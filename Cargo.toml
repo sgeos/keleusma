@@ -1,0 +1,11 @@
+[package]
+name = "keleusma"
+version = "0.1.0"
+edition = "2024"
+description = "Keleusma: a Total Functional Stream Processor that compiles to bytecode"
+license = "MIT"
+keywords = ["scripting", "bytecode", "no-std", "language", "vm"]
+categories = ["no-std", "compilers"]
+
+[dependencies]
+libm = "0.2"
