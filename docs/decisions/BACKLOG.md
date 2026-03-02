@@ -16,13 +16,13 @@ Traits or generic type parameters would enable polymorphic functions and reusabl
 
 Closures or anonymous functions would enable higher-order programming patterns such as callbacks and inline transformations. Deferred to keep the VM simple. Multiheaded function dispatch serves as a partial alternative for pattern-based dispatch.
 
-## B4. Hot-swap mechanism
+## B4. Hot code swap implementation
 
-Live reloading of scripts without restarting the VM would enable rapid iteration during development. Deferred due to the complexity of state migration, including preserving coroutine state and local variables across script reloads.
+The design specifies hot swapping of text and rodata segments at RESET boundaries. The dialogue type (A -> B) must remain invariant across swaps. Different routines may have different WCETs, and each is certified independently. The arena is cleared before new code executes, ensuring zero memory debt. Implementation is pending the target ISA. The current VM does not support hot swapping.
 
-## B5. Formal verification at bytecode level
+## B5. Structural verification implementation
 
-Proving termination and productivity guarantees at the bytecode level rather than relying on source-level analysis would strengthen correctness assurances. Deferred pending a formal specification of the bytecode semantics.
+The design specifies load-time verification via block-graph coloring. A linear scan colors blocks based on productivity and rejects programs that violate structural constraints. All paths from STREAM to RESET must contain at least one YIELD. All FUNC blocks must be free of yields. Implementation is pending the target ISA.
 
 ## B6. String interpolation
 

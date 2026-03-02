@@ -47,3 +47,19 @@ Each script file constitutes one module. Modules cannot import other Keleusma mo
 ## R11. .kma file extension
 
 Script files use the `.kma` file extension. This provides a distinctive identifier for tooling, editor support, and file association without conflicting with other language extensions.
+
+## R12. Stream coalgebra model
+
+Top-level productive divergent functions model stream transformations of the form f : Stream<A> -> Stream<B>. This coalgebraic formulation enables mathematical reasoning about infinite stream transformations and provides a formal foundation for productivity proofs. Helper functions may yield but must share the top-level function's dialogue type.
+
+## R13. Arena memory model
+
+The VM uses an arena memory model consisting of a stack and a scratchpad heap. The arena persists across yields within a single stream phase but is cleared at the top of every productive divergent function iteration (the RESET boundary). This prevents memory leaks, ensures predictable resource usage, and eliminates memory debt across mission phases. Memory bounds are statically analyzable per stream phase.
+
+## R14. Two temporal domains
+
+Execution is governed by two temporal domains. The yield domain (control clock) provides fine-grained scheduling with WCET measured yield-to-yield. The reset domain (phase clock) provides coarse-grained phase control with swap latency measured reset-to-reset. This separation allows independent analysis and certification of timing properties at each granularity.
+
+## R15. Structural ISA verification
+
+Programs are verified at load time via block-graph coloring. The structural ISA uses block types (STREAM, REENTRANT, FUNC, LOOP_N) that make invalid or unproductive programs impossible to define. A linear scan verifies that all paths from STREAM to RESET contain at least one YIELD and that all FUNC blocks are free of yields. Invalid programs are rejected before execution begins.

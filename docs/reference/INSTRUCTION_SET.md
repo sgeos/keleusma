@@ -6,6 +6,8 @@ The Keleusma VM executes a 48-instruction bytecode. All instructions operate on 
 
 For details on how bytecode is generated from source, see [COMPILATION_PIPELINE.md](../architecture/COMPILATION_PIPELINE.md).
 
+This document describes the current implementation bytecode. The long-term target ISA, designed for safety-critical certification with structural verification, is documented in [TARGET_ISA.md](./TARGET_ISA.md).
+
 ## Constants
 
 | Instruction | Operands | Description |

@@ -15,3 +15,11 @@ The compiler currently only supports range-based for loops of the form `for i in
 ## P3. Error recovery model
 
 What should happen when a script encounters a runtime error? Options include yielding a default value, suspending the script, or notifying the host via `VmError`. The current implementation halts execution on error. A recovery model would need to define whether the host can resume a script after an error, and if so, what value the host supplies at the recovery point.
+
+## P4. Target ISA implementation
+
+The structural ISA with STREAM, RESET, REENTRANT, FUNC, and LOOP_N block types represents the long-term execution model designed for safety-critical certification. Transitioning from the current 48-instruction bytecode to the structural ISA requires significant compiler and VM changes, including adding block primitives to the bytecode format, implementing the arena memory model with RESET-triggered clearing, and implementing the structural verification pass.
+
+## P5. WCET analysis tooling
+
+Static analysis to compute worst-case execution time between yield points is required for safety-critical certification. The analysis must enumerate all paths between YIELD instructions and count opcodes on the longest path. The absence of dynamic dispatch ensures that all paths are statically enumerable, but the tooling to perform this analysis has not yet been implemented.
