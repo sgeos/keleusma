@@ -5,6 +5,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 use crate::bytecode::*;
+use crate::verify;
 
 /// A runtime error from the Keleusma VM.
 #[derive(Debug, Clone)]
@@ -27,6 +28,8 @@ pub enum VmError {
     InvalidBytecode(String),
     /// Script execution was halted by a Trap instruction.
     Trap(String),
+    /// Structural verification failed at load time.
+    VerifyError(String),
 }
 
 /// The execution state of the VM.
@@ -36,6 +39,8 @@ pub enum VmState {
     Yielded(Value),
     /// The function completed with a return value.
     Finished(Value),
+    /// The stream hit a Reset boundary. The host may hot-swap and resume.
+    Reset,
 }
 
 /// A call frame on the VM call stack.
@@ -69,14 +74,20 @@ pub struct Vm {
 
 impl Vm {
     /// Create a new VM with the given compiled module.
-    pub fn new(module: Module) -> Self {
-        Self {
+    ///
+    /// Runs structural verification on the module. Returns an error if
+    /// verification fails.
+    pub fn new(module: Module) -> Result<Self, VmError> {
+        verify::verify(&module).map_err(|e| {
+            VmError::VerifyError(format!("{}: {}", e.chunk_name, e.message))
+        })?;
+        Ok(Self {
             module,
             stack: Vec::new(),
             frames: Vec::new(),
             natives: Vec::new(),
             started: false,
-        }
+        })
     }
 
     /// Register a native function by name using a function pointer.
@@ -149,16 +160,16 @@ impl Vm {
         self.run()
     }
 
-    /// Resume execution after a yield, providing the input value.
+    /// Resume execution after a yield or reset, providing the input value.
     pub fn resume(&mut self, input: Value) -> Result<VmState, VmError> {
         if !self.started || self.frames.is_empty() {
             return Err(VmError::InvalidBytecode(String::from("cannot resume: VM not suspended")));
         }
-        // For loop functions, update the parameter slot with the new input.
-        // This ensures the next iteration of the loop body sees the latest input.
+        // For stream functions, update the parameter slot with the new input.
+        // This ensures the next iteration sees the latest input.
         if let Some(base_frame) = self.frames.first() {
             let chunk = &self.module.chunks[base_frame.chunk_idx];
-            if chunk.is_loop && chunk.param_count > 0 {
+            if chunk.block_type == BlockType::Stream && chunk.param_count > 0 {
                 let base = base_frame.base;
                 self.stack[base] = input.clone();
             }
@@ -168,11 +179,10 @@ impl Vm {
         self.run()
     }
 
-    /// Execute bytecode until yield, return, or error.
+    /// Execute bytecode until yield, return, reset, or error.
     fn run(&mut self) -> Result<VmState, VmError> {
         loop {
             if self.frames.is_empty() {
-                // Should not happen during normal execution.
                 return Err(VmError::InvalidBytecode(String::from("empty call stack")));
             }
 
@@ -271,19 +281,84 @@ impl Vm {
                     }
                 }
 
-                Op::Jump(addr) => {
-                    self.frames.last_mut().unwrap().ip = addr as usize;
-                }
-                Op::JumpIfFalse(addr) => {
+                // -- Block-structured control flow --
+
+                Op::If(target) => {
                     let val = self.pop()?;
                     match val {
                         Value::Bool(false) => {
-                            self.frames.last_mut().unwrap().ip = addr as usize;
+                            self.frames.last_mut().unwrap().ip = target as usize;
                         }
-                        Value::Bool(true) => {}
+                        Value::Bool(true) => {
+                            // Continue to then-block.
+                        }
                         v => return Err(VmError::TypeError(format!("condition must be Bool, got {}", v.type_name()))),
                     }
                 }
+                Op::Else(target) => {
+                    // Reached when then-block completes. Skip else-block.
+                    self.frames.last_mut().unwrap().ip = target as usize;
+                }
+                Op::EndIf => {
+                    // No-op. Block delimiter.
+                }
+
+                Op::Loop(_) => {
+                    // No-op at entry. Target is used by Break/BreakIf.
+                }
+                Op::EndLoop(target) => {
+                    // Back-edge: jump to instruction after Loop.
+                    self.frames.last_mut().unwrap().ip = target as usize;
+                }
+                Op::Break(target) => {
+                    self.frames.last_mut().unwrap().ip = target as usize;
+                }
+                Op::BreakIf(target) => {
+                    let val = self.pop()?;
+                    match val {
+                        Value::Bool(true) => {
+                            self.frames.last_mut().unwrap().ip = target as usize;
+                        }
+                        Value::Bool(false) => {
+                            // Continue loop body.
+                        }
+                        v => return Err(VmError::TypeError(format!("BreakIf condition must be Bool, got {}", v.type_name()))),
+                    }
+                }
+
+                // -- Streaming --
+
+                Op::Stream => {
+                    // No-op. Marks the stream entry point.
+                }
+                Op::Reset => {
+                    // Clear arena: reset locals to Unit, truncate stack.
+                    let frame = self.frames.last_mut().unwrap();
+                    let reset_base = frame.base;
+                    let reset_chunk_idx = frame.chunk_idx;
+                    let local_count = self.module.chunks[reset_chunk_idx].local_count as usize;
+
+                    // Clear locals to Unit.
+                    for i in 0..local_count {
+                        self.stack[reset_base + i] = Value::Unit;
+                    }
+                    // Truncate stack to just the locals.
+                    self.stack.truncate(reset_base + local_count);
+
+                    // Find Stream instruction and set IP to instruction after it.
+                    let ops = &self.module.chunks[reset_chunk_idx].ops;
+                    let stream_ip = ops.iter().position(|op| matches!(op, Op::Stream));
+                    match stream_ip {
+                        Some(pos) => frame.ip = pos + 1,
+                        None => return Err(VmError::InvalidBytecode(
+                            String::from("Reset without Stream in chunk")
+                        )),
+                    }
+
+                    return Ok(VmState::Reset);
+                }
+
+                // -- Functions --
 
                 Op::Call(idx, arg_count) => {
                     let called_chunk = self.module.chunks.get(idx as usize)
@@ -305,10 +380,6 @@ impl Vm {
                         return Err(VmError::StackUnderflow);
                     }
                     let args: Vec<Value> = self.stack.drain(self.stack.len() - n..).collect();
-                    // Resolve the native function by name: the compiler assigns
-                    // indices based on use-declaration order in the script. The
-                    // VM looks up the declared name and finds the matching
-                    // registered native function.
                     let native_name = self.module.native_names.get(idx as usize)
                         .ok_or_else(|| VmError::InvalidBytecode(format!("invalid native index: {}", idx)))?;
                     let entry = self.natives.iter()
@@ -450,7 +521,9 @@ impl Vm {
                     }
                 }
 
-                Op::TestEnum(enum_const, var_const, fail_addr) => {
+                // -- Type predicates (push bool, no jump) --
+
+                Op::IsEnum(enum_const, var_const) => {
                     let val = self.stack.last().ok_or(VmError::StackUnderflow)?;
                     let expected_type = match &self.module.chunks[chunk_idx].constants[enum_const as usize] {
                         Value::Str(s) => s.as_str(),
@@ -465,20 +538,16 @@ impl Vm {
                         Value::Enum { type_name, variant, .. }
                             if type_name == expected_type && variant == expected_var
                     );
-                    if !matches {
-                        self.frames.last_mut().unwrap().ip = fail_addr as usize;
-                    }
+                    self.stack.push(Value::Bool(matches));
                 }
-                Op::TestStruct(type_const, fail_addr) => {
+                Op::IsStruct(type_const) => {
                     let val = self.stack.last().ok_or(VmError::StackUnderflow)?;
                     let expected = match &self.module.chunks[chunk_idx].constants[type_const as usize] {
                         Value::Str(s) => s.as_str(),
                         _ => return Err(VmError::InvalidBytecode(String::from("type const not string"))),
                     };
                     let matches = matches!(val, Value::Struct { type_name, .. } if type_name == expected);
-                    if !matches {
-                        self.frames.last_mut().unwrap().ip = fail_addr as usize;
-                    }
+                    self.stack.push(Value::Bool(matches));
                 }
 
                 Op::IntToFloat => {
@@ -567,7 +636,7 @@ mod tests {
         let tokens = tokenize(src).expect("lex error");
         let program = parse(&tokens).expect("parse error");
         let module = compile(&program).expect("compile error");
-        let mut vm = Vm::new(module);
+        let mut vm = Vm::new(module)?;
         vm.call(args)
     }
 
@@ -575,6 +644,7 @@ mod tests {
         match run_program(src, args).unwrap() {
             VmState::Finished(v) => v,
             VmState::Yielded(v) => panic!("unexpected yield: {:?}", v),
+            VmState::Reset => panic!("unexpected reset"),
         }
     }
 
@@ -738,24 +808,36 @@ mod tests {
         let tokens = tokenize(src).expect("lex error");
         let program = parse(&tokens).expect("parse error");
         let module = compile(&program).expect("compile error");
-        let mut vm = Vm::new(module);
+        let mut vm = Vm::new(module).unwrap();
 
         // First call: main(5) -> yields 5 * 2 = 10.
         match vm.call(&[Value::Int(5)]).unwrap() {
             VmState::Yielded(v) => assert_eq!(v, Value::Int(10)),
-            VmState::Finished(_) => panic!("expected yield"),
+            other => panic!("expected yield, got {:?}", other),
         }
 
-        // Resume with 7: yields 7 * 2 = 14.
+        // Resume with 7: continues after yield, sets input=7, reaches Reset.
+        match vm.resume(Value::Int(7)).unwrap() {
+            VmState::Reset => {}
+            other => panic!("expected reset, got {:?}", other),
+        }
+
+        // Resume after Reset with 7: restarts stream, yields 7 * 2 = 14.
         match vm.resume(Value::Int(7)).unwrap() {
             VmState::Yielded(v) => assert_eq!(v, Value::Int(14)),
-            VmState::Finished(_) => panic!("expected yield"),
+            other => panic!("expected yield, got {:?}", other),
         }
 
-        // Resume with 0: yields 0 * 2 = 0.
+        // Resume with 0: reaches Reset.
+        match vm.resume(Value::Int(0)).unwrap() {
+            VmState::Reset => {}
+            other => panic!("expected reset, got {:?}", other),
+        }
+
+        // Resume after Reset with 0: yields 0 * 2 = 0.
         match vm.resume(Value::Int(0)).unwrap() {
             VmState::Yielded(v) => assert_eq!(v, Value::Int(0)),
-            VmState::Finished(_) => panic!("expected yield"),
+            other => panic!("expected yield, got {:?}", other),
         }
     }
 
@@ -822,7 +904,7 @@ mod tests {
         let tokens = tokenize(src).expect("lex error");
         let program = parse(&tokens).expect("parse error");
         let module = compile(&program).expect("compile error");
-        let mut vm = Vm::new(module);
+        let mut vm = Vm::new(module).unwrap();
         vm.register_native("math::add_one", |args| {
             match &args[0] {
                 Value::Int(x) => Ok(Value::Int(x + 1)),
@@ -831,7 +913,7 @@ mod tests {
         });
         match vm.call(&[Value::Int(41)]).unwrap() {
             VmState::Finished(v) => assert_eq!(v, Value::Int(42)),
-            VmState::Yielded(_) => panic!("expected finished"),
+            other => panic!("expected finished, got {:?}", other),
         }
     }
 

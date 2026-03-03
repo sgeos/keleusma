@@ -1,10 +1,10 @@
-# Target ISA
+# Structural ISA
 
 > **Navigation**: [Reference](./README.md) | [Documentation Root](../README.md)
 
 ## Overview
 
-This document describes the target Instruction Set Architecture for Keleusma. The target ISA uses structured control flow and block-based nesting to make invalid or unproductive programs impossible to define or load. This is a design specification for the long-term execution model. The current implementation uses a different 48-instruction bytecode documented in [INSTRUCTION_SET.md](./INSTRUCTION_SET.md).
+This document describes the Instruction Set Architecture for Keleusma. The structural ISA uses block-structured control flow and block-based nesting to make invalid or unproductive programs impossible to define or load. This ISA is currently being implemented, replacing the previous flat-jump bytecode. See [INSTRUCTION_SET.md](./INSTRUCTION_SET.md) for the bytecode instruction reference.
 
 ## Block Hierarchy
 
@@ -30,20 +30,36 @@ Pure, total arithmetic and logic. No partial operations.
 | EQ, LT | Comparison |
 | AND, OR, NOT | Logic |
 
+## Type Testing
+
+| Instruction | Operands | Description |
+|:---|:---|:---|
+| IsEnum | u16 type, u16 variant | Pop value, push true if it matches the enum type and variant. |
+| IsStruct | u16 name | Pop value, push true if it matches the struct type. |
+
+Type testing instructions push a boolean result onto the stack. They do not contain jump offsets. Conditional dispatch based on type tests uses the block-structured If/Else/EndIf control flow.
+
 ## Control Flow
 
-| Instruction | Description |
-|:---|:---|
-| JMP | Unconditional jump |
-| BRANCH | Conditional branch |
-| CALL | Call a FUNC |
-| RETURN | Return from FUNC |
+| Instruction | Operands | Description |
+|:---|:---|:---|
+| If | u32 offset | Pop boolean. If false, skip forward by offset instructions to the matching Else or EndIf. |
+| Else | u32 offset | Unconditional skip forward by offset instructions to the matching EndIf. Marks the start of the else branch. |
+| EndIf | none | Marks the end of an if or if-else block. No operation. |
+| Loop | u32 offset | Marks the start of a loop block. Offset encodes the distance to the matching EndLoop for verification. |
+| EndLoop | u32 offset | Unconditional jump backward by offset instructions to the matching Loop. |
+| Break | u32 depth | Exit the enclosing loop at nesting depth. Jumps past the matching EndLoop. |
+| BreakIf | u32 depth | Pop boolean. If true, exit the enclosing loop at nesting depth. |
+| CALL | none | Call a FUNC. |
+| RETURN | none | Return from FUNC. |
+
+All control flow is block-structured. There are no flat jump instructions (JMP, BRANCH). Every forward or backward transfer of control is mediated by a matching block delimiter. This constraint ensures that the control flow graph can be statically verified through block nesting alone.
 
 Restrictions:
 
 - No indirect calls or jumps. All call targets are statically resolved.
+- No flat jumps. All branches use block-structured If/Else/EndIf or Loop/EndLoop/Break/BreakIf.
 - RETURN is only allowed inside FUNC blocks.
-- No jumping into the middle of a LOOP_N body.
 - STREAM cannot be called. It is entered only via RESET.
 
 ## Structured Bounded Loops
@@ -63,17 +79,43 @@ Rules:
 
 ## Streaming Machinery
 
+| Instruction | Operands | Description |
+|:---|:---|:---|
+| Stream | none | Entry of the streaming region. Only Reset may target it. |
+| Yield | none | Exchanges data with the host. Suspends and resumes. Falls through to the next instruction. |
+| Reset | none | Clears arena. Activates double-buffered text/rodata swap if scheduled. Jumps to Stream entry. |
+
 ```
-STREAM entry
-  YIELD
-RESET
+Stream
+  Yield
+Reset
 ```
 
 Semantics:
 
-- **STREAM**: Entry of the streaming region. Only RESET may target it.
-- **YIELD**: Exchanges data with the host. Suspends and resumes. Falls through to the next instruction.
-- **RESET**: Clears arena. Swaps text/rodata if scheduled. Jumps to STREAM entry. Only instruction allowed to target STREAM.
+- **Stream**: Entry of the streaming region. Only Reset may target it.
+- **Yield**: Exchanges data with the host (Output B for Input A). Suspends and resumes. Falls through to the next instruction.
+- **Reset**: Clears arena. Activates the secondary buffer if a hot swap is scheduled (see double buffering in [EXECUTION_MODEL.md](../architecture/EXECUTION_MODEL.md)). Jumps to Stream entry. Only instruction allowed to target Stream.
+
+## Dialogue Type Interoperability
+
+The dialogue signature `Dialogue A B` specifies the types exchanged between the host and the VM on each Yield. The host defines the Rust types for A and B using the `#[keleusma_type]` attribute macro. This attribute enforces an interoperable memory layout on the annotated type, ensuring that the host and VM agree on the binary representation of the dialogue types. The attribute handles alignment, field ordering, and representation so that values can be passed across the host-VM boundary without serialization.
+
+```rust
+#[keleusma_type]
+struct SensorReading {
+    temperature: f64,
+    pressure: f64,
+    timestamp: u64,
+}
+
+#[keleusma_type]
+enum Command {
+    Idle,
+    Thrust(f64),
+    Rotate(f64, f64),
+}
+```
 
 ## Structural Verification Rules
 
@@ -103,17 +145,19 @@ Inside STREAM:
 
 ## Relationship to Current Implementation
 
-The current Keleusma VM uses a 48-instruction stack-based bytecode documented in [INSTRUCTION_SET.md](./INSTRUCTION_SET.md). The target ISA described here represents the long-term execution model designed for safety-critical certification. The transition from the current bytecode to the structural ISA requires:
+The structural ISA described here is currently being implemented, replacing the previous 48-instruction flat-jump bytecode. The transition involves the following changes.
 
-- Adding STREAM, RESET, and REENTRANT block primitives to the bytecode format
-- Implementing the arena memory model with RESET-triggered clearing
-- Implementing the structural verification pass (block-graph coloring)
-- Replacing unbounded stack allocation with arena allocation
+- Adding Stream, Reset, and Reentrant block primitives to the bytecode format.
+- Replacing flat jumps (Jump, JumpIfFalse) with block-structured control flow (If/Else/EndIf, Loop/EndLoop, Break/BreakIf).
+- Replacing TestEnum and TestStruct (which contained jump offsets) with IsEnum and IsStruct (which push booleans).
+- Implementing the arena memory model with Reset-triggered clearing.
+- Implementing the structural verification pass (block-graph coloring).
+- Replacing unbounded stack allocation with bump arena allocation.
 
-The surface language (Keleusma source syntax) remains largely unchanged. The compiler backend will target the structural ISA instead of the current flat bytecode.
+The surface language (Keleusma source syntax) remains unchanged. The compiler backend targets the structural ISA. Surface-level constructs such as pattern dispatch, pipelines, and dynamic types are syntactic sugar that the compiler lowers to the austere certifiable bytecode.
 
 ## Cross-References
 
-- [INSTRUCTION_SET.md](./INSTRUCTION_SET.md) documents the current implementation bytecode.
+- [INSTRUCTION_SET.md](./INSTRUCTION_SET.md) provides the bytecode instruction reference.
 - [EXECUTION_MODEL.md](../architecture/EXECUTION_MODEL.md) describes the execution model and temporal domains.
 - [LANGUAGE_DESIGN.md](../architecture/LANGUAGE_DESIGN.md) describes the language-level design goals.

@@ -2,11 +2,9 @@
 
 > **Navigation**: [Reference](./README.md) | [Documentation Root](../README.md)
 
-The Keleusma VM executes a 48-instruction bytecode. All instructions operate on a value stack. This document lists every instruction with its operands and behavior.
+The Keleusma VM executes a stack-based bytecode using block-structured control flow. All instructions operate on a value stack. This document lists every instruction with its operands and behavior.
 
-For details on how bytecode is generated from source, see [COMPILATION_PIPELINE.md](../architecture/COMPILATION_PIPELINE.md).
-
-This document describes the current implementation bytecode. The long-term target ISA, designed for safety-critical certification with structural verification, is documented in [TARGET_ISA.md](./TARGET_ISA.md).
+For details on how bytecode is generated from source, see [COMPILATION_PIPELINE.md](../architecture/COMPILATION_PIPELINE.md). For the structural ISA specification including block hierarchy and verification rules, see [TARGET_ISA.md](./TARGET_ISA.md).
 
 ## Constants
 
@@ -56,8 +54,13 @@ This document describes the current implementation bytecode. The long-term targe
 
 | Instruction | Operands | Description |
 |-------------|----------|-------------|
-| Jump | u32 target | Unconditional jump to instruction index |
-| JumpIfFalse | u32 target | Pop boolean, jump if false |
+| If | u32 offset | Pop boolean. If false, skip forward by offset to matching Else or EndIf |
+| Else | u32 offset | Unconditional skip forward by offset to matching EndIf |
+| EndIf | none | End of if or if-else block. No operation |
+| Loop | u32 offset | Start of loop block. Offset is distance to matching EndLoop |
+| EndLoop | u32 offset | Unconditional jump backward by offset to matching Loop |
+| Break | u32 depth | Exit enclosing loop at nesting depth |
+| BreakIf | u32 depth | Pop boolean. If true, exit enclosing loop at nesting depth |
 
 ## Function Calls
 
@@ -66,12 +69,14 @@ This document describes the current implementation bytecode. The long-term targe
 | Call | u16 index, u8 argc | Call function chunk with arguments |
 | CallNative | u16 index, u8 argc | Call native function with arguments |
 
-## Return and Yield
+## Return, Yield, and Streaming
 
 | Instruction | Operands | Description |
 |-------------|----------|-------------|
 | Return | none | Return from current function |
-| Yield | none | Suspend coroutine, return yielded value to host |
+| Yield | none | Suspend coroutine, exchange output B for input A with host |
+| Stream | none | Entry of the streaming region. Only Reset may target it |
+| Reset | none | Clear arena, activate hot swap if scheduled, jump to Stream |
 
 ## Stack
 
@@ -104,8 +109,8 @@ This document describes the current implementation bytecode. The long-term targe
 
 | Instruction | Operands | Description |
 |-------------|----------|-------------|
-| TestEnum | u16 type, u16 variant, u32 jump | Test if value matches enum variant, jump if not |
-| TestStruct | u16 name, u32 jump | Test if value matches struct type, jump if not |
+| IsEnum | u16 type, u16 variant | Pop value, push true if it matches the enum type and variant |
+| IsStruct | u16 name | Pop value, push true if it matches the struct type |
 
 ## Casting
 

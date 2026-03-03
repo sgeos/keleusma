@@ -54,7 +54,7 @@ Top-level productive divergent functions model stream transformations of the for
 
 ## R13. Arena memory model
 
-The VM uses an arena memory model consisting of a stack and a scratchpad heap. The arena persists across yields within a single stream phase but is cleared at the top of every productive divergent function iteration (the RESET boundary). This prevents memory leaks, ensures predictable resource usage, and eliminates memory debt across mission phases. Memory bounds are statically analyzable per stream phase.
+The VM uses an arena memory model consisting of a single contiguous bump-allocated buffer. The stack grows from one end. There is no heap initially. The arena persists across yields within a single stream phase but is cleared at the top of every productive divergent function iteration (the RESET boundary) by resetting the bump pointer. This prevents memory leaks, ensures predictable resource usage, and eliminates memory debt across mission phases. Memory bounds are statically analyzable per stream phase. See R20 for implementation details.
 
 ## R14. Two temporal domains
 
@@ -63,3 +63,27 @@ Execution is governed by two temporal domains. The yield domain (control clock) 
 ## R15. Structural ISA verification
 
 Programs are verified at load time via block-graph coloring. The structural ISA uses block types (STREAM, REENTRANT, FUNC, LOOP_N) that make invalid or unproductive programs impossible to define. A linear scan verifies that all paths from STREAM to RESET contain at least one YIELD and that all FUNC blocks are free of yields. Invalid programs are rejected before execution begins.
+
+## R16. Stack machine execution
+
+The VM is a stack machine. Individual time slices are not Turing complete. Each yield-to-yield slice executes a bounded number of instructions and then suspends. The VM-Host pair is Turing complete via the unbounded RESET cycle with the host providing the tape through YIELD exchanges. Host-controlled state that persists across resets serves as the unbounded external memory.
+
+## R17. No flat jumps
+
+All control flow uses block-structured instructions (If/Else/EndIf, Loop/EndLoop, Break/BreakIf). Flat JMP and BRANCH instructions are prohibited. Every forward or backward transfer of control is mediated by a matching block delimiter. This constraint ensures that the control flow graph can be statically verified through block nesting alone.
+
+## R18. Surface language compiles down
+
+The surface language (pattern dispatch, pipelines, dynamic types) is syntactic sugar. The compiler lowers rich surface constructs to austere certifiable bytecode. The surface language does not narrow. The bytecode ISA is deliberately minimal and verifiable, while the surface language provides developer ergonomics.
+
+## R19. Double-buffered hot swap
+
+Hot code swapping uses double buffering. The host loads new text and rodata into a secondary buffer while the current code continues executing in the primary buffer. RESET activates the new buffer by swapping primary and secondary. The old buffer is retained for rollback if the host determines that the new code should be reverted.
+
+## R20. Arena implementation
+
+The arena is a single contiguous allocation with bump allocation. The stack grows from one end. There is no heap initially. Allocations advance a pointer linearly through the buffer. Deallocation occurs only at RESET when the entire arena is cleared by resetting the bump pointer.
+
+## R21. Immediate ISA transition
+
+The structural ISA (Stream, Reset, Func, Reentrant, block-structured control flow) replaces the previous 48-instruction flat-jump bytecode immediately rather than as a future phase. The transition includes replacing flat jumps with block-structured If/Else/EndIf and Loop/EndLoop/Break/BreakIf, replacing TestEnum and TestStruct (which contained jump offsets) with IsEnum and IsStruct (which push booleans), and adding Stream and Reset instructions.

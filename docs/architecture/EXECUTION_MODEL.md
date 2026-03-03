@@ -57,17 +57,19 @@ This defines a two-clock deterministic control VM. Fine-grained scheduling opera
 
 ## Arena Memory Model
 
-The arena consists of a stack and a scratchpad heap. It persists across yields within a single stream phase. It is cleared only at RESET. No dynamic allocation survives across phases. Memory bounds are statically analyzable per stream phase.
+The arena is a single contiguous allocation using bump allocation. The stack grows from one end of the arena. There is no heap initially. Allocations advance a pointer linearly through the contiguous buffer. Deallocation occurs only at RESET, when the entire arena is cleared by resetting the bump pointer to the start. This design eliminates fragmentation and ensures O(1) allocation and deallocation.
+
+The arena persists across yields within a single stream phase. It is cleared only at RESET. No dynamic allocation survives across phases. Memory bounds are statically analyzable per stream phase.
 
 Three memory regions exist.
 
-- **Arena.** Ephemeral per stream phase. Stack and scratchpad heap. Cleared at RESET.
-- **Read-only sections.** Immutable text (code) and rodata (constants). Swappable at RESET boundaries.
+- **Arena.** Ephemeral per stream phase. Single contiguous bump-allocated buffer with stack growing from one end. Cleared at RESET.
+- **Read-only sections.** Immutable text (code) and rodata (constants). Double-buffered and swappable at RESET boundaries.
 - **Host state.** External to the VM. Managed by the host application.
 
 ## Hot Code Swapping
 
-Hot code swapping occurs only at RESET boundaries. The following requirements apply.
+Hot code swapping occurs only at RESET boundaries and uses double buffering. The following requirements apply.
 
 - The YIELD signature (dialogue type A exchanged for B) remains invariant across the entire STREAM and across swaps.
 - Only text and rodata segments may change.
@@ -76,15 +78,17 @@ Hot code swapping occurs only at RESET boundaries. The following requirements ap
 
 Different routines (f vs g) may have different WCETs, which are declared in a static header for the host scheduler to validate before accepting the swap.
 
+### Double-Buffered Swap Mechanism
+
+The host loads new text and rodata into a secondary buffer while the current code continues executing in the primary buffer. When the VM reaches RESET, it activates the secondary buffer, making it the new primary. The old primary buffer is retained as the secondary, available for rollback if the host determines that the new code should be reverted. This mechanism ensures that the swap is atomic from the VM's perspective and that no partially loaded code is ever executed.
+
 ## Turing Completeness
 
-Internal slices are bounded, but the overall system is Turing complete for the following reasons.
+Individual time slices are not Turing complete. Each yield-to-yield slice executes a bounded number of instructions and then suspends. The VM in isolation cannot perform unbounded computation within a single slice.
 
-- STREAM provides unbounded execution via the RESET cycle.
-- Host interaction through YIELD allows unbounded state evolution.
-- Computation can span arbitrarily many RESET cycles.
+The VM-Host pair is Turing complete. Turing completeness arises from the unbounded RESET cycle with the host providing the "tape" through YIELD exchanges. The host supplies new input on each resumption, and host-controlled state that persists across resets serves as the unbounded external memory. Computation can span arbitrarily many RESET cycles.
 
-Each slice is finite and certifiable. The overall stream machine is computationally universal.
+This separation is deliberate. The VM executes finite, certifiable slices. The host drives the unbounded computation loop. Industrial certification applies to individual slices, not to the overall infinite execution.
 
 ## Structural Verification
 

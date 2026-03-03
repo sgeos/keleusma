@@ -4,11 +4,13 @@
 
 Key terminology used in the Keleusma documentation and source code.
 
-**Arena** -- The ephemeral memory region consisting of a stack and scratchpad heap. The arena persists across yields within a single stream phase but is cleared at the RESET boundary. No memory survives across RESET. Memory bounds are statically analyzable.
+**Arena** -- The ephemeral memory region consisting of a single contiguous bump-allocated buffer. The stack grows from one end. There is no heap initially. The arena persists across yields within a single stream phase but is cleared at the RESET boundary by resetting the bump pointer. No memory survives across RESET. Memory bounds are statically analyzable.
 
 **Atomic function** -- A function declared with the `fn` keyword that must terminate without yielding. May call other atomic functions and native functions.
 
 **Bounded-step invariant** -- The property that there exists a statically provable upper bound on instructions executed between any two yield points. This enables WCET analysis for safety-critical certification.
+
+**Bump allocator** -- The arena allocation strategy. Allocations advance a pointer linearly through a contiguous buffer. Deallocation occurs only at RESET when the entire arena is cleared.
 
 **Bytecode** -- The compiled representation of a Keleusma program. A sequence of instructions executed by the virtual machine.
 
@@ -16,13 +18,19 @@ Key terminology used in the Keleusma documentation and source code.
 
 **Coroutine** -- An execution context that can be suspended via yield and resumed by the host. Keleusma scripts are coroutines.
 
+**Cost table** -- A mapping from each bytecode instruction to its execution cost in abstract time units. Used for WCET analysis. Initially populated with reasonable estimates, refined as the implementation matures.
+
 **Dialogue type** -- The pair of types (A, B) that defines the yield contract between a stream program and its host. Input A is provided by the host on resume. Output B is produced by the program on yield. The dialogue type must remain invariant across hot code swaps.
+
+**Double buffering** -- The hot swap mechanism. The host loads new text and rodata into a secondary buffer while the current code continues executing. RESET activates the new buffer. The old buffer is retained for rollback.
 
 **Guard clause** -- A boolean condition attached to a function head using the `when` keyword. Evaluated after pattern matching succeeds. Limited to comparisons and logical operators.
 
 **Host** -- The Rust application that embeds the Keleusma VM, registers native functions, and drives coroutine execution by calling `call()` and `resume()`.
 
 **Keleusma** -- A Total Functional Stream Processor that compiles to bytecode. The name derives from the Greek word for a command or signal, specifically the rhythmic calls used by ancient Greek rowing masters to coordinate oar strokes.
+
+**keleusma_type** -- A Rust attribute macro (`#[keleusma_type]`) that enforces interoperable memory layout on host types used in the dialogue signature. Ensures the host and VM agree on binary representation of A and B types.
 
 **Loop function** -- A function declared with the `loop` keyword that never exits. Must yield on every iteration. Exactly one per script. Serves as the coroutine entry point.
 

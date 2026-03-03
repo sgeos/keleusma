@@ -241,11 +241,12 @@ mod tests {
         let tokens = tokenize(src).expect("lex error");
         let program = parse(&tokens).expect("parse error");
         let module = compile(&program).expect("compile error");
-        let mut vm = Vm::new(module);
+        let mut vm = Vm::new(module).unwrap();
         register_audio_natives(&mut vm);
         match vm.call(&[]).unwrap() {
             crate::vm::VmState::Finished(v) => v,
             crate::vm::VmState::Yielded(v) => panic!("unexpected yield: {:?}", v),
+            crate::vm::VmState::Reset => panic!("unexpected reset"),
         }
     }
 

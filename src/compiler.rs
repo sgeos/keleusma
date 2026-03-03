@@ -40,7 +40,7 @@ struct FuncCompiler {
 impl FuncCompiler {
     fn new(
         name: &str,
-        is_loop: bool,
+        block_type: BlockType,
         function_map: BTreeMap<String, u16>,
         native_map: BTreeMap<String, u16>,
     ) -> Self {
@@ -52,7 +52,7 @@ impl FuncCompiler {
                 struct_templates: Vec::new(),
                 local_count: 0,
                 param_count: 0,
-                is_loop,
+                block_type,
             },
             locals: Vec::new(),
             scope_depth: 0,
@@ -76,10 +76,12 @@ impl FuncCompiler {
     fn patch_jump(&mut self, addr: usize) {
         let target = self.chunk.ops.len() as u32;
         match &mut self.chunk.ops[addr] {
-            Op::Jump(a)
-            | Op::JumpIfFalse(a)
-            | Op::TestEnum(_, _, a)
-            | Op::TestStruct(_, a) => *a = target,
+            Op::If(a)
+            | Op::Else(a)
+            | Op::Loop(a)
+            | Op::EndLoop(a)
+            | Op::Break(a)
+            | Op::BreakIf(a) => *a = target,
             _ => {}
         }
     }
@@ -239,10 +241,14 @@ fn compile_function_group(
     native_map: &BTreeMap<String, u16>,
 ) -> Result<Chunk, CompileError> {
     let first = defs[0];
-    let is_loop = first.category == FunctionCategory::Loop;
+    let block_type = match first.category {
+        FunctionCategory::Fn => BlockType::Func,
+        FunctionCategory::Yield => BlockType::Reentrant,
+        FunctionCategory::Loop => BlockType::Stream,
+    };
     let param_count = first.params.len() as u8;
 
-    let mut fc = FuncCompiler::new(name, is_loop, function_map.clone(), native_map.clone());
+    let mut fc = FuncCompiler::new(name, block_type, function_map.clone(), native_map.clone());
     fc.chunk.param_count = param_count;
 
     // Declare parameter slots. For multiheaded functions, use positional names.
@@ -257,23 +263,33 @@ fn compile_function_group(
         for (i, param) in first.params.iter().enumerate() {
             bind_param_pattern(&mut fc, &param.pattern, param_slots[i]);
         }
-        let body_start = fc.chunk.ops.len() as u32;
-        compile_block(&mut fc, &first.body)?;
-        if is_loop {
-            fc.emit(Op::Pop); // Discard body value before looping.
-            fc.emit(Op::Jump(body_start));
+
+        if block_type == BlockType::Stream {
+            // Stream function: wrap body in Stream...Reset.
+            fc.emit(Op::Stream);
+            compile_block(&mut fc, &first.body)?;
+            fc.emit(Op::Pop); // Discard body value before Reset.
+            fc.emit(Op::Reset);
         } else {
+            compile_block(&mut fc, &first.body)?;
             fc.emit(Op::Return);
         }
     } else {
         // Multiheaded or pattern-matched parameters: dispatch.
+        if block_type == BlockType::Stream {
+            return Err(CompileError {
+                message: String::from("multiheaded stream (loop) functions are not supported"),
+                span: first.params.first().map_or(Span { start: 0, end: 0, line: 0, column: 0 }, |p| p.span),
+            });
+        }
+
         let mut fail_jumps: Vec<usize> = Vec::new();
-        let mut end_jumps: Vec<usize> = Vec::new();
 
         for def in defs {
-            // Patch previous fail jump to here.
-            for addr in fail_jumps.drain(..) {
+            // Close previous arm's If blocks: emit EndIf for each fail_jump in reverse.
+            for addr in fail_jumps.drain(..).rev() {
                 fc.patch_jump(addr);
+                fc.emit(Op::EndIf);
             }
 
             fc.begin_scope();
@@ -292,28 +308,25 @@ fn compile_function_group(
             // Test guard clause if present.
             if let Some(guard) = &def.guard {
                 compile_expr(&mut fc, guard)?;
-                let fail = fc.emit_jump(Op::JumpIfFalse(0));
+                let fail = fc.emit_jump(Op::If(0));
                 fail_jumps.push(fail);
             }
 
             compile_block(&mut fc, &def.body)?;
             fc.emit(Op::Return);
-            end_jumps.push(fc.emit_jump(Op::Jump(0)));
 
             fc.end_scope();
         }
 
-        // No head matched: emit trap.
-        for addr in fail_jumps.drain(..) {
+        // Close final arm's If blocks.
+        for addr in fail_jumps.drain(..).rev() {
             fc.patch_jump(addr);
+            fc.emit(Op::EndIf);
         }
+
+        // No head matched: emit trap.
         let msg = fc.add_string_constant(&format!("no matching head for {}", name));
         fc.emit(Op::Trap(msg));
-
-        // Patch end jumps.
-        for addr in end_jumps {
-            fc.patch_jump(addr);
-        }
     }
 
     Ok(fc.finish())
@@ -369,7 +382,7 @@ fn compile_stmt(fc: &mut FuncCompiler, stmt: &Stmt) -> Result<(), CompileError> 
                     span: *span,
                 });
             }
-            let addr = fc.emit_jump(Op::Jump(0));
+            let addr = fc.emit_jump(Op::Break(0));
             if let Some(breaks) = fc.loop_breaks.last_mut() {
                 breaks.push(addr);
             }
@@ -424,14 +437,14 @@ fn compile_for(fc: &mut FuncCompiler, for_stmt: &ForStmt) -> Result<(), CompileE
             let end_slot = fc.declare_local("__for_end");
             fc.emit(Op::SetLocal(end_slot));
 
-            let loop_start = fc.chunk.ops.len();
+            let loop_addr = fc.emit(Op::Loop(0)); // Placeholder, patched to past EndLoop.
             fc.enter_loop();
 
-            // Condition: var < end.
+            // Condition: break if var >= end.
             fc.emit(Op::GetLocal(var_slot));
             fc.emit(Op::GetLocal(end_slot));
-            fc.emit(Op::CmpLt);
-            let exit_jump = fc.emit_jump(Op::JumpIfFalse(0));
+            fc.emit(Op::CmpGe);
+            let break_addr = fc.emit(Op::BreakIf(0)); // Placeholder.
 
             // Body.
             fc.begin_scope();
@@ -445,29 +458,26 @@ fn compile_for(fc: &mut FuncCompiler, for_stmt: &ForStmt) -> Result<(), CompileE
             fc.emit(Op::Const(one_const));
             fc.emit(Op::Add);
             fc.emit(Op::SetLocal(var_slot));
-            fc.emit(Op::Jump(loop_start as u32));
 
-            fc.patch_jump(exit_jump);
-            fc.exit_loop();
+            let endloop_addr = fc.emit(Op::EndLoop(0)); // Placeholder, patched to after Loop.
+
+            // Patch Loop and BreakIf to point past EndLoop.
+            let after_endloop = fc.chunk.ops.len() as u32;
+            if let Op::Loop(a) = &mut fc.chunk.ops[loop_addr] {
+                *a = after_endloop;
+            }
+            if let Op::BreakIf(a) = &mut fc.chunk.ops[break_addr] {
+                *a = after_endloop;
+            }
+            // Patch EndLoop back-edge to instruction after Loop.
+            let after_loop = (loop_addr + 1) as u32;
+            if let Op::EndLoop(a) = &mut fc.chunk.ops[endloop_addr] {
+                *a = after_loop;
+            }
+
+            fc.exit_loop(); // Patches Break addresses to after_endloop.
         }
-        Iterable::Expr(expr) => {
-            // Compile the iterable expression.
-            compile_expr(fc, expr)?;
-            let arr_slot = fc.declare_local("__for_arr");
-            fc.emit(Op::SetLocal(arr_slot));
-
-            // Index counter.
-            let zero_const = fc.add_constant(Value::Int(0));
-            fc.emit(Op::Const(zero_const));
-            let idx_slot = fc.declare_local("__for_idx");
-            fc.emit(Op::SetLocal(idx_slot));
-
-            // Array length: we need a way to get length at runtime.
-            // For now, use a native-like approach: store array and index.
-            // The loop condition checks arr[idx] bounds.
-            // We will use a special approach: catch index-out-of-bounds as loop exit.
-            // FUTURE: Add a Len instruction. For now, iterate until GetIndex fails.
-            // HACK: This is a placeholder. Proper iteration requires a Len opcode.
+        Iterable::Expr(_expr) => {
             return Err(CompileError {
                 message: String::from("for-in over expressions is not yet supported; use range syntax"),
                 span: for_stmt.span,
@@ -511,26 +521,37 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
         }
 
         Expr::BinOp { op, left, right, .. } => {
-            // Short-circuit for logical operators.
+            // Short-circuit for logical operators using block-structured control.
             match op {
                 BinOp::And => {
+                    // a && b: if a is false, result is false; else result is b.
                     compile_expr(fc, left)?;
-                    let short = fc.emit_jump(Op::JumpIfFalse(0));
+                    fc.emit(Op::Dup);
+                    let if_addr = fc.emit_jump(Op::If(0));
+                    // a was true: discard dup, evaluate b.
+                    fc.emit(Op::Pop);
                     compile_expr(fc, right)?;
-                    let end = fc.emit_jump(Op::Jump(0));
-                    fc.patch_jump(short);
-                    fc.emit(Op::PushFalse);
-                    fc.patch_jump(end);
+                    let else_addr = fc.emit_jump(Op::Else(0));
+                    fc.patch_jump(if_addr);
+                    // a was false: duplicated false is on stack as result.
+                    fc.patch_jump(else_addr);
+                    fc.emit(Op::EndIf);
                     return Ok(());
                 }
                 BinOp::Or => {
+                    // a || b: if a is true, result is true; else result is b.
                     compile_expr(fc, left)?;
-                    let short = fc.emit_jump(Op::JumpIfFalse(0));
-                    fc.emit(Op::PushTrue);
-                    let end = fc.emit_jump(Op::Jump(0));
-                    fc.patch_jump(short);
+                    fc.emit(Op::Dup);
+                    fc.emit(Op::Not);
+                    let if_addr = fc.emit_jump(Op::If(0));
+                    // a was false (Not gave true, If continued): discard dup, evaluate b.
+                    fc.emit(Op::Pop);
                     compile_expr(fc, right)?;
-                    fc.patch_jump(end);
+                    let else_addr = fc.emit_jump(Op::Else(0));
+                    fc.patch_jump(if_addr);
+                    // a was true (Not gave false, If skipped): duplicated true is on stack.
+                    fc.patch_jump(else_addr);
+                    fc.emit(Op::EndIf);
                     return Ok(());
                 }
                 _ => {}
@@ -610,18 +631,20 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
 
         Expr::If { condition, then_block, else_block, .. } => {
             compile_expr(fc, condition)?;
-            let else_jump = fc.emit_jump(Op::JumpIfFalse(0));
+            let if_addr = fc.emit_jump(Op::If(0));
             compile_block(fc, then_block)?;
             if let Some(else_blk) = else_block {
-                let end_jump = fc.emit_jump(Op::Jump(0));
-                fc.patch_jump(else_jump);
+                let else_addr = fc.emit_jump(Op::Else(0));
+                fc.patch_jump(if_addr);
                 compile_block(fc, else_blk)?;
-                fc.patch_jump(end_jump);
+                fc.patch_jump(else_addr);
+                fc.emit(Op::EndIf);
             } else {
-                let end_jump = fc.emit_jump(Op::Jump(0));
-                fc.patch_jump(else_jump);
+                let else_addr = fc.emit_jump(Op::Else(0));
+                fc.patch_jump(if_addr);
                 fc.emit(Op::PushUnit);
-                fc.patch_jump(end_jump);
+                fc.patch_jump(else_addr);
+                fc.emit(Op::EndIf);
             }
         }
 
@@ -630,7 +653,9 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
             let temp = fc.declare_local("__match");
             fc.emit(Op::SetLocal(temp));
 
-            let mut end_jumps: Vec<usize> = Vec::new();
+            // Wrap match in a virtual Loop so arms can Break to exit.
+            let loop_addr = fc.emit(Op::Loop(0));
+            fc.enter_loop();
 
             for arm in arms {
                 fc.begin_scope();
@@ -638,12 +663,19 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
                 let fail_addrs = compile_pattern_test(fc, &arm.pattern, temp)?;
                 compile_pattern_bind(fc, &arm.pattern, temp)?;
                 compile_expr(fc, &arm.expr)?;
-                end_jumps.push(fc.emit_jump(Op::Jump(0)));
+
+                // Break out of virtual loop (arm matched, result on stack).
+                let break_addr = fc.emit(Op::Break(0));
+                if let Some(breaks) = fc.loop_breaks.last_mut() {
+                    breaks.push(break_addr);
+                }
 
                 fc.end_scope();
 
-                for addr in fail_addrs {
+                // Close If blocks from pattern tests in reverse order.
+                for addr in fail_addrs.into_iter().rev() {
                     fc.patch_jump(addr);
+                    fc.emit(Op::EndIf);
                 }
             }
 
@@ -651,20 +683,44 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
             let msg = fc.add_string_constant("no matching arm in match expression");
             fc.emit(Op::Trap(msg));
 
-            for addr in end_jumps {
-                fc.patch_jump(addr);
+            let endloop_addr = fc.emit(Op::EndLoop(0));
+
+            // Patch EndLoop back-edge to instruction after Loop.
+            let after_loop = (loop_addr + 1) as u32;
+            if let Op::EndLoop(a) = &mut fc.chunk.ops[endloop_addr] {
+                *a = after_loop;
             }
+
+            // Patch Loop to past EndLoop, and patch all Break addresses.
+            let after_endloop = fc.chunk.ops.len() as u32;
+            if let Op::Loop(a) = &mut fc.chunk.ops[loop_addr] {
+                *a = after_endloop;
+            }
+            fc.exit_loop();
         }
 
         Expr::Loop { body, .. } => {
-            let loop_start = fc.chunk.ops.len();
+            let loop_addr = fc.emit(Op::Loop(0));
             fc.enter_loop();
 
             compile_block(fc, body)?;
             fc.emit(Op::Pop); // Discard block value.
-            fc.emit(Op::Jump(loop_start as u32));
 
+            let endloop_addr = fc.emit(Op::EndLoop(0));
+
+            // Patch EndLoop back-edge to instruction after Loop.
+            let after_loop = (loop_addr + 1) as u32;
+            if let Op::EndLoop(a) = &mut fc.chunk.ops[endloop_addr] {
+                *a = after_loop;
+            }
+
+            // Patch Loop to past EndLoop, and patch all Break addresses.
+            let after_endloop = fc.chunk.ops.len() as u32;
+            if let Op::Loop(a) = &mut fc.chunk.ops[loop_addr] {
+                *a = after_endloop;
+            }
             fc.exit_loop();
+
             // Loop expression evaluates to Unit after break.
             fc.emit(Op::PushUnit);
         }
@@ -757,8 +813,8 @@ fn compile_call(
     Ok(())
 }
 
-/// Compile a pattern test. Returns addresses of jump instructions that need
-/// patching to the "fail" destination (the next arm or error).
+/// Compile a pattern test. Returns addresses of If instructions that need
+/// patching to the "fail" destination (EndIf at the next arm or error).
 fn compile_pattern_test(
     fc: &mut FuncCompiler,
     pattern: &Pattern,
@@ -789,14 +845,14 @@ fn compile_pattern_test(
                 Literal::Bool(false) => { fc.emit(Op::PushFalse); }
             }
             fc.emit(Op::CmpEq);
-            fail_addrs.push(fc.emit_jump(Op::JumpIfFalse(0)));
+            fail_addrs.push(fc.emit_jump(Op::If(0)));
         }
         Pattern::Enum(enum_name, variant, sub_pats, _) => {
             fc.emit(Op::GetLocal(value_slot));
             let e_const = fc.add_string_constant(enum_name);
             let v_const = fc.add_string_constant(variant);
-            let fail = fc.emit_jump(Op::TestEnum(e_const, v_const, 0));
-            fail_addrs.push(fail);
+            fc.emit(Op::IsEnum(e_const, v_const));
+            fail_addrs.push(fc.emit_jump(Op::If(0)));
             fc.emit(Op::Pop); // Discard the peeked value.
 
             // Test sub-patterns on extracted fields.
@@ -815,8 +871,8 @@ fn compile_pattern_test(
         Pattern::Struct(type_name, field_pats, _) => {
             fc.emit(Op::GetLocal(value_slot));
             let t_const = fc.add_string_constant(type_name);
-            let fail = fc.emit_jump(Op::TestStruct(t_const, 0));
-            fail_addrs.push(fail);
+            fc.emit(Op::IsStruct(t_const));
+            fail_addrs.push(fc.emit_jump(Op::If(0)));
             fc.emit(Op::Pop);
 
             for field_pat in field_pats {
@@ -963,8 +1019,8 @@ mod tests {
             "fn max(a: i64, b: i64) -> i64 { if a > b { a } else { b } }"
         ).unwrap();
         assert_eq!(module.chunks.len(), 1);
-        // Should contain JumpIfFalse for the if condition.
-        assert!(module.chunks[0].ops.iter().any(|op| matches!(op, Op::JumpIfFalse(_))));
+        // Should contain If for the condition.
+        assert!(module.chunks[0].ops.iter().any(|op| matches!(op, Op::If(_))));
     }
 
     #[test]
@@ -981,6 +1037,9 @@ mod tests {
             "fn sum_to(n: i64) -> i64 { let total = 0; for i in 0..n { let x = total + i; } total }"
         ).unwrap();
         assert_eq!(module.chunks.len(), 1);
+        // Should contain Loop/EndLoop for the for-range.
+        assert!(module.chunks[0].ops.iter().any(|op| matches!(op, Op::Loop(_))));
+        assert!(module.chunks[0].ops.iter().any(|op| matches!(op, Op::EndLoop(_))));
     }
 
     #[test]
@@ -1028,6 +1087,7 @@ mod tests {
         ).unwrap();
         assert_eq!(module.chunks.len(), 1);
         assert!(module.chunks[0].ops.iter().any(|op| matches!(op, Op::Yield)));
+        assert_eq!(module.chunks[0].block_type, BlockType::Reentrant);
     }
 
     #[test]
@@ -1036,12 +1096,10 @@ mod tests {
             "loop main(input: i64) -> i64 { let input = yield input + 1; input }"
         ).unwrap();
         assert_eq!(module.chunks.len(), 1);
-        assert!(module.chunks[0].is_loop);
-        // Should end with Jump(0) for the implicit loop.
-        let last_real = module.chunks[0].ops.iter().rev()
-            .find(|op| !matches!(op, Op::Jump(_)))
-            .cloned();
-        assert!(last_real.is_some());
+        assert_eq!(module.chunks[0].block_type, BlockType::Stream);
+        // Should contain Stream and Reset instructions.
+        assert!(module.chunks[0].ops.iter().any(|op| matches!(op, Op::Stream)));
+        assert!(module.chunks[0].ops.iter().any(|op| matches!(op, Op::Reset)));
     }
 
     #[test]
@@ -1076,5 +1134,20 @@ mod tests {
     fn error_break_outside_loop() {
         let result = compile_str("fn bad() -> () { break; }");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn compile_block_structured_control() {
+        // Verify no flat jumps are emitted.
+        let module = compile_str(
+            "fn main() -> i64 { if true { 1 } else { 2 } }"
+        ).unwrap();
+        for op in &module.chunks[0].ops {
+            assert!(!matches!(op, Op::Loop(_) | Op::EndLoop(_) | Op::Break(_) | Op::BreakIf(_)),
+                "unexpected loop instruction in simple if/else");
+        }
+        assert!(module.chunks[0].ops.iter().any(|op| matches!(op, Op::If(_))));
+        assert!(module.chunks[0].ops.iter().any(|op| matches!(op, Op::Else(_))));
+        assert!(module.chunks[0].ops.iter().any(|op| matches!(op, Op::EndIf)));
     }
 }

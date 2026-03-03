@@ -7,5 +7,6 @@ pub mod ast;
 pub mod parser;
 pub mod bytecode;
 pub mod compiler;
+pub mod verify;
 pub mod vm;
 pub mod audio_natives;

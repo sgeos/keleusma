@@ -69,12 +69,12 @@ Keleusma provides four static guarantees about program behavior.
 
 ## Memory Model
 
-Keleusma uses an arena memory model. The arena consists of a stack and a scratchpad heap. The arena persists across yields within an iteration but is cleared at the top of every productive divergent function iteration (the RESET boundary). This prevents memory leaks and ensures predictable resource usage. No memory survives across RESET boundaries. Memory bounds are statically analyzable.
+Keleusma uses an arena memory model. The arena is a single contiguous allocation using bump allocation. The stack grows from one end. There is no heap initially. The arena persists across yields within an iteration but is cleared at the top of every productive divergent function iteration (the RESET boundary). Deallocation occurs only at RESET, when the entire arena is cleared by resetting the bump pointer. This prevents memory leaks and ensures predictable resource usage. No memory survives across RESET boundaries. Memory bounds are statically analyzable.
 
 Clear separation exists between three memory regions.
 
-- **Arena (stack + scratchpad heap).** Ephemeral per iteration. Cleared at RESET.
-- **Read-only sections (rodata + text).** Immutable program code and constant data. Swappable at RESET boundaries during hot code swaps.
+- **Arena (bump-allocated).** Ephemeral per iteration. Single contiguous buffer with stack growing from one end. Cleared at RESET.
+- **Read-only sections (rodata + text).** Immutable program code and constant data. Double-buffered and swappable at RESET boundaries during hot code swaps.
 - **Host-controlled state.** External to the VM, managed by the host application.
 
 ## Hot Code Swapping
@@ -84,6 +84,10 @@ Keleusma supports swapping the text and rodata segments at the boundary of a pro
 ## WCET Analysis
 
 Worst-Case Execution Time is measured from yield to yield. Each yield-to-yield slice must have a statically provable upper bound on instructions executed. In the absence of dynamic dispatch, every execution path is a static directed acyclic graph between yield points. WCET is determined by counting opcodes on the longest path between any two yield points. This enables industrial certification for hard real-time systems.
+
+## Turing Completeness
+
+Individual time slices are not Turing complete. Each yield-to-yield slice executes a bounded number of instructions and then suspends. Turing completeness arises from the VM-Host pair operating over the unbounded RESET cycle. The host provides the "tape" through YIELD exchanges, supplying new input on each resumption. Computation can span arbitrarily many RESET cycles, and the host-controlled state that persists across resets serves as the unbounded external memory that completes the computational model. The language is deliberately not Turing complete in isolation. This constraint is what makes static WCET analysis and industrial certification possible.
 
 ## Two Temporal Domains
 
@@ -124,10 +128,10 @@ The following features are explicitly excluded from the current language design.
 - Closures and anonymous functions
 - String interpolation
 
-Note: Hot code swapping and structural verification at the bytecode level are part of the design vision and are described in [EXECUTION_MODEL.md](./EXECUTION_MODEL.md) and [TARGET_ISA.md](../reference/TARGET_ISA.md). Implementation is pending.
+Note: Hot code swapping and structural verification at the bytecode level are part of the design and are described in [EXECUTION_MODEL.md](./EXECUTION_MODEL.md) and [TARGET_ISA.md](../reference/TARGET_ISA.md). The structural ISA is currently being implemented.
 
 ## Cross-References
 
 - [GRAMMAR.md](../design/GRAMMAR.md) provides the formal EBNF grammar specification.
 - [EXECUTION_MODEL.md](./EXECUTION_MODEL.md) describes the target execution model with temporal domains.
-- [TARGET_ISA.md](../reference/TARGET_ISA.md) describes the structural ISA design.
+- [TARGET_ISA.md](../reference/TARGET_ISA.md) describes the structural ISA specification.

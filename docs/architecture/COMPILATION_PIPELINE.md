@@ -99,9 +99,9 @@ A compiled `Module` is the output of the compiler and the input to the virtual m
 - **Entry point index.** The index into the chunk vector that identifies the loop function serving as the script entry point.
 - **Enum definitions.** A table of enum type definitions used for variant construction and pattern matching at runtime.
 
-## Structural Verification (Target)
+## Structural Verification
 
-The target ISA design introduces structural verification rules that validate programs at load time. Block-based nesting ensures that invalid or unproductive programs cannot be loaded. The verifier performs a linear scan that colors blocks based on productivity. All paths from STREAM to RESET must pass through at least one YIELD. All FUNC blocks must be free of yields. This verification is not yet implemented in the current compilation pipeline. See [TARGET_ISA.md](../reference/TARGET_ISA.md) for the complete structural ISA specification.
+The structural ISA introduces verification rules that validate programs at load time. Block-based nesting ensures that invalid or unproductive programs cannot be loaded. The verifier performs a linear scan that colors blocks based on productivity. All paths from STREAM to RESET must pass through at least one YIELD. All FUNC blocks must be free of yields. Implementation of structural verification is in progress alongside the ISA transition (R21). See [TARGET_ISA.md](../reference/TARGET_ISA.md) for the complete structural ISA specification.
 
 ## Cross-References
 

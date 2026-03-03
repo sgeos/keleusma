@@ -16,9 +16,9 @@ The compiler currently only supports range-based for loops of the form `for i in
 
 What should happen when a script encounters a runtime error? Options include yielding a default value, suspending the script, or notifying the host via `VmError`. The current implementation halts execution on error. A recovery model would need to define whether the host can resume a script after an error, and if so, what value the host supplies at the recovery point.
 
-## P4. Target ISA implementation
+## P4. Structural ISA implementation
 
-The structural ISA with STREAM, RESET, REENTRANT, FUNC, and LOOP_N block types represents the long-term execution model designed for safety-critical certification. Transitioning from the current 48-instruction bytecode to the structural ISA requires significant compiler and VM changes, including adding block primitives to the bytecode format, implementing the arena memory model with RESET-triggered clearing, and implementing the structural verification pass.
+The structural ISA with Stream, Reset, Reentrant, Func, and block-structured control flow is currently being implemented (R21). The transition from the previous 48-instruction flat-jump bytecode to the structural ISA requires compiler and VM changes, including replacing flat jumps with block-structured control flow, adding block primitives to the bytecode format, implementing the arena memory model with Reset-triggered clearing, and implementing the structural verification pass.
 
 ## P5. WCET analysis tooling
 

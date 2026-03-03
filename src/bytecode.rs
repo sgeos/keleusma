@@ -74,6 +74,17 @@ impl Value {
     }
 }
 
+/// Classification of a compiled function chunk.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BlockType {
+    /// Atomic total function (`fn`). No yields, no streaming.
+    Func,
+    /// Non-atomic total function (`yield fn`). Must contain at least one Yield.
+    Reentrant,
+    /// Productive divergent function (`loop fn`). Contains Stream/Reset and Yield.
+    Stream,
+}
+
 /// A bytecode instruction.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Op {
@@ -120,10 +131,32 @@ pub enum Op {
     /// Logical NOT.
     Not,
 
-    /// Unconditional jump to instruction index.
-    Jump(u32),
-    /// Pop top of stack; jump if false.
-    JumpIfFalse(u32),
+    // -- Block-structured control flow --
+
+    /// Pop bool; if false, skip to target (matching Else or EndIf).
+    If(u32),
+    /// Skip to target (matching EndIf). Reached when then-block falls through.
+    Else(u32),
+    /// Block delimiter for If/Else. No-op at runtime.
+    EndIf,
+
+    /// Begin loop block. Target is past EndLoop (used by Break/BreakIf).
+    Loop(u32),
+    /// Back-edge to instruction after matching Loop.
+    EndLoop(u32),
+    /// Unconditional forward jump past enclosing EndLoop.
+    Break(u32),
+    /// Pop bool; if true, forward jump past enclosing EndLoop.
+    BreakIf(u32),
+
+    // -- Streaming --
+
+    /// Stream block entry marker. No-op at runtime.
+    Stream,
+    /// Clear arena, return VmState::Reset to host.
+    Reset,
+
+    // -- Functions --
 
     /// Call compiled function by chunk index with N arguments.
     Call(u16, u8),
@@ -162,10 +195,10 @@ pub enum Op {
     /// Pop enum, push field at literal index.
     GetEnumField(u8),
 
-    /// Peek at TOS: continue if matching enum variant, else jump.
-    TestEnum(u16, u16, u32),
-    /// Peek at TOS: continue if matching struct type, else jump.
-    TestStruct(u16, u32),
+    /// Peek at TOS: push true if matching enum type and variant, false otherwise.
+    IsEnum(u16, u16),
+    /// Peek at TOS: push true if matching struct type, false otherwise.
+    IsStruct(u16),
 
     /// Cast i64 to f64.
     IntToFloat,
@@ -200,8 +233,8 @@ pub struct Chunk {
     pub local_count: u16,
     /// Number of parameters.
     pub param_count: u8,
-    /// Whether this is a `loop` category function.
-    pub is_loop: bool,
+    /// Block type classification for structural verification.
+    pub block_type: BlockType,
 }
 
 /// A compiled Keleusma module.
