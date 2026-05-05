@@ -616,10 +616,12 @@ impl<'a> Parser<'a> {
                             span,
                         };
                     }
-                    _ => return Err(ParseError {
-                        message: String::from("expected field name or tuple index after '.'"),
-                        span: tok.span,
-                    }),
+                    _ => {
+                        return Err(ParseError {
+                            message: String::from("expected field name or tuple index after '.'"),
+                            span: tok.span,
+                        });
+                    }
                 }
             } else if self.eat(&TokenKind::LBracket) {
                 let index = self.parse_expr()?;
@@ -806,9 +808,7 @@ impl<'a> Parser<'a> {
                 } else {
                     None
                 };
-                let end = else_block
-                    .as_ref()
-                    .map_or(then_block.span, |b| b.span);
+                let end = else_block.as_ref().map_or(then_block.span, |b| b.span);
                 Ok(Expr::If {
                     condition: Box::new(condition),
                     then_block,
@@ -1183,27 +1183,49 @@ mod tests {
     #[test]
     fn parse_integer_literal() {
         let expr = parse_expr_str("42").unwrap();
-        assert!(matches!(expr, Expr::Literal { value: Literal::Int(42), .. }));
+        assert!(matches!(
+            expr,
+            Expr::Literal {
+                value: Literal::Int(42),
+                ..
+            }
+        ));
     }
 
     #[test]
     fn parse_float_literal() {
         let expr = parse_expr_str("2.75").unwrap();
-        assert!(matches!(expr, Expr::Literal { value: Literal::Float(v), .. } if (v - 2.75).abs() < 1e-10));
+        assert!(
+            matches!(expr, Expr::Literal { value: Literal::Float(v), .. } if (v - 2.75).abs() < 1e-10)
+        );
     }
 
     #[test]
     fn parse_string_literal() {
         let expr = parse_expr_str("\"hello\"").unwrap();
-        assert!(matches!(expr, Expr::Literal { value: Literal::String(ref s), .. } if s == "hello"));
+        assert!(
+            matches!(expr, Expr::Literal { value: Literal::String(ref s), .. } if s == "hello")
+        );
     }
 
     #[test]
     fn parse_bool_literals() {
         let t = parse_expr_str("true").unwrap();
-        assert!(matches!(t, Expr::Literal { value: Literal::Bool(true), .. }));
+        assert!(matches!(
+            t,
+            Expr::Literal {
+                value: Literal::Bool(true),
+                ..
+            }
+        ));
         let f = parse_expr_str("false").unwrap();
-        assert!(matches!(f, Expr::Literal { value: Literal::Bool(false), .. }));
+        assert!(matches!(
+            f,
+            Expr::Literal {
+                value: Literal::Bool(false),
+                ..
+            }
+        ));
     }
 
     #[test]
@@ -1217,7 +1239,12 @@ mod tests {
         let expr = parse_expr_str("a + b * c").unwrap();
         // Should be Add(a, Mul(b, c)) due to precedence.
         match expr {
-            Expr::BinOp { op: BinOp::Add, ref left, ref right, .. } => {
+            Expr::BinOp {
+                op: BinOp::Add,
+                ref left,
+                ref right,
+                ..
+            } => {
                 assert!(matches!(**left, Expr::Ident { ref name, .. } if name == "a"));
                 assert!(matches!(**right, Expr::BinOp { op: BinOp::Mul, .. }));
             }
@@ -1236,7 +1263,11 @@ mod tests {
         let expr = parse_expr_str("a and b or c").unwrap();
         // `and` and `or` are same precedence, left-to-right.
         match expr {
-            Expr::BinOp { op: BinOp::Or, ref left, .. } => {
+            Expr::BinOp {
+                op: BinOp::Or,
+                ref left,
+                ..
+            } => {
                 assert!(matches!(**left, Expr::BinOp { op: BinOp::And, .. }));
             }
             _ => panic!("expected Or, got {:?}", expr),
@@ -1246,20 +1277,34 @@ mod tests {
     #[test]
     fn parse_unary_not() {
         let expr = parse_expr_str("not true").unwrap();
-        assert!(matches!(expr, Expr::UnaryOp { op: UnaryOp::Not, .. }));
+        assert!(matches!(
+            expr,
+            Expr::UnaryOp {
+                op: UnaryOp::Not,
+                ..
+            }
+        ));
     }
 
     #[test]
     fn parse_unary_neg() {
         let expr = parse_expr_str("-x").unwrap();
-        assert!(matches!(expr, Expr::UnaryOp { op: UnaryOp::Neg, .. }));
+        assert!(matches!(
+            expr,
+            Expr::UnaryOp {
+                op: UnaryOp::Neg,
+                ..
+            }
+        ));
     }
 
     #[test]
     fn parse_function_call() {
         let expr = parse_expr_str("foo(1, 2, 3)").unwrap();
         match expr {
-            Expr::Call { ref name, ref args, .. } => {
+            Expr::Call {
+                ref name, ref args, ..
+            } => {
                 assert_eq!(name, "foo");
                 assert_eq!(args.len(), 3);
             }
@@ -1271,7 +1316,9 @@ mod tests {
     fn parse_qualified_call() {
         let expr = parse_expr_str("audio::set_freq(440.0)").unwrap();
         match expr {
-            Expr::Call { ref name, ref args, .. } => {
+            Expr::Call {
+                ref name, ref args, ..
+            } => {
                 assert_eq!(name, "audio::set_freq");
                 assert_eq!(args.len(), 1);
             }
@@ -1283,7 +1330,12 @@ mod tests {
     fn parse_enum_variant() {
         let expr = parse_expr_str("Command::NoteOn(1, 60, 0.8)").unwrap();
         match expr {
-            Expr::EnumVariant { ref enum_name, ref variant, ref args, .. } => {
+            Expr::EnumVariant {
+                ref enum_name,
+                ref variant,
+                ref args,
+                ..
+            } => {
                 assert_eq!(enum_name, "Command");
                 assert_eq!(variant, "NoteOn");
                 assert_eq!(args.len(), 3);
@@ -1296,7 +1348,12 @@ mod tests {
     fn parse_unit_enum_variant() {
         let expr = parse_expr_str("Command::Silence").unwrap();
         match expr {
-            Expr::EnumVariant { ref enum_name, ref variant, ref args, .. } => {
+            Expr::EnumVariant {
+                ref enum_name,
+                ref variant,
+                ref args,
+                ..
+            } => {
                 assert_eq!(enum_name, "Command");
                 assert_eq!(variant, "Silence");
                 assert!(args.is_empty());
@@ -1309,7 +1366,11 @@ mod tests {
     fn parse_struct_init() {
         let expr = parse_expr_str("Note { channel: 0, pitch: 60 }").unwrap();
         match expr {
-            Expr::StructInit { ref name, ref fields, .. } => {
+            Expr::StructInit {
+                ref name,
+                ref fields,
+                ..
+            } => {
                 assert_eq!(name, "Note");
                 assert_eq!(fields.len(), 2);
                 assert_eq!(fields[0].name, "channel");
@@ -1494,7 +1555,10 @@ mod tests {
         let program = parse_str(src).unwrap();
         assert_eq!(program.uses.len(), 1);
         assert_eq!(program.uses[0].path, vec!["audio"]);
-        assert_eq!(program.uses[0].import, ImportItem::Name(String::from("set_frequency")));
+        assert_eq!(
+            program.uses[0].import,
+            ImportItem::Name(String::from("set_frequency"))
+        );
     }
 
     #[test]
@@ -1551,7 +1615,9 @@ mod tests {
     fn parse_pipeline() {
         let expr = parse_expr_str("x |> transform() |> output()").unwrap();
         match expr {
-            Expr::Pipeline { ref func, ref left, .. } => {
+            Expr::Pipeline {
+                ref func, ref left, ..
+            } => {
                 assert_eq!(func, "output");
                 assert!(matches!(**left, Expr::Pipeline { .. }));
             }
@@ -1563,7 +1629,9 @@ mod tests {
     fn parse_pipeline_with_args() {
         let expr = parse_expr_str("x |> insert(coll, _)").unwrap();
         match expr {
-            Expr::Pipeline { ref func, ref args, .. } => {
+            Expr::Pipeline {
+                ref func, ref args, ..
+            } => {
                 assert_eq!(func, "insert");
                 assert_eq!(args.len(), 2);
                 assert!(matches!(args[1], Expr::Placeholder { .. }));

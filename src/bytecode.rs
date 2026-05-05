@@ -44,12 +44,26 @@ impl PartialEq for Value {
             (Value::Str(a), Value::Str(b)) => a == b,
             (Value::Tuple(a), Value::Tuple(b)) | (Value::Array(a), Value::Array(b)) => a == b,
             (
-                Value::Struct { type_name: na, fields: fa },
-                Value::Struct { type_name: nb, fields: fb },
+                Value::Struct {
+                    type_name: na,
+                    fields: fa,
+                },
+                Value::Struct {
+                    type_name: nb,
+                    fields: fb,
+                },
             ) => na == nb && fa == fb,
             (
-                Value::Enum { type_name: na, variant: va, fields: fa },
-                Value::Enum { type_name: nb, variant: vb, fields: fb },
+                Value::Enum {
+                    type_name: na,
+                    variant: va,
+                    fields: fa,
+                },
+                Value::Enum {
+                    type_name: nb,
+                    variant: vb,
+                    fields: fb,
+                },
             ) => na == nb && va == vb && fa == fb,
             _ => false,
         }
@@ -132,7 +146,6 @@ pub enum Op {
     Not,
 
     // -- Block-structured control flow --
-
     /// Pop bool; if false, skip to target (matching Else or EndIf).
     If(u32),
     /// Skip to target (matching EndIf). Reached when then-block falls through.
@@ -150,14 +163,12 @@ pub enum Op {
     BreakIf(u32),
 
     // -- Streaming --
-
     /// Stream block entry marker. No-op at runtime.
     Stream,
     /// Clear arena, return VmState::Reset to host.
     Reset,
 
     // -- Functions --
-
     /// Call compiled function by chunk index with N arguments.
     Call(u16, u8),
     /// Call native function by registry index with N arguments.

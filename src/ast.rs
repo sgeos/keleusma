@@ -153,35 +153,87 @@ pub enum Expr {
     /// Variable or qualified name reference.
     Ident { name: String, span: Span },
     /// Binary operation.
-    BinOp { op: BinOp, left: Box<Expr>, right: Box<Expr>, span: Span },
+    BinOp {
+        op: BinOp,
+        left: Box<Expr>,
+        right: Box<Expr>,
+        span: Span,
+    },
     /// Unary operation (`not`, `-`).
-    UnaryOp { op: UnaryOp, operand: Box<Expr>, span: Span },
+    UnaryOp {
+        op: UnaryOp,
+        operand: Box<Expr>,
+        span: Span,
+    },
     /// Function call.
-    Call { name: String, args: Vec<Expr>, span: Span },
+    Call {
+        name: String,
+        args: Vec<Expr>,
+        span: Span,
+    },
     /// Pipeline expression: `left |> func(args)`.
-    Pipeline { left: Box<Expr>, func: String, args: Vec<Expr>, span: Span },
+    Pipeline {
+        left: Box<Expr>,
+        func: String,
+        args: Vec<Expr>,
+        span: Span,
+    },
     /// Yield expression.
     Yield { value: Box<Expr>, span: Span },
     /// If/else expression.
-    If { condition: Box<Expr>, then_block: Block, else_block: Option<Block>, span: Span },
+    If {
+        condition: Box<Expr>,
+        then_block: Block,
+        else_block: Option<Block>,
+        span: Span,
+    },
     /// Match expression.
-    Match { scrutinee: Box<Expr>, arms: Vec<MatchArm>, span: Span },
+    Match {
+        scrutinee: Box<Expr>,
+        arms: Vec<MatchArm>,
+        span: Span,
+    },
     /// Loop expression.
     Loop { body: Block, span: Span },
     /// Field access: `expr.field`.
-    FieldAccess { object: Box<Expr>, field: String, span: Span },
+    FieldAccess {
+        object: Box<Expr>,
+        field: String,
+        span: Span,
+    },
     /// Tuple index: `expr.0`.
-    TupleIndex { object: Box<Expr>, index: u64, span: Span },
+    TupleIndex {
+        object: Box<Expr>,
+        index: u64,
+        span: Span,
+    },
     /// Array index: `expr[index]`.
-    ArrayIndex { object: Box<Expr>, index: Box<Expr>, span: Span },
+    ArrayIndex {
+        object: Box<Expr>,
+        index: Box<Expr>,
+        span: Span,
+    },
     /// Struct initialization: `Name { field: value }`.
-    StructInit { name: String, fields: Vec<FieldInit>, span: Span },
+    StructInit {
+        name: String,
+        fields: Vec<FieldInit>,
+        span: Span,
+    },
     /// Enum variant: `Enum::Variant(args)`.
-    EnumVariant { enum_name: String, variant: String, args: Vec<Expr>, span: Span },
+    EnumVariant {
+        enum_name: String,
+        variant: String,
+        args: Vec<Expr>,
+        span: Span,
+    },
     /// Array literal: `[a, b, c]`.
     ArrayLiteral { elements: Vec<Expr>, span: Span },
     /// Type cast: `expr as Type`.
-    Cast { expr: Box<Expr>, target: TypeExpr, span: Span },
+    Cast {
+        expr: Box<Expr>,
+        target: TypeExpr,
+        span: Span,
+    },
     /// Pipeline placeholder `_`.
     Placeholder { span: Span },
 }

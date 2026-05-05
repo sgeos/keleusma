@@ -351,7 +351,10 @@ impl<'a> Lexer<'a> {
 
             // Underscore: standalone is a token, with trailing alnum is a lower ident
             b'_' => {
-                if self.peek().is_some_and(|c| c.is_ascii_alphanumeric() || c == b'_') {
+                if self
+                    .peek()
+                    .is_some_and(|c| c.is_ascii_alphanumeric() || c == b'_')
+                {
                     self.lex_lower_ident(start, start_line, start_col)
                 } else {
                     Ok(Token {
@@ -398,8 +401,8 @@ impl<'a> Lexer<'a> {
         }
 
         let text = core::str::from_utf8(&self.source[start..self.pos]).unwrap_or("");
-        let kind = TokenKind::keyword(text)
-            .unwrap_or_else(|| TokenKind::LowerIdent(String::from(text)));
+        let kind =
+            TokenKind::keyword(text).unwrap_or_else(|| TokenKind::LowerIdent(String::from(text)));
 
         Ok(Token {
             kind,
@@ -413,10 +416,7 @@ impl<'a> Lexer<'a> {
         start_line: u32,
         start_col: u32,
     ) -> Result<Token, LexError> {
-        while self
-            .peek()
-            .is_some_and(|c| c.is_ascii_alphanumeric())
-        {
+        while self.peek().is_some_and(|c| c.is_ascii_alphanumeric()) {
             self.advance();
         }
 
@@ -577,37 +577,35 @@ impl<'a> Lexer<'a> {
                         start_col,
                     ));
                 }
-                Some(b'\\') => {
-                    match self.advance() {
-                        Some(b'n') => value.push('\n'),
-                        Some(b't') => value.push('\t'),
-                        Some(b'r') => value.push('\r'),
-                        Some(b'\\') => value.push('\\'),
-                        Some(b'"') => value.push('"'),
-                        Some(b'0') => value.push('\0'),
-                        Some(c) => {
-                            return Err(self.error(
-                                {
-                                    let mut msg = String::from("unknown escape sequence '\\");
-                                    msg.push(c as char);
-                                    msg.push('\'');
-                                    msg
-                                },
-                                start,
-                                start_line,
-                                start_col,
-                            ));
-                        }
-                        None => {
-                            return Err(self.error(
-                                String::from("unterminated escape sequence"),
-                                start,
-                                start_line,
-                                start_col,
-                            ));
-                        }
+                Some(b'\\') => match self.advance() {
+                    Some(b'n') => value.push('\n'),
+                    Some(b't') => value.push('\t'),
+                    Some(b'r') => value.push('\r'),
+                    Some(b'\\') => value.push('\\'),
+                    Some(b'"') => value.push('"'),
+                    Some(b'0') => value.push('\0'),
+                    Some(c) => {
+                        return Err(self.error(
+                            {
+                                let mut msg = String::from("unknown escape sequence '\\");
+                                msg.push(c as char);
+                                msg.push('\'');
+                                msg
+                            },
+                            start,
+                            start_line,
+                            start_col,
+                        ));
                     }
-                }
+                    None => {
+                        return Err(self.error(
+                            String::from("unterminated escape sequence"),
+                            start,
+                            start_line,
+                            start_col,
+                        ));
+                    }
+                },
                 Some(c) => value.push(c as char),
             }
         }
@@ -621,9 +619,9 @@ impl<'a> Lexer<'a> {
 #[cfg(test)]
 mod tests {
     extern crate alloc;
+    use super::*;
     use alloc::string::String;
     use alloc::vec;
-    use super::*;
 
     fn kinds(source: &str) -> Vec<TokenKind> {
         tokenize(source)
@@ -659,103 +657,154 @@ mod tests {
         let result = kinds(
             "fn yield loop break let for in if else match use struct enum true false as when not and or pure",
         );
-        assert_eq!(result, vec![
-            TokenKind::Fn, TokenKind::Yield, TokenKind::Loop, TokenKind::Break,
-            TokenKind::Let, TokenKind::For, TokenKind::In, TokenKind::If,
-            TokenKind::Else, TokenKind::Match, TokenKind::Use, TokenKind::Struct,
-            TokenKind::Enum, TokenKind::True, TokenKind::False, TokenKind::As,
-            TokenKind::When, TokenKind::Not, TokenKind::And, TokenKind::Or,
-            TokenKind::Pure, TokenKind::Eof,
-        ]);
+        assert_eq!(
+            result,
+            vec![
+                TokenKind::Fn,
+                TokenKind::Yield,
+                TokenKind::Loop,
+                TokenKind::Break,
+                TokenKind::Let,
+                TokenKind::For,
+                TokenKind::In,
+                TokenKind::If,
+                TokenKind::Else,
+                TokenKind::Match,
+                TokenKind::Use,
+                TokenKind::Struct,
+                TokenKind::Enum,
+                TokenKind::True,
+                TokenKind::False,
+                TokenKind::As,
+                TokenKind::When,
+                TokenKind::Not,
+                TokenKind::And,
+                TokenKind::Or,
+                TokenKind::Pure,
+                TokenKind::Eof,
+            ]
+        );
     }
 
     #[test]
     fn lower_identifiers() {
         let result = kinds("foo bar_baz _private x1 my_var");
-        assert_eq!(result, vec![
-            TokenKind::LowerIdent(String::from("foo")),
-            TokenKind::LowerIdent(String::from("bar_baz")),
-            TokenKind::LowerIdent(String::from("_private")),
-            TokenKind::LowerIdent(String::from("x1")),
-            TokenKind::LowerIdent(String::from("my_var")),
-            TokenKind::Eof,
-        ]);
+        assert_eq!(
+            result,
+            vec![
+                TokenKind::LowerIdent(String::from("foo")),
+                TokenKind::LowerIdent(String::from("bar_baz")),
+                TokenKind::LowerIdent(String::from("_private")),
+                TokenKind::LowerIdent(String::from("x1")),
+                TokenKind::LowerIdent(String::from("my_var")),
+                TokenKind::Eof,
+            ]
+        );
     }
 
     #[test]
     fn upper_identifiers() {
         let result = kinds("Foo BarBaz Option AudioCommand");
-        assert_eq!(result, vec![
-            TokenKind::UpperIdent(String::from("Foo")),
-            TokenKind::UpperIdent(String::from("BarBaz")),
-            TokenKind::UpperIdent(String::from("Option")),
-            TokenKind::UpperIdent(String::from("AudioCommand")),
-            TokenKind::Eof,
-        ]);
+        assert_eq!(
+            result,
+            vec![
+                TokenKind::UpperIdent(String::from("Foo")),
+                TokenKind::UpperIdent(String::from("BarBaz")),
+                TokenKind::UpperIdent(String::from("Option")),
+                TokenKind::UpperIdent(String::from("AudioCommand")),
+                TokenKind::Eof,
+            ]
+        );
     }
 
     #[test]
     fn integer_literals() {
         let result = kinds("0 42 123 0xff 0b1010 100i64");
-        assert_eq!(result, vec![
-            TokenKind::IntLit(0),
-            TokenKind::IntLit(42),
-            TokenKind::IntLit(123),
-            TokenKind::IntLit(0xff),
-            TokenKind::IntLit(0b1010),
-            TokenKind::IntLit(100),
-            TokenKind::Eof,
-        ]);
+        assert_eq!(
+            result,
+            vec![
+                TokenKind::IntLit(0),
+                TokenKind::IntLit(42),
+                TokenKind::IntLit(123),
+                TokenKind::IntLit(0xff),
+                TokenKind::IntLit(0b1010),
+                TokenKind::IntLit(100),
+                TokenKind::Eof,
+            ]
+        );
     }
 
     #[test]
     fn float_literals() {
         let result = kinds("3.25 0.5 100.0 4.75f64");
-        assert_eq!(result, vec![
-            TokenKind::FloatLit(3.25),
-            TokenKind::FloatLit(0.5),
-            TokenKind::FloatLit(100.0),
-            TokenKind::FloatLit(4.75),
-            TokenKind::Eof,
-        ]);
+        assert_eq!(
+            result,
+            vec![
+                TokenKind::FloatLit(3.25),
+                TokenKind::FloatLit(0.5),
+                TokenKind::FloatLit(100.0),
+                TokenKind::FloatLit(4.75),
+                TokenKind::Eof,
+            ]
+        );
     }
 
     #[test]
     fn string_literals() {
         let result = kinds(r#""hello" "world\n" "tab\there" "quote\"end" "null\0""#);
-        assert_eq!(result, vec![
-            TokenKind::StringLit(String::from("hello")),
-            TokenKind::StringLit(String::from("world\n")),
-            TokenKind::StringLit(String::from("tab\there")),
-            TokenKind::StringLit(String::from("quote\"end")),
-            TokenKind::StringLit(String::from("null\0")),
-            TokenKind::Eof,
-        ]);
+        assert_eq!(
+            result,
+            vec![
+                TokenKind::StringLit(String::from("hello")),
+                TokenKind::StringLit(String::from("world\n")),
+                TokenKind::StringLit(String::from("tab\there")),
+                TokenKind::StringLit(String::from("quote\"end")),
+                TokenKind::StringLit(String::from("null\0")),
+                TokenKind::Eof,
+            ]
+        );
     }
 
     #[test]
     fn arithmetic_operators() {
         let result = kinds("+ - * / %");
-        assert_eq!(result, vec![
-            TokenKind::Plus, TokenKind::Minus, TokenKind::Star,
-            TokenKind::Slash, TokenKind::Percent, TokenKind::Eof,
-        ]);
+        assert_eq!(
+            result,
+            vec![
+                TokenKind::Plus,
+                TokenKind::Minus,
+                TokenKind::Star,
+                TokenKind::Slash,
+                TokenKind::Percent,
+                TokenKind::Eof,
+            ]
+        );
     }
 
     #[test]
     fn comparison_operators() {
         let result = kinds("== != < > <= >=");
-        assert_eq!(result, vec![
-            TokenKind::EqEq, TokenKind::NotEq, TokenKind::Lt,
-            TokenKind::Gt, TokenKind::LtEq, TokenKind::GtEq,
-            TokenKind::Eof,
-        ]);
+        assert_eq!(
+            result,
+            vec![
+                TokenKind::EqEq,
+                TokenKind::NotEq,
+                TokenKind::Lt,
+                TokenKind::Gt,
+                TokenKind::LtEq,
+                TokenKind::GtEq,
+                TokenKind::Eof,
+            ]
+        );
     }
 
     #[test]
     fn assignment_and_arrow() {
         let result = kinds("= ->");
-        assert_eq!(result, vec![TokenKind::Eq, TokenKind::Arrow, TokenKind::Eof]);
+        assert_eq!(
+            result,
+            vec![TokenKind::Eq, TokenKind::Arrow, TokenKind::Eof]
+        );
     }
 
     #[test]
@@ -767,196 +816,259 @@ mod tests {
     #[test]
     fn punctuation() {
         let result = kinds(". .. :: : ; , _");
-        assert_eq!(result, vec![
-            TokenKind::Dot, TokenKind::DotDot, TokenKind::ColonColon,
-            TokenKind::Colon, TokenKind::Semicolon, TokenKind::Comma,
-            TokenKind::Underscore, TokenKind::Eof,
-        ]);
+        assert_eq!(
+            result,
+            vec![
+                TokenKind::Dot,
+                TokenKind::DotDot,
+                TokenKind::ColonColon,
+                TokenKind::Colon,
+                TokenKind::Semicolon,
+                TokenKind::Comma,
+                TokenKind::Underscore,
+                TokenKind::Eof,
+            ]
+        );
     }
 
     #[test]
     fn delimiters() {
         let result = kinds("( ) { } [ ]");
-        assert_eq!(result, vec![
-            TokenKind::LParen, TokenKind::RParen,
-            TokenKind::LBrace, TokenKind::RBrace,
-            TokenKind::LBracket, TokenKind::RBracket,
-            TokenKind::Eof,
-        ]);
+        assert_eq!(
+            result,
+            vec![
+                TokenKind::LParen,
+                TokenKind::RParen,
+                TokenKind::LBrace,
+                TokenKind::RBrace,
+                TokenKind::LBracket,
+                TokenKind::RBracket,
+                TokenKind::Eof,
+            ]
+        );
     }
 
     #[test]
     fn line_comments_skipped() {
         let result = kinds("foo // this is a comment\nbar");
-        assert_eq!(result, vec![
-            TokenKind::LowerIdent(String::from("foo")),
-            TokenKind::LowerIdent(String::from("bar")),
-            TokenKind::Eof,
-        ]);
+        assert_eq!(
+            result,
+            vec![
+                TokenKind::LowerIdent(String::from("foo")),
+                TokenKind::LowerIdent(String::from("bar")),
+                TokenKind::Eof,
+            ]
+        );
     }
 
     #[test]
     fn block_comments_skipped() {
         let result = kinds("foo /* block comment */ bar");
-        assert_eq!(result, vec![
-            TokenKind::LowerIdent(String::from("foo")),
-            TokenKind::LowerIdent(String::from("bar")),
-            TokenKind::Eof,
-        ]);
+        assert_eq!(
+            result,
+            vec![
+                TokenKind::LowerIdent(String::from("foo")),
+                TokenKind::LowerIdent(String::from("bar")),
+                TokenKind::Eof,
+            ]
+        );
     }
 
     #[test]
     fn multiline_block_comment() {
         let result = kinds("foo /* line1\nline2\nline3 */ bar");
-        assert_eq!(result, vec![
-            TokenKind::LowerIdent(String::from("foo")),
-            TokenKind::LowerIdent(String::from("bar")),
-            TokenKind::Eof,
-        ]);
+        assert_eq!(
+            result,
+            vec![
+                TokenKind::LowerIdent(String::from("foo")),
+                TokenKind::LowerIdent(String::from("bar")),
+                TokenKind::Eof,
+            ]
+        );
     }
 
     #[test]
     fn newlines_between_tokens() {
         let result = kinds("foo\n\n\nbar");
-        assert_eq!(result, vec![
-            TokenKind::LowerIdent(String::from("foo")),
-            TokenKind::LowerIdent(String::from("bar")),
-            TokenKind::Eof,
-        ]);
+        assert_eq!(
+            result,
+            vec![
+                TokenKind::LowerIdent(String::from("foo")),
+                TokenKind::LowerIdent(String::from("bar")),
+                TokenKind::Eof,
+            ]
+        );
     }
 
     #[test]
     fn semicolons_as_separators() {
         let result = kinds("let x = 1; let y = 2;");
-        assert_eq!(result, vec![
-            TokenKind::Let,
-            TokenKind::LowerIdent(String::from("x")),
-            TokenKind::Eq,
-            TokenKind::IntLit(1),
-            TokenKind::Semicolon,
-            TokenKind::Let,
-            TokenKind::LowerIdent(String::from("y")),
-            TokenKind::Eq,
-            TokenKind::IntLit(2),
-            TokenKind::Semicolon,
-            TokenKind::Eof,
-        ]);
+        assert_eq!(
+            result,
+            vec![
+                TokenKind::Let,
+                TokenKind::LowerIdent(String::from("x")),
+                TokenKind::Eq,
+                TokenKind::IntLit(1),
+                TokenKind::Semicolon,
+                TokenKind::Let,
+                TokenKind::LowerIdent(String::from("y")),
+                TokenKind::Eq,
+                TokenKind::IntLit(2),
+                TokenKind::Semicolon,
+                TokenKind::Eof,
+            ]
+        );
     }
 
     #[test]
     fn function_signature() {
         let result = kinds("fn process(cmd: AudioCommand) -> AudioAction {");
-        assert_eq!(result, vec![
-            TokenKind::Fn,
-            TokenKind::LowerIdent(String::from("process")),
-            TokenKind::LParen,
-            TokenKind::LowerIdent(String::from("cmd")),
-            TokenKind::Colon,
-            TokenKind::UpperIdent(String::from("AudioCommand")),
-            TokenKind::RParen,
-            TokenKind::Arrow,
-            TokenKind::UpperIdent(String::from("AudioAction")),
-            TokenKind::LBrace,
-            TokenKind::Eof,
-        ]);
+        assert_eq!(
+            result,
+            vec![
+                TokenKind::Fn,
+                TokenKind::LowerIdent(String::from("process")),
+                TokenKind::LParen,
+                TokenKind::LowerIdent(String::from("cmd")),
+                TokenKind::Colon,
+                TokenKind::UpperIdent(String::from("AudioCommand")),
+                TokenKind::RParen,
+                TokenKind::Arrow,
+                TokenKind::UpperIdent(String::from("AudioAction")),
+                TokenKind::LBrace,
+                TokenKind::Eof,
+            ]
+        );
     }
 
     #[test]
     fn pipeline_expression() {
         let result = kinds("value |> transform() |> filter(threshold)");
-        assert_eq!(result, vec![
-            TokenKind::LowerIdent(String::from("value")),
-            TokenKind::Pipe,
-            TokenKind::LowerIdent(String::from("transform")),
-            TokenKind::LParen,
-            TokenKind::RParen,
-            TokenKind::Pipe,
-            TokenKind::LowerIdent(String::from("filter")),
-            TokenKind::LParen,
-            TokenKind::LowerIdent(String::from("threshold")),
-            TokenKind::RParen,
-            TokenKind::Eof,
-        ]);
+        assert_eq!(
+            result,
+            vec![
+                TokenKind::LowerIdent(String::from("value")),
+                TokenKind::Pipe,
+                TokenKind::LowerIdent(String::from("transform")),
+                TokenKind::LParen,
+                TokenKind::RParen,
+                TokenKind::Pipe,
+                TokenKind::LowerIdent(String::from("filter")),
+                TokenKind::LParen,
+                TokenKind::LowerIdent(String::from("threshold")),
+                TokenKind::RParen,
+                TokenKind::Eof,
+            ]
+        );
     }
 
     #[test]
     fn enum_variant_path() {
         let result = kinds("Command::NoteOn");
-        assert_eq!(result, vec![
-            TokenKind::UpperIdent(String::from("Command")),
-            TokenKind::ColonColon,
-            TokenKind::UpperIdent(String::from("NoteOn")),
-            TokenKind::Eof,
-        ]);
+        assert_eq!(
+            result,
+            vec![
+                TokenKind::UpperIdent(String::from("Command")),
+                TokenKind::ColonColon,
+                TokenKind::UpperIdent(String::from("NoteOn")),
+                TokenKind::Eof,
+            ]
+        );
     }
 
     #[test]
     fn yield_expression() {
         let result = kinds("let input = yield output_expr;");
-        assert_eq!(result, vec![
-            TokenKind::Let,
-            TokenKind::LowerIdent(String::from("input")),
-            TokenKind::Eq,
-            TokenKind::Yield,
-            TokenKind::LowerIdent(String::from("output_expr")),
-            TokenKind::Semicolon,
-            TokenKind::Eof,
-        ]);
+        assert_eq!(
+            result,
+            vec![
+                TokenKind::Let,
+                TokenKind::LowerIdent(String::from("input")),
+                TokenKind::Eq,
+                TokenKind::Yield,
+                TokenKind::LowerIdent(String::from("output_expr")),
+                TokenKind::Semicolon,
+                TokenKind::Eof,
+            ]
+        );
     }
 
     #[test]
     fn match_expression() {
         let result = kinds("match cmd {\n  Command::NoteOn(ch, note, vel) => play(ch, note)\n}");
-        assert_eq!(result, vec![
-            TokenKind::Match,
-            TokenKind::LowerIdent(String::from("cmd")),
-            TokenKind::LBrace,
-            TokenKind::UpperIdent(String::from("Command")),
-            TokenKind::ColonColon,
-            TokenKind::UpperIdent(String::from("NoteOn")),
-            TokenKind::LParen,
-            TokenKind::LowerIdent(String::from("ch")),
-            TokenKind::Comma,
-            TokenKind::LowerIdent(String::from("note")),
-            TokenKind::Comma,
-            TokenKind::LowerIdent(String::from("vel")),
-            TokenKind::RParen,
-            TokenKind::FatArrow,
-            TokenKind::LowerIdent(String::from("play")),
-            TokenKind::LParen,
-            TokenKind::LowerIdent(String::from("ch")),
-            TokenKind::Comma,
-            TokenKind::LowerIdent(String::from("note")),
-            TokenKind::RParen,
-            TokenKind::RBrace,
-            TokenKind::Eof,
-        ]);
+        assert_eq!(
+            result,
+            vec![
+                TokenKind::Match,
+                TokenKind::LowerIdent(String::from("cmd")),
+                TokenKind::LBrace,
+                TokenKind::UpperIdent(String::from("Command")),
+                TokenKind::ColonColon,
+                TokenKind::UpperIdent(String::from("NoteOn")),
+                TokenKind::LParen,
+                TokenKind::LowerIdent(String::from("ch")),
+                TokenKind::Comma,
+                TokenKind::LowerIdent(String::from("note")),
+                TokenKind::Comma,
+                TokenKind::LowerIdent(String::from("vel")),
+                TokenKind::RParen,
+                TokenKind::FatArrow,
+                TokenKind::LowerIdent(String::from("play")),
+                TokenKind::LParen,
+                TokenKind::LowerIdent(String::from("ch")),
+                TokenKind::Comma,
+                TokenKind::LowerIdent(String::from("note")),
+                TokenKind::RParen,
+                TokenKind::RBrace,
+                TokenKind::Eof,
+            ]
+        );
     }
 
     #[test]
     fn struct_definition() {
         let result = kinds("struct Note { channel: i64, pitch: i64 }");
-        assert_eq!(result, vec![
-            TokenKind::Struct,
-            TokenKind::UpperIdent(String::from("Note")),
-            TokenKind::LBrace,
-            TokenKind::LowerIdent(String::from("channel")),
-            TokenKind::Colon,
-            TokenKind::LowerIdent(String::from("i64")),
-            TokenKind::Comma,
-            TokenKind::LowerIdent(String::from("pitch")),
-            TokenKind::Colon,
-            TokenKind::LowerIdent(String::from("i64")),
-            TokenKind::RBrace,
-            TokenKind::Eof,
-        ]);
+        assert_eq!(
+            result,
+            vec![
+                TokenKind::Struct,
+                TokenKind::UpperIdent(String::from("Note")),
+                TokenKind::LBrace,
+                TokenKind::LowerIdent(String::from("channel")),
+                TokenKind::Colon,
+                TokenKind::LowerIdent(String::from("i64")),
+                TokenKind::Comma,
+                TokenKind::LowerIdent(String::from("pitch")),
+                TokenKind::Colon,
+                TokenKind::LowerIdent(String::from("i64")),
+                TokenKind::RBrace,
+                TokenKind::Eof,
+            ]
+        );
     }
 
     #[test]
     fn span_tracking() {
         let tokens = tokenize("fn foo").unwrap();
-        assert_eq!(tokens[0].span, Span { start: 0, end: 2, line: 1, column: 1 });
-        assert_eq!(tokens[1].span, Span { start: 3, end: 6, line: 1, column: 4 });
+        assert_eq!(
+            tokens[0].span,
+            Span {
+                start: 0,
+                end: 2,
+                line: 1,
+                column: 1
+            }
+        );
+        assert_eq!(
+            tokens[1].span,
+            Span {
+                start: 3,
+                end: 6,
+                line: 1,
+                column: 4
+            }
+        );
     }
 
     #[test]
@@ -971,29 +1083,35 @@ mod tests {
     #[test]
     fn underscore_standalone() {
         let result = kinds("_ _foo");
-        assert_eq!(result, vec![
-            TokenKind::Underscore,
-            TokenKind::LowerIdent(String::from("_foo")),
-            TokenKind::Eof,
-        ]);
+        assert_eq!(
+            result,
+            vec![
+                TokenKind::Underscore,
+                TokenKind::LowerIdent(String::from("_foo")),
+                TokenKind::Eof,
+            ]
+        );
     }
 
     #[test]
     fn break_keyword() {
         let result = kinds("for i in 0..10 { break; }");
-        assert_eq!(result, vec![
-            TokenKind::For,
-            TokenKind::LowerIdent(String::from("i")),
-            TokenKind::In,
-            TokenKind::IntLit(0),
-            TokenKind::DotDot,
-            TokenKind::IntLit(10),
-            TokenKind::LBrace,
-            TokenKind::Break,
-            TokenKind::Semicolon,
-            TokenKind::RBrace,
-            TokenKind::Eof,
-        ]);
+        assert_eq!(
+            result,
+            vec![
+                TokenKind::For,
+                TokenKind::LowerIdent(String::from("i")),
+                TokenKind::In,
+                TokenKind::IntLit(0),
+                TokenKind::DotDot,
+                TokenKind::IntLit(10),
+                TokenKind::LBrace,
+                TokenKind::Break,
+                TokenKind::Semicolon,
+                TokenKind::RBrace,
+                TokenKind::Eof,
+            ]
+        );
     }
 
     #[test]
@@ -1053,36 +1171,45 @@ mod tests {
     #[test]
     fn for_in_range() {
         let result = kinds("for i in 0..10 {");
-        assert_eq!(result, vec![
-            TokenKind::For,
-            TokenKind::LowerIdent(String::from("i")),
-            TokenKind::In,
-            TokenKind::IntLit(0),
-            TokenKind::DotDot,
-            TokenKind::IntLit(10),
-            TokenKind::LBrace,
-            TokenKind::Eof,
-        ]);
+        assert_eq!(
+            result,
+            vec![
+                TokenKind::For,
+                TokenKind::LowerIdent(String::from("i")),
+                TokenKind::In,
+                TokenKind::IntLit(0),
+                TokenKind::DotDot,
+                TokenKind::IntLit(10),
+                TokenKind::LBrace,
+                TokenKind::Eof,
+            ]
+        );
     }
 
     #[test]
     fn array_type() {
         let result = kinds("[f64; 8]");
-        assert_eq!(result, vec![
-            TokenKind::LBracket,
-            TokenKind::LowerIdent(String::from("f64")),
-            TokenKind::Semicolon,
-            TokenKind::IntLit(8),
-            TokenKind::RBracket,
-            TokenKind::Eof,
-        ]);
+        assert_eq!(
+            result,
+            vec![
+                TokenKind::LBracket,
+                TokenKind::LowerIdent(String::from("f64")),
+                TokenKind::Semicolon,
+                TokenKind::IntLit(8),
+                TokenKind::RBracket,
+                TokenKind::Eof,
+            ]
+        );
     }
 
     #[test]
     fn block_comment_line_tracking() {
         // Block comment spanning 2 lines: bar should be on line 3.
         let tokens = tokenize("foo\n/* line2\nline3 */\nbar").unwrap();
-        let bar = tokens.iter().find(|t| t.kind == TokenKind::LowerIdent(String::from("bar"))).unwrap();
+        let bar = tokens
+            .iter()
+            .find(|t| t.kind == TokenKind::LowerIdent(String::from("bar")))
+            .unwrap();
         assert_eq!(bar.span.line, 4);
         assert_eq!(bar.span.column, 1);
     }
@@ -1091,11 +1218,14 @@ mod tests {
     fn slash_after_comment() {
         // A division operator on the line after a comment.
         let result = kinds("a // comment\n/ b");
-        assert_eq!(result, vec![
-            TokenKind::LowerIdent(String::from("a")),
-            TokenKind::Slash,
-            TokenKind::LowerIdent(String::from("b")),
-            TokenKind::Eof,
-        ]);
+        assert_eq!(
+            result,
+            vec![
+                TokenKind::LowerIdent(String::from("a")),
+                TokenKind::Slash,
+                TokenKind::LowerIdent(String::from("b")),
+                TokenKind::Eof,
+            ]
+        );
     }
 }

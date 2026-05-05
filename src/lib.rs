@@ -1,12 +1,12 @@
 #![no_std]
 extern crate alloc;
 
-pub mod token;
-pub mod lexer;
 pub mod ast;
-pub mod parser;
+pub mod audio_natives;
 pub mod bytecode;
 pub mod compiler;
+pub mod lexer;
+pub mod parser;
+pub mod token;
 pub mod verify;
 pub mod vm;
-pub mod audio_natives;

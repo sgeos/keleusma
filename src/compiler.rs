@@ -215,12 +215,7 @@ pub fn compile(program: &Program) -> Result<Module, CompileError> {
     // Compile each function group.
     let mut chunks: Vec<Chunk> = Vec::new();
     for (name, defs) in &groups {
-        let chunk = compile_function_group(
-            name,
-            defs,
-            &function_map,
-            &native_map,
-        )?;
+        let chunk = compile_function_group(name, defs, &function_map, &native_map)?;
         chunks.push(chunk);
     }
 
@@ -279,7 +274,15 @@ fn compile_function_group(
         if block_type == BlockType::Stream {
             return Err(CompileError {
                 message: String::from("multiheaded stream (loop) functions are not supported"),
-                span: first.params.first().map_or(Span { start: 0, end: 0, line: 0, column: 0 }, |p| p.span),
+                span: first.params.first().map_or(
+                    Span {
+                        start: 0,
+                        end: 0,
+                        line: 0,
+                        column: 0,
+                    },
+                    |p| p.span,
+                ),
             });
         }
 
@@ -334,7 +337,9 @@ fn compile_function_group(
 
 /// Check if any parameter has a non-trivial pattern (not a simple variable).
 fn has_non_trivial_pattern(params: &[Param]) -> bool {
-    params.iter().any(|p| !matches!(p.pattern, Pattern::Variable(_, _)))
+    params
+        .iter()
+        .any(|p| !matches!(p.pattern, Pattern::Variable(_, _)))
 }
 
 /// Bind a simple variable pattern to a parameter slot (alias).
@@ -479,7 +484,9 @@ fn compile_for(fc: &mut FuncCompiler, for_stmt: &ForStmt) -> Result<(), CompileE
         }
         Iterable::Expr(_expr) => {
             return Err(CompileError {
-                message: String::from("for-in over expressions is not yet supported; use range syntax"),
+                message: String::from(
+                    "for-in over expressions is not yet supported; use range syntax",
+                ),
                 span: for_stmt.span,
             });
         }
@@ -490,24 +497,26 @@ fn compile_for(fc: &mut FuncCompiler, for_stmt: &ForStmt) -> Result<(), CompileE
 /// Compile an expression, leaving the result on the stack.
 fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> {
     match expr {
-        Expr::Literal { value, .. } => {
-            match value {
-                Literal::Int(v) => {
-                    let idx = fc.add_constant(Value::Int(*v));
-                    fc.emit(Op::Const(idx));
-                }
-                Literal::Float(v) => {
-                    let idx = fc.add_constant(Value::Float(*v));
-                    fc.emit(Op::Const(idx));
-                }
-                Literal::String(s) => {
-                    let idx = fc.add_constant(Value::Str(s.clone()));
-                    fc.emit(Op::Const(idx));
-                }
-                Literal::Bool(true) => { fc.emit(Op::PushTrue); }
-                Literal::Bool(false) => { fc.emit(Op::PushFalse); }
+        Expr::Literal { value, .. } => match value {
+            Literal::Int(v) => {
+                let idx = fc.add_constant(Value::Int(*v));
+                fc.emit(Op::Const(idx));
             }
-        }
+            Literal::Float(v) => {
+                let idx = fc.add_constant(Value::Float(*v));
+                fc.emit(Op::Const(idx));
+            }
+            Literal::String(s) => {
+                let idx = fc.add_constant(Value::Str(s.clone()));
+                fc.emit(Op::Const(idx));
+            }
+            Literal::Bool(true) => {
+                fc.emit(Op::PushTrue);
+            }
+            Literal::Bool(false) => {
+                fc.emit(Op::PushFalse);
+            }
+        },
 
         Expr::Ident { name, span } => {
             if let Some(slot) = fc.resolve_local(name) {
@@ -520,7 +529,9 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
             }
         }
 
-        Expr::BinOp { op, left, right, .. } => {
+        Expr::BinOp {
+            op, left, right, ..
+        } => {
             // Short-circuit for logical operators using block-structured control.
             match op {
                 BinOp::And => {
@@ -559,17 +570,39 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
             compile_expr(fc, left)?;
             compile_expr(fc, right)?;
             match op {
-                BinOp::Add => { fc.emit(Op::Add); }
-                BinOp::Sub => { fc.emit(Op::Sub); }
-                BinOp::Mul => { fc.emit(Op::Mul); }
-                BinOp::Div => { fc.emit(Op::Div); }
-                BinOp::Mod => { fc.emit(Op::Mod); }
-                BinOp::Eq => { fc.emit(Op::CmpEq); }
-                BinOp::NotEq => { fc.emit(Op::CmpNe); }
-                BinOp::Lt => { fc.emit(Op::CmpLt); }
-                BinOp::Gt => { fc.emit(Op::CmpGt); }
-                BinOp::LtEq => { fc.emit(Op::CmpLe); }
-                BinOp::GtEq => { fc.emit(Op::CmpGe); }
+                BinOp::Add => {
+                    fc.emit(Op::Add);
+                }
+                BinOp::Sub => {
+                    fc.emit(Op::Sub);
+                }
+                BinOp::Mul => {
+                    fc.emit(Op::Mul);
+                }
+                BinOp::Div => {
+                    fc.emit(Op::Div);
+                }
+                BinOp::Mod => {
+                    fc.emit(Op::Mod);
+                }
+                BinOp::Eq => {
+                    fc.emit(Op::CmpEq);
+                }
+                BinOp::NotEq => {
+                    fc.emit(Op::CmpNe);
+                }
+                BinOp::Lt => {
+                    fc.emit(Op::CmpLt);
+                }
+                BinOp::Gt => {
+                    fc.emit(Op::CmpGt);
+                }
+                BinOp::LtEq => {
+                    fc.emit(Op::CmpLe);
+                }
+                BinOp::GtEq => {
+                    fc.emit(Op::CmpGe);
+                }
                 BinOp::And | BinOp::Or => unreachable!(),
             }
         }
@@ -577,8 +610,12 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
         Expr::UnaryOp { op, operand, .. } => {
             compile_expr(fc, operand)?;
             match op {
-                UnaryOp::Neg => { fc.emit(Op::Neg); }
-                UnaryOp::Not => { fc.emit(Op::Not); }
+                UnaryOp::Neg => {
+                    fc.emit(Op::Neg);
+                }
+                UnaryOp::Not => {
+                    fc.emit(Op::Not);
+                }
             }
         }
 
@@ -586,7 +623,12 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
             compile_call(fc, name, args, span)?;
         }
 
-        Expr::Pipeline { left, func, args, span } => {
+        Expr::Pipeline {
+            left,
+            func,
+            args,
+            span,
+        } => {
             // Desugar pipeline: insert left as first arg, or at placeholder position.
             let mut call_args: Vec<&Expr> = Vec::new();
             let mut placeholder_found = false;
@@ -629,7 +671,12 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
             fc.emit(Op::Yield);
         }
 
-        Expr::If { condition, then_block, else_block, .. } => {
+        Expr::If {
+            condition,
+            then_block,
+            else_block,
+            ..
+        } => {
             compile_expr(fc, condition)?;
             let if_addr = fc.emit_jump(Op::If(0));
             compile_block(fc, then_block)?;
@@ -648,7 +695,9 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
             }
         }
 
-        Expr::Match { scrutinee, arms, .. } => {
+        Expr::Match {
+            scrutinee, arms, ..
+        } => {
             compile_expr(fc, scrutinee)?;
             let temp = fc.declare_local("__match");
             fc.emit(Op::SetLocal(temp));
@@ -751,7 +800,12 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
             fc.emit(Op::NewStruct(template_idx));
         }
 
-        Expr::EnumVariant { enum_name, variant, args, .. } => {
+        Expr::EnumVariant {
+            enum_name,
+            variant,
+            args,
+            ..
+        } => {
             for arg in args {
                 compile_expr(fc, arg)?;
             }
@@ -767,11 +821,19 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
             fc.emit(Op::NewArray(elements.len() as u16));
         }
 
-        Expr::Cast { expr: inner, target, .. } => {
+        Expr::Cast {
+            expr: inner,
+            target,
+            ..
+        } => {
             compile_expr(fc, inner)?;
             match target {
-                TypeExpr::Prim(PrimType::F64, _) => { fc.emit(Op::IntToFloat); }
-                TypeExpr::Prim(PrimType::I64, _) => { fc.emit(Op::FloatToInt); }
+                TypeExpr::Prim(PrimType::F64, _) => {
+                    fc.emit(Op::IntToFloat);
+                }
+                TypeExpr::Prim(PrimType::I64, _) => {
+                    fc.emit(Op::FloatToInt);
+                }
                 _ => {
                     // Other casts are identity at runtime.
                 }
@@ -841,8 +903,12 @@ fn compile_pattern_test(
                     let idx = fc.add_constant(Value::Str(s.clone()));
                     fc.emit(Op::Const(idx));
                 }
-                Literal::Bool(true) => { fc.emit(Op::PushTrue); }
-                Literal::Bool(false) => { fc.emit(Op::PushFalse); }
+                Literal::Bool(true) => {
+                    fc.emit(Op::PushTrue);
+                }
+                Literal::Bool(false) => {
+                    fc.emit(Op::PushFalse);
+                }
             }
             fc.emit(Op::CmpEq);
             fail_addrs.push(fc.emit_jump(Op::If(0)));
@@ -1015,19 +1081,21 @@ mod tests {
 
     #[test]
     fn compile_if_else() {
-        let module = compile_str(
-            "fn max(a: i64, b: i64) -> i64 { if a > b { a } else { b } }"
-        ).unwrap();
+        let module =
+            compile_str("fn max(a: i64, b: i64) -> i64 { if a > b { a } else { b } }").unwrap();
         assert_eq!(module.chunks.len(), 1);
         // Should contain If for the condition.
-        assert!(module.chunks[0].ops.iter().any(|op| matches!(op, Op::If(_))));
+        assert!(
+            module.chunks[0]
+                .ops
+                .iter()
+                .any(|op| matches!(op, Op::If(_)))
+        );
     }
 
     #[test]
     fn compile_let_binding() {
-        let module = compile_str(
-            "fn double(x: i64) -> i64 { let y = x * 2; y }"
-        ).unwrap();
+        let module = compile_str("fn double(x: i64) -> i64 { let y = x * 2; y }").unwrap();
         assert_eq!(module.chunks.len(), 1);
     }
 
@@ -1038,15 +1106,26 @@ mod tests {
         ).unwrap();
         assert_eq!(module.chunks.len(), 1);
         // Should contain Loop/EndLoop for the for-range.
-        assert!(module.chunks[0].ops.iter().any(|op| matches!(op, Op::Loop(_))));
-        assert!(module.chunks[0].ops.iter().any(|op| matches!(op, Op::EndLoop(_))));
+        assert!(
+            module.chunks[0]
+                .ops
+                .iter()
+                .any(|op| matches!(op, Op::Loop(_)))
+        );
+        assert!(
+            module.chunks[0]
+                .ops
+                .iter()
+                .any(|op| matches!(op, Op::EndLoop(_)))
+        );
     }
 
     #[test]
     fn compile_function_call() {
         let module = compile_str(
-            "fn double(x: i64) -> i64 { x * 2 }\nfn quad(x: i64) -> i64 { double(double(x)) }"
-        ).unwrap();
+            "fn double(x: i64) -> i64 { x * 2 }\nfn quad(x: i64) -> i64 { double(double(x)) }",
+        )
+        .unwrap();
         assert_eq!(module.chunks.len(), 2);
         // quad should contain Call instructions.
         let quad = &module.chunks[1];
@@ -1056,65 +1135,84 @@ mod tests {
     #[test]
     fn compile_multiheaded() {
         let module = compile_str(
-            "fn classify(0) -> String { \"zero\" }\nfn classify(x: i64) -> String { \"other\" }"
-        ).unwrap();
+            "fn classify(0) -> String { \"zero\" }\nfn classify(x: i64) -> String { \"other\" }",
+        )
+        .unwrap();
         // Two heads compiled into one chunk.
         assert_eq!(module.chunks.len(), 1);
     }
 
     #[test]
     fn compile_enum_variant() {
-        let module = compile_str(
-            "fn make() -> () { let x = Color::Red(); x }"
-        ).unwrap();
+        let module = compile_str("fn make() -> () { let x = Color::Red(); x }").unwrap();
         assert_eq!(module.chunks.len(), 1);
-        assert!(module.chunks[0].ops.iter().any(|op| matches!(op, Op::NewEnum(_, _, 0))));
+        assert!(
+            module.chunks[0]
+                .ops
+                .iter()
+                .any(|op| matches!(op, Op::NewEnum(_, _, 0)))
+        );
     }
 
     #[test]
     fn compile_struct_init() {
-        let module = compile_str(
-            "fn make() -> () { let p = Point { x: 1, y: 2 }; p }"
-        ).unwrap();
+        let module = compile_str("fn make() -> () { let p = Point { x: 1, y: 2 }; p }").unwrap();
         assert_eq!(module.chunks.len(), 1);
-        assert!(module.chunks[0].ops.iter().any(|op| matches!(op, Op::NewStruct(_))));
+        assert!(
+            module.chunks[0]
+                .ops
+                .iter()
+                .any(|op| matches!(op, Op::NewStruct(_)))
+        );
     }
 
     #[test]
     fn compile_yield_function() {
-        let module = compile_str(
-            "yield process(input: i64) -> i64 { yield input * 2 }"
-        ).unwrap();
+        let module = compile_str("yield process(input: i64) -> i64 { yield input * 2 }").unwrap();
         assert_eq!(module.chunks.len(), 1);
-        assert!(module.chunks[0].ops.iter().any(|op| matches!(op, Op::Yield)));
+        assert!(
+            module.chunks[0]
+                .ops
+                .iter()
+                .any(|op| matches!(op, Op::Yield))
+        );
         assert_eq!(module.chunks[0].block_type, BlockType::Reentrant);
     }
 
     #[test]
     fn compile_loop_function() {
-        let module = compile_str(
-            "loop main(input: i64) -> i64 { let input = yield input + 1; input }"
-        ).unwrap();
+        let module =
+            compile_str("loop main(input: i64) -> i64 { let input = yield input + 1; input }")
+                .unwrap();
         assert_eq!(module.chunks.len(), 1);
         assert_eq!(module.chunks[0].block_type, BlockType::Stream);
         // Should contain Stream and Reset instructions.
-        assert!(module.chunks[0].ops.iter().any(|op| matches!(op, Op::Stream)));
-        assert!(module.chunks[0].ops.iter().any(|op| matches!(op, Op::Reset)));
+        assert!(
+            module.chunks[0]
+                .ops
+                .iter()
+                .any(|op| matches!(op, Op::Stream))
+        );
+        assert!(
+            module.chunks[0]
+                .ops
+                .iter()
+                .any(|op| matches!(op, Op::Reset))
+        );
     }
 
     #[test]
     fn compile_entry_point() {
-        let module = compile_str(
-            "fn main(x: i64) -> i64 { x }"
-        ).unwrap();
+        let module = compile_str("fn main(x: i64) -> i64 { x }").unwrap();
         assert!(module.entry_point.is_some());
     }
 
     #[test]
     fn compile_pipeline() {
         let module = compile_str(
-            "fn double(x: i64) -> i64 { x * 2 }\nfn apply(x: i64) -> i64 { x |> double() }"
-        ).unwrap();
+            "fn double(x: i64) -> i64 { x * 2 }\nfn apply(x: i64) -> i64 { x |> double() }",
+        )
+        .unwrap();
         assert_eq!(module.chunks.len(), 2);
     }
 
@@ -1139,15 +1237,33 @@ mod tests {
     #[test]
     fn compile_block_structured_control() {
         // Verify no flat jumps are emitted.
-        let module = compile_str(
-            "fn main() -> i64 { if true { 1 } else { 2 } }"
-        ).unwrap();
+        let module = compile_str("fn main() -> i64 { if true { 1 } else { 2 } }").unwrap();
         for op in &module.chunks[0].ops {
-            assert!(!matches!(op, Op::Loop(_) | Op::EndLoop(_) | Op::Break(_) | Op::BreakIf(_)),
-                "unexpected loop instruction in simple if/else");
+            assert!(
+                !matches!(
+                    op,
+                    Op::Loop(_) | Op::EndLoop(_) | Op::Break(_) | Op::BreakIf(_)
+                ),
+                "unexpected loop instruction in simple if/else"
+            );
         }
-        assert!(module.chunks[0].ops.iter().any(|op| matches!(op, Op::If(_))));
-        assert!(module.chunks[0].ops.iter().any(|op| matches!(op, Op::Else(_))));
-        assert!(module.chunks[0].ops.iter().any(|op| matches!(op, Op::EndIf)));
+        assert!(
+            module.chunks[0]
+                .ops
+                .iter()
+                .any(|op| matches!(op, Op::If(_)))
+        );
+        assert!(
+            module.chunks[0]
+                .ops
+                .iter()
+                .any(|op| matches!(op, Op::Else(_)))
+        );
+        assert!(
+            module.chunks[0]
+                .ops
+                .iter()
+                .any(|op| matches!(op, Op::EndIf))
+        );
     }
 }

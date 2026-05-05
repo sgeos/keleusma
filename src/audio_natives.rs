@@ -315,9 +315,8 @@ mod tests {
 
     #[test]
     fn clamp_within_range() {
-        let val = run_with_natives(
-            "use math::clamp\nfn main() -> f64 { math::clamp(0.5, 0.0, 1.0) }",
-        );
+        let val =
+            run_with_natives("use math::clamp\nfn main() -> f64 { math::clamp(0.5, 0.0, 1.0) }");
         match val {
             Value::Float(f) => assert!((f - 0.5).abs() < 0.001),
             other => panic!("expected Float, got {:?}", other),
@@ -326,9 +325,8 @@ mod tests {
 
     #[test]
     fn clamp_below_min() {
-        let val = run_with_natives(
-            "use math::clamp\nfn main() -> f64 { math::clamp(-1.0, 0.0, 1.0) }",
-        );
+        let val =
+            run_with_natives("use math::clamp\nfn main() -> f64 { math::clamp(-1.0, 0.0, 1.0) }");
         match val {
             Value::Float(f) => assert!(f.abs() < 0.001),
             other => panic!("expected Float, got {:?}", other),
@@ -337,9 +335,8 @@ mod tests {
 
     #[test]
     fn clamp_above_max() {
-        let val = run_with_natives(
-            "use math::clamp\nfn main() -> f64 { math::clamp(5.0, 0.0, 1.0) }",
-        );
+        let val =
+            run_with_natives("use math::clamp\nfn main() -> f64 { math::clamp(5.0, 0.0, 1.0) }");
         match val {
             Value::Float(f) => assert!((f - 1.0).abs() < 0.001),
             other => panic!("expected Float, got {:?}", other),
@@ -348,9 +345,8 @@ mod tests {
 
     #[test]
     fn lerp_midpoint() {
-        let val = run_with_natives(
-            "use math::lerp\nfn main() -> f64 { math::lerp(0.0, 100.0, 0.5) }",
-        );
+        let val =
+            run_with_natives("use math::lerp\nfn main() -> f64 { math::lerp(0.0, 100.0, 0.5) }");
         match val {
             Value::Float(f) => assert!((f - 50.0).abs() < 0.001),
             other => panic!("expected Float, got {:?}", other),
@@ -359,9 +355,7 @@ mod tests {
 
     #[test]
     fn sin_zero() {
-        let val = run_with_natives(
-            "use math::sin\nfn main() -> f64 { math::sin(0.0) }",
-        );
+        let val = run_with_natives("use math::sin\nfn main() -> f64 { math::sin(0.0) }");
         match val {
             Value::Float(f) => assert!(f.abs() < 0.001),
             other => panic!("expected Float, got {:?}", other),
@@ -370,9 +364,7 @@ mod tests {
 
     #[test]
     fn pow_two_cubed() {
-        let val = run_with_natives(
-            "use math::pow\nfn main() -> f64 { math::pow(2.0, 3.0) }",
-        );
+        let val = run_with_natives("use math::pow\nfn main() -> f64 { math::pow(2.0, 3.0) }");
         match val {
             Value::Float(f) => assert!((f - 8.0).abs() < 0.001),
             other => panic!("expected Float, got {:?}", other),
@@ -381,9 +373,7 @@ mod tests {
 
     #[test]
     fn abs_negative() {
-        let val = run_with_natives(
-            "use math::abs\nfn main() -> f64 { math::abs(-42.5) }",
-        );
+        let val = run_with_natives("use math::abs\nfn main() -> f64 { math::abs(-42.5) }");
         match val {
             Value::Float(f) => assert!((f - 42.5).abs() < 0.001),
             other => panic!("expected Float, got {:?}", other),

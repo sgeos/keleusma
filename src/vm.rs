@@ -78,9 +78,8 @@ impl Vm {
     /// Runs structural verification on the module. Returns an error if
     /// verification fails.
     pub fn new(module: Module) -> Result<Self, VmError> {
-        verify::verify(&module).map_err(|e| {
-            VmError::VerifyError(format!("{}: {}", e.chunk_name, e.message))
-        })?;
+        verify::verify(&module)
+            .map_err(|e| VmError::VerifyError(format!("{}: {}", e.chunk_name, e.message)))?;
         Ok(Self {
             module,
             stack: Vec::new(),
@@ -91,11 +90,7 @@ impl Vm {
     }
 
     /// Register a native function by name using a function pointer.
-    pub fn register_native(
-        &mut self,
-        name: &str,
-        func: fn(&[Value]) -> Result<Value, VmError>,
-    ) {
+    pub fn register_native(&mut self, name: &str, func: fn(&[Value]) -> Result<Value, VmError>) {
         self.natives.push(NativeEntry {
             name: String::from(name),
             func: Box::new(func),
@@ -106,11 +101,7 @@ impl Vm {
     ///
     /// This allows closures that capture state, such as a shared command
     /// buffer for audio script integration.
-    pub fn register_native_closure<F>(
-        &mut self,
-        name: &str,
-        func: F,
-    )
+    pub fn register_native_closure<F>(&mut self, name: &str, func: F)
     where
         F: Fn(&[Value]) -> Result<Value, VmError> + 'static,
     {
@@ -122,20 +113,24 @@ impl Vm {
 
     /// Call the module's entry point with the given arguments.
     pub fn call(&mut self, args: &[Value]) -> Result<VmState, VmError> {
-        let entry = self.module.entry_point
+        let entry = self
+            .module
+            .entry_point
             .ok_or_else(|| VmError::InvalidBytecode(String::from("no entry point")))?;
         self.call_function(entry, args)
     }
 
     /// Call a specific function by chunk index with the given arguments.
     pub fn call_function(&mut self, chunk_idx: usize, args: &[Value]) -> Result<VmState, VmError> {
-        let chunk = self.module.chunks.get(chunk_idx)
-            .ok_or_else(|| VmError::InvalidBytecode(format!("invalid chunk index: {}", chunk_idx)))?;
+        let chunk = self.module.chunks.get(chunk_idx).ok_or_else(|| {
+            VmError::InvalidBytecode(format!("invalid chunk index: {}", chunk_idx))
+        })?;
 
         if args.len() > chunk.local_count as usize {
             return Err(VmError::InvalidBytecode(format!(
                 "too many arguments: expected at most {}, got {}",
-                chunk.local_count, args.len()
+                chunk.local_count,
+                args.len()
             )));
         }
 
@@ -163,7 +158,9 @@ impl Vm {
     /// Resume execution after a yield or reset, providing the input value.
     pub fn resume(&mut self, input: Value) -> Result<VmState, VmError> {
         if !self.started || self.frames.is_empty() {
-            return Err(VmError::InvalidBytecode(String::from("cannot resume: VM not suspended")));
+            return Err(VmError::InvalidBytecode(String::from(
+                "cannot resume: VM not suspended",
+            )));
         }
         // For stream functions, update the parameter slot with the new input.
         // This ensures the next iteration sees the latest input.
@@ -233,7 +230,11 @@ impl Vm {
                         s.push_str(&y);
                         Ok(Value::Str(s))
                     }
-                    (a, b) => Err(VmError::TypeError(format!("cannot add {} and {}", a.type_name(), b.type_name()))),
+                    (a, b) => Err(VmError::TypeError(format!(
+                        "cannot add {} and {}",
+                        a.type_name(),
+                        b.type_name()
+                    ))),
                 })?,
                 Op::Sub => self.binary_arith(|a, b| a.wrapping_sub(b), |a, b| a - b)?,
                 Op::Mul => self.binary_arith(|a, b| a.wrapping_mul(b), |a, b| a * b)?,
@@ -244,7 +245,13 @@ impl Vm {
                         (Value::Int(_), Value::Int(0)) => return Err(VmError::DivisionByZero),
                         (Value::Int(x), Value::Int(y)) => self.stack.push(Value::Int(x / y)),
                         (Value::Float(x), Value::Float(y)) => self.stack.push(Value::Float(x / y)),
-                        (a, b) => return Err(VmError::TypeError(format!("cannot divide {} by {}", a.type_name(), b.type_name()))),
+                        (a, b) => {
+                            return Err(VmError::TypeError(format!(
+                                "cannot divide {} by {}",
+                                a.type_name(),
+                                b.type_name()
+                            )));
+                        }
                     }
                 }
                 Op::Mod => {
@@ -254,7 +261,13 @@ impl Vm {
                         (Value::Int(_), Value::Int(0)) => return Err(VmError::DivisionByZero),
                         (Value::Int(x), Value::Int(y)) => self.stack.push(Value::Int(x % y)),
                         (Value::Float(x), Value::Float(y)) => self.stack.push(Value::Float(x % y)),
-                        (a, b) => return Err(VmError::TypeError(format!("cannot modulo {} by {}", a.type_name(), b.type_name()))),
+                        (a, b) => {
+                            return Err(VmError::TypeError(format!(
+                                "cannot modulo {} by {}",
+                                a.type_name(),
+                                b.type_name()
+                            )));
+                        }
                     }
                 }
                 Op::Neg => {
@@ -262,12 +275,25 @@ impl Vm {
                     match val {
                         Value::Int(x) => self.stack.push(Value::Int(-x)),
                         Value::Float(x) => self.stack.push(Value::Float(-x)),
-                        v => return Err(VmError::TypeError(format!("cannot negate {}", v.type_name()))),
+                        v => {
+                            return Err(VmError::TypeError(format!(
+                                "cannot negate {}",
+                                v.type_name()
+                            )));
+                        }
                     }
                 }
 
-                Op::CmpEq => { let b = self.pop()?; let a = self.pop()?; self.stack.push(Value::Bool(a == b)); }
-                Op::CmpNe => { let b = self.pop()?; let a = self.pop()?; self.stack.push(Value::Bool(a != b)); }
+                Op::CmpEq => {
+                    let b = self.pop()?;
+                    let a = self.pop()?;
+                    self.stack.push(Value::Bool(a == b));
+                }
+                Op::CmpNe => {
+                    let b = self.pop()?;
+                    let a = self.pop()?;
+                    self.stack.push(Value::Bool(a != b));
+                }
                 Op::CmpLt => self.compare_op(|ord| ord.is_lt())?,
                 Op::CmpGt => self.compare_op(|ord| ord.is_gt())?,
                 Op::CmpLe => self.compare_op(|ord| ord.is_le())?,
@@ -277,12 +303,16 @@ impl Vm {
                     let val = self.pop()?;
                     match val {
                         Value::Bool(b) => self.stack.push(Value::Bool(!b)),
-                        v => return Err(VmError::TypeError(format!("cannot apply not to {}", v.type_name()))),
+                        v => {
+                            return Err(VmError::TypeError(format!(
+                                "cannot apply not to {}",
+                                v.type_name()
+                            )));
+                        }
                     }
                 }
 
                 // -- Block-structured control flow --
-
                 Op::If(target) => {
                     let val = self.pop()?;
                     match val {
@@ -292,7 +322,12 @@ impl Vm {
                         Value::Bool(true) => {
                             // Continue to then-block.
                         }
-                        v => return Err(VmError::TypeError(format!("condition must be Bool, got {}", v.type_name()))),
+                        v => {
+                            return Err(VmError::TypeError(format!(
+                                "condition must be Bool, got {}",
+                                v.type_name()
+                            )));
+                        }
                     }
                 }
                 Op::Else(target) => {
@@ -322,12 +357,16 @@ impl Vm {
                         Value::Bool(false) => {
                             // Continue loop body.
                         }
-                        v => return Err(VmError::TypeError(format!("BreakIf condition must be Bool, got {}", v.type_name()))),
+                        v => {
+                            return Err(VmError::TypeError(format!(
+                                "BreakIf condition must be Bool, got {}",
+                                v.type_name()
+                            )));
+                        }
                     }
                 }
 
                 // -- Streaming --
-
                 Op::Stream => {
                     // No-op. Marks the stream entry point.
                 }
@@ -350,19 +389,21 @@ impl Vm {
                     let stream_ip = ops.iter().position(|op| matches!(op, Op::Stream));
                     match stream_ip {
                         Some(pos) => frame.ip = pos + 1,
-                        None => return Err(VmError::InvalidBytecode(
-                            String::from("Reset without Stream in chunk")
-                        )),
+                        None => {
+                            return Err(VmError::InvalidBytecode(String::from(
+                                "Reset without Stream in chunk",
+                            )));
+                        }
                     }
 
                     return Ok(VmState::Reset);
                 }
 
                 // -- Functions --
-
                 Op::Call(idx, arg_count) => {
-                    let called_chunk = self.module.chunks.get(idx as usize)
-                        .ok_or_else(|| VmError::InvalidBytecode(format!("invalid chunk: {}", idx)))?;
+                    let called_chunk = self.module.chunks.get(idx as usize).ok_or_else(|| {
+                        VmError::InvalidBytecode(format!("invalid chunk: {}", idx))
+                    })?;
                     let new_base = self.stack.len() - arg_count as usize;
                     let extra = called_chunk.local_count as usize - arg_count as usize;
                     for _ in 0..extra {
@@ -380,11 +421,20 @@ impl Vm {
                         return Err(VmError::StackUnderflow);
                     }
                     let args: Vec<Value> = self.stack.drain(self.stack.len() - n..).collect();
-                    let native_name = self.module.native_names.get(idx as usize)
-                        .ok_or_else(|| VmError::InvalidBytecode(format!("invalid native index: {}", idx)))?;
-                    let entry = self.natives.iter()
+                    let native_name =
+                        self.module.native_names.get(idx as usize).ok_or_else(|| {
+                            VmError::InvalidBytecode(format!("invalid native index: {}", idx))
+                        })?;
+                    let entry = self
+                        .natives
+                        .iter()
                         .find(|e| e.name == *native_name)
-                        .ok_or_else(|| VmError::InvalidBytecode(format!("unregistered native: {}", native_name)))?;
+                        .ok_or_else(|| {
+                            VmError::InvalidBytecode(format!(
+                                "unregistered native: {}",
+                                native_name
+                            ))
+                        })?;
                     let result = (entry.func)(&args)?;
                     self.stack.push(result);
                 }
@@ -403,23 +453,25 @@ impl Vm {
                     return Ok(VmState::Yielded(output));
                 }
 
-                Op::Pop => { self.pop()?; }
+                Op::Pop => {
+                    self.pop()?;
+                }
                 Op::Dup => {
-                    let val = self.stack.last()
-                        .ok_or(VmError::StackUnderflow)?
-                        .clone();
+                    let val = self.stack.last().ok_or(VmError::StackUnderflow)?.clone();
                     self.stack.push(val);
                 }
 
                 Op::NewStruct(template_idx) => {
-                    let template = &self.module.chunks[chunk_idx]
-                        .struct_templates[template_idx as usize];
+                    let template =
+                        &self.module.chunks[chunk_idx].struct_templates[template_idx as usize];
                     let n = template.field_names.len();
                     if self.stack.len() < n {
                         return Err(VmError::StackUnderflow);
                     }
                     let values: Vec<Value> = self.stack.drain(self.stack.len() - n..).collect();
-                    let fields: Vec<(String, Value)> = template.field_names.iter()
+                    let fields: Vec<(String, Value)> = template
+                        .field_names
+                        .iter()
                         .zip(values)
                         .map(|(name, val)| (name.clone(), val))
                         .collect();
@@ -429,13 +481,23 @@ impl Vm {
                     });
                 }
                 Op::NewEnum(enum_const, var_const, arg_count) => {
-                    let type_name = match &self.module.chunks[chunk_idx].constants[enum_const as usize] {
+                    let type_name =
+                        match &self.module.chunks[chunk_idx].constants[enum_const as usize] {
+                            Value::Str(s) => s.clone(),
+                            _ => {
+                                return Err(VmError::InvalidBytecode(String::from(
+                                    "enum name not a string",
+                                )));
+                            }
+                        };
+                    let variant = match &self.module.chunks[chunk_idx].constants[var_const as usize]
+                    {
                         Value::Str(s) => s.clone(),
-                        _ => return Err(VmError::InvalidBytecode(String::from("enum name not a string"))),
-                    };
-                    let variant = match &self.module.chunks[chunk_idx].constants[var_const as usize] {
-                        Value::Str(s) => s.clone(),
-                        _ => return Err(VmError::InvalidBytecode(String::from("variant name not a string"))),
+                        _ => {
+                            return Err(VmError::InvalidBytecode(String::from(
+                                "variant name not a string",
+                            )));
+                        }
                     };
                     let n = arg_count as usize;
                     let fields: Vec<Value> = if n > 0 {
@@ -443,7 +505,11 @@ impl Vm {
                     } else {
                         Vec::new()
                     };
-                    self.stack.push(Value::Enum { type_name, variant, fields });
+                    self.stack.push(Value::Enum {
+                        type_name,
+                        variant,
+                        fields,
+                    });
                 }
                 Op::NewArray(count) => {
                     let n = count as usize;
@@ -465,19 +531,30 @@ impl Vm {
 
                 Op::GetField(name_const) => {
                     let container = self.pop()?;
-                    let field_name = match &self.module.chunks[chunk_idx].constants[name_const as usize] {
-                        Value::Str(s) => s.clone(),
-                        _ => return Err(VmError::InvalidBytecode(String::from("field name not a string"))),
-                    };
+                    let field_name =
+                        match &self.module.chunks[chunk_idx].constants[name_const as usize] {
+                            Value::Str(s) => s.clone(),
+                            _ => {
+                                return Err(VmError::InvalidBytecode(String::from(
+                                    "field name not a string",
+                                )));
+                            }
+                        };
                     match container {
                         Value::Struct { type_name, fields } => {
-                            let val = fields.iter()
+                            let val = fields
+                                .iter()
                                 .find(|(n, _)| n == &field_name)
                                 .map(|(_, v)| v.clone())
                                 .ok_or(VmError::FieldNotFound(type_name, field_name))?;
                             self.stack.push(val);
                         }
-                        v => return Err(VmError::TypeError(format!("cannot access field on {}", v.type_name()))),
+                        v => {
+                            return Err(VmError::TypeError(format!(
+                                "cannot access field on {}",
+                                v.type_name()
+                            )));
+                        }
                     }
                 }
                 Op::GetIndex => {
@@ -491,7 +568,13 @@ impl Vm {
                             }
                             self.stack.push(arr[i as usize].clone());
                         }
-                        (c, i) => return Err(VmError::TypeError(format!("cannot index {} with {}", c.type_name(), i.type_name()))),
+                        (c, i) => {
+                            return Err(VmError::TypeError(format!(
+                                "cannot index {} with {}",
+                                c.type_name(),
+                                i.type_name()
+                            )));
+                        }
                     }
                 }
                 Op::GetTupleField(idx) => {
@@ -504,7 +587,12 @@ impl Vm {
                             }
                             self.stack.push(elems[i].clone());
                         }
-                        v => return Err(VmError::TypeError(format!("cannot tuple-index {}", v.type_name()))),
+                        v => {
+                            return Err(VmError::TypeError(format!(
+                                "cannot tuple-index {}",
+                                v.type_name()
+                            )));
+                        }
                     }
                 }
                 Op::GetEnumField(idx) => {
@@ -517,22 +605,36 @@ impl Vm {
                             }
                             self.stack.push(fields[i].clone());
                         }
-                        v => return Err(VmError::TypeError(format!("cannot enum-field {}", v.type_name()))),
+                        v => {
+                            return Err(VmError::TypeError(format!(
+                                "cannot enum-field {}",
+                                v.type_name()
+                            )));
+                        }
                     }
                 }
 
                 // -- Type predicates (push bool, no jump) --
-
                 Op::IsEnum(enum_const, var_const) => {
                     let val = self.stack.last().ok_or(VmError::StackUnderflow)?;
-                    let expected_type = match &self.module.chunks[chunk_idx].constants[enum_const as usize] {
-                        Value::Str(s) => s.as_str(),
-                        _ => return Err(VmError::InvalidBytecode(String::from("enum const not string"))),
-                    };
-                    let expected_var = match &self.module.chunks[chunk_idx].constants[var_const as usize] {
-                        Value::Str(s) => s.as_str(),
-                        _ => return Err(VmError::InvalidBytecode(String::from("variant const not string"))),
-                    };
+                    let expected_type =
+                        match &self.module.chunks[chunk_idx].constants[enum_const as usize] {
+                            Value::Str(s) => s.as_str(),
+                            _ => {
+                                return Err(VmError::InvalidBytecode(String::from(
+                                    "enum const not string",
+                                )));
+                            }
+                        };
+                    let expected_var =
+                        match &self.module.chunks[chunk_idx].constants[var_const as usize] {
+                            Value::Str(s) => s.as_str(),
+                            _ => {
+                                return Err(VmError::InvalidBytecode(String::from(
+                                    "variant const not string",
+                                )));
+                            }
+                        };
                     let matches = matches!(
                         val,
                         Value::Enum { type_name, variant, .. }
@@ -542,11 +644,17 @@ impl Vm {
                 }
                 Op::IsStruct(type_const) => {
                     let val = self.stack.last().ok_or(VmError::StackUnderflow)?;
-                    let expected = match &self.module.chunks[chunk_idx].constants[type_const as usize] {
-                        Value::Str(s) => s.as_str(),
-                        _ => return Err(VmError::InvalidBytecode(String::from("type const not string"))),
-                    };
-                    let matches = matches!(val, Value::Struct { type_name, .. } if type_name == expected);
+                    let expected =
+                        match &self.module.chunks[chunk_idx].constants[type_const as usize] {
+                            Value::Str(s) => s.as_str(),
+                            _ => {
+                                return Err(VmError::InvalidBytecode(String::from(
+                                    "type const not string",
+                                )));
+                            }
+                        };
+                    let matches =
+                        matches!(val, Value::Struct { type_name, .. } if type_name == expected);
                     self.stack.push(Value::Bool(matches));
                 }
 
@@ -554,14 +662,24 @@ impl Vm {
                     let val = self.pop()?;
                     match val {
                         Value::Int(i) => self.stack.push(Value::Float(i as f64)),
-                        v => return Err(VmError::TypeError(format!("cannot cast {} to f64", v.type_name()))),
+                        v => {
+                            return Err(VmError::TypeError(format!(
+                                "cannot cast {} to f64",
+                                v.type_name()
+                            )));
+                        }
                     }
                 }
                 Op::FloatToInt => {
                     let val = self.pop()?;
                     match val {
                         Value::Float(f) => self.stack.push(Value::Int(f as i64)),
-                        v => return Err(VmError::TypeError(format!("cannot cast {} to i64", v.type_name()))),
+                        v => {
+                            return Err(VmError::TypeError(format!(
+                                "cannot cast {} to i64",
+                                v.type_name()
+                            )));
+                        }
                     }
                 }
 
@@ -601,7 +719,13 @@ impl Vm {
         match (a, b) {
             (Value::Int(x), Value::Int(y)) => self.stack.push(Value::Int(int_op(x, y))),
             (Value::Float(x), Value::Float(y)) => self.stack.push(Value::Float(float_op(x, y))),
-            (a, b) => return Err(VmError::TypeError(format!("type mismatch: {} and {}", a.type_name(), b.type_name()))),
+            (a, b) => {
+                return Err(VmError::TypeError(format!(
+                    "type mismatch: {} and {}",
+                    a.type_name(),
+                    b.type_name()
+                )));
+            }
         }
         Ok(())
     }
@@ -618,7 +742,13 @@ impl Vm {
                 x.partial_cmp(y).unwrap_or(core::cmp::Ordering::Equal)
             }
             (Value::Str(x), Value::Str(y)) => x.cmp(y),
-            _ => return Err(VmError::TypeError(format!("cannot compare {} and {}", a.type_name(), b.type_name()))),
+            _ => {
+                return Err(VmError::TypeError(format!(
+                    "cannot compare {} and {}",
+                    a.type_name(),
+                    b.type_name()
+                )));
+            }
         };
         self.stack.push(Value::Bool(pred(ord)));
         Ok(())
@@ -734,10 +864,7 @@ mod tests {
 
     #[test]
     fn eval_with_args() {
-        let val = run_expect(
-            "fn main(x: i64) -> i64 { x + 1 }",
-            &[Value::Int(41)],
-        );
+        let val = run_expect("fn main(x: i64) -> i64 { x + 1 }", &[Value::Int(41)]);
         assert_eq!(val, Value::Int(42));
     }
 
@@ -786,19 +913,13 @@ mod tests {
 
     #[test]
     fn eval_enum_variant() {
-        let val = run_expect(
-            "fn main() -> i64 { let c = Color::Red(); 42 }",
-            &[],
-        );
+        let val = run_expect("fn main() -> i64 { let c = Color::Red(); 42 }", &[]);
         assert_eq!(val, Value::Int(42));
     }
 
     #[test]
     fn eval_array_literal_and_index() {
-        let val = run_expect(
-            "fn main() -> i64 { let arr = [10, 20, 30]; arr[1] }",
-            &[],
-        );
+        let val = run_expect("fn main() -> i64 { let arr = [10, 20, 30]; arr[1] }", &[]);
         assert_eq!(val, Value::Int(20));
     }
 
@@ -905,11 +1026,9 @@ mod tests {
         let program = parse(&tokens).expect("parse error");
         let module = compile(&program).expect("compile error");
         let mut vm = Vm::new(module).unwrap();
-        vm.register_native("math::add_one", |args| {
-            match &args[0] {
-                Value::Int(x) => Ok(Value::Int(x + 1)),
-                _ => Err(VmError::TypeError(String::from("expected Int"))),
-            }
+        vm.register_native("math::add_one", |args| match &args[0] {
+            Value::Int(x) => Ok(Value::Int(x + 1)),
+            _ => Err(VmError::TypeError(String::from("expected Int"))),
         });
         match vm.call(&[Value::Int(41)]).unwrap() {
             VmState::Finished(v) => assert_eq!(v, Value::Int(42)),
@@ -928,10 +1047,7 @@ mod tests {
 
     #[test]
     fn eval_string_concat() {
-        let val = run_expect(
-            "fn main() -> String { \"hello\" + \" world\" }",
-            &[],
-        );
+        let val = run_expect("fn main() -> String { \"hello\" + \" world\" }", &[]);
         assert_eq!(val, Value::Str(String::from("hello world")));
     }
 }
