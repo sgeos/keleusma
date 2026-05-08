@@ -16,9 +16,9 @@ Traits or generic type parameters would enable polymorphic functions and reusabl
 
 Closures or anonymous functions would enable higher-order programming patterns such as callbacks and inline transformations. Deferred to keep the VM simple. Multiheaded function dispatch serves as a partial alternative for pattern-based dispatch.
 
-## B4. Hot code swap implementation
+## ~~B4. Hot code swap implementation~~ (Resolved as R29)
 
-The design specifies hot swapping of text, rodata, and the data segment schema at RESET boundaries. Only the dialogue type (A -> B) must remain invariant across swaps (R25). Different routines may have different WCETs, and each is certified independently. The arena is cleared before new code executes, ensuring zero memory debt. Cross-swap data segment value handling follows Replace semantics with the host owning storage and migration responsibility (R26). Atomicity is logical only (R27). Rollback is mechanically identical to a forward update. Implementation requires host-side support for candidate slotting, version retention, and data segment instance supply.
+Hot code swap is implemented through `Vm::replace_module`. The host calls it between a `VmState::Reset` and the next `call`. The new module is verified before replacement. The host supplies an initial data segment instance whose length must match the new module's declared slot count. Frames and stack are cleared so the next `call` starts the new module's entry point. The same mechanism supports forward update and rollback. See R29 in [RESOLVED.md](./RESOLVED.md).
 
 ## ~~B5. Structural verification implementation~~ (Resolved as R22, R23)
 

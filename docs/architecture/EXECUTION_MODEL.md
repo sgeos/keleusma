@@ -78,9 +78,25 @@ The data segment is a fixed-size, fixed-layout region of mutable storage owned b
 
 Cross-yield value preservation is not guaranteed. The host may write to the segment between yields and is expected to do so in many designs. Within a single code image, the schema is fixed at compile time and does not change. Across hot updates, the schema may change arbitrarily because hot updates occur only at RESET, where no script invariant spans the boundary on the script side. Cross-swap value handling follows Replace semantics, in which the host atomically supplies the data instance appropriate for the new code version. The host may keep, modify, migrate, or substitute the underlying storage transparently.
 
-Concurrency is single-ownership. The script holds exclusive access to the segment while executing. Ownership returns to the host at YIELD and at RESET. Concurrent access from another host thread during script execution is unspecified.
+Concurrency is single-ownership. The script holds exclusive access to the segment while executing. Ownership returns to the host at YIELD and at RESET. Concurrent access from another host thread during script execution is unspecified. In the Rust host environment, the borrow checker enforces single ownership at compile time, namely the host cannot call `set_data`, `get_data`, or `replace_module` while a `call` or `resume` invocation holds the mutable reference to the VM.
 
 The data segment design draws on the persistent state model of the Erlang and Open Telecom Platform multi-version code coexistence pattern [H1, H2] and on the state vector model of mode automata in the synchronous reactive language tradition [H3, SC1].
+
+### Host Interoperability Layer
+
+The host interacts with the data segment through a slot-based `Vec<Value>` interface rather than through a `repr(C)` Rust struct mapping. The choice avoids unsafe pointer manipulation and keeps the runtime consistent with the rest of the VM, where every value is represented as a `Value` enum. The host is free to back its application-level state in any Rust struct it prefers and to marshal between that struct and the slot vector at the YIELD and RESET boundaries.
+
+The Vm public API for the data segment consists of the following methods.
+
+| Method | Use |
+|---|---|
+| `Vm::new(module)` | Construct the VM. The data segment is allocated to match the declared layout slot count and zero-initialized to `Value::Unit`. |
+| `set_data(slot, value)` | Initialize or update a single slot. Valid between calls to `call` and `resume`. |
+| `get_data(slot)` | Read a single slot. |
+| `data_len()` | Return the number of slots in the current data segment. |
+| `replace_module(new_module, initial_data)` | Hot swap the code and data segment atomically. Verifies the new module. Requires the host-supplied data vector length to match the new module's declared slot count. Clears frames and stack so the next `call` starts the new module's entry point. Suitable for both forward update and rollback. |
+
+Schema mismatch detection is by size check plus host attestation. The size check compares the supplied data vector length against the declared slot count of the new module. Dialogue type compatibility between modules across a swap is the host's responsibility because dialogue types are erased at the bytecode level. Schema hash comparison and structural type checking against a schema descriptor are deferred to a later phase.
 
 ### Host State
 

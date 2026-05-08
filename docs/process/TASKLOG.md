@@ -12,7 +12,7 @@ Current sprint source of truth.
 
 ## Active Milestone
 
-**V0.0-M3**: Data segment specification and implementation.
+None. V0.0-M3 complete. Ready for V0.1 planning.
 
 ## Task Breakdown
 
@@ -30,8 +30,10 @@ Current sprint source of truth.
 | V0.0-M3-T4 | Singular data block enforcement | Complete | Compile-time error referencing R28, test coverage |
 | V0.0-M3-T5 | Fixed-size field type enforcement | Complete | Recursive validation at data block declaration boundary, test coverage for primitives, tuples, arrays, options, structs, enums, and rejection cases |
 | V0.0-M3-T6 | Verifier bounds checking for GetData and SetData | Complete | Slot index validated against data layout slot count, test coverage |
-| V0.0-M3-T7 | Host interoperability layer specification | Pending | P6 item 4 |
-| V0.0-M3-T8 | End-to-end data segment integration tests | Pending | Tests covering read, write, persistence across yield, persistence across reset, and schema change across hot update require host-side support |
+| V0.0-M3-T7 | Host interoperability layer specification | Complete | R29. Slot-based Vec<Value> interface. Documented in EXECUTION_MODEL and COMPILATION_PIPELINE |
+| V0.0-M3-T8 | End-to-end data segment integration tests | Complete | Six hot swap tests added covering same-schema, new-schema, size mismatch, no-data module, swap at reset, and rollback. 238 tests pass, zero clippy warnings |
+| V0.0-M3-T9 | Hot swap API replace_module on Vm | Complete | replace_module, data_len added with documentation |
+| V0.0-M3-T10 | Concurrency contract specification | Complete | Single-ownership enforced by Rust borrow checker. Documented in EXECUTION_MODEL |
 
 ## History
 
@@ -44,3 +46,4 @@ Current sprint source of truth.
 | 2026-05-08 | Formal related work pass with citations across knowledge graph. RELATED_WORK.md created. |
 | 2026-05-08 | Data segment design feasibility analysis. R24 through R28 added. RELATED_WORK Section 8 added covering hot code update with persistent state. |
 | 2026-05-08 | Data segment source conformance brought into alignment with specification. Singular block check, fixed-size field type validation, verifier bounds check. 232 tests pass, zero clippy warnings. |
+| 2026-05-08 | V0.0-M3 complete. Hot swap API added with replace_module and data_len. Six hot swap integration tests added. R29 records the slot-based interoperability decision. 238 tests pass. |

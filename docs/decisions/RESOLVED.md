@@ -115,3 +115,7 @@ Hot swap atomicity is logical only. The new code text and rodata must be residen
 ## R28. Singular data block per program
 
 A program may declare zero or one `data` block. The grammar admits the syntactic form of multiple data declarations, but the compiler emits an error if more than one block is declared. This decision follows the philosophy of "boring code that does exciting things," in which the script presents a single coherent context type T to the host. Future extension to multiple blocks composed into a single segment is admissible but is not part of the current specification.
+
+## R29. Host interoperability layer is slot-based
+
+The host interoperability layer for the data segment is a slot-based `Vec<Value>` interface rather than a `repr(C)` Rust struct mapping. The host stores its application-level state in any Rust struct it prefers and marshals between that struct and the slot vector at the YIELD and RESET boundaries. The choice avoids unsafe pointer manipulation, keeps the runtime consistent with the rest of the VM where every value is a `Value` enum, and requires no new infrastructure. The Vm exposes `set_data`, `get_data`, `data_len`, and `replace_module` for host use. Schema mismatch detection at swap time is by size check plus host attestation. Hash comparison and structural type checking against a schema descriptor are deferred. Single-ownership concurrency is enforced by the Rust borrow checker because the host cannot hold a mutable reference to the VM while `call` or `resume` is running.

@@ -20,13 +20,13 @@ What should happen when a script encounters a runtime error? Options include yie
 
 ## ~~P5. WCET analysis tooling~~ (Resolved as R23)
 
-## P6. Data segment implementation completion
+## ~~P6. Data segment implementation completion~~ (Resolved as R29)
 
-The data segment design is specified across R24 through R28. The compile-time and verifier-time conformance items are implemented. The remaining items concern host integration and end-to-end coverage.
+All P6 items are complete.
 
 1. ~~Enforce the singular data block constraint (R28) at compile time with a clear diagnostic.~~ Complete.
 2. ~~Enforce the fixed-size field type constraint at the data block declaration boundary, per the table in [TYPE_SYSTEM.md](../design/TYPE_SYSTEM.md).~~ Complete.
 3. ~~Extend the structural verifier to reject `GetData` and `SetData` operands that exceed the segment slot count.~~ Complete.
-4. Define the host interoperability layer that maps the declared schema to a Rust struct of fixed layout, including the `repr(C)` discipline or an offset-based accessor scheme. Open. Interacts with the schema mismatch detection question, namely whether the VM trusts the host, compares schema hashes, or performs structural type checking.
-5. Specify the concurrency contract that the script holds exclusive ownership during execution and the host holds ownership at YIELD and RESET.
-6. Add end-to-end integration tests covering data segment read, write, persistence across yield, persistence across reset, and schema change across hot update. Requires host-side support per item 4.
+4. ~~Define the host interoperability layer.~~ Complete. Slot-based `Vec<Value>` interface chosen over `repr(C)` struct mapping. Schema mismatch detection by size check plus host attestation. Hash and structural checking deferred. See R29.
+5. ~~Specify the concurrency contract.~~ Complete. Single-ownership enforced by Rust borrow checker. Documented in EXECUTION_MODEL.md.
+6. ~~Add end-to-end integration tests.~~ Complete. Six new hot swap tests cover same-schema preserved, new-schema replaced, size mismatch rejected, no-data module, swap at reset starts new module, and rollback to prior version.

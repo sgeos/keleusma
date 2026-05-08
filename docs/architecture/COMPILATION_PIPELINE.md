@@ -131,12 +131,25 @@ The recommended pipeline for loading and executing a Keleusma script from the ho
 let tokens = tokenize(source)?;
 let program = parse(&tokens)?;
 let module = compile(&program)?;
-verify(&module)?;
 let mut vm = Vm::new(module)?;
-// Register native functions, then call/resume.
+// Register native functions.
+// Initialize data segment slots if the module declares a data block.
+for (slot, value) in initial_values.iter().enumerate() {
+    vm.set_data(slot, value.clone())?;
+}
+// Drive coroutine execution.
+match vm.call(&[])? {
+    VmState::Yielded(output) => { /* host processes output */ }
+    VmState::Reset => { /* host may hot swap or resume */ }
+    VmState::Finished(value) => { /* terminal result */ }
+}
 ```
 
-Structural verification via `verify()` is optional but recommended. The VM does not call `verify()` internally. The host is responsible for calling it before constructing the VM if load-time safety guarantees are desired. See [TARGET_ISA.md](../reference/TARGET_ISA.md) for the complete structural ISA specification.
+`Vm::new()` runs structural verification on the module and returns an error if verification fails. The data segment is allocated to match the declared layout slot count and zero-initialized to `Value::Unit`. The host calls `set_data` to populate slots before execution begins.
+
+Hot code update is performed by calling `vm.replace_module(new_module, initial_data)` between a `VmState::Reset` and the next `call`. The new module is verified before replacement. The supplied data vector length must match the new module's declared slot count. After a successful swap, the host calls `call` to start the new module's entry point. The same mechanism supports rollback by replacing with an older module and an appropriate data instance.
+
+See [TARGET_ISA.md](../reference/TARGET_ISA.md) for the complete structural ISA specification and [EXECUTION_MODEL.md](./EXECUTION_MODEL.md) for the data segment specification.
 
 ## Cross-References
 

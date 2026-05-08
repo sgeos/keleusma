@@ -125,6 +125,65 @@ impl Vm {
         })
     }
 
+    /// Return the number of slots in the current data segment.
+    ///
+    /// Useful for hosts that want to allocate a `Vec<Value>` of the correct
+    /// size without inspecting the `Module` directly.
+    pub fn data_len(&self) -> usize {
+        self.data.len()
+    }
+
+    /// Replace the current module with a new one as a hot code update.
+    ///
+    /// This is the host-facing hot swap API (R26, R27). The host is
+    /// expected to call this only between a `VmState::Reset` and the
+    /// next `call`. The Rust borrow checker enforces that the call
+    /// cannot overlap with running execution because that would require
+    /// concurrent mutable access to `self`.
+    ///
+    /// The new module is verified before replacement. The data segment
+    /// is replaced atomically with the host-supplied initial values
+    /// following Replace semantics, namely the host owns storage and
+    /// supplies whatever instance is appropriate for the new code
+    /// version. The supplied vector length must match the declared
+    /// slot count of the new module.
+    ///
+    /// Frames and stack are cleared. The host should call `call` to
+    /// start the new module's entry point. The old module's coroutine
+    /// state, if any, is discarded.
+    ///
+    /// Dialogue type compatibility between the old and new modules is
+    /// the host's responsibility. The VM does not check it because
+    /// dialogue types are erased at the bytecode level.
+    pub fn replace_module(
+        &mut self,
+        new_module: Module,
+        initial_data: Vec<Value>,
+    ) -> Result<(), VmError> {
+        verify::verify(&new_module)
+            .map_err(|e| VmError::VerifyError(format!("{}: {}", e.chunk_name, e.message)))?;
+
+        let expected_len = new_module
+            .data_layout
+            .as_ref()
+            .map_or(0, |dl| dl.slots.len());
+        if initial_data.len() != expected_len {
+            return Err(VmError::InvalidBytecode(format!(
+                "data segment size mismatch: new module declares {} slot(s), host supplied {}",
+                expected_len,
+                initial_data.len()
+            )));
+        }
+
+        self.module = new_module;
+        self.data = initial_data;
+        self.frames.clear();
+        self.stack.clear();
+        self.started = false;
+
+        Ok(())
+    }
+
     /// Register a native function by name using a function pointer.
     pub fn register_native(&mut self, name: &str, func: fn(&[Value]) -> Result<Value, VmError>) {
         self.natives.push(NativeEntry {
@@ -1394,6 +1453,183 @@ mod tests {
         vm.set_data(1, Value::Int(200)).unwrap();
         match vm.call(&[]).unwrap() {
             VmState::Finished(v) => assert_eq!(v, Value::Int(300)),
+            other => panic!("expected finished, got {:?}", other),
+        }
+    }
+
+    fn build_module(src: &str) -> Module {
+        let tokens = tokenize(src).expect("lex error");
+        let program = parse(&tokens).expect("parse error");
+        compile(&program).expect("compile error")
+    }
+
+    // -- Hot swap (replace_module) --
+
+    #[test]
+    fn hot_swap_same_schema_preserved() {
+        // Module A: ctx { score: i64 }, returns ctx.score + 10.
+        let src_a = "data ctx { score: i64 }\nfn main() -> i64 { ctx.score + 10 }";
+        // Module B: ctx { score: i64 }, returns ctx.score * 2.
+        let src_b = "data ctx { score: i64 }\nfn main() -> i64 { ctx.score * 2 }";
+
+        let mod_a = build_module(src_a);
+        let mod_b = build_module(src_b);
+
+        let mut vm = Vm::new(mod_a).unwrap();
+        vm.set_data(0, Value::Int(5)).unwrap();
+        match vm.call(&[]).unwrap() {
+            VmState::Finished(v) => assert_eq!(v, Value::Int(15)),
+            other => panic!("expected finished, got {:?}", other),
+        }
+
+        // Hot swap to module B with the same value preserved by the host.
+        vm.replace_module(mod_b, alloc::vec![Value::Int(5)])
+            .unwrap();
+        assert_eq!(vm.data_len(), 1);
+        match vm.call(&[]).unwrap() {
+            VmState::Finished(v) => assert_eq!(v, Value::Int(10)),
+            other => panic!("expected finished, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn hot_swap_new_schema_replaced() {
+        // Module A: ctx { score: i64 }, returns ctx.score.
+        let src_a = "data ctx { score: i64 }\nfn main() -> i64 { ctx.score }";
+        // Module B: ctx { x: i64, y: i64, z: i64 }, returns x + y + z.
+        let src_b =
+            "data ctx { x: i64, y: i64, z: i64 }\nfn main() -> i64 { ctx.x + ctx.y + ctx.z }";
+
+        let mod_a = build_module(src_a);
+        let mod_b = build_module(src_b);
+
+        let mut vm = Vm::new(mod_a).unwrap();
+        vm.set_data(0, Value::Int(7)).unwrap();
+        assert_eq!(vm.data_len(), 1);
+
+        vm.replace_module(
+            mod_b,
+            alloc::vec![Value::Int(1), Value::Int(2), Value::Int(3)],
+        )
+        .unwrap();
+        assert_eq!(vm.data_len(), 3);
+
+        match vm.call(&[]).unwrap() {
+            VmState::Finished(v) => assert_eq!(v, Value::Int(6)),
+            other => panic!("expected finished, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn hot_swap_size_mismatch_rejected() {
+        let src_a = "data ctx { x: i64 }\nfn main() -> i64 { ctx.x }";
+        let src_b = "data ctx { x: i64, y: i64 }\nfn main() -> i64 { ctx.x + ctx.y }";
+
+        let mod_a = build_module(src_a);
+        let mod_b = build_module(src_b);
+
+        let mut vm = Vm::new(mod_a).unwrap();
+        // Supplying one value when the new module declares two slots must fail.
+        let err = vm
+            .replace_module(mod_b, alloc::vec![Value::Int(99)])
+            .unwrap_err();
+        match err {
+            VmError::InvalidBytecode(msg) => assert!(msg.contains("size mismatch")),
+            other => panic!("expected size mismatch error, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn hot_swap_no_data_module_accepts_empty_vec() {
+        let src_a = "data ctx { x: i64 }\nfn main() -> i64 { ctx.x }";
+        let src_b = "fn main() -> i64 { 42 }";
+
+        let mod_a = build_module(src_a);
+        let mod_b = build_module(src_b);
+
+        let mut vm = Vm::new(mod_a).unwrap();
+        vm.replace_module(mod_b, Vec::new()).unwrap();
+        assert_eq!(vm.data_len(), 0);
+        match vm.call(&[]).unwrap() {
+            VmState::Finished(v) => assert_eq!(v, Value::Int(42)),
+            other => panic!("expected finished, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn hot_swap_at_reset_starts_new_module() {
+        // Module A: streaming counter. Module B: streaming doubler.
+        let src_a = "data ctx { n: i64 }\n\
+                     loop main(input: i64) -> i64 {\n\
+                         ctx.n = ctx.n + 1;\n\
+                         let input = yield ctx.n;\n\
+                         input\n\
+                     }";
+        let src_b = "data ctx { n: i64 }\n\
+                     loop main(input: i64) -> i64 {\n\
+                         let input = yield ctx.n * 10;\n\
+                         input\n\
+                     }";
+
+        let mod_a = build_module(src_a);
+        let mod_b = build_module(src_b);
+
+        let mut vm = Vm::new(mod_a).unwrap();
+        vm.set_data(0, Value::Int(0)).unwrap();
+
+        // Run module A: yield 1.
+        match vm.call(&[Value::Int(0)]).unwrap() {
+            VmState::Yielded(v) => assert_eq!(v, Value::Int(1)),
+            other => panic!("expected yield, got {:?}", other),
+        }
+
+        // Resume to reach Reset.
+        match vm.resume(Value::Int(0)).unwrap() {
+            VmState::Reset => {}
+            other => panic!("expected reset, got {:?}", other),
+        }
+
+        // Hot swap to module B, host preserves n = 1.
+        vm.replace_module(mod_b, alloc::vec![Value::Int(1)])
+            .unwrap();
+
+        // Run module B: yield 1 * 10 = 10.
+        match vm.call(&[Value::Int(0)]).unwrap() {
+            VmState::Yielded(v) => assert_eq!(v, Value::Int(10)),
+            other => panic!("expected yield, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn hot_swap_rollback_to_prior_version() {
+        // Demonstrate rollback by treating the older module as the swap target.
+        let src_v1 = "data ctx { n: i64 }\nfn main() -> i64 { ctx.n + 1 }";
+        let src_v2 = "data ctx { n: i64 }\nfn main() -> i64 { ctx.n + 100 }";
+
+        let mod_v1 = build_module(src_v1);
+        let mod_v2 = build_module(src_v2);
+
+        // Start with v1, snapshot the value 5.
+        let mut vm = Vm::new(mod_v1.clone()).unwrap();
+        vm.set_data(0, Value::Int(5)).unwrap();
+        match vm.call(&[]).unwrap() {
+            VmState::Finished(v) => assert_eq!(v, Value::Int(6)),
+            other => panic!("expected finished, got {:?}", other),
+        }
+
+        // Forward update to v2.
+        vm.replace_module(mod_v2, alloc::vec![Value::Int(5)])
+            .unwrap();
+        match vm.call(&[]).unwrap() {
+            VmState::Finished(v) => assert_eq!(v, Value::Int(105)),
+            other => panic!("expected finished, got {:?}", other),
+        }
+
+        // Rollback to v1 with the same value.
+        vm.replace_module(mod_v1, alloc::vec![Value::Int(5)])
+            .unwrap();
+        match vm.call(&[]).unwrap() {
+            VmState::Finished(v) => assert_eq!(v, Value::Int(6)),
             other => panic!("expected finished, got {:?}", other),
         }
     }
