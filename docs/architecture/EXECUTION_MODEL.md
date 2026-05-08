@@ -10,7 +10,7 @@ This document describes the execution model for Keleusma. The model separates te
 
 ### Yield Domain (Control Clock)
 
-WCET is measured from YIELD to YIELD. The YIELD primitive performs a bidirectional exchange with the host (A exchanged for B), suspends execution, and resumes at the next instruction. YIELD does not clear the arena. Multiple YIELDs may occur before RESET. Each yield-to-yield slice must be statically bounded.
+WCET is measured from YIELD to YIELD. The YIELD primitive performs a bidirectional exchange with the host (A exchanged for B), suspends execution, and resumes at the next instruction. YIELD does not clear the arena. Multiple YIELDs may occur before RESET. Each yield-to-yield slice must be statically bounded. The yield domain corresponds to the synchronous hypothesis from the synchronous reactive language tradition [L1, SY1], which assumes that computation completes within one logical tick.
 
 ### Reset Domain (Phase Clock)
 
@@ -98,7 +98,7 @@ Programs are verified at load time through structural analysis. The verifier (`v
 2. **Offset validation.** All jump targets are within bounds and point to correct matching delimiters.
 3. **Block type constraints.** Func chunks contain no Yield, Stream, or Reset. Reentrant chunks contain at least one Yield. Stream chunks contain exactly one Stream, one Reset, and at least one Yield.
 4. **Break containment.** Every Break and BreakIf is inside a Loop/EndLoop.
-5. **Productivity rule.** Abstract interpretation over a two-element lattice verifies that all control flow paths from Stream to Reset pass through at least one Yield.
+5. **Productivity rule.** Abstract interpretation over a two-element lattice verifies that all control flow paths from Stream to Reset pass through at least one Yield. The productivity analysis and the WCET analysis are both instances of abstract interpretation in the sense of Cousot and Cousot [AI1], operating over finite lattices (a two-element boolean lattice for productivity, the natural numbers for WCET cost).
 
 A program is valid only if all paths satisfy these constraints. Invalid programs are rejected before execution begins.
 
@@ -111,3 +111,8 @@ See [TARGET_ISA.md](../reference/TARGET_ISA.md) for the full structural ISA spec
 - [LANGUAGE_DESIGN.md](./LANGUAGE_DESIGN.md) describes the language-level design goals and guarantees.
 - [TARGET_ISA.md](../reference/TARGET_ISA.md) specifies the structural ISA block types and verification rules.
 - [COMPILATION_PIPELINE.md](./COMPILATION_PIPELINE.md) describes the current compilation pipeline.
+- [RELATED_WORK.md](../reference/RELATED_WORK.md) positions Keleusma within the academic and industrial landscape.
+
+## Citation Key
+
+Citations in this document use bracket notation (e.g., [L1], [AI1]) referring to entries in the bibliography in [RELATED_WORK.md](../reference/RELATED_WORK.md).

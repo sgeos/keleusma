@@ -29,6 +29,7 @@ This documentation is structured as a **knowledge graph** encoded in the file sy
 | Open questions | [decisions/PRIORITY.md](./decisions/PRIORITY.md) |
 | Current task | [process/TASKLOG.md](./process/TASKLOG.md) |
 | Terminology | [reference/GLOSSARY.md](./reference/GLOSSARY.md) |
+| Related work and citations | [reference/RELATED_WORK.md](./reference/RELATED_WORK.md) |
 | Development roadmap | [roadmap/README.md](./roadmap/README.md) |
 
 ## Meta

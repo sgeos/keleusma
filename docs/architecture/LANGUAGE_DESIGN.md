@@ -4,11 +4,11 @@
 
 ## Overview
 
-Keleusma is a Total Functional Stream Processing Language designed for safety-critical and industrially certifiable applications such as robotics, flight control, and embedded audio. Its philosophy is "boring code enabling exciting behavior": the language enforces simplicity, determinism, and analyzability while allowing external systems to perform complex tasks. It is lightweight, embeddable, compiles to bytecode, and runs on a stack-based virtual machine targeting `no_std+alloc` environments.
+Keleusma is a Total Functional Stream Processing Language whose design is informed by the synchronous reactive language tradition [SY1] and the coalgebraic theory of stream processing [C1, C2]. Its philosophy is "boring code enabling exciting behavior": the language enforces simplicity, determinism, and analyzability while allowing external systems to perform complex tasks. It is lightweight, embeddable, compiles to bytecode, and runs on a stack-based virtual machine targeting `no_std+alloc` environments. Its target applications include embedded audio engines, game scripting, and domains where bounded-step execution and deterministic scheduling are required. See [RELATED_WORK.md](../reference/RELATED_WORK.md) for the full academic and industrial context.
 
 ## Design Philosophy
 
-Keleusma emphasizes minimal, analyzable primitives. The language eliminates dynamic features such as dynamic dispatch, unbounded recursion, and heap fragmentation to ensure absolute predictability. Exciting system behavior emerges externally, not from language complexity. The language is designed for formal certifiability in hard real-time domains.
+Keleusma emphasizes minimal, analyzable primitives. The language eliminates dynamic features such as dynamic dispatch, unbounded recursion, and heap fragmentation to ensure absolute predictability. Exciting system behavior emerges externally, not from language complexity. These design choices are shared with the synchronous reactive language family (Lustre, Esterel, Signal, SCADE) [SY1], which has demonstrated that deterministic, bounded-step languages are practical for real-time embedded applications.
 
 ## Design Goals
 
@@ -38,7 +38,7 @@ Keleusma targets three application domains.
 
 ## Stream Coalgebra
 
-Every top-level productive divergent function represents a coalgebra: `f : Stream<A> -> Stream<B>`. Functions transform one stream into another, potentially infinitely. Helper functions may yield but must match the top-level function's dialogue type (yield contract). The coalgebraic model enables mathematical reasoning about infinite stream transformations.
+Every top-level productive divergent function represents a coalgebra: `f : Stream<A> -> Stream<B>`, following Rutten's theory of universal coalgebra [C1] and coinductive stream calculus [C2]. Functions transform one stream into another, potentially infinitely. Helper functions may yield but must match the top-level function's dialogue type (yield contract). The coalgebraic model enables mathematical reasoning about infinite stream transformations and provides the theoretical foundation for productivity proofs [C4].
 
 ## Three Function Categories
 
@@ -62,9 +62,9 @@ The three categories map to the structural ISA block types. Atomic functions cor
 
 Keleusma provides four static guarantees about program behavior.
 
-1. **Totality.** No partial functions or undefined behavior. Every execution path terminates or yields.
-2. **Productivity.** Each iteration of a productive divergent function produces observable output via at least one yield.
-3. **Bounded-step.** There exists a statically provable upper bound on instructions executed between any two yield points (WCET analyzable).
+1. **Totality.** No partial functions or undefined behavior. Every execution path terminates or yields. This follows Turner's argument for total functional programming [T1] and is enforced through recursion prohibition and bounded loops.
+2. **Productivity.** Each iteration of a productive divergent function produces observable output via at least one yield. This is the coinductive dual of termination, as studied by Endrullis et al. for stream definitions [C4] and unified with termination checking by Abel and Pientka [C3].
+3. **Bounded-step.** There exists a statically provable upper bound on instructions executed between any two yield points (WCET analyzable). This corresponds to the synchronous hypothesis [L1, SY1] and enables WCET analysis [WC1].
 4. **Safe swapping.** Hot code swaps preserve type safety and stream continuity. Only the dialogue type must remain invariant across swaps.
 
 ## Memory Model
@@ -83,9 +83,11 @@ Keleusma supports swapping the text and rodata segments at the boundary of a pro
 
 ## WCET Analysis
 
-Worst-Case Execution Time is measured from yield to yield. Each yield-to-yield slice must have a statically provable upper bound on instructions executed. In the absence of dynamic dispatch, every execution path is a static directed acyclic graph between yield points. WCET is determined by counting weighted opcodes on the longest path between any two yield points. This enables industrial certification for hard real-time systems.
+Worst-Case Execution Time is measured from yield to yield. Each yield-to-yield slice must have a statically provable upper bound on instructions executed. In the absence of dynamic dispatch, every execution path is a static directed acyclic graph between yield points. WCET is determined by counting weighted opcodes on the longest path between any two yield points. Wilhelm et al. provide a comprehensive survey of WCET analysis methods and tools [WC1].
 
 Each bytecode instruction carries a relative integer cost via `Op::cost()`, assigned across five tiers: 1 for data movement and control flow markers, 2 for arithmetic and comparisons, 3 for division and field lookup, 5 for composite value construction, and 10 for function calls. The `wcet_stream_iteration()` function in `src/verify.rs` computes the worst-case total cost of one Stream-to-Reset iteration by recursively analyzing block-structured control flow, taking the maximum cost branch at each join point. These cost weights are preliminary and subject to refinement as the instruction set stabilizes.
+
+Abstract opcode cost does not directly correspond to wall-clock execution time. Industrial WCET analysis tools such as aiT [WC2] account for pipeline effects, cache behavior, and branch prediction on the target hardware. For safety-critical certification, a sound bound on real-time WCET requires either a time-predictable execution platform (as demonstrated for JOP in [WC5]) or a validated mapping from abstract cost to physical time. Keleusma's current WCET analysis is sufficient for soft real-time applications (audio engines, game scripting) where approximate cost bounds inform scheduling decisions. See [RELATED_WORK.md](../reference/RELATED_WORK.md) Section 4 for a full discussion.
 
 ## Turing Completeness
 
@@ -132,8 +134,15 @@ The following features are explicitly excluded from the current language design.
 
 Note: Hot code swapping at the bytecode level is part of the design and is described in [EXECUTION_MODEL.md](./EXECUTION_MODEL.md). Structural verification is implemented and described in [TARGET_ISA.md](../reference/TARGET_ISA.md).
 
+Keleusma's design choices are informed by synchronous reactive language principles and are favorable for eventual safety-critical certification, but current claims of suitability for "aerospace, robotics, and flight control" are design aspirations, not certification status. See [RELATED_WORK.md](../reference/RELATED_WORK.md) Section 7 for a gap analysis between the current implementation and industrial certification readiness.
+
 ## Cross-References
 
 - [GRAMMAR.md](../design/GRAMMAR.md) provides the formal EBNF grammar specification.
 - [EXECUTION_MODEL.md](./EXECUTION_MODEL.md) describes the target execution model with temporal domains.
 - [TARGET_ISA.md](../reference/TARGET_ISA.md) describes the structural ISA specification.
+- [RELATED_WORK.md](../reference/RELATED_WORK.md) positions Keleusma within the academic and industrial landscape.
+
+## Citation Key
+
+Citations in this document use bracket notation (e.g., [SY1], [C1]) referring to entries in the bibliography in [RELATED_WORK.md](../reference/RELATED_WORK.md).

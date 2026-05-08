@@ -2,7 +2,9 @@
 
 > **Navigation**: [Reference](./README.md) | [Documentation Root](../README.md)
 
-Key terminology used in the Keleusma documentation and source code.
+Key terminology used in the Keleusma documentation and source code. Citations use bracket notation (e.g., [AI1], [SY1]) referring to entries in the bibliography in [RELATED_WORK.md](./RELATED_WORK.md).
+
+**Abstract interpretation** -- A general framework for sound static analysis of programs, introduced by Cousot and Cousot [AI1]. The framework defines analysis as computation over abstract domains (lattices) that soundly approximate concrete program behavior. In Keleusma, the productivity analysis operates over a two-element boolean lattice and the WCET analysis operates over the natural numbers, both following the abstract interpretation methodology.
 
 **Arena** -- The ephemeral memory region consisting of a single contiguous bump-allocated buffer. The stack grows from one end. There is no heap initially. The arena persists across yields within a single stream phase but is cleared at the RESET boundary by resetting the bump pointer. No memory survives across RESET. Memory bounds are statically analyzable.
 
@@ -48,7 +50,7 @@ Key terminology used in the Keleusma documentation and source code.
 
 **Productive divergent function** -- A function declared with the `loop` keyword. It diverges by never exiting, but is productive because it yields a value on every iteration.
 
-**Productivity invariant** -- The property that every control path from STREAM to RESET must encounter at least one YIELD. This ensures that every iteration of a productive divergent function produces observable output. Enforced by Pass 5 of the structural verifier via abstract interpretation over a two-element lattice.
+**Productivity invariant** -- The property that every control path from STREAM to RESET must encounter at least one YIELD. This ensures that every iteration of a productive divergent function produces observable output. Enforced by Pass 5 of the structural verifier via abstract interpretation [AI1] over a two-element lattice. The coinductive dual of termination, as studied by Endrullis et al. [C4].
 
 **Productivity verification** -- The static analysis pass that enforces the productivity invariant. Implemented as `analyze_yield_coverage()` in `src/verify.rs`. The analysis walks the block-structured control flow, tracking whether all paths have yielded. At If/Else branches, both branches must yield. At loops, all break-exit paths must have yielded. Programs that violate the invariant are rejected at load time.
 
@@ -56,17 +58,23 @@ Key terminology used in the Keleusma documentation and source code.
 
 **RESET** -- A structural ISA primitive that clears the arena, performs a hot swap if scheduled, and jumps to the STREAM entry point. RESET is the only instruction allowed to target STREAM and is the only global back-edge in the program.
 
+**Soundness** -- The property that a verification pass rejects all invalid programs. A sound verifier never accepts a program that violates the property it checks. The structural verifier's soundness has not been formally proven. See [RELATED_WORK.md](./RELATED_WORK.md) Section 7 for the certification gap analysis.
+
 **Span** -- A source location record containing byte offsets, line number, and column number. Attached to tokens and AST nodes for error reporting.
+
+**Synchronous hypothesis** -- The assumption, originating in the synchronous reactive language tradition [L1, SY1], that computation completes within one logical tick. In Keleusma, each yield-to-yield slice corresponds to one logical tick, and the bounded-step invariant ensures that each tick completes in bounded time.
 
 **STREAM** -- A structural ISA block type representing the mission loop entry point. Zero or one STREAM region may exist per program. STREAM terminates with RESET. The RESET -> STREAM cycle is the only unbounded cycle.
 
-**Total function** -- A function guaranteed to terminate, assuming called functions return. Both `fn` and `yield` functions are total. Loop functions are not total but are productive.
+**Tool qualification** -- The certification process for development tools under safety standards such as DO-178C [IC1] and DO-330 [IC2]. A qualified tool has been demonstrated to produce correct output or to detect its own errors. Keleusma's compiler and verifier are not currently qualified. See [RELATED_WORK.md](./RELATED_WORK.md) Section 7 for the certification gap analysis.
+
+**Total function** -- A function guaranteed to terminate, assuming called functions return. Both `fn` and `yield` functions are total. Loop functions are not total but are productive. The totality guarantee follows Turner's argument for total functional programming [T1].
 
 **Value** -- The runtime representation of data in the VM. An enum with variants: Unit, Bool, Int, Float, Str, Tuple, Array, Struct, Enum, and None.
 
 **Structural verification** -- Load-time validation of compiled modules. Implemented as `verify()` in `src/verify.rs`. Performs five passes per chunk: block nesting, offset validation, block type constraints, break containment, and productivity rule enforcement. Programs that fail verification are rejected before execution begins.
 
-**WCET** -- Worst-Case Execution Time. In Keleusma, WCET is measured from yield to yield by counting weighted opcodes on the longest path between any two YIELD instructions. The absence of dynamic dispatch ensures all paths are statically enumerable. Computed by `wcet_stream_iteration()` in `src/verify.rs`.
+**WCET** -- Worst-Case Execution Time. In Keleusma, WCET is measured from yield to yield by counting weighted opcodes on the longest path between any two YIELD instructions. The absence of dynamic dispatch ensures all paths are statically enumerable. Computed by `wcet_stream_iteration()` in `src/verify.rs`. This abstract opcode cost does not directly correspond to wall-clock execution time. Industrial WCET tools [WC1] account for pipeline effects, cache behavior, and branch prediction on target hardware. See [RELATED_WORK.md](./RELATED_WORK.md) Section 4 for the distinction between abstract and hardware-aware WCET analysis.
 
 **WCET analysis** -- The static analysis function `wcet_stream_iteration()` that computes the worst-case cost of one Stream-to-Reset iteration. Uses the same recursive block-structured traversal as productivity verification, but sums `Op::cost()` values and takes the maximum at each control flow join rather than computing a boolean lattice.
 

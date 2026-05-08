@@ -11,8 +11,8 @@ Development phases for Keleusma.
 | V0.0 | Bootstrap | Crate extraction, documentation, standalone release | In Progress |
 | V0.1 | Language Completion | Type checker, for-in expressions, semantic analysis | Planned |
 | V0.2 | Tooling | Error formatting, REPL, language server protocol | Planned |
-| V0.3 | Structural ISA | Structural ISA, arena memory, structural verification | In Progress |
-| V0.4 | Certification | WCET analysis, hot code swapping, safety-critical tooling | Planned |
+| V0.3 | Structural ISA | Structural ISA, arena memory, structural verification | Complete |
+| V0.4 | Certification | WCET analysis, hot code swapping, safety-critical tooling. See [RELATED_WORK.md](../reference/RELATED_WORK.md) Section 7 for certification gap analysis | Planned |
 
 ## Contents
 

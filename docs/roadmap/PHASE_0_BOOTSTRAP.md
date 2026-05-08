@@ -15,7 +15,7 @@ Establish Keleusma as a standalone project with documentation, tests, and a stab
 | V0.0-M0 | Extract crate from workspace | Complete |
 | V0.0-M1 | Documentation knowledge graph | Complete |
 | V0.0-M2 | README and usage examples | Planned |
-| V0.0-M3 | CI/CD pipeline | Planned |
+| V0.0-M3 | CI/CD pipeline | Complete |
 
 ## Success Criteria
 
@@ -26,7 +26,7 @@ Establish Keleusma as a standalone project with documentation, tests, and a stab
 
 ## Entry Criteria
 
-Crate source code functional with 147 passing tests.
+Crate source code functional with 181 passing tests.
 
 ## Exit Criteria
 

@@ -4,7 +4,7 @@
 
 ## Overview
 
-This document describes the Instruction Set Architecture for Keleusma. The structural ISA uses block-structured control flow and block-based nesting to make invalid or unproductive programs impossible to define or load. See [INSTRUCTION_SET.md](./INSTRUCTION_SET.md) for the bytecode instruction reference.
+This document describes the Instruction Set Architecture for Keleusma. The structural ISA uses block-structured control flow and block-based nesting to make invalid or unproductive programs impossible to define or load. This design shares the same validation principle as WebAssembly [W1], where block-structured control flow enables single-pass validation without constructing a full control flow graph. See [INSTRUCTION_SET.md](./INSTRUCTION_SET.md) for the bytecode instruction reference.
 
 ## Block Hierarchy
 
@@ -157,8 +157,17 @@ The structural verifier (`verify()` in `src/verify.rs`) enforces all rules descr
 
 A WCET analysis function (`wcet_stream_iteration()`) computes the worst-case cost of one Stream-to-Reset iteration using the same block-structured recursive traversal, taking the maximum cost branch at each control flow join.
 
+### Soundness
+
+The correctness of the structural verifier has not been formally proven. The five verification passes are tested against positive and negative examples, but a soundness argument would require demonstrating that every program accepted by the verifier satisfies the productivity invariant and block nesting rules on all possible execution paths. Watt [W2] provides a model for mechanized verification of bytecode specifications, having formalized the WebAssembly type system in Isabelle/HOL. A similar mechanization of Keleusma's structural verification rules would strengthen confidence in the verifier's soundness and is identified as a certification gap in [RELATED_WORK.md](./RELATED_WORK.md) Section 7.
+
 ## Cross-References
 
 - [INSTRUCTION_SET.md](./INSTRUCTION_SET.md) provides the bytecode instruction reference.
 - [EXECUTION_MODEL.md](../architecture/EXECUTION_MODEL.md) describes the execution model and temporal domains.
 - [LANGUAGE_DESIGN.md](../architecture/LANGUAGE_DESIGN.md) describes the language-level design goals.
+- [RELATED_WORK.md](./RELATED_WORK.md) positions Keleusma within the academic and industrial landscape.
+
+## Citation Key
+
+Citations in this document use bracket notation (e.g., [W1], [W2]) referring to entries in the bibliography in [RELATED_WORK.md](./RELATED_WORK.md).

@@ -966,6 +966,33 @@ Note that `handle` is declared with `yield` because it is called from the `loop 
 
 **Rationale**: Keleusma provides stronger static guarantees, purity tracking, and a coroutine model that Rhai lacks, at the cost of dynamic features like closures. The `no_std` requirement eliminates Rhai as a direct alternative.
 
+### Keleusma and Synchronous Languages (Lustre/Esterel/SCADE)
+
+| Feature | Keleusma | Lustre/Esterel/SCADE |
+|---------|--------|------|
+| Synchronous hypothesis | Yes (yield-to-yield bounded) | Yes (tick-based) |
+| Temporal model | Single yield clock + phase clock | Multi-clock (Lustre), concurrent (Esterel) |
+| Compilation target | Bytecode VM | C code / automata (Lustre, SCADE) |
+| Certification status | Design aspiration | DO-178C TQL-1 qualified (SCADE KCG) |
+| Concurrency | Single coroutine | Concurrent composition (Esterel) |
+| Memory model | Arena (bump allocation, cleared at RESET) | Static allocation |
+| Host interaction | Bidirectional typed yield | Sensor/actuator interface |
+
+**Rationale**: Keleusma applies synchronous language principles to an embeddable bytecode VM for game and audio scripting. It shares the synchronous hypothesis (all computation within a logical tick completes before the next tick) but targets a different execution model (interpreted bytecode with coroutine yield) and application domain (embedded scripting rather than safety-critical control). See [RELATED_WORK.md](../reference/RELATED_WORK.md) Section 1 for detailed analysis and citations.
+
+### Keleusma and WebAssembly
+
+| Feature | Keleusma | WebAssembly |
+|---------|--------|------|
+| Control flow | Block-structured, no flat jumps | Block-structured, no flat jumps |
+| Validation | Single-pass structural | Single-pass structural |
+| Type system | Nominal static types | Structural stack typing |
+| Execution model | Coroutine yield/resume | Call/return |
+| Target use case | Embedded scripting (audio, games) | Portable execution (web, cloud) |
+| Streaming primitives | Stream, Yield, Reset | None |
+
+**Rationale**: Keleusma adopts WebAssembly's insight that block-structured control flow enables efficient single-pass validation without constructing a full control flow graph. Both formats prohibit flat jumps for the same reason: verifiability. See [RELATED_WORK.md](../reference/RELATED_WORK.md) Section 3 for detailed analysis and citations.
+
 ## 14. Termination and Productivity Guarantees
 
 Keleusma provides static guarantees about script behavior through the three function categories.
@@ -1005,9 +1032,17 @@ Must yield on every iteration but never exit. The compiler verifies:
 
 The host is guaranteed to receive output on every coroutine step.
 
+### Theoretical Foundations
+
+The three function categories correspond to Turner's data/codata distinction [T1]: `fn` functions operate on finite data and must terminate (inductive), while `loop` functions produce infinite streams and must be productive (coinductive). The `yield` category bridges the two. The productivity invariant (every path from STREAM to RESET must pass through at least one YIELD) is a concrete instance of productivity for corecursive definitions as studied by Endrullis et al. [C4].
+
+The productivity verification pass (`analyze_yield_coverage` in `src/verify.rs`) is an instance of abstract interpretation [AI1] over a two-element boolean lattice. The bounded-step execution property enables WCET analysis by counting weighted opcodes on the longest path between yield points [WC1]. See [RELATED_WORK.md](../reference/RELATED_WORK.md) for full citations and analysis.
+
 ### Formalization Status
 
-The termination guarantees described above represent the intended design. Formal verification of these properties is pending further specification by the project owner. The current guarantees rely on the assumptions that (1) host-registered native functions are total, and (2) the host resumes the coroutine after each yield.
+The termination and productivity guarantees are enforced by the compiler (recursion prohibition, bounded loops, block type constraints) and the structural verifier (productivity rule verification). The productivity verification pass has been implemented and tested against both handwritten bytecode and compiled programs.
+
+Formal verification of soundness (a machine-checked proof that the verifier correctly rejects all programs violating the stated properties) is pending. Watt's mechanized verification of WebAssembly [W2] provides a model for what such a proof would require. The current guarantees rely on the assumptions that (1) host-registered native functions are total, and (2) the host resumes the coroutine after each yield.
 
 ## 15. Error Propagation
 

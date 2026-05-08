@@ -91,7 +91,9 @@ docs/
 ├── reference/                   # Reference material
 │   ├── README.md
 │   ├── GLOSSARY.md
-│   └── INSTRUCTION_SET.md
+│   ├── INSTRUCTION_SET.md
+│   ├── RELATED_WORK.md
+│   └── TARGET_ISA.md
 │
 └── roadmap/                     # Development phases
     ├── README.md
@@ -140,6 +142,7 @@ This section is a **meta-prompt** for AI agents working with this documentation.
 | Current task | `process/TASKLOG.md` |
 | Git workflow | `process/GIT_STRATEGY.md` |
 | Terminology | `reference/GLOSSARY.md` |
+| Related work and citations | `reference/RELATED_WORK.md` |
 | Development roadmap | `roadmap/README.md` |
 
 ### Verification Pattern
