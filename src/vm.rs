@@ -379,10 +379,17 @@ impl Vm {
                 Op::Add => self.binary_op(|a, b| match (a, b) {
                     (Value::Int(x), Value::Int(y)) => Ok(Value::Int(x.wrapping_add(y))),
                     (Value::Float(x), Value::Float(y)) => Ok(Value::Float(x + y)),
-                    (Value::Str(x), Value::Str(y)) => {
-                        let mut s = x;
-                        s.push_str(&y);
-                        Ok(Value::Str(s))
+                    (a, b) if a.as_str().is_some() && b.as_str().is_some() => {
+                        let mut s = match a {
+                            Value::StaticStr(s) | Value::DynStr(s) => s,
+                            _ => unreachable!(),
+                        };
+                        let suffix = match b {
+                            Value::StaticStr(s) | Value::DynStr(s) => s,
+                            _ => unreachable!(),
+                        };
+                        s.push_str(&suffix);
+                        Ok(Value::DynStr(s))
                     }
                     (a, b) => Err(VmError::TypeError(format!(
                         "cannot add {} and {}",
@@ -604,6 +611,20 @@ impl Vm {
 
                 Op::Yield => {
                     let output = self.pop()?;
+                    // Enforce cross-yield prohibition on dynamic strings (R31).
+                    // A dynamic string is an arena pointer. Allowing one across
+                    // the yield boundary would either require the host to
+                    // consume it before the next RESET or accept dangling
+                    // references after the arena is cleared. The runtime
+                    // structural check rejects yielded values that transitively
+                    // contain a dynamic string.
+                    if output.contains_dynstr() {
+                        return Err(VmError::TypeError(String::from(
+                            "yielded value contains a dynamic string, which cannot \
+                             cross the yield boundary; use a static string or convert \
+                             to a non-string representation in the host",
+                        )));
+                    }
                     return Ok(VmState::Yielded(output));
                 }
 
@@ -637,7 +658,7 @@ impl Vm {
                 Op::NewEnum(enum_const, var_const, arg_count) => {
                     let type_name =
                         match &self.module.chunks[chunk_idx].constants[enum_const as usize] {
-                            Value::Str(s) => s.clone(),
+                            Value::StaticStr(s) | Value::DynStr(s) => s.clone(),
                             _ => {
                                 return Err(VmError::InvalidBytecode(String::from(
                                     "enum name not a string",
@@ -646,7 +667,7 @@ impl Vm {
                         };
                     let variant = match &self.module.chunks[chunk_idx].constants[var_const as usize]
                     {
-                        Value::Str(s) => s.clone(),
+                        Value::StaticStr(s) | Value::DynStr(s) => s.clone(),
                         _ => {
                             return Err(VmError::InvalidBytecode(String::from(
                                 "variant name not a string",
@@ -687,7 +708,7 @@ impl Vm {
                     let container = self.pop()?;
                     let field_name =
                         match &self.module.chunks[chunk_idx].constants[name_const as usize] {
-                            Value::Str(s) => s.clone(),
+                            Value::StaticStr(s) | Value::DynStr(s) => s.clone(),
                             _ => {
                                 return Err(VmError::InvalidBytecode(String::from(
                                     "field name not a string",
@@ -773,7 +794,7 @@ impl Vm {
                         Value::Array(arr) => {
                             self.stack.push(Value::Int(arr.len() as i64));
                         }
-                        Value::Str(s) => {
+                        Value::StaticStr(s) | Value::DynStr(s) => {
                             self.stack.push(Value::Int(s.chars().count() as i64));
                         }
                         Value::Tuple(t) => {
@@ -793,7 +814,7 @@ impl Vm {
                     let val = self.stack.last().ok_or(VmError::StackUnderflow)?;
                     let expected_type =
                         match &self.module.chunks[chunk_idx].constants[enum_const as usize] {
-                            Value::Str(s) => s.as_str(),
+                            Value::StaticStr(s) | Value::DynStr(s) => s.as_str(),
                             _ => {
                                 return Err(VmError::InvalidBytecode(String::from(
                                     "enum const not string",
@@ -802,7 +823,7 @@ impl Vm {
                         };
                     let expected_var =
                         match &self.module.chunks[chunk_idx].constants[var_const as usize] {
-                            Value::Str(s) => s.as_str(),
+                            Value::StaticStr(s) | Value::DynStr(s) => s.as_str(),
                             _ => {
                                 return Err(VmError::InvalidBytecode(String::from(
                                     "variant const not string",
@@ -820,7 +841,7 @@ impl Vm {
                     let val = self.stack.last().ok_or(VmError::StackUnderflow)?;
                     let expected =
                         match &self.module.chunks[chunk_idx].constants[type_const as usize] {
-                            Value::Str(s) => s.as_str(),
+                            Value::StaticStr(s) | Value::DynStr(s) => s.as_str(),
                             _ => {
                                 return Err(VmError::InvalidBytecode(String::from(
                                     "type const not string",
@@ -859,7 +880,7 @@ impl Vm {
 
                 Op::Trap(msg_const) => {
                     let msg = match &self.module.chunks[chunk_idx].constants[msg_const as usize] {
-                        Value::Str(s) => s.clone(),
+                        Value::StaticStr(s) | Value::DynStr(s) => s.clone(),
                         _ => String::from("trap"),
                     };
                     return Err(VmError::Trap(msg));
@@ -915,7 +936,9 @@ impl Vm {
             (Value::Float(x), Value::Float(y)) => {
                 x.partial_cmp(y).unwrap_or(core::cmp::Ordering::Equal)
             }
-            (Value::Str(x), Value::Str(y)) => x.cmp(y),
+            (Value::StaticStr(x) | Value::DynStr(x), Value::StaticStr(y) | Value::DynStr(y)) => {
+                x.cmp(y)
+            }
             _ => {
                 return Err(VmError::TypeError(format!(
                     "cannot compare {} and {}",
@@ -1055,7 +1078,7 @@ mod tests {
     #[test]
     fn eval_string_literal() {
         let val = run_expect("fn main() -> String { \"hello\" }", &[]);
-        assert_eq!(val, Value::Str(String::from("hello")));
+        assert_eq!(val, Value::StaticStr(String::from("hello")));
     }
 
     #[test]
@@ -1142,7 +1165,7 @@ mod tests {
             "fn classify(0) -> String { \"zero\" }\nfn classify(x: i64) -> String { \"other\" }\nfn main() -> String { classify(0) }",
             &[],
         );
-        assert_eq!(val, Value::Str(String::from("zero")));
+        assert_eq!(val, Value::StaticStr(String::from("zero")));
     }
 
     #[test]
@@ -1151,7 +1174,7 @@ mod tests {
             "fn classify(0) -> String { \"zero\" }\nfn classify(x: i64) -> String { \"other\" }\nfn main() -> String { classify(5) }",
             &[],
         );
-        assert_eq!(val, Value::Str(String::from("other")));
+        assert_eq!(val, Value::StaticStr(String::from("other")));
     }
 
     #[test]
@@ -1169,7 +1192,7 @@ mod tests {
             "fn main() -> String { let x = 1; match x { 1 => \"one\", 2 => \"two\", _ => \"other\" } }",
             &[],
         );
-        assert_eq!(val, Value::Str(String::from("one")));
+        assert_eq!(val, Value::StaticStr(String::from("one")));
     }
 
     #[test]
@@ -1178,7 +1201,7 @@ mod tests {
             "fn main() -> String { let x = 99; match x { 1 => \"one\", _ => \"other\" } }",
             &[],
         );
-        assert_eq!(val, Value::Str(String::from("other")));
+        assert_eq!(val, Value::StaticStr(String::from("other")));
     }
 
     #[test]
@@ -1222,7 +1245,7 @@ mod tests {
     #[test]
     fn eval_string_concat() {
         let val = run_expect("fn main() -> String { \"hello\" + \" world\" }", &[]);
-        assert_eq!(val, Value::Str(String::from("hello world")));
+        assert_eq!(val, Value::DynStr(String::from("hello world")));
     }
 
     // -- For-in over array expressions --
@@ -1668,5 +1691,84 @@ mod tests {
             VmState::Finished(v) => assert_eq!(v, Value::Int(6)),
             other => panic!("expected finished, got {:?}", other),
         }
+    }
+
+    // -- Cross-yield prohibition on dynamic strings (R31) --
+
+    #[test]
+    fn yield_static_string_succeeds() {
+        // Static string literals can be yielded.
+        let src = "loop main(input: i64) -> String { let input = yield \"static\"; \"static\" }";
+        let tokens = tokenize(src).expect("lex error");
+        let program = parse(&tokens).expect("parse error");
+        let module = compile(&program).expect("compile error");
+        let mut vm = Vm::new(module).unwrap();
+        match vm.call(&[Value::Int(0)]).unwrap() {
+            VmState::Yielded(v) => assert_eq!(v, Value::StaticStr(String::from("static"))),
+            other => panic!("expected yield, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn yield_dynamic_string_fails() {
+        // to_string returns a DynStr. Yielding it must fail at runtime.
+        let src = "use to_string\n\
+                   loop main(input: i64) -> String { \
+                       let input = yield to_string(input); \"done\" }";
+        let tokens = tokenize(src).expect("lex error");
+        let program = parse(&tokens).expect("parse error");
+        let module = compile(&program).expect("compile error");
+        let mut vm = Vm::new(module).unwrap();
+        crate::utility_natives::register_utility_natives(&mut vm);
+        let err = vm.call(&[Value::Int(42)]).unwrap_err();
+        match err {
+            VmError::TypeError(msg) => {
+                assert!(msg.contains("dynamic string") || msg.contains("DynStr"))
+            }
+            other => panic!("expected TypeError, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn yield_tuple_with_dynamic_string_fails() {
+        // Yielding a tuple containing a DynStr must fail.
+        let src = "use to_string\n\
+                   loop main(input: i64) -> (i64, String) { \
+                       let input = yield (input, to_string(input)); (0, \"\") }";
+        let tokens = tokenize(src).expect("lex error");
+        let program = parse(&tokens).expect("parse error");
+        let module = compile(&program).expect("compile error");
+        let mut vm = Vm::new(module).unwrap();
+        crate::utility_natives::register_utility_natives(&mut vm);
+        let err = vm.call(&[Value::Int(7)]).unwrap_err();
+        match err {
+            VmError::TypeError(msg) => assert!(msg.contains("dynamic string")),
+            other => panic!("expected TypeError, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn contains_dynstr_helper() {
+        assert!(!Value::Int(1).contains_dynstr());
+        assert!(!Value::StaticStr(String::from("hi")).contains_dynstr());
+        assert!(Value::DynStr(String::from("hi")).contains_dynstr());
+        assert!(
+            Value::Tuple(alloc::vec![Value::Int(1), Value::DynStr(String::from("x"))])
+                .contains_dynstr()
+        );
+        assert!(
+            !Value::Tuple(alloc::vec![
+                Value::Int(1),
+                Value::StaticStr(String::from("x"))
+            ])
+            .contains_dynstr()
+        );
+        assert!(
+            Value::Struct {
+                type_name: String::from("Foo"),
+                fields: alloc::vec![(String::from("x"), Value::DynStr(String::from("y")))],
+            }
+            .contains_dynstr()
+        );
     }
 }

@@ -13,8 +13,16 @@ pub enum Value {
     Int(i64),
     /// 64-bit floating-point number.
     Float(f64),
-    /// UTF-8 string.
-    Str(String),
+    /// Immutable static string referenced from the rodata region. Source-level
+    /// string literals compile to this variant. Permitted to flow through the
+    /// dialogue type B and across hot updates subject to the host attestation
+    /// for rodata pointer validity. See R31, R32, R33 and B5.
+    StaticStr(String),
+    /// Dynamic string allocated in the arena heap. Produced by native function
+    /// calls and runtime string operations. Lifetime bound to the arena and
+    /// cleared at RESET. Cannot cross the yield boundary. Cannot reside in
+    /// the data segment.
+    DynStr(String),
     /// Tuple of values.
     Tuple(Vec<Value>),
     /// Fixed-size array of values.
@@ -41,7 +49,13 @@ impl PartialEq for Value {
             (Value::Bool(a), Value::Bool(b)) => a == b,
             (Value::Int(a), Value::Int(b)) => a == b,
             (Value::Float(a), Value::Float(b)) => a == b,
-            (Value::Str(a), Value::Str(b)) => a == b,
+            // Static and dynamic strings compare equal if their contents match.
+            // This relaxation follows the convention that the discipline is
+            // about lifetime and provenance, not about value identity.
+            (Value::StaticStr(a), Value::StaticStr(b))
+            | (Value::DynStr(a), Value::DynStr(b))
+            | (Value::StaticStr(a), Value::DynStr(b))
+            | (Value::DynStr(a), Value::StaticStr(b)) => a == b,
             (Value::Tuple(a), Value::Tuple(b)) | (Value::Array(a), Value::Array(b)) => a == b,
             (
                 Value::Struct {
@@ -78,12 +92,38 @@ impl Value {
             Value::Bool(_) => "Bool",
             Value::Int(_) => "Int",
             Value::Float(_) => "Float",
-            Value::Str(_) => "String",
+            Value::StaticStr(_) => "StaticStr",
+            Value::DynStr(_) => "DynStr",
             Value::Tuple(_) => "Tuple",
             Value::Array(_) => "Array",
             Value::Struct { .. } => "Struct",
             Value::Enum { .. } => "Enum",
             Value::None => "None",
+        }
+    }
+
+    /// Borrow the underlying UTF-8 contents of either string variant.
+    ///
+    /// Returns `None` if the value is not a string. Used at sites that read
+    /// string contents without caring about static-versus-dynamic provenance,
+    /// such as type-name lookups in the constant pool and string-consuming
+    /// natives like `length` and `println`.
+    pub fn as_str(&self) -> Option<&str> {
+        match self {
+            Value::StaticStr(s) | Value::DynStr(s) => Some(s.as_str()),
+            _ => Option::None,
+        }
+    }
+
+    /// Returns true if the value is a dynamic string or transitively contains
+    /// a dynamic string. Used to enforce the cross-yield prohibition (R31).
+    pub fn contains_dynstr(&self) -> bool {
+        match self {
+            Value::DynStr(_) => true,
+            Value::Tuple(items) | Value::Array(items) => items.iter().any(Value::contains_dynstr),
+            Value::Struct { fields, .. } => fields.iter().any(|(_, v)| v.contains_dynstr()),
+            Value::Enum { fields, .. } => fields.iter().any(Value::contains_dynstr),
+            _ => false,
         }
     }
 }

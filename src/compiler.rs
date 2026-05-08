@@ -103,7 +103,7 @@ impl FuncCompiler {
     }
 
     fn add_string_constant(&mut self, s: &str) -> u16 {
-        self.add_constant(Value::Str(String::from(s)))
+        self.add_constant(Value::StaticStr(String::from(s)))
     }
 
     fn add_struct_template(&mut self, type_name: &str, field_names: Vec<String>) -> u16 {
@@ -732,7 +732,7 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
                 fc.emit(Op::Const(idx));
             }
             Literal::String(s) => {
-                let idx = fc.add_constant(Value::Str(s.clone()));
+                let idx = fc.add_constant(Value::StaticStr(s.clone()));
                 fc.emit(Op::Const(idx));
             }
             Literal::Bool(true) => {
@@ -1157,7 +1157,7 @@ fn compile_pattern_test(
                     fc.emit(Op::Const(idx));
                 }
                 Literal::String(s) => {
-                    let idx = fc.add_constant(Value::Str(s.clone()));
+                    let idx = fc.add_constant(Value::StaticStr(s.clone()));
                     fc.emit(Op::Const(idx));
                 }
                 Literal::Bool(true) => {

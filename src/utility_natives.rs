@@ -7,6 +7,9 @@ use crate::bytecode::Value;
 use crate::vm::{Vm, VmError};
 
 /// Convert any value to its string representation.
+///
+/// Returns a `Value::DynStr` because the produced string is computed at
+/// runtime. Subject to the cross-yield prohibition on dynamic strings.
 fn native_to_string(args: &[Value]) -> Result<Value, VmError> {
     if args.len() != 1 {
         return Err(VmError::NativeError(format!(
@@ -18,14 +21,14 @@ fn native_to_string(args: &[Value]) -> Result<Value, VmError> {
         Value::Int(n) => format!("{}", n),
         Value::Float(f) => format!("{}", f),
         Value::Bool(b) => format!("{}", b),
-        Value::Str(s) => s.clone(),
+        Value::StaticStr(s) | Value::DynStr(s) => s.clone(),
         Value::Unit => String::from("()"),
         Value::None => String::from("None"),
         Value::Tuple(elems) => {
             let parts: Vec<String> = elems
                 .iter()
                 .map(|e| match native_to_string(core::slice::from_ref(e)) {
-                    Ok(Value::Str(s)) => s,
+                    Ok(Value::StaticStr(s)) | Ok(Value::DynStr(s)) => s,
                     _ => String::from("?"),
                 })
                 .collect();
@@ -35,7 +38,7 @@ fn native_to_string(args: &[Value]) -> Result<Value, VmError> {
             let parts: Vec<String> = elems
                 .iter()
                 .map(|e| match native_to_string(core::slice::from_ref(e)) {
-                    Ok(Value::Str(s)) => s,
+                    Ok(Value::StaticStr(s)) | Ok(Value::DynStr(s)) => s,
                     _ => String::from("?"),
                 })
                 .collect();
@@ -48,7 +51,7 @@ fn native_to_string(args: &[Value]) -> Result<Value, VmError> {
                 .iter()
                 .map(|(name, val)| {
                     let vs = match native_to_string(core::slice::from_ref(val)) {
-                        Ok(Value::Str(s)) => s,
+                        Ok(Value::StaticStr(s)) | Ok(Value::DynStr(s)) => s,
                         _ => String::from("?"),
                     };
                     format!("{}: {}", name, vs)
@@ -67,7 +70,7 @@ fn native_to_string(args: &[Value]) -> Result<Value, VmError> {
                 let parts: Vec<String> = fields
                     .iter()
                     .map(|e| match native_to_string(core::slice::from_ref(e)) {
-                        Ok(Value::Str(s)) => s,
+                        Ok(Value::StaticStr(s)) | Ok(Value::DynStr(s)) => s,
                         _ => String::from("?"),
                     })
                     .collect();
@@ -75,7 +78,7 @@ fn native_to_string(args: &[Value]) -> Result<Value, VmError> {
             }
         }
     };
-    Ok(Value::Str(s))
+    Ok(Value::DynStr(s))
 }
 
 /// Get the length of an array, string, or tuple.
@@ -88,7 +91,7 @@ fn native_length(args: &[Value]) -> Result<Value, VmError> {
     }
     match &args[0] {
         Value::Array(arr) => Ok(Value::Int(arr.len() as i64)),
-        Value::Str(s) => Ok(Value::Int(s.chars().count() as i64)),
+        Value::StaticStr(s) | Value::DynStr(s) => Ok(Value::Int(s.chars().count() as i64)),
         Value::Tuple(t) => Ok(Value::Int(t.len() as i64)),
         other => Err(VmError::TypeError(format!(
             "length: unsupported type {}",
@@ -155,29 +158,29 @@ mod tests {
     #[test]
     fn to_string_int() {
         let val = run_with_utilities("use to_string\nfn main() -> String { to_string(42) }");
-        assert_eq!(val, Value::Str(String::from("42")));
+        assert_eq!(val, Value::DynStr(String::from("42")));
     }
 
     #[test]
     fn to_string_float() {
-        let val = run_with_utilities("use to_string\nfn main() -> String { to_string(3.14) }");
-        if let Value::Str(s) = val {
-            assert!(s.starts_with("3.14"));
+        let val = run_with_utilities("use to_string\nfn main() -> String { to_string(2.5) }");
+        if let Value::DynStr(s) = val {
+            assert!(s.starts_with("2.5"));
         } else {
-            panic!("expected Str");
+            panic!("expected DynStr");
         }
     }
 
     #[test]
     fn to_string_bool() {
         let val = run_with_utilities("use to_string\nfn main() -> String { to_string(true) }");
-        assert_eq!(val, Value::Str(String::from("true")));
+        assert_eq!(val, Value::DynStr(String::from("true")));
     }
 
     #[test]
     fn to_string_string() {
         let val = run_with_utilities("use to_string\nfn main() -> String { to_string(\"hello\") }");
-        assert_eq!(val, Value::Str(String::from("hello")));
+        assert_eq!(val, Value::DynStr(String::from("hello")));
     }
 
     #[test]
