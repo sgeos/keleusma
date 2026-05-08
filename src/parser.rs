@@ -851,7 +851,7 @@ impl<'a> Parser<'a> {
                 Ok(Expr::Loop { body, span })
             }
 
-            // Parenthesized expression.
+            // Parenthesized expression or tuple literal.
             TokenKind::LParen => {
                 self.pos += 1;
                 if self.eat(&TokenKind::RParen) {
@@ -861,9 +861,29 @@ impl<'a> Parser<'a> {
                         span: merge_spans(tok.span, self.prev_span()),
                     });
                 }
-                let expr = self.parse_expr()?;
-                self.expect(&TokenKind::RParen)?;
-                Ok(expr)
+                let first = self.parse_expr()?;
+                if self.eat(&TokenKind::Comma) {
+                    // Tuple literal: (expr, expr, ...)
+                    let mut elements = vec![first];
+                    if !self.at(&TokenKind::RParen) {
+                        elements.push(self.parse_expr()?);
+                        while self.eat(&TokenKind::Comma) {
+                            if self.at(&TokenKind::RParen) {
+                                break;
+                            }
+                            elements.push(self.parse_expr()?);
+                        }
+                    }
+                    let end = self.expect(&TokenKind::RParen)?;
+                    Ok(Expr::TupleLiteral {
+                        elements,
+                        span: merge_spans(tok.span, end),
+                    })
+                } else {
+                    // Grouped expression.
+                    self.expect(&TokenKind::RParen)?;
+                    Ok(first)
+                }
             }
 
             // Array literal.

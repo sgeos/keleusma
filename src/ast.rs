@@ -228,6 +228,8 @@ pub enum Expr {
     },
     /// Array literal: `[a, b, c]`.
     ArrayLiteral { elements: Vec<Expr>, span: Span },
+    /// Tuple literal: `(a, b, c)`.
+    TupleLiteral { elements: Vec<Expr>, span: Span },
     /// Type cast: `expr as Type`.
     Cast {
         expr: Box<Expr>,
@@ -258,6 +260,7 @@ impl Expr {
             | Expr::StructInit { span, .. }
             | Expr::EnumVariant { span, .. }
             | Expr::ArrayLiteral { span, .. }
+            | Expr::TupleLiteral { span, .. }
             | Expr::Cast { span, .. }
             | Expr::Placeholder { span } => *span,
         }

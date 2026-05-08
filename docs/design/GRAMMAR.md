@@ -27,8 +27,9 @@ The following features are explicitly out of scope for the initial specification
 - Traits or generic type parameters
 - Closures or anonymous functions
 - Hot-swap mechanism
-- Formal verification at bytecode level
 - String interpolation (not needed for a control language)
+
+Note: Structural verification at the bytecode level is implemented. See [TARGET_ISA.md](../reference/TARGET_ISA.md) for the verification specification.
 
 ## 2. Lexical Structure
 
@@ -698,7 +699,9 @@ primary_expr    = literal
                 | if_expr
                 | match_expr
                 | loop_expr
+                | '(' ')'
                 | '(' expression ')'
+                | '(' expression ',' expression { ',' expression } [ ',' ] ')'
                 | '[' [ arg_list ] ']'
                 | expression 'as' type_expr
 

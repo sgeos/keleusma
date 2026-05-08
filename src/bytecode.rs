@@ -205,6 +205,8 @@ pub enum Op {
     GetTupleField(u8),
     /// Pop enum, push field at literal index.
     GetEnumField(u8),
+    /// Pop composite value, push its length as Int.
+    Len,
 
     /// Peek at TOS: push true if matching enum type and variant, false otherwise.
     IsEnum(u16, u16),
@@ -270,6 +272,7 @@ impl Op {
             | Op::GetIndex
             | Op::GetTupleField(_)
             | Op::GetEnumField(_)
+            | Op::Len
             | Op::IntToFloat
             | Op::FloatToInt
             | Op::Return => 2,

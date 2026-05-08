@@ -482,13 +482,69 @@ fn compile_for(fc: &mut FuncCompiler, for_stmt: &ForStmt) -> Result<(), CompileE
 
             fc.exit_loop(); // Patches Break addresses to after_endloop.
         }
-        Iterable::Expr(_expr) => {
-            return Err(CompileError {
-                message: String::from(
-                    "for-in over expressions is not yet supported; use range syntax",
-                ),
-                span: for_stmt.span,
-            });
+        Iterable::Expr(expr) => {
+            // Compile the iterable expression (array) and store it.
+            compile_expr(fc, expr)?;
+            let arr_slot = fc.declare_local("__for_arr");
+            fc.emit(Op::SetLocal(arr_slot));
+
+            // Get the length for the loop bound.
+            fc.emit(Op::GetLocal(arr_slot));
+            fc.emit(Op::Len);
+            let end_slot = fc.declare_local("__for_end");
+            fc.emit(Op::SetLocal(end_slot));
+
+            // Initialize index to 0.
+            let zero_const = fc.add_constant(Value::Int(0));
+            fc.emit(Op::Const(zero_const));
+            let idx_slot = fc.declare_local("__for_idx");
+            fc.emit(Op::SetLocal(idx_slot));
+
+            let loop_addr = fc.emit(Op::Loop(0));
+            fc.enter_loop();
+
+            // Condition: break if index >= length.
+            fc.emit(Op::GetLocal(idx_slot));
+            fc.emit(Op::GetLocal(end_slot));
+            fc.emit(Op::CmpGe);
+            let break_addr = fc.emit(Op::BreakIf(0));
+
+            // Extract element at current index.
+            fc.emit(Op::GetLocal(arr_slot));
+            fc.emit(Op::GetLocal(idx_slot));
+            fc.emit(Op::GetIndex);
+            let var_slot = fc.declare_local(&for_stmt.var);
+            fc.emit(Op::SetLocal(var_slot));
+
+            // Body.
+            fc.begin_scope();
+            compile_block(fc, &for_stmt.body)?;
+            fc.emit(Op::Pop);
+            fc.end_scope();
+
+            // Increment index.
+            fc.emit(Op::GetLocal(idx_slot));
+            let one_const = fc.add_constant(Value::Int(1));
+            fc.emit(Op::Const(one_const));
+            fc.emit(Op::Add);
+            fc.emit(Op::SetLocal(idx_slot));
+
+            let endloop_addr = fc.emit(Op::EndLoop(0));
+
+            // Patch jumps.
+            let after_endloop = fc.chunk.ops.len() as u32;
+            if let Op::Loop(a) = &mut fc.chunk.ops[loop_addr] {
+                *a = after_endloop;
+            }
+            if let Op::BreakIf(a) = &mut fc.chunk.ops[break_addr] {
+                *a = after_endloop;
+            }
+            let after_loop = (loop_addr + 1) as u32;
+            if let Op::EndLoop(a) = &mut fc.chunk.ops[endloop_addr] {
+                *a = after_loop;
+            }
+
+            fc.exit_loop();
         }
     }
     Ok(())
@@ -819,6 +875,13 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
                 compile_expr(fc, elem)?;
             }
             fc.emit(Op::NewArray(elements.len() as u16));
+        }
+
+        Expr::TupleLiteral { elements, .. } => {
+            for elem in elements {
+                compile_expr(fc, elem)?;
+            }
+            fc.emit(Op::NewTuple(elements.len() as u8));
         }
 
         Expr::Cast {
@@ -1232,6 +1295,37 @@ mod tests {
     fn error_break_outside_loop() {
         let result = compile_str("fn bad() -> () { break; }");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn compile_for_in_array() {
+        let module = compile_str(
+            "fn main() -> i64 { let s = 0; for x in [1, 2, 3] { let s = s + x; } s }",
+        )
+        .unwrap();
+        assert_eq!(module.chunks.len(), 1);
+        // Should contain Loop/EndLoop for the for-in.
+        assert!(module.chunks[0]
+            .ops
+            .iter()
+            .any(|op| matches!(op, Op::Loop(_))));
+        // Should contain Len instruction.
+        assert!(module.chunks[0].ops.iter().any(|op| matches!(op, Op::Len)));
+        // Should contain GetIndex.
+        assert!(module.chunks[0]
+            .ops
+            .iter()
+            .any(|op| matches!(op, Op::GetIndex)));
+    }
+
+    #[test]
+    fn compile_tuple_literal() {
+        let module = compile_str("fn main() -> () { let t = (1, 2, 3); t }").unwrap();
+        assert_eq!(module.chunks.len(), 1);
+        assert!(module.chunks[0]
+            .ops
+            .iter()
+            .any(|op| matches!(op, Op::NewTuple(3))));
     }
 
     #[test]

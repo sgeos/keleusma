@@ -106,6 +106,7 @@ For details on how bytecode is generated from source, see [COMPILATION_PIPELINE.
 | GetIndex | none | 2 | Pop index and array, push element |
 | GetTupleField | u8 index | 2 | Pop tuple, push element at index |
 | GetEnumField | u8 index | 2 | Pop enum variant, push field at index |
+| Len | none | 2 | Pop composite value (Array, String, Tuple), push length as Int |
 
 ## Type Testing
 
@@ -134,7 +135,7 @@ Costs are relative weights used by `wcet_stream_iteration()` for worst-case exec
 | Cost | Instructions |
 |------|-------------|
 | 1 | Const, PushUnit, PushTrue, PushFalse, GetLocal, SetLocal, Pop, Dup, PushNone, WrapSome, Not, If, Else, EndIf, Loop, EndLoop, Break, BreakIf, Stream, Reset, Yield, Trap |
-| 2 | Add, Sub, Mul, Neg, CmpEq, CmpNe, CmpLt, CmpGt, CmpLe, CmpGe, GetIndex, GetTupleField, GetEnumField, IntToFloat, FloatToInt, Return |
+| 2 | Add, Sub, Mul, Neg, CmpEq, CmpNe, CmpLt, CmpGt, CmpLe, CmpGe, GetIndex, GetTupleField, GetEnumField, Len, IntToFloat, FloatToInt, Return |
 | 3 | Div, Mod, GetField, IsEnum, IsStruct |
 | 5 | NewStruct, NewEnum, NewArray, NewTuple |
 | 10 | Call, CallNative |

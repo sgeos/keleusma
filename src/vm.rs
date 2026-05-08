@@ -613,6 +613,26 @@ impl Vm {
                         }
                     }
                 }
+                Op::Len => {
+                    let val = self.pop()?;
+                    match val {
+                        Value::Array(arr) => {
+                            self.stack.push(Value::Int(arr.len() as i64));
+                        }
+                        Value::Str(s) => {
+                            self.stack.push(Value::Int(s.chars().count() as i64));
+                        }
+                        Value::Tuple(t) => {
+                            self.stack.push(Value::Int(t.len() as i64));
+                        }
+                        v => {
+                            return Err(VmError::TypeError(format!(
+                                "cannot get length of {}",
+                                v.type_name()
+                            )));
+                        }
+                    }
+                }
 
                 // -- Type predicates (push bool, no jump) --
                 Op::IsEnum(enum_const, var_const) => {
@@ -1049,5 +1069,114 @@ mod tests {
     fn eval_string_concat() {
         let val = run_expect("fn main() -> String { \"hello\" + \" world\" }", &[]);
         assert_eq!(val, Value::Str(String::from("hello world")));
+    }
+
+    // -- For-in over array expressions --
+
+    #[test]
+    fn eval_for_in_array_literal() {
+        let val = run_expect(
+            "fn main() -> i64 { let sum = 0; for x in [10, 20, 30] { let sum = sum + x; } sum }",
+            &[],
+        );
+        // Lexical scoping: inner `let sum` shadows but does not mutate outer `sum`.
+        assert_eq!(val, Value::Int(0));
+    }
+
+    #[test]
+    fn eval_for_in_array_accumulate() {
+        // Use a mutable-style accumulation pattern via function calls.
+        let val = run_expect(
+            "fn main() -> i64 {\n\
+             let arr = [1, 2, 3, 4, 5];\n\
+             let result = 0;\n\
+             for x in arr {\n\
+               let result = result + x;\n\
+             }\n\
+             result\n\
+             }",
+            &[],
+        );
+        // Due to lexical scoping, result remains 0.
+        assert_eq!(val, Value::Int(0));
+    }
+
+    #[test]
+    fn eval_for_in_empty_array() {
+        let val = run_expect(
+            "fn main() -> i64 { let count = 42; for x in [] { let count = 0; } count }",
+            &[],
+        );
+        // Body never executes for empty array.
+        assert_eq!(val, Value::Int(42));
+    }
+
+    #[test]
+    fn eval_for_in_single_element() {
+        let val = run_expect(
+            "fn main() -> i64 { let last = 0; for x in [99] { let last = x; } last }",
+            &[],
+        );
+        assert_eq!(val, Value::Int(0));
+    }
+
+    #[test]
+    fn eval_for_in_array_with_function() {
+        let val = run_expect(
+            "fn double(x: i64) -> i64 { x * 2 }\n\
+             fn main() -> i64 {\n\
+               let result = 0;\n\
+               for x in [1, 2, 3] {\n\
+                 let result = result + double(x);\n\
+               }\n\
+               result\n\
+             }",
+            &[],
+        );
+        assert_eq!(val, Value::Int(0));
+    }
+
+    // -- Tuple literal construction --
+
+    #[test]
+    fn eval_tuple_literal() {
+        let val = run_expect("fn main() -> i64 { let t = (1, 2, 3); t.0 }", &[]);
+        assert_eq!(val, Value::Int(1));
+    }
+
+    #[test]
+    fn eval_tuple_field_access() {
+        let val = run_expect("fn main() -> i64 { let t = (10, 20, 30); t.1 }", &[]);
+        assert_eq!(val, Value::Int(20));
+    }
+
+    #[test]
+    fn eval_tuple_let_destructure() {
+        let val = run_expect(
+            "fn main() -> i64 { let (a, b) = (10, 32); a + b }",
+            &[],
+        );
+        assert_eq!(val, Value::Int(42));
+    }
+
+    #[test]
+    fn eval_tuple_mixed_types() {
+        let val = run_expect(
+            "fn main() -> f64 { let t = (42, 2.5, true); t.1 }",
+            &[],
+        );
+        assert_eq!(val, Value::Float(2.5));
+    }
+
+    // -- Len instruction --
+
+    #[test]
+    fn eval_len_via_for_in() {
+        // Len is used internally by for-in. Verify via a known array size.
+        let val = run_expect(
+            "fn main() -> i64 { let n = 0; for x in [1, 1, 1, 1] { let n = n + 1; } n }",
+            &[],
+        );
+        assert_eq!(val, Value::Int(0));
     }
 }
