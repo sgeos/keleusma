@@ -220,6 +220,72 @@ pub enum Op {
     Trap(u16),
 }
 
+impl Op {
+    /// Return the relative integer cost of this instruction.
+    ///
+    /// Costs are unitless relative weights, not cycle counts. Higher values
+    /// indicate more expensive operations. The scale is chosen so that
+    /// simple data movement operations cost 1 and complex operations cost
+    /// proportionally more. These values are preliminary and subject to
+    /// refinement as the instruction set stabilizes.
+    pub fn cost(&self) -> u32 {
+        match self {
+            // Data movement: minimal cost.
+            Op::Const(_)
+            | Op::PushUnit
+            | Op::PushTrue
+            | Op::PushFalse
+            | Op::GetLocal(_)
+            | Op::SetLocal(_)
+            | Op::Pop
+            | Op::Dup
+            | Op::PushNone
+            | Op::WrapSome
+            | Op::Not => 1,
+
+            // Control flow markers: minimal overhead.
+            Op::If(_)
+            | Op::Else(_)
+            | Op::EndIf
+            | Op::Loop(_)
+            | Op::EndLoop(_)
+            | Op::Break(_)
+            | Op::BreakIf(_)
+            | Op::Stream
+            | Op::Reset
+            | Op::Yield
+            | Op::Trap(_) => 1,
+
+            // Simple arithmetic and comparisons.
+            Op::Add
+            | Op::Sub
+            | Op::Mul
+            | Op::Neg
+            | Op::CmpEq
+            | Op::CmpNe
+            | Op::CmpLt
+            | Op::CmpGt
+            | Op::CmpLe
+            | Op::CmpGe
+            | Op::GetIndex
+            | Op::GetTupleField(_)
+            | Op::GetEnumField(_)
+            | Op::IntToFloat
+            | Op::FloatToInt
+            | Op::Return => 2,
+
+            // Division, field lookup, type checks (string comparison).
+            Op::Div | Op::Mod | Op::GetField(_) | Op::IsEnum(_, _) | Op::IsStruct(_) => 3,
+
+            // Composite value construction.
+            Op::NewStruct(_) | Op::NewEnum(_, _, _) | Op::NewArray(_) | Op::NewTuple(_) => 5,
+
+            // Function calls.
+            Op::Call(_, _) | Op::CallNative(_, _) => 10,
+        }
+    }
+}
+
 /// Template for struct construction.
 #[derive(Debug, Clone)]
 pub struct StructTemplate {

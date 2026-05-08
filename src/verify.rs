@@ -2,7 +2,7 @@ extern crate alloc;
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use crate::bytecode::{BlockType, Module, Op};
+use crate::bytecode::{BlockType, Chunk, Module, Op};
 
 /// An error produced by structural verification.
 #[derive(Debug, Clone)]
@@ -20,6 +20,225 @@ enum BlockKind {
     Loop,
 }
 
+/// Analyze yield coverage for a region of instructions `[start, end)`.
+///
+/// Returns `Some(true)` if all fall-through paths contain at least one Yield.
+/// Returns `Some(false)` if some fall-through path lacks a Yield.
+/// Returns `None` if all paths exit via Break (no fall-through to `end`).
+///
+/// Break and BreakIf states are accumulated in `break_states` for the
+/// enclosing loop to collect.
+fn analyze_yield_coverage(
+    ops: &[Op],
+    start: usize,
+    end: usize,
+    initial: bool,
+    break_states: &mut Vec<bool>,
+) -> Option<bool> {
+    let mut has_yielded = initial;
+    let mut ip = start;
+
+    while ip < end {
+        match &ops[ip] {
+            Op::Yield => {
+                has_yielded = true;
+                ip += 1;
+            }
+            Op::Break(_) => {
+                break_states.push(has_yielded);
+                return None;
+            }
+            Op::BreakIf(_) => {
+                break_states.push(has_yielded);
+                ip += 1;
+            }
+            Op::If(target) => {
+                let target = *target as usize;
+                if target > 0 && matches!(&ops[target - 1], Op::Else(_)) {
+                    // If-Else-EndIf pattern.
+                    let endif_pos = if let Op::Else(e) = &ops[target - 1] {
+                        *e as usize
+                    } else {
+                        unreachable!()
+                    };
+                    let then_result =
+                        analyze_yield_coverage(ops, ip + 1, target - 1, has_yielded, break_states);
+                    let else_result =
+                        analyze_yield_coverage(ops, target, endif_pos, has_yielded, break_states);
+                    match (then_result, else_result) {
+                        (Some(a), Some(b)) => has_yielded = a && b,
+                        (Some(a), None) => has_yielded = a,
+                        (None, Some(b)) => has_yielded = b,
+                        (None, None) => return None,
+                    }
+                    ip = endif_pos + 1;
+                } else {
+                    // If-EndIf without Else (pattern matching).
+                    let then_result =
+                        analyze_yield_coverage(ops, ip + 1, target, has_yielded, break_states);
+                    match then_result {
+                        Some(a) => has_yielded = a && has_yielded,
+                        None => {
+                            // Then-branch breaks out; false path falls through unchanged.
+                        }
+                    }
+                    ip = target + 1;
+                }
+            }
+            Op::Loop(target) => {
+                let loop_exit_target = *target as usize;
+                let endloop_ip = loop_exit_target - 1;
+                let mut loop_breaks: Vec<bool> = Vec::new();
+                let _body_result =
+                    analyze_yield_coverage(ops, ip + 1, endloop_ip, has_yielded, &mut loop_breaks);
+                if loop_breaks.is_empty() {
+                    return None;
+                }
+                has_yielded = loop_breaks.iter().all(|&b| b);
+                ip = loop_exit_target;
+            }
+            // Else, EndIf, EndLoop are handled by the recursive calls above.
+            // If encountered linearly, skip them.
+            Op::Else(_) | Op::EndIf | Op::EndLoop(_) => {
+                ip += 1;
+            }
+            _ => {
+                ip += 1;
+            }
+        }
+    }
+
+    Some(has_yielded)
+}
+
+/// Compute the worst-case execution cost of a region of instructions `[start, end)`.
+///
+/// At control flow joins (If/Else/EndIf), takes the maximum cost branch.
+/// For loops, assumes one iteration (conservative default).
+///
+/// Returns `Some(cost)` for paths that fall through to `end`.
+/// Returns `None` if all paths exit via Break.
+///
+/// Break costs are accumulated in `break_costs` for the enclosing loop.
+fn wcet_region(ops: &[Op], start: usize, end: usize, break_costs: &mut Vec<u32>) -> Option<u32> {
+    let mut cost: u32 = 0;
+    let mut ip = start;
+
+    while ip < end {
+        match &ops[ip] {
+            Op::Break(_) => {
+                cost += ops[ip].cost();
+                break_costs.push(cost);
+                return None;
+            }
+            Op::BreakIf(_) => {
+                cost += ops[ip].cost();
+                break_costs.push(cost);
+                ip += 1;
+            }
+            Op::If(target) => {
+                cost += ops[ip].cost();
+                let target = *target as usize;
+                if target > 0 && matches!(&ops[target - 1], Op::Else(_)) {
+                    let endif_pos = if let Op::Else(e) = &ops[target - 1] {
+                        *e as usize
+                    } else {
+                        unreachable!()
+                    };
+                    let then_cost = wcet_region(ops, ip + 1, target - 1, break_costs);
+                    let else_cost = wcet_region(ops, target, endif_pos, break_costs);
+                    let branch_cost = match (then_cost, else_cost) {
+                        (Some(a), Some(b)) => Some(if a > b { a } else { b }),
+                        (Some(a), None) => Some(a),
+                        (None, Some(b)) => Some(b),
+                        (None, None) => return None,
+                    };
+                    cost += branch_cost.unwrap_or(0);
+                    ip = endif_pos + 1;
+                } else {
+                    let then_cost = wcet_region(ops, ip + 1, target, break_costs);
+                    // False path has zero additional cost (skips to EndIf).
+                    // Worst case is the then-body if it is more expensive.
+                    match then_cost {
+                        Some(c) => cost += c,
+                        None => {
+                            // Then-branch breaks. False path falls through with zero cost.
+                        }
+                    }
+                    ip = target + 1;
+                }
+            }
+            Op::Loop(target) => {
+                cost += ops[ip].cost();
+                let loop_exit_target = *target as usize;
+                let endloop_ip = loop_exit_target - 1;
+                let mut loop_break_costs: Vec<u32> = Vec::new();
+                let body_cost = wcet_region(ops, ip + 1, endloop_ip, &mut loop_break_costs);
+                if loop_break_costs.is_empty() && body_cost.is_none() {
+                    return None;
+                }
+                let max_break = loop_break_costs.iter().copied().max().unwrap_or(0);
+                let max_body = body_cost.unwrap_or(0);
+                cost += if max_break > max_body {
+                    max_break
+                } else {
+                    max_body
+                };
+                ip = loop_exit_target;
+            }
+            Op::Else(_) | Op::EndIf | Op::EndLoop(_) => {
+                ip += 1;
+            }
+            _ => {
+                cost += ops[ip].cost();
+                ip += 1;
+            }
+        }
+    }
+
+    Some(cost)
+}
+
+/// Compute the worst-case execution cost of one full Stream iteration
+/// (from Stream to Reset), taking the maximum cost branch at each
+/// control flow join.
+///
+/// Returns the worst-case cost as a unitless integer. Returns an error
+/// if the chunk is not a Stream block type or lacks Stream/Reset.
+pub fn wcet_stream_iteration(chunk: &Chunk) -> Result<u32, VerifyError> {
+    if chunk.block_type != BlockType::Stream {
+        return Err(VerifyError {
+            chunk_name: chunk.name.clone(),
+            message: String::from("wcet_stream_iteration requires a Stream block"),
+        });
+    }
+
+    let ops = &chunk.ops;
+    let stream_pos = ops
+        .iter()
+        .position(|op| matches!(op, Op::Stream))
+        .ok_or_else(|| VerifyError {
+            chunk_name: chunk.name.clone(),
+            message: String::from("Stream block missing Stream instruction"),
+        })?;
+    let reset_pos = ops
+        .iter()
+        .position(|op| matches!(op, Op::Reset))
+        .ok_or_else(|| VerifyError {
+            chunk_name: chunk.name.clone(),
+            message: String::from("Stream block missing Reset instruction"),
+        })?;
+
+    let mut break_costs: Vec<u32> = Vec::new();
+    let body_cost = wcet_region(ops, stream_pos + 1, reset_pos, &mut break_costs);
+
+    // Include Stream and Reset instruction costs.
+    let overhead = ops[stream_pos].cost() + ops[reset_pos].cost();
+    let region_cost = body_cost.unwrap_or(0);
+
+    Ok(overhead + region_cost)
+}
+
 /// Verify structural invariants of a compiled module.
 ///
 /// Checks performed per chunk:
@@ -33,6 +252,8 @@ enum BlockKind {
 ///    Stream chunks contain exactly one Stream, exactly one Reset, and at
 ///    least one Yield.
 /// 4. Break containment: Every Break and BreakIf is inside a Loop/EndLoop.
+/// 5. Productivity rule (Stream chunks only): All control flow paths from
+///    Stream to Reset pass through at least one Yield.
 pub fn verify(module: &Module) -> Result<(), VerifyError> {
     for chunk in &module.chunks {
         let name = &chunk.name;
@@ -316,6 +537,25 @@ pub fn verify(module: &Module) -> Result<(), VerifyError> {
                     return Err(VerifyError {
                         chunk_name: name.clone(),
                         message: String::from("Stream block must contain at least one Yield"),
+                    });
+                }
+            }
+        }
+
+        // -- Pass 3: Productivity verification (Stream chunks only) --
+        if chunk.block_type == BlockType::Stream {
+            let stream_pos = ops.iter().position(|op| matches!(op, Op::Stream));
+            let reset_pos = ops.iter().position(|op| matches!(op, Op::Reset));
+            if let (Some(s), Some(r)) = (stream_pos, reset_pos) {
+                let mut break_states: Vec<bool> = Vec::new();
+                let result = analyze_yield_coverage(ops, s + 1, r, false, &mut break_states);
+                if let Some(false) = result {
+                    return Err(VerifyError {
+                        chunk_name: name.clone(),
+                        message: String::from(
+                            "productivity violation: some path from Stream to Reset \
+                             does not pass through any Yield",
+                        ),
                     });
                 }
             }
@@ -634,5 +874,295 @@ mod tests {
                 );
             }
         }
+    }
+
+    // -- Productivity rule tests --
+
+    #[test]
+    fn productivity_linear_yield() {
+        // Stream -> Yield -> Reset: all paths yield. Should pass.
+        let chunk = make_chunk(
+            "tick",
+            vec![
+                Op::Stream,      // 0
+                Op::GetLocal(0), // 1
+                Op::Yield,       // 2
+                Op::Pop,         // 3
+                Op::Reset,       // 4
+            ],
+            BlockType::Stream,
+        );
+        let module = make_module(vec![chunk]);
+        assert!(verify(&module).is_ok());
+    }
+
+    #[test]
+    fn productivity_yield_both_branches() {
+        // Stream -> If { Yield } Else { Yield } -> Reset: both branches yield.
+        let chunk = make_chunk(
+            "tick",
+            vec![
+                Op::Stream,      // 0
+                Op::PushTrue,    // 1
+                Op::If(6),       // 2 -> else body at 6
+                Op::GetLocal(0), // 3 (then)
+                Op::Yield,       // 4 (then)
+                Op::Else(9),     // 5 -> EndIf at 9
+                Op::GetLocal(0), // 6 (else)
+                Op::Yield,       // 7 (else)
+                Op::Pop,         // 8 (else)
+                Op::EndIf,       // 9
+                Op::Pop,         // 10
+                Op::Reset,       // 11
+            ],
+            BlockType::Stream,
+        );
+        let module = make_module(vec![chunk]);
+        assert!(verify(&module).is_ok());
+    }
+
+    #[test]
+    fn productivity_yield_before_if() {
+        // Stream -> Yield -> If/Else -> Reset: yield dominates both branches.
+        let chunk = make_chunk(
+            "tick",
+            vec![
+                Op::Stream,      // 0
+                Op::GetLocal(0), // 1
+                Op::Yield,       // 2
+                Op::Pop,         // 3
+                Op::PushTrue,    // 4
+                Op::If(8),       // 5 -> else body at 8
+                Op::PushUnit,    // 6 (then)
+                Op::Else(10),    // 7 -> EndIf at 10
+                Op::PushUnit,    // 8 (else)
+                Op::Pop,         // 9 (else)
+                Op::EndIf,       // 10
+                Op::Reset,       // 11
+            ],
+            BlockType::Stream,
+        );
+        let module = make_module(vec![chunk]);
+        assert!(verify(&module).is_ok());
+    }
+
+    #[test]
+    fn productivity_yield_only_in_then_fails() {
+        // Stream -> If { Yield } Else { no yield } -> Reset: else branch missing yield.
+        let chunk = make_chunk(
+            "tick",
+            vec![
+                Op::Stream,      // 0
+                Op::PushTrue,    // 1
+                Op::If(6),       // 2 -> else body at 6
+                Op::GetLocal(0), // 3 (then)
+                Op::Yield,       // 4 (then)
+                Op::Else(9),     // 5 -> EndIf at 9
+                Op::PushUnit,    // 6 (else, no yield)
+                Op::Pop,         // 7 (else)
+                Op::PushUnit,    // 8 (else)
+                Op::EndIf,       // 9
+                Op::Pop,         // 10
+                Op::Reset,       // 11
+            ],
+            BlockType::Stream,
+        );
+        let module = make_module(vec![chunk]);
+        let err = verify(&module).unwrap_err();
+        assert!(err.message.contains("productivity violation"));
+    }
+
+    #[test]
+    fn productivity_no_yield_path_fails() {
+        // Stream -> If(no-else) { Yield } -> Reset: false path has no yield.
+        let chunk = make_chunk(
+            "tick",
+            vec![
+                Op::Stream,      // 0
+                Op::PushTrue,    // 1
+                Op::If(6),       // 2 -> EndIf at 6 (no Else)
+                Op::GetLocal(0), // 3 (then)
+                Op::Yield,       // 4 (then)
+                Op::Pop,         // 5 (then)
+                Op::EndIf,       // 6
+                Op::Reset,       // 7
+            ],
+            BlockType::Stream,
+        );
+        let module = make_module(vec![chunk]);
+        let err = verify(&module).unwrap_err();
+        assert!(err.message.contains("productivity violation"));
+    }
+
+    #[test]
+    fn productivity_yield_in_loop_fails() {
+        // Stream -> Loop { BreakIf; Yield } -> Reset.
+        // The BreakIf can exit before the Yield, so some path has no yield.
+        let chunk = make_chunk(
+            "tick",
+            vec![
+                Op::Stream,      // 0
+                Op::Loop(8),     // 1 -> past EndLoop
+                Op::PushTrue,    // 2
+                Op::BreakIf(8),  // 3 -> past EndLoop
+                Op::GetLocal(0), // 4
+                Op::Yield,       // 5
+                Op::Pop,         // 6
+                Op::EndLoop(2),  // 7 -> back to 2
+                Op::Reset,       // 8
+            ],
+            BlockType::Stream,
+        );
+        let module = make_module(vec![chunk]);
+        let err = verify(&module).unwrap_err();
+        assert!(err.message.contains("productivity violation"));
+    }
+
+    #[test]
+    fn productivity_yield_before_loop() {
+        // Stream -> Yield -> Loop { BreakIf } -> Reset.
+        // Yield dominates the loop, so all paths have yielded.
+        let chunk = make_chunk(
+            "tick",
+            vec![
+                Op::Stream,      // 0
+                Op::GetLocal(0), // 1
+                Op::Yield,       // 2
+                Op::Pop,         // 3
+                Op::Loop(9),     // 4 -> past EndLoop
+                Op::PushTrue,    // 5
+                Op::BreakIf(9),  // 6 -> past EndLoop
+                Op::PushUnit,    // 7
+                Op::EndLoop(5),  // 8 -> back to 5
+                Op::Reset,       // 9
+            ],
+            BlockType::Stream,
+        );
+        let module = make_module(vec![chunk]);
+        assert!(verify(&module).is_ok());
+    }
+
+    #[test]
+    fn productivity_compiled_stream() {
+        // Integration test: compile a real loop function and verify productivity.
+        use crate::compiler::compile;
+        use crate::lexer::tokenize;
+        use crate::parser::parse;
+
+        let src = "loop tick(x: i64) -> i64 { let x = yield x * 2; x }";
+        let tokens = tokenize(src).expect("lex error");
+        let program = parse(&tokens).expect("parse error");
+        let module = compile(&program).expect("compile error");
+        assert!(verify(&module).is_ok());
+    }
+
+    // -- WCET cost table tests --
+
+    #[test]
+    fn cost_basic_ops() {
+        // Verify representative Op::cost() values.
+        assert_eq!(Op::Const(0).cost(), 1);
+        assert_eq!(Op::PushUnit.cost(), 1);
+        assert_eq!(Op::GetLocal(0).cost(), 1);
+        assert_eq!(Op::SetLocal(0).cost(), 1);
+        assert_eq!(Op::Pop.cost(), 1);
+        assert_eq!(Op::Not.cost(), 1);
+
+        assert_eq!(Op::Add.cost(), 2);
+        assert_eq!(Op::Sub.cost(), 2);
+        assert_eq!(Op::Mul.cost(), 2);
+        assert_eq!(Op::CmpEq.cost(), 2);
+        assert_eq!(Op::Return.cost(), 2);
+
+        assert_eq!(Op::Div.cost(), 3);
+        assert_eq!(Op::Mod.cost(), 3);
+        assert_eq!(Op::GetField(0).cost(), 3);
+
+        assert_eq!(Op::NewStruct(0).cost(), 5);
+        assert_eq!(Op::NewArray(0).cost(), 5);
+        assert_eq!(Op::NewTuple(0).cost(), 5);
+
+        assert_eq!(Op::Call(0, 0).cost(), 10);
+        assert_eq!(Op::CallNative(0, 0).cost(), 10);
+    }
+
+    #[test]
+    fn wcet_linear_stream() {
+        // Stream -> GetLocal -> Add -> Yield -> Pop -> Reset.
+        // Body cost: 1 + 2 + 1 + 1 = 5, overhead: 1 + 1 = 2, total = 7.
+        let chunk = make_chunk(
+            "tick",
+            vec![
+                Op::Stream,      // 0: cost 1 (overhead)
+                Op::GetLocal(0), // 1: cost 1
+                Op::Add,         // 2: cost 2
+                Op::Yield,       // 3: cost 1
+                Op::Pop,         // 4: cost 1
+                Op::Reset,       // 5: cost 1 (overhead)
+            ],
+            BlockType::Stream,
+        );
+        let cost = wcet_stream_iteration(&chunk).unwrap();
+        assert_eq!(cost, 7);
+    }
+
+    #[test]
+    fn wcet_branching_takes_max() {
+        // Stream -> PushTrue -> If { Add(2) } Else { Div(3) + Mul(2) } ->
+        //   Yield -> Pop -> Reset.
+        // Then body [3,4): Add = 2. Else body [5,7): Div(3) + Mul(2) = 5.
+        // Max branch = 5.
+        // Body: PushTrue(1) + If(1) + 5 + Yield(1) + Pop(1) = 9.
+        // Overhead: Stream(1) + Reset(1) = 2. Total = 11.
+        let chunk = make_chunk(
+            "tick",
+            vec![
+                Op::Stream,   // 0
+                Op::PushTrue, // 1
+                Op::If(5),    // 2 -> else body at 5
+                Op::Add,      // 3 (then body)
+                Op::Else(7),  // 4 -> EndIf at 7
+                Op::Div,      // 5 (else body)
+                Op::Mul,      // 6 (else body)
+                Op::EndIf,    // 7
+                Op::Yield,    // 8
+                Op::Pop,      // 9
+                Op::Reset,    // 10
+            ],
+            BlockType::Stream,
+        );
+        let cost = wcet_stream_iteration(&chunk).unwrap();
+        assert_eq!(cost, 11);
+    }
+
+    #[test]
+    fn wcet_non_stream_errors() {
+        let chunk = make_chunk("main", vec![Op::PushUnit, Op::Return], BlockType::Func);
+        let err = wcet_stream_iteration(&chunk).unwrap_err();
+        assert!(err.message.contains("Stream"));
+    }
+
+    #[test]
+    fn wcet_compiled_stream() {
+        // Integration test: compile a real loop function and compute WCET.
+        use crate::compiler::compile;
+        use crate::lexer::tokenize;
+        use crate::parser::parse;
+
+        let src = "loop tick(x: i64) -> i64 { let x = yield x * 2; x }";
+        let tokens = tokenize(src).expect("lex error");
+        let program = parse(&tokens).expect("parse error");
+        let module = compile(&program).expect("compile error");
+
+        // Find the stream chunk.
+        let stream_chunk = module
+            .chunks
+            .iter()
+            .find(|c| c.block_type == BlockType::Stream)
+            .expect("no stream chunk found");
+
+        let cost = wcet_stream_iteration(stream_chunk).unwrap();
+        // Cost must be positive and finite.
+        assert!(cost > 0, "WCET should be positive, got {}", cost);
     }
 }
