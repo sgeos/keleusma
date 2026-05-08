@@ -1,5 +1,5 @@
 [workspace]
-members = ["keleusma-macros"]
+members = ["keleusma-macros", "keleusma-arena"]
 
 [package]
 name = "keleusma"
@@ -13,4 +13,5 @@ categories = ["no-std", "compilers"]
 [dependencies]
 libm = "0.2"
 keleusma-macros = { path = "keleusma-macros", version = "0.1.0" }
+keleusma-arena = { path = "keleusma-arena", version = "0.1.0", features = ["alloc"] }
 allocator-api2 = { version = "0.4", default-features = false, features = ["alloc"] }

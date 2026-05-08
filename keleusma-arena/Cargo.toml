@@ -1,0 +1,22 @@
+[package]
+name = "keleusma-arena"
+version = "0.1.0"
+edition = "2024"
+description = "Simple and boring memory allocator for exciting applications"
+license = "MIT"
+keywords = ["arena", "allocator", "no-std", "embedded", "bump"]
+categories = ["memory-management", "no-std", "embedded"]
+
+[features]
+default = ["alloc"]
+# Enables the heap-allocating constructor `Arena::with_capacity`. The
+# static-buffer constructor `Arena::from_static_buffer` and the unsafe
+# `Arena::from_buffer_unchecked` work without this feature, supporting
+# `core`-only targets that have no global allocator. Enabling this
+# feature also enables `allocator-api2`'s `alloc` feature, which
+# provides the arena-aware `Vec` and similar collection types used in
+# tests and downstream code.
+alloc = ["allocator-api2/alloc"]
+
+[dependencies]
+allocator-api2 = { version = "0.4", default-features = false }

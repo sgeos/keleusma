@@ -25,9 +25,8 @@ keleusma/
 │   ├── bytecode.rs            # Runtime values and instruction set
 │   ├── compiler.rs            # Source-to-bytecode compilation (public API: compile)
 │   ├── vm.rs                  # Stack-based VM with coroutine support (public API: Vm)
-│   ├── verify.rs              # Structural verifier (public API: verify, wcet_stream_iteration)
+│   ├── verify.rs              # Structural verifier (public API: verify, wcet_stream_iteration, wcmu_stream_iteration, verify_resource_bounds)
 │   ├── marshall.rs            # KeleusmaType trait and IntoNativeFn family
-│   ├── arena.rs               # Dual-end bump-allocated arena (public API: Arena, StackHandle, HeapHandle)
 │   ├── audio_natives.rs       # Built-in audio and math native functions
 │   └── utility_natives.rs     # to_string, length, println, math utilities
 ├── tests/                     # Integration tests
@@ -35,6 +34,10 @@ keleusma/
 ├── keleusma-macros/           # Proc-macro crate (workspace member)
 │   ├── Cargo.toml
 │   └── src/lib.rs             # #[derive(KeleusmaType)]
+├── keleusma-arena/            # Standalone arena allocator (workspace member)
+│   ├── Cargo.toml
+│   ├── README.md
+│   └── src/lib.rs             # Arena, BottomHandle, TopHandle, Budget, marks
 └── docs/                      # Documentation knowledge graph
     ├── README.md              # Documentation root
     ├── DOCUMENTATION_STRATEGY.md
@@ -133,7 +136,7 @@ All public API functions return `Result` types with error structs that include s
 - **Rust** (edition 2024)
 - **no_std + alloc** (no standard library dependency)
 - **libm 0.2** (math functions for no_std environments)
-- **allocator-api2 0.4** (stable polyfill of the unstable allocator API, used by `arena`)
+- **allocator-api2 0.4** (stable polyfill of the unstable allocator API, used by `keleusma-arena`)
 - **syn 2, quote 1, proc-macro2 1** (compile-time only, used by `keleusma-macros`)
-- Cargo workspace with two members: `keleusma` (runtime) and `keleusma-macros` (proc-macro)
-- 286 tests across lexer, parser, compiler, VM, verifier, marshall, arena, audio natives, utility natives, and integration tests
+- Cargo workspace with three members: `keleusma` (runtime), `keleusma-macros` (proc-macro), and `keleusma-arena` (standalone arena allocator)
+- 300 tests across the workspace covering lexer, parser, compiler, VM, verifier, marshall, arena, audio natives, utility natives, and integration tests

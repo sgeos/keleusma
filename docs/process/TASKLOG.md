@@ -12,7 +12,7 @@ Current sprint source of truth.
 
 ## Active Milestone
 
-None. V0.0-M6 substantially complete. Arena allocator and WCMU instrumentation in place. Auto-arena sizing and call-graph WCMU integration remain as P8 follow-on.
+None. V0.0-M6 complete. Arena extracted to standalone keleusma-arena crate. Auto-arena sizing and call-graph WCMU integration remain as P8 follow-on for V0.0-M7.
 
 ## Task Breakdown
 
@@ -75,3 +75,4 @@ None. V0.0-M6 substantially complete. Arena allocator and WCMU instrumentation i
 | 2026-05-08 | V0.0-M5 partial complete. Two-string-type discipline at runtime with Value::StaticStr and Value::DynStr. Cross-yield prohibition enforced. R31 R32 R33 added. WCMU and dual-end arena documented as the fifth guarantee. 272 tests pass. Arena allocator and WCMU instrumentation deferred to V0.0-M6 as P7 and P8. |
 | 2026-05-08 | V0.0-M6 partial complete. Arena allocator foundation in place. allocator-api2 dependency added. Arena type with dual-end bump pointers, StackHandle and HeapHandle implementing allocator_api2::Allocator. Vm holds Arena, reset on Op::Reset and replace_module. R34 records the implementation. 286 tests pass. Operand stack and DynStr arena migration tracked as P7 follow-on. WCMU instrumentation tracked as P8. |
 | 2026-05-08 | V0.0-M6 substantially complete. WCMU instrumentation added with per-op stack and heap cost methods. wcmu_stream_iteration parallels wcet_stream_iteration. verify_resource_bounds enforces stack_wcmu plus heap_wcmu fits within arena_capacity at Vm::new and Vm::replace_module. Native function attestation widened to include WCET and WCMU bounds via Vm::set_native_bounds. R35 records the implementation. 294 tests pass. Auto-arena sizing and call-graph integration deferred to V0.0-M7 as P8 follow-on. |
+| 2026-05-08 | V0.0-M6 complete. Arena extracted to standalone keleusma-arena crate. Three constructors (with_capacity, from_static_buffer, from_buffer_unchecked). Renamed handles to BottomHandle and TopHandle. Added Budget contract for generic budget verification. Added mark and rewind API with unsafe per-end reset. Added peak watermark tracking. core-only operation without alloc supported. R36 records the extraction. 300 tests across the workspace. Tagline "Simple and boring memory allocator for exciting applications." |

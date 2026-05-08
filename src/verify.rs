@@ -511,16 +511,32 @@ pub fn wcet_stream_iteration(chunk: &Chunk) -> Result<u32, VerifyError> {
     Ok(overhead + region_cost)
 }
 
+/// Compute a memory budget for the given Stream chunk.
+///
+/// The budget bottom side carries the stack WCMU. The budget top side
+/// carries the heap WCMU. This pairing matches the Keleusma runtime
+/// convention in which the operand stack uses the arena's bottom end
+/// and the dynamic-string heap uses the arena's top end.
+///
+/// Returns an error if the chunk is not a Stream block.
+pub fn budget_for_stream(chunk: &Chunk) -> Result<keleusma_arena::Budget, VerifyError> {
+    let (stack_bytes, heap_bytes) = wcmu_stream_iteration(chunk)?;
+    Ok(keleusma_arena::Budget::new(
+        stack_bytes as usize,
+        heap_bytes as usize,
+    ))
+}
+
 /// Verify that the module's worst-case memory usage fits within the given
 /// arena capacity.
 ///
-/// Computes the stack and heap WCMU for each Stream chunk in the module
-/// and checks that their sum is at most `arena_capacity`. Programs that
-/// exceed the bound are rejected with a `VerifyError` describing which
-/// chunk failed and by how much.
+/// Computes a [`keleusma_arena::Budget`] for each Stream chunk and uses
+/// the arena's generic [`keleusma_arena::Arena::fits_budget`] contract
+/// to check admissibility. Programs that exceed the bound are rejected
+/// with a `VerifyError` describing which chunk failed.
 ///
 /// Calling functions are not transitively included in the analysis. The
-/// bound is a sound underestimate for programs that do not contain calls.
+/// bound is a sound upper bound for programs that do not contain calls.
 /// Programs with calls or variable-iteration loops may exhaust the arena
 /// at runtime even when this check passes. Sharper analysis is recorded
 /// as future work.
@@ -529,16 +545,15 @@ pub fn verify_resource_bounds(module: &Module, arena_capacity: usize) -> Result<
         if chunk.block_type != BlockType::Stream {
             continue;
         }
-        let (stack_bytes, heap_bytes) = wcmu_stream_iteration(chunk)?;
-        let total = (stack_bytes as usize).saturating_add(heap_bytes as usize);
-        if total > arena_capacity {
+        let budget = budget_for_stream(chunk)?;
+        if budget.total() > arena_capacity {
             return Err(VerifyError {
                 chunk_name: chunk.name.clone(),
                 message: alloc::format!(
-                    "WCMU bound {} bytes (stack {} + heap {}) exceeds arena capacity {} bytes",
-                    total,
-                    stack_bytes,
-                    heap_bytes,
+                    "WCMU budget {} bytes (bottom {} + top {}) exceeds arena capacity {} bytes",
+                    budget.total(),
+                    budget.bottom_bytes,
+                    budget.top_bytes,
                     arena_capacity
                 ),
             });

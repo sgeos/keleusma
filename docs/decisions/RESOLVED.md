@@ -148,6 +148,18 @@ The deeper integration of the operand stack and dynamic-string storage with the 
 
 The dependency on `allocator-api2` adds about 0.04 megabytes of dependency code and no runtime cost. The crate is a stable polyfill of the unstable `core::alloc::Allocator` trait. When the standard trait stabilizes, the dependency may be removed in favor of the standard library.
 
+## R36. Arena extracted to standalone keleusma-arena crate
+
+The dual-end bump-allocated arena specified in R32 and implemented in R34 is extracted to a standalone workspace member named `keleusma-arena`. The crate is positioned as a general-purpose embedded arena allocator with a differentiated value proposition from `bumpalo`, namely fixed-size storage, fail-fast allocation, dual-end discipline, generic budget contract, and `core`-only operation without `alloc`.
+
+API changes from the in-tree arena. `StackHandle` and `HeapHandle` rename to `BottomHandle` and `TopHandle`. The keleusma runtime preserves the old names as backwards-compatible aliases at the crate root. The arena gains three constructors. `Arena::with_capacity` allocates from the global allocator when the `alloc` feature is on. `Arena::from_static_buffer` borrows a `&'static mut [u8]` for embedded targets with link-time-allocated buffers. `unsafe fn Arena::from_buffer_unchecked(ptr, len)` accepts arbitrary buffers under the caller's lifetime guarantee.
+
+New API surface. `Budget` struct with `bottom_bytes` and `top_bytes` fields and `total()` saturating sum. `Arena::fits_budget(budget)` for admissibility check. `BottomMark` and `TopMark` types for LIFO discipline. Safe `Arena::bottom_mark()` and `Arena::top_mark()` snapshots. Unsafe `Arena::rewind_bottom`, `Arena::rewind_top`, `Arena::reset_bottom`, `Arena::reset_top` operations. Peak watermark tracking with `Arena::bottom_peak()`, `Arena::top_peak()`, and `Arena::clear_peaks()`. The unsafe variants are marked unsafe because they invalidate the rewound region while raw pointers obtained through the `Allocator` trait may still be retained by the caller.
+
+Generic budget contract. The `Budget` type lives in the arena crate so that independent users can compute their own budgets through profiling, manual analysis, or any other mechanism, and use the arena's `fits_budget` to verify admissibility. The keleusma runtime computes its budget from a static analysis of bytecode through a new `verify::budget_for_stream` adapter that produces a `keleusma_arena::Budget`. The `verify_resource_bounds` function uses the arena's `fits_budget` for the actual check.
+
+Tagline. "Simple and boring memory allocator for exciting applications." The phrase aligns with Keleusma's overall philosophy of boring code that does exciting things.
+
 ## R35. WCMU instrumentation and host attestation widening
 
 The fifth Keleusma guarantee, namely bounded-memory specified in R31, is implemented as `wcmu_stream_iteration` in `src/verify.rs`. The function parallels `wcet_stream_iteration` and walks the same block-structured control flow graph. It returns a tuple of stack and heap WCMU bounds, both in bytes, computed using the per-instruction cost methods on `Op`.

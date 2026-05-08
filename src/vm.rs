@@ -102,7 +102,7 @@ pub struct Vm {
     /// function use through `Vm::arena()`. The operand stack and dynamic
     /// string storage do not yet route through the arena. See P7 and P8 in
     /// `docs/decisions/PRIORITY.md` for the integration plan.
-    arena: crate::arena::Arena,
+    arena: keleusma_arena::Arena,
     started: bool,
 }
 
@@ -138,7 +138,7 @@ impl Vm {
             frames: Vec::new(),
             natives: Vec::new(),
             data,
-            arena: crate::arena::Arena::with_capacity(arena_capacity),
+            arena: keleusma_arena::Arena::with_capacity(arena_capacity),
             started: false,
         })
     }
@@ -188,12 +188,12 @@ impl Vm {
     /// dynamic strings or other arena-resident values. The arena is reset
     /// at every `Op::Reset` boundary, so host-allocated values do not
     /// survive across stream phases.
-    pub fn arena(&self) -> &crate::arena::Arena {
+    pub fn arena(&self) -> &keleusma_arena::Arena {
         &self.arena
     }
 
     /// Mutable borrow of the VM's arena.
-    pub fn arena_mut(&mut self) -> &mut crate::arena::Arena {
+    pub fn arena_mut(&mut self) -> &mut keleusma_arena::Arena {
         &mut self.arena
     }
 
@@ -1870,8 +1870,8 @@ mod tests {
         let module = build_module("fn main() -> i64 { 42 }");
         let vm = Vm::new(module).unwrap();
         assert_eq!(vm.arena().capacity(), DEFAULT_ARENA_CAPACITY);
-        assert_eq!(vm.arena().stack_used(), 0);
-        assert_eq!(vm.arena().heap_used(), 0);
+        assert_eq!(vm.arena().bottom_used(), 0);
+        assert_eq!(vm.arena().top_used(), 0);
     }
 
     #[test]
@@ -1886,8 +1886,8 @@ mod tests {
         // Stream function that allocates from arena via the arena_mut
         // accessor before yield. The arena is not reset at yield, but is
         // reset at the Op::Reset boundary.
-        use crate::arena::Arena;
         use core::alloc::Layout;
+        use keleusma_arena::Arena;
 
         let src = "loop main(input: i64) -> i64 { let input = yield input; input }";
         let module = build_module(src);
@@ -1896,10 +1896,10 @@ mod tests {
         // Host allocates from arena before first call.
         {
             let layout = Layout::new::<u64>();
-            let handle = vm.arena().stack_handle();
+            let handle = vm.arena().bottom_handle();
             let _p = allocator_api2::alloc::Allocator::allocate(&handle, layout).unwrap();
         }
-        assert!(vm.arena().stack_used() > 0);
+        assert!(vm.arena().bottom_used() > 0);
         let _ = &vm; // fence for readability
 
         // First call yields, arena not reset at yield.
@@ -1907,15 +1907,15 @@ mod tests {
             VmState::Yielded(_) => {}
             other => panic!("expected yield, got {:?}", other),
         }
-        assert!(vm.arena().stack_used() > 0);
+        assert!(vm.arena().bottom_used() > 0);
 
         // Resume to reach Reset. Arena is reset.
         match vm.resume(Value::Int(0)).unwrap() {
             VmState::Reset => {}
             other => panic!("expected reset, got {:?}", other),
         }
-        assert_eq!(vm.arena().stack_used(), 0);
-        assert_eq!(vm.arena().heap_used(), 0);
+        assert_eq!(vm.arena().bottom_used(), 0);
+        assert_eq!(vm.arena().top_used(), 0);
 
         // Suppress unused import in this nested context.
         let _: fn(usize) -> Arena = Arena::with_capacity;
