@@ -22,15 +22,16 @@ What should happen when a script encounters a runtime error? Options include yie
 
 ## P7. Arena allocator implementation
 
-The arena is currently simulated. R32 specifies the dual-end design and the verification rule. Implementation requires the following.
+Foundation complete. R34 records the implementation. The remaining work is iterative integration.
 
-1. Add `allocator-api2` as a dependency.
-2. Implement Keleusma's own arena allocator, namely a type that owns a fixed-size buffer and exposes two bump pointers, one growing up from the bottom and one growing down from the top.
-3. Implement the `allocator_api2::Allocator` trait for a handle to the arena, so that `Vec<T, A>` and similar collections can use it.
-4. Migrate the operand stack and dynamic-string storage to use the arena allocator. Note that stable Rust does not provide a `String` type with a custom allocator. A custom `DynStr` type backed by `Vec<u8, A>` with string-specific methods is the practical path.
-5. Wire up the arena into `Vm::new` and `Op::Reset`.
+1. ~~Add `allocator-api2` as a dependency.~~ Complete.
+2. ~~Implement Keleusma's own arena allocator.~~ Complete. See `src/arena.rs`.
+3. ~~Implement the `allocator_api2::Allocator` trait for arena handles.~~ Complete. See `StackHandle` and `HeapHandle`.
+4. ~~Wire up the arena into `Vm::new`, `Op::Reset`, and `replace_module`.~~ Complete.
+5. Migrate the operand stack to use `allocator_api2::vec::Vec<Value, StackHandle>`. Open. Requires propagating an arena lifetime parameter through the `Vm` struct, which cascades through every signature that touches `Vm`. Substantial refactor.
+6. Replace `Value::DynStr(String)` with a custom `DynStr` storage type backed by `allocator_api2::vec::Vec<u8, HeapHandle>`. Open. Requires propagating the arena lifetime through `Value`. Equally substantial.
 
-This is substantial infrastructure work that warrants its own milestone. The two-string-type discipline (V0.0-M5) is operational without it. Programs that allocate dynamic strings currently use the global allocator, and the arena lifetime is enforced through Rust drop semantics rather than through bump-pointer reset.
+Items 5 and 6 are coordinated. They cannot be done independently because both touch the lifetime story of `Value`. They are the next major refactor and should be addressed together. The current arena is operational and reset on schedule, but its principal use today is host-supplied native functions that wish to allocate arena-resident scratch buffers. The operand stack and dynamic-string storage continue to use the global allocator with Rust drop semantics enforcing the arena lifetime.
 
 ## P8. WCMU instrumentation and auto-arena sizing
 

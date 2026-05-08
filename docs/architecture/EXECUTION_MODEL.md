@@ -74,6 +74,14 @@ The dual-end design ensures O(1) allocation from either end and O(1) reset of bo
 
 Memory bounds are statically analyzable per stream phase. The compiler computes a worst-case stack consumption (`stack_wcmu`) and a worst-case heap consumption (`heap_wcmu`) separately. The verifier checks the inequality `stack_wcmu + heap_wcmu <= arena_size`. Programs for which either WCMU cannot be statically computed are rejected at verification time. The arena auto-size, when computed, is exactly the sum of the two bounds plus an optional safety margin.
 
+#### Arena Implementation
+
+The arena is implemented as the `Arena` type in `src/arena.rs`. It owns a fixed-size `Box<[u8]>` backing buffer and tracks two bump pointers using `Cell<usize>`. Two handle types `StackHandle` and `HeapHandle` borrow the arena and implement the `allocator_api2::Allocator` trait, allowing arena-backed collections through `allocator_api2::vec::Vec::new_in(handle)` and similar constructors.
+
+The `Vm` holds an `Arena` instance configured with a default capacity of 65536 bytes. The capacity is configurable through `Vm::new_with_arena_capacity`. The arena is exposed through `Vm::arena()` and `Vm::arena_mut()` accessors for host-supplied native functions that wish to allocate arena-resident scratch buffers. The arena is reset at every `Op::Reset` boundary and at every `replace_module` call.
+
+The deeper integration of the operand stack and dynamic-string storage with the arena is iterative work tracked as P7 follow-on. Stable Rust does not currently expose a `String` type with a custom allocator, so a custom `DynStr` storage type backed by `allocator_api2::vec::Vec<u8, HeapHandle>` is required for full integration. See R34 for the implementation status.
+
 ### Data Segment
 
 The data segment is a fixed-size, fixed-layout region of mutable storage owned by the host and presented to the script as a preinitialized `.data` section. It is the sole region of mutable state observable to the script that persists beyond a single function activation. Scripts read and write the segment through `GetData` and `SetData` instructions, which address slots by index. The host is responsible for supplying a memory instance that conforms to the schema declared by the script.

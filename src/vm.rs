@@ -64,6 +64,10 @@ struct NativeEntry {
     func: NativeFn,
 }
 
+/// Default arena capacity in bytes when constructed via `Vm::new`. The host
+/// can override this by calling `Vm::new_with_arena_capacity`.
+pub const DEFAULT_ARENA_CAPACITY: usize = 64 * 1024;
+
 /// The Keleusma virtual machine.
 pub struct Vm {
     module: Module,
@@ -72,15 +76,30 @@ pub struct Vm {
     natives: Vec<NativeEntry>,
     /// Persistent data segment. Survives across RESET boundaries.
     data: Vec<Value>,
+    /// Dual-end bump-allocated arena. Currently exposed for explicit native
+    /// function use through `Vm::arena()`. The operand stack and dynamic
+    /// string storage do not yet route through the arena. See P7 and P8 in
+    /// `docs/decisions/PRIORITY.md` for the integration plan.
+    arena: crate::arena::Arena,
     started: bool,
 }
 
 impl Vm {
-    /// Create a new VM with the given compiled module.
+    /// Create a new VM with the given compiled module and the default arena
+    /// capacity.
     ///
     /// Runs structural verification on the module. Returns an error if
     /// verification fails.
     pub fn new(module: Module) -> Result<Self, VmError> {
+        Self::new_with_arena_capacity(module, DEFAULT_ARENA_CAPACITY)
+    }
+
+    /// Create a new VM with the given compiled module and a host-specified
+    /// arena capacity in bytes.
+    ///
+    /// Runs structural verification on the module. Returns an error if
+    /// verification fails.
+    pub fn new_with_arena_capacity(module: Module, arena_capacity: usize) -> Result<Self, VmError> {
         verify::verify(&module)
             .map_err(|e| VmError::VerifyError(format!("{}: {}", e.chunk_name, e.message)))?;
         let data_len = module.data_layout.as_ref().map_or(0, |dl| dl.slots.len());
@@ -91,6 +110,7 @@ impl Vm {
             frames: Vec::new(),
             natives: Vec::new(),
             data,
+            arena: crate::arena::Arena::with_capacity(arena_capacity),
             started: false,
         })
     }
@@ -131,6 +151,22 @@ impl Vm {
     /// size without inspecting the `Module` directly.
     pub fn data_len(&self) -> usize {
         self.data.len()
+    }
+
+    /// Borrow the VM's arena.
+    ///
+    /// The arena is the dual-end bump-allocated buffer described in R32. It
+    /// is available to host-supplied native functions that wish to allocate
+    /// dynamic strings or other arena-resident values. The arena is reset
+    /// at every `Op::Reset` boundary, so host-allocated values do not
+    /// survive across stream phases.
+    pub fn arena(&self) -> &crate::arena::Arena {
+        &self.arena
+    }
+
+    /// Mutable borrow of the VM's arena.
+    pub fn arena_mut(&mut self) -> &mut crate::arena::Arena {
+        &mut self.arena
     }
 
     /// Replace the current module with a new one as a hot code update.
@@ -179,6 +215,7 @@ impl Vm {
         self.data = initial_data;
         self.frames.clear();
         self.stack.clear();
+        self.arena.reset();
         self.started = false;
 
         Ok(())
@@ -532,7 +569,7 @@ impl Vm {
                     // No-op. Marks the stream entry point.
                 }
                 Op::Reset => {
-                    // Clear arena: reset locals to Unit, truncate stack.
+                    // Reset locals to Unit, truncate stack, reset arena pointers.
                     let frame = self.frames.last_mut().unwrap();
                     let reset_base = frame.base;
                     let reset_chunk_idx = frame.chunk_idx;
@@ -544,6 +581,11 @@ impl Vm {
                     }
                     // Truncate stack to just the locals.
                     self.stack.truncate(reset_base + local_count);
+
+                    // Reset both arena bump pointers (R32). Host-allocated
+                    // dynamic strings and other arena values are reclaimed
+                    // here.
+                    self.arena.reset();
 
                     // Find Stream instruction and set IP to instruction after it.
                     let ops = &self.module.chunks[reset_chunk_idx].ops;
@@ -1745,6 +1787,64 @@ mod tests {
             VmError::TypeError(msg) => assert!(msg.contains("dynamic string")),
             other => panic!("expected TypeError, got {:?}", other),
         }
+    }
+
+    // -- Arena integration --
+
+    #[test]
+    fn vm_has_arena_with_default_capacity() {
+        let module = build_module("fn main() -> i64 { 42 }");
+        let vm = Vm::new(module).unwrap();
+        assert_eq!(vm.arena().capacity(), DEFAULT_ARENA_CAPACITY);
+        assert_eq!(vm.arena().stack_used(), 0);
+        assert_eq!(vm.arena().heap_used(), 0);
+    }
+
+    #[test]
+    fn vm_arena_capacity_configurable() {
+        let module = build_module("fn main() -> i64 { 42 }");
+        let vm = Vm::new_with_arena_capacity(module, 4096).unwrap();
+        assert_eq!(vm.arena().capacity(), 4096);
+    }
+
+    #[test]
+    fn vm_arena_reset_at_op_reset() {
+        // Stream function that allocates from arena via the arena_mut
+        // accessor before yield. The arena is not reset at yield, but is
+        // reset at the Op::Reset boundary.
+        use crate::arena::Arena;
+        use core::alloc::Layout;
+
+        let src = "loop main(input: i64) -> i64 { let input = yield input; input }";
+        let module = build_module(src);
+        let mut vm = Vm::new(module).unwrap();
+
+        // Host allocates from arena before first call.
+        {
+            let layout = Layout::new::<u64>();
+            let handle = vm.arena().stack_handle();
+            let _p = allocator_api2::alloc::Allocator::allocate(&handle, layout).unwrap();
+        }
+        assert!(vm.arena().stack_used() > 0);
+        let _ = &vm; // fence for readability
+
+        // First call yields, arena not reset at yield.
+        match vm.call(&[Value::Int(0)]).unwrap() {
+            VmState::Yielded(_) => {}
+            other => panic!("expected yield, got {:?}", other),
+        }
+        assert!(vm.arena().stack_used() > 0);
+
+        // Resume to reach Reset. Arena is reset.
+        match vm.resume(Value::Int(0)).unwrap() {
+            VmState::Reset => {}
+            other => panic!("expected reset, got {:?}", other),
+        }
+        assert_eq!(vm.arena().stack_used(), 0);
+        assert_eq!(vm.arena().heap_used(), 0);
+
+        // Suppress unused import in this nested context.
+        let _: fn(usize) -> Arena = Arena::with_capacity;
     }
 
     #[test]

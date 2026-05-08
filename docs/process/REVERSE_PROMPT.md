@@ -9,59 +9,58 @@ AI to Human communication channel.
 ## Last Updated
 
 **Date**: 2026-05-08
-**Task**: V0.0-M5 partial completion. Two-string-type discipline and the fifth guarantee.
-**Status**: Partial. Type discipline complete. Arena allocator and WCMU instrumentation deferred to V0.0-M6.
+**Task**: V0.0-M6 partial completion. Arena allocator foundation.
+**Status**: Partial. Arena infrastructure in place. Operand stack and dynamic string arena migration tracked as P7 follow-on.
 
 ## Verification
 
 **Command**: `cargo test && cargo clippy --tests --all-targets -- -D warnings && cargo fmt --check`
-**Result**: 272 tests pass, up from 268. Zero clippy warnings. Format clean. Four new tests cover the cross-yield prohibition on dynamic strings, namely yield of static string succeeds, yield of dynamic string fails, yield of tuple containing dynamic string fails, and a unit test for the `Value::contains_dynstr` helper.
+**Result**: 286 tests pass (269 unit + 17 integration), up from 272. Zero clippy warnings. Format clean. Eleven new arena unit tests cover initial state, stack and heap allocation, alignment, exhaustion, stack-heap meet detection, reset, integration with `allocator_api2::vec::Vec`, dual-region usage, zero-capacity, and zero-size layout. Three new VM tests cover default arena capacity, configurable capacity, and arena reset at `Op::Reset`.
 
 ## Summary
 
-Recorded R31, R32, R33, and B6, B9, B10. Documented the fifth Keleusma guarantee, namely bounded-memory (WCMU). Documented the dual-end arena. Implemented the two-string-type discipline at runtime with `Value::StaticStr` and `Value::DynStr` as distinct variants. Source-level string literals compile to `StaticStr`. The `to_string` native returns `DynStr`. The string concatenation operator produces `DynStr`. The cross-yield prohibition is enforced at runtime via a structural check on the yielded value. The arena allocator and WCMU instrumentation are recorded as P7 and P8 in the priority list and deferred to V0.0-M6.
+Implemented the arena allocator foundation specified in R32. Added `allocator-api2` 0.4 as a stable polyfill dependency. Created `src/arena.rs` with the `Arena` type owning a fixed-size `Box<[u8]>` backing buffer and tracking two bump pointers via `Cell<usize>`. Defined `StackHandle` and `HeapHandle` types implementing `allocator_api2::Allocator`. Wired the arena into `Vm` with a configurable default capacity of 65536 bytes. The arena is reset at `Op::Reset` and at `replace_module`. Added R34 recording the implementation. Updated `EXECUTION_MODEL.md`, `GLOSSARY.md`, `PRIORITY.md`, `RESOLVED.md`, `TASKLOG.md`, and `CLAUDE.md`.
 
 ## Changes Made
 
 ### Source Code
 
-- **src/bytecode.rs**: Replaced `Value::Str(String)` with two distinct variants `Value::StaticStr(String)` and `Value::DynStr(String)`. Updated `Value::type_name()` to report each variant. Updated `PartialEq` to allow cross-variant equality on string contents because the discipline is about lifetime and provenance rather than value identity. Added `Value::as_str()` accessor for sites that read string contents without caring about provenance. Added `Value::contains_dynstr()` for the cross-yield runtime check.
-- **src/compiler.rs**: Source-level string literals now compile to `Value::StaticStr` constants. Type names and variant names in the constant pool also use `Value::StaticStr` since they are static labels embedded in the code image.
-- **src/vm.rs**: Updated all pattern matching on string values to handle both variants. The string concatenation result of `Op::Add` produces a `Value::DynStr` because the resulting string is computed at runtime. Comparison operators handle both variants. The `Op::Yield` handler now rejects yielded values that transitively contain a `DynStr`. Four new tests cover the yield discipline.
-- **src/utility_natives.rs**: `to_string` returns `Value::DynStr` because the produced string is computed. `length` accepts either string variant. The pattern matching on string contents in the recursive `to_string` calls handles both variants.
+- **Cargo.toml**: Added `allocator-api2 = { version = "0.4", default-features = false, features = ["alloc"] }`. The crate is no_std-compatible and serves as a stable polyfill of the unstable `core::alloc::Allocator` trait.
+- **src/arena.rs**: New module. Contains the `Arena` type with `Box<[u8]>` backing buffer and two `Cell<usize>` bump pointers. Stack region grows from offset zero. Heap region grows down from buffer length. Alignment-aware allocation. Reset method. Eleven unit tests.
+- **src/lib.rs**: Added `pub mod arena` and re-exports `Arena`, `StackHandle`, `HeapHandle` at the crate root.
+- **src/vm.rs**: Added `arena` field to `Vm` struct. Added `DEFAULT_ARENA_CAPACITY` constant of 65536 bytes. Added `Vm::new_with_arena_capacity` constructor for host-configurable arena size. Added `arena()` and `arena_mut()` accessors. The `Op::Reset` handler now calls `arena.reset()`. The `replace_module` method also resets the arena. Three new tests verify the integration.
 
 ### Knowledge Graph
 
-- **docs/decisions/RESOLVED.md**: Added R31 (WCMU as the fifth guarantee), R32 (dual-end arena with separate stack and heap WCMU bounds), R33 (modern 64-bit target assumption for V0.0).
-- **docs/decisions/BACKLOG.md**: Updated B5 to reflect the V0.0-M5 partial completion. Added B9 (hot update of yielded static strings) and B10 (portability and target abstraction).
-- **docs/decisions/PRIORITY.md**: Added P7 (arena allocator implementation) and P8 (WCMU instrumentation and auto-arena sizing) for V0.0-M6.
-- **docs/architecture/LANGUAGE_DESIGN.md**: Now lists five guarantees instead of four. Memory model section describes the dual-end arena and the two-string-type discipline.
-- **docs/architecture/EXECUTION_MODEL.md**: Memory section rewritten to describe the dual-end arena with separate stack and heap WCMU bounds.
-- **docs/design/TYPE_SYSTEM.md**: Primitive type table updated with size and alignment columns. New String Types section documents StaticStr and DynStr disciplines. Data segment admissibility table updated to reflect string constraints. Runtime value table updated.
-- **docs/reference/GLOSSARY.md**: Added Arena (revised), Dual-end arena, DynStr, StaticStr, and WCMU entries.
-- **docs/process/TASKLOG.md**: V0.0-M5 partial completion recorded. Active milestone none, ready for V0.0-M6 or V0.1 planning.
+- **docs/decisions/RESOLVED.md**: Added R34 recording the arena allocator implementation, including the rationale for the two-handle design and the deferral of the deeper integration work.
+- **docs/decisions/PRIORITY.md**: Updated P7 to mark the foundation as complete and to enumerate the remaining work, namely the operand stack and dynamic string arena migration.
+- **docs/architecture/EXECUTION_MODEL.md**: Added an Arena Implementation subsection describing the concrete `Arena` type and its handles.
+- **docs/reference/GLOSSARY.md**: Updated the Dual-end arena entry. Added a StackHandle / HeapHandle entry.
+- **docs/process/TASKLOG.md**: V0.0-M6 partial completion recorded with task breakdown.
+- **CLAUDE.md**: Updated repository structure to include `src/arena.rs`. Updated technology stack to mention `allocator-api2`. Test count updated to 286.
 
 ## Unaddressed Concerns
 
-1. **Arena allocator is still simulated.** The runtime continues to use the global allocator for `String` and `Vec` content. The two-string-type discipline is enforced at the Value level, but the actual storage of `DynStr` is not arena-allocated yet. The arena lifetime is enforced through Rust drop semantics rather than through bump-pointer reset. P7 is the implementation work.
-2. **WCMU is not yet computed.** The fifth guarantee is documented but not enforced. The host-attestation surface for native functions does not yet include WCMU declarations. P8 is the implementation work.
-3. **Cross-yield prohibition is runtime-only.** The current check fires at the moment of yield, not at compile time. A compile-time check would require type tracking through the surface compiler that is beyond V0.0-M5 scope. The runtime check is sufficient for safety but does not catch the violation as early as ideal.
-4. **String surface concatenation operator remains in place.** The `+` operator on strings produces a `DynStr`. This was kept for backward compatibility with the existing `eval_string_concat` test. The user has indicated that surface-language string operations beyond literals are deferred. Future work could remove this operator entirely and force concatenation to host functions.
-5. **Static strings in `.data` is permitted at the bytecode level but not exposed in the surface grammar.** This is consistent with the user's clarification. The host can write `Value::StaticStr` values into data slots through `set_data` and is responsible for validity across hot updates.
-6. **Stable Rust does not provide String with a custom allocator.** The arena work in P7 will require a custom `DynStr` type backed by `Vec<u8, Allocator>` rather than reusing the standard `String`. This is a known engineering item.
+1. **Deeper arena integration is not yet done.** The operand stack continues to use `alloc::Vec<Value>`, namely the global allocator. The dynamic string storage `Value::DynStr(String)` continues to use `alloc::String`. The arena exists and is reset on schedule, but its principal use today is host-supplied native functions that wish to allocate scratch buffers. Migrating the operand stack and dynamic string storage to use the arena requires propagating an arena lifetime parameter through the `Vm` struct and through `Value`. This is a substantial refactor and is tracked as P7 follow-on work. The visible behavior of the runtime is unchanged because Rust drop semantics continue to enforce the arena lifetime.
+
+2. **WCMU instrumentation remains pending.** The fifth guarantee specified in R31 is documented but not enforced. The host-attestation surface for native functions does not yet include WCMU declarations. Tracked as P8.
+
+3. **Arena exhaustion produces an `AllocError` from the `allocator_api2::Allocator` trait.** The Keleusma VM does not yet have a bytecode-level path that surfaces this error to the host. When the operand stack and dynamic string storage are migrated to the arena, a new `VmError::ArenaExhausted` variant will need to be added and the runtime allocation sites will need to map `AllocError` to it. Currently, only host code calling the arena handles directly observes the error.
+
+4. **Default arena capacity is hard-coded to 65536 bytes.** The host can override via `Vm::new_with_arena_capacity`. The auto-arena-sizing path described in R31 and P8 is not yet implemented because it depends on WCMU computation.
 
 ## Intended Next Step
 
-Two paths forward, in order of independence.
+Two paths forward.
 
-A. V0.0-M6 implementing P7 (arena allocator) and P8 (WCMU instrumentation) together. This delivers the full dual-end arena with bump-pointer reset and the fifth guarantee enforcement. Substantial infrastructure work.
+A. Continue with V0.0-M6 by tackling the operand stack and dynamic string arena migration (P7 follow-on items 5 and 6). This delivers the full arena story for the runtime, with the operand stack as `allocator_api2::vec::Vec<Value, StackHandle>` and dynamic strings as a custom `DynStr` storage backed by `allocator_api2::vec::Vec<u8, HeapHandle>`. Substantial refactor due to lifetime parameter cascade.
 
-B. Other V0.1 candidates from the prior reverse prompt, namely the type checker (P1), for-in over arbitrary expressions (P2), or the error recovery model (P3). These are language-layer improvements that do not require the arena.
+B. Pivot to WCMU instrumentation (P8) before the deeper arena integration. The WCMU analysis is independent of the storage representation and parallels the existing WCET analysis closely. Adding `Op::memory()` and `wcmu_stream_iteration()` is well-scoped work.
 
-Recommend B if the language layer is the priority. Recommend A if the certification posture is the priority. The arena and WCMU work is a clear next step for the certification path because both directly support the bounded-memory guarantee.
+Recommend B because it closes the fifth-guarantee gap with smaller blast radius. Path A then becomes the V0.0-M7 milestone.
 
 Await human prompt before proceeding.
 
 ## Session Context
 
-The session resumed a previously stalled data segment design and carried through three milestones of work, V0.0-M3 for the data segment, V0.0-M4 for the static marshalling layer, and V0.0-M5 partial for the two-string-type discipline and the fifth guarantee. The total session arc covered specification clarification, research and documentation formalization, source conformance, host interoperability layer, hot swap API, ergonomic Rust type interop with macro-generated marshalling, and now the type-discipline portion of strings and memory bounds. Six commits accumulated during the session. The arena allocator and WCMU instrumentation are recorded as P7 and P8 in the priority list and constitute the next implementation milestone.
+This session executed across multiple milestones. V0.0-M3 completed the data segment with hot swap. V0.0-M4 added static marshalling. V0.0-M5 partial introduced the two-string-type discipline. V0.0-M6 partial added the arena allocator foundation. Eight commits accumulated during the session, all on main.

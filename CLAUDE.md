@@ -27,6 +27,7 @@ keleusma/
 │   ├── vm.rs                  # Stack-based VM with coroutine support (public API: Vm)
 │   ├── verify.rs              # Structural verifier (public API: verify, wcet_stream_iteration)
 │   ├── marshall.rs            # KeleusmaType trait and IntoNativeFn family
+│   ├── arena.rs               # Dual-end bump-allocated arena (public API: Arena, StackHandle, HeapHandle)
 │   ├── audio_natives.rs       # Built-in audio and math native functions
 │   └── utility_natives.rs     # to_string, length, println, math utilities
 ├── tests/                     # Integration tests
@@ -132,6 +133,7 @@ All public API functions return `Result` types with error structs that include s
 - **Rust** (edition 2024)
 - **no_std + alloc** (no standard library dependency)
 - **libm 0.2** (math functions for no_std environments)
+- **allocator-api2 0.4** (stable polyfill of the unstable allocator API, used by `arena`)
 - **syn 2, quote 1, proc-macro2 1** (compile-time only, used by `keleusma-macros`)
 - Cargo workspace with two members: `keleusma` (runtime) and `keleusma-macros` (proc-macro)
-- 268 tests across lexer, parser, compiler, VM, verifier, marshall, audio natives, utility natives, and integration tests
+- 286 tests across lexer, parser, compiler, VM, verifier, marshall, arena, audio natives, utility natives, and integration tests

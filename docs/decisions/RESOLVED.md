@@ -135,3 +135,15 @@ The arena is a single contiguous allocation with two pointers growing toward eac
 ## R33. Modern 64-bit target assumption for V0.0
 
 The current development cycle assumes a modern 64-bit target. Type sizes and alignments are fixed. `i64` is 8 bytes with 8-byte alignment. `f64` is 8 bytes with 8-byte alignment. `bool` is 1 byte with 1-byte alignment. `()` is 0 bytes with 1-byte alignment. Aggregates use C-style alignment rules with padding inserted as needed. Native function memory attestation is in aligned bytes on the same target assumption. Future work expands the type system with `word`, `byte`, `bit`, and `address` primitives and parameterizes the compiler over a target descriptor, enabling code generation for architectures from the 6502 to ARM64. That expansion is recorded as B6.
+
+## R34. Arena allocator implementation with allocator-api2
+
+The dual-end arena specified in R32 is implemented as the `Arena` type in `src/arena.rs`. The arena owns a fixed-size `Box<[u8]>` backing buffer. Two `Cell<usize>` pointers track the stack-end and heap-end allocation cursors. Allocation is constant-time and respects layout alignment. Reset clears both pointers atomically. The arena is single-threaded and uses `Cell` rather than atomics, consistent with the single-threaded VM model.
+
+Two handle types `StackHandle` and `HeapHandle` borrow the arena and implement the `allocator_api2::Allocator` trait. The handles are passed to `allocator_api2::vec::Vec::new_in` and similar constructors to obtain arena-backed collections. The two-handle design distinguishes the two arena ends at the type level rather than through a runtime discriminator.
+
+The `Vm` struct holds an `Arena` field initialized at construction with a default capacity of 65536 bytes. The capacity is configurable via `Vm::new_with_arena_capacity`. The `arena()` and `arena_mut()` accessors expose the arena to host-supplied native functions. The arena is reset at every `Op::Reset` boundary and at every `replace_module` call.
+
+The deeper integration of the operand stack and dynamic-string storage with the arena is recorded as P7 follow-on work and is iterative rather than atomic. Stable Rust does not provide a `String` type with a custom allocator, so a custom `DynStr` storage type backed by `allocator_api2::vec::Vec<u8, A>` is required for full integration. The current state has the arena present and reset on schedule, but operand stack and string storage continue to use the global allocator.
+
+The dependency on `allocator-api2` adds about 0.04 megabytes of dependency code and no runtime cost. The crate is a stable polyfill of the unstable `core::alloc::Allocator` trait. When the standard trait stabilizes, the dependency may be removed in favor of the standard library.

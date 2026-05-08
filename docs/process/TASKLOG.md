@@ -12,7 +12,7 @@ Current sprint source of truth.
 
 ## Active Milestone
 
-None. V0.0-M5 partial complete. Type discipline implemented. Arena allocator and WCMU instrumentation tracked as P7 and P8 for V0.0-M6.
+None. V0.0-M6 partial complete. Arena allocator foundation in place. WCMU instrumentation tracked as P8.
 
 ## Task Breakdown
 
@@ -45,8 +45,15 @@ None. V0.0-M5 partial complete. Type discipline implemented. Arena allocator and
 | V0.0-M5-T2 | Two-string-type discipline at runtime | Complete | Value::StaticStr and Value::DynStr distinct variants. Source literals compile to StaticStr. to_string returns DynStr. String concat result is DynStr. |
 | V0.0-M5-T3 | Cross-yield prohibition on dynamic strings | Complete | Runtime structural check at Op::Yield. Value::contains_dynstr helper. Tests for static yield, dynamic yield rejection, tuple-with-dynstr rejection. |
 | V0.0-M5-T4 | Documentation pass for fifth guarantee | Complete | TYPE_SYSTEM, LANGUAGE_DESIGN, EXECUTION_MODEL, GLOSSARY updated. Five guarantees explicit. Dual-end arena documented. |
-| V0.0-M5-T5 | Arena allocator with allocator-api2 | Deferred | Tracked as P7 for V0.0-M6. Substantial infrastructure work. The two-string-type discipline is operational without it. |
-| V0.0-M5-T6 | WCMU instrumentation | Deferred | Tracked as P8 for V0.0-M6. Pairs naturally with the arena allocator. |
+| V0.0-M5-T5 | Arena allocator with allocator-api2 | Foundation complete in V0.0-M6 | See V0.0-M6 below. |
+| V0.0-M5-T6 | WCMU instrumentation | Deferred | Tracked as P8. Pairs with the deeper arena integration. |
+| V0.0-M6-T1 | Add allocator-api2 dependency | Complete | Cargo.toml updated, no_std + alloc preserved |
+| V0.0-M6-T2 | Implement Arena type | Complete | src/arena.rs with dual-end bump pointers, alignment-aware allocation, reset method |
+| V0.0-M6-T3 | Implement Allocator trait for handles | Complete | StackHandle and HeapHandle types implementing allocator_api2::Allocator |
+| V0.0-M6-T4 | Wire arena into Vm | Complete | Arena field, configurable capacity, reset on Op::Reset and replace_module |
+| V0.0-M6-T5 | Documentation pass | Complete | R34 added, EXECUTION_MODEL updated, GLOSSARY updated, P7 marked foundation-complete |
+| V0.0-M6-T6 | Operand stack and DynStr arena migration | Open | P7 follow-on work. Substantial refactor due to arena lifetime parameter cascade |
+| V0.0-M6-T7 | WCMU instrumentation | Open | P8. Pairs with V0.0-M6-T6. |
 
 ## History
 
@@ -62,3 +69,4 @@ None. V0.0-M5 partial complete. Type discipline implemented. Arena allocator and
 | 2026-05-08 | V0.0-M3 complete. Hot swap API added with replace_module and data_len. Six hot swap integration tests added. R29 records the slot-based interoperability decision. 238 tests pass. |
 | 2026-05-08 | V0.0-M4 complete. Workspace conversion. keleusma-macros proc-macro crate added. KeleusmaType trait, derive, IntoNativeFn family, and register_fn API. Audio and utility natives migrated. 268 tests pass. R30 records the static marshalling decision. |
 | 2026-05-08 | V0.0-M5 partial complete. Two-string-type discipline at runtime with Value::StaticStr and Value::DynStr. Cross-yield prohibition enforced. R31 R32 R33 added. WCMU and dual-end arena documented as the fifth guarantee. 272 tests pass. Arena allocator and WCMU instrumentation deferred to V0.0-M6 as P7 and P8. |
+| 2026-05-08 | V0.0-M6 partial complete. Arena allocator foundation in place. allocator-api2 dependency added. Arena type with dual-end bump pointers, StackHandle and HeapHandle implementing allocator_api2::Allocator. Vm holds Arena, reset on Op::Reset and replace_module. R34 records the implementation. 286 tests pass. Operand stack and DynStr arena migration tracked as P7 follow-on. WCMU instrumentation tracked as P8. |
