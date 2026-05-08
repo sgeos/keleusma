@@ -147,6 +147,8 @@ match vm.call(&[])? {
 
 `Vm::new()` runs structural verification on the module and returns an error if verification fails. The data segment is allocated to match the declared layout slot count and zero-initialized to `Value::Unit`. The host calls `set_data` to populate slots before execution begins.
 
+Native functions are registered via `Vm::register_fn` for the ergonomic typed registration that handles arity, type coercion, and return wrapping automatically. Argument and return types must implement `KeleusmaType`, which the `#[derive(KeleusmaType)]` macro provides for host structs and enums. Use `Vm::register_fn_fallible` when the host function returns `Result<R, VmError>`. The lower-level `register_native` and `register_native_closure` remain available for functions that must inspect arbitrary `Value` variants.
+
 Hot code update is performed by calling `vm.replace_module(new_module, initial_data)` between a `VmState::Reset` and the next `call`. The new module is verified before replacement. The supplied data vector length must match the new module's declared slot count. After a successful swap, the host calls `call` to start the new module's entry point. The same mechanism supports rollback by replacing with an older module and an appropriate data instance.
 
 See [TARGET_ISA.md](../reference/TARGET_ISA.md) for the complete structural ISA specification and [EXECUTION_MODEL.md](./EXECUTION_MODEL.md) for the data segment specification.

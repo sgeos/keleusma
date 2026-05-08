@@ -36,7 +36,13 @@ Key terminology used in the Keleusma documentation and source code. Citations us
 
 **Keleusma** -- A Total Functional Stream Processor that compiles to bytecode. The name derives from the Greek word for a command or signal, specifically the rhythmic calls used by ancient Greek rowing masters to coordinate oar strokes.
 
-**keleusma_type** -- A Rust attribute macro (`#[keleusma_type]`) that enforces interoperable memory layout on host types used in the dialogue signature. Ensures the host and VM agree on binary representation of A and B types.
+**keleusma_type** -- A Rust attribute macro (`#[keleusma_type]`) that enforces interoperable memory layout on host types used in the dialogue signature. Ensures the host and VM agree on binary representation of A and B types. Aspirational. The current implementation uses `#[derive(KeleusmaType)]` for both ergonomic native function marshalling and dialogue type implementation.
+
+**KeleusmaType** -- A trait defined in the runtime crate that describes the static marshalling contract between a Rust type and the runtime `Value` enum. Implemented for primitives, the unit type, fixed-arity tuples, fixed-length arrays, and `Option<T>`. Host structs and enums implement the trait through the `#[derive(KeleusmaType)]` macro from the `keleusma-macros` crate. The `from_value` method extracts the Rust value from a `Value`. The `into_value` method produces a `Value` from the Rust value. Together these support automatic argument and return-value marshalling at the native function boundary.
+
+**IntoNativeFn** -- A trait family with one implementation per arity zero through four that allows ordinary Rust functions and closures to be registered as native functions through `Vm::register_fn`. The trait wraps the host function in the uniform `fn(&[Value]) -> Result<Value, VmError>` shape required by the VM. The companion `IntoFallibleNativeFn` covers host functions whose return type is `Result<R, VmError>`.
+
+**register_fn** -- The Vm method that registers a host function with automatic argument and return-value marshalling. The recommended registration path for new code. Use `register_fn_fallible` for host functions that may return errors.
 
 **Logical atomicity** -- The property that the script never observes a partial hot swap. Either the entire old image is in effect or the entire new image is in effect. Realized by requiring the new code text and rodata to be resident and the host-supplied data segment instance to conform to the new schema before the candidate is eligible for installation. Distinct from crash atomicity, which concerns recovery from a fault during the swap and is the responsibility of the host platform [H4, H5].
 

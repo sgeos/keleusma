@@ -115,17 +115,25 @@ This model allows scripts to operate as persistent stream processors. The host d
 
 ## Native Function Interface
 
-The host registers native functions with the virtual machine before compilation. Two registration methods are available.
+The host registers native functions with the virtual machine before compilation. Four registration methods are available, in order from most to least ergonomic.
 
-**Function pointers.** The host provides a function name and a Rust function pointer with the signature `fn(&[Value]) -> Result<Value, VmError>`. This method is appropriate for stateless utility functions.
+**Ergonomic typed registration.** The host calls `vm.register_fn(name, func)` where `func` is an ordinary Rust function or closure of arity zero through four whose argument and return types implement `KeleusmaType`. Argument extraction, arity checking, and return value wrapping happen automatically. Use `vm.register_fn_fallible(name, func)` when the host function returns `Result<R, VmError>`. This is the recommended path for new code.
 
-**Closures.** The host provides a function name and a boxed closure that captures external state. This method is appropriate for functions that need to read from or write to host resources.
+**Function pointers.** The host provides a function name and a Rust function pointer with the signature `fn(&[Value]) -> Result<Value, VmError>`. Suitable when the host function must inspect arbitrary `Value` variants.
+
+**Closures.** The host provides a function name and a boxed closure that captures external state. Suitable for functions that need to read from or write to host resources or that must inspect arbitrary `Value` variants.
 
 Native functions participate in the script call graph like any other function. The compiler resolves native function names during compilation, and the virtual machine dispatches to the registered implementation at runtime.
 
 Type coercion at the native function boundary is flexible. Integer arguments are accepted where floating-point parameters are expected, with automatic widening from `i64` to `f64`. Purity of native functions is declared by the host and is not verified by the compiler. The host is responsible for ensuring that functions declared as pure do not produce side effects.
 
 The host is responsible for verifying and certifying host functions. Native functions can define domain-specific vocabularies tailored to the target application.
+
+### KeleusmaType and Static Marshalling
+
+The `KeleusmaType` trait defines the static marshalling contract between Rust types and the runtime `Value` enum. Host structs and enums become implementations through `#[derive(KeleusmaType)]` from the `keleusma-macros` crate. The derive accepts named-field structs and enums whose variants may be unit, tuple-style, or struct-style. Field types compose admissible interop types per the rules in [TYPE_SYSTEM.md](../design/TYPE_SYSTEM.md).
+
+The static marshalling approach contrasts with the dynamic approach of Rhai, which relies on `Box<dyn Any>` to carry arbitrary Rust types. Keleusma's discipline of fixed-size, fixed-layout interop types makes static dispatch sufficient and avoids the unsafe pointer manipulation and runtime type-erasure overhead of the dynamic approach. See [RELATED_WORK.md](../reference/RELATED_WORK.md) Section 9 for the full comparison.
 
 ## Scope Exclusions
 

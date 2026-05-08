@@ -128,6 +128,22 @@ Keleusma differs from Ksplice and Kitsune in that update points are explicit and
 
 The atomicity of the swap in Keleusma is logical only. The new code text must be resident in memory before it is eligible for installation. The host writes the candidate slot and the VM reads it at the next RESET. Crash atomicity, namely recovery from a fault that interrupts the swap, is the responsibility of the host platform. The Ksplice and Kitsune literature treats this question in detail and provides a model for what would be required of the host if Keleusma were deployed in a context where crash atomicity is required.
 
+## 9. Embedded Scripting Languages and Static Marshalling
+
+Embedded scripting in Rust applications is a well-populated design space. Rhai [E2] is the closest comparable for general-purpose embedded scripting in Rust, with substantial ergonomic affordances for host type registration through `Engine::register_type`, `Engine::register_fn`, and the `#[export_module]` proc macro. The Rhai approach centers on a `Dynamic` runtime value that carries `Box<dyn Any + Send + Sync>` plus trait-driven marshalling that converts arbitrary Rust function signatures into the engine's uniform call convention. The dynamic approach maximizes flexibility at the cost of unsafe-adjacent pointer manipulation and runtime type-erasure overhead.
+
+Lua bindings for Rust, including mlua and rlua, provide similar ergonomics through the `UserData` trait pattern, in which arbitrary Rust types are wrapped and exposed to Lua scripts with method bindings. Like Rhai, the design relies on `Any` plus runtime type checks.
+
+WebAssembly host bindings, in contrast, marshal values across the boundary through a fixed type system at the boundary surface. The wasm-bindgen crate generates static marshalling code at compile time, mediating between Rust types and JavaScript values without dynamic dispatch on the host side.
+
+**Relationship to Keleusma.** Keleusma adopts the static marshalling approach. The discipline of fixed-size, fixed-layout interop types, established for the data segment and extended to native function arguments and return values, makes the dynamic `Box<dyn Any>` mechanism unnecessary. The `KeleusmaType` trait provides the marshalling contract. The `#[derive(KeleusmaType)]` macro generates implementations for host structs and enums whose fields and variants compose admissible types. The `IntoNativeFn` trait family produces registration glue from ordinary Rust function signatures.
+
+Keleusma differs from Rhai in three specific ways. The interop value space is closed at compile time rather than open at runtime, which trades flexibility for static analyzability. There is no boxing of host types because every interop value has a statically known shape. The marshalling layer is amenable to qualification under safety standards because no `Box<dyn Any>` cast site requires trust at runtime.
+
+Keleusma differs from wasm-bindgen in scope. Keleusma is a complete embedded scripting runtime with its own bytecode and verifier. The marshalling layer is comparable in approach but operates within the closed `Value` representation rather than across a portable binary interface.
+
+The static marshalling approach has precedents in the typed embedded scripting tradition, including the Lua bindings used in Tarantool and the typed effects in Koka, but Keleusma's combination of synchronous reactive semantics with a typed marshalling layer is, to the author's knowledge, novel.
+
 ## Cross-References
 
 - [LANGUAGE_DESIGN.md](../architecture/LANGUAGE_DESIGN.md) describes the design goals and four guarantees.
@@ -215,3 +231,7 @@ The atomicity of the swap in Keleusma is logical only. The new code text must be
 [H4] J. Arnold and M. F. Kaashoek. "Ksplice: Automatic Rebootless Kernel Updates." In Proceedings of the 4th ACM European Conference on Computer Systems (EuroSys), pages 187-198. ACM, 2009.
 
 [H5] C. M. Hayden, E. K. Smith, M. Denchev, M. Hicks, and J. S. Foster. "Kitsune: Efficient, General-Purpose Dynamic Software Updating for C." In Proceedings of the ACM International Conference on Object Oriented Programming Systems Languages and Applications (OOPSLA), pages 249-264. ACM, 2012.
+
+### Embedded Scripting
+
+[E2] J. Lim and contributors. "Rhai: An Embedded Scripting Language for Rust." Open-source project. https://rhai.rs (accessed 2026).

@@ -12,7 +12,7 @@ Current sprint source of truth.
 
 ## Active Milestone
 
-None. V0.0-M3 complete. Ready for V0.1 planning.
+None. V0.0-M4 complete. Ready for V0.1 planning.
 
 ## Task Breakdown
 
@@ -34,6 +34,13 @@ None. V0.0-M3 complete. Ready for V0.1 planning.
 | V0.0-M3-T8 | End-to-end data segment integration tests | Complete | Six hot swap tests added covering same-schema, new-schema, size mismatch, no-data module, swap at reset, and rollback. 238 tests pass, zero clippy warnings |
 | V0.0-M3-T9 | Hot swap API replace_module on Vm | Complete | replace_module, data_len added with documentation |
 | V0.0-M3-T10 | Concurrency contract specification | Complete | Single-ownership enforced by Rust borrow checker. Documented in EXECUTION_MODEL |
+| V0.0-M4-T1 | Cargo workspace conversion with keleusma-macros | Complete | Workspace member added, runtime crate retains src/ at root |
+| V0.0-M4-T2 | KeleusmaType trait and primitive impls | Complete | Trait in src/marshall.rs covers i64, f64, bool, (), Option, fixed-arity tuples through 4, and fixed-length arrays |
+| V0.0-M4-T3 | KeleusmaType derive for structs and enums | Complete | Named-field structs and enums with unit, tuple, and struct-style variants |
+| V0.0-M4-T4 | IntoNativeFn family and register_fn API | Complete | Arities 0 through 4 for both infallible and Result-returning host functions |
+| V0.0-M4-T5 | Migrate audio_natives and utility_natives to register_fn | Complete | Twelve functions migrated; the three Value-polymorphic functions remain on register_native |
+| V0.0-M4-T6 | Integration tests for derive and register_fn | Complete | tests/marshall.rs adds 17 integration tests |
+| V0.0-M4-T7 | Documentation pass for marshalling layer | Complete | LANGUAGE_DESIGN, COMPILATION_PIPELINE, GLOSSARY, RELATED_WORK Section 9, R30, B5 |
 
 ## History
 
@@ -47,3 +54,4 @@ None. V0.0-M3 complete. Ready for V0.1 planning.
 | 2026-05-08 | Data segment design feasibility analysis. R24 through R28 added. RELATED_WORK Section 8 added covering hot code update with persistent state. |
 | 2026-05-08 | Data segment source conformance brought into alignment with specification. Singular block check, fixed-size field type validation, verifier bounds check. 232 tests pass, zero clippy warnings. |
 | 2026-05-08 | V0.0-M3 complete. Hot swap API added with replace_module and data_len. Six hot swap integration tests added. R29 records the slot-based interoperability decision. 238 tests pass. |
+| 2026-05-08 | V0.0-M4 complete. Workspace conversion. keleusma-macros proc-macro crate added. KeleusmaType trait, derive, IntoNativeFn family, and register_fn API. Audio and utility natives migrated. 268 tests pass. R30 records the static marshalling decision. |

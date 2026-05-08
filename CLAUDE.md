@@ -15,9 +15,9 @@ Keleusma is a Total Functional Stream Processor that compiles to bytecode and ru
 ```
 keleusma/
 ├── CLAUDE.md                  # AI agent instructions
-├── Cargo.toml                 # Package definition
-├── src/
-│   ├── lib.rs                 # Crate root (no_std, module declarations)
+├── Cargo.toml                 # Workspace + runtime package definition
+├── src/                       # Runtime package source
+│   ├── lib.rs                 # Crate root (no_std, module declarations, re-exports)
 │   ├── token.rs               # Token definitions and keyword recognition
 │   ├── lexer.rs               # Tokenization (public API: tokenize)
 │   ├── ast.rs                 # Abstract Syntax Tree node definitions
@@ -25,7 +25,15 @@ keleusma/
 │   ├── bytecode.rs            # Runtime values and instruction set
 │   ├── compiler.rs            # Source-to-bytecode compilation (public API: compile)
 │   ├── vm.rs                  # Stack-based VM with coroutine support (public API: Vm)
-│   └── audio_natives.rs       # Built-in audio and math native functions
+│   ├── verify.rs              # Structural verifier (public API: verify, wcet_stream_iteration)
+│   ├── marshall.rs            # KeleusmaType trait and IntoNativeFn family
+│   ├── audio_natives.rs       # Built-in audio and math native functions
+│   └── utility_natives.rs     # to_string, length, println, math utilities
+├── tests/                     # Integration tests
+│   └── marshall.rs            # KeleusmaType derive and register_fn end-to-end
+├── keleusma-macros/           # Proc-macro crate (workspace member)
+│   ├── Cargo.toml
+│   └── src/lib.rs             # #[derive(KeleusmaType)]
 └── docs/                      # Documentation knowledge graph
     ├── README.md              # Documentation root
     ├── DOCUMENTATION_STRATEGY.md
@@ -124,5 +132,6 @@ All public API functions return `Result` types with error structs that include s
 - **Rust** (edition 2024)
 - **no_std + alloc** (no standard library dependency)
 - **libm 0.2** (math functions for no_std environments)
-- Single crate, no workspace
-- 147 tests across lexer, parser, compiler, VM, and audio natives
+- **syn 2, quote 1, proc-macro2 1** (compile-time only, used by `keleusma-macros`)
+- Cargo workspace with two members: `keleusma` (runtime) and `keleusma-macros` (proc-macro)
+- 268 tests across lexer, parser, compiler, VM, verifier, marshall, audio natives, utility natives, and integration tests

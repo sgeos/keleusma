@@ -24,6 +24,10 @@ Hot code swap is implemented through `Vm::replace_module`. The host calls it bet
 
 Structural verification is implemented. See R22 and R23 in [RESOLVED.md](./RESOLVED.md).
 
+## B5. Static string discipline
+
+String values currently use `Value::Str(String)`, which is heap-allocated and variable-length. This is in tension with the fixed-size discipline adopted for interop types in R29 and R30. A future redesign would intern string literals into the `.rodata` section and replace `Value::Str(String)` with an index-based representation. Dynamic string operations would move to host-supplied native functions. The user has indicated that this redesign is acceptable and that anything fancy with strings should be the host's responsibility. Deferred to allow the V0.0-M4 marshalling work to land without disturbing existing tests.
+
 ## B6. String interpolation
 
 String interpolation is not needed for a control language. Keleusma scripts primarily produce structured enum values and numeric outputs, not formatted strings. If formatting is needed, the host can provide native functions for string construction.
