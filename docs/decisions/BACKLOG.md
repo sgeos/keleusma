@@ -20,9 +20,9 @@ Closures or anonymous functions would enable higher-order programming patterns s
 
 The design specifies hot swapping of text and rodata segments at RESET boundaries. The dialogue type (A -> B) must remain invariant across swaps. Different routines may have different WCETs, and each is certified independently. The arena is cleared before new code executes, ensuring zero memory debt. The mechanism is double buffering with rollback (R19). Implementation requires host-side support.
 
-## B5. Structural verification implementation
+## ~~B5. Structural verification implementation~~ (Resolved as R22, R23)
 
-The design specifies load-time verification via block-graph coloring. A linear scan colors blocks based on productivity and rejects programs that violate structural constraints. All paths from STREAM to RESET must contain at least one YIELD. All FUNC blocks must be free of yields. Structural verification is being implemented alongside the ISA transition (R21).
+Structural verification is implemented. See R22 and R23 in [RESOLVED.md](./RESOLVED.md).
 
 ## B6. String interpolation
 

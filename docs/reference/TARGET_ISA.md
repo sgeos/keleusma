@@ -4,7 +4,7 @@
 
 ## Overview
 
-This document describes the Instruction Set Architecture for Keleusma. The structural ISA uses block-structured control flow and block-based nesting to make invalid or unproductive programs impossible to define or load. This ISA is currently being implemented, replacing the previous flat-jump bytecode. See [INSTRUCTION_SET.md](./INSTRUCTION_SET.md) for the bytecode instruction reference.
+This document describes the Instruction Set Architecture for Keleusma. The structural ISA uses block-structured control flow and block-based nesting to make invalid or unproductive programs impossible to define or load. See [INSTRUCTION_SET.md](./INSTRUCTION_SET.md) for the bytecode instruction reference.
 
 ## Block Hierarchy
 
@@ -143,18 +143,19 @@ Inside STREAM:
 
 - No RETURN allowed.
 
-## Relationship to Current Implementation
+## Implementation Status
 
-The structural ISA described here is currently being implemented, replacing the previous 48-instruction flat-jump bytecode. The transition involves the following changes.
+The structural ISA is fully implemented. The compiler emits block-structured bytecode, the VM executes it natively, and the structural verifier validates all modules at load time. The surface language (Keleusma source syntax) remains unchanged. The compiler backend targets the structural ISA. Surface-level constructs such as pattern dispatch, pipelines, and dynamic types are syntactic sugar that the compiler lowers to the austere certifiable bytecode.
 
-- Adding Stream, Reset, and Reentrant block primitives to the bytecode format.
-- Replacing flat jumps (Jump, JumpIfFalse) with block-structured control flow (If/Else/EndIf, Loop/EndLoop, Break/BreakIf).
-- Replacing TestEnum and TestStruct (which contained jump offsets) with IsEnum and IsStruct (which push booleans).
-- Implementing the arena memory model with Reset-triggered clearing.
-- Implementing the structural verification pass (block-graph coloring).
-- Replacing unbounded stack allocation with bump arena allocation.
+The structural verifier (`verify()` in `src/verify.rs`) enforces all rules described in this document through five passes.
 
-The surface language (Keleusma source syntax) remains unchanged. The compiler backend targets the structural ISA. Surface-level constructs such as pattern dispatch, pipelines, and dynamic types are syntactic sugar that the compiler lowers to the austere certifiable bytecode.
+1. **Block nesting.** Every If is matched by EndIf (with optional Else). Every Loop is matched by EndLoop. No orphaned delimiters.
+2. **Offset validation.** All jump targets are within bounds and point to the correct matching delimiter.
+3. **Block type constraints.** Func chunks contain no Yield, Stream, or Reset. Reentrant chunks contain at least one Yield and no Stream or Reset. Stream chunks contain exactly one Stream, exactly one Reset, and at least one Yield.
+4. **Break containment.** Every Break and BreakIf is inside a Loop/EndLoop.
+5. **Productivity rule.** All control flow paths from Stream to Reset pass through at least one Yield.
+
+A WCET analysis function (`wcet_stream_iteration()`) computes the worst-case cost of one Stream-to-Reset iteration using the same block-structured recursive traversal, taking the maximum cost branch at each control flow join.
 
 ## Cross-References
 

@@ -83,7 +83,9 @@ Keleusma supports swapping the text and rodata segments at the boundary of a pro
 
 ## WCET Analysis
 
-Worst-Case Execution Time is measured from yield to yield. Each yield-to-yield slice must have a statically provable upper bound on instructions executed. In the absence of dynamic dispatch, every execution path is a static directed acyclic graph between yield points. WCET is determined by counting opcodes on the longest path between any two yield points. This enables industrial certification for hard real-time systems.
+Worst-Case Execution Time is measured from yield to yield. Each yield-to-yield slice must have a statically provable upper bound on instructions executed. In the absence of dynamic dispatch, every execution path is a static directed acyclic graph between yield points. WCET is determined by counting weighted opcodes on the longest path between any two yield points. This enables industrial certification for hard real-time systems.
+
+Each bytecode instruction carries a relative integer cost via `Op::cost()`, assigned across five tiers: 1 for data movement and control flow markers, 2 for arithmetic and comparisons, 3 for division and field lookup, 5 for composite value construction, and 10 for function calls. The `wcet_stream_iteration()` function in `src/verify.rs` computes the worst-case total cost of one Stream-to-Reset iteration by recursively analyzing block-structured control flow, taking the maximum cost branch at each join point. These cost weights are preliminary and subject to refinement as the instruction set stabilizes.
 
 ## Turing Completeness
 
@@ -128,7 +130,7 @@ The following features are explicitly excluded from the current language design.
 - Closures and anonymous functions
 - String interpolation
 
-Note: Hot code swapping and structural verification at the bytecode level are part of the design and are described in [EXECUTION_MODEL.md](./EXECUTION_MODEL.md) and [TARGET_ISA.md](../reference/TARGET_ISA.md). The structural ISA is currently being implemented.
+Note: Hot code swapping at the bytecode level is part of the design and is described in [EXECUTION_MODEL.md](./EXECUTION_MODEL.md). Structural verification is implemented and described in [TARGET_ISA.md](../reference/TARGET_ISA.md).
 
 ## Cross-References
 

@@ -18,7 +18,7 @@ Key terminology used in the Keleusma documentation and source code.
 
 **Coroutine** -- An execution context that can be suspended via yield and resumed by the host. Keleusma scripts are coroutines.
 
-**Cost table** -- A mapping from each bytecode instruction to its execution cost in abstract time units. Used for WCET analysis. Initially populated with reasonable estimates, refined as the implementation matures.
+**Cost table** -- A mapping from each bytecode instruction to its execution cost in abstract time units, implemented as `Op::cost()` in `src/bytecode.rs`. Costs are relative integer weights across five tiers: 1 for data movement, 2 for arithmetic, 3 for division and field lookup, 5 for composite construction, and 10 for function calls. Used by `wcet_stream_iteration()` for worst-case execution time analysis. These values are preliminary and subject to refinement.
 
 **Dialogue type** -- The pair of types (A, B) that defines the yield contract between a stream program and its host. Input A is provided by the host on resume. Output B is produced by the program on yield. The dialogue type must remain invariant across hot code swaps.
 
@@ -48,7 +48,9 @@ Key terminology used in the Keleusma documentation and source code.
 
 **Productive divergent function** -- A function declared with the `loop` keyword. It diverges by never exiting, but is productive because it yields a value on every iteration.
 
-**Productivity invariant** -- The property that every control path from STREAM to RESET must encounter at least one YIELD. This ensures that every iteration of a productive divergent function produces observable output.
+**Productivity invariant** -- The property that every control path from STREAM to RESET must encounter at least one YIELD. This ensures that every iteration of a productive divergent function produces observable output. Enforced by Pass 5 of the structural verifier via abstract interpretation over a two-element lattice.
+
+**Productivity verification** -- The static analysis pass that enforces the productivity invariant. Implemented as `analyze_yield_coverage()` in `src/verify.rs`. The analysis walks the block-structured control flow, tracking whether all paths have yielded. At If/Else branches, both branches must yield. At loops, all break-exit paths must have yielded. Programs that violate the invariant are rejected at load time.
 
 **REENTRANT block** -- A structural ISA block type that must contain at least one YIELD. Used for logic that interacts with the host. Corresponds to non-atomic total functions and productive divergent functions in the surface language.
 
@@ -62,7 +64,11 @@ Key terminology used in the Keleusma documentation and source code.
 
 **Value** -- The runtime representation of data in the VM. An enum with variants: Unit, Bool, Int, Float, Str, Tuple, Array, Struct, Enum, and None.
 
-**WCET** -- Worst-Case Execution Time. In Keleusma, WCET is measured from yield to yield by counting opcodes on the longest path between any two YIELD instructions. The absence of dynamic dispatch ensures all paths are statically enumerable.
+**Structural verification** -- Load-time validation of compiled modules. Implemented as `verify()` in `src/verify.rs`. Performs five passes per chunk: block nesting, offset validation, block type constraints, break containment, and productivity rule enforcement. Programs that fail verification are rejected before execution begins.
+
+**WCET** -- Worst-Case Execution Time. In Keleusma, WCET is measured from yield to yield by counting weighted opcodes on the longest path between any two YIELD instructions. The absence of dynamic dispatch ensures all paths are statically enumerable. Computed by `wcet_stream_iteration()` in `src/verify.rs`.
+
+**WCET analysis** -- The static analysis function `wcet_stream_iteration()` that computes the worst-case cost of one Stream-to-Reset iteration. Uses the same recursive block-structured traversal as productivity verification, but sums `Op::cost()` values and takes the maximum at each control flow join rather than computing a boolean lattice.
 
 **Yield** -- The mechanism by which a coroutine suspends execution, sends a value to the host, and receives a value when resumed. Expressed as `let input = yield output;` in source code.
 

@@ -87,3 +87,11 @@ The arena is a single contiguous allocation with bump allocation. The stack grow
 ## R21. Immediate ISA transition
 
 The structural ISA (Stream, Reset, Func, Reentrant, block-structured control flow) replaces the previous 48-instruction flat-jump bytecode immediately rather than as a future phase. The transition includes replacing flat jumps with block-structured If/Else/EndIf and Loop/EndLoop/Break/BreakIf, replacing TestEnum and TestStruct (which contained jump offsets) with IsEnum and IsStruct (which push booleans), and adding Stream and Reset instructions.
+
+## R22. Structural ISA implementation complete
+
+The structural ISA transition (P4, R21) is complete. The compiler emits block-structured bytecode. The VM executes block-structured control flow natively. The structural verification pass (`verify()` in `src/verify.rs`) validates all compiled modules at load time through five checks: block nesting validation, offset bounds checking, block type constraint enforcement (Func, Reentrant, Stream), break containment verification, and the productivity rule. Programs that fail verification are rejected before execution begins.
+
+## R23. WCET analysis and productivity verification
+
+Static analysis tooling for worst-case execution time (P5) and productivity verification is implemented. Each bytecode instruction carries a relative integer cost via `Op::cost()`, assigned across five tiers: 1 for data movement and control flow markers, 2 for arithmetic and comparisons, 3 for division and field lookup, 5 for composite value construction, and 10 for function calls. The `wcet_stream_iteration()` function computes the worst-case total cost of one Stream-to-Reset iteration by recursively analyzing block-structured control flow, taking the maximum cost branch at each join point. The productivity rule is enforced as Pass 3 of the structural verifier: abstract interpretation over a two-element lattice tracks whether all control flow paths from Stream to Reset pass through at least one Yield. Programs that violate productivity are rejected at load time.

@@ -4,7 +4,7 @@
 
 ## Overview
 
-This document describes the target execution model for Keleusma. The model separates temporal control, memory phase control, and host interaction into distinct primitives. It defines two temporal domains and a structural program layout that enables static verification of safety properties.
+This document describes the execution model for Keleusma. The model separates temporal control, memory phase control, and host interaction into distinct primitives. It defines two temporal domains and a structural program layout that enables static verification of safety properties.
 
 ## Two Temporal Domains
 
@@ -92,14 +92,19 @@ This separation is deliberate. The VM executes finite, certifiable slices. The h
 
 ## Structural Verification
 
-Programs are verified at load time through structural analysis. A linear scan "colors" blocks based on productivity.
+Programs are verified at load time through structural analysis. The verifier (`verify()` in `src/verify.rs`) performs five passes per chunk.
 
-- All paths from STREAM to RESET must pass through at least one YIELD (productivity rule).
-- All FUNC blocks must be free of yields (atomic function rule).
-- All REENTRANT blocks must contain at least one YIELD.
-- LOOP_N bounds must be compile-time constants.
+1. **Block nesting.** Every If is matched by EndIf (with optional Else). Every Loop is matched by EndLoop.
+2. **Offset validation.** All jump targets are within bounds and point to correct matching delimiters.
+3. **Block type constraints.** Func chunks contain no Yield, Stream, or Reset. Reentrant chunks contain at least one Yield. Stream chunks contain exactly one Stream, one Reset, and at least one Yield.
+4. **Break containment.** Every Break and BreakIf is inside a Loop/EndLoop.
+5. **Productivity rule.** Abstract interpretation over a two-element lattice verifies that all control flow paths from Stream to Reset pass through at least one Yield.
 
-A program is valid only if all paths satisfy these constraints. Invalid programs are rejected before execution begins. See [TARGET_ISA.md](../reference/TARGET_ISA.md) for the full structural ISA specification.
+A program is valid only if all paths satisfy these constraints. Invalid programs are rejected before execution begins.
+
+Additionally, `wcet_stream_iteration()` computes the worst-case execution cost of one Stream-to-Reset iteration. Each instruction carries a relative cost via `Op::cost()`. The analysis recursively traverses block-structured control flow, taking the maximum cost branch at each join point, and returns the worst-case total as a unitless integer.
+
+See [TARGET_ISA.md](../reference/TARGET_ISA.md) for the full structural ISA specification.
 
 ## Cross-References
 
