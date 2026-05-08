@@ -1,238 +1,82 @@
+//! Built-in audio and math native functions.
+//!
+//! All functions are registered through the ergonomic `register_fn`
+//! marshalling layer documented in `marshall.rs`. Argument and return
+//! types are ordinary Rust primitives. Fallible functions return
+//! `Result<R, VmError>` and are registered with `register_fn_fallible`.
+
 extern crate alloc;
-use alloc::format;
 use alloc::string::String;
 
-use crate::bytecode::Value;
 use crate::vm::{Vm, VmError};
-
-/// Extract an f64 from a Value, accepting both Float and Int (with cast).
-fn extract_f64(val: &Value) -> Result<f64, VmError> {
-    match val {
-        Value::Float(f) => Ok(*f),
-        Value::Int(i) => Ok(*i as f64),
-        other => Err(VmError::TypeError(format!(
-            "expected f64 or i64, got {}",
-            other.type_name()
-        ))),
-    }
-}
-
-/// Extract an i64 from a Value.
-fn extract_i64(val: &Value) -> Result<i64, VmError> {
-    match val {
-        Value::Int(i) => Ok(*i),
-        other => Err(VmError::TypeError(format!(
-            "expected i64, got {}",
-            other.type_name()
-        ))),
-    }
-}
-
-/// Convert a MIDI note number (0-127) to frequency in Hz.
-///
-/// Uses the standard formula: 440 * 2^((note - 69) / 12).
-fn native_midi_to_freq(args: &[Value]) -> Result<Value, VmError> {
-    if args.len() != 1 {
-        return Err(VmError::NativeError(format!(
-            "midi_to_freq: expected 1 argument, got {}",
-            args.len()
-        )));
-    }
-    let note = extract_i64(&args[0])?;
-    let freq = 440.0 * libm::pow(2.0, (note - 69) as f64 / 12.0);
-    Ok(Value::Float(freq))
-}
-
-/// Convert a frequency in Hz to the nearest MIDI note number.
-///
-/// Uses the inverse formula: 69 + 12 * log2(freq / 440).
-fn native_freq_to_midi(args: &[Value]) -> Result<Value, VmError> {
-    if args.len() != 1 {
-        return Err(VmError::NativeError(format!(
-            "freq_to_midi: expected 1 argument, got {}",
-            args.len()
-        )));
-    }
-    let freq = extract_f64(&args[0])?;
-    if freq <= 0.0 {
-        return Err(VmError::NativeError(String::from(
-            "freq_to_midi: frequency must be positive",
-        )));
-    }
-    let note = 69.0 + 12.0 * libm::log2(freq / 440.0);
-    Ok(Value::Int(libm::round(note) as i64))
-}
-
-/// Convert decibels to linear amplitude.
-///
-/// Uses the formula: 10^(db / 20).
-fn native_db_to_linear(args: &[Value]) -> Result<Value, VmError> {
-    if args.len() != 1 {
-        return Err(VmError::NativeError(format!(
-            "db_to_linear: expected 1 argument, got {}",
-            args.len()
-        )));
-    }
-    let db = extract_f64(&args[0])?;
-    let linear = libm::pow(10.0, db / 20.0);
-    Ok(Value::Float(linear))
-}
-
-/// Convert linear amplitude to decibels.
-///
-/// Uses the formula: 20 * log10(linear).
-fn native_linear_to_db(args: &[Value]) -> Result<Value, VmError> {
-    if args.len() != 1 {
-        return Err(VmError::NativeError(format!(
-            "linear_to_db: expected 1 argument, got {}",
-            args.len()
-        )));
-    }
-    let linear = extract_f64(&args[0])?;
-    if linear <= 0.0 {
-        return Err(VmError::NativeError(String::from(
-            "linear_to_db: amplitude must be positive",
-        )));
-    }
-    let db = 20.0 * libm::log10(linear);
-    Ok(Value::Float(db))
-}
-
-/// Clamp a value between min and max.
-fn native_clamp(args: &[Value]) -> Result<Value, VmError> {
-    if args.len() != 3 {
-        return Err(VmError::NativeError(format!(
-            "clamp: expected 3 arguments, got {}",
-            args.len()
-        )));
-    }
-    let val = extract_f64(&args[0])?;
-    let min = extract_f64(&args[1])?;
-    let max = extract_f64(&args[2])?;
-    let clamped = if val < min {
-        min
-    } else if val > max {
-        max
-    } else {
-        val
-    };
-    Ok(Value::Float(clamped))
-}
-
-/// Linear interpolation between two values.
-///
-/// lerp(a, b, t) = a + (b - a) * t
-fn native_lerp(args: &[Value]) -> Result<Value, VmError> {
-    if args.len() != 3 {
-        return Err(VmError::NativeError(format!(
-            "lerp: expected 3 arguments, got {}",
-            args.len()
-        )));
-    }
-    let a = extract_f64(&args[0])?;
-    let b = extract_f64(&args[1])?;
-    let t = extract_f64(&args[2])?;
-    let result = a + (b - a) * t;
-    Ok(Value::Float(result))
-}
-
-/// Compute sine of a value in radians.
-fn native_sin(args: &[Value]) -> Result<Value, VmError> {
-    if args.len() != 1 {
-        return Err(VmError::NativeError(format!(
-            "sin: expected 1 argument, got {}",
-            args.len()
-        )));
-    }
-    let x = extract_f64(&args[0])?;
-    Ok(Value::Float(libm::sin(x)))
-}
-
-/// Compute cosine of a value in radians.
-fn native_cos(args: &[Value]) -> Result<Value, VmError> {
-    if args.len() != 1 {
-        return Err(VmError::NativeError(format!(
-            "cos: expected 1 argument, got {}",
-            args.len()
-        )));
-    }
-    let x = extract_f64(&args[0])?;
-    Ok(Value::Float(libm::cos(x)))
-}
-
-/// Raise base to the power of exponent.
-fn native_pow(args: &[Value]) -> Result<Value, VmError> {
-    if args.len() != 2 {
-        return Err(VmError::NativeError(format!(
-            "pow: expected 2 arguments, got {}",
-            args.len()
-        )));
-    }
-    let base = extract_f64(&args[0])?;
-    let exp = extract_f64(&args[1])?;
-    Ok(Value::Float(libm::pow(base, exp)))
-}
-
-/// Compute the absolute value of a float.
-fn native_abs(args: &[Value]) -> Result<Value, VmError> {
-    if args.len() != 1 {
-        return Err(VmError::NativeError(format!(
-            "abs: expected 1 argument, got {}",
-            args.len()
-        )));
-    }
-    let x = extract_f64(&args[0])?;
-    Ok(Value::Float(libm::fabs(x)))
-}
-
-/// Compute the minimum of two floats.
-fn native_min(args: &[Value]) -> Result<Value, VmError> {
-    if args.len() != 2 {
-        return Err(VmError::NativeError(format!(
-            "min: expected 2 arguments, got {}",
-            args.len()
-        )));
-    }
-    let a = extract_f64(&args[0])?;
-    let b = extract_f64(&args[1])?;
-    Ok(Value::Float(libm::fmin(a, b)))
-}
-
-/// Compute the maximum of two floats.
-fn native_max(args: &[Value]) -> Result<Value, VmError> {
-    if args.len() != 2 {
-        return Err(VmError::NativeError(format!(
-            "max: expected 2 arguments, got {}",
-            args.len()
-        )));
-    }
-    let a = extract_f64(&args[0])?;
-    let b = extract_f64(&args[1])?;
-    Ok(Value::Float(libm::fmax(a, b)))
-}
 
 /// Register all audio utility native functions on a VM instance.
 ///
 /// These are pure functions that do not require engine access.
 /// They are available under the `audio` and `math` namespaces.
 pub fn register_audio_natives(vm: &mut Vm) {
-    vm.register_native("audio::midi_to_freq", native_midi_to_freq);
-    vm.register_native("audio::freq_to_midi", native_freq_to_midi);
-    vm.register_native("audio::db_to_linear", native_db_to_linear);
-    vm.register_native("audio::linear_to_db", native_linear_to_db);
-    vm.register_native("math::clamp", native_clamp);
-    vm.register_native("math::lerp", native_lerp);
-    vm.register_native("math::sin", native_sin);
-    vm.register_native("math::cos", native_cos);
-    vm.register_native("math::pow", native_pow);
-    vm.register_native("math::abs", native_abs);
-    vm.register_native("math::min", native_min);
-    vm.register_native("math::max", native_max);
+    // MIDI note to frequency. Standard formula 440 * 2^((note - 69) / 12).
+    vm.register_fn("audio::midi_to_freq", |note: i64| -> f64 {
+        440.0 * libm::pow(2.0, (note - 69) as f64 / 12.0)
+    });
+
+    // Frequency to MIDI. Fallible because frequency must be positive.
+    vm.register_fn_fallible("audio::freq_to_midi", |freq: f64| -> Result<i64, VmError> {
+        if freq <= 0.0 {
+            return Err(VmError::NativeError(String::from(
+                "freq_to_midi: frequency must be positive",
+            )));
+        }
+        let note = 69.0 + 12.0 * libm::log2(freq / 440.0);
+        Ok(libm::round(note) as i64)
+    });
+
+    // Decibels to linear amplitude. 10^(db / 20).
+    vm.register_fn("audio::db_to_linear", |db: f64| -> f64 {
+        libm::pow(10.0, db / 20.0)
+    });
+
+    // Linear amplitude to decibels. Fallible because amplitude must be positive.
+    vm.register_fn_fallible(
+        "audio::linear_to_db",
+        |linear: f64| -> Result<f64, VmError> {
+            if linear <= 0.0 {
+                return Err(VmError::NativeError(String::from(
+                    "linear_to_db: amplitude must be positive",
+                )));
+            }
+            Ok(20.0 * libm::log10(linear))
+        },
+    );
+
+    vm.register_fn("math::clamp", |val: f64, min: f64, max: f64| -> f64 {
+        if val < min {
+            min
+        } else if val > max {
+            max
+        } else {
+            val
+        }
+    });
+
+    vm.register_fn("math::lerp", |a: f64, b: f64, t: f64| -> f64 {
+        a + (b - a) * t
+    });
+
+    vm.register_fn("math::sin", |x: f64| -> f64 { libm::sin(x) });
+    vm.register_fn("math::cos", |x: f64| -> f64 { libm::cos(x) });
+    vm.register_fn("math::pow", |base: f64, exp: f64| -> f64 {
+        libm::pow(base, exp)
+    });
+    vm.register_fn("math::abs", |x: f64| -> f64 { libm::fabs(x) });
+    vm.register_fn("math::min", |a: f64, b: f64| -> f64 { libm::fmin(a, b) });
+    vm.register_fn("math::max", |a: f64, b: f64| -> f64 { libm::fmax(a, b) });
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::bytecode::Value;
     use crate::compiler::compile;
     use crate::lexer::tokenize;
     use crate::parser::parse;

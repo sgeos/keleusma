@@ -6,19 +6,6 @@ use alloc::vec::Vec;
 use crate::bytecode::Value;
 use crate::vm::{Vm, VmError};
 
-/// Extract an f64 from a Value, accepting both Float and Int (with widening).
-fn extract_f64(val: &Value, fn_name: &str) -> Result<f64, VmError> {
-    match val {
-        Value::Float(f) => Ok(*f),
-        Value::Int(i) => Ok(*i as f64),
-        other => Err(VmError::TypeError(format!(
-            "{}: expected f64, got {}",
-            fn_name,
-            other.type_name()
-        ))),
-    }
-}
-
 /// Convert any value to its string representation.
 fn native_to_string(args: &[Value]) -> Result<Value, VmError> {
     if args.len() != 1 {
@@ -128,65 +115,20 @@ fn native_println(args: &[Value]) -> Result<Value, VmError> {
 ///
 /// Registers: `to_string`, `length`, `println`, `math::sqrt`, `math::floor`,
 /// `math::ceil`, `math::round`, `math::log2`.
+///
+/// `to_string`, `length`, and `println` accept any `Value` variant and so
+/// remain registered through `register_native`. The math functions take
+/// fixed primitive types and use the ergonomic `register_fn` API.
 pub fn register_utility_natives(vm: &mut Vm) {
     vm.register_native("to_string", native_to_string);
     vm.register_native("length", native_length);
     vm.register_native("println", native_println);
 
-    vm.register_native("math::sqrt", |args| {
-        if args.len() != 1 {
-            return Err(VmError::NativeError(format!(
-                "math::sqrt: expected 1 argument, got {}",
-                args.len()
-            )));
-        }
-        let x = extract_f64(&args[0], "math::sqrt")?;
-        Ok(Value::Float(libm::sqrt(x)))
-    });
-
-    vm.register_native("math::floor", |args| {
-        if args.len() != 1 {
-            return Err(VmError::NativeError(format!(
-                "math::floor: expected 1 argument, got {}",
-                args.len()
-            )));
-        }
-        let x = extract_f64(&args[0], "math::floor")?;
-        Ok(Value::Float(libm::floor(x)))
-    });
-
-    vm.register_native("math::ceil", |args| {
-        if args.len() != 1 {
-            return Err(VmError::NativeError(format!(
-                "math::ceil: expected 1 argument, got {}",
-                args.len()
-            )));
-        }
-        let x = extract_f64(&args[0], "math::ceil")?;
-        Ok(Value::Float(libm::ceil(x)))
-    });
-
-    vm.register_native("math::round", |args| {
-        if args.len() != 1 {
-            return Err(VmError::NativeError(format!(
-                "math::round: expected 1 argument, got {}",
-                args.len()
-            )));
-        }
-        let x = extract_f64(&args[0], "math::round")?;
-        Ok(Value::Float(libm::round(x)))
-    });
-
-    vm.register_native("math::log2", |args| {
-        if args.len() != 1 {
-            return Err(VmError::NativeError(format!(
-                "math::log2: expected 1 argument, got {}",
-                args.len()
-            )));
-        }
-        let x = extract_f64(&args[0], "math::log2")?;
-        Ok(Value::Float(libm::log2(x)))
-    });
+    vm.register_fn("math::sqrt", |x: f64| -> f64 { libm::sqrt(x) });
+    vm.register_fn("math::floor", |x: f64| -> f64 { libm::floor(x) });
+    vm.register_fn("math::ceil", |x: f64| -> f64 { libm::ceil(x) });
+    vm.register_fn("math::round", |x: f64| -> f64 { libm::round(x) });
+    vm.register_fn("math::log2", |x: f64| -> f64 { libm::log2(x) });
 }
 
 #[cfg(test)]

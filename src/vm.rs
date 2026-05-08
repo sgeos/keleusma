@@ -206,6 +206,42 @@ impl Vm {
         });
     }
 
+    /// Register an infallible host function with automatic argument and
+    /// return-value marshalling.
+    ///
+    /// The function may take any number of arguments through arity 4 whose
+    /// types implement `KeleusmaType`. The return type must also implement
+    /// `KeleusmaType`. Arity and type checks happen at the boundary
+    /// automatically. For functions that may fail, use
+    /// [`register_fn_fallible`] instead.
+    ///
+    /// [`register_fn_fallible`]: Self::register_fn_fallible
+    pub fn register_fn<F, Args, R>(&mut self, name: &str, func: F)
+    where
+        F: crate::marshall::IntoNativeFn<Args, R>,
+    {
+        self.natives.push(NativeEntry {
+            name: String::from(name),
+            func: func.into_native_fn(),
+        });
+    }
+
+    /// Register a fallible host function with automatic argument and
+    /// return-value marshalling.
+    ///
+    /// The function returns `Result<R, VmError>`. Errors propagate to the
+    /// script as native errors. Argument and return types must implement
+    /// `KeleusmaType`.
+    pub fn register_fn_fallible<F, Args, R>(&mut self, name: &str, func: F)
+    where
+        F: crate::marshall::IntoFallibleNativeFn<Args, R>,
+    {
+        self.natives.push(NativeEntry {
+            name: String::from(name),
+            func: func.into_native_fn(),
+        });
+    }
+
     /// Call the module's entry point with the given arguments.
     pub fn call(&mut self, args: &[Value]) -> Result<VmState, VmError> {
         let entry = self
