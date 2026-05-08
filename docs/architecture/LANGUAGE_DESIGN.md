@@ -58,14 +58,15 @@ Functions declared with `loop` never exit. They must yield to the host on every 
 
 The three categories map to the structural ISA block types. Atomic functions correspond to FUNC blocks. Non-atomic total functions and productive divergent functions correspond to REENTRANT blocks. The loop function corresponds to the STREAM region. See [EXECUTION_MODEL.md](./EXECUTION_MODEL.md) for the target execution model.
 
-## Four Guarantees
+## Five Guarantees
 
-Keleusma provides four static guarantees about program behavior.
+Keleusma provides five static guarantees about program behavior.
 
 1. **Totality.** No partial functions or undefined behavior. Every execution path terminates or yields. This follows Turner's argument for total functional programming [T1] and is enforced through recursion prohibition and bounded loops.
 2. **Productivity.** Each iteration of a productive divergent function produces observable output via at least one yield. This is the coinductive dual of termination, as studied by Endrullis et al. for stream definitions [C4] and unified with termination checking by Abel and Pientka [C3].
 3. **Bounded-step.** There exists a statically provable upper bound on instructions executed between any two yield points (WCET analyzable). This corresponds to the synchronous hypothesis [L1, SY1] and enables WCET analysis [WC1].
-4. **Safe swapping.** Hot code swaps preserve type safety and stream continuity. Only the dialogue type must remain invariant across swaps.
+4. **Bounded-memory.** There exists a statically provable upper bound on arena memory consumed during one Stream-to-Reset cycle, separately for the stack region and the heap region. The Worst-Case Memory Usage (WCMU) analysis is the memory analog of WCET. The arena is sized to accommodate the worst case the program can produce. Programs whose WCMU cannot be statically computed are rejected at verification time. This guarantee parallels the timing bound and is required for full safety-critical certification under DO-178C and ISO 26262.
+5. **Safe swapping.** Hot code swaps preserve type safety and stream continuity. Only the dialogue type must remain invariant across swaps.
 
 ## Memory Model
 
@@ -80,7 +81,9 @@ The Keleusma runtime memory layout corresponds to the four conventional executab
 
 The Keleusma source language is purely functional with respect to script-defined values. Local bindings, the operand stack, and the arena are conceptually immutable at the surface language level. The data segment is the sole region of mutable state observable to the script that persists beyond a single function activation. The host owns the data segment storage and presents it to the script as a preinitialized `.data` section. Scripts read and write the segment through a fixed schema declared in a `data` block. The schema is fixed within a single code image and may change arbitrarily across hot updates. Cross-yield value preservation is not guaranteed. The host may write to the segment between yields. The data segment design draws on the persistent state model of the Erlang and Open Telecom Platform multi-version code coexistence pattern [H1, H2] and on the state vector model of mode automata in the synchronous reactive language tradition [H3, SC1].
 
-The arena is a single contiguous allocation using bump allocation. The stack grows from one end. The arena persists across yields within an iteration but is cleared at the RESET boundary by resetting the bump pointer. Memory bounds are statically analyzable.
+The arena is a single contiguous allocation with two pointers growing toward each other from opposite ends. The operand stack grows from one end. The dynamic-string heap and other arena allocations grow from the other. The arena persists across yields within an iteration but is cleared at the RESET boundary by resetting both pointers. The verifier proves that the worst-case stack growth and worst-case heap growth do not overlap, namely `stack_wcmu + heap_wcmu <= arena_size`. Memory bounds are statically analyzable in aligned bytes.
+
+Strings divide into two distinct types. Static strings reside in the rodata region and may flow anywhere admissible. Dynamic strings reside in the arena heap, are produced by native function calls, and may not cross the yield boundary. See [TYPE_SYSTEM.md](../design/TYPE_SYSTEM.md) for the full discipline.
 
 ## Hot Code Swapping
 

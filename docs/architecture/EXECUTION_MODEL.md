@@ -66,11 +66,13 @@ The runtime memory layout corresponds directly to the four conventional executab
 | Data segment | `.data` | Host-supplied preinitialized context | Mutable | Persists across yield and reset |
 | Arena and operand stack | `.bss` | Working storage for one stream phase | Mutable | Cleared at RESET |
 
-### Arena and Operand Stack
+### Arena, Operand Stack, and Heap
 
-The arena is a single contiguous allocation using bump allocation. The operand stack grows from one end of the arena. There is no heap initially. Allocations advance a pointer linearly through the contiguous buffer. Deallocation occurs only at RESET, when the entire arena is cleared by resetting the bump pointer to the start. This design eliminates fragmentation and ensures O(1) allocation and deallocation.
+The arena is a single contiguous allocation with two pointers growing toward each other from opposite ends. The operand stack grows from one end. The dynamic-string heap and any other arena allocations grow from the other end. There is no fixed boundary between the regions. Either pointer may consume any portion of the arena that the other has not consumed. Allocation fails when the two pointers would meet, producing a runtime error.
 
-The arena persists across yields within a single stream phase. It is cleared only at RESET. No arena memory survives across phases. Memory bounds are statically analyzable per stream phase.
+The dual-end design ensures O(1) allocation from either end and O(1) reset of both. RESET clears both pointers atomically. The arena persists across yields within a single stream phase. It is cleared only at RESET. No arena memory survives across phases.
+
+Memory bounds are statically analyzable per stream phase. The compiler computes a worst-case stack consumption (`stack_wcmu`) and a worst-case heap consumption (`heap_wcmu`) separately. The verifier checks the inequality `stack_wcmu + heap_wcmu <= arena_size`. Programs for which either WCMU cannot be statically computed are rejected at verification time. The arena auto-size, when computed, is exactly the sum of the two bounds plus an optional safety margin.
 
 ### Data Segment
 

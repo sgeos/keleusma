@@ -8,15 +8,51 @@ Keleusma uses a static nominal type system with Rust syntax. There is no implici
 
 ## Primitive Types
 
-| Type | Description | Rust Equivalent |
-|------|-------------|-----------------|
-| `i64` | 64-bit signed integer | `i64` |
-| `f64` | 64-bit floating-point number | `f64` |
-| `bool` | Boolean value | `bool` |
-| `String` | UTF-8 string | `String` |
-| `()` | Unit type | `()` |
+| Type | Description | Size (bytes) | Alignment (bytes) |
+|------|-------------|---|---|
+| `i64` | 64-bit signed integer | 8 | 8 |
+| `f64` | 64-bit floating-point number | 8 | 8 |
+| `bool` | Boolean value | 1 | 1 |
+| `()` | Unit type | 0 | 1 |
 
 All numeric operations use `i64` or `f64`. When host structs contain smaller integer types such as `i32` or `u16`, those values are widened to `i64` at the boundary between the host and the script.
+
+Sizes and alignments above assume the modern 64-bit target. Future work extends the type system with `word`, `byte`, `bit`, and `address` primitives whose sizes and alignments are target-defined. See R33 and B10 for the modern-target assumption and the portability future work.
+
+## String Types
+
+Keleusma distinguishes two string types with distinct lifetimes and allowed flow paths.
+
+### Static strings
+
+Static strings reside in the read-only data section of the loaded code image. Source-level string literals compile to static strings. The runtime representation is an index or pointer into the constant pool. Static strings are immutable and have a fixed-size handle, namely the index.
+
+| Property | Value |
+|---|---|
+| Lifetime | Bound to the code image. Replaced at hot update with the rest of rodata. |
+| Allowed flow paths | Anywhere admissible. Function arguments, return values, dialogue type B, native function arguments and returns, local bindings. |
+| Data segment | Permitted at the bytecode level. Surface grammar does not expose static strings as `data` field types. The host may write static-string handles into data slots via `set_data` and is responsible for validity across hot updates. |
+| Mutability | Immutable. |
+| Cost | Fixed-size handle, no allocation at use site. |
+
+### Dynamic strings
+
+Dynamic strings reside in the arena heap region. They are produced by native function calls that allocate from the arena. Dynamic strings are immutable from the script's perspective, namely the script cannot mutate the string contents in place.
+
+| Property | Value |
+|---|---|
+| Lifetime | Bound to the arena. Cleared at RESET. |
+| Allowed flow paths | Stack, local bindings, native function parameters by borrow, native function returns. |
+| Cross-yield prohibition | A dynamic string cannot appear in the dialogue type B. The yield expression cannot be a value whose static type contains a dynamic string. |
+| Data segment | Forbidden. The fixed-size discipline excludes variable-length types from the data segment. |
+| Mutability | Immutable from the script. The arena owns the storage and reclaims it at RESET. |
+| Cost | Variable-length allocation in the arena. Counted against `heap_wcmu`. |
+
+The cross-yield prohibition is the load-bearing safety property of the dynamic string design. A dynamic string is an arena pointer. Allowing one across the yield boundary would either require the host to consume it before the next RESET or accept dangling references after the arena is cleared. Prohibiting it structurally is simpler and preserves the safe-swapping guarantee.
+
+### String surface features
+
+The surface language supports string literals only. There is no concatenation operator, no formatting syntax, no slicing or indexing built into the grammar. All variable-cost string operations are host-supplied native functions. This freeze is intentional. Keleusma is not a value-add for string processing. Anything fancier than literal handling and native function delegation is deferred per B5.
 
 ## Composite Types
 
@@ -107,7 +143,8 @@ All values in the virtual machine are represented as variants of the `Value` enu
 | `Value::Bool(bool)` | A boolean | True or false |
 | `Value::Int(i64)` | A 64-bit integer | Signed integer value |
 | `Value::Float(f64)` | A 64-bit float | Floating-point value |
-| `Value::Str(String)` | A UTF-8 string | Heap-allocated string |
+| `Value::StaticStr(String)` | A UTF-8 static string | Static string referenced from the code image |
+| `Value::DynStr(String)` | A UTF-8 dynamic string | Arena-allocated string produced at runtime |
 | `Value::Tuple(Vec<Value>)` | A vector of values | Anonymous product type |
 | `Value::Array(Vec<Value>)` | A vector of values | Homogeneous fixed-size array |
 | `Value::Struct { type_name, fields }` | Name and field map | Named product type instance |
@@ -131,7 +168,8 @@ The following type expressions are admissible as data segment field types.
 | `Option<T>` where `T` is admissible | Yes | Tag plus payload, fixed size. |
 | Nominal struct of admissible fields | Yes | Compositional. |
 | Nominal enum where all variants have admissible payloads | Yes | Discriminator plus the maximum-size payload. |
-| `String` | No | Variable length. Backing storage cannot be inlined into a fixed-size segment. |
+| `StaticStr` | Conditional | Permitted at the bytecode level. Surface grammar does not currently expose static strings as data field types. The host may store static-string handles in data slots through `set_data` and bears responsibility for validity across hot updates. |
+| `DynStr` | No | Variable-length and arena-bound. Lifetime conflicts with cross-RESET persistence. |
 | Variable-length array | No | Variable length. |
 | Opaque types | Conditional | Admissible only if the host declares a fixed size for the type. Subject to future specification. |
 

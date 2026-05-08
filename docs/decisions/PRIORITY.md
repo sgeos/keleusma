@@ -20,7 +20,31 @@ What should happen when a script encounters a runtime error? Options include yie
 
 ## ~~P5. WCET analysis tooling~~ (Resolved as R23)
 
-## ~~P6. Data segment implementation completion~~ (Resolved as R29)
+## P7. Arena allocator implementation
+
+The arena is currently simulated. R32 specifies the dual-end design and the verification rule. Implementation requires the following.
+
+1. Add `allocator-api2` as a dependency.
+2. Implement Keleusma's own arena allocator, namely a type that owns a fixed-size buffer and exposes two bump pointers, one growing up from the bottom and one growing down from the top.
+3. Implement the `allocator_api2::Allocator` trait for a handle to the arena, so that `Vec<T, A>` and similar collections can use it.
+4. Migrate the operand stack and dynamic-string storage to use the arena allocator. Note that stable Rust does not provide a `String` type with a custom allocator. A custom `DynStr` type backed by `Vec<u8, A>` with string-specific methods is the practical path.
+5. Wire up the arena into `Vm::new` and `Op::Reset`.
+
+This is substantial infrastructure work that warrants its own milestone. The two-string-type discipline (V0.0-M5) is operational without it. Programs that allocate dynamic strings currently use the global allocator, and the arena lifetime is enforced through Rust drop semantics rather than through bump-pointer reset.
+
+## P8. WCMU instrumentation and auto-arena sizing
+
+R31 specifies WCMU as the fifth guarantee. Implementation requires the following.
+
+1. Add `Op::memory()` paralleling `Op::cost()`. Each instruction declares its byte footprint, with alignment accounted for.
+2. Add `wcmu_stream_iteration()` paralleling `wcet_stream_iteration()`. The same recursive block-structured traversal applies, taking the maximum at branches and summing along sequential paths.
+3. Compute `stack_wcmu` and `heap_wcmu` separately. Record both in `Module`.
+4. Verify `stack_wcmu + heap_wcmu <= arena_size` at load time.
+5. Auto-arena sizing produces `arena_size = stack_wcmu + heap_wcmu`.
+6. Widen the host-attestation API. Native function registration accepts a WCMU declaration in addition to the WCET declaration.
+7. Reject programs whose WCMU cannot be statically computed.
+
+This pairs naturally with P7 because both require the arena to exist.
 
 All P6 items are complete.
 

@@ -6,7 +6,15 @@ Key terminology used in the Keleusma documentation and source code. Citations us
 
 **Abstract interpretation** -- A general framework for sound static analysis of programs, introduced by Cousot and Cousot [AI1]. The framework defines analysis as computation over abstract domains (lattices) that soundly approximate concrete program behavior. In Keleusma, the productivity analysis operates over a two-element boolean lattice and the WCET analysis operates over the natural numbers, both following the abstract interpretation methodology.
 
-**Arena** -- The ephemeral memory region consisting of a single contiguous bump-allocated buffer. The stack grows from one end. There is no heap initially. The arena persists across yields within a single stream phase but is cleared at the RESET boundary by resetting the bump pointer. No memory survives across RESET. Memory bounds are statically analyzable.
+**Arena** -- The ephemeral memory region consisting of a single contiguous buffer with two pointers growing toward each other from opposite ends. The operand stack grows from one end. The heap, used for dynamic strings and other arena allocations, grows from the other. The arena persists across yields within a single stream phase but is cleared at the RESET boundary by resetting both pointers. No arena memory survives across RESET. Memory bounds are statically analyzable in aligned bytes.
+
+**Dual-end arena** -- The arena's stack-and-heap arrangement, in which two bump pointers grow from opposite ends of a single contiguous buffer. There is no fixed boundary. Allocation fails only when the two pointers would meet. The verifier proves at compile time that worst-case stack consumption plus worst-case heap consumption stays under the arena size.
+
+**DynStr** -- A dynamic string runtime variant. Represents a UTF-8 string allocated in the arena heap. Produced by native function calls. Lifetime bound to the arena, namely cleared at RESET. Cannot cross the yield boundary. Cannot reside in the data segment. May appear on the operand stack, in local bindings, and as a parameter or return value of a native function. The cross-yield prohibition is the load-bearing safety property.
+
+**StaticStr** -- A static string runtime variant. Represents a UTF-8 string referenced from the rodata region of the loaded code image. Source-level string literals compile to `StaticStr` values. Fixed-size handle, namely an index or pointer into the constant pool. May flow anywhere admissible. Permitted at the bytecode level in the data segment, with the host responsible for validity across hot updates.
+
+**WCMU** -- Worst-Case Memory Usage. The memory analog of WCET. Computed by `wcmu_stream_iteration()` in `src/verify.rs` (planned). The unit of measurement is aligned bytes. Reported separately for the stack region and the heap region of the dual-end arena. The fifth Keleusma guarantee.
 
 **Atomic function** -- A function declared with the `fn` keyword that must terminate without yielding. May call other atomic functions and native functions.
 

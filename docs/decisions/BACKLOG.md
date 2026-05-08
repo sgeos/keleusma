@@ -26,7 +26,7 @@ Structural verification is implemented. See R22 and R23 in [RESOLVED.md](./RESOL
 
 ## B5. Static string discipline
 
-String values currently use `Value::Str(String)`, which is heap-allocated and variable-length. This is in tension with the fixed-size discipline adopted for interop types in R29 and R30. A future redesign would intern string literals into the `.rodata` section and replace `Value::Str(String)` with an index-based representation. Dynamic string operations would move to host-supplied native functions. The user has indicated that this redesign is acceptable and that anything fancy with strings should be the host's responsibility. Deferred to allow the V0.0-M4 marshalling work to land without disturbing existing tests.
+String values currently use `Value::Str(String)`, which is heap-allocated and variable-length. The V0.0-M5 milestone splits this into `Value::StaticStr` and `Value::DynStr` with the static-strings-anywhere and dynamic-strings-arena-only discipline. Anything beyond the minimum coherent design, namely surface-language string concatenation, formatting, slicing, or other variable-cost operations, is deferred. Keleusma is not a value-add for string work, so further string features are recorded here for future consideration only.
 
 ## B6. String interpolation
 
@@ -39,3 +39,11 @@ Allowing yield to return `Result<T, E>` so the host can signal errors to the scr
 ## B8. VM allocation model
 
 Should the VM allocate per-script or share an arena across all active scripts? Currently each VM instance is independent with its own heap allocations. A shared arena could reduce allocation overhead for hosts running many concurrent scripts, but would add complexity to lifetime management.
+
+## B9. Hot update of yielded static strings
+
+A static string in the dialogue type B is a pointer or index into rodata. The host may hold a yielded value containing a static string across a hot update boundary. After the hot update, the rodata changes, and the held pointer or index may become invalid. Two resolution paths exist. Host responsibility, namely the host is told to consume or copy yielded static strings before allowing a hot update. Eager resolution, namely the yield path materializes static strings into host-owned memory before returning. The user has noted this concern and asked it be tracked alongside future work on precompiled code and Keleusma type interop.
+
+## B10. Portability and target abstraction
+
+Keleusma should eventually be portable across architectures from the 6502 to ARM64. This requires several substantial design extensions. The type system gains `word`, `byte`, `bit`, and `address` primitives whose sizes and alignments are target-defined. The compiler accepts a target descriptor as input. The runtime representation of `Value` becomes target-aware, with the current 64-bit-tagged-union form unsuitable for 8-bit and 16-bit targets. The block-structured ISA itself is target-portable in principle, with code generation backends producing target-specific assembly or machine code. The synchronous-language tradition uses a comparable approach in Lustre and SCADE, where target-independent intermediate representations feed into target-specific backends. Recorded for future conversation. This entry interacts with B5 (static strings), B9 (hot update of yielded static strings), and the precompiled-code question raised by the user. The triple shares a common theme of cross-environment portability of Keleusma artifacts.
