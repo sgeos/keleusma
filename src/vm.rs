@@ -2,6 +2,7 @@ extern crate alloc;
 use alloc::boxed::Box;
 use alloc::format;
 use alloc::string::String;
+use alloc::vec;
 use alloc::vec::Vec;
 
 use crate::bytecode::*;
@@ -69,6 +70,8 @@ pub struct Vm {
     stack: Vec<Value>,
     frames: Vec<CallFrame>,
     natives: Vec<NativeEntry>,
+    /// Persistent data segment. Survives across RESET boundaries.
+    data: Vec<Value>,
     started: bool,
 }
 
@@ -80,12 +83,45 @@ impl Vm {
     pub fn new(module: Module) -> Result<Self, VmError> {
         verify::verify(&module)
             .map_err(|e| VmError::VerifyError(format!("{}: {}", e.chunk_name, e.message)))?;
+        let data_len = module.data_layout.as_ref().map_or(0, |dl| dl.slots.len());
+        let data = vec![Value::Unit; data_len];
         Ok(Self {
             module,
             stack: Vec::new(),
             frames: Vec::new(),
             natives: Vec::new(),
+            data,
             started: false,
+        })
+    }
+
+    /// Set a data segment slot to an initial value.
+    ///
+    /// The host calls this before execution begins to populate the
+    /// persistent context. Returns an error if the slot index is out
+    /// of bounds.
+    pub fn set_data(&mut self, slot: usize, value: Value) -> Result<(), VmError> {
+        if slot >= self.data.len() {
+            return Err(VmError::NativeError(format!(
+                "data slot index {} out of bounds (data segment has {} slots)",
+                slot,
+                self.data.len()
+            )));
+        }
+        self.data[slot] = value;
+        Ok(())
+    }
+
+    /// Read a data segment slot value.
+    ///
+    /// Returns an error if the slot index is out of bounds.
+    pub fn get_data(&self, slot: usize) -> Result<&Value, VmError> {
+        self.data.get(slot).ok_or_else(|| {
+            VmError::NativeError(format!(
+                "data slot index {} out of bounds (data segment has {} slots)",
+                slot,
+                self.data.len()
+            ))
         })
     }
 
@@ -220,6 +256,29 @@ impl Vm {
                 Op::SetLocal(slot) => {
                     let val = self.pop()?;
                     self.stack[base + slot as usize] = val;
+                }
+
+                Op::GetData(slot) => {
+                    let idx = slot as usize;
+                    if idx >= self.data.len() {
+                        return Err(VmError::InvalidBytecode(format!(
+                            "data slot index {} out of bounds",
+                            idx
+                        )));
+                    }
+                    let val = self.data[idx].clone();
+                    self.stack.push(val);
+                }
+                Op::SetData(slot) => {
+                    let idx = slot as usize;
+                    if idx >= self.data.len() {
+                        return Err(VmError::InvalidBytecode(format!(
+                            "data slot index {} out of bounds",
+                            idx
+                        )));
+                    }
+                    let val = self.pop()?;
+                    self.data[idx] = val;
                 }
 
                 Op::Add => self.binary_op(|a, b| match (a, b) {
@@ -1152,19 +1211,13 @@ mod tests {
 
     #[test]
     fn eval_tuple_let_destructure() {
-        let val = run_expect(
-            "fn main() -> i64 { let (a, b) = (10, 32); a + b }",
-            &[],
-        );
+        let val = run_expect("fn main() -> i64 { let (a, b) = (10, 32); a + b }", &[]);
         assert_eq!(val, Value::Int(42));
     }
 
     #[test]
     fn eval_tuple_mixed_types() {
-        let val = run_expect(
-            "fn main() -> f64 { let t = (42, 2.5, true); t.1 }",
-            &[],
-        );
+        let val = run_expect("fn main() -> f64 { let t = (42, 2.5, true); t.1 }", &[]);
         assert_eq!(val, Value::Float(2.5));
     }
 
@@ -1178,5 +1231,170 @@ mod tests {
             &[],
         );
         assert_eq!(val, Value::Int(0));
+    }
+
+    // -- Data segment --
+
+    #[test]
+    fn eval_data_read() {
+        // Read a host-initialized data slot from script.
+        let src = "data ctx {\n    score: i64,\n}\nfn main() -> i64 { ctx.score }";
+        let tokens = tokenize(src).expect("lex error");
+        let program = parse(&tokens).expect("parse error");
+        let module = compile(&program).expect("compile error");
+        let mut vm = Vm::new(module).unwrap();
+        vm.set_data(0, Value::Int(42)).unwrap();
+        match vm.call(&[]).unwrap() {
+            VmState::Finished(v) => assert_eq!(v, Value::Int(42)),
+            other => panic!("expected finished, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn eval_data_write() {
+        // Write to a data slot and read it back.
+        let src = "\
+            data ctx {\n\
+                score: i64,\n\
+            }\n\
+            fn main() -> i64 {\n\
+                ctx.score = 100;\n\
+                ctx.score\n\
+            }";
+        let tokens = tokenize(src).expect("lex error");
+        let program = parse(&tokens).expect("parse error");
+        let module = compile(&program).expect("compile error");
+        let mut vm = Vm::new(module).unwrap();
+        match vm.call(&[]).unwrap() {
+            VmState::Finished(v) => assert_eq!(v, Value::Int(100)),
+            other => panic!("expected finished, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn eval_data_survives_reset() {
+        // Write to data before reset, verify it persists after.
+        let src = "\
+            data ctx {\n\
+                counter: i64,\n\
+            }\n\
+            loop main(input: i64) -> i64 {\n\
+                ctx.counter = ctx.counter + 1;\n\
+                let input = yield ctx.counter;\n\
+                input\n\
+            }";
+        let tokens = tokenize(src).expect("lex error");
+        let program = parse(&tokens).expect("parse error");
+        let module = compile(&program).expect("compile error");
+        let mut vm = Vm::new(module).unwrap();
+        vm.set_data(0, Value::Int(0)).unwrap();
+
+        // First call: counter 0 + 1 = 1, yield 1.
+        match vm.call(&[Value::Int(0)]).unwrap() {
+            VmState::Yielded(v) => assert_eq!(v, Value::Int(1)),
+            other => panic!("expected yield, got {:?}", other),
+        }
+
+        // Resume: reaches Reset. Counter is still 1.
+        match vm.resume(Value::Int(0)).unwrap() {
+            VmState::Reset => {}
+            other => panic!("expected reset, got {:?}", other),
+        }
+
+        // Resume after Reset: counter 1 + 1 = 2, yield 2.
+        // Data survived the reset.
+        match vm.resume(Value::Int(0)).unwrap() {
+            VmState::Yielded(v) => assert_eq!(v, Value::Int(2)),
+            other => panic!("expected yield, got {:?}", other),
+        }
+
+        // Resume: reaches Reset.
+        match vm.resume(Value::Int(0)).unwrap() {
+            VmState::Reset => {}
+            other => panic!("expected reset, got {:?}", other),
+        }
+
+        // Resume after second Reset: counter 2 + 1 = 3.
+        match vm.resume(Value::Int(0)).unwrap() {
+            VmState::Yielded(v) => assert_eq!(v, Value::Int(3)),
+            other => panic!("expected yield, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn eval_data_survives_yield() {
+        // Write to data, yield, resume, verify data persists across yield.
+        let src = "\
+            data ctx {\n\
+                value: i64,\n\
+            }\n\
+            loop main(input: i64) -> i64 {\n\
+                ctx.value = 99;\n\
+                let input = yield ctx.value;\n\
+                let input = yield ctx.value + 1;\n\
+                input\n\
+            }";
+        let tokens = tokenize(src).expect("lex error");
+        let program = parse(&tokens).expect("parse error");
+        let module = compile(&program).expect("compile error");
+        let mut vm = Vm::new(module).unwrap();
+
+        // First yield: ctx.value = 99, yield 99.
+        match vm.call(&[Value::Int(0)]).unwrap() {
+            VmState::Yielded(v) => assert_eq!(v, Value::Int(99)),
+            other => panic!("expected yield, got {:?}", other),
+        }
+
+        // Second yield: ctx.value still 99, yield 99 + 1 = 100.
+        match vm.resume(Value::Int(0)).unwrap() {
+            VmState::Yielded(v) => assert_eq!(v, Value::Int(100)),
+            other => panic!("expected yield, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn eval_data_multiple_slots() {
+        // Multiple named data slots with independent values.
+        let src = "\
+            data ctx {\n\
+                a: i64,\n\
+                b: i64,\n\
+                c: i64,\n\
+            }\n\
+            fn main() -> i64 {\n\
+                ctx.a = 10;\n\
+                ctx.b = 20;\n\
+                ctx.c = 30;\n\
+                ctx.a + ctx.b + ctx.c\n\
+            }";
+        let tokens = tokenize(src).expect("lex error");
+        let program = parse(&tokens).expect("parse error");
+        let module = compile(&program).expect("compile error");
+        let mut vm = Vm::new(module).unwrap();
+        match vm.call(&[]).unwrap() {
+            VmState::Finished(v) => assert_eq!(v, Value::Int(60)),
+            other => panic!("expected finished, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn eval_data_host_initialized() {
+        // Host initializes data, script reads it.
+        let src = "\
+            data ctx {\n\
+                x: i64,\n\
+                y: i64,\n\
+            }\n\
+            fn main() -> i64 { ctx.x + ctx.y }";
+        let tokens = tokenize(src).expect("lex error");
+        let program = parse(&tokens).expect("parse error");
+        let module = compile(&program).expect("compile error");
+        let mut vm = Vm::new(module).unwrap();
+        vm.set_data(0, Value::Int(100)).unwrap();
+        vm.set_data(1, Value::Int(200)).unwrap();
+        match vm.call(&[]).unwrap() {
+            VmState::Finished(v) => assert_eq!(v, Value::Int(300)),
+            other => panic!("expected finished, got {:?}", other),
+        }
     }
 }

@@ -1,5 +1,5 @@
 extern crate alloc;
-use alloc::collections::BTreeMap;
+use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::format;
 use alloc::string::String;
 use alloc::vec;
@@ -35,6 +35,8 @@ struct FuncCompiler {
     function_map: BTreeMap<String, u16>,
     /// Map from native function name to native registry index.
     native_map: BTreeMap<String, u16>,
+    /// Map from data block name to a list of (field_name, slot_index) pairs.
+    data_fields: BTreeMap<String, Vec<(String, u16)>>,
 }
 
 impl FuncCompiler {
@@ -43,6 +45,7 @@ impl FuncCompiler {
         block_type: BlockType,
         function_map: BTreeMap<String, u16>,
         native_map: BTreeMap<String, u16>,
+        data_fields: BTreeMap<String, Vec<(String, u16)>>,
     ) -> Self {
         Self {
             chunk: Chunk {
@@ -60,6 +63,7 @@ impl FuncCompiler {
             loop_breaks: Vec::new(),
             function_map,
             native_map,
+            data_fields,
         }
     }
 
@@ -118,6 +122,21 @@ impl FuncCompiler {
             }
         }
         Option::None
+    }
+
+    /// Check if a name refers to a data block.
+    fn is_data_block(&self, name: &str) -> bool {
+        self.data_fields.contains_key(name)
+    }
+
+    /// Resolve a data block field to its slot index.
+    fn resolve_data_field(&self, data_name: &str, field: &str) -> Option<u16> {
+        self.data_fields.get(data_name).and_then(|fields| {
+            fields
+                .iter()
+                .find(|(name, _)| name == field)
+                .map(|(_, slot)| *slot)
+        })
     }
 
     fn declare_local(&mut self, name: &str) -> u16 {
@@ -200,6 +219,43 @@ pub fn compile(program: &Program) -> Result<Module, CompileError> {
         }
     }
 
+    // R28: at most one data block per program.
+    if program.data_decls.len() > 1 {
+        return Err(CompileError {
+            message: format!(
+                "at most one data block per program (R28), found {}",
+                program.data_decls.len()
+            ),
+            span: program.data_decls[1].span,
+        });
+    }
+
+    // Build data layout from data declarations. Validate that each field
+    // type has a statically known fixed size before assigning a slot.
+    let mut data_fields: BTreeMap<String, Vec<(String, u16)>> = BTreeMap::new();
+    let mut data_layout_slots: Vec<DataSlot> = Vec::new();
+    let mut data_slot_idx: u16 = 0;
+    for decl in &program.data_decls {
+        let mut fields = Vec::new();
+        for field in &decl.fields {
+            let mut visiting: BTreeSet<String> = BTreeSet::new();
+            validate_data_field_type(&field.type_expr, &program.types, &mut visiting)?;
+            fields.push((field.name.clone(), data_slot_idx));
+            data_layout_slots.push(DataSlot {
+                name: format!("{}.{}", decl.name, field.name),
+            });
+            data_slot_idx += 1;
+        }
+        data_fields.insert(decl.name.clone(), fields);
+    }
+    let data_layout = if data_layout_slots.is_empty() {
+        None
+    } else {
+        Some(DataLayout {
+            slots: data_layout_slots,
+        })
+    };
+
     // Group function definitions by name.
     let mut groups: BTreeMap<String, Vec<&FunctionDef>> = BTreeMap::new();
     for func in &program.functions {
@@ -215,7 +271,7 @@ pub fn compile(program: &Program) -> Result<Module, CompileError> {
     // Compile each function group.
     let mut chunks: Vec<Chunk> = Vec::new();
     for (name, defs) in &groups {
-        let chunk = compile_function_group(name, defs, &function_map, &native_map)?;
+        let chunk = compile_function_group(name, defs, &function_map, &native_map, &data_fields)?;
         chunks.push(chunk);
     }
 
@@ -225,7 +281,86 @@ pub fn compile(program: &Program) -> Result<Module, CompileError> {
         chunks,
         native_names,
         entry_point,
+        data_layout,
     })
+}
+
+/// Validate that a data segment field type has a statically known fixed size.
+///
+/// Admissible: i64, f64, bool, (), tuples, fixed-length arrays, Option of
+/// admissible, named structs of admissible fields, named enums whose variants
+/// all have admissible payloads. Rejected: String, opaque named types,
+/// recursive types.
+fn validate_data_field_type(
+    type_expr: &TypeExpr,
+    types: &[TypeDef],
+    visiting: &mut BTreeSet<String>,
+) -> Result<(), CompileError> {
+    match type_expr {
+        TypeExpr::Prim(prim, span) => match prim {
+            PrimType::I64 | PrimType::F64 | PrimType::Bool => Ok(()),
+            PrimType::KString => Err(CompileError {
+                message: String::from(
+                    "data field type String is not admissible: variable-length \
+                     types cannot be inlined into the data segment",
+                ),
+                span: *span,
+            }),
+        },
+        TypeExpr::Unit(_) => Ok(()),
+        TypeExpr::Tuple(elems, _) => {
+            for elem in elems {
+                validate_data_field_type(elem, types, visiting)?;
+            }
+            Ok(())
+        }
+        TypeExpr::Array(elem, _len, _) => validate_data_field_type(elem, types, visiting),
+        TypeExpr::Option(inner, _) => validate_data_field_type(inner, types, visiting),
+        TypeExpr::Named(name, span) => {
+            if visiting.contains(name) {
+                return Err(CompileError {
+                    message: format!(
+                        "recursive type {} cannot appear in a data segment field: \
+                         the data segment requires statically known fixed size",
+                        name
+                    ),
+                    span: *span,
+                });
+            }
+            let type_def = types.iter().find(|td| match td {
+                TypeDef::Struct(s) => &s.name == name,
+                TypeDef::Enum(e) => &e.name == name,
+            });
+            match type_def {
+                Some(TypeDef::Struct(s)) => {
+                    visiting.insert(name.clone());
+                    for field in &s.fields {
+                        validate_data_field_type(&field.type_expr, types, visiting)?;
+                    }
+                    visiting.remove(name);
+                    Ok(())
+                }
+                Some(TypeDef::Enum(e)) => {
+                    visiting.insert(name.clone());
+                    for variant in &e.variants {
+                        for ftype in &variant.fields {
+                            validate_data_field_type(ftype, types, visiting)?;
+                        }
+                    }
+                    visiting.remove(name);
+                    Ok(())
+                }
+                None => Err(CompileError {
+                    message: format!(
+                        "data field type {} is not a struct or enum: opaque types \
+                         are not yet admissible in data segment fields",
+                        name
+                    ),
+                    span: *span,
+                }),
+            }
+        }
+    }
 }
 
 /// Compile a group of function definitions with the same name into one chunk.
@@ -234,6 +369,7 @@ fn compile_function_group(
     defs: &[&FunctionDef],
     function_map: &BTreeMap<String, u16>,
     native_map: &BTreeMap<String, u16>,
+    data_fields: &BTreeMap<String, Vec<(String, u16)>>,
 ) -> Result<Chunk, CompileError> {
     let first = defs[0];
     let block_type = match first.category {
@@ -243,7 +379,13 @@ fn compile_function_group(
     };
     let param_count = first.params.len() as u8;
 
-    let mut fc = FuncCompiler::new(name, block_type, function_map.clone(), native_map.clone());
+    let mut fc = FuncCompiler::new(
+        name,
+        block_type,
+        function_map.clone(),
+        native_map.clone(),
+        data_fields.clone(),
+    );
     fc.chunk.param_count = param_count;
 
     // Declare parameter slots. For multiheaded functions, use positional names.
@@ -370,6 +512,25 @@ fn compile_block(fc: &mut FuncCompiler, block: &Block) -> Result<(), CompileErro
     Ok(())
 }
 
+/// Compile a data field assignment: `data_name.field = expr;`.
+fn compile_data_field_assign(
+    fc: &mut FuncCompiler,
+    data_name: &str,
+    field: &str,
+    value: &Expr,
+    span: Span,
+) -> Result<(), CompileError> {
+    let slot = fc
+        .resolve_data_field(data_name, field)
+        .ok_or_else(|| CompileError {
+            message: format!("unknown data field: {}.{}", data_name, field),
+            span,
+        })?;
+    compile_expr(fc, value)?;
+    fc.emit(Op::SetData(slot));
+    Ok(())
+}
+
 /// Compile a single statement.
 fn compile_stmt(fc: &mut FuncCompiler, stmt: &Stmt) -> Result<(), CompileError> {
     match stmt {
@@ -391,6 +552,14 @@ fn compile_stmt(fc: &mut FuncCompiler, stmt: &Stmt) -> Result<(), CompileError> 
             if let Some(breaks) = fc.loop_breaks.last_mut() {
                 breaks.push(addr);
             }
+        }
+        Stmt::DataFieldAssign {
+            data_name,
+            field,
+            value,
+            span,
+        } => {
+            compile_data_field_assign(fc, data_name, field, value, *span)?;
         }
         Stmt::Expr(expr) => {
             compile_expr(fc, expr)?;
@@ -577,6 +746,14 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
         Expr::Ident { name, span } => {
             if let Some(slot) = fc.resolve_local(name) {
                 fc.emit(Op::GetLocal(slot));
+            } else if fc.is_data_block(name) {
+                return Err(CompileError {
+                    message: format!(
+                        "data block '{}' cannot be used as a value; access individual fields with {}.field_name",
+                        name, name
+                    ),
+                    span: *span,
+                });
             } else {
                 return Err(CompileError {
                     message: format!("undefined variable: {}", name),
@@ -830,7 +1007,24 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
             fc.emit(Op::PushUnit);
         }
 
-        Expr::FieldAccess { object, field, .. } => {
+        Expr::FieldAccess {
+            object,
+            field,
+            span,
+        } => {
+            // Check if this is a data block field access.
+            if let Expr::Ident { name, .. } = object.as_ref()
+                && fc.is_data_block(name)
+            {
+                let slot = fc
+                    .resolve_data_field(name, field)
+                    .ok_or_else(|| CompileError {
+                        message: format!("unknown data field: {}.{}", name, field),
+                        span: *span,
+                    })?;
+                fc.emit(Op::GetData(slot));
+                return Ok(());
+            }
             compile_expr(fc, object)?;
             let name_const = fc.add_string_constant(field);
             fc.emit(Op::GetField(name_const));
@@ -1299,33 +1493,38 @@ mod tests {
 
     #[test]
     fn compile_for_in_array() {
-        let module = compile_str(
-            "fn main() -> i64 { let s = 0; for x in [1, 2, 3] { let s = s + x; } s }",
-        )
-        .unwrap();
+        let module =
+            compile_str("fn main() -> i64 { let s = 0; for x in [1, 2, 3] { let s = s + x; } s }")
+                .unwrap();
         assert_eq!(module.chunks.len(), 1);
         // Should contain Loop/EndLoop for the for-in.
-        assert!(module.chunks[0]
-            .ops
-            .iter()
-            .any(|op| matches!(op, Op::Loop(_))));
+        assert!(
+            module.chunks[0]
+                .ops
+                .iter()
+                .any(|op| matches!(op, Op::Loop(_)))
+        );
         // Should contain Len instruction.
         assert!(module.chunks[0].ops.iter().any(|op| matches!(op, Op::Len)));
         // Should contain GetIndex.
-        assert!(module.chunks[0]
-            .ops
-            .iter()
-            .any(|op| matches!(op, Op::GetIndex)));
+        assert!(
+            module.chunks[0]
+                .ops
+                .iter()
+                .any(|op| matches!(op, Op::GetIndex))
+        );
     }
 
     #[test]
     fn compile_tuple_literal() {
         let module = compile_str("fn main() -> () { let t = (1, 2, 3); t }").unwrap();
         assert_eq!(module.chunks.len(), 1);
-        assert!(module.chunks[0]
-            .ops
-            .iter()
-            .any(|op| matches!(op, Op::NewTuple(3))));
+        assert!(
+            module.chunks[0]
+                .ops
+                .iter()
+                .any(|op| matches!(op, Op::NewTuple(3)))
+        );
     }
 
     #[test]
@@ -1359,5 +1558,134 @@ mod tests {
                 .iter()
                 .any(|op| matches!(op, Op::EndIf))
         );
+    }
+
+    // -- Data segment conformance tests --
+
+    #[test]
+    fn data_block_admits_primitives() {
+        let src = "data ctx { score: i64, level: i64, ratio: f64, alive: bool }\n\
+                   fn main() -> i64 { ctx.score }";
+        let module = compile_str(src).unwrap();
+        let layout = module.data_layout.expect("expected data layout");
+        assert_eq!(layout.slots.len(), 4);
+    }
+
+    #[test]
+    fn data_block_admits_unit() {
+        let src = "data ctx { tick: () }\n\
+                   fn main() -> () { ctx.tick }";
+        let module = compile_str(src).unwrap();
+        assert!(module.data_layout.is_some());
+    }
+
+    #[test]
+    fn data_block_admits_tuple_of_admissible() {
+        let src = "data ctx { pos: (f64, f64) }\n\
+                   fn main() -> (f64, f64) { ctx.pos }";
+        assert!(compile_str(src).is_ok());
+    }
+
+    #[test]
+    fn data_block_admits_array_of_admissible() {
+        let src = "data ctx { samples: [f64; 4] }\n\
+                   fn main() -> () { () }";
+        assert!(compile_str(src).is_ok());
+    }
+
+    #[test]
+    fn data_block_admits_option_of_admissible() {
+        let src = "data ctx { last: Option<i64> }\n\
+                   fn main() -> () { () }";
+        assert!(compile_str(src).is_ok());
+    }
+
+    #[test]
+    fn data_block_admits_struct_of_admissible() {
+        let src = "struct Point { x: f64, y: f64 }\n\
+                   data ctx { origin: Point }\n\
+                   fn main() -> () { () }";
+        assert!(compile_str(src).is_ok());
+    }
+
+    #[test]
+    fn data_block_admits_enum_of_admissible() {
+        let src = "enum Status { Idle, Active(i64), Error(i64, i64) }\n\
+                   data ctx { state: Status }\n\
+                   fn main() -> () { () }";
+        assert!(compile_str(src).is_ok());
+    }
+
+    #[test]
+    fn data_block_rejects_string() {
+        let src = "data ctx { name: String }\n\
+                   fn main() -> () { () }";
+        let err = compile_str(src).unwrap_err();
+        assert!(err.message.contains("String"));
+    }
+
+    #[test]
+    fn data_block_rejects_string_in_tuple() {
+        let src = "data ctx { pair: (i64, String) }\n\
+                   fn main() -> () { () }";
+        let err = compile_str(src).unwrap_err();
+        assert!(err.message.contains("String"));
+    }
+
+    #[test]
+    fn data_block_rejects_string_in_array() {
+        let src = "data ctx { names: [String; 4] }\n\
+                   fn main() -> () { () }";
+        let err = compile_str(src).unwrap_err();
+        assert!(err.message.contains("String"));
+    }
+
+    #[test]
+    fn data_block_rejects_string_in_option() {
+        let src = "data ctx { last: Option<String> }\n\
+                   fn main() -> () { () }";
+        let err = compile_str(src).unwrap_err();
+        assert!(err.message.contains("String"));
+    }
+
+    #[test]
+    fn data_block_rejects_string_in_struct() {
+        let src = "struct Tag { label: String }\n\
+                   data ctx { t: Tag }\n\
+                   fn main() -> () { () }";
+        let err = compile_str(src).unwrap_err();
+        assert!(err.message.contains("String"));
+    }
+
+    #[test]
+    fn data_block_rejects_string_in_enum() {
+        let src = "enum Tag { Named(String), Unnamed }\n\
+                   data ctx { t: Tag }\n\
+                   fn main() -> () { () }";
+        let err = compile_str(src).unwrap_err();
+        assert!(err.message.contains("String"));
+    }
+
+    #[test]
+    fn data_block_rejects_unknown_named_type() {
+        let src = "data ctx { handle: Mystery }\n\
+                   fn main() -> () { () }";
+        let err = compile_str(src).unwrap_err();
+        assert!(err.message.contains("Mystery") || err.message.contains("opaque"));
+    }
+
+    #[test]
+    fn multiple_data_blocks_rejected() {
+        let src = "data ctx_a { x: i64 }\n\
+                   data ctx_b { y: i64 }\n\
+                   fn main() -> () { () }";
+        let err = compile_str(src).unwrap_err();
+        assert!(err.message.contains("R28") || err.message.contains("one data block"));
+    }
+
+    #[test]
+    fn no_data_block_compiles() {
+        let module = compile_str("fn main() -> i64 { 42 }").unwrap();
+        assert!(module.data_layout.is_none());
     }
 }

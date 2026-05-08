@@ -1,5 +1,6 @@
 extern crate alloc;
 use alloc::boxed::Box;
+use alloc::collections::BTreeSet;
 use alloc::format;
 use alloc::string::String;
 use alloc::vec;
@@ -25,11 +26,17 @@ pub fn parse(tokens: &[Token]) -> Result<Program, ParseError> {
 struct Parser<'a> {
     tokens: &'a [Token],
     pos: usize,
+    /// Known data block names, populated during parsing.
+    data_names: BTreeSet<String>,
 }
 
 impl<'a> Parser<'a> {
     fn new(tokens: &'a [Token]) -> Self {
-        Self { tokens, pos: 0 }
+        Self {
+            tokens,
+            pos: 0,
+            data_names: BTreeSet::new(),
+        }
     }
 
     // --- Lookahead and consumption helpers ---
@@ -141,6 +148,7 @@ impl<'a> Parser<'a> {
         let start = self.peek_span();
         let mut uses = Vec::new();
         let mut types = Vec::new();
+        let mut data_decls = Vec::new();
         let mut functions = Vec::new();
 
         // Parse use declarations.
@@ -148,15 +156,20 @@ impl<'a> Parser<'a> {
             uses.push(self.parse_use_decl()?);
         }
 
-        // Parse type definitions and function definitions.
+        // Parse type definitions, data declarations, and function definitions.
         while !self.at_end() {
             match self.peek() {
                 TokenKind::Struct => types.push(TypeDef::Struct(self.parse_struct_def()?)),
                 TokenKind::Enum => types.push(TypeDef::Enum(self.parse_enum_def()?)),
+                TokenKind::Data => data_decls.push(self.parse_data_decl()?),
                 TokenKind::Fn | TokenKind::Yield | TokenKind::Loop | TokenKind::Pure => {
                     functions.push(self.parse_function_def()?);
                 }
-                _ => return Err(self.error("expected type definition or function definition")),
+                _ => {
+                    return Err(self.error(
+                        "expected type definition, data declaration, or function definition",
+                    ));
+                }
             }
         }
 
@@ -164,6 +177,7 @@ impl<'a> Parser<'a> {
         Ok(Program {
             uses,
             types,
+            data_decls,
             functions,
             span: merge_spans(start, end),
         })
@@ -224,6 +238,34 @@ impl<'a> Parser<'a> {
 
         let end = self.expect(&TokenKind::RBrace)?;
         Ok(StructDef {
+            name,
+            fields,
+            span: merge_spans(start, end),
+        })
+    }
+
+    fn parse_data_decl(&mut self) -> Result<DataDecl, ParseError> {
+        let start = self.expect(&TokenKind::Data)?;
+        let (name, _) = self.expect_lower_ident()?;
+        self.data_names.insert(name.clone());
+        self.expect(&TokenKind::LBrace)?;
+
+        let mut fields = Vec::new();
+        while !self.at(&TokenKind::RBrace) {
+            let (fname, fspan) = self.expect_lower_ident()?;
+            self.expect(&TokenKind::Colon)?;
+            let ftype = self.parse_type_expr()?;
+            let end = ftype.span();
+            fields.push(DataFieldDecl {
+                name: fname,
+                type_expr: ftype,
+                span: merge_spans(fspan, end),
+            });
+            self.eat(&TokenKind::Comma);
+        }
+
+        let end = self.expect(&TokenKind::RBrace)?;
+        Ok(DataDecl {
             name,
             fields,
             span: merge_spans(start, end),
@@ -372,7 +414,30 @@ impl<'a> Parser<'a> {
                 }
                 _ => {
                     let expr = self.parse_expr()?;
-                    if self.eat(&TokenKind::Semicolon) {
+                    if self.eat(&TokenKind::Eq) {
+                        // Data field assignment: data_name.field = expr;
+                        if let Expr::FieldAccess {
+                            object,
+                            field,
+                            span: fa_span,
+                        } = &expr
+                            && let Expr::Ident { name, .. } = object.as_ref()
+                            && self.data_names.contains(name)
+                        {
+                            let value = self.parse_expr()?;
+                            let end = self.expect(&TokenKind::Semicolon)?;
+                            stmts.push(Stmt::DataFieldAssign {
+                                data_name: name.clone(),
+                                field: field.clone(),
+                                value,
+                                span: merge_spans(*fa_span, end),
+                            });
+                            continue;
+                        }
+                        return Err(
+                            self.error("assignment is only supported for data block fields")
+                        );
+                    } else if self.eat(&TokenKind::Semicolon) {
                         stmts.push(Stmt::Expr(expr));
                     } else if self.at(&TokenKind::RBrace) {
                         tail_expr = Some(Box::new(expr));
@@ -1746,5 +1811,36 @@ mod tests {
         let src = "fn test() -> i64 { + }";
         let result = parse_str(src);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_data_decl() {
+        let src = "\
+            data ctx {\n\
+                score: i64,\n\
+                health: f64,\n\
+            }\n\
+            fn main() -> i64 { ctx.score }";
+        let program = parse_str(src).unwrap();
+        assert_eq!(program.data_decls.len(), 1);
+        assert_eq!(program.data_decls[0].name, "ctx");
+        assert_eq!(program.data_decls[0].fields.len(), 2);
+        assert_eq!(program.data_decls[0].fields[0].name, "score");
+        assert_eq!(program.data_decls[0].fields[1].name, "health");
+    }
+
+    #[test]
+    fn parse_data_field_assign() {
+        let src = "\
+            data ctx {\n\
+                value: i64,\n\
+            }\n\
+            fn main() -> i64 {\n\
+                ctx.value = 42;\n\
+                ctx.value\n\
+            }";
+        let program = parse_str(src).unwrap();
+        let body = &program.functions[0].body;
+        assert!(matches!(&body.stmts[0], Stmt::DataFieldAssign { .. }));
     }
 }

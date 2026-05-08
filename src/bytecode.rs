@@ -116,6 +116,11 @@ pub enum Op {
     /// Pop and store to local variable slot.
     SetLocal(u16),
 
+    /// Push data segment slot value onto stack.
+    GetData(u16),
+    /// Pop value and store into data segment slot.
+    SetData(u16),
+
     /// Binary addition.
     Add,
     /// Binary subtraction.
@@ -239,6 +244,8 @@ impl Op {
             | Op::PushFalse
             | Op::GetLocal(_)
             | Op::SetLocal(_)
+            | Op::GetData(_)
+            | Op::SetData(_)
             | Op::Pop
             | Op::Dup
             | Op::PushNone
@@ -298,6 +305,25 @@ pub struct StructTemplate {
     pub field_names: Vec<String>,
 }
 
+/// A named slot in the data segment.
+#[derive(Debug, Clone)]
+pub struct DataSlot {
+    /// Slot name (for host initialization and debugging).
+    pub name: String,
+}
+
+/// Data segment layout declaration.
+///
+/// Defines the fixed-size, fixed-layout set of persistent values that
+/// survive across RESET boundaries. The host initializes data slots
+/// before execution begins. Scripts read and write slots by index.
+#[derive(Debug, Clone)]
+pub struct DataLayout {
+    /// Named slots in declaration order. Slot index corresponds to
+    /// the `GetData`/`SetData` operand.
+    pub slots: Vec<DataSlot>,
+}
+
 /// A compiled function.
 #[derive(Debug, Clone)]
 pub struct Chunk {
@@ -326,4 +352,7 @@ pub struct Module {
     pub native_names: Vec<String>,
     /// Entry point chunk index (the `main` function).
     pub entry_point: Option<usize>,
+    /// Data segment layout. If present, defines persistent slots that
+    /// survive across RESET boundaries.
+    pub data_layout: Option<DataLayout>,
 }

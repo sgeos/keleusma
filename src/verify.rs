@@ -428,6 +428,42 @@ pub fn verify(module: &Module) -> Result<(), VerifyError> {
                         });
                     }
                 }
+                Op::GetData(slot) | Op::SetData(slot) => {
+                    let idx = *slot as usize;
+                    let data_len = module.data_layout.as_ref().map_or(0, |dl| dl.slots.len());
+                    if data_len == 0 {
+                        let op_name = if matches!(op, Op::GetData(_)) {
+                            "GetData"
+                        } else {
+                            "SetData"
+                        };
+                        return Err(VerifyError {
+                            chunk_name: name.clone(),
+                            message: alloc::format!(
+                                "{} at {} but module has no data layout declared",
+                                op_name,
+                                ip
+                            ),
+                        });
+                    }
+                    if idx >= data_len {
+                        let op_name = if matches!(op, Op::GetData(_)) {
+                            "GetData"
+                        } else {
+                            "SetData"
+                        };
+                        return Err(VerifyError {
+                            chunk_name: name.clone(),
+                            message: alloc::format!(
+                                "{} at {} references slot {} but data layout has {} slot(s)",
+                                op_name,
+                                ip,
+                                idx,
+                                data_len
+                            ),
+                        });
+                    }
+                }
                 _ => {}
             }
         }
@@ -576,6 +612,7 @@ mod tests {
             chunks,
             native_names: Vec::new(),
             entry_point: Some(0),
+            data_layout: None,
         }
     }
 
@@ -1164,5 +1201,62 @@ mod tests {
         let cost = wcet_stream_iteration(stream_chunk).unwrap();
         // Cost must be positive and finite.
         assert!(cost > 0, "WCET should be positive, got {}", cost);
+    }
+
+    // -- Data segment verification --
+
+    #[test]
+    fn data_slot_out_of_bounds_fails() {
+        // GetData with index beyond data layout should fail verification.
+        use crate::bytecode::{DataLayout, DataSlot};
+        let chunk = make_chunk("main", vec![Op::GetData(5), Op::Return], BlockType::Func);
+        let module = Module {
+            chunks: vec![chunk],
+            native_names: Vec::new(),
+            entry_point: Some(0),
+            data_layout: Some(DataLayout {
+                slots: vec![DataSlot {
+                    name: String::from("ctx.x"),
+                }],
+            }),
+        };
+        let err = verify(&module).unwrap_err();
+        assert!(err.message.contains("slot"));
+    }
+
+    #[test]
+    fn data_no_layout_fails() {
+        // GetData without any data layout should fail verification.
+        let chunk = make_chunk("main", vec![Op::GetData(0), Op::Return], BlockType::Func);
+        let module = make_module(vec![chunk]);
+        let err = verify(&module).unwrap_err();
+        assert!(err.message.contains("no data layout"));
+    }
+
+    #[test]
+    fn data_valid_slot_passes() {
+        // GetData/SetData with valid indices should pass.
+        use crate::bytecode::{DataLayout, DataSlot};
+        let chunk = make_chunk(
+            "main",
+            vec![Op::GetData(0), Op::SetData(1), Op::PushUnit, Op::Return],
+            BlockType::Func,
+        );
+        let module = Module {
+            chunks: vec![chunk],
+            native_names: Vec::new(),
+            entry_point: Some(0),
+            data_layout: Some(DataLayout {
+                slots: vec![
+                    DataSlot {
+                        name: String::from("ctx.a"),
+                    },
+                    DataSlot {
+                        name: String::from("ctx.b"),
+                    },
+                ],
+            }),
+        };
+        assert!(verify(&module).is_ok());
     }
 }

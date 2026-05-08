@@ -10,7 +10,28 @@ use crate::token::Span;
 pub struct Program {
     pub uses: Vec<UseDecl>,
     pub types: Vec<TypeDef>,
+    pub data_decls: Vec<DataDecl>,
     pub functions: Vec<FunctionDef>,
+    pub span: Span,
+}
+
+/// A `data` block declaration for persistent mutable state.
+///
+/// Data blocks define named contexts whose fields persist across RESET
+/// boundaries. The host initializes the data slots before execution.
+/// Script code reads and writes fields via `name.field` syntax.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DataDecl {
+    pub name: String,
+    pub fields: Vec<DataFieldDecl>,
+    pub span: Span,
+}
+
+/// A field in a data block declaration.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DataFieldDecl {
+    pub name: String,
+    pub type_expr: TypeExpr,
     pub span: Span,
 }
 
@@ -115,6 +136,13 @@ pub enum Stmt {
     Let(LetStmt),
     For(ForStmt),
     Break(Span),
+    /// Assignment to a data block field: `data_name.field = expr;`.
+    DataFieldAssign {
+        data_name: String,
+        field: String,
+        value: Expr,
+        span: Span,
+    },
     Expr(Expr),
 }
 

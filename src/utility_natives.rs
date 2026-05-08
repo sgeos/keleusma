@@ -212,17 +212,13 @@ mod tests {
 
     #[test]
     fn to_string_int() {
-        let val = run_with_utilities(
-            "use to_string\nfn main() -> String { to_string(42) }",
-        );
+        let val = run_with_utilities("use to_string\nfn main() -> String { to_string(42) }");
         assert_eq!(val, Value::Str(String::from("42")));
     }
 
     #[test]
     fn to_string_float() {
-        let val = run_with_utilities(
-            "use to_string\nfn main() -> String { to_string(3.14) }",
-        );
+        let val = run_with_utilities("use to_string\nfn main() -> String { to_string(3.14) }");
         if let Value::Str(s) = val {
             assert!(s.starts_with("3.14"));
         } else {
@@ -232,81 +228,61 @@ mod tests {
 
     #[test]
     fn to_string_bool() {
-        let val = run_with_utilities(
-            "use to_string\nfn main() -> String { to_string(true) }",
-        );
+        let val = run_with_utilities("use to_string\nfn main() -> String { to_string(true) }");
         assert_eq!(val, Value::Str(String::from("true")));
     }
 
     #[test]
     fn to_string_string() {
-        let val = run_with_utilities(
-            "use to_string\nfn main() -> String { to_string(\"hello\") }",
-        );
+        let val = run_with_utilities("use to_string\nfn main() -> String { to_string(\"hello\") }");
         assert_eq!(val, Value::Str(String::from("hello")));
     }
 
     #[test]
     fn length_array() {
-        let val = run_with_utilities(
-            "use length\nfn main() -> i64 { length([10, 20, 30]) }",
-        );
+        let val = run_with_utilities("use length\nfn main() -> i64 { length([10, 20, 30]) }");
         assert_eq!(val, Value::Int(3));
     }
 
     #[test]
     fn length_string() {
-        let val = run_with_utilities(
-            "use length\nfn main() -> i64 { length(\"hello\") }",
-        );
+        let val = run_with_utilities("use length\nfn main() -> i64 { length(\"hello\") }");
         assert_eq!(val, Value::Int(5));
     }
 
     #[test]
     fn length_tuple() {
-        let val = run_with_utilities(
-            "use length\nfn main() -> i64 { length((1, 2, 3)) }",
-        );
+        let val = run_with_utilities("use length\nfn main() -> i64 { length((1, 2, 3)) }");
         assert_eq!(val, Value::Int(3));
     }
 
     #[test]
     fn sqrt_value() {
-        let val = run_with_utilities(
-            "use math::sqrt\nfn main() -> f64 { math::sqrt(9.0) }",
-        );
+        let val = run_with_utilities("use math::sqrt\nfn main() -> f64 { math::sqrt(9.0) }");
         assert_eq!(val, Value::Float(3.0));
     }
 
     #[test]
     fn floor_value() {
-        let val = run_with_utilities(
-            "use math::floor\nfn main() -> f64 { math::floor(3.7) }",
-        );
+        let val = run_with_utilities("use math::floor\nfn main() -> f64 { math::floor(3.7) }");
         assert_eq!(val, Value::Float(3.0));
     }
 
     #[test]
     fn ceil_value() {
-        let val = run_with_utilities(
-            "use math::ceil\nfn main() -> f64 { math::ceil(3.2) }",
-        );
+        let val = run_with_utilities("use math::ceil\nfn main() -> f64 { math::ceil(3.2) }");
         assert_eq!(val, Value::Float(4.0));
     }
 
     #[test]
     fn round_value() {
-        let val = run_with_utilities(
-            "use math::round\nfn main() -> f64 { math::round(3.5) }",
-        );
+        let val = run_with_utilities("use math::round\nfn main() -> f64 { math::round(3.5) }");
         assert_eq!(val, Value::Float(4.0));
     }
 
     #[test]
     fn log2_value() {
-        let val = run_with_utilities(
-            "use math::log2\nfn main() -> f64 { math::log2(8.0) }",
-        );
+        let val = run_with_utilities("use math::log2\nfn main() -> f64 { math::log2(8.0) }");
         assert_eq!(val, Value::Float(3.0));
     }
 }
