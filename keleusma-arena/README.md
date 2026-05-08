@@ -2,21 +2,33 @@
 
 > Simple and boring memory allocator for exciting applications.
 
-A dual-end bump-allocated arena for embedded Rust. A single contiguous buffer holds two bump pointers that grow toward each other from opposite ends. Allocation is constant-time. Allocation fails when the two pointers would meet. The arena's discipline supports both ad-hoc embedded use and static analysis of memory bounds.
+A dual-end bump-allocated arena for embedded Rust. Single contiguous buffer. Two pointers growing toward each other from opposite ends. Constant-time allocation. Fail-fast on exhaustion.
 
-## Why
+## History
 
-`keleusma-arena` is the memory substrate of the Keleusma scripting language, extracted as a standalone crate for general-purpose embedded use. It is designed for environments where memory is fixed, predictability matters, and the budget is part of the contract.
+Born as the memory substrate of the Keleusma scripting language, where it pairs with a static analysis pass to enforce a bounded-memory guarantee at script load time. Extracted as a standalone crate so embedded users can adopt the discipline without taking on the language runtime.
 
-| Property | This crate |
-|---|---|
-| Storage shape | Single contiguous buffer. Fixed at construction. |
-| Allocation timing | Constant-time always. No path that allocates from the global allocator at use-time. |
-| Failure mode | Returns `AllocError` on overflow. The host explicitly handles it. |
-| Region structure | Two bump pointers growing from opposite ends, sharing a budget. |
-| Static bound | Generic `Budget` type. Producers compute a budget from any analysis. The arena verifies admissibility. |
-| Targeting | `core` only without `alloc`. The static-buffer constructor admits `&'static mut [u8]` for link-time-allocated buffers. |
-| Code footprint | Small. Single allocation strategy, audit-friendly. |
+## Philosophy
+
+Boring code that does exciting things. The arena's storage shape, allocation strategy, and failure mode are all the simplest possible. The discipline that emerges is what enables the exciting use cases, namely real-time predictability, certifiable memory bounds, and zero-allocation hot paths on platforms with fixed memory.
+
+- Single allocation strategy. No chunk lists, no fallback paths.
+- Fixed at construction. No surprise growth at use-time.
+- Fail-fast. Returns `AllocError` on overflow. The host handles it.
+- `core`-only without `alloc`. The static-buffer constructor needs neither.
+- Two ends with one budget. The user decides what each end means.
+
+## Ecosystem Pitch
+
+Existing arena crates serve different niches. `bumpalo` grows dynamically. `typed-arena` is type-monomorphic. `slab` and `generational-arena` are pool allocators. None of them combine fixed-size storage with a dual-end discipline and a generic budget contract. `keleusma-arena` fills that gap.
+
+Targets it serves well.
+
+- Embedded systems with link-time-allocated buffers. `from_static_buffer` accepts `&'static mut [u8]`.
+- Multi-region targets like the Game Boy Advance. Construct one arena per memory region, namely IWRAM, EWRAM, VRAM.
+- Real-time and safety-critical workloads. Constant-time allocation, no surprise pauses, sound bounds when paired with an analysis.
+- Game engines and simulation loops. Reset the arena per frame. Allocate transient values without GC pressure.
+- Any program that wants a compile-time memory budget contract.
 
 ## Quick Start
 
@@ -24,20 +36,19 @@ A dual-end bump-allocated arena for embedded Rust. A single contiguous buffer ho
 use keleusma_arena::Arena;
 use core::alloc::Layout;
 
-// Heap-backed (alloc feature on by default).
 let arena = Arena::with_capacity(4096);
 
-// Bottom end allocation.
+// StackHandle and HeapHandle are conventional aliases for BottomHandle
+// and TopHandle. Use whichever names match your mental model.
 let layout = Layout::new::<u64>();
-let p = allocator_api2::alloc::Allocator::allocate(&arena.bottom_handle(), layout)
-    .unwrap();
-
-// Top end allocation.
-let q = allocator_api2::alloc::Allocator::allocate(&arena.top_handle(), layout)
-    .unwrap();
-
-assert_eq!(arena.bottom_used(), 8);
-assert_eq!(arena.top_used(), 8);
+let stack_alloc = allocator_api2::alloc::Allocator::allocate(
+    &arena.bottom_handle(),
+    layout,
+).unwrap();
+let heap_alloc = allocator_api2::alloc::Allocator::allocate(
+    &arena.top_handle(),
+    layout,
+).unwrap();
 ```
 
 ## Static-Buffer Use
@@ -50,7 +61,6 @@ use keleusma_arena::Arena;
 static mut BUFFER: [u8; 4096] = [0u8; 4096];
 
 fn make_arena() -> Arena {
-    // SAFETY: BUFFER is accessed exclusively through the arena.
     let buffer: &'static mut [u8] = unsafe {
         core::slice::from_raw_parts_mut(BUFFER.as_mut_ptr(), BUFFER.len())
     };
@@ -58,87 +68,48 @@ fn make_arena() -> Arena {
 }
 ```
 
-For targets with multiple memory regions, such as the Game Boy Advance with IWRAM, EWRAM, and VRAM, construct one arena per region.
-
-## Collection Integration
-
-The handles implement `allocator_api2::alloc::Allocator`, so standard allocator-aware collections work directly.
-
-```rust
-use keleusma_arena::Arena;
-use allocator_api2::vec::Vec as ArenaVec;
-
-let arena = Arena::with_capacity(4096);
-let mut v: ArenaVec<i32, _> = ArenaVec::new_in(arena.bottom_handle());
-v.push(1);
-v.push(2);
-v.push(3);
-```
-
-## Budget Contract
-
-The arena exposes a generic `Budget` type and a `fits_budget` method for compile-time bounds analysis.
+## Collections, Marks, Budgets, Stats
 
 ```rust
 use keleusma_arena::{Arena, Budget};
+use allocator_api2::vec::Vec as ArenaVec;
 
 let arena = Arena::with_capacity(4096);
-let budget = Budget::new(2048, 1024);  // bottom_bytes, top_bytes
-assert!(arena.fits_budget(&budget));
-```
 
-The Keleusma runtime computes its budget through static analysis of bytecode and uses `fits_budget` to enforce its bounded-memory guarantee. Independent users may compute budgets through profiling, manual analysis, or any other mechanism.
+// Collection backed by the arena.
+let mut v: ArenaVec<i32, _> = ArenaVec::new_in(arena.bottom_handle());
+v.push(1);
 
-## Mark and Rewind
-
-Each end supports a LIFO mark and rewind discipline.
-
-```rust
-use keleusma_arena::Arena;
-use core::alloc::Layout;
-
-let arena = Arena::with_capacity(1024);
+// LIFO discipline through marks.
 let mark = arena.bottom_mark();
-let _scratch = allocator_api2::alloc::Allocator::allocate(
-    &arena.bottom_handle(),
-    Layout::new::<[u64; 16]>(),
-).unwrap();
-// SAFETY: No live references to the scratch allocation remain.
+// ... allocate scratch ...
 unsafe { arena.rewind_bottom(mark); }
-assert_eq!(arena.bottom_used(), 0);
+
+// Budget contract.
+let budget = Budget::new(2048, 1024);
+assert!(arena.fits_budget(&budget));
+
+// Observability.
+println!("bottom peak: {}", arena.bottom_peak());
+println!("top peak: {}", arena.top_peak());
 ```
 
-Rewind and per-end reset are unsafe because they invalidate the contents of the rewound region. The caller is responsible for ensuring no live references remain.
+## Naming
 
-## Observability
-
-```rust
-use keleusma_arena::Arena;
-
-let arena = Arena::with_capacity(4096);
-// ... allocate ...
-println!("bottom used: {} bytes", arena.bottom_used());
-println!("top used: {} bytes", arena.top_used());
-println!("free: {} bytes", arena.free());
-println!("bottom peak: {} bytes", arena.bottom_peak());
-println!("top peak: {} bytes", arena.top_peak());
-```
-
-Peak watermarks are tracked since arena creation or the last `clear_peaks` call. Useful for sizing analysis and post-mortem inspection.
+`BottomHandle` and `TopHandle` are the canonical handle names, matching a vertical-buffer mental model where the bottom end starts at low addresses and grows up while the top end starts at high addresses and grows down. `StackHandle` and `HeapHandle` aliases cover code that prefers the conventional CPU-memory mental model where one end is treated as a stack and the other as a heap. The arena imposes no semantic distinction; users map their concepts to the two ends.
 
 ## Comparison with bumpalo
 
-| Property | bumpalo | keleusma-arena |
+| | bumpalo | keleusma-arena |
 |---|---|---|
-| Storage | Linked list of chunks. Auto-grows. | Single contiguous buffer. Fixed at construction. |
-| Allocation timing | Constant-time fast path. Chunk allocation occasional. | Constant-time always. |
-| Failure mode | Effectively only fails on global allocator exhaustion. | Returns `AllocError` on overflow. Fail-fast. |
-| Region structure | Single bump pointer. | Dual-end. Two pointers with a shared budget. |
-| Static bound | None. | `Budget` contract. |
-| `core`-only | No. Requires `alloc`. | Yes. `alloc` is opt-in. |
-| Target audience | General-purpose Rust. | Embedded, safety-critical, real-time, certifiable. |
+| Storage | Linked chunks. Auto-grows. | Single contiguous buffer. Fixed. |
+| Failure | Effectively only on global allocator exhaustion. | `AllocError` on overflow. Fail-fast. |
+| Region structure | One bump pointer. | Two, sharing a budget. |
+| `core`-only | No. | Yes, when `alloc` feature is off. |
+| Static-buffer constructor | No. | Yes. |
+| Budget contract | No. | Generic `Budget` type. |
 
-The two crates serve different niches. `bumpalo` is the right choice when memory is plentiful and growth is acceptable. `keleusma-arena` is the right choice when memory is fixed, predictability is essential, and the budget is part of the contract.
+`bumpalo` is the right choice when memory is plentiful and growth is acceptable. `keleusma-arena` is the right choice when memory is fixed and predictability is the contract.
 
 ## Features
 
@@ -150,8 +121,6 @@ MIT.
 
 ## Crate Family
 
-- [`keleusma`](https://crates.io/crates/keleusma). The Keleusma scripting language and runtime.
-- [`keleusma-macros`](https://crates.io/crates/keleusma-macros). Procedural macros used by the runtime.
+- `keleusma`. The Keleusma scripting language and runtime.
+- `keleusma-macros`. Procedural macros used by the runtime.
 - `keleusma-arena`. This crate.
-
-The arena is the original substrate that the runtime is built on. It is published as a standalone crate so that embedded users can adopt the discipline without taking on the full language runtime.

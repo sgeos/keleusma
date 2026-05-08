@@ -1,106 +1,63 @@
 //! Simple and boring memory allocator for exciting applications.
 //!
-//! `keleusma-arena` is a dual-end bump-allocated arena for embedded Rust.
-//! A single contiguous buffer holds two bump pointers that grow toward each
-//! other from opposite ends. Allocation is constant-time. Allocation fails
-//! when the two pointers would meet. The arena's discipline supports both
-//! ad-hoc embedded use and static analysis of memory bounds.
+//! A dual-end bump-allocated arena for embedded Rust. Single contiguous
+//! buffer. Two pointers growing toward each other from opposite ends.
+//! Constant-time allocation. Fail-fast on exhaustion. `core`-only when
+//! the `alloc` feature is off.
 //!
-//! # Design
+//! Born as the memory substrate of the Keleusma scripting language and
+//! extracted for general embedded use. See the README for the ecosystem
+//! pitch and the comparison with `bumpalo`.
 //!
-//! The arena offers two ends, named `Bottom` and `Top`. The bottom end
-//! starts at offset zero and grows upward toward higher addresses. The top
-//! end starts at the buffer's high address and grows downward toward lower
-//! addresses. The two ends share a single contiguous buffer with no fixed
-//! boundary. Either may consume any portion that the other has not.
+//! # Quick Reference
 //!
-//! These names are conventional. The arena imposes no semantic
-//! distinction between the two ends. Users may map their own concepts to
-//! the two ends as they see fit. A common mapping uses the bottom end for
-//! a stack-like region whose allocations follow LIFO order and the top
-//! end for a heap-like region whose allocations are reset together rather
-//! than freed individually. The Keleusma scripting runtime, the original
-//! consumer of this crate, follows this mapping. Independent users are
-//! free to do otherwise.
+//! Construct an arena with one of three constructors.
 //!
-//! # Storage
-//!
-//! The arena's backing storage is supplied at construction. Three
-//! constructors exist.
-//!
-//! - [`Arena::with_capacity`]. Allocates a `Box<[u8]>` from the global
-//!   allocator. Available only with the `alloc` feature, which is on by
-//!   default.
+//! - [`Arena::with_capacity`]. Heap-backed. Requires the `alloc` feature.
 //! - [`Arena::from_static_buffer`]. Borrows a `&'static mut [u8]`. Safe.
-//!   Suitable for embedded targets with link-time-allocated buffers, such
-//!   as static arrays placed in BSS or DATA, or fixed memory regions on
-//!   targets like the Game Boy Advance with IWRAM, EWRAM, and VRAM.
-//! - [`Arena::from_buffer_unchecked`]. Accepts a raw pointer and length.
-//!   Unsafe. The caller asserts that the buffer remains valid for the
-//!   arena's lifetime and that no aliasing access occurs.
+//! - [`Arena::from_buffer_unchecked`]. Raw pointer and length. Unsafe.
 //!
-//! The arena is `core`-compatible without `alloc` if only the static or
-//! unsafe constructors are used.
+//! Allocate through one of two handles.
 //!
-//! # Allocator Trait
+//! - [`BottomHandle`]. Allocates from offset zero, grows upward.
+//! - [`TopHandle`]. Allocates from buffer end, grows downward.
 //!
-//! [`BottomHandle`] and [`TopHandle`] are zero-cost handles that borrow
-//! an `Arena` and implement `allocator_api2::alloc::Allocator`. They can
-//! be passed to `allocator_api2::vec::Vec::new_in` and similar
-//! constructors to obtain arena-backed collections without changing the
-//! collection's type beyond its allocator parameter.
+//! [`StackHandle`] and [`HeapHandle`] are aliases for code that prefers
+//! the conventional CPU-memory mental model.
 //!
-//! The arena is not thread-safe. Interior mutability uses `Cell<usize>`
-//! for the bump pointers and peak watermarks rather than atomic
-//! primitives.
+//! Both handles implement `allocator_api2::alloc::Allocator`. Pass them
+//! to `Vec::new_in` and similar constructors for arena-backed
+//! collections.
 //!
-//! The arena is intended for scoped use through the `Allocator` trait.
-//! Setting it as the program's `#[global_allocator]` is possible but
-//! unusual and requires the user to wrap the arena in an interior-
-//! mutability container with thread-safe access. The crate does not
-//! provide such a wrapper.
+//! # Reset, Rewind, and Marks
 //!
-//! # Mark and Rewind
+//! [`Arena::reset`] takes `&mut self` and clears both ends safely.
 //!
-//! Each end exposes a mark and rewind discipline for LIFO usage. The
-//! safe [`Arena::bottom_mark`] and [`Arena::top_mark`] take a snapshot of
-//! the current bump pointer. The unsafe [`Arena::rewind_bottom`] and
-//! [`Arena::rewind_top`] restore an end to a previous mark. The unsafe
-//! [`Arena::reset_bottom`] and [`Arena::reset_top`] clear one end while
-//! leaving the other intact. The safe [`Arena::reset`] takes `&mut self`
-//! and clears both ends; the borrow checker ensures no outstanding
-//! handles exist at that point.
+//! Each end exposes a LIFO mark and rewind discipline. [`Arena::bottom_mark`]
+//! and [`Arena::top_mark`] are safe snapshot accessors. [`Arena::rewind_bottom`],
+//! [`Arena::rewind_top`], [`Arena::reset_bottom`], and [`Arena::reset_top`]
+//! are unsafe because they invalidate the rewound region while raw
+//! pointers obtained through the `Allocator` trait may still be held by
+//! the caller.
 //!
-//! Rewind and per-end reset are unsafe because they invalidate the
-//! contents of the rewound region. Subsequent allocations may overwrite
-//! data that the caller still references through raw pointers obtained
-//! via the `Allocator` trait. Higher-level collections such as
-//! `allocator_api2::vec::Vec` do not protect against this; the caller
-//! must drop or otherwise abandon any such collection before calling
-//! rewind.
+//! # Observability and Budget
 //!
-//! # Observability
+//! [`Arena::bottom_peak`] and [`Arena::top_peak`] track high watermarks
+//! since arena creation or the most recent [`Arena::clear_peaks`].
+//! [`Arena::bottom_used`], [`Arena::top_used`], [`Arena::free`], and
+//! [`Arena::capacity`] report current state.
 //!
-//! Each end tracks a peak watermark in addition to its current usage.
-//! [`Arena::bottom_peak`] and [`Arena::top_peak`] return the highest
-//! observed usage in bytes since the arena was created or since
-//! [`Arena::clear_peaks`] was last called. [`Arena::bottom_used`],
-//! [`Arena::top_used`], [`Arena::free`], and [`Arena::capacity`] report
-//! current state. The peak watermarks are useful for sizing analysis,
-//! namely determining the smallest arena that admits the program's
-//! observed behavior across a representative workload.
+//! [`Budget`] is a generic memory budget structure. Producers compute a
+//! budget through any analysis they choose. [`Arena::fits_budget`]
+//! checks whether the budget is admissible against the arena's capacity.
 //!
-//! # Budget Contract
+//! # Thread Safety
 //!
-//! [`Budget`] is a generic memory budget structure independent of any
-//! specific bytecode or analysis. Producers compute a budget from
-//! whatever analysis they choose. The arena's [`Arena::fits_budget`]
-//! method checks whether a budget is admissible against the arena's
-//! capacity. The Keleusma scripting runtime computes its budget through
-//! a static analysis of bytecode and uses `fits_budget` to enforce the
-//! bounded-memory guarantee at module load time. Independent users may
-//! compute budgets through profiling, manual analysis, or any other
-//! mechanism.
+//! Not thread-safe. Interior mutability uses `Cell<usize>` rather than
+//! atomic primitives. The arena is designed for scoped per-thread use
+//! through the `Allocator` trait. Setting it as the program's
+//! `#[global_allocator]` requires a thread-safe wrapper that this crate
+//! does not provide.
 
 #![no_std]
 #![cfg_attr(docsrs, feature(doc_cfg))]
@@ -534,6 +491,15 @@ unsafe impl Allocator for TopHandle<'_> {
         // No-op. Bump allocator reclaims at reset.
     }
 }
+
+/// Conventional alias for [`BottomHandle`]. Suitable for code that maps
+/// the arena's bottom end to a stack-like region with LIFO discipline.
+pub type StackHandle<'a> = BottomHandle<'a>;
+
+/// Conventional alias for [`TopHandle`]. Suitable for code that maps the
+/// arena's top end to a heap-like region whose allocations are reset
+/// together rather than freed individually.
+pub type HeapHandle<'a> = TopHandle<'a>;
 
 #[cfg(test)]
 mod tests {
