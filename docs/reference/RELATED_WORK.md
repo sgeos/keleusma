@@ -99,6 +99,35 @@ The gap between Keleusma's current implementation and industrial certification r
 
 Keleusma's design choices (no recursion, block-structured ISA, bounded loops, single-pass verification) are favorable for eventual certification because they reduce the verification burden. However, achieving certification for any specific standard and assurance level would require substantial additional work in formal methods, tool qualification, and evidence generation.
 
+## 8. Hot Code Update with Persistent State
+
+Long-running systems frequently require updates to executable code without interrupting service. Hot code update is the general term for replacing program code while the program continues running. The literature distinguishes update of the code text alone, which is comparatively well understood, from update of code together with persistent mutable state, which raises additional questions about state migration, schema compatibility, and the temporal point at which the update takes effect.
+
+Erlang and the Open Telecom Platform (OTP) provide the most extensive industrial precedent for hot code update. Armstrong's thesis describes the language and runtime design principles, including the multi-version code coexistence model in which two versions of any module may be loaded simultaneously [H1]. The OTP design principles formalize this through behaviors such as `gen_server`, where a `code_change` callback receives the previous state value and produces the new state value at the moment of the upgrade. Cesarini and Thompson document the engineering practice of hot code upgrade in production Erlang systems [H2]. The defining property of the OTP model is that the upgrade transition is mediated by a callback under the application's control, which permits arbitrary schema migration but introduces a trust boundary between the runtime and the application.
+
+In the synchronous reactive language tradition, the closest analogue to hot code update is the mode change construct. SCADE 6 supports state machines with mode transitions in which the state of the source mode is either preserved or discarded according to whether the transition is weak or strong [SC1]. Maraninchi and Rémond's mode-automata extend Lustre with explicit mode constructs that compose with the synchronous data flow semantics, and define the formal semantics of mode transition with respect to the underlying state vector [H3]. The mode change boundary in SCADE corresponds closely to the RESET boundary in Keleusma. The state vector in SCADE corresponds closely to the data segment.
+
+A distinct line of work concerns dynamic update of running C programs and operating system kernels. Arnold and Kaashoek's Ksplice provides automatic rebootless kernel updates by analyzing source patches and inserting redirection trampolines at quiescent points in the kernel call graph [H4]. Hayden, Smith, Denchev, Hicks, and Foster's Kitsune extends dynamic software update to general-purpose C programs by inserting update points into long-running loops and providing a state transformation language for migrating heap data across versions [H5]. The literature on kernel and C-program live update emphasizes safe points and stack quiescence as preconditions for an update to be applied. The RESET boundary in Keleusma is by construction such a safe point.
+
+The conventional executable memory layout, with sections for code, read-only data, preinitialized read-write data, and zero-initialized read-write data, provides the engineering vocabulary for the Keleusma memory model. The four sections are commonly written as `.text`, `.rodata`, `.data`, and `.bss`. This layout originates in the Unix linker and assembler tradition and is codified in the System V Application Binary Interface and in the Executable and Linkable Format. Keleusma adopts this analogy as its organizing frame for runtime memory.
+
+**Relationship to Keleusma.** Keleusma adopts the multi-version code coexistence model from Erlang and OTP, with the host responsible for installing and selecting code versions. The RESET boundary serves as the point at which an update takes effect, analogous to a strong mode transition in SCADE. The data segment is conceptually the state vector of a SCADE mode automaton or the persistent state of an OTP `gen_server`. The four memory regions of the Keleusma runtime correspond directly to the four conventional executable sections.
+
+| Keleusma region | Conventional analogue | Properties |
+|---|---|---|
+| Bytecode chunks | `.text` | Immutable, double-buffered, swappable at RESET. |
+| Constant pool and templates | `.rodata` | Immutable, swappable at RESET alongside text. |
+| Data segment | `.data` | Mutable, persistent across yield and reset, host-owned, schema may change at hot update. |
+| Arena and operand stack | `.bss` | Mutable, ephemeral within a stream phase, cleared at RESET. |
+
+Keleusma differs from Erlang and OTP in two specific ways. The host owns the data segment storage rather than the runtime. There is therefore no `code_change` callback within the script. Instead, the host is responsible for supplying whatever data segment instance is appropriate at each RESET, including possibly a migrated instance, a freshly initialized instance, or the unchanged previous instance. This is referred to as Replace semantics in the architecture documents. Schema may change arbitrarily across hot updates because the script never observes any cross-update invariant on the data segment beyond what the host elects to provide.
+
+Keleusma differs from SCADE mode automata in that the schema of the state vector is permitted to change across the mode transition when that transition coincides with a hot code update. SCADE's mode automaton model fixes the state vector at code generation time. Keleusma's model places this responsibility on the host, which permits schema flexibility at the cost of moving the verification responsibility to the host as well. This division of concerns is consistent with the broader Keleusma philosophy in which the script is austere and certifiable while the host is rich and responsible for orchestration.
+
+Keleusma differs from Ksplice and Kitsune in that update points are explicit and structurally enforced rather than inferred. RESET is the only update point. Stack quiescence is trivial because the operand stack is empty at RESET by construction.
+
+The atomicity of the swap in Keleusma is logical only. The new code text must be resident in memory before it is eligible for installation. The host writes the candidate slot and the VM reads it at the next RESET. Crash atomicity, namely recovery from a fault that interrupts the swap, is the responsibility of the host platform. The Ksplice and Kitsune literature treats this question in detail and provides a model for what would be required of the host if Keleusma were deployed in a context where crash atomicity is required.
+
 ## Cross-References
 
 - [LANGUAGE_DESIGN.md](../architecture/LANGUAGE_DESIGN.md) describes the design goals and four guarantees.
@@ -174,3 +203,15 @@ Keleusma's design choices (no recursion, block-structured ISA, bounded loops, si
 [IC3] International Electrotechnical Commission. IEC 61508: Functional Safety of Electrical/Electronic/Programmable Electronic Safety-Related Systems. Parts 1-7. Edition 2, 2010.
 
 [IC4] International Organization for Standardization. ISO 26262: Road Vehicles -- Functional Safety. Parts 1-12. Edition 2, 2018.
+
+### Hot Code Update
+
+[H1] J. Armstrong. "Making Reliable Distributed Systems in the Presence of Software Errors." PhD thesis, The Royal Institute of Technology, Stockholm, 2003.
+
+[H2] F. Cesarini and S. Thompson. Erlang Programming. O'Reilly Media, 2009.
+
+[H3] F. Maraninchi and Y. Rémond. "Mode-Automata: A New Domain-Specific Construct for the Development of Safe Critical Systems." Science of Computer Programming, 46(3):219-254, 2003.
+
+[H4] J. Arnold and M. F. Kaashoek. "Ksplice: Automatic Rebootless Kernel Updates." In Proceedings of the 4th ACM European Conference on Computer Systems (EuroSys), pages 187-198. ACM, 2009.
+
+[H5] C. M. Hayden, E. K. Smith, M. Denchev, M. Hicks, and J. S. Foster. "Kitsune: Efficient, General-Purpose Dynamic Software Updating for C." In Proceedings of the ACM International Conference on Object Oriented Programming Systems Languages and Applications (OOPSLA), pages 249-264. ACM, 2012.

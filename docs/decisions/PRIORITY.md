@@ -19,3 +19,14 @@ What should happen when a script encounters a runtime error? Options include yie
 ## ~~P4. Structural ISA implementation~~ (Resolved as R22)
 
 ## ~~P5. WCET analysis tooling~~ (Resolved as R23)
+
+## P6. Data segment implementation completion
+
+The data segment design is specified across R24 through R28. The compile-time and verifier-time conformance items are implemented. The remaining items concern host integration and end-to-end coverage.
+
+1. ~~Enforce the singular data block constraint (R28) at compile time with a clear diagnostic.~~ Complete.
+2. ~~Enforce the fixed-size field type constraint at the data block declaration boundary, per the table in [TYPE_SYSTEM.md](../design/TYPE_SYSTEM.md).~~ Complete.
+3. ~~Extend the structural verifier to reject `GetData` and `SetData` operands that exceed the segment slot count.~~ Complete.
+4. Define the host interoperability layer that maps the declared schema to a Rust struct of fixed layout, including the `repr(C)` discipline or an offset-based accessor scheme. Open. Interacts with the schema mismatch detection question, namely whether the VM trusts the host, compares schema hashes, or performs structural type checking.
+5. Specify the concurrency contract that the script holds exclusive ownership during execution and the host holds ownership at YIELD and RESET.
+6. Add end-to-end integration tests covering data segment read, write, persistence across yield, persistence across reset, and schema change across hot update. Requires host-side support per item 4.

@@ -69,17 +69,22 @@ Keleusma provides four static guarantees about program behavior.
 
 ## Memory Model
 
-Keleusma uses an arena memory model. The arena is a single contiguous allocation using bump allocation. The stack grows from one end. There is no heap initially. The arena persists across yields within an iteration but is cleared at the top of every productive divergent function iteration (the RESET boundary). Deallocation occurs only at RESET, when the entire arena is cleared by resetting the bump pointer. This prevents memory leaks and ensures predictable resource usage. No memory survives across RESET boundaries. Memory bounds are statically analyzable.
+The Keleusma runtime memory layout corresponds to the four conventional executable sections found in the Unix linker tradition and the System V Application Binary Interface, namely `.text`, `.rodata`, `.data`, and `.bss`. This analogy is the organizing frame for runtime memory. See [EXECUTION_MODEL.md](./EXECUTION_MODEL.md) for the detailed specification and [RELATED_WORK.md](../reference/RELATED_WORK.md) Section 8 for the academic and engineering precedents.
 
-Clear separation exists between three memory regions.
+| Region | Conventional analogue | Mutability | Lifetime |
+|---|---|---|---|
+| Bytecode chunks | `.text` | Immutable | Until hot swap at RESET |
+| Constant pool and templates | `.rodata` | Immutable | Until hot swap at RESET |
+| Data segment | `.data` | Mutable | Persists across yield and reset |
+| Arena and operand stack | `.bss` | Mutable | Cleared at RESET |
 
-- **Arena (bump-allocated).** Ephemeral per iteration. Single contiguous buffer with stack growing from one end. Cleared at RESET.
-- **Read-only sections (rodata + text).** Immutable program code and constant data. Double-buffered and swappable at RESET boundaries during hot code swaps.
-- **Host-controlled state.** External to the VM, managed by the host application.
+The Keleusma source language is purely functional with respect to script-defined values. Local bindings, the operand stack, and the arena are conceptually immutable at the surface language level. The data segment is the sole region of mutable state observable to the script that persists beyond a single function activation. The host owns the data segment storage and presents it to the script as a preinitialized `.data` section. Scripts read and write the segment through a fixed schema declared in a `data` block. The schema is fixed within a single code image and may change arbitrarily across hot updates. Cross-yield value preservation is not guaranteed. The host may write to the segment between yields. The data segment design draws on the persistent state model of the Erlang and Open Telecom Platform multi-version code coexistence pattern [H1, H2] and on the state vector model of mode automata in the synchronous reactive language tradition [H3, SC1].
+
+The arena is a single contiguous allocation using bump allocation. The stack grows from one end. The arena persists across yields within an iteration but is cleared at the RESET boundary by resetting the bump pointer. Memory bounds are statically analyzable.
 
 ## Hot Code Swapping
 
-Keleusma supports swapping the text and rodata segments at the boundary of a productive divergent function iteration (the RESET point). Only the dialogue type (the yield contract `A -> B`) must remain constant across swaps. Different routines may have different WCETs, and each is certified independently. The arena is cleared before the new code begins executing, ensuring zero memory debt across swap boundaries.
+Keleusma supports hot code swapping at the RESET boundary of a productive divergent function iteration. Only the dialogue type, namely the yield contract from A to B, must remain invariant across swaps. Text, rodata, and the data segment schema may all change across a swap. Different routines may have different WCETs, and each is certified independently. The arena is cleared before the new code begins executing, ensuring zero memory debt across swap boundaries. Cross-swap data segment value handling follows Replace semantics, in which the host atomically supplies the data instance appropriate for the new code version. The host may keep, modify, migrate, or substitute the underlying storage transparently. Atomicity is logical only. The new image must be resident before the candidate is eligible for installation. Rollback is mechanically identical to a forward update with an older code version selected. The model parallels the Erlang and Open Telecom Platform multi-version code coexistence pattern [H1, H2], with the simplification that the migration callback resides in the host rather than in the script. See [EXECUTION_MODEL.md](./EXECUTION_MODEL.md) for the full specification.
 
 ## WCET Analysis
 

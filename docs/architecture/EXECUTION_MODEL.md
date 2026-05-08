@@ -55,32 +55,67 @@ Infinite Execution (via RESET cycle)
 
 This defines a two-clock deterministic control VM. Fine-grained scheduling operates via YIELD. Coarse-grained phase control operates via RESET.
 
-## Arena Memory Model
+## Memory Model
 
-The arena is a single contiguous allocation using bump allocation. The stack grows from one end of the arena. There is no heap initially. Allocations advance a pointer linearly through the contiguous buffer. Deallocation occurs only at RESET, when the entire arena is cleared by resetting the bump pointer to the start. This design eliminates fragmentation and ensures O(1) allocation and deallocation.
+The runtime memory layout corresponds directly to the four conventional executable sections found in the Unix linker tradition and the System V Application Binary Interface, namely `.text`, `.rodata`, `.data`, and `.bss`. This analogy is the organizing frame for runtime memory and is used throughout the documentation. See [RELATED_WORK.md](../reference/RELATED_WORK.md) Section 8 for the full discussion.
 
-The arena persists across yields within a single stream phase. It is cleared only at RESET. No dynamic allocation survives across phases. Memory bounds are statically analyzable per stream phase.
+| Region | Conventional analogue | Contents | Mutability | Lifetime |
+|---|---|---|---|---|
+| Bytecode chunks | `.text` | Compiled instruction sequences | Immutable | Until hot swap at RESET |
+| Constant pool and templates | `.rodata` | Constants, struct templates, enum definitions | Immutable | Until hot swap at RESET |
+| Data segment | `.data` | Host-supplied preinitialized context | Mutable | Persists across yield and reset |
+| Arena and operand stack | `.bss` | Working storage for one stream phase | Mutable | Cleared at RESET |
 
-Three memory regions exist.
+### Arena and Operand Stack
 
-- **Arena.** Ephemeral per stream phase. Single contiguous bump-allocated buffer with stack growing from one end. Cleared at RESET.
-- **Read-only sections.** Immutable text (code) and rodata (constants). Double-buffered and swappable at RESET boundaries.
-- **Host state.** External to the VM. Managed by the host application.
+The arena is a single contiguous allocation using bump allocation. The operand stack grows from one end of the arena. There is no heap initially. Allocations advance a pointer linearly through the contiguous buffer. Deallocation occurs only at RESET, when the entire arena is cleared by resetting the bump pointer to the start. This design eliminates fragmentation and ensures O(1) allocation and deallocation.
+
+The arena persists across yields within a single stream phase. It is cleared only at RESET. No arena memory survives across phases. Memory bounds are statically analyzable per stream phase.
+
+### Data Segment
+
+The data segment is a fixed-size, fixed-layout region of mutable storage owned by the host and presented to the script as a preinitialized `.data` section. It is the sole region of mutable state observable to the script that persists beyond a single function activation. Scripts read and write the segment through `GetData` and `SetData` instructions, which address slots by index. The host is responsible for supplying a memory instance that conforms to the schema declared by the script.
+
+Cross-yield value preservation is not guaranteed. The host may write to the segment between yields and is expected to do so in many designs. Within a single code image, the schema is fixed at compile time and does not change. Across hot updates, the schema may change arbitrarily because hot updates occur only at RESET, where no script invariant spans the boundary on the script side. Cross-swap value handling follows Replace semantics, in which the host atomically supplies the data instance appropriate for the new code version. The host may keep, modify, migrate, or substitute the underlying storage transparently.
+
+Concurrency is single-ownership. The script holds exclusive access to the segment while executing. Ownership returns to the host at YIELD and at RESET. Concurrent access from another host thread during script execution is unspecified.
+
+The data segment design draws on the persistent state model of the Erlang and Open Telecom Platform multi-version code coexistence pattern [H1, H2] and on the state vector model of mode automata in the synchronous reactive language tradition [H3, SC1].
+
+### Host State
+
+External to the VM and managed by the host application. Not directly observable to the script except through the data segment and through native function calls.
 
 ## Hot Code Swapping
 
-Hot code swapping occurs only at RESET boundaries and uses double buffering. The following requirements apply.
+Hot code swapping occurs only at RESET boundaries. The following requirements apply.
 
-- The YIELD signature (dialogue type A exchanged for B) remains invariant across the entire STREAM and across swaps.
-- Only text and rodata segments may change.
+- The YIELD signature, namely the dialogue type A exchanged for B, remains invariant across the entire STREAM and across swaps.
+- Text, rodata, and the data segment schema may all change across a swap. Only the dialogue type is invariant.
 - The arena is cleared before new code executes.
 - WCET and reset-to-reset bounds are certified per routine independently.
 
-Different routines (f vs g) may have different WCETs, which are declared in a static header for the host scheduler to validate before accepting the swap.
+Different routines may have different WCETs, which are declared in a static header for the host scheduler to validate before accepting the swap.
 
-### Double-Buffered Swap Mechanism
+### Atomicity
 
-The host loads new text and rodata into a secondary buffer while the current code continues executing in the primary buffer. When the VM reaches RESET, it activates the secondary buffer, making it the new primary. The old primary buffer is retained as the secondary, available for rollback if the host determines that the new code should be reverted. This mechanism ensures that the swap is atomic from the VM's perspective and that no partially loaded code is ever executed.
+Atomicity is logical only. The new code text and rodata must be resident in memory and the host-supplied data segment instance must conform to the new schema before the candidate is eligible for installation. The host writes the candidate slot. The VM reads the slot at the next RESET and applies the swap as a single atomic transition from the script's point of view. Crash atomicity, namely recovery from a fault that interrupts the swap, is the responsibility of the host platform and is out of scope for the VM specification. The Ksplice and Kitsune literature treats this question in detail [H4, H5].
+
+### Cross-Swap Value Handling
+
+Value handling across the swap follows Replace semantics. The host owns the data segment storage and supplies a memory instance appropriate for the new code version. From the script's point of view, the data segment seen after RESET is whatever the host presents. The host may transparently keep, modify, migrate, or substitute the underlying storage, including supplying an instance of an entirely different schema if the new code requires it. This is consistent with the multi-version code coexistence pattern of Erlang and the Open Telecom Platform [H1, H2], with the simplification that the migration callback resides in the host rather than in the script.
+
+### Rollback
+
+Rollback occurs at RESET and is mechanically identical to a forward update with an older code version selected. The host bears responsibility for tracking which code versions are eligible and for supplying a data segment instance compatible with the selected version. From the script's point of view, rollback is indistinguishable from any other update.
+
+### Stale Slot Behavior
+
+The most recent valid code version runs at each RESET. If no new candidate has been slotted, the existing image continues. After a rollback, the host must mark the rejected version as ineligible or must operate in a rollback mode so that the VM does not automatically reinstall the rejected candidate at the next opportunity.
+
+### Update Points and Stack Quiescence
+
+RESET is the only update point. Stack quiescence is trivial because the operand stack is empty at RESET by construction. This contrasts with the dynamic software update literature for general-purpose C programs, where update points must be inferred and stack quiescence must be reasoned about explicitly [H4, H5]. The structural ISA of Keleusma makes both properties hold by construction.
 
 ## Turing Completeness
 

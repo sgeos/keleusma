@@ -22,21 +22,29 @@ Key terminology used in the Keleusma documentation and source code. Citations us
 
 **Cost table** -- A mapping from each bytecode instruction to its execution cost in abstract time units, implemented as `Op::cost()` in `src/bytecode.rs`. Costs are relative integer weights across five tiers: 1 for data movement, 2 for arithmetic, 3 for division and field lookup, 5 for composite construction, and 10 for function calls. Used by `wcet_stream_iteration()` for worst-case execution time analysis. These values are preliminary and subject to refinement.
 
-**Dialogue type** -- The pair of types (A, B) that defines the yield contract between a stream program and its host. Input A is provided by the host on resume. Output B is produced by the program on yield. The dialogue type must remain invariant across hot code swaps.
+**Data segment** -- The fourth memory region in the Keleusma runtime, corresponding to the conventional `.data` section of an executable. A fixed-size, fixed-layout region of mutable storage owned by the host and presented to the script as a preinitialized context. Declared in source through a singular `data` block. Read and written via `GetData` and `SetData` instructions. Persists across yield and reset boundaries. Schema may change arbitrarily across hot updates. Conceptually analogous to the persistent state of an Open Telecom Platform `gen_server` [H1, H2] and to the state vector of a SCADE mode automaton [H3, SC1]. See [EXECUTION_MODEL.md](../architecture/EXECUTION_MODEL.md) and [RELATED_WORK.md](./RELATED_WORK.md) Section 8.
+
+**Dialogue type** -- The pair of types (A, B) that defines the yield contract between a stream program and its host. Input A is provided by the host on resume. Output B is produced by the program on yield. The dialogue type is the only invariant required across hot code swaps. Text, rodata, and the data segment schema may all change.
 
 **Double buffering** -- The hot swap mechanism. The host loads new text and rodata into a secondary buffer while the current code continues executing. RESET activates the new buffer. The old buffer is retained for rollback.
 
 **Guard clause** -- A boolean condition attached to a function head using the `when` keyword. Evaluated after pattern matching succeeds. Limited to comparisons and logical operators.
 
-**Host** -- The Rust application that embeds the Keleusma VM, registers native functions, and drives coroutine execution by calling `call()` and `resume()`.
+**Host** -- The Rust application that embeds the Keleusma VM, registers native functions, and drives coroutine execution by calling `call()` and `resume()`. The host owns the data segment storage and is responsible for installing and selecting code versions across hot updates.
+
+**Hot code update** -- The replacement of executable code while the program continues running. In Keleusma, hot code updates occur only at RESET. Text, rodata, and the data segment schema may all change across an update. Only the dialogue type is invariant. Cross-swap data segment value handling follows Replace semantics. Atomicity is logical only. Rollback is mechanically identical to a forward update with an older code version selected. Drawn from the multi-version code coexistence model of Erlang and the Open Telecom Platform [H1, H2] with adaptation for the synchronous reset boundary of Keleusma. See [RELATED_WORK.md](./RELATED_WORK.md) Section 8.
 
 **Keleusma** -- A Total Functional Stream Processor that compiles to bytecode. The name derives from the Greek word for a command or signal, specifically the rhythmic calls used by ancient Greek rowing masters to coordinate oar strokes.
 
 **keleusma_type** -- A Rust attribute macro (`#[keleusma_type]`) that enforces interoperable memory layout on host types used in the dialogue signature. Ensures the host and VM agree on binary representation of A and B types.
 
+**Logical atomicity** -- The property that the script never observes a partial hot swap. Either the entire old image is in effect or the entire new image is in effect. Realized by requiring the new code text and rodata to be resident and the host-supplied data segment instance to conform to the new schema before the candidate is eligible for installation. Distinct from crash atomicity, which concerns recovery from a fault during the swap and is the responsibility of the host platform [H4, H5].
+
 **Loop function** -- A function declared with the `loop` keyword that never exits. Must yield on every iteration. Exactly one per script. Serves as the coroutine entry point.
 
-**Module** -- The compiled output of the compiler. Contains chunks for compiled functions, an entry point index, and enum definitions.
+**Mode change** -- A construct in the synchronous reactive language tradition that transitions a program between distinct operating modes with associated state vectors [H3, SC1]. The Keleusma RESET boundary is the closest analogue, and the data segment is the closest analogue to the SCADE mode automaton state vector. Keleusma extends the model by permitting the schema of the state vector to change when the transition coincides with a hot code update.
+
+**Module** -- The compiled output of the compiler. Contains chunks for compiled functions, an entry point index, enum definitions, and an optional data segment layout.
 
 **Multiheaded function** -- Multiple function definitions with the same name and arity that form a single logical function. Dispatch selects the first head whose pattern matches the arguments.
 
@@ -56,11 +64,17 @@ Key terminology used in the Keleusma documentation and source code. Citations us
 
 **REENTRANT block** -- A structural ISA block type that must contain at least one YIELD. Used for logic that interacts with the host. Corresponds to non-atomic total functions and productive divergent functions in the surface language.
 
-**RESET** -- A structural ISA primitive that clears the arena, performs a hot swap if scheduled, and jumps to the STREAM entry point. RESET is the only instruction allowed to target STREAM and is the only global back-edge in the program.
+**Replace semantics** -- The cross-swap value-handling discipline for the data segment. The host owns the data segment storage and supplies a memory instance appropriate for the new code version at each RESET. The script observes whatever the host presents, with no obligation on the host to preserve any field across the swap. The host may keep, modify, migrate, or substitute the underlying storage transparently. The simplification relative to the Open Telecom Platform `code_change` callback model [H1, H2] is that the migration responsibility resides in the host rather than in the script.
+
+**RESET** -- A structural ISA primitive that clears the arena, performs a hot swap if scheduled, and jumps to the STREAM entry point. RESET is the only instruction allowed to target STREAM and is the only global back-edge in the program. RESET is the only update point at which a hot code update may take effect.
 
 **Soundness** -- The property that a verification pass rejects all invalid programs. A sound verifier never accepts a program that violates the property it checks. The structural verifier's soundness has not been formally proven. See [RELATED_WORK.md](./RELATED_WORK.md) Section 7 for the certification gap analysis.
 
+**Schema** -- The number, names, and types of fields declared in a `data` block. Within a single code image the schema is fixed at compile time. Across hot updates the schema may change arbitrarily because the update applies at RESET and the host supplies a conforming data segment instance.
+
 **Span** -- A source location record containing byte offsets, line number, and column number. Attached to tokens and AST nodes for error reporting.
+
+**Stack quiescence** -- The property that the operand stack contains no values whose interpretation depends on the previous code version at the moment of a hot code update. In Keleusma, stack quiescence holds trivially because the operand stack is empty at RESET by construction. This contrasts with the dynamic software update literature for general-purpose C programs, where stack quiescence must be reasoned about explicitly [H4, H5].
 
 **Synchronous hypothesis** -- The assumption, originating in the synchronous reactive language tradition [L1, SY1], that computation completes within one logical tick. In Keleusma, each yield-to-yield slice corresponds to one logical tick, and the bounded-step invariant ensures that each tick completes in bounded time.
 

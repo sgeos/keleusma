@@ -116,6 +116,31 @@ All values in the virtual machine are represented as variants of the `Value` enu
 
 The `Struct` variant stores the type name as a string and the fields as an ordered collection of name-value pairs. The `Enum` variant additionally stores the variant name. This representation allows pattern matching and field access at runtime without requiring type metadata beyond what is embedded in the value itself.
 
+## Data Segment Field Types
+
+Fields declared in a `data` block are subject to a stricter constraint than ordinary value types. Each field must have a statically known fixed size. This constraint follows directly from the `.data` section analogy described in [LANGUAGE_DESIGN.md](../architecture/LANGUAGE_DESIGN.md). The host context struct must have a fixed layout and size to be installable as the preinitialized region for a code image.
+
+The following type expressions are admissible as data segment field types.
+
+| Type form | Admissible | Rationale |
+|---|---|---|
+| `i64`, `f64`, `bool` | Yes | Fixed-size primitives. |
+| `()` | Yes | Zero-size unit. |
+| Fixed-arity tuple of admissible types | Yes | Compositional. |
+| Fixed-length array `[T; N]` of admissible elements | Yes | Size is element size times length. |
+| `Option<T>` where `T` is admissible | Yes | Tag plus payload, fixed size. |
+| Nominal struct of admissible fields | Yes | Compositional. |
+| Nominal enum where all variants have admissible payloads | Yes | Discriminator plus the maximum-size payload. |
+| `String` | No | Variable length. Backing storage cannot be inlined into a fixed-size segment. |
+| Variable-length array | No | Variable length. |
+| Opaque types | Conditional | Admissible only if the host declares a fixed size for the type. Subject to future specification. |
+
+The constraint is enforced at the data block declaration boundary. Programs that declare data fields with non-admissible types are rejected at compile time with a clear diagnostic referencing the offending field.
+
+The ordinary value types described above remain available without restriction in function parameters, return types, local bindings, and constant pool entries. The fixed-size constraint applies specifically to data segment field declarations.
+
 ## Cross-References
 
 - [GRAMMAR.md](./GRAMMAR.md) Section 3 provides the formal syntax for type expressions.
+- [LANGUAGE_DESIGN.md](../architecture/LANGUAGE_DESIGN.md) describes the four memory regions and the `.data` analogy.
+- [EXECUTION_MODEL.md](../architecture/EXECUTION_MODEL.md) specifies the data segment ownership and lifetime.

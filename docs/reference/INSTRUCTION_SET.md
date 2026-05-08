@@ -98,6 +98,13 @@ For details on how bytecode is generated from source, see [COMPILATION_PIPELINE.
 | WrapSome | none | 1 | Pop value, wrap in Option::Some |
 | PushNone | none | 1 | Push Option::None |
 
+## Data Segment
+
+| Instruction | Operands | Cost | Description |
+|-------------|----------|------|-------------|
+| GetData | u16 slot | 1 | Push data segment slot value onto stack |
+| SetData | u16 slot | 1 | Pop value and store into data segment slot |
+
 ## Field Access
 
 | Instruction | Operands | Cost | Description |
@@ -134,7 +141,7 @@ Costs are relative weights used by `wcet_stream_iteration()` for worst-case exec
 
 | Cost | Instructions |
 |------|-------------|
-| 1 | Const, PushUnit, PushTrue, PushFalse, GetLocal, SetLocal, Pop, Dup, PushNone, WrapSome, Not, If, Else, EndIf, Loop, EndLoop, Break, BreakIf, Stream, Reset, Yield, Trap |
+| 1 | Const, PushUnit, PushTrue, PushFalse, GetLocal, SetLocal, GetData, SetData, Pop, Dup, PushNone, WrapSome, Not, If, Else, EndIf, Loop, EndLoop, Break, BreakIf, Stream, Reset, Yield, Trap |
 | 2 | Add, Sub, Mul, Neg, CmpEq, CmpNe, CmpLt, CmpGt, CmpLe, CmpGe, GetIndex, GetTupleField, GetEnumField, Len, IntToFloat, FloatToInt, Return |
 | 3 | Div, Mod, GetField, IsEnum, IsStruct |
 | 5 | NewStruct, NewEnum, NewArray, NewTuple |

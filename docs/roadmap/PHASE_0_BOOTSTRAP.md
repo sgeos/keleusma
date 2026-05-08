@@ -26,7 +26,7 @@ Establish Keleusma as a standalone project with documentation, tests, and a stab
 
 ## Entry Criteria
 
-Crate source code functional with 205 passing tests.
+Crate source code functional with 216 passing tests.
 
 ## Exit Criteria
 

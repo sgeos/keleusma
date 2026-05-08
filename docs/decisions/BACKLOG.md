@@ -18,7 +18,7 @@ Closures or anonymous functions would enable higher-order programming patterns s
 
 ## B4. Hot code swap implementation
 
-The design specifies hot swapping of text and rodata segments at RESET boundaries. The dialogue type (A -> B) must remain invariant across swaps. Different routines may have different WCETs, and each is certified independently. The arena is cleared before new code executes, ensuring zero memory debt. The mechanism is double buffering with rollback (R19). Implementation requires host-side support.
+The design specifies hot swapping of text, rodata, and the data segment schema at RESET boundaries. Only the dialogue type (A -> B) must remain invariant across swaps (R25). Different routines may have different WCETs, and each is certified independently. The arena is cleared before new code executes, ensuring zero memory debt. Cross-swap data segment value handling follows Replace semantics with the host owning storage and migration responsibility (R26). Atomicity is logical only (R27). Rollback is mechanically identical to a forward update. Implementation requires host-side support for candidate slotting, version retention, and data segment instance supply.
 
 ## ~~B5. Structural verification implementation~~ (Resolved as R22, R23)
 

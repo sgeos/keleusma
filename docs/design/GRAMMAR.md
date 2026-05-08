@@ -631,7 +631,7 @@ File extension: `.kma`
 ## 11. Formal Grammar (EBNF)
 
 ````
-program         = { use_decl } { type_def } { function_def }
+program         = { use_decl } { type_def | data_decl } { function_def }
 
 (* Imports *)
 use_decl        = 'use' module_path '::' ( lower_ident | '*' )
@@ -644,6 +644,10 @@ field_decl      = lower_ident ':' type_expr
 enum_def        = 'enum' upper_ident '{' { variant_decl } '}'
 variant_decl    = upper_ident [ '(' type_list ')' ]
 type_list       = type_expr { ',' type_expr }
+
+(* Data Declarations *)
+data_decl       = 'data' lower_ident '{' { data_field_decl } '}'
+data_field_decl = lower_ident ':' type_expr
 
 (* Types *)
 type_expr       = prim_type | upper_ident | tuple_type | array_type | option_type
