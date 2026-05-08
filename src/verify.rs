@@ -199,6 +199,278 @@ fn wcet_region(ops: &[Op], start: usize, end: usize, break_costs: &mut Vec<u32>)
     Some(cost)
 }
 
+/// Result of WCMU analysis over a region.
+#[derive(Debug, Clone, Copy)]
+struct McuResult {
+    /// Maximum stack depth observed during the region, relative to the
+    /// initial stack offset at the start of the region.
+    peak_above_initial: u32,
+    /// Stack offset at the end of the region, relative to the initial
+    /// offset. May be negative conceptually if the region pops more than
+    /// it pushes; we saturate at zero because the verifier guarantees the
+    /// program is structurally valid.
+    delta: i32,
+    /// Total bytes allocated to the arena heap by the region, summed
+    /// along the path that reaches `end`.
+    heap_total: u32,
+}
+
+impl McuResult {
+    fn empty() -> Self {
+        Self {
+            peak_above_initial: 0,
+            delta: 0,
+            heap_total: 0,
+        }
+    }
+}
+
+/// Compute the worst-case memory usage over a region of instructions
+/// `[start, end)`. The analysis tracks operand-stack depth in slots and
+/// arena heap bytes.
+///
+/// At control flow joins, the peak stack and heap total are taken as the
+/// maximum across branches. The stack delta is taken from the branch that
+/// reaches `end`, with the convention that the surface compiler ensures
+/// branches end at the same depth.
+///
+/// For loops, the body is treated as one iteration. This mirrors the
+/// existing WCET limitation and is unsound for variable-iteration loops.
+/// Programs that compile from bounded for-range loops produce sound
+/// bounds at their static iteration count, but the analysis here
+/// underestimates by the iteration factor. A future pass will lift this
+/// limitation.
+///
+/// Returns `Some(McuResult)` for paths that fall through to `end`.
+/// Returns `None` if all paths exit via Break.
+fn wcmu_region(
+    chunk: &Chunk,
+    start: usize,
+    end: usize,
+    break_results: &mut Vec<McuResult>,
+) -> Option<McuResult> {
+    let ops = &chunk.ops;
+    let mut current_offset: i32 = 0;
+    let mut peak: u32 = 0;
+    let mut heap: u32 = 0;
+    let mut ip = start;
+
+    while ip < end {
+        let op = &ops[ip];
+        match op {
+            Op::Break(_) => {
+                let shrink = op.stack_shrink() as i32;
+                let growth = op.stack_growth() as i32;
+                let during_peak = (current_offset + growth).max(0) as u32;
+                peak = peak.max(during_peak);
+                heap += op.heap_alloc(chunk);
+                current_offset += growth - shrink;
+                break_results.push(McuResult {
+                    peak_above_initial: peak,
+                    delta: current_offset,
+                    heap_total: heap,
+                });
+                return None;
+            }
+            Op::BreakIf(_) => {
+                let shrink = op.stack_shrink() as i32;
+                let growth = op.stack_growth() as i32;
+                let during_peak = (current_offset + growth).max(0) as u32;
+                peak = peak.max(during_peak);
+                heap += op.heap_alloc(chunk);
+                current_offset += growth - shrink;
+                break_results.push(McuResult {
+                    peak_above_initial: peak,
+                    delta: current_offset,
+                    heap_total: heap,
+                });
+                ip += 1;
+            }
+            Op::If(target) => {
+                // Account for the If instruction itself before recursing.
+                let shrink = op.stack_shrink() as i32;
+                let growth = op.stack_growth() as i32;
+                let during_peak = (current_offset + growth).max(0) as u32;
+                peak = peak.max(during_peak);
+                heap += op.heap_alloc(chunk);
+                current_offset += growth - shrink;
+
+                let target = *target as usize;
+                if target > 0 && matches!(&ops[target - 1], Op::Else(_)) {
+                    let endif_pos = if let Op::Else(e) = &ops[target - 1] {
+                        *e as usize
+                    } else {
+                        unreachable!()
+                    };
+                    let then_branch =
+                        wcmu_subregion(chunk, ip + 1, target - 1, current_offset, break_results);
+                    let else_branch =
+                        wcmu_subregion(chunk, target, endif_pos, current_offset, break_results);
+                    match (then_branch, else_branch) {
+                        (Some(a), Some(b)) => {
+                            peak = peak.max(a.peak_above_initial).max(b.peak_above_initial);
+                            heap += a.heap_total.max(b.heap_total);
+                            // Branches should end at the same offset, but if
+                            // not, take the maximum to remain conservative.
+                            current_offset = a.delta.max(b.delta);
+                        }
+                        (Some(a), None) => {
+                            peak = peak.max(a.peak_above_initial);
+                            heap += a.heap_total;
+                            current_offset = a.delta;
+                        }
+                        (None, Some(b)) => {
+                            peak = peak.max(b.peak_above_initial);
+                            heap += b.heap_total;
+                            current_offset = b.delta;
+                        }
+                        (None, None) => {
+                            return None;
+                        }
+                    }
+                    ip = endif_pos + 1;
+                } else {
+                    let then_branch =
+                        wcmu_subregion(chunk, ip + 1, target, current_offset, break_results);
+                    if let Some(a) = then_branch {
+                        peak = peak.max(a.peak_above_initial);
+                        heap += a.heap_total;
+                        // The false path skips with zero contribution.
+                        // Conservative final offset is the maximum.
+                        current_offset = current_offset.max(a.delta);
+                    }
+                    ip = target + 1;
+                }
+            }
+            Op::Loop(target) => {
+                let shrink = op.stack_shrink() as i32;
+                let growth = op.stack_growth() as i32;
+                let during_peak = (current_offset + growth).max(0) as u32;
+                peak = peak.max(during_peak);
+                heap += op.heap_alloc(chunk);
+                current_offset += growth - shrink;
+
+                let loop_exit_target = *target as usize;
+                let endloop_ip = loop_exit_target - 1;
+                let mut loop_breaks: Vec<McuResult> = Vec::new();
+                let body =
+                    wcmu_subregion(chunk, ip + 1, endloop_ip, current_offset, &mut loop_breaks);
+                let body_peak = body.as_ref().map_or(0, |r| r.peak_above_initial);
+                let body_heap = body.as_ref().map_or(0, |r| r.heap_total);
+                let break_peak = loop_breaks
+                    .iter()
+                    .map(|r| r.peak_above_initial)
+                    .max()
+                    .unwrap_or(0);
+                let break_heap = loop_breaks.iter().map(|r| r.heap_total).max().unwrap_or(0);
+                peak = peak.max(body_peak).max(break_peak);
+                heap += body_heap.max(break_heap);
+                if loop_breaks.is_empty() && body.is_none() {
+                    return None;
+                }
+                ip = loop_exit_target;
+            }
+            Op::Else(_) | Op::EndIf | Op::EndLoop(_) => {
+                ip += 1;
+            }
+            _ => {
+                let shrink = op.stack_shrink() as i32;
+                let growth = op.stack_growth() as i32;
+                let during_peak = (current_offset + growth).max(0) as u32;
+                peak = peak.max(during_peak);
+                heap += op.heap_alloc(chunk);
+                current_offset += growth - shrink;
+                ip += 1;
+            }
+        }
+    }
+
+    Some(McuResult {
+        peak_above_initial: peak,
+        delta: current_offset,
+        heap_total: heap,
+    })
+}
+
+/// Helper that recurses into a subregion with an explicit initial offset
+/// and adjusts the result back to the caller's frame of reference. The
+/// returned `peak_above_initial` is the peak above the caller's initial
+/// position before this subregion.
+fn wcmu_subregion(
+    chunk: &Chunk,
+    start: usize,
+    end: usize,
+    offset_at_start: i32,
+    break_results: &mut Vec<McuResult>,
+) -> Option<McuResult> {
+    let mut sub_breaks: Vec<McuResult> = Vec::new();
+    let result = wcmu_region(chunk, start, end, &mut sub_breaks);
+    // Lift breaks from the subregion into the caller's frame of reference.
+    for b in sub_breaks {
+        break_results.push(McuResult {
+            peak_above_initial: (offset_at_start.max(0) as u32) + b.peak_above_initial,
+            delta: offset_at_start + b.delta,
+            heap_total: b.heap_total,
+        });
+    }
+    result.map(|r| McuResult {
+        peak_above_initial: (offset_at_start.max(0) as u32) + r.peak_above_initial,
+        delta: offset_at_start + r.delta,
+        heap_total: r.heap_total,
+    })
+}
+
+/// Compute the worst-case memory usage of one full Stream iteration.
+///
+/// Returns a tuple `(stack_wcmu_bytes, heap_wcmu_bytes)`. Stack WCMU
+/// includes the chunk's local frame plus the peak operand-stack growth
+/// during execution. Heap WCMU is the total bytes allocated to the arena
+/// heap during one Stream-to-Reset cycle.
+///
+/// Both bounds are sound for programs that do not contain calls or
+/// variable-iteration loops. Calls are treated locally, namely the call
+/// instruction itself contributes its `stack_growth` and `stack_shrink`
+/// but the transitive contribution of the called function is not
+/// included. Loops are treated as one iteration. These limitations
+/// mirror the existing WCET implementation and are tracked for future
+/// work.
+pub fn wcmu_stream_iteration(chunk: &Chunk) -> Result<(u32, u32), VerifyError> {
+    if chunk.block_type != BlockType::Stream {
+        return Err(VerifyError {
+            chunk_name: chunk.name.clone(),
+            message: String::from("wcmu_stream_iteration requires a Stream block"),
+        });
+    }
+
+    let ops = &chunk.ops;
+    let stream_pos = ops
+        .iter()
+        .position(|op| matches!(op, Op::Stream))
+        .ok_or_else(|| VerifyError {
+            chunk_name: chunk.name.clone(),
+            message: String::from("Stream block missing Stream instruction"),
+        })?;
+    let reset_pos = ops
+        .iter()
+        .position(|op| matches!(op, Op::Reset))
+        .ok_or_else(|| VerifyError {
+            chunk_name: chunk.name.clone(),
+            message: String::from("Stream block missing Reset instruction"),
+        })?;
+
+    let mut breaks: Vec<McuResult> = Vec::new();
+    let body =
+        wcmu_region(chunk, stream_pos + 1, reset_pos, &mut breaks).unwrap_or(McuResult::empty());
+
+    let body_peak = body.peak_above_initial;
+    let body_heap = body.heap_total;
+
+    let stack_slots = chunk.local_count as u32 + body_peak;
+    let stack_bytes = stack_slots * crate::bytecode::VALUE_SLOT_SIZE_BYTES;
+
+    Ok((stack_bytes, body_heap))
+}
+
 /// Compute the worst-case execution cost of one full Stream iteration
 /// (from Stream to Reset), taking the maximum cost branch at each
 /// control flow join.
@@ -237,6 +509,42 @@ pub fn wcet_stream_iteration(chunk: &Chunk) -> Result<u32, VerifyError> {
     let region_cost = body_cost.unwrap_or(0);
 
     Ok(overhead + region_cost)
+}
+
+/// Verify that the module's worst-case memory usage fits within the given
+/// arena capacity.
+///
+/// Computes the stack and heap WCMU for each Stream chunk in the module
+/// and checks that their sum is at most `arena_capacity`. Programs that
+/// exceed the bound are rejected with a `VerifyError` describing which
+/// chunk failed and by how much.
+///
+/// Calling functions are not transitively included in the analysis. The
+/// bound is a sound underestimate for programs that do not contain calls.
+/// Programs with calls or variable-iteration loops may exhaust the arena
+/// at runtime even when this check passes. Sharper analysis is recorded
+/// as future work.
+pub fn verify_resource_bounds(module: &Module, arena_capacity: usize) -> Result<(), VerifyError> {
+    for chunk in &module.chunks {
+        if chunk.block_type != BlockType::Stream {
+            continue;
+        }
+        let (stack_bytes, heap_bytes) = wcmu_stream_iteration(chunk)?;
+        let total = (stack_bytes as usize).saturating_add(heap_bytes as usize);
+        if total > arena_capacity {
+            return Err(VerifyError {
+                chunk_name: chunk.name.clone(),
+                message: alloc::format!(
+                    "WCMU bound {} bytes (stack {} + heap {}) exceeds arena capacity {} bytes",
+                    total,
+                    stack_bytes,
+                    heap_bytes,
+                    arena_capacity
+                ),
+            });
+        }
+    }
+    Ok(())
 }
 
 /// Verify structural invariants of a compiled module.
@@ -604,7 +912,7 @@ pub fn verify(module: &Module) -> Result<(), VerifyError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::bytecode::{BlockType, Chunk, Module, Op};
+    use crate::bytecode::{BlockType, Chunk, Module, Op, Value};
     use alloc::vec;
 
     fn make_module(chunks: Vec<Chunk>) -> Module {
@@ -1258,5 +1566,169 @@ mod tests {
             }),
         };
         assert!(verify(&module).is_ok());
+    }
+
+    // -- WCMU analysis tests --
+
+    #[test]
+    fn wcmu_stream_simple() {
+        // Stream Yield Reset. The body is just one Yield, which pops the
+        // yielded value. Stack peak is 1 slot for the value plus
+        // local_count. Heap is zero.
+        use crate::bytecode::VALUE_SLOT_SIZE_BYTES;
+        let chunk = make_chunk(
+            "tick",
+            vec![
+                Op::Stream,      // 0
+                Op::GetLocal(0), // 1
+                Op::Yield,       // 2
+                Op::Pop,         // 3 — never reached after yield
+                Op::Reset,       // 4
+            ],
+            BlockType::Stream,
+        );
+        let mut chunk = chunk;
+        chunk.local_count = 1;
+        let (stack, heap) = wcmu_stream_iteration(&chunk).unwrap();
+        // local_count=1 + peak above local=1 = 2 slots.
+        assert_eq!(stack, 2 * VALUE_SLOT_SIZE_BYTES);
+        assert_eq!(heap, 0);
+    }
+
+    #[test]
+    fn wcmu_branching_takes_max() {
+        // If/Else where one branch pushes more than the other.
+        use crate::bytecode::VALUE_SLOT_SIZE_BYTES;
+        let mut chunk = make_chunk(
+            "tick",
+            vec![
+                Op::Stream,      // 0
+                Op::PushTrue,    // 1
+                Op::If(7),       // 2 -> else body at 7
+                Op::Const(0),    // 3 (then push)
+                Op::Const(0),    // 4 (then push)
+                Op::Const(0),    // 5 (then push, total 3 deep)
+                Op::Else(9),     // 6 -> EndIf at 9
+                Op::Const(0),    // 7 (else, push 1)
+                Op::Pop,         // 8 (else, pop)
+                Op::EndIf,       // 9
+                Op::Pop,         // 10 (consume one if any)
+                Op::Pop,         // 11
+                Op::Pop,         // 12
+                Op::GetLocal(0), // 13
+                Op::Yield,       // 14
+                Op::Pop,         // 15
+                Op::Reset,       // 16
+            ],
+            BlockType::Stream,
+        );
+        chunk.local_count = 1;
+        chunk.constants = vec![Value::Int(0)];
+        let (stack, _heap) = wcmu_stream_iteration(&chunk).unwrap();
+        // Then branch peaks at 3 above the IfBoolPop. Plus local frame.
+        // The actual peak should be at least 3 slots above the local frame.
+        assert!(stack >= 3 * VALUE_SLOT_SIZE_BYTES);
+    }
+
+    #[test]
+    fn wcmu_new_struct_heap() {
+        // NewStruct with two fields allocates 2 * VALUE_SLOT_SIZE_BYTES.
+        use crate::bytecode::{StructTemplate, VALUE_SLOT_SIZE_BYTES};
+        let mut chunk = make_chunk(
+            "tick",
+            vec![
+                Op::Stream,       // 0
+                Op::Const(0),     // 1
+                Op::Const(0),     // 2
+                Op::NewStruct(0), // 3
+                Op::Yield,        // 4
+                Op::Reset,        // 5
+            ],
+            BlockType::Stream,
+        );
+        chunk.local_count = 0;
+        chunk.constants = vec![Value::Int(0)];
+        chunk.struct_templates = vec![StructTemplate {
+            type_name: String::from("Point"),
+            field_names: vec![String::from("x"), String::from("y")],
+        }];
+        let (_stack, heap) = wcmu_stream_iteration(&chunk).unwrap();
+        assert_eq!(heap, 2 * VALUE_SLOT_SIZE_BYTES);
+    }
+
+    #[test]
+    fn wcmu_new_array_heap() {
+        // NewArray with three elements allocates 3 * VALUE_SLOT_SIZE_BYTES.
+        use crate::bytecode::VALUE_SLOT_SIZE_BYTES;
+        let mut chunk = make_chunk(
+            "tick",
+            vec![
+                Op::Stream,
+                Op::Const(0),
+                Op::Const(0),
+                Op::Const(0),
+                Op::NewArray(3),
+                Op::Yield,
+                Op::Reset,
+            ],
+            BlockType::Stream,
+        );
+        chunk.constants = vec![Value::Int(0)];
+        let (_stack, heap) = wcmu_stream_iteration(&chunk).unwrap();
+        assert_eq!(heap, 3 * VALUE_SLOT_SIZE_BYTES);
+    }
+
+    #[test]
+    fn wcmu_non_stream_errors() {
+        let chunk = make_chunk("main", vec![Op::PushUnit, Op::Return], BlockType::Func);
+        let err = wcmu_stream_iteration(&chunk).unwrap_err();
+        assert!(err.message.contains("Stream"));
+    }
+
+    #[test]
+    fn verify_resource_bounds_passes() {
+        // Small program fits in default arena.
+        let chunk = make_chunk(
+            "tick",
+            vec![Op::Stream, Op::PushUnit, Op::Yield, Op::Pop, Op::Reset],
+            BlockType::Stream,
+        );
+        let module = make_module(vec![chunk]);
+        let result = verify_resource_bounds(&module, 1024 * 1024);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn verify_resource_bounds_rejects_oversized() {
+        // Tiny arena rejects any nontrivial stream.
+        let mut chunk = make_chunk(
+            "tick",
+            vec![
+                Op::Stream,
+                Op::Const(0),
+                Op::Const(0),
+                Op::NewArray(2),
+                Op::Yield,
+                Op::Pop,
+                Op::Reset,
+            ],
+            BlockType::Stream,
+        );
+        chunk.local_count = 4;
+        chunk.constants = vec![Value::Int(0)];
+        let module = make_module(vec![chunk]);
+        // Arena of 16 bytes is much smaller than the stream's WCMU.
+        let err = verify_resource_bounds(&module, 16).unwrap_err();
+        assert!(err.message.contains("WCMU"));
+        assert!(err.message.contains("exceeds arena capacity"));
+    }
+
+    #[test]
+    fn verify_resource_bounds_skips_non_stream() {
+        // A module with only Func chunks has no WCMU bound to verify.
+        let chunk = make_chunk("util", vec![Op::PushUnit, Op::Return], BlockType::Func);
+        let module = make_module(vec![chunk]);
+        let result = verify_resource_bounds(&module, 16);
+        assert!(result.is_ok());
     }
 }

@@ -267,6 +267,17 @@ pub enum Op {
     Trap(u16),
 }
 
+/// Size in bytes of one operand-stack slot, namely the size of `Value` on
+/// the modern 64-bit target. The actual `core::mem::size_of::<Value>()` is
+/// implementation-dependent and may include padding to align variant
+/// discriminators. For WCMU analysis, the conservative upper bound is
+/// chosen so that the analysis remains sound even if the runtime
+/// representation grows.
+///
+/// On the V0.0 cycle target (R33), this constant is 32 bytes. Future work
+/// under B10 may parameterize this by target.
+pub const VALUE_SLOT_SIZE_BYTES: u32 = 32;
+
 impl Op {
     /// Return the relative integer cost of this instruction.
     ///
@@ -332,6 +343,145 @@ impl Op {
 
             // Function calls.
             Op::Call(_, _) | Op::CallNative(_, _) => 10,
+        }
+    }
+
+    /// Number of operand-stack slots pushed by this instruction.
+    ///
+    /// This is the maximum the operand stack can grow during execution of
+    /// this single instruction relative to its starting depth. Used by the
+    /// WCMU analysis to compute peak stack consumption.
+    pub fn stack_growth(&self) -> u32 {
+        match self {
+            Op::Const(_)
+            | Op::PushUnit
+            | Op::PushTrue
+            | Op::PushFalse
+            | Op::GetLocal(_)
+            | Op::GetData(_)
+            | Op::Dup
+            | Op::PushNone => 1,
+
+            Op::WrapSome | Op::Not | Op::Neg => 0,
+
+            Op::Add
+            | Op::Sub
+            | Op::Mul
+            | Op::Div
+            | Op::Mod
+            | Op::CmpEq
+            | Op::CmpNe
+            | Op::CmpLt
+            | Op::CmpGt
+            | Op::CmpLe
+            | Op::CmpGe => 0,
+
+            Op::SetLocal(_) | Op::SetData(_) | Op::Pop => 0,
+
+            Op::If(_) | Op::BreakIf(_) => 0,
+            Op::Else(_) | Op::EndIf | Op::Loop(_) | Op::EndLoop(_) | Op::Break(_) => 0,
+            Op::Stream | Op::Reset => 0,
+            Op::Yield => 0,
+
+            Op::Call(_, _) | Op::CallNative(_, _) => 1,
+            Op::Return => 0,
+
+            Op::NewStruct(_) | Op::NewEnum(_, _, _) | Op::NewArray(_) | Op::NewTuple(_) => 1,
+
+            Op::GetField(_)
+            | Op::GetIndex
+            | Op::GetTupleField(_)
+            | Op::GetEnumField(_)
+            | Op::Len => 0,
+
+            Op::IsEnum(_, _) | Op::IsStruct(_) => 0,
+
+            Op::IntToFloat | Op::FloatToInt => 0,
+
+            Op::Trap(_) => 0,
+        }
+    }
+
+    /// Number of operand-stack slots popped by this instruction.
+    pub fn stack_shrink(&self) -> u32 {
+        match self {
+            Op::Const(_)
+            | Op::PushUnit
+            | Op::PushTrue
+            | Op::PushFalse
+            | Op::GetLocal(_)
+            | Op::GetData(_)
+            | Op::Dup
+            | Op::PushNone => 0,
+
+            Op::WrapSome | Op::Not | Op::Neg => 0,
+
+            Op::Add
+            | Op::Sub
+            | Op::Mul
+            | Op::Div
+            | Op::Mod
+            | Op::CmpEq
+            | Op::CmpNe
+            | Op::CmpLt
+            | Op::CmpGt
+            | Op::CmpLe
+            | Op::CmpGe => 1,
+
+            Op::SetLocal(_) | Op::SetData(_) | Op::Pop => 1,
+
+            Op::If(_) | Op::BreakIf(_) => 1,
+            Op::Else(_) | Op::EndIf | Op::Loop(_) | Op::EndLoop(_) | Op::Break(_) => 0,
+            Op::Stream | Op::Reset => 0,
+            Op::Yield => 1,
+
+            Op::Call(_, n) | Op::CallNative(_, n) => *n as u32,
+            Op::Return => 0,
+
+            Op::NewStruct(_) => 0,
+            Op::NewEnum(_, _, n) => *n as u32,
+            Op::NewArray(n) => *n as u32,
+            Op::NewTuple(n) => *n as u32,
+
+            Op::GetField(_) | Op::GetIndex | Op::GetTupleField(_) | Op::GetEnumField(_) => 1,
+            Op::Len => 0,
+
+            Op::IsEnum(_, _) | Op::IsStruct(_) => 0,
+
+            Op::IntToFloat | Op::FloatToInt => 0,
+
+            Op::Trap(_) => 0,
+        }
+    }
+
+    /// Bytes allocated to the arena heap by this instruction, ignoring
+    /// transitive allocations through called functions.
+    ///
+    /// For composite-construction instructions, the size is the count of
+    /// stored field slots times `VALUE_SLOT_SIZE_BYTES`. For `NewStruct`,
+    /// the field count comes from the chunk's struct templates and so is
+    /// looked up using the provided `chunk` reference.
+    ///
+    /// Calls and native calls are reported as zero local heap. The
+    /// transitive heap contribution of a `Call` is the WCMU of the called
+    /// function and is computed at the analysis level by recursive
+    /// traversal of the call graph. The heap contribution of a
+    /// `CallNative` comes from the host's WCMU attestation, recorded
+    /// against the native function entry.
+    pub fn heap_alloc(&self, chunk: &Chunk) -> u32 {
+        match self {
+            Op::NewStruct(template_idx) => {
+                let idx = *template_idx as usize;
+                let field_count = chunk
+                    .struct_templates
+                    .get(idx)
+                    .map_or(0, |t| t.field_names.len() as u32);
+                field_count * VALUE_SLOT_SIZE_BYTES
+            }
+            Op::NewEnum(_, _, n) => *n as u32 * VALUE_SLOT_SIZE_BYTES,
+            Op::NewArray(n) => *n as u32 * VALUE_SLOT_SIZE_BYTES,
+            Op::NewTuple(n) => *n as u32 * VALUE_SLOT_SIZE_BYTES,
+            _ => 0,
         }
     }
 }

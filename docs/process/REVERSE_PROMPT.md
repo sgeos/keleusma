@@ -9,58 +9,61 @@ AI to Human communication channel.
 ## Last Updated
 
 **Date**: 2026-05-08
-**Task**: V0.0-M6 partial completion. Arena allocator foundation.
-**Status**: Partial. Arena infrastructure in place. Operand stack and dynamic string arena migration tracked as P7 follow-on.
+**Task**: V0.0-M6 substantial completion. WCMU instrumentation and verification.
+**Status**: Substantial. WCMU analysis and module-load verification in place. Auto-arena sizing and call-graph integration deferred.
 
 ## Verification
 
 **Command**: `cargo test && cargo clippy --tests --all-targets -- -D warnings && cargo fmt --check`
-**Result**: 286 tests pass (269 unit + 17 integration), up from 272. Zero clippy warnings. Format clean. Eleven new arena unit tests cover initial state, stack and heap allocation, alignment, exhaustion, stack-heap meet detection, reset, integration with `allocator_api2::vec::Vec`, dual-region usage, zero-capacity, and zero-size layout. Three new VM tests cover default arena capacity, configurable capacity, and arena reset at `Op::Reset`.
+**Result**: 294 tests pass (277 unit + 17 integration), up from 286. Zero clippy warnings. Format clean. Eight new tests cover simple WCMU computation, branching, NewStruct heap, NewArray heap, non-stream rejection, resource bounds pass, oversized rejection, and skip-non-stream.
 
 ## Summary
 
-Implemented the arena allocator foundation specified in R32. Added `allocator-api2` 0.4 as a stable polyfill dependency. Created `src/arena.rs` with the `Arena` type owning a fixed-size `Box<[u8]>` backing buffer and tracking two bump pointers via `Cell<usize>`. Defined `StackHandle` and `HeapHandle` types implementing `allocator_api2::Allocator`. Wired the arena into `Vm` with a configurable default capacity of 65536 bytes. The arena is reset at `Op::Reset` and at `replace_module`. Added R34 recording the implementation. Updated `EXECUTION_MODEL.md`, `GLOSSARY.md`, `PRIORITY.md`, `RESOLVED.md`, `TASKLOG.md`, and `CLAUDE.md`.
+Implemented the fifth Keleusma guarantee (R31). Added per-instruction memory cost methods on `Op`, namely `stack_growth`, `stack_shrink`, and `heap_alloc`. Added `wcmu_stream_iteration` in `src/verify.rs` paralleling the existing WCET analysis. Added `verify_resource_bounds` that checks the WCMU sum against the arena capacity. Wired the verification into `Vm::new`, `Vm::new_with_arena_capacity`, and `Vm::replace_module`. Widened the native function attestation API with WCET and WCMU bound fields and a `Vm::set_native_bounds` setter. Documented the implementation as R35 and updated the priority list, knowledge graph, and instruction set reference.
 
 ## Changes Made
 
 ### Source Code
 
-- **Cargo.toml**: Added `allocator-api2 = { version = "0.4", default-features = false, features = ["alloc"] }`. The crate is no_std-compatible and serves as a stable polyfill of the unstable `core::alloc::Allocator` trait.
-- **src/arena.rs**: New module. Contains the `Arena` type with `Box<[u8]>` backing buffer and two `Cell<usize>` bump pointers. Stack region grows from offset zero. Heap region grows down from buffer length. Alignment-aware allocation. Reset method. Eleven unit tests.
-- **src/lib.rs**: Added `pub mod arena` and re-exports `Arena`, `StackHandle`, `HeapHandle` at the crate root.
-- **src/vm.rs**: Added `arena` field to `Vm` struct. Added `DEFAULT_ARENA_CAPACITY` constant of 65536 bytes. Added `Vm::new_with_arena_capacity` constructor for host-configurable arena size. Added `arena()` and `arena_mut()` accessors. The `Op::Reset` handler now calls `arena.reset()`. The `replace_module` method also resets the arena. Three new tests verify the integration.
+- **src/bytecode.rs**: Added `VALUE_SLOT_SIZE_BYTES` constant (32 bytes on the modern 64-bit target). Added `Op::stack_growth()`, `Op::stack_shrink()`, and `Op::heap_alloc(chunk)` methods returning slot counts and bytes respectively.
+- **src/verify.rs**: Added `McuResult` internal struct tracking peak stack, end-of-region stack delta, and heap total. Added `wcmu_region` and `wcmu_subregion` walking the block-structured CFG with appropriate aggregation rules. Added `wcmu_stream_iteration(chunk)` returning `(stack_wcmu_bytes, heap_wcmu_bytes)`. Added `verify_resource_bounds(module, arena_capacity)` checking the WCMU sum against the configured arena. Eight new tests.
+- **src/vm.rs**: Added `wcet` and `wcmu_bytes` fields to `NativeEntry` initialized to defaults (`DEFAULT_NATIVE_WCET = 10`, `DEFAULT_NATIVE_WCMU_BYTES = 0`). Added `Vm::set_native_bounds(name, wcet, wcmu)` setter. Wired `verify_resource_bounds` into `Vm::new_with_arena_capacity` and `Vm::replace_module`.
 
 ### Knowledge Graph
 
-- **docs/decisions/RESOLVED.md**: Added R34 recording the arena allocator implementation, including the rationale for the two-handle design and the deferral of the deeper integration work.
-- **docs/decisions/PRIORITY.md**: Updated P7 to mark the foundation as complete and to enumerate the remaining work, namely the operand stack and dynamic string arena migration.
-- **docs/architecture/EXECUTION_MODEL.md**: Added an Arena Implementation subsection describing the concrete `Arena` type and its handles.
-- **docs/reference/GLOSSARY.md**: Updated the Dual-end arena entry. Added a StackHandle / HeapHandle entry.
-- **docs/process/TASKLOG.md**: V0.0-M6 partial completion recorded with task breakdown.
-- **CLAUDE.md**: Updated repository structure to include `src/arena.rs`. Updated technology stack to mention `allocator-api2`. Test count updated to 286.
+- **docs/decisions/RESOLVED.md**: Added R35 recording the WCMU implementation, the per-instruction methods, the aggregation rules, the host attestation widening, and the module-load enforcement. Documented current limitations (single-iteration loop, no transitive call analysis).
+- **docs/decisions/PRIORITY.md**: Updated P8 to reflect substantial completion. Auto-arena sizing and call-graph WCMU integration remain as follow-on items.
+- **docs/architecture/EXECUTION_MODEL.md**: Updated WCMU paragraph to reference `wcmu_stream_iteration` and `verify_resource_bounds` and to note the limitations.
+- **docs/reference/GLOSSARY.md**: Updated WCMU entry. Added `Op::stack_growth, Op::stack_shrink, Op::heap_alloc` entry. Added Native attestation entry. Added `verify_resource_bounds` entry.
+- **docs/reference/INSTRUCTION_SET.md**: Added WCMU Cost Tables section with stack growth, stack shrink, and heap allocation per instruction.
+- **docs/process/TASKLOG.md**: V0.0-M6 substantially complete. Active milestone none, ready for V0.0-M7 or V0.1.
 
 ## Unaddressed Concerns
 
-1. **Deeper arena integration is not yet done.** The operand stack continues to use `alloc::Vec<Value>`, namely the global allocator. The dynamic string storage `Value::DynStr(String)` continues to use `alloc::String`. The arena exists and is reset on schedule, but its principal use today is host-supplied native functions that wish to allocate scratch buffers. Migrating the operand stack and dynamic string storage to use the arena requires propagating an arena lifetime parameter through the `Vm` struct and through `Value`. This is a substantial refactor and is tracked as P7 follow-on work. The visible behavior of the runtime is unchanged because Rust drop semantics continue to enforce the arena lifetime.
+1. **Auto-arena sizing is not implemented.** The host configures arena capacity at `Vm::new_with_arena_capacity`. A future iteration could compute the WCMU sum at module load and size the arena automatically. This is one of the remaining P8 items and is well-scoped follow-on work.
 
-2. **WCMU instrumentation remains pending.** The fifth guarantee specified in R31 is documented but not enforced. The host-attestation surface for native functions does not yet include WCMU declarations. Tracked as P8.
+2. **Call-graph WCMU integration is not implemented.** The current analysis treats `Call` and `CallNative` instructions as locally consuming their argument slots and producing one return value, but does not include the transitive stack and heap effects of the called function. This is sound for programs without function calls but is an underestimate for programs that do call helper functions or natives. The WCET analysis has the same limitation. Both warrant a coordinated improvement that walks the call graph bottom-up.
 
-3. **Arena exhaustion produces an `AllocError` from the `allocator_api2::Allocator` trait.** The Keleusma VM does not yet have a bytecode-level path that surfaces this error to the host. When the operand stack and dynamic string storage are migrated to the arena, a new `VmError::ArenaExhausted` variant will need to be added and the runtime allocation sites will need to map `AllocError` to it. Currently, only host code calling the arena handles directly observes the error.
+3. **Variable-iteration loops are treated as one iteration.** The Keleusma surface language requires bounded for-range loops, but the bytecode does not encode the iteration count visibly. A pass that analyzes the loop structure to extract the iteration bound is needed for sound WCMU and WCET in the presence of loops. This too is shared with the existing WCET limitation.
 
-4. **Default arena capacity is hard-coded to 65536 bytes.** The host can override via `Vm::new_with_arena_capacity`. The auto-arena-sizing path described in R31 and P8 is not yet implemented because it depends on WCMU computation.
+4. **The default `VALUE_SLOT_SIZE_BYTES` of 32 may be over-conservative.** The actual `core::mem::size_of::<Value>()` on the modern 64-bit target is implementation-dependent. The choice of 32 ensures soundness even if the runtime representation grows, but produces tighter bounds when it underestimates. A future iteration could derive the constant from `size_of` directly with a const assertion.
+
+5. **The deeper arena integration of operand stack and DynStr remains open.** Tracked as P7 follow-on. The WCMU analysis already accounts for both regions on the assumption that they will be arena-resident. Once the integration is done, the analysis becomes load-bearing for runtime soundness rather than an aspirational bound.
 
 ## Intended Next Step
 
-Two paths forward.
+Three paths forward.
 
-A. Continue with V0.0-M6 by tackling the operand stack and dynamic string arena migration (P7 follow-on items 5 and 6). This delivers the full arena story for the runtime, with the operand stack as `allocator_api2::vec::Vec<Value, StackHandle>` and dynamic strings as a custom `DynStr` storage backed by `allocator_api2::vec::Vec<u8, HeapHandle>`. Substantial refactor due to lifetime parameter cascade.
+A. V0.0-M7 implementing P8 follow-on items, namely auto-arena sizing and call-graph WCMU integration. Both are well-scoped extensions of the existing analysis.
 
-B. Pivot to WCMU instrumentation (P8) before the deeper arena integration. The WCMU analysis is independent of the storage representation and parallels the existing WCET analysis closely. Adding `Op::memory()` and `wcmu_stream_iteration()` is well-scoped work.
+B. V0.0-M7 implementing P7 follow-on items, namely operand stack and DynStr arena migration. Substantial refactor due to lifetime parameter cascade through `Vm` and `Value`.
 
-Recommend B because it closes the fifth-guarantee gap with smaller blast radius. Path A then becomes the V0.0-M7 milestone.
+C. Pivot to V0.1 candidates. Type checker (P1), for-in over arbitrary expressions (P2), or error recovery (P3).
+
+Path A delivers more on the certification posture in less time. Path B closes the gap between the documented arena lifetime and the runtime mechanism. Path C opens new feature areas for the language layer.
 
 Await human prompt before proceeding.
 
 ## Session Context
 
-This session executed across multiple milestones. V0.0-M3 completed the data segment with hot swap. V0.0-M4 added static marshalling. V0.0-M5 partial introduced the two-string-type discipline. V0.0-M6 partial added the arena allocator foundation. Eight commits accumulated during the session, all on main.
+This long session has executed across V0.0-M3 (data segment), V0.0-M4 (static marshalling), V0.0-M5 (two-string-type discipline), and V0.0-M6 (arena allocator and WCMU instrumentation). Ten commits have accumulated. The five guarantees of Keleusma now have concrete implementation backing for totality, productivity, bounded-step, bounded-memory, and safe swapping, with the limitations on the static analyses noted above. Additional work was requested on positioning the Keleusma arena allocator as a general-purpose embedded arena differentiated from bumpalo. That positioning will be addressed in the next response.

@@ -147,3 +147,17 @@ The `Vm` struct holds an `Arena` field initialized at construction with a defaul
 The deeper integration of the operand stack and dynamic-string storage with the arena is recorded as P7 follow-on work and is iterative rather than atomic. Stable Rust does not provide a `String` type with a custom allocator, so a custom `DynStr` storage type backed by `allocator_api2::vec::Vec<u8, A>` is required for full integration. The current state has the arena present and reset on schedule, but operand stack and string storage continue to use the global allocator.
 
 The dependency on `allocator-api2` adds about 0.04 megabytes of dependency code and no runtime cost. The crate is a stable polyfill of the unstable `core::alloc::Allocator` trait. When the standard trait stabilizes, the dependency may be removed in favor of the standard library.
+
+## R35. WCMU instrumentation and host attestation widening
+
+The fifth Keleusma guarantee, namely bounded-memory specified in R31, is implemented as `wcmu_stream_iteration` in `src/verify.rs`. The function parallels `wcet_stream_iteration` and walks the same block-structured control flow graph. It returns a tuple of stack and heap WCMU bounds, both in bytes, computed using the per-instruction cost methods on `Op`.
+
+Per-instruction methods. `Op::stack_growth()` and `Op::stack_shrink()` return the instruction's effect on the operand stack in slots. `Op::heap_alloc(chunk)` returns the bytes allocated to the arena heap, parameterized by the chunk for instructions whose operand resolves to a struct template. The constant `VALUE_SLOT_SIZE_BYTES` is set to 32 on the modern 64-bit target and converts slot counts to bytes.
+
+Aggregation rules. Sequential composition sums heap totals and computes the running peak of stack depth. Branches take the maximum peak across the two arms and the maximum heap total. Loops are treated as one iteration, mirroring the existing WCET limitation. Programs that compile from bounded for-range loops produce sound bounds at the static iteration count, but the analysis underestimates by the iteration factor at present. The same limitation exists for transitive function calls, namely the local stack effect of the call instruction is counted but the called function's own contribution is not.
+
+Host attestation. Native function entries gain `wcet` and `wcmu_bytes` fields, defaulted to `DEFAULT_NATIVE_WCET` (10) and `DEFAULT_NATIVE_WCMU_BYTES` (0) respectively. The host calls `Vm::set_native_bounds(name, wcet, wcmu)` after registration to attest the actual bounds. The defaults are conservative for timing and zero for memory, matching the assumption that natives that do not allocate need no further declaration. Native functions that do allocate from the arena must override the WCMU default for the analysis to remain sound. This widens the host trust boundary established in R9.
+
+Module-load enforcement. The new `verify_resource_bounds(module, arena_capacity)` function computes WCMU for every Stream chunk and checks that `stack_wcmu + heap_wcmu <= arena_capacity`. Programs that exceed the bound are rejected at `Vm::new` and `Vm::replace_module`. The check is sound for programs without calls and without variable-iteration loops, with the limitations noted above.
+
+Auto-arena sizing is not yet implemented. The host configures arena capacity at VM construction. A future iteration could compute the WCMU sum at module load and size the arena automatically. This is recorded as P8 follow-on.

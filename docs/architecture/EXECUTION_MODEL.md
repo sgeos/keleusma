@@ -72,7 +72,7 @@ The arena is a single contiguous allocation with two pointers growing toward eac
 
 The dual-end design ensures O(1) allocation from either end and O(1) reset of both. RESET clears both pointers atomically. The arena persists across yields within a single stream phase. It is cleared only at RESET. No arena memory survives across phases.
 
-Memory bounds are statically analyzable per stream phase. The compiler computes a worst-case stack consumption (`stack_wcmu`) and a worst-case heap consumption (`heap_wcmu`) separately. The verifier checks the inequality `stack_wcmu + heap_wcmu <= arena_size`. Programs for which either WCMU cannot be statically computed are rejected at verification time. The arena auto-size, when computed, is exactly the sum of the two bounds plus an optional safety margin.
+Memory bounds are statically analyzable per stream phase. The verifier computes a worst-case stack consumption (`stack_wcmu`) and a worst-case heap consumption (`heap_wcmu`) separately through `wcmu_stream_iteration` in `src/verify.rs`. The function `verify_resource_bounds` checks the inequality `stack_wcmu + heap_wcmu <= arena_size` at module load time. Programs that exceed the bound are rejected at `Vm::new` and `Vm::replace_module`. The analysis is sound for programs without calls and without variable-iteration loops. Programs with transitive calls or variable-iteration loops produce underestimates rather than rejection at present. A sharper analysis with call-graph integration is recorded as P8 follow-on. The arena auto-size, when computed, is exactly the sum of the two bounds plus an optional safety margin. Auto-sizing is not yet implemented; the host configures arena capacity at construction.
 
 #### Arena Implementation
 

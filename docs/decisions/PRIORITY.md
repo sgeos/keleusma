@@ -35,17 +35,17 @@ Items 5 and 6 are coordinated. They cannot be done independently because both to
 
 ## P8. WCMU instrumentation and auto-arena sizing
 
-R31 specifies WCMU as the fifth guarantee. Implementation requires the following.
+R31 specifies WCMU as the fifth guarantee. R35 records the implementation. Status of the items is as follows.
 
-1. Add `Op::memory()` paralleling `Op::cost()`. Each instruction declares its byte footprint, with alignment accounted for.
-2. Add `wcmu_stream_iteration()` paralleling `wcet_stream_iteration()`. The same recursive block-structured traversal applies, taking the maximum at branches and summing along sequential paths.
-3. Compute `stack_wcmu` and `heap_wcmu` separately. Record both in `Module`.
-4. Verify `stack_wcmu + heap_wcmu <= arena_size` at load time.
-5. Auto-arena sizing produces `arena_size = stack_wcmu + heap_wcmu`.
-6. Widen the host-attestation API. Native function registration accepts a WCMU declaration in addition to the WCET declaration.
-7. Reject programs whose WCMU cannot be statically computed.
+1. ~~Add `Op::stack_growth`, `Op::stack_shrink`, and `Op::heap_alloc` methods paralleling `Op::cost()`.~~ Complete.
+2. ~~Add `wcmu_stream_iteration()` paralleling `wcet_stream_iteration()`.~~ Complete.
+3. Compute `stack_wcmu` and `heap_wcmu` separately. ~~Function returns both as a tuple.~~ Complete. Recording in `Module` is open and not strictly required because the analysis runs at verify time.
+4. ~~Verify `stack_wcmu + heap_wcmu <= arena_size` at load time.~~ Complete via `verify_resource_bounds` called from `Vm::new` and `Vm::replace_module`.
+5. Auto-arena sizing. Open. Currently the host configures arena capacity. A future iteration could compute the WCMU sum and size the arena automatically.
+6. ~~Widen the host-attestation API.~~ Complete via `Vm::set_native_bounds(name, wcet, wcmu)`. Native entries carry both bounds. Defaults are 10 WCET and 0 WCMU.
+7. Reject programs whose WCMU cannot be statically computed. Partially complete. The current analysis returns a value for any structurally valid program. Programs with variable-iteration loops or transitive calls produce underestimates rather than rejection. A sound rejection path requires call-graph analysis and bounded-loop integration.
 
-This pairs naturally with P7 because both require the arena to exist.
+The remaining open items are auto-arena sizing (item 5) and call-graph analysis (item 7). Both are well-scoped follow-on tasks. Recommended as V0.0-M7 alongside related work on the static analysis tooling.
 
 All P6 items are complete.
 

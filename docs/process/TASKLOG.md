@@ -12,7 +12,7 @@ Current sprint source of truth.
 
 ## Active Milestone
 
-None. V0.0-M6 partial complete. Arena allocator foundation in place. WCMU instrumentation tracked as P8.
+None. V0.0-M6 substantially complete. Arena allocator and WCMU instrumentation in place. Auto-arena sizing and call-graph WCMU integration remain as P8 follow-on.
 
 ## Task Breakdown
 
@@ -53,7 +53,11 @@ None. V0.0-M6 partial complete. Arena allocator foundation in place. WCMU instru
 | V0.0-M6-T4 | Wire arena into Vm | Complete | Arena field, configurable capacity, reset on Op::Reset and replace_module |
 | V0.0-M6-T5 | Documentation pass | Complete | R34 added, EXECUTION_MODEL updated, GLOSSARY updated, P7 marked foundation-complete |
 | V0.0-M6-T6 | Operand stack and DynStr arena migration | Open | P7 follow-on work. Substantial refactor due to arena lifetime parameter cascade |
-| V0.0-M6-T7 | WCMU instrumentation | Open | P8. Pairs with V0.0-M6-T6. |
+| V0.0-M6-T7 | WCMU instrumentation | Complete | Op::stack_growth, Op::stack_shrink, Op::heap_alloc methods. wcmu_stream_iteration in verify.rs. verify_resource_bounds called from Vm::new and Vm::replace_module |
+| V0.0-M6-T8 | Native attestation API for WCET and WCMU | Complete | Vm::set_native_bounds. R35 records the implementation |
+| V0.0-M6-T9 | Tests for WCMU analysis and verification | Complete | Eight new tests covering simple stream, branching, NewStruct heap, NewArray heap, non-stream rejection, resource bounds pass, oversized rejection, and non-stream skip |
+| V0.0-M6-T10 | Auto-arena sizing | Open | P8 follow-on. Compute WCMU at module load and size the arena automatically. |
+| V0.0-M6-T11 | Call-graph WCMU integration | Open | P8 follow-on. Walk the call graph to include transitive heap and stack contributions of called functions |
 
 ## History
 
@@ -70,3 +74,4 @@ None. V0.0-M6 partial complete. Arena allocator foundation in place. WCMU instru
 | 2026-05-08 | V0.0-M4 complete. Workspace conversion. keleusma-macros proc-macro crate added. KeleusmaType trait, derive, IntoNativeFn family, and register_fn API. Audio and utility natives migrated. 268 tests pass. R30 records the static marshalling decision. |
 | 2026-05-08 | V0.0-M5 partial complete. Two-string-type discipline at runtime with Value::StaticStr and Value::DynStr. Cross-yield prohibition enforced. R31 R32 R33 added. WCMU and dual-end arena documented as the fifth guarantee. 272 tests pass. Arena allocator and WCMU instrumentation deferred to V0.0-M6 as P7 and P8. |
 | 2026-05-08 | V0.0-M6 partial complete. Arena allocator foundation in place. allocator-api2 dependency added. Arena type with dual-end bump pointers, StackHandle and HeapHandle implementing allocator_api2::Allocator. Vm holds Arena, reset on Op::Reset and replace_module. R34 records the implementation. 286 tests pass. Operand stack and DynStr arena migration tracked as P7 follow-on. WCMU instrumentation tracked as P8. |
+| 2026-05-08 | V0.0-M6 substantially complete. WCMU instrumentation added with per-op stack and heap cost methods. wcmu_stream_iteration parallels wcet_stream_iteration. verify_resource_bounds enforces stack_wcmu plus heap_wcmu fits within arena_capacity at Vm::new and Vm::replace_module. Native function attestation widened to include WCET and WCMU bounds via Vm::set_native_bounds. R35 records the implementation. 294 tests pass. Auto-arena sizing and call-graph integration deferred to V0.0-M7 as P8 follow-on. |

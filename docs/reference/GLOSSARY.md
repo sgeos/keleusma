@@ -16,7 +16,13 @@ Key terminology used in the Keleusma documentation and source code. Citations us
 
 **StaticStr** -- A static string runtime variant. Represents a UTF-8 string referenced from the rodata region of the loaded code image. Source-level string literals compile to `StaticStr` values. Fixed-size handle, namely an index or pointer into the constant pool. May flow anywhere admissible. Permitted at the bytecode level in the data segment, with the host responsible for validity across hot updates.
 
-**WCMU** -- Worst-Case Memory Usage. The memory analog of WCET. Computed by `wcmu_stream_iteration()` in `src/verify.rs` (planned). The unit of measurement is aligned bytes. Reported separately for the stack region and the heap region of the dual-end arena. The fifth Keleusma guarantee.
+**WCMU** -- Worst-Case Memory Usage. The memory analog of WCET. Computed by `wcmu_stream_iteration()` in `src/verify.rs`. The unit of measurement is aligned bytes. Reported separately for the stack region and the heap region of the dual-end arena. The fifth Keleusma guarantee. Sound for programs without calls and without variable-iteration loops at present. The constant `VALUE_SLOT_SIZE_BYTES` (32 on the modern target) converts slot counts to bytes.
+
+**Op::stack_growth, Op::stack_shrink, Op::heap_alloc** -- Per-instruction cost methods on `Op`. `stack_growth` and `stack_shrink` return slot counts. `heap_alloc` returns bytes. The WCMU analysis composes these to compute the per-region peak stack depth and total heap allocation.
+
+**Native attestation** -- The host declaration of WCET cost and WCMU memory bounds for each registered native function. Set via `Vm::set_native_bounds(name, wcet, wcmu_bytes)`. Defaults are `DEFAULT_NATIVE_WCET` (10) and `DEFAULT_NATIVE_WCMU_BYTES` (0). Native functions that allocate from the arena must override the WCMU default for the analysis to remain sound.
+
+**verify_resource_bounds** -- The function in `src/verify.rs` that checks whether the WCMU computed from a module fits within the configured arena capacity. Called from `Vm::new` and `Vm::replace_module` at load time. Programs whose WCMU exceeds the arena are rejected with a `VerifyError` describing the violation.
 
 **Atomic function** -- A function declared with the `fn` keyword that must terminate without yielding. May call other atomic functions and native functions.
 

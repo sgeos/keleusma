@@ -146,3 +146,30 @@ Costs are relative weights used by `wcet_stream_iteration()` for worst-case exec
 | 3 | Div, Mod, GetField, IsEnum, IsStruct |
 | 5 | NewStruct, NewEnum, NewArray, NewTuple |
 | 10 | Call, CallNative |
+
+## WCMU Cost Tables
+
+WCMU costs are reported separately as stack slot growth, stack slot shrink, and heap allocation in bytes. The constant `VALUE_SLOT_SIZE_BYTES` (32 on the modern 64-bit target) converts slot counts to bytes. Computed by `wcmu_stream_iteration()` in `src/verify.rs`.
+
+### Stack Growth (slots pushed during execution)
+
+| Growth | Instructions |
+|---|---|
+| 0 | SetLocal, SetData, Pop, If, BreakIf, Else, EndIf, Loop, EndLoop, Break, Stream, Reset, Yield, Return, Add, Sub, Mul, Div, Mod, Neg, Not, CmpEq through CmpGe, WrapSome, GetField, GetIndex, GetTupleField, GetEnumField, Len, IsEnum, IsStruct, IntToFloat, FloatToInt, Trap |
+| 1 | Const, PushUnit, PushTrue, PushFalse, GetLocal, GetData, Dup, PushNone, Call, CallNative, NewStruct, NewEnum, NewArray, NewTuple |
+
+### Stack Shrink (slots popped during execution)
+
+| Shrink | Instructions |
+|---|---|
+| 0 | Const, PushUnit, PushTrue, PushFalse, GetLocal, GetData, Dup, PushNone, Else, EndIf, Loop, EndLoop, Break, Stream, Reset, Return, Neg, Not, NewStruct, Len, IsEnum, IsStruct, IntToFloat, FloatToInt, Trap, WrapSome |
+| 1 | SetLocal, SetData, Pop, If, BreakIf, Yield, Add, Sub, Mul, Div, Mod, CmpEq through CmpGe, GetField, GetIndex, GetTupleField, GetEnumField |
+| n | Call(_, n), CallNative(_, n), NewEnum(_, _, n), NewArray(n), NewTuple(n) |
+
+### Heap Allocation (bytes)
+
+| Heap | Instructions |
+|---|---|
+| 0 | All instructions not listed below |
+| n * `VALUE_SLOT_SIZE_BYTES` | NewStruct (n field count from template), NewEnum(_, _, n), NewArray(n), NewTuple(n) |
+| host-attested | CallNative through `Vm::set_native_bounds` |

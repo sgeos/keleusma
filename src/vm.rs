@@ -58,11 +58,33 @@ struct CallFrame {
 type NativeFn = Box<dyn Fn(&[Value]) -> Result<Value, VmError>>;
 
 /// A registered native function.
+///
+/// Carries WCET and WCMU bounds attested by the host. The bounds are used
+/// by the static analysis tooling to compute end-to-end resource bounds.
+/// Defaults are conservative for timing (one `CallNative` cost) and zero
+/// for memory.
 struct NativeEntry {
-    #[allow(dead_code)]
     name: String,
     func: NativeFn,
+    /// Host-attested worst-case execution time, in the same unitless cost
+    /// space as `Op::cost()`. Default `DEFAULT_NATIVE_WCET`.
+    #[allow(dead_code)]
+    wcet: u32,
+    /// Host-attested worst-case memory usage in bytes. Native functions
+    /// that allocate from the arena must override this for the analysis
+    /// to remain sound. Default `DEFAULT_NATIVE_WCMU_BYTES`.
+    #[allow(dead_code)]
+    wcmu_bytes: u32,
 }
+
+/// Default WCET attestation for a native function. Equal to the cost of a
+/// single `CallNative` instruction.
+pub const DEFAULT_NATIVE_WCET: u32 = 10;
+
+/// Default WCMU attestation for a native function. Native functions that
+/// allocate from the arena must override this through
+/// `Vm::set_native_bounds`.
+pub const DEFAULT_NATIVE_WCMU_BYTES: u32 = 0;
 
 /// Default arena capacity in bytes when constructed via `Vm::new`. The host
 /// can override this by calling `Vm::new_with_arena_capacity`.
@@ -101,6 +123,12 @@ impl Vm {
     /// verification fails.
     pub fn new_with_arena_capacity(module: Module, arena_capacity: usize) -> Result<Self, VmError> {
         verify::verify(&module)
+            .map_err(|e| VmError::VerifyError(format!("{}: {}", e.chunk_name, e.message)))?;
+        // R31. Verify worst-case memory usage fits within the arena. The
+        // check is sound for programs without calls and without
+        // variable-iteration loops. See `verify_resource_bounds` for
+        // current limitations.
+        verify::verify_resource_bounds(&module, arena_capacity)
             .map_err(|e| VmError::VerifyError(format!("{}: {}", e.chunk_name, e.message)))?;
         let data_len = module.data_layout.as_ref().map_or(0, |dl| dl.slots.len());
         let data = vec![Value::Unit; data_len];
@@ -198,6 +226,9 @@ impl Vm {
     ) -> Result<(), VmError> {
         verify::verify(&new_module)
             .map_err(|e| VmError::VerifyError(format!("{}: {}", e.chunk_name, e.message)))?;
+        // R31. Verify the new module's WCMU fits the existing arena.
+        verify::verify_resource_bounds(&new_module, self.arena.capacity())
+            .map_err(|e| VmError::VerifyError(format!("{}: {}", e.chunk_name, e.message)))?;
 
         let expected_len = new_module
             .data_layout
@@ -224,6 +255,8 @@ impl Vm {
     /// Register a native function by name using a function pointer.
     pub fn register_native(&mut self, name: &str, func: fn(&[Value]) -> Result<Value, VmError>) {
         self.natives.push(NativeEntry {
+            wcet: DEFAULT_NATIVE_WCET,
+            wcmu_bytes: DEFAULT_NATIVE_WCMU_BYTES,
             name: String::from(name),
             func: Box::new(func),
         });
@@ -238,6 +271,8 @@ impl Vm {
         F: Fn(&[Value]) -> Result<Value, VmError> + 'static,
     {
         self.natives.push(NativeEntry {
+            wcet: DEFAULT_NATIVE_WCET,
+            wcmu_bytes: DEFAULT_NATIVE_WCMU_BYTES,
             name: String::from(name),
             func: Box::new(func),
         });
@@ -258,6 +293,8 @@ impl Vm {
         F: crate::marshall::IntoNativeFn<Args, R>,
     {
         self.natives.push(NativeEntry {
+            wcet: DEFAULT_NATIVE_WCET,
+            wcmu_bytes: DEFAULT_NATIVE_WCMU_BYTES,
             name: String::from(name),
             func: func.into_native_fn(),
         });
@@ -274,9 +311,46 @@ impl Vm {
         F: crate::marshall::IntoFallibleNativeFn<Args, R>,
     {
         self.natives.push(NativeEntry {
+            wcet: DEFAULT_NATIVE_WCET,
+            wcmu_bytes: DEFAULT_NATIVE_WCMU_BYTES,
             name: String::from(name),
             func: func.into_native_fn(),
         });
+    }
+
+    /// Set the worst-case execution time and memory usage attestation for
+    /// a previously registered native function.
+    ///
+    /// The host calls this after `register_native`, `register_fn`, or any
+    /// other registration method to provide the upper bounds used by the
+    /// static analysis tooling. The bounds are part of the trust boundary
+    /// described in R9.
+    ///
+    /// Returns an error if no native function is registered under the
+    /// given name. Applies to all entries registered under that name in
+    /// case the host has registered the same name multiple times.
+    pub fn set_native_bounds(
+        &mut self,
+        name: &str,
+        wcet: u32,
+        wcmu_bytes: u32,
+    ) -> Result<(), VmError> {
+        let mut found = false;
+        for entry in self.natives.iter_mut() {
+            if entry.name == name {
+                entry.wcet = wcet;
+                entry.wcmu_bytes = wcmu_bytes;
+                found = true;
+            }
+        }
+        if found {
+            Ok(())
+        } else {
+            Err(VmError::NativeError(format!(
+                "no native function registered under name `{}`",
+                name
+            )))
+        }
     }
 
     /// Call the module's entry point with the given arguments.
