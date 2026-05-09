@@ -282,6 +282,8 @@ pub fn compile(program: &Program) -> Result<Module, CompileError> {
         native_names,
         entry_point,
         data_layout,
+        word_bits_log2: crate::bytecode::RUNTIME_WORD_BITS_LOG2,
+        addr_bits_log2: crate::bytecode::RUNTIME_ADDRESS_BITS_LOG2,
     })
 }
 

@@ -9,7 +9,7 @@ AI to Human communication channel.
 ## Last Updated
 
 **Date**: 2026-05-08
-**Task**: V0.1-M1 wire format extended with length, word size, address size, and golden-bytes test.
+**Task**: V0.1-M1 word and address sizes as base-2 exponents with relaxed acceptance and integer masking.
 **Status**: Complete.
 
 ## Verification
@@ -24,72 +24,76 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 **Results**:
 
-- 339 tests pass workspace-wide. 294 keleusma unit, 17 keleusma integration, 22 keleusma-arena unit, 6 keleusma-arena doctests. Six new tests cover word size mismatch, address size mismatch, oversized length field, undersized length field, trailing padding admission, and golden-bytes pinning.
+- 341 tests pass workspace-wide. 296 keleusma unit, 17 keleusma integration, 22 keleusma-arena unit, 6 keleusma-arena doctests. Two new tests confirm narrower bytecode acceptance and integer truncation under the masking pass.
 - Clippy clean under `--workspace --all-targets`.
 - Format clean.
 
 ## Summary
 
-The bytecode wire format header expanded from six bytes to twelve. The new fields are a thirty-two-bit total framing length in little-endian, an eight-bit word size in bits, and an eight-bit address size in bits. The version field bumped from one to two. The minimum framing size is sixteen bytes (twelve header plus four trailer).
+Word size and address size in the bytecode header are now encoded as base-2 exponents. The actual width in bits is `1 << field`. The current Keleusma runtime is built for sixty-four-bit words and sixty-four-bit addresses, so `RUNTIME_WORD_BITS_LOG2` and `RUNTIME_ADDRESS_BITS_LOG2` are both six.
 
-The recorded length is authoritative. The deserializer truncates the input slice to the recorded length before any further processing. Trailing bytes after the recorded length are ignored, supporting bytecode embedded inside a larger buffer such as a flash region with padding or a multi-segment archive.
+The acceptance policy relaxed to `bytecode_exponent <= runtime_exponent`. Bytecode compiled for a narrower target runs on a wider runtime. A program compiled for thirty-two-bit words runs on a sixty-four-bit runtime under the integer masking pass. A program compiled for sixty-four-bit words is rejected on a thirty-two-bit runtime.
 
-Word size and address size record the assumptions the compiler made about the host runtime when emitting the bytecode. The current Keleusma runtime is built for sixty-four-bit words and sixty-four-bit addresses. `RUNTIME_WORD_BITS` and `RUNTIME_ADDRESS_BITS` are both sixty-four. Bytecode that records a different word size or address size is rejected at load time with `WordSizeMismatch` or `AddressSizeMismatch`. The fields prepare the runtime for B10 (target portability), under which the compiler will accept a target descriptor and emit bytecode for various architectures.
+The encoding restricts widths to powers of two. The covered set is one, two, four, eight, sixteen, thirty-two, sixty-four, one-hundred-twenty-eight, and two-hundred-fifty-six bits at exponents zero through eight. The restriction excludes non-power-of-two architectures such as twenty-four-bit DSPs (Motorola 56000) and thirty-six-bit historical machines (PDP-10). Keleusma's stated target range from 6502 through ARM64 is entirely powers of two, so the restriction is acceptable.
 
-A golden-bytes test pins the exact thirty-seven-byte serialization of `fn main() -> i64 { 1 }`. The test catches unintended wire format changes and endian-dependent code paths. Updating the expected byte sequence requires a deliberate decision and a `BYTECODE_VERSION` bump if the change is not backwards compatible.
+The VM applies sign-extending integer truncation `(value << shift) >> shift` where `shift = 64 - (1 << word_bits_log2)` to arithmetic results when the bytecode declares a word size narrower than the runtime supports. The truncation is applied after `Add`, `Sub`, `Mul`, `Div`, `Mod`, and `Neg` for integer operands. The float and string paths are unaffected. When the declared width matches or exceeds sixty-four bits, the truncation is the identity.
 
-The validation order in `Module::from_bytes` is truncation, magic, length, CRC residue, version, word size, address size, and body decode. The CRC check precedes the version, word size, and address size checks because a corrupted byte in any of those fields would otherwise be reported as a mismatch rather than the more accurate `BadChecksum`. The length check precedes the CRC check because the CRC range depends on the recorded length.
+The expression `2147483647 + 1` produces `2147483648` under sixty-four-bit semantics. Under the bytecode-declared thirty-two-bit semantics on a sixty-four-bit runtime, the masking pass produces `i32::MIN` which is `-2147483648`. The new `bytecode_masking_truncates_to_declared_width` test confirms the behavior.
+
+`BYTECODE_VERSION` bumped from two to three. The version-two and version-one wire formats are now obsolete intermediate formats that were never released to crates.io.
 
 ## Changes Made
 
 ### Source
 
-- **`src/bytecode.rs`**: `BYTECODE_VERSION` bumped from one to two. New `RUNTIME_WORD_BITS` and `RUNTIME_ADDRESS_BITS` constants set to sixty-four. `HEADER_LEN` raised from six to twelve. New `WordSizeMismatch` and `AddressSizeMismatch` LoadError variants with display strings. `Module::to_bytes` writes the new header layout including total length in little-endian and the two size fields. `Module::from_bytes` validates length authoritatively, runs the CRC over the truncated slice, and checks version, word size, and address size in order.
-- **`src/vm.rs`**: Existing `bytecode_rejects_bad_magic` and `bytecode_load_via_vm_propagates_load_error` extended to sixteen-byte input slices. Existing `bytecode_rejects_bad_checksum` updated to flip a byte beyond the length field so the truncation check does not trip first. Six new tests added: `bytecode_rejects_oversized_length_field`, `bytecode_rejects_undersized_length_field`, `bytecode_rejects_word_size_mismatch`, `bytecode_rejects_address_size_mismatch`, `bytecode_admits_trailing_padding`, and `bytecode_golden_bytes_for_main_returning_one`.
+- **`src/bytecode.rs`**: `BYTECODE_VERSION` bumped to three. New `RUNTIME_WORD_BITS_LOG2` and `RUNTIME_ADDRESS_BITS_LOG2` constants set to six. Old `RUNTIME_WORD_BITS` and `RUNTIME_ADDRESS_BITS` removed. New `Module::word_bits_log2` and `Module::addr_bits_log2` fields with `#[serde(skip, default = "...")]` so they are excluded from the postcard body. Default helper functions return the runtime constants. New `truncate_int` helper applies sign-extending mask. `Module::to_bytes` writes the per-Module exponents from `self`. `Module::from_bytes` validates `<=` and stores the exponents on the deserialized Module. `LoadError::WordSizeMismatch` and `LoadError::AddressSizeMismatch` field renamed from `expected` to `max_supported` to reflect the relaxed policy. Display strings updated to report decoded bit widths.
+- **`src/compiler.rs`**: Module construction sets `word_bits_log2` and `addr_bits_log2` to runtime defaults.
+- **`src/vm.rs`**: Arithmetic ops `Add`, `Sub`, `Mul`, `Div`, `Mod`, `Neg` now apply `bytecode::truncate_int` to integer results using `self.module.word_bits_log2`. The `binary_arith` helper takes the same path. Integer division and modulo switched to `wrapping_div` and `wrapping_rem` for consistency under truncation. Existing tests updated to use the new field names and exponents. Two new tests added: `bytecode_admits_narrower_word_size` and `bytecode_masking_truncates_to_declared_width`. Golden bytes updated for version three with exponent encoding. Existing `bytecode_rejects_word_size_mismatch` and `bytecode_rejects_address_size_mismatch` updated for `max_supported` field name and use `runtime_log2 + 1` to trigger rejection.
+- **`src/verify.rs`**: Test-only Module constructions updated to include the new fields.
 
 ### Knowledge Graph
 
-- **`docs/decisions/RESOLVED.md`**: R39 updated. Wire format description includes the new header fields. Length authority is documented. Word size and address size fields are documented with reference to B10. Endian portability is now explicitly stated and tied to the golden-bytes test. The validation order is updated.
-- **`docs/architecture/EXECUTION_MODEL.md`**: Bytecode Loading section updated. Header layout includes the new fields. Length authority is documented.
-- **`docs/process/TASKLOG.md`**: V0.1-M1-T6 row added. New history row added.
+- **`docs/decisions/RESOLVED.md`**: R39 updated. Wire format description includes the exponent encoding and the relaxed acceptance policy. The integer masking pass is documented. Power-of-two restriction is recorded as acceptable for the stated target range.
+- **`docs/architecture/EXECUTION_MODEL.md`**: Bytecode Loading section updated. Constants renamed. Acceptance policy and masking documented.
+- **`docs/process/TASKLOG.md`**: V0.1-M1-T7 row added. New history row added.
 - **`docs/process/REVERSE_PROMPT.md`**: This file.
 
 ## Trade-offs and Properties
 
-The total framing length field enables embedding bytecode within a larger buffer. The reader can find the boundary of a single bytecode within a multi-segment archive or a flash region with padding. The cost is four bytes of header overhead.
+The exponent encoding is more compact than the literal bit count and aligns with hardware conventions. Eight bits suffice to express widths from one bit to two-hundred-fifty-six bits.
 
-The word size and address size fields record forward compatibility metadata. The current single-target runtime rejects bytecode that records a different size, which surfaces silent target mismatches as a clear error. The cost is two bytes of header overhead. The fields are eight-bit unsigned integers, sufficient for any plausible target from eight-bit microcontrollers up to two-hundred-fifty-five-bit hypothetical targets.
+The relaxed acceptance policy enables forward-compatible bytecode distribution. A binary compiled for 8-bit AVR can run on a 64-bit ARM64 runtime under masking. The cost is per-arithmetic-op truncation overhead. For 64-bit-on-64-bit (the current default), the truncation is the identity branch and the overhead is a single comparison.
 
-The version bump from one to two is the cleanest signaling that the format changed. Version one is now an obsolete intermediate format that was never released to crates.io and was only present during the prior commit in this session. Version two is the first stable wire format.
+The sign-extending shift pattern `(value << shift) >> shift` is branchless and produces correct two's complement semantics for all widths from one to sixty-three bits. The shift count is bounded by `64 - 1 = 63`, which is within Rust's defined-behavior range for shifts.
 
-The golden-bytes test pins thirty-seven bytes that capture the exact serialization of a minimal program. The test will fail loudly on any unintended change. Intentional changes require a `BYTECODE_VERSION` bump and an update to the expected byte sequence. The cost is roughly twelve lines of test code.
+The `wrapping_div` and `wrapping_rem` switch matches the wrapping behavior of `wrapping_add`, `wrapping_sub`, `wrapping_mul`, and `wrapping_neg` already in use. The only previously non-wrapping case was `i64::MIN / -1`, which is now handled.
 
 ## Unaddressed Concerns
 
-1. **The golden test is a single program.** Coverage is high for the framing and a tiny body, but rare combinations of `Op` variants or `Value` shapes that produce unusual postcard encoding are not pinned. A future iteration could pin a richer program to broaden coverage. Not blocking because the current test catches all framing-level changes.
+1. **Float width is not yet parameterized.** The header records integer word size only. `Value::Float` is always `f64`. A future iteration may add a separate float-size field for targets that use `f32` natively. Not blocking because the current single-target runtime always uses `f64`.
 
-2. **Word size and address size are eight-bit.** This caps representable widths at two-hundred-fifty-five bits, which is sufficient for all known and plausible targets but is not unlimited. A future iteration could promote to sixteen-bit if exotic targets motivate it. Not blocking.
+2. **Constants in the postcard body are i64-encoded.** A bytecode compiled for thirty-two-bit words still serializes its constants as i64 because `Value::Int` holds `i64`. The values are correct after deserialization but the wire form is wider than necessary. A future iteration may add target-aware constant encoding under B10. Not blocking.
 
-3. **Length field is thirty-two-bit.** This caps bytecode at four gigabytes, which is sufficient for all embedded and most desktop use cases but is not unlimited. A future iteration could promote to sixty-four-bit if very large bytecode motivates it. Not blocking.
+3. **Address-related operations.** The address-bits field is read and validated but no current opcode is parameterized by address size. The field is metadata only at present. Future opcodes that compute or compare addresses will use it. Not blocking.
 
-4. **Cross-endian verification is by construction, not by test on a big-endian target.** The session has not run the runtime on a big-endian target. The golden-bytes test will detect any unintended native-endian code paths if it ever ran on such a target. Adding a CI matrix that includes a big-endian target through cross or QEMU is admissible as a future addition.
+4. **Cross-width execution is not exhaustively tested.** The new tests cover the 32-bit-on-64-bit path with the canonical `i32::MAX + 1` overflow. Other widths (16-bit, 8-bit) and other operations (multiplication overflow, division by `-1` with `i64::MIN` truncated to narrower) are exercised through the masking helper but not pinned by individual tests. The masking pass is the same regardless of width, so the existing test should be sufficient. A future iteration may add per-width tests if confidence requires.
 
-5. **No incremental or chunked deserialization.** The `from_bytes` path operates on the full slice. Hosts that stream bytecode from a network would need to buffer the full bytecode before calling. Adequate for the stated embedded and file-loading use cases.
+5. **The `truncate_int` function is `pub(crate)`.** Visibility is the minimum required for tests to access it. Could be promoted to `pub` for host-side use, but no host scenario currently motivates that.
 
 ## Intended Next Step
 
 Three paths.
 
-A. V0.1-M2 implementing P10 path B. Lifetime-parameterize Module. Eliminate String fields in favor of byte-offset references. The new header fields integrate naturally because the length, word size, and address size are all positional and known.
+A. V0.1-M2 implementing P10 path B. Lifetime-parameterize Module. Eliminate String fields in favor of byte-offset references. The current header design is already path-B-friendly because the length, word size, and address size are positional and known at fixed offsets.
 
 B. V0.1-M2 advancing to V0.1 candidates such as the type checker (P1), for-in over arbitrary expressions (P2), or error recovery (P3).
 
 C. V0.1-M2 returning to P7 follow-on items, namely operand stack and `DynStr` arena migration in the keleusma runtime.
 
-Recommend A if the precompiled-code use case is the priority. The wire format is now stable and well-tested. Path B's zero-copy execution against `.rodata` becomes the natural completion of the precompiled-distribution story.
+Recommend A if the precompiled-code use case is the priority. The wire format is now stable, well-tested, and forward-compatible for narrower-target bytecode. Path B's zero-copy execution against `.rodata` becomes the natural completion of the precompiled-distribution story.
 
 Await human prompt before proceeding.
 
 ## Session Context
 
-This session began with V0.0-M5 and V0.0-M6 already complete and the arena extracted into a workspace crate. The session resolved P8 and P9, completed three pre-publication audit and polish passes on `keleusma-arena`, published v0.1.0 to crates.io, switched the keleusma main crate to consume the registry version, completed V0.1-M1 implementing precompiled bytecode loading and trust-based verification skip, hardened the wire format with a CRC-32 algebraic self-inclusion trailer, and now extended the header with length, word size, and address size, pinned a golden-bytes test, and bumped the wire format version from one to two.
+This session began with V0.0-M5 and V0.0-M6 already complete and the arena extracted into a workspace crate. The session resolved P8 and P9, completed three pre-publication audit and polish passes on `keleusma-arena`, published v0.1.0 to crates.io, switched the keleusma main crate to consume the registry version, completed V0.1-M1 implementing precompiled bytecode loading and trust-based verification skip, hardened the wire format with a CRC-32 algebraic self-inclusion trailer, extended the header with length, word size, and address size and pinned a golden-bytes test, and now shifted word and address fields to base-2 exponent encoding with relaxed acceptance and integer masking. The phase has advanced to V0.1.

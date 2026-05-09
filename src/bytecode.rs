@@ -546,6 +546,31 @@ pub struct Module {
     /// Data segment layout. If present, defines persistent slots that
     /// survive across RESET boundaries.
     pub data_layout: Option<DataLayout>,
+    /// Word size required by this bytecode, encoded as the base-2
+    /// exponent. Actual width in bits is `1 << word_bits_log2`. The
+    /// runtime accepts the bytecode when the recorded value is at most
+    /// the runtime's `RUNTIME_WORD_BITS_LOG2`. The VM masks integer
+    /// arithmetic to the declared width using sign-extending shift.
+    /// Not part of the postcard body; mirrored from the framing header
+    /// during `from_bytes`.
+    #[serde(skip, default = "default_word_bits_log2")]
+    pub word_bits_log2: u8,
+    /// Address size required by this bytecode, encoded as the base-2
+    /// exponent. Actual width in bits is `1 << addr_bits_log2`. The
+    /// runtime accepts the bytecode when the recorded value is at most
+    /// the runtime's `RUNTIME_ADDRESS_BITS_LOG2`. Not part of the
+    /// postcard body; mirrored from the framing header during
+    /// `from_bytes`.
+    #[serde(skip, default = "default_addr_bits_log2")]
+    pub addr_bits_log2: u8,
+}
+
+fn default_word_bits_log2() -> u8 {
+    RUNTIME_WORD_BITS_LOG2
+}
+
+fn default_addr_bits_log2() -> u8 {
+    RUNTIME_ADDRESS_BITS_LOG2
 }
 
 /// Magic prefix identifying serialized Keleusma bytecode (`KELE`).
@@ -553,18 +578,19 @@ pub const BYTECODE_MAGIC: [u8; 4] = *b"KELE";
 
 /// Wire format version for serialized bytecode. Bytecode produced under a
 /// different version is rejected at load time.
-pub const BYTECODE_VERSION: u16 = 2;
+pub const BYTECODE_VERSION: u16 = 3;
 
-/// Word size in bits assumed by this runtime build. Bytecode is rejected
-/// if the recorded word size does not match. The current Keleusma runtime
-/// uses 64-bit words (i64 and f64). A future target-portability pass will
-/// parameterize this by build target.
-pub const RUNTIME_WORD_BITS: u8 = 64;
+/// Word size in bits assumed by this runtime build, encoded as the
+/// base-2 exponent. Actual width in bits is `1 << RUNTIME_WORD_BITS_LOG2`.
+/// The current Keleusma runtime uses 64-bit words (i64 and f64), so the
+/// exponent is 6.
+pub const RUNTIME_WORD_BITS_LOG2: u8 = 6;
 
-/// Address size in bits assumed by this runtime build. Bytecode is
-/// rejected if the recorded address size does not match. The current
-/// Keleusma runtime targets 64-bit address spaces.
-pub const RUNTIME_ADDRESS_BITS: u8 = 64;
+/// Address size in bits assumed by this runtime build, encoded as the
+/// base-2 exponent. Actual width in bits is
+/// `1 << RUNTIME_ADDRESS_BITS_LOG2`. The current Keleusma runtime
+/// targets 64-bit address spaces, so the exponent is 6.
+pub const RUNTIME_ADDRESS_BITS_LOG2: u8 = 6;
 
 /// Header length in bytes. The fields are
 ///
@@ -572,8 +598,8 @@ pub const RUNTIME_ADDRESS_BITS: u8 = 64;
 /// - bytes 4..6: version (u16 little-endian)
 /// - bytes 6..10: total framing length (u32 little-endian, includes
 ///   header and CRC trailer)
-/// - bytes 10..11: word_bits (u8)
-/// - bytes 11..12: addr_bits (u8)
+/// - bytes 10..11: word_bits_log2 (u8). Actual width is `1 << value`.
+/// - bytes 11..12: addr_bits_log2 (u8). Actual width is `1 << value`.
 const HEADER_LEN: usize = 12;
 
 /// Footer length in bytes (4-byte little-endian CRC-32).
@@ -635,19 +661,23 @@ pub enum LoadError {
         /// Version the runtime supports.
         expected: u16,
     },
-    /// The recorded word size in bits does not match the runtime build.
+    /// The recorded word size exponent exceeds what this runtime build
+    /// supports. Values are log-base-2 exponents. The bytecode is
+    /// admitted when `got <= max_supported`.
     WordSizeMismatch {
-        /// Word size recorded in the bytecode header.
+        /// Word size exponent recorded in the bytecode header.
         got: u8,
-        /// Word size this runtime build supports.
-        expected: u8,
+        /// Maximum word size exponent this runtime build supports.
+        max_supported: u8,
     },
-    /// The recorded address size in bits does not match the runtime build.
+    /// The recorded address size exponent exceeds what this runtime
+    /// build supports. Values are log-base-2 exponents. The bytecode is
+    /// admitted when `got <= max_supported`.
     AddressSizeMismatch {
-        /// Address size recorded in the bytecode header.
+        /// Address size exponent recorded in the bytecode header.
         got: u8,
-        /// Address size this runtime build supports.
-        expected: u8,
+        /// Maximum address size exponent this runtime build supports.
+        max_supported: u8,
     },
     /// The CRC-32 trailer did not satisfy the algebraic self-inclusion
     /// residue. The bytecode is corrupted or was produced by a different
@@ -671,18 +701,20 @@ impl core::fmt::Display for LoadError {
                     got, expected
                 )
             }
-            LoadError::WordSizeMismatch { got, expected } => {
+            LoadError::WordSizeMismatch { got, max_supported } => {
                 write!(
                     f,
-                    "bytecode word size {} bits does not match runtime build {} bits",
-                    got, expected
+                    "bytecode requires {}-bit words, runtime supports up to {}-bit",
+                    1u32 << got,
+                    1u32 << max_supported
                 )
             }
-            LoadError::AddressSizeMismatch { got, expected } => {
+            LoadError::AddressSizeMismatch { got, max_supported } => {
                 write!(
                     f,
-                    "bytecode address size {} bits does not match runtime build {} bits",
-                    got, expected
+                    "bytecode requires {}-bit addresses, runtime supports up to {}-bit",
+                    1u32 << got,
+                    1u32 << max_supported
                 )
             }
             LoadError::BadChecksum => f.write_str("bytecode CRC-32 residue check failed"),
@@ -722,8 +754,8 @@ impl Module {
         buf.extend_from_slice(&BYTECODE_MAGIC);
         buf.extend_from_slice(&BYTECODE_VERSION.to_le_bytes());
         buf.extend_from_slice(&total_len.to_le_bytes());
-        buf.push(RUNTIME_WORD_BITS);
-        buf.push(RUNTIME_ADDRESS_BITS);
+        buf.push(self.word_bits_log2);
+        buf.push(self.addr_bits_log2);
         buf.extend_from_slice(&body);
         let crc = crc32(&buf);
         buf.extend_from_slice(&crc.to_le_bytes());
@@ -777,21 +809,41 @@ impl Module {
                 expected: BYTECODE_VERSION,
             });
         }
-        let word_bits = bytes[10];
-        if word_bits != RUNTIME_WORD_BITS {
+        let word_bits_log2 = bytes[10];
+        if word_bits_log2 > RUNTIME_WORD_BITS_LOG2 {
             return Err(LoadError::WordSizeMismatch {
-                got: word_bits,
-                expected: RUNTIME_WORD_BITS,
+                got: word_bits_log2,
+                max_supported: RUNTIME_WORD_BITS_LOG2,
             });
         }
-        let addr_bits = bytes[11];
-        if addr_bits != RUNTIME_ADDRESS_BITS {
+        let addr_bits_log2 = bytes[11];
+        if addr_bits_log2 > RUNTIME_ADDRESS_BITS_LOG2 {
             return Err(LoadError::AddressSizeMismatch {
-                got: addr_bits,
-                expected: RUNTIME_ADDRESS_BITS,
+                got: addr_bits_log2,
+                max_supported: RUNTIME_ADDRESS_BITS_LOG2,
             });
         }
         let body = &bytes[HEADER_LEN..length - FOOTER_LEN];
-        postcard::from_bytes(body).map_err(|e| LoadError::Codec(format!("decode failed: {}", e)))
+        let mut module: Module = postcard::from_bytes(body)
+            .map_err(|e| LoadError::Codec(format!("decode failed: {}", e)))?;
+        module.word_bits_log2 = word_bits_log2;
+        module.addr_bits_log2 = addr_bits_log2;
+        Ok(module)
     }
+}
+
+/// Sign-extending mask for narrower-than-runtime integer arithmetic.
+///
+/// When a bytecode declares a word size narrower than the runtime
+/// supports, the VM applies this mask after each integer arithmetic
+/// op so that overflow points match the bytecode's declared width.
+/// For `word_bits_log2 >= 6` the function is the identity, since the
+/// runtime's native i64 already matches or exceeds the declared width.
+pub(crate) fn truncate_int(value: i64, word_bits_log2: u8) -> i64 {
+    if word_bits_log2 >= 6 {
+        return value;
+    }
+    let bits = 1u32 << word_bits_log2;
+    let shift = 64 - bits;
+    (value << shift) >> shift
 }

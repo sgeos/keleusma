@@ -648,35 +648,43 @@ impl Vm {
                     self.data[idx] = val;
                 }
 
-                Op::Add => self.binary_op(|a, b| match (a, b) {
-                    (Value::Int(x), Value::Int(y)) => Ok(Value::Int(x.wrapping_add(y))),
-                    (Value::Float(x), Value::Float(y)) => Ok(Value::Float(x + y)),
-                    (a, b) if a.as_str().is_some() && b.as_str().is_some() => {
-                        let mut s = match a {
-                            Value::StaticStr(s) | Value::DynStr(s) => s,
-                            _ => unreachable!(),
-                        };
-                        let suffix = match b {
-                            Value::StaticStr(s) | Value::DynStr(s) => s,
-                            _ => unreachable!(),
-                        };
-                        s.push_str(&suffix);
-                        Ok(Value::DynStr(s))
-                    }
-                    (a, b) => Err(VmError::TypeError(format!(
-                        "cannot add {} and {}",
-                        a.type_name(),
-                        b.type_name()
-                    ))),
-                })?,
+                Op::Add => {
+                    let word_bits_log2 = self.module.word_bits_log2;
+                    self.binary_op(move |a, b| match (a, b) {
+                        (Value::Int(x), Value::Int(y)) => Ok(Value::Int(
+                            crate::bytecode::truncate_int(x.wrapping_add(y), word_bits_log2),
+                        )),
+                        (Value::Float(x), Value::Float(y)) => Ok(Value::Float(x + y)),
+                        (a, b) if a.as_str().is_some() && b.as_str().is_some() => {
+                            let mut s = match a {
+                                Value::StaticStr(s) | Value::DynStr(s) => s,
+                                _ => unreachable!(),
+                            };
+                            let suffix = match b {
+                                Value::StaticStr(s) | Value::DynStr(s) => s,
+                                _ => unreachable!(),
+                            };
+                            s.push_str(&suffix);
+                            Ok(Value::DynStr(s))
+                        }
+                        (a, b) => Err(VmError::TypeError(format!(
+                            "cannot add {} and {}",
+                            a.type_name(),
+                            b.type_name()
+                        ))),
+                    })?
+                }
                 Op::Sub => self.binary_arith(|a, b| a.wrapping_sub(b), |a, b| a - b)?,
                 Op::Mul => self.binary_arith(|a, b| a.wrapping_mul(b), |a, b| a * b)?,
                 Op::Div => {
+                    let word_bits_log2 = self.module.word_bits_log2;
                     let b = self.pop()?;
                     let a = self.pop()?;
                     match (a, b) {
                         (Value::Int(_), Value::Int(0)) => return Err(VmError::DivisionByZero),
-                        (Value::Int(x), Value::Int(y)) => self.stack.push(Value::Int(x / y)),
+                        (Value::Int(x), Value::Int(y)) => self.stack.push(Value::Int(
+                            crate::bytecode::truncate_int(x.wrapping_div(y), word_bits_log2),
+                        )),
                         (Value::Float(x), Value::Float(y)) => self.stack.push(Value::Float(x / y)),
                         (a, b) => {
                             return Err(VmError::TypeError(format!(
@@ -688,11 +696,14 @@ impl Vm {
                     }
                 }
                 Op::Mod => {
+                    let word_bits_log2 = self.module.word_bits_log2;
                     let b = self.pop()?;
                     let a = self.pop()?;
                     match (a, b) {
                         (Value::Int(_), Value::Int(0)) => return Err(VmError::DivisionByZero),
-                        (Value::Int(x), Value::Int(y)) => self.stack.push(Value::Int(x % y)),
+                        (Value::Int(x), Value::Int(y)) => self.stack.push(Value::Int(
+                            crate::bytecode::truncate_int(x.wrapping_rem(y), word_bits_log2),
+                        )),
                         (Value::Float(x), Value::Float(y)) => self.stack.push(Value::Float(x % y)),
                         (a, b) => {
                             return Err(VmError::TypeError(format!(
@@ -704,9 +715,12 @@ impl Vm {
                     }
                 }
                 Op::Neg => {
+                    let word_bits_log2 = self.module.word_bits_log2;
                     let val = self.pop()?;
                     match val {
-                        Value::Int(x) => self.stack.push(Value::Int(-x)),
+                        Value::Int(x) => self.stack.push(Value::Int(
+                            crate::bytecode::truncate_int(x.wrapping_neg(), word_bits_log2),
+                        )),
                         Value::Float(x) => self.stack.push(Value::Float(-x)),
                         v => {
                             return Err(VmError::TypeError(format!(
@@ -1186,10 +1200,14 @@ impl Vm {
         int_op: fn(i64, i64) -> i64,
         float_op: fn(f64, f64) -> f64,
     ) -> Result<(), VmError> {
+        let word_bits_log2 = self.module.word_bits_log2;
         let b = self.pop()?;
         let a = self.pop()?;
         match (a, b) {
-            (Value::Int(x), Value::Int(y)) => self.stack.push(Value::Int(int_op(x, y))),
+            (Value::Int(x), Value::Int(y)) => {
+                let result = crate::bytecode::truncate_int(int_op(x, y), word_bits_log2);
+                self.stack.push(Value::Int(result));
+            }
             (Value::Float(x), Value::Float(y)) => self.stack.push(Value::Float(float_op(x, y))),
             (a, b) => {
                 return Err(VmError::TypeError(format!(
@@ -2194,17 +2212,17 @@ mod tests {
         // Source: `fn main() -> i64 { 1 }`
         //
         // Layout breakdown:
-        //   bytes[0..4]    = b"KELE"          magic
-        //   bytes[4..6]    = 0x02 0x00         version 2 (u16 LE)
-        //   bytes[6..10]   = 0x25 0x00 0x00 0x00  length 37 (u32 LE)
-        //   bytes[10]      = 0x40              word_bits 64
-        //   bytes[11]      = 0x40              addr_bits 64
+        //   bytes[0..4]    = b"KELE"               magic
+        //   bytes[4..6]    = 0x03 0x00              version 3 (u16 LE)
+        //   bytes[6..10]   = 0x25 0x00 0x00 0x00    length 37 (u32 LE)
+        //   bytes[10]      = 0x06                   word_bits_log2 = 6 (64-bit)
+        //   bytes[11]      = 0x06                   addr_bits_log2 = 6 (64-bit)
         //   bytes[12..33]  = postcard body
-        //   bytes[33..37]  = 0xFE 0xD5 0x21 0x91  CRC-32 (u32 LE)
+        //   bytes[33..37]  = 0xD7 0x1E 0x99 0xA2    CRC-32 (u32 LE)
         let expected: alloc::vec::Vec<u8> = alloc::vec![
-            0x4B, 0x45, 0x4C, 0x45, 0x02, 0x00, 0x25, 0x00, 0x00, 0x00, 0x40, 0x40, 0x01, 0x04,
+            0x4B, 0x45, 0x4C, 0x45, 0x03, 0x00, 0x25, 0x00, 0x00, 0x00, 0x06, 0x06, 0x01, 0x04,
             0x6D, 0x61, 0x69, 0x6E, 0x02, 0x00, 0x00, 0x20, 0x01, 0x02, 0x02, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x01, 0x00, 0x00, 0xFE, 0xD5, 0x21, 0x91,
+            0x00, 0x00, 0x01, 0x00, 0x00, 0xD7, 0x1E, 0x99, 0xA2,
         ];
         let src = "fn main() -> i64 { 1 }";
         let tokens = tokenize(src).expect("lex");
@@ -2292,23 +2310,24 @@ mod tests {
 
     #[test]
     fn bytecode_rejects_word_size_mismatch() {
-        // Compile a real module, patch the word_bits field, and
-        // recompute the CRC trailer so the residue check passes. The
-        // version and length fields are intact so only the word size
-        // mismatch surfaces.
+        // Compile a real module, patch the word_bits_log2 field to a
+        // value greater than the runtime supports, and recompute the
+        // CRC trailer so the residue check passes. The version and
+        // length fields are intact so only the word size mismatch
+        // surfaces.
         let src = "fn main() -> i64 { 1 }";
         let tokens = tokenize(src).expect("lex");
         let program = parse(&tokens).expect("parse");
         let module = compile(&program).expect("compile");
         let mut bytes = module.to_bytes().expect("encode");
-        bytes[10] = 32;
+        bytes[10] = crate::bytecode::RUNTIME_WORD_BITS_LOG2 + 1;
         let trailer_start = bytes.len() - 4;
         let new_crc = crate::bytecode::crc32(&bytes[..trailer_start]);
         bytes[trailer_start..].copy_from_slice(&new_crc.to_le_bytes());
         match Module::from_bytes(&bytes) {
-            Err(crate::bytecode::LoadError::WordSizeMismatch { got, expected }) => {
-                assert_eq!(got, 32);
-                assert_eq!(expected, crate::bytecode::RUNTIME_WORD_BITS);
+            Err(crate::bytecode::LoadError::WordSizeMismatch { got, max_supported }) => {
+                assert_eq!(got, crate::bytecode::RUNTIME_WORD_BITS_LOG2 + 1);
+                assert_eq!(max_supported, crate::bytecode::RUNTIME_WORD_BITS_LOG2);
             }
             other => panic!("expected WordSizeMismatch, got {:?}", other),
         }
@@ -2321,16 +2340,59 @@ mod tests {
         let program = parse(&tokens).expect("parse");
         let module = compile(&program).expect("compile");
         let mut bytes = module.to_bytes().expect("encode");
-        bytes[11] = 16;
+        bytes[11] = crate::bytecode::RUNTIME_ADDRESS_BITS_LOG2 + 1;
         let trailer_start = bytes.len() - 4;
         let new_crc = crate::bytecode::crc32(&bytes[..trailer_start]);
         bytes[trailer_start..].copy_from_slice(&new_crc.to_le_bytes());
         match Module::from_bytes(&bytes) {
-            Err(crate::bytecode::LoadError::AddressSizeMismatch { got, expected }) => {
-                assert_eq!(got, 16);
-                assert_eq!(expected, crate::bytecode::RUNTIME_ADDRESS_BITS);
+            Err(crate::bytecode::LoadError::AddressSizeMismatch { got, max_supported }) => {
+                assert_eq!(got, crate::bytecode::RUNTIME_ADDRESS_BITS_LOG2 + 1);
+                assert_eq!(max_supported, crate::bytecode::RUNTIME_ADDRESS_BITS_LOG2);
             }
             other => panic!("expected AddressSizeMismatch, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn bytecode_admits_narrower_word_size() {
+        // Compile a module, patch the word_bits_log2 to a value below
+        // the runtime maximum, and recompute the CRC. The runtime
+        // accepts narrower-than-runtime bytecode under the relaxed
+        // policy. The masking pass in the VM keeps arithmetic within
+        // the declared narrower width.
+        let src = "fn main() -> i64 { 1 }";
+        let tokens = tokenize(src).expect("lex");
+        let program = parse(&tokens).expect("parse");
+        let module = compile(&program).expect("compile");
+        let mut bytes = module.to_bytes().expect("encode");
+        // Declare 32-bit words. Runtime is 64-bit so 5 <= 6 holds.
+        bytes[10] = 5;
+        let trailer_start = bytes.len() - 4;
+        let new_crc = crate::bytecode::crc32(&bytes[..trailer_start]);
+        bytes[trailer_start..].copy_from_slice(&new_crc.to_le_bytes());
+        let mut vm = Vm::load_bytes(&bytes).expect("narrower bytecode should be admitted");
+        match vm.call(&[]).unwrap() {
+            VmState::Finished(v) => assert_eq!(v, Value::Int(1)),
+            other => panic!("expected finished, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn bytecode_masking_truncates_to_declared_width() {
+        // Construct a Module with word_bits_log2 = 5 (32-bit) and an
+        // arithmetic that would not overflow at 64 bits but would at
+        // 32 bits. Verify that the runtime applies sign-extending
+        // truncation. The expression `2147483647 + 1` produces
+        // 2147483648 at 64 bits but i32::MIN = -2147483648 at 32 bits.
+        let src = "fn main() -> i64 { 2147483647 + 1 }";
+        let tokens = tokenize(src).expect("lex");
+        let program = parse(&tokens).expect("parse");
+        let mut module = compile(&program).expect("compile");
+        module.word_bits_log2 = 5;
+        let mut vm = Vm::new(module).expect("verify");
+        match vm.call(&[]).unwrap() {
+            VmState::Finished(v) => assert_eq!(v, Value::Int(-2147483648)),
+            other => panic!("expected finished, got {:?}", other),
         }
     }
 
@@ -2407,6 +2469,8 @@ mod tests {
             native_names: alloc::vec![],
             entry_point: Some(0),
             data_layout: None,
+            word_bits_log2: crate::bytecode::RUNTIME_WORD_BITS_LOG2,
+            addr_bits_log2: crate::bytecode::RUNTIME_ADDRESS_BITS_LOG2,
         };
         // The unchecked constructor still rejects on structural grounds.
         let result = unsafe { Vm::new_unchecked(module) };

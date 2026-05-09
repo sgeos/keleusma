@@ -1368,6 +1368,8 @@ mod tests {
             native_names: Vec::new(),
             entry_point: Some(0),
             data_layout: None,
+            word_bits_log2: crate::bytecode::RUNTIME_WORD_BITS_LOG2,
+            addr_bits_log2: crate::bytecode::RUNTIME_ADDRESS_BITS_LOG2,
         }
     }
 
@@ -1969,6 +1971,8 @@ mod tests {
             chunks: vec![chunk],
             native_names: Vec::new(),
             entry_point: Some(0),
+            word_bits_log2: crate::bytecode::RUNTIME_WORD_BITS_LOG2,
+            addr_bits_log2: crate::bytecode::RUNTIME_ADDRESS_BITS_LOG2,
             data_layout: Some(DataLayout {
                 slots: vec![DataSlot {
                     name: String::from("ctx.x"),
@@ -2001,6 +2005,8 @@ mod tests {
             chunks: vec![chunk],
             native_names: Vec::new(),
             entry_point: Some(0),
+            word_bits_log2: crate::bytecode::RUNTIME_WORD_BITS_LOG2,
+            addr_bits_log2: crate::bytecode::RUNTIME_ADDRESS_BITS_LOG2,
             data_layout: Some(DataLayout {
                 slots: vec![
                     DataSlot {
