@@ -145,7 +145,525 @@ pub fn monomorphize(program: Program) -> Program {
     program
         .functions
         .retain(|f| !specialized_origins.contains(&f.name));
+
+    // Generic struct specialization. Walk the program once more
+    // looking for `Expr::StructInit` whose target is a generic
+    // struct. Infer the struct's type arguments from the provided
+    // field values, generate a specialized `StructDef` with
+    // concrete field types, and rewrite the `StructInit`'s name to
+    // the specialized name. Subsequent compilation sees the
+    // specialized struct as a regular non-generic struct, which
+    // lets compile-time field-type inference resolve method
+    // dispatch on field-typed receivers.
+    program = specialize_structs(program, &fn_returns);
     program
+}
+
+/// Generic struct specialization pass.
+///
+/// Walks the program for `Expr::StructInit` expressions whose target
+/// struct has type parameters. For each, infers the struct's type
+/// arguments by matching declared field types against the provided
+/// field values' types. When all type arguments can be inferred,
+/// emits a specialized `StructDef` with concrete field types and
+/// rewrites the `StructInit`'s name to a mangled form. The original
+/// generic struct is retained alongside the specialization.
+fn specialize_structs(mut program: Program, fn_returns: &BTreeMap<String, TypeExpr>) -> Program {
+    // Map from generic struct name to its declaration.
+    let generic_structs: BTreeMap<String, StructDef> = program
+        .types
+        .iter()
+        .filter_map(|td| match td {
+            TypeDef::Struct(s) if !s.type_params.is_empty() => Some((s.name.clone(), s.clone())),
+            _ => None,
+        })
+        .collect();
+    if generic_structs.is_empty() {
+        return program;
+    }
+    let mut struct_specs: BTreeMap<(String, String), String> = BTreeMap::new();
+    let mut new_structs: Vec<StructDef> = Vec::new();
+    let mut local_types: BTreeMap<String, TypeExpr> = BTreeMap::new();
+    for func in &mut program.functions {
+        local_types.clear();
+        for param in &func.params {
+            if let Some(t) = &param.type_expr
+                && let Pattern::Variable(name, _) = &param.pattern
+            {
+                local_types.insert(name.clone(), t.clone());
+            }
+        }
+        rewrite_struct_inits_block(
+            &mut func.body,
+            &generic_structs,
+            &mut local_types,
+            &mut struct_specs,
+            &mut new_structs,
+            fn_returns,
+        );
+    }
+    program
+        .types
+        .extend(new_structs.into_iter().map(TypeDef::Struct));
+    program
+}
+
+fn mangle_struct(name: &str, type_args: &[TypeExpr]) -> String {
+    let mut s = name.to_string();
+    for arg in type_args {
+        s.push_str("__");
+        s.push_str(&type_arg_canonical(arg));
+    }
+    s
+}
+
+fn specialize_struct(
+    struct_def: &StructDef,
+    type_args: &[TypeExpr],
+    spec_name: String,
+) -> StructDef {
+    let mut subst: BTreeMap<String, TypeExpr> = BTreeMap::new();
+    for (tp, arg) in struct_def.type_params.iter().zip(type_args.iter()) {
+        subst.insert(tp.name.clone(), arg.clone());
+    }
+    let fields: Vec<FieldDecl> = struct_def
+        .fields
+        .iter()
+        .map(|f| FieldDecl {
+            name: f.name.clone(),
+            type_expr: subst_type_expr(&f.type_expr, &subst),
+            span: f.span,
+        })
+        .collect();
+    StructDef {
+        name: spec_name,
+        type_params: Vec::new(),
+        fields,
+        span: struct_def.span,
+    }
+}
+
+fn rewrite_struct_inits_block(
+    block: &mut Block,
+    generic_structs: &BTreeMap<String, StructDef>,
+    locals: &mut BTreeMap<String, TypeExpr>,
+    specs: &mut BTreeMap<(String, String), String>,
+    new_structs: &mut Vec<StructDef>,
+    fn_returns: &BTreeMap<String, TypeExpr>,
+) {
+    for stmt in block.stmts.iter_mut() {
+        rewrite_struct_inits_stmt(
+            stmt,
+            generic_structs,
+            locals,
+            specs,
+            new_structs,
+            fn_returns,
+        );
+    }
+    if let Some(e) = block.tail_expr.as_mut() {
+        rewrite_struct_inits_expr(e, generic_structs, locals, specs, new_structs, fn_returns);
+    }
+}
+
+fn rewrite_struct_inits_stmt(
+    stmt: &mut Stmt,
+    generic_structs: &BTreeMap<String, StructDef>,
+    locals: &mut BTreeMap<String, TypeExpr>,
+    specs: &mut BTreeMap<(String, String), String>,
+    new_structs: &mut Vec<StructDef>,
+    fn_returns: &BTreeMap<String, TypeExpr>,
+) {
+    match stmt {
+        Stmt::Let(l) => {
+            rewrite_struct_inits_expr(
+                &mut l.value,
+                generic_structs,
+                locals,
+                specs,
+                new_structs,
+                fn_returns,
+            );
+            if let Pattern::Variable(name, _) = &l.pattern
+                && let Some(t) = l
+                    .type_expr
+                    .clone()
+                    .or_else(|| infer_arg_type(&l.value, locals, fn_returns))
+            {
+                locals.insert(name.clone(), t);
+            }
+        }
+        Stmt::For(f) => {
+            match &mut f.iterable {
+                Iterable::Range(s, e) => {
+                    rewrite_struct_inits_expr(
+                        s,
+                        generic_structs,
+                        locals,
+                        specs,
+                        new_structs,
+                        fn_returns,
+                    );
+                    rewrite_struct_inits_expr(
+                        e,
+                        generic_structs,
+                        locals,
+                        specs,
+                        new_structs,
+                        fn_returns,
+                    );
+                }
+                Iterable::Expr(e) => {
+                    rewrite_struct_inits_expr(
+                        e,
+                        generic_structs,
+                        locals,
+                        specs,
+                        new_structs,
+                        fn_returns,
+                    );
+                }
+            }
+            rewrite_struct_inits_block(
+                &mut f.body,
+                generic_structs,
+                locals,
+                specs,
+                new_structs,
+                fn_returns,
+            );
+        }
+        Stmt::Break(_) => {}
+        Stmt::DataFieldAssign { value, .. } => {
+            rewrite_struct_inits_expr(
+                value,
+                generic_structs,
+                locals,
+                specs,
+                new_structs,
+                fn_returns,
+            );
+        }
+        Stmt::Expr(e) => {
+            rewrite_struct_inits_expr(e, generic_structs, locals, specs, new_structs, fn_returns);
+        }
+    }
+}
+
+fn rewrite_struct_inits_expr(
+    expr: &mut Expr,
+    generic_structs: &BTreeMap<String, StructDef>,
+    locals: &mut BTreeMap<String, TypeExpr>,
+    specs: &mut BTreeMap<(String, String), String>,
+    new_structs: &mut Vec<StructDef>,
+    fn_returns: &BTreeMap<String, TypeExpr>,
+) {
+    // Recurse into sub-expressions first.
+    match expr {
+        Expr::BinOp { left, right, .. } => {
+            rewrite_struct_inits_expr(
+                left,
+                generic_structs,
+                locals,
+                specs,
+                new_structs,
+                fn_returns,
+            );
+            rewrite_struct_inits_expr(
+                right,
+                generic_structs,
+                locals,
+                specs,
+                new_structs,
+                fn_returns,
+            );
+        }
+        Expr::UnaryOp { operand, .. } => {
+            rewrite_struct_inits_expr(
+                operand,
+                generic_structs,
+                locals,
+                specs,
+                new_structs,
+                fn_returns,
+            );
+        }
+        Expr::Call { args, .. } => {
+            for a in args.iter_mut() {
+                rewrite_struct_inits_expr(
+                    a,
+                    generic_structs,
+                    locals,
+                    specs,
+                    new_structs,
+                    fn_returns,
+                );
+            }
+        }
+        Expr::Pipeline { left, args, .. } => {
+            rewrite_struct_inits_expr(
+                left,
+                generic_structs,
+                locals,
+                specs,
+                new_structs,
+                fn_returns,
+            );
+            for a in args.iter_mut() {
+                rewrite_struct_inits_expr(
+                    a,
+                    generic_structs,
+                    locals,
+                    specs,
+                    new_structs,
+                    fn_returns,
+                );
+            }
+        }
+        Expr::Yield { value, .. } => {
+            rewrite_struct_inits_expr(
+                value,
+                generic_structs,
+                locals,
+                specs,
+                new_structs,
+                fn_returns,
+            );
+        }
+        Expr::If {
+            condition,
+            then_block,
+            else_block,
+            ..
+        } => {
+            rewrite_struct_inits_expr(
+                condition,
+                generic_structs,
+                locals,
+                specs,
+                new_structs,
+                fn_returns,
+            );
+            rewrite_struct_inits_block(
+                then_block,
+                generic_structs,
+                locals,
+                specs,
+                new_structs,
+                fn_returns,
+            );
+            if let Some(b) = else_block.as_mut() {
+                rewrite_struct_inits_block(
+                    b,
+                    generic_structs,
+                    locals,
+                    specs,
+                    new_structs,
+                    fn_returns,
+                );
+            }
+        }
+        Expr::Match {
+            scrutinee, arms, ..
+        } => {
+            rewrite_struct_inits_expr(
+                scrutinee,
+                generic_structs,
+                locals,
+                specs,
+                new_structs,
+                fn_returns,
+            );
+            for arm in arms.iter_mut() {
+                rewrite_struct_inits_expr(
+                    &mut arm.expr,
+                    generic_structs,
+                    locals,
+                    specs,
+                    new_structs,
+                    fn_returns,
+                );
+            }
+        }
+        Expr::Loop { body, .. } => {
+            rewrite_struct_inits_block(
+                body,
+                generic_structs,
+                locals,
+                specs,
+                new_structs,
+                fn_returns,
+            );
+        }
+        Expr::FieldAccess { object, .. } => {
+            rewrite_struct_inits_expr(
+                object,
+                generic_structs,
+                locals,
+                specs,
+                new_structs,
+                fn_returns,
+            );
+        }
+        Expr::MethodCall { receiver, args, .. } => {
+            rewrite_struct_inits_expr(
+                receiver,
+                generic_structs,
+                locals,
+                specs,
+                new_structs,
+                fn_returns,
+            );
+            for a in args.iter_mut() {
+                rewrite_struct_inits_expr(
+                    a,
+                    generic_structs,
+                    locals,
+                    specs,
+                    new_structs,
+                    fn_returns,
+                );
+            }
+        }
+        Expr::TupleIndex { object, .. } => {
+            rewrite_struct_inits_expr(
+                object,
+                generic_structs,
+                locals,
+                specs,
+                new_structs,
+                fn_returns,
+            );
+        }
+        Expr::ArrayIndex { object, index, .. } => {
+            rewrite_struct_inits_expr(
+                object,
+                generic_structs,
+                locals,
+                specs,
+                new_structs,
+                fn_returns,
+            );
+            rewrite_struct_inits_expr(
+                index,
+                generic_structs,
+                locals,
+                specs,
+                new_structs,
+                fn_returns,
+            );
+        }
+        Expr::StructInit { fields, .. } => {
+            for f in fields.iter_mut() {
+                rewrite_struct_inits_expr(
+                    &mut f.value,
+                    generic_structs,
+                    locals,
+                    specs,
+                    new_structs,
+                    fn_returns,
+                );
+            }
+        }
+        Expr::EnumVariant { args, .. } => {
+            for a in args.iter_mut() {
+                rewrite_struct_inits_expr(
+                    a,
+                    generic_structs,
+                    locals,
+                    specs,
+                    new_structs,
+                    fn_returns,
+                );
+            }
+        }
+        Expr::ArrayLiteral { elements, .. } | Expr::TupleLiteral { elements, .. } => {
+            for e in elements.iter_mut() {
+                rewrite_struct_inits_expr(
+                    e,
+                    generic_structs,
+                    locals,
+                    specs,
+                    new_structs,
+                    fn_returns,
+                );
+            }
+        }
+        Expr::Cast { expr, .. } => {
+            rewrite_struct_inits_expr(
+                expr,
+                generic_structs,
+                locals,
+                specs,
+                new_structs,
+                fn_returns,
+            );
+        }
+        Expr::Closure { body, .. } => {
+            // Closures are hoisted before this pass runs in the
+            // compile pipeline, but for safety recurse anyway.
+            rewrite_struct_inits_block(
+                body,
+                generic_structs,
+                locals,
+                specs,
+                new_structs,
+                fn_returns,
+            );
+        }
+        Expr::ClosureRef { .. }
+        | Expr::Literal { .. }
+        | Expr::Ident { .. }
+        | Expr::Placeholder { .. } => {}
+    }
+
+    // Now check the expression itself for a generic StructInit.
+    if let Expr::StructInit {
+        name,
+        fields,
+        span: _,
+    } = expr
+        && let Some(struct_def) = generic_structs.get(name)
+    {
+        let mut type_args: Vec<TypeExpr> = Vec::new();
+        for tp in &struct_def.type_params {
+            // Find the first declared field whose type is `Named(tp.name)`
+            // and infer from the matching provided field's value.
+            let mut inferred: Option<TypeExpr> = None;
+            for decl_field in &struct_def.fields {
+                if let TypeExpr::Named(n, _, _) = &decl_field.type_expr
+                    && *n == tp.name
+                    && let Some(init) = fields.iter().find(|f| f.name == decl_field.name)
+                    && let Some(t) = infer_arg_type(&init.value, locals, fn_returns)
+                {
+                    inferred = Some(t);
+                    break;
+                }
+            }
+            match inferred {
+                Some(t) => type_args.push(t),
+                None => return,
+            }
+        }
+        if type_args.len() != struct_def.type_params.len() {
+            return;
+        }
+        let key_args: Vec<String> = type_args.iter().map(type_arg_canonical).collect();
+        let canonical = key_args.join(",");
+        let cache_key = (name.clone(), canonical);
+        let spec_name = if let Some(existing) = specs.get(&cache_key) {
+            existing.clone()
+        } else {
+            let spec_name = mangle_struct(name, &type_args);
+            let specialized = specialize_struct(struct_def, &type_args, spec_name.clone());
+            specs.insert(cache_key, spec_name.clone());
+            new_structs.push(specialized);
+            spec_name
+        };
+        if let Expr::StructInit { name, .. } = expr {
+            *name = spec_name;
+        }
+    }
 }
 
 /// Mangle a function name with its type arguments. The mangling uses

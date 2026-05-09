@@ -2852,6 +2852,23 @@ mod tests {
     }
 
     #[test]
+    fn monomorphize_struct_field_method_dispatch() {
+        // Method dispatch on a generic struct's field. Generic
+        // struct specialization gives the field a concrete type so
+        // the method call resolves to the impl.
+        check_src(
+            "trait Doubler { fn double(x: i64) -> i64; }\n\
+             impl Doubler for i64 { fn double(x: i64) -> i64 { x + x } }\n\
+             struct Cell<T> { value: T }\n\
+             fn main() -> i64 {\n\
+                let c = Cell { value: 21 };\n\
+                c.value.double()\n\
+             }",
+        )
+        .unwrap();
+    }
+
+    #[test]
     fn closure_passed_as_argument() {
         // A generic function takes a closure as an argument and
         // invokes it. The body uses the parameter as a callable

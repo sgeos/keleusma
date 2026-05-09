@@ -46,14 +46,16 @@ What lands.
 
 End-to-end example. `examples/monomorphize_generic_method.rs` compiles and executes `fn use_doubler<T: Doubler>(x: T) -> i64 { x.double() }` where the body's method call resolves only after monomorphization specializes `use_doubler` for `T = i64`.
 
-Inference reach extension. `infer_arg_type` now resolves the type of function calls (through a function-return-type map), tuple and array literals, cast expressions, enum variants, and the first-arm of if/match expressions. Generic call sites whose arguments use these shapes specialize correctly. Generic structs and enums are not yet specialized.
+Inference reach extension. `infer_arg_type` now resolves the type of function calls (through a function-return-type map), tuple and array literals, cast expressions, enum variants, and the first-arm of if/match expressions. Generic call sites whose arguments use these shapes specialize correctly.
+
+Generic struct specialization. `specialize_structs` runs after function specialization. For each `Expr::StructInit` whose target struct has type parameters, the pass infers the type arguments by matching declared field types against provided field values' types and emits a specialized `StructDef` with the field types substituted. The `StructInit`'s name is rewritten to the mangled form (for example `Cell__i64`). Subsequent compilation sees the specialized struct as a regular non-generic struct, which lets compile-time field-type inference resolve method dispatch on field-typed receivers. Example: `c.value.double()` where `c: Cell<i64>` now compiles correctly.
 
 Pruning policy. Generic functions whose specializations were generated are dropped from the program output. Generic functions with no specializations are retained because they continue to execute correctly through runtime tag dispatch on Value tags. This is the safe default for cases like first-class closure arguments where the concrete type cannot be inferred but the function still runs.
 
 Remaining work.
 
-- Generic structs and enums. The current pass handles only generic functions. Generic struct construction and field access continue to use runtime tag dispatch. Specialization of structs requires emitting per-instantiation copies of struct templates and rewriting field offsets accordingly. Estimated 3 to 5 hours.
-- Polymorphic recursion guard. The MVP includes a SPECIALIZATION_LIMIT bound to prevent unbounded specialization. A more sophisticated cycle-detection guard could reject the program before allocating partial specializations.
+- Generic enum specialization. Currently `Expr::EnumVariant` does not trigger specialization. Method dispatch on enum payload types follows the same pattern as struct fields and would benefit from a similar pass. Estimated 1 to 2 hours.
+- Polymorphic recursion cycle detection. The MVP includes a SPECIALIZATION_LIMIT bound to prevent unbounded specialization. A more sophisticated cycle-detection guard could reject the program before allocating partial specializations.
 
 ## ~~B3. Closures and anonymous functions~~ (Resolved with environment capture)
 
