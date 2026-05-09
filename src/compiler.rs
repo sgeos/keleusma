@@ -187,15 +187,20 @@ impl FuncCompiler {
 
 /// Compile a parsed Keleusma program into a bytecode module.
 ///
-/// The static type checker in `crate::typecheck` is intentionally not
-/// invoked here because the parser currently represents the unit
-/// literal `()` as `Literal::Int(0)`. Type checking would surface
-/// spurious i64-versus-Unit mismatches for unit-returning functions.
-/// Hosts that want type checking can call `typecheck::check(program)`
-/// before `compile`. Wiring the checker into the pipeline is recorded
-/// as a follow-up that includes refactoring the parser to produce a
-/// proper unit literal.
+/// Runs the static type checker before bytecode emission. Type errors
+/// are surfaced as `CompileError` with the offending span. The
+/// checker catches argument-count and argument-type mismatches,
+/// return-type mismatches, let-binding annotation mismatches, and
+/// arithmetic on incompatible types. Native function calls are not
+/// type-checked at compile time because natives are registered at
+/// runtime through `Vm::register_*`. See `crate::typecheck` for the
+/// full coverage list.
 pub fn compile(program: &Program) -> Result<Module, CompileError> {
+    crate::typecheck::check(program).map_err(|e| CompileError {
+        message: format!("type error: {}", e.message),
+        span: e.span,
+    })?;
+
     let mut native_names: Vec<String> = Vec::new();
     let mut native_map: BTreeMap<String, u16> = BTreeMap::new();
 
@@ -752,6 +757,9 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
             Literal::Bool(false) => {
                 fc.emit(Op::PushFalse);
             }
+            Literal::Unit => {
+                fc.emit(Op::PushUnit);
+            }
         },
 
         Expr::Ident { name, span } => {
@@ -1177,6 +1185,9 @@ fn compile_pattern_test(
                 Literal::Bool(false) => {
                     fc.emit(Op::PushFalse);
                 }
+                Literal::Unit => {
+                    fc.emit(Op::PushUnit);
+                }
             }
             fc.emit(Op::CmpEq);
             fail_addrs.push(fc.emit_jump(Op::If(0)));
@@ -1412,7 +1423,10 @@ mod tests {
 
     #[test]
     fn compile_enum_variant() {
-        let module = compile_str("fn make() -> () { let x = Color::Red(); x }").unwrap();
+        let module = compile_str(
+            "enum Color { Red, Green, Blue }\nfn make() -> Color { let x = Color::Red(); x }",
+        )
+        .unwrap();
         assert_eq!(module.chunks.len(), 1);
         assert!(
             module.chunks[0]
@@ -1424,7 +1438,10 @@ mod tests {
 
     #[test]
     fn compile_struct_init() {
-        let module = compile_str("fn make() -> () { let p = Point { x: 1, y: 2 }; p }").unwrap();
+        let module = compile_str(
+            "struct Point { x: i64, y: i64 }\nfn make() -> Point { let p = Point { x: 1, y: 2 }; p }",
+        )
+        .unwrap();
         assert_eq!(module.chunks.len(), 1);
         assert!(
             module.chunks[0]
@@ -1528,7 +1545,7 @@ mod tests {
 
     #[test]
     fn compile_tuple_literal() {
-        let module = compile_str("fn main() -> () { let t = (1, 2, 3); t }").unwrap();
+        let module = compile_str("fn main() -> (i64, i64, i64) { let t = (1, 2, 3); t }").unwrap();
         assert_eq!(module.chunks.len(), 1);
         assert!(
             module.chunks[0]

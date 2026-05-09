@@ -302,6 +302,8 @@ pub enum Literal {
     Float(f64),
     String(String),
     Bool(bool),
+    /// The unit literal `()`.
+    Unit,
 }
 
 /// Binary operator.

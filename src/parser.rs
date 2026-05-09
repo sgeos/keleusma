@@ -922,7 +922,7 @@ impl<'a> Parser<'a> {
                 if self.eat(&TokenKind::RParen) {
                     // Unit literal.
                     return Ok(Expr::Literal {
-                        value: Literal::Int(0),
+                        value: Literal::Unit,
                         span: merge_spans(tok.span, self.prev_span()),
                     });
                 }

@@ -472,6 +472,7 @@ fn type_of_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Type, TypeError> {
             Literal::Float(_) => Type::F64,
             Literal::String(_) => Type::Str,
             Literal::Bool(_) => Type::Bool,
+            Literal::Unit => Type::Unit,
         }),
         Expr::Ident { name, span } => {
             // Local variable shadows function name lookup.

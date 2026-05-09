@@ -1608,7 +1608,7 @@ mod tests {
     #[test]
     fn eval_struct_init_and_field() {
         let val = run_expect(
-            "fn main() -> i64 { let p = Point { x: 10, y: 32 }; p.x + p.y }",
+            "struct Point { x: i64, y: i64 }\nfn main() -> i64 { let p = Point { x: 10, y: 32 }; p.x + p.y }",
             &[],
         );
         assert_eq!(val, Value::Int(42));
@@ -1616,7 +1616,10 @@ mod tests {
 
     #[test]
     fn eval_enum_variant() {
-        let val = run_expect("fn main() -> i64 { let c = Color::Red(); 42 }", &[]);
+        let val = run_expect(
+            "enum Color { Red, Green, Blue }\nfn main() -> i64 { let c = Color::Red(); 42 }",
+            &[],
+        );
         assert_eq!(val, Value::Int(42));
     }
 

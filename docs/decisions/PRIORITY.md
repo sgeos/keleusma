@@ -4,9 +4,9 @@
 
 Open decisions that may block near-term development.
 
-## P1. Type checker implementation
+## ~~P1. Type checker implementation~~ (Resolved)
 
-A standalone static type checker is in place at `src/typecheck.rs`. Hosts that want compile-time type checking can call `typecheck::check(&program)` after parse and before `compile`. The checker is not yet wired into `compile` because the parser currently represents the unit literal `()` as `Literal::Int(0)`, which would surface spurious i64-versus-Unit mismatches for unit-returning functions. Wiring the checker into the pipeline is recorded as a follow-up that includes a small parser refactor to produce a proper unit literal.
+A static type checker is in place at `src/typecheck.rs` and is invoked from `compile`. Type errors are surfaced as `CompileError` before bytecode emission. The parser now represents the unit literal `()` as `Literal::Unit` rather than `Literal::Int(0)`. The compiler emits `Op::PushUnit` for the new variant. The type checker recognizes `Literal::Unit` as `Type::Unit`. Five existing tests that relied on lax behavior (programs referencing struct or enum names without definitions, or returning a tuple from a unit-typed function) were updated to declare the types they reference.
 
 Coverage in place.
 
