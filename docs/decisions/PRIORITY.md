@@ -51,19 +51,21 @@ All P8 items are complete except for the bounded-iteration loop analysis, which 
 
 Phase 1 of P10 is complete. The body format is rkyv as of `BYTECODE_VERSION = 4`. Rkyv produces a self-relative addressable layout that supports in-place access. The wire format reserves alignment padding so the body begins at an eight-byte-aligned offset when the buffer base is eight-byte-aligned. The current `Module::from_bytes` path copies the body to `AlignedVec` to satisfy alignment for arbitrary host slices, then deserializes to an owned `Module`. The runtime continues to execute against the owned form for now.
 
-Phase 2 adds the actual zero-copy execution path. The work cascades:
+Phase 2 step 1 is complete. `Module::access_bytes` returns a borrowed `&'a ArchivedModule` after validating the framing through the existing checks. `Module::view_bytes` calls `access_bytes` and deserializes to an owned `Module` without the body copy that `from_bytes` performs. The corresponding `Vm::view_bytes` and `unsafe Vm::view_bytes_unchecked` constructors compose validation with the safe and unchecked Vm constructors. Both require the body to be 8-byte aligned. Hosts arrange this through `AlignedVec`, through a static buffer with `#[repr(align(8))]`, or through linker placement.
+
+Phase 2 step 2 is the actual zero-copy execution path and remains open. The work cascades:
 
 - `Vm` gains a lifetime parameter. Either `Vm<'a>` everywhere or a separate `BorrowedVm<'a>` alongside the owned `Vm`.
-- The execution loop reads from `&ArchivedModule` instead of `&Module`. Match arms over `Op` become match arms over `ArchivedOp`. Vector accesses go through `ArchivedVec`. String accesses go through `ArchivedString`.
-- A new constructor `Vm::view_bytes(&'a [u8])` validates framing and calls `rkyv::access` to obtain `&'a ArchivedModule`.
-- The lifetime cascades through every public method that touches the VM.
+- The execution loop reads from `&ArchivedModule` instead of `&Module`. Match arms over `Op` become match arms over `ArchivedOp` with `to_native()` conversions for endian-explicit types. Vector accesses go through `ArchivedVec`. String accesses go through `ArchivedString`.
+- A converter from `ArchivedValue` to `Value` is needed at constant-load sites because the operand stack continues to use owned `Value`.
+- The verifier either gains an `ArchivedModule` variant or zero-copy execution is restricted to the unchecked path that skips verification.
 - Tests for execution against borrowed buffers, including from a `&'static [u8]` placed in `.rodata`.
 
-Phase 2 also interacts with two backlog items.
+Phase 2 step 2 also interacts with two backlog items.
 
 B10 (target portability) interacts because the rkyv encoding is endian-stable but float and integer width assumptions still affect runtime semantics. The recent log2 encoding work covers integer widths through masking. Float widths are still hardcoded to f64.
 
-B9 (hot update of yielded static strings) interacts because yielded `Value::StaticStr` under path B is an `ArchivedString` that points into a specific bytecode buffer. A hot update that swaps the buffer invalidates outstanding archived references the host has retained. The resolution paths in B9 (host-responsibility consumption or eager materialization at yield) must be in place before path B fully replaces path A.
+B9 (hot update of yielded static strings) interacts because yielded `Value::StaticStr` under step 2 would be an `ArchivedString` that points into a specific bytecode buffer. A hot update that swaps the buffer invalidates outstanding archived references the host has retained. The resolution paths in B9 (host-responsibility consumption or eager materialization at yield) must be in place before step 2 fully replaces the owned execution path.
 
 Both the WCMU and WCET analyses now multiply the loop body cost by the iteration count when the loop matches the canonical for-range pattern emitted by the compiler. The pattern detector in `extract_loop_iteration_bound` recognizes `Loop GetLocal(var) GetLocal(end) CmpGe BreakIf` followed by a body and traces backward to find the literal `Const` initializers of the var and end slots. Loops whose bounds are not literal integers fall back to the conservative one-iteration treatment, which remains sound but loose. R38 records the implementation.
 

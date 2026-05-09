@@ -828,12 +828,103 @@ impl Module {
         let body = &bytes[HEADER_LEN..length - FOOTER_LEN];
         // rkyv requires the body buffer to be 8-byte aligned. Copy
         // into an AlignedVec to satisfy this for arbitrary host slices.
-        // Phase 2 will add a zero-copy path for hosts that supply an
-        // aligned buffer directly.
+        // For hosts that supply an aligned buffer directly, see
+        // [`Module::view_bytes`] which skips the copy.
         let mut aligned = rkyv::util::AlignedVec::<8>::with_capacity(body.len());
         aligned.extend_from_slice(body);
         rkyv::from_bytes::<Module, rkyv::rancor::Error>(&aligned)
             .map_err(|e| LoadError::Codec(format!("decode failed: {}", e)))
+    }
+
+    /// Validate framing and return a borrowed archived view of the module.
+    ///
+    /// Performs the same framing checks as [`Module::from_bytes`] (magic,
+    /// length, CRC residue, version, word size, address size) and then
+    /// runs `rkyv::access` on the body to obtain a `&'a ArchivedModule`
+    /// without deserialization.
+    ///
+    /// The body must be 8-byte aligned within the slice. Because
+    /// [`HEADER_LEN`] is 16, the body is 8-byte aligned within the slice
+    /// when the slice base itself is 8-byte aligned. Hosts that compute
+    /// or load bytecode into an `rkyv::util::AlignedVec` or a static
+    /// buffer with `#[repr(align(8))]` satisfy this requirement.
+    /// Bytecode placed by the linker into a section that aligns to at
+    /// least 8 bytes also satisfies it.
+    ///
+    /// Returns `LoadError::Codec` with an alignment message when the
+    /// body is not aligned, or when the rkyv structural validator
+    /// rejects the body. Returns the other `LoadError` variants for
+    /// header validation failures.
+    pub fn access_bytes(bytes: &[u8]) -> Result<&ArchivedModule, LoadError> {
+        use alloc::format;
+        if bytes.len() < HEADER_LEN + FOOTER_LEN {
+            return Err(LoadError::Truncated);
+        }
+        if bytes[0..4] != BYTECODE_MAGIC {
+            return Err(LoadError::BadMagic);
+        }
+        let length = u32::from_le_bytes([bytes[6], bytes[7], bytes[8], bytes[9]]) as usize;
+        if length < HEADER_LEN + FOOTER_LEN || length > bytes.len() {
+            return Err(LoadError::Truncated);
+        }
+        let bytes = &bytes[..length];
+        if crc32(bytes) != CRC32_RESIDUE {
+            return Err(LoadError::BadChecksum);
+        }
+        let version = u16::from_le_bytes([bytes[4], bytes[5]]);
+        if version != BYTECODE_VERSION {
+            return Err(LoadError::UnsupportedVersion {
+                got: version,
+                expected: BYTECODE_VERSION,
+            });
+        }
+        let word_bits_log2 = bytes[10];
+        if word_bits_log2 > RUNTIME_WORD_BITS_LOG2 {
+            return Err(LoadError::WordSizeMismatch {
+                got: word_bits_log2,
+                max_supported: RUNTIME_WORD_BITS_LOG2,
+            });
+        }
+        let addr_bits_log2 = bytes[11];
+        if addr_bits_log2 > RUNTIME_ADDRESS_BITS_LOG2 {
+            return Err(LoadError::AddressSizeMismatch {
+                got: addr_bits_log2,
+                max_supported: RUNTIME_ADDRESS_BITS_LOG2,
+            });
+        }
+        let body = &bytes[HEADER_LEN..length - FOOTER_LEN];
+        if !(body.as_ptr() as usize).is_multiple_of(8) {
+            return Err(LoadError::Codec(format!(
+                "body not 8-byte aligned (slice base 0x{:x}); use Module::from_bytes for unaligned input",
+                bytes.as_ptr() as usize
+            )));
+        }
+        rkyv::access::<ArchivedModule, rkyv::rancor::Error>(body)
+            .map_err(|e| LoadError::Codec(format!("rkyv access failed: {}", e)))
+    }
+
+    /// Deserialize a module from an aligned byte slice without the
+    /// AlignedVec copy step that [`Module::from_bytes`] performs.
+    ///
+    /// Validates the framing through [`Module::access_bytes`] and then
+    /// calls `rkyv::deserialize` on the validated archived form. Returns
+    /// an owned `Module` for compatibility with the existing execution
+    /// path. The wire-format validation runs in place against the input
+    /// slice. The deserialization step still allocates the owned form.
+    ///
+    /// True zero-copy execution against `&ArchivedModule` is recorded as
+    /// the next iteration of P10. Path B requires lifetime-parameterizing
+    /// the Vm and rewriting the execution loop to read from
+    /// `&ArchivedModule`. The current view path delivers in-place
+    /// validation and is the architectural foundation for Phase 2.
+    ///
+    /// Requires the body to be 8-byte aligned. See [`Module::access_bytes`]
+    /// for the alignment contract.
+    pub fn view_bytes(bytes: &[u8]) -> Result<Module, LoadError> {
+        use alloc::format;
+        let archived = Self::access_bytes(bytes)?;
+        rkyv::deserialize::<Module, rkyv::rancor::Error>(archived)
+            .map_err(|e| LoadError::Codec(format!("deserialize failed: {}", e)))
     }
 }
 

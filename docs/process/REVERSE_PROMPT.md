@@ -9,8 +9,8 @@ AI to Human communication channel.
 ## Last Updated
 
 **Date**: 2026-05-09
-**Task**: V0.1-M2-T1. P10 Phase 1. Switch body format from postcard to rkyv.
-**Status**: Complete. Phase 2 (zero-copy execution) deferred.
+**Task**: V0.1-M2-T2. P10 Phase 2 step 1. Aligned-input zero-copy validation.
+**Status**: Complete. Step 2 (execution against ArchivedModule) remains open.
 
 ## Verification
 
@@ -24,77 +24,81 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 **Results**:
 
-- 341 tests pass workspace-wide. 296 keleusma unit including 16 bytecode tests, 17 keleusma integration, 22 keleusma-arena unit, 6 keleusma-arena doctests.
+- 344 tests pass workspace-wide. 299 keleusma unit including 19 bytecode tests, 17 keleusma integration, 22 keleusma-arena unit, 6 keleusma-arena doctests. Three new bytecode tests for the view path.
 - Clippy clean under `--workspace --all-targets`.
 - Format clean.
 
 ## Summary
 
-Switched the bytecode body format from postcard to rkyv 0.8 in preparation for zero-copy execution. The serde and postcard dependencies are removed. The new dependency is `rkyv` with the `alloc` and `bytecheck` features.
+Phase 2 of P10 is split into two steps. Step 1 lands the in-place validation API and the no-copy load path. Step 2 lands the actual zero-copy execution loop and is deferred.
 
-`BYTECODE_VERSION` bumped from three to four. Header padded to sixteen bytes with four reserved bytes that align the body to an eight-byte-aligned offset for `rkyv::access` compatibility. Minimum framing size is now twenty bytes.
+### Step 1 deliverables
 
-The recursive `Value` type carries `#[rkyv(omit_bounds)]` on its self-referential fields (`Tuple`, `Array`, `Struct.fields`, `Enum.fields`) and explicit `serialize_bounds`, `deserialize_bounds`, and `bytecheck(bounds(...))` attributes to break the type-level recursion in the macro expansion.
+`Module::access_bytes(&'a [u8]) -> Result<&'a ArchivedModule, LoadError>` validates the framing (magic, length, CRC residue, version, word size, address size) and runs `rkyv::access` on the body to return a borrowed archived view without copying. Requires the body to be 8-byte aligned within the slice. Because the header is 16 bytes, the body is 8-byte aligned when the slice base itself is 8-byte aligned.
 
-`Module::from_bytes` copies the body to `rkyv::util::AlignedVec<8>` before calling `rkyv::from_bytes`. The copy ensures alignment regardless of the host slice's alignment. The runtime continues to execute against the owned `Module` form for now. Phase 2 will add a borrowed-buffer path that requires the host to supply an aligned slice and adds a lifetime parameter to the `Vm`.
+`Module::view_bytes(&[u8]) -> Result<Module, LoadError>` validates through `access_bytes` and deserializes the archived form to an owned `Module`. Compared to `from_bytes`, this skips the `AlignedVec` copy step. The deserialization itself still allocates an owned `Module`.
 
-## Phase 2 Status
+`Vm::view_bytes(&[u8]) -> Result<Self, VmError>` and `unsafe Vm::view_bytes_unchecked(&[u8]) -> Result<Self, VmError>` compose `Module::view_bytes` with the safe and unchecked `Vm` constructors.
 
-Phase 2 is deferred. The work cascades through the entire codebase.
+The execution loop continues to operate on the deserialized owned `Module`. The view path is the validation half of true zero-copy. The execution half is step 2.
 
-- `Vm` gains a lifetime parameter `Vm<'a>` or a parallel `BorrowedVm<'a>` is added.
-- The execution loop is rewritten to read from `&ArchivedModule` instead of `&Module`. Match arms over `Op` become match arms over `ArchivedOp`. Vector accesses go through `ArchivedVec`. String accesses through `ArchivedString`.
-- A new constructor `Vm::view_bytes(&'a [u8])` validates framing and obtains `&'a ArchivedModule` through `rkyv::access`.
-- The lifetime cascades through every public method that touches the VM and every test.
+### Step 2 outline (deferred)
 
-This is properly its own milestone. Splitting it from Phase 1 lets the wire format change land cleanly and lets Phase 2 begin from a known-good baseline.
+The remaining work for true zero-copy execution.
+
+1. `Vm` gains a lifetime parameter. Storage shifts from `Module` to bytes (owned `AlignedVec` or borrowed `&[u8]`). Module access flows through `&ArchivedModule`.
+2. The execution loop is rewritten to read from `&ArchivedModule`. Match arms over `Op` become match arms over `ArchivedOp` with `to_native()` conversions for endian-explicit types. Vector accesses go through `ArchivedVec`. String accesses through `ArchivedString`.
+3. A converter from `ArchivedValue` to `Value` is added because the operand stack continues to use owned `Value`. Constants loaded from the bytecode are cloned into `Value` when pushed.
+4. The verifier either gains an `ArchivedModule` variant or zero-copy execution is restricted to the unchecked path that skips verification.
+5. New tests for execution against borrowed buffers including from `&'static [u8]` placed in `.rodata`.
 
 ## Changes Made
 
 ### Source
 
-- **`Cargo.toml`**: Removed `serde` and `postcard`. Added `rkyv 0.8` with `default-features = false` and `alloc` plus `bytecheck` features.
-- **`src/bytecode.rs`**: Replaced `serde::{Serialize, Deserialize}` derives with `rkyv::{Archive, Serialize, Deserialize}` derives across `Value`, `BlockType`, `Op`, `StructTemplate`, `DataSlot`, `DataLayout`, `Chunk`, and `Module`. The `Value` enum gains `#[rkyv(serialize_bounds, deserialize_bounds, bytecheck(bounds))]` and `#[rkyv(omit_bounds)]` per recursive field. `BYTECODE_VERSION` bumped to four. `HEADER_LEN` raised to sixteen with four reserved bytes. The `Module::word_bits_log2` and `Module::addr_bits_log2` fields are now part of the rkyv body (no `#[serde(skip)]`). `Module::to_bytes` uses `rkyv::to_bytes`. `Module::from_bytes` copies the body to `AlignedVec<8>` and calls `rkyv::from_bytes`.
-- **`src/vm.rs`**: Tests updated for the new minimum framing size (twenty bytes) and the new golden bytes (one-hundred-forty-four bytes for `fn main() -> i64 { 1 }`). The `bytecode_rejects_oversized_length_field`, `bytecode_rejects_undersized_length_field`, and `bytecode_load_via_vm_propagates_load_error` tests updated for the new header length.
+- **`src/bytecode.rs`**: New `Module::access_bytes` returns `&'a ArchivedModule` after framing validation. New `Module::view_bytes` calls `access_bytes` and deserializes. Both require 8-byte alignment of the body. The alignment check uses `is_multiple_of(8)`.
+- **`src/vm.rs`**: New `Vm::view_bytes` and `unsafe Vm::view_bytes_unchecked` constructors. Three new tests: `bytecode_view_bytes_runs_aligned_input`, `bytecode_view_bytes_rejects_unaligned_input`, `bytecode_access_bytes_returns_archived_view`.
 
 ### Knowledge Graph
 
-- **`docs/decisions/RESOLVED.md`**: R39 updated. Wire format description includes the rkyv body, the alignment padding, the AlignedVec copy on deserialization, and the deferred Phase 2 path.
-- **`docs/decisions/PRIORITY.md`**: P10 updated. Phase 1 marked complete. Phase 2 scope laid out.
-- **`docs/architecture/EXECUTION_MODEL.md`**: Bytecode Loading section updated for the new header layout and the rkyv body.
-- **`docs/process/TASKLOG.md`**: V0.1-M2-T1 row added marking Phase 1 complete. V0.1-M2-T2 row added for Phase 2 (open). New history row added.
+- **`docs/decisions/RESOLVED.md`**: R39 updated to describe the view path alongside `from_bytes`. The execution loop limitation and the next-iteration scope are documented.
+- **`docs/decisions/PRIORITY.md`**: P10 split into step 1 (complete) and step 2 (open). Step 2 scope listed.
+- **`docs/architecture/EXECUTION_MODEL.md`**: Bytecode Loading section gains the new methods in the API table.
+- **`docs/process/TASKLOG.md`**: V0.1-M2-T2 row added marking step 1 complete. V0.1-M2-T3 row added for step 2 (open). New history row added.
 - **`docs/process/REVERSE_PROMPT.md`**: This file.
 
 ## Trade-offs and Properties
 
-The rkyv encoding is larger than postcard. The serialization of `fn main() -> i64 { 1 }` grew from thirty-seven bytes to one-hundred-forty-four bytes. The growth is due to rkyv's relative pointer and alignment padding overhead, which is the cost paid for in-place addressability. For embedded distribution this is still small in absolute terms.
+The view path skips the body copy when the host supplies an aligned slice. For hosts that load bytecode from a file into a `Vec<u8>`, the alignment is not guaranteed and `view_bytes` rejects with a clear error. Hosts that need the alignment can wrap their input in `rkyv::util::AlignedVec`. Hosts that store bytecode in a static buffer with `#[repr(align(8))]` or in a linker section that aligns to at least 8 bytes also satisfy the requirement.
 
-The `AlignedVec` copy in `from_bytes` adds a memory allocation and copy at load time. The copy is bounded by the body length (a few KB to MB). Phase 2 will add an alignment-required path that skips the copy.
+The deserialization step still allocates an owned `Module`. The actual zero-copy execution against the archived form is deferred. The architectural foundation is in place: `Module::access_bytes` exposes the archived view to callers who want to inspect bytecode without deserializing.
 
-The `bytecheck` feature is enabled to make `from_bytes` safe. Without it, `rkyv::from_bytes` is gated and only `unsafe` access is available. The runtime overhead of bytecheck is modest for the deserialization path.
+The view path is honest about its scope. The naming distinguishes `view_bytes` (in-place validation, no body copy, deserialize for execution) from `load_bytes` (copy to AlignedVec, deserialize for execution). Hosts that benefit from the no-copy validation path use `view_bytes`. Others use `load_bytes`.
 
 ## Unaddressed Concerns
 
-1. **Wire format size growth.** Rkyv adds substantial padding and pointers. For very small bytecode the overhead dominates. For typical embedded use this is acceptable. A future iteration could explore a more compact format if size matters more than zero-copy access.
+1. **Execution path is not yet zero-copy.** Step 2 of Phase 2 is the remaining work. The owned `Module` allocation is still paid at load time. The `Vm` lifetime cascade and execution loop rewrite are required. This is a multi-session refactor properly done.
 
-2. **Phase 2 lifetime cascade.** `Vm<'a>` propagates through the public API. Some users may prefer the current owned form. A separate `BorrowedVm<'a>` type would coexist with `Vm` at the cost of some duplication.
+2. **Alignment requirement is host responsibility.** The view path fails with a clear error on unaligned input. Hosts that want to use the view path must arrange alignment through `AlignedVec`, `#[repr(align(8))]`, or linker placement. The from_bytes path remains available for arbitrary unaligned slices.
 
-3. **Bytecheck overhead.** The bytecheck feature adds runtime validation on deserialization. For trusted bytecode this is wasted work. A `from_bytes_unchecked` path that skips validation could be added if it matters.
+3. **The verifier still requires owned Module.** When step 2 lands and zero-copy execution is desired with verification, either the verifier is rewritten to accept `&ArchivedModule` or zero-copy is restricted to the unchecked path. The decision is open.
 
-4. **Endian portability test coverage unchanged.** The golden-bytes test still pins the exact byte sequence. The new format is endian-portable through rkyv's specification, which states all multi-byte integer types are stored in little-endian. The test catches drift the same way it did under postcard.
+4. **Float width is not yet parameterized.** Same concern as before. `Value::Float` is always `f64`. A future iteration may add a separate float-size header field for targets that use `f32` natively.
 
 ## Intended Next Step
 
-A. Continue P10 Phase 2. Lifetime-parameterize `Vm`. Rewrite the execution loop to read from `&ArchivedModule`. New `Vm::view_bytes` constructor. Tests for execution against borrowed buffers including from `&'static [u8]` placed in `.rodata`.
+Three paths.
+
+A. Continue P10 Phase 2 step 2. The actual zero-copy execution loop. Multi-session refactor.
 
 B. Pause P10 and pivot to a different priority such as P1 (type checker), P3 (error recovery), or P7 follow-on (operand stack and DynStr arena migration).
 
-C. Publish keleusma main crate to crates.io now that the wire format is settled (subject to the user's go-or-no-go decision).
+C. Publish keleusma main crate to crates.io now that the wire format and load API are stable (subject to the user's go-or-no-go decision).
 
-Recommend A. Phase 2 is the actual user-visible delivery of P10. Phase 1 was foundation. Splitting them is sensible, but Phase 2 should follow promptly so the precompiled-distribution story closes.
+Recommend A only if the precompiled-distribution story is the priority. The current step 1 already provides validation without copy, which covers many embedded use cases where bytecode comes from a known-aligned location. Full zero-copy execution adds value for the most constrained targets.
 
 Await human prompt before proceeding.
 
 ## Session Context
 
-This session began with V0.0-M5 and V0.0-M6 already complete and the arena extracted into a workspace crate. The session resolved P8 and P9, completed three pre-publication audit and polish passes on `keleusma-arena`, published v0.1.0 to crates.io, switched the keleusma main crate to consume the registry version, completed V0.1-M1 implementing precompiled bytecode loading and trust-based verification skip, hardened the wire format with a CRC-32 algebraic self-inclusion trailer, extended the header with length, word size, and address size, pinned a golden-bytes test, shifted word and address fields to base-2 exponent encoding with relaxed acceptance and integer masking, and now switched the body format from postcard to rkyv as Phase 1 of P10.
+This session began with V0.0-M5 and V0.0-M6 already complete and the arena extracted into a workspace crate. The session resolved P8 and P9, completed three pre-publication audit and polish passes on `keleusma-arena`, published v0.1.0 to crates.io, switched the keleusma main crate to consume the registry version, completed V0.1-M1 implementing precompiled bytecode loading and trust-based verification skip, hardened the wire format with a CRC-32 algebraic self-inclusion trailer, extended the header with length, word size, and address size, pinned a golden-bytes test, shifted word and address fields to base-2 exponent encoding with relaxed acceptance and integer masking, switched the body format from postcard to rkyv as Phase 1 of P10, and now landed Phase 2 step 1 with in-place validation and the no-copy load path.

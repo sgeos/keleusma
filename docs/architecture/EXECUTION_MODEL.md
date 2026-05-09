@@ -120,7 +120,7 @@ Compiled modules can be loaded from any addressable byte slice. The runtime crat
 
 The serialized form begins with a sixteen-byte header followed by the rkyv-encoded module body followed by a four-byte little-endian CRC-32 trailer. The header carries the four-byte magic `KELE`, a little-endian sixteen-bit version, a little-endian thirty-two-bit total framing length, an eight-bit word size encoded as the base-2 exponent, an eight-bit address size encoded as the base-2 exponent, and four reserved bytes that pad the header so the rkyv body begins at an eight-byte-aligned offset within the buffer. The minimum framing size is twenty bytes. The header allows the runtime to reject foreign or incompatible bytecode at load time before any deserialization is attempted. The trailer detects bit-level corruption anywhere in the framed range. The `BYTECODE_MAGIC`, `BYTECODE_VERSION`, `RUNTIME_WORD_BITS_LOG2`, and `RUNTIME_ADDRESS_BITS_LOG2` constants in the bytecode module record the current values. The runtime accepts bytecode whose word and address exponents are less than or equal to the runtime's supported maximum. The VM applies sign-extending integer truncation in `Add`, `Sub`, `Mul`, `Div`, `Mod`, and `Neg` when the declared word size is narrower than the runtime's, so arithmetic overflow points match the declared width.
 
-The body format is rkyv. Rkyv produces a self-relative addressable layout that supports zero-copy access through `rkyv::access`. The current `from_bytes` path copies the body to an `AlignedVec` and deserializes to an owned `Module` for compatibility with the existing execution loop. A future zero-copy execution path (P10 Phase 2) will read directly from the buffer without deserialization, bounded by a lifetime parameter on the `Vm`.
+The body format is rkyv. Rkyv produces a self-relative addressable layout that supports zero-copy access through `rkyv::access`. The `from_bytes` path copies the body to an `AlignedVec` and deserializes to an owned `Module` for compatibility with arbitrary unaligned host slices. The `view_bytes` path skips the body copy when the host supplies an aligned slice and validates the archived form in place via `access_bytes`. The execution loop currently operates on the deserialized owned `Module` regardless of which load path was used. A future zero-copy execution path (P10 Phase 2 step 2) will read directly from the buffer without deserialization, bounded by a lifetime parameter on the `Vm`.
 
 The recorded length is authoritative. The deserializer truncates the input slice to the recorded length before any further processing. Trailing bytes after the recorded length are ignored, supporting bytecode embedded inside a larger buffer such as a flash region with padding. Slices shorter than the recorded length, or recorded lengths below the minimum framing size, are rejected as `Truncated`.
 
@@ -134,12 +134,16 @@ The deserialized Module owns heap-allocated data and does not borrow from the in
 
 | Method | Use |
 |---|---|
-| `Module::to_bytes()` | Serialize a module to a `Vec<u8>` carrying the magic-and-version header followed by the postcard-encoded body. |
-| `Module::from_bytes(bytes)` | Validate the header and deserialize. Returns `bytecode::LoadError` on header mismatch or codec failure. Does not run structural or resource verification. |
+| `Module::to_bytes()` | Serialize a module to a `Vec<u8>` carrying the magic-and-version header followed by the rkyv-encoded body and the CRC trailer. |
+| `Module::from_bytes(bytes)` | Validate the header and deserialize. Copies the body into an `AlignedVec` for alignment regardless of the host slice's alignment. Returns `bytecode::LoadError` on header mismatch or codec failure. Does not run structural or resource verification. |
+| `Module::access_bytes(bytes)` | Validate the framing and return a borrowed `&'a ArchivedModule` through `rkyv::access`. Requires the body to be 8-byte aligned within the slice. |
+| `Module::view_bytes(bytes)` | Validate through `access_bytes` and deserialize to owned `Module`. Skips the body copy that `from_bytes` performs. Requires alignment. |
 | `Vm::new(module)` | Construct the VM. Runs structural verification and resource bounds verification. |
 | `Vm::load_bytes(bytes)` | Convenience for `Vm::new(Module::from_bytes(bytes)?)`. Runs full verification. |
+| `Vm::view_bytes(bytes)` | Convenience for `Vm::new(Module::view_bytes(bytes)?)`. Skips the body copy. Requires alignment. |
 | `unsafe Vm::new_unchecked(module)` | Skip the resource bounds check. Structural verification still runs because the VM execution loop relies on its invariants for memory safety. |
 | `unsafe Vm::load_bytes_unchecked(bytes)` | Convenience for `unsafe Vm::new_unchecked(Module::from_bytes(bytes)?)`. |
+| `unsafe Vm::view_bytes_unchecked(bytes)` | Convenience for `unsafe Vm::new_unchecked(Module::view_bytes(bytes)?)`. Skips the body copy. Requires alignment. |
 
 The unchecked path is for hosts that load precompiled bytecode whose resource bounds were validated during the build pipeline. The unsafe marker captures the trust contract. The host attests that bytecode was previously verified or originates from a trusted compiler. The bounded-memory and bounded-step guarantees are weakened to host attestation under this path. Exceeding the bound at runtime produces an arena allocation failure rather than memory unsafety. See R39 for the full design rationale.
 

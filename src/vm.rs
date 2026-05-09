@@ -254,6 +254,45 @@ impl Vm {
         unsafe { Self::new_unchecked(module) }
     }
 
+    /// Load a module from an aligned byte slice and run full verification.
+    ///
+    /// The body of the framed bytecode must be 8-byte aligned within the
+    /// slice. The runtime validates the framing in place via
+    /// [`Module::access_bytes`] and deserializes the archived form via
+    /// `rkyv::deserialize`. Compared to [`Vm::load_bytes`], this path
+    /// skips the body copy that arbitrary unaligned slices require.
+    ///
+    /// Hosts that wish to execute bytecode directly from `.rodata` or
+    /// from a flash region typically arrange alignment through linker
+    /// scripts or by wrapping the buffer in `rkyv::util::AlignedVec`.
+    /// See the documentation on [`Module::access_bytes`] for the
+    /// alignment contract.
+    ///
+    /// True zero-copy execution against `&ArchivedModule` is the next
+    /// iteration of P10. The current view path delivers in-place
+    /// validation. The execution loop continues to operate on the
+    /// deserialized owned `Module`.
+    pub fn view_bytes(bytes: &[u8]) -> Result<Self, VmError> {
+        let module = Module::view_bytes(bytes)?;
+        Self::new(module)
+    }
+
+    /// Load a module from an aligned byte slice and skip resource
+    /// bounds verification.
+    ///
+    /// Convenience wrapper. Equivalent to
+    /// `Vm::new_unchecked(Module::view_bytes(bytes)?)`. See
+    /// [`Vm::new_unchecked`] for the trust contract and
+    /// [`Vm::view_bytes`] for the alignment contract.
+    ///
+    /// # Safety
+    ///
+    /// Same contract as [`Vm::new_unchecked`].
+    pub unsafe fn view_bytes_unchecked(bytes: &[u8]) -> Result<Self, VmError> {
+        let module = Module::view_bytes(bytes)?;
+        unsafe { Self::new_unchecked(module) }
+    }
+
     /// Construct the VM struct without running any verification.
     ///
     /// Internal helper shared by the verifying and unchecked
@@ -2252,6 +2291,81 @@ mod tests {
             VmState::Finished(v) => assert_eq!(v, Value::Int(1)),
             other => panic!("expected finished, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn bytecode_view_bytes_runs_aligned_input() {
+        // Compile, serialize, and copy into an AlignedVec to obtain an
+        // aligned slice. view_bytes validates in place via
+        // Module::access_bytes and deserializes without the AlignedVec
+        // copy that load_bytes performs internally.
+        let src = "fn main() -> i64 { 7 + 35 }";
+        let tokens = tokenize(src).expect("lex");
+        let program = parse(&tokens).expect("parse");
+        let module = compile(&program).expect("compile");
+        let bytes = module.to_bytes().expect("encode");
+        let mut aligned = rkyv::util::AlignedVec::<8>::with_capacity(bytes.len());
+        aligned.extend_from_slice(&bytes);
+        let mut vm = Vm::view_bytes(&aligned).expect("view");
+        match vm.call(&[]).unwrap() {
+            VmState::Finished(v) => assert_eq!(v, Value::Int(42)),
+            other => panic!("expected finished, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn bytecode_view_bytes_rejects_unaligned_input() {
+        // A plain Vec<u8> is not guaranteed to be 8-byte aligned. The
+        // view path fails with an alignment-specific Codec message
+        // rather than silently succeeding under undefined behavior.
+        let src = "fn main() -> i64 { 1 }";
+        let tokens = tokenize(src).expect("lex");
+        let program = parse(&tokens).expect("parse");
+        let module = compile(&program).expect("compile");
+        let bytes = module.to_bytes().expect("encode");
+        // Force unaligned by prepending one byte then taking bytes[1..].
+        // This guarantees the body slice is not 8-byte aligned.
+        let mut shifted = alloc::vec![0u8];
+        shifted.extend_from_slice(&bytes);
+        let unaligned = &shifted[1..];
+        match Module::view_bytes(unaligned) {
+            Err(crate::bytecode::LoadError::Codec(msg)) if msg.contains("not 8-byte aligned") => {}
+            // The shifted slice may also misalign the framing reads in
+            // ways that surface as BadMagic or BadChecksum before the
+            // alignment check. Either is acceptable evidence that the
+            // path rejects unaligned input.
+            Err(crate::bytecode::LoadError::BadMagic) => {}
+            Err(crate::bytecode::LoadError::BadChecksum) => {}
+            other => panic!(
+                "expected alignment or magic/checksum failure, got {:?}",
+                other
+            ),
+        }
+    }
+
+    #[test]
+    fn bytecode_access_bytes_returns_archived_view() {
+        // access_bytes returns a borrowed ArchivedModule. The archived
+        // form preserves the chunk count, the entry point, and the word
+        // and address sizes, exposed through native conversions.
+        use crate::bytecode::ArchivedModule;
+        let src = "fn double(x: i64) -> i64 { x * 2 }\nfn main() -> i64 { double(21) }";
+        let tokens = tokenize(src).expect("lex");
+        let program = parse(&tokens).expect("parse");
+        let module = compile(&program).expect("compile");
+        let bytes = module.to_bytes().expect("encode");
+        let mut aligned = rkyv::util::AlignedVec::<8>::with_capacity(bytes.len());
+        aligned.extend_from_slice(&bytes);
+        let archived: &ArchivedModule = Module::access_bytes(&aligned).expect("access");
+        assert_eq!(archived.chunks.len(), 2);
+        assert_eq!(
+            archived.word_bits_log2,
+            crate::bytecode::RUNTIME_WORD_BITS_LOG2
+        );
+        assert_eq!(
+            archived.addr_bits_log2,
+            crate::bytecode::RUNTIME_ADDRESS_BITS_LOG2
+        );
     }
 
     #[test]
