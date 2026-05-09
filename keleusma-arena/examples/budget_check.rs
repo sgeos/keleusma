@@ -2,14 +2,18 @@
 //!
 //! The Budget type is producer-agnostic. Real producers compute budgets
 //! through static analysis, profiling, or measurement. This example
-//! demonstrates the contract using hand-computed bounds.
+//! demonstrates the contract using hand-computed bounds. For a concrete
+//! example of computing a budget from a static analysis of bytecode,
+//! see the Keleusma scripting runtime.
 //!
 //! Run with: `cargo run --example budget_check`
 
 use keleusma_arena::{Arena, Budget};
 
 fn main() {
-    // Budget computed by some upstream analysis.
+    // Budget computed by some upstream analysis. The bottom_bytes value
+    // covers the stack-like region and top_bytes covers the heap-like
+    // region.
     let budget = Budget::new(2048, 1024);
 
     // Adequate arena.

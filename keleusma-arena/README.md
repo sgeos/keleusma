@@ -35,8 +35,11 @@ use allocator_api2::alloc::Allocator;
 
 let arena = Arena::with_capacity(4096);
 let layout = Layout::new::<u64>();
-let _bottom = arena.bottom_handle().allocate(layout).unwrap();
-let _top = arena.top_handle().allocate(layout).unwrap();
+
+// Stack-end and heap-end allocation. The arena imposes no semantic
+// distinction; these are conventional aliases for the two ends.
+let _stack_alloc = arena.stack_handle().allocate(layout).unwrap();
+let _heap_alloc = arena.heap_handle().allocate(layout).unwrap();
 ```
 
 ## Static-Buffer Use
@@ -56,33 +59,61 @@ fn make_arena() -> Arena {
 }
 ```
 
-## Collections, Marks, Budgets, Stats
+## Aligned and Unaligned Allocation
+
+Aligned allocations go through the `Allocator` trait with a `Layout` that carries the desired alignment. Unaligned byte allocations have direct convenience methods.
 
 ```rust
-use keleusma_arena::{Arena, Budget};
+use keleusma_arena::Arena;
+use core::alloc::Layout;
+use allocator_api2::alloc::Allocator;
+
+let arena = Arena::with_capacity(4096);
+
+// Three packed bytes. No padding for alignment.
+let _a = arena.alloc_bottom_bytes(3).unwrap();
+
+// A pointer-aligned allocation. The arena pads as needed.
+let _p = arena.stack_handle().allocate(Layout::new::<*const u8>()).unwrap();
+```
+
+## Collections, Marks, Stats
+
+```rust
+use keleusma_arena::Arena;
 use allocator_api2::vec::Vec as ArenaVec;
 
 let arena = Arena::with_capacity(4096);
 
 // Arena-backed collection.
-let mut v: ArenaVec<i32, _> = ArenaVec::new_in(arena.bottom_handle());
-v.push(1);
+let mut stack: ArenaVec<i32, _> = ArenaVec::new_in(arena.stack_handle());
+stack.push(1);
 
 // LIFO discipline through marks.
 let mark = arena.bottom_mark();
 unsafe { arena.rewind_bottom(mark); }
 
-// Budget contract.
-let budget = Budget::new(2048, 1024);
-assert!(arena.fits_budget(&budget));
-
 // Observability.
 let _peak = arena.bottom_peak();
 ```
 
+## Budget Contract
+
+The arena exposes a generic `Budget` type and a `fits_budget` method for compile-time bounds analysis.
+
+```rust
+use keleusma_arena::{Arena, Budget};
+
+let arena = Arena::with_capacity(4096);
+let budget = Budget::new(2048, 1024);
+assert!(arena.fits_budget(&budget));
+```
+
+For a concrete example of computing a budget from a static analysis and using it to verify admissibility, see the Keleusma scripting runtime, which computes a `Budget` from bytecode worst-case memory usage analysis and uses `fits_budget` to enforce the bounded-memory guarantee at module load time. The Keleusma project is the original consumer of this crate and demonstrates the discipline end-to-end.
+
 ## Naming
 
-The canonical handle types are `BottomHandle` and `TopHandle`, matching a vertical-buffer model where the bottom end starts at low addresses and grows up while the top end starts at high addresses and grows down. Code that prefers a CPU-memory mental model may treat the bottom end as a stack-like region and the top end as a heap-like region, with the corresponding mental aliases `StackHandle` and `HeapHandle`. The arena imposes no semantic distinction between the two ends.
+The canonical handle types are `BottomHandle` and `TopHandle`, matching a vertical-buffer model where the bottom end starts at low addresses and grows up while the top end starts at high addresses and grows down. Code that prefers a CPU-memory mental model may use the `stack_handle()` and `heap_handle()` method aliases. The arena imposes no semantic distinction between the two ends.
 
 ## Comparison with bumpalo
 

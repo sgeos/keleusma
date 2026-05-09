@@ -19,21 +19,23 @@ fn main() {
         // Reset reclaims all allocations from the previous frame.
         arena.reset();
 
-        // Each frame allocates a transient buffer for visible entities.
-        let mut entities: ArenaVec<u64, _> = ArenaVec::new_in(arena.bottom_handle());
+        // Each frame allocates a transient buffer for visible entities
+        // from the stack-like region.
+        let mut entities: ArenaVec<u64, _> = ArenaVec::new_in(arena.stack_handle());
         let entity_count = (frame + 1) * 4;
         for i in 0..entity_count {
             entities.push(((frame * 100) + i) as u64);
         }
 
-        // Each frame also allocates command buffers from the heap end.
-        let mut commands: ArenaVec<u32, _> = ArenaVec::new_in(arena.top_handle());
+        // Each frame also allocates command buffers from the heap-like
+        // region.
+        let mut commands: ArenaVec<u32, _> = ArenaVec::new_in(arena.heap_handle());
         for i in 0..(entity_count / 2) {
             commands.push(i as u32);
         }
 
         println!(
-            "frame {}: entities={} commands={} bottom_used={} top_used={}",
+            "frame {}: entities={} commands={} stack={} heap={}",
             frame,
             entities.len(),
             commands.len(),
@@ -44,10 +46,10 @@ fn main() {
 
     println!();
     println!("after run:");
-    println!("  bottom_peak: {} bytes", arena.bottom_peak());
-    println!("  top_peak:    {} bytes", arena.top_peak());
+    println!("  stack peak: {} bytes", arena.bottom_peak());
+    println!("  heap peak:  {} bytes", arena.top_peak());
     println!(
-        "  total peak:  {} bytes (use this to size the arena)",
+        "  total peak: {} bytes (use this to size the arena)",
         arena.bottom_peak() + arena.top_peak()
     );
 }

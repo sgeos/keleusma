@@ -20,10 +20,13 @@
 //! `allocator_api2::alloc::Allocator`. Pass them to `Vec::new_in` and
 //! similar constructors for arena-backed collections. The bottom end
 //! starts at offset zero and grows upward; the top end starts at the
-//! buffer's high address and grows downward. Code that prefers a
-//! CPU-memory mental model may informally refer to these as
-//! `StackHandle` and `HeapHandle`. The arena imposes no semantic
-//! distinction between the two ends.
+//! buffer's high address and grows downward. The arena imposes no
+//! semantic distinction between the two ends.
+//!
+//! Code that prefers a CPU-memory mental model may use the method
+//! aliases [`Arena::stack_handle`] and [`Arena::heap_handle`], which
+//! return the same `BottomHandle` and `TopHandle` types under
+//! conventional names.
 //!
 //! Aligned allocations go through the `Allocator` trait with a
 //! `Layout` that carries the desired alignment. Alignment is computed
@@ -399,6 +402,19 @@ impl Arena {
     /// Obtain a top-end allocation handle.
     pub fn top_handle(&self) -> TopHandle<'_> {
         TopHandle(self)
+    }
+
+    /// Alias for [`Arena::bottom_handle`]. Suitable for code that
+    /// treats the bottom end as a stack-like region.
+    pub fn stack_handle(&self) -> BottomHandle<'_> {
+        self.bottom_handle()
+    }
+
+    /// Alias for [`Arena::top_handle`]. Suitable for code that treats
+    /// the top end as a heap-like region whose allocations are reset
+    /// together rather than freed individually.
+    pub fn heap_handle(&self) -> TopHandle<'_> {
+        self.top_handle()
     }
 
     /// Allocate `n` bytes from the bottom end with no alignment

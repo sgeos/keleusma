@@ -8,25 +8,25 @@ use keleusma_arena::Arena;
 fn main() {
     let arena = Arena::with_capacity(4096);
 
-    // Bottom end: stack-like usage. Push integers as they come.
-    let mut bottom: ArenaVec<i32, _> = ArenaVec::new_in(arena.bottom_handle());
+    // Stack-like region: push integers as they come.
+    let mut stack: ArenaVec<i32, _> = ArenaVec::new_in(arena.stack_handle());
     for i in 0..10 {
-        bottom.push(i);
+        stack.push(i);
     }
 
-    // Top end: heap-like usage. Allocate distinct buffers.
-    let mut top: ArenaVec<f64, _> = ArenaVec::new_in(arena.top_handle());
+    // Heap-like region: allocate distinct buffers.
+    let mut heap: ArenaVec<f64, _> = ArenaVec::new_in(arena.heap_handle());
     for i in 0..5 {
-        top.push((i as f64) * 0.5);
+        heap.push((i as f64) * 0.5);
     }
 
     println!("capacity:    {} bytes", arena.capacity());
-    println!("bottom_used: {} bytes", arena.bottom_used());
-    println!("top_used:    {} bytes", arena.top_used());
+    println!("stack used:  {} bytes", arena.bottom_used());
+    println!("heap used:   {} bytes", arena.top_used());
     println!("free:        {} bytes", arena.free());
-    println!("bottom_peak: {} bytes", arena.bottom_peak());
-    println!("top_peak:    {} bytes", arena.top_peak());
+    println!("stack peak:  {} bytes", arena.bottom_peak());
+    println!("heap peak:   {} bytes", arena.top_peak());
 
-    println!("bottom: {:?}", bottom.as_slice());
-    println!("top:    {:?}", top.as_slice());
+    println!("stack: {:?}", stack.as_slice());
+    println!("heap:  {:?}", heap.as_slice());
 }
