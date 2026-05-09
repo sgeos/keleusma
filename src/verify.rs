@@ -827,6 +827,28 @@ pub fn wcet_stream_iteration(chunk: &Chunk) -> Result<u32, VerifyError> {
 /// The call graph is required to be acyclic (R4 forbids recursion).
 /// Returns an error if a recursive call is detected.
 pub fn module_wcmu(module: &Module, native_wcmu: &[u32]) -> Result<Vec<(u32, u32)>, VerifyError> {
+    // Recursive closures introduced by `Op::MakeRecursiveClosure`
+    // dispatch through `Op::CallIndirect` and can therefore recurse
+    // an unbounded number of times. The WCMU analysis is sound only
+    // for acyclic call graphs, so the verifier rejects any module
+    // that contains a recursive-closure construction site. Hosts
+    // that need recursive closures and can attest a maximum recursion
+    // depth must do so through a separate attestation API; the
+    // present verifier has no such API and therefore rejects the
+    // construction.
+    for chunk in &module.chunks {
+        for op in &chunk.ops {
+            if let Op::MakeRecursiveClosure(target, _) = op {
+                return Err(VerifyError {
+                    chunk_name: chunk.name.clone(),
+                    message: alloc::format!(
+                        "MakeRecursiveClosure(chunk={}) introduces unbounded recursion that cannot be statically bounded for WCET/WCMU analysis. Recursive closures are not admitted by `verify_resource_bounds`.",
+                        target
+                    ),
+                });
+            }
+        }
+    }
     let n = module.chunks.len();
     let mut chunk_wcmu: Vec<Option<(u32, u32)>> = alloc::vec![None; n];
     let order = topological_call_order(module)?;
@@ -2177,6 +2199,37 @@ mod tests {
         let err = verify_resource_bounds(&module, 16).unwrap_err();
         assert!(err.message.contains("WCMU"));
         assert!(err.message.contains("exceeds arena capacity"));
+    }
+
+    #[test]
+    fn verify_resource_bounds_rejects_recursive_closures() {
+        // A chunk that contains `Op::MakeRecursiveClosure` introduces
+        // unbounded recursion that the WCMU analysis cannot bound.
+        // The verifier rejects the module before consulting the
+        // arena capacity, so the resource-bounds API is safe for
+        // hosts that rely on the analysis to reason about real-time
+        // execution.
+        let chunk = make_chunk(
+            "tick",
+            vec![
+                Op::Stream,
+                Op::MakeRecursiveClosure(0, 0),
+                Op::Pop,
+                Op::PushUnit,
+                Op::Yield,
+                Op::Pop,
+                Op::Reset,
+            ],
+            BlockType::Stream,
+        );
+        let module = make_module(vec![chunk]);
+        let err = verify_resource_bounds(&module, 1024 * 1024).unwrap_err();
+        assert!(
+            err.message.contains("MakeRecursiveClosure")
+                || err.message.contains("unbounded recursion"),
+            "unexpected error message: {}",
+            err.message,
+        );
     }
 
     #[test]

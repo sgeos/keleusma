@@ -212,6 +212,14 @@ A program is valid only if all paths satisfy these constraints. Invalid programs
 
 Additionally, `wcet_stream_iteration()` computes the worst-case execution cost of one Stream-to-Reset iteration. Each instruction carries a relative cost via `Op::cost()`. The analysis recursively traverses block-structured control flow, taking the maximum cost branch at each join point, and returns the worst-case total as a unitless integer.
 
+### Indirect Dispatch and Recursion
+
+The WCMU and WCET analyses are sound only for acyclic call graphs. The `topological_call_order` walk follows `Op::Call` edges and rejects any module whose direct-call graph contains a cycle. `Op::CallIndirect` is the dispatch path for first-class function values produced by `Op::PushFunc`, `Op::MakeClosure`, and `Op::MakeRecursiveClosure`. The chunk index for an indirect call is determined at runtime, so the static analysis cannot follow these edges through the call graph.
+
+To preserve the soundness of the resource-bounds verifier, `verify::module_wcmu` rejects any module that contains `Op::MakeRecursiveClosure`. Recursive closures opt into self-dispatch through indirect call and therefore introduce unbounded recursion that the analysis cannot bound. The safe constructors `Vm::new` and `Vm::load_bytes` reject recursive-closure programs by default. Hosts that need recursive closures and accept the unbounded-recursion risk must construct the VM through `Vm::new_unchecked` or `Vm::load_bytes_unchecked`, which skip the resource-bounds check while preserving structural verification.
+
+Non-recursive closures and first-class function arguments produced by `Op::PushFunc` and `Op::MakeClosure` are admitted by the verifier. Their per-instruction cost contribution is the cost of `Op::CallIndirect` itself, which the analysis treats as a constant, plus the cost of any chunk the closure may invoke. The analysis does not currently follow indirect-dispatch targets and therefore does not account for transitive callee costs through indirect dispatch. A program that constructs an unbounded recursion through indirect dispatch over non-recursive closures (such as `apply(apply, x)` where `apply` is a generic identity closure-applier) is admissible by the verifier despite being unbounded at runtime. This is a known approximation. Tightening it would require either a conservative max-cost-over-all-chunks bound for `Op::CallIndirect` or a flow analysis that tracks which chunks each Func value may resolve to. The approximation is documented here so hosts that rely on the resource bounds for real-time embedding can take the appropriate caution. For programs that strictly require statically bounded execution, restrict the surface to direct calls and avoid first-class function values entirely.
+
 See [TARGET_ISA.md](../reference/TARGET_ISA.md) for the full structural ISA specification.
 
 ## Cross-References

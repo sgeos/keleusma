@@ -92,8 +92,29 @@ Recursive closures also support regular captures: the synthetic
 chunk's parameter order places captures before the self slot, and
 `MakeRecursiveClosure` pops the captures into the env identically
 to `MakeClosure`. End-to-end demonstration:
-`examples/closure_recursive.rs` computes `fact(5) == 120`. Bytecode
-version is bumped to `7`.
+`examples/closure_recursive.rs` computes `fact(5) == 120` using
+`Vm::new_unchecked` to opt out of resource-bounds verification.
+Bytecode version is bumped to `7`.
+
+WCET and WCMU implications. Recursive closures introduce unbounded
+recursion that cannot be statically bounded by the present analysis.
+The pre-existing `topological_call_order` walk over the call graph
+detects recursion through `Op::Call` only and never traverses
+`Op::CallIndirect`, so a self-referential closure escapes the
+recursion check by construction. To preserve the soundness of the
+WCET and WCMU analyses, `verify::module_wcmu` rejects any module
+that contains `Op::MakeRecursiveClosure` with a clear error
+message. The safe constructors `Vm::new` and `Vm::load_bytes`
+therefore reject recursive-closure programs by default. Hosts that
+need recursive closures and accept the unbounded-recursion risk
+must construct the VM through `Vm::new_unchecked` or
+`Vm::load_bytes_unchecked`. A future refinement could add a
+recursion-depth attestation API analogous to `set_native_bounds`,
+multiplying the closure's per-invocation WCET and WCMU by the
+declared depth, but that is not implemented and is recorded as a
+follow-on item. For real-time embedding without an external
+attestation, recursive closures are out of scope and the safe
+constructor's rejection is the correct contract.
 
 Capture by reference disposition. Capture by reference is not meaningful in Keleusma's pure-functional surface. The language's `let` bindings are immutable by design. There is no surface assignment operator that mutates a previously bound local, which means a captured local cannot diverge from the captured snapshot regardless of whether the capture is by value or by reference. The only mutable mechanism is the data segment, which is accessed through `data.field` and `data.field = expr` syntax that is independent of closure capture. A closure that wants to mutate shared state therefore reads and writes data segment slots directly. Capture by reference would only matter in a language with mutable locals, which Keleusma intentionally does not have. The item is therefore closed as not applicable rather than deferred.
 
