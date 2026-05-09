@@ -3158,6 +3158,79 @@ mod tests {
     }
 
     #[test]
+    fn match_on_inner_value_inside_three_level_nested_for_in() {
+        // A match expression inside three nested for-in loops over a
+        // 3D array of i64. The match arms evaluate to integer values
+        // and the result accumulates into a data segment field. The
+        // value 1 contributes 100; every other value contributes 1.
+        // The matrix has values 1..=8 so the total is 100 + 7 = 107.
+        let src = "data ctx { sum: i64 }\n\
+                   fn main() -> i64 {\n\
+                       let map: [[[i64; 2]; 2]; 2] = [\n\
+                           [[1, 2], [3, 4]],\n\
+                           [[5, 6], [7, 8]],\n\
+                       ];\n\
+                       for z in map {\n\
+                           for y in z {\n\
+                               for x in y {\n\
+                                   let v = match x {\n\
+                                       1 => 100,\n\
+                                       _ => 1,\n\
+                                   };\n\
+                                   ctx.sum = ctx.sum + v;\n\
+                               }\n\
+                           }\n\
+                       }\n\
+                       ctx.sum\n\
+                   }";
+        let tokens = tokenize(src).expect("lex");
+        let program = parse(&tokens).expect("parse");
+        let module = compile(&program).expect("compile");
+        let mut vm = Vm::new(module).expect("verify");
+        vm.set_data(0, Value::Int(0)).expect("init sum");
+        match vm.call(&[]) {
+            Ok(VmState::Finished(Value::Int(v))) => assert_eq!(v, 107),
+            other => panic!("unexpected {:?}", other),
+        }
+    }
+
+    #[test]
+    fn tuple_match_across_three_loop_variables() {
+        // Three independent 1D arrays, nested for-in, with a match
+        // on the tuple `(x, y, z)`. The corner case `(0, 0, 0)`
+        // contributes 100; every other coordinate contributes 1.
+        // The 2x2x2 coordinate space has 8 cells so the total is
+        // 100 + 7 = 107.
+        let src = "data ctx { hits: i64 }\n\
+                   fn main() -> i64 {\n\
+                       let xs: [i64; 2] = [0, 1];\n\
+                       let ys: [i64; 2] = [0, 1];\n\
+                       let zs: [i64; 2] = [0, 1];\n\
+                       for z in zs {\n\
+                           for y in ys {\n\
+                               for x in xs {\n\
+                                   let v = match (x, y, z) {\n\
+                                       (0, 0, 0) => 100,\n\
+                                       _ => 1,\n\
+                                   };\n\
+                                   ctx.hits = ctx.hits + v;\n\
+                               }\n\
+                           }\n\
+                       }\n\
+                       ctx.hits\n\
+                   }";
+        let tokens = tokenize(src).expect("lex");
+        let program = parse(&tokens).expect("parse");
+        let module = compile(&program).expect("compile");
+        let mut vm = Vm::new(module).expect("verify");
+        vm.set_data(0, Value::Int(0)).expect("init hits");
+        match vm.call(&[]) {
+            Ok(VmState::Finished(Value::Int(v))) => assert_eq!(v, 107),
+            other => panic!("unexpected {:?}", other),
+        }
+    }
+
+    #[test]
     fn for_in_three_level_nested_runs() {
         // Same shape as the verify test but exercises full execution
         // through a native function call. The native sums all
