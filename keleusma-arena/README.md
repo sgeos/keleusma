@@ -2,58 +2,46 @@
 
 > Simple and boring memory allocator for exciting applications.
 
-A dual-end bump-allocated arena for embedded Rust. Single contiguous buffer. Two pointers growing toward each other from opposite ends. Constant-time allocation. Fail-fast on exhaustion.
+A dual-end bump-allocated arena for embedded Rust. Single contiguous buffer. Two pointers growing toward each other from opposite ends. Constant-time allocation. Fail-fast on exhaustion. `core`-only when the `alloc` feature is off.
 
 ## History
 
-Born as the memory substrate of the Keleusma scripting language, where it pairs with a static analysis pass to enforce a bounded-memory guarantee at script load time. Extracted as a standalone crate so embedded users can adopt the discipline without taking on the language runtime.
+Born as the memory substrate of the Keleusma scripting language and extracted as a standalone crate so embedded users can adopt the discipline without the language runtime.
 
 ## Philosophy
 
-Boring code that does exciting things. The arena's storage shape, allocation strategy, and failure mode are all the simplest possible. The discipline that emerges is what enables the exciting use cases, namely real-time predictability, certifiable memory bounds, and zero-allocation hot paths on platforms with fixed memory.
+Boring code that does exciting things. The arena's storage shape, allocation strategy, and failure mode are the simplest possible. The discipline that emerges supports real-time predictability, certifiable memory bounds, and zero-allocation hot paths on platforms with fixed memory.
 
 - Single allocation strategy. No chunk lists, no fallback paths.
 - Fixed at construction. No surprise growth at use-time.
-- Fail-fast. Returns `AllocError` on overflow. The host handles it.
-- `core`-only without `alloc`. The static-buffer constructor needs neither.
-- Two ends with one budget. The user decides what each end means.
+- Fail-fast. Returns `AllocError` on overflow.
+- `core`-only without `alloc`.
+- Two ends with one budget.
 
-## Ecosystem Pitch
+## Niche
 
-Existing arena crates serve different niches. `bumpalo` grows dynamically. `typed-arena` is type-monomorphic. `slab` and `generational-arena` are pool allocators. None of them combine fixed-size storage with a dual-end discipline and a generic budget contract. `keleusma-arena` fills that gap.
-
-Targets it serves well.
-
-- Embedded systems with link-time-allocated buffers. `from_static_buffer` accepts `&'static mut [u8]`.
-- Multi-region targets like the Game Boy Advance. Construct one arena per memory region, namely IWRAM, EWRAM, VRAM.
-- Real-time and safety-critical workloads. Constant-time allocation, no surprise pauses, sound bounds when paired with an analysis.
-- Game engines and simulation loops. Reset the arena per frame. Allocate transient values without GC pressure.
-- Any program that wants a compile-time memory budget contract.
+- Embedded systems with link-time-allocated buffers.
+- Multi-region targets such as the Game Boy Advance with IWRAM, EWRAM, and VRAM. One arena per region.
+- Real-time and safety-critical workloads where fixed bounds and constant-time allocation are required.
+- Game engines and simulation loops that reset the arena per frame.
+- Programs that want a compile-time memory budget contract.
 
 ## Quick Start
 
 ```rust
 use keleusma_arena::Arena;
 use core::alloc::Layout;
+use allocator_api2::alloc::Allocator;
 
 let arena = Arena::with_capacity(4096);
-
-// StackHandle and HeapHandle are conventional aliases for BottomHandle
-// and TopHandle. Use whichever names match your mental model.
 let layout = Layout::new::<u64>();
-let stack_alloc = allocator_api2::alloc::Allocator::allocate(
-    &arena.bottom_handle(),
-    layout,
-).unwrap();
-let heap_alloc = allocator_api2::alloc::Allocator::allocate(
-    &arena.top_handle(),
-    layout,
-).unwrap();
+let _bottom = arena.bottom_handle().allocate(layout).unwrap();
+let _top = arena.top_handle().allocate(layout).unwrap();
 ```
 
 ## Static-Buffer Use
 
-For embedded targets without a global allocator, use a statically allocated buffer.
+For embedded targets without a global allocator, hand the arena a statically allocated buffer.
 
 ```rust
 use keleusma_arena::Arena;
@@ -76,13 +64,12 @@ use allocator_api2::vec::Vec as ArenaVec;
 
 let arena = Arena::with_capacity(4096);
 
-// Collection backed by the arena.
+// Arena-backed collection.
 let mut v: ArenaVec<i32, _> = ArenaVec::new_in(arena.bottom_handle());
 v.push(1);
 
 // LIFO discipline through marks.
 let mark = arena.bottom_mark();
-// ... allocate scratch ...
 unsafe { arena.rewind_bottom(mark); }
 
 // Budget contract.
@@ -90,13 +77,12 @@ let budget = Budget::new(2048, 1024);
 assert!(arena.fits_budget(&budget));
 
 // Observability.
-println!("bottom peak: {}", arena.bottom_peak());
-println!("top peak: {}", arena.top_peak());
+let _peak = arena.bottom_peak();
 ```
 
 ## Naming
 
-`BottomHandle` and `TopHandle` are the canonical handle names, matching a vertical-buffer mental model where the bottom end starts at low addresses and grows up while the top end starts at high addresses and grows down. `StackHandle` and `HeapHandle` aliases cover code that prefers the conventional CPU-memory mental model where one end is treated as a stack and the other as a heap. The arena imposes no semantic distinction; users map their concepts to the two ends.
+The canonical handle types are `BottomHandle` and `TopHandle`, matching a vertical-buffer model where the bottom end starts at low addresses and grows up while the top end starts at high addresses and grows down. Code that prefers a CPU-memory mental model may treat the bottom end as a stack-like region and the top end as a heap-like region, with the corresponding mental aliases `StackHandle` and `HeapHandle`. The arena imposes no semantic distinction between the two ends.
 
 ## Comparison with bumpalo
 
@@ -113,14 +99,8 @@ println!("top peak: {}", arena.top_peak());
 
 ## Features
 
-- `alloc` (default). Enables `Arena::with_capacity` and `allocator-api2`'s `vec` and other alloc-dependent modules. Disable for `core`-only targets.
+- `alloc` (default). Enables `Arena::with_capacity` and the `allocator-api2` collection types. Disable for `core`-only targets.
 
 ## License
 
 MIT.
-
-## Crate Family
-
-- `keleusma`. The Keleusma scripting language and runtime.
-- `keleusma-macros`. Procedural macros used by the runtime.
-- `keleusma-arena`. This crate.

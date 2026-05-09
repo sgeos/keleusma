@@ -5,40 +5,36 @@
 //! Constant-time allocation. Fail-fast on exhaustion. `core`-only when
 //! the `alloc` feature is off.
 //!
-//! Born as the memory substrate of the Keleusma scripting language and
-//! extracted for general embedded use. See the README for the ecosystem
-//! pitch and the comparison with `bumpalo`.
+//! See the README for the ecosystem pitch and the comparison with
+//! `bumpalo`.
 //!
-//! # Quick Reference
-//!
-//! Construct an arena with one of three constructors.
+//! # Construction
 //!
 //! - [`Arena::with_capacity`]. Heap-backed. Requires the `alloc` feature.
 //! - [`Arena::from_static_buffer`]. Borrows a `&'static mut [u8]`. Safe.
 //! - [`Arena::from_buffer_unchecked`]. Raw pointer and length. Unsafe.
 //!
-//! Allocate through one of two handles.
+//! # Allocation
 //!
-//! - [`BottomHandle`]. Allocates from offset zero, grows upward.
-//! - [`TopHandle`]. Allocates from buffer end, grows downward.
-//!
-//! [`StackHandle`] and [`HeapHandle`] are aliases for code that prefers
-//! the conventional CPU-memory mental model.
-//!
-//! Both handles implement `allocator_api2::alloc::Allocator`. Pass them
-//! to `Vec::new_in` and similar constructors for arena-backed
-//! collections.
+//! [`BottomHandle`] and [`TopHandle`] borrow the arena and implement
+//! `allocator_api2::alloc::Allocator`. Pass them to `Vec::new_in` and
+//! similar constructors for arena-backed collections. The bottom end
+//! starts at offset zero and grows upward; the top end starts at the
+//! buffer's high address and grows downward. Code that prefers a
+//! CPU-memory mental model may informally refer to these as
+//! `StackHandle` and `HeapHandle`. The arena imposes no semantic
+//! distinction between the two ends.
 //!
 //! # Reset, Rewind, and Marks
 //!
-//! [`Arena::reset`] takes `&mut self` and clears both ends safely.
-//!
-//! Each end exposes a LIFO mark and rewind discipline. [`Arena::bottom_mark`]
-//! and [`Arena::top_mark`] are safe snapshot accessors. [`Arena::rewind_bottom`],
-//! [`Arena::rewind_top`], [`Arena::reset_bottom`], and [`Arena::reset_top`]
-//! are unsafe because they invalidate the rewound region while raw
-//! pointers obtained through the `Allocator` trait may still be held by
-//! the caller.
+//! [`Arena::reset`] takes `&mut self` and clears both ends safely. Each
+//! end also exposes a LIFO mark and rewind discipline. The mark
+//! accessors [`Arena::bottom_mark`] and [`Arena::top_mark`] are safe.
+//! The rewind and per-end reset operations [`Arena::rewind_bottom`],
+//! [`Arena::rewind_top`], [`Arena::reset_bottom`], and
+//! [`Arena::reset_top`] are unsafe because they invalidate the rewound
+//! region while raw pointers obtained through the `Allocator` trait may
+//! still be held by the caller.
 //!
 //! # Observability and Budget
 //!
@@ -491,15 +487,6 @@ unsafe impl Allocator for TopHandle<'_> {
         // No-op. Bump allocator reclaims at reset.
     }
 }
-
-/// Conventional alias for [`BottomHandle`]. Suitable for code that maps
-/// the arena's bottom end to a stack-like region with LIFO discipline.
-pub type StackHandle<'a> = BottomHandle<'a>;
-
-/// Conventional alias for [`TopHandle`]. Suitable for code that maps the
-/// arena's top end to a heap-like region whose allocations are reset
-/// together rather than freed individually.
-pub type HeapHandle<'a> = TopHandle<'a>;
 
 #[cfg(test)]
 mod tests {
