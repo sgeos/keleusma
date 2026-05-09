@@ -123,7 +123,20 @@ pub enum Value {
     /// `env` is empty for plain function references such as those
     /// produced by `Op::PushFunc`. Closures with captured outer-scope
     /// values produce non-empty `env` through `Op::MakeClosure`.
-    Func { chunk_idx: u16, env: Vec<Value> },
+    Func {
+        chunk_idx: u16,
+        env: Vec<Value>,
+        /// Whether the function is a recursive closure produced by
+        /// [`Op::MakeRecursiveClosure`]. At each invocation through
+        /// [`Op::CallIndirect`], a recursive `Func` is pushed onto
+        /// the operand stack as an additional implicit argument
+        /// between the env values and the explicit arguments. The
+        /// synthetic chunk's parameter list is laid out to receive
+        /// this self argument in the slot named after the closure's
+        /// let-binding, so references to the binding name inside the
+        /// body resolve to the local that holds the closure itself.
+        recursive: bool,
+    },
 }
 
 impl PartialEq for Value {
@@ -153,12 +166,14 @@ impl PartialEq for Value {
                 Value::Func {
                     chunk_idx: a,
                     env: ae,
+                    recursive: ar,
                 },
                 Value::Func {
                     chunk_idx: b,
                     env: be,
+                    recursive: br,
                 },
-            ) => a == b && ae == be,
+            ) => a == b && ae == be && ar == br,
             (Value::Tuple(a), Value::Tuple(b)) | (Value::Array(a), Value::Array(b)) => a == b,
             (
                 Value::Struct {
@@ -415,6 +430,20 @@ pub enum Op {
     /// invocation through `Op::CallIndirect`, prepended to the
     /// explicit arguments.
     MakeClosure(u16, u8),
+    /// Build a recursive closure value. Identical to
+    /// [`Op::MakeClosure`] except the resulting `Value::Func` carries
+    /// `recursive = true`. At each invocation through
+    /// [`Op::CallIndirect`], the runtime pushes the closure value
+    /// itself as an additional implicit argument between the
+    /// captured environment values and the explicit arguments. This
+    /// implements the self-reference contract for closures bound
+    /// through `let f = |...| ... f(...) ...` where the let-binding
+    /// name appears in the closure's body. The synthetic chunk
+    /// receives parameters in the order
+    /// `(other_captures..., self_param, explicit_params...)` so
+    /// references to the binding name inside the body resolve to the
+    /// implicit self parameter and dispatch through indirect-call.
+    MakeRecursiveClosure(u16, u8),
     /// Return from the current function.
     Return,
 
@@ -544,6 +573,7 @@ impl Op {
             // MakeClosure cost is the per-capture allocation cost.
             // Held at a small constant for the WCMU analysis.
             Op::MakeClosure(_, _) => 5,
+            Op::MakeRecursiveClosure(_, _) => 5,
         }
     }
 
@@ -604,7 +634,7 @@ impl Op {
 
             // MakeClosure pushes one closure value (regardless of
             // captures, which net out against the pops).
-            Op::MakeClosure(_, _) => 1,
+            Op::MakeClosure(_, _) | Op::MakeRecursiveClosure(_, _) => 1,
         }
     }
 
@@ -662,7 +692,7 @@ impl Op {
             Op::Trap(_) => 0,
 
             // MakeClosure pops `n` captures.
-            Op::MakeClosure(_, n) => *n as u32,
+            Op::MakeClosure(_, n) | Op::MakeRecursiveClosure(_, n) => *n as u32,
         }
     }
 
@@ -786,7 +816,7 @@ pub const BYTECODE_MAGIC: [u8; 4] = *b"KELE";
 
 /// Wire format version for serialized bytecode. Bytecode produced under a
 /// different version is rejected at load time.
-pub const BYTECODE_VERSION: u16 = 6;
+pub const BYTECODE_VERSION: u16 = 7;
 
 /// Word size in bits assumed by this runtime build, encoded as the
 /// base-2 exponent. Actual width in bits is `1 << RUNTIME_WORD_BITS_LOG2`.
@@ -1227,6 +1257,7 @@ pub fn op_from_archived(archived: &ArchivedOp) -> Op {
         ArchivedOp::CallIndirect(n) => Op::CallIndirect(*n),
         ArchivedOp::PushFunc(idx) => Op::PushFunc(idx.to_native()),
         ArchivedOp::MakeClosure(idx, n) => Op::MakeClosure(idx.to_native(), *n),
+        ArchivedOp::MakeRecursiveClosure(idx, n) => Op::MakeRecursiveClosure(idx.to_native(), *n),
         ArchivedOp::Return => Op::Return,
         ArchivedOp::Yield => Op::Yield,
         ArchivedOp::Pop => Op::Pop,

@@ -374,9 +374,19 @@ pub enum Expr {
     /// emits `GetLocal` for each captured name followed by
     /// `Op::MakeClosure(chunk_idx, n_captures)`. User-written code
     /// never produces this variant directly.
+    ///
+    /// When `recursive` is `true`, the closure was produced by a
+    /// `let f = |...| ... f(...) ...` form whose let-binding name
+    /// appears in the body. The hoist pass synthesizes the chunk
+    /// with the binding name as an additional implicit parameter
+    /// after the captures, and the compiler emits
+    /// `Op::MakeRecursiveClosure` instead of `Op::MakeClosure`. At
+    /// invocation, the runtime pushes the closure value itself into
+    /// the self parameter slot before the explicit arguments.
     ClosureRef {
         name: String,
         captures: Vec<String>,
+        recursive: bool,
         span: Span,
     },
 }

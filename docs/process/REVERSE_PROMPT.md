@@ -9,8 +9,8 @@ AI to Human communication channel.
 ## Last Updated
 
 **Date**: 2026-05-09
-**Task**: V0.1-M3-T25. B2.4 inference reach extension to field access, B2 stale doc cleanup, and B3 nested-closure transitive capture.
-**Status**: Complete. The remaining named B2 and B3 follow-ons that surfaced after the prior session are closed. Field-access inference and nested-closure transitive capture both required real implementation work, while the B2 backlog entry was outdated documentation that has been corrected.
+**Task**: V0.1-M3-T26. B2.4 inference reach to TupleIndex and ArrayIndex, and B3 recursive closures via let-binding self-reference.
+**Status**: Complete. Recursive closures land with full runtime support (new opcode, runtime self-push, BYTECODE_VERSION bump). Two more inference shapes (tuple-index, array-index) close the remaining low-effort B2.4 inference gaps.
 
 ## Verification
 
@@ -24,71 +24,90 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 **Results**:
 
-- 475 tests pass workspace-wide. 407 keleusma unit (3 new), 17 keleusma marshall integration, 17 keleusma `kstring_boundary` integration, 28 keleusma-arena unit, 6 keleusma-arena doctests.
+- 479 tests pass workspace-wide. 411 keleusma unit (4 new), 17 keleusma marshall integration, 17 keleusma `kstring_boundary` integration, 28 keleusma-arena unit, 6 keleusma-arena doctests.
 - Clippy clean under `--workspace --all-targets`.
 - Format clean.
 
 ## Summary
 
-This session closed three follow-on items:
+This session closed two follow-on items:
 
-### B2.4 inference reach extension to field access
+### B2.4 inference reach to TupleIndex and ArrayIndex
 
-`monomorphize::infer_arg_type` previously returned `None` for `Expr::FieldAccess` because no struct table was available. The pass now builds a struct table at the top of `monomorphize()` and threads it through `rewrite_block`, `rewrite_stmt`, `rewrite_expr`, and `rewrite_iterable`. The `FieldAccess` arm of `infer_arg_type` resolves the object's nominal type, looks up the struct's declared field type, and applies per-instance type-argument substitution when concrete type arguments are available on the receiver. Abstract field types (those whose declared type is exactly one of the struct's type parameters and the receiver carries no type arguments) are guarded against erroneous propagation: returning such an abstract type as the inferred argument would cause the call site to specialize against a type variable rather than a concrete type.
+A probe revealed that the existing tests for inference shapes used `check_src` which only runs the type-check pass. The type checker is permissive enough to accept generic call sites whose argument types it cannot resolve, deferring the error to monomorphization or compilation. Tests therefore passed even when monomorphization could not specialize the call. A new `compile_src` helper exercises the full compile pipeline so a missing inference path produces an actionable test failure.
 
-The motivating case `let h = Holder { value: 21 }; use_doubler(h.value)` where `Holder` is a non-generic struct with `value: i64` and `use_doubler<T: Doubler>` requires a concrete `T` now compiles end to end.
+With the more rigorous test, two real inference gaps surfaced. `Expr::TupleIndex` and `Expr::ArrayIndex` returned `None` from `infer_arg_type`. Both are now resolved: tuple-index reads the element type from the inferred tuple's element list, and array-index reads the element type from the inferred array type. New tests exercise each shape end to end through the compile pipeline.
 
-### B2 stale doc cleanup
+The existing field-access test was also refactored to use `compile_src` so it actually verifies monomorphization rather than just type-check.
 
-The B2 backlog entry listed "Method call surface syntax (`x.method(args)`)" as remaining work. That syntax landed in V0.1-M3-T18 with `Expr::MethodCall`. The entry has been corrected to record the syntax as implemented and to remove the stale "remaining work" bullet.
+### B3 recursive closures via let-binding
 
-### B3 nested-closure transitive capture
+The form `let f = |...| ... f(...) ...` declares a closure whose body references its own let-binding name. Previously this failed with "undefined function `f`" at type-check.
 
-`compiler::collect_free_in_expr` previously treated `Expr::ClosureRef` as a leaf, so an inner closure that captured an outer-function local could not transitively propagate that capture through an enclosing closure. The motivating failure was `let base = 100; let outer = |x| { let inner = |y| base + x + y; inner(3) }; outer(7)`, which produced a "captures `base` which is not a local in the enclosing scope" compile error because `outer`'s synthetic chunk did not receive `base` as a captured implicit parameter.
+The new flow works as follows:
 
-The `ClosureRef` arm of the free-variable collector now treats each entry of the inner closure's `captures` list as a free variable of the enclosing expression unless it is bound by the enclosing scope's parameters. The outer closure's hoisted chunk therefore gains the transitively captured name as an additional implicit parameter, and at the inner closure's construction site that name is in scope and is captured normally through `Op::MakeClosure`.
+- The type checker registers a fresh type variable for the let-binding name before walking the closure value, so the body's self-reference type-checks rather than failing as undefined.
+- The hoist pass detects the pattern in `Stmt::Let` when the value is `Expr::Closure` and the binding name appears in the body's free variables. The synthetic chunk's parameter list is laid out as `(other_captures..., self_param, explicit_params...)` where `self_param` carries the binding name. Other captures are populated normally, and the resulting `Expr::ClosureRef` carries `recursive = true`.
+- The compiler emits the new `Op::MakeRecursiveClosure(chunk_idx, n_captures)` for recursive `ClosureRef`s. This produces a `Value::Func { recursive: true, ... }`. The compiler also accepts captures that resolve to top-level functions or already-hoisted synthetic chunks via `Op::PushFunc`, which is needed for nested closures whose inner capture is an outer closure's binding name.
+- The runtime extends `Op::CallIndirect`. When the popped `Value::Func` has `recursive == true`, the VM pushes the closure value itself onto the operand stack between the env values and the explicit arguments, populating the synthetic chunk's self parameter. References to the binding name inside the body resolve to the local that holds the closure and dispatch through indirect call.
+- Recursive closures coexist with regular captures. The synthetic chunk receives `(captures..., self, explicit_params...)`. The existing transitive capture mechanism continues to work because the recursive marker only affects how `CallIndirect` handles the self slot.
+
+`BYTECODE_VERSION` bumped to `7`. The golden bytes test was updated accordingly.
+
+End-to-end demonstration: `examples/closure_recursive.rs` computes `fact(5) == 120`.
 
 ## Tests
 
-Three new typecheck tests:
+Four new typecheck tests:
 
-- `monomorphize_inference_through_field_access` covers the field-access inference round trip.
-- `closure_nested_inside_closure_typechecks` covers the basic nested-closure type check.
-- `closure_nested_capturing_outer_local_typechecks` covers the transitive-capture case.
+- `monomorphize_inference_through_tuple_index` covers the tuple-index inference case end to end through the compile pipeline.
+- `monomorphize_inference_through_array_index` covers the array-index inference case.
+- `recursive_closure_typechecks` covers the basic recursive closure pattern.
+- `recursive_closure_with_capture_typechecks` covers a recursive closure that also captures an outer-function local.
 
-One new example, `examples/closure_nested.rs`, demonstrates end-to-end execution.
+The existing `monomorphize_inference_through_field_access` test was refactored to use `compile_src` rather than `check_src`.
+
+One new example: `examples/closure_recursive.rs`.
 
 ## Trade-offs and Properties
 
-The struct table threading is invasive at the call-site level (every recursive call in the rewrite chain gains an extra argument) but conceptually narrow. The `infer_arg_type` function continues to take an `Option` for the struct table so callers in the `specialize_structs` and `specialize_enums` chains, which do not need field-access inference, can pass `None` without owning a struct table.
+The recursive closure implementation requires runtime support (a new opcode and a `Value::Func` flag). The alternative (a body rewrite that threads the closure value as an explicit argument at every recursive call) avoids the runtime change but requires synthetic transformations across the body. The runtime approach is simpler structurally and concentrates the change in the dispatch path.
 
-The transitive-capture propagation is conservative in that it adds every inner-capture name to the enclosing scope's free-variable list. If an inner closure's capture is in fact bound by the enclosing scope (for example, the inner closure captures the outer closure's parameter), the outer's `bound` set filters it out. The propagation does not deduplicate against names already in `out` beyond the existing `!out.contains(...)` check, which keeps the logic uniform with the rest of the collector.
+The `recursive` flag on `Value::Func` adds a single boolean per first-class function value at runtime. The cost is negligible for an `enum` Value with multiple existing fields. The flag is `false` for plain function references produced by `Op::PushFunc` and for non-recursive closures produced by `Op::MakeClosure`, so existing code continues to behave identically.
+
+The hoist pass's detection of self-reference is conservative: it only fires when the let-binding's pattern is a single `Pattern::Variable` and the value is exactly an `Expr::Closure`. Indirect cases (a closure assigned to a destructured pattern, or a closure passed through other expressions) are not detected and produce the original "undefined function" error. This is acceptable because the canonical pattern covers the practical use cases.
+
+The type checker's pre-registration of a fresh type variable is similarly scoped. The variable is later overwritten by the actual closure type when `bind_pattern` runs at the end of let-checking. Within the closure body, the binding's type is the fresh variable, so call sites unify against it but cannot fully resolve the closure's signature. The compile pipeline's monomorphization and indirect-call dispatch then handle the runtime resolution.
 
 ## Changes Made
 
 ### Source
 
-- **`src/monomorphize.rs`**. Struct table built at the top of `monomorphize()` and threaded through `rewrite_block`, `rewrite_stmt`, `rewrite_expr`, `rewrite_iterable`. `infer_arg_type` signature extended with `Option<&BTreeMap<String, StructDef>>`. `FieldAccess` arm resolves field type with per-instance substitution and abstract-type guard.
-- **`src/compiler.rs`**. `collect_free_in_expr`'s `ClosureRef` arm now propagates inner-capture names to the enclosing scope's free-variable list, separated from the unreachable `Closure` arm.
-- **`src/typecheck.rs`**. Three new unit tests.
-- **`examples/closure_nested.rs`** (new). End-to-end demonstration.
+- **`src/bytecode.rs`**. New `Op::MakeRecursiveClosure(u16, u8)` variant. New `recursive: bool` field on `Value::Func`. WCMU cost, stack growth/shrink, and `op_from_archived` updated for the new variant. `BYTECODE_VERSION` bumped to `7`.
+- **`src/vm.rs`**. New `Op::MakeRecursiveClosure` execution arm. `Op::CallIndirect` extended: when the popped `Value::Func` is recursive, the VM pushes the closure value itself between env values and explicit arguments. Golden bytes test updated for version 7.
+- **`src/utility_natives.rs`**. `render_value_to_string` recognizes the recursive flag and renders accordingly.
+- **`src/ast.rs`**. `Expr::ClosureRef` gained `recursive: bool`.
+- **`src/typecheck.rs`**. `Stmt::Let` arm now pre-registers a fresh type variable for the binding when the value is a closure and the pattern is a simple variable. Three new tests covering tuple-index, array-index, and recursive closure cases. New `compile_src` helper. Existing inference test refactored to use `compile_src`.
+- **`src/compiler.rs`**. New `hoist_let_bound_closure` helper that produces recursive `ClosureRef`s. The compiler's `ClosureRef` arm emits `Op::MakeRecursiveClosure` when the closure is recursive and falls back to top-level function references via `Op::PushFunc` when a capture name resolves to a function rather than a local.
+- **`src/monomorphize.rs`**. `infer_arg_type` `Expr::TupleIndex` and `Expr::ArrayIndex` arms now return inferred element types. The `subst_in_expr` arm for `ClosureRef` propagates the new `recursive` field.
+- **`examples/closure_recursive.rs`** (new). End-to-end demonstration of `fact(5) == 120`.
 
 ### Knowledge Graph
 
-- **`docs/decisions/BACKLOG.md`**. B2 entry corrected to remove the stale method-call-syntax item. B2.4 entry updated with field-access inference and the abstract-type guard. B3 entry updated with the nested-closure transitive-capture mechanism.
-- **`docs/process/TASKLOG.md`**. New row for V0.1-M3-T25.
+- **`docs/decisions/BACKLOG.md`**. B2.4 entry updated with the tuple-index and array-index inference cases. B3 entry updated with the recursive-closure mechanism, including the runtime contract and bytecode version bump.
+- **`docs/process/TASKLOG.md`**. New row for V0.1-M3-T26.
 - **`docs/process/REVERSE_PROMPT.md`**. This file.
 
 ## Remaining Open Priorities
 
-None of the originally named B2.2, B2.3, B2.4, or B3 items remain unresolved. Subsequent sessions can address items outside this scope, such as B11 (per-op decode optimization for zero-copy execution) or B5b (variable-cost string operations).
+None of the originally named B2.2, B2.3, B2.4, or B3 items remain unresolved. The closure subsystem now supports first-class arguments, environment capture, transitive nested capture, and recursive let-bound closures. The monomorphization pass resolves type arguments through literals, identifiers, function-call returns, casts, enum variants, struct constructions, tuple and array literals, if and match arms, field access, tuple-index, and array-index expressions.
 
 The `keleusma-arena` registry version is still v0.1.0.
 
 ## Intended Next Step
 
-Await human prompt before proceeding. Subsequent work is open-ended.
+Await human prompt before proceeding. Subsequent work falls outside the previously named B2.2, B2.3, B2.4, and B3 scope. Candidates include B11 (per-op decode optimization) or B5b (variable-cost string operations) from the backlog.
 
 ## Session Context
 
-This session closed the residual follow-on items in B2.2, B2.3, B2.4, and B3 that surfaced after the prior session: a stale doc entry, a real inference-reach gap for field access, and a real transitive-capture gap for nested closures. The compile pipeline now specializes generic calls whose arguments include field access expressions, and closures can transitively capture from any enclosing scope through any number of intermediate closures.
+This session closed the residual TupleIndex/ArrayIndex inference gaps in B2.4 and added full recursive closure support to B3. The bytecode wire format advanced to version 7. The closure subsystem is now feature-complete for the canonical functional patterns (recursion, capture, nesting, first-class arguments).

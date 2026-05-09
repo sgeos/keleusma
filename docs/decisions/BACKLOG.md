@@ -44,7 +44,7 @@ What lands.
 
 End-to-end example. `examples/monomorphize_generic_method.rs` compiles and executes `fn use_doubler<T: Doubler>(x: T) -> i64 { x.double() }` where the body's method call resolves only after monomorphization specializes `use_doubler` for `T = i64`.
 
-Inference reach extension. `infer_arg_type` now resolves the type of function calls (through a function-return-type map), tuple and array literals, cast expressions, enum variants, the first-arm of if/match expressions, and field access expressions. Generic call sites whose arguments use these shapes specialize correctly. Field-access inference threads a struct table through the rewrite chain and resolves `o.field` against the struct's declared field type, applying per-instance type-argument substitution when the receiver carries concrete type arguments. Abstract field types (those whose declared type is exactly one of the struct's type parameters and the receiver has no type arguments) are guarded against erroneous propagation.
+Inference reach extension. `infer_arg_type` now resolves the type of function calls (through a function-return-type map), tuple and array literals, cast expressions, enum variants, the first-arm of if/match expressions, field access expressions, tuple-index expressions, and array-index expressions. Generic call sites whose arguments use these shapes specialize correctly. Field-access inference threads a struct table through the rewrite chain and resolves `o.field` against the struct's declared field type, applying per-instance type-argument substitution when the receiver carries concrete type arguments. Abstract field types (those whose declared type is exactly one of the struct's type parameters and the receiver has no type arguments) are guarded against erroneous propagation. Tuple-index inference reads the indexed element type from the inferred tuple type. Array-index inference returns the array's element type regardless of the index value.
 
 Generic struct specialization. `specialize_structs` runs after function specialization. For each `Expr::StructInit` whose target struct has type parameters, the pass infers the type arguments by matching declared field types against provided field values' types and emits a specialized `StructDef` with the field types substituted. The `StructInit`'s name is rewritten to the mangled form (for example `Cell__i64`). Subsequent compilation sees the specialized struct as a regular non-generic struct, which lets compile-time field-type inference resolve method dispatch on field-typed receivers. Example: `c.value.double()` where `c: Cell<i64>` now compiles correctly.
 
@@ -72,6 +72,28 @@ End-to-end. `examples/closure_basic.rs` demonstrates `let f = |x: i64| x + 1; f(
 First-class closures as function arguments now work end to end. A generic function `fn apply<F>(f: F, x: i64) -> i64 { f(x) }` accepts a closure and invokes it through the indirect-call mechanism. The compiler resolves the parameter `f` as a local and emits `Op::CallIndirect`. Monomorphization leaves the call generic when the argument's concrete type cannot be inferred (closure types are opaque); the runtime polymorphic dispatch handles invocation.
 
 Nested closures with transitive capture work end to end. When a closure is hoisted, the resulting `Expr::ClosureRef` carries the inner closure's free-variable list. The free-variable analysis for any enclosing closure now treats each entry of an inner `ClosureRef`'s captures list as a free variable of the enclosing expression unless it is bound in the enclosing scope. This propagation lets an inner closure capture a name from an outer-function local through an outer closure's synthetic chunk: the outer closure's hoisted body is given the name as an additional implicit parameter, and at the inner closure's construction site that local is in scope and is captured normally.
+
+Recursive closures via let-binding work end to end. The form
+`let f = |...| ... f(...) ...` declares a closure whose body
+references its own let-binding name. The hoist pass detects this
+pattern in `Stmt::Let` and synthesizes a chunk whose parameter list
+is `(other_captures..., self_param, explicit_params...)` where
+`self_param` carries the binding name. The compiler emits the new
+`Op::MakeRecursiveClosure(chunk_idx, n_captures)` instead of
+`Op::MakeClosure`, producing a `Value::Func { recursive: true }`. At
+each invocation through `Op::CallIndirect`, the runtime pushes the
+closure value itself into the self slot before the explicit
+arguments, so references to the binding name inside the body
+resolve to the closure value and dispatch through indirect call.
+The type checker registers a fresh type variable for the binding
+before checking the closure value, allowing the body's
+self-reference to type-check rather than failing as undefined.
+Recursive closures also support regular captures: the synthetic
+chunk's parameter order places captures before the self slot, and
+`MakeRecursiveClosure` pops the captures into the env identically
+to `MakeClosure`. End-to-end demonstration:
+`examples/closure_recursive.rs` computes `fact(5) == 120`. Bytecode
+version is bumped to `7`.
 
 Capture by reference disposition. Capture by reference is not meaningful in Keleusma's pure-functional surface. The language's `let` bindings are immutable by design. There is no surface assignment operator that mutates a previously bound local, which means a captured local cannot diverge from the captured snapshot regardless of whether the capture is by value or by reference. The only mutable mechanism is the data segment, which is accessed through `data.field` and `data.field = expr` syntax that is independent of closure capture. A closure that wants to mutate shared state therefore reads and writes data segment slots directly. Capture by reference would only matter in a language with mutable locals, which Keleusma intentionally does not have. The item is therefore closed as not applicable rather than deferred.
 

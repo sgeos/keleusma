@@ -31,11 +31,16 @@ fn render_value_to_string(arena: Option<&Arena>, val: &Value) -> String {
         },
         Value::Unit => String::from("()"),
         Value::None => String::from("None"),
-        Value::Func { chunk_idx, env } => {
-            if env.is_empty() {
+        Value::Func {
+            chunk_idx,
+            env,
+            recursive,
+        } => {
+            let kind = if *recursive { "rec" } else { "closure" };
+            if env.is_empty() && !*recursive {
                 format!("<fn:{}>", chunk_idx)
             } else {
-                format!("<closure:{}/{}>", chunk_idx, env.len())
+                format!("<{}:{}/{}>", kind, chunk_idx, env.len())
             }
         }
         Value::Tuple(elems) => {

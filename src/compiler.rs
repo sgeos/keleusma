@@ -1339,6 +1339,92 @@ fn hoist_closures(mut program: Program) -> Program {
     program
 }
 
+/// Hoist a closure expression that is the value of a `let` binding,
+/// detecting self-reference. When the closure body's free variables
+/// include the let-binding name, the closure is treated as recursive.
+/// The synthetic chunk's parameter list places the binding name
+/// after the other captures, the runtime fills that slot with the
+/// closure value at each invocation, and the compiler emits
+/// `Op::MakeRecursiveClosure` at the construction site.
+fn hoist_let_bound_closure(
+    let_name: alloc::string::String,
+    expr: &mut Expr,
+    counter: &mut usize,
+    out: &mut Vec<FunctionDef>,
+    natives: &alloc::collections::BTreeSet<alloc::string::String>,
+) {
+    let (params, return_type, body, span) = match expr {
+        Expr::Closure {
+            params,
+            return_type,
+            body,
+            span,
+        } => (params, return_type, body, *span),
+        _ => return,
+    };
+    // Hoist any nested closures inside the body first.
+    hoist_in_block(body, counter, out, natives);
+    let mut bound: alloc::collections::BTreeSet<alloc::string::String> =
+        alloc::collections::BTreeSet::new();
+    for p in params.iter() {
+        collect_pattern_names(&p.pattern, &mut bound);
+    }
+    let mut free: Vec<alloc::string::String> = Vec::new();
+    collect_free_in_block(body, &bound, &mut free);
+    let recursive = free.iter().any(|n| n == &let_name);
+    if !recursive {
+        // Defer to the regular closure-hoist path if the body does
+        // not actually reference the let-binding name. This keeps
+        // the non-recursive cases identical to the previous flow.
+        hoist_in_expr(expr, counter, out, natives);
+        return;
+    }
+    // Filter out the self-reference from the regular captures list.
+    free.retain(|n| n != &let_name);
+    let name = format!("__closure_{}", *counter);
+    *counter += 1;
+    let mut all_params: Vec<Param> = Vec::with_capacity(free.len() + 1 + params.len());
+    for capture in &free {
+        all_params.push(Param {
+            pattern: Pattern::Variable(capture.clone(), span),
+            type_expr: None,
+            span,
+        });
+    }
+    // The self parameter sits between captures and explicit params.
+    all_params.push(Param {
+        pattern: Pattern::Variable(let_name.clone(), span),
+        type_expr: None,
+        span,
+    });
+    all_params.extend(params.iter().cloned());
+    let body_owned = core::mem::replace(
+        body,
+        Block {
+            stmts: Vec::new(),
+            tail_expr: None,
+            span,
+        },
+    );
+    let synth = FunctionDef {
+        category: FunctionCategory::Fn,
+        name: name.clone(),
+        type_params: Vec::new(),
+        params: all_params,
+        return_type: return_type.clone().unwrap_or(TypeExpr::Unit(span)),
+        guard: None,
+        body: body_owned,
+        span,
+    };
+    out.push(synth);
+    *expr = Expr::ClosureRef {
+        name,
+        captures: free,
+        recursive: true,
+        span,
+    };
+}
+
 fn hoist_in_block(
     block: &mut Block,
     counter: &mut usize,
@@ -1360,7 +1446,27 @@ fn hoist_in_stmt(
     natives: &alloc::collections::BTreeSet<alloc::string::String>,
 ) {
     match stmt {
-        Stmt::Let(l) => hoist_in_expr(&mut l.value, counter, out, natives),
+        Stmt::Let(l) => {
+            // Special-case `let f = |...| ...` where the closure body
+            // references the let-binding name. The hoist pass treats
+            // the binding name as a self-reference and produces a
+            // recursive ClosureRef. The synthetic chunk's parameter
+            // list is laid out as
+            //   (other_captures..., self_param, explicit_params...)
+            // so references to the binding name inside the body
+            // resolve to the implicit self parameter and dispatch
+            // through `Op::CallIndirect`. The compiler emits
+            // `Op::MakeRecursiveClosure` at the construction site and
+            // the runtime pushes the closure value into the self
+            // slot at each invocation.
+            if let Pattern::Variable(let_name, _) = &l.pattern
+                && let Expr::Closure { .. } = &l.value
+            {
+                hoist_let_bound_closure(let_name.clone(), &mut l.value, counter, out, natives);
+            } else {
+                hoist_in_expr(&mut l.value, counter, out, natives);
+            }
+        }
         Stmt::For(f) => {
             match &mut f.iterable {
                 Iterable::Range(s, e) => {
@@ -1511,6 +1617,7 @@ fn hoist_in_expr(
             *expr = Expr::ClosureRef {
                 name,
                 captures: free,
+                recursive: false,
                 span: *span,
             };
         }
@@ -1975,6 +2082,7 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
         Expr::ClosureRef {
             name,
             captures,
+            recursive,
             span,
         } => {
             let chunk_idx = match fc.function_map.get(name) {
@@ -1989,6 +2097,13 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
             for capture in captures {
                 if let Some(slot) = fc.resolve_local(capture) {
                     fc.emit(Op::GetLocal(slot));
+                } else if let Some(&fn_idx) = fc.function_map.get(capture) {
+                    // The capture refers to a top-level function (or
+                    // an already-hoisted synthetic chunk) rather than
+                    // a local. Push a non-recursive function value
+                    // for it. This case arises when an inner closure
+                    // captures an outer closure's binding name.
+                    fc.emit(Op::PushFunc(fn_idx));
                 } else {
                     return Err(CompileError {
                         message: format!(
@@ -2000,7 +2115,15 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
                 }
             }
             let n = captures.len() as u8;
-            if n == 0 {
+            if *recursive {
+                // For recursive closures, the synthetic chunk's first
+                // implicit parameter after the captures is the self
+                // reference, populated at each indirect-call by the
+                // runtime. The compiler emits the recursive variant
+                // even when the captures list is empty so the runtime
+                // knows to push the closure value into the self slot.
+                fc.emit(Op::MakeRecursiveClosure(chunk_idx, n));
+            } else if n == 0 {
                 fc.emit(Op::PushFunc(chunk_idx));
             } else {
                 fc.emit(Op::MakeClosure(chunk_idx, n));

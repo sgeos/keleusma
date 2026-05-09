@@ -998,6 +998,7 @@ impl<'a, 'arena> Vm<'a, 'arena> {
                 Op::PushFunc(idx) => self.stack.push(Value::Func {
                     chunk_idx: idx,
                     env: alloc::vec::Vec::new(),
+                    recursive: false,
                 }),
                 Op::MakeClosure(chunk_idx_val, n_captures) => {
                     let n = n_captures as usize;
@@ -1009,6 +1010,26 @@ impl<'a, 'arena> Vm<'a, 'arena> {
                     self.stack.push(Value::Func {
                         chunk_idx: chunk_idx_val,
                         env,
+                        recursive: false,
+                    });
+                }
+                Op::MakeRecursiveClosure(chunk_idx_val, n_captures) => {
+                    // Identical to MakeClosure except the resulting
+                    // Value::Func is marked recursive. At each
+                    // CallIndirect invocation, the runtime will push
+                    // the func itself between the env values and the
+                    // explicit arguments, populating the synthetic
+                    // chunk's self parameter with the closure value.
+                    let n = n_captures as usize;
+                    if self.stack.len() < n {
+                        return Err(VmError::StackUnderflow);
+                    }
+                    let env: alloc::vec::Vec<Value> =
+                        self.stack.drain(self.stack.len() - n..).collect();
+                    self.stack.push(Value::Func {
+                        chunk_idx: chunk_idx_val,
+                        env,
+                        recursive: true,
                     });
                 }
 
@@ -1308,8 +1329,12 @@ impl<'a, 'arena> Vm<'a, 'arena> {
                     let saved_args: alloc::vec::Vec<Value> =
                         self.stack.drain(args_start..).collect();
                     let func_value = self.pop()?;
-                    let (chunk_idx, env) = match func_value {
-                        Value::Func { chunk_idx, env } => (chunk_idx, env),
+                    let (chunk_idx, env, recursive) = match func_value.clone() {
+                        Value::Func {
+                            chunk_idx,
+                            env,
+                            recursive,
+                        } => (chunk_idx, env, recursive),
                         other => {
                             return Err(VmError::TypeError(format!(
                                 "indirect call expected Func, got {}",
@@ -1327,10 +1352,20 @@ impl<'a, 'arena> Vm<'a, 'arena> {
                     for v in env {
                         self.stack.push(v);
                     }
+                    // For recursive closures, push the closure value
+                    // itself between the env values and the explicit
+                    // arguments. This populates the synthetic chunk's
+                    // self parameter so the body's references to the
+                    // closure's let-binding resolve to the closure
+                    // value through indirect dispatch.
+                    let self_count = if recursive { 1 } else { 0 };
+                    if recursive {
+                        self.stack.push(func_value);
+                    }
                     for v in saved_args {
                         self.stack.push(v);
                     }
-                    let total_args = env_len + n;
+                    let total_args = env_len + self_count + n;
                     let called_local_count = self.chunk_local_count(chunk_idx as usize) as usize;
                     let new_base = self.stack.len() - total_args;
                     let extra = called_local_count - total_args;
@@ -2665,7 +2700,7 @@ mod tests {
         //
         // Layout breakdown:
         //   bytes[0..4]    = b"KELE"               magic
-        //   bytes[4..6]    = 0x06 0x00              version 6 (u16 LE)
+        //   bytes[4..6]    = 0x07 0x00              version 7 (u16 LE)
         //   bytes[6..10]   = 0x90 0x00 0x00 0x00    length 144 (u32 LE)
         //   bytes[10]      = 0x06                   word_bits_log2 = 6 (64-bit)
         //   bytes[11]      = 0x06                   addr_bits_log2 = 6 (64-bit)
@@ -2674,8 +2709,8 @@ mod tests {
         //   bytes[16..140] = rkyv body
         //   bytes[140..144] = CRC-32 (u32 LE)
         let expected: alloc::vec::Vec<u8> = alloc::vec![
-            0x4B, 0x45, 0x4C, 0x45, 0x06, 0x00, 0x90, 0x00, 0x00, 0x00, 0x06, 0x06, 0x06, 0x00,
-            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x23, 0x00, 0x00, 0x00,
+            0x4B, 0x45, 0x4C, 0x45, 0x07, 0x00, 0x90, 0x00, 0x00, 0x00, 0x06, 0x06, 0x06, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x24, 0x00, 0x00, 0x00,
             0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00,
             0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
             0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x6D, 0x61, 0x69, 0x6E, 0xFF, 0xFF,
@@ -2684,7 +2719,7 @@ mod tests {
             0x00, 0x00, 0xDC, 0xFF, 0xFF, 0xFF, 0x01, 0x00, 0x00, 0x00, 0xF8, 0xFF, 0xFF, 0xFF,
             0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
             0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x06, 0x06, 0x06, 0x00,
-            0x59, 0xFF, 0x63, 0x79,
+            0xBB, 0xE7, 0xEB, 0x42,
         ];
         let src = "fn main() -> i64 { 1 }";
         let tokens = tokenize(src).expect("lex");

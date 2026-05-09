@@ -1202,6 +1202,29 @@ fn infer_arg_type(
             let first = arms.first()?;
             infer_arg_type(&first.expr, locals, fn_returns, structs)
         }
+        Expr::TupleIndex { object, index, .. } => {
+            // Resolve the object's type. If it is a tuple type with
+            // enough elements, the indexed element's type is the
+            // result. Out-of-range indices return None and let the
+            // call site fall back to runtime tag dispatch.
+            let obj_ty = infer_arg_type(object, locals, fn_returns, structs)?;
+            if let TypeExpr::Tuple(elements, _) = obj_ty {
+                let idx = *index as usize;
+                elements.get(idx).cloned()
+            } else {
+                None
+            }
+        }
+        Expr::ArrayIndex { object, .. } => {
+            // Array element type is the inferred element of the
+            // object's array type, regardless of the index value.
+            let obj_ty = infer_arg_type(object, locals, fn_returns, structs)?;
+            if let TypeExpr::Array(elem, _, _) = obj_ty {
+                Some(*elem)
+            } else {
+                None
+            }
+        }
         Expr::FieldAccess { object, field, .. } => {
             // Resolve the object's nominal type, look up the struct's
             // declared field type, and apply the per-instance
@@ -1545,10 +1568,12 @@ fn subst_in_expr(expr: &Expr, subst: &BTreeMap<String, TypeExpr>) -> Expr {
         Expr::ClosureRef {
             name,
             captures,
+            recursive,
             span,
         } => Expr::ClosureRef {
             name: name.clone(),
             captures: captures.clone(),
+            recursive: *recursive,
             span: *span,
         },
     }

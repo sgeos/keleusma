@@ -1321,6 +1321,19 @@ fn type_of_block(ctx: &mut Ctx, block: &Block) -> Result<Type, TypeError> {
 fn check_stmt(ctx: &mut Ctx, stmt: &Stmt) -> Result<(), TypeError> {
     match stmt {
         Stmt::Let(let_stmt) => {
+            // Self-referential closure binding: `let f = |...| ... f(...) ...`.
+            // The closure body may reference the binding name. Register a
+            // fresh type variable for the binding before checking the
+            // value so the body's reference resolves rather than failing
+            // with "undefined function". The hoist pass later detects the
+            // self-reference and synthesizes a recursive ClosureRef.
+            if let Pattern::Variable(name, _) = &let_stmt.pattern
+                && let Expr::Closure { .. } = &let_stmt.value
+                && let Some(scope) = ctx.locals.last_mut()
+            {
+                let pre_ty = ctx.vargen.fresh();
+                scope.insert(name.clone(), pre_ty);
+            }
             let value_ty = type_of_expr(ctx, &let_stmt.value)?;
             let bound_ty = match &let_stmt.type_expr {
                 Some(t) => {
@@ -2172,6 +2185,19 @@ mod tests {
         check(&program)
     }
 
+    /// End-to-end compile helper. Some tests need to validate that
+    /// monomorphization specializes a generic call site, which only
+    /// surfaces during the full compile pipeline rather than the
+    /// type-check pass alone. Returns the message of any compile
+    /// error so the test can assert against the failure mode.
+    fn compile_src(src: &str) -> Result<(), alloc::string::String> {
+        let tokens = tokenize(src).expect("lex");
+        let program = parse(&tokens).expect("parse");
+        crate::compiler::compile(&program)
+            .map(|_| ())
+            .map_err(|e| e.message)
+    }
+
     #[test]
     fn simple_function_type_checks() {
         check_src("fn main() -> i64 { 1 + 2 }").unwrap();
@@ -2852,12 +2878,45 @@ mod tests {
     }
 
     #[test]
+    fn recursive_closure_typechecks() {
+        // The closure body references its own let-binding name.
+        // The type checker now registers a fresh type variable for
+        // the binding before walking the value, so the body's
+        // self-reference resolves rather than failing with
+        // "undefined function". The full compile pipeline must
+        // succeed because the hoist pass produces a recursive
+        // ClosureRef and the compiler emits MakeRecursiveClosure.
+        compile_src(
+            "fn main() -> i64 {\n\
+                let fact = |n: i64| if n <= 1 { 1 } else { n * fact(n - 1) };\n\
+                fact(5)\n\
+             }",
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn recursive_closure_with_capture_typechecks() {
+        // A recursive closure can also capture an outer-function
+        // local. The hoist pass orders the synthetic chunk's
+        // parameters as (other_captures..., self, explicit_params...).
+        compile_src(
+            "fn main() -> i64 {\n\
+                let base: i64 = 1000;\n\
+                let fact = |n: i64| if n <= 1 { base } else { n * fact(n - 1) };\n\
+                fact(3)\n\
+             }",
+        )
+        .unwrap();
+    }
+
+    #[test]
     fn monomorphize_inference_through_field_access() {
         // A generic call site whose argument is a field access on a
-        // local-typed struct should specialize the call. The
-        // monomorphization pass resolves the field's declared type
-        // through the struct table and infers the type argument.
-        check_src(
+        // local-typed struct should specialize the call. The full
+        // compile pipeline must succeed because the receiver
+        // resolves to a concrete type only after monomorphization.
+        compile_src(
             "trait Doubler { fn double(x: i64) -> i64; }\n\
              impl Doubler for i64 { fn double(x: i64) -> i64 { x + x } }\n\
              struct Holder { value: i64 }\n\
@@ -2955,6 +3014,41 @@ mod tests {
                     inner(5)\n\
                 };\n\
                 outer(7)\n\
+             }",
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn monomorphize_inference_through_tuple_index() {
+        // The argument is a tuple-index expression. The monomorphize
+        // pass infers the type from the indexed tuple's element list,
+        // which must succeed for the receiver's method dispatch to
+        // resolve in the specialized body.
+        compile_src(
+            "trait Doubler { fn double(x: i64) -> i64; }\n\
+             impl Doubler for i64 { fn double(x: i64) -> i64 { x + x } }\n\
+             fn use_doubler<T: Doubler>(x: T) -> i64 { x.double() }\n\
+             fn main() -> i64 {\n\
+                 let t = (21, true);\n\
+                 use_doubler(t.0)\n\
+             }",
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn monomorphize_inference_through_array_index() {
+        // The argument is an array index expression. The monomorphize
+        // pass infers the element type from the array's declared
+        // element type. The full compile pipeline must succeed.
+        compile_src(
+            "trait Doubler { fn double(x: i64) -> i64; }\n\
+             impl Doubler for i64 { fn double(x: i64) -> i64 { x + x } }\n\
+             fn use_doubler<T: Doubler>(x: T) -> i64 { x.double() }\n\
+             fn main() -> i64 {\n\
+                 let a: [i64; 2] = [21, 42];\n\
+                 use_doubler(a[0])\n\
              }",
         )
         .unwrap();
