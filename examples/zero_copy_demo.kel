@@ -1,0 +1,18 @@
+// Source for the zero-copy include_bytes example.
+//
+// This file documents the source the binary `zero_copy_demo.kel.bin`
+// was compiled from. To regenerate the binary after a wire format
+// change, run:
+//
+//     cargo run --example regenerate_zero_copy_bytecode
+//
+// The output is a self-describing serialized Module conforming to
+// `BYTECODE_VERSION` in `src/bytecode.rs`.
+
+fn double(x: i64) -> i64 {
+    x * 2
+}
+
+fn main() -> i64 {
+    double(21)
+}
