@@ -16,7 +16,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - run: cargo check
+      - run: cargo check --workspace --all-targets
 
   test:
     name: Test
@@ -24,7 +24,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - run: cargo test
+      - run: cargo test --workspace
 
   clippy:
     name: Clippy
@@ -34,7 +34,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
-      - run: cargo clippy --tests -- -D warnings
+      - run: cargo clippy --workspace --all-targets -- -D warnings
 
   fmt:
     name: Format
@@ -45,3 +45,27 @@ jobs:
         with:
           components: rustfmt
       - run: cargo fmt --check
+
+  msrv:
+    name: MSRV (1.85)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.85
+      - run: cargo check -p keleusma-arena
+      - run: cargo check -p keleusma-arena --no-default-features
+
+  miri:
+    name: Miri
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: miri
+      - name: Stacked borrows
+        run: cargo miri test -p keleusma-arena
+      - name: Tree borrows
+        env:
+          MIRIFLAGS: -Zmiri-tree-borrows
+        run: cargo miri test -p keleusma-arena

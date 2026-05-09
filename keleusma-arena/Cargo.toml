@@ -24,3 +24,10 @@ alloc = ["allocator-api2/alloc"]
 
 [dependencies]
 allocator-api2 = { version = "0.4", default-features = false }
+
+[package.metadata.docs.rs]
+# Document every feature so feature-gated APIs render. The
+# `docsrs` cfg activates `#[doc(cfg(...))]` annotations on items
+# that are only available under specific features.
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]

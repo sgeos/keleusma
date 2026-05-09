@@ -215,6 +215,21 @@ impl Arena {
     /// path. A capacity of zero produces an arena that satisfies
     /// allocation requests for zero-size layouts only; non-zero
     /// allocations return `AllocError`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use allocator_api2::vec::Vec as ArenaVec;
+    /// use keleusma_arena::Arena;
+    ///
+    /// let arena = Arena::with_capacity(1024);
+    /// let mut v: ArenaVec<i64, _> = ArenaVec::new_in(arena.stack_handle());
+    /// v.push(1);
+    /// v.push(2);
+    /// v.push(3);
+    /// assert_eq!(v.len(), 3);
+    /// assert!(arena.bottom_used() >= 24);
+    /// ```
     #[cfg(feature = "alloc")]
     pub fn with_capacity(capacity: usize) -> Self {
         use alloc::alloc::{Layout as AllocLayout, alloc_zeroed, handle_alloc_error};
