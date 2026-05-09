@@ -3,7 +3,7 @@ name = "keleusma-macros"
 version = "0.1.0"
 edition = "2024"
 description = "Procedural macros for the Keleusma scripting language"
-license = "MIT"
+license = "0BSD"
 
 [lib]
 proc-macro = true

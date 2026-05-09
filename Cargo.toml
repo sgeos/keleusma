@@ -6,7 +6,7 @@ name = "keleusma"
 version = "0.1.0"
 edition = "2024"
 description = "Keleusma: a Total Functional Stream Processor that compiles to bytecode"
-license = "MIT"
+license = "0BSD"
 keywords = ["scripting", "bytecode", "no-std", "language", "vm"]
 categories = ["no-std", "compilers"]
 
