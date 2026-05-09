@@ -4,9 +4,15 @@
 
 Deferred decisions for future consideration. These are explicitly out of scope for the current development phase.
 
-## B1. Hindley-Milner type inference
+## ~~B1. Hindley-Milner type inference~~ (Foundation in place)
 
-Full type inference would reduce annotation burden by allowing the compiler to deduce types from usage rather than requiring explicit declarations. Deferred due to implementation complexity and the current lack of generic types in the language.
+Hindley-Milner foundation primitives are implemented in `src/typecheck.rs`. The `Type` enum gains a `Var(u32)` variant. The `Subst` type maps type variables to types. The `unify` function implements Robinson's algorithm with the occurs check. The `VarGen` allocator produces fresh type variables. The typing context carries the substitution and variable allocator across a function check.
+
+The existing checker is now constraint-based. `types_compatible` calls `unify` and records relationships in the substitution. Unannotated positions that previously returned `Type::Unknown` now allocate fresh type variables, so constraints propagate across let bindings, function calls, returns, and conditional branches.
+
+Without generic type parameters (B2), inference is monomorphic. Each unannotated position has at most one resolved type once constraints are solved. The remaining future work for full HM is the substitution-application pass at end of function with explicit reporting of unresolved type variables, and removal of the `Type::Unknown` sentinel that backstops permissive matching during the transition. These are tracked under future-session work.
+
+The original deferral reasoning, namely the lack of generic types, is preserved as B2.
 
 ## B2. Traits or generic type parameters
 

@@ -9,8 +9,8 @@ AI to Human communication channel.
 ## Last Updated
 
 **Date**: 2026-05-09
-**Task**: V0.1-M3-T12. Native ABI arena context, float width log2, B9 documentation, BACKLOG hygiene.
-**Status**: Complete. All requested follow-on items addressed.
+**Task**: V0.1-M3-T13. B1 Hindley-Milner foundation primitives and constraint-based type checker integration.
+**Status**: Complete. The foundation primitives are implemented, tested, and integrated into the existing type checker pipeline. Full substitution-application reporting deferred to follow-on work that pairs with B2 generics.
 
 ## Verification
 
@@ -24,13 +24,23 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 **Results**:
 
-- 415 tests pass workspace-wide. 347 keleusma unit (3 new for arena-aware natives), 17 keleusma marshall integration, 17 keleusma `kstring_boundary` integration, 28 keleusma-arena unit, 6 keleusma-arena doctests.
+- 433 tests pass workspace-wide. 365 keleusma unit (18 new for HM foundation primitives), 17 keleusma marshall integration, 17 keleusma `kstring_boundary` integration, 28 keleusma-arena unit, 6 keleusma-arena doctests.
 - Clippy clean under `--workspace --all-targets`.
 - Format clean.
 
 ## Summary
 
-This session addressed all engineering gaps adjacent to recent P7 work and all future-work items that interact with P10, except the `keleusma-arena` registry version which the user deferred. Document hygiene also landed.
+This session addressed B1 (Hindley-Milner type inference) by landing the foundation primitives and integrating constraint-based type checking into the existing pipeline.
+
+`Type::Var(u32)` is the new inference variable variant on the `Type` enum. `Subst` is the substitution map. `unify` implements Robinson's algorithm with the occurs check. `VarGen` allocates fresh type variables. `Type::occurs` and `Type::apply` round out the machinery. `UnifyError` carries structural failure detail across `Mismatch`, `OccursCheck`, `ArrayLengthMismatch`, and `TupleArityMismatch`.
+
+The typing `Ctx` gains `vargen: VarGen` and `subst: Subst`. The existing `types_compatible` was migrated from a structural-equality check to a unify-based call that records constraints in the substitution. Unannotated positions that previously returned `Type::Unknown` now allocate a fresh type variable through `Ctx::fresh`, so constraints propagate across let bindings, function calls, returns, and conditional branches.
+
+Eighteen new unit tests cover the foundation primitives. The integration preserves backwards compatibility with the existing 415 tests while adding the new HM-specific tests.
+
+The remaining future work for full HM is the substitution-application pass at end of function check with explicit reporting of unresolved type variables, and removal of the `Type::Unknown` sentinel that backstops permissive matching during the transition. Both are tracked as future-session work that pairs naturally with B2 (generics) when that lands.
+
+The original deferral reasoning, namely the lack of generic types, is preserved as B2 in the BACKLOG.
 
 Native ABI extension. The new `NativeCtx<'a>` type carries a borrow of the host-owned arena. The `Vm` constructs a fresh `NativeCtx` at every `Op::CallNative` dispatch and passes it to the native. The native function type is now `for<'a> Fn(&NativeCtx<'a>, &[Value]) -> Result<Value, VmError>`. The legacy registration paths (`register_native`, `register_native_closure`, `register_fn`, `register_fn_fallible`) are unchanged in their public signature; they wrap the supplied function so it ignores the context. The new `register_native_with_ctx` and `register_native_with_ctx_closure` variants pass the context through.
 
@@ -46,13 +56,28 @@ BACKLOG hygiene. The duplicate `B5` heading was renamed to `B5b. Static string d
 
 ## Tests
 
-Three new unit tests in `src/utility_natives.rs` cover the arena-aware natives.
+Eighteen new unit tests in `src/typecheck.rs` cover the HM foundation primitives.
 
-- `to_string_with_ctx_int_returns_kstr`. Confirms `to_string(42)` returns `Value::KStr` with the expected resolved contents.
-- `to_string_with_ctx_string_returns_kstr`. Confirms string-typed input flows through the boundary.
-- `length_with_ctx_string_counts_chars`. Confirms `length` resolves `KStr` arguments through the arena.
+- `vargen_allocates_fresh_variables`. The variable generator produces successive identifiers.
+- `unify_identical_primitives`. Trivial unification of matching primitive types.
+- `unify_distinct_primitives_fails`. Mismatch detection.
+- `unify_var_with_concrete_binds`. Variable resolution through unification.
+- `unify_concrete_with_var_binds`. Symmetric direction.
+- `unify_var_with_var_binds_one_to_other`. Variable-to-variable binding.
+- `unify_same_var_succeeds_with_no_binding`. Reflexivity.
+- `unify_tuple_pairwise`. Tuple element unification.
+- `unify_tuple_arity_mismatch`. Arity rejection.
+- `unify_array_length_mismatch`. Length rejection.
+- `unify_array_element_types_unify`. Recursive element unification.
+- `unify_option_inner_types_unify`. Option inner unification.
+- `unify_named_struct_same_name_succeeds`. Nominal equality.
+- `unify_named_struct_different_name_fails`. Nominal inequality.
+- `unify_occurs_check_rejects_self_reference`. Infinite type rejection.
+- `apply_substitution_resolves_variable`. Substitution application.
+- `apply_substitution_resolves_chain`. Chain following through composed substitution.
+- `unify_propagates_through_existing_substitution`. Constraint propagation across calls.
 
-The existing 412 tests continue to pass after the wire format bump and the marshall layer update.
+The existing 415 tests continue to pass after the migration of `types_compatible` and the replacement of `Type::Unknown` returns with fresh type variables at narrow-inference call sites.
 
 ## Changes Made
 
@@ -86,20 +111,24 @@ The B9 resolution is structural rather than design-level. The resolution is tied
 
 ## Remaining Open Priorities
 
-None. P1 through P10 fully resolved.
+None. P1 through P10 fully resolved. B1 foundation in place. B11 added for per-op decode optimization (deferred until profiling indicates need).
 
-The remaining open engineering item the user explicitly deferred is the `keleusma-arena` registry version. The registry currently hosts v0.1.0; the local crate has new APIs (`epoch`, `ArenaHandle`, `KString`, `reset_top_unchecked`, `force_reset_epoch`) that need a v0.2 publication before the main `keleusma` crate can be published to crates.io with a registry-only dependency. This is documentation and release process work, not a design or implementation gap.
+The substitution-application pass at end of function check with explicit reporting of unresolved type variables remains future-session work that pairs with B2 (generic types). Without B2, the pass would have nothing useful to do because every type either resolves to a concrete monomorphic type or is bound by an explicit annotation.
+
+The `keleusma-arena` registry version is still v0.1.0 and the local crate has new APIs. Publishing the main `keleusma` crate to crates.io requires either bumping `keleusma-arena` to v0.2 first or accepting the path dependency. This is documentation and release process work.
 
 ## Intended Next Step
 
-The user has not specified the next step. Two reasonable directions.
+Three reasonable directions.
 
-A. Publish keleusma-arena v0.2 and then keleusma v0.1 to crates.io. Cuts an external release that includes the boundary type, host-owned arena, and arena-aware native ABI.
+A. B2 generic type parameters. Pairs naturally with the B1 foundation just landed. The infrastructure for inference variables can be reused for type parameter instantiation. Substantial multi-session work.
 
-B. Continue language work toward V0.2 milestones once those are scoped.
+B. Publish `keleusma-arena` v0.2 and then `keleusma` v0.1 to crates.io. Cuts an external release that includes the boundary type, host-owned arena, arena-aware native ABI, and HM foundation.
+
+C. Continue toward V0.2 milestones once those are scoped.
 
 Await human prompt before proceeding.
 
 ## Session Context
 
-This long session resolved P7 across all nine items including the native ABI extension that closes the bounded-memory loop end to end for native-produced dynamic strings. The wire format gained a `float_bits_log2` byte for future portability. B9 was resolved structurally and B11 was opened to track per-op decode optimization. BACKLOG hygiene removed the duplicate B5. TASKLOG was synced with three previously stale rows now marked complete.
+This long session resolved P7 across all nine items, the B9 lifetime concern, the float width portability prep work, and the B1 Hindley-Milner foundation. The wire format gained a `float_bits_log2` byte. The native ABI gained arena context. The type checker gained inference variables and constraint-based unification. BACKLOG hygiene removed duplicate B5 and added B11 for per-op decode optimization. TASKLOG synced with all in-flight work marked complete.

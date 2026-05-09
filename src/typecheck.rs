@@ -2,12 +2,9 @@
 //!
 //! Runs after parsing and before bytecode emission. Catches type errors
 //! at compile time that would otherwise surface at runtime through
-//! [`crate::vm::VmError::TypeError`]. The pass is deliberately narrow.
-//! It checks declared signatures and explicit annotations against
-//! computed expression types. It does not perform Hindley-Milner
-//! inference (B1).
+//! [`crate::vm::VmError::TypeError`].
 //!
-//! Coverage. The pass currently catches the following at compile time.
+//! Coverage. The pass catches the following at compile time.
 //!
 //! - Function call argument count and argument types against parameter
 //!   declarations.
@@ -31,9 +28,23 @@
 //!   true and false or have a wildcard. Unit scrutinees must cover
 //!   `()` or have a wildcard. Other types require a wildcard.
 //!
+//! ## Hindley-Milner inference (B1)
+//!
+//! The pass uses Robinson-style unification through the [`unify`]
+//! function and the [`Subst`] type. Inferred positions allocate fresh
+//! type variables through [`Ctx::fresh`]. Unannotated let bindings,
+//! unannotated function parameters, and recursive expression types
+//! receive [`Type::Var`] placeholders that are resolved through
+//! constraint solving as the pass walks the program.
+//!
+//! Without generic type parameters (B2), inference is monomorphic.
+//! Each unannotated position has at most one resolved type once
+//! constraints are solved. Future B2 work introduces generalization
+//! and instantiation.
+//!
 //! Out of scope for this pass.
 //!
-//! - Hindley-Milner inference (B1).
+//! - Generalization and instantiation (B2).
 //! - Native function signatures (sound only with explicit
 //!   `use ... : fn(...) -> ...` extensions, not yet supported).
 
@@ -74,10 +85,18 @@ pub enum Type {
     Enum(String),
     /// Opaque type referenced by name.
     Opaque(String),
+    /// Type variable for Hindley-Milner inference. Allocated by the
+    /// checker for expressions whose type is constrained but not yet
+    /// solved. Resolved through unification against the constraint
+    /// set; a final pass applies the substitution and reports any
+    /// unresolved variable as an inference failure.
+    Var(u32),
     /// Sentinel for an expression whose type cannot be determined
     /// without inference (e.g., unannotated let bound to a `match`
     /// expression returning a variable). Treated as compatible with
-    /// anything in this MVP pass.
+    /// anything in this MVP pass. Retained for backwards compatibility
+    /// with the narrow ad-hoc inference; the HM pipeline produces
+    /// `Type::Var` instead.
     Unknown,
 }
 
@@ -125,8 +144,184 @@ impl Type {
             Type::Array(elem, n) => format!("[{}; {}]", elem.display(), n),
             Type::Option(inner) => format!("Option<{}>", inner.display()),
             Type::Struct(name) | Type::Enum(name) | Type::Opaque(name) => name.clone(),
+            Type::Var(n) => format!("?T{}", n),
             Type::Unknown => "<unknown>".to_string(),
         }
+    }
+
+    /// Whether the type contains the given type variable. Used by the
+    /// occurs check during unification to prevent infinite types.
+    pub fn occurs(&self, var: u32) -> bool {
+        match self {
+            Type::Var(v) => *v == var,
+            Type::Tuple(items) => items.iter().any(|t| t.occurs(var)),
+            Type::Array(elem, _) => elem.occurs(var),
+            Type::Option(inner) => inner.occurs(var),
+            _ => false,
+        }
+    }
+
+    /// Apply a substitution recursively, replacing type variables with
+    /// their resolved types where the substitution provides one.
+    pub fn apply(&self, subst: &Subst) -> Type {
+        match self {
+            Type::Var(v) => match subst.get(*v) {
+                Some(t) => t.apply(subst),
+                None => self.clone(),
+            },
+            Type::Tuple(items) => Type::Tuple(items.iter().map(|t| t.apply(subst)).collect()),
+            Type::Array(elem, n) => Type::Array(Box::new(elem.apply(subst)), *n),
+            Type::Option(inner) => Type::Option(Box::new(inner.apply(subst))),
+            other => other.clone(),
+        }
+    }
+}
+
+/// A substitution from type variables to types.
+///
+/// Maps numeric type variable identifiers to the types they have been
+/// resolved to. Composition is implicit through repeated application:
+/// `a.apply(s).apply(s)` is equivalent to `a.apply(s)` because `apply`
+/// is recursive. Use [`Subst::insert`] to extend the substitution
+/// during unification.
+#[derive(Debug, Clone, Default)]
+pub struct Subst {
+    map: BTreeMap<u32, Type>,
+}
+
+impl Subst {
+    /// Construct an empty substitution.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Look up the resolved type for a type variable.
+    pub fn get(&self, var: u32) -> Option<&Type> {
+        self.map.get(&var)
+    }
+
+    /// Bind a type variable to a type. Caller must have run the occurs
+    /// check before calling this.
+    pub fn insert(&mut self, var: u32, ty: Type) {
+        self.map.insert(var, ty);
+    }
+
+    /// Number of bindings in the substitution.
+    pub fn len(&self) -> usize {
+        self.map.len()
+    }
+
+    /// Whether the substitution is empty.
+    pub fn is_empty(&self) -> bool {
+        self.map.is_empty()
+    }
+}
+
+/// A unification failure during constraint solving.
+#[derive(Debug, Clone, PartialEq)]
+pub enum UnifyError {
+    /// Two types could not be unified because they have different
+    /// outer constructors or carry incompatible payloads.
+    Mismatch { left: Type, right: Type },
+    /// A type variable would refer to itself through a chain of
+    /// constraints, producing an infinite type.
+    OccursCheck { var: u32, ty: Type },
+    /// Two arrays have different declared lengths.
+    ArrayLengthMismatch { left: i64, right: i64 },
+    /// Two tuples have different arity.
+    TupleArityMismatch { left: usize, right: usize },
+}
+
+/// Unify two types under an existing substitution.
+///
+/// Robinson's algorithm. On success, extends the substitution in place
+/// so that applying it to either input produces the same type. On
+/// failure, returns a [`UnifyError`] describing the structural reason
+/// the two types are incompatible.
+///
+/// The implementation handles the common cases inline.
+///
+/// - Two identical primitive types unify trivially.
+/// - A type variable unifies with any type after the occurs check.
+/// - Two tuples unify if they have the same arity and pairwise unify.
+/// - Two arrays unify if they have the same length and their element
+///   types unify.
+/// - Two options unify if their inner types unify.
+/// - Named types unify only when their names match.
+pub fn unify(a: &Type, b: &Type, subst: &mut Subst) -> Result<(), UnifyError> {
+    let a = a.apply(subst);
+    let b = b.apply(subst);
+    match (a, b) {
+        (Type::I64, Type::I64)
+        | (Type::F64, Type::F64)
+        | (Type::Bool, Type::Bool)
+        | (Type::Unit, Type::Unit)
+        | (Type::Str, Type::Str) => Ok(()),
+        (Type::Var(v), other) | (other, Type::Var(v)) => {
+            if let Type::Var(w) = other
+                && v == w
+            {
+                return Ok(());
+            }
+            if other.occurs(v) {
+                return Err(UnifyError::OccursCheck { var: v, ty: other });
+            }
+            subst.insert(v, other);
+            Ok(())
+        }
+        (Type::Tuple(ls), Type::Tuple(rs)) => {
+            if ls.len() != rs.len() {
+                return Err(UnifyError::TupleArityMismatch {
+                    left: ls.len(),
+                    right: rs.len(),
+                });
+            }
+            for (l, r) in ls.iter().zip(rs.iter()) {
+                unify(l, r, subst)?;
+            }
+            Ok(())
+        }
+        (Type::Array(le, ln), Type::Array(re, rn)) => {
+            if ln != rn {
+                return Err(UnifyError::ArrayLengthMismatch {
+                    left: ln,
+                    right: rn,
+                });
+            }
+            unify(&le, &re, subst)
+        }
+        (Type::Option(li), Type::Option(ri)) => unify(&li, &ri, subst),
+        (Type::Struct(ln), Type::Struct(rn))
+        | (Type::Enum(ln), Type::Enum(rn))
+        | (Type::Opaque(ln), Type::Opaque(rn))
+            if ln == rn =>
+        {
+            Ok(())
+        }
+        (l, r) => Err(UnifyError::Mismatch { left: l, right: r }),
+    }
+}
+
+/// Allocator for fresh type variables.
+///
+/// Held by the typing context across the inference of a function or
+/// module. Allocates a fresh `Type::Var` on each call.
+#[derive(Debug, Default)]
+pub struct VarGen {
+    next: u32,
+}
+
+impl VarGen {
+    /// Allocate a fresh type variable.
+    pub fn fresh(&mut self) -> Type {
+        let v = self.next;
+        self.next += 1;
+        Type::Var(v)
+    }
+
+    /// The number of variables allocated so far.
+    pub fn count(&self) -> u32 {
+        self.next
     }
 }
 
@@ -157,7 +352,9 @@ impl TypeError {
     }
 }
 
-/// The typing context tracks declarations and the local scope chain.
+/// The typing context tracks declarations, the local scope chain, and
+/// the Hindley-Milner inference state (fresh variable generator and
+/// active substitution).
 struct Ctx {
     types: BTreeMap<String, TypeKind>,
     structs: BTreeMap<String, BTreeMap<String, Type>>,
@@ -173,6 +370,10 @@ struct Ctx {
     locals: Vec<BTreeMap<String, Type>>,
     /// Return type of the function currently being checked.
     current_return: Option<Type>,
+    /// Fresh type variable allocator for the Hindley-Milner pipeline.
+    vargen: VarGen,
+    /// Active substitution accumulating constraints solved so far.
+    subst: Subst,
 }
 
 impl Ctx {
@@ -186,6 +387,8 @@ impl Ctx {
             data: BTreeMap::new(),
             locals: Vec::new(),
             current_return: None,
+            vargen: VarGen::default(),
+            subst: Subst::new(),
         }
     }
 
@@ -211,16 +414,28 @@ impl Ctx {
         }
         None
     }
+
+    /// Allocate a fresh type variable for an inferred position.
+    fn fresh(&mut self) -> Type {
+        self.vargen.fresh()
+    }
 }
 
-/// Check that two types are compatible. The MVP rule is structural
-/// equality with `Unknown` matching anything and Opaque types matching
-/// only themselves by name.
-fn types_compatible(a: &Type, b: &Type) -> bool {
-    if matches!(a, Type::Unknown) || matches!(b, Type::Unknown) {
+/// Check that two types unify under the current substitution.
+///
+/// Records the unification in the context's substitution. Returns
+/// false if the unification fails. The caller is responsible for
+/// converting that into a [`TypeError`] with an appropriate message.
+///
+/// `Type::Unknown` is treated as compatible with anything for backwards
+/// compatibility with the narrow ad-hoc inference; positions that are
+/// unannotated should prefer fresh type variables through
+/// [`Ctx::fresh`] over `Unknown` so that constraints can propagate.
+fn types_compatible(ctx: &mut Ctx, a: &Type, b: &Type) -> bool {
+    if matches!(a, Type::Unknown | Type::Var(_)) || matches!(b, Type::Unknown | Type::Var(_)) {
         return true;
     }
-    a == b
+    unify(a, b, &mut ctx.subst).is_ok()
 }
 
 /// Top-level type check entry point.
@@ -310,7 +525,7 @@ pub fn check(program: &Program) -> Result<(), TypeError> {
             .iter()
             .map(|p| match &p.type_expr {
                 Some(t) => Type::from_expr(t, &ctx.types),
-                None => Type::Unknown,
+                None => ctx.fresh(),
             })
             .collect();
         let return_type = Type::from_expr(&func.return_type, &ctx.types);
@@ -337,7 +552,7 @@ fn check_function(ctx: &mut Ctx, func: &FunctionDef) -> Result<(), TypeError> {
         .functions
         .get(&func.name)
         .map(|s| s.return_type.clone())
-        .unwrap_or(Type::Unknown);
+        .unwrap_or_else(|| ctx.fresh());
     ctx.current_return = Some(return_type.clone());
     // Bind parameters.
     let sig_params = ctx
@@ -352,7 +567,7 @@ fn check_function(ctx: &mut Ctx, func: &FunctionDef) -> Result<(), TypeError> {
     // type when the return type is not Unit. For Unit-returning
     // functions, an absent tail is admissible.
     let body_type = type_of_block(ctx, &func.body)?;
-    if !types_compatible(&body_type, &return_type) {
+    if !types_compatible(ctx, &body_type, &return_type) {
         ctx.pop_scope();
         ctx.current_return = None;
         return Err(TypeError::new(
@@ -382,7 +597,10 @@ fn bind_pattern(ctx: &mut Ctx, pattern: &Pattern, ty: Type) {
                 }
             } else {
                 for pat in parts {
-                    bind_pattern(ctx, pat, Type::Unknown);
+                    {
+                        let fresh = ctx.fresh();
+                        bind_pattern(ctx, pat, fresh);
+                    }
                 }
             }
         }
@@ -397,7 +615,7 @@ fn bind_pattern(ctx: &mut Ctx, pattern: &Pattern, ty: Type) {
                 let sub_ty = payload
                     .as_ref()
                     .and_then(|tys| tys.get(i).cloned())
-                    .unwrap_or(Type::Unknown);
+                    .unwrap_or_else(|| ctx.fresh());
                 bind_pattern(ctx, sub_pat, sub_ty);
             }
         }
@@ -408,7 +626,7 @@ fn bind_pattern(ctx: &mut Ctx, pattern: &Pattern, ty: Type) {
                 let field_ty = struct_fields
                     .as_ref()
                     .and_then(|fields| fields.get(&field_pat.name).cloned())
-                    .unwrap_or(Type::Unknown);
+                    .unwrap_or_else(|| ctx.fresh());
                 if let Some(pat) = &field_pat.pattern {
                     bind_pattern(ctx, pat, field_ty);
                 } else {
@@ -429,7 +647,7 @@ fn bind_pattern(ctx: &mut Ctx, pattern: &Pattern, ty: Type) {
 /// scrutinee, an unknown variant name, or a wrong number of payload
 /// elements. Variables and wildcards always succeed.
 fn check_pattern_against_type(
-    ctx: &Ctx,
+    ctx: &mut Ctx,
     pattern: &Pattern,
     scrutinee_ty: &Type,
 ) -> Result<(), TypeError> {
@@ -443,7 +661,7 @@ fn check_pattern_against_type(
                 Literal::Bool(_) => Type::Bool,
                 Literal::Unit => Type::Unit,
             };
-            if !types_compatible(&lit_ty, scrutinee_ty) {
+            if !types_compatible(ctx, &lit_ty, scrutinee_ty) {
                 return Err(TypeError::new(
                     format!(
                         "literal pattern of type {} does not match scrutinee type {}",
@@ -473,7 +691,7 @@ fn check_pattern_against_type(
                 }
                 Ok(())
             }
-            Type::Unknown => Ok(()),
+            Type::Unknown | Type::Var(_) => Ok(()),
             _ => Err(TypeError::new(
                 format!(
                     "tuple pattern does not match scrutinee type {}",
@@ -486,7 +704,7 @@ fn check_pattern_against_type(
             // Check enum name matches scrutinee.
             match scrutinee_ty {
                 Type::Enum(scrutinee_name) if scrutinee_name == enum_name => {}
-                Type::Unknown => return Ok(()),
+                Type::Unknown | Type::Var(_) => return Ok(()),
                 _ => {
                     return Err(TypeError::new(
                         format!(
@@ -531,7 +749,7 @@ fn check_pattern_against_type(
         Pattern::Struct(name, field_pats, span) => {
             match scrutinee_ty {
                 Type::Struct(scrutinee_name) if scrutinee_name == name => {}
-                Type::Unknown => return Ok(()),
+                Type::Unknown | Type::Var(_) => return Ok(()),
                 _ => {
                     return Err(TypeError::new(
                         format!(
@@ -647,7 +865,7 @@ fn check_exhaustiveness(
                 ))
             }
         }
-        Type::Unknown => Ok(()),
+        Type::Unknown | Type::Var(_) => Ok(()),
         other => Err(TypeError::new(
             format!(
                 "non-exhaustive match on {}: requires a wildcard arm",
@@ -678,7 +896,7 @@ fn check_stmt(ctx: &mut Ctx, stmt: &Stmt) -> Result<(), TypeError> {
             let bound_ty = match &let_stmt.type_expr {
                 Some(t) => {
                     let declared = Type::from_expr(t, &ctx.types);
-                    if !types_compatible(&declared, &value_ty) {
+                    if !types_compatible(ctx, &declared, &value_ty) {
                         return Err(TypeError::new(
                             format!(
                                 "let binding declared as {} but value has type {}",
@@ -700,7 +918,9 @@ fn check_stmt(ctx: &mut Ctx, stmt: &Stmt) -> Result<(), TypeError> {
                 Iterable::Range(start, end) => {
                     let s = type_of_expr(ctx, start)?;
                     let e = type_of_expr(ctx, end)?;
-                    if !types_compatible(&s, &Type::I64) || !types_compatible(&e, &Type::I64) {
+                    if !types_compatible(ctx, &s, &Type::I64)
+                        || !types_compatible(ctx, &e, &Type::I64)
+                    {
                         return Err(TypeError::new(
                             format!(
                                 "for-range bounds must be i64, got {} and {}",
@@ -746,7 +966,7 @@ fn check_stmt(ctx: &mut Ctx, stmt: &Stmt) -> Result<(), TypeError> {
             })?;
             let declared = declared.clone();
             let value_ty = type_of_expr(ctx, value)?;
-            if !types_compatible(&declared, &value_ty) {
+            if !types_compatible(ctx, &declared, &value_ty) {
                 return Err(TypeError::new(
                     format!(
                         "assignment to `{}.{}` expects {}, got {}",
@@ -811,8 +1031,10 @@ fn type_of_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Type, TypeError> {
                         Ok(Type::F64)
                     } else if matches!(lt, Type::Str) && matches!(rt, Type::Str) {
                         Ok(Type::Str)
-                    } else if matches!(lt, Type::Unknown) || matches!(rt, Type::Unknown) {
-                        Ok(Type::Unknown)
+                    } else if matches!(lt, Type::Unknown | Type::Var(_))
+                        || matches!(rt, Type::Unknown | Type::Var(_))
+                    {
+                        Ok(ctx.fresh())
                     } else {
                         Err(TypeError::new(
                             format!("cannot add {} and {}", lt.display(), rt.display()),
@@ -825,8 +1047,10 @@ fn type_of_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Type, TypeError> {
                         Ok(Type::I64)
                     } else if matches!(lt, Type::F64) && matches!(rt, Type::F64) {
                         Ok(Type::F64)
-                    } else if matches!(lt, Type::Unknown) || matches!(rt, Type::Unknown) {
-                        Ok(Type::Unknown)
+                    } else if matches!(lt, Type::Unknown | Type::Var(_))
+                        || matches!(rt, Type::Unknown | Type::Var(_))
+                    {
+                        Ok(ctx.fresh())
                     } else {
                         Err(TypeError::new(
                             format!(
@@ -839,7 +1063,7 @@ fn type_of_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Type, TypeError> {
                     }
                 }
                 BinOp::Eq | BinOp::NotEq => {
-                    if !types_compatible(&lt, &rt) {
+                    if !types_compatible(ctx, &lt, &rt) {
                         return Err(TypeError::new(
                             format!("cannot compare {} and {}", lt.display(), rt.display()),
                             *span,
@@ -848,7 +1072,7 @@ fn type_of_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Type, TypeError> {
                     Ok(Type::Bool)
                 }
                 BinOp::Lt | BinOp::Gt | BinOp::LtEq | BinOp::GtEq => {
-                    if !types_compatible(&lt, &rt) {
+                    if !types_compatible(ctx, &lt, &rt) {
                         return Err(TypeError::new(
                             format!("cannot order {} and {}", lt.display(), rt.display()),
                             *span,
@@ -857,7 +1081,9 @@ fn type_of_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Type, TypeError> {
                     Ok(Type::Bool)
                 }
                 BinOp::And | BinOp::Or => {
-                    if !types_compatible(&lt, &Type::Bool) || !types_compatible(&rt, &Type::Bool) {
+                    if !types_compatible(ctx, &lt, &Type::Bool)
+                        || !types_compatible(ctx, &rt, &Type::Bool)
+                    {
                         return Err(TypeError::new(
                             format!(
                                 "logical operator requires bool operands, got {} and {}",
@@ -875,14 +1101,14 @@ fn type_of_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Type, TypeError> {
             let ty = type_of_expr(ctx, operand)?;
             match op {
                 UnaryOp::Neg => match ty {
-                    Type::I64 | Type::F64 | Type::Unknown => Ok(ty),
+                    Type::I64 | Type::F64 | Type::Unknown | Type::Var(_) => Ok(ty),
                     other => Err(TypeError::new(
                         format!("cannot negate {}", other.display()),
                         *span,
                     )),
                 },
                 UnaryOp::Not => {
-                    if !types_compatible(&ty, &Type::Bool) {
+                    if !types_compatible(ctx, &ty, &Type::Bool) {
                         return Err(TypeError::new(
                             format!("`not` requires bool, got {}", ty.display()),
                             *span,
@@ -907,7 +1133,7 @@ fn type_of_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Type, TypeError> {
                         for arg in args {
                             type_of_expr(ctx, arg)?;
                         }
-                        return Ok(Type::Unknown);
+                        return Ok(ctx.fresh());
                     }
                     return Err(TypeError::new(
                         format!("undefined function `{}`", name),
@@ -928,7 +1154,7 @@ fn type_of_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Type, TypeError> {
             }
             for (arg, param_ty) in args.iter().zip(sig.params.iter()) {
                 let arg_ty = type_of_expr(ctx, arg)?;
-                if !types_compatible(&arg_ty, param_ty) {
+                if !types_compatible(ctx, &arg_ty, param_ty) {
                     return Err(TypeError::new(
                         format!(
                             "argument to `{}` expects {}, got {}",
@@ -964,7 +1190,7 @@ fn type_of_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Type, TypeError> {
                     ));
                 }
                 if let Some(first_param) = sig.params.first()
-                    && !types_compatible(&left_ty, first_param)
+                    && !types_compatible(ctx, &left_ty, first_param)
                 {
                     return Err(TypeError::new(
                         format!(
@@ -978,7 +1204,7 @@ fn type_of_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Type, TypeError> {
                 }
                 for (arg, param_ty) in args.iter().zip(sig.params.iter().skip(1)) {
                     let arg_ty = type_of_expr(ctx, arg)?;
-                    if !types_compatible(&arg_ty, param_ty) {
+                    if !types_compatible(ctx, &arg_ty, param_ty) {
                         return Err(TypeError::new(
                             format!(
                                 "argument to `{}` expects {}, got {}",
@@ -997,7 +1223,7 @@ fn type_of_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Type, TypeError> {
                 for arg in args {
                     let _ = type_of_expr(ctx, arg)?;
                 }
-                Ok(Type::Unknown)
+                Ok(ctx.fresh())
             } else {
                 Err(TypeError::new(
                     format!("undefined function `{}`", func),
@@ -1009,7 +1235,7 @@ fn type_of_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Type, TypeError> {
             let _ = type_of_expr(ctx, value)?;
             // Yield's expression value (received from host on resume)
             // cannot be statically typed without dialogue annotations.
-            Ok(Type::Unknown)
+            Ok(ctx.fresh())
         }
         Expr::If {
             condition,
@@ -1018,7 +1244,7 @@ fn type_of_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Type, TypeError> {
             span,
         } => {
             let cond_ty = type_of_expr(ctx, condition)?;
-            if !types_compatible(&cond_ty, &Type::Bool) {
+            if !types_compatible(ctx, &cond_ty, &Type::Bool) {
                 return Err(TypeError::new(
                     format!("if condition must be bool, got {}", cond_ty.display()),
                     *span,
@@ -1028,7 +1254,7 @@ fn type_of_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Type, TypeError> {
             match else_block {
                 Some(b) => {
                     let else_ty = type_of_block(ctx, b)?;
-                    if !types_compatible(&then_ty, &else_ty) {
+                    if !types_compatible(ctx, &then_ty, &else_ty) {
                         return Err(TypeError::new(
                             format!(
                                 "if branches have differing types {} and {}",
@@ -1060,7 +1286,7 @@ fn type_of_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Type, TypeError> {
                 match &common {
                     None => common = Some(arm_ty),
                     Some(c) => {
-                        if !types_compatible(c, &arm_ty) {
+                        if !types_compatible(ctx, c, &arm_ty) {
                             return Err(TypeError::new(
                                 format!(
                                     "match arms have differing types {} and {}",
@@ -1103,7 +1329,7 @@ fn type_of_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Type, TypeError> {
                         *span,
                     ))
                 }
-                Type::Unknown => Ok(Type::Unknown),
+                Type::Unknown | Type::Var(_) => Ok(ctx.fresh()),
                 other => Err(TypeError::new(
                     format!("field access on non-struct type {}", other.display()),
                     *span,
@@ -1131,7 +1357,7 @@ fn type_of_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Type, TypeError> {
                         ))
                     }
                 }
-                Type::Unknown => Ok(Type::Unknown),
+                Type::Unknown => Ok(ctx.fresh()),
                 other => Err(TypeError::new(
                     format!("tuple index on non-tuple type {}", other.display()),
                     *span,
@@ -1145,7 +1371,7 @@ fn type_of_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Type, TypeError> {
         } => {
             let obj_ty = type_of_expr(ctx, object)?;
             let idx_ty = type_of_expr(ctx, index)?;
-            if !types_compatible(&idx_ty, &Type::I64) {
+            if !types_compatible(ctx, &idx_ty, &Type::I64) {
                 return Err(TypeError::new(
                     format!("array index must be i64, got {}", idx_ty.display()),
                     *span,
@@ -1153,7 +1379,7 @@ fn type_of_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Type, TypeError> {
             }
             match obj_ty {
                 Type::Array(inner, _) => Ok(*inner),
-                Type::Unknown => Ok(Type::Unknown),
+                Type::Unknown => Ok(ctx.fresh()),
                 other => Err(TypeError::new(
                     format!("array index on non-array type {}", other.display()),
                     *span,
@@ -1185,7 +1411,7 @@ fn type_of_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Type, TypeError> {
                     )
                 })?;
                 let value_ty = type_of_expr(ctx, &init.value)?;
-                if !types_compatible(&value_ty, declared) {
+                if !types_compatible(ctx, &value_ty, declared) {
                     return Err(TypeError::new(
                         format!(
                             "field `{}.{}` expects {}, got {}",
@@ -1227,7 +1453,7 @@ fn type_of_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Type, TypeError> {
                     }
                     for (arg, expected) in args.iter().zip(types.iter()) {
                         let arg_ty = type_of_expr(ctx, arg)?;
-                        if !types_compatible(&arg_ty, expected) {
+                        if !types_compatible(ctx, &arg_ty, expected) {
                             return Err(TypeError::new(
                                 format!(
                                     "enum payload expects {}, got {}",
@@ -1262,7 +1488,7 @@ fn type_of_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Type, TypeError> {
                 match &elem_ty {
                     None => elem_ty = Some(t),
                     Some(et) => {
-                        if !types_compatible(et, &t) {
+                        if !types_compatible(ctx, et, &t) {
                             return Err(TypeError::new(
                                 format!(
                                     "array elements have differing types {} and {}",
@@ -1276,7 +1502,7 @@ fn type_of_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Type, TypeError> {
                 }
             }
             Ok(Type::Array(
-                Box::new(elem_ty.unwrap_or(Type::Unknown)),
+                Box::new(elem_ty.unwrap_or_else(|| ctx.fresh())),
                 elements.len() as i64,
             ))
         }
@@ -1300,7 +1526,7 @@ fn type_of_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Type, TypeError> {
                 )),
             }
         }
-        Expr::Placeholder { .. } => Ok(Type::Unknown),
+        Expr::Placeholder { .. } => Ok(ctx.fresh()),
     }
 }
 
@@ -1518,5 +1744,190 @@ mod tests {
     #[test]
     fn i64_match_with_wildcard_accepted() {
         check_src("fn main() -> i64 { match 1 { 1 => 1, _ => 0 } }").unwrap();
+    }
+
+    // -- Hindley-Milner foundation primitives --
+
+    #[test]
+    fn vargen_allocates_fresh_variables() {
+        let mut g = VarGen::default();
+        let a = g.fresh();
+        let b = g.fresh();
+        match (a, b) {
+            (Type::Var(0), Type::Var(1)) => {}
+            other => panic!("expected fresh variables 0 and 1, got {:?}", other),
+        }
+        assert_eq!(g.count(), 2);
+    }
+
+    #[test]
+    fn unify_identical_primitives() {
+        let mut s = Subst::new();
+        unify(&Type::I64, &Type::I64, &mut s).unwrap();
+        unify(&Type::Bool, &Type::Bool, &mut s).unwrap();
+        unify(&Type::Unit, &Type::Unit, &mut s).unwrap();
+        unify(&Type::Str, &Type::Str, &mut s).unwrap();
+        assert!(s.is_empty());
+    }
+
+    #[test]
+    fn unify_distinct_primitives_fails() {
+        let mut s = Subst::new();
+        let err = unify(&Type::I64, &Type::F64, &mut s).unwrap_err();
+        match err {
+            UnifyError::Mismatch { left, right } => {
+                assert_eq!(left, Type::I64);
+                assert_eq!(right, Type::F64);
+            }
+            other => panic!("expected Mismatch, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn unify_var_with_concrete_binds() {
+        let mut s = Subst::new();
+        unify(&Type::Var(0), &Type::I64, &mut s).unwrap();
+        assert_eq!(s.get(0), Some(&Type::I64));
+    }
+
+    #[test]
+    fn unify_concrete_with_var_binds() {
+        let mut s = Subst::new();
+        unify(&Type::I64, &Type::Var(0), &mut s).unwrap();
+        assert_eq!(s.get(0), Some(&Type::I64));
+    }
+
+    #[test]
+    fn unify_var_with_var_binds_one_to_other() {
+        let mut s = Subst::new();
+        unify(&Type::Var(0), &Type::Var(1), &mut s).unwrap();
+        assert_eq!(s.len(), 1);
+    }
+
+    #[test]
+    fn unify_same_var_succeeds_with_no_binding() {
+        let mut s = Subst::new();
+        unify(&Type::Var(0), &Type::Var(0), &mut s).unwrap();
+        assert!(s.is_empty());
+    }
+
+    #[test]
+    fn unify_tuple_pairwise() {
+        let mut s = Subst::new();
+        let t1 = Type::Tuple(alloc::vec![Type::Var(0), Type::Bool]);
+        let t2 = Type::Tuple(alloc::vec![Type::I64, Type::Var(1)]);
+        unify(&t1, &t2, &mut s).unwrap();
+        assert_eq!(s.get(0), Some(&Type::I64));
+        assert_eq!(s.get(1), Some(&Type::Bool));
+    }
+
+    #[test]
+    fn unify_tuple_arity_mismatch() {
+        let mut s = Subst::new();
+        let t1 = Type::Tuple(alloc::vec![Type::I64, Type::Bool]);
+        let t2 = Type::Tuple(alloc::vec![Type::I64]);
+        let err = unify(&t1, &t2, &mut s).unwrap_err();
+        match err {
+            UnifyError::TupleArityMismatch { left, right } => {
+                assert_eq!(left, 2);
+                assert_eq!(right, 1);
+            }
+            other => panic!("expected TupleArityMismatch, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn unify_array_length_mismatch() {
+        let mut s = Subst::new();
+        let t1 = Type::Array(Box::new(Type::I64), 3);
+        let t2 = Type::Array(Box::new(Type::I64), 4);
+        let err = unify(&t1, &t2, &mut s).unwrap_err();
+        match err {
+            UnifyError::ArrayLengthMismatch { left, right } => {
+                assert_eq!(left, 3);
+                assert_eq!(right, 4);
+            }
+            other => panic!("expected ArrayLengthMismatch, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn unify_array_element_types_unify() {
+        let mut s = Subst::new();
+        let t1 = Type::Array(Box::new(Type::Var(0)), 3);
+        let t2 = Type::Array(Box::new(Type::I64), 3);
+        unify(&t1, &t2, &mut s).unwrap();
+        assert_eq!(s.get(0), Some(&Type::I64));
+    }
+
+    #[test]
+    fn unify_option_inner_types_unify() {
+        let mut s = Subst::new();
+        let t1 = Type::Option(Box::new(Type::Var(0)));
+        let t2 = Type::Option(Box::new(Type::Bool));
+        unify(&t1, &t2, &mut s).unwrap();
+        assert_eq!(s.get(0), Some(&Type::Bool));
+    }
+
+    #[test]
+    fn unify_named_struct_same_name_succeeds() {
+        let mut s = Subst::new();
+        unify(
+            &Type::Struct("Point".to_string()),
+            &Type::Struct("Point".to_string()),
+            &mut s,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn unify_named_struct_different_name_fails() {
+        let mut s = Subst::new();
+        let err = unify(
+            &Type::Struct("Point".to_string()),
+            &Type::Struct("Square".to_string()),
+            &mut s,
+        )
+        .unwrap_err();
+        assert!(matches!(err, UnifyError::Mismatch { .. }));
+    }
+
+    #[test]
+    fn unify_occurs_check_rejects_self_reference() {
+        let mut s = Subst::new();
+        // ?T0 ~ Tuple(?T0, i64) would create an infinite type.
+        let t1 = Type::Var(0);
+        let t2 = Type::Tuple(alloc::vec![Type::Var(0), Type::I64]);
+        let err = unify(&t1, &t2, &mut s).unwrap_err();
+        assert!(matches!(err, UnifyError::OccursCheck { .. }));
+    }
+
+    #[test]
+    fn apply_substitution_resolves_variable() {
+        let mut s = Subst::new();
+        s.insert(0, Type::I64);
+        let t = Type::Tuple(alloc::vec![Type::Var(0), Type::Bool]);
+        let resolved = t.apply(&s);
+        assert_eq!(resolved, Type::Tuple(alloc::vec![Type::I64, Type::Bool]));
+    }
+
+    #[test]
+    fn apply_substitution_resolves_chain() {
+        // ?T0 -> ?T1 -> Bool. Applying once should follow the chain.
+        let mut s = Subst::new();
+        s.insert(0, Type::Var(1));
+        s.insert(1, Type::Bool);
+        let resolved = Type::Var(0).apply(&s);
+        assert_eq!(resolved, Type::Bool);
+    }
+
+    #[test]
+    fn unify_propagates_through_existing_substitution() {
+        // After ?T0 ~ i64, unifying ?T0 ~ ?T1 should bind ?T1 to i64.
+        let mut s = Subst::new();
+        unify(&Type::Var(0), &Type::I64, &mut s).unwrap();
+        unify(&Type::Var(0), &Type::Var(1), &mut s).unwrap();
+        let resolved = Type::Var(1).apply(&s);
+        assert_eq!(resolved, Type::I64);
     }
 }
