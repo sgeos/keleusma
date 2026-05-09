@@ -919,6 +919,11 @@ fn compile_for(fc: &mut FuncCompiler, for_stmt: &ForStmt) -> Result<(), CompileE
             // known. The fall-back is admissible at the bytecode level
             // but may be rejected by the verifier in strict mode.
             let static_length = fc.static_for_in_length(expr);
+            // Determine the iteration variable's type from the source
+            // type's element type. Recorded on the iteration variable's
+            // local so that nested for-in loops can resolve their own
+            // iteration bounds through this binding.
+            let element_ty = infer_expr_type(fc, expr).and_then(|t| element_type_of(&t));
 
             // Compile the iterable expression (array) and store it.
             compile_expr(fc, expr)?;
@@ -956,7 +961,7 @@ fn compile_for(fc: &mut FuncCompiler, for_stmt: &ForStmt) -> Result<(), CompileE
             fc.emit(Op::GetLocal(arr_slot));
             fc.emit(Op::GetLocal(idx_slot));
             fc.emit(Op::GetIndex);
-            let var_slot = fc.declare_local(&for_stmt.var);
+            let var_slot = fc.declare_local_typed(&for_stmt.var, element_ty);
             fc.emit(Op::SetLocal(var_slot));
 
             // Body.

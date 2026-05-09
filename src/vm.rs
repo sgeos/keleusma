@@ -3130,6 +3130,69 @@ mod tests {
     }
 
     #[test]
+    fn for_in_three_level_nested_passes_strict_verify() {
+        // Three nested for-in loops over a 3D array. Each level
+        // resolves its iteration bound from the binding's element
+        // type. The outer loop reads the matrix's outer length.
+        // Each subsequent loop reads the element type's length from
+        // the iteration variable's type recorded by the compiler.
+        let src = "fn main() -> i64 {\n\
+                       let map: [[[i64; 2]; 2]; 2] = [\n\
+                           [[1, 2], [3, 4]],\n\
+                           [[5, 6], [7, 8]],\n\
+                       ];\n\
+                       let last = 0;\n\
+                       for z in map {\n\
+                           for y in z {\n\
+                               for x in y {\n\
+                                   let last = x;\n\
+                               }\n\
+                           }\n\
+                       }\n\
+                       last\n\
+                   }";
+        let tokens = tokenize(src).expect("lex");
+        let program = parse(&tokens).expect("parse");
+        let module = compile(&program).expect("compile");
+        let _vm = Vm::new(module).expect("verify");
+    }
+
+    #[test]
+    fn for_in_three_level_nested_runs() {
+        // Same shape as the verify test but exercises full execution
+        // through a native function call. The native sums all
+        // visited values. The data segment carries the running total
+        // because let bindings shadow rather than mutate.
+        let src = "data ctx { total: i64 }\n\
+                   fn main() -> i64 {\n\
+                       let map: [[[i64; 2]; 2]; 2] = [\n\
+                           [[1, 2], [3, 4]],\n\
+                           [[5, 6], [7, 8]],\n\
+                       ];\n\
+                       for z in map {\n\
+                           for y in z {\n\
+                               for x in y {\n\
+                                   ctx.total = ctx.total + x;\n\
+                               }\n\
+                           }\n\
+                       }\n\
+                       ctx.total\n\
+                   }";
+        let tokens = tokenize(src).expect("lex");
+        let program = parse(&tokens).expect("parse");
+        let module = compile(&program).expect("compile");
+        let mut vm = Vm::new(module).expect("verify");
+        vm.set_data(0, Value::Int(0)).expect("init total");
+        match vm.call(&[]) {
+            Ok(VmState::Finished(Value::Int(v))) => {
+                // Sum of 1..=8 is 36.
+                assert_eq!(v, 36);
+            }
+            other => panic!("unexpected {:?}", other),
+        }
+    }
+
+    #[test]
     fn for_in_over_array_literal_runs() {
         let val = run_expect(
             "fn main() -> i64 {\n\
