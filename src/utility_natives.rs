@@ -31,6 +31,7 @@ fn render_value_to_string(arena: Option<&Arena>, val: &Value) -> String {
         },
         Value::Unit => String::from("()"),
         Value::None => String::from("None"),
+        Value::Func(idx) => format!("<fn:{}>", idx),
         Value::Tuple(elems) => {
             let parts: Vec<String> = elems
                 .iter()

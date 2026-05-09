@@ -343,6 +343,12 @@ pub fn compile(program: &Program) -> Result<Module, CompileError> {
         message: format!("type error after monomorphization: {}", e.message),
         span: e.span,
     })?;
+    // Hoist closure literals to top-level functions. Each
+    // `Expr::Closure` becomes `Expr::Ident { name: "__closure_<n>" }`
+    // and a synthetic `FunctionDef` is added to the program. The
+    // closure's evaluation at runtime emits `Op::PushFunc(idx)` where
+    // `idx` is the synthetic function's chunk index.
+    let owned = hoist_closures(owned);
     let program = &owned;
 
     let mut native_names: Vec<String> = Vec::new();
@@ -1089,6 +1095,169 @@ fn compile_for(fc: &mut FuncCompiler, for_stmt: &ForStmt) -> Result<(), CompileE
     Ok(())
 }
 
+/// Closure hoisting pass.
+///
+/// Walks every function body and impl method body in the program,
+/// replacing `Expr::Closure` expressions with `Expr::Ident {
+/// name: "__closure_<n>" }` references and emitting a synthetic
+/// `FunctionDef` per closure. The synthetic functions go to the
+/// end of `program.functions` so they receive chunk indices in the
+/// expected order. Surrounding compilation logic resolves the
+/// `Expr::Ident` to a chunk-emitting `Op::PushFunc(idx)` because the
+/// synthetic name is in `function_map` but never appears as a
+/// local.
+fn hoist_closures(mut program: Program) -> Program {
+    let mut counter: usize = 0;
+    let mut new_functions: Vec<FunctionDef> = Vec::new();
+    for func in program.functions.iter_mut() {
+        hoist_in_block(&mut func.body, &mut counter, &mut new_functions);
+    }
+    for impl_block in program.impls.iter_mut() {
+        for method in impl_block.methods.iter_mut() {
+            hoist_in_block(&mut method.body, &mut counter, &mut new_functions);
+        }
+    }
+    program.functions.extend(new_functions);
+    program
+}
+
+fn hoist_in_block(block: &mut Block, counter: &mut usize, out: &mut Vec<FunctionDef>) {
+    for stmt in block.stmts.iter_mut() {
+        hoist_in_stmt(stmt, counter, out);
+    }
+    if let Some(e) = block.tail_expr.as_mut() {
+        hoist_in_expr(e, counter, out);
+    }
+}
+
+fn hoist_in_stmt(stmt: &mut Stmt, counter: &mut usize, out: &mut Vec<FunctionDef>) {
+    match stmt {
+        Stmt::Let(l) => hoist_in_expr(&mut l.value, counter, out),
+        Stmt::For(f) => {
+            match &mut f.iterable {
+                Iterable::Range(s, e) => {
+                    hoist_in_expr(s, counter, out);
+                    hoist_in_expr(e, counter, out);
+                }
+                Iterable::Expr(e) => hoist_in_expr(e, counter, out),
+            }
+            hoist_in_block(&mut f.body, counter, out);
+        }
+        Stmt::Break(_) => {}
+        Stmt::DataFieldAssign { value, .. } => hoist_in_expr(value, counter, out),
+        Stmt::Expr(e) => hoist_in_expr(e, counter, out),
+    }
+}
+
+fn hoist_in_expr(expr: &mut Expr, counter: &mut usize, out: &mut Vec<FunctionDef>) {
+    match expr {
+        Expr::BinOp { left, right, .. } => {
+            hoist_in_expr(left, counter, out);
+            hoist_in_expr(right, counter, out);
+        }
+        Expr::UnaryOp { operand, .. } => hoist_in_expr(operand, counter, out),
+        Expr::Call { args, .. } => {
+            for a in args.iter_mut() {
+                hoist_in_expr(a, counter, out);
+            }
+        }
+        Expr::Pipeline { left, args, .. } => {
+            hoist_in_expr(left, counter, out);
+            for a in args.iter_mut() {
+                hoist_in_expr(a, counter, out);
+            }
+        }
+        Expr::Yield { value, .. } => hoist_in_expr(value, counter, out),
+        Expr::If {
+            condition,
+            then_block,
+            else_block,
+            ..
+        } => {
+            hoist_in_expr(condition, counter, out);
+            hoist_in_block(then_block, counter, out);
+            if let Some(b) = else_block.as_mut() {
+                hoist_in_block(b, counter, out);
+            }
+        }
+        Expr::Match {
+            scrutinee, arms, ..
+        } => {
+            hoist_in_expr(scrutinee, counter, out);
+            for arm in arms.iter_mut() {
+                hoist_in_expr(&mut arm.expr, counter, out);
+            }
+        }
+        Expr::Loop { body, .. } => hoist_in_block(body, counter, out),
+        Expr::FieldAccess { object, .. } => hoist_in_expr(object, counter, out),
+        Expr::MethodCall { receiver, args, .. } => {
+            hoist_in_expr(receiver, counter, out);
+            for a in args.iter_mut() {
+                hoist_in_expr(a, counter, out);
+            }
+        }
+        Expr::TupleIndex { object, .. } => hoist_in_expr(object, counter, out),
+        Expr::ArrayIndex { object, index, .. } => {
+            hoist_in_expr(object, counter, out);
+            hoist_in_expr(index, counter, out);
+        }
+        Expr::StructInit { fields, .. } => {
+            for f in fields.iter_mut() {
+                hoist_in_expr(&mut f.value, counter, out);
+            }
+        }
+        Expr::EnumVariant { args, .. } => {
+            for a in args.iter_mut() {
+                hoist_in_expr(a, counter, out);
+            }
+        }
+        Expr::ArrayLiteral { elements, .. } | Expr::TupleLiteral { elements, .. } => {
+            for e in elements.iter_mut() {
+                hoist_in_expr(e, counter, out);
+            }
+        }
+        Expr::Cast { expr, .. } => hoist_in_expr(expr, counter, out),
+        Expr::Closure {
+            params,
+            return_type,
+            body,
+            span,
+        } => {
+            // First descend into the body so nested closures are
+            // hoisted too.
+            hoist_in_block(body, counter, out);
+            // Synthesize the function definition.
+            let name = format!("__closure_{}", *counter);
+            *counter += 1;
+            let body_owned = core::mem::replace(
+                body,
+                Block {
+                    stmts: Vec::new(),
+                    tail_expr: None,
+                    span: *span,
+                },
+            );
+            let synth = FunctionDef {
+                category: FunctionCategory::Fn,
+                name: name.clone(),
+                type_params: Vec::new(),
+                params: params.clone(),
+                return_type: return_type.clone().unwrap_or(TypeExpr::Unit(*span)),
+                guard: None,
+                body: body_owned,
+                span: *span,
+            };
+            out.push(synth);
+            // Replace the closure expression with an identifier
+            // reference. The compiler routes Expr::Ident with a name
+            // present in function_map (and not present in locals) to
+            // an `Op::PushFunc` emission.
+            *expr = Expr::Ident { name, span: *span };
+        }
+        Expr::Literal { .. } | Expr::Ident { .. } | Expr::Placeholder { .. } => {}
+    }
+}
+
 /// Compile an expression, leaving the result on the stack.
 fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> {
     match expr {
@@ -1119,6 +1288,11 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
         Expr::Ident { name, span } => {
             if let Some(slot) = fc.resolve_local(name) {
                 fc.emit(Op::GetLocal(slot));
+            } else if let Some(&idx) = fc.function_map.get(name) {
+                // The name resolves to a top-level function (or a
+                // hoisted closure). Emit a `Func` value that the
+                // runtime can invoke through `Op::CallIndirect`.
+                fc.emit(Op::PushFunc(idx));
             } else if fc.is_data_block(name) {
                 return Err(CompileError {
                     message: format!(
@@ -1554,6 +1728,18 @@ fn compile_call(
     args: &[Expr],
     span: &Span,
 ) -> Result<(), CompileError> {
+    // Indirect call through a local variable holding a `Value::Func`.
+    // The compiler pushes the function value, then the explicit
+    // arguments, then emits `Op::CallIndirect(arg_count)`. The
+    // runtime pops the args plus the func value before invoking.
+    if let Some(slot) = fc.resolve_local(name) {
+        fc.emit(Op::GetLocal(slot));
+        for arg in args {
+            compile_expr(fc, arg)?;
+        }
+        fc.emit(Op::CallIndirect(args.len() as u8));
+        return Ok(());
+    }
     for arg in args {
         compile_expr(fc, arg)?;
     }

@@ -53,21 +53,26 @@ Remaining work.
 - Polymorphic recursion guard. If a generic function calls itself with type arguments derived from its own type parameters, the pass would loop indefinitely. The MVP relies on the call graph being finite and the test suite not exercising polymorphic recursion. A guard against unbounded specialization should be added before the feature is considered production-ready.
 - Pruning unused generic functions. The MVP retains generic functions that have at least one specialization; non-specialized generics remain in the program as dead code that the compiler emits but the runtime never enters. A pruning pass would remove these.
 
-## B3. Closures and anonymous functions (parser and type-check landed; runtime deferred)
+## ~~B3. Closures and anonymous functions~~ (Resolved without environment capture)
 
-Surface syntax `|args| body` and `|args| -> ret { body }` is parsed and the AST carries `Expr::Closure { params, return_type, body, span }`. The lexer distinguishes the bare `|` token (`Bar`) from the pipeline operator `|>` (`Pipe`). The type checker walks the closure body in a fresh scope where parameters are bound to fresh type variables or their declared types and returns a fresh type variable for the closure expression. Monomorphization recurses through closure bodies during substitution and call-site rewriting.
+Surface syntax `|args| body` and `|args| -> ret { body }`. New `Bar` token for the bare `|`. New `Expr::Closure { params, return_type, body, span }` AST variant. Closures hoist to top-level chunks at compile time; the closure expression evaluates to `Value::Func(chunk_idx)` through `Op::PushFunc`. Indirect call through `Op::CallIndirect(arg_count)` pops the args plus the `Value::Func` and invokes the referenced chunk.
 
-The runtime side is deferred. The compiler currently rejects closure expressions at compile time with a clear "closure runtime is not yet implemented" error so the syntax surface is stable while the implementation evolves.
+End-to-end. `examples/closure_basic.rs` demonstrates `let f = |x: i64| x + 1; f(41)` returning 42.
 
-Remaining work.
+What lands.
 
-- Runtime representation. Add a `Value::Func(u16)` variant carrying the chunk index of the compiled closure body, and a closure type.
-- Compiler hoisting. Each closure expression compiles to a top-level chunk with a synthetic mangled name. The closure expression evaluates to `Value::Func(chunk_idx)`.
-- Indirect call. Add `Op::CallIndirect(u8)` that pops `arg_count` args plus a `Value::Func` from the operand stack and invokes the carried chunk.
-- Environment capture. The body resolves identifiers against the closure's parameter scope plus a copied environment captured from the enclosing scope at closure creation. The captured environment becomes part of the closure value.
-- Surface syntax for invocation. Calls of the form `f(args)` where `f` is a closure-typed local resolve to `CallIndirect` rather than the existing name-based `Call`. The parser may need a separate `IndirectCall` AST variant or the compiler resolves at compile time based on the receiver's known type.
+- New `Value::Func(u16)` runtime-only variant.
+- New `Op::PushFunc(u16)` and `Op::CallIndirect(u8)` instructions.
+- Closure hoisting pass in the compile pipeline. Each closure expression becomes an `Expr::Ident` referencing a synthetic `__closure_<n>` function plus a fresh `FunctionDef` appended to the program. Hoisting recurses through the entire program including impl method bodies.
+- Compiler resolves `Expr::Ident` against `function_map` after locals; an unbound name that matches a function name emits `Op::PushFunc(idx)`.
+- Compiler resolves `f(args)` where `f` is a local to `GetLocal(slot); args; CallIndirect(n)` for indirect dispatch.
+- Type checker accepts indirect-call expressions and returns a fresh type variable.
+- Wire format. `BYTECODE_VERSION` bumped to 6 to reflect the new opcode tags.
 
-Estimated implementation effort. Six to ten hours for the runtime including capture.
+Remaining work tracked under future B3 follow-on.
+
+- Environment capture. The body currently resolves identifiers against its parameter scope only. Closures that reference outer-scope variables fail at compile time with an "undefined variable" error. The fix introduces a captured environment that the closure value carries alongside the chunk index, with the runtime binding captured values as additional implicit parameters at invocation. Estimated 4 to 6 hours.
+- First-class closures as arguments. Currently closures stored in locals can be invoked through indirect call, but passing a closure as an argument to another function and invoking it from the called function requires the typecheck to flow function types through call signatures. The current minimum admits closures stored in locals; broader function-typed parameters are deferred.
 
 ## ~~B4. Hot code swap implementation~~ (Resolved as R29)
 

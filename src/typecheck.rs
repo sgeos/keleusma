@@ -1548,6 +1548,16 @@ fn type_of_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Type, TypeError> {
             }
         }
         Expr::Call { name, args, span } => {
+            // If `name` resolves to a local first, this is an indirect
+            // call through a function value (closure). Type-check the
+            // arguments and return a fresh type for the result. The
+            // compiler emits `Op::CallIndirect`.
+            if ctx.lookup_local(name).is_some() {
+                for arg in args {
+                    type_of_expr(ctx, arg)?;
+                }
+                return Ok(ctx.fresh());
+            }
             // Native functions are registered at runtime and have no
             // compile-time signature. Names declared in `use` or
             // qualified with `::` are treated as natives and accept
@@ -2812,6 +2822,30 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.message.contains("no method"));
+    }
+
+    #[test]
+    fn closure_executes_end_to_end() {
+        // The compile pipeline includes hoisting; the type checker
+        // accepts the closure expression and the indirect call site.
+        check_src(
+            "fn main() -> i64 {\n\
+                let f = |x: i64| x + 1;\n\
+                f(41)\n\
+             }",
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn closure_no_param_callable() {
+        check_src(
+            "fn main() -> i64 {\n\
+                let f = || 42;\n\
+                f()\n\
+             }",
+        )
+        .unwrap();
     }
 
     #[test]

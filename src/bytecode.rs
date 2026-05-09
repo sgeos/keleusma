@@ -113,6 +113,13 @@ pub enum Value {
     },
     /// Option::None.
     None,
+    /// First-class function value carrying a chunk index. Produced by
+    /// closure expressions hoisted to top-level chunks at compile
+    /// time. Invoked through [`Op::CallIndirect`] which pops the
+    /// `Func` value and the explicit arguments and invokes the
+    /// referenced chunk. Environment capture is not yet part of
+    /// this representation.
+    Func(u16),
 }
 
 impl PartialEq for Value {
@@ -138,6 +145,7 @@ impl PartialEq for Value {
             // equality must compare through `as_str_with_arena` against
             // a known arena.
             (Value::KStr(a), Value::KStr(b)) => a.epoch() == b.epoch(),
+            (Value::Func(a), Value::Func(b)) => a == b,
             (Value::Tuple(a), Value::Tuple(b)) | (Value::Array(a), Value::Array(b)) => a == b,
             (
                 Value::Struct {
@@ -177,6 +185,7 @@ impl Value {
             Value::StaticStr(_) => "StaticStr",
             Value::DynStr(_) => "DynStr",
             Value::KStr(_) => "KStr",
+            Value::Func(_) => "Func",
             Value::Tuple(_) => "Tuple",
             Value::Array(_) => "Array",
             Value::Struct { .. } => "Struct",
@@ -372,6 +381,17 @@ pub enum Op {
     Call(u16, u8),
     /// Call native function by registry index with N arguments.
     CallNative(u16, u8),
+    /// Indirect call. Pops N arguments and then a `Value::Func`
+    /// from the operand stack, then invokes the function chunk
+    /// referenced by the popped `Func` value. The argument count
+    /// is encoded inline; the chunk index comes from the popped
+    /// value at runtime.
+    CallIndirect(u8),
+    /// Push `Value::Func(chunk_idx)` onto the operand stack. Emitted
+    /// by closure expressions that the compiler has hoisted to a
+    /// top-level chunk. The runtime resulting `Func` value can then
+    /// flow through locals or be invoked through `Op::CallIndirect`.
+    PushFunc(u16),
     /// Return from the current function.
     Return,
 
@@ -496,7 +516,8 @@ impl Op {
             Op::NewStruct(_) | Op::NewEnum(_, _, _) | Op::NewArray(_) | Op::NewTuple(_) => 5,
 
             // Function calls.
-            Op::Call(_, _) | Op::CallNative(_, _) => 10,
+            Op::Call(_, _) | Op::CallNative(_, _) | Op::CallIndirect(_) => 10,
+            Op::PushFunc(_) => 0,
         }
     }
 
@@ -537,7 +558,8 @@ impl Op {
             Op::Stream | Op::Reset => 0,
             Op::Yield => 0,
 
-            Op::Call(_, _) | Op::CallNative(_, _) => 1,
+            Op::Call(_, _) | Op::CallNative(_, _) | Op::CallIndirect(_) => 1,
+            Op::PushFunc(_) => 0,
             Op::Return => 0,
 
             Op::NewStruct(_) | Op::NewEnum(_, _, _) | Op::NewArray(_) | Op::NewTuple(_) => 1,
@@ -566,7 +588,8 @@ impl Op {
             | Op::GetLocal(_)
             | Op::GetData(_)
             | Op::Dup
-            | Op::PushNone => 0,
+            | Op::PushNone
+            | Op::PushFunc(_) => 0,
 
             Op::WrapSome | Op::Not | Op::Neg => 0,
 
@@ -590,6 +613,8 @@ impl Op {
             Op::Yield => 1,
 
             Op::Call(_, n) | Op::CallNative(_, n) => *n as u32,
+            // CallIndirect pops the args plus the Func value itself.
+            Op::CallIndirect(n) => (*n as u32) + 1,
             Op::Return => 0,
 
             Op::NewStruct(_) => 0,
@@ -728,7 +753,7 @@ pub const BYTECODE_MAGIC: [u8; 4] = *b"KELE";
 
 /// Wire format version for serialized bytecode. Bytecode produced under a
 /// different version is rejected at load time.
-pub const BYTECODE_VERSION: u16 = 5;
+pub const BYTECODE_VERSION: u16 = 6;
 
 /// Word size in bits assumed by this runtime build, encoded as the
 /// base-2 exponent. Actual width in bits is `1 << RUNTIME_WORD_BITS_LOG2`.
@@ -1166,6 +1191,8 @@ pub fn op_from_archived(archived: &ArchivedOp) -> Op {
         ArchivedOp::Reset => Op::Reset,
         ArchivedOp::Call(c, n) => Op::Call(c.to_native(), *n),
         ArchivedOp::CallNative(c, n) => Op::CallNative(c.to_native(), *n),
+        ArchivedOp::CallIndirect(n) => Op::CallIndirect(*n),
+        ArchivedOp::PushFunc(idx) => Op::PushFunc(idx.to_native()),
         ArchivedOp::Return => Op::Return,
         ArchivedOp::Yield => Op::Yield,
         ArchivedOp::Pop => Op::Pop,
@@ -1205,6 +1232,7 @@ impl ConstValue {
             Value::StaticStr(s) => Ok(ConstValue::StaticStr(s)),
             Value::DynStr(_) => Err("DynStr cannot be a compile-time constant"),
             Value::KStr(_) => Err("KStr cannot be a compile-time constant"),
+            Value::Func(_) => Err("Func cannot be a compile-time constant"),
             Value::Tuple(items) => items
                 .into_iter()
                 .map(ConstValue::try_from_value)

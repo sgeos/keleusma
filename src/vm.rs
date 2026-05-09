@@ -995,6 +995,7 @@ impl<'a, 'arena> Vm<'a, 'arena> {
                 Op::PushUnit => self.stack.push(Value::Unit),
                 Op::PushTrue => self.stack.push(Value::Bool(true)),
                 Op::PushFalse => self.stack.push(Value::Bool(false)),
+                Op::PushFunc(idx) => self.stack.push(Value::Func(idx)),
 
                 Op::GetLocal(slot) => {
                     let val = self.stack[base + slot as usize].clone();
@@ -1273,6 +1274,47 @@ impl<'a, 'arena> Vm<'a, 'arena> {
                     let ctx = NativeCtx { arena: self.arena };
                     let result = (entry.func)(&ctx, &args)?;
                     self.stack.push(result);
+                }
+                Op::CallIndirect(arg_count) => {
+                    // The operand stack holds, from top down, the
+                    // function arguments (arg_count items) and then
+                    // the `Value::Func` carrying the chunk index.
+                    // Pop the args, then the func, then push args
+                    // back and push extra `Unit` slots for the
+                    // chunk's locals beyond its parameters.
+                    let n = arg_count as usize;
+                    if self.stack.len() < n + 1 {
+                        return Err(VmError::StackUnderflow);
+                    }
+                    let args_start = self.stack.len() - n;
+                    let func_idx_pos = args_start - 1;
+                    let func_value = self.stack.remove(func_idx_pos);
+                    let chunk_idx = match func_value {
+                        Value::Func(i) => i,
+                        other => {
+                            return Err(VmError::TypeError(format!(
+                                "indirect call expected Func, got {}",
+                                other.type_name()
+                            )));
+                        }
+                    };
+                    if chunk_idx as usize >= self.chunk_count() {
+                        return Err(VmError::InvalidBytecode(format!(
+                            "invalid chunk: {}",
+                            chunk_idx
+                        )));
+                    }
+                    let called_local_count = self.chunk_local_count(chunk_idx as usize) as usize;
+                    let new_base = self.stack.len() - n;
+                    let extra = called_local_count - n;
+                    for _ in 0..extra {
+                        self.stack.push(Value::Unit);
+                    }
+                    self.frames.push(CallFrame {
+                        chunk_idx: chunk_idx as usize,
+                        ip: 0,
+                        base: new_base,
+                    });
                 }
                 Op::Return => {
                     let result = self.pop()?;
@@ -2596,7 +2638,7 @@ mod tests {
         //
         // Layout breakdown:
         //   bytes[0..4]    = b"KELE"               magic
-        //   bytes[4..6]    = 0x05 0x00              version 5 (u16 LE)
+        //   bytes[4..6]    = 0x06 0x00              version 6 (u16 LE)
         //   bytes[6..10]   = 0x90 0x00 0x00 0x00    length 144 (u32 LE)
         //   bytes[10]      = 0x06                   word_bits_log2 = 6 (64-bit)
         //   bytes[11]      = 0x06                   addr_bits_log2 = 6 (64-bit)
@@ -2605,8 +2647,8 @@ mod tests {
         //   bytes[16..140] = rkyv body
         //   bytes[140..144] = CRC-32 (u32 LE)
         let expected: alloc::vec::Vec<u8> = alloc::vec![
-            0x4B, 0x45, 0x4C, 0x45, 0x05, 0x00, 0x90, 0x00, 0x00, 0x00, 0x06, 0x06, 0x06, 0x00,
-            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x20, 0x00, 0x00, 0x00,
+            0x4B, 0x45, 0x4C, 0x45, 0x06, 0x00, 0x90, 0x00, 0x00, 0x00, 0x06, 0x06, 0x06, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x22, 0x00, 0x00, 0x00,
             0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00,
             0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
             0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x6D, 0x61, 0x69, 0x6E, 0xFF, 0xFF,
@@ -2615,7 +2657,7 @@ mod tests {
             0x00, 0x00, 0xDC, 0xFF, 0xFF, 0xFF, 0x01, 0x00, 0x00, 0x00, 0xF8, 0xFF, 0xFF, 0xFF,
             0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
             0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x06, 0x06, 0x06, 0x00,
-            0xEF, 0x2C, 0x08, 0x3A,
+            0xB1, 0x99, 0xFB, 0x78,
         ];
         let src = "fn main() -> i64 { 1 }";
         let tokens = tokenize(src).expect("lex");
