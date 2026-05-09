@@ -23,6 +23,20 @@ struct Local {
     depth: u32,
 }
 
+/// Static type information collected from the AST and used by the
+/// compiler for selected optimizations such as the for-in iteration
+/// bound (P2). Independent of the type checker; the compiler queries
+/// only the subset of declarations it needs.
+#[derive(Default, Clone)]
+struct TypeInfo {
+    /// Struct name to (field name to declared field type).
+    structs: BTreeMap<String, BTreeMap<String, TypeExpr>>,
+    /// Function name to declared return type.
+    function_returns: BTreeMap<String, TypeExpr>,
+    /// Data block name to (field name to declared field type).
+    data_field_types: BTreeMap<String, BTreeMap<String, TypeExpr>>,
+}
+
 /// State for compiling a single function chunk.
 struct FuncCompiler {
     chunk: Chunk,
@@ -37,6 +51,9 @@ struct FuncCompiler {
     native_map: BTreeMap<String, u16>,
     /// Map from data block name to a list of (field_name, slot_index) pairs.
     data_fields: BTreeMap<String, Vec<(String, u16)>>,
+    /// Static type information used by the for-in iteration bound
+    /// inference and similar narrow optimizations.
+    type_info: TypeInfo,
 }
 
 impl FuncCompiler {
@@ -46,6 +63,7 @@ impl FuncCompiler {
         function_map: BTreeMap<String, u16>,
         native_map: BTreeMap<String, u16>,
         data_fields: BTreeMap<String, Vec<(String, u16)>>,
+        type_info: TypeInfo,
     ) -> Self {
         Self {
             chunk: Chunk {
@@ -64,6 +82,48 @@ impl FuncCompiler {
             function_map,
             native_map,
             data_fields,
+            type_info,
+        }
+    }
+
+    /// Infer the static array length of an expression used as a
+    /// for-in source. Returns `Some(N)` when the expression's static
+    /// type is `[T; N]`. Used to emit a `Const(N)` end bound that the
+    /// strict-mode WCMU verifier accepts. Falls back to `None` for
+    /// expressions whose array length is not statically known.
+    fn static_for_in_length(&self, expr: &Expr) -> Option<i64> {
+        match expr {
+            Expr::ArrayLiteral { elements, .. } => Some(elements.len() as i64),
+            Expr::Call { name, .. } => {
+                let return_type = self.type_info.function_returns.get(name)?;
+                array_length_of_type(return_type)
+            }
+            Expr::FieldAccess { object, field, .. } => {
+                let owner = self.struct_name_of(object)?;
+                let field_type = self
+                    .type_info
+                    .structs
+                    .get(&owner)
+                    .or_else(|| self.type_info.data_field_types.get(&owner))
+                    .and_then(|fields| fields.get(field))?;
+                array_length_of_type(field_type)
+            }
+            _ => None,
+        }
+    }
+
+    /// Return the struct or data block name for an expression that
+    /// resolves to a named composite. Used by `static_for_in_length`
+    /// to look up field types.
+    fn struct_name_of(&self, expr: &Expr) -> Option<String> {
+        match expr {
+            Expr::Ident { name, .. } => {
+                if self.data_fields.contains_key(name) {
+                    return Some(name.clone());
+                }
+                None
+            }
+            _ => None,
         }
     }
 
@@ -185,6 +245,15 @@ impl FuncCompiler {
     }
 }
 
+/// Extract the length of an array type expression. Returns `Some(N)`
+/// for `[T; N]` and `None` for other shapes.
+fn array_length_of_type(t: &TypeExpr) -> Option<i64> {
+    match t {
+        TypeExpr::Array(_, n, _) => Some(*n),
+        _ => None,
+    }
+}
+
 /// Compile a parsed Keleusma program into a bytecode module.
 ///
 /// Runs the static type checker before bytecode emission. Type errors
@@ -282,10 +351,41 @@ pub fn compile(program: &Program) -> Result<Module, CompileError> {
         function_map.insert(name.clone(), chunk_idx as u16);
     }
 
+    // Build type info for the compiler's static analyses.
+    let mut type_info = TypeInfo::default();
+    for type_def in &program.types {
+        if let TypeDef::Struct(s) = type_def {
+            let mut fields = BTreeMap::new();
+            for f in &s.fields {
+                fields.insert(f.name.clone(), f.type_expr.clone());
+            }
+            type_info.structs.insert(s.name.clone(), fields);
+        }
+    }
+    for func in &program.functions {
+        type_info
+            .function_returns
+            .insert(func.name.clone(), func.return_type.clone());
+    }
+    for decl in &program.data_decls {
+        let mut fields = BTreeMap::new();
+        for f in &decl.fields {
+            fields.insert(f.name.clone(), f.type_expr.clone());
+        }
+        type_info.data_field_types.insert(decl.name.clone(), fields);
+    }
+
     // Compile each function group.
     let mut chunks: Vec<Chunk> = Vec::new();
     for (name, defs) in &groups {
-        let chunk = compile_function_group(name, defs, &function_map, &native_map, &data_fields)?;
+        let chunk = compile_function_group(
+            name,
+            defs,
+            &function_map,
+            &native_map,
+            &data_fields,
+            &type_info,
+        )?;
         chunks.push(chunk);
     }
 
@@ -386,6 +486,7 @@ fn compile_function_group(
     function_map: &BTreeMap<String, u16>,
     native_map: &BTreeMap<String, u16>,
     data_fields: &BTreeMap<String, Vec<(String, u16)>>,
+    type_info: &TypeInfo,
 ) -> Result<Chunk, CompileError> {
     let first = defs[0];
     let block_type = match first.category {
@@ -401,6 +502,7 @@ fn compile_function_group(
         function_map.clone(),
         native_map.clone(),
         data_fields.clone(),
+        type_info.clone(),
     );
     fc.chunk.param_count = param_count;
 
@@ -668,16 +770,30 @@ fn compile_for(fc: &mut FuncCompiler, for_stmt: &ForStmt) -> Result<(), CompileE
             fc.exit_loop(); // Patches Break addresses to after_endloop.
         }
         Iterable::Expr(expr) => {
+            // Determine the static array length if the source's type is
+            // statically known. Used to emit a `Const(N)` end bound that
+            // the strict-mode WCMU verifier accepts. Falls back to
+            // `Op::Len` for sources whose length is not statically
+            // known. The fall-back is admissible at the bytecode level
+            // but may be rejected by the verifier in strict mode.
+            let static_length = fc.static_for_in_length(expr);
+
             // Compile the iterable expression (array) and store it.
             compile_expr(fc, expr)?;
             let arr_slot = fc.declare_local("__for_arr");
             fc.emit(Op::SetLocal(arr_slot));
 
-            // Get the length for the loop bound.
-            fc.emit(Op::GetLocal(arr_slot));
-            fc.emit(Op::Len);
+            // Compute the end bound.
             let end_slot = fc.declare_local("__for_end");
-            fc.emit(Op::SetLocal(end_slot));
+            if let Some(n) = static_length {
+                let n_const = fc.add_constant(Value::Int(n));
+                fc.emit(Op::Const(n_const));
+                fc.emit(Op::SetLocal(end_slot));
+            } else {
+                fc.emit(Op::GetLocal(arr_slot));
+                fc.emit(Op::Len);
+                fc.emit(Op::SetLocal(end_slot));
+            }
 
             // Initialize index to 0.
             let zero_const = fc.add_constant(Value::Int(0));
@@ -1532,8 +1648,11 @@ mod tests {
                 .iter()
                 .any(|op| matches!(op, Op::Loop(_)))
         );
-        // Should contain Len instruction.
-        assert!(module.chunks[0].ops.iter().any(|op| matches!(op, Op::Len)));
+        // For an array literal, the for-in iteration bound is known
+        // statically (3), so the compiler emits a Const for the end
+        // bound rather than `Op::Len`. The strict-mode WCMU verifier
+        // accepts this pattern.
+        assert!(!module.chunks[0].ops.iter().any(|op| matches!(op, Op::Len)));
         // Should contain GetIndex.
         assert!(
             module.chunks[0]

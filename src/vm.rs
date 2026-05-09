@@ -3014,4 +3014,60 @@ mod tests {
             other => panic!("expected finished 1, got {:?}", other),
         }
     }
+
+    // -- P2 for-in over typed expressions --
+
+    #[test]
+    fn for_in_over_function_return_passes_strict_verify() {
+        // The for-in iteration bound is extracted from the called
+        // function's declared return type [i64; 3]. The verifier
+        // accepts the loop because the end bound is a Const(3).
+        // Without static type info the same source would be rejected
+        // by strict-mode WCMU.
+        let src = "fn make() -> [i64; 3] { [1, 2, 3] }\n\
+                   fn main() -> i64 {\n\
+                       let last = 0;\n\
+                       for x in make() { let last = x; }\n\
+                       last\n\
+                   }";
+        let tokens = tokenize(src).expect("lex");
+        let program = parse(&tokens).expect("parse");
+        let module = compile(&program).expect("compile");
+        // Constructing the VM runs the strict-mode verifier. A
+        // successful construction confirms the iteration bound was
+        // extractable from the typed return.
+        let _vm = Vm::new(module).expect("verify");
+    }
+
+    #[test]
+    fn for_in_over_data_segment_field_passes_strict_verify() {
+        // For-in over a data segment field whose declared type is
+        // [i64; N] is admissible because the field type provides the
+        // static iteration bound.
+        let src = "data ctx { items: [i64; 4] }\n\
+                   fn main() -> i64 {\n\
+                       let last = 0;\n\
+                       for x in ctx.items { let last = x; }\n\
+                       last\n\
+                   }";
+        let tokens = tokenize(src).expect("lex");
+        let program = parse(&tokens).expect("parse");
+        let module = compile(&program).expect("compile");
+        let _vm = Vm::new(module).expect("verify");
+    }
+
+    #[test]
+    fn for_in_over_array_literal_runs() {
+        let val = run_expect(
+            "fn main() -> i64 {\n\
+                 let last = 0;\n\
+                 for x in [10, 20, 30] { let last = x; }\n\
+                 last\n\
+             }",
+            &[],
+        );
+        // The body's `let last = x;` shadows in the inner scope.
+        // Outer `last` remains 0.
+        assert_eq!(val, Value::Int(0));
+    }
 }

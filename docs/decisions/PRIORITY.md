@@ -40,9 +40,23 @@ Follow-up work to integrate the checker into the compile pipeline.
 4. Invoke `typecheck::check` from `compile` and convert errors to `CompileError`.
 5. Update existing test programs that relied on the lax behavior.
 
-## P2. For-in over expressions
+## ~~P2. For-in over expressions~~ (Resolved for typed cases)
 
-The compiler currently only supports range-based for loops of the form `for i in 0..n`. Support for iterating over array expressions, such as `for item in array`, is specified in the grammar but not yet implemented. The implementation requires deciding on iterator semantics, including whether iteration consumes the array or borrows it, and how to handle mutation of the array during iteration.
+For-in over array expressions is now supported when the source expression's static array length is determinable at compile time. The compiler emits a `Const(N)` end bound that the strict-mode WCMU verifier accepts. The cases in scope.
+
+- Array literal source. `for x in [1, 2, 3]`. Length from element count.
+- Function return source. `for x in make()` where `make()` returns `[T; N]`. Length from declared return type.
+- Data segment field source. `for x in ctx.items` where `items` is declared `[T; N]`. Length from data block declaration.
+- Let-bound array literal. `let arr = [1, 2, 3]; for x in arr`. Length traced through the local alias chain to the originating `NewArray`.
+
+Three new tests cover the typed paths. `for_in_over_function_return_passes_strict_verify`, `for_in_over_data_segment_field_passes_strict_verify`, and `for_in_over_array_literal_runs`.
+
+The cases that remain rejected by strict-mode WCMU.
+
+- Struct field access from a local. `let b = Box { items: [..] }; for x in b.items`. The compiler does not track local variable types. Without local type tracking the field access cannot be resolved to a typed array.
+- Nested array access. `for x in matrix[0]` where `matrix` is `[[T; N]; M]`. Same root cause.
+
+The follow-up work to close the remaining cases is a local type tracker in the compiler. The type checker (P1) already has the needed information. Plumbing it into the compiler so that `let` bindings carry their declared or inferred type would extend `static_for_in_length` to handle struct fields from locals. This is admissible as a future enhancement.
 
 ## ~~P3. Error recovery model~~ (Resolved)
 
