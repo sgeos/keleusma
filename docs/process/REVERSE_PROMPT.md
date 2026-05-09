@@ -9,7 +9,7 @@ AI to Human communication channel.
 ## Last Updated
 
 **Date**: 2026-05-08
-**Task**: keleusma-arena pre-publication final pass.
+**Task**: keleusma-arena docs polish.
 **Status**: Complete. The crate is publication-ready. The remaining step is the human pilot's invocation of `cargo publish` against the live registry.
 
 ## Verification
@@ -21,64 +21,50 @@ cargo fmt --all
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test -p keleusma-arena --doc
-cargo +1.85 -C keleusma-arena check
-cargo +1.85 -C keleusma-arena check --no-default-features
-cd keleusma-arena && cargo +nightly miri test
-cd keleusma-arena && MIRIFLAGS="-Zmiri-tree-borrows" cargo +nightly miri test
+RUSTDOCFLAGS="--cfg docsrs" cargo +nightly doc -p keleusma-arena --no-deps --all-features
 ```
 
 **Results**:
 
-- Workspace tests. 278 keleusma unit, 17 keleusma integration, 22 keleusma-arena unit, 1 keleusma-arena doctest. All pass.
+- Workspace tests. 278 keleusma unit, 17 keleusma integration, 22 keleusma-arena unit, 6 keleusma-arena doctests. 323 tests pass total. All pass.
 - Clippy with `--workspace --all-targets`. Zero warnings.
 - Format. Clean.
-- Doctest on `Arena::with_capacity`. Passes.
-- Rust 1.85 build of keleusma-arena. Builds with default features and with `--no-default-features`.
-- miri stacked borrows. 21 of 22 tests pass. The single ignore is `arena_from_static_buffer`, which deliberately leaks a `Vec` to obtain a `'static mut [u8]`.
-- miri tree borrows. 21 of 22 tests pass. Same single ignore. The raw-pointer derivation pattern is sound under both aliasing models.
+- Doctests. Six pass. Five from the README and one on `Arena::with_capacity`.
+- docs.rs simulation. Generated under `--cfg docsrs --all-features`. The `stab portability` marker confirming `#[doc(cfg(feature = "alloc"))]` rendering is present in the generated HTML for `Arena::with_capacity`. The published documentation will display an `Available on crate feature alloc only` badge.
 
 ## Summary
 
-Six items were addressed before publication.
+Two final docs items were addressed.
 
-1. **Tree borrows verification.** Ran `MIRIFLAGS=-Zmiri-tree-borrows cargo miri test`. Clean. The arena's allocation pattern derives write pointers through a shared reference to a raw-provenance buffer, which is sound under both stacked borrows and tree borrows.
-2. **docs.rs metadata.** Added `[package.metadata.docs.rs]` block with `all-features = true` and `rustdoc-args = ["--cfg", "docsrs"]`. The `docsrs` cfg activates `#[doc(cfg(...))]` annotations on items behind the `alloc` feature. The metadata block also ensures all features are documented when the crate renders on docs.rs.
-3. **CI miri job.** Added a `miri` job to `.github/workflows/ci.yml` that installs miri on nightly and runs both stacked borrows and tree borrows against `keleusma-arena`. Future regressions in unsafe code will be caught at PR time.
-4. **CI MSRV job.** Added an `msrv` job pinned to `1.85`. The job runs `cargo check -p keleusma-arena` with default features and with `--no-default-features` to verify the `core`-only path. MSRV drift will be caught.
-5. **CI clippy upgraded.** Changed `cargo clippy --tests -- -D warnings` to `cargo clippy --workspace --all-targets -- -D warnings`. Examples are now lint-checked, including `mixed_allocator` and the `wcmu_*` examples in the keleusma crate.
-6. **Doctest.** Added a runnable example on `Arena::with_capacity` demonstrating construction, allocation through `stack_handle()` into `allocator_api2::vec::Vec::new_in`, and observability via `bottom_used()`. The doctest is wired through `cargo test --doc` and catches documentation drift on the primary entry point.
+1. **Activate docs.rs feature badge.** Added `#[cfg_attr(docsrs, doc(cfg(feature = "alloc")))]` to `Arena::with_capacity`. The crate root already carried `#![cfg_attr(docsrs, feature(doc_cfg))]` and the Cargo.toml metadata sets the `docsrs` cfg on docs.rs. Without the per-item annotation, the metadata had no observable effect. The annotation now causes docs.rs to render an `Available on crate feature alloc only` badge on the method.
+
+2. **Wire README into crate-level documentation.** Added `#![doc = include_str!("../README.md")]` to `src/lib.rs`. The README's five code blocks now run as doctests through `cargo test --doc`. The existing structured reference content is preserved as a `## API Reference` subsection following the README intro. Section headers were demoted from `#` to `##` for nesting consistency with the README's `## Quick Start`, `## Static-Buffer Use`, and similar sections.
+
+3. **Fix the Static-Buffer Use README example for edition 2024.** The original example used `BUFFER.as_mut_ptr()` and `BUFFER.len()`, which create implicit references to a `static mut` and were tightened to a hard error in edition 2024. Replaced with `core::ptr::addr_of_mut!(BUFFER) as *mut u8` and an explicit length. The constructor function form was inlined into top-level statements to make the example a runnable doctest without an unused `fn make_arena` warning.
 
 ## Changes Made
 
 ### keleusma-arena Crate
 
-- **keleusma-arena/Cargo.toml**: Added `[package.metadata.docs.rs]` block.
-- **keleusma-arena/src/lib.rs**: Added `# Examples` doctest to `Arena::with_capacity`.
-
-### CI
-
-- **.github/workflows/ci.yml**: Test job now runs `cargo test --workspace`. Check job runs `cargo check --workspace --all-targets`. Clippy job runs `cargo clippy --workspace --all-targets`. New `msrv` job pins Rust 1.85. New `miri` job runs both stacked and tree borrows against keleusma-arena.
+- **keleusma-arena/src/lib.rs**: Replaced the intro paragraph of the crate-level `//!` docs with `#![doc = include_str!("../README.md")]`. Demoted the structured reference section headers from `#` to `##` and grouped them under a new `## API Reference` parent. Added `#[cfg_attr(docsrs, doc(cfg(feature = "alloc")))]` to `Arena::with_capacity`.
+- **keleusma-arena/README.md**: Rewrote the `Static-Buffer Use` example to use `core::ptr::addr_of_mut!` and inline form so the code compiles cleanly under edition 2024 and runs as a doctest.
 
 ### Knowledge Graph
 
-- **docs/process/TASKLOG.md**: V0.0-M6-T13 row added. History row added.
+- **docs/process/TASKLOG.md**: V0.0-M6-T14 row added. History row added.
 - **docs/process/REVERSE_PROMPT.md**: This file.
 
 ## Unaddressed Concerns
 
-1. **The crate has not been published.** All preparation is complete. The human pilot should invoke `cargo publish` against crates.io when ready. The dry run succeeded.
+1. **The crate has not been published.** All preparation is complete. The human pilot should invoke `cargo publish` against crates.io when ready.
 
-2. **The single miri-ignored test.** `arena_from_static_buffer` constructs a `&'static mut [u8]` by leaking a `Vec`. miri's leak detector cannot distinguish that synthetic pattern from a real bug. The behavior is sound under genuine `'static` storage. Unchanged from prior session. A future test using `Box::leak` on a `[u8; N]` array would let the test run unconditionally because miri tracks the leaked allocation differently. Not blocking.
+2. **Mixing of section headers in rendered crate docs.** When docs.rs renders the included README, the README's `# keleusma-arena` H1 produces a heading inside a page that already has the crate name as the page title. This is a common pattern across the Rust ecosystem and is generally tolerated, but it does create a visual double-H1. A future iteration could replace the README's H1 with content that flows from the crate name, but the trade-off is divergence between GitHub README rendering and docs.rs rendering. Not blocking.
 
-3. **CI mac and Windows coverage.** CI runs on `ubuntu-latest` only. The arena uses no platform-specific code, but downstream embedded users on Cortex-M targets will not exercise the same toolchain configuration. A `runs-on` matrix is admissible but is overhead the human pilot may decide is not worth it for v0.1.0.
+3. **The single miri-ignored test.** Unchanged. `arena_from_static_buffer` deliberately leaks a `Vec` to obtain a `'static mut [u8]`. Sound under genuine `'static` storage; flagged by miri's leak detector under the synthetic test pattern.
 
-4. **Crate-level documentation freshness.** Only one method has a doctest. The crate-level documentation in `lib.rs` and the `README.md` quickstart are not compile-verified. This is mitigated by the four working examples, which are compile-checked by clippy. Adding `#![doc = include_str!("../README.md")]` at the crate root would unify the README and crate-level docs at the cost of a small refactor.
-
-5. **Concurrency contract.** Single-threaded by design. Documented. Hosts that need a thread-safe wrapper must build one. This is a stated design choice, not a deficiency.
+4. **CI mac and Windows coverage.** CI runs on `ubuntu-latest` only. Not blocking for v0.1.0.
 
 ## Intended Next Step
-
-Three paths.
 
 A. Push the branch. Invoke `cargo publish` for `keleusma-arena` to push v0.1.0 to crates.io.
 
@@ -86,10 +72,10 @@ B. V0.0-M7 implementing P7 follow-on items, namely operand stack and `DynStr` ar
 
 C. Pivot to V0.1 candidates such as the type checker (P1), for-in over arbitrary expressions (P2), or error recovery (P3).
 
-Recommend A. The pre-publication audit is exhausted. Tree borrows is clean. CI guardrails are in place. The crate is ready for the registry. Following A with B preserves the natural sequence in which `keleusma-arena` first lands as a published crate, then the runtime adopts it through its published version rather than a path dependency.
+Recommend A. The pre-publication audit is now closed. All documented items are addressed. The crate has miri verification under both aliasing models, CI guardrails, complete Cargo.toml metadata, a CHANGELOG, working examples, six doctests, and an explicit Drop and storage discipline.
 
 Await human prompt before proceeding.
 
 ## Session Context
 
-This session began with V0.0-M5 and V0.0-M6 already complete and the arena extracted into a workspace crate. The session resolved P8 (call-graph WCMU integration with auto-arena sizing) and P9 (strict-mode bounded-iteration loop analysis), then completed two pre-publication passes on `keleusma-arena`. The crate is now publication-ready with miri verification under both aliasing models, CI guardrails for miri and MSRV, complete Cargo.toml metadata, a CHANGELOG, working examples, a doctest, and an explicit Drop and storage discipline.
+This session began with V0.0-M5 and V0.0-M6 already complete and the arena extracted into a workspace crate. The session resolved P8 and P9, then completed three pre-publication passes on `keleusma-arena`. The crate is now publication-ready.

@@ -51,12 +51,15 @@ use keleusma_arena::Arena;
 
 static mut BUFFER: [u8; 4096] = [0u8; 4096];
 
-fn make_arena() -> Arena {
-    let buffer: &'static mut [u8] = unsafe {
-        core::slice::from_raw_parts_mut(BUFFER.as_mut_ptr(), BUFFER.len())
-    };
-    Arena::from_static_buffer(buffer)
-}
+// `addr_of_mut!` obtains a raw pointer without creating a reference
+// to the static, which is required under edition 2024.
+let buffer: &'static mut [u8] = unsafe {
+    core::slice::from_raw_parts_mut(
+        core::ptr::addr_of_mut!(BUFFER) as *mut u8,
+        4096,
+    )
+};
+let arena = Arena::from_static_buffer(buffer);
 ```
 
 ## Aligned and Unaligned Allocation

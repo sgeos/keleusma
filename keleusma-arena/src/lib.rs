@@ -1,25 +1,19 @@
-//! Simple and boring memory allocator for exciting applications.
+#![doc = include_str!("../README.md")]
 //!
-//! A dual-end bump-allocated arena for embedded Rust. Single contiguous
-//! buffer. Two pointers growing toward each other from opposite ends.
-//! Constant-time allocation. Fail-fast on exhaustion. `core`-only when
-//! the `alloc` feature is off.
+//! # API Reference
 //!
-//! See the README for the ecosystem pitch and the comparison with
-//! `bumpalo`.
-//!
-//! # Construction
+//! ## Construction
 //!
 //! - [`Arena::with_capacity`]. Heap-backed. Requires the `alloc` feature.
 //! - [`Arena::from_static_buffer`]. Borrows a `&'static mut [u8]`. Safe.
 //! - [`Arena::from_buffer_unchecked`]. Raw pointer and length. Unsafe.
 //!
-//! # Allocation
+//! ## Allocation
 //!
 //! [`BottomHandle`] and [`TopHandle`] borrow the arena and implement
 //! `allocator_api2::alloc::Allocator`. Pass them to `Vec::new_in` and
 //! similar constructors for arena-backed collections. The bottom end
-//! starts at offset zero and grows upward; the top end starts at the
+//! starts at offset zero and grows upward. The top end starts at the
 //! buffer's high address and grows downward. The arena imposes no
 //! semantic distinction between the two ends.
 //!
@@ -34,10 +28,10 @@
 //! supported. Unaligned byte allocations have direct convenience
 //! methods [`Arena::alloc_bottom_bytes`] and [`Arena::alloc_top_bytes`]
 //! that allocate `n` bytes without padding for alignment. Use the
-//! aligned form for typed values and pointers; use the byte form for
+//! aligned form for typed values and pointers. Use the byte form for
 //! packed byte buffers.
 //!
-//! # Reset, Rewind, and Marks
+//! ## Reset, Rewind, and Marks
 //!
 //! [`Arena::reset`] takes `&mut self` and clears both ends safely. Each
 //! end also exposes a LIFO mark and rewind discipline. The mark
@@ -48,7 +42,7 @@
 //! region while raw pointers obtained through the `Allocator` trait may
 //! still be held by the caller.
 //!
-//! # Observability and Budget
+//! ## Observability and Budget
 //!
 //! [`Arena::bottom_peak`] and [`Arena::top_peak`] track high watermarks
 //! since arena creation or the most recent [`Arena::clear_peaks`].
@@ -59,7 +53,7 @@
 //! budget through any analysis they choose. [`Arena::fits_budget`]
 //! checks whether the budget is admissible against the arena's capacity.
 //!
-//! # Thread Safety
+//! ## Thread Safety
 //!
 //! Not thread-safe. Interior mutability uses `Cell<usize>` rather than
 //! atomic primitives. The arena is designed for scoped per-thread use
@@ -231,6 +225,7 @@ impl Arena {
     /// assert!(arena.bottom_used() >= 24);
     /// ```
     #[cfg(feature = "alloc")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "alloc")))]
     pub fn with_capacity(capacity: usize) -> Self {
         use alloc::alloc::{Layout as AllocLayout, alloc_zeroed, handle_alloc_error};
 
