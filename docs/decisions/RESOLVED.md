@@ -148,6 +148,18 @@ The deeper integration of the operand stack and dynamic-string storage with the 
 
 The dependency on `allocator-api2` adds about 0.04 megabytes of dependency code and no runtime cost. The crate is a stable polyfill of the unstable `core::alloc::Allocator` trait. When the standard trait stabilizes, the dependency may be removed in favor of the standard library.
 
+## R37. Call-graph integration and auto-arena sizing for WCMU
+
+The WCMU analysis is extended to walk the call graph in topological order. Per-chunk WCMU is computed bottom-up, with each chunk's bound including the transitive contributions of any chunks it calls and any host-attested native heap usage. The function `verify::module_wcmu(module, native_wcmu)` returns the per-chunk results. The function `verify::verify_resource_bounds_with_natives(module, capacity, native_wcmu)` checks each Stream chunk's budget against the configured arena capacity using the new analysis.
+
+Auto-arena sizing is implemented as `Vm::new_auto(module)`, which computes the largest WCMU sum across Stream chunks under default native attestations and sizes the arena accordingly. `Vm::auto_arena_capacity()` returns the same value for an existing VM under current native attestations, useful for diagnostics.
+
+Re-verification with current native bounds is provided by `Vm::verify_resources()`. The host calls this after registering natives and declaring their WCET and WCMU through `Vm::set_native_bounds`. The default attestation at registration time is zero heap, which is a sound under-bound for natives that allocate. Hosts must override the default for natives that consume arena memory, or the verification produces an underestimate.
+
+The call-graph analysis enforces the no-recursion rule (R4) by detecting cycles during the topological sort. Programs that violate the rule are rejected with a clear error.
+
+Variable-iteration loops are still treated as one iteration. The mismatch between the bytecode loop shape and the source-language for-range bounds is the responsibility of a separate analysis pass tracked as P9.
+
 ## R36. Arena extracted to standalone keleusma-arena crate
 
 The dual-end bump-allocated arena specified in R32 and implemented in R34 is extracted to a standalone workspace member named `keleusma-arena`. The crate is positioned as a general-purpose embedded arena allocator with a differentiated value proposition from `bumpalo`, namely fixed-size storage, fail-fast allocation, dual-end discipline, generic budget contract, and `core`-only operation without `alloc`.

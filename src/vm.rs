@@ -90,6 +90,28 @@ pub const DEFAULT_NATIVE_WCMU_BYTES: u32 = 0;
 /// can override this by calling `Vm::new_with_arena_capacity`.
 pub const DEFAULT_ARENA_CAPACITY: usize = 64 * 1024;
 
+/// Compute the smallest arena capacity that admits the given module
+/// under the supplied native attestations. Returns the maximum WCMU sum
+/// across Stream chunks, or zero if the module has no Stream chunks.
+pub fn auto_arena_capacity_for(
+    module: &crate::bytecode::Module,
+    native_wcmu: &[u32],
+) -> Result<usize, VmError> {
+    let chunk_wcmu = verify::module_wcmu(module, native_wcmu)
+        .map_err(|e| VmError::VerifyError(format!("{}: {}", e.chunk_name, e.message)))?;
+    let mut max_total: usize = 0;
+    for (chunk_idx, chunk) in module.chunks.iter().enumerate() {
+        if chunk.block_type == crate::bytecode::BlockType::Stream {
+            let (s, h) = chunk_wcmu[chunk_idx];
+            let total = (s as usize).saturating_add(h as usize);
+            if total > max_total {
+                max_total = total;
+            }
+        }
+    }
+    Ok(max_total)
+}
+
 /// The Keleusma virtual machine.
 pub struct Vm {
     module: Module,
@@ -114,6 +136,22 @@ impl Vm {
     /// verification fails.
     pub fn new(module: Module) -> Result<Self, VmError> {
         Self::new_with_arena_capacity(module, DEFAULT_ARENA_CAPACITY)
+    }
+
+    /// Construct a VM with an arena auto-sized from the module's
+    /// worst-case memory usage.
+    ///
+    /// The capacity is the sum of the worst-case stack and heap WCMU of
+    /// the entry-point Stream chunk, computed with default native
+    /// attestations (zero heap). For modules without function calls or
+    /// natives, this produces a tight bound. For modules whose natives
+    /// allocate from the arena, the host should set native bounds and
+    /// call [`Vm::verify_resources`] afterward; if verification fails
+    /// because the auto-sized arena is too small, construct a new VM
+    /// with [`Vm::new_with_arena_capacity`] using a larger capacity.
+    pub fn new_auto(module: Module) -> Result<Self, VmError> {
+        let capacity = auto_arena_capacity_for(&module, &[])?;
+        Self::new_with_arena_capacity(module, capacity)
     }
 
     /// Create a new VM with the given compiled module and a host-specified
@@ -316,6 +354,37 @@ impl Vm {
             name: String::from(name),
             func: func.into_native_fn(),
         });
+    }
+
+    /// Re-verify resource bounds with current native attestations.
+    ///
+    /// Walks the module's call graph, computes per-chunk WCMU including
+    /// transitive contributions from chunks and natives, and checks
+    /// each Stream chunk against the configured arena capacity. The
+    /// host calls this after registering natives and declaring their
+    /// bounds via [`Vm::set_native_bounds`].
+    ///
+    /// Returns an error if any Stream chunk's WCMU exceeds the arena
+    /// capacity.
+    pub fn verify_resources(&self) -> Result<(), VmError> {
+        let native_wcmu: Vec<u32> = self.natives.iter().map(|n| n.wcmu_bytes).collect();
+        verify::verify_resource_bounds_with_natives(
+            &self.module,
+            self.arena.capacity(),
+            &native_wcmu,
+        )
+        .map_err(|e| VmError::VerifyError(format!("{}: {}", e.chunk_name, e.message)))
+    }
+
+    /// Compute the smallest arena capacity that admits this VM's module
+    /// under current native attestations.
+    ///
+    /// Returns the maximum WCMU sum across Stream chunks. If the module
+    /// has no Stream chunk, returns zero. The host can use this to size
+    /// a fresh VM appropriately.
+    pub fn auto_arena_capacity(&self) -> Result<usize, VmError> {
+        let native_wcmu: Vec<u32> = self.natives.iter().map(|n| n.wcmu_bytes).collect();
+        auto_arena_capacity_for(&self.module, &native_wcmu)
     }
 
     /// Set the worst-case execution time and memory usage attestation for

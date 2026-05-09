@@ -33,19 +33,21 @@ Foundation complete. R34 records the implementation. The remaining work is itera
 
 Items 5 and 6 are coordinated. They cannot be done independently because both touch the lifetime story of `Value`. They are the next major refactor and should be addressed together. The current arena is operational and reset on schedule, but its principal use today is host-supplied native functions that wish to allocate arena-resident scratch buffers. The operand stack and dynamic-string storage continue to use the global allocator with Rust drop semantics enforcing the arena lifetime.
 
-## P8. WCMU instrumentation and auto-arena sizing
+## ~~P8. WCMU instrumentation and auto-arena sizing~~ (Resolved as R35 and R37)
 
-R31 specifies WCMU as the fifth guarantee. R35 records the implementation. Status of the items is as follows.
+All P8 items are complete except for the bounded-iteration loop analysis, which is tracked separately as P9.
 
-1. ~~Add `Op::stack_growth`, `Op::stack_shrink`, and `Op::heap_alloc` methods paralleling `Op::cost()`.~~ Complete.
-2. ~~Add `wcmu_stream_iteration()` paralleling `wcet_stream_iteration()`.~~ Complete.
-3. Compute `stack_wcmu` and `heap_wcmu` separately. ~~Function returns both as a tuple.~~ Complete. Recording in `Module` is open and not strictly required because the analysis runs at verify time.
-4. ~~Verify `stack_wcmu + heap_wcmu <= arena_size` at load time.~~ Complete via `verify_resource_bounds` called from `Vm::new` and `Vm::replace_module`.
-5. Auto-arena sizing. Open. Currently the host configures arena capacity. A future iteration could compute the WCMU sum and size the arena automatically.
-6. ~~Widen the host-attestation API.~~ Complete via `Vm::set_native_bounds(name, wcet, wcmu)`. Native entries carry both bounds. Defaults are 10 WCET and 0 WCMU.
-7. Reject programs whose WCMU cannot be statically computed. Partially complete. The current analysis returns a value for any structurally valid program. Programs with variable-iteration loops or transitive calls produce underestimates rather than rejection. A sound rejection path requires call-graph analysis and bounded-loop integration.
+1. ~~Add `Op::stack_growth`, `Op::stack_shrink`, and `Op::heap_alloc` methods.~~ Complete.
+2. ~~Add `wcmu_stream_iteration()`.~~ Complete.
+3. ~~Compute `stack_wcmu` and `heap_wcmu` separately.~~ Complete.
+4. ~~Verify `stack_wcmu + heap_wcmu <= arena_size` at load time.~~ Complete.
+5. ~~Auto-arena sizing.~~ Complete via `Vm::new_auto` and `Vm::auto_arena_capacity`. R37.
+6. ~~Widen host-attestation API.~~ Complete via `Vm::set_native_bounds`.
+7. ~~Reject programs whose WCMU cannot be statically computed.~~ Complete for the call-graph case. The analysis now walks the call DAG topologically and includes transitive contributions of called chunks and natives. R37.
 
-The remaining open items are auto-arena sizing (item 5) and call-graph analysis (item 7). Both are well-scoped follow-on tasks. Recommended as V0.0-M7 alongside related work on the static analysis tooling.
+## P9. Bounded-iteration loop analysis
+
+The current WCMU analysis treats variable-iteration loops as one iteration. Programs that compile from `for i in 0..n` produce sound bounds at the static iteration count, but the analysis underestimates by the iteration factor at present. Lifting this requires either a side-table associating loop instructions with their iteration counts, or a structural pattern match on the compiled loop shape. The same limitation exists in the WCET analysis. A coordinated fix for both analyses is the V0.1 candidate.
 
 All P6 items are complete.
 

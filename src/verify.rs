@@ -225,6 +225,42 @@ impl McuResult {
     }
 }
 
+/// Lookup table for resolving the WCMU contribution of `Op::Call` and
+/// `Op::CallNative` instructions. The empty resolver returns zero for
+/// every lookup, which produces the local-only WCMU bound used by
+/// `wcmu_stream_iteration`. The full resolver is populated by
+/// `module_wcmu` for transitive call analysis.
+struct CallResolver<'a> {
+    /// Per-chunk WCMU as `(stack_bytes, heap_bytes)`. `None` for chunks
+    /// not yet analyzed in the topological walk.
+    chunk_wcmu: &'a [Option<(u32, u32)>],
+    /// Per-native WCMU bytes from host attestation. Indexed by native
+    /// function entry index.
+    native_wcmu: &'a [u32],
+}
+
+impl<'a> CallResolver<'a> {
+    /// A resolver that returns zero for every lookup. Used by the
+    /// local-only analysis path.
+    fn empty() -> Self {
+        Self {
+            chunk_wcmu: &[],
+            native_wcmu: &[],
+        }
+    }
+
+    fn resolve_chunk(&self, idx: u16) -> (u32, u32) {
+        self.chunk_wcmu
+            .get(idx as usize)
+            .and_then(|o| *o)
+            .unwrap_or((0, 0))
+    }
+
+    fn resolve_native(&self, idx: u16) -> u32 {
+        self.native_wcmu.get(idx as usize).copied().unwrap_or(0)
+    }
+}
+
 /// Compute the worst-case memory usage over a region of instructions
 /// `[start, end)`. The analysis tracks operand-stack depth in slots and
 /// arena heap bytes.
@@ -248,6 +284,7 @@ fn wcmu_region(
     start: usize,
     end: usize,
     break_results: &mut Vec<McuResult>,
+    resolver: &CallResolver,
 ) -> Option<McuResult> {
     let ops = &chunk.ops;
     let mut current_offset: i32 = 0;
@@ -302,10 +339,22 @@ fn wcmu_region(
                     } else {
                         unreachable!()
                     };
-                    let then_branch =
-                        wcmu_subregion(chunk, ip + 1, target - 1, current_offset, break_results);
-                    let else_branch =
-                        wcmu_subregion(chunk, target, endif_pos, current_offset, break_results);
+                    let then_branch = wcmu_subregion(
+                        chunk,
+                        ip + 1,
+                        target - 1,
+                        current_offset,
+                        break_results,
+                        resolver,
+                    );
+                    let else_branch = wcmu_subregion(
+                        chunk,
+                        target,
+                        endif_pos,
+                        current_offset,
+                        break_results,
+                        resolver,
+                    );
                     match (then_branch, else_branch) {
                         (Some(a), Some(b)) => {
                             peak = peak.max(a.peak_above_initial).max(b.peak_above_initial);
@@ -330,8 +379,14 @@ fn wcmu_region(
                     }
                     ip = endif_pos + 1;
                 } else {
-                    let then_branch =
-                        wcmu_subregion(chunk, ip + 1, target, current_offset, break_results);
+                    let then_branch = wcmu_subregion(
+                        chunk,
+                        ip + 1,
+                        target,
+                        current_offset,
+                        break_results,
+                        resolver,
+                    );
                     if let Some(a) = then_branch {
                         peak = peak.max(a.peak_above_initial);
                         heap += a.heap_total;
@@ -353,8 +408,14 @@ fn wcmu_region(
                 let loop_exit_target = *target as usize;
                 let endloop_ip = loop_exit_target - 1;
                 let mut loop_breaks: Vec<McuResult> = Vec::new();
-                let body =
-                    wcmu_subregion(chunk, ip + 1, endloop_ip, current_offset, &mut loop_breaks);
+                let body = wcmu_subregion(
+                    chunk,
+                    ip + 1,
+                    endloop_ip,
+                    current_offset,
+                    &mut loop_breaks,
+                    resolver,
+                );
                 let body_peak = body.as_ref().map_or(0, |r| r.peak_above_initial);
                 let body_heap = body.as_ref().map_or(0, |r| r.heap_total);
                 let break_peak = loop_breaks
@@ -369,6 +430,37 @@ fn wcmu_region(
                     return None;
                 }
                 ip = loop_exit_target;
+            }
+            Op::Call(callee_idx, n_args) => {
+                // Transitive WCMU contribution of the called chunk.
+                // The callee's stack WCMU includes its local frame plus
+                // its body peak. During the call, the caller's depth
+                // minus the n args being passed plus the callee's stack
+                // is the peak observed.
+                let (callee_stack_bytes, callee_heap_bytes) = resolver.resolve_chunk(*callee_idx);
+                let callee_stack_slots =
+                    (callee_stack_bytes / crate::bytecode::VALUE_SLOT_SIZE_BYTES) as i32;
+                let n = *n_args as i32;
+                let during_peak = (current_offset + callee_stack_slots - n)
+                    .max(current_offset + 1)
+                    .max(0) as u32;
+                peak = peak.max(during_peak);
+                heap += callee_heap_bytes;
+                // Net stack effect: pop n args, push 1 return value.
+                current_offset += 1 - n;
+                ip += 1;
+            }
+            Op::CallNative(native_idx, n_args) => {
+                // Native function runs in host code. The operand-stack
+                // effect is just the argument pop and return push. Heap
+                // contribution comes from the host attestation.
+                let native_heap = resolver.resolve_native(*native_idx);
+                let n = *n_args as i32;
+                let during_peak = (current_offset + 1).max(0) as u32;
+                peak = peak.max(during_peak);
+                heap += native_heap;
+                current_offset += 1 - n;
+                ip += 1;
             }
             Op::Else(_) | Op::EndIf | Op::EndLoop(_) => {
                 ip += 1;
@@ -402,9 +494,10 @@ fn wcmu_subregion(
     end: usize,
     offset_at_start: i32,
     break_results: &mut Vec<McuResult>,
+    resolver: &CallResolver,
 ) -> Option<McuResult> {
     let mut sub_breaks: Vec<McuResult> = Vec::new();
-    let result = wcmu_region(chunk, start, end, &mut sub_breaks);
+    let result = wcmu_region(chunk, start, end, &mut sub_breaks, resolver);
     // Lift breaks from the subregion into the caller's frame of reference.
     for b in sub_breaks {
         break_results.push(McuResult {
@@ -459,8 +552,9 @@ pub fn wcmu_stream_iteration(chunk: &Chunk) -> Result<(u32, u32), VerifyError> {
         })?;
 
     let mut breaks: Vec<McuResult> = Vec::new();
-    let body =
-        wcmu_region(chunk, stream_pos + 1, reset_pos, &mut breaks).unwrap_or(McuResult::empty());
+    let resolver = CallResolver::empty();
+    let body = wcmu_region(chunk, stream_pos + 1, reset_pos, &mut breaks, &resolver)
+        .unwrap_or(McuResult::empty());
 
     let body_peak = body.peak_above_initial;
     let body_heap = body.heap_total;
@@ -511,6 +605,119 @@ pub fn wcet_stream_iteration(chunk: &Chunk) -> Result<u32, VerifyError> {
     Ok(overhead + region_cost)
 }
 
+/// Compute the per-chunk WCMU for an entire module.
+///
+/// Returns a vector indexed by chunk index. Each entry is `(stack_bytes,
+/// heap_bytes)` and includes the chunk's local frame, body peak, and
+/// transitive contributions of any chunks or natives the chunk calls.
+///
+/// `native_wcmu` supplies the host-attested heap usage per native
+/// function, indexed by native function entry index. Natives whose
+/// index falls outside the slice contribute zero. This matches the
+/// default attestation when the host has not yet declared a native's
+/// bounds.
+///
+/// The call graph is required to be acyclic (R4 forbids recursion).
+/// Returns an error if a recursive call is detected.
+pub fn module_wcmu(module: &Module, native_wcmu: &[u32]) -> Result<Vec<(u32, u32)>, VerifyError> {
+    let n = module.chunks.len();
+    let mut chunk_wcmu: Vec<Option<(u32, u32)>> = alloc::vec![None; n];
+    let order = topological_call_order(module)?;
+    for chunk_idx in order {
+        let chunk = &module.chunks[chunk_idx];
+        let resolver = CallResolver {
+            chunk_wcmu: &chunk_wcmu,
+            native_wcmu,
+        };
+        let result = compute_chunk_wcmu(chunk, &resolver)?;
+        chunk_wcmu[chunk_idx] = Some(result);
+    }
+    Ok(chunk_wcmu
+        .into_iter()
+        .map(|o| o.unwrap_or((0, 0)))
+        .collect())
+}
+
+/// Topological order of the call graph. Leaves come first, roots last.
+fn topological_call_order(module: &Module) -> Result<Vec<usize>, VerifyError> {
+    let n = module.chunks.len();
+    let mut visited = alloc::vec![false; n];
+    let mut on_stack = alloc::vec![false; n];
+    let mut order = Vec::new();
+    for i in 0..n {
+        if !visited[i] {
+            topo_visit(module, i, &mut visited, &mut on_stack, &mut order)?;
+        }
+    }
+    Ok(order)
+}
+
+fn topo_visit(
+    module: &Module,
+    idx: usize,
+    visited: &mut [bool],
+    on_stack: &mut [bool],
+    order: &mut Vec<usize>,
+) -> Result<(), VerifyError> {
+    if on_stack[idx] {
+        return Err(VerifyError {
+            chunk_name: module.chunks[idx].name.clone(),
+            message: String::from("recursive call detected during WCMU topological sort"),
+        });
+    }
+    if visited[idx] {
+        return Ok(());
+    }
+    on_stack[idx] = true;
+    for op in &module.chunks[idx].ops {
+        if let Op::Call(callee, _) = op {
+            let callee_idx = *callee as usize;
+            if callee_idx < module.chunks.len() {
+                topo_visit(module, callee_idx, visited, on_stack, order)?;
+            }
+        }
+    }
+    on_stack[idx] = false;
+    visited[idx] = true;
+    order.push(idx);
+    Ok(())
+}
+
+/// Compute the WCMU of a single chunk given a resolver populated for
+/// any chunks it calls.
+fn compute_chunk_wcmu(chunk: &Chunk, resolver: &CallResolver) -> Result<(u32, u32), VerifyError> {
+    let (start, end) = match chunk.block_type {
+        BlockType::Stream => {
+            let stream_pos = chunk
+                .ops
+                .iter()
+                .position(|op| matches!(op, Op::Stream))
+                .ok_or_else(|| VerifyError {
+                    chunk_name: chunk.name.clone(),
+                    message: String::from("Stream block missing Stream instruction"),
+                })?;
+            let reset_pos = chunk
+                .ops
+                .iter()
+                .position(|op| matches!(op, Op::Reset))
+                .ok_or_else(|| VerifyError {
+                    chunk_name: chunk.name.clone(),
+                    message: String::from("Stream block missing Reset instruction"),
+                })?;
+            (stream_pos + 1, reset_pos)
+        }
+        BlockType::Func | BlockType::Reentrant => (0, chunk.ops.len()),
+    };
+
+    let mut breaks: Vec<McuResult> = Vec::new();
+    let body = wcmu_region(chunk, start, end, &mut breaks, resolver).unwrap_or(McuResult::empty());
+
+    let stack_slots = chunk.local_count as u32 + body.peak_above_initial;
+    let stack_bytes = stack_slots * crate::bytecode::VALUE_SLOT_SIZE_BYTES;
+
+    Ok((stack_bytes, body.heap_total))
+}
+
 /// Compute a memory budget for the given Stream chunk.
 ///
 /// The budget bottom side carries the stack WCMU. The budget top side
@@ -527,25 +734,43 @@ pub fn budget_for_stream(chunk: &Chunk) -> Result<keleusma_arena::Budget, Verify
     ))
 }
 
-/// Verify that the module's worst-case memory usage fits within the given
-/// arena capacity.
+/// Verify that the module's worst-case memory usage fits within the
+/// given arena capacity, using the local-only analysis.
 ///
-/// Computes a [`keleusma_arena::Budget`] for each Stream chunk and uses
-/// the arena's generic [`keleusma_arena::Arena::fits_budget`] contract
-/// to check admissibility. Programs that exceed the bound are rejected
-/// with a `VerifyError` describing which chunk failed.
-///
-/// Calling functions are not transitively included in the analysis. The
-/// bound is a sound upper bound for programs that do not contain calls.
-/// Programs with calls or variable-iteration loops may exhaust the arena
-/// at runtime even when this check passes. Sharper analysis is recorded
-/// as future work.
+/// Equivalent to [`verify_resource_bounds_with_natives`] with empty
+/// native attestations. Suitable for programs without function calls
+/// or natives, or as an initial sanity check before native attestation
+/// has been declared.
 pub fn verify_resource_bounds(module: &Module, arena_capacity: usize) -> Result<(), VerifyError> {
-    for chunk in &module.chunks {
+    verify_resource_bounds_with_natives(module, arena_capacity, &[])
+}
+
+/// Verify that the module's worst-case memory usage fits within the
+/// given arena capacity, with full call-graph integration and native
+/// attestations.
+///
+/// Computes [`module_wcmu`] using `native_wcmu` for native functions
+/// and the recursively computed per-chunk values for `Op::Call`. For
+/// each Stream chunk, builds a [`keleusma_arena::Budget`] and checks
+/// admissibility through [`keleusma_arena::Arena::fits_budget`].
+/// Programs that exceed the bound are rejected with a `VerifyError`
+/// describing which chunk failed.
+///
+/// Variable-iteration loops are still treated as one iteration. This
+/// limitation is tracked separately and is unsound for programs that
+/// rely on bounded iteration counts to stay within budget.
+pub fn verify_resource_bounds_with_natives(
+    module: &Module,
+    arena_capacity: usize,
+    native_wcmu: &[u32],
+) -> Result<(), VerifyError> {
+    let chunk_wcmu = module_wcmu(module, native_wcmu)?;
+    for (chunk_idx, chunk) in module.chunks.iter().enumerate() {
         if chunk.block_type != BlockType::Stream {
             continue;
         }
-        let budget = budget_for_stream(chunk)?;
+        let (stack_bytes, heap_bytes) = chunk_wcmu[chunk_idx];
+        let budget = keleusma_arena::Budget::new(stack_bytes as usize, heap_bytes as usize);
         if budget.total() > arena_capacity {
             return Err(VerifyError {
                 chunk_name: chunk.name.clone(),
@@ -1745,5 +1970,145 @@ mod tests {
         let module = make_module(vec![chunk]);
         let result = verify_resource_bounds(&module, 16);
         assert!(result.is_ok());
+    }
+
+    // -- Module-level WCMU and call-graph integration --
+
+    #[test]
+    fn module_wcmu_returns_per_chunk_results() {
+        let chunk = make_chunk(
+            "tick",
+            vec![Op::Stream, Op::PushUnit, Op::Yield, Op::Pop, Op::Reset],
+            BlockType::Stream,
+        );
+        let module = make_module(vec![chunk]);
+        let results = module_wcmu(&module, &[]).unwrap();
+        assert_eq!(results.len(), 1);
+        let (stack_bytes, heap_bytes) = results[0];
+        assert!(stack_bytes > 0);
+        assert_eq!(heap_bytes, 0);
+    }
+
+    #[test]
+    fn module_wcmu_includes_transitive_call_heap() {
+        // chunk 0: callee that allocates an array.
+        // chunk 1: stream that calls chunk 0.
+        let mut callee = make_chunk(
+            "alloc_array",
+            vec![
+                Op::Const(0),
+                Op::Const(0),
+                Op::Const(0),
+                Op::NewArray(3),
+                Op::Pop,
+                Op::PushUnit,
+                Op::Return,
+            ],
+            BlockType::Func,
+        );
+        callee.constants = vec![Value::Int(0)];
+
+        let stream_chunk = make_chunk(
+            "tick",
+            vec![
+                Op::Stream,     // 0
+                Op::Call(0, 0), // 1 — calls alloc_array
+                Op::Pop,        // 2
+                Op::PushUnit,   // 3
+                Op::Yield,      // 4
+                Op::Pop,        // 5
+                Op::Reset,      // 6
+            ],
+            BlockType::Stream,
+        );
+
+        let module = make_module(vec![callee, stream_chunk]);
+        let results = module_wcmu(&module, &[]).unwrap();
+        // Stream chunk's heap should include callee's array allocation.
+        let (_stream_stack, stream_heap) = results[1];
+        let (_callee_stack, callee_heap) = results[0];
+        assert!(callee_heap > 0, "callee heap should be > 0");
+        assert!(
+            stream_heap >= callee_heap,
+            "stream heap should include callee heap"
+        );
+    }
+
+    #[test]
+    fn module_wcmu_uses_native_attestation() {
+        let stream_chunk = make_chunk(
+            "tick",
+            vec![
+                Op::Stream,           // 0
+                Op::CallNative(0, 0), // 1 — calls native 0
+                Op::Pop,              // 2
+                Op::PushUnit,         // 3
+                Op::Yield,            // 4
+                Op::Pop,              // 5
+                Op::Reset,            // 6
+            ],
+            BlockType::Stream,
+        );
+
+        let mut module = make_module(vec![stream_chunk]);
+        module.native_names = vec![String::from("host::alloc")];
+
+        // No attestation: heap should be zero.
+        let results = module_wcmu(&module, &[]).unwrap();
+        let (_, heap_no_attest) = results[0];
+        assert_eq!(heap_no_attest, 0);
+
+        // With attestation of 256 bytes: heap should reflect.
+        let results = module_wcmu(&module, &[256]).unwrap();
+        let (_, heap_with_attest) = results[0];
+        assert_eq!(heap_with_attest, 256);
+    }
+
+    #[test]
+    fn verify_resource_bounds_with_natives_rejects_attested_overflow() {
+        let stream_chunk = make_chunk(
+            "tick",
+            vec![
+                Op::Stream,
+                Op::CallNative(0, 0),
+                Op::Pop,
+                Op::PushUnit,
+                Op::Yield,
+                Op::Pop,
+                Op::Reset,
+            ],
+            BlockType::Stream,
+        );
+        let mut module = make_module(vec![stream_chunk]);
+        module.native_names = vec![String::from("host::alloc")];
+
+        // Attestation of 1024 bytes; arena of 16 bytes is too small.
+        let err = verify_resource_bounds_with_natives(&module, 16, &[1024]).unwrap_err();
+        assert!(err.message.contains("exceeds arena capacity"));
+    }
+
+    #[test]
+    fn module_wcmu_topological_handles_chain() {
+        // Three-chunk chain: stream calls helper, helper calls leaf.
+        let leaf = make_chunk("leaf", vec![Op::PushUnit, Op::Return], BlockType::Func);
+        let helper = make_chunk("helper", vec![Op::Call(0, 0), Op::Return], BlockType::Func);
+        let stream = make_chunk(
+            "tick",
+            vec![
+                Op::Stream,
+                Op::Call(1, 0),
+                Op::Pop,
+                Op::PushUnit,
+                Op::Yield,
+                Op::Pop,
+                Op::Reset,
+            ],
+            BlockType::Stream,
+        );
+        let module = make_module(vec![leaf, helper, stream]);
+        let results = module_wcmu(&module, &[]).unwrap();
+        assert_eq!(results.len(), 3);
+        // All chunks should have a non-zero stack bound (their local frame
+        // contributes at least one slot for the chunk).
     }
 }
