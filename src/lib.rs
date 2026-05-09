@@ -7,6 +7,7 @@ pub mod bytecode;
 pub mod compiler;
 pub mod lexer;
 pub mod marshall;
+pub mod monomorphize;
 pub mod parser;
 pub mod token;
 pub mod typecheck;

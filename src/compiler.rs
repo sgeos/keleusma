@@ -330,6 +330,21 @@ pub fn compile(program: &Program) -> Result<Module, CompileError> {
         span: e.span,
     })?;
 
+    // Monomorphize generic functions before compilation. The pass
+    // walks the call graph and generates a specialized FunctionDef
+    // per `(function, type_args)` pair. Call sites are rewritten to
+    // reference the specialized name. Generic functions for which
+    // no concrete instantiation could be inferred remain unchanged
+    // and rely on runtime polymorphism through the Value tag.
+    let owned = crate::monomorphize::monomorphize(program.clone());
+    // Re-typecheck the monomorphized program so specialized bodies
+    // benefit from concrete-type method resolution.
+    crate::typecheck::check(&owned).map_err(|e| CompileError {
+        message: format!("type error after monomorphization: {}", e.message),
+        span: e.span,
+    })?;
+    let program = &owned;
+
     let mut native_names: Vec<String> = Vec::new();
     let mut native_map: BTreeMap<String, u16> = BTreeMap::new();
 

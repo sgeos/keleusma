@@ -32,30 +32,26 @@ The remaining future work tracked under this entry.
 
 - Method call surface syntax (`x.method(args)`). Parser change plus resolution. Pairs naturally with monomorphization which makes the receiver type concrete.
 
-## B2.4 Compile-time monomorphization
+## ~~B2.4 Compile-time monomorphization~~ (MVP landed)
 
-Monomorphization specializes each generic chunk per concrete type instantiation, eliminating runtime tag dispatch for generic operations and providing a path for trait method dispatch.
+Monomorphization specializes generic functions per concrete type instantiation. The MVP is implemented in `src/monomorphize.rs` and runs between type checking and compilation in `compile()`.
 
-Design phases.
+What lands.
 
-Phase 1. Call-graph traversal from `main`. Walk the program from the entry point, following calls. At each call to a generic function, record the concrete `Vec<Type>` that satisfies the call's type parameters. Each unique `(function, type_args)` pair is one specialization.
+- Call-graph traversal from non-generic functions. The pass walks every call site of a generic function and infers the concrete type arguments from literal arguments and locals with declared types.
+- Specialization generation. Each `(function, type_args)` pair clones the generic function and substitutes the abstract type-parameter names with the concrete `TypeExpr` throughout the parameter list, the return type, and the function body (let bindings, casts, struct constructions, and so on).
+- Trait method resolution within specializations. After substitution, the receiver of a method call has a concrete type. The compiler's existing `MethodCall` resolution path looks up the impl's mangled name `Trait::TypeHead::method` in the function map and emits a direct call.
+- Output. The compiler emits the monomorphic specializations and drops the original generic functions whose specialization was generated. Calls in the program are rewritten to point to the specializations through the mangled names.
+- Re-typecheck after monomorphization validates the specialized bodies under their concrete types, which is what allows generic-receiver method calls to resolve.
 
-Phase 2. Specialization generation. For each `(function, type_args)` pair, clone the function's body and substitute the abstract type-parameter variables with the concrete types throughout. The specialization name is the original function name suffixed with the canonical encoding of the type args.
+End-to-end example. `examples/monomorphize_generic_method.rs` compiles and executes `fn use_doubler<T: Doubler>(x: T) -> i64 { x.double() }` where the body's method call resolves only after monomorphization specializes `use_doubler` for `T = i64`.
 
-Phase 3. Trait method resolution within specializations. After substitution, every use of a trait method on a known-concrete type rewrites to the impl's mangled name (`Trait::TypeHead::method`). The runtime dispatch becomes a direct chunk-index call.
+Remaining work.
 
-Phase 4. Output. The compiler emits only the monomorphic specializations. The original generic functions are dropped from the bytecode. Calls in the program are rewritten to point to the specializations.
-
-Implementation considerations.
-
-- Generic structs and enums are similarly monomorphized. The runtime representation can stay tag-based for now (`Type::Struct(name, args)`); future work could specialize the runtime representation per instantiation.
-- Polymorphic recursion is rejected because it produces unbounded specializations.
-- Caching the specializations by `(function, type_args)` ensures finite output.
-- The substitution applied is the function's signature substitution at the call site, captured by the type checker.
-
-Estimated implementation effort. Four to eight hours for generic functions; trait method dispatch within specializations adds two to four hours. Generic structs and enums are roughly equivalent to functions.
-
-This is the next major language work. Without monomorphization, trait methods cannot be invoked through a clean surface syntax, and the runtime pays a tag-dispatch cost on every operation.
+- Generic structs and enums. The current pass handles only generic functions. Generic struct construction and field access continue to use runtime tag dispatch. Specialization of structs requires emitting per-instantiation copies of struct templates and rewriting field offsets accordingly. Estimated 3 to 5 hours.
+- Inference reach. The MVP infers concrete type arguments from literal arguments and locally-declared identifiers. Cases where the type argument flows through a chain of function calls or through generic-receiver method results are not yet handled and the call site is left generic. Estimated 2 to 4 hours.
+- Polymorphic recursion guard. If a generic function calls itself with type arguments derived from its own type parameters, the pass would loop indefinitely. The MVP relies on the call graph being finite and the test suite not exercising polymorphic recursion. A guard against unbounded specialization should be added before the feature is considered production-ready.
+- Pruning unused generic functions. The MVP retains generic functions that have at least one specialization; non-specialized generics remain in the program as dead code that the compiler emits but the runtime never enters. A pruning pass would remove these.
 
 ## B3. Closures or anonymous functions
 

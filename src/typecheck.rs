@@ -2703,6 +2703,21 @@ mod tests {
     }
 
     #[test]
+    fn monomorphize_generic_method_dispatch() {
+        // Inside a generic function body, the receiver's type is the
+        // abstract type parameter. Monomorphization specializes the
+        // function per concrete call-site type, after which the
+        // method call resolves to the impl's mangled function.
+        check_src(
+            "trait Doubler { fn double(x: i64) -> i64; }\n\
+             impl Doubler for i64 { fn double(x: i64) -> i64 { x + x } }\n\
+             fn use_doubler<T: Doubler>(x: T) -> i64 { x.double() }\n\
+             fn main() -> i64 { use_doubler(21) }",
+        )
+        .unwrap();
+    }
+
+    #[test]
     fn method_call_resolves_to_impl() {
         check_src(
             "trait Doubler { fn double(x: i64) -> i64; }\n\
