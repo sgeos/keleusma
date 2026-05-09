@@ -312,6 +312,15 @@ pub enum Expr {
         field: String,
         span: Span,
     },
+    /// Method call: `expr.method(args)`. Resolved at compile time to
+    /// the impl-defined function for the receiver's type. Generic
+    /// receivers are resolved through monomorphization.
+    MethodCall {
+        receiver: Box<Expr>,
+        method: String,
+        args: Vec<Expr>,
+        span: Span,
+    },
     /// Tuple index: `expr.0`.
     TupleIndex {
         object: Box<Expr>,
@@ -366,6 +375,7 @@ impl Expr {
             | Expr::Match { span, .. }
             | Expr::Loop { span, .. }
             | Expr::FieldAccess { span, .. }
+            | Expr::MethodCall { span, .. }
             | Expr::TupleIndex { span, .. }
             | Expr::ArrayIndex { span, .. }
             | Expr::StructInit { span, .. }

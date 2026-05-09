@@ -870,6 +870,28 @@ fn infer_expr_type(fc: &FuncCompiler, expr: &Expr) -> Option<TypeExpr> {
     }
 }
 
+/// Compute the head name of a type expression for method dispatch
+/// resolution. Mirrors the typecheck `type_head_name` helper.
+fn type_expr_head(ty: &TypeExpr) -> Option<String> {
+    use alloc::string::ToString;
+    match ty {
+        TypeExpr::Prim(p, _) => Some(
+            match p {
+                PrimType::I64 => "i64",
+                PrimType::F64 => "f64",
+                PrimType::Bool => "bool",
+                PrimType::KString => "String",
+            }
+            .to_string(),
+        ),
+        TypeExpr::Unit(_) => Some("()".to_string()),
+        TypeExpr::Tuple(_, _) => Some("tuple".to_string()),
+        TypeExpr::Array(_, _, _) => Some("array".to_string()),
+        TypeExpr::Option(_, _) => Some("Option".to_string()),
+        TypeExpr::Named(name, _, _) => Some(name.clone()),
+    }
+}
+
 /// Compile a let binding pattern (allocate locals and store values).
 fn compile_let_pattern(fc: &mut FuncCompiler, pattern: &Pattern) -> Result<(), CompileError> {
     compile_let_pattern_typed(fc, pattern, None)
@@ -1190,6 +1212,59 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
 
         Expr::Call { name, args, span } => {
             compile_call(fc, name, args, span)?;
+        }
+
+        Expr::MethodCall {
+            receiver,
+            method,
+            args,
+            span,
+        } => {
+            // Resolve the method by inferring the receiver's type
+            // head and finding a registered impl method with the
+            // mangled name `Trait::Head::method` in the function map.
+            // The receiver is passed as the first argument to the
+            // resolved chunk.
+            let head = match infer_expr_type(fc, receiver).and_then(|t| type_expr_head(&t)) {
+                Some(h) => h,
+                None => {
+                    return Err(CompileError {
+                        message: format!(
+                            "method `{}` receiver type cannot be statically resolved; \
+                             this currently requires monomorphization (B2.4)",
+                            method
+                        ),
+                        span: *span,
+                    });
+                }
+            };
+            // Search the function map for any `*::Head::method` entry.
+            let suffix = format!("::{}::{}", head, method);
+            let resolved = fc
+                .function_map
+                .iter()
+                .find(|(k, _)| k.ends_with(&suffix))
+                .map(|(k, &idx)| (k.clone(), idx));
+            let (mangled, chunk_idx) = match resolved {
+                Some(p) => p,
+                None => {
+                    return Err(CompileError {
+                        message: format!(
+                            "type `{}` has no method `{}` from any trait in scope",
+                            head, method
+                        ),
+                        span: *span,
+                    });
+                }
+            };
+            let _ = mangled;
+            // Push the receiver and remaining arguments, then call.
+            compile_expr(fc, receiver)?;
+            for arg in args {
+                compile_expr(fc, arg)?;
+            }
+            let arg_count = (args.len() + 1) as u8;
+            fc.emit(Op::Call(chunk_idx, arg_count));
         }
 
         Expr::Pipeline {

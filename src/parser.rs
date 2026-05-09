@@ -798,14 +798,31 @@ impl<'a> Parser<'a> {
                 // Field access or tuple index.
                 let tok = self.tokens[self.pos].clone();
                 match tok.kind {
-                    TokenKind::LowerIdent(field) => {
+                    TokenKind::LowerIdent(name) => {
                         self.pos += 1;
-                        let span = merge_spans(expr.span(), tok.span);
-                        expr = Expr::FieldAccess {
-                            object: Box::new(expr),
-                            field,
-                            span,
-                        };
+                        // Distinguish field access from method call by
+                        // looking ahead for `(`. `expr.name(args)` is
+                        // a method call; `expr.name` without paren is
+                        // a field access.
+                        if self.at(&TokenKind::LParen) {
+                            self.pos += 1;
+                            let args = self.parse_arg_list()?;
+                            let end = self.expect(&TokenKind::RParen)?;
+                            let span = merge_spans(expr.span(), end);
+                            expr = Expr::MethodCall {
+                                receiver: Box::new(expr),
+                                method: name,
+                                args,
+                                span,
+                            };
+                        } else {
+                            let span = merge_spans(expr.span(), tok.span);
+                            expr = Expr::FieldAccess {
+                                object: Box::new(expr),
+                                field: name,
+                                span,
+                            };
+                        }
                     }
                     TokenKind::IntLit(idx) => {
                         self.pos += 1;

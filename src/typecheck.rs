@@ -870,10 +870,26 @@ pub fn check(program: &Program) -> Result<(), TypeError> {
     for func in &program.functions {
         check_function(&mut ctx, func)?;
     }
-    // Also check impl method bodies as ordinary functions.
+    // Also check impl method bodies. The bodies are checked under
+    // their mangled names so the parameter and return type lookups
+    // resolve through the same FnSig that was registered in pass 1d.
     for impl_block in &program.impls {
+        let head = match Type::from_expr(&impl_block.for_type, &ctx.types) {
+            Type::I64 => "i64".to_string(),
+            Type::F64 => "f64".to_string(),
+            Type::Bool => "bool".to_string(),
+            Type::Unit => "()".to_string(),
+            Type::Str => "String".to_string(),
+            Type::Tuple(_) => "tuple".to_string(),
+            Type::Array(_, _) => "array".to_string(),
+            Type::Option(_) => "Option".to_string(),
+            Type::Struct(name, _) | Type::Enum(name, _) | Type::Opaque(name) => name,
+            Type::Var(_) | Type::Unknown => continue,
+        };
         for method in &impl_block.methods {
-            check_function(&mut ctx, method)?;
+            let mut renamed = method.clone();
+            renamed.name = format!("{}::{}::{}", impl_block.trait_name, head, method.name);
+            check_function(&mut ctx, &renamed)?;
         }
     }
 
@@ -1966,6 +1982,100 @@ fn type_of_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Type, TypeError> {
             }
         }
         Expr::Placeholder { .. } => Ok(ctx.fresh()),
+        Expr::MethodCall {
+            receiver,
+            method,
+            args,
+            span,
+        } => {
+            // Method call resolution by receiver type.
+            //
+            // Compute the receiver's type, take its head name, and look
+            // up the mangled function `Trait::Head::method` for any
+            // trait that has an impl for the receiver's type. The
+            // receiver is passed as the first argument.
+            //
+            // For unresolved receiver types (Type::Var or
+            // Type::Unknown), the resolution is deferred. The current
+            // session emits a fresh return type and skips bound
+            // checking; B2.4 monomorphization will resolve the call
+            // by substituting the concrete instantiation.
+            let receiver_ty = type_of_expr(ctx, receiver)?;
+            let receiver_resolved = receiver_ty.apply(&ctx.subst);
+            let head = match type_head_name(&receiver_resolved) {
+                Some(h) => h,
+                None => return Ok(ctx.fresh()),
+            };
+            // Search for any trait that has an impl for the head with
+            // a method matching the called name.
+            let mut resolved: Option<String> = None;
+            for trait_name in ctx.traits.keys() {
+                let candidate = format!("{}::{}::{}", trait_name, head, method);
+                if ctx.functions.contains_key(&candidate) {
+                    resolved = Some(candidate);
+                    break;
+                }
+            }
+            let mangled = resolved.unwrap_or_default();
+            let sig = match ctx.functions.get(&mangled).cloned() {
+                Some(s) => s,
+                None => {
+                    return Err(TypeError::new(
+                        format!(
+                            "type `{}` has no method `{}` from any trait in scope",
+                            head, method
+                        ),
+                        *span,
+                    ));
+                }
+            };
+            // The receiver is implicitly the first argument. Total
+            // argument count must match params.len(). Check that
+            // params.len() >= 1 to account for the receiver.
+            let expected = sig.params.len();
+            let actual = args.len() + 1;
+            if expected != actual {
+                return Err(TypeError::new(
+                    format!(
+                        "method `{}` expects {} arguments (including receiver), got {}",
+                        method, expected, actual
+                    ),
+                    *span,
+                ));
+            }
+            // Instantiate generic type parameters.
+            let (inst_params, inst_return, _fresh_vars) = instantiate_sig(ctx, &sig);
+            // Unify receiver with the first parameter.
+            if let Some(first) = inst_params.first()
+                && !types_compatible(ctx, &receiver_resolved, first)
+            {
+                return Err(TypeError::new(
+                    format!(
+                        "method `{}` receiver expects {}, got {}",
+                        method,
+                        first.display(),
+                        receiver_resolved.display()
+                    ),
+                    receiver.span(),
+                ));
+            }
+            // Unify remaining args with the rest of the parameters.
+            for (arg, param_ty) in args.iter().zip(inst_params.iter().skip(1)) {
+                let arg_ty = type_of_expr(ctx, arg)?;
+                if !types_compatible(ctx, &arg_ty, param_ty) {
+                    return Err(TypeError::new(
+                        format!(
+                            "method `{}` argument expects {}, got {}",
+                            method,
+                            param_ty.display(),
+                            arg_ty.display()
+                        ),
+                        arg.span(),
+                    ));
+                }
+            }
+            Ok(inst_return)
+        }
     }
 }
 
@@ -2590,6 +2700,33 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.message.contains("parameter"));
+    }
+
+    #[test]
+    fn method_call_resolves_to_impl() {
+        check_src(
+            "trait Doubler { fn double(x: i64) -> i64; }\n\
+             impl Doubler for i64 { fn double(x: i64) -> i64 { x + x } }\n\
+             fn main() -> i64 {\n\
+                let n: i64 = 21;\n\
+                n.double()\n\
+             }",
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn method_call_unknown_method_rejected() {
+        let err = check_src(
+            "trait Doubler { fn double(x: i64) -> i64; }\n\
+             impl Doubler for i64 { fn double(x: i64) -> i64 { x + x } }\n\
+             fn main() -> i64 {\n\
+                let n: i64 = 21;\n\
+                n.triple()\n\
+             }",
+        )
+        .unwrap_err();
+        assert!(err.message.contains("no method"));
     }
 
     #[test]
