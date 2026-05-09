@@ -9,7 +9,7 @@ AI to Human communication channel.
 ## Last Updated
 
 **Date**: 2026-05-08
-**Task**: keleusma-arena v0.1.0 published to crates.io. keleusma switched to registry consumption.
+**Task**: V0.1-M1 precompiled bytecode loading and trust-based verification skip.
 **Status**: Complete.
 
 ## Verification
@@ -17,66 +17,72 @@ AI to Human communication channel.
 **Commands**:
 
 ```bash
-cargo publish
-cargo update -p keleusma-arena
 cargo build --workspace
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
+cargo fmt --all
 ```
 
 **Results**:
 
-- `cargo publish` for `keleusma-arena` succeeded. 12 files, 55.1 KiB total, 15.3 KiB compressed. The registry confirmed availability.
-- `cargo update -p keleusma-arena` resolved the dependency to `keleusma-arena v0.1.0` from `crates-io`.
-- Workspace builds and tests pass. 323 tests total. 278 keleusma unit, 17 keleusma integration, 22 keleusma-arena unit, 6 keleusma-arena doctests.
+- Workspace tests pass. 286 keleusma unit, 17 keleusma integration, 22 keleusma-arena unit, 6 keleusma-arena doctests. 331 tests total. Up from 323 by seven new precompiled-bytecode tests in `src/vm.rs::tests`.
 - Clippy with `--workspace --all-targets`. Zero warnings.
+- Format. Clean.
+- New dependencies. `serde 1.x` with `derive` and `alloc` features. `postcard 1.x` with `alloc` feature. Both `no_std` plus `alloc` compatible.
 
 ## Summary
 
-Two operations completed.
+The Keleusma scripting language now runs precompiled code from any addressable byte slice. The implementation is path A as defined in R39. The Module type is serialized and deserialized through `postcard` with a self-describing magic-and-version header. The deserialized form holds owned heap data and does not borrow from the input slice. The bytecode buffer can persist in `.rodata`, in a file, in `Vec<u8>`, or anywhere else accessible as `&[u8]`. Section placement is the host's responsibility because the runtime crate stays `no_std` plus `alloc`.
 
-1. **Published `keleusma-arena` v0.1.0 to crates.io.** The crate is live at https://crates.io/crates/keleusma-arena. Documentation will render at https://docs.rs/keleusma-arena/0.1.0/ shortly. Registry metadata includes the description, keywords, categories, license, homepage, and repository URLs. The published package is 15.3 KiB compressed and includes the source, README, CHANGELOG, LICENSE, four examples, and Cargo manifest.
+A trust-based verification skip is now exposed through `unsafe fn Vm::new_unchecked` and `unsafe fn Vm::load_bytes_unchecked`. Both run structural verification because the VM execution loop relies on those invariants for memory safety. Both skip the WCET and WCMU resource bounds checks. The unsafe marker captures the trust contract. The host attests that the bytecode was previously verified or originates from a trusted compiler. Exceeding the bound at runtime produces an arena allocation failure rather than memory unsafety, so the unsafe marker captures the loss of contract rather than a memory-safety risk.
 
-2. **Switched keleusma to consume keleusma-arena from the registry.** The `Cargo.toml` dependency line for `keleusma-arena` previously carried both `path = "keleusma-arena"` and `version = "0.1.0"`, with cargo using the path during workspace-local builds. The path attribute has been dropped. The dependency now resolves through the registry. `Cargo.lock` was updated accordingly.
+True zero-copy execution from `.rodata`, where the runtime Module borrows directly from the input buffer with no heap allocation for the parsed form, is recorded as P10 and deferred. The current implementation covers the user's full request for runtime loading from any source, including `.rodata` and other host-binary sections, with the caveat that the parsed form is heap-allocated.
 
 ## Changes Made
 
-### Workspace
+### Source
 
-- **Cargo.toml**: `keleusma-arena` dependency line changed from `{ path = "keleusma-arena", version = "0.1.0", features = ["alloc"] }` to `{ version = "0.1", features = ["alloc"] }`.
-- **Cargo.lock**: Updated by `cargo update -p keleusma-arena`. The lock now references the registry version.
+- **`src/bytecode.rs`**: `#[derive(Serialize, Deserialize)]` on Value, BlockType, Op, StructTemplate, DataSlot, DataLayout, Chunk, Module. New `BYTECODE_MAGIC` and `BYTECODE_VERSION` constants. New `LoadError` enum with `BadMagic`, `Truncated`, `UnsupportedVersion`, and `Codec` variants. New `Module::to_bytes` and `Module::from_bytes` methods. `core::error::Error` and `Display` impls on `LoadError`.
+- **`src/vm.rs`**: New `VmError::LoadError(String)` variant. `From<bytecode::LoadError> for VmError` impl. New `unsafe fn Vm::new_unchecked` and `unsafe fn Vm::new_unchecked_with_arena_capacity`. New `Vm::load_bytes` and `unsafe fn Vm::load_bytes_unchecked` convenience constructors. Internal `Vm::construct` helper deduplicates field initialization between the verifying and unchecked paths. Seven new tests covering roundtrip, header rejection paths, error propagation through `Vm::load_bytes`, and unchecked admission of a module that fails resource bounds verification.
+- **`Cargo.toml`**: `serde 1` and `postcard 1` added with `default-features = false` and the appropriate feature flags for `no_std` plus `alloc`.
 
 ### Knowledge Graph
 
-- **docs/process/TASKLOG.md**: V0.0-M6-T15 and T16 rows added. Two history rows added.
-- **docs/process/REVERSE_PROMPT.md**: This file.
-
-## Workflow Note
-
-`keleusma-arena` remains a workspace member. The workspace member exists as a separate development target rather than as a dependency consumed through path resolution. Edits to `keleusma-arena/src/lib.rs` will compile and test under `cargo test --workspace` because keleusma-arena is still a member, but those edits will not affect the keleusma crate's compilation. To exercise local arena changes from keleusma's perspective, the maintainer must publish a new version of keleusma-arena, or temporarily restore the path attribute on the dependency.
+- **`docs/decisions/RESOLVED.md`**: New R39 entry recording the wire format, the trust-skip API, the unsafe contract, and the postcard choice.
+- **`docs/decisions/PRIORITY.md`**: New P10 entry recording zero-copy execution as the deferred path B.
+- **`docs/decisions/BACKLOG.md`**: B9 and B10 cross-reference R39 for the addressed portions.
+- **`docs/architecture/EXECUTION_MODEL.md`**: New `## Bytecode Loading` section between Memory Model and Hot Code Swapping. Wire format description, loading API table, trust contract.
+- **`docs/process/TASKLOG.md`**: Phase advances to V0.1. Active milestone updated to V0.1-M1. Four task rows added under V0.1-M1. History row added.
+- **`docs/process/REVERSE_PROMPT.md`**: This file.
 
 ## Unaddressed Concerns
 
-1. **Dual-compilation overhead.** Workspace members and registry dependencies of the same name produce two compiled copies of `keleusma-arena` during `cargo build --workspace`. Once as a workspace member built from local source, once as a registry crate consumed by keleusma. Build time impact is small and incremental builds avoid recompilation.
+1. **Path B remains deferred.** P10 captures the zero-copy execution requirement. Lifetime-parameterizing Module is a substantial refactor that cascades through Chunk, Op, Value, and the Vm struct. The current implementation supports the user's runtime-loading request with the parsed Module heap-allocated. Path B is admissible as a future milestone once the format and API have settled.
 
-2. **Forward compatibility of the workspace member.** Future edits to `keleusma-arena/src/lib.rs` that change behavior will produce a workspace state where the local arena and the registry arena disagree. This is acceptable for a published crate but should prompt a version bump and republish before the changes are exercised through keleusma.
+2. **Bytecode versioning has only one version.** A future change to any serialized type bumps `BYTECODE_VERSION`. The crate does not yet provide a migration path between versions. For V0.1, mismatched versions are rejected with `LoadError::UnsupportedVersion`. A future iteration can add explicit migration shims if needed.
 
-3. **The keleusma crate has not been published.** No request has been made. The crate metadata is suitable for publication, but a deliberate decision should precede that step. Filing this as a future option.
+3. **The `serde` dependency widens the dependency surface.** Two new transitive dependencies arrive with this change. Both are well-tested and `no_std` compatible. The trade-off favors ergonomics over a custom binary layout. A custom format remains admissible if path B in P10 motivates a representation amenable to in-place execution.
+
+4. **No file-loading helper in the crate.** Per the design choice in this milestone, file I/O is the host's responsibility. Hosts on `std`-bearing platforms call `std::fs::read` and pass the result to `Vm::load_bytes`. Hosts on bare-metal targets place bytecode in `.rodata` or a flash region accessible as `&'static [u8]`.
+
+5. **Native function name resolution at load time is unchanged.** The deserialized Module carries `native_names: Vec<String>`. The host registers natives by name through `Vm::register_fn` and `Vm::register_native` after construction. Future work could explore index-based native resolution baked into bytecode, but this requires a stable native registry shared between compile time and load time.
+
+6. **Trust contract and unsafe API.** The unsafe marker on `Vm::new_unchecked` and `Vm::load_bytes_unchecked` is conservative. Skipping resource bounds checks does not produce memory unsafety in Rust's strict sense, but does weaken the documented bounded-memory and bounded-step guarantees. The decision to require `unsafe` reflects the user's choice in the design discussion. A future iteration could provide a safe `_unchecked` variant if the community settles on the convention that contract violations of this kind do not warrant `unsafe`.
 
 ## Intended Next Step
 
 Three paths.
 
-A. V0.0-M7 implementing P7 follow-on items, namely operand stack and `DynStr` arena migration in the keleusma runtime. The published arena crate now serves as the substrate.
+A. V0.1-M2 implementing path B from P10. Lifetime-parameterize Module. Eliminate String fields in favor of byte-offset references. Adopt either a custom binary layout or `rkyv`. This delivers true zero-copy execution from `.rodata` for hosts that want to avoid the heap-allocation cost of the deserialized form.
 
-B. Publish the keleusma crate to crates.io. Requires deciding whether the language is in a state suitable for public consumption at v0.1.0.
+B. V0.1-M2 returning to P7 follow-on items, namely operand stack and `DynStr` arena migration in the keleusma runtime. The published `keleusma-arena` crate and the new precompiled-loading API both inform the design.
 
-C. Pivot to V0.1 candidates such as the type checker (P1), for-in over arbitrary expressions (P2), or error recovery (P3).
+C. V0.1-M2 advancing to V0.1 candidates such as the type checker (P1), for-in over arbitrary expressions (P2), or error recovery (P3).
 
-Recommend A. The arena crate is now stable and external. Migrating the operand stack and DynStr to use it tightens the design that motivated the extraction. Path B is admissible but warrants a separate go or no-go decision since the language is still pre-stable.
+Recommend A if the precompiled-code use case is the priority. Recommend B if memory-discipline tightening is the priority. Recommend C if language-feature breadth is the priority. The three paths are largely independent. The user's recent direction emphasized embedded use and precompiled distribution, which favors A.
 
 Await human prompt before proceeding.
 
 ## Session Context
 
-This session began with V0.0-M5 and V0.0-M6 already complete and the arena extracted into a workspace crate. The session resolved P8 (call-graph WCMU integration with auto-arena sizing), P9 (strict-mode bounded-iteration loop analysis), three pre-publication audit and polish passes on `keleusma-arena`, the publication of `keleusma-arena` v0.1.0 to crates.io, and the switch of keleusma to consume the registry version.
+This session began with V0.0-M5 and V0.0-M6 already complete and the arena extracted into a workspace crate. The session resolved P8 and P9, completed three pre-publication audit and polish passes on `keleusma-arena`, published v0.1.0 to crates.io, switched the keleusma main crate to consume the registry version, and now completes V0.1-M1 implementing precompiled bytecode loading and trust-based verification skip. The phase has advanced to V0.1.

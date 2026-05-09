@@ -1,9 +1,10 @@
 extern crate alloc;
 use alloc::string::String;
 use alloc::vec::Vec;
+use serde::{Deserialize, Serialize};
 
 /// Runtime value in the Keleusma VM.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Value {
     /// Unit value `()`.
     Unit,
@@ -129,7 +130,7 @@ impl Value {
 }
 
 /// Classification of a compiled function chunk.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum BlockType {
     /// Atomic total function (`fn`). No yields, no streaming.
     Func,
@@ -140,7 +141,7 @@ pub enum BlockType {
 }
 
 /// A bytecode instruction.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Op {
     /// Push a constant from the chunk's constant pool.
     Const(u16),
@@ -487,7 +488,7 @@ impl Op {
 }
 
 /// Template for struct construction.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StructTemplate {
     /// Struct type name.
     pub type_name: String,
@@ -496,7 +497,7 @@ pub struct StructTemplate {
 }
 
 /// A named slot in the data segment.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DataSlot {
     /// Slot name (for host initialization and debugging).
     pub name: String,
@@ -507,7 +508,7 @@ pub struct DataSlot {
 /// Defines the fixed-size, fixed-layout set of persistent values that
 /// survive across RESET boundaries. The host initializes data slots
 /// before execution begins. Scripts read and write slots by index.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DataLayout {
     /// Named slots in declaration order. Slot index corresponds to
     /// the `GetData`/`SetData` operand.
@@ -515,7 +516,7 @@ pub struct DataLayout {
 }
 
 /// A compiled function.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Chunk {
     /// Function name (for debugging and lookup).
     pub name: String,
@@ -534,7 +535,7 @@ pub struct Chunk {
 }
 
 /// A compiled Keleusma module.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Module {
     /// Compiled function chunks.
     pub chunks: Vec<Chunk>,
@@ -545,4 +546,110 @@ pub struct Module {
     /// Data segment layout. If present, defines persistent slots that
     /// survive across RESET boundaries.
     pub data_layout: Option<DataLayout>,
+}
+
+/// Magic prefix identifying serialized Keleusma bytecode (`KELE`).
+pub const BYTECODE_MAGIC: [u8; 4] = *b"KELE";
+
+/// Wire format version for serialized bytecode. Bytecode produced under a
+/// different version is rejected at load time.
+pub const BYTECODE_VERSION: u16 = 1;
+
+/// Header length in bytes (4-byte magic plus 2-byte little-endian version).
+const HEADER_LEN: usize = 6;
+
+/// A failure encountered while loading or saving precompiled bytecode.
+///
+/// Returned by [`Module::to_bytes`] and [`Module::from_bytes`]. The runtime
+/// converts this into [`crate::vm::VmError::LoadError`] when used through
+/// [`crate::vm::Vm::load_bytes`] and the related convenience constructors.
+#[derive(Debug, Clone)]
+pub enum LoadError {
+    /// The header magic bytes did not match `KELE`.
+    BadMagic,
+    /// The buffer was shorter than the required header.
+    Truncated,
+    /// The bytecode version is not supported by this runtime.
+    UnsupportedVersion {
+        /// Version recorded in the bytecode header.
+        got: u16,
+        /// Version the runtime supports.
+        expected: u16,
+    },
+    /// The body could not be encoded or decoded.
+    Codec(String),
+}
+
+impl core::fmt::Display for LoadError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            LoadError::BadMagic => f.write_str("bytecode header missing magic 'KELE'"),
+            LoadError::Truncated => f.write_str("bytecode shorter than required header"),
+            LoadError::UnsupportedVersion { got, expected } => {
+                write!(
+                    f,
+                    "bytecode version {} not supported, expected {}",
+                    got, expected
+                )
+            }
+            LoadError::Codec(msg) => write!(f, "bytecode codec error: {}", msg),
+        }
+    }
+}
+
+impl core::error::Error for LoadError {}
+
+impl Module {
+    /// Serialize the module to a self-describing byte vector.
+    ///
+    /// The output begins with [`BYTECODE_MAGIC`] followed by
+    /// [`BYTECODE_VERSION`] in little-endian order. The remainder is the
+    /// module body in postcard wire format. The header allows the runtime
+    /// to reject foreign or incompatible bytecode at load time without
+    /// attempting deserialization.
+    ///
+    /// Returns [`LoadError::Codec`] if postcard rejects any field. The
+    /// `Module` type is composed entirely of types that postcard supports,
+    /// so encode failures are not expected in practice and indicate
+    /// corruption of the runtime data.
+    pub fn to_bytes(&self) -> Result<Vec<u8>, LoadError> {
+        use alloc::format;
+        let body = postcard::to_allocvec(self)
+            .map_err(|e| LoadError::Codec(format!("encode failed: {}", e)))?;
+        let mut buf = Vec::with_capacity(HEADER_LEN + body.len());
+        buf.extend_from_slice(&BYTECODE_MAGIC);
+        buf.extend_from_slice(&BYTECODE_VERSION.to_le_bytes());
+        buf.extend_from_slice(&body);
+        Ok(buf)
+    }
+
+    /// Deserialize a module from a self-describing byte slice.
+    ///
+    /// Validates the magic and version header, then deserializes the
+    /// postcard body. The input may originate from any addressable byte
+    /// slice including in-memory buffers, file-loaded buffers, or
+    /// `&'static [u8]` data placed in `.rodata`.
+    ///
+    /// Does not run structural verification or resource bounds checks.
+    /// Pass the result to [`crate::vm::Vm::new`] for full verification or
+    /// to [`crate::vm::Vm::new_unchecked`] for trust-based skipping of
+    /// the bounds checks.
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, LoadError> {
+        use alloc::format;
+        if bytes.len() < HEADER_LEN {
+            return Err(LoadError::Truncated);
+        }
+        if bytes[0..4] != BYTECODE_MAGIC {
+            return Err(LoadError::BadMagic);
+        }
+        let version = u16::from_le_bytes([bytes[4], bytes[5]]);
+        if version != BYTECODE_VERSION {
+            return Err(LoadError::UnsupportedVersion {
+                got: version,
+                expected: BYTECODE_VERSION,
+            });
+        }
+        postcard::from_bytes(&bytes[HEADER_LEN..])
+            .map_err(|e| LoadError::Codec(format!("decode failed: {}", e)))
+    }
 }

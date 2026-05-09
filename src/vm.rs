@@ -31,6 +31,15 @@ pub enum VmError {
     Trap(String),
     /// Structural verification failed at load time.
     VerifyError(String),
+    /// Bytecode load failure encountered before verification could run,
+    /// such as a header mismatch or postcard decode error.
+    LoadError(String),
+}
+
+impl From<crate::bytecode::LoadError> for VmError {
+    fn from(e: crate::bytecode::LoadError) -> Self {
+        VmError::LoadError(format!("{}", e))
+    }
 }
 
 /// The execution state of the VM.
@@ -168,9 +177,92 @@ impl Vm {
         // current limitations.
         verify::verify_resource_bounds(&module, arena_capacity)
             .map_err(|e| VmError::VerifyError(format!("{}: {}", e.chunk_name, e.message)))?;
+        Ok(Self::construct(module, arena_capacity))
+    }
+
+    /// Create a VM that runs structural verification but skips WCET and
+    /// WCMU resource bounds checks.
+    ///
+    /// Intended for hosts that load precompiled bytecode from a trusted
+    /// source where the resource bounds were validated during the
+    /// build pipeline rather than at load time. Skipping the bounds
+    /// check shifts the bounded-memory and bounded-step guarantees onto
+    /// the host's attestation that the bytecode was admitted by an
+    /// equivalent verification step previously.
+    ///
+    /// Structural verification still runs because the VM execution loop
+    /// relies on its invariants for memory safety. Specifically, block
+    /// nesting depth, jump offset bounds, and the productivity rule
+    /// must hold for the VM to step the bytecode without dereferencing
+    /// invalid frame state.
+    ///
+    /// # Safety
+    ///
+    /// The caller attests that the bytecode was produced by a trusted
+    /// compiler and that resource bounds were verified during the build
+    /// pipeline, or that the host accepts the consequences of running
+    /// bytecode whose worst-case stack and heap usage may exceed the
+    /// arena capacity. Exceeding the bound at runtime produces an
+    /// allocation failure error from the arena rather than memory
+    /// unsafety, so the unsafe marker captures the loss of the
+    /// bounded-memory contract rather than a memory-safety risk.
+    pub unsafe fn new_unchecked(module: Module) -> Result<Self, VmError> {
+        unsafe { Self::new_unchecked_with_arena_capacity(module, DEFAULT_ARENA_CAPACITY) }
+    }
+
+    /// Create a VM with a host-specified arena capacity that runs
+    /// structural verification but skips resource bounds checks.
+    ///
+    /// See [`Vm::new_unchecked`] for the trust contract.
+    ///
+    /// # Safety
+    ///
+    /// Same contract as [`Vm::new_unchecked`].
+    pub unsafe fn new_unchecked_with_arena_capacity(
+        module: Module,
+        arena_capacity: usize,
+    ) -> Result<Self, VmError> {
+        verify::verify(&module)
+            .map_err(|e| VmError::VerifyError(format!("{}: {}", e.chunk_name, e.message)))?;
+        Ok(Self::construct(module, arena_capacity))
+    }
+
+    /// Load and verify a module from a serialized byte slice.
+    ///
+    /// Convenience wrapper. Equivalent to
+    /// `Vm::new(Module::from_bytes(bytes)?)`. The byte slice may
+    /// originate from any addressable buffer including a file read,
+    /// an in-memory `Vec<u8>`, or a `&'static [u8]` placed in
+    /// `.rodata`. Runs full verification including resource bounds.
+    pub fn load_bytes(bytes: &[u8]) -> Result<Self, VmError> {
+        let module = Module::from_bytes(bytes)?;
+        Self::new(module)
+    }
+
+    /// Load a module from a serialized byte slice and skip resource
+    /// bounds verification.
+    ///
+    /// Convenience wrapper. Equivalent to
+    /// `Vm::new_unchecked(Module::from_bytes(bytes)?)`. See
+    /// [`Vm::new_unchecked`] for the trust contract.
+    ///
+    /// # Safety
+    ///
+    /// Same contract as [`Vm::new_unchecked`].
+    pub unsafe fn load_bytes_unchecked(bytes: &[u8]) -> Result<Self, VmError> {
+        let module = Module::from_bytes(bytes)?;
+        unsafe { Self::new_unchecked(module) }
+    }
+
+    /// Construct the VM struct without running any verification.
+    ///
+    /// Internal helper shared by the verifying and unchecked
+    /// constructors. The data segment is initialized to `Unit` for
+    /// each declared slot.
+    fn construct(module: Module, arena_capacity: usize) -> Self {
         let data_len = module.data_layout.as_ref().map_or(0, |dl| dl.slots.len());
         let data = vec![Value::Unit; data_len];
-        Ok(Self {
+        Self {
             module,
             stack: Vec::new(),
             frames: Vec::new(),
@@ -178,7 +270,7 @@ impl Vm {
             data,
             arena: keleusma_arena::Arena::with_capacity(arena_capacity),
             started: false,
-        })
+        }
     }
 
     /// Set a data segment slot to an initial value.
@@ -1988,6 +2080,130 @@ mod tests {
 
         // Suppress unused import in this nested context.
         let _: fn(usize) -> Arena = Arena::with_capacity;
+    }
+
+    #[test]
+    fn bytecode_roundtrip() {
+        let src = "fn double(x: i64) -> i64 { x * 2 }\nfn main() -> i64 { double(21) }";
+        let tokens = tokenize(src).expect("lex");
+        let program = parse(&tokens).expect("parse");
+        let module = compile(&program).expect("compile");
+        let bytes = module.to_bytes().expect("encode");
+        // Header is correctly stamped.
+        assert_eq!(&bytes[0..4], &crate::bytecode::BYTECODE_MAGIC);
+        assert_eq!(
+            u16::from_le_bytes([bytes[4], bytes[5]]),
+            crate::bytecode::BYTECODE_VERSION
+        );
+        // Decoded module runs and produces the same result as the original.
+        let decoded = Module::from_bytes(&bytes).expect("decode");
+        let mut vm = Vm::new(decoded).unwrap();
+        match vm.call(&[]).unwrap() {
+            VmState::Finished(v) => assert_eq!(v, Value::Int(42)),
+            other => panic!("expected finished, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn bytecode_load_bytes_end_to_end() {
+        let src = "fn main() -> i64 { 7 + 35 }";
+        let tokens = tokenize(src).expect("lex");
+        let program = parse(&tokens).expect("parse");
+        let module = compile(&program).expect("compile");
+        let bytes = module.to_bytes().expect("encode");
+        let mut vm = Vm::load_bytes(&bytes).expect("load");
+        match vm.call(&[]).unwrap() {
+            VmState::Finished(v) => assert_eq!(v, Value::Int(42)),
+            other => panic!("expected finished, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn bytecode_rejects_bad_magic() {
+        let bytes = alloc::vec![b'X', b'X', b'X', b'X', 0x01, 0x00, 0x00];
+        match Module::from_bytes(&bytes) {
+            Err(crate::bytecode::LoadError::BadMagic) => {}
+            other => panic!("expected BadMagic, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn bytecode_rejects_truncated() {
+        let bytes = alloc::vec![b'K', b'E', b'L'];
+        match Module::from_bytes(&bytes) {
+            Err(crate::bytecode::LoadError::Truncated) => {}
+            other => panic!("expected Truncated, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn bytecode_rejects_unsupported_version() {
+        let mut bytes = alloc::vec![b'K', b'E', b'L', b'E'];
+        bytes.extend_from_slice(&u16::to_le_bytes(0xFFFF));
+        match Module::from_bytes(&bytes) {
+            Err(crate::bytecode::LoadError::UnsupportedVersion { got, expected }) => {
+                assert_eq!(got, 0xFFFF);
+                assert_eq!(expected, crate::bytecode::BYTECODE_VERSION);
+            }
+            other => panic!("expected UnsupportedVersion, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn bytecode_load_via_vm_propagates_load_error() {
+        let bytes = alloc::vec![b'X', b'X', b'X', b'X', 0x01, 0x00];
+        match Vm::load_bytes(&bytes) {
+            Err(VmError::LoadError(_)) => {}
+            Err(other) => panic!("expected VmError::LoadError, got {:?}", other),
+            Ok(_) => panic!("expected error, got VM"),
+        }
+    }
+
+    #[test]
+    fn unchecked_admits_module_that_fails_bounds() {
+        // A loop main that pushes a value yields a tiny but non-zero
+        // worst-case stack usage. With a capacity of 1 byte, the
+        // bounds check rejects the module. The unchecked path admits
+        // it because it skips the bounds check entirely.
+        let src = "loop main() -> i64 { let n = yield 0; n }";
+        let tokens = tokenize(src).expect("lex");
+        let program = parse(&tokens).expect("parse");
+        let module = compile(&program).expect("compile");
+
+        // The verifying constructor rejects.
+        let rejected = Vm::new_with_arena_capacity(module.clone(), 1);
+        assert!(matches!(rejected, Err(VmError::VerifyError(_))));
+
+        // The unchecked constructor admits the same module under the
+        // same tiny capacity. Structural verification still runs.
+        let admitted = unsafe { Vm::new_unchecked_with_arena_capacity(module, 1) };
+        assert!(admitted.is_ok());
+    }
+
+    #[test]
+    fn unchecked_still_runs_structural_verification() {
+        // Construct a module that fails structural verification by
+        // manually corrupting the chunk's block type. A `Stream` chunk
+        // without a yield is rejected.
+        use crate::bytecode::{BlockType, Chunk, Module, Op};
+        let chunk = Chunk {
+            name: alloc::string::String::from("main"),
+            ops: alloc::vec![Op::Const(0), Op::Reset],
+            constants: alloc::vec![Value::Int(0)],
+            struct_templates: alloc::vec![],
+            local_count: 0,
+            param_count: 0,
+            block_type: BlockType::Stream,
+        };
+        let module = Module {
+            chunks: alloc::vec![chunk],
+            native_names: alloc::vec![],
+            entry_point: Some(0),
+            data_layout: None,
+        };
+        // The unchecked constructor still rejects on structural grounds.
+        let result = unsafe { Vm::new_unchecked(module) };
+        assert!(matches!(result, Err(VmError::VerifyError(_))));
     }
 
     #[test]

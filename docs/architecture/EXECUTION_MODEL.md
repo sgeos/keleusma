@@ -112,6 +112,31 @@ Schema mismatch detection is by size check plus host attestation. The size check
 
 External to the VM and managed by the host application. Not directly observable to the script except through the data segment and through native function calls.
 
+## Bytecode Loading
+
+Compiled modules can be loaded from any addressable byte slice. The runtime crate is `no_std` plus `alloc` and accepts `&[u8]` from any source. Section placement is the host's responsibility. The same input shape covers in-memory `Vec<u8>` data, file-loaded buffers, and `&'static [u8]` data placed in the `.rodata`, `.text`, `.data`, or `.bss` section of the host binary. File loading is left to the host so that the runtime crate retains the `no_std` posture.
+
+### Wire Format
+
+The serialized form begins with the four-byte magic `KELE` followed by a little-endian sixteen-bit version followed by the postcard-encoded module body. The header allows the runtime to reject foreign or incompatible bytecode at load time before any deserialization is attempted. The `BYTECODE_MAGIC` and `BYTECODE_VERSION` constants in the bytecode module record the current values. Bytecode produced under one version is not accepted by a runtime that expects a different version.
+
+The choice of postcard reflects the constraints of `no_std` plus `alloc` operation and the desire for a compact wire form. The serialization uses `#[derive(Serialize, Deserialize)]` on every type that participates in the Module structure, including Module, Chunk, Op, Value, BlockType, StructTemplate, DataSlot, and DataLayout.
+
+The deserialized Module owns heap-allocated data and does not borrow from the input slice. The bytecode buffer can persist in `.rodata` even though the parsed form is heap-allocated. Future work under P10 introduces a zero-copy variant where the parsed Module borrows directly from the input buffer.
+
+### Loading API
+
+| Method | Use |
+|---|---|
+| `Module::to_bytes()` | Serialize a module to a `Vec<u8>` carrying the magic-and-version header followed by the postcard-encoded body. |
+| `Module::from_bytes(bytes)` | Validate the header and deserialize. Returns `bytecode::LoadError` on header mismatch or codec failure. Does not run structural or resource verification. |
+| `Vm::new(module)` | Construct the VM. Runs structural verification and resource bounds verification. |
+| `Vm::load_bytes(bytes)` | Convenience for `Vm::new(Module::from_bytes(bytes)?)`. Runs full verification. |
+| `unsafe Vm::new_unchecked(module)` | Skip the resource bounds check. Structural verification still runs because the VM execution loop relies on its invariants for memory safety. |
+| `unsafe Vm::load_bytes_unchecked(bytes)` | Convenience for `unsafe Vm::new_unchecked(Module::from_bytes(bytes)?)`. |
+
+The unchecked path is for hosts that load precompiled bytecode whose resource bounds were validated during the build pipeline. The unsafe marker captures the trust contract. The host attests that bytecode was previously verified or originates from a trusted compiler. The bounded-memory and bounded-step guarantees are weakened to host attestation under this path. Exceeding the bound at runtime produces an arena allocation failure rather than memory unsafety. See R39 for the full design rationale.
+
 ## Hot Code Swapping
 
 Hot code swapping occurs only at RESET boundaries. The following requirements apply.

@@ -8,11 +8,11 @@ Current sprint source of truth.
 
 ## Current Phase
 
-**V0.0**: Bootstrap, near completion. Data segment design formalized. Implementation in progress.
+**V0.1**: Embedding-grade runtime. Precompiled bytecode loading and trust-based verification skip in place.
 
 ## Active Milestone
 
-None. V0.0-M6 complete. Arena extracted to standalone keleusma-arena crate. Auto-arena sizing and call-graph WCMU integration remain as P8 follow-on for V0.0-M7.
+V0.1-M1 complete. Precompiled bytecode wire format with magic and version header, deserialization from any addressable byte slice including .rodata, and unsafe trust-skip API for hosts that pre-verify bytecode at build time. R39 records the design.
 
 ## Task Breakdown
 
@@ -63,6 +63,10 @@ None. V0.0-M6 complete. Arena extracted to standalone keleusma-arena crate. Auto
 | V0.0-M6-T14 | keleusma-arena docs polish | Complete | doc_cfg annotation added to Arena::with_capacity so docs.rs renders the alloc feature badge. README wired into crate-level documentation via include_str so all README code blocks run as doctests. Static-Buffer Use example rewritten to use addr_of_mut for edition 2024 compatibility. Existing structured reference content preserved as ## API Reference subsection following the README. |
 | V0.0-M6-T15 | keleusma-arena published to crates.io v0.1.0 | Complete | cargo publish succeeded. 12 files, 55.1 KiB total, 15.3 KiB compressed. Crate listing live at https://crates.io/crates/keleusma-arena. Documentation rendering at https://docs.rs/keleusma-arena/0.1.0/. |
 | V0.0-M6-T16 | Switch keleusma to registry version of keleusma-arena | Complete | Cargo.toml dependency line for keleusma-arena dropped path attribute and now uses version "0.1" only. Cargo.lock updated to consume keleusma-arena v0.1.0 from crates-io. Workspace tests pass (323 total). keleusma-arena remains a workspace member for convenient local development of the arena crate, but keleusma's dependency now resolves through the registry. |
+| V0.1-M1-T1 | Wire format for precompiled bytecode | Complete | postcard 1.x and serde 1.x added. Serialize and Deserialize derived on Module, Chunk, Op, Value, BlockType, StructTemplate, DataSlot, and DataLayout. BYTECODE_MAGIC ("KELE") and BYTECODE_VERSION (1) constants. Module::to_bytes and Module::from_bytes with header validation. LoadError enum with BadMagic, Truncated, UnsupportedVersion, and Codec variants. |
+| V0.1-M1-T2 | Trust-based verification skip API | Complete | unsafe Vm::new_unchecked and unsafe Vm::new_unchecked_with_arena_capacity skip the resource bounds check while keeping structural verification active. Convenience constructors Vm::load_bytes and unsafe Vm::load_bytes_unchecked compose deserialization with new and new_unchecked. VmError::LoadError variant added with From conversion from bytecode::LoadError. |
+| V0.1-M1-T3 | Tests for precompiled bytecode | Complete | Roundtrip compile-serialize-deserialize-run produces identical results. Bad magic rejected with BadMagic. Short input rejected with Truncated. Wrong version rejected with UnsupportedVersion. Vm::load_bytes propagates LoadError as VmError::LoadError. unsafe new_unchecked admits a module that fails bounds verification with a tiny capacity. unsafe new_unchecked still rejects modules that fail structural verification (Stream chunk without yield). 7 new tests, 286 total in keleusma. |
+| V0.1-M1-T4 | Knowledge graph documentation | Complete | R39 records the wire format design and trust-skip rationale in RESOLVED. P10 records zero-copy execution as the deferred path B in PRIORITY. B9 and B10 in BACKLOG cross-reference R39 for the addressed portions. EXECUTION_MODEL gains a Bytecode Loading section between Memory Model and Hot Code Swapping. |
 
 ## History
 
@@ -87,3 +91,4 @@ None. V0.0-M6 complete. Arena extracted to standalone keleusma-arena crate. Auto
 | 2026-05-08 | keleusma-arena pre-publication final pass. Tree borrows verified clean. docs.rs metadata block added so feature-gated APIs render and doc_cfg activates. Doctest added on Arena::with_capacity to catch documentation drift. CI extended with miri job covering both stacked and tree borrows, MSRV pin job at Rust 1.85 covering default and no-default-features builds, and clippy upgraded to --workspace --all-targets to lint examples. |
 | 2026-05-08 | keleusma-arena docs polish. Activated the docs.rs alloc feature badge by adding cfg_attr doc_cfg to Arena::with_capacity. Wired README into crate-level documentation via include_str so all README code blocks run as doctests under cargo test --doc. Rewrote Static-Buffer Use example to use core::ptr::addr_of_mut for edition 2024 compatibility and inline form. Existing structured reference content kept as the API Reference subsection following the README intro. Six doctests pass total (five from the README, one on Arena::with_capacity). |
 | 2026-05-08 | keleusma-arena v0.1.0 published to crates.io. Crate listing live with description, keywords, categories, license, homepage, and repository fields. cargo publish packaged 12 files at 55.1 KiB total. Documentation rendering on docs.rs. Workspace dependency line in keleusma updated to consume keleusma-arena from the registry rather than through the workspace path. keleusma-arena remains a workspace member for arena-side development. |
+| 2026-05-08 | V0.1-M1 complete. Precompiled bytecode loading and trust-based verification skip. postcard wire format with KELE magic and 16-bit version. Module::to_bytes and Module::from_bytes accept any addressable byte slice including rodata. unsafe Vm::new_unchecked and unsafe Vm::load_bytes_unchecked skip WCET and WCMU bounds checks while preserving structural verification. R39 records the design. P10 records zero-copy execution as deferred path B. 286 keleusma unit tests, 7 new for precompiled bytecode. Phase advances to V0.1. |
