@@ -118,7 +118,9 @@ Compiled modules can be loaded from any addressable byte slice. The runtime crat
 
 ### Wire Format
 
-The serialized form begins with the four-byte magic `KELE` followed by a little-endian sixteen-bit version followed by the postcard-encoded module body. The header allows the runtime to reject foreign or incompatible bytecode at load time before any deserialization is attempted. The `BYTECODE_MAGIC` and `BYTECODE_VERSION` constants in the bytecode module record the current values. Bytecode produced under one version is not accepted by a runtime that expects a different version.
+The serialized form begins with the four-byte magic `KELE` followed by a little-endian sixteen-bit version followed by the postcard-encoded module body followed by a four-byte little-endian CRC-32 trailer. The header allows the runtime to reject foreign or incompatible bytecode at load time before any deserialization is attempted. The trailer detects bit-level corruption anywhere in the framed range. The `BYTECODE_MAGIC` and `BYTECODE_VERSION` constants in the bytecode module record the current values. Bytecode produced under one version is not accepted by a runtime that expects a different version.
+
+The CRC-32 uses the standard IEEE 802.3 reflected polynomial with init `0xFFFFFFFF`, refin and refout true, and xor-out `0xFFFFFFFF`. The verification path exploits the algebraic self-inclusion residue of this parameterization. Computing the CRC over the entire byte slice including the trailer yields the residue constant `0x2144DF1C` for valid bytecode. The verifier runs the CRC once over the full slice and checks for the residue in a single linear pass. The trailer is part of the checksummed range without requiring zero-fill or position-aware special casing during verification.
 
 The choice of postcard reflects the constraints of `no_std` plus `alloc` operation and the desire for a compact wire form. The serialization uses `#[derive(Serialize, Deserialize)]` on every type that participates in the Module structure, including Module, Chunk, Op, Value, BlockType, StructTemplate, DataSlot, and DataLayout.
 

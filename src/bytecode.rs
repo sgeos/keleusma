@@ -558,6 +558,45 @@ pub const BYTECODE_VERSION: u16 = 1;
 /// Header length in bytes (4-byte magic plus 2-byte little-endian version).
 const HEADER_LEN: usize = 6;
 
+/// Footer length in bytes (4-byte little-endian CRC-32).
+const FOOTER_LEN: usize = 4;
+
+/// Reflected polynomial for the standard CRC-32 (IEEE 802.3, gzip, PNG,
+/// ZIP). Reflected form of 0x04C11DB7. Paired with init 0xFFFFFFFF,
+/// refin/refout true, and xor-out 0xFFFFFFFF.
+const CRC32_POLY: u32 = 0xEDB88320;
+
+/// Residue constant for the CRC-32 parameters above. After computing the
+/// CRC over any byte sequence followed by the little-endian encoding of
+/// that sequence's CRC, the result equals this constant. The verifier
+/// exploits this property to check integrity in a single pass without
+/// separating the CRC field from the data, satisfying the algebraic
+/// self-inclusion contract recorded in R39.
+const CRC32_RESIDUE: u32 = 0x2144DF1C;
+
+/// Compute the standard CRC-32 of `bytes`.
+///
+/// Bit-by-bit implementation. Adequate for bytecode-sized inputs in the
+/// kilobyte to megabyte range. The verifier runs this once over the
+/// entire serialized form including the appended CRC and checks against
+/// [`CRC32_RESIDUE`]. Visibility is `pub(crate)` for use by integrity
+/// tests that need to construct bytecode with a hand-tweaked field and
+/// a recomputed checksum.
+pub(crate) fn crc32(bytes: &[u8]) -> u32 {
+    let mut crc: u32 = 0xFFFFFFFF;
+    for &byte in bytes {
+        crc ^= byte as u32;
+        for _ in 0..8 {
+            crc = if crc & 1 != 0 {
+                (crc >> 1) ^ CRC32_POLY
+            } else {
+                crc >> 1
+            };
+        }
+    }
+    crc ^ 0xFFFFFFFF
+}
+
 /// A failure encountered while loading or saving precompiled bytecode.
 ///
 /// Returned by [`Module::to_bytes`] and [`Module::from_bytes`]. The runtime
@@ -567,7 +606,7 @@ const HEADER_LEN: usize = 6;
 pub enum LoadError {
     /// The header magic bytes did not match `KELE`.
     BadMagic,
-    /// The buffer was shorter than the required header.
+    /// The buffer was shorter than the required header plus footer.
     Truncated,
     /// The bytecode version is not supported by this runtime.
     UnsupportedVersion {
@@ -576,6 +615,10 @@ pub enum LoadError {
         /// Version the runtime supports.
         expected: u16,
     },
+    /// The CRC-32 trailer did not satisfy the algebraic self-inclusion
+    /// residue. The bytecode is corrupted or was produced by a different
+    /// CRC implementation.
+    BadChecksum,
     /// The body could not be encoded or decoded.
     Codec(String),
 }
@@ -584,7 +627,9 @@ impl core::fmt::Display for LoadError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             LoadError::BadMagic => f.write_str("bytecode header missing magic 'KELE'"),
-            LoadError::Truncated => f.write_str("bytecode shorter than required header"),
+            LoadError::Truncated => {
+                f.write_str("bytecode shorter than required header plus footer")
+            }
             LoadError::UnsupportedVersion { got, expected } => {
                 write!(
                     f,
@@ -592,6 +637,7 @@ impl core::fmt::Display for LoadError {
                     got, expected
                 )
             }
+            LoadError::BadChecksum => f.write_str("bytecode CRC-32 residue check failed"),
             LoadError::Codec(msg) => write!(f, "bytecode codec error: {}", msg),
         }
     }
@@ -603,10 +649,13 @@ impl Module {
     /// Serialize the module to a self-describing byte vector.
     ///
     /// The output begins with [`BYTECODE_MAGIC`] followed by
-    /// [`BYTECODE_VERSION`] in little-endian order. The remainder is the
-    /// module body in postcard wire format. The header allows the runtime
-    /// to reject foreign or incompatible bytecode at load time without
-    /// attempting deserialization.
+    /// [`BYTECODE_VERSION`] in little-endian order, then the module body
+    /// in postcard wire format, then a four-byte little-endian CRC-32
+    /// trailer. The CRC covers the magic, version, and body. The
+    /// algebraic self-inclusion property of CRC-32 means that running
+    /// the CRC over the entire serialized form including the trailer
+    /// produces a fixed residue constant, which the verifier checks in
+    /// a single pass without separating the trailer from the data.
     ///
     /// Returns [`LoadError::Codec`] if postcard rejects any field. The
     /// `Module` type is composed entirely of types that postcard supports,
@@ -616,19 +665,26 @@ impl Module {
         use alloc::format;
         let body = postcard::to_allocvec(self)
             .map_err(|e| LoadError::Codec(format!("encode failed: {}", e)))?;
-        let mut buf = Vec::with_capacity(HEADER_LEN + body.len());
+        let mut buf = Vec::with_capacity(HEADER_LEN + body.len() + FOOTER_LEN);
         buf.extend_from_slice(&BYTECODE_MAGIC);
         buf.extend_from_slice(&BYTECODE_VERSION.to_le_bytes());
         buf.extend_from_slice(&body);
+        let crc = crc32(&buf);
+        buf.extend_from_slice(&crc.to_le_bytes());
         Ok(buf)
     }
 
     /// Deserialize a module from a self-describing byte slice.
     ///
-    /// Validates the magic and version header, then deserializes the
-    /// postcard body. The input may originate from any addressable byte
-    /// slice including in-memory buffers, file-loaded buffers, or
+    /// Validates the magic, the CRC-32 trailer through the residue
+    /// property, and the version header in that order, then deserializes
+    /// the postcard body. The input may originate from any addressable
+    /// byte slice including in-memory buffers, file-loaded buffers, or
     /// `&'static [u8]` data placed in `.rodata`.
+    ///
+    /// The CRC is checked before the version because a corrupted byte
+    /// in the version field would otherwise be reported as
+    /// `UnsupportedVersion` rather than the more accurate `BadChecksum`.
     ///
     /// Does not run structural verification or resource bounds checks.
     /// Pass the result to [`crate::vm::Vm::new`] for full verification or
@@ -636,11 +692,16 @@ impl Module {
     /// the bounds checks.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, LoadError> {
         use alloc::format;
-        if bytes.len() < HEADER_LEN {
+        if bytes.len() < HEADER_LEN + FOOTER_LEN {
             return Err(LoadError::Truncated);
         }
         if bytes[0..4] != BYTECODE_MAGIC {
             return Err(LoadError::BadMagic);
+        }
+        // CRC residue check covers the entire byte slice including the
+        // trailer. A correctly produced bytecode produces CRC32_RESIDUE.
+        if crc32(bytes) != CRC32_RESIDUE {
+            return Err(LoadError::BadChecksum);
         }
         let version = u16::from_le_bytes([bytes[4], bytes[5]]);
         if version != BYTECODE_VERSION {
@@ -649,7 +710,7 @@ impl Module {
                 expected: BYTECODE_VERSION,
             });
         }
-        postcard::from_bytes(&bytes[HEADER_LEN..])
-            .map_err(|e| LoadError::Codec(format!("decode failed: {}", e)))
+        let body = &bytes[HEADER_LEN..bytes.len() - FOOTER_LEN];
+        postcard::from_bytes(body).map_err(|e| LoadError::Codec(format!("decode failed: {}", e)))
     }
 }

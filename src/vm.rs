@@ -2120,7 +2120,9 @@ mod tests {
 
     #[test]
     fn bytecode_rejects_bad_magic() {
-        let bytes = alloc::vec![b'X', b'X', b'X', b'X', 0x01, 0x00, 0x00];
+        // Pad to the required header plus footer length so the slice
+        // passes the truncation check and reaches the magic check.
+        let bytes = alloc::vec![b'X', b'X', b'X', b'X', 0x01, 0x00, 0x00, 0x00, 0x00, 0x00];
         match Module::from_bytes(&bytes) {
             Err(crate::bytecode::LoadError::BadMagic) => {}
             other => panic!("expected BadMagic, got {:?}", other),
@@ -2138,8 +2140,20 @@ mod tests {
 
     #[test]
     fn bytecode_rejects_unsupported_version() {
-        let mut bytes = alloc::vec![b'K', b'E', b'L', b'E'];
-        bytes.extend_from_slice(&u16::to_le_bytes(0xFFFF));
+        // Compile a real module, patch the version field to an
+        // unsupported value, then recompute the CRC trailer so the
+        // residue check still passes. This isolates the version
+        // rejection path from the checksum rejection path.
+        let src = "fn main() -> i64 { 1 }";
+        let tokens = tokenize(src).expect("lex");
+        let program = parse(&tokens).expect("parse");
+        let module = compile(&program).expect("compile");
+        let mut bytes = module.to_bytes().expect("encode");
+        bytes[4] = 0xFF;
+        bytes[5] = 0xFF;
+        let trailer_start = bytes.len() - 4;
+        let new_crc = crate::bytecode::crc32(&bytes[..trailer_start]);
+        bytes[trailer_start..].copy_from_slice(&new_crc.to_le_bytes());
         match Module::from_bytes(&bytes) {
             Err(crate::bytecode::LoadError::UnsupportedVersion { got, expected }) => {
                 assert_eq!(got, 0xFFFF);
@@ -2150,8 +2164,43 @@ mod tests {
     }
 
     #[test]
+    fn bytecode_rejects_bad_checksum() {
+        // Compile a real module, then flip a body byte so the CRC
+        // residue check fails. The CRC is checked before the version
+        // and the body decode, so corruption anywhere in the
+        // checksummed range surfaces as BadChecksum.
+        let src = "fn main() -> i64 { 1 }";
+        let tokens = tokenize(src).expect("lex");
+        let program = parse(&tokens).expect("parse");
+        let module = compile(&program).expect("compile");
+        let mut bytes = module.to_bytes().expect("encode");
+        let body_byte = crate::bytecode::BYTECODE_MAGIC.len() + 2;
+        bytes[body_byte] ^= 0xFF;
+        match Module::from_bytes(&bytes) {
+            Err(crate::bytecode::LoadError::BadChecksum) => {}
+            other => panic!("expected BadChecksum, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn bytecode_residue_property_holds() {
+        // The CRC-32 residue property states that for any byte sequence
+        // D and its CRC C, the CRC of D followed by the little-endian
+        // encoding of C equals 0x2144DF1C. Verify against the reference
+        // value crc32("123456789") = 0xCBF43926 and confirm the residue.
+        let data = b"123456789";
+        let c = crate::bytecode::crc32(data);
+        assert_eq!(c, 0xCBF43926);
+        let mut combined = alloc::vec![];
+        combined.extend_from_slice(data);
+        combined.extend_from_slice(&c.to_le_bytes());
+        let residue = crate::bytecode::crc32(&combined);
+        assert_eq!(residue, 0x2144DF1C);
+    }
+
+    #[test]
     fn bytecode_load_via_vm_propagates_load_error() {
-        let bytes = alloc::vec![b'X', b'X', b'X', b'X', 0x01, 0x00];
+        let bytes = alloc::vec![b'X', b'X', b'X', b'X', 0x01, 0x00, 0x00, 0x00, 0x00, 0x00];
         match Vm::load_bytes(&bytes) {
             Err(VmError::LoadError(_)) => {}
             Err(other) => panic!("expected VmError::LoadError, got {:?}", other),
