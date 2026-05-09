@@ -14,7 +14,7 @@ use crate::vm::{Vm, VmError};
 ///
 /// These are pure functions that do not require engine access.
 /// They are available under the `audio` and `math` namespaces.
-pub fn register_audio_natives(vm: &mut Vm) {
+pub fn register_audio_natives<'a>(vm: &mut Vm<'a>) {
     // MIDI note to frequency. Standard formula 440 * 2^((note - 69) / 12).
     vm.register_fn("audio::midi_to_freq", |note: i64| -> f64 {
         440.0 * libm::pow(2.0, (note - 69) as f64 / 12.0)

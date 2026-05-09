@@ -9,8 +9,8 @@ AI to Human communication channel.
 ## Last Updated
 
 **Date**: 2026-05-09
-**Task**: V0.1-M2-T3. P10 Phase 2 step 2 conversion helpers.
-**Status**: Foundation complete. Execution loop refactor (V0.1-M2-T4) deferred.
+**Task**: V0.1-M2-T4. P10 Phase 2 step 2 execution loop refactor.
+**Status**: Complete. P10 is now resolved across all phases.
 
 ## Verification
 
@@ -24,83 +24,92 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 **Results**:
 
-- 346 tests pass workspace-wide. 301 keleusma unit including 21 bytecode tests, 17 keleusma integration, 22 keleusma-arena unit, 6 keleusma-arena doctests. Two new round-trip tests for the archive converters.
+- 347 tests pass workspace-wide. 302 keleusma unit including 22 bytecode tests and the new `vm_view_bytes_zero_copy_executes_against_borrowed_buffer` test, 17 keleusma integration, 22 keleusma-arena unit, 6 keleusma-arena doctests.
 - Clippy clean under `--workspace --all-targets`.
 - Format clean.
 
 ## Summary
 
-Phase 2 step 2 of P10 is the execution-against-archived refactor. This iteration delivers the foundation for that refactor without yet changing the execution loop.
+True zero-copy execution against an `&'a ArchivedModule` is now in place. The Vm reads bytecode directly from a borrowed buffer with no owned `Module` materialized.
 
-`Op` now derives `Copy`. With all variants having `Copy` payloads (`u8`, `u16`, `u32`), this is a no-cost addition that lets the execution loop extract owned `Op` values from a `&[Op]` slice without cloning.
+The refactor cascaded through the Vm and several callers.
 
-`bytecode::op_from_archived(&ArchivedOp) -> Op` materializes an owned `Op` from an archived form. All forty-eight `Op` variants are covered. Endian-explicit fields are converted through `.to_native()`. The result is a `Copy` value with no heap allocation.
+- `Vm` gained the lifetime parameter `Vm<'a>`. Internal storage shifted to a `BytecodeStore<'a>` enum carrying either an `Owned` `AlignedVec<8>` (for VMs constructed from `Module` or unaligned bytes) or a `Borrowed` `&'a [u8]` (for the new zero-copy constructor).
+- A private `archived()` helper returns `&ArchivedModule` from the bytecode storage via `rkyv::access_unchecked`. The bytes were validated at construction, so the unchecked access is sound.
+- The execution loop now reads through per-access converter helpers. `chunk_op` returns an owned `Op` via `op_from_archived`. `chunk_const` returns an owned `Value` via `value_from_archived`. `chunk_const_str`, `struct_template`, `native_name`, `chunk_op_count`, `chunk_local_count`, and `word_bits_log2` cover the remaining access patterns.
+- Cold-path methods (`verify_resources`, `auto_arena_capacity`) deserialize the bytecode to an owned `Module` on call via `module_owned()` and operate on it. The hot execution path never materializes the owned form.
+- `replace_module` serializes the new module to `AlignedVec` and replaces the storage. The Vm's lifetime parameter is unchanged because the new bytes are always owned.
+- `register_utility_natives`, `register_audio_natives`, and the `build_vm` helper in the marshall integration test all updated to thread the lifetime parameter through their signatures.
+- A new `unsafe Vm::view_bytes_zero_copy(&'a [u8])` constructor stores the borrowed slice directly without deserialization. Validates the framing only. The execution loop runs against the buffer's `&ArchivedModule` for as long as the borrowed lifetime is valid.
+- A new test `vm_view_bytes_zero_copy_executes_against_borrowed_buffer` compiles a program, serializes to an `AlignedVec`, constructs a `Vm<'_>` borrowing the slice, and confirms the program executes correctly with no owned `Module` materialized.
 
-`bytecode::value_from_archived(&ArchivedValue) -> Value` materializes an owned `Value` recursively. All eleven `Value` variants are covered including the recursive composites (`Tuple`, `Array`, `Struct`, `Enum`). Strings round-trip through `ArchivedString::as_str().to_string()`. Heap allocations occur only for string and composite constants, not for primitives.
+## API Surface
 
-Two new round-trip tests verify the converters preserve op and value identity across the archive cycle. `bytecode_archived_op_round_trip_matches_owned` compiles a program with arithmetic ops and confirms each op survives the archive round trip. `bytecode_archived_value_round_trip_matches_owned` does the same for the constants pool.
+The runtime now supports five entry points spanning the design space.
 
-The execution loop continues to operate on the deserialized owned `Module`. The converters are not yet wired into the run loop.
+| Entry point | Source | Verification | Allocation |
+|---|---|---|---|
+| `Vm::new(Module)` | Owned module | Full | Serializes module internally for archived access |
+| `Vm::load_bytes(&[u8])` | Unaligned bytes | Full | Body copy to `AlignedVec` before deserialize |
+| `Vm::view_bytes(&[u8])` | Aligned bytes | Full | Skip body copy. Deserialize for verification then store. |
+| `unsafe Vm::view_bytes_unchecked(&[u8])` | Aligned bytes | Skip resource bounds | Same as `view_bytes` minus bounds check |
+| `unsafe Vm::view_bytes_zero_copy(&'a [u8])` | Aligned bytes | Skip all checks | True zero-copy. Borrow the buffer. |
 
-## Step 2 Remaining Work (V0.1-M2-T4)
-
-The actual zero-copy execution loop refactor is recorded as V0.1-M2-T4 and remains open.
-
-- `Vm` gains a lifetime parameter `Vm<'a>` with internal storage as bytes. An enum carries either an owned `rkyv::util::AlignedVec` or a borrowed `&'a [u8]`.
-- Each method that currently accesses `self.module.chunks[idx]` is updated to access `self.archived().chunks[idx]` where `self.archived()` returns `&ArchivedModule` from the bytes via `rkyv::access_unchecked`.
-- The execution loop calls `op_from_archived` for the current op and `value_from_archived` for constant loads. The match arms over the converted `Op` are unchanged from the current execution loop.
-- Verifier rewrite to operate on `&ArchivedModule` or restrict zero-copy execution to the unchecked path that skips verification. Decision pending.
-- Tests for execution against borrowed buffers including from a `&'static [u8]` placed in `.rodata`.
-
-The cascade of the lifetime parameter through every `Vm` method and the rewrite of every access site is genuine multi-session work. Splitting it across sessions reduces the risk of partial conversion that leaves the codebase in a half-broken state.
+The zero-copy path is the strongest unsafe contract because it skips all verification including structural verification. Hosts use it when the bytecode is known good (typically because it was verified by the build pipeline).
 
 ## Changes Made
 
 ### Source
 
-- **`src/bytecode.rs`**: `Op` gains `Copy` derive. New `pub fn op_from_archived(&ArchivedOp) -> Op` covers all forty-eight variants. New `pub fn value_from_archived(&ArchivedValue) -> Value` covers all eleven variants recursively.
-- **`src/vm.rs`**: Two new round-trip tests. The execution loop's `chunk.ops[ip].clone()` simplified to `chunk.ops[ip]` since `Op` is now `Copy`.
+- **`src/vm.rs`**: New `BytecodeStore<'a>` enum and `archived()` helper. `Vm` struct gained lifetime parameter `Vm<'a>`. `CallFrame` derives `Copy`. New helpers `module_owned`, `chunk_op`, `chunk_const`, `chunk_op_count`, `chunk_local_count`, `chunk_const_str`, `struct_template`, `native_name`, `chunk_count`, `word_bits_log2`. `construct` returns `Result<Self, VmError>` and serializes the module to `AlignedVec`. All 24 access sites for `self.module.X` converted to use the helpers. `replace_module` re-serializes. `verify_resources` and `auto_arena_capacity` deserialize on call. New `unsafe fn view_bytes_zero_copy(bytes: &'a [u8])` constructor. New `vm_view_bytes_zero_copy_executes_against_borrowed_buffer` test.
+- **`src/utility_natives.rs`**: `register_utility_natives` gained the `<'a>` lifetime parameter on its signature.
+- **`src/audio_natives.rs`**: `register_audio_natives` gained the `<'a>` lifetime parameter on its signature.
+- **`tests/marshall.rs`**: `build_vm` return type changed from `Vm` to `Vm<'_>`.
 
 ### Knowledge Graph
 
-- **`docs/decisions/PRIORITY.md`**: P10 entry expanded. Step 2 split into completed foundations and remaining execution loop refactor.
-- **`docs/process/TASKLOG.md`**: V0.1-M2-T3 row added marking foundations complete. V0.1-M2-T4 row added for the remaining execution loop refactor. New history row added.
+- **`docs/decisions/PRIORITY.md`**: P10 marked resolved across all phases. Strikethrough on the heading. Full design space table added.
+- **`docs/process/TASKLOG.md`**: V0.1-M2-T4 row marked complete. New history row added.
 - **`docs/process/REVERSE_PROMPT.md`**: This file.
 
 ## Trade-offs and Properties
 
-The converters do real work. Each `op_from_archived` call performs a discriminant match and a `to_native()` conversion for endian-explicit fields. For the execution path, this cost is paid per op-fetch. The cost is comparable to a `clone` on a small `Op` value and is dominated by the match dispatch.
+The hot path now does a discriminant match plus a `to_native()` conversion per op-fetch through `op_from_archived`. The cost is comparable to a clone on a small `Op` value and is dominated by the match dispatch. Constants are converted via `value_from_archived` which is more expensive for composite values because of recursive descent and heap allocations for `Vec<Value>` and `String`. For typical Keleusma programs that execute many instructions per second, the overhead is acceptable.
 
-The `value_from_archived` call is more expensive for composite values because of the recursive descent and the heap allocations for `Vec<Value>` and `String`. However, this cost is paid only at constant-load sites, which are typically a small fraction of total instructions executed.
+The zero-copy path skips all verification. This is intentional. Hosts that use this path attest the bytecode is well-formed. Adversarial bytecode could cause arbitrary VM behavior including reads or writes through invalid frame state. The unsafe marker captures this contract.
 
-For typical Keleusma programs that execute many instructions per second, the per-op converter cost is acceptable. Future iterations can investigate batch conversion or trait-based static dispatch if the overhead becomes significant.
-
-`Op` becoming `Copy` is a backward-compatible addition. All existing code that called `.clone()` on `Op` continues to work. Clippy now flags the redundant clone on the existing op-fetch site, which is updated in this commit.
+The owned-input paths (`Vm::new`, `Vm::load_bytes`) now serialize the module internally. This is a one-time cost at construction. Subsequent execution uses the archived form like the zero-copy path. The unified execution path simplifies the maintenance burden compared to alternatives such as a parallel `VmView<'a>` type.
 
 ## Unaddressed Concerns
 
-1. **The execution loop still runs against owned `Module`.** True zero-copy execution requires the V0.1-M2-T4 refactor. This iteration ships the converter foundations.
+1. **Zero-copy execution skips structural verification.** The unsafe contract requires the host to attest that block nesting, jump offsets, and the productivity rule are valid. Future work could add a verification pass that operates on `&ArchivedModule` to provide a safe zero-copy entry point. The pass would mirror `verify::verify` but read through archived accessors.
 
-2. **The user explicitly asked for step 2.** This iteration delivers the foundation rather than the full execution refactor. The honest framing is that step 2 is two-part: foundations (this iteration) and execution loop (next iteration). The split reduces risk of partial state.
+2. **Per-op converter overhead.** Every op-fetch and constant-load runs a discriminant match. Performance is acceptable for typical programs. Hot loops could benefit from caching the chunk's op slice or specializing the dispatch. Future optimization.
 
-3. **No new test exercises true zero-copy execution.** A test that runs a program against `&'static [u8]` would close the loop. That requires V0.1-M2-T4.
+3. **String constants clone on access.** When the bytecode declares `Value::StaticStr("hello")`, the runtime materializes a fresh `String` for each load. The clone happens at the converter boundary. A future variant could return `Cow<'a, str>` to avoid cloning when the host buffer outlives the operand stack lifetime, at the cost of more lifetime annotations.
 
-4. **The converters perform per-call heap allocation for string and composite constants.** This is unavoidable in the materialization-on-demand pattern. A future variant that returns a borrowed `Cow`-like value could reduce this cost but adds lifetime complexity.
+4. **Float width is still hardcoded.** `Value::Float` is `f64`. Targets that use `f32` natively would need a separate float-size header field. Tracked under B10.
+
+5. **Zero-copy from `&'static [u8]` placed in `.rodata` is supported in principle but not exercised by an explicit test.** The `vm_view_bytes_zero_copy_executes_against_borrowed_buffer` test uses an `AlignedVec` rather than a static array. A test using a `static` with `#[repr(align(8))]` would close the loop. Not currently a defect.
 
 ## Intended Next Step
 
+P10 is now resolved. The precompiled-distribution story is complete from compile through wire format through zero-copy execution.
+
 Three paths.
 
-A. Continue V0.1-M2-T4. The actual execution loop refactor. Multi-session work. Beneficial if the precompiled-distribution story is the priority.
+A. Pivot to P1 (type checker). Currently the compiler emits bytecode without type checking. Adding a semantic analysis pass would catch type errors at compile time rather than runtime.
 
-B. Pause P10 and pivot to a different priority such as P1 (type checker), P3 (error recovery), or P7 follow-on (operand stack and DynStr arena migration).
+B. Pivot to P3 (error recovery model). A runtime error currently halts execution. Defining recovery semantics is necessary for safety-critical control systems.
 
-C. Publish keleusma main crate to crates.io now that the wire format and load API are stable.
+C. Pivot to P7 follow-on (operand stack and DynStr arena migration). The arena is in place but the operand stack and dynamic strings still use the global allocator. Routing them through the arena completes the bounded-memory guarantee.
 
-Recommend A only if the user has appetite for a multi-session refactor. The converter foundations are useful in their own right for hosts that want to inspect bytecode without deserializing. The runtime-side benefit of full zero-copy execution requires the V0.1-M2-T4 refactor.
+D. Publish keleusma main crate to crates.io now that the wire format and load API are stable.
+
+Recommend C if the bounded-memory guarantee is the priority. Recommend A or B if the safety-critical positioning is the priority. Recommend D if external visibility is the priority.
 
 Await human prompt before proceeding.
 
 ## Session Context
 
-This session began with V0.0-M5 and V0.0-M6 already complete and the arena extracted into a workspace crate. The session resolved P8 and P9, completed three pre-publication audit and polish passes on `keleusma-arena`, published v0.1.0 to crates.io, switched the keleusma main crate to consume the registry version, completed V0.1-M1 implementing precompiled bytecode loading and trust-based verification skip, hardened the wire format with a CRC-32 algebraic self-inclusion trailer, extended the header with length, word size, and address size, pinned a golden-bytes test, shifted word and address fields to base-2 exponent encoding with relaxed acceptance and integer masking, switched the body format from postcard to rkyv as Phase 1 of P10, landed Phase 2 step 1 with in-place validation and the no-copy load path, and now landed the conversion helper foundations for Phase 2 step 2.
+This session began with V0.0-M5 and V0.0-M6 already complete and the arena extracted into a workspace crate. The session resolved P8 and P9, completed three pre-publication audit and polish passes on `keleusma-arena`, published v0.1.0 to crates.io, switched the keleusma main crate to consume the registry version, completed V0.1-M1 implementing precompiled bytecode loading and trust-based verification skip, hardened the wire format with a CRC-32 algebraic self-inclusion trailer, extended the header with length, word size, and address size, pinned a golden-bytes test, shifted word and address fields to base-2 exponent encoding with relaxed acceptance and integer masking, switched the body format from postcard to rkyv, landed the in-place validation and no-copy load path, landed the conversion helper foundations, and now completed the full Vm refactor with true zero-copy execution against borrowed bytecode buffers. P10 is resolved across all phases.

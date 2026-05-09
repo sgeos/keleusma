@@ -47,29 +47,42 @@ All P8 items are complete except for the bounded-iteration loop analysis, which 
 
 ## ~~P9. Bounded-iteration loop analysis~~ (Resolved as R38)
 
-## P10. Zero-copy bytecode execution from rodata
+## ~~P10. Zero-copy bytecode execution from rodata~~ (Resolved)
 
-Phase 1 of P10 is complete. The body format is rkyv as of `BYTECODE_VERSION = 4`. Rkyv produces a self-relative addressable layout that supports in-place access. The wire format reserves alignment padding so the body begins at an eight-byte-aligned offset when the buffer base is eight-byte-aligned. The current `Module::from_bytes` path copies the body to `AlignedVec` to satisfy alignment for arbitrary host slices, then deserializes to an owned `Module`. The runtime continues to execute against the owned form for now.
+P10 is complete across all phases.
 
-Phase 2 step 1 is complete. `Module::access_bytes` returns a borrowed `&'a ArchivedModule` after validating the framing through the existing checks. `Module::view_bytes` calls `access_bytes` and deserializes to an owned `Module` without the body copy that `from_bytes` performs. The corresponding `Vm::view_bytes` and `unsafe Vm::view_bytes_unchecked` constructors compose validation with the safe and unchecked Vm constructors. Both require the body to be 8-byte aligned. Hosts arrange this through `AlignedVec`, through a static buffer with `#[repr(align(8))]`, or through linker placement.
+Phase 1 (`BYTECODE_VERSION = 4`). Body format switched from postcard to rkyv. Rkyv produces a self-relative addressable layout that supports in-place access. Header padded for 8-byte body alignment.
 
-Phase 2 step 2 is in progress. The conversion helpers are in place. The execution loop refactor remains.
+Phase 2 step 1. `Module::access_bytes` returns a borrowed `&'a ArchivedModule` after framing validation. `Module::view_bytes` deserializes from access without the body copy. `Vm::view_bytes` and `unsafe Vm::view_bytes_unchecked` constructors compose this with the existing safe and unchecked paths.
 
-Completed under step 2:
+Phase 2 step 2 foundations. `Op` derives `Copy`. `op_from_archived` covers all 48 variants. `value_from_archived` covers all 11 variants recursively. Round-trip tests verify identity preservation.
 
-- `Op` derives `Copy`, allowing fast extraction from archived form.
-- `bytecode::op_from_archived(&ArchivedOp) -> Op` materializes an owned `Op` from an archived form. All forty-eight variants covered.
-- `bytecode::value_from_archived(&ArchivedValue) -> Value` materializes an owned `Value` recursively. All eleven variants covered.
-- Round-trip tests verify the converters preserve op and value identity through the archive cycle.
+Phase 2 step 2 execution refactor.
 
-Remaining under step 2:
+- `Vm` gained lifetime parameter `Vm<'a>` with `BytecodeStore<'a>` enum carrying owned `AlignedVec` or borrowed `&'a [u8]`.
+- The execution loop reads from `&ArchivedModule` via the `archived()` helper and the per-access converters (`chunk_op`, `chunk_const`, `chunk_const_str`, `struct_template`, `native_name`, `chunk_op_count`, `chunk_local_count`, `word_bits_log2`).
+- Cold-path methods (`verify_resources`, `auto_arena_capacity`) deserialize to owned `Module` on call via `module_owned()`.
+- `replace_module` serializes the new module to `AlignedVec` and replaces the bytecode store.
+- `unsafe Vm::view_bytes_zero_copy(&'a [u8])` is the true zero-copy constructor. Validates framing only. Stores the borrowed slice. The execution loop reads ops and constants directly from the buffer with no owned `Module` materialized.
+- The cascade reached the `register_*_natives` helpers and the marshalling test harness, both updated to thread the lifetime parameter through their signatures.
 
-- `Vm` gains a lifetime parameter. Either `Vm<'a>` everywhere or a separate `BorrowedVm<'a>` alongside the owned `Vm`.
-- The execution loop reads from `&ArchivedModule` instead of `&Module`. Each iteration calls `op_from_archived` for the current instruction and `value_from_archived` for any constant load. The match arms over the converted `Op` are unchanged from the current execution loop.
-- The verifier either gains an `ArchivedModule` variant or zero-copy execution is restricted to the unchecked path that skips verification.
-- Tests for execution against borrowed buffers, including from a `&'static [u8]` placed in `.rodata`.
+The runtime now supports four entry points spanning the design space.
 
-The remaining work is genuine multi-session refactor. The cascade of the lifetime parameter through every `Vm` method and the rewrite of the execution loop accessors is mechanical but extensive. Splitting it across sessions reduces risk of leaving the codebase in a partially-converted state.
+| Entry point | Source | Verification | Allocation |
+|---|---|---|---|
+| `Vm::new(Module)` | Owned module | Full | Serializes module internally for archived access |
+| `Vm::load_bytes(&[u8])` | Unaligned bytes | Full | Body copy to `AlignedVec` before deserialize |
+| `Vm::view_bytes(&[u8])` | Aligned bytes | Full | Skip body copy. Deserialize for verification then store. |
+| `unsafe Vm::view_bytes_unchecked(&[u8])` | Aligned bytes | Skip resource bounds | Same as `view_bytes` minus bounds check |
+| `unsafe Vm::view_bytes_zero_copy(&'a [u8])` | Aligned bytes | Skip everything | True zero-copy. Borrow the buffer. |
+
+The zero-copy path borrows the buffer's lifetime through `Vm<'a>`. A program loaded via this path executes entirely against the buffer with no module-side heap allocation.
+
+Future work that interacts with P10 but is outside its scope:
+
+- B10 target portability. The wire format is endian-stable through rkyv. Float widths are still hardcoded to f64.
+- B9 hot update of yielded static strings. Under zero-copy execution from a swappable buffer, `Value::StaticStr` materialized from the buffer must be valid for as long as the host retains it.
+- Optimization. The per-op `op_from_archived` call costs a discriminant match per fetch. A future iteration may cache the chunk's archived ops slice or use a JIT for hot paths.
 
 Phase 2 step 2 also interacts with two backlog items.
 

@@ -54,6 +54,7 @@ pub enum VmState {
 }
 
 /// A call frame on the VM call stack.
+#[derive(Debug, Clone, Copy)]
 struct CallFrame {
     /// Index of the chunk being executed.
     chunk_idx: usize,
@@ -121,9 +122,34 @@ pub fn auto_arena_capacity_for(
     Ok(max_total)
 }
 
+/// Bytecode storage for the VM.
+///
+/// `Owned` carries an `AlignedVec` produced by serializing a `Module`
+/// at construction time. `Borrowed` carries a slice supplied by the
+/// host through `Vm::view_bytes_unchecked` for true zero-copy
+/// execution from `.rodata` or any addressable buffer.
+enum BytecodeStore<'a> {
+    Owned(rkyv::util::AlignedVec<8>),
+    Borrowed(&'a [u8]),
+}
+
+impl<'a> BytecodeStore<'a> {
+    fn as_slice(&self) -> &[u8] {
+        match self {
+            BytecodeStore::Owned(v) => v.as_slice(),
+            BytecodeStore::Borrowed(b) => b,
+        }
+    }
+}
+
 /// The Keleusma virtual machine.
-pub struct Vm {
-    module: Module,
+///
+/// The lifetime parameter `'a` reflects the bytecode source. VMs
+/// constructed from an owned `Module` or from arbitrary byte slices
+/// carry `Vm<'static>`. VMs constructed via `view_bytes_unchecked`
+/// from a borrowed slice carry `Vm<'a>` for the slice's lifetime.
+pub struct Vm<'a> {
+    bytecode: BytecodeStore<'a>,
     stack: Vec<Value>,
     frames: Vec<CallFrame>,
     natives: Vec<NativeEntry>,
@@ -137,7 +163,105 @@ pub struct Vm {
     started: bool,
 }
 
-impl Vm {
+impl<'a> Vm<'a> {
+    /// Borrow the archived module from internal bytecode storage.
+    ///
+    /// The bytes were validated at construction time, so accessing the
+    /// archived form via `access_unchecked` is sound. For owned bytes
+    /// produced by `Module::to_bytes`, the bytes are well-formed by
+    /// construction. For borrowed bytes from `view_bytes_unchecked`,
+    /// the framing was validated and the caller attests through the
+    /// unsafe marker that the rkyv structure is valid.
+    fn archived(&self) -> &crate::bytecode::ArchivedModule {
+        let bytes = self.bytecode.as_slice();
+        let length = u32::from_le_bytes([bytes[6], bytes[7], bytes[8], bytes[9]]) as usize;
+        let body = &bytes[16..length - 4];
+        unsafe { rkyv::access_unchecked::<crate::bytecode::ArchivedModule>(body) }
+    }
+
+    /// Deserialize the current bytecode to an owned `Module`.
+    ///
+    /// Used by cold-path methods such as resource-bounds re-verification
+    /// and auto-arena-capacity computation that operate on owned
+    /// `Module` values. The hot execution path uses `archived` directly.
+    fn module_owned(&self) -> Result<Module, VmError> {
+        Ok(Module::from_bytes(self.bytecode.as_slice())?)
+    }
+
+    /// Materialize the op at `(chunk_idx, ip)` from archived storage.
+    fn chunk_op(&self, chunk_idx: usize, ip: usize) -> Op {
+        let chunk = &self.archived().chunks[chunk_idx];
+        crate::bytecode::op_from_archived(&chunk.ops[ip])
+    }
+
+    /// Materialize the constant at `(chunk_idx, idx)` from archived storage.
+    fn chunk_const(&self, chunk_idx: usize, idx: usize) -> Value {
+        let chunk = &self.archived().chunks[chunk_idx];
+        crate::bytecode::value_from_archived(&chunk.constants[idx])
+    }
+
+    /// Number of ops in the chunk.
+    fn chunk_op_count(&self, chunk_idx: usize) -> usize {
+        self.archived().chunks[chunk_idx].ops.len()
+    }
+
+    /// Local-variable slot count for the chunk (includes parameters).
+    fn chunk_local_count(&self, chunk_idx: usize) -> u16 {
+        self.archived().chunks[chunk_idx].local_count.to_native()
+    }
+
+    /// Module-wide bit width exponent for arithmetic masking.
+    fn word_bits_log2(&self) -> u8 {
+        self.archived().word_bits_log2
+    }
+
+    /// Test whether a chunk index is in range.
+    fn chunk_count(&self) -> usize {
+        self.archived().chunks.len()
+    }
+
+    /// Look up a native function name by index. Returns `None` if out of bounds.
+    fn native_name(&self, idx: usize) -> Option<alloc::string::String> {
+        use alloc::string::ToString;
+        self.archived()
+            .native_names
+            .get(idx)
+            .map(|s| s.as_str().to_string())
+    }
+
+    /// Read a string-typed constant. Returns `None` if not a string.
+    fn chunk_const_str(&self, chunk_idx: usize, idx: usize) -> Option<alloc::string::String> {
+        use alloc::string::ToString;
+        let chunk = &self.archived().chunks[chunk_idx];
+        match &chunk.constants[idx] {
+            crate::bytecode::ArchivedValue::StaticStr(s)
+            | crate::bytecode::ArchivedValue::DynStr(s) => Some(s.as_str().to_string()),
+            _ => None,
+        }
+    }
+
+    /// Look up a struct template's type name and field names.
+    fn struct_template(
+        &self,
+        chunk_idx: usize,
+        idx: usize,
+    ) -> (
+        alloc::string::String,
+        alloc::vec::Vec<alloc::string::String>,
+    ) {
+        use alloc::string::ToString;
+        let template = &self.archived().chunks[chunk_idx].struct_templates[idx];
+        let type_name = template.type_name.as_str().to_string();
+        let field_names: alloc::vec::Vec<_> = template
+            .field_names
+            .iter()
+            .map(|s| s.as_str().to_string())
+            .collect();
+        (type_name, field_names)
+    }
+}
+
+impl<'a> Vm<'a> {
     /// Create a new VM with the given compiled module and the default arena
     /// capacity.
     ///
@@ -177,7 +301,7 @@ impl Vm {
         // current limitations.
         verify::verify_resource_bounds(&module, arena_capacity)
             .map_err(|e| VmError::VerifyError(format!("{}: {}", e.chunk_name, e.message)))?;
-        Ok(Self::construct(module, arena_capacity))
+        Self::construct(module, arena_capacity)
     }
 
     /// Create a VM that runs structural verification but skips WCET and
@@ -224,7 +348,7 @@ impl Vm {
     ) -> Result<Self, VmError> {
         verify::verify(&module)
             .map_err(|e| VmError::VerifyError(format!("{}: {}", e.chunk_name, e.message)))?;
-        Ok(Self::construct(module, arena_capacity))
+        Self::construct(module, arena_capacity)
     }
 
     /// Load and verify a module from a serialized byte slice.
@@ -293,23 +417,86 @@ impl Vm {
         unsafe { Self::new_unchecked(module) }
     }
 
+    /// Construct a VM that borrows bytecode directly from `bytes` without
+    /// any deserialization. True zero-copy execution.
+    ///
+    /// Validates the framing through [`Module::access_bytes`] and stores
+    /// the slice. The execution loop reads from `&ArchivedModule` for
+    /// every op-fetch and constant-load via the archived converters. No
+    /// owned `Module` is materialized at any point.
+    ///
+    /// The lifetime parameter on the returned `Vm<'a>` ties the VM to
+    /// the slice's lifetime. The slice must remain valid for as long as
+    /// the VM is in use.
+    ///
+    /// Suitable for hosts that place bytecode in `.rodata` (a
+    /// `&'static [u8]`) or in any addressable buffer where the host
+    /// arranges 8-byte alignment of the body.
+    ///
+    /// Skips structural verification, resource bounds verification,
+    /// and rkyv body validation. The host attests through the unsafe
+    /// marker that the bytecode was previously verified or comes from
+    /// a trusted compiler.
+    ///
+    /// # Safety
+    ///
+    /// The caller attests that the bytecode is well-formed: framing,
+    /// rkyv structure, structural invariants (block nesting, jump
+    /// offsets, productivity rule), and resource bounds. Violation may
+    /// produce arbitrary VM behavior including reads or writes of
+    /// invalid memory through the operand stack and the call frames.
+    /// This is stronger than [`Vm::new_unchecked`] which still runs
+    /// structural verification.
+    ///
+    /// Use [`Vm::view_bytes_unchecked`] for hosts that want the bytes
+    /// borrowed but with structural verification still active. Use
+    /// this constructor only when the bytecode is known good.
+    pub unsafe fn view_bytes_zero_copy(bytes: &'a [u8]) -> Result<Self, VmError> {
+        // Framing validation only (magic, length, CRC, version, sizes).
+        // No rkyv structural validation, no execution-side verification.
+        let _ = Module::access_bytes(bytes)?;
+        // Determine data segment length from the archived module so the
+        // data vector has the right slot count.
+        let data_len = {
+            let length = u32::from_le_bytes([bytes[6], bytes[7], bytes[8], bytes[9]]) as usize;
+            let body = &bytes[16..length - 4];
+            let archived =
+                unsafe { rkyv::access_unchecked::<crate::bytecode::ArchivedModule>(body) };
+            archived.data_layout.as_ref().map_or(0, |dl| dl.slots.len())
+        };
+        let data = vec![Value::Unit; data_len];
+        Ok(Self {
+            bytecode: BytecodeStore::Borrowed(bytes),
+            stack: Vec::new(),
+            frames: Vec::new(),
+            natives: Vec::new(),
+            data,
+            arena: keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY),
+            started: false,
+        })
+    }
+
     /// Construct the VM struct without running any verification.
     ///
     /// Internal helper shared by the verifying and unchecked
-    /// constructors. The data segment is initialized to `Unit` for
-    /// each declared slot.
-    fn construct(module: Module, arena_capacity: usize) -> Self {
+    /// constructors. Serializes the owned module to an aligned vector
+    /// for archived access during execution. The data segment is
+    /// initialized to `Unit` for each declared slot.
+    fn construct(module: Module, arena_capacity: usize) -> Result<Self, VmError> {
         let data_len = module.data_layout.as_ref().map_or(0, |dl| dl.slots.len());
         let data = vec![Value::Unit; data_len];
-        Self {
-            module,
+        let bytes = module.to_bytes()?;
+        let mut aligned = rkyv::util::AlignedVec::<8>::with_capacity(bytes.len());
+        aligned.extend_from_slice(&bytes);
+        Ok(Self {
+            bytecode: BytecodeStore::Owned(aligned),
             stack: Vec::new(),
             frames: Vec::new(),
             natives: Vec::new(),
             data,
             arena: keleusma_arena::Arena::with_capacity(arena_capacity),
             started: false,
-        }
+        })
     }
 
     /// Set a data segment slot to an initial value.
@@ -411,7 +598,13 @@ impl Vm {
             )));
         }
 
-        self.module = new_module;
+        // Serialize the new module to aligned bytes for archived
+        // access. The borrowed variant is replaced by an owned variant
+        // because hot swap takes an owned input.
+        let bytes = new_module.to_bytes()?;
+        let mut aligned = rkyv::util::AlignedVec::<8>::with_capacity(bytes.len());
+        aligned.extend_from_slice(&bytes);
+        self.bytecode = BytecodeStore::Owned(aligned);
         self.data = initial_data;
         self.frames.clear();
         self.stack.clear();
@@ -498,13 +691,10 @@ impl Vm {
     /// Returns an error if any Stream chunk's WCMU exceeds the arena
     /// capacity.
     pub fn verify_resources(&self) -> Result<(), VmError> {
+        let module = self.module_owned()?;
         let native_wcmu: Vec<u32> = self.natives.iter().map(|n| n.wcmu_bytes).collect();
-        verify::verify_resource_bounds_with_natives(
-            &self.module,
-            self.arena.capacity(),
-            &native_wcmu,
-        )
-        .map_err(|e| VmError::VerifyError(format!("{}: {}", e.chunk_name, e.message)))
+        verify::verify_resource_bounds_with_natives(&module, self.arena.capacity(), &native_wcmu)
+            .map_err(|e| VmError::VerifyError(format!("{}: {}", e.chunk_name, e.message)))
     }
 
     /// Compute the smallest arena capacity that admits this VM's module
@@ -514,8 +704,9 @@ impl Vm {
     /// has no Stream chunk, returns zero. The host can use this to size
     /// a fresh VM appropriately.
     pub fn auto_arena_capacity(&self) -> Result<usize, VmError> {
+        let module = self.module_owned()?;
         let native_wcmu: Vec<u32> = self.natives.iter().map(|n| n.wcmu_bytes).collect();
-        auto_arena_capacity_for(&self.module, &native_wcmu)
+        auto_arena_capacity_for(&module, &native_wcmu)
     }
 
     /// Set the worst-case execution time and memory usage attestation for
@@ -556,22 +747,26 @@ impl Vm {
     /// Call the module's entry point with the given arguments.
     pub fn call(&mut self, args: &[Value]) -> Result<VmState, VmError> {
         let entry = self
-            .module
+            .archived()
             .entry_point
+            .as_ref()
+            .map(|e| e.to_native() as usize)
             .ok_or_else(|| VmError::InvalidBytecode(String::from("no entry point")))?;
         self.call_function(entry, args)
     }
 
     /// Call a specific function by chunk index with the given arguments.
     pub fn call_function(&mut self, chunk_idx: usize, args: &[Value]) -> Result<VmState, VmError> {
-        let chunk = self.module.chunks.get(chunk_idx).ok_or_else(|| {
+        let archived = self.archived();
+        let chunk = archived.chunks.get(chunk_idx).ok_or_else(|| {
             VmError::InvalidBytecode(format!("invalid chunk index: {}", chunk_idx))
         })?;
+        let local_count = chunk.local_count.to_native() as usize;
 
-        if args.len() > chunk.local_count as usize {
+        if args.len() > local_count {
             return Err(VmError::InvalidBytecode(format!(
                 "too many arguments: expected at most {}, got {}",
-                chunk.local_count,
+                local_count,
                 args.len()
             )));
         }
@@ -582,7 +777,7 @@ impl Vm {
             self.stack.push(arg.clone());
         }
         // Extend stack for remaining local slots.
-        let extra = chunk.local_count as usize - args.len();
+        let extra = local_count - args.len();
         for _ in 0..extra {
             self.stack.push(Value::Unit);
         }
@@ -606,9 +801,16 @@ impl Vm {
         }
         // For stream functions, update the parameter slot with the new input.
         // This ensures the next iteration sees the latest input.
-        if let Some(base_frame) = self.frames.first() {
-            let chunk = &self.module.chunks[base_frame.chunk_idx];
-            if chunk.block_type == BlockType::Stream && chunk.param_count > 0 {
+        if let Some(base_frame) = self.frames.first().copied() {
+            let archived = self.archived();
+            let chunk = &archived.chunks[base_frame.chunk_idx];
+            let block_type = match &chunk.block_type {
+                crate::bytecode::ArchivedBlockType::Stream => BlockType::Stream,
+                crate::bytecode::ArchivedBlockType::Reentrant => BlockType::Reentrant,
+                crate::bytecode::ArchivedBlockType::Func => BlockType::Func,
+            };
+            let param_count = chunk.param_count;
+            if block_type == BlockType::Stream && param_count > 0 {
                 let base = base_frame.base;
                 self.stack[base] = input.clone();
             }
@@ -630,8 +832,7 @@ impl Vm {
             let ip = frame.ip;
             let base = frame.base;
 
-            let chunk = &self.module.chunks[chunk_idx];
-            if ip >= chunk.ops.len() {
+            if ip >= self.chunk_op_count(chunk_idx) {
                 // End of chunk without explicit return: return Unit.
                 let result = self.stack.pop().unwrap_or(Value::Unit);
                 self.frames.pop();
@@ -642,13 +843,13 @@ impl Vm {
                 continue;
             }
 
-            let op = chunk.ops[ip];
+            let op = self.chunk_op(chunk_idx, ip);
             // Advance IP.
             self.frames.last_mut().unwrap().ip += 1;
 
             match op {
                 Op::Const(idx) => {
-                    let val = self.module.chunks[chunk_idx].constants[idx as usize].clone();
+                    let val = self.chunk_const(chunk_idx, idx as usize);
                     self.stack.push(val);
                 }
                 Op::PushUnit => self.stack.push(Value::Unit),
@@ -688,7 +889,7 @@ impl Vm {
                 }
 
                 Op::Add => {
-                    let word_bits_log2 = self.module.word_bits_log2;
+                    let word_bits_log2 = self.word_bits_log2();
                     self.binary_op(move |a, b| match (a, b) {
                         (Value::Int(x), Value::Int(y)) => Ok(Value::Int(
                             crate::bytecode::truncate_int(x.wrapping_add(y), word_bits_log2),
@@ -716,7 +917,7 @@ impl Vm {
                 Op::Sub => self.binary_arith(|a, b| a.wrapping_sub(b), |a, b| a - b)?,
                 Op::Mul => self.binary_arith(|a, b| a.wrapping_mul(b), |a, b| a * b)?,
                 Op::Div => {
-                    let word_bits_log2 = self.module.word_bits_log2;
+                    let word_bits_log2 = self.word_bits_log2();
                     let b = self.pop()?;
                     let a = self.pop()?;
                     match (a, b) {
@@ -735,7 +936,7 @@ impl Vm {
                     }
                 }
                 Op::Mod => {
-                    let word_bits_log2 = self.module.word_bits_log2;
+                    let word_bits_log2 = self.word_bits_log2();
                     let b = self.pop()?;
                     let a = self.pop()?;
                     match (a, b) {
@@ -754,7 +955,7 @@ impl Vm {
                     }
                 }
                 Op::Neg => {
-                    let word_bits_log2 = self.module.word_bits_log2;
+                    let word_bits_log2 = self.word_bits_log2();
                     let val = self.pop()?;
                     match val {
                         Value::Int(x) => self.stack.push(Value::Int(
@@ -858,10 +1059,11 @@ impl Vm {
                 }
                 Op::Reset => {
                     // Reset locals to Unit, truncate stack, reset arena pointers.
-                    let frame = self.frames.last_mut().unwrap();
-                    let reset_base = frame.base;
-                    let reset_chunk_idx = frame.chunk_idx;
-                    let local_count = self.module.chunks[reset_chunk_idx].local_count as usize;
+                    let (reset_base, reset_chunk_idx) = {
+                        let frame = self.frames.last().unwrap();
+                        (frame.base, frame.chunk_idx)
+                    };
+                    let local_count = self.chunk_local_count(reset_chunk_idx) as usize;
 
                     // Clear locals to Unit.
                     for i in 0..local_count {
@@ -876,10 +1078,12 @@ impl Vm {
                     self.arena.reset();
 
                     // Find Stream instruction and set IP to instruction after it.
-                    let ops = &self.module.chunks[reset_chunk_idx].ops;
-                    let stream_ip = ops.iter().position(|op| matches!(op, Op::Stream));
+                    let stream_ip = self.archived().chunks[reset_chunk_idx]
+                        .ops
+                        .iter()
+                        .position(|op| matches!(op, crate::bytecode::ArchivedOp::Stream));
                     match stream_ip {
-                        Some(pos) => frame.ip = pos + 1,
+                        Some(pos) => self.frames.last_mut().unwrap().ip = pos + 1,
                         None => {
                             return Err(VmError::InvalidBytecode(String::from(
                                 "Reset without Stream in chunk",
@@ -892,11 +1096,12 @@ impl Vm {
 
                 // -- Functions --
                 Op::Call(idx, arg_count) => {
-                    let called_chunk = self.module.chunks.get(idx as usize).ok_or_else(|| {
-                        VmError::InvalidBytecode(format!("invalid chunk: {}", idx))
-                    })?;
+                    if idx as usize >= self.chunk_count() {
+                        return Err(VmError::InvalidBytecode(format!("invalid chunk: {}", idx)));
+                    }
+                    let called_local_count = self.chunk_local_count(idx as usize) as usize;
                     let new_base = self.stack.len() - arg_count as usize;
-                    let extra = called_chunk.local_count as usize - arg_count as usize;
+                    let extra = called_local_count - arg_count as usize;
                     for _ in 0..extra {
                         self.stack.push(Value::Unit);
                     }
@@ -912,14 +1117,13 @@ impl Vm {
                         return Err(VmError::StackUnderflow);
                     }
                     let args: Vec<Value> = self.stack.drain(self.stack.len() - n..).collect();
-                    let native_name =
-                        self.module.native_names.get(idx as usize).ok_or_else(|| {
-                            VmError::InvalidBytecode(format!("invalid native index: {}", idx))
-                        })?;
+                    let native_name = self.native_name(idx as usize).ok_or_else(|| {
+                        VmError::InvalidBytecode(format!("invalid native index: {}", idx))
+                    })?;
                     let entry = self
                         .natives
                         .iter()
-                        .find(|e| e.name == *native_name)
+                        .find(|e| e.name == native_name)
                         .ok_or_else(|| {
                             VmError::InvalidBytecode(format!(
                                 "unregistered native: {}",
@@ -967,43 +1171,28 @@ impl Vm {
                 }
 
                 Op::NewStruct(template_idx) => {
-                    let template =
-                        &self.module.chunks[chunk_idx].struct_templates[template_idx as usize];
-                    let n = template.field_names.len();
+                    let (type_name, field_names) =
+                        self.struct_template(chunk_idx, template_idx as usize);
+                    let n = field_names.len();
                     if self.stack.len() < n {
                         return Err(VmError::StackUnderflow);
                     }
                     let values: Vec<Value> = self.stack.drain(self.stack.len() - n..).collect();
-                    let fields: Vec<(String, Value)> = template
-                        .field_names
-                        .iter()
-                        .zip(values)
-                        .map(|(name, val)| (name.clone(), val))
-                        .collect();
-                    self.stack.push(Value::Struct {
-                        type_name: template.type_name.clone(),
-                        fields,
-                    });
+                    let fields: Vec<(String, Value)> =
+                        field_names.into_iter().zip(values).collect();
+                    self.stack.push(Value::Struct { type_name, fields });
                 }
                 Op::NewEnum(enum_const, var_const, arg_count) => {
-                    let type_name =
-                        match &self.module.chunks[chunk_idx].constants[enum_const as usize] {
-                            Value::StaticStr(s) | Value::DynStr(s) => s.clone(),
-                            _ => {
-                                return Err(VmError::InvalidBytecode(String::from(
-                                    "enum name not a string",
-                                )));
-                            }
-                        };
-                    let variant = match &self.module.chunks[chunk_idx].constants[var_const as usize]
-                    {
-                        Value::StaticStr(s) | Value::DynStr(s) => s.clone(),
-                        _ => {
-                            return Err(VmError::InvalidBytecode(String::from(
-                                "variant name not a string",
-                            )));
-                        }
-                    };
+                    let type_name = self
+                        .chunk_const_str(chunk_idx, enum_const as usize)
+                        .ok_or_else(|| {
+                            VmError::InvalidBytecode(String::from("enum name not a string"))
+                        })?;
+                    let variant = self
+                        .chunk_const_str(chunk_idx, var_const as usize)
+                        .ok_or_else(|| {
+                            VmError::InvalidBytecode(String::from("variant name not a string"))
+                        })?;
                     let n = arg_count as usize;
                     let fields: Vec<Value> = if n > 0 {
                         self.stack.drain(self.stack.len() - n..).collect()
@@ -1036,15 +1225,11 @@ impl Vm {
 
                 Op::GetField(name_const) => {
                     let container = self.pop()?;
-                    let field_name =
-                        match &self.module.chunks[chunk_idx].constants[name_const as usize] {
-                            Value::StaticStr(s) | Value::DynStr(s) => s.clone(),
-                            _ => {
-                                return Err(VmError::InvalidBytecode(String::from(
-                                    "field name not a string",
-                                )));
-                            }
-                        };
+                    let field_name = self
+                        .chunk_const_str(chunk_idx, name_const as usize)
+                        .ok_or_else(|| {
+                            VmError::InvalidBytecode(String::from("field name not a string"))
+                        })?;
                     match container {
                         Value::Struct { type_name, fields } => {
                             let val = fields
@@ -1141,45 +1326,33 @@ impl Vm {
 
                 // -- Type predicates (push bool, no jump) --
                 Op::IsEnum(enum_const, var_const) => {
+                    let expected_type = self
+                        .chunk_const_str(chunk_idx, enum_const as usize)
+                        .ok_or_else(|| {
+                            VmError::InvalidBytecode(String::from("enum const not string"))
+                        })?;
+                    let expected_var = self
+                        .chunk_const_str(chunk_idx, var_const as usize)
+                        .ok_or_else(|| {
+                            VmError::InvalidBytecode(String::from("variant const not string"))
+                        })?;
                     let val = self.stack.last().ok_or(VmError::StackUnderflow)?;
-                    let expected_type =
-                        match &self.module.chunks[chunk_idx].constants[enum_const as usize] {
-                            Value::StaticStr(s) | Value::DynStr(s) => s.as_str(),
-                            _ => {
-                                return Err(VmError::InvalidBytecode(String::from(
-                                    "enum const not string",
-                                )));
-                            }
-                        };
-                    let expected_var =
-                        match &self.module.chunks[chunk_idx].constants[var_const as usize] {
-                            Value::StaticStr(s) | Value::DynStr(s) => s.as_str(),
-                            _ => {
-                                return Err(VmError::InvalidBytecode(String::from(
-                                    "variant const not string",
-                                )));
-                            }
-                        };
                     let matches = matches!(
                         val,
                         Value::Enum { type_name, variant, .. }
-                            if type_name == expected_type && variant == expected_var
+                            if type_name == &expected_type && variant == &expected_var
                     );
                     self.stack.push(Value::Bool(matches));
                 }
                 Op::IsStruct(type_const) => {
+                    let expected = self
+                        .chunk_const_str(chunk_idx, type_const as usize)
+                        .ok_or_else(|| {
+                            VmError::InvalidBytecode(String::from("type const not string"))
+                        })?;
                     let val = self.stack.last().ok_or(VmError::StackUnderflow)?;
-                    let expected =
-                        match &self.module.chunks[chunk_idx].constants[type_const as usize] {
-                            Value::StaticStr(s) | Value::DynStr(s) => s.as_str(),
-                            _ => {
-                                return Err(VmError::InvalidBytecode(String::from(
-                                    "type const not string",
-                                )));
-                            }
-                        };
                     let matches =
-                        matches!(val, Value::Struct { type_name, .. } if type_name == expected);
+                        matches!(val, Value::Struct { type_name, .. } if type_name == &expected);
                     self.stack.push(Value::Bool(matches));
                 }
 
@@ -1209,10 +1382,9 @@ impl Vm {
                 }
 
                 Op::Trap(msg_const) => {
-                    let msg = match &self.module.chunks[chunk_idx].constants[msg_const as usize] {
-                        Value::StaticStr(s) | Value::DynStr(s) => s.clone(),
-                        _ => String::from("trap"),
-                    };
+                    let msg = self
+                        .chunk_const_str(chunk_idx, msg_const as usize)
+                        .unwrap_or_else(|| String::from("trap"));
                     return Err(VmError::Trap(msg));
                 }
             }
@@ -1239,7 +1411,7 @@ impl Vm {
         int_op: fn(i64, i64) -> i64,
         float_op: fn(f64, f64) -> f64,
     ) -> Result<(), VmError> {
-        let word_bits_log2 = self.module.word_bits_log2;
+        let word_bits_log2 = self.word_bits_log2();
         let b = self.pop()?;
         let a = self.pop()?;
         match (a, b) {
@@ -2340,6 +2512,29 @@ mod tests {
                 "expected alignment or magic/checksum failure, got {:?}",
                 other
             ),
+        }
+    }
+
+    #[test]
+    fn vm_view_bytes_zero_copy_executes_against_borrowed_buffer() {
+        // True zero-copy execution. Compile a program, serialize to
+        // bytes inside an AlignedVec, then construct a VM that borrows
+        // the bytes directly. The execution loop reads the entire
+        // module through `&ArchivedModule` with no owned `Module`
+        // materialized.
+        let src = "fn double(x: i64) -> i64 { x * 2 }\nfn main() -> i64 { double(21) }";
+        let tokens = tokenize(src).expect("lex");
+        let program = parse(&tokens).expect("parse");
+        let module = compile(&program).expect("compile");
+        let bytes = module.to_bytes().expect("encode");
+        let mut aligned = rkyv::util::AlignedVec::<8>::with_capacity(bytes.len());
+        aligned.extend_from_slice(&bytes);
+        // Construct a VM that borrows from `aligned`. The lifetime
+        // parameter on Vm is tied to the slice.
+        let mut vm: Vm<'_> = unsafe { Vm::view_bytes_zero_copy(&aligned[..]).expect("view") };
+        match vm.call(&[]).unwrap() {
+            VmState::Finished(v) => assert_eq!(v, Value::Int(42)),
+            other => panic!("expected finished, got {:?}", other),
         }
     }
 

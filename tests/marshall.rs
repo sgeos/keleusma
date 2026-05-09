@@ -136,7 +136,7 @@ fn derive_enum_unknown_variant_errors() {
 
 // -- Register_fn end-to-end --
 
-fn build_vm(src: &str) -> Vm {
+fn build_vm(src: &str) -> Vm<'_> {
     let tokens = tokenize(src).expect("lex error");
     let program = parse(&tokens).expect("parse error");
     let module = compile(&program).expect("compile error");

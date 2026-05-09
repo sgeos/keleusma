@@ -122,7 +122,7 @@ fn native_println(args: &[Value]) -> Result<Value, VmError> {
 /// `to_string`, `length`, and `println` accept any `Value` variant and so
 /// remain registered through `register_native`. The math functions take
 /// fixed primitive types and use the ergonomic `register_fn` API.
-pub fn register_utility_natives(vm: &mut Vm) {
+pub fn register_utility_natives<'a>(vm: &mut Vm<'a>) {
     vm.register_native("to_string", native_to_string);
     vm.register_native("length", native_length);
     vm.register_native("println", native_println);
