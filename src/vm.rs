@@ -2120,9 +2120,16 @@ mod tests {
 
     #[test]
     fn bytecode_rejects_bad_magic() {
-        // Pad to the required header plus footer length so the slice
-        // passes the truncation check and reaches the magic check.
-        let bytes = alloc::vec![b'X', b'X', b'X', b'X', 0x01, 0x00, 0x00, 0x00, 0x00, 0x00];
+        // Pad to the minimum framing length (header plus footer = 16)
+        // so the slice passes the truncation check and reaches the
+        // magic check.
+        let bytes = alloc::vec![
+            b'X', b'X', b'X', b'X', // magic
+            0x02, 0x00, // version
+            0x10, 0x00, 0x00, 0x00, // length = 16
+            64, 64, // word_bits, addr_bits
+            0x00, 0x00, 0x00, 0x00, // CRC placeholder
+        ];
         match Module::from_bytes(&bytes) {
             Err(crate::bytecode::LoadError::BadMagic) => {}
             other => panic!("expected BadMagic, got {:?}", other),
@@ -2135,6 +2142,106 @@ mod tests {
         match Module::from_bytes(&bytes) {
             Err(crate::bytecode::LoadError::Truncated) => {}
             other => panic!("expected Truncated, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn bytecode_rejects_oversized_length_field() {
+        // Construct a slice whose length field claims more bytes than
+        // the slice actually contains. The truncation check catches
+        // this before any further validation.
+        let mut bytes = alloc::vec![
+            b'K', b'E', b'L', b'E', // magic
+            0x02, 0x00, // version
+            0xFF, 0xFF, 0xFF, 0xFF, // length = 4 GiB, far above slice length
+            64, 64, // word_bits, addr_bits
+            0x00, 0x00, 0x00, 0x00, // CRC placeholder
+        ];
+        // Pad to clearly less than the claimed length.
+        bytes.push(0);
+        match Module::from_bytes(&bytes) {
+            Err(crate::bytecode::LoadError::Truncated) => {}
+            other => panic!("expected Truncated, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn bytecode_rejects_undersized_length_field() {
+        // Construct a slice whose length field is below the minimum
+        // framing size.
+        let bytes = alloc::vec![
+            b'K', b'E', b'L', b'E', // magic
+            0x02, 0x00, // version
+            0x05, 0x00, 0x00, 0x00, // length = 5, below minimum framing
+            64, 64, // word_bits, addr_bits
+            0x00, 0x00, 0x00, 0x00, // CRC placeholder
+        ];
+        match Module::from_bytes(&bytes) {
+            Err(crate::bytecode::LoadError::Truncated) => {}
+            other => panic!("expected Truncated, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn bytecode_golden_bytes_for_main_returning_one() {
+        // Pin the exact serialized form of a minimal Keleusma program
+        // to guard against unintended wire format changes and
+        // endian-dependent code paths. Updating this byte sequence
+        // requires a deliberate decision recorded in R39 and a
+        // BYTECODE_VERSION bump if the change is not backwards
+        // compatible.
+        //
+        // Source: `fn main() -> i64 { 1 }`
+        //
+        // Layout breakdown:
+        //   bytes[0..4]    = b"KELE"          magic
+        //   bytes[4..6]    = 0x02 0x00         version 2 (u16 LE)
+        //   bytes[6..10]   = 0x25 0x00 0x00 0x00  length 37 (u32 LE)
+        //   bytes[10]      = 0x40              word_bits 64
+        //   bytes[11]      = 0x40              addr_bits 64
+        //   bytes[12..33]  = postcard body
+        //   bytes[33..37]  = 0xFE 0xD5 0x21 0x91  CRC-32 (u32 LE)
+        let expected: alloc::vec::Vec<u8> = alloc::vec![
+            0x4B, 0x45, 0x4C, 0x45, 0x02, 0x00, 0x25, 0x00, 0x00, 0x00, 0x40, 0x40, 0x01, 0x04,
+            0x6D, 0x61, 0x69, 0x6E, 0x02, 0x00, 0x00, 0x20, 0x01, 0x02, 0x02, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x01, 0x00, 0x00, 0xFE, 0xD5, 0x21, 0x91,
+        ];
+        let src = "fn main() -> i64 { 1 }";
+        let tokens = tokenize(src).expect("lex");
+        let program = parse(&tokens).expect("parse");
+        let module = compile(&program).expect("compile");
+        let bytes = module.to_bytes().expect("encode");
+        assert_eq!(
+            bytes, expected,
+            "wire format drift detected. Update the expected bytes deliberately and bump BYTECODE_VERSION if not backwards compatible."
+        );
+        // Round-trip verifies the deserializer reads the golden bytes
+        // correctly and the resulting program executes.
+        let mut vm = Vm::load_bytes(&expected).expect("load");
+        match vm.call(&[]).unwrap() {
+            VmState::Finished(v) => assert_eq!(v, Value::Int(1)),
+            other => panic!("expected finished, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn bytecode_admits_trailing_padding() {
+        // The recorded length is authoritative. Trailing bytes after
+        // the recorded length are ignored, so bytecode embedded in a
+        // larger buffer is accepted.
+        let src = "fn main() -> i64 { 1 }";
+        let tokens = tokenize(src).expect("lex");
+        let program = parse(&tokens).expect("parse");
+        let module = compile(&program).expect("compile");
+        let mut bytes = module.to_bytes().expect("encode");
+        bytes.extend_from_slice(&[0xAA; 32]);
+        let mut vm = Module::from_bytes(&bytes)
+            .map(Vm::new)
+            .expect("decode")
+            .expect("verify");
+        match vm.call(&[]).unwrap() {
+            VmState::Finished(v) => assert_eq!(v, Value::Int(1)),
+            other => panic!("expected finished, got {:?}", other),
         }
     }
 
@@ -2165,20 +2272,65 @@ mod tests {
 
     #[test]
     fn bytecode_rejects_bad_checksum() {
-        // Compile a real module, then flip a body byte so the CRC
-        // residue check fails. The CRC is checked before the version
-        // and the body decode, so corruption anywhere in the
-        // checksummed range surfaces as BadChecksum.
+        // Compile a real module, then flip a byte deep inside the body
+        // so the CRC residue check fails. The flipped byte must lie
+        // beyond the length field (offsets 6..10) so it does not change
+        // the recorded length and trip the truncation check first.
         let src = "fn main() -> i64 { 1 }";
         let tokens = tokenize(src).expect("lex");
         let program = parse(&tokens).expect("parse");
         let module = compile(&program).expect("compile");
         let mut bytes = module.to_bytes().expect("encode");
-        let body_byte = crate::bytecode::BYTECODE_MAGIC.len() + 2;
+        // Flip a byte in the postcard body, just past the header.
+        let body_byte = bytes.len() - 5;
         bytes[body_byte] ^= 0xFF;
         match Module::from_bytes(&bytes) {
             Err(crate::bytecode::LoadError::BadChecksum) => {}
             other => panic!("expected BadChecksum, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn bytecode_rejects_word_size_mismatch() {
+        // Compile a real module, patch the word_bits field, and
+        // recompute the CRC trailer so the residue check passes. The
+        // version and length fields are intact so only the word size
+        // mismatch surfaces.
+        let src = "fn main() -> i64 { 1 }";
+        let tokens = tokenize(src).expect("lex");
+        let program = parse(&tokens).expect("parse");
+        let module = compile(&program).expect("compile");
+        let mut bytes = module.to_bytes().expect("encode");
+        bytes[10] = 32;
+        let trailer_start = bytes.len() - 4;
+        let new_crc = crate::bytecode::crc32(&bytes[..trailer_start]);
+        bytes[trailer_start..].copy_from_slice(&new_crc.to_le_bytes());
+        match Module::from_bytes(&bytes) {
+            Err(crate::bytecode::LoadError::WordSizeMismatch { got, expected }) => {
+                assert_eq!(got, 32);
+                assert_eq!(expected, crate::bytecode::RUNTIME_WORD_BITS);
+            }
+            other => panic!("expected WordSizeMismatch, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn bytecode_rejects_address_size_mismatch() {
+        let src = "fn main() -> i64 { 1 }";
+        let tokens = tokenize(src).expect("lex");
+        let program = parse(&tokens).expect("parse");
+        let module = compile(&program).expect("compile");
+        let mut bytes = module.to_bytes().expect("encode");
+        bytes[11] = 16;
+        let trailer_start = bytes.len() - 4;
+        let new_crc = crate::bytecode::crc32(&bytes[..trailer_start]);
+        bytes[trailer_start..].copy_from_slice(&new_crc.to_le_bytes());
+        match Module::from_bytes(&bytes) {
+            Err(crate::bytecode::LoadError::AddressSizeMismatch { got, expected }) => {
+                assert_eq!(got, 16);
+                assert_eq!(expected, crate::bytecode::RUNTIME_ADDRESS_BITS);
+            }
+            other => panic!("expected AddressSizeMismatch, got {:?}", other),
         }
     }
 
@@ -2200,7 +2352,13 @@ mod tests {
 
     #[test]
     fn bytecode_load_via_vm_propagates_load_error() {
-        let bytes = alloc::vec![b'X', b'X', b'X', b'X', 0x01, 0x00, 0x00, 0x00, 0x00, 0x00];
+        // Sixteen bytes is the minimum framing size. The magic is
+        // intentionally wrong so the magic-check path triggers. The
+        // length field is set to 16 so the truncation check passes.
+        let bytes = alloc::vec![
+            b'X', b'X', b'X', b'X', 0x02, 0x00, 0x10, 0x00, 0x00, 0x00, 64, 64, 0x00, 0x00, 0x00,
+            0x00,
+        ];
         match Vm::load_bytes(&bytes) {
             Err(VmError::LoadError(_)) => {}
             Err(other) => panic!("expected VmError::LoadError, got {:?}", other),

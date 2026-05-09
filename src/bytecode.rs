@@ -553,10 +553,28 @@ pub const BYTECODE_MAGIC: [u8; 4] = *b"KELE";
 
 /// Wire format version for serialized bytecode. Bytecode produced under a
 /// different version is rejected at load time.
-pub const BYTECODE_VERSION: u16 = 1;
+pub const BYTECODE_VERSION: u16 = 2;
 
-/// Header length in bytes (4-byte magic plus 2-byte little-endian version).
-const HEADER_LEN: usize = 6;
+/// Word size in bits assumed by this runtime build. Bytecode is rejected
+/// if the recorded word size does not match. The current Keleusma runtime
+/// uses 64-bit words (i64 and f64). A future target-portability pass will
+/// parameterize this by build target.
+pub const RUNTIME_WORD_BITS: u8 = 64;
+
+/// Address size in bits assumed by this runtime build. Bytecode is
+/// rejected if the recorded address size does not match. The current
+/// Keleusma runtime targets 64-bit address spaces.
+pub const RUNTIME_ADDRESS_BITS: u8 = 64;
+
+/// Header length in bytes. The fields are
+///
+/// - bytes 0..4: magic (`KELE`)
+/// - bytes 4..6: version (u16 little-endian)
+/// - bytes 6..10: total framing length (u32 little-endian, includes
+///   header and CRC trailer)
+/// - bytes 10..11: word_bits (u8)
+/// - bytes 11..12: addr_bits (u8)
+const HEADER_LEN: usize = 12;
 
 /// Footer length in bytes (4-byte little-endian CRC-32).
 const FOOTER_LEN: usize = 4;
@@ -606,7 +624,9 @@ pub(crate) fn crc32(bytes: &[u8]) -> u32 {
 pub enum LoadError {
     /// The header magic bytes did not match `KELE`.
     BadMagic,
-    /// The buffer was shorter than the required header plus footer.
+    /// The buffer was shorter than the required header plus footer, or
+    /// the recorded length field exceeds the slice length, or the
+    /// recorded length is below the minimum framing size.
     Truncated,
     /// The bytecode version is not supported by this runtime.
     UnsupportedVersion {
@@ -614,6 +634,20 @@ pub enum LoadError {
         got: u16,
         /// Version the runtime supports.
         expected: u16,
+    },
+    /// The recorded word size in bits does not match the runtime build.
+    WordSizeMismatch {
+        /// Word size recorded in the bytecode header.
+        got: u8,
+        /// Word size this runtime build supports.
+        expected: u8,
+    },
+    /// The recorded address size in bits does not match the runtime build.
+    AddressSizeMismatch {
+        /// Address size recorded in the bytecode header.
+        got: u8,
+        /// Address size this runtime build supports.
+        expected: u8,
     },
     /// The CRC-32 trailer did not satisfy the algebraic self-inclusion
     /// residue. The bytecode is corrupted or was produced by a different
@@ -627,13 +661,27 @@ impl core::fmt::Display for LoadError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             LoadError::BadMagic => f.write_str("bytecode header missing magic 'KELE'"),
-            LoadError::Truncated => {
-                f.write_str("bytecode shorter than required header plus footer")
-            }
+            LoadError::Truncated => f.write_str(
+                "bytecode truncated, recorded length exceeds slice, or below minimum framing",
+            ),
             LoadError::UnsupportedVersion { got, expected } => {
                 write!(
                     f,
                     "bytecode version {} not supported, expected {}",
+                    got, expected
+                )
+            }
+            LoadError::WordSizeMismatch { got, expected } => {
+                write!(
+                    f,
+                    "bytecode word size {} bits does not match runtime build {} bits",
+                    got, expected
+                )
+            }
+            LoadError::AddressSizeMismatch { got, expected } => {
+                write!(
+                    f,
+                    "bytecode address size {} bits does not match runtime build {} bits",
                     got, expected
                 )
             }
@@ -648,14 +696,18 @@ impl core::error::Error for LoadError {}
 impl Module {
     /// Serialize the module to a self-describing byte vector.
     ///
-    /// The output begins with [`BYTECODE_MAGIC`] followed by
-    /// [`BYTECODE_VERSION`] in little-endian order, then the module body
-    /// in postcard wire format, then a four-byte little-endian CRC-32
-    /// trailer. The CRC covers the magic, version, and body. The
-    /// algebraic self-inclusion property of CRC-32 means that running
-    /// the CRC over the entire serialized form including the trailer
-    /// produces a fixed residue constant, which the verifier checks in
-    /// a single pass without separating the trailer from the data.
+    /// The output begins with the twelve-byte header (magic, version,
+    /// total length, word size, address size), then the module body in
+    /// postcard wire format, then a four-byte little-endian CRC-32
+    /// trailer. The CRC covers the entire framed range. The algebraic
+    /// self-inclusion residue of the CRC parameterization makes the
+    /// trailer part of the checksummed range.
+    ///
+    /// All multi-byte integer fields in the framing are stored in
+    /// little-endian order. Postcard stores its own multi-byte values in
+    /// little-endian or as varints. The wire format is therefore
+    /// identical bytes regardless of producer or consumer host
+    /// endianness.
     ///
     /// Returns [`LoadError::Codec`] if postcard rejects any field. The
     /// `Module` type is composed entirely of types that postcard supports,
@@ -665,9 +717,13 @@ impl Module {
         use alloc::format;
         let body = postcard::to_allocvec(self)
             .map_err(|e| LoadError::Codec(format!("encode failed: {}", e)))?;
-        let mut buf = Vec::with_capacity(HEADER_LEN + body.len() + FOOTER_LEN);
+        let total_len = (HEADER_LEN + body.len() + FOOTER_LEN) as u32;
+        let mut buf = Vec::with_capacity(total_len as usize);
         buf.extend_from_slice(&BYTECODE_MAGIC);
         buf.extend_from_slice(&BYTECODE_VERSION.to_le_bytes());
+        buf.extend_from_slice(&total_len.to_le_bytes());
+        buf.push(RUNTIME_WORD_BITS);
+        buf.push(RUNTIME_ADDRESS_BITS);
         buf.extend_from_slice(&body);
         let crc = crc32(&buf);
         buf.extend_from_slice(&crc.to_le_bytes());
@@ -676,15 +732,16 @@ impl Module {
 
     /// Deserialize a module from a self-describing byte slice.
     ///
-    /// Validates the magic, the CRC-32 trailer through the residue
-    /// property, and the version header in that order, then deserializes
-    /// the postcard body. The input may originate from any addressable
-    /// byte slice including in-memory buffers, file-loaded buffers, or
-    /// `&'static [u8]` data placed in `.rodata`.
+    /// Validation order is truncation, magic, length, CRC residue,
+    /// version, word size, address size, and body decode. The slice is
+    /// truncated to the recorded length before the CRC check so that
+    /// bytecode embedded in a larger buffer is supported. Trailing
+    /// bytes after the recorded length are ignored.
     ///
-    /// The CRC is checked before the version because a corrupted byte
-    /// in the version field would otherwise be reported as
-    /// `UnsupportedVersion` rather than the more accurate `BadChecksum`.
+    /// The CRC is checked before the version, word size, and address
+    /// size because a corrupted byte in any of those fields would
+    /// otherwise be reported as a mismatch rather than the more
+    /// accurate `BadChecksum`.
     ///
     /// Does not run structural verification or resource bounds checks.
     /// Pass the result to [`crate::vm::Vm::new`] for full verification or
@@ -698,8 +755,18 @@ impl Module {
         if bytes[0..4] != BYTECODE_MAGIC {
             return Err(LoadError::BadMagic);
         }
-        // CRC residue check covers the entire byte slice including the
-        // trailer. A correctly produced bytecode produces CRC32_RESIDUE.
+        // Read the recorded total length and validate that the slice has
+        // at least that many bytes and that the recorded length is at
+        // least the minimum framing size. Trailing bytes after the
+        // recorded length are ignored.
+        let length = u32::from_le_bytes([bytes[6], bytes[7], bytes[8], bytes[9]]) as usize;
+        if length < HEADER_LEN + FOOTER_LEN || length > bytes.len() {
+            return Err(LoadError::Truncated);
+        }
+        let bytes = &bytes[..length];
+        // CRC residue check covers the entire truncated slice including
+        // the trailer. A correctly produced bytecode produces
+        // CRC32_RESIDUE.
         if crc32(bytes) != CRC32_RESIDUE {
             return Err(LoadError::BadChecksum);
         }
@@ -710,7 +777,21 @@ impl Module {
                 expected: BYTECODE_VERSION,
             });
         }
-        let body = &bytes[HEADER_LEN..bytes.len() - FOOTER_LEN];
+        let word_bits = bytes[10];
+        if word_bits != RUNTIME_WORD_BITS {
+            return Err(LoadError::WordSizeMismatch {
+                got: word_bits,
+                expected: RUNTIME_WORD_BITS,
+            });
+        }
+        let addr_bits = bytes[11];
+        if addr_bits != RUNTIME_ADDRESS_BITS {
+            return Err(LoadError::AddressSizeMismatch {
+                got: addr_bits,
+                expected: RUNTIME_ADDRESS_BITS,
+            });
+        }
+        let body = &bytes[HEADER_LEN..length - FOOTER_LEN];
         postcard::from_bytes(body).map_err(|e| LoadError::Codec(format!("decode failed: {}", e)))
     }
 }
