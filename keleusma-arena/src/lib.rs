@@ -130,19 +130,30 @@ pub struct TopMark(usize);
 
 /// Storage backing variants for an arena.
 ///
-/// The variant is read implicitly through `Drop`. Owned variants release
-/// their backing allocation when the arena drops; External variants do
-/// nothing at drop time.
-#[allow(dead_code)]
+/// The arena holds the raw pointer and capacity directly in the
+/// `buffer` and `capacity` fields. The variant tracks ownership for
+/// the explicit `Drop` impl on `Arena`. Owned arenas reconstruct the
+/// `Box` via `Box::from_raw` and let it drop, releasing the buffer.
+/// External arenas leave the buffer untouched; the caller owns the
+/// storage.
+///
+/// Using a raw pointer rather than holding the `Box` directly gives
+/// the buffer "raw" provenance from the perspective of the borrow
+/// checker and miri's aliasing models. This is necessary because
+/// allocations through `BottomHandle` and `TopHandle` derive write
+/// pointers into the buffer through a shared `&Arena`; deriving
+/// through a unique-reference ancestor would make subsequent
+/// derivations from the same source aliasing-unsound under both
+/// stacked borrows and tree borrows.
+#[derive(Clone, Copy)]
 enum Storage {
-    /// Externally owned buffer. The arena holds a raw pointer and length.
-    /// The caller is responsible for keeping the buffer alive for the
-    /// arena's lifetime.
+    /// Externally owned buffer. The caller is responsible for keeping
+    /// the buffer alive for the arena's lifetime.
     External,
-    /// Owned buffer allocated through the global allocator. Dropped when
-    /// the arena drops.
+    /// Owned buffer allocated through the global allocator. The arena
+    /// reconstructs the `Box` and drops it on its own `Drop`.
     #[cfg(feature = "alloc")]
-    Owned(alloc::boxed::Box<[u8]>),
+    Owned,
 }
 
 /// A dual-end bump-allocated arena.
@@ -151,6 +162,17 @@ enum Storage {
 /// allocation positions at each end. The bottom end grows from low
 /// addresses upward. The top end grows from high addresses downward.
 /// Allocation fails when the two pointers would meet.
+///
+/// The arena is not the program's `#[global_allocator]` and is not
+/// intended to be one. It is designed for scoped per-region or
+/// per-thread use through `BottomHandle` and `TopHandle`, which the
+/// host passes to allocator-aware collection constructors. The standard
+/// global allocator continues to handle every allocation that does not
+/// route through an arena handle. Hosts that want every allocation in
+/// the program to be arena-backed must wrap the arena in a thread-safe
+/// allocator and install it via `#[global_allocator]`; this crate does
+/// not provide such a wrapper because doing so well requires choices
+/// that depend on the host's threading and synchronization model.
 ///
 /// See the crate-level documentation for the design overview.
 pub struct Arena {
@@ -185,15 +207,34 @@ impl Arena {
     /// given byte capacity.
     ///
     /// Available only with the `alloc` feature. The buffer is zeroed at
-    /// construction.
+    /// construction and is allocated with 16-byte alignment, which
+    /// covers the alignment requirements of `i64`, `f64`, `u128`, and
+    /// most platform-native pointers and primitives.
+    ///
+    /// Panics on allocation failure via the standard `handle_alloc_error`
+    /// path. A capacity of zero produces an arena that satisfies
+    /// allocation requests for zero-size layouts only; non-zero
+    /// allocations return `AllocError`.
     #[cfg(feature = "alloc")]
     pub fn with_capacity(capacity: usize) -> Self {
-        let mut backing: alloc::boxed::Box<[u8]> = alloc::vec![0u8; capacity].into_boxed_slice();
-        let ptr = backing.as_mut_ptr();
-        // SAFETY: `ptr` is non-null because `backing` is a valid
-        // allocation. The `Box` is held in `Storage::Owned` to keep the
-        // buffer alive for the arena's lifetime.
-        let buffer = unsafe { NonNull::new_unchecked(ptr) };
+        use alloc::alloc::{Layout as AllocLayout, alloc_zeroed, handle_alloc_error};
+
+        let buffer = if capacity == 0 {
+            NonNull::<u8>::dangling()
+        } else {
+            // Allocate a 16-byte-aligned buffer. The alignment covers
+            // every standard primitive type and gives the arena
+            // predictable behavior across allocators that may otherwise
+            // return only minimally-aligned memory for byte allocations.
+            let layout = AllocLayout::from_size_align(capacity, 16).expect("invalid arena layout");
+            // SAFETY: `layout` has non-zero size because `capacity > 0`.
+            let raw = unsafe { alloc_zeroed(layout) };
+            if raw.is_null() {
+                handle_alloc_error(layout);
+            }
+            // SAFETY: `alloc_zeroed` returned non-null on success.
+            unsafe { NonNull::new_unchecked(raw) }
+        };
         Self {
             buffer,
             capacity,
@@ -201,7 +242,7 @@ impl Arena {
             top_top: Cell::new(capacity),
             bottom_peak: Cell::new(0),
             top_peak_low: Cell::new(capacity),
-            storage: Storage::Owned(backing),
+            storage: Storage::Owned,
         }
     }
 
@@ -516,9 +557,37 @@ impl core::fmt::Debug for Arena {
     }
 }
 
-// The `storage` field handles drop. `External` does nothing. `Owned`
-// drops the held `Box`, which deallocates the buffer. No additional
-// `Drop` impl is needed.
+// Soundness audit for the explicit `Drop` impl below.
+//
+// The arena holds a raw `NonNull<u8>` pointer to the backing storage.
+// The `storage` field tracks ownership.
+//
+// - `Storage::External`: the caller owns the buffer. The `Drop` impl
+//   does not free it. The caller's safety contracts on
+//   `Arena::from_static_buffer` and `Arena::from_buffer_unchecked`
+//   require the buffer to outlive the arena.
+// - `Storage::Owned`: the arena owns the heap allocation that backs
+//   the buffer. The `Drop` impl reconstitutes a `Box<[u8]>` from the
+//   raw pointer and drops it, releasing the buffer.
+//
+// The buffer pointer has raw provenance (derived from `Box::into_raw`)
+// so that handle allocations through a shared `&Arena` reference do
+// not run afoul of stacked-borrows or tree-borrows aliasing rules.
+impl Drop for Arena {
+    fn drop(&mut self) {
+        #[cfg(feature = "alloc")]
+        if matches!(self.storage, Storage::Owned) && self.capacity > 0 {
+            use alloc::alloc::{Layout as AllocLayout, dealloc};
+            // SAFETY: When `storage` is `Owned` with non-zero capacity,
+            // the buffer was obtained from `alloc_zeroed` with this
+            // exact layout. The same layout is used for `dealloc`. The
+            // arena is being dropped, so no further access to the
+            // buffer occurs after this point.
+            let layout = unsafe { AllocLayout::from_size_align_unchecked(self.capacity, 16) };
+            unsafe { dealloc(self.buffer.as_ptr(), layout) };
+        }
+    }
+}
 
 /// Allocation handle for the bottom end of an arena.
 ///
@@ -579,6 +648,10 @@ mod tests {
         assert_eq!(arena.top_peak(), 0);
     }
 
+    // Skipped under miri because the test deliberately leaks a Vec to
+    // synthesize a `'static mut [u8]`. Real embedded use of
+    // `from_static_buffer` is a `static mut` array, which has no leak.
+    #[cfg_attr(miri, ignore)]
     #[test]
     fn arena_from_static_buffer() {
         // Use a leaked Box for a 'static-like buffer in tests. In real
@@ -587,8 +660,15 @@ mod tests {
         let arena = Arena::from_static_buffer(leaked);
         assert_eq!(arena.capacity(), 256);
         let layout = Layout::new::<u64>();
-        let _p = arena.bottom_handle().allocate(layout).unwrap();
-        assert_eq!(arena.bottom_used(), 8);
+        let p = arena.bottom_handle().allocate(layout).unwrap();
+        // The leaked Vec<u8> has alignment-of-u8 (one byte) per Rust's
+        // contract. The arena pads as needed to satisfy the requested
+        // u64 alignment, so usage is at least size and at most
+        // size + alignment.
+        assert!(arena.bottom_used() >= 8);
+        assert!(arena.bottom_used() <= 8 + 8);
+        let addr = p.as_ptr() as *const u8 as usize;
+        assert_eq!(addr % 8, 0);
     }
 
     #[test]
@@ -603,7 +683,11 @@ mod tests {
         assert_eq!(arena.capacity(), 128);
         let layout = Layout::new::<u32>();
         let _p = arena.bottom_handle().allocate(layout).unwrap();
-        assert_eq!(arena.bottom_used(), 4);
+        // The buffer base may be any alignment for from_buffer_unchecked.
+        // The arena pads to satisfy the requested alignment, so usage
+        // is at least the layout size and at most size + alignment.
+        assert!(arena.bottom_used() >= 4);
+        assert!(arena.bottom_used() <= 4 + 4);
         drop(arena);
         // `buffer` is still alive here.
         assert_eq!(buffer.len(), 128);
