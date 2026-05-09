@@ -9,8 +9,8 @@ AI to Human communication channel.
 ## Last Updated
 
 **Date**: 2026-05-09
-**Task**: V0.1-M2-T4. P10 Phase 2 step 2 execution loop refactor.
-**Status**: Complete. P10 is now resolved across all phases.
+**Task**: V0.1-M3-T1. P1 standalone type checker.
+**Status**: Complete as a standalone pass. Pipeline integration deferred until parser refactor.
 
 ## Verification
 
@@ -24,92 +24,105 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 **Results**:
 
-- 347 tests pass workspace-wide. 302 keleusma unit including 22 bytecode tests and the new `vm_view_bytes_zero_copy_executes_against_borrowed_buffer` test, 17 keleusma integration, 22 keleusma-arena unit, 6 keleusma-arena doctests.
+- 360 tests pass workspace-wide. 315 keleusma unit including 13 new typecheck tests, 17 keleusma integration, 22 keleusma-arena unit, 6 keleusma-arena doctests.
 - Clippy clean under `--workspace --all-targets`.
 - Format clean.
 
 ## Summary
 
-True zero-copy execution against an `&'a ArchivedModule` is now in place. The Vm reads bytecode directly from a borrowed buffer with no owned `Module` materialized.
+A static type checker for Keleusma source programs is now in place at `src/typecheck.rs`. The pass is callable as `typecheck::check(&program)` after parse and before bytecode emission.
 
-The refactor cascaded through the Vm and several callers.
+Coverage.
 
-- `Vm` gained the lifetime parameter `Vm<'a>`. Internal storage shifted to a `BytecodeStore<'a>` enum carrying either an `Owned` `AlignedVec<8>` (for VMs constructed from `Module` or unaligned bytes) or a `Borrowed` `&'a [u8]` (for the new zero-copy constructor).
-- A private `archived()` helper returns `&ArchivedModule` from the bytecode storage via `rkyv::access_unchecked`. The bytes were validated at construction, so the unchecked access is sound.
-- The execution loop now reads through per-access converter helpers. `chunk_op` returns an owned `Op` via `op_from_archived`. `chunk_const` returns an owned `Value` via `value_from_archived`. `chunk_const_str`, `struct_template`, `native_name`, `chunk_op_count`, `chunk_local_count`, and `word_bits_log2` cover the remaining access patterns.
-- Cold-path methods (`verify_resources`, `auto_arena_capacity`) deserialize the bytecode to an owned `Module` on call via `module_owned()` and operate on it. The hot execution path never materializes the owned form.
-- `replace_module` serializes the new module to `AlignedVec` and replaces the storage. The Vm's lifetime parameter is unchanged because the new bytes are always owned.
-- `register_utility_natives`, `register_audio_natives`, and the `build_vm` helper in the marshall integration test all updated to thread the lifetime parameter through their signatures.
-- A new `unsafe Vm::view_bytes_zero_copy(&'a [u8])` constructor stores the borrowed slice directly without deserialization. Validates the framing only. The execution loop runs against the buffer's `&ArchivedModule` for as long as the borrowed lifetime is valid.
-- A new test `vm_view_bytes_zero_copy_executes_against_borrowed_buffer` compiles a program, serializes to an `AlignedVec`, constructs a `Vm<'_>` borrowing the slice, and confirms the program executes correctly with no owned `Module` materialized.
+- Function call argument count and argument types against parameter declarations.
+- Function return expression type against declared return type.
+- Let binding type against the value's type when annotation is present.
+- Let bindings without annotation infer from the right-hand side.
+- Arithmetic and comparison operations have type-compatible operands.
+- Logical operators require bool operands.
+- Field access references defined fields on the operand type.
+- Struct construction provides defined fields with the right types.
+- Tuple index in range. Array index of i64.
+- Cast operations are between admissible types, namely i64 to f64 and back.
+- Identifier references resolve to known locals or function names.
+- If-else branch type agreement.
+- For-range bound types. For-in element type extraction.
+- Enum variant existence and payload arity and types.
 
-## API Surface
+Architecture. The checker uses a two-pass design. Pass one collects type definitions, struct field signatures, enum variant payload signatures, data block field types, and function signatures. Pass two checks each function body against its declared signature. The internal `Type` enum is independent of the `TypeExpr` AST node so the checker can reason about types without surface-syntax detail.
 
-The runtime now supports five entry points spanning the design space.
+Out of scope and deferred.
 
-| Entry point | Source | Verification | Allocation |
-|---|---|---|---|
-| `Vm::new(Module)` | Owned module | Full | Serializes module internally for archived access |
-| `Vm::load_bytes(&[u8])` | Unaligned bytes | Full | Body copy to `AlignedVec` before deserialize |
-| `Vm::view_bytes(&[u8])` | Aligned bytes | Full | Skip body copy. Deserialize for verification then store. |
-| `unsafe Vm::view_bytes_unchecked(&[u8])` | Aligned bytes | Skip resource bounds | Same as `view_bytes` minus bounds check |
-| `unsafe Vm::view_bytes_zero_copy(&'a [u8])` | Aligned bytes | Skip all checks | True zero-copy. Borrow the buffer. |
+- Hindley-Milner inference (B1).
+- Detailed pattern type checking against the scrutinee. Match arms accept any pattern. The runtime detects mismatches.
+- Match arm exhaustiveness.
+- Native function call types. Natives are registered at runtime through `Vm::register_*`.
+- Yielded value types. The dialogue type is not yet tracked.
 
-The zero-copy path is the strongest unsafe contract because it skips all verification including structural verification. Hosts use it when the bytecode is known good (typically because it was verified by the build pipeline).
+## Pipeline integration is deferred
+
+The natural next step is to invoke the checker from `compile`. This is blocked by a parser quirk. The unit literal `()` is currently represented as `Literal::Int(0)` rather than as a unit value. The compiler emits `Op::PushUnit` for this case through pattern matching on the literal, but the type checker would surface spurious i64-versus-Unit mismatches for unit-returning functions.
+
+Follow-up sequence to integrate the checker.
+
+1. Add `Literal::Unit` to the AST, or change the parser to produce `TupleLiteral` with empty elements for `()`.
+2. Update the compiler to handle the new representation by emitting `Op::PushUnit`.
+3. Update the type checker to recognize the new representation as `Type::Unit`.
+4. Invoke `typecheck::check` from `compile` and convert errors to `CompileError`.
+5. Update any existing test programs that relied on lax behavior.
+
+The current commit deliberately stops short of step 1 to keep the scope bounded. The standalone checker is useful as a host-callable verification step in its own right.
 
 ## Changes Made
 
 ### Source
 
-- **`src/vm.rs`**: New `BytecodeStore<'a>` enum and `archived()` helper. `Vm` struct gained lifetime parameter `Vm<'a>`. `CallFrame` derives `Copy`. New helpers `module_owned`, `chunk_op`, `chunk_const`, `chunk_op_count`, `chunk_local_count`, `chunk_const_str`, `struct_template`, `native_name`, `chunk_count`, `word_bits_log2`. `construct` returns `Result<Self, VmError>` and serializes the module to `AlignedVec`. All 24 access sites for `self.module.X` converted to use the helpers. `replace_module` re-serializes. `verify_resources` and `auto_arena_capacity` deserialize on call. New `unsafe fn view_bytes_zero_copy(bytes: &'a [u8])` constructor. New `vm_view_bytes_zero_copy_executes_against_borrowed_buffer` test.
-- **`src/utility_natives.rs`**: `register_utility_natives` gained the `<'a>` lifetime parameter on its signature.
-- **`src/audio_natives.rs`**: `register_audio_natives` gained the `<'a>` lifetime parameter on its signature.
-- **`tests/marshall.rs`**: `build_vm` return type changed from `Vm` to `Vm<'_>`.
+- **`src/typecheck.rs`**: New file. ~850 lines. Type enum, TypeError, Ctx, check entry point, and a comprehensive set of unit tests for the coverage matrix.
+- **`src/lib.rs`**: New `pub mod typecheck;` declaration.
+- **`src/compiler.rs`**: Documentation note explaining why the type checker is not yet wired into `compile`. Hosts can call `typecheck::check(program)` themselves before `compile`.
 
 ### Knowledge Graph
 
-- **`docs/decisions/PRIORITY.md`**: P10 marked resolved across all phases. Strikethrough on the heading. Full design space table added.
-- **`docs/process/TASKLOG.md`**: V0.1-M2-T4 row marked complete. New history row added.
+- **`docs/decisions/PRIORITY.md`**: P1 entry expanded. Coverage list, deferred items, and the integration follow-up steps documented.
+- **`docs/process/TASKLOG.md`**: V0.1-M3-T1 row added marking the standalone pass complete. New history row.
 - **`docs/process/REVERSE_PROMPT.md`**: This file.
 
 ## Trade-offs and Properties
 
-The hot path now does a discriminant match plus a `to_native()` conversion per op-fetch through `op_from_archived`. The cost is comparable to a clone on a small `Op` value and is dominated by the match dispatch. Constants are converted via `value_from_archived` which is more expensive for composite values because of recursive descent and heap allocations for `Vec<Value>` and `String`. For typical Keleusma programs that execute many instructions per second, the overhead is acceptable.
+The checker uses `BTreeMap` from the `alloc` crate rather than `HashMap` so it remains compatible with the `no_std + alloc` posture.
 
-The zero-copy path skips all verification. This is intentional. Hosts that use this path attest the bytecode is well-formed. Adversarial bytecode could cause arbitrary VM behavior including reads or writes through invalid frame state. The unsafe marker captures this contract.
+`Type::Unknown` is a sentinel used when type information cannot be determined without inference. Treated as compatible with anything in this MVP pass. Enables the checker to stop short of full inference while still detecting concrete mismatches. Future iterations can tighten the rules as inference is added.
 
-The owned-input paths (`Vm::new`, `Vm::load_bytes`) now serialize the module internally. This is a one-time cost at construction. Subsequent execution uses the archived form like the zero-copy path. The unified execution path simplifies the maintenance burden compared to alternatives such as a parallel `VmView<'a>` type.
+Native function calls return `Type::Unknown` because the checker has no compile-time view of native signatures. This is lenient by design. Bringing native types into the checker requires either a `use` declaration that includes signatures or a static registry mapped at compile time. Both are larger changes than this MVP.
+
+The two-pass design lets type definitions reference one another in any order. Functions can call any other function in the program regardless of declaration order.
 
 ## Unaddressed Concerns
 
-1. **Zero-copy execution skips structural verification.** The unsafe contract requires the host to attest that block nesting, jump offsets, and the productivity rule are valid. Future work could add a verification pass that operates on `&ArchivedModule` to provide a safe zero-copy entry point. The pass would mirror `verify::verify` but read through archived accessors.
+1. **Pipeline integration.** Documented above. The standalone checker is callable but not invoked by `compile`. Hosts that want compile-time checking call it directly.
 
-2. **Per-op converter overhead.** Every op-fetch and constant-load runs a discriminant match. Performance is acceptable for typical programs. Hot loops could benefit from caching the chunk's op slice or specializing the dispatch. Future optimization.
+2. **Pattern type checking.** Match arms bind variables but do not check the pattern shape against the scrutinee type. Runtime continues to surface mismatches.
 
-3. **String constants clone on access.** When the bytecode declares `Value::StaticStr("hello")`, the runtime materializes a fresh `String` for each load. The clone happens at the converter boundary. A future variant could return `Cow<'a, str>` to avoid cloning when the host buffer outlives the operand stack lifetime, at the cost of more lifetime annotations.
+3. **Match exhaustiveness.** Not checked. The runtime continues to surface non-matching enum cases through the `NoMatch` error.
 
-4. **Float width is still hardcoded.** `Value::Float` is `f64`. Targets that use `f32` natively would need a separate float-size header field. Tracked under B10.
+4. **Native function types.** Not type-checked at compile time. Bringing them in requires either a richer `use` declaration or a compile-time registry.
 
-5. **Zero-copy from `&'static [u8]` placed in `.rodata` is supported in principle but not exercised by an explicit test.** The `vm_view_bytes_zero_copy_executes_against_borrowed_buffer` test uses an `AlignedVec` rather than a static array. A test using a `static` with `#[repr(align(8))]` would close the loop. Not currently a defect.
+5. **Generic and parametric types.** Not supported. Tracked as B1 (HM inference) and B2 (traits or generic type parameters).
 
 ## Intended Next Step
 
-P10 is now resolved. The precompiled-distribution story is complete from compile through wire format through zero-copy execution.
-
 Three paths.
 
-A. Pivot to P1 (type checker). Currently the compiler emits bytecode without type checking. Adding a semantic analysis pass would catch type errors at compile time rather than runtime.
+A. Integrate the checker into the compile pipeline. Requires the small parser refactor for the unit literal. Then existing test programs that depend on lax behavior need adjustment.
 
-B. Pivot to P3 (error recovery model). A runtime error currently halts execution. Defining recovery semantics is necessary for safety-critical control systems.
+B. Pivot to P3 error recovery model. Defining recovery semantics for runtime errors closes the safety-critical positioning alongside P1.
 
-C. Pivot to P7 follow-on (operand stack and DynStr arena migration). The arena is in place but the operand stack and dynamic strings still use the global allocator. Routing them through the arena completes the bounded-memory guarantee.
+C. Pivot to P7 follow-on. Operand stack and DynStr arena migration. Closes the bounded-memory guarantee end to end.
 
-D. Publish keleusma main crate to crates.io now that the wire format and load API are stable.
-
-Recommend C if the bounded-memory guarantee is the priority. Recommend A or B if the safety-critical positioning is the priority. Recommend D if external visibility is the priority.
+Recommend A if compile-time type errors are the priority. Recommend B if defining error recovery semantics matters more. Recommend C if the bounded-memory guarantee is the priority.
 
 Await human prompt before proceeding.
 
 ## Session Context
 
-This session began with V0.0-M5 and V0.0-M6 already complete and the arena extracted into a workspace crate. The session resolved P8 and P9, completed three pre-publication audit and polish passes on `keleusma-arena`, published v0.1.0 to crates.io, switched the keleusma main crate to consume the registry version, completed V0.1-M1 implementing precompiled bytecode loading and trust-based verification skip, hardened the wire format with a CRC-32 algebraic self-inclusion trailer, extended the header with length, word size, and address size, pinned a golden-bytes test, shifted word and address fields to base-2 exponent encoding with relaxed acceptance and integer masking, switched the body format from postcard to rkyv, landed the in-place validation and no-copy load path, landed the conversion helper foundations, and now completed the full Vm refactor with true zero-copy execution against borrowed bytecode buffers. P10 is resolved across all phases.
+Long session that closed out P10 across all phases (rkyv format, in-place validation, archive converters, full Vm refactor with Vm<'a>, true zero-copy execution, include_bytes example) and now landed P1 as a standalone pass. The type checker covers the core surface of Keleusma's static type system. Pipeline integration is the next step and depends on a small parser change.

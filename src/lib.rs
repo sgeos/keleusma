@@ -9,6 +9,7 @@ pub mod lexer;
 pub mod marshall;
 pub mod parser;
 pub mod token;
+pub mod typecheck;
 pub mod utility_natives;
 pub mod verify;
 pub mod vm;

@@ -186,6 +186,15 @@ impl FuncCompiler {
 }
 
 /// Compile a parsed Keleusma program into a bytecode module.
+///
+/// The static type checker in `crate::typecheck` is intentionally not
+/// invoked here because the parser currently represents the unit
+/// literal `()` as `Literal::Int(0)`. Type checking would surface
+/// spurious i64-versus-Unit mismatches for unit-returning functions.
+/// Hosts that want type checking can call `typecheck::check(program)`
+/// before `compile`. Wiring the checker into the pipeline is recorded
+/// as a follow-up that includes refactoring the parser to produce a
+/// proper unit literal.
 pub fn compile(program: &Program) -> Result<Module, CompileError> {
     let mut native_names: Vec<String> = Vec::new();
     let mut native_map: BTreeMap<String, u16> = BTreeMap::new();

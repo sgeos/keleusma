@@ -6,7 +6,39 @@ Open decisions that may block near-term development.
 
 ## P1. Type checker implementation
 
-The compiler currently produces bytecode without type checking or name resolution validation. Adding a semantic analysis pass would catch type errors at compile time rather than runtime. This affects the reliability of the compilation pipeline. The scope of such a pass needs to be determined, including whether it should be a simple type-check against declared signatures or a full inference system, and how it interacts with native function type declarations.
+A standalone static type checker is in place at `src/typecheck.rs`. Hosts that want compile-time type checking can call `typecheck::check(&program)` after parse and before `compile`. The checker is not yet wired into `compile` because the parser currently represents the unit literal `()` as `Literal::Int(0)`, which would surface spurious i64-versus-Unit mismatches for unit-returning functions. Wiring the checker into the pipeline is recorded as a follow-up that includes a small parser refactor to produce a proper unit literal.
+
+Coverage in place.
+
+- Function call argument count and argument types against parameter declarations.
+- Function return expression type against declared return type.
+- Let binding type against the value's type when annotation is present.
+- Arithmetic and comparison operations have type-compatible operands.
+- Field access references defined fields on the operand type.
+- Struct construction provides defined fields with the right types.
+- Tuple index in range and array index of i64.
+- Cast operations are between admissible types (i64 to f64 and back).
+- Identifier references resolve to known locals or function names.
+- If-else branch type agreement.
+- For-range bound types and for-in element type extraction.
+- Enum variant existence and payload arity and types.
+- Logical operator operand types.
+
+Out of scope and deferred.
+
+- Hindley-Milner inference (B1).
+- Detailed pattern type checking against the scrutinee. Match arms accept any pattern; the runtime detects mismatches.
+- Match arm exhaustiveness.
+- Native function call types. Natives are registered at runtime.
+- Yielded value types. The dialogue type is not yet tracked.
+
+Follow-up work to integrate the checker into the compile pipeline.
+
+1. Add `Literal::Unit` to the AST or change the parser to produce `TupleLiteral` with empty elements for `()`.
+2. Update the compiler to handle the new representation by emitting `Op::PushUnit`.
+3. Update the type checker to recognize the new representation as `Type::Unit`.
+4. Invoke `typecheck::check` from `compile` and convert errors to `CompileError`.
+5. Update existing test programs that relied on the lax behavior.
 
 ## P2. For-in over expressions
 
