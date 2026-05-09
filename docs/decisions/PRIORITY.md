@@ -49,15 +49,21 @@ All P8 items are complete except for the bounded-iteration loop analysis, which 
 
 ## P10. Zero-copy bytecode execution from rodata
 
-R39 implements path A. The Module type owns heap-allocated data after deserialization, and the parsed form does not borrow from the input slice. Path B, namely true zero-copy execution where the runtime Module borrows directly from a `&'static [u8]` buffer with no heap allocation for the parsed form, is deferred to this milestone.
+Phase 1 of P10 is complete. The body format is rkyv as of `BYTECODE_VERSION = 4`. Rkyv produces a self-relative addressable layout that supports in-place access. The wire format reserves alignment padding so the body begins at an eight-byte-aligned offset when the buffer base is eight-byte-aligned. The current `Module::from_bytes` path copies the body to `AlignedVec` to satisfy alignment for arbitrary host slices, then deserializes to an owned `Module`. The runtime continues to execute against the owned form for now.
 
-Path B requires lifetime-parameterizing Module, eliminating String fields in favor of byte-offset references into the buffer, and either a custom binary format with direct memory layout or a zero-copy serialization framework such as rkyv. The work cascades through every type that participates in the Module structure, including Chunk, Op, Value, StructTemplate, DataLayout, and DataSlot. The VM execution loop must accept a borrowed module rather than an owned one, which adds a lifetime parameter to the Vm struct and propagates through the public API.
+Phase 2 adds the actual zero-copy execution path. The work cascades:
 
-This work interacts with B10 in the backlog (target portability) because both motivate a more compact and architecture-portable bytecode representation. The portability work introduces target descriptors and word, byte, and bit primitives that change the Value representation. Aligning that change with the zero-copy refactor avoids paying the disruption cost twice.
+- `Vm` gains a lifetime parameter. Either `Vm<'a>` everywhere or a separate `BorrowedVm<'a>` alongside the owned `Vm`.
+- The execution loop reads from `&ArchivedModule` instead of `&Module`. Match arms over `Op` become match arms over `ArchivedOp`. Vector accesses go through `ArchivedVec`. String accesses go through `ArchivedString`.
+- A new constructor `Vm::view_bytes(&'a [u8])` validates framing and calls `rkyv::access` to obtain `&'a ArchivedModule`.
+- The lifetime cascades through every public method that touches the VM.
+- Tests for execution against borrowed buffers, including from a `&'static [u8]` placed in `.rodata`.
 
-The work also interacts with B9 (hot update of yielded static strings). Yielded static strings under path B are byte-offset references into a specific bytecode buffer. A hot update that replaces the buffer invalidates outstanding references. The resolution paths recorded in B9, namely host-responsibility consumption or eager materialization, must be implemented before path B can fully replace path A.
+Phase 2 also interacts with two backlog items.
 
-R39 lists the API surface that path B must remain compatible with. New constructors and the `Module::from_bytes` shape are signposts for path B's lifetime-parameterized analogs.
+B10 (target portability) interacts because the rkyv encoding is endian-stable but float and integer width assumptions still affect runtime semantics. The recent log2 encoding work covers integer widths through masking. Float widths are still hardcoded to f64.
+
+B9 (hot update of yielded static strings) interacts because yielded `Value::StaticStr` under path B is an `ArchivedString` that points into a specific bytecode buffer. A hot update that swaps the buffer invalidates outstanding archived references the host has retained. The resolution paths in B9 (host-responsibility consumption or eager materialization at yield) must be in place before path B fully replaces path A.
 
 Both the WCMU and WCET analyses now multiply the loop body cost by the iteration count when the loop matches the canonical for-range pattern emitted by the compiler. The pattern detector in `extract_loop_iteration_bound` recognizes `Loop GetLocal(var) GetLocal(end) CmpGe BreakIf` followed by a body and traces backward to find the literal `Const` initializers of the var and end slots. Loops whose bounds are not literal integers fall back to the conservative one-iteration treatment, which remains sound but loose. R38 records the implementation.
 

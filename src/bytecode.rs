@@ -1,10 +1,15 @@
 extern crate alloc;
 use alloc::string::String;
 use alloc::vec::Vec;
-use serde::{Deserialize, Serialize};
+use rkyv::{Archive, Deserialize, Serialize};
 
 /// Runtime value in the Keleusma VM.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Archive, Serialize, Deserialize)]
+#[rkyv(
+    serialize_bounds(__S: rkyv::ser::Writer + rkyv::ser::Allocator, __S::Error: rkyv::rancor::Source),
+    deserialize_bounds(__D::Error: rkyv::rancor::Source),
+    bytecheck(bounds(__C: rkyv::validation::ArchiveContext, <__C as rkyv::rancor::Fallible>::Error: rkyv::rancor::Source))
+)]
 pub enum Value {
     /// Unit value `()`.
     Unit,
@@ -25,18 +30,20 @@ pub enum Value {
     /// the data segment.
     DynStr(String),
     /// Tuple of values.
-    Tuple(Vec<Value>),
+    Tuple(#[rkyv(omit_bounds)] Vec<Value>),
     /// Fixed-size array of values.
-    Array(Vec<Value>),
+    Array(#[rkyv(omit_bounds)] Vec<Value>),
     /// Named struct with ordered fields.
     Struct {
         type_name: String,
+        #[rkyv(omit_bounds)]
         fields: Vec<(String, Value)>,
     },
     /// Enum variant with optional payload.
     Enum {
         type_name: String,
         variant: String,
+        #[rkyv(omit_bounds)]
         fields: Vec<Value>,
     },
     /// Option::None.
@@ -130,7 +137,7 @@ impl Value {
 }
 
 /// Classification of a compiled function chunk.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Archive, Serialize, Deserialize)]
 pub enum BlockType {
     /// Atomic total function (`fn`). No yields, no streaming.
     Func,
@@ -141,7 +148,7 @@ pub enum BlockType {
 }
 
 /// A bytecode instruction.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Archive, Serialize, Deserialize)]
 pub enum Op {
     /// Push a constant from the chunk's constant pool.
     Const(u16),
@@ -488,7 +495,7 @@ impl Op {
 }
 
 /// Template for struct construction.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Archive, Serialize, Deserialize)]
 pub struct StructTemplate {
     /// Struct type name.
     pub type_name: String,
@@ -497,7 +504,7 @@ pub struct StructTemplate {
 }
 
 /// A named slot in the data segment.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Archive, Serialize, Deserialize)]
 pub struct DataSlot {
     /// Slot name (for host initialization and debugging).
     pub name: String,
@@ -508,7 +515,7 @@ pub struct DataSlot {
 /// Defines the fixed-size, fixed-layout set of persistent values that
 /// survive across RESET boundaries. The host initializes data slots
 /// before execution begins. Scripts read and write slots by index.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Archive, Serialize, Deserialize)]
 pub struct DataLayout {
     /// Named slots in declaration order. Slot index corresponds to
     /// the `GetData`/`SetData` operand.
@@ -516,7 +523,7 @@ pub struct DataLayout {
 }
 
 /// A compiled function.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Archive, Serialize, Deserialize)]
 pub struct Chunk {
     /// Function name (for debugging and lookup).
     pub name: String,
@@ -535,7 +542,7 @@ pub struct Chunk {
 }
 
 /// A compiled Keleusma module.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Archive, Serialize, Deserialize)]
 pub struct Module {
     /// Compiled function chunks.
     pub chunks: Vec<Chunk>,
@@ -551,26 +558,14 @@ pub struct Module {
     /// runtime accepts the bytecode when the recorded value is at most
     /// the runtime's `RUNTIME_WORD_BITS_LOG2`. The VM masks integer
     /// arithmetic to the declared width using sign-extending shift.
-    /// Not part of the postcard body; mirrored from the framing header
-    /// during `from_bytes`.
-    #[serde(skip, default = "default_word_bits_log2")]
+    /// Mirrored in the framing header for fast pre-decode rejection.
     pub word_bits_log2: u8,
     /// Address size required by this bytecode, encoded as the base-2
     /// exponent. Actual width in bits is `1 << addr_bits_log2`. The
     /// runtime accepts the bytecode when the recorded value is at most
-    /// the runtime's `RUNTIME_ADDRESS_BITS_LOG2`. Not part of the
-    /// postcard body; mirrored from the framing header during
-    /// `from_bytes`.
-    #[serde(skip, default = "default_addr_bits_log2")]
+    /// the runtime's `RUNTIME_ADDRESS_BITS_LOG2`. Mirrored in the
+    /// framing header for fast pre-decode rejection.
     pub addr_bits_log2: u8,
-}
-
-fn default_word_bits_log2() -> u8 {
-    RUNTIME_WORD_BITS_LOG2
-}
-
-fn default_addr_bits_log2() -> u8 {
-    RUNTIME_ADDRESS_BITS_LOG2
 }
 
 /// Magic prefix identifying serialized Keleusma bytecode (`KELE`).
@@ -578,7 +573,7 @@ pub const BYTECODE_MAGIC: [u8; 4] = *b"KELE";
 
 /// Wire format version for serialized bytecode. Bytecode produced under a
 /// different version is rejected at load time.
-pub const BYTECODE_VERSION: u16 = 3;
+pub const BYTECODE_VERSION: u16 = 4;
 
 /// Word size in bits assumed by this runtime build, encoded as the
 /// base-2 exponent. Actual width in bits is `1 << RUNTIME_WORD_BITS_LOG2`.
@@ -600,7 +595,11 @@ pub const RUNTIME_ADDRESS_BITS_LOG2: u8 = 6;
 ///   header and CRC trailer)
 /// - bytes 10..11: word_bits_log2 (u8). Actual width is `1 << value`.
 /// - bytes 11..12: addr_bits_log2 (u8). Actual width is `1 << value`.
-const HEADER_LEN: usize = 12;
+/// - bytes 12..16: reserved (zero). Pads the header so the rkyv body
+///   begins at an 8-byte-aligned offset within the buffer when the
+///   buffer base is itself 8-byte-aligned. Required for in-place
+///   access through `rkyv::access`.
+const HEADER_LEN: usize = 16;
 
 /// Footer length in bytes (4-byte little-endian CRC-32).
 const FOOTER_LEN: usize = 4;
@@ -747,7 +746,7 @@ impl Module {
     /// corruption of the runtime data.
     pub fn to_bytes(&self) -> Result<Vec<u8>, LoadError> {
         use alloc::format;
-        let body = postcard::to_allocvec(self)
+        let body = rkyv::to_bytes::<rkyv::rancor::Error>(self)
             .map_err(|e| LoadError::Codec(format!("encode failed: {}", e)))?;
         let total_len = (HEADER_LEN + body.len() + FOOTER_LEN) as u32;
         let mut buf = Vec::with_capacity(total_len as usize);
@@ -756,6 +755,9 @@ impl Module {
         buf.extend_from_slice(&total_len.to_le_bytes());
         buf.push(self.word_bits_log2);
         buf.push(self.addr_bits_log2);
+        // Reserved bytes pad the header to 16 so the rkyv body begins
+        // at an 8-byte-aligned offset within the buffer.
+        buf.extend_from_slice(&[0u8; 4]);
         buf.extend_from_slice(&body);
         let crc = crc32(&buf);
         buf.extend_from_slice(&crc.to_le_bytes());
@@ -824,11 +826,14 @@ impl Module {
             });
         }
         let body = &bytes[HEADER_LEN..length - FOOTER_LEN];
-        let mut module: Module = postcard::from_bytes(body)
-            .map_err(|e| LoadError::Codec(format!("decode failed: {}", e)))?;
-        module.word_bits_log2 = word_bits_log2;
-        module.addr_bits_log2 = addr_bits_log2;
-        Ok(module)
+        // rkyv requires the body buffer to be 8-byte aligned. Copy
+        // into an AlignedVec to satisfy this for arbitrary host slices.
+        // Phase 2 will add a zero-copy path for hosts that supply an
+        // aligned buffer directly.
+        let mut aligned = rkyv::util::AlignedVec::<8>::with_capacity(body.len());
+        aligned.extend_from_slice(body);
+        rkyv::from_bytes::<Module, rkyv::rancor::Error>(&aligned)
+            .map_err(|e| LoadError::Codec(format!("decode failed: {}", e)))
     }
 }
 
