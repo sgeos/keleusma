@@ -45,9 +45,9 @@ All P8 items are complete except for the bounded-iteration loop analysis, which 
 6. ~~Widen host-attestation API.~~ Complete via `Vm::set_native_bounds`.
 7. ~~Reject programs whose WCMU cannot be statically computed.~~ Complete for the call-graph case. The analysis now walks the call DAG topologically and includes transitive contributions of called chunks and natives. R37.
 
-## P9. Bounded-iteration loop analysis
+## ~~P9. Bounded-iteration loop analysis~~ (Resolved as R38)
 
-The current WCMU analysis treats variable-iteration loops as one iteration. Programs that compile from `for i in 0..n` produce sound bounds at the static iteration count, but the analysis underestimates by the iteration factor at present. Lifting this requires either a side-table associating loop instructions with their iteration counts, or a structural pattern match on the compiled loop shape. The same limitation exists in the WCET analysis. A coordinated fix for both analyses is the V0.1 candidate.
+Both the WCMU and WCET analyses now multiply the loop body cost by the iteration count when the loop matches the canonical for-range pattern emitted by the compiler. The pattern detector in `extract_loop_iteration_bound` recognizes `Loop GetLocal(var) GetLocal(end) CmpGe BreakIf` followed by a body and traces backward to find the literal `Const` initializers of the var and end slots. Loops whose bounds are not literal integers fall back to the conservative one-iteration treatment, which remains sound but loose. R38 records the implementation.
 
 All P6 items are complete.
 

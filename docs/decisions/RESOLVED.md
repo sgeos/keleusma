@@ -148,6 +148,14 @@ The deeper integration of the operand stack and dynamic-string storage with the 
 
 The dependency on `allocator-api2` adds about 0.04 megabytes of dependency code and no runtime cost. The crate is a stable polyfill of the unstable `core::alloc::Allocator` trait. When the standard trait stabilizes, the dependency may be removed in favor of the standard library.
 
+## R38. Bounded-iteration loop analysis for WCMU and WCET
+
+The WCMU and WCET analyses are extended to account for the iteration count of bounded for-range loops. The helper `extract_loop_iteration_bound` in `src/verify.rs` recognizes the canonical for-range bytecode shape emitted by the compiler, namely `Loop GetLocal(var) GetLocal(end) CmpGe BreakIf body... EndLoop`, and traces backward through the bytecode to find the literal `Const` initializers of the var and end local slots. The iteration count is computed as `end - start` for non-negative integer bounds. The analyses multiply the body's heap allocation and time cost by the iteration count. Stack peak does not multiply because peak is a maximum across iterations, not a sum.
+
+Loops whose bounds are not literal integers, including loops over runtime-computed ranges or arrays whose length is not statically known, fall back to the conservative one-iteration treatment. The fallback is sound but produces an underestimate. Programs that rely on tight bounds in such cases must either use literal bounds or accept manual-attestation through host-supplied wrappers.
+
+Sound rejection of programs with non-statically-computable iteration counts is admissible but not yet implemented. The current behavior is to under-bound rather than reject, which is a deliberate trade-off favoring expressiveness over conservatism for this milestone. Future work could add a strict mode that rejects loops whose iteration count cannot be extracted.
+
 ## R37. Call-graph integration and auto-arena sizing for WCMU
 
 The WCMU analysis is extended to walk the call graph in topological order. Per-chunk WCMU is computed bottom-up, with each chunk's bound including the transitive contributions of any chunks it calls and any host-attested native heap usage. The function `verify::module_wcmu(module, native_wcmu)` returns the per-chunk results. The function `verify::verify_resource_bounds_with_natives(module, capacity, native_wcmu)` checks each Stream chunk's budget against the configured arena capacity using the new analysis.

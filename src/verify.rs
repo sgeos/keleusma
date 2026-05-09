@@ -2,7 +2,7 @@ extern crate alloc;
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use crate::bytecode::{BlockType, Chunk, Module, Op};
+use crate::bytecode::{BlockType, Chunk, Module, Op, Value};
 
 /// An error produced by structural verification.
 #[derive(Debug, Clone)]
@@ -114,13 +114,16 @@ fn analyze_yield_coverage(
 /// Compute the worst-case execution cost of a region of instructions `[start, end)`.
 ///
 /// At control flow joins (If/Else/EndIf), takes the maximum cost branch.
-/// For loops, assumes one iteration (conservative default).
+/// For loops, multiplies the body cost by the iteration count when the
+/// loop matches the canonical for-range pattern, otherwise assumes one
+/// iteration (conservative default).
 ///
 /// Returns `Some(cost)` for paths that fall through to `end`.
 /// Returns `None` if all paths exit via Break.
 ///
 /// Break costs are accumulated in `break_costs` for the enclosing loop.
-fn wcet_region(ops: &[Op], start: usize, end: usize, break_costs: &mut Vec<u32>) -> Option<u32> {
+fn wcet_region(chunk: &Chunk, start: usize, end: usize, break_costs: &mut Vec<u32>) -> Option<u32> {
+    let ops = &chunk.ops;
     let mut cost: u32 = 0;
     let mut ip = start;
 
@@ -145,8 +148,8 @@ fn wcet_region(ops: &[Op], start: usize, end: usize, break_costs: &mut Vec<u32>)
                     } else {
                         unreachable!()
                     };
-                    let then_cost = wcet_region(ops, ip + 1, target - 1, break_costs);
-                    let else_cost = wcet_region(ops, target, endif_pos, break_costs);
+                    let then_cost = wcet_region(chunk, ip + 1, target - 1, break_costs);
+                    let else_cost = wcet_region(chunk, target, endif_pos, break_costs);
                     let branch_cost = match (then_cost, else_cost) {
                         (Some(a), Some(b)) => Some(if a > b { a } else { b }),
                         (Some(a), None) => Some(a),
@@ -156,7 +159,7 @@ fn wcet_region(ops: &[Op], start: usize, end: usize, break_costs: &mut Vec<u32>)
                     cost += branch_cost.unwrap_or(0);
                     ip = endif_pos + 1;
                 } else {
-                    let then_cost = wcet_region(ops, ip + 1, target, break_costs);
+                    let then_cost = wcet_region(chunk, ip + 1, target, break_costs);
                     // False path has zero additional cost (skips to EndIf).
                     // Worst case is the then-body if it is more expensive.
                     match then_cost {
@@ -173,16 +176,20 @@ fn wcet_region(ops: &[Op], start: usize, end: usize, break_costs: &mut Vec<u32>)
                 let loop_exit_target = *target as usize;
                 let endloop_ip = loop_exit_target - 1;
                 let mut loop_break_costs: Vec<u32> = Vec::new();
-                let body_cost = wcet_region(ops, ip + 1, endloop_ip, &mut loop_break_costs);
+                let body_cost = wcet_region(chunk, ip + 1, endloop_ip, &mut loop_break_costs);
                 if loop_break_costs.is_empty() && body_cost.is_none() {
                     return None;
                 }
+                // Multiply body cost by iteration count when the loop
+                // matches the canonical for-range pattern. Otherwise use
+                // the conservative one-iteration body cost.
+                let iter_count = extract_loop_iteration_bound(chunk, ip).unwrap_or(1);
+                let body_cost_total = body_cost.unwrap_or(0).saturating_mul(iter_count);
                 let max_break = loop_break_costs.iter().copied().max().unwrap_or(0);
-                let max_body = body_cost.unwrap_or(0);
-                cost += if max_break > max_body {
+                cost += if max_break > body_cost_total {
                     max_break
                 } else {
-                    max_body
+                    body_cost_total
                 };
                 ip = loop_exit_target;
             }
@@ -197,6 +204,81 @@ fn wcet_region(ops: &[Op], start: usize, end: usize, break_costs: &mut Vec<u32>)
     }
 
     Some(cost)
+}
+
+/// Detect a bounded for-range loop pattern starting at `loop_ip` and
+/// return the iteration count if extractable.
+///
+/// The Keleusma compiler emits for-range loops with the canonical shape
+/// `Loop GetLocal(var) GetLocal(end) CmpGe BreakIf body... EndLoop`,
+/// where `var` and `end` are local slots set by literal `Const`
+/// instructions before the `Loop`. This helper recognizes that pattern
+/// and extracts the iteration count from the difference of the literal
+/// constants.
+///
+/// Returns `None` for loops whose bounds are not literal integers.
+/// Callers fall back to the conservative one-iteration treatment in
+/// that case, which is sound but typically loose.
+fn extract_loop_iteration_bound(chunk: &Chunk, loop_ip: usize) -> Option<u32> {
+    let ops = &chunk.ops;
+    if loop_ip + 4 >= ops.len() {
+        return None;
+    }
+    let var_slot = match &ops[loop_ip + 1] {
+        Op::GetLocal(s) => *s,
+        _ => return None,
+    };
+    let end_slot = match &ops[loop_ip + 2] {
+        Op::GetLocal(s) => *s,
+        _ => return None,
+    };
+    if !matches!(&ops[loop_ip + 3], Op::CmpGe) {
+        return None;
+    }
+    if !matches!(&ops[loop_ip + 4], Op::BreakIf(_)) {
+        return None;
+    }
+
+    // Trace back to find the most recent SetLocal(slot) and check if the
+    // previous instruction is a Const that resolves to an integer.
+    let end_val = trace_const_set_local(chunk, loop_ip, end_slot)?;
+    let start_val = trace_const_set_local(chunk, loop_ip, var_slot)?;
+
+    if end_val >= start_val {
+        let count = (end_val - start_val) as u64;
+        if count > u32::MAX as u64 {
+            None
+        } else {
+            Some(count as u32)
+        }
+    } else {
+        Some(0)
+    }
+}
+
+/// Find the most recent `SetLocal(slot)` before `before_ip` and return
+/// the integer constant pushed immediately before it. Returns `None` if
+/// the slot is not set by a literal constant.
+fn trace_const_set_local(chunk: &Chunk, before_ip: usize, slot: u16) -> Option<i64> {
+    let ops = &chunk.ops;
+    let mut ip = before_ip;
+    while ip > 0 {
+        ip -= 1;
+        if let Op::SetLocal(s) = &ops[ip]
+            && *s == slot
+        {
+            if ip == 0 {
+                return None;
+            }
+            if let Op::Const(idx) = &ops[ip - 1]
+                && let Some(Value::Int(n)) = chunk.constants.get(*idx as usize)
+            {
+                return Some(*n);
+            }
+            return None;
+        }
+    }
+    None
 }
 
 /// Result of WCMU analysis over a region.
@@ -417,7 +499,12 @@ fn wcmu_region(
                     resolver,
                 );
                 let body_peak = body.as_ref().map_or(0, |r| r.peak_above_initial);
-                let body_heap = body.as_ref().map_or(0, |r| r.heap_total);
+                let body_heap_one = body.as_ref().map_or(0, |r| r.heap_total);
+                // Multiply heap by iteration count if we can extract a
+                // bound from the canonical for-range pattern. Stack peak
+                // is a maximum, not a sum, so it does not multiply.
+                let iter_count = extract_loop_iteration_bound(chunk, ip).unwrap_or(1);
+                let body_heap = body_heap_one.saturating_mul(iter_count);
                 let break_peak = loop_breaks
                     .iter()
                     .map(|r| r.peak_above_initial)
@@ -596,7 +683,7 @@ pub fn wcet_stream_iteration(chunk: &Chunk) -> Result<u32, VerifyError> {
         })?;
 
     let mut break_costs: Vec<u32> = Vec::new();
-    let body_cost = wcet_region(ops, stream_pos + 1, reset_pos, &mut break_costs);
+    let body_cost = wcet_region(chunk, stream_pos + 1, reset_pos, &mut break_costs);
 
     // Include Stream and Reset instruction costs.
     let overhead = ops[stream_pos].cost() + ops[reset_pos].cost();
@@ -2110,5 +2197,161 @@ mod tests {
         assert_eq!(results.len(), 3);
         // All chunks should have a non-zero stack bound (their local frame
         // contributes at least one slot for the chunk).
+    }
+
+    // -- Bounded-iteration loop analysis --
+
+    #[test]
+    fn for_range_loop_multiplies_heap() {
+        // Compile a real for-range loop with array allocation in body.
+        // Verify the heap WCMU reflects the iteration count.
+        use crate::compiler::compile;
+        use crate::lexer::tokenize;
+        use crate::parser::parse;
+
+        let src = "loop main(input: i64) -> i64 { \
+            for i in 0..5 { \
+                let _arr = [1, 2, 3, 4]; \
+            } \
+            let _ignored = yield input; \
+            input \
+        }";
+        let tokens = tokenize(src).expect("lex error");
+        let program = parse(&tokens).expect("parse error");
+        let module = compile(&program).expect("compile error");
+        let stream_chunk = module
+            .chunks
+            .iter()
+            .find(|c| c.block_type == BlockType::Stream)
+            .expect("no stream chunk");
+        let (_stack_bytes, heap_bytes) = wcmu_stream_iteration(stream_chunk).unwrap();
+        // Each iteration allocates a 4-element array. With 5 iterations,
+        // heap = 5 * 4 * VALUE_SLOT_SIZE_BYTES = 5 * 128 = 640 bytes.
+        let expected = 5 * 4 * crate::bytecode::VALUE_SLOT_SIZE_BYTES;
+        assert_eq!(heap_bytes, expected);
+    }
+
+    #[test]
+    fn for_range_loop_multiplies_wcet() {
+        // Compile a real for-range loop. Verify WCET reflects the
+        // iteration count.
+        use crate::compiler::compile;
+        use crate::lexer::tokenize;
+        use crate::parser::parse;
+
+        let src = "loop main(input: i64) -> i64 { \
+            for i in 0..3 { \
+                let _x = i + 1; \
+            } \
+            let _ignored = yield input; \
+            input \
+        }";
+        let tokens = tokenize(src).expect("lex error");
+        let program = parse(&tokens).expect("parse error");
+        let module = compile(&program).expect("compile error");
+        let stream_chunk = module
+            .chunks
+            .iter()
+            .find(|c| c.block_type == BlockType::Stream)
+            .expect("no stream chunk");
+        let cost_with_loop = wcet_stream_iteration(stream_chunk).unwrap();
+
+        // A simpler version without the loop should cost less.
+        let src_no_loop = "loop main(input: i64) -> i64 { \
+            let _x = input + 1; \
+            let _ignored = yield input; \
+            input \
+        }";
+        let tokens = tokenize(src_no_loop).expect("lex error");
+        let program = parse(&tokens).expect("parse error");
+        let module2 = compile(&program).expect("compile error");
+        let stream_chunk2 = module2
+            .chunks
+            .iter()
+            .find(|c| c.block_type == BlockType::Stream)
+            .expect("no stream chunk");
+        let cost_without_loop = wcet_stream_iteration(stream_chunk2).unwrap();
+
+        // The loop version should cost more than the non-loop version,
+        // and should reflect at least three iterations of the body cost.
+        assert!(
+            cost_with_loop > cost_without_loop,
+            "loop cost {} should exceed non-loop cost {}",
+            cost_with_loop,
+            cost_without_loop
+        );
+    }
+
+    #[test]
+    fn extract_loop_iteration_bound_matches_canonical() {
+        // Synthetic chunk in the canonical for-range shape.
+        let mut chunk = make_chunk(
+            "test",
+            vec![
+                Op::Const(0),    // 0: push start (0)
+                Op::SetLocal(0), // 1: var = 0
+                Op::Const(1),    // 2: push end (10)
+                Op::SetLocal(1), // 3: end = 10
+                Op::Loop(11),    // 4
+                Op::GetLocal(0), // 5: get var
+                Op::GetLocal(1), // 6: get end
+                Op::CmpGe,       // 7
+                Op::BreakIf(11), // 8
+                Op::EndLoop(5),  // 9
+                Op::Return,      // 10
+            ],
+            BlockType::Func,
+        );
+        chunk.constants = vec![Value::Int(0), Value::Int(10)];
+
+        let count = extract_loop_iteration_bound(&chunk, 4);
+        assert_eq!(count, Some(10));
+    }
+
+    #[test]
+    fn extract_loop_iteration_bound_returns_none_for_non_canonical() {
+        // A loop without the canonical pattern. Should return None.
+        let chunk = make_chunk(
+            "test",
+            vec![Op::Loop(4), Op::PushTrue, Op::BreakIf(4), Op::EndLoop(1)],
+            BlockType::Func,
+        );
+        let count = extract_loop_iteration_bound(&chunk, 0);
+        assert_eq!(count, None);
+    }
+
+    #[test]
+    fn for_range_zero_iterations_yields_zero_heap() {
+        // An empty range produces zero iterations.
+        let mut chunk = make_chunk(
+            "tick",
+            vec![
+                Op::Stream,
+                Op::Const(0),    // start = 5
+                Op::SetLocal(0), // var = 5
+                Op::Const(1),    // end = 5
+                Op::SetLocal(1), // end_slot = 5
+                Op::Loop(15),
+                Op::GetLocal(0),
+                Op::GetLocal(1),
+                Op::CmpGe,
+                Op::BreakIf(15),
+                Op::Const(2),
+                Op::Const(2),
+                Op::NewArray(2), // body: allocate 2-element array
+                Op::Pop,
+                Op::EndLoop(6),
+                Op::PushUnit,
+                Op::Yield,
+                Op::Pop,
+                Op::Reset,
+            ],
+            BlockType::Stream,
+        );
+        chunk.constants = vec![Value::Int(5), Value::Int(5), Value::Int(0)];
+        chunk.local_count = 2;
+        let (_stack, heap) = wcmu_stream_iteration(&chunk).unwrap();
+        // 0 iterations means the body's heap allocation does not count.
+        assert_eq!(heap, 0);
     }
 }
