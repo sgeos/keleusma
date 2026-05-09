@@ -60,9 +60,16 @@ pub enum TypeDef {
 }
 
 /// A struct definition.
+///
+/// Generic structs declare type parameters in `<T, U>` form between
+/// the struct name and the field block. Field type expressions may
+/// reference these parameters. Construction at use sites instantiates
+/// the parameters with fresh per-construction type variables in the
+/// same way generic functions do.
 #[derive(Debug, Clone, PartialEq)]
 pub struct StructDef {
     pub name: String,
+    pub type_params: Vec<TypeParam>,
     pub fields: Vec<FieldDecl>,
     pub span: Span,
 }
@@ -76,9 +83,16 @@ pub struct FieldDecl {
 }
 
 /// An enum definition.
+///
+/// Generic enums declare type parameters in `<T, U>` form between the
+/// enum name and the variant block. Variant payload type expressions
+/// may reference these parameters. Variant construction at use sites
+/// instantiates the parameters with fresh per-construction type
+/// variables.
 #[derive(Debug, Clone, PartialEq)]
 pub struct EnumDef {
     pub name: String,
+    pub type_params: Vec<TypeParam>,
     pub variants: Vec<VariantDecl>,
     pub span: Span,
 }

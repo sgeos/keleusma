@@ -16,25 +16,24 @@ Generic functions (B2) reuse the same machinery: each generic call site instanti
 
 The `Type::Unknown` sentinel is retained as a permissive transitional anchor for runtime-only dispatch positions (such as native function call results without declared signatures). Removing it would require declaring native signatures, which is recorded as future work in the typecheck module documentation.
 
-## ~~B2. Generic type parameters on functions~~ (Resolved for functions)
+## ~~B2. Generic type parameters~~ (Resolved for functions, structs, and enums)
 
-Generic functions are supported in the language end to end.
+Generic functions, structs, and enums are supported in the language end to end.
 
-Surface syntax. `fn name<T, U>(args) -> ret { body }`. Type parameters are upper-case identifiers. Bounds and trait constraints are reserved for future work.
+Surface syntax. `fn name<T, U>(args) -> ret { body }`, `struct Name<T, U> { fields }`, and `enum Name<T, U> { variants }`. Type parameters are upper-case identifiers, parsed through a shared helper.
 
-AST. `FunctionDef` carries a `type_params: Vec<TypeParam>` field. The list is empty for non-generic functions.
+AST. `FunctionDef`, `StructDef`, and `EnumDef` each carry a `type_params: Vec<TypeParam>` field. Empty for non-generic declarations.
 
-Type checking. Each generic function's signature records the abstract `Type::Var` allocated per type parameter. At call sites, [`instantiate_sig`] generates a fresh substitution from the abstract variables to per-call fresh variables and applies it to the parameter and return types before unifying against actual arguments. Two distinct call sites of the same generic function instantiate the type parameter independently, so the same generic function flows through different concrete types in the same module.
+Type checking. Each generic declaration's signature records the abstract `Type::Var` allocated per type parameter. At call or construction sites, fresh per-instance variables are allocated and the substitution is applied to declared parameter/field/payload types before unifying with provided values. Two distinct instantiations within the same module are independent. `Type::Struct(String, Vec<Type>)` and `Type::Enum(String, Vec<Type>)` carry per-instance type arguments. Field access on a generic struct constructs a per-instance substitution from the abstract variables to the captured arguments and applies it to the declared field type.
 
-Compilation and runtime. Keleusma's `Value` enum is runtime-tagged. Bytecode operations dispatch on the tag, so a generic chunk that flows values through unchanged works for any concrete type without compile-time monomorphization. Operations that constrain `T` to a specific shape (such as arithmetic that requires numeric `T`) currently rely on runtime tag dispatch; static enforcement would require trait bounds, which are tracked separately.
+Compilation and runtime. Keleusma's `Value` enum is runtime-tagged. Bytecode operations dispatch on the tag, so generic chunks work for any concrete type without compile-time monomorphization. Operations that constrain `T` to a specific shape (such as arithmetic) rely on runtime tag dispatch; static enforcement requires trait bounds.
 
 The remaining future work tracked under this entry.
 
-- Generic struct and enum declarations (`struct Pair<T, U> { a: T, b: U }`).
 - Trait declarations and trait bounds (`fn add<T: Numeric>(...)`).
-- Compile-time monomorphization as a performance optimization. The current dispatch is correct but pays a runtime tag-check cost on every operation. Monomorphization would specialize each generic chunk per (function, type_args) pair and elide the dispatch.
+- Compile-time monomorphization as a performance optimization. The current dispatch is correct but pays a runtime tag-check cost on every operation. Monomorphization would specialize each generic chunk per (function or type, type_args) pair and elide the dispatch.
 
-These are future-session work and do not block the current generic-function functionality.
+These are future-session work and do not block the current generic functionality.
 
 ## B3. Closures or anonymous functions
 

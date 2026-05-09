@@ -219,6 +219,7 @@ impl<'a> Parser<'a> {
     fn parse_struct_def(&mut self) -> Result<StructDef, ParseError> {
         let start = self.expect(&TokenKind::Struct)?;
         let (name, _) = self.expect_upper_ident()?;
+        let type_params = self.parse_optional_type_params()?;
         self.expect(&TokenKind::LBrace)?;
 
         let mut fields = Vec::new();
@@ -239,9 +240,31 @@ impl<'a> Parser<'a> {
         let end = self.expect(&TokenKind::RBrace)?;
         Ok(StructDef {
             name,
+            type_params,
             fields,
             span: merge_spans(start, end),
         })
+    }
+
+    /// Parse an optional generic type parameter list `<T, U>`.
+    ///
+    /// Returns an empty vector when no `<` is present. Used by both
+    /// function and type definitions.
+    fn parse_optional_type_params(&mut self) -> Result<Vec<TypeParam>, ParseError> {
+        let mut type_params: Vec<TypeParam> = Vec::new();
+        if self.eat(&TokenKind::Lt) {
+            if !self.at(&TokenKind::Gt) {
+                type_params.push(self.parse_type_param()?);
+                while self.eat(&TokenKind::Comma) {
+                    if self.at(&TokenKind::Gt) {
+                        break;
+                    }
+                    type_params.push(self.parse_type_param()?);
+                }
+            }
+            self.expect(&TokenKind::Gt)?;
+        }
+        Ok(type_params)
     }
 
     fn parse_data_decl(&mut self) -> Result<DataDecl, ParseError> {
@@ -275,6 +298,7 @@ impl<'a> Parser<'a> {
     fn parse_enum_def(&mut self) -> Result<EnumDef, ParseError> {
         let start = self.expect(&TokenKind::Enum)?;
         let (name, _) = self.expect_upper_ident()?;
+        let type_params = self.parse_optional_type_params()?;
         self.expect(&TokenKind::LBrace)?;
 
         let mut variants = Vec::new();
@@ -305,6 +329,7 @@ impl<'a> Parser<'a> {
         let end = self.expect(&TokenKind::RBrace)?;
         Ok(EnumDef {
             name,
+            type_params,
             variants,
             span: merge_spans(start, end),
         })

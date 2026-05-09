@@ -79,10 +79,12 @@ pub enum Type {
     Array(Box<Type>, i64),
     /// Option of a type.
     Option(Box<Type>),
-    /// Named struct.
-    Struct(String),
-    /// Named enum.
-    Enum(String),
+    /// Named struct with optional generic type arguments. Empty
+    /// `Vec<Type>` for non-generic structs.
+    Struct(String, Vec<Type>),
+    /// Named enum with optional generic type arguments. Empty
+    /// `Vec<Type>` for non-generic enums.
+    Enum(String, Vec<Type>),
     /// Opaque type referenced by name.
     Opaque(String),
     /// Type variable for Hindley-Milner inference. Allocated by the
@@ -147,8 +149,8 @@ impl Type {
                     return t.clone();
                 }
                 match defined_types.get(name) {
-                    Some(TypeKind::Struct) => Type::Struct(name.clone()),
-                    Some(TypeKind::Enum) => Type::Enum(name.clone()),
+                    Some(TypeKind::Struct) => Type::Struct(name.clone(), Vec::new()),
+                    Some(TypeKind::Enum) => Type::Enum(name.clone(), Vec::new()),
                     None => Type::Opaque(name.clone()),
                 }
             }
@@ -169,7 +171,15 @@ impl Type {
             }
             Type::Array(elem, n) => format!("[{}; {}]", elem.display(), n),
             Type::Option(inner) => format!("Option<{}>", inner.display()),
-            Type::Struct(name) | Type::Enum(name) | Type::Opaque(name) => name.clone(),
+            Type::Struct(name, args) | Type::Enum(name, args) => {
+                if args.is_empty() {
+                    name.clone()
+                } else {
+                    let inner: Vec<String> = args.iter().map(|t| t.display()).collect();
+                    format!("{}<{}>", name, inner.join(", "))
+                }
+            }
+            Type::Opaque(name) => name.clone(),
             Type::Var(n) => format!("?T{}", n),
             Type::Unknown => "<unknown>".to_string(),
         }
@@ -183,6 +193,7 @@ impl Type {
             Type::Tuple(items) => items.iter().any(|t| t.occurs(var)),
             Type::Array(elem, _) => elem.occurs(var),
             Type::Option(inner) => inner.occurs(var),
+            Type::Struct(_, args) | Type::Enum(_, args) => args.iter().any(|t| t.occurs(var)),
             _ => false,
         }
     }
@@ -198,6 +209,12 @@ impl Type {
             Type::Tuple(items) => Type::Tuple(items.iter().map(|t| t.apply(subst)).collect()),
             Type::Array(elem, n) => Type::Array(Box::new(elem.apply(subst)), *n),
             Type::Option(inner) => Type::Option(Box::new(inner.apply(subst))),
+            Type::Struct(name, args) => {
+                Type::Struct(name.clone(), args.iter().map(|t| t.apply(subst)).collect())
+            }
+            Type::Enum(name, args) => {
+                Type::Enum(name.clone(), args.iter().map(|t| t.apply(subst)).collect())
+            }
             other => other.clone(),
         }
     }
@@ -317,13 +334,15 @@ pub fn unify(a: &Type, b: &Type, subst: &mut Subst) -> Result<(), UnifyError> {
             unify(&le, &re, subst)
         }
         (Type::Option(li), Type::Option(ri)) => unify(&li, &ri, subst),
-        (Type::Struct(ln), Type::Struct(rn))
-        | (Type::Enum(ln), Type::Enum(rn))
-        | (Type::Opaque(ln), Type::Opaque(rn))
-            if ln == rn =>
+        (Type::Struct(ln, la), Type::Struct(rn, ra)) | (Type::Enum(ln, la), Type::Enum(rn, ra))
+            if ln == rn && la.len() == ra.len() =>
         {
+            for (l, r) in la.iter().zip(ra.iter()) {
+                unify(l, r, subst)?;
+            }
             Ok(())
         }
+        (Type::Opaque(ln), Type::Opaque(rn)) if ln == rn => Ok(()),
         (l, r) => Err(UnifyError::Mismatch { left: l, right: r }),
     }
 }
@@ -399,7 +418,15 @@ impl TypeError {
 struct Ctx {
     types: BTreeMap<String, TypeKind>,
     structs: BTreeMap<String, BTreeMap<String, Type>>,
+    /// Abstract `Type::Var` ids assigned to each generic struct's
+    /// type parameters in declaration order. Empty vector for
+    /// non-generic structs. Used at struct construction and field
+    /// access sites to substitute the per-instance type arguments.
+    struct_type_param_vars: BTreeMap<String, Vec<Type>>,
     enums: BTreeMap<String, BTreeMap<String, Vec<Type>>>,
+    /// Abstract `Type::Var` ids assigned to each generic enum's type
+    /// parameters in declaration order.
+    enum_type_param_vars: BTreeMap<String, Vec<Type>>,
     functions: BTreeMap<String, FnSig>,
     /// Native function names imported via `use` declarations. Calls
     /// to these names are accepted with any argument types because
@@ -422,7 +449,9 @@ impl Ctx {
         Self {
             types: BTreeMap::new(),
             structs: BTreeMap::new(),
+            struct_type_param_vars: BTreeMap::new(),
             enums: BTreeMap::new(),
+            enum_type_param_vars: BTreeMap::new(),
             functions: BTreeMap::new(),
             natives: BTreeSet::new(),
             data: BTreeMap::new(),
@@ -462,6 +491,27 @@ impl Ctx {
     }
 }
 
+/// Build a fresh per-instantiation substitution for a list of
+/// abstract `Type::Var` ids.
+///
+/// For each abstract variable in `abstract_vars`, allocate a fresh
+/// `Type::Var` and bind the abstract id to the fresh variable in the
+/// returned substitution. Returns the substitution and the ordered
+/// list of fresh variables suitable for storing as the per-instance
+/// type arguments on a `Type::Struct` or `Type::Enum`.
+fn build_instance_subst(ctx: &mut Ctx, abstract_vars: &[Type]) -> (Subst, Vec<Type>) {
+    let mut inst = Subst::new();
+    let mut fresh_args: Vec<Type> = Vec::with_capacity(abstract_vars.len());
+    for var in abstract_vars {
+        if let Type::Var(v) = var {
+            let fresh = ctx.vargen.fresh();
+            inst.insert(*v, fresh.clone());
+            fresh_args.push(fresh);
+        }
+    }
+    (inst, fresh_args)
+}
+
 /// Instantiate a generic function signature with fresh per-call type
 /// variables.
 ///
@@ -498,7 +548,13 @@ fn instantiate_sig(ctx: &mut Ctx, sig: &FnSig) -> (Vec<Type>, Type) {
 /// unannotated should prefer fresh type variables through
 /// [`Ctx::fresh`] over `Unknown` so that constraints can propagate.
 fn types_compatible(ctx: &mut Ctx, a: &Type, b: &Type) -> bool {
-    if matches!(a, Type::Unknown | Type::Var(_)) || matches!(b, Type::Unknown | Type::Var(_)) {
+    // The legacy `Type::Unknown` sentinel is compatible with anything
+    // because the narrow inference produces it when no constraint can
+    // be derived. `Type::Var` is NOT short-circuited here; it must go
+    // through `unify` so the constraint is recorded in the
+    // substitution. Otherwise distinct generic instantiations would
+    // appear compatible regardless of their actual types.
+    if matches!(a, Type::Unknown) || matches!(b, Type::Unknown) {
         return true;
     }
     unify(a, b, &mut ctx.subst).is_ok()
@@ -527,27 +583,52 @@ pub fn check(program: &Program) -> Result<(), TypeError> {
     }
 
     // Pass 1b. Build struct field types, enum variant types, and data
-    // block field types. The `from_expr` resolver consults `ctx.types`.
+    // block field types. Generic types allocate a fresh `Type::Var`
+    // per declared type parameter and resolve field/variant type
+    // expressions through `from_expr_with_params` so the recorded
+    // declarations carry abstract type variables. Construction at use
+    // sites instantiates these abstract variables with fresh per-call
+    // variables and applies the substitution to declared field types
+    // before unifying with provided values.
     for type_def in &program.types {
         match type_def {
             TypeDef::Struct(s) => {
+                let mut tp_map: BTreeMap<String, Type> = BTreeMap::new();
+                let mut tp_vars: Vec<Type> = Vec::new();
+                for tp in &s.type_params {
+                    let v = ctx.fresh();
+                    tp_map.insert(tp.name.clone(), v.clone());
+                    tp_vars.push(v);
+                }
                 let mut fields = BTreeMap::new();
                 for f in &s.fields {
-                    fields.insert(f.name.clone(), Type::from_expr(&f.type_expr, &ctx.types));
+                    fields.insert(
+                        f.name.clone(),
+                        Type::from_expr_with_params(&f.type_expr, &ctx.types, &tp_map),
+                    );
                 }
                 ctx.structs.insert(s.name.clone(), fields);
+                ctx.struct_type_param_vars.insert(s.name.clone(), tp_vars);
             }
             TypeDef::Enum(e) => {
+                let mut tp_map: BTreeMap<String, Type> = BTreeMap::new();
+                let mut tp_vars: Vec<Type> = Vec::new();
+                for tp in &e.type_params {
+                    let v = ctx.fresh();
+                    tp_map.insert(tp.name.clone(), v.clone());
+                    tp_vars.push(v);
+                }
                 let mut variants = BTreeMap::new();
                 for v in &e.variants {
                     let payload: Vec<Type> = v
                         .fields
                         .iter()
-                        .map(|t| Type::from_expr(t, &ctx.types))
+                        .map(|t| Type::from_expr_with_params(t, &ctx.types, &tp_map))
                         .collect();
                     variants.insert(v.name.clone(), payload);
                 }
                 ctx.enums.insert(e.name.clone(), variants);
+                ctx.enum_type_param_vars.insert(e.name.clone(), tp_vars);
             }
         }
     }
@@ -815,7 +896,7 @@ fn check_pattern_against_type(
         Pattern::Enum(enum_name, variant, sub_pats, span) => {
             // Check enum name matches scrutinee.
             match scrutinee_ty {
-                Type::Enum(scrutinee_name) if scrutinee_name == enum_name => {}
+                Type::Enum(scrutinee_name, _) if scrutinee_name == enum_name => {}
                 Type::Unknown | Type::Var(_) => return Ok(()),
                 _ => {
                     return Err(TypeError::new(
@@ -860,7 +941,7 @@ fn check_pattern_against_type(
         }
         Pattern::Struct(name, field_pats, span) => {
             match scrutinee_ty {
-                Type::Struct(scrutinee_name) if scrutinee_name == name => {}
+                Type::Struct(scrutinee_name, _) if scrutinee_name == name => {}
                 Type::Unknown | Type::Var(_) => return Ok(()),
                 _ => {
                     return Err(TypeError::new(
@@ -934,7 +1015,7 @@ fn check_exhaustiveness(
             }
             Ok(())
         }
-        Type::Enum(enum_name) => {
+        Type::Enum(enum_name, _) => {
             let variants = ctx
                 .enums
                 .get(enum_name)
@@ -1119,7 +1200,7 @@ fn type_of_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Type, TypeError> {
             // the receiver of subsequent field access. Surface it as a
             // synthetic Struct type whose name is the data block name.
             if ctx.data.contains_key(name) {
-                return Ok(Type::Struct(name.clone()));
+                return Ok(Type::Struct(name.clone(), Vec::new()));
             }
             // Bare function name reference. Report unknown.
             Err(TypeError::new(
@@ -1429,11 +1510,25 @@ fn type_of_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Type, TypeError> {
         } => {
             let obj_ty = type_of_expr(ctx, object)?;
             match obj_ty {
-                Type::Struct(ref name) => {
+                Type::Struct(ref name, ref args) => {
+                    // Apply the per-instance type argument substitution
+                    // to the field's declared type so generic structs
+                    // reflect the concrete instantiation at this access.
+                    let abstract_vars = ctx
+                        .struct_type_param_vars
+                        .get(name)
+                        .cloned()
+                        .unwrap_or_default();
+                    let mut inst = Subst::new();
+                    for (abstract_var, concrete) in abstract_vars.iter().zip(args.iter()) {
+                        if let Type::Var(v) = abstract_var {
+                            inst.insert(*v, concrete.clone());
+                        }
+                    }
                     if let Some(fields) = ctx.structs.get(name)
                         && let Some(t) = fields.get(field)
                     {
-                        return Ok(t.clone());
+                        return Ok(t.apply(&inst));
                     }
                     if let Some(fields) = ctx.data.get(name)
                         && let Some(t) = fields.get(field)
@@ -1519,6 +1614,18 @@ fn type_of_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Type, TypeError> {
                     *span,
                 ));
             }
+            // Instantiate generic type parameters with fresh per-call
+            // variables. The fresh variables become the type arguments
+            // on the resulting `Type::Struct` and the substitution is
+            // applied to each declared field type before unifying with
+            // the value's type. Non-generic structs go through the
+            // same path with an empty substitution.
+            let abstract_vars = ctx
+                .struct_type_param_vars
+                .get(name)
+                .cloned()
+                .unwrap_or_default();
+            let (inst, type_args) = build_instance_subst(ctx, &abstract_vars);
             for init in fields {
                 let declared = declared_fields.get(&init.name).ok_or_else(|| {
                     TypeError::new(
@@ -1526,21 +1633,22 @@ fn type_of_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Type, TypeError> {
                         init.span,
                     )
                 })?;
+                let declared_inst = declared.apply(&inst);
                 let value_ty = type_of_expr(ctx, &init.value)?;
-                if !types_compatible(ctx, &value_ty, declared) {
+                if !types_compatible(ctx, &value_ty, &declared_inst) {
                     return Err(TypeError::new(
                         format!(
                             "field `{}.{}` expects {}, got {}",
                             name,
                             init.name,
-                            declared.display(),
+                            declared_inst.display(),
                             value_ty.display()
                         ),
                         init.span,
                     ));
                 }
             }
-            Ok(Type::Struct(name.clone()))
+            Ok(Type::Struct(name.clone(), type_args))
         }
         Expr::EnumVariant {
             enum_name,
@@ -1567,20 +1675,33 @@ fn type_of_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Type, TypeError> {
                             *span,
                         ));
                     }
+                    // Instantiate generic type parameters with fresh
+                    // per-call variables. The fresh variables become
+                    // the type arguments on the resulting
+                    // `Type::Enum` and the substitution is applied to
+                    // each declared payload type before unifying with
+                    // the argument's type.
+                    let abstract_vars = ctx
+                        .enum_type_param_vars
+                        .get(enum_name)
+                        .cloned()
+                        .unwrap_or_default();
+                    let (inst, type_args) = build_instance_subst(ctx, &abstract_vars);
                     for (arg, expected) in args.iter().zip(types.iter()) {
+                        let expected_inst = expected.apply(&inst);
                         let arg_ty = type_of_expr(ctx, arg)?;
-                        if !types_compatible(ctx, &arg_ty, expected) {
+                        if !types_compatible(ctx, &arg_ty, &expected_inst) {
                             return Err(TypeError::new(
                                 format!(
                                     "enum payload expects {}, got {}",
-                                    expected.display(),
+                                    expected_inst.display(),
                                     arg_ty.display()
                                 ),
                                 arg.span(),
                             ));
                         }
                     }
-                    Ok(Type::Enum(enum_name.clone()))
+                    Ok(Type::Enum(enum_name.clone(), type_args))
                 }
                 None => {
                     if enum_name == "Option" {
@@ -1989,8 +2110,8 @@ mod tests {
     fn unify_named_struct_same_name_succeeds() {
         let mut s = Subst::new();
         unify(
-            &Type::Struct("Point".to_string()),
-            &Type::Struct("Point".to_string()),
+            &Type::Struct("Point".to_string(), Vec::new()),
+            &Type::Struct("Point".to_string(), Vec::new()),
             &mut s,
         )
         .unwrap();
@@ -2000,8 +2121,8 @@ mod tests {
     fn unify_named_struct_different_name_fails() {
         let mut s = Subst::new();
         let err = unify(
-            &Type::Struct("Point".to_string()),
-            &Type::Struct("Square".to_string()),
+            &Type::Struct("Point".to_string(), Vec::new()),
+            &Type::Struct("Square".to_string(), Vec::new()),
             &mut s,
         )
         .unwrap_err();
@@ -2084,5 +2205,77 @@ mod tests {
         let err =
             check_src("fn id<T>(x: T) -> T { x }\nfn main() -> i64 { id(1, 2) }").unwrap_err();
         assert!(err.message.contains("expects 1 arguments"));
+    }
+
+    // -- B2.2 generic struct and enum checks --
+
+    #[test]
+    fn generic_struct_with_one_param_typechecks() {
+        check_src(
+            "struct Cell<T> { value: T }\n\
+             fn main() -> i64 {\n\
+                let c = Cell { value: 42 };\n\
+                c.value\n\
+             }",
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn generic_struct_with_two_params_typechecks() {
+        check_src(
+            "struct Pair<T, U> { a: T, b: U }\n\
+             fn main() -> i64 {\n\
+                let p = Pair { a: 1, b: true };\n\
+                p.a\n\
+             }",
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn generic_struct_field_access_uses_instantiation() {
+        check_src(
+            "struct Cell<T> { value: T }\n\
+             fn main() -> i64 {\n\
+                let p = Cell { value: 1 };\n\
+                let q = Cell { value: true };\n\
+                let _ = q.value;\n\
+                p.value\n\
+             }",
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn generic_enum_construction_typechecks() {
+        check_src(
+            "enum Maybe<T> { Just(T), Nothing }\n\
+             fn main() -> i64 {\n\
+                let m = Maybe::Just(42);\n\
+                0\n\
+             }",
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn generic_struct_same_type_param_constraint() {
+        // The struct expects both fields to share the same T. With the
+        // unifier in place, providing inconsistent types unifies T
+        // against incompatible values and surfaces a type error.
+        let err = check_src(
+            "struct SamePair<T> { a: T, b: T }\n\
+             fn main() -> i64 {\n\
+                let p = SamePair { a: 1, b: true };\n\
+                0\n\
+             }",
+        )
+        .unwrap_err();
+        assert!(
+            err.message.contains("expects") || err.message.contains("type"),
+            "unexpected error message: {}",
+            err.message,
+        );
     }
 }
