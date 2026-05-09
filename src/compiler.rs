@@ -1264,9 +1264,25 @@ fn collect_free_in_expr(
             }
         }
         Expr::Cast { expr, .. } => collect_free_in_expr(expr, bound, out),
-        Expr::Closure { .. } | Expr::ClosureRef { .. } => {
-            // Nested closures have their own free-variable analysis;
-            // do not recurse into their bodies here.
+        Expr::Closure { .. } => {
+            // Should not occur after the hoist pass replaces every
+            // closure literal with a `ClosureRef`. Conservatively do
+            // nothing if it does appear; the surrounding pass will
+            // hoist it on the next walk.
+        }
+        Expr::ClosureRef { captures, .. } => {
+            // The inner closure has already been hoisted and its free
+            // variables recorded as captures. Each inner capture that
+            // is not bound in the outer scope is itself a free
+            // variable of the outer expression. Propagating these
+            // names lets nested closures transitively capture from
+            // enclosing scopes through the surrounding closure's
+            // synthetic chunk.
+            for capture in captures {
+                if !bound.contains(capture) && !out.contains(capture) {
+                    out.push(capture.clone());
+                }
+            }
         }
     }
 }

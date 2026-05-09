@@ -9,8 +9,8 @@ AI to Human communication channel.
 ## Last Updated
 
 **Date**: 2026-05-09
-**Task**: V0.1-M3-T24. B2.4 generic enum specialization, polymorphic recursion cycle detection refinement, and B3 capture-by-reference disposition.
-**Status**: Complete. The remaining named B2.4 and B3 follow-on items are now closed. The last B2.4 item (generic enum specialization) and the cycle detection refinement land in this session, and the capture-by-reference question is closed as not applicable to Keleusma's surface.
+**Task**: V0.1-M3-T25. B2.4 inference reach extension to field access, B2 stale doc cleanup, and B3 nested-closure transitive capture.
+**Status**: Complete. The remaining named B2 and B3 follow-ons that surfaced after the prior session are closed. Field-access inference and nested-closure transitive capture both required real implementation work, while the B2 backlog entry was outdated documentation that has been corrected.
 
 ## Verification
 
@@ -24,61 +24,71 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 **Results**:
 
-- 472 tests pass workspace-wide. 404 keleusma unit (1 new for enum specialization), 17 keleusma marshall integration, 17 keleusma `kstring_boundary` integration, 28 keleusma-arena unit, 6 keleusma-arena doctests.
+- 475 tests pass workspace-wide. 407 keleusma unit (3 new), 17 keleusma marshall integration, 17 keleusma `kstring_boundary` integration, 28 keleusma-arena unit, 6 keleusma-arena doctests.
 - Clippy clean under `--workspace --all-targets`.
 - Format clean.
 
 ## Summary
 
-This session closes the remaining named B2.4 and B3 follow-on items.
+This session closed three follow-on items:
 
-### Generic enum specialization
+### B2.4 inference reach extension to field access
 
-The new `specialize_enums` pass runs in `monomorphize` after `specialize_structs` and mirrors that pass for `Expr::EnumVariant` whose target enum has type parameters. For each variant construction site, the pass walks the enum's declared variant payload types looking for `TypeExpr::Named(tp_name, ..)` patterns whose name matches a type parameter, infers the concrete type from the corresponding payload value via the existing `infer_arg_type` helper, emits a specialized `EnumDef` with payload types substituted, and rewrites the `EnumVariant`'s `enum_name` to the mangled form. Subsequent compilation sees the specialized enum as a regular non-generic enum, closing the same compile-time inference gap for enum-payload method dispatch that the struct pass closes for fields.
+`monomorphize::infer_arg_type` previously returned `None` for `Expr::FieldAccess` because no struct table was available. The pass now builds a struct table at the top of `monomorphize()` and threads it through `rewrite_block`, `rewrite_stmt`, `rewrite_expr`, and `rewrite_iterable`. The `FieldAccess` arm of `infer_arg_type` resolves the object's nominal type, looks up the struct's declared field type, and applies per-instance type-argument substitution when concrete type arguments are available on the receiver. Abstract field types (those whose declared type is exactly one of the struct's type parameters and the receiver carries no type arguments) are guarded against erroneous propagation: returning such an abstract type as the inferred argument would cause the call site to specialize against a type variable rather than a concrete type.
 
-### Polymorphic recursion cycle detection
+The motivating case `let h = Holder { value: 21 }; use_doubler(h.value)` where `Holder` is a non-generic struct with `value: i64` and `use_doubler<T: Doubler>` requires a concrete `T` now compiles end to end.
 
-The fixed-point loop now bounds two ways. The existing global `SPECIALIZATION_LIMIT` caps the total number of specializations across the entire program. The new `PER_FUNCTION_LIMIT` caps the number of specializations any single generic function may produce, which is the structural signature of polymorphic recursion. The loop tracks per-function counts in a `BTreeMap`, updates them after each `rewrite_block` call by recovering the origin function name from the `origin__type_args` mangling, and exits early when any single function exceeds its bound. When the per-function bound trips, the remaining work is left unspecialized; subsequent compilation surfaces the truncation through the bytecode chunk count limit, which produces a clearer error path than infinite expansion.
+### B2 stale doc cleanup
 
-### Capture-by-reference disposition
+The B2 backlog entry listed "Method call surface syntax (`x.method(args)`)" as remaining work. That syntax landed in V0.1-M3-T18 with `Expr::MethodCall`. The entry has been corrected to record the syntax as implemented and to remove the stale "remaining work" bullet.
 
-Capture by reference is not meaningful in Keleusma's pure-functional surface. The language's `let` bindings are immutable by design. There is no surface assignment operator that mutates a previously bound local, which means a captured local cannot diverge from the captured snapshot regardless of whether the capture is by value or by reference. The only mutable mechanism is the data segment, which is accessed through `data.field` and `data.field = expr` syntax that is independent of closure capture. A closure that wants to mutate shared state therefore reads and writes data segment slots directly. Capture by reference would only matter in a language with mutable locals, which Keleusma intentionally does not have. The item is therefore closed as not applicable rather than deferred.
+### B3 nested-closure transitive capture
+
+`compiler::collect_free_in_expr` previously treated `Expr::ClosureRef` as a leaf, so an inner closure that captured an outer-function local could not transitively propagate that capture through an enclosing closure. The motivating failure was `let base = 100; let outer = |x| { let inner = |y| base + x + y; inner(3) }; outer(7)`, which produced a "captures `base` which is not a local in the enclosing scope" compile error because `outer`'s synthetic chunk did not receive `base` as a captured implicit parameter.
+
+The `ClosureRef` arm of the free-variable collector now treats each entry of the inner closure's `captures` list as a free variable of the enclosing expression unless it is bound by the enclosing scope's parameters. The outer closure's hoisted chunk therefore gains the transitively captured name as an additional implicit parameter, and at the inner closure's construction site that name is in scope and is captured normally through `Op::MakeClosure`.
 
 ## Tests
 
-One new typecheck test, `monomorphize_enum_specialization_round_trip`, covers a `Maybe<T>` round trip through construction with a concrete payload value and a `match` over the result.
+Three new typecheck tests:
+
+- `monomorphize_inference_through_field_access` covers the field-access inference round trip.
+- `closure_nested_inside_closure_typechecks` covers the basic nested-closure type check.
+- `closure_nested_capturing_outer_local_typechecks` covers the transitive-capture case.
+
+One new example, `examples/closure_nested.rs`, demonstrates end-to-end execution.
 
 ## Trade-offs and Properties
 
-The enum specialization pass uses positional matching on payload types just as the struct pass uses positional matching on field types. For each declared type parameter, the pass searches for the first variant payload field whose declared type expression is `Named(tp_name)` and infers from the corresponding argument's value. More complex cases such as a payload field of `Pair<T, U>` (type parameter nested inside another generic) are not handled and the call site is left generic, mirroring the struct pass's treatment of nested generic field types.
+The struct table threading is invasive at the call-site level (every recursive call in the rewrite chain gains an extra argument) but conceptually narrow. The `infer_arg_type` function continues to take an `Option` for the struct table so callers in the `specialize_structs` and `specialize_enums` chains, which do not need field-access inference, can pass `None` without owning a struct table.
 
-The original generic enum declaration is retained alongside the specialization. This is the safe default consistent with the struct pass: callers that constructed the enum in ways the pass could not analyze still see the generic declaration. Future cleanup could prune declarations whose every construction was specialized.
-
-The per-function specialization limit is conservative. Legitimate uses of polymorphic recursion that converge on a finite set of types remain admissible; only true unbounded recursion through type-argument growth trips the limit. The bound is set to 64 specializations per function, which is generous for hand-written code while remaining within practical bytecode chunk count limits.
+The transitive-capture propagation is conservative in that it adds every inner-capture name to the enclosing scope's free-variable list. If an inner closure's capture is in fact bound by the enclosing scope (for example, the inner closure captures the outer closure's parameter), the outer's `bound` set filters it out. The propagation does not deduplicate against names already in `out` beyond the existing `!out.contains(...)` check, which keeps the logic uniform with the rest of the collector.
 
 ## Changes Made
 
 ### Source
 
-- **`src/monomorphize.rs`**. New `specialize_enums` pass invoked from `monomorphize` after `specialize_structs`. New helpers `specialize_enum`, `rewrite_enum_variants_block`, `rewrite_enum_variants_stmt`, `rewrite_enum_variants_expr` walk the program and rewrite enum variant construction sites. New `PER_FUNCTION_LIMIT` constant and `per_fn_counts` `BTreeMap` track per-function specialization counts within the existing fixed-point loop.
-- **`src/typecheck.rs`**. New unit test `monomorphize_enum_specialization_round_trip`.
+- **`src/monomorphize.rs`**. Struct table built at the top of `monomorphize()` and threaded through `rewrite_block`, `rewrite_stmt`, `rewrite_expr`, `rewrite_iterable`. `infer_arg_type` signature extended with `Option<&BTreeMap<String, StructDef>>`. `FieldAccess` arm resolves field type with per-instance substitution and abstract-type guard.
+- **`src/compiler.rs`**. `collect_free_in_expr`'s `ClosureRef` arm now propagates inner-capture names to the enclosing scope's free-variable list, separated from the unreachable `Closure` arm.
+- **`src/typecheck.rs`**. Three new unit tests.
+- **`examples/closure_nested.rs`** (new). End-to-end demonstration.
 
 ### Knowledge Graph
 
-- **`docs/decisions/BACKLOG.md`**. B2.4 entry updated to record generic enum specialization and the polymorphic recursion cycle detection refinement as resolved. B3 entry updated to record capture-by-reference disposition as not applicable.
-- **`docs/process/TASKLOG.md`**. New row for V0.1-M3-T24.
+- **`docs/decisions/BACKLOG.md`**. B2 entry corrected to remove the stale method-call-syntax item. B2.4 entry updated with field-access inference and the abstract-type guard. B3 entry updated with the nested-closure transitive-capture mechanism.
+- **`docs/process/TASKLOG.md`**. New row for V0.1-M3-T25.
 - **`docs/process/REVERSE_PROMPT.md`**. This file.
 
 ## Remaining Open Priorities
 
-None of the originally named B2.4 or B3 items remain unresolved. The named work for generics, traits, monomorphization, and closures is structurally complete.
+None of the originally named B2.2, B2.3, B2.4, or B3 items remain unresolved. Subsequent sessions can address items outside this scope, such as B11 (per-op decode optimization for zero-copy execution) or B5b (variable-cost string operations).
 
 The `keleusma-arena` registry version is still v0.1.0.
 
 ## Intended Next Step
 
-Await human prompt before proceeding. Subsequent work is open-ended; candidates from `BACKLOG.md` include further wire-format optimizations under B11 (per-op decode), additional native-side ergonomics, or work outside the previously named B2 and B3 scopes.
+Await human prompt before proceeding. Subsequent work is open-ended.
 
 ## Session Context
 
-This session closed the remaining named B2.4 and B3 follow-on items. The compile pipeline now specializes generic functions, generic structs, and generic enums per concrete instantiation, and the monomorphization fixed-point loop is guarded against polymorphic recursion both globally and per-function. The capture-by-reference question is closed as not applicable because the surface language has no mutable locals.
+This session closed the residual follow-on items in B2.2, B2.3, B2.4, and B3 that surfaced after the prior session: a stale doc entry, a real inference-reach gap for field access, and a real transitive-capture gap for nested closures. The compile pipeline now specializes generic calls whose arguments include field access expressions, and closures can transitively capture from any enclosing scope through any number of intermediate closures.

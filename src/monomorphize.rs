@@ -56,6 +56,18 @@ pub fn monomorphize(program: Program) -> Program {
         fn_returns.insert(f.name.clone(), f.return_type.clone());
     }
 
+    // Struct-definition map for field-access type inference. Used by
+    // `infer_arg_type` to resolve `o.field` against the struct's
+    // declared field types when `o`'s nominal type is known.
+    let struct_table: BTreeMap<String, StructDef> = program
+        .types
+        .iter()
+        .filter_map(|td| match td {
+            TypeDef::Struct(s) => Some((s.name.clone(), s.clone())),
+            _ => None,
+        })
+        .collect();
+
     // Local-type information for argument-type inference.
     let mut local_types: BTreeMap<String, TypeExpr> = BTreeMap::new();
     // Specializations generated. Keyed on (function, type_args
@@ -81,6 +93,7 @@ pub fn monomorphize(program: Program) -> Program {
                 &mut specs,
                 &mut new_functions,
                 &fn_returns,
+                &struct_table,
             );
         }
     }
@@ -146,6 +159,7 @@ pub fn monomorphize(program: Program) -> Program {
             &mut specs,
             &mut new_functions,
             &fn_returns,
+            &struct_table,
         );
         new_functions[idx].body = body_clone;
         // Update per-function counts for any specializations
@@ -308,7 +322,7 @@ fn rewrite_enum_variants_stmt(
                 && let Some(t) = l
                     .type_expr
                     .clone()
-                    .or_else(|| infer_arg_type(&l.value, locals, fn_returns))
+                    .or_else(|| infer_arg_type(&l.value, locals, fn_returns, None))
             {
                 locals.insert(name.clone(), t);
             }
@@ -535,7 +549,7 @@ fn rewrite_enum_variants_expr(
                 if let TypeExpr::Named(n, _, _) = decl_ty
                     && *n == tp.name
                     && let Some(arg) = args.get(i)
-                    && let Some(t) = infer_arg_type(arg, locals, fn_returns)
+                    && let Some(t) = infer_arg_type(arg, locals, fn_returns, None)
                 {
                     inferred = Some(t);
                     break;
@@ -696,7 +710,7 @@ fn rewrite_struct_inits_stmt(
                 && let Some(t) = l
                     .type_expr
                     .clone()
-                    .or_else(|| infer_arg_type(&l.value, locals, fn_returns))
+                    .or_else(|| infer_arg_type(&l.value, locals, fn_returns, None))
             {
                 locals.insert(name.clone(), t);
             }
@@ -1042,7 +1056,7 @@ fn rewrite_struct_inits_expr(
                 if let TypeExpr::Named(n, _, _) = &decl_field.type_expr
                     && *n == tp.name
                     && let Some(init) = fields.iter().find(|f| f.name == decl_field.name)
-                    && let Some(t) = infer_arg_type(&init.value, locals, fn_returns)
+                    && let Some(t) = infer_arg_type(&init.value, locals, fn_returns, None)
                 {
                     inferred = Some(t);
                     break;
@@ -1125,10 +1139,15 @@ fn type_arg_canonical(t: &TypeExpr) -> String {
 /// information. The pass returns `None` for expressions whose type
 /// cannot be determined, in which case the call site is not
 /// specialized and the runtime falls back to the generic dispatch.
+///
+/// The optional `structs` argument enables `FieldAccess` resolution
+/// against declared struct field types. Callers that lack a struct
+/// table pass `None`, in which case `FieldAccess` returns `None`.
 fn infer_arg_type(
     expr: &Expr,
     locals: &BTreeMap<String, TypeExpr>,
     fn_returns: &BTreeMap<String, TypeExpr>,
+    structs: Option<&BTreeMap<String, StructDef>>,
 ) -> Option<TypeExpr> {
     match expr {
         Expr::Literal { value, span } => Some(match value {
@@ -1150,13 +1169,13 @@ fn infer_arg_type(
         Expr::TupleLiteral { elements, span } => {
             let parts: Option<Vec<TypeExpr>> = elements
                 .iter()
-                .map(|e| infer_arg_type(e, locals, fn_returns))
+                .map(|e| infer_arg_type(e, locals, fn_returns, structs))
                 .collect();
             parts.map(|p| TypeExpr::Tuple(p, *span))
         }
         Expr::ArrayLiteral { elements, span } => {
             let elem = elements.first()?;
-            let elem_ty = infer_arg_type(elem, locals, fn_returns)?;
+            let elem_ty = infer_arg_type(elem, locals, fn_returns, structs)?;
             Some(TypeExpr::Array(
                 Box::new(elem_ty),
                 elements.len() as i64,
@@ -1170,26 +1189,60 @@ fn infer_arg_type(
         } => {
             // Use the type of the then-branch's tail expression.
             let tail = then_block.tail_expr.as_ref()?;
-            infer_arg_type(tail, locals, fn_returns).or_else(|| {
+            infer_arg_type(tail, locals, fn_returns, structs).or_else(|| {
                 else_block
                     .as_ref()
                     .and_then(|b| b.tail_expr.as_ref())
-                    .and_then(|e| infer_arg_type(e, locals, fn_returns))
+                    .and_then(|e| infer_arg_type(e, locals, fn_returns, structs))
             })
         }
         Expr::Match { arms, .. } => {
             // All arms agree on type per the type checker. Use the
             // first arm's expression type.
             let first = arms.first()?;
-            infer_arg_type(&first.expr, locals, fn_returns)
+            infer_arg_type(&first.expr, locals, fn_returns, structs)
         }
         Expr::FieldAccess { object, field, .. } => {
-            // For a known local of a known struct, the field's type
-            // could be looked up. The current `locals` map only
-            // records the struct's nominal type. Without struct
-            // field tables threaded here, return None for now.
-            let _ = (object, field);
-            None
+            // Resolve the object's nominal type, look up the struct's
+            // declared field type, and apply the per-instance
+            // substitution from the struct's type parameters to the
+            // instance's type arguments. When the struct table is not
+            // available or the lookup fails, return None and let the
+            // call site fall back to runtime tag dispatch.
+            let structs = structs?;
+            let obj_ty = infer_arg_type(object, locals, fn_returns, Some(structs))?;
+            let (struct_name, type_args) = match obj_ty {
+                TypeExpr::Named(name, args, _) => (name, args),
+                _ => return None,
+            };
+            let struct_def = structs.get(&struct_name)?;
+            let field_decl = struct_def.fields.iter().find(|f| f.name == *field)?;
+            if struct_def.type_params.len() == type_args.len() && !type_args.is_empty() {
+                let subst: BTreeMap<String, TypeExpr> = struct_def
+                    .type_params
+                    .iter()
+                    .zip(type_args.iter())
+                    .map(|(tp, arg)| (tp.name.clone(), arg.clone()))
+                    .collect();
+                Some(subst_type_expr(&field_decl.type_expr, &subst))
+            } else {
+                // No type-arg substitution available. If the field's
+                // declared type is exactly one of the struct's type
+                // parameters, the inferred type would be abstract
+                // and would erroneously propagate as a concrete
+                // type argument at the call site. Return None so
+                // the call falls back to runtime tag dispatch.
+                if let TypeExpr::Named(field_name, field_args, _) = &field_decl.type_expr
+                    && field_args.is_empty()
+                    && struct_def
+                        .type_params
+                        .iter()
+                        .any(|tp| tp.name == *field_name)
+                {
+                    return None;
+                }
+                Some(field_decl.type_expr.clone())
+            }
         }
         _ => None,
     }
@@ -1511,12 +1564,29 @@ fn rewrite_block(
     specs: &mut BTreeMap<(String, String), String>,
     new_functions: &mut Vec<FunctionDef>,
     fn_returns: &BTreeMap<String, TypeExpr>,
+    struct_table: &BTreeMap<String, StructDef>,
 ) {
     for stmt in &mut block.stmts {
-        rewrite_stmt(stmt, generics, locals, specs, new_functions, fn_returns);
+        rewrite_stmt(
+            stmt,
+            generics,
+            locals,
+            specs,
+            new_functions,
+            fn_returns,
+            struct_table,
+        );
     }
     if let Some(e) = block.tail_expr.as_mut() {
-        rewrite_expr(e, generics, locals, specs, new_functions, fn_returns);
+        rewrite_expr(
+            e,
+            generics,
+            locals,
+            specs,
+            new_functions,
+            fn_returns,
+            struct_table,
+        );
     }
 }
 
@@ -1527,6 +1597,7 @@ fn rewrite_stmt(
     specs: &mut BTreeMap<(String, String), String>,
     new_functions: &mut Vec<FunctionDef>,
     fn_returns: &BTreeMap<String, TypeExpr>,
+    struct_table: &BTreeMap<String, StructDef>,
 ) {
     match stmt {
         Stmt::Let(l) => {
@@ -1537,6 +1608,7 @@ fn rewrite_stmt(
                 specs,
                 new_functions,
                 fn_returns,
+                struct_table,
             );
             // Record local type for subsequent type inference at call
             // sites that reference this binding.
@@ -1544,7 +1616,7 @@ fn rewrite_stmt(
                 && let Some(t) = l
                     .type_expr
                     .clone()
-                    .or_else(|| infer_arg_type(&l.value, locals, fn_returns))
+                    .or_else(|| infer_arg_type(&l.value, locals, fn_returns, Some(struct_table)))
             {
                 locals.insert(name.clone(), t);
             }
@@ -1557,6 +1629,7 @@ fn rewrite_stmt(
                 specs,
                 new_functions,
                 fn_returns,
+                struct_table,
             );
             rewrite_block(
                 &mut f.body,
@@ -1565,13 +1638,30 @@ fn rewrite_stmt(
                 specs,
                 new_functions,
                 fn_returns,
+                struct_table,
             );
         }
         Stmt::Break(_) => {}
         Stmt::DataFieldAssign { value, .. } => {
-            rewrite_expr(value, generics, locals, specs, new_functions, fn_returns);
+            rewrite_expr(
+                value,
+                generics,
+                locals,
+                specs,
+                new_functions,
+                fn_returns,
+                struct_table,
+            );
         }
-        Stmt::Expr(e) => rewrite_expr(e, generics, locals, specs, new_functions, fn_returns),
+        Stmt::Expr(e) => rewrite_expr(
+            e,
+            generics,
+            locals,
+            specs,
+            new_functions,
+            fn_returns,
+            struct_table,
+        ),
     }
 }
 
@@ -1582,13 +1672,38 @@ fn rewrite_iterable(
     specs: &mut BTreeMap<(String, String), String>,
     new_functions: &mut Vec<FunctionDef>,
     fn_returns: &BTreeMap<String, TypeExpr>,
+    struct_table: &BTreeMap<String, StructDef>,
 ) {
     match it {
         Iterable::Range(start, end) => {
-            rewrite_expr(start, generics, locals, specs, new_functions, fn_returns);
-            rewrite_expr(end, generics, locals, specs, new_functions, fn_returns);
+            rewrite_expr(
+                start,
+                generics,
+                locals,
+                specs,
+                new_functions,
+                fn_returns,
+                struct_table,
+            );
+            rewrite_expr(
+                end,
+                generics,
+                locals,
+                specs,
+                new_functions,
+                fn_returns,
+                struct_table,
+            );
         }
-        Iterable::Expr(e) => rewrite_expr(e, generics, locals, specs, new_functions, fn_returns),
+        Iterable::Expr(e) => rewrite_expr(
+            e,
+            generics,
+            locals,
+            specs,
+            new_functions,
+            fn_returns,
+            struct_table,
+        ),
     }
 }
 
@@ -1599,30 +1714,85 @@ fn rewrite_expr(
     specs: &mut BTreeMap<(String, String), String>,
     new_functions: &mut Vec<FunctionDef>,
     fn_returns: &BTreeMap<String, TypeExpr>,
+    struct_table: &BTreeMap<String, StructDef>,
 ) {
     // First descend so nested calls are rewritten before this one.
     match expr {
         Expr::BinOp { left, right, .. } => {
-            rewrite_expr(left, generics, locals, specs, new_functions, fn_returns);
-            rewrite_expr(right, generics, locals, specs, new_functions, fn_returns);
+            rewrite_expr(
+                left,
+                generics,
+                locals,
+                specs,
+                new_functions,
+                fn_returns,
+                struct_table,
+            );
+            rewrite_expr(
+                right,
+                generics,
+                locals,
+                specs,
+                new_functions,
+                fn_returns,
+                struct_table,
+            );
         }
         Expr::UnaryOp { operand, .. } => {
-            rewrite_expr(operand, generics, locals, specs, new_functions, fn_returns);
+            rewrite_expr(
+                operand,
+                generics,
+                locals,
+                specs,
+                new_functions,
+                fn_returns,
+                struct_table,
+            );
         }
         Expr::Call { args, .. } => {
             for a in args.iter_mut() {
-                rewrite_expr(a, generics, locals, specs, new_functions, fn_returns);
+                rewrite_expr(
+                    a,
+                    generics,
+                    locals,
+                    specs,
+                    new_functions,
+                    fn_returns,
+                    struct_table,
+                );
             }
         }
         Expr::Pipeline { left, args, .. } => {
-            rewrite_expr(left, generics, locals, specs, new_functions, fn_returns);
+            rewrite_expr(
+                left,
+                generics,
+                locals,
+                specs,
+                new_functions,
+                fn_returns,
+                struct_table,
+            );
             for a in args.iter_mut() {
-                rewrite_expr(a, generics, locals, specs, new_functions, fn_returns);
+                rewrite_expr(
+                    a,
+                    generics,
+                    locals,
+                    specs,
+                    new_functions,
+                    fn_returns,
+                    struct_table,
+                );
             }
         }
-        Expr::Yield { value, .. } => {
-            rewrite_expr(value, generics, locals, specs, new_functions, fn_returns)
-        }
+        Expr::Yield { value, .. } => rewrite_expr(
+            value,
+            generics,
+            locals,
+            specs,
+            new_functions,
+            fn_returns,
+            struct_table,
+        ),
         Expr::If {
             condition,
             then_block,
@@ -1636,6 +1806,7 @@ fn rewrite_expr(
                 specs,
                 new_functions,
                 fn_returns,
+                struct_table,
             );
             rewrite_block(
                 then_block,
@@ -1644,9 +1815,18 @@ fn rewrite_expr(
                 specs,
                 new_functions,
                 fn_returns,
+                struct_table,
             );
             if let Some(b) = else_block.as_mut() {
-                rewrite_block(b, generics, locals, specs, new_functions, fn_returns);
+                rewrite_block(
+                    b,
+                    generics,
+                    locals,
+                    specs,
+                    new_functions,
+                    fn_returns,
+                    struct_table,
+                );
             }
         }
         Expr::Match {
@@ -1659,6 +1839,7 @@ fn rewrite_expr(
                 specs,
                 new_functions,
                 fn_returns,
+                struct_table,
             );
             for arm in arms.iter_mut() {
                 rewrite_expr(
@@ -1668,27 +1849,82 @@ fn rewrite_expr(
                     specs,
                     new_functions,
                     fn_returns,
+                    struct_table,
                 );
             }
         }
-        Expr::Loop { body, .. } => {
-            rewrite_block(body, generics, locals, specs, new_functions, fn_returns)
-        }
+        Expr::Loop { body, .. } => rewrite_block(
+            body,
+            generics,
+            locals,
+            specs,
+            new_functions,
+            fn_returns,
+            struct_table,
+        ),
         Expr::FieldAccess { object, .. } => {
-            rewrite_expr(object, generics, locals, specs, new_functions, fn_returns);
+            rewrite_expr(
+                object,
+                generics,
+                locals,
+                specs,
+                new_functions,
+                fn_returns,
+                struct_table,
+            );
         }
         Expr::MethodCall { receiver, args, .. } => {
-            rewrite_expr(receiver, generics, locals, specs, new_functions, fn_returns);
+            rewrite_expr(
+                receiver,
+                generics,
+                locals,
+                specs,
+                new_functions,
+                fn_returns,
+                struct_table,
+            );
             for a in args.iter_mut() {
-                rewrite_expr(a, generics, locals, specs, new_functions, fn_returns);
+                rewrite_expr(
+                    a,
+                    generics,
+                    locals,
+                    specs,
+                    new_functions,
+                    fn_returns,
+                    struct_table,
+                );
             }
         }
         Expr::TupleIndex { object, .. } => {
-            rewrite_expr(object, generics, locals, specs, new_functions, fn_returns);
+            rewrite_expr(
+                object,
+                generics,
+                locals,
+                specs,
+                new_functions,
+                fn_returns,
+                struct_table,
+            );
         }
         Expr::ArrayIndex { object, index, .. } => {
-            rewrite_expr(object, generics, locals, specs, new_functions, fn_returns);
-            rewrite_expr(index, generics, locals, specs, new_functions, fn_returns);
+            rewrite_expr(
+                object,
+                generics,
+                locals,
+                specs,
+                new_functions,
+                fn_returns,
+                struct_table,
+            );
+            rewrite_expr(
+                index,
+                generics,
+                locals,
+                specs,
+                new_functions,
+                fn_returns,
+                struct_table,
+            );
         }
         Expr::StructInit { fields, .. } => {
             for f in fields.iter_mut() {
@@ -1699,24 +1935,55 @@ fn rewrite_expr(
                     specs,
                     new_functions,
                     fn_returns,
+                    struct_table,
                 );
             }
         }
         Expr::EnumVariant { args, .. } => {
             for a in args.iter_mut() {
-                rewrite_expr(a, generics, locals, specs, new_functions, fn_returns);
+                rewrite_expr(
+                    a,
+                    generics,
+                    locals,
+                    specs,
+                    new_functions,
+                    fn_returns,
+                    struct_table,
+                );
             }
         }
         Expr::ArrayLiteral { elements, .. } | Expr::TupleLiteral { elements, .. } => {
             for e in elements.iter_mut() {
-                rewrite_expr(e, generics, locals, specs, new_functions, fn_returns);
+                rewrite_expr(
+                    e,
+                    generics,
+                    locals,
+                    specs,
+                    new_functions,
+                    fn_returns,
+                    struct_table,
+                );
             }
         }
-        Expr::Cast { expr, .. } => {
-            rewrite_expr(expr, generics, locals, specs, new_functions, fn_returns)
-        }
+        Expr::Cast { expr, .. } => rewrite_expr(
+            expr,
+            generics,
+            locals,
+            specs,
+            new_functions,
+            fn_returns,
+            struct_table,
+        ),
         Expr::Closure { body, .. } => {
-            rewrite_block(body, generics, locals, specs, new_functions, fn_returns);
+            rewrite_block(
+                body,
+                generics,
+                locals,
+                specs,
+                new_functions,
+                fn_returns,
+                struct_table,
+            );
         }
         Expr::ClosureRef { .. } => {}
         Expr::Literal { .. } | Expr::Ident { .. } | Expr::Placeholder { .. } => {}
@@ -1748,7 +2015,7 @@ fn rewrite_expr(
                 if let Some(TypeExpr::Named(n, _, _)) = &param.type_expr
                     && *n == tp.name
                     && let Some(arg) = args.get(param_idx)
-                    && let Some(t) = infer_arg_type(arg, locals, fn_returns)
+                    && let Some(t) = infer_arg_type(arg, locals, fn_returns, Some(struct_table))
                 {
                     inferred = Some(t);
                     break;

@@ -2852,6 +2852,25 @@ mod tests {
     }
 
     #[test]
+    fn monomorphize_inference_through_field_access() {
+        // A generic call site whose argument is a field access on a
+        // local-typed struct should specialize the call. The
+        // monomorphization pass resolves the field's declared type
+        // through the struct table and infers the type argument.
+        check_src(
+            "trait Doubler { fn double(x: i64) -> i64; }\n\
+             impl Doubler for i64 { fn double(x: i64) -> i64 { x + x } }\n\
+             struct Holder { value: i64 }\n\
+             fn use_doubler<T: Doubler>(x: T) -> i64 { x.double() }\n\
+             fn main() -> i64 {\n\
+                 let h = Holder { value: 21 };\n\
+                 use_doubler(h.value)\n\
+             }",
+        )
+        .unwrap();
+    }
+
+    #[test]
     fn monomorphize_enum_specialization_round_trip() {
         // Generic enum specialization mirrors struct specialization.
         // Construction with a concrete payload value generates a
@@ -2919,6 +2938,41 @@ mod tests {
             "fn main() -> i64 {\n\
                 let f = || 42;\n\
                 f()\n\
+             }",
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn closure_nested_inside_closure_typechecks() {
+        // A closure body containing another closure literal should
+        // type check. The inner closure captures the outer closure's
+        // parameter; the hoist pass should lift each separately.
+        check_src(
+            "fn main() -> i64 {\n\
+                let outer = |x: i64| {\n\
+                    let inner = |y: i64| x + y;\n\
+                    inner(5)\n\
+                };\n\
+                outer(7)\n\
+             }",
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn closure_nested_capturing_outer_local_typechecks() {
+        // The inner closure captures both an outer local from the
+        // enclosing function and the outer closure's parameter. Both
+        // captures must be threaded through the hoist pass.
+        check_src(
+            "fn main() -> i64 {\n\
+                let base: i64 = 100;\n\
+                let outer = |x: i64| {\n\
+                    let inner = |y: i64| base + x + y;\n\
+                    inner(3)\n\
+                };\n\
+                outer(7)\n\
              }",
         )
         .unwrap();
