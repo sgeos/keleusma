@@ -53,26 +53,25 @@ Remaining work.
 - Polymorphic recursion guard. If a generic function calls itself with type arguments derived from its own type parameters, the pass would loop indefinitely. The MVP relies on the call graph being finite and the test suite not exercising polymorphic recursion. A guard against unbounded specialization should be added before the feature is considered production-ready.
 - Pruning unused generic functions. The MVP retains generic functions that have at least one specialization; non-specialized generics remain in the program as dead code that the compiler emits but the runtime never enters. A pruning pass would remove these.
 
-## ~~B3. Closures and anonymous functions~~ (Resolved without environment capture)
+## ~~B3. Closures and anonymous functions~~ (Resolved with environment capture)
 
-Surface syntax `|args| body` and `|args| -> ret { body }`. New `Bar` token for the bare `|`. New `Expr::Closure { params, return_type, body, span }` AST variant. Closures hoist to top-level chunks at compile time; the closure expression evaluates to `Value::Func(chunk_idx)` through `Op::PushFunc`. Indirect call through `Op::CallIndirect(arg_count)` pops the args plus the `Value::Func` and invokes the referenced chunk.
-
-End-to-end. `examples/closure_basic.rs` demonstrates `let f = |x: i64| x + 1; f(41)` returning 42.
+Surface syntax `|args| body` and `|args| -> ret { body }`. Closures capture outer-scope locals and execute end to end through hoisted chunks plus the indirect-call mechanism.
 
 What lands.
 
-- New `Value::Func(u16)` runtime-only variant.
-- New `Op::PushFunc(u16)` and `Op::CallIndirect(u8)` instructions.
-- Closure hoisting pass in the compile pipeline. Each closure expression becomes an `Expr::Ident` referencing a synthetic `__closure_<n>` function plus a fresh `FunctionDef` appended to the program. Hoisting recurses through the entire program including impl method bodies.
-- Compiler resolves `Expr::Ident` against `function_map` after locals; an unbound name that matches a function name emits `Op::PushFunc(idx)`.
-- Compiler resolves `f(args)` where `f` is a local to `GetLocal(slot); args; CallIndirect(n)` for indirect dispatch.
-- Type checker accepts indirect-call expressions and returns a fresh type variable.
-- Wire format. `BYTECODE_VERSION` bumped to 6 to reflect the new opcode tags.
+- New `Value::Func { chunk_idx: u16, env: Vec<Value> }` runtime-only variant. The `env` carries captured values for closures with capture; non-empty `env` is produced by `Op::MakeClosure`, empty `env` by `Op::PushFunc`.
+- New `Op::PushFunc(u16)`, `Op::MakeClosure(u16, u8)`, and `Op::CallIndirect(u8)` instructions.
+- Closure hoisting pass walks the program before compilation. For each `Expr::Closure`, the pass collects free variables (identifiers referenced in the body but not bound by the closure's parameters), filters out names declared as natives or qualified with `::`, prepends the remaining names as parameters of the synthetic function, and replaces the closure expression with `Expr::ClosureRef { name, captures, span }`.
+- Compiler emits captures: for each name in the `ClosureRef`'s captures list, `GetLocal(slot)` if local, `PushFunc(chunk_idx)` if a top-level function. Then `MakeClosure(synth_idx, n)` if any captures, otherwise `PushFunc(synth_idx)`.
+- VM execution. `Op::MakeClosure` pops `n` captures and pushes `Value::Func` with the captured env. `Op::CallIndirect` pops args plus the `Func` value, then pushes the env values back onto the operand stack as implicit arguments before the explicit ones, and invokes the referenced chunk.
+- Type checker accepts `ClosureRef` and indirect-call call sites with fresh type variables.
+
+End-to-end. `examples/closure_basic.rs` demonstrates `let f = |x: i64| x + 1; f(41)` returning 42. `examples/closure_capture.rs` demonstrates `let n: i64 = 10; let f = |x: i64| x + n; f(5)` returning 15.
 
 Remaining work tracked under future B3 follow-on.
 
-- Environment capture. The body currently resolves identifiers against its parameter scope only. Closures that reference outer-scope variables fail at compile time with an "undefined variable" error. The fix introduces a captured environment that the closure value carries alongside the chunk index, with the runtime binding captured values as additional implicit parameters at invocation. Estimated 4 to 6 hours.
-- First-class closures as arguments. Currently closures stored in locals can be invoked through indirect call, but passing a closure as an argument to another function and invoking it from the called function requires the typecheck to flow function types through call signatures. The current minimum admits closures stored in locals; broader function-typed parameters are deferred.
+- First-class closures as function arguments. Closures stored in locals can be invoked through indirect call, but passing a closure as an argument to another function and invoking it from the called function requires the typecheck to flow function types through call signatures. The current minimum admits closures stored in locals; broader function-typed parameters are deferred. Estimated 2 to 4 hours.
+- Capture by value semantics. The current capture copies the value at closure creation time, matching the typical capture-by-value contract. Capture by reference (mutable shared environment across multiple invocations of the same closure) is not currently supported and would require a different runtime representation.
 
 ## ~~B4. Hot code swap implementation~~ (Resolved as R29)
 

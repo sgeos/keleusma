@@ -361,13 +361,22 @@ pub enum Expr {
     /// Closure literal: `|args| body` or `|args| -> ret { body }`.
     /// The return type and body are optional in surface syntax: a
     /// bare expression body is wrapped into a single-tail-expression
-    /// block automatically by the parser. Captured environment is
-    /// not yet supported; the body resolves identifiers against the
-    /// closure's own parameter scope only.
+    /// block automatically by the parser.
     Closure {
         params: Vec<Param>,
         return_type: Option<TypeExpr>,
         body: Block,
+        span: Span,
+    },
+    /// Hoisted closure reference produced by the closure-hoisting
+    /// pass. Carries the synthetic function's name and the names of
+    /// outer-scope locals that the closure captures. The compiler
+    /// emits `GetLocal` for each captured name followed by
+    /// `Op::MakeClosure(chunk_idx, n_captures)`. User-written code
+    /// never produces this variant directly.
+    ClosureRef {
+        name: String,
+        captures: Vec<String>,
         span: Span,
     },
 }
@@ -396,7 +405,8 @@ impl Expr {
             | Expr::TupleLiteral { span, .. }
             | Expr::Cast { span, .. }
             | Expr::Placeholder { span }
-            | Expr::Closure { span, .. } => *span,
+            | Expr::Closure { span, .. }
+            | Expr::ClosureRef { span, .. } => *span,
         }
     }
 }

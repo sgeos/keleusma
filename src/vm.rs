@@ -995,7 +995,22 @@ impl<'a, 'arena> Vm<'a, 'arena> {
                 Op::PushUnit => self.stack.push(Value::Unit),
                 Op::PushTrue => self.stack.push(Value::Bool(true)),
                 Op::PushFalse => self.stack.push(Value::Bool(false)),
-                Op::PushFunc(idx) => self.stack.push(Value::Func(idx)),
+                Op::PushFunc(idx) => self.stack.push(Value::Func {
+                    chunk_idx: idx,
+                    env: alloc::vec::Vec::new(),
+                }),
+                Op::MakeClosure(chunk_idx_val, n_captures) => {
+                    let n = n_captures as usize;
+                    if self.stack.len() < n {
+                        return Err(VmError::StackUnderflow);
+                    }
+                    let env: alloc::vec::Vec<Value> =
+                        self.stack.drain(self.stack.len() - n..).collect();
+                    self.stack.push(Value::Func {
+                        chunk_idx: chunk_idx_val,
+                        env,
+                    });
+                }
 
                 Op::GetLocal(slot) => {
                     let val = self.stack[base + slot as usize].clone();
@@ -1278,19 +1293,23 @@ impl<'a, 'arena> Vm<'a, 'arena> {
                 Op::CallIndirect(arg_count) => {
                     // The operand stack holds, from top down, the
                     // function arguments (arg_count items) and then
-                    // the `Value::Func` carrying the chunk index.
-                    // Pop the args, then the func, then push args
-                    // back and push extra `Unit` slots for the
-                    // chunk's locals beyond its parameters.
+                    // the `Value::Func` carrying the chunk index and
+                    // optional captured environment. Pop the args
+                    // aside, pop the func, push the env values, push
+                    // the saved args, then push extra `Unit` slots
+                    // for the chunk's locals beyond its parameters.
+                    // The total argument count seen by the called
+                    // chunk is `env.len() + arg_count`.
                     let n = arg_count as usize;
                     if self.stack.len() < n + 1 {
                         return Err(VmError::StackUnderflow);
                     }
                     let args_start = self.stack.len() - n;
-                    let func_idx_pos = args_start - 1;
-                    let func_value = self.stack.remove(func_idx_pos);
-                    let chunk_idx = match func_value {
-                        Value::Func(i) => i,
+                    let saved_args: alloc::vec::Vec<Value> =
+                        self.stack.drain(args_start..).collect();
+                    let func_value = self.pop()?;
+                    let (chunk_idx, env) = match func_value {
+                        Value::Func { chunk_idx, env } => (chunk_idx, env),
                         other => {
                             return Err(VmError::TypeError(format!(
                                 "indirect call expected Func, got {}",
@@ -1304,9 +1323,17 @@ impl<'a, 'arena> Vm<'a, 'arena> {
                             chunk_idx
                         )));
                     }
+                    let env_len = env.len();
+                    for v in env {
+                        self.stack.push(v);
+                    }
+                    for v in saved_args {
+                        self.stack.push(v);
+                    }
+                    let total_args = env_len + n;
                     let called_local_count = self.chunk_local_count(chunk_idx as usize) as usize;
-                    let new_base = self.stack.len() - n;
-                    let extra = called_local_count - n;
+                    let new_base = self.stack.len() - total_args;
+                    let extra = called_local_count - total_args;
                     for _ in 0..extra {
                         self.stack.push(Value::Unit);
                     }
@@ -2648,7 +2675,7 @@ mod tests {
         //   bytes[140..144] = CRC-32 (u32 LE)
         let expected: alloc::vec::Vec<u8> = alloc::vec![
             0x4B, 0x45, 0x4C, 0x45, 0x06, 0x00, 0x90, 0x00, 0x00, 0x00, 0x06, 0x06, 0x06, 0x00,
-            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x22, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x23, 0x00, 0x00, 0x00,
             0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00,
             0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
             0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x6D, 0x61, 0x69, 0x6E, 0xFF, 0xFF,
@@ -2657,7 +2684,7 @@ mod tests {
             0x00, 0x00, 0xDC, 0xFF, 0xFF, 0xFF, 0x01, 0x00, 0x00, 0x00, 0xF8, 0xFF, 0xFF, 0xFF,
             0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
             0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x06, 0x06, 0x06, 0x00,
-            0xB1, 0x99, 0xFB, 0x78,
+            0x59, 0xFF, 0x63, 0x79,
         ];
         let src = "fn main() -> i64 { 1 }";
         let tokens = tokenize(src).expect("lex");

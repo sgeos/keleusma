@@ -498,6 +498,15 @@ fn subst_in_expr(expr: &Expr, subst: &BTreeMap<String, TypeExpr>) -> Expr {
             body: subst_in_block(body, subst),
             span: *span,
         },
+        Expr::ClosureRef {
+            name,
+            captures,
+            span,
+        } => Expr::ClosureRef {
+            name: name.clone(),
+            captures: captures.clone(),
+            span: *span,
+        },
     }
 }
 
@@ -652,6 +661,7 @@ fn rewrite_expr(
         Expr::Closure { body, .. } => {
             rewrite_block(body, generics, locals, specs, new_functions);
         }
+        Expr::ClosureRef { .. } => {}
         Expr::Literal { .. } | Expr::Ident { .. } | Expr::Placeholder { .. } => {}
     }
 

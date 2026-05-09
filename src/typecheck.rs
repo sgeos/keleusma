@@ -2044,6 +2044,7 @@ fn type_of_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Type, TypeError> {
             }
         }
         Expr::Placeholder { .. } => Ok(ctx.fresh()),
+        Expr::ClosureRef { .. } => Ok(ctx.fresh()),
         Expr::Closure { params, body, .. } => {
             // Type-check the closure body in a fresh scope where the
             // parameters are bound to fresh type variables (or their
@@ -2832,6 +2833,18 @@ mod tests {
             "fn main() -> i64 {\n\
                 let f = |x: i64| x + 1;\n\
                 f(41)\n\
+             }",
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn closure_captures_outer_local() {
+        check_src(
+            "fn main() -> i64 {\n\
+                let n: i64 = 10;\n\
+                let f = |x: i64| x + n;\n\
+                f(5)\n\
              }",
         )
         .unwrap();

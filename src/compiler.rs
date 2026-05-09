@@ -1095,6 +1095,182 @@ fn compile_for(fc: &mut FuncCompiler, for_stmt: &ForStmt) -> Result<(), CompileE
     Ok(())
 }
 
+/// Collect the variable names bound by a pattern. Tuple, struct,
+/// and enum sub-patterns recurse. Wildcards bind nothing.
+fn collect_pattern_names(
+    pattern: &Pattern,
+    out: &mut alloc::collections::BTreeSet<alloc::string::String>,
+) {
+    match pattern {
+        Pattern::Variable(name, _) => {
+            out.insert(name.clone());
+        }
+        Pattern::Wildcard(_) | Pattern::Literal(_, _) => {}
+        Pattern::Tuple(parts, _) => {
+            for p in parts {
+                collect_pattern_names(p, out);
+            }
+        }
+        Pattern::Enum(_, _, sub_pats, _) => {
+            for p in sub_pats {
+                collect_pattern_names(p, out);
+            }
+        }
+        Pattern::Struct(_, field_pats, _) => {
+            for fp in field_pats {
+                if let Some(p) = &fp.pattern {
+                    collect_pattern_names(p, out);
+                } else {
+                    out.insert(fp.name.clone());
+                }
+            }
+        }
+    }
+}
+
+/// Collect free identifiers in a block. A free identifier is one that
+/// is referenced but not in the current `bound` set. Matching let
+/// bindings and for-loop variables extend `bound` for the rest of
+/// the block. Closures within the block are NOT recursed into here
+/// because they have their own free-variable analysis.
+fn collect_free_in_block(
+    block: &Block,
+    bound: &alloc::collections::BTreeSet<alloc::string::String>,
+    out: &mut Vec<alloc::string::String>,
+) {
+    let mut local_bound = bound.clone();
+    for stmt in &block.stmts {
+        collect_free_in_stmt(stmt, &mut local_bound, out);
+    }
+    if let Some(e) = &block.tail_expr {
+        collect_free_in_expr(e, &local_bound, out);
+    }
+}
+
+fn collect_free_in_stmt(
+    stmt: &Stmt,
+    bound: &mut alloc::collections::BTreeSet<alloc::string::String>,
+    out: &mut Vec<alloc::string::String>,
+) {
+    match stmt {
+        Stmt::Let(l) => {
+            collect_free_in_expr(&l.value, bound, out);
+            collect_pattern_names(&l.pattern, bound);
+        }
+        Stmt::For(f) => {
+            match &f.iterable {
+                Iterable::Range(s, e) => {
+                    collect_free_in_expr(s, bound, out);
+                    collect_free_in_expr(e, bound, out);
+                }
+                Iterable::Expr(e) => collect_free_in_expr(e, bound, out),
+            }
+            let mut inner_bound = bound.clone();
+            inner_bound.insert(f.var.clone());
+            collect_free_in_block(&f.body, &inner_bound, out);
+        }
+        Stmt::Break(_) => {}
+        Stmt::DataFieldAssign { value, .. } => collect_free_in_expr(value, bound, out),
+        Stmt::Expr(e) => collect_free_in_expr(e, bound, out),
+    }
+}
+
+fn collect_free_in_expr(
+    expr: &Expr,
+    bound: &alloc::collections::BTreeSet<alloc::string::String>,
+    out: &mut Vec<alloc::string::String>,
+) {
+    match expr {
+        Expr::Literal { .. } | Expr::Placeholder { .. } => {}
+        Expr::Ident { name, .. } => {
+            if !bound.contains(name) && !out.contains(name) {
+                out.push(name.clone());
+            }
+        }
+        Expr::BinOp { left, right, .. } => {
+            collect_free_in_expr(left, bound, out);
+            collect_free_in_expr(right, bound, out);
+        }
+        Expr::UnaryOp { operand, .. } => collect_free_in_expr(operand, bound, out),
+        Expr::Call { name, args, .. } => {
+            // Only treat the call name as a free variable if it
+            // resolves to a local (not a function). The caller
+            // doesn't know which is which here, so we conservatively
+            // include the name. The compile site filters non-locals
+            // out by checking against function_map first when
+            // capturing.
+            if !bound.contains(name) && !out.contains(name) {
+                out.push(name.clone());
+            }
+            for a in args {
+                collect_free_in_expr(a, bound, out);
+            }
+        }
+        Expr::Pipeline { left, args, .. } => {
+            collect_free_in_expr(left, bound, out);
+            for a in args {
+                collect_free_in_expr(a, bound, out);
+            }
+        }
+        Expr::Yield { value, .. } => collect_free_in_expr(value, bound, out),
+        Expr::If {
+            condition,
+            then_block,
+            else_block,
+            ..
+        } => {
+            collect_free_in_expr(condition, bound, out);
+            collect_free_in_block(then_block, bound, out);
+            if let Some(b) = else_block {
+                collect_free_in_block(b, bound, out);
+            }
+        }
+        Expr::Match {
+            scrutinee, arms, ..
+        } => {
+            collect_free_in_expr(scrutinee, bound, out);
+            for arm in arms {
+                let mut arm_bound = bound.clone();
+                collect_pattern_names(&arm.pattern, &mut arm_bound);
+                collect_free_in_expr(&arm.expr, &arm_bound, out);
+            }
+        }
+        Expr::Loop { body, .. } => collect_free_in_block(body, bound, out),
+        Expr::FieldAccess { object, .. } => collect_free_in_expr(object, bound, out),
+        Expr::MethodCall { receiver, args, .. } => {
+            collect_free_in_expr(receiver, bound, out);
+            for a in args {
+                collect_free_in_expr(a, bound, out);
+            }
+        }
+        Expr::TupleIndex { object, .. } => collect_free_in_expr(object, bound, out),
+        Expr::ArrayIndex { object, index, .. } => {
+            collect_free_in_expr(object, bound, out);
+            collect_free_in_expr(index, bound, out);
+        }
+        Expr::StructInit { fields, .. } => {
+            for f in fields {
+                collect_free_in_expr(&f.value, bound, out);
+            }
+        }
+        Expr::EnumVariant { args, .. } => {
+            for a in args {
+                collect_free_in_expr(a, bound, out);
+            }
+        }
+        Expr::ArrayLiteral { elements, .. } | Expr::TupleLiteral { elements, .. } => {
+            for e in elements {
+                collect_free_in_expr(e, bound, out);
+            }
+        }
+        Expr::Cast { expr, .. } => collect_free_in_expr(expr, bound, out),
+        Expr::Closure { .. } | Expr::ClosureRef { .. } => {
+            // Nested closures have their own free-variable analysis;
+            // do not recurse into their bodies here.
+        }
+    }
+}
+
 /// Closure hoisting pass.
 ///
 /// Walks every function body and impl method body in the program,
@@ -1107,116 +1283,157 @@ fn compile_for(fc: &mut FuncCompiler, for_stmt: &ForStmt) -> Result<(), CompileE
 /// synthetic name is in `function_map` but never appears as a
 /// local.
 fn hoist_closures(mut program: Program) -> Program {
+    // Build the set of native names declared via `use` so the
+    // free-variable analysis does not treat them as captures.
+    // Closures that reference native functions resolve through the
+    // synthetic chunk's normal call path at compile time.
+    let mut natives: alloc::collections::BTreeSet<alloc::string::String> =
+        alloc::collections::BTreeSet::new();
+    for use_decl in &program.uses {
+        if let ImportItem::Name(name) = &use_decl.import {
+            let full = if use_decl.path.is_empty() {
+                name.clone()
+            } else {
+                let mut full = String::new();
+                for (i, seg) in use_decl.path.iter().enumerate() {
+                    if i > 0 {
+                        full.push_str("::");
+                    }
+                    full.push_str(seg);
+                }
+                full.push_str("::");
+                full.push_str(name);
+                full
+            };
+            natives.insert(full);
+            natives.insert(name.clone());
+        }
+    }
     let mut counter: usize = 0;
     let mut new_functions: Vec<FunctionDef> = Vec::new();
     for func in program.functions.iter_mut() {
-        hoist_in_block(&mut func.body, &mut counter, &mut new_functions);
+        hoist_in_block(&mut func.body, &mut counter, &mut new_functions, &natives);
     }
     for impl_block in program.impls.iter_mut() {
         for method in impl_block.methods.iter_mut() {
-            hoist_in_block(&mut method.body, &mut counter, &mut new_functions);
+            hoist_in_block(&mut method.body, &mut counter, &mut new_functions, &natives);
         }
     }
     program.functions.extend(new_functions);
     program
 }
 
-fn hoist_in_block(block: &mut Block, counter: &mut usize, out: &mut Vec<FunctionDef>) {
+fn hoist_in_block(
+    block: &mut Block,
+    counter: &mut usize,
+    out: &mut Vec<FunctionDef>,
+    natives: &alloc::collections::BTreeSet<alloc::string::String>,
+) {
     for stmt in block.stmts.iter_mut() {
-        hoist_in_stmt(stmt, counter, out);
+        hoist_in_stmt(stmt, counter, out, natives);
     }
     if let Some(e) = block.tail_expr.as_mut() {
-        hoist_in_expr(e, counter, out);
+        hoist_in_expr(e, counter, out, natives);
     }
 }
 
-fn hoist_in_stmt(stmt: &mut Stmt, counter: &mut usize, out: &mut Vec<FunctionDef>) {
+fn hoist_in_stmt(
+    stmt: &mut Stmt,
+    counter: &mut usize,
+    out: &mut Vec<FunctionDef>,
+    natives: &alloc::collections::BTreeSet<alloc::string::String>,
+) {
     match stmt {
-        Stmt::Let(l) => hoist_in_expr(&mut l.value, counter, out),
+        Stmt::Let(l) => hoist_in_expr(&mut l.value, counter, out, natives),
         Stmt::For(f) => {
             match &mut f.iterable {
                 Iterable::Range(s, e) => {
-                    hoist_in_expr(s, counter, out);
-                    hoist_in_expr(e, counter, out);
+                    hoist_in_expr(s, counter, out, natives);
+                    hoist_in_expr(e, counter, out, natives);
                 }
-                Iterable::Expr(e) => hoist_in_expr(e, counter, out),
+                Iterable::Expr(e) => hoist_in_expr(e, counter, out, natives),
             }
-            hoist_in_block(&mut f.body, counter, out);
+            hoist_in_block(&mut f.body, counter, out, natives);
         }
         Stmt::Break(_) => {}
-        Stmt::DataFieldAssign { value, .. } => hoist_in_expr(value, counter, out),
-        Stmt::Expr(e) => hoist_in_expr(e, counter, out),
+        Stmt::DataFieldAssign { value, .. } => hoist_in_expr(value, counter, out, natives),
+        Stmt::Expr(e) => hoist_in_expr(e, counter, out, natives),
     }
 }
 
-fn hoist_in_expr(expr: &mut Expr, counter: &mut usize, out: &mut Vec<FunctionDef>) {
+fn hoist_in_expr(
+    expr: &mut Expr,
+    counter: &mut usize,
+    out: &mut Vec<FunctionDef>,
+    natives: &alloc::collections::BTreeSet<alloc::string::String>,
+) {
     match expr {
         Expr::BinOp { left, right, .. } => {
-            hoist_in_expr(left, counter, out);
-            hoist_in_expr(right, counter, out);
+            hoist_in_expr(left, counter, out, natives);
+            hoist_in_expr(right, counter, out, natives);
         }
-        Expr::UnaryOp { operand, .. } => hoist_in_expr(operand, counter, out),
+        Expr::UnaryOp { operand, .. } => hoist_in_expr(operand, counter, out, natives),
         Expr::Call { args, .. } => {
             for a in args.iter_mut() {
-                hoist_in_expr(a, counter, out);
+                hoist_in_expr(a, counter, out, natives);
             }
         }
         Expr::Pipeline { left, args, .. } => {
-            hoist_in_expr(left, counter, out);
+            hoist_in_expr(left, counter, out, natives);
             for a in args.iter_mut() {
-                hoist_in_expr(a, counter, out);
+                hoist_in_expr(a, counter, out, natives);
             }
         }
-        Expr::Yield { value, .. } => hoist_in_expr(value, counter, out),
+        Expr::Yield { value, .. } => hoist_in_expr(value, counter, out, natives),
         Expr::If {
             condition,
             then_block,
             else_block,
             ..
         } => {
-            hoist_in_expr(condition, counter, out);
-            hoist_in_block(then_block, counter, out);
+            hoist_in_expr(condition, counter, out, natives);
+            hoist_in_block(then_block, counter, out, natives);
             if let Some(b) = else_block.as_mut() {
-                hoist_in_block(b, counter, out);
+                hoist_in_block(b, counter, out, natives);
             }
         }
         Expr::Match {
             scrutinee, arms, ..
         } => {
-            hoist_in_expr(scrutinee, counter, out);
+            hoist_in_expr(scrutinee, counter, out, natives);
             for arm in arms.iter_mut() {
-                hoist_in_expr(&mut arm.expr, counter, out);
+                hoist_in_expr(&mut arm.expr, counter, out, natives);
             }
         }
-        Expr::Loop { body, .. } => hoist_in_block(body, counter, out),
-        Expr::FieldAccess { object, .. } => hoist_in_expr(object, counter, out),
+        Expr::Loop { body, .. } => hoist_in_block(body, counter, out, natives),
+        Expr::FieldAccess { object, .. } => hoist_in_expr(object, counter, out, natives),
         Expr::MethodCall { receiver, args, .. } => {
-            hoist_in_expr(receiver, counter, out);
+            hoist_in_expr(receiver, counter, out, natives);
             for a in args.iter_mut() {
-                hoist_in_expr(a, counter, out);
+                hoist_in_expr(a, counter, out, natives);
             }
         }
-        Expr::TupleIndex { object, .. } => hoist_in_expr(object, counter, out),
+        Expr::TupleIndex { object, .. } => hoist_in_expr(object, counter, out, natives),
         Expr::ArrayIndex { object, index, .. } => {
-            hoist_in_expr(object, counter, out);
-            hoist_in_expr(index, counter, out);
+            hoist_in_expr(object, counter, out, natives);
+            hoist_in_expr(index, counter, out, natives);
         }
         Expr::StructInit { fields, .. } => {
             for f in fields.iter_mut() {
-                hoist_in_expr(&mut f.value, counter, out);
+                hoist_in_expr(&mut f.value, counter, out, natives);
             }
         }
         Expr::EnumVariant { args, .. } => {
             for a in args.iter_mut() {
-                hoist_in_expr(a, counter, out);
+                hoist_in_expr(a, counter, out, natives);
             }
         }
         Expr::ArrayLiteral { elements, .. } | Expr::TupleLiteral { elements, .. } => {
             for e in elements.iter_mut() {
-                hoist_in_expr(e, counter, out);
+                hoist_in_expr(e, counter, out, natives);
             }
         }
-        Expr::Cast { expr, .. } => hoist_in_expr(expr, counter, out),
+        Expr::Cast { expr, .. } => hoist_in_expr(expr, counter, out, natives),
         Expr::Closure {
             params,
             return_type,
@@ -1225,10 +1442,33 @@ fn hoist_in_expr(expr: &mut Expr, counter: &mut usize, out: &mut Vec<FunctionDef
         } => {
             // First descend into the body so nested closures are
             // hoisted too.
-            hoist_in_block(body, counter, out);
-            // Synthesize the function definition.
+            hoist_in_block(body, counter, out, natives);
+            // Compute the set of names bound by the closure's own
+            // parameters. Identifiers in the body that are not in
+            // this set are free variables and become captures.
+            let mut bound: alloc::collections::BTreeSet<alloc::string::String> =
+                alloc::collections::BTreeSet::new();
+            for p in params.iter() {
+                collect_pattern_names(&p.pattern, &mut bound);
+            }
+            let mut free: Vec<alloc::string::String> = Vec::new();
+            collect_free_in_block(body, &bound, &mut free);
+            // Allocate a synthetic name and assemble the synthetic
+            // function definition. Captured names become parameters
+            // prepended to the user's parameters, with `Type::Unknown`-
+            // equivalent type expressions because their concrete
+            // types flow from the call site.
             let name = format!("__closure_{}", *counter);
             *counter += 1;
+            let mut all_params: Vec<Param> = Vec::with_capacity(free.len() + params.len());
+            for capture in &free {
+                all_params.push(Param {
+                    pattern: Pattern::Variable(capture.clone(), *span),
+                    type_expr: None,
+                    span: *span,
+                });
+            }
+            all_params.extend(params.iter().cloned());
             let body_owned = core::mem::replace(
                 body,
                 Block {
@@ -1241,18 +1481,25 @@ fn hoist_in_expr(expr: &mut Expr, counter: &mut usize, out: &mut Vec<FunctionDef
                 category: FunctionCategory::Fn,
                 name: name.clone(),
                 type_params: Vec::new(),
-                params: params.clone(),
+                params: all_params,
                 return_type: return_type.clone().unwrap_or(TypeExpr::Unit(*span)),
                 guard: None,
                 body: body_owned,
                 span: *span,
             };
             out.push(synth);
-            // Replace the closure expression with an identifier
-            // reference. The compiler routes Expr::Ident with a name
-            // present in function_map (and not present in locals) to
-            // an `Op::PushFunc` emission.
-            *expr = Expr::Ident { name, span: *span };
+            // Replace the closure expression with a ClosureRef that
+            // carries the captured names. The compiler emits a
+            // `MakeClosure` (or `PushFunc` when there are no
+            // captures) plus `GetLocal` for each capture.
+            *expr = Expr::ClosureRef {
+                name,
+                captures: free,
+                span: *span,
+            };
+        }
+        Expr::ClosureRef { .. } => {
+            // Already hoisted; nothing further to do at this pass.
         }
         Expr::Literal { .. } | Expr::Ident { .. } | Expr::Placeholder { .. } => {}
     }
@@ -1704,18 +1951,44 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
             });
         }
         Expr::Closure { span, .. } => {
-            // Closures are parsed and type-checked but the runtime
-            // representation and first-class invocation are deferred
-            // to a follow-on B3 session. Emitting a chunk for the
-            // closure body and producing a callable value requires a
-            // new `Value::Func` variant and an indirect-call
-            // bytecode op.
             return Err(CompileError {
-                message: String::from(
-                    "closure runtime is not yet implemented; only parsing and type-checking are supported in this session",
-                ),
+                message: String::from("internal: closure expression encountered after hoist pass"),
                 span: *span,
             });
+        }
+        Expr::ClosureRef {
+            name,
+            captures,
+            span,
+        } => {
+            let chunk_idx = match fc.function_map.get(name) {
+                Some(&i) => i,
+                None => {
+                    return Err(CompileError {
+                        message: format!("internal: synthetic closure name {} not found", name),
+                        span: *span,
+                    });
+                }
+            };
+            for capture in captures {
+                if let Some(slot) = fc.resolve_local(capture) {
+                    fc.emit(Op::GetLocal(slot));
+                } else {
+                    return Err(CompileError {
+                        message: format!(
+                            "closure captures `{}` which is not a local in the enclosing scope",
+                            capture
+                        ),
+                        span: *span,
+                    });
+                }
+            }
+            let n = captures.len() as u8;
+            if n == 0 {
+                fc.emit(Op::PushFunc(chunk_idx));
+            } else {
+                fc.emit(Op::MakeClosure(chunk_idx, n));
+            }
         }
     }
     Ok(())

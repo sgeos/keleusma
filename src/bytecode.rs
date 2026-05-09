@@ -113,13 +113,17 @@ pub enum Value {
     },
     /// Option::None.
     None,
-    /// First-class function value carrying a chunk index. Produced by
-    /// closure expressions hoisted to top-level chunks at compile
-    /// time. Invoked through [`Op::CallIndirect`] which pops the
-    /// `Func` value and the explicit arguments and invokes the
-    /// referenced chunk. Environment capture is not yet part of
-    /// this representation.
-    Func(u16),
+    /// First-class function value carrying a chunk index and an
+    /// optional captured environment. Produced by closure
+    /// expressions hoisted to top-level chunks at compile time.
+    /// Invoked through [`Op::CallIndirect`] which pops the `Func`
+    /// value and the explicit arguments, pushes the captured
+    /// environment values onto the operand stack as additional
+    /// implicit arguments, and invokes the referenced chunk. The
+    /// `env` is empty for plain function references such as those
+    /// produced by `Op::PushFunc`. Closures with captured outer-scope
+    /// values produce non-empty `env` through `Op::MakeClosure`.
+    Func { chunk_idx: u16, env: Vec<Value> },
 }
 
 impl PartialEq for Value {
@@ -145,7 +149,16 @@ impl PartialEq for Value {
             // equality must compare through `as_str_with_arena` against
             // a known arena.
             (Value::KStr(a), Value::KStr(b)) => a.epoch() == b.epoch(),
-            (Value::Func(a), Value::Func(b)) => a == b,
+            (
+                Value::Func {
+                    chunk_idx: a,
+                    env: ae,
+                },
+                Value::Func {
+                    chunk_idx: b,
+                    env: be,
+                },
+            ) => a == b && ae == be,
             (Value::Tuple(a), Value::Tuple(b)) | (Value::Array(a), Value::Array(b)) => a == b,
             (
                 Value::Struct {
@@ -185,7 +198,7 @@ impl Value {
             Value::StaticStr(_) => "StaticStr",
             Value::DynStr(_) => "DynStr",
             Value::KStr(_) => "KStr",
-            Value::Func(_) => "Func",
+            Value::Func { .. } => "Func",
             Value::Tuple(_) => "Tuple",
             Value::Array(_) => "Array",
             Value::Struct { .. } => "Struct",
@@ -387,11 +400,21 @@ pub enum Op {
     /// is encoded inline; the chunk index comes from the popped
     /// value at runtime.
     CallIndirect(u8),
-    /// Push `Value::Func(chunk_idx)` onto the operand stack. Emitted
-    /// by closure expressions that the compiler has hoisted to a
-    /// top-level chunk. The runtime resulting `Func` value can then
-    /// flow through locals or be invoked through `Op::CallIndirect`.
+    /// Push `Value::Func { chunk_idx, env: [] }` onto the operand
+    /// stack. Emitted for closures that capture nothing and for
+    /// plain function-name references used as values. The resulting
+    /// `Func` value can flow through locals or be invoked through
+    /// `Op::CallIndirect`.
     PushFunc(u16),
+    /// Build a closure value that captures `n_captures` values from
+    /// the operand stack. The runtime pops `n_captures` values
+    /// (top of stack first), stores them as the closure's
+    /// environment in declaration order, and pushes
+    /// `Value::Func { chunk_idx, env: captured }`. The captured
+    /// values are passed as additional implicit arguments at
+    /// invocation through `Op::CallIndirect`, prepended to the
+    /// explicit arguments.
+    MakeClosure(u16, u8),
     /// Return from the current function.
     Return,
 
@@ -518,6 +541,9 @@ impl Op {
             // Function calls.
             Op::Call(_, _) | Op::CallNative(_, _) | Op::CallIndirect(_) => 10,
             Op::PushFunc(_) => 0,
+            // MakeClosure cost is the per-capture allocation cost.
+            // Held at a small constant for the WCMU analysis.
+            Op::MakeClosure(_, _) => 5,
         }
     }
 
@@ -575,6 +601,10 @@ impl Op {
             Op::IntToFloat | Op::FloatToInt => 0,
 
             Op::Trap(_) => 0,
+
+            // MakeClosure pushes one closure value (regardless of
+            // captures, which net out against the pops).
+            Op::MakeClosure(_, _) => 1,
         }
     }
 
@@ -630,6 +660,9 @@ impl Op {
             Op::IntToFloat | Op::FloatToInt => 0,
 
             Op::Trap(_) => 0,
+
+            // MakeClosure pops `n` captures.
+            Op::MakeClosure(_, n) => *n as u32,
         }
     }
 
@@ -1193,6 +1226,7 @@ pub fn op_from_archived(archived: &ArchivedOp) -> Op {
         ArchivedOp::CallNative(c, n) => Op::CallNative(c.to_native(), *n),
         ArchivedOp::CallIndirect(n) => Op::CallIndirect(*n),
         ArchivedOp::PushFunc(idx) => Op::PushFunc(idx.to_native()),
+        ArchivedOp::MakeClosure(idx, n) => Op::MakeClosure(idx.to_native(), *n),
         ArchivedOp::Return => Op::Return,
         ArchivedOp::Yield => Op::Yield,
         ArchivedOp::Pop => Op::Pop,
@@ -1232,7 +1266,7 @@ impl ConstValue {
             Value::StaticStr(s) => Ok(ConstValue::StaticStr(s)),
             Value::DynStr(_) => Err("DynStr cannot be a compile-time constant"),
             Value::KStr(_) => Err("KStr cannot be a compile-time constant"),
-            Value::Func(_) => Err("Func cannot be a compile-time constant"),
+            Value::Func { .. } => Err("Func cannot be a compile-time constant"),
             Value::Tuple(items) => items
                 .into_iter()
                 .map(ConstValue::try_from_value)
