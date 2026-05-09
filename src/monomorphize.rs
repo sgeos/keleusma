@@ -85,13 +85,19 @@ pub fn monomorphize(program: Program) -> Program {
         }
     }
 
-    // Polymorphic recursion guard. The fixed-point loop below
-    // bounds the number of specializations to prevent unbounded
-    // expansion when a generic function calls itself with type
-    // arguments derived from its own type parameters in a way that
-    // grows. The bound is generous; legitimate programs reach a
-    // fixed point well below it.
+    // Polymorphic recursion guards. The fixed-point loop below
+    // bounds two ways. The global SPECIALIZATION_LIMIT bounds the
+    // total number of specializations. The per-function limit
+    // detects cycles where a single generic function generates an
+    // unbounded family of specializations through self-recursion
+    // with growing type arguments. Both bounds are conservative;
+    // legitimate programs reach a fixed point well below them.
     const SPECIALIZATION_LIMIT: usize = 1024;
+    const PER_FUNCTION_LIMIT: usize = 64;
+    let mut per_fn_counts: BTreeMap<String, usize> = BTreeMap::new();
+    for (origin, _) in specs.keys() {
+        *per_fn_counts.entry(origin.clone()).or_insert(0) += 1;
+    }
 
     // Also rewrite calls inside specialized functions. Specialization
     // can introduce new calls that themselves point at generic
@@ -108,6 +114,19 @@ pub fn monomorphize(program: Program) -> Program {
             // clearer error path than infinite loop.
             break;
         }
+        // Per-function cycle detection. If any single generic
+        // function has produced more than PER_FUNCTION_LIMIT
+        // specializations, the call graph is consuming the budget
+        // through polymorphic recursion. Abort the loop early.
+        let mut max_count = 0;
+        for &count in per_fn_counts.values() {
+            if count > max_count {
+                max_count = count;
+            }
+        }
+        if max_count > PER_FUNCTION_LIMIT {
+            break;
+        }
         local_types.clear();
         for param in &new_functions[idx].params {
             if let Some(t) = &param.type_expr
@@ -118,6 +137,7 @@ pub fn monomorphize(program: Program) -> Program {
         }
         // Take ownership of the function temporarily so we can borrow
         // new_functions mutably for inserting nested specializations.
+        let len_before = new_functions.len();
         let mut body_clone = new_functions[idx].body.clone();
         rewrite_block(
             &mut body_clone,
@@ -128,6 +148,21 @@ pub fn monomorphize(program: Program) -> Program {
             &fn_returns,
         );
         new_functions[idx].body = body_clone;
+        // Update per-function counts for any specializations
+        // introduced by rewriting this function's body.
+        if new_functions.len() > len_before {
+            for new_fn in &new_functions[len_before..] {
+                // The synthetic name is `origin__type_args`. Recover
+                // the origin by splitting on the first `__`.
+                let origin = new_fn
+                    .name
+                    .split("__")
+                    .next()
+                    .unwrap_or(&new_fn.name)
+                    .to_string();
+                *per_fn_counts.entry(origin).or_insert(0) += 1;
+            }
+        }
         idx += 1;
     }
 
@@ -156,7 +191,380 @@ pub fn monomorphize(program: Program) -> Program {
     // lets compile-time field-type inference resolve method
     // dispatch on field-typed receivers.
     program = specialize_structs(program, &fn_returns);
+
+    // Generic enum specialization mirrors the struct pass for
+    // `Expr::EnumVariant` whose target enum has type parameters.
+    // The payload values' inferred types determine the type
+    // arguments, and the pass emits a specialized `EnumDef` with
+    // payload types substituted.
+    program = specialize_enums(program, &fn_returns);
     program
+}
+
+/// Generic enum specialization pass. See [`specialize_structs`] for
+/// the analogous struct pass. The mechanics mirror struct
+/// specialization, with variant payload types in place of struct
+/// field types.
+fn specialize_enums(mut program: Program, fn_returns: &BTreeMap<String, TypeExpr>) -> Program {
+    let generic_enums: BTreeMap<String, EnumDef> = program
+        .types
+        .iter()
+        .filter_map(|td| match td {
+            TypeDef::Enum(e) if !e.type_params.is_empty() => Some((e.name.clone(), e.clone())),
+            _ => None,
+        })
+        .collect();
+    if generic_enums.is_empty() {
+        return program;
+    }
+    let mut enum_specs: BTreeMap<(String, String), String> = BTreeMap::new();
+    let mut new_enums: Vec<EnumDef> = Vec::new();
+    let mut local_types: BTreeMap<String, TypeExpr> = BTreeMap::new();
+    for func in &mut program.functions {
+        local_types.clear();
+        for param in &func.params {
+            if let Some(t) = &param.type_expr
+                && let Pattern::Variable(name, _) = &param.pattern
+            {
+                local_types.insert(name.clone(), t.clone());
+            }
+        }
+        rewrite_enum_variants_block(
+            &mut func.body,
+            &generic_enums,
+            &mut local_types,
+            &mut enum_specs,
+            &mut new_enums,
+            fn_returns,
+        );
+    }
+    program
+        .types
+        .extend(new_enums.into_iter().map(TypeDef::Enum));
+    program
+}
+
+fn specialize_enum(enum_def: &EnumDef, type_args: &[TypeExpr], spec_name: String) -> EnumDef {
+    let mut subst: BTreeMap<String, TypeExpr> = BTreeMap::new();
+    for (tp, arg) in enum_def.type_params.iter().zip(type_args.iter()) {
+        subst.insert(tp.name.clone(), arg.clone());
+    }
+    let variants: Vec<VariantDecl> = enum_def
+        .variants
+        .iter()
+        .map(|v| VariantDecl {
+            name: v.name.clone(),
+            fields: v
+                .fields
+                .iter()
+                .map(|t| subst_type_expr(t, &subst))
+                .collect(),
+            span: v.span,
+        })
+        .collect();
+    EnumDef {
+        name: spec_name,
+        type_params: Vec::new(),
+        variants,
+        span: enum_def.span,
+    }
+}
+
+fn rewrite_enum_variants_block(
+    block: &mut Block,
+    generic_enums: &BTreeMap<String, EnumDef>,
+    locals: &mut BTreeMap<String, TypeExpr>,
+    specs: &mut BTreeMap<(String, String), String>,
+    new_enums: &mut Vec<EnumDef>,
+    fn_returns: &BTreeMap<String, TypeExpr>,
+) {
+    for stmt in block.stmts.iter_mut() {
+        rewrite_enum_variants_stmt(stmt, generic_enums, locals, specs, new_enums, fn_returns);
+    }
+    if let Some(e) = block.tail_expr.as_mut() {
+        rewrite_enum_variants_expr(e, generic_enums, locals, specs, new_enums, fn_returns);
+    }
+}
+
+fn rewrite_enum_variants_stmt(
+    stmt: &mut Stmt,
+    generic_enums: &BTreeMap<String, EnumDef>,
+    locals: &mut BTreeMap<String, TypeExpr>,
+    specs: &mut BTreeMap<(String, String), String>,
+    new_enums: &mut Vec<EnumDef>,
+    fn_returns: &BTreeMap<String, TypeExpr>,
+) {
+    match stmt {
+        Stmt::Let(l) => {
+            rewrite_enum_variants_expr(
+                &mut l.value,
+                generic_enums,
+                locals,
+                specs,
+                new_enums,
+                fn_returns,
+            );
+            if let Pattern::Variable(name, _) = &l.pattern
+                && let Some(t) = l
+                    .type_expr
+                    .clone()
+                    .or_else(|| infer_arg_type(&l.value, locals, fn_returns))
+            {
+                locals.insert(name.clone(), t);
+            }
+        }
+        Stmt::For(f) => {
+            match &mut f.iterable {
+                Iterable::Range(s, e) => {
+                    rewrite_enum_variants_expr(
+                        s,
+                        generic_enums,
+                        locals,
+                        specs,
+                        new_enums,
+                        fn_returns,
+                    );
+                    rewrite_enum_variants_expr(
+                        e,
+                        generic_enums,
+                        locals,
+                        specs,
+                        new_enums,
+                        fn_returns,
+                    );
+                }
+                Iterable::Expr(e) => {
+                    rewrite_enum_variants_expr(
+                        e,
+                        generic_enums,
+                        locals,
+                        specs,
+                        new_enums,
+                        fn_returns,
+                    );
+                }
+            }
+            rewrite_enum_variants_block(
+                &mut f.body,
+                generic_enums,
+                locals,
+                specs,
+                new_enums,
+                fn_returns,
+            );
+        }
+        Stmt::Break(_) => {}
+        Stmt::DataFieldAssign { value, .. } => {
+            rewrite_enum_variants_expr(value, generic_enums, locals, specs, new_enums, fn_returns);
+        }
+        Stmt::Expr(e) => {
+            rewrite_enum_variants_expr(e, generic_enums, locals, specs, new_enums, fn_returns);
+        }
+    }
+}
+
+fn rewrite_enum_variants_expr(
+    expr: &mut Expr,
+    generic_enums: &BTreeMap<String, EnumDef>,
+    locals: &mut BTreeMap<String, TypeExpr>,
+    specs: &mut BTreeMap<(String, String), String>,
+    new_enums: &mut Vec<EnumDef>,
+    fn_returns: &BTreeMap<String, TypeExpr>,
+) {
+    // Recurse first.
+    match expr {
+        Expr::BinOp { left, right, .. } => {
+            rewrite_enum_variants_expr(left, generic_enums, locals, specs, new_enums, fn_returns);
+            rewrite_enum_variants_expr(right, generic_enums, locals, specs, new_enums, fn_returns);
+        }
+        Expr::UnaryOp { operand, .. } => {
+            rewrite_enum_variants_expr(
+                operand,
+                generic_enums,
+                locals,
+                specs,
+                new_enums,
+                fn_returns,
+            );
+        }
+        Expr::Call { args, .. } => {
+            for a in args.iter_mut() {
+                rewrite_enum_variants_expr(a, generic_enums, locals, specs, new_enums, fn_returns);
+            }
+        }
+        Expr::Pipeline { left, args, .. } => {
+            rewrite_enum_variants_expr(left, generic_enums, locals, specs, new_enums, fn_returns);
+            for a in args.iter_mut() {
+                rewrite_enum_variants_expr(a, generic_enums, locals, specs, new_enums, fn_returns);
+            }
+        }
+        Expr::Yield { value, .. } => {
+            rewrite_enum_variants_expr(value, generic_enums, locals, specs, new_enums, fn_returns);
+        }
+        Expr::If {
+            condition,
+            then_block,
+            else_block,
+            ..
+        } => {
+            rewrite_enum_variants_expr(
+                condition,
+                generic_enums,
+                locals,
+                specs,
+                new_enums,
+                fn_returns,
+            );
+            rewrite_enum_variants_block(
+                then_block,
+                generic_enums,
+                locals,
+                specs,
+                new_enums,
+                fn_returns,
+            );
+            if let Some(b) = else_block.as_mut() {
+                rewrite_enum_variants_block(b, generic_enums, locals, specs, new_enums, fn_returns);
+            }
+        }
+        Expr::Match {
+            scrutinee, arms, ..
+        } => {
+            rewrite_enum_variants_expr(
+                scrutinee,
+                generic_enums,
+                locals,
+                specs,
+                new_enums,
+                fn_returns,
+            );
+            for arm in arms.iter_mut() {
+                rewrite_enum_variants_expr(
+                    &mut arm.expr,
+                    generic_enums,
+                    locals,
+                    specs,
+                    new_enums,
+                    fn_returns,
+                );
+            }
+        }
+        Expr::Loop { body, .. } => {
+            rewrite_enum_variants_block(body, generic_enums, locals, specs, new_enums, fn_returns);
+        }
+        Expr::FieldAccess { object, .. } => {
+            rewrite_enum_variants_expr(object, generic_enums, locals, specs, new_enums, fn_returns);
+        }
+        Expr::MethodCall { receiver, args, .. } => {
+            rewrite_enum_variants_expr(
+                receiver,
+                generic_enums,
+                locals,
+                specs,
+                new_enums,
+                fn_returns,
+            );
+            for a in args.iter_mut() {
+                rewrite_enum_variants_expr(a, generic_enums, locals, specs, new_enums, fn_returns);
+            }
+        }
+        Expr::TupleIndex { object, .. } => {
+            rewrite_enum_variants_expr(object, generic_enums, locals, specs, new_enums, fn_returns);
+        }
+        Expr::ArrayIndex { object, index, .. } => {
+            rewrite_enum_variants_expr(object, generic_enums, locals, specs, new_enums, fn_returns);
+            rewrite_enum_variants_expr(index, generic_enums, locals, specs, new_enums, fn_returns);
+        }
+        Expr::StructInit { fields, .. } => {
+            for f in fields.iter_mut() {
+                rewrite_enum_variants_expr(
+                    &mut f.value,
+                    generic_enums,
+                    locals,
+                    specs,
+                    new_enums,
+                    fn_returns,
+                );
+            }
+        }
+        Expr::EnumVariant { args, .. } => {
+            for a in args.iter_mut() {
+                rewrite_enum_variants_expr(a, generic_enums, locals, specs, new_enums, fn_returns);
+            }
+        }
+        Expr::ArrayLiteral { elements, .. } | Expr::TupleLiteral { elements, .. } => {
+            for e in elements.iter_mut() {
+                rewrite_enum_variants_expr(e, generic_enums, locals, specs, new_enums, fn_returns);
+            }
+        }
+        Expr::Cast { expr, .. } => {
+            rewrite_enum_variants_expr(expr, generic_enums, locals, specs, new_enums, fn_returns);
+        }
+        Expr::Closure { body, .. } => {
+            rewrite_enum_variants_block(body, generic_enums, locals, specs, new_enums, fn_returns);
+        }
+        Expr::ClosureRef { .. }
+        | Expr::Literal { .. }
+        | Expr::Ident { .. }
+        | Expr::Placeholder { .. } => {}
+    }
+
+    // Now check the expression itself for a generic EnumVariant
+    // construction that should specialize.
+    if let Expr::EnumVariant {
+        enum_name,
+        variant,
+        args,
+        ..
+    } = expr
+        && let Some(enum_def) = generic_enums.get(enum_name)
+    {
+        // Find the variant declaration whose name matches.
+        let decl_variant = enum_def.variants.iter().find(|v| v.name == *variant);
+        let decl_variant = match decl_variant {
+            Some(v) => v,
+            None => return,
+        };
+        // For each type parameter of the enum, find a payload field
+        // whose declared type is `Named(tp.name)` and infer from the
+        // matching argument's value.
+        let mut type_args: Vec<TypeExpr> = Vec::new();
+        for tp in &enum_def.type_params {
+            let mut inferred: Option<TypeExpr> = None;
+            for (i, decl_ty) in decl_variant.fields.iter().enumerate() {
+                if let TypeExpr::Named(n, _, _) = decl_ty
+                    && *n == tp.name
+                    && let Some(arg) = args.get(i)
+                    && let Some(t) = infer_arg_type(arg, locals, fn_returns)
+                {
+                    inferred = Some(t);
+                    break;
+                }
+            }
+            match inferred {
+                Some(t) => type_args.push(t),
+                None => return,
+            }
+        }
+        if type_args.len() != enum_def.type_params.len() {
+            return;
+        }
+        let key_args: Vec<String> = type_args.iter().map(type_arg_canonical).collect();
+        let canonical = key_args.join(",");
+        let cache_key = (enum_name.clone(), canonical);
+        let spec_name = if let Some(existing) = specs.get(&cache_key) {
+            existing.clone()
+        } else {
+            let spec_name = mangle_struct(enum_name, &type_args);
+            let specialized = specialize_enum(enum_def, &type_args, spec_name.clone());
+            specs.insert(cache_key, spec_name.clone());
+            new_enums.push(specialized);
+            spec_name
+        };
+        if let Expr::EnumVariant { enum_name, .. } = expr {
+            *enum_name = spec_name;
+        }
+    }
 }
 
 /// Generic struct specialization pass.

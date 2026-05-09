@@ -50,12 +50,11 @@ Inference reach extension. `infer_arg_type` now resolves the type of function ca
 
 Generic struct specialization. `specialize_structs` runs after function specialization. For each `Expr::StructInit` whose target struct has type parameters, the pass infers the type arguments by matching declared field types against provided field values' types and emits a specialized `StructDef` with the field types substituted. The `StructInit`'s name is rewritten to the mangled form (for example `Cell__i64`). Subsequent compilation sees the specialized struct as a regular non-generic struct, which lets compile-time field-type inference resolve method dispatch on field-typed receivers. Example: `c.value.double()` where `c: Cell<i64>` now compiles correctly.
 
+Generic enum specialization. `specialize_enums` runs after `specialize_structs` and mirrors that pass for `Expr::EnumVariant` whose target enum has type parameters. The payload values' inferred types determine the type arguments, and the pass emits a specialized `EnumDef` with payload types substituted. Subsequent compilation sees the specialized enum as a regular non-generic enum, which closes the same compile-time inference gap for enum-payload method dispatch that the struct pass closes for fields.
+
 Pruning policy. Generic functions whose specializations were generated are dropped from the program output. Generic functions with no specializations are retained because they continue to execute correctly through runtime tag dispatch on Value tags. This is the safe default for cases like first-class closure arguments where the concrete type cannot be inferred but the function still runs.
 
-Remaining work.
-
-- Generic enum specialization. Currently `Expr::EnumVariant` does not trigger specialization. Method dispatch on enum payload types follows the same pattern as struct fields and would benefit from a similar pass. Estimated 1 to 2 hours.
-- Polymorphic recursion cycle detection. The MVP includes a SPECIALIZATION_LIMIT bound to prevent unbounded specialization. A more sophisticated cycle-detection guard could reject the program before allocating partial specializations.
+Polymorphic recursion cycle detection. Two complementary bounds guard the fixed-point loop. The global `SPECIALIZATION_LIMIT` caps the total number of specializations. The `PER_FUNCTION_LIMIT` caps the number of specializations any single generic function may produce, which is the structural signature of polymorphic recursion. When the per-function bound is reached, the loop exits early and the remaining work is left unspecialized; subsequent compilation will surface the truncation through the bytecode chunk count limit, which produces a clearer error path than infinite expansion.
 
 ## ~~B3. Closures and anonymous functions~~ (Resolved with environment capture)
 
@@ -74,9 +73,7 @@ End-to-end. `examples/closure_basic.rs` demonstrates `let f = |x: i64| x + 1; f(
 
 First-class closures as function arguments now work end to end. A generic function `fn apply<F>(f: F, x: i64) -> i64 { f(x) }` accepts a closure and invokes it through the indirect-call mechanism. The compiler resolves the parameter `f` as a local and emits `Op::CallIndirect`. Monomorphization leaves the call generic when the argument's concrete type cannot be inferred (closure types are opaque); the runtime polymorphic dispatch handles invocation.
 
-Remaining work tracked under future B3 follow-on.
-
-- Capture by reference semantics. The current capture copies the value at closure creation time, matching the typical capture-by-value contract. Capture by reference (mutable shared environment across multiple invocations of the same closure) is not currently supported and would require a different runtime representation.
+Capture by reference disposition. Capture by reference is not meaningful in Keleusma's pure-functional surface. The language's `let` bindings are immutable by design. There is no surface assignment operator that mutates a previously bound local, which means a captured local cannot diverge from the captured snapshot regardless of whether the capture is by value or by reference. The only mutable mechanism is the data segment, which is accessed through `data.field` and `data.field = expr` syntax that is independent of closure capture. A closure that wants to mutate shared state therefore reads and writes data segment slots directly. Capture by reference would only matter in a language with mutable locals, which Keleusma intentionally does not have. The item is therefore closed as not applicable rather than deferred.
 
 ## ~~B4. Hot code swap implementation~~ (Resolved as R29)
 

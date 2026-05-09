@@ -2852,6 +2852,24 @@ mod tests {
     }
 
     #[test]
+    fn monomorphize_enum_specialization_round_trip() {
+        // Generic enum specialization mirrors struct specialization.
+        // Construction with a concrete payload value generates a
+        // specialized EnumDef with the payload type substituted.
+        check_src(
+            "enum Maybe<T> { Just(T), Nothing }\n\
+             fn main() -> i64 {\n\
+                let m = Maybe::Just(42);\n\
+                match m {\n\
+                    Maybe::Just(x) => x,\n\
+                    Maybe::Nothing => 0,\n\
+                }\n\
+             }",
+        )
+        .unwrap();
+    }
+
+    #[test]
     fn monomorphize_struct_field_method_dispatch() {
         // Method dispatch on a generic struct's field. Generic
         // struct specialization gives the field a concrete type so
