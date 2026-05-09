@@ -9,8 +9,8 @@ AI to Human communication channel.
 ## Last Updated
 
 **Date**: 2026-05-09
-**Task**: V0.1-M3-T11. P7 fully resolved. Operand stack arena migration and `Value::KStr` via the `ConstValue` and `Value` split.
-**Status**: Complete. P7 items 1 through 8 are resolved.
+**Task**: V0.1-M3-T12. Native ABI arena context, float width log2, B9 documentation, BACKLOG hygiene.
+**Status**: Complete. All requested follow-on items addressed.
 
 ## Verification
 
@@ -24,86 +24,82 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 **Results**:
 
-- 412 tests pass workspace-wide. 344 keleusma unit, 17 keleusma marshall integration, 17 keleusma `kstring_boundary` integration (7 new), 28 keleusma-arena unit, 6 keleusma-arena doctests.
+- 415 tests pass workspace-wide. 347 keleusma unit (3 new for arena-aware natives), 17 keleusma marshall integration, 17 keleusma `kstring_boundary` integration, 28 keleusma-arena unit, 6 keleusma-arena doctests.
 - Clippy clean under `--workspace --all-targets`.
 - Format clean.
 
 ## Summary
 
-This session completed the deferred P7 items 7 and 8.
+This session addressed all engineering gaps adjacent to recent P7 work and all future-work items that interact with P10, except the `keleusma-arena` registry version which the user deferred. Document hygiene also landed.
 
-Item 7. Operand stack arena migration. The operand stack and call-frame stack are now `allocator_api2::vec::Vec<T, BottomHandle<'arena>>` instead of globally-allocated `Vec<T>`. The arena's bottom region holds the stacks across iterations. The arena's top region holds dynamic strings and other scratch. The `Vm` distinguishes between two reset paths.
+Native ABI extension. The new `NativeCtx<'a>` type carries a borrow of the host-owned arena. The `Vm` constructs a fresh `NativeCtx` at every `Op::CallNative` dispatch and passes it to the native. The native function type is now `for<'a> Fn(&NativeCtx<'a>, &[Value]) -> Result<Value, VmError>`. The legacy registration paths (`register_native`, `register_native_closure`, `register_fn`, `register_fn_fallible`) are unchanged in their public signature; they wrap the supplied function so it ignores the context. The new `register_native_with_ctx` and `register_native_with_ctx_closure` variants pass the context through.
 
-- Top-only reset for `Op::Reset`. Invalidates dynamic strings and clears the top region while preserving the operand stack and frames. The new `Arena::reset_top_unchecked` is the underlying primitive. Used between stream iterations where local state must persist.
-- Full reset for error recovery and hot swap. Drops the arena-backed stacks, advances the epoch, and clears both ends. The stacks are recreated as zero-capacity instances that allocate fresh on first push. The discipline that no allocator-bound collection holds storage at the moment of bottom-region reset is documented in the safety comment on `full_reset_arena_internal`.
+Arena-aware utility natives. The `register_utility_natives_with_ctx` companion to `register_utility_natives` registers `to_string` and `length` through the new ABI. `to_string` allocates a `KString` from the arena and returns `Value::KStr` for the bounded-memory path. `length` resolves `Value::KStr` arguments through the arena before counting characters. The non-arena `length` errors on `Value::KStr` with a clear message pointing the caller to the ctx-aware registration. The legacy `register_utility_natives` remains for hosts that prefer `Value::DynStr` outputs through the global allocator.
 
-The semantic change is observable. Bottom-region usage no longer drops to zero at `Op::Reset` because the operand stack is bottom-allocated and survives the reset. The existing test that asserted `bottom_used == 0` after `Op::Reset` was updated to assert `top_used == 0` and to observe the epoch advance through a `KString` handle.
+Float width log2 in the wire format. The bytecode header gains a `float_bits_log2` byte at offset 12 (previously reserved). The `Module` struct gains a `float_bits_log2: u8` field. The runtime defines `RUNTIME_FLOAT_BITS_LOG2 = 6` for f64. The verifier admits bytecode whose `float_bits_log2` is at most the runtime's, paralleling the existing word and address size discipline. A new `LoadError::FloatSizeMismatch` variant surfaces a width mismatch with a precise error message. Bytecode version bumped from 4 to 5. The golden bytes test updated. Future portability work tracked under B10 will use this field to gate narrower or wider float support.
 
-Item 8. `Value::KStr` integration. `ConstValue` is the new compile-time-constant type that participates in the rkyv archive. `Value` is the runtime type and adds the `KStr(KString)` variant alongside the existing `DynStr(String)`. The compiler emits `ConstValue` into the constant pool through `ConstValue::try_from_value` at the boundary, which rejects `DynStr` and `KStr` because they cannot be compile-time constants. The runtime lifts archived constants into `Value` through `Value::from_const_archived`, the inverse direction. `Chunk.constants` is now `Vec<ConstValue>`. `value_from_archived` is now a thin wrapper over `Value::from_const_archived` that operates on `ArchivedConstValue`.
+B9 hot update of yielded static strings. Resolved structurally and documented. `Value::from_const_archived` materializes archived `StaticStr` constants into owned `String` values at the moment they are pushed onto the operand stack. Yielded values that contain a `Value::StaticStr` therefore hold owned heap data that is independent of the bytecode buffer. A hot update through `Vm::replace_module` does not affect the host's retained yield value because the string bytes were already copied out at the lift boundary. The BACKLOG entry is now marked resolved.
 
-The `Value::KStr` variant carries a lifetime-free `KString` (which is `ArenaHandle<str>`). Resolution goes through `Value::as_str_with_arena(&arena)`, returning `Some(&str)` on success or `Err(Stale)` if the arena has been reset since the handle was issued. `Value::contains_dynstr` treats both `DynStr` and `KStr` as dynamic for the cross-yield prohibition. `Value` no longer derives Archive. PartialEq for `Value::KStr` compares captured handles by epoch identity, so two `KStr` values with the same content but different epochs are not equal. Hosts that want content equality go through `as_str_with_arena`.
+Per-op decode optimization. Recorded as backlog item B11. The current zero-copy execution path reads each instruction through `op_from_archived(&chunk.ops[ip])`, performing a discriminant match per fetch. Two candidate optimizations are documented (cached `Vec<Op>` per chunk, specialized dispatch table for hot opcodes). Deferred until profiling identifies the dispatch as a hot path on real workloads.
 
-## Trade-offs and Properties
-
-Bounded memory holds end to end for the operand stack and for dynamic strings allocated through `KString`. The remaining unbounded path is `Value::DynStr(String)`, which uses the global allocator. The `to_string` native still emits `DynStr` because the current native ABI does not thread the arena through. Threading the arena through native invocations would let `to_string` produce `Value::KStr` and is a separate enhancement.
-
-The `KString` equality discipline is identity-based, not content-based. Two `KString` handles compare equal only if they share the same epoch (and, by construction, the same arena allocation). This avoids requiring an arena borrow inside `PartialEq`, which the trait does not allow. The cost is that `Value::KStr` cannot be compared against an unrelated `KString` of the same content without an explicit arena resolution. Test code that needs content equality uses `as_str_with_arena`.
-
-The constant-pool boundary is one-directional. `ConstValue::try_from_value` lowers a `Value` to `ConstValue` if and only if the value is a compile-time constant. The reverse direction `ConstValue::into_value` is total. Runtime values cannot become compile-time constants because that would require serializing handles, which the design refuses for soundness reasons.
-
-The reset discipline is documented and tested. `Arena::reset_top_unchecked` is the primitive for between-iteration resets that preserve bottom-region collections. `Arena::reset_unchecked` clears both ends and is the primitive for full reset. Both advance the epoch. The `Vm` is the sole caller of these unsafe primitives in the runtime.
+BACKLOG hygiene. The duplicate `B5` heading was renamed to `B5b. Static string discipline extensions` to remove the conflict with the resolved structural-verification entry. Three stale `Open` rows in TASKLOG were marked complete with their resolving session IDs.
 
 ## Tests
 
-Seven new tests in `tests/kstring_boundary.rs` cover the `Value::KStr` boundary surface.
+Three new unit tests in `src/utility_natives.rs` cover the arena-aware natives.
 
-- `value_kstr_type_name_is_kstr`. Surface check.
-- `value_kstr_resolves_through_arena`. Round trip.
-- `value_kstr_returns_stale_after_reset`. Stale detection through `as_str_with_arena`.
-- `value_kstr_counts_as_dynstr_for_cross_yield_prohibition`. Cross-yield discipline.
-- `value_kstr_inside_tuple_is_detected`. Recursive detection.
-- `value_kstr_equality_uses_epoch_identity`. The PartialEq contract.
-- `value_as_str_returns_none_for_kstr_without_arena`. The non-arena accessor returns None for `KStr`.
+- `to_string_with_ctx_int_returns_kstr`. Confirms `to_string(42)` returns `Value::KStr` with the expected resolved contents.
+- `to_string_with_ctx_string_returns_kstr`. Confirms string-typed input flows through the boundary.
+- `length_with_ctx_string_counts_chars`. Confirms `length` resolves `KStr` arguments through the arena.
 
-The previously failing `vm_arena_reset_at_op_reset` test was rewritten to reflect the new semantics: top-only reset at `Op::Reset` with the stack and frames preserved. The test now allocates a `KString` from the arena, observes the epoch advance, and confirms the handle becomes stale.
+The existing 412 tests continue to pass after the wire format bump and the marshall layer update.
 
 ## Changes Made
 
 ### Source
 
-- **`keleusma-arena/src/lib.rs`**. New `Arena::reset_top_unchecked` method that clears the top region and advances the epoch through a shared reference, leaving the bottom region intact. Documented as the primitive for between-iteration resets where bottom-region allocator-bound collections persist.
-- **`src/bytecode.rs`**. New `ConstValue` enum that mirrors `Value` for compile-time constants only. Carries the rkyv `Archive` derive and serializes faithfully. Variants: `Unit, Bool, Int, Float, StaticStr, Tuple, Array, Struct, Enum, None`. `Value` no longer derives `Archive` and gains a new `KStr(KString)` variant. New `Value::from_const_archived` lifts an archived constant into a runtime value. New `Value::as_str_with_arena` resolves any string variant including `KStr` against an arena. `Value::contains_dynstr` extended to recognize `KStr`. `ConstValue::try_from_value` lowers `Value` to `ConstValue` for the constant subset. `ConstValue::into_value` is the inverse total lift. `Value::PartialEq` extended to compare `KStr` by epoch identity.
-- **`src/vm.rs`**. `Vm.stack` and `Vm.frames` are now `allocator_api2::vec::Vec<T, BottomHandle<'arena>>` through the new `StackVec` type alias. `reset_arena_internal` is the top-only reset, used by `Op::Reset`. `full_reset_arena_internal` is the new full reset that drops and recreates the stacks before clearing both ends. `chunk_const_str` updated to match `ArchivedConstValue::StaticStr` only. The previous `vm_arena_reset_at_op_reset` test rewritten to assert the top-only semantics through `KString` staleness and epoch advance.
-- **`src/compiler.rs`**. `add_constant` now converts `Value` to `ConstValue` at the boundary through `ConstValue::try_from_value`. Runtime-only variants in compile-time positions panic.
-- **`src/verify.rs`**. Updated to import `ConstValue`. Pattern matches on the constant pool now match `ConstValue::Int` instead of `Value::Int`. Test fixtures updated.
-- **`src/utility_natives.rs`**. `to_string` native gains a `KStr` arm that returns a placeholder string. Threading the arena through the native ABI to resolve `KStr` is a separate enhancement.
+- **`keleusma-arena/src/lib.rs`**. No new public surface this session; the prior `reset_top_unchecked` carries the arena-side semantic for `Op::Reset`.
+- **`src/bytecode.rs`**. `Module` gains `float_bits_log2: u8`. `BYTECODE_VERSION` bumped to 5. New `RUNTIME_FLOAT_BITS_LOG2` constant. New `LoadError::FloatSizeMismatch` variant with display formatting. `to_bytes` writes the new byte; `from_bytes` and `access_bytes` validate it. Header documentation updated.
+- **`src/vm.rs`**. New `NativeCtx<'a>` public type with a single field `arena: &'a Arena`. Native function type updated to `for<'a> Fn(&NativeCtx<'a>, &[Value]) -> Result<Value, VmError>`. New `register_native_with_ctx` and `register_native_with_ctx_closure` methods. The dispatch in `Op::CallNative` constructs a `NativeCtx` per call. The legacy `register_native`, `register_native_closure`, `register_fn`, and `register_fn_fallible` wrap the supplied function. Golden bytes test updated for the new wire format.
+- **`src/marshall.rs`**. `BoxedNativeFn` retyped to accept `&NativeCtx<'_>`. The `IntoNativeFn` and `IntoFallibleNativeFn` macros wrap the inner Rust function with a closure that ignores the context. Test helpers gain a small `ctx` builder.
+- **`src/utility_natives.rs`**. Refactored `native_to_string` and `native_length` to share a `render_value_to_string` helper that optionally takes an arena reference for `Value::KStr` resolution. New `native_to_string_with_ctx` and `native_length_with_ctx` use the ctx-aware ABI. New `register_utility_natives_with_ctx` registers the arena-aware variants. Three new tests cover the arena-aware path.
+- **`src/lib.rs`**. Re-exports `NativeCtx` from `vm`.
+- **`src/compiler.rs`**, **`src/verify.rs`**, **`src/vm.rs`** test fixtures. `Module` literals gain `float_bits_log2: RUNTIME_FLOAT_BITS_LOG2`.
+- **`examples/zero_copy_demo.kel.bin`**. Regenerated against `BYTECODE_VERSION = 5`.
 
 ### Knowledge Graph
 
-- **`docs/decisions/PRIORITY.md`**. P7 entry rewritten as resolved across all eight items. R34, R39, and R40 are the design records.
-- **`docs/process/TASKLOG.md`**. New row for V0.1-M3-T11.
+- **`docs/decisions/PRIORITY.md`**. P7 entry extended with item 9 covering the native ABI extension. The closing paragraph updated to record the bounded-memory end-to-end status.
+- **`docs/decisions/BACKLOG.md`**. Duplicate `B5` heading renamed to `B5b. Static string discipline extensions`. `B9` marked resolved structurally. New `B11. Per-op decode optimization for zero-copy execution` records the deferred dispatch optimization.
+- **`docs/process/TASKLOG.md`**. Three stale `Open` rows in V0.0-M6 marked complete with their resolving session IDs. New row for V0.1-M3-T12.
 - **`docs/process/REVERSE_PROMPT.md`**. This file.
+
+## Trade-offs and Properties
+
+The native ABI extension is backwards compatible. Existing `register_native`, `register_fn`, and `register_fn_fallible` callers compile and run unchanged. Hosts that want bounded-memory dynamic strings opt into the new ABI through `register_native_with_ctx` or `register_utility_natives_with_ctx`. The cost is a small wrapping closure for legacy registrations and a per-dispatch `NativeCtx` construction (one pointer copy).
+
+The float width field is forward-looking. The runtime currently rejects narrower or wider floats because no masking is implemented. When narrower-float support lands, the verifier will admit narrower bytecode and the runtime will mask through a sign-extending cast similar to the integer path. The wire format change is a one-time bump from version 4 to 5.
+
+The `Value::KStr` discipline propagates correctly through the cross-yield prohibition. `Value::contains_dynstr` returns true for both `DynStr` and `KStr`, so attempts to yield a value that contains a `KStr` fail at the yield boundary as they do for `DynStr`. This preserves the soundness contract from R31.
+
+The B9 resolution is structural rather than design-level. The resolution is tied to the `Value::from_const_archived` lift that always copies into owned `String`. Future zero-copy yield paths that retain `&ArchivedString` references in `Value` would re-introduce the concern; the BACKLOG entry documents the alternative host-responsibility model.
 
 ## Remaining Open Priorities
 
-None for P7. The bounded-memory guarantee holds end to end for the operand stack and for arena-backed dynamic strings.
+None. P1 through P10 fully resolved.
 
-The remaining engineering improvement is threading the arena through the native ABI so that natives like `to_string` can produce `Value::KStr` instead of `Value::DynStr`. This is a marshall-layer enhancement, not a P7 item.
-
-Resolved priorities to date. P1, P2, P3, P4, P5, P6, P7, P8, P9, P10.
+The remaining open engineering item the user explicitly deferred is the `keleusma-arena` registry version. The registry currently hosts v0.1.0; the local crate has new APIs (`epoch`, `ArenaHandle`, `KString`, `reset_top_unchecked`, `force_reset_epoch`) that need a v0.2 publication before the main `keleusma` crate can be published to crates.io with a registry-only dependency. This is documentation and release process work, not a design or implementation gap.
 
 ## Intended Next Step
 
-P7 closure complete. Recommend either of two paths.
+The user has not specified the next step. Two reasonable directions.
 
-A. Native ABI extension. Thread the arena through the native invocation context so that natives can produce `Value::KStr`. Updates the `NativeFn` signature, the marshall layer, and `register_native_*` helpers. Delivers full bounded-memory for native-produced strings. Estimated one to two hours.
+A. Publish keleusma-arena v0.2 and then keleusma v0.1 to crates.io. Cuts an external release that includes the boundary type, host-owned arena, and arena-aware native ABI.
 
-B. Publish keleusma main crate to crates.io now that P1 through P10 are fully resolved. Cuts a v0.1 release that includes the boundary type and the host-owned arena.
-
-Recommend A if the bounded-memory guarantee for natives is load-bearing for upcoming use cases. Recommend B if external visibility is the priority.
+B. Continue language work toward V0.2 milestones once those are scoped.
 
 Await human prompt before proceeding.
 
 ## Session Context
 
-This long session resolved P7 across all eight items. Earlier in the session the type checker gaps 11 through 14 were closed and an integration test for three-level-nested for-in loops with match expressions was added. The host-owned arena and `KString` boundary type landed first. Then operand stack migration. Then the `ConstValue`/`Value` split that allowed `Value::KStr` to coexist with rkyv. The bounded-memory guarantee now holds end to end for the operand stack and arena-allocated strings.
+This long session resolved P7 across all nine items including the native ABI extension that closes the bounded-memory loop end to end for native-produced dynamic strings. The wire format gained a `float_bits_log2` byte for future portability. B9 was resolved structurally and B11 was opened to track per-op decode optimization. BACKLOG hygiene removed the duplicate B5. TASKLOG was synced with three previously stale rows now marked complete.

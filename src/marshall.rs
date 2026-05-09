@@ -207,7 +207,13 @@ impl_tuple!(A: 0, B: 1, C: 2, D: 3, E: 4);
 // -- IntoNativeFn family --
 
 /// The boxed call convention used by the VM for native functions.
-type BoxedNativeFn = alloc::boxed::Box<dyn Fn(&[Value]) -> Result<Value, VmError>>;
+///
+/// All native functions internally accept a [`crate::vm::NativeCtx`]
+/// to support arena-aware natives. Marshalled functions registered
+/// through this trait family ignore the context.
+type BoxedNativeFn = alloc::boxed::Box<
+    dyn for<'a> Fn(&crate::vm::NativeCtx<'a>, &[Value]) -> Result<Value, VmError>,
+>;
 
 /// A function-like value whose Rust signature can be wrapped as a native
 /// function. The tuple `Args` is the argument tuple inferred from the
@@ -235,19 +241,21 @@ macro_rules! impl_into_native_fn {
         {
             #[allow(unused_variables, clippy::let_unit_value, non_snake_case)]
             fn into_native_fn(self) -> BoxedNativeFn {
-                alloc::boxed::Box::new(move |args: &[Value]| -> Result<Value, VmError> {
-                    if args.len() != $arity {
-                        return Err(VmError::NativeError(format!(
-                            "native function expected {} argument(s), got {}",
-                            $arity,
-                            args.len()
-                        )));
-                    }
-                    $(
-                        let $name = $name::from_value(&args[$idx])?;
-                    )*
-                    Ok(self($($name,)*).into_value())
-                })
+                alloc::boxed::Box::new(
+                    move |_ctx: &crate::vm::NativeCtx<'_>, args: &[Value]| -> Result<Value, VmError> {
+                        if args.len() != $arity {
+                            return Err(VmError::NativeError(format!(
+                                "native function expected {} argument(s), got {}",
+                                $arity,
+                                args.len()
+                            )));
+                        }
+                        $(
+                            let $name = $name::from_value(&args[$idx])?;
+                        )*
+                        Ok(self($($name,)*).into_value())
+                    },
+                )
             }
         }
 
@@ -259,19 +267,21 @@ macro_rules! impl_into_native_fn {
         {
             #[allow(unused_variables, clippy::let_unit_value, non_snake_case)]
             fn into_native_fn(self) -> BoxedNativeFn {
-                alloc::boxed::Box::new(move |args: &[Value]| -> Result<Value, VmError> {
-                    if args.len() != $arity {
-                        return Err(VmError::NativeError(format!(
-                            "native function expected {} argument(s), got {}",
-                            $arity,
-                            args.len()
-                        )));
-                    }
-                    $(
-                        let $name = $name::from_value(&args[$idx])?;
-                    )*
-                    self($($name,)*).map(KeleusmaType::into_value)
-                })
+                alloc::boxed::Box::new(
+                    move |_ctx: &crate::vm::NativeCtx<'_>, args: &[Value]| -> Result<Value, VmError> {
+                        if args.len() != $arity {
+                            return Err(VmError::NativeError(format!(
+                                "native function expected {} argument(s), got {}",
+                                $arity,
+                                args.len()
+                            )));
+                        }
+                        $(
+                            let $name = $name::from_value(&args[$idx])?;
+                        )*
+                        self($($name,)*).map(KeleusmaType::into_value)
+                    },
+                )
             }
         }
     };
@@ -359,11 +369,16 @@ mod tests {
         }
     }
 
+    fn ctx(arena: &keleusma_arena::Arena) -> crate::vm::NativeCtx<'_> {
+        crate::vm::NativeCtx { arena }
+    }
+
     #[test]
     fn into_native_fn_arity_zero() {
         let f = || 42i64;
         let native = IntoNativeFn::into_native_fn(f);
-        let r = native(&[]).unwrap();
+        let arena = keleusma_arena::Arena::with_capacity(64);
+        let r = native(&ctx(&arena), &[]).unwrap();
         assert_eq!(r, Value::Int(42));
     }
 
@@ -371,7 +386,8 @@ mod tests {
     fn into_native_fn_arity_one() {
         let f = |x: i64| x * 2;
         let native = IntoNativeFn::into_native_fn(f);
-        let r = native(&[Value::Int(7)]).unwrap();
+        let arena = keleusma_arena::Arena::with_capacity(64);
+        let r = native(&ctx(&arena), &[Value::Int(7)]).unwrap();
         assert_eq!(r, Value::Int(14));
     }
 
@@ -379,7 +395,8 @@ mod tests {
     fn into_native_fn_arity_two() {
         let f = |a: i64, b: i64| a + b;
         let native = IntoNativeFn::into_native_fn(f);
-        let r = native(&[Value::Int(3), Value::Int(4)]).unwrap();
+        let arena = keleusma_arena::Arena::with_capacity(64);
+        let r = native(&ctx(&arena), &[Value::Int(3), Value::Int(4)]).unwrap();
         assert_eq!(r, Value::Int(7));
     }
 
@@ -387,7 +404,8 @@ mod tests {
     fn into_native_fn_arity_mismatch_errors() {
         let f = |x: i64| x;
         let native = IntoNativeFn::into_native_fn(f);
-        let err = native(&[Value::Int(1), Value::Int(2)]).unwrap_err();
+        let arena = keleusma_arena::Arena::with_capacity(64);
+        let err = native(&ctx(&arena), &[Value::Int(1), Value::Int(2)]).unwrap_err();
         match err {
             VmError::NativeError(msg) => assert!(msg.contains("expected 1 argument")),
             other => panic!("expected NativeError, got {:?}", other),
@@ -404,9 +422,10 @@ mod tests {
             }
         };
         let native = IntoFallibleNativeFn::into_native_fn(f);
-        let r = native(&[Value::Int(5)]).unwrap();
+        let arena = keleusma_arena::Arena::with_capacity(64);
+        let r = native(&ctx(&arena), &[Value::Int(5)]).unwrap();
         assert_eq!(r, Value::Int(20));
-        let err = native(&[Value::Int(0)]).unwrap_err();
+        let err = native(&ctx(&arena), &[Value::Int(0)]).unwrap_err();
         match err {
             VmError::DivisionByZero => {}
             other => panic!("expected DivisionByZero, got {:?}", other),

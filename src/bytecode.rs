@@ -712,6 +712,15 @@ pub struct Module {
     /// the runtime's `RUNTIME_ADDRESS_BITS_LOG2`. Mirrored in the
     /// framing header for fast pre-decode rejection.
     pub addr_bits_log2: u8,
+    /// Floating-point width required by this bytecode, encoded as the
+    /// base-2 exponent. Actual width in bits is `1 << float_bits_log2`.
+    /// The runtime accepts the bytecode when the recorded value is at
+    /// most the runtime's `RUNTIME_FLOAT_BITS_LOG2`. The current
+    /// runtime uses f64 exclusively (exponent 6); narrower or wider
+    /// floats are reserved for future portability work tracked under
+    /// B10. Mirrored in the framing header for fast pre-decode
+    /// rejection.
+    pub float_bits_log2: u8,
 }
 
 /// Magic prefix identifying serialized Keleusma bytecode (`KELE`).
@@ -719,7 +728,7 @@ pub const BYTECODE_MAGIC: [u8; 4] = *b"KELE";
 
 /// Wire format version for serialized bytecode. Bytecode produced under a
 /// different version is rejected at load time.
-pub const BYTECODE_VERSION: u16 = 4;
+pub const BYTECODE_VERSION: u16 = 5;
 
 /// Word size in bits assumed by this runtime build, encoded as the
 /// base-2 exponent. Actual width in bits is `1 << RUNTIME_WORD_BITS_LOG2`.
@@ -733,6 +742,14 @@ pub const RUNTIME_WORD_BITS_LOG2: u8 = 6;
 /// targets 64-bit address spaces, so the exponent is 6.
 pub const RUNTIME_ADDRESS_BITS_LOG2: u8 = 6;
 
+/// Floating-point width in bits assumed by this runtime build, encoded
+/// as the base-2 exponent. Actual width in bits is
+/// `1 << RUNTIME_FLOAT_BITS_LOG2`. The current Keleusma runtime uses
+/// f64 exclusively, so the exponent is 6. Narrower or wider floats
+/// (f32 = 5, f128 = 7) are reserved for future portability work
+/// tracked under B10.
+pub const RUNTIME_FLOAT_BITS_LOG2: u8 = 6;
+
 /// Header length in bytes. The fields are
 ///
 /// - bytes 0..4: magic (`KELE`)
@@ -741,7 +758,8 @@ pub const RUNTIME_ADDRESS_BITS_LOG2: u8 = 6;
 ///   header and CRC trailer)
 /// - bytes 10..11: word_bits_log2 (u8). Actual width is `1 << value`.
 /// - bytes 11..12: addr_bits_log2 (u8). Actual width is `1 << value`.
-/// - bytes 12..16: reserved (zero). Pads the header so the rkyv body
+/// - bytes 12..13: float_bits_log2 (u8). Actual width is `1 << value`.
+/// - bytes 13..16: reserved (zero). Pads the header so the rkyv body
 ///   begins at an 8-byte-aligned offset within the buffer when the
 ///   buffer base is itself 8-byte-aligned. Required for in-place
 ///   access through `rkyv::access`.
@@ -824,6 +842,15 @@ pub enum LoadError {
         /// Maximum address size exponent this runtime build supports.
         max_supported: u8,
     },
+    /// The recorded floating-point width exponent exceeds what this
+    /// runtime build supports. Values are log-base-2 exponents. The
+    /// bytecode is admitted when `got <= max_supported`.
+    FloatSizeMismatch {
+        /// Float width exponent recorded in the bytecode header.
+        got: u8,
+        /// Maximum float width exponent this runtime build supports.
+        max_supported: u8,
+    },
     /// The CRC-32 trailer did not satisfy the algebraic self-inclusion
     /// residue. The bytecode is corrupted or was produced by a different
     /// CRC implementation.
@@ -858,6 +885,14 @@ impl core::fmt::Display for LoadError {
                 write!(
                     f,
                     "bytecode requires {}-bit addresses, runtime supports up to {}-bit",
+                    1u32 << got,
+                    1u32 << max_supported
+                )
+            }
+            LoadError::FloatSizeMismatch { got, max_supported } => {
+                write!(
+                    f,
+                    "bytecode requires {}-bit floats, runtime supports up to {}-bit",
                     1u32 << got,
                     1u32 << max_supported
                 )
@@ -901,9 +936,10 @@ impl Module {
         buf.extend_from_slice(&total_len.to_le_bytes());
         buf.push(self.word_bits_log2);
         buf.push(self.addr_bits_log2);
+        buf.push(self.float_bits_log2);
         // Reserved bytes pad the header to 16 so the rkyv body begins
         // at an 8-byte-aligned offset within the buffer.
-        buf.extend_from_slice(&[0u8; 4]);
+        buf.extend_from_slice(&[0u8; 3]);
         buf.extend_from_slice(&body);
         let crc = crc32(&buf);
         buf.extend_from_slice(&crc.to_le_bytes());
@@ -971,6 +1007,13 @@ impl Module {
                 max_supported: RUNTIME_ADDRESS_BITS_LOG2,
             });
         }
+        let float_bits_log2 = bytes[12];
+        if float_bits_log2 > RUNTIME_FLOAT_BITS_LOG2 {
+            return Err(LoadError::FloatSizeMismatch {
+                got: float_bits_log2,
+                max_supported: RUNTIME_FLOAT_BITS_LOG2,
+            });
+        }
         let body = &bytes[HEADER_LEN..length - FOOTER_LEN];
         // rkyv requires the body buffer to be 8-byte aligned. Copy
         // into an AlignedVec to satisfy this for arbitrary host slices.
@@ -1036,6 +1079,13 @@ impl Module {
             return Err(LoadError::AddressSizeMismatch {
                 got: addr_bits_log2,
                 max_supported: RUNTIME_ADDRESS_BITS_LOG2,
+            });
+        }
+        let float_bits_log2 = bytes[12];
+        if float_bits_log2 > RUNTIME_FLOAT_BITS_LOG2 {
+            return Err(LoadError::FloatSizeMismatch {
+                got: float_bits_log2,
+                max_supported: RUNTIME_FLOAT_BITS_LOG2,
             });
         }
         let body = &bytes[HEADER_LEN..length - FOOTER_LEN];

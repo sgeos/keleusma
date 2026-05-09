@@ -73,8 +73,26 @@ struct CallFrame {
     base: usize,
 }
 
+/// Context passed to native functions that opt into arena access.
+///
+/// Created freshly at each [`Op::CallNative`] dispatch with a borrow
+/// of the host-owned arena. Native functions allocate dynamic strings
+/// through `KString::alloc(ctx.arena, s)` and return them as
+/// [`Value::KStr`] for the bounded-memory path. Natives that do not
+/// need arena access can be registered through [`Vm::register_native`]
+/// or [`Vm::register_fn`], whose function types omit the context.
+pub struct NativeCtx<'a> {
+    /// Borrow of the host-owned arena for string and scratch
+    /// allocations.
+    pub arena: &'a keleusma_arena::Arena,
+}
+
 /// Type alias for a native function callable from Keleusma.
-type NativeFn = Box<dyn Fn(&[Value]) -> Result<Value, VmError>>;
+///
+/// All native functions internally accept a [`NativeCtx`] to support
+/// arena-aware natives. Natives registered through the no-context API
+/// ignore the context.
+type NativeFn = Box<dyn for<'a> Fn(&NativeCtx<'a>, &[Value]) -> Result<Value, VmError>>;
 
 /// A registered native function.
 ///
@@ -696,7 +714,50 @@ impl<'a, 'arena> Vm<'a, 'arena> {
     }
 
     /// Register a native function by name using a function pointer.
+    ///
+    /// The supplied function does not receive arena context. Native
+    /// functions that need arena access for [`Value::KStr`] allocation
+    /// register through [`Vm::register_native_with_ctx`] instead.
     pub fn register_native(&mut self, name: &str, func: fn(&[Value]) -> Result<Value, VmError>) {
+        self.natives.push(NativeEntry {
+            wcet: DEFAULT_NATIVE_WCET,
+            wcmu_bytes: DEFAULT_NATIVE_WCMU_BYTES,
+            name: String::from(name),
+            func: Box::new(move |_ctx: &NativeCtx<'_>, args: &[Value]| func(args)),
+        });
+    }
+
+    /// Register a native function by name using a closure.
+    ///
+    /// This allows closures that capture state, such as a shared command
+    /// buffer for audio script integration. The closure does not receive
+    /// arena context.
+    pub fn register_native_closure<F>(&mut self, name: &str, func: F)
+    where
+        F: Fn(&[Value]) -> Result<Value, VmError> + 'static,
+    {
+        self.natives.push(NativeEntry {
+            wcet: DEFAULT_NATIVE_WCET,
+            wcmu_bytes: DEFAULT_NATIVE_WCMU_BYTES,
+            name: String::from(name),
+            func: Box::new(move |_ctx: &NativeCtx<'_>, args: &[Value]| func(args)),
+        });
+    }
+
+    /// Register a native function that receives arena context.
+    ///
+    /// The function gains access to the host-owned arena through the
+    /// [`NativeCtx`] argument. Use this for natives that produce
+    /// arena-allocated dynamic strings via
+    /// [`keleusma_arena::KString::alloc`] and return them as
+    /// [`Value::KStr`]. The boundary type carries epoch-tagged
+    /// stale-pointer detection. Outstanding handles become
+    /// [`keleusma_arena::Stale`] on the next reset.
+    pub fn register_native_with_ctx(
+        &mut self,
+        name: &str,
+        func: for<'b> fn(&NativeCtx<'b>, &[Value]) -> Result<Value, VmError>,
+    ) {
         self.natives.push(NativeEntry {
             wcet: DEFAULT_NATIVE_WCET,
             wcmu_bytes: DEFAULT_NATIVE_WCMU_BYTES,
@@ -705,13 +766,11 @@ impl<'a, 'arena> Vm<'a, 'arena> {
         });
     }
 
-    /// Register a native function by name using a closure.
-    ///
-    /// This allows closures that capture state, such as a shared command
-    /// buffer for audio script integration.
-    pub fn register_native_closure<F>(&mut self, name: &str, func: F)
+    /// Register a native function that receives arena context using a
+    /// closure.
+    pub fn register_native_with_ctx_closure<F>(&mut self, name: &str, func: F)
     where
-        F: Fn(&[Value]) -> Result<Value, VmError> + 'static,
+        F: for<'b> Fn(&NativeCtx<'b>, &[Value]) -> Result<Value, VmError> + 'static,
     {
         self.natives.push(NativeEntry {
             wcet: DEFAULT_NATIVE_WCET,
@@ -1211,7 +1270,8 @@ impl<'a, 'arena> Vm<'a, 'arena> {
                                 native_name
                             ))
                         })?;
-                    let result = (entry.func)(&args)?;
+                    let ctx = NativeCtx { arena: self.arena };
+                    let result = (entry.func)(&ctx, &args)?;
                     self.stack.push(result);
                 }
                 Op::Return => {
@@ -2536,15 +2596,16 @@ mod tests {
         //
         // Layout breakdown:
         //   bytes[0..4]    = b"KELE"               magic
-        //   bytes[4..6]    = 0x04 0x00              version 4 (u16 LE)
+        //   bytes[4..6]    = 0x05 0x00              version 5 (u16 LE)
         //   bytes[6..10]   = 0x90 0x00 0x00 0x00    length 144 (u32 LE)
         //   bytes[10]      = 0x06                   word_bits_log2 = 6 (64-bit)
         //   bytes[11]      = 0x06                   addr_bits_log2 = 6 (64-bit)
-        //   bytes[12..16]  = 0x00 0x00 0x00 0x00    reserved
+        //   bytes[12]      = 0x06                   float_bits_log2 = 6 (f64)
+        //   bytes[13..16]  = 0x00 0x00 0x00         reserved
         //   bytes[16..140] = rkyv body
-        //   bytes[140..144] = 0xB9 0x9D 0x13 0xFB   CRC-32 (u32 LE)
+        //   bytes[140..144] = CRC-32 (u32 LE)
         let expected: alloc::vec::Vec<u8> = alloc::vec![
-            0x4B, 0x45, 0x4C, 0x45, 0x04, 0x00, 0x90, 0x00, 0x00, 0x00, 0x06, 0x06, 0x00, 0x00,
+            0x4B, 0x45, 0x4C, 0x45, 0x05, 0x00, 0x90, 0x00, 0x00, 0x00, 0x06, 0x06, 0x06, 0x00,
             0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x20, 0x00, 0x00, 0x00,
             0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00,
             0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
@@ -2553,8 +2614,8 @@ mod tests {
             0x01, 0x00, 0x00, 0x00, 0xE8, 0xFF, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
             0x00, 0x00, 0xDC, 0xFF, 0xFF, 0xFF, 0x01, 0x00, 0x00, 0x00, 0xF8, 0xFF, 0xFF, 0xFF,
             0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x06, 0x06, 0x00, 0x00,
-            0xB9, 0x9D, 0x13, 0xFB,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x06, 0x06, 0x06, 0x00,
+            0xEF, 0x2C, 0x08, 0x3A,
         ];
         let src = "fn main() -> i64 { 1 }";
         let tokens = tokenize(src).expect("lex");
@@ -2962,6 +3023,7 @@ mod tests {
             data_layout: None,
             word_bits_log2: crate::bytecode::RUNTIME_WORD_BITS_LOG2,
             addr_bits_log2: crate::bytecode::RUNTIME_ADDRESS_BITS_LOG2,
+            float_bits_log2: crate::bytecode::RUNTIME_FLOAT_BITS_LOG2,
         };
         // The unchecked constructor still rejects on structural grounds.
         let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);

@@ -1370,6 +1370,7 @@ mod tests {
             data_layout: None,
             word_bits_log2: crate::bytecode::RUNTIME_WORD_BITS_LOG2,
             addr_bits_log2: crate::bytecode::RUNTIME_ADDRESS_BITS_LOG2,
+            float_bits_log2: crate::bytecode::RUNTIME_FLOAT_BITS_LOG2,
         }
     }
 
@@ -1973,6 +1974,7 @@ mod tests {
             entry_point: Some(0),
             word_bits_log2: crate::bytecode::RUNTIME_WORD_BITS_LOG2,
             addr_bits_log2: crate::bytecode::RUNTIME_ADDRESS_BITS_LOG2,
+            float_bits_log2: crate::bytecode::RUNTIME_FLOAT_BITS_LOG2,
             data_layout: Some(DataLayout {
                 slots: vec![DataSlot {
                     name: String::from("ctx.x"),
@@ -2007,6 +2009,7 @@ mod tests {
             entry_point: Some(0),
             word_bits_log2: crate::bytecode::RUNTIME_WORD_BITS_LOG2,
             addr_bits_log2: crate::bytecode::RUNTIME_ADDRESS_BITS_LOG2,
+            float_bits_log2: crate::bytecode::RUNTIME_FLOAT_BITS_LOG2,
             data_layout: Some(DataLayout {
                 slots: vec![
                     DataSlot {

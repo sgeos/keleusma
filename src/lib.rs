@@ -21,4 +21,4 @@ pub use keleusma_arena::{
 pub use bytecode::Value;
 pub use keleusma_macros::KeleusmaType;
 pub use marshall::{IntoFallibleNativeFn, IntoNativeFn, KeleusmaType};
-pub use vm::VmError;
+pub use vm::{NativeCtx, VmError};

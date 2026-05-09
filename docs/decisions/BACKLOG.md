@@ -24,9 +24,9 @@ Hot code swap is implemented through `Vm::replace_module`. The host calls it bet
 
 Structural verification is implemented. See R22 and R23 in [RESOLVED.md](./RESOLVED.md).
 
-## B5. Static string discipline
+## B5b. Static string discipline extensions
 
-String values currently use `Value::Str(String)`, which is heap-allocated and variable-length. The V0.0-M5 milestone splits this into `Value::StaticStr` and `Value::DynStr` with the static-strings-anywhere and dynamic-strings-arena-only discipline. Anything beyond the minimum coherent design, namely surface-language string concatenation, formatting, slicing, or other variable-cost operations, is deferred. Keleusma is not a value-add for string work, so further string features are recorded here for future consideration only.
+String values use the two-string-type discipline of `Value::StaticStr` and `Value::DynStr` with the host-owned arena boundary type `Value::KStr` for stale-pointer detection. The minimum coherent design is in place. Anything beyond, namely surface-language string concatenation, formatting, slicing, or other variable-cost operations, is deferred. Keleusma is not a value-add for string work, so further string features are recorded here for future consideration only.
 
 ## B6. String interpolation
 
@@ -40,11 +40,23 @@ Allowing yield to return `Result<T, E>` so the host can signal errors to the scr
 
 Should the VM allocate per-script or share an arena across all active scripts? Currently each VM instance is independent with its own heap allocations. A shared arena could reduce allocation overhead for hosts running many concurrent scripts, but would add complexity to lifetime management.
 
-## B9. Hot update of yielded static strings
+## ~~B9. Hot update of yielded static strings~~ (Resolved structurally)
 
-A static string in the dialogue type B is a pointer or index into rodata. The host may hold a yielded value containing a static string across a hot update boundary. After the hot update, the rodata changes, and the held pointer or index may become invalid. Two resolution paths exist. Host responsibility, namely the host is told to consume or copy yielded static strings before allowing a hot update. Eager resolution, namely the yield path materializes static strings into host-owned memory before returning. The user has noted this concern and asked it be tracked alongside future work on precompiled code and Keleusma type interop.
+The lifetime concern is structurally avoided in the current implementation. `Value::from_const_archived` materializes archived `StaticStr` constants into owned `String` values at the moment they are pushed onto the operand stack. Yielded values that contain a `Value::StaticStr` therefore hold owned heap data that is independent of the bytecode buffer. A hot update that swaps the buffer through `Vm::replace_module` does not affect the host's retained yield value because the string bytes were already copied out at the lift boundary.
 
-The precompiled-code work resolved in R39 implements path A, where the parsed Module owns heap-allocated string data. Yielded static strings under path A are owned `String` values, so the cross-update lifetime concern does not apply. The concern returns under path B (P10), where yielded static strings are byte-offset references into a specific bytecode buffer.
+Eager resolution at the lift boundary is the resolution path B from the original design. The trade-off is a heap allocation per `StaticStr` push, which is acceptable for the dialogue surface where yielded values cross out of the VM. Future zero-copy yield paths that retain `&ArchivedString` references in `Value` would re-introduce the concern; if they are pursued, the host-responsibility model from path A is the alternative.
+
+## B11. Per-op decode optimization for zero-copy execution
+
+The zero-copy execution path reads each instruction through `op_from_archived(&chunk.ops[ip])`, which performs a discriminant match per fetch. The cost is one match arm and a small payload copy on hot loops. For very hot bytecode this could become measurable.
+
+Two candidate optimizations.
+
+A. Cache a decoded `Vec<Op>` per chunk at VM construction. Hot path becomes a direct slice index. Cost: heap allocation proportional to chunk size at construction; defeats zero-copy for the operation slice but preserves zero-copy for constants and string data.
+
+B. Specialize the dispatch loop on a small set of hot opcodes through a separate dispatch table generated from the archived form. Cost: more complex codegen; benefit depends on opcode distribution in real workloads.
+
+Deferred until profiling identifies the dispatch as a hot path on real workloads. The current implementation is correct and the cost is bounded by the structural verifier's per-op accounting, so this is a performance enhancement rather than a correctness concern.
 
 ## B10. Portability and target abstraction
 
