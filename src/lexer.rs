@@ -1,4 +1,5 @@
 extern crate alloc;
+use alloc::collections::VecDeque;
 use alloc::string::String;
 use alloc::vec::Vec;
 
@@ -34,11 +35,116 @@ pub fn tokenize(source: &str) -> Result<Vec<Token>, LexError> {
     Ok(tokens)
 }
 
+/// One segment of an f-string. Either a literal text run or a raw
+/// expression source captured between `{` and `}` markers.
+enum FStringPart {
+    Literal(String),
+    Interp(String),
+}
+
+/// Emit the desugared token stream for an f-string. The first token
+/// is returned directly; the remainder are queued in `pending`.
+///
+/// Synthesized tokens carry the f-string's span as a single source
+/// location. Interpolated expressions are recursively tokenized via
+/// `tokenize`; the trailing `Eof` token from the recursive lex is
+/// dropped. Lex errors inside an interpolation are propagated.
+fn emit_fstring_desugar(
+    parts: Vec<FStringPart>,
+    span: Span,
+    pending: &mut VecDeque<Token>,
+) -> Result<Token, LexError> {
+    // Sequence of token streams that together form the desugared
+    // expression. Each stream is one of:
+    //   - a single `StringLit` token for a literal segment
+    //   - the tokens for `to_string(<expr>)` for an interpolation
+    let mut segments: Vec<Vec<Token>> = Vec::new();
+    for part in parts {
+        match part {
+            FStringPart::Literal(s) => {
+                segments.push(alloc::vec![Token {
+                    kind: TokenKind::StringLit(s),
+                    span,
+                }]);
+            }
+            FStringPart::Interp(src) => {
+                let inner = tokenize(&src)?;
+                let mut to_string_call: Vec<Token> = Vec::with_capacity(inner.len() + 2);
+                to_string_call.push(Token {
+                    kind: TokenKind::LowerIdent(alloc::string::String::from("to_string")),
+                    span,
+                });
+                to_string_call.push(Token {
+                    kind: TokenKind::LParen,
+                    span,
+                });
+                for t in inner.into_iter() {
+                    if t.kind == TokenKind::Eof {
+                        continue;
+                    }
+                    to_string_call.push(Token { kind: t.kind, span });
+                }
+                to_string_call.push(Token {
+                    kind: TokenKind::RParen,
+                    span,
+                });
+                segments.push(to_string_call);
+            }
+        }
+    }
+
+    if segments.is_empty() {
+        return Ok(Token {
+            kind: TokenKind::StringLit(String::new()),
+            span,
+        });
+    }
+
+    // Fold segments left-associatively into a `concat(..., ...)`
+    // chain. A single segment passes through unchanged.
+    let mut iter = segments.into_iter();
+    let mut acc = iter.next().expect("non-empty segments");
+    for next in iter {
+        let mut wrapped: Vec<Token> = Vec::with_capacity(acc.len() + next.len() + 4);
+        wrapped.push(Token {
+            kind: TokenKind::LowerIdent(alloc::string::String::from("concat")),
+            span,
+        });
+        wrapped.push(Token {
+            kind: TokenKind::LParen,
+            span,
+        });
+        wrapped.extend(acc);
+        wrapped.push(Token {
+            kind: TokenKind::Comma,
+            span,
+        });
+        wrapped.extend(next);
+        wrapped.push(Token {
+            kind: TokenKind::RParen,
+            span,
+        });
+        acc = wrapped;
+    }
+
+    let mut iter = acc.into_iter();
+    let first = iter.next().expect("non-empty desugared stream");
+    for t in iter {
+        pending.push_back(t);
+    }
+    Ok(first)
+}
+
 struct Lexer<'a> {
     source: &'a [u8],
     pos: usize,
     line: u32,
     line_start: usize,
+    /// Pending tokens emitted by multi-token lexer paths such as the
+    /// f-string desugaring. `next_token` drains this queue before
+    /// scanning fresh input. The queue's tokens already carry
+    /// resolved spans pointing into the original source.
+    pending: VecDeque<Token>,
 }
 
 impl<'a> Lexer<'a> {
@@ -48,6 +154,7 @@ impl<'a> Lexer<'a> {
             pos: 0,
             line: 1,
             line_start: 0,
+            pending: VecDeque::new(),
         }
     }
 
@@ -143,6 +250,9 @@ impl<'a> Lexer<'a> {
     }
 
     fn next_token(&mut self) -> Result<Token, LexError> {
+        if let Some(t) = self.pending.pop_front() {
+            return Ok(t);
+        }
         self.skip_whitespace_and_comments()?;
 
         let start = self.pos;
@@ -362,6 +472,16 @@ impl<'a> Lexer<'a> {
                 }
             }
 
+            // f-string interpolation prefix: `f"..."` desugars to a
+            // `concat`/`to_string` chain. Recognized before the
+            // lowercase-ident path so the bare `f` identifier path
+            // is unaffected when no `"` follows.
+            b'f' if self.peek() == Some(b'"') => {
+                // Consume the `"` and scan the f-string body.
+                self.advance();
+                self.lex_fstring(start, start_line, start_col)
+            }
+
             // Lowercase identifier or keyword
             b'a'..=b'z' => self.lex_lower_ident(start, start_line, start_col),
 
@@ -547,6 +667,141 @@ impl<'a> Lexer<'a> {
             kind: TokenKind::IntLit(value),
             span: self.span_from(start, start_line, start_col),
         })
+    }
+
+    /// Lex an f-string `f"text {expr} more"` into a desugared token
+    /// stream. The parts are concatenated through repeated calls to
+    /// the registered `concat` native; each interpolation expression
+    /// is wrapped in `to_string(...)`. The outermost token returned
+    /// is the first of the desugared stream and the remainder are
+    /// queued in the lexer's `pending` buffer.
+    ///
+    /// Empty f-strings produce a `StringLit("")`. Single-literal
+    /// f-strings produce the bare literal. Single-interpolation
+    /// f-strings produce `to_string(<expr>)`. Mixed f-strings produce
+    /// a left-associative chain of `concat(...)` calls.
+    fn lex_fstring(
+        &mut self,
+        start: usize,
+        start_line: u32,
+        start_col: u32,
+    ) -> Result<Token, LexError> {
+        let mut parts: Vec<FStringPart> = Vec::new();
+        let mut current_lit = String::new();
+        loop {
+            match self.advance() {
+                None => {
+                    return Err(self.error(
+                        String::from("unterminated f-string literal"),
+                        start,
+                        start_line,
+                        start_col,
+                    ));
+                }
+                Some(b'"') => {
+                    if !current_lit.is_empty() {
+                        parts.push(FStringPart::Literal(core::mem::take(&mut current_lit)));
+                    }
+                    break;
+                }
+                Some(b'\n') => {
+                    return Err(self.error(
+                        String::from("newline in f-string literal"),
+                        start,
+                        start_line,
+                        start_col,
+                    ));
+                }
+                Some(b'\\') => match self.advance() {
+                    Some(b'n') => current_lit.push('\n'),
+                    Some(b't') => current_lit.push('\t'),
+                    Some(b'r') => current_lit.push('\r'),
+                    Some(b'\\') => current_lit.push('\\'),
+                    Some(b'"') => current_lit.push('"'),
+                    Some(b'0') => current_lit.push('\0'),
+                    Some(b'{') => current_lit.push('{'),
+                    Some(b'}') => current_lit.push('}'),
+                    Some(c) => {
+                        return Err(self.error(
+                            {
+                                let mut msg = String::from("unknown escape sequence '\\");
+                                msg.push(c as char);
+                                msg.push('\'');
+                                msg
+                            },
+                            start,
+                            start_line,
+                            start_col,
+                        ));
+                    }
+                    None => {
+                        return Err(self.error(
+                            String::from("unterminated escape sequence"),
+                            start,
+                            start_line,
+                            start_col,
+                        ));
+                    }
+                },
+                Some(b'{') => {
+                    if !current_lit.is_empty() {
+                        parts.push(FStringPart::Literal(core::mem::take(&mut current_lit)));
+                    }
+                    let interp_start = self.pos;
+                    let interp_start_line = self.line;
+                    let interp_start_col = self.column();
+                    let mut depth: usize = 1;
+                    let mut interp_text = String::new();
+                    loop {
+                        match self.advance() {
+                            None => {
+                                return Err(self.error(
+                                    String::from("unterminated f-string interpolation"),
+                                    interp_start,
+                                    interp_start_line,
+                                    interp_start_col,
+                                ));
+                            }
+                            Some(b'\n') => {
+                                return Err(self.error(
+                                    String::from("newline inside f-string interpolation"),
+                                    interp_start,
+                                    interp_start_line,
+                                    interp_start_col,
+                                ));
+                            }
+                            Some(b'{') => {
+                                depth += 1;
+                                interp_text.push('{');
+                            }
+                            Some(b'}') => {
+                                depth -= 1;
+                                if depth == 0 {
+                                    break;
+                                }
+                                interp_text.push('}');
+                            }
+                            Some(c) => interp_text.push(c as char),
+                        }
+                    }
+                    parts.push(FStringPart::Interp(interp_text));
+                }
+                Some(b'}') => {
+                    return Err(self.error(
+                        String::from(
+                            "unmatched `}` in f-string; use `\\}` to embed a literal brace",
+                        ),
+                        start,
+                        start_line,
+                        start_col,
+                    ));
+                }
+                Some(c) => current_lit.push(c as char),
+            }
+        }
+
+        let span = self.span_from(start, start_line, start_col);
+        emit_fstring_desugar(parts, span, &mut self.pending)
     }
 
     fn lex_string(

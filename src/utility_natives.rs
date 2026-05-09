@@ -177,6 +177,203 @@ fn native_length_with_ctx(ctx: &NativeCtx<'_>, args: &[Value]) -> Result<Value, 
     }
 }
 
+/// Concatenate two strings.
+///
+/// Resolves either operand, including arena-backed `Value::KStr`,
+/// when an arena is supplied. Returns `Value::DynStr` containing the
+/// catenation. Subject to the cross-yield prohibition on dynamic
+/// strings. The arena-aware variant [`native_concat_with_ctx`]
+/// returns `Value::KStr` for the bounded-memory path.
+///
+/// Worst-case output length is the sum of the operand lengths, so
+/// hosts that rely on `verify_resource_bounds` for real-time
+/// embedding must declare a heap bound through `set_native_bounds`
+/// before invoking the VM. Without an attestation, the analysis
+/// treats `concat` as zero-cost, which is unsound for unbounded
+/// inputs.
+fn native_concat(args: &[Value]) -> Result<Value, VmError> {
+    if args.len() != 2 {
+        return Err(VmError::NativeError(format!(
+            "concat: expected 2 arguments, got {}",
+            args.len()
+        )));
+    }
+    let a = string_view_no_arena(&args[0])?;
+    let b = string_view_no_arena(&args[1])?;
+    let mut out = String::with_capacity(a.len() + b.len());
+    out.push_str(a);
+    out.push_str(b);
+    Ok(Value::DynStr(out))
+}
+
+/// Concatenate two strings with arena context.
+///
+/// Resolves arena-backed `Value::KStr` handles before catenation and
+/// allocates the result through the host-owned arena's top region as
+/// `Value::KStr`. The result becomes [`keleusma_arena::Stale`] on the
+/// next reset.
+fn native_concat_with_ctx(ctx: &NativeCtx<'_>, args: &[Value]) -> Result<Value, VmError> {
+    if args.len() != 2 {
+        return Err(VmError::NativeError(format!(
+            "concat: expected 2 arguments, got {}",
+            args.len()
+        )));
+    }
+    let a = string_view_with_arena(ctx.arena, &args[0])?;
+    let b = string_view_with_arena(ctx.arena, &args[1])?;
+    let mut out = String::with_capacity(a.len() + b.len());
+    out.push_str(&a);
+    out.push_str(&b);
+    let handle = KString::alloc(ctx.arena, &out).map_err(|_| {
+        VmError::NativeError(String::from(
+            "concat: arena allocation failed (out of memory)",
+        ))
+    })?;
+    Ok(Value::KStr(handle))
+}
+
+/// Substring slice from `start` (inclusive) to `end` (exclusive).
+///
+/// Bounds: `0 <= start <= end <= length`. Out-of-range indices return
+/// a `NativeError`. Indexes are character counts measured in Unicode
+/// code points (matching `length`'s semantics), not byte offsets, so
+/// multi-byte characters are not split.
+///
+/// Returns `Value::DynStr`. The arena-aware variant
+/// [`native_slice_with_ctx`] returns `Value::KStr`.
+///
+/// Worst-case output length is `end - start`. The same WCMU
+/// attestation guidance as `concat` applies.
+fn native_slice(args: &[Value]) -> Result<Value, VmError> {
+    if args.len() != 3 {
+        return Err(VmError::NativeError(format!(
+            "slice: expected 3 arguments, got {}",
+            args.len()
+        )));
+    }
+    let s = string_view_no_arena(&args[0])?;
+    let start = match &args[1] {
+        Value::Int(i) => *i,
+        other => {
+            return Err(VmError::TypeError(format!(
+                "slice: start must be i64, got {}",
+                other.type_name()
+            )));
+        }
+    };
+    let end = match &args[2] {
+        Value::Int(i) => *i,
+        other => {
+            return Err(VmError::TypeError(format!(
+                "slice: end must be i64, got {}",
+                other.type_name()
+            )));
+        }
+    };
+    let out = slice_chars(s, start, end)?;
+    Ok(Value::DynStr(out))
+}
+
+/// Substring slice with arena context.
+fn native_slice_with_ctx(ctx: &NativeCtx<'_>, args: &[Value]) -> Result<Value, VmError> {
+    if args.len() != 3 {
+        return Err(VmError::NativeError(format!(
+            "slice: expected 3 arguments, got {}",
+            args.len()
+        )));
+    }
+    let s = string_view_with_arena(ctx.arena, &args[0])?;
+    let start = match &args[1] {
+        Value::Int(i) => *i,
+        other => {
+            return Err(VmError::TypeError(format!(
+                "slice: start must be i64, got {}",
+                other.type_name()
+            )));
+        }
+    };
+    let end = match &args[2] {
+        Value::Int(i) => *i,
+        other => {
+            return Err(VmError::TypeError(format!(
+                "slice: end must be i64, got {}",
+                other.type_name()
+            )));
+        }
+    };
+    let out = slice_chars(&s, start, end)?;
+    let handle = KString::alloc(ctx.arena, &out).map_err(|_| {
+        VmError::NativeError(String::from(
+            "slice: arena allocation failed (out of memory)",
+        ))
+    })?;
+    Ok(Value::KStr(handle))
+}
+
+/// Helper: read a string Value as a `&str`, rejecting `Value::KStr`
+/// because no arena is available for resolution. Used by the
+/// non-context-aware native variants.
+fn string_view_no_arena(v: &Value) -> Result<&str, VmError> {
+    match v {
+        Value::StaticStr(s) | Value::DynStr(s) => Ok(s.as_str()),
+        Value::KStr(_) => Err(VmError::NativeError(String::from(
+            "expected String argument; arena-backed KStr requires arena context",
+        ))),
+        other => Err(VmError::TypeError(format!(
+            "expected String, got {}",
+            other.type_name()
+        ))),
+    }
+}
+
+/// Helper: read a string Value as an owned `String`, resolving
+/// `Value::KStr` through the supplied arena. Used by the
+/// context-aware native variants.
+fn string_view_with_arena(arena: &Arena, v: &Value) -> Result<String, VmError> {
+    match v {
+        Value::StaticStr(s) | Value::DynStr(s) => Ok(s.clone()),
+        Value::KStr(h) => match h.get(arena) {
+            Ok(s) => Ok(String::from(s)),
+            Err(_) => Err(VmError::NativeError(String::from(
+                "KStr is stale (arena reset since allocation)",
+            ))),
+        },
+        other => Err(VmError::TypeError(format!(
+            "expected String, got {}",
+            other.type_name()
+        ))),
+    }
+}
+
+/// Helper: extract a substring by character indices. Returns a new
+/// owned `String`. Bounds-checks both indices and rejects out-of-range
+/// or inverted ranges.
+fn slice_chars(s: &str, start: i64, end: i64) -> Result<String, VmError> {
+    if start < 0 {
+        return Err(VmError::NativeError(format!(
+            "slice: start index {} is negative",
+            start
+        )));
+    }
+    if end < start {
+        return Err(VmError::NativeError(format!(
+            "slice: end index {} less than start {}",
+            end, start
+        )));
+    }
+    let chars: Vec<char> = s.chars().collect();
+    let len = chars.len() as i64;
+    if end > len {
+        return Err(VmError::NativeError(format!(
+            "slice: end index {} exceeds length {}",
+            end, len
+        )));
+    }
+    let start_u = start as usize;
+    let end_u = end as usize;
+    Ok(chars[start_u..end_u].iter().collect())
+}
+
 /// Debug print a value. Returns Unit. In no_std this is a no-op; the host
 /// can override with a closure using `register_native_closure` if output
 /// is desired.
@@ -198,11 +395,14 @@ fn native_println(args: &[Value]) -> Result<Value, VmError> {
 /// [`register_utility_natives_with_ctx`] for the arena-aware
 /// variants that produce `KStr` and that resolve `KStr` arguments.
 ///
-/// Registers: `to_string`, `length`, `println`, `math::sqrt`, `math::floor`,
-/// `math::ceil`, `math::round`, `math::log2`.
+/// Registers: `to_string`, `length`, `concat`, `slice`, `println`,
+/// `math::sqrt`, `math::floor`, `math::ceil`, `math::round`,
+/// `math::log2`.
 pub fn register_utility_natives<'a, 'arena>(vm: &mut Vm<'a, 'arena>) {
     vm.register_native("to_string", native_to_string);
     vm.register_native("length", native_length);
+    vm.register_native("concat", native_concat);
+    vm.register_native("slice", native_slice);
     vm.register_native("println", native_println);
 
     vm.register_fn("math::sqrt", |x: f64| -> f64 { libm::sqrt(x) });
@@ -220,13 +420,15 @@ pub fn register_utility_natives<'a, 'arena>(vm: &mut Vm<'a, 'arena>) {
 /// `Value::KStr` arguments through the arena before counting
 /// characters. The bounded-memory path for native-produced strings.
 ///
-/// Registers: `to_string`, `length`, `println`, `math::sqrt`,
-/// `math::floor`, `math::ceil`, `math::round`, `math::log2`. Math
-/// functions are arity-typed and identical between the two
-/// registrations.
+/// Registers: `to_string`, `length`, `concat`, `slice`, `println`,
+/// `math::sqrt`, `math::floor`, `math::ceil`, `math::round`,
+/// `math::log2`. Math functions are arity-typed and identical
+/// between the two registrations.
 pub fn register_utility_natives_with_ctx<'a, 'arena>(vm: &mut Vm<'a, 'arena>) {
     vm.register_native_with_ctx("to_string", native_to_string_with_ctx);
     vm.register_native_with_ctx("length", native_length_with_ctx);
+    vm.register_native_with_ctx("concat", native_concat_with_ctx);
+    vm.register_native_with_ctx("slice", native_slice_with_ctx);
     vm.register_native("println", native_println);
 
     vm.register_fn("math::sqrt", |x: f64| -> f64 { libm::sqrt(x) });
@@ -379,6 +581,107 @@ mod tests {
         );
         assert!(matches!(val, Value::KStr(_)));
         assert_eq!(resolved.as_deref(), Some("hello"));
+    }
+
+    // -- f-string interpolation --
+
+    #[test]
+    fn fstring_no_interpolation() {
+        let val = run_with_utilities("fn main() -> String { f\"hello\" }");
+        assert_eq!(val, Value::StaticStr(String::from("hello")));
+    }
+
+    #[test]
+    fn fstring_single_interp() {
+        let val =
+            run_with_utilities("use to_string\nfn main() -> String { let n: i64 = 42; f\"{n}\" }");
+        assert_eq!(val, Value::DynStr(String::from("42")));
+    }
+
+    #[test]
+    fn fstring_mixed_interp() {
+        let val = run_with_utilities(
+            "use to_string\nuse concat\n\
+             fn main() -> String { let n: i64 = 42; f\"x = {n}!\" }",
+        );
+        assert_eq!(val, Value::DynStr(String::from("x = 42!")));
+    }
+
+    #[test]
+    fn fstring_multiple_interps() {
+        let val = run_with_utilities(
+            "use to_string\nuse concat\n\
+             fn main() -> String {\n\
+                let a: i64 = 1;\n\
+                let b: i64 = 2;\n\
+                f\"({a}, {b})\"\n\
+             }",
+        );
+        assert_eq!(val, Value::DynStr(String::from("(1, 2)")));
+    }
+
+    #[test]
+    fn fstring_escaped_braces() {
+        let val = run_with_utilities("fn main() -> String { f\"\\{key\\}\" }");
+        assert_eq!(val, Value::StaticStr(String::from("{key}")));
+    }
+
+    // -- Concat and slice --
+
+    #[test]
+    fn concat_two_static_strings() {
+        let val = run_with_utilities(
+            "use concat\nfn main() -> String { concat(\"hello, \", \"world\") }",
+        );
+        assert_eq!(val, Value::DynStr(String::from("hello, world")));
+    }
+
+    #[test]
+    fn concat_static_with_dynamic() {
+        let val = run_with_utilities(
+            "use concat\nuse to_string\nfn main() -> String { concat(\"x = \", to_string(42)) }",
+        );
+        assert_eq!(val, Value::DynStr(String::from("x = 42")));
+    }
+
+    #[test]
+    fn slice_basic() {
+        let val = run_with_utilities("use slice\nfn main() -> String { slice(\"hello\", 1, 4) }");
+        assert_eq!(val, Value::DynStr(String::from("ell")));
+    }
+
+    #[test]
+    fn slice_full_range() {
+        let val = run_with_utilities("use slice\nfn main() -> String { slice(\"hello\", 0, 5) }");
+        assert_eq!(val, Value::DynStr(String::from("hello")));
+    }
+
+    #[test]
+    fn slice_empty_range() {
+        let val = run_with_utilities("use slice\nfn main() -> String { slice(\"hello\", 2, 2) }");
+        assert_eq!(val, Value::DynStr(String::from("")));
+    }
+
+    #[test]
+    fn concat_with_ctx_returns_kstr() {
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let (val, resolved) = run_with_utilities_with_ctx(
+            "use concat\nfn main() -> String { concat(\"foo\", \"bar\") }",
+            &arena,
+        );
+        assert!(matches!(val, Value::KStr(_)));
+        assert_eq!(resolved.as_deref(), Some("foobar"));
+    }
+
+    #[test]
+    fn slice_with_ctx_returns_kstr() {
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let (val, resolved) = run_with_utilities_with_ctx(
+            "use slice\nfn main() -> String { slice(\"hello world\", 6, 11) }",
+            &arena,
+        );
+        assert!(matches!(val, Value::KStr(_)));
+        assert_eq!(resolved.as_deref(), Some("world"));
     }
 
     #[test]
