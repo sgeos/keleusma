@@ -870,6 +870,49 @@ impl<'a> Parser<'a> {
         let tok = self.tokens[self.pos].clone();
 
         match tok.kind {
+            // Closure literal: `|args| body` or `|args| -> ret { body }`.
+            // Bar (`|`) introduces the parameter list. The body can
+            // be a brace block or a single expression.
+            TokenKind::Bar => {
+                self.pos += 1;
+                let mut params: Vec<Param> = Vec::new();
+                if !self.at(&TokenKind::Bar) {
+                    params.push(self.parse_param()?);
+                    while self.eat(&TokenKind::Comma) {
+                        if self.at(&TokenKind::Bar) {
+                            break;
+                        }
+                        params.push(self.parse_param()?);
+                    }
+                }
+                self.expect(&TokenKind::Bar)?;
+                let return_type = if self.eat(&TokenKind::Arrow) {
+                    Some(self.parse_type_expr()?)
+                } else {
+                    None
+                };
+                let body = if self.at(&TokenKind::LBrace) {
+                    self.parse_block()?
+                } else {
+                    // Single-expression body wraps into a block whose
+                    // tail expression is the parsed expression. The
+                    // span is the expression's span.
+                    let e = self.parse_expr()?;
+                    let span = e.span();
+                    Block {
+                        stmts: Vec::new(),
+                        tail_expr: Some(Box::new(e)),
+                        span,
+                    }
+                };
+                let end = body.span;
+                Ok(Expr::Closure {
+                    params,
+                    return_type,
+                    body,
+                    span: merge_spans(tok.span, end),
+                })
+            }
             // Literals.
             TokenKind::IntLit(v) => {
                 self.pos += 1;
@@ -1779,6 +1822,55 @@ mod tests {
         let src = "fn id<T,>(x: T) -> T { x }";
         let program = parse_str(src).unwrap();
         assert_eq!(program.functions[0].type_params.len(), 1);
+    }
+
+    #[test]
+    fn parse_closure_no_params_no_body() {
+        // `|| 42` parses as a nullary closure whose tail expression
+        // is a literal.
+        let src = "fn main() -> i64 { let f = || 42; 0 }";
+        let program = parse_str(src).unwrap();
+        let body = &program.functions[0].body;
+        match &body.stmts[0] {
+            Stmt::Let(l) => match &l.value {
+                Expr::Closure { params, .. } => assert!(params.is_empty()),
+                other => panic!("expected closure, got {:?}", other),
+            },
+            other => panic!("expected let, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_closure_with_one_param() {
+        let src = "fn main() -> i64 { let f = |x: i64| x + 1; 0 }";
+        let program = parse_str(src).unwrap();
+        let body = &program.functions[0].body;
+        match &body.stmts[0] {
+            Stmt::Let(l) => match &l.value {
+                Expr::Closure { params, .. } => assert_eq!(params.len(), 1),
+                other => panic!("expected closure, got {:?}", other),
+            },
+            other => panic!("expected let, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_closure_with_block_body() {
+        let src = "fn main() -> i64 { let f = |x: i64| -> i64 { x * 2 }; 0 }";
+        let program = parse_str(src).unwrap();
+        let body = &program.functions[0].body;
+        match &body.stmts[0] {
+            Stmt::Let(l) => match &l.value {
+                Expr::Closure {
+                    return_type, body, ..
+                } => {
+                    assert!(return_type.is_some());
+                    assert!(body.tail_expr.is_some());
+                }
+                other => panic!("expected closure, got {:?}", other),
+            },
+            other => panic!("expected let, got {:?}", other),
+        }
     }
 
     #[test]

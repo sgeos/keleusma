@@ -1529,6 +1529,20 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
                 span: *span,
             });
         }
+        Expr::Closure { span, .. } => {
+            // Closures are parsed and type-checked but the runtime
+            // representation and first-class invocation are deferred
+            // to a follow-on B3 session. Emitting a chunk for the
+            // closure body and producing a callable value requires a
+            // new `Value::Func` variant and an indirect-call
+            // bytecode op.
+            return Err(CompileError {
+                message: String::from(
+                    "closure runtime is not yet implemented; only parsing and type-checking are supported in this session",
+                ),
+                span: *span,
+            });
+        }
     }
     Ok(())
 }

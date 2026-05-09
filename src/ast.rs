@@ -358,6 +358,18 @@ pub enum Expr {
     },
     /// Pipeline placeholder `_`.
     Placeholder { span: Span },
+    /// Closure literal: `|args| body` or `|args| -> ret { body }`.
+    /// The return type and body are optional in surface syntax: a
+    /// bare expression body is wrapped into a single-tail-expression
+    /// block automatically by the parser. Captured environment is
+    /// not yet supported; the body resolves identifiers against the
+    /// closure's own parameter scope only.
+    Closure {
+        params: Vec<Param>,
+        return_type: Option<TypeExpr>,
+        body: Block,
+        span: Span,
+    },
 }
 
 impl Expr {
@@ -383,7 +395,8 @@ impl Expr {
             | Expr::ArrayLiteral { span, .. }
             | Expr::TupleLiteral { span, .. }
             | Expr::Cast { span, .. }
-            | Expr::Placeholder { span } => *span,
+            | Expr::Placeholder { span }
+            | Expr::Closure { span, .. } => *span,
         }
     }
 }

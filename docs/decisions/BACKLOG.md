@@ -53,9 +53,21 @@ Remaining work.
 - Polymorphic recursion guard. If a generic function calls itself with type arguments derived from its own type parameters, the pass would loop indefinitely. The MVP relies on the call graph being finite and the test suite not exercising polymorphic recursion. A guard against unbounded specialization should be added before the feature is considered production-ready.
 - Pruning unused generic functions. The MVP retains generic functions that have at least one specialization; non-specialized generics remain in the program as dead code that the compiler emits but the runtime never enters. A pruning pass would remove these.
 
-## B3. Closures or anonymous functions
+## B3. Closures and anonymous functions (parser and type-check landed; runtime deferred)
 
-Closures or anonymous functions would enable higher-order programming patterns such as callbacks and inline transformations. Deferred to keep the VM simple. Multiheaded function dispatch serves as a partial alternative for pattern-based dispatch.
+Surface syntax `|args| body` and `|args| -> ret { body }` is parsed and the AST carries `Expr::Closure { params, return_type, body, span }`. The lexer distinguishes the bare `|` token (`Bar`) from the pipeline operator `|>` (`Pipe`). The type checker walks the closure body in a fresh scope where parameters are bound to fresh type variables or their declared types and returns a fresh type variable for the closure expression. Monomorphization recurses through closure bodies during substitution and call-site rewriting.
+
+The runtime side is deferred. The compiler currently rejects closure expressions at compile time with a clear "closure runtime is not yet implemented" error so the syntax surface is stable while the implementation evolves.
+
+Remaining work.
+
+- Runtime representation. Add a `Value::Func(u16)` variant carrying the chunk index of the compiled closure body, and a closure type.
+- Compiler hoisting. Each closure expression compiles to a top-level chunk with a synthetic mangled name. The closure expression evaluates to `Value::Func(chunk_idx)`.
+- Indirect call. Add `Op::CallIndirect(u8)` that pops `arg_count` args plus a `Value::Func` from the operand stack and invokes the carried chunk.
+- Environment capture. The body resolves identifiers against the closure's parameter scope plus a copied environment captured from the enclosing scope at closure creation. The captured environment becomes part of the closure value.
+- Surface syntax for invocation. Calls of the form `f(args)` where `f` is a closure-typed local resolve to `CallIndirect` rather than the existing name-based `Call`. The parser may need a separate `IndirectCall` AST variant or the compiler resolves at compile time based on the receiver's known type.
+
+Estimated implementation effort. Six to ten hours for the runtime including capture.
 
 ## ~~B4. Hot code swap implementation~~ (Resolved as R29)
 

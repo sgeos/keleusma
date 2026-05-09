@@ -863,6 +863,58 @@ pub fn check(program: &Program) -> Result<(), TypeError> {
                     impl_method.span,
                 ));
             }
+            // Validate that each parameter type and the return type
+            // agree between the impl method and the trait declaration.
+            // Both sides resolve through `from_expr` against the same
+            // `ctx.types` registry. Type parameters of the trait or
+            // impl are not yet resolved here; the validation matches
+            // by structural equality. Self is not yet a distinguished
+            // type so trait declarations that mention `Self` use the
+            // implementing type's name explicitly. Future work: allow
+            // `Self` in trait declarations and substitute the impl's
+            // for_type at validation time.
+            for (idx, (impl_param, trait_param)) in impl_method
+                .params
+                .iter()
+                .zip(trait_sig.params.iter())
+                .enumerate()
+            {
+                let impl_ty = match &impl_param.type_expr {
+                    Some(t) => Type::from_expr(t, &ctx.types),
+                    None => continue,
+                };
+                let trait_ty = match &trait_param.type_expr {
+                    Some(t) => Type::from_expr(t, &ctx.types),
+                    None => continue,
+                };
+                if impl_ty != trait_ty {
+                    return Err(TypeError::new(
+                        format!(
+                            "impl method `{}::{}` parameter {} has type {} but trait declares {}",
+                            impl_block.trait_name,
+                            impl_method.name,
+                            idx,
+                            impl_ty.display(),
+                            trait_ty.display()
+                        ),
+                        impl_param.span,
+                    ));
+                }
+            }
+            let impl_ret = Type::from_expr(&impl_method.return_type, &ctx.types);
+            let trait_ret = Type::from_expr(&trait_sig.return_type, &ctx.types);
+            if impl_ret != trait_ret {
+                return Err(TypeError::new(
+                    format!(
+                        "impl method `{}::{}` returns {} but trait declares {}",
+                        impl_block.trait_name,
+                        impl_method.name,
+                        impl_ret.display(),
+                        trait_ret.display()
+                    ),
+                    impl_method.span,
+                ));
+            }
         }
     }
 
@@ -1982,6 +2034,24 @@ fn type_of_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Type, TypeError> {
             }
         }
         Expr::Placeholder { .. } => Ok(ctx.fresh()),
+        Expr::Closure { params, body, .. } => {
+            // Type-check the closure body in a fresh scope where the
+            // parameters are bound to fresh type variables (or their
+            // declared types). The closure's surface type is left as
+            // a fresh type variable for now; first-class function
+            // types are tracked under future B3 follow-on work.
+            ctx.push_scope();
+            for param in params {
+                let t = match &param.type_expr {
+                    Some(t) => Type::from_expr(t, &ctx.types),
+                    None => ctx.fresh(),
+                };
+                bind_pattern(ctx, &param.pattern, t);
+            }
+            let _body_ty = type_of_block(ctx, body)?;
+            ctx.pop_scope();
+            Ok(ctx.fresh())
+        }
         Expr::MethodCall {
             receiver,
             method,
@@ -2742,6 +2812,37 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.message.contains("no method"));
+    }
+
+    #[test]
+    fn impl_method_param_type_mismatch_rejected() {
+        // Trait declares `fn double(x: i64) -> i64` but the impl
+        // supplies `fn double(x: bool) -> i64`. Parameter type
+        // mismatch must be rejected.
+        let err = check_src(
+            "trait Doubler { fn double(x: i64) -> i64; }\n\
+             impl Doubler for i64 { fn double(x: bool) -> i64 { 0 } }\n\
+             fn main() -> i64 { 0 }",
+        )
+        .unwrap_err();
+        assert!(
+            err.message.contains("parameter") || err.message.contains("type"),
+            "unexpected error: {}",
+            err.message,
+        );
+    }
+
+    #[test]
+    fn impl_method_return_type_mismatch_rejected() {
+        // Trait declares `fn double(x: i64) -> i64` but the impl
+        // returns `bool`. Return type mismatch must be rejected.
+        let err = check_src(
+            "trait Doubler { fn double(x: i64) -> i64; }\n\
+             impl Doubler for i64 { fn double(x: i64) -> bool { true } }\n\
+             fn main() -> i64 { 0 }",
+        )
+        .unwrap_err();
+        assert!(err.message.contains("returns"));
     }
 
     #[test]

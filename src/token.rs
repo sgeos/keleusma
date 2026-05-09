@@ -84,6 +84,7 @@ pub enum TokenKind {
 
     // Pipeline
     Pipe,
+    Bar,
 
     // Punctuation
     Dot,

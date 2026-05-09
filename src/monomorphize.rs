@@ -76,11 +76,29 @@ pub fn monomorphize(program: Program) -> Program {
         }
     }
 
+    // Polymorphic recursion guard. The fixed-point loop below
+    // bounds the number of specializations to prevent unbounded
+    // expansion when a generic function calls itself with type
+    // arguments derived from its own type parameters in a way that
+    // grows. The bound is generous; legitimate programs reach a
+    // fixed point well below it.
+    const SPECIALIZATION_LIMIT: usize = 1024;
+
     // Also rewrite calls inside specialized functions. Specialization
     // can introduce new calls that themselves point at generic
     // functions, so iterate to a fixed point.
     let mut idx = 0;
     while idx < new_functions.len() {
+        if new_functions.len() > SPECIALIZATION_LIMIT {
+            // Bail out: the program likely contains polymorphic
+            // recursion that would grow specializations
+            // unboundedly. Subsequent compilation will fail when
+            // the bytecode chunk count exceeds VM limits, which is
+            // the documented behavior. Returning the program
+            // with the partial specializations gives the user a
+            // clearer error path than infinite loop.
+            break;
+        }
         local_types.clear();
         for param in &new_functions[idx].params {
             if let Some(t) = &param.type_expr
@@ -104,19 +122,17 @@ pub fn monomorphize(program: Program) -> Program {
     }
 
     program.functions.extend(new_functions);
-    // Drop generic functions whose specialization is now generated.
-    // Calls to them have been rewritten to specialized names. Generic
-    // functions for which no specialization was generated remain;
-    // they are unused by main and the compiler emits them as dead
-    // code that the runtime never enters. A future iteration could
-    // prune them, but doing so eagerly risks dropping functions that
-    // are reached through paths the current pass does not yet
-    // analyze.
-    let specialized_origins: alloc::collections::BTreeSet<String> =
-        specs.keys().map(|(name, _)| name.clone()).collect();
-    program
-        .functions
-        .retain(|f| !specialized_origins.contains(&f.name));
+    // Drop every generic function from the output. Specialized
+    // copies have been generated for call sites the pass could
+    // analyze, and the corresponding call sites have been rewritten
+    // to specialized names. Generic functions retained in the
+    // output would compile to dead-code chunks that the runtime
+    // never enters, and any remaining call site that still
+    // references a generic name would indicate that the pass
+    // failed to monomorphize the call. Dropping the generics
+    // surfaces such failures as compile-time errors rather than
+    // silent dead code.
+    program.functions.retain(|f| f.type_params.is_empty());
     program
 }
 
@@ -464,6 +480,24 @@ fn subst_in_expr(expr: &Expr, subst: &BTreeMap<String, TypeExpr>) -> Expr {
             span: *span,
         },
         Expr::Placeholder { span } => Expr::Placeholder { span: *span },
+        Expr::Closure {
+            params,
+            return_type,
+            body,
+            span,
+        } => Expr::Closure {
+            params: params
+                .iter()
+                .map(|p| Param {
+                    pattern: p.pattern.clone(),
+                    type_expr: p.type_expr.as_ref().map(|t| subst_type_expr(t, subst)),
+                    span: p.span,
+                })
+                .collect(),
+            return_type: return_type.as_ref().map(|t| subst_type_expr(t, subst)),
+            body: subst_in_block(body, subst),
+            span: *span,
+        },
     }
 }
 
@@ -615,6 +649,9 @@ fn rewrite_expr(
             }
         }
         Expr::Cast { expr, .. } => rewrite_expr(expr, generics, locals, specs, new_functions),
+        Expr::Closure { body, .. } => {
+            rewrite_block(body, generics, locals, specs, new_functions);
+        }
         Expr::Literal { .. } | Expr::Ident { .. } | Expr::Placeholder { .. } => {}
     }
 

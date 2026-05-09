@@ -307,12 +307,10 @@ impl<'a> Lexer<'a> {
                         span: self.span_from(start, start_line, start_col),
                     })
                 } else {
-                    Err(self.error(
-                        String::from("unexpected character '|', expected '|>'"),
-                        start,
-                        start_line,
-                        start_col,
-                    ))
+                    Ok(Token {
+                        kind: TokenKind::Bar,
+                        span: self.span_from(start, start_line, start_col),
+                    })
                 }
             }
 
@@ -1129,9 +1127,12 @@ mod tests {
     }
 
     #[test]
-    fn error_bare_pipe() {
-        let result = tokenize("| foo");
-        assert!(result.is_err());
+    fn bare_pipe_is_bar() {
+        // `|` alone is now the closure delimiter token. Bare `|` is
+        // tokenized as `Bar`. Adjacent `|>` continues to lex as the
+        // pipeline operator.
+        let result = tokenize("| foo").unwrap();
+        assert!(matches!(result[0].kind, TokenKind::Bar));
     }
 
     #[test]
