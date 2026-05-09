@@ -53,13 +53,23 @@ Phase 1 of P10 is complete. The body format is rkyv as of `BYTECODE_VERSION = 4`
 
 Phase 2 step 1 is complete. `Module::access_bytes` returns a borrowed `&'a ArchivedModule` after validating the framing through the existing checks. `Module::view_bytes` calls `access_bytes` and deserializes to an owned `Module` without the body copy that `from_bytes` performs. The corresponding `Vm::view_bytes` and `unsafe Vm::view_bytes_unchecked` constructors compose validation with the safe and unchecked Vm constructors. Both require the body to be 8-byte aligned. Hosts arrange this through `AlignedVec`, through a static buffer with `#[repr(align(8))]`, or through linker placement.
 
-Phase 2 step 2 is the actual zero-copy execution path and remains open. The work cascades:
+Phase 2 step 2 is in progress. The conversion helpers are in place. The execution loop refactor remains.
+
+Completed under step 2:
+
+- `Op` derives `Copy`, allowing fast extraction from archived form.
+- `bytecode::op_from_archived(&ArchivedOp) -> Op` materializes an owned `Op` from an archived form. All forty-eight variants covered.
+- `bytecode::value_from_archived(&ArchivedValue) -> Value` materializes an owned `Value` recursively. All eleven variants covered.
+- Round-trip tests verify the converters preserve op and value identity through the archive cycle.
+
+Remaining under step 2:
 
 - `Vm` gains a lifetime parameter. Either `Vm<'a>` everywhere or a separate `BorrowedVm<'a>` alongside the owned `Vm`.
-- The execution loop reads from `&ArchivedModule` instead of `&Module`. Match arms over `Op` become match arms over `ArchivedOp` with `to_native()` conversions for endian-explicit types. Vector accesses go through `ArchivedVec`. String accesses go through `ArchivedString`.
-- A converter from `ArchivedValue` to `Value` is needed at constant-load sites because the operand stack continues to use owned `Value`.
+- The execution loop reads from `&ArchivedModule` instead of `&Module`. Each iteration calls `op_from_archived` for the current instruction and `value_from_archived` for any constant load. The match arms over the converted `Op` are unchanged from the current execution loop.
 - The verifier either gains an `ArchivedModule` variant or zero-copy execution is restricted to the unchecked path that skips verification.
 - Tests for execution against borrowed buffers, including from a `&'static [u8]` placed in `.rodata`.
+
+The remaining work is genuine multi-session refactor. The cascade of the lifetime parameter through every `Vm` method and the rewrite of the execution loop accessors is mechanical but extensive. Splitting it across sessions reduces risk of leaving the codebase in a partially-converted state.
 
 Phase 2 step 2 also interacts with two backlog items.
 

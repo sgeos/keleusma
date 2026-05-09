@@ -148,7 +148,7 @@ pub enum BlockType {
 }
 
 /// A bytecode instruction.
-#[derive(Debug, Clone, PartialEq, Archive, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Archive, Serialize, Deserialize)]
 pub enum Op {
     /// Push a constant from the chunk's constant pool.
     Const(u16),
@@ -925,6 +925,115 @@ impl Module {
         let archived = Self::access_bytes(bytes)?;
         rkyv::deserialize::<Module, rkyv::rancor::Error>(archived)
             .map_err(|e| LoadError::Codec(format!("deserialize failed: {}", e)))
+    }
+}
+
+/// Convert an archived `Op` to its owned form.
+///
+/// The archived form stores multi-byte integer payloads in
+/// little-endian-explicit types from `rkyv::rend`. This helper
+/// materializes an owned `Op` for execution. `Op` is `Copy`, so the
+/// returned value carries no heap allocation. Used by the zero-copy
+/// execution path where the bytecode buffer is not deserialized into an
+/// owned `Module`.
+pub fn op_from_archived(archived: &ArchivedOp) -> Op {
+    match archived {
+        ArchivedOp::Const(idx) => Op::Const(idx.to_native()),
+        ArchivedOp::PushUnit => Op::PushUnit,
+        ArchivedOp::PushTrue => Op::PushTrue,
+        ArchivedOp::PushFalse => Op::PushFalse,
+        ArchivedOp::GetLocal(idx) => Op::GetLocal(idx.to_native()),
+        ArchivedOp::SetLocal(idx) => Op::SetLocal(idx.to_native()),
+        ArchivedOp::GetData(idx) => Op::GetData(idx.to_native()),
+        ArchivedOp::SetData(idx) => Op::SetData(idx.to_native()),
+        ArchivedOp::Add => Op::Add,
+        ArchivedOp::Sub => Op::Sub,
+        ArchivedOp::Mul => Op::Mul,
+        ArchivedOp::Div => Op::Div,
+        ArchivedOp::Mod => Op::Mod,
+        ArchivedOp::Neg => Op::Neg,
+        ArchivedOp::CmpEq => Op::CmpEq,
+        ArchivedOp::CmpNe => Op::CmpNe,
+        ArchivedOp::CmpLt => Op::CmpLt,
+        ArchivedOp::CmpGt => Op::CmpGt,
+        ArchivedOp::CmpLe => Op::CmpLe,
+        ArchivedOp::CmpGe => Op::CmpGe,
+        ArchivedOp::Not => Op::Not,
+        ArchivedOp::If(t) => Op::If(t.to_native()),
+        ArchivedOp::Else(t) => Op::Else(t.to_native()),
+        ArchivedOp::EndIf => Op::EndIf,
+        ArchivedOp::Loop(t) => Op::Loop(t.to_native()),
+        ArchivedOp::EndLoop(t) => Op::EndLoop(t.to_native()),
+        ArchivedOp::Break(t) => Op::Break(t.to_native()),
+        ArchivedOp::BreakIf(t) => Op::BreakIf(t.to_native()),
+        ArchivedOp::Stream => Op::Stream,
+        ArchivedOp::Reset => Op::Reset,
+        ArchivedOp::Call(c, n) => Op::Call(c.to_native(), *n),
+        ArchivedOp::CallNative(c, n) => Op::CallNative(c.to_native(), *n),
+        ArchivedOp::Return => Op::Return,
+        ArchivedOp::Yield => Op::Yield,
+        ArchivedOp::Pop => Op::Pop,
+        ArchivedOp::Dup => Op::Dup,
+        ArchivedOp::NewStruct(t) => Op::NewStruct(t.to_native()),
+        ArchivedOp::NewEnum(t, v, n) => Op::NewEnum(t.to_native(), v.to_native(), *n),
+        ArchivedOp::NewArray(n) => Op::NewArray(n.to_native()),
+        ArchivedOp::NewTuple(n) => Op::NewTuple(*n),
+        ArchivedOp::WrapSome => Op::WrapSome,
+        ArchivedOp::PushNone => Op::PushNone,
+        ArchivedOp::GetField(idx) => Op::GetField(idx.to_native()),
+        ArchivedOp::GetIndex => Op::GetIndex,
+        ArchivedOp::GetTupleField(idx) => Op::GetTupleField(*idx),
+        ArchivedOp::GetEnumField(idx) => Op::GetEnumField(*idx),
+        ArchivedOp::Len => Op::Len,
+        ArchivedOp::IsEnum(t, v) => Op::IsEnum(t.to_native(), v.to_native()),
+        ArchivedOp::IsStruct(t) => Op::IsStruct(t.to_native()),
+        ArchivedOp::IntToFloat => Op::IntToFloat,
+        ArchivedOp::FloatToInt => Op::FloatToInt,
+        ArchivedOp::Trap(idx) => Op::Trap(idx.to_native()),
+    }
+}
+
+/// Convert an archived `Value` to its owned form.
+///
+/// Recursive. Materializes the entire value tree as owned. For
+/// constants loaded into the operand stack at runtime under the
+/// zero-copy execution path. The cost per load is proportional to the
+/// constant's size; for primitive constants the cost is one match arm
+/// and a small copy. For string and composite constants the cost
+/// includes a heap allocation.
+pub fn value_from_archived(archived: &ArchivedValue) -> Value {
+    use alloc::string::ToString;
+    use alloc::vec::Vec as AVec;
+    match archived {
+        ArchivedValue::Unit => Value::Unit,
+        ArchivedValue::Bool(b) => Value::Bool(*b),
+        ArchivedValue::Int(i) => Value::Int(i.to_native()),
+        ArchivedValue::Float(f) => Value::Float(f.to_native()),
+        ArchivedValue::StaticStr(s) => Value::StaticStr(s.as_str().to_string()),
+        ArchivedValue::DynStr(s) => Value::DynStr(s.as_str().to_string()),
+        ArchivedValue::Tuple(items) => {
+            Value::Tuple(items.iter().map(value_from_archived).collect())
+        }
+        ArchivedValue::Array(items) => {
+            Value::Array(items.iter().map(value_from_archived).collect())
+        }
+        ArchivedValue::Struct { type_name, fields } => Value::Struct {
+            type_name: type_name.as_str().to_string(),
+            fields: fields
+                .iter()
+                .map(|t| (t.0.as_str().to_string(), value_from_archived(&t.1)))
+                .collect::<AVec<_>>(),
+        },
+        ArchivedValue::Enum {
+            type_name,
+            variant,
+            fields,
+        } => Value::Enum {
+            type_name: type_name.as_str().to_string(),
+            variant: variant.as_str().to_string(),
+            fields: fields.iter().map(value_from_archived).collect(),
+        },
+        ArchivedValue::None => Value::None,
     }
 }
 

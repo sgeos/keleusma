@@ -642,7 +642,7 @@ impl Vm {
                 continue;
             }
 
-            let op = chunk.ops[ip].clone();
+            let op = chunk.ops[ip];
             // Advance IP.
             self.frames.last_mut().unwrap().ip += 1;
 
@@ -2340,6 +2340,59 @@ mod tests {
                 "expected alignment or magic/checksum failure, got {:?}",
                 other
             ),
+        }
+    }
+
+    #[test]
+    fn bytecode_archived_op_round_trip_matches_owned() {
+        // op_from_archived materializes an owned Op from an archived Op
+        // without information loss. Verify the ops in a compiled module
+        // compare equal across the archive round trip. This is the
+        // foundation for the future zero-copy execution loop, which
+        // will fetch ArchivedOp and convert per step.
+        use crate::bytecode::{ArchivedModule, op_from_archived};
+        let src = "fn main() -> i64 { 1 + 2 }";
+        let tokens = tokenize(src).expect("lex");
+        let program = parse(&tokens).expect("parse");
+        let module = compile(&program).expect("compile");
+        let bytes = module.to_bytes().expect("encode");
+        let mut aligned = rkyv::util::AlignedVec::<8>::with_capacity(bytes.len());
+        aligned.extend_from_slice(&bytes);
+        let archived: &ArchivedModule = Module::access_bytes(&aligned).expect("access");
+        let main_chunk = &archived.chunks[0];
+        for (i, archived_op) in main_chunk.ops.iter().enumerate() {
+            let owned_op = op_from_archived(archived_op);
+            let original_op = module.chunks[0].ops[i];
+            assert_eq!(
+                owned_op, original_op,
+                "op at index {} mismatches across archive round trip",
+                i
+            );
+        }
+    }
+
+    #[test]
+    fn bytecode_archived_value_round_trip_matches_owned() {
+        // value_from_archived materializes an owned Value from an
+        // archived Value. Verify constants survive the round trip.
+        use crate::bytecode::{ArchivedModule, value_from_archived};
+        let src = "fn main() -> i64 { 42 }";
+        let tokens = tokenize(src).expect("lex");
+        let program = parse(&tokens).expect("parse");
+        let module = compile(&program).expect("compile");
+        let bytes = module.to_bytes().expect("encode");
+        let mut aligned = rkyv::util::AlignedVec::<8>::with_capacity(bytes.len());
+        aligned.extend_from_slice(&bytes);
+        let archived: &ArchivedModule = Module::access_bytes(&aligned).expect("access");
+        let main_chunk = &archived.chunks[0];
+        for (i, archived_val) in main_chunk.constants.iter().enumerate() {
+            let owned = value_from_archived(archived_val);
+            let original = &module.chunks[0].constants[i];
+            assert_eq!(
+                &owned, original,
+                "constant at index {} mismatches across archive round trip",
+                i
+            );
         }
     }
 
