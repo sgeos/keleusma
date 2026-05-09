@@ -38,8 +38,10 @@ fn main() {
         }
     }
 
-    // Construct a Vm with auto-sized arena.
-    let mut vm = Vm::new_auto(module).expect("vm construction");
+    // Construct an auto-sized arena and a Vm that borrows it.
+    let cap = keleusma::vm::auto_arena_capacity_for(&module, &[]).expect("auto capacity");
+    let arena = keleusma::Arena::with_capacity(cap);
+    let mut vm = Vm::new(module, &arena).expect("vm construction");
     println!();
     println!("auto-sized arena capacity: {} bytes", vm.arena().capacity());
 

@@ -25,7 +25,8 @@ fn main() {
 
     // Try to construct a Vm with an arena too small for the program.
     // The verification fails at Vm construction, before any code runs.
-    match Vm::new_with_arena_capacity(module, 16) {
+    let arena = keleusma::Arena::with_capacity(16);
+    match Vm::new(module, &arena) {
         Ok(_) => unreachable!("expected verification to fail"),
         Err(VmError::VerifyError(msg)) => {
             println!("verification rejected the module:");
@@ -35,6 +36,6 @@ fn main() {
     }
 
     println!();
-    println!("the host can either size the arena adequately via Vm::new_with_arena_capacity");
-    println!("or use Vm::new_auto to compute a suitable capacity from the module");
+    println!("the host can either pre-size the arena via keleusma::Arena::with_capacity");
+    println!("or compute the required capacity from the module via auto_arena_capacity_for");
 }

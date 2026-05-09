@@ -3,13 +3,72 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use rkyv::{Archive, Deserialize, Serialize};
 
-/// Runtime value in the Keleusma VM.
+use keleusma_arena::KString;
+
+/// A compile-time constant, the variant of [`Value`] that the compiler
+/// emits into the bytecode's constant pool.
+///
+/// Strict subset of [`Value`]. Only variants that the rkyv archive can
+/// faithfully serialize and deserialize. The runtime-only variants
+/// [`Value::DynStr`] and [`Value::KStr`] are intentionally absent
+/// because they are produced exclusively by native functions and
+/// runtime string operations, never as compile-time constants.
+///
+/// The runtime executes against the archived form
+/// [`ArchivedConstValue`]. Each operand-stack push from a constant
+/// goes through [`Value::from_const_archived`], which lifts the
+/// archived form into a runtime `Value`.
 #[derive(Debug, Clone, Archive, Serialize, Deserialize)]
 #[rkyv(
     serialize_bounds(__S: rkyv::ser::Writer + rkyv::ser::Allocator, __S::Error: rkyv::rancor::Source),
     deserialize_bounds(__D::Error: rkyv::rancor::Source),
     bytecheck(bounds(__C: rkyv::validation::ArchiveContext, <__C as rkyv::rancor::Fallible>::Error: rkyv::rancor::Source))
 )]
+pub enum ConstValue {
+    /// Unit value `()`.
+    Unit,
+    /// Boolean.
+    Bool(bool),
+    /// 64-bit signed integer.
+    Int(i64),
+    /// 64-bit floating-point number.
+    Float(f64),
+    /// Immutable static string referenced from the rodata region.
+    /// Source-level string literals compile to this variant.
+    StaticStr(String),
+    /// Tuple of constant values.
+    Tuple(#[rkyv(omit_bounds)] Vec<ConstValue>),
+    /// Fixed-size array of constant values.
+    Array(#[rkyv(omit_bounds)] Vec<ConstValue>),
+    /// Named struct with ordered fields.
+    Struct {
+        type_name: String,
+        #[rkyv(omit_bounds)]
+        fields: Vec<(String, ConstValue)>,
+    },
+    /// Enum variant with optional payload.
+    Enum {
+        type_name: String,
+        variant: String,
+        #[rkyv(omit_bounds)]
+        fields: Vec<ConstValue>,
+    },
+    /// Option::None.
+    None,
+}
+
+/// Runtime value in the Keleusma VM.
+///
+/// Superset of [`ConstValue`] that adds the runtime-only string
+/// variants [`Value::DynStr`] for globally-allocated dynamic strings
+/// and [`Value::KStr`] for arena-allocated strings with epoch-tagged
+/// stale-pointer detection. Neither participates in rkyv
+/// serialization. The constant-pool boundary is the
+/// [`Value::from_const_archived`] lift and the
+/// `ConstValue::try_from(&Value)` lower direction is intentionally
+/// absent because runtime values cannot become compile-time
+/// constants.
+#[derive(Debug, Clone)]
 pub enum Value {
     /// Unit value `()`.
     Unit,
@@ -24,26 +83,32 @@ pub enum Value {
     /// dialogue type B and across hot updates subject to the host attestation
     /// for rodata pointer validity. See R31, R32, R33 and B5.
     StaticStr(String),
-    /// Dynamic string allocated in the arena heap. Produced by native function
-    /// calls and runtime string operations. Lifetime bound to the arena and
-    /// cleared at RESET. Cannot cross the yield boundary. Cannot reside in
-    /// the data segment.
+    /// Dynamic string allocated through the global allocator. Produced by
+    /// native functions that do not have arena access and by runtime
+    /// string operations. Subject to the cross-yield prohibition. Cannot
+    /// reside in the data segment.
     DynStr(String),
+    /// Dynamic string allocated in the host-owned arena's top region.
+    /// Carries a [`keleusma_arena::KString`] handle that becomes
+    /// [`keleusma_arena::Stale`] on access if the arena has been reset
+    /// since the handle was issued. Subject to the cross-yield
+    /// prohibition because the underlying storage does not survive a
+    /// reset. The boundary type for native callers and the host that
+    /// want bounded-memory accounting and stale-pointer detection.
+    KStr(KString),
     /// Tuple of values.
-    Tuple(#[rkyv(omit_bounds)] Vec<Value>),
+    Tuple(Vec<Value>),
     /// Fixed-size array of values.
-    Array(#[rkyv(omit_bounds)] Vec<Value>),
+    Array(Vec<Value>),
     /// Named struct with ordered fields.
     Struct {
         type_name: String,
-        #[rkyv(omit_bounds)]
         fields: Vec<(String, Value)>,
     },
     /// Enum variant with optional payload.
     Enum {
         type_name: String,
         variant: String,
-        #[rkyv(omit_bounds)]
         fields: Vec<Value>,
     },
     /// Option::None.
@@ -64,6 +129,15 @@ impl PartialEq for Value {
             | (Value::DynStr(a), Value::DynStr(b))
             | (Value::StaticStr(a), Value::DynStr(b))
             | (Value::DynStr(a), Value::StaticStr(b)) => a == b,
+            // KStr equality compares the captured handle (pointer and
+            // epoch). Two KStr handles are equal only if they point to
+            // the same arena allocation under the same epoch. Content
+            // equality across distinct arena allocations is not checked
+            // because the comparison would require an arena borrow that
+            // `PartialEq` does not provide. Hosts that want content
+            // equality must compare through `as_str_with_arena` against
+            // a known arena.
+            (Value::KStr(a), Value::KStr(b)) => a.epoch() == b.epoch(),
             (Value::Tuple(a), Value::Tuple(b)) | (Value::Array(a), Value::Array(b)) => a == b,
             (
                 Value::Struct {
@@ -102,6 +176,7 @@ impl Value {
             Value::Float(_) => "Float",
             Value::StaticStr(_) => "StaticStr",
             Value::DynStr(_) => "DynStr",
+            Value::KStr(_) => "KStr",
             Value::Tuple(_) => "Tuple",
             Value::Array(_) => "Array",
             Value::Struct { .. } => "Struct",
@@ -110,12 +185,15 @@ impl Value {
         }
     }
 
-    /// Borrow the underlying UTF-8 contents of either string variant.
+    /// Borrow the underlying UTF-8 contents of either non-arena string
+    /// variant.
     ///
-    /// Returns `None` if the value is not a string. Used at sites that read
-    /// string contents without caring about static-versus-dynamic provenance,
-    /// such as type-name lookups in the constant pool and string-consuming
-    /// natives like `length` and `println`.
+    /// Returns `None` if the value is not a string or is a [`Value::KStr`].
+    /// Used at sites that read string contents without caring about
+    /// static-versus-dynamic provenance, such as type-name lookups in
+    /// the constant pool and string-consuming natives like `length` and
+    /// `println`. KStr access requires arena context and goes through
+    /// [`Value::as_str_with_arena`].
     pub fn as_str(&self) -> Option<&str> {
         match self {
             Value::StaticStr(s) | Value::DynStr(s) => Some(s.as_str()),
@@ -123,15 +201,83 @@ impl Value {
         }
     }
 
+    /// Borrow the underlying UTF-8 contents of any string variant,
+    /// resolving `KStr` through the supplied arena.
+    ///
+    /// Returns `Ok(None)` if the value is not a string. Returns
+    /// `Err(Stale)` if the value is a `KStr` whose epoch no longer
+    /// matches the arena's. Returns `Ok(Some(s))` for any string
+    /// variant whose contents are accessible.
+    pub fn as_str_with_arena<'a>(
+        &'a self,
+        arena: &'a keleusma_arena::Arena,
+    ) -> Result<Option<&'a str>, keleusma_arena::Stale> {
+        match self {
+            Value::StaticStr(s) | Value::DynStr(s) => Ok(Some(s.as_str())),
+            Value::KStr(h) => h.get(arena).map(Some),
+            _ => Ok(Option::None),
+        }
+    }
+
     /// Returns true if the value is a dynamic string or transitively contains
-    /// a dynamic string. Used to enforce the cross-yield prohibition (R31).
+    /// a dynamic string. Both `DynStr` and `KStr` count as dynamic for the
+    /// purposes of the cross-yield prohibition (R31).
     pub fn contains_dynstr(&self) -> bool {
         match self {
-            Value::DynStr(_) => true,
+            Value::DynStr(_) | Value::KStr(_) => true,
             Value::Tuple(items) | Value::Array(items) => items.iter().any(Value::contains_dynstr),
             Value::Struct { fields, .. } => fields.iter().any(|(_, v)| v.contains_dynstr()),
             Value::Enum { fields, .. } => fields.iter().any(Value::contains_dynstr),
             _ => false,
+        }
+    }
+
+    /// Lift an archived constant pool entry into a runtime `Value`.
+    ///
+    /// The constant pool stores [`ConstValue`] entries which the rkyv
+    /// archive serializes faithfully. At op-fetch time, the runtime
+    /// reads the archived form and lifts it through this conversion.
+    /// `KStr` is never produced by this lift because the constant pool
+    /// does not contain runtime-only variants.
+    pub fn from_const_archived(c: &ArchivedConstValue) -> Value {
+        match c {
+            ArchivedConstValue::Unit => Value::Unit,
+            ArchivedConstValue::Bool(b) => Value::Bool(*b),
+            ArchivedConstValue::Int(i) => Value::Int(i.to_native()),
+            ArchivedConstValue::Float(f) => Value::Float(f.to_native()),
+            ArchivedConstValue::StaticStr(s) => {
+                use alloc::string::ToString;
+                Value::StaticStr(s.as_str().to_string())
+            }
+            ArchivedConstValue::Tuple(items) => {
+                Value::Tuple(items.iter().map(Value::from_const_archived).collect())
+            }
+            ArchivedConstValue::Array(items) => {
+                Value::Array(items.iter().map(Value::from_const_archived).collect())
+            }
+            ArchivedConstValue::Struct { type_name, fields } => {
+                use alloc::string::ToString;
+                Value::Struct {
+                    type_name: type_name.as_str().to_string(),
+                    fields: fields
+                        .iter()
+                        .map(|kv| (kv.0.as_str().to_string(), Value::from_const_archived(&kv.1)))
+                        .collect(),
+                }
+            }
+            ArchivedConstValue::Enum {
+                type_name,
+                variant,
+                fields,
+            } => {
+                use alloc::string::ToString;
+                Value::Enum {
+                    type_name: type_name.as_str().to_string(),
+                    variant: variant.as_str().to_string(),
+                    fields: fields.iter().map(Value::from_const_archived).collect(),
+                }
+            }
+            ArchivedConstValue::None => Value::None,
         }
     }
 }
@@ -529,8 +675,8 @@ pub struct Chunk {
     pub name: String,
     /// Bytecode instructions.
     pub ops: Vec<Op>,
-    /// Constant pool.
-    pub constants: Vec<Value>,
+    /// Constant pool. Stores compile-time constants only.
+    pub constants: Vec<ConstValue>,
     /// Struct field layout templates.
     pub struct_templates: Vec<StructTemplate>,
     /// Total local variable slots (including parameters).
@@ -993,7 +1139,136 @@ pub fn op_from_archived(archived: &ArchivedOp) -> Op {
     }
 }
 
-/// Convert an archived `Value` to its owned form.
+impl ConstValue {
+    /// Lower a runtime [`Value`] into a compile-time [`ConstValue`].
+    ///
+    /// Returns `Err` for runtime-only variants ([`Value::DynStr`] and
+    /// [`Value::KStr`]) which cannot be embedded in the bytecode's
+    /// constant pool. The compiler is the sole caller and uses this
+    /// at the boundary where it pushes constants to a chunk's pool.
+    pub fn try_from_value(value: Value) -> Result<Self, &'static str> {
+        match value {
+            Value::Unit => Ok(ConstValue::Unit),
+            Value::Bool(b) => Ok(ConstValue::Bool(b)),
+            Value::Int(i) => Ok(ConstValue::Int(i)),
+            Value::Float(f) => Ok(ConstValue::Float(f)),
+            Value::StaticStr(s) => Ok(ConstValue::StaticStr(s)),
+            Value::DynStr(_) => Err("DynStr cannot be a compile-time constant"),
+            Value::KStr(_) => Err("KStr cannot be a compile-time constant"),
+            Value::Tuple(items) => items
+                .into_iter()
+                .map(ConstValue::try_from_value)
+                .collect::<Result<Vec<_>, _>>()
+                .map(ConstValue::Tuple),
+            Value::Array(items) => items
+                .into_iter()
+                .map(ConstValue::try_from_value)
+                .collect::<Result<Vec<_>, _>>()
+                .map(ConstValue::Array),
+            Value::Struct { type_name, fields } => {
+                let cfields: Result<Vec<_>, _> = fields
+                    .into_iter()
+                    .map(|(n, v)| ConstValue::try_from_value(v).map(|cv| (n, cv)))
+                    .collect();
+                Ok(ConstValue::Struct {
+                    type_name,
+                    fields: cfields?,
+                })
+            }
+            Value::Enum {
+                type_name,
+                variant,
+                fields,
+            } => {
+                let cfields: Result<Vec<_>, _> =
+                    fields.into_iter().map(ConstValue::try_from_value).collect();
+                Ok(ConstValue::Enum {
+                    type_name,
+                    variant,
+                    fields: cfields?,
+                })
+            }
+            Value::None => Ok(ConstValue::None),
+        }
+    }
+
+    /// Lift a [`ConstValue`] into a runtime [`Value`].
+    ///
+    /// Inverse of [`ConstValue::try_from_value`] for the constant
+    /// subset. Always succeeds because every `ConstValue` variant has
+    /// a corresponding `Value` variant.
+    pub fn into_value(self) -> Value {
+        match self {
+            ConstValue::Unit => Value::Unit,
+            ConstValue::Bool(b) => Value::Bool(b),
+            ConstValue::Int(i) => Value::Int(i),
+            ConstValue::Float(f) => Value::Float(f),
+            ConstValue::StaticStr(s) => Value::StaticStr(s),
+            ConstValue::Tuple(items) => {
+                Value::Tuple(items.into_iter().map(ConstValue::into_value).collect())
+            }
+            ConstValue::Array(items) => {
+                Value::Array(items.into_iter().map(ConstValue::into_value).collect())
+            }
+            ConstValue::Struct { type_name, fields } => Value::Struct {
+                type_name,
+                fields: fields
+                    .into_iter()
+                    .map(|(n, v)| (n, v.into_value()))
+                    .collect(),
+            },
+            ConstValue::Enum {
+                type_name,
+                variant,
+                fields,
+            } => Value::Enum {
+                type_name,
+                variant,
+                fields: fields.into_iter().map(ConstValue::into_value).collect(),
+            },
+            ConstValue::None => Value::None,
+        }
+    }
+}
+
+impl PartialEq for ConstValue {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (ConstValue::Unit, ConstValue::Unit) | (ConstValue::None, ConstValue::None) => true,
+            (ConstValue::Bool(a), ConstValue::Bool(b)) => a == b,
+            (ConstValue::Int(a), ConstValue::Int(b)) => a == b,
+            (ConstValue::Float(a), ConstValue::Float(b)) => a == b,
+            (ConstValue::StaticStr(a), ConstValue::StaticStr(b)) => a == b,
+            (ConstValue::Tuple(a), ConstValue::Tuple(b))
+            | (ConstValue::Array(a), ConstValue::Array(b)) => a == b,
+            (
+                ConstValue::Struct {
+                    type_name: na,
+                    fields: fa,
+                },
+                ConstValue::Struct {
+                    type_name: nb,
+                    fields: fb,
+                },
+            ) => na == nb && fa == fb,
+            (
+                ConstValue::Enum {
+                    type_name: na,
+                    variant: va,
+                    fields: fa,
+                },
+                ConstValue::Enum {
+                    type_name: nb,
+                    variant: vb,
+                    fields: fb,
+                },
+            ) => na == nb && va == vb && fa == fb,
+            _ => false,
+        }
+    }
+}
+
+/// Convert an archived `ConstValue` to its owned [`Value`] form.
 ///
 /// Recursive. Materializes the entire value tree as owned. For
 /// constants loaded into the operand stack at runtime under the
@@ -1001,40 +1276,8 @@ pub fn op_from_archived(archived: &ArchivedOp) -> Op {
 /// constant's size; for primitive constants the cost is one match arm
 /// and a small copy. For string and composite constants the cost
 /// includes a heap allocation.
-pub fn value_from_archived(archived: &ArchivedValue) -> Value {
-    use alloc::string::ToString;
-    use alloc::vec::Vec as AVec;
-    match archived {
-        ArchivedValue::Unit => Value::Unit,
-        ArchivedValue::Bool(b) => Value::Bool(*b),
-        ArchivedValue::Int(i) => Value::Int(i.to_native()),
-        ArchivedValue::Float(f) => Value::Float(f.to_native()),
-        ArchivedValue::StaticStr(s) => Value::StaticStr(s.as_str().to_string()),
-        ArchivedValue::DynStr(s) => Value::DynStr(s.as_str().to_string()),
-        ArchivedValue::Tuple(items) => {
-            Value::Tuple(items.iter().map(value_from_archived).collect())
-        }
-        ArchivedValue::Array(items) => {
-            Value::Array(items.iter().map(value_from_archived).collect())
-        }
-        ArchivedValue::Struct { type_name, fields } => Value::Struct {
-            type_name: type_name.as_str().to_string(),
-            fields: fields
-                .iter()
-                .map(|t| (t.0.as_str().to_string(), value_from_archived(&t.1)))
-                .collect::<AVec<_>>(),
-        },
-        ArchivedValue::Enum {
-            type_name,
-            variant,
-            fields,
-        } => Value::Enum {
-            type_name: type_name.as_str().to_string(),
-            variant: variant.as_str().to_string(),
-            fields: fields.iter().map(value_from_archived).collect(),
-        },
-        ArchivedValue::None => Value::None,
-    }
+pub fn value_from_archived(archived: &ArchivedConstValue) -> Value {
+    Value::from_const_archived(archived)
 }
 
 /// Sign-extending mask for narrower-than-runtime integer arithmetic.

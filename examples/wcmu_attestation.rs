@@ -54,7 +54,8 @@ fn main() {
     }
 
     // Construct a Vm with adequate capacity.
-    let mut vm = Vm::new_with_arena_capacity(module, 4096).expect("vm construction");
+    let arena = keleusma::Arena::with_capacity(4096);
+    let mut vm = Vm::new(module, &arena).expect("vm construction");
 
     // Register the native and declare its WCET and WCMU bounds.
     vm.register_fn("host::compute_value", |x: i64| -> i64 { x * 3 });

@@ -91,18 +91,20 @@ Out of scope and tracked elsewhere.
 
 ## ~~P5. WCET analysis tooling~~ (Resolved as R23)
 
-## P7. Arena allocator implementation
+## ~~P7. Arena allocator implementation~~ (Resolved as R34, R39, R40)
 
-Foundation complete. R34 records the implementation. The remaining work is iterative integration.
+All P7 items complete.
 
 1. ~~Add `allocator-api2` as a dependency.~~ Complete.
-2. ~~Implement Keleusma's own arena allocator.~~ Complete. See `src/arena.rs`.
-3. ~~Implement the `allocator_api2::Allocator` trait for arena handles.~~ Complete. See `StackHandle` and `HeapHandle`.
+2. ~~Implement Keleusma's own arena allocator.~~ Complete. See the `keleusma-arena` crate.
+3. ~~Implement the `allocator_api2::Allocator` trait for arena handles.~~ Complete. See `BottomHandle` and `TopHandle`.
 4. ~~Wire up the arena into `Vm::new`, `Op::Reset`, and `replace_module`.~~ Complete.
-5. Migrate the operand stack to use `allocator_api2::vec::Vec<Value, StackHandle>`. Open. Requires propagating an arena lifetime parameter through the `Vm` struct, which cascades through every signature that touches `Vm`. Substantial refactor.
-6. Replace `Value::DynStr(String)` with a custom `DynStr` storage type backed by `allocator_api2::vec::Vec<u8, HeapHandle>`. Open. Requires propagating the arena lifetime through `Value`. Equally substantial.
+5. ~~Migrate the `Vm` to a host-owned arena with explicit `'arena` lifetime.~~ Complete. The `Vm` borrows the arena and the host pre-sizes it through `auto_arena_capacity_for`. Internal reset routes through `Arena::reset_unchecked` because the `Vm` holds the arena through a shared reference. The discipline that no allocator-bound collection retains storage at reset is documented in the `reset_arena_internal` safety comment.
+6. ~~Add the `KString` boundary type with epoch-tagged stale-pointer detection.~~ Complete. `keleusma_arena::ArenaHandle<T: ?Sized>` is the generic wrapper, and `KString = ArenaHandle<str>` is the alias for arena-allocated dynamic strings. The arena carries a `u64` epoch counter that advances on `reset` and saturates with `EpochSaturated`. Recovery for very long-lived deployments is via the unsafe `Arena::force_reset_epoch` after the host has drained every cache that holds an `ArenaHandle`. See R39.
+7. ~~Operand stack migration.~~ Complete. The operand stack and call-frame stack are now `allocator_api2::vec::Vec<T, BottomHandle<'arena>>`. The arena's bottom region holds the stacks. The `Vm` distinguishes between top-only reset for `Op::Reset` (preserves the stack and frames, invalidates dynamic strings) and full reset for error recovery and hot swap (drops and recreates the stacks, then clears both ends). The new `Arena::reset_top_unchecked` provides the top-only path. See R40.
+8. ~~`Value::KStr` integration via the `ConstValue` and `Value` split.~~ Complete. `ConstValue` is the new compile-time-constant type that participates in the rkyv archive. `Value` is the runtime type and adds the `KStr(KString)` variant alongside `DynStr(String)`. The compiler emits `ConstValue` into the constant pool through `ConstValue::try_from_value` at the boundary. The runtime lifts archived constants into `Value` through `Value::from_const_archived`. `Value::as_str_with_arena` resolves either string variant against an arena, returning `Stale` for a stale `KStr`. `Value::contains_dynstr` treats both `DynStr` and `KStr` as dynamic for the cross-yield prohibition. See R40.
 
-Items 5 and 6 are coordinated. They cannot be done independently because both touch the lifetime story of `Value`. They are the next major refactor and should be addressed together. The current arena is operational and reset on schedule, but its principal use today is host-supplied native functions that wish to allocate arena-resident scratch buffers. The operand stack and dynamic-string storage continue to use the global allocator with Rust drop semantics enforcing the arena lifetime.
+The bounded-memory guarantee now holds end to end for the operand stack and dynamic strings allocated through `KString`. The remaining unbounded path is `Value::DynStr(String)`, which uses the global allocator. Hosts that want full bounded memory for dynamic strings should produce `Value::KStr` rather than `Value::DynStr`. The `to_string` native still emits `DynStr` because it does not currently receive arena context; threading the arena through the native ABI is a separate enhancement.
 
 ## ~~P8. WCMU instrumentation and auto-arena sizing~~ (Resolved as R35 and R37)
 
@@ -162,6 +164,8 @@ B10 (target portability) interacts because the rkyv encoding is endian-stable bu
 B9 (hot update of yielded static strings) interacts because yielded `Value::StaticStr` under step 2 would be an `ArchivedString` that points into a specific bytecode buffer. A hot update that swaps the buffer invalidates outstanding archived references the host has retained. The resolution paths in B9 (host-responsibility consumption or eager materialization at yield) must be in place before step 2 fully replaces the owned execution path.
 
 Both the WCMU and WCET analyses now multiply the loop body cost by the iteration count when the loop matches the canonical for-range pattern emitted by the compiler. The pattern detector in `extract_loop_iteration_bound` recognizes `Loop GetLocal(var) GetLocal(end) CmpGe BreakIf` followed by a body and traces backward to find the literal `Const` initializers of the var and end slots. Loops whose bounds are not literal integers fall back to the conservative one-iteration treatment, which remains sound but loose. R38 records the implementation.
+
+## ~~P6. Data segment work~~ (Resolved as R28 and R29)
 
 All P6 items are complete.
 

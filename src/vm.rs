@@ -5,8 +5,17 @@ use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 
+use allocator_api2::vec::Vec as ArenaVec;
+use keleusma_arena::BottomHandle;
+
 use crate::bytecode::*;
 use crate::verify;
+
+/// Operand stack and call-frame stack type. Borrows the host-owned
+/// arena's bottom region. The `Vm` drops and recreates these at every
+/// arena reset because their storage pointer would otherwise alias
+/// memory that the bump allocator returns for subsequent allocations.
+type StackVec<'arena, T> = ArenaVec<T, BottomHandle<'arena>>;
 
 /// A runtime error from the Keleusma VM.
 #[derive(Debug, Clone)]
@@ -144,26 +153,46 @@ impl<'a> BytecodeStore<'a> {
 
 /// The Keleusma virtual machine.
 ///
-/// The lifetime parameter `'a` reflects the bytecode source. VMs
+/// Two lifetime parameters. `'a` reflects the bytecode source. VMs
 /// constructed from an owned `Module` or from arbitrary byte slices
-/// carry `Vm<'static>`. VMs constructed via `view_bytes_unchecked`
-/// from a borrowed slice carry `Vm<'a>` for the slice's lifetime.
-pub struct Vm<'a> {
+/// carry `Vm<'static, 'arena>`. VMs constructed via
+/// [`Vm::view_bytes_unchecked`] from a borrowed slice carry
+/// `Vm<'a, 'arena>` for the slice's lifetime.
+///
+/// `'arena` ties the VM to a host-owned [`keleusma_arena::Arena`].
+/// The host constructs the arena and passes it as a shared reference at
+/// VM construction time. Dynamic strings produced during execution
+/// allocate into this arena and survive until the next reset.
+///
+/// Reset of the arena is initiated by the VM through
+/// [`keleusma_arena::Arena::reset_unchecked`] because the VM holds the
+/// arena through a shared reference. The VM's internal discipline
+/// guarantees no allocator-bound collection retains storage in the
+/// arena at the moment of reset. Hosts that want to reset the arena
+/// from outside the VM must do so when the VM is not borrowing the
+/// arena, which means the VM must be dropped first or the host must
+/// invoke [`Vm::reset_arena`] which routes through the unsafe path
+/// with the same safety justification.
+pub struct Vm<'a, 'arena> {
     bytecode: BytecodeStore<'a>,
-    stack: Vec<Value>,
-    frames: Vec<CallFrame>,
+    /// Operand stack. Bump-allocated from the arena's bottom region.
+    /// Recreated at every arena reset because the bump allocator's
+    /// `deallocate` is a no-op and the Vec's storage would otherwise
+    /// alias newly-allocated memory after a reset.
+    stack: StackVec<'arena, Value>,
+    /// Call-frame stack. Same arena-backed discipline as `stack`.
+    frames: StackVec<'arena, CallFrame>,
     natives: Vec<NativeEntry>,
     /// Persistent data segment. Survives across RESET boundaries.
     data: Vec<Value>,
-    /// Dual-end bump-allocated arena. Currently exposed for explicit native
-    /// function use through `Vm::arena()`. The operand stack and dynamic
-    /// string storage do not yet route through the arena. See P7 and P8 in
-    /// `docs/decisions/PRIORITY.md` for the integration plan.
-    arena: keleusma_arena::Arena,
+    /// Host-owned dual-end bump-allocated arena. Borrowed for the
+    /// lifetime of the VM. Native functions that allocate dynamic
+    /// strings pass `vm.arena()` to [`keleusma_arena::KString::alloc`].
+    arena: &'arena keleusma_arena::Arena,
     started: bool,
 }
 
-impl<'a> Vm<'a> {
+impl<'a, 'arena> Vm<'a, 'arena> {
     /// Borrow the archived module from internal bytecode storage.
     ///
     /// The bytes were validated at construction time, so accessing the
@@ -234,8 +263,7 @@ impl<'a> Vm<'a> {
         use alloc::string::ToString;
         let chunk = &self.archived().chunks[chunk_idx];
         match &chunk.constants[idx] {
-            crate::bytecode::ArchivedValue::StaticStr(s)
-            | crate::bytecode::ArchivedValue::DynStr(s) => Some(s.as_str().to_string()),
+            crate::bytecode::ArchivedConstValue::StaticStr(s) => Some(s.as_str().to_string()),
             _ => None,
         }
     }
@@ -261,47 +289,26 @@ impl<'a> Vm<'a> {
     }
 }
 
-impl<'a> Vm<'a> {
-    /// Create a new VM with the given compiled module and the default arena
-    /// capacity.
+impl<'a, 'arena> Vm<'a, 'arena> {
+    /// Create a new VM with the given compiled module and a host-owned
+    /// arena.
     ///
-    /// Runs structural verification on the module. Returns an error if
-    /// verification fails.
-    pub fn new(module: Module) -> Result<Self, VmError> {
-        Self::new_with_arena_capacity(module, DEFAULT_ARENA_CAPACITY)
-    }
-
-    /// Construct a VM with an arena auto-sized from the module's
-    /// worst-case memory usage.
-    ///
-    /// The capacity is the sum of the worst-case stack and heap WCMU of
-    /// the entry-point Stream chunk, computed with default native
-    /// attestations (zero heap). For modules without function calls or
-    /// natives, this produces a tight bound. For modules whose natives
-    /// allocate from the arena, the host should set native bounds and
-    /// call [`Vm::verify_resources`] afterward; if verification fails
-    /// because the auto-sized arena is too small, construct a new VM
-    /// with [`Vm::new_with_arena_capacity`] using a larger capacity.
-    pub fn new_auto(module: Module) -> Result<Self, VmError> {
-        let capacity = auto_arena_capacity_for(&module, &[])?;
-        Self::new_with_arena_capacity(module, capacity)
-    }
-
-    /// Create a new VM with the given compiled module and a host-specified
-    /// arena capacity in bytes.
-    ///
-    /// Runs structural verification on the module. Returns an error if
-    /// verification fails.
-    pub fn new_with_arena_capacity(module: Module, arena_capacity: usize) -> Result<Self, VmError> {
+    /// The arena's capacity must accommodate the module's worst-case
+    /// memory usage. The host typically sizes the arena via
+    /// [`auto_arena_capacity_for`] before constructing the VM. Runs
+    /// structural verification on the module and resource bounds
+    /// verification against the arena's capacity. Returns an error if
+    /// either check fails.
+    pub fn new(module: Module, arena: &'arena keleusma_arena::Arena) -> Result<Self, VmError> {
         verify::verify(&module)
             .map_err(|e| VmError::VerifyError(format!("{}: {}", e.chunk_name, e.message)))?;
         // R31. Verify worst-case memory usage fits within the arena. The
         // check is sound for programs without calls and without
         // variable-iteration loops. See `verify_resource_bounds` for
         // current limitations.
-        verify::verify_resource_bounds(&module, arena_capacity)
+        verify::verify_resource_bounds(&module, arena.capacity())
             .map_err(|e| VmError::VerifyError(format!("{}: {}", e.chunk_name, e.message)))?;
-        Self::construct(module, arena_capacity)
+        Self::construct(module, arena)
     }
 
     /// Create a VM that runs structural verification but skips WCET and
@@ -330,52 +337,40 @@ impl<'a> Vm<'a> {
     /// allocation failure error from the arena rather than memory
     /// unsafety, so the unsafe marker captures the loss of the
     /// bounded-memory contract rather than a memory-safety risk.
-    pub unsafe fn new_unchecked(module: Module) -> Result<Self, VmError> {
-        unsafe { Self::new_unchecked_with_arena_capacity(module, DEFAULT_ARENA_CAPACITY) }
-    }
-
-    /// Create a VM with a host-specified arena capacity that runs
-    /// structural verification but skips resource bounds checks.
-    ///
-    /// See [`Vm::new_unchecked`] for the trust contract.
-    ///
-    /// # Safety
-    ///
-    /// Same contract as [`Vm::new_unchecked`].
-    pub unsafe fn new_unchecked_with_arena_capacity(
+    pub unsafe fn new_unchecked(
         module: Module,
-        arena_capacity: usize,
+        arena: &'arena keleusma_arena::Arena,
     ) -> Result<Self, VmError> {
         verify::verify(&module)
             .map_err(|e| VmError::VerifyError(format!("{}: {}", e.chunk_name, e.message)))?;
-        Self::construct(module, arena_capacity)
+        Self::construct(module, arena)
     }
 
     /// Load and verify a module from a serialized byte slice.
     ///
-    /// Convenience wrapper. Equivalent to
-    /// `Vm::new(Module::from_bytes(bytes)?)`. The byte slice may
+    /// Convenience wrapper around [`Vm::new`]. The byte slice may
     /// originate from any addressable buffer including a file read,
     /// an in-memory `Vec<u8>`, or a `&'static [u8]` placed in
     /// `.rodata`. Runs full verification including resource bounds.
-    pub fn load_bytes(bytes: &[u8]) -> Result<Self, VmError> {
+    pub fn load_bytes(bytes: &[u8], arena: &'arena keleusma_arena::Arena) -> Result<Self, VmError> {
         let module = Module::from_bytes(bytes)?;
-        Self::new(module)
+        Self::new(module, arena)
     }
 
     /// Load a module from a serialized byte slice and skip resource
     /// bounds verification.
     ///
-    /// Convenience wrapper. Equivalent to
-    /// `Vm::new_unchecked(Module::from_bytes(bytes)?)`. See
-    /// [`Vm::new_unchecked`] for the trust contract.
+    /// Convenience wrapper around [`Vm::new_unchecked`].
     ///
     /// # Safety
     ///
     /// Same contract as [`Vm::new_unchecked`].
-    pub unsafe fn load_bytes_unchecked(bytes: &[u8]) -> Result<Self, VmError> {
+    pub unsafe fn load_bytes_unchecked(
+        bytes: &[u8],
+        arena: &'arena keleusma_arena::Arena,
+    ) -> Result<Self, VmError> {
         let module = Module::from_bytes(bytes)?;
-        unsafe { Self::new_unchecked(module) }
+        unsafe { Self::new_unchecked(module, arena) }
     }
 
     /// Load a module from an aligned byte slice and run full verification.
@@ -396,25 +391,25 @@ impl<'a> Vm<'a> {
     /// iteration of P10. The current view path delivers in-place
     /// validation. The execution loop continues to operate on the
     /// deserialized owned `Module`.
-    pub fn view_bytes(bytes: &[u8]) -> Result<Self, VmError> {
+    pub fn view_bytes(bytes: &[u8], arena: &'arena keleusma_arena::Arena) -> Result<Self, VmError> {
         let module = Module::view_bytes(bytes)?;
-        Self::new(module)
+        Self::new(module, arena)
     }
 
     /// Load a module from an aligned byte slice and skip resource
     /// bounds verification.
     ///
-    /// Convenience wrapper. Equivalent to
-    /// `Vm::new_unchecked(Module::view_bytes(bytes)?)`. See
-    /// [`Vm::new_unchecked`] for the trust contract and
-    /// [`Vm::view_bytes`] for the alignment contract.
+    /// Convenience wrapper around [`Vm::new_unchecked`].
     ///
     /// # Safety
     ///
     /// Same contract as [`Vm::new_unchecked`].
-    pub unsafe fn view_bytes_unchecked(bytes: &[u8]) -> Result<Self, VmError> {
+    pub unsafe fn view_bytes_unchecked(
+        bytes: &[u8],
+        arena: &'arena keleusma_arena::Arena,
+    ) -> Result<Self, VmError> {
         let module = Module::view_bytes(bytes)?;
-        unsafe { Self::new_unchecked(module) }
+        unsafe { Self::new_unchecked(module, arena) }
     }
 
     /// Construct a VM that borrows bytecode directly from `bytes` without
@@ -451,7 +446,10 @@ impl<'a> Vm<'a> {
     /// Use [`Vm::view_bytes_unchecked`] for hosts that want the bytes
     /// borrowed but with structural verification still active. Use
     /// this constructor only when the bytecode is known good.
-    pub unsafe fn view_bytes_zero_copy(bytes: &'a [u8]) -> Result<Self, VmError> {
+    pub unsafe fn view_bytes_zero_copy(
+        bytes: &'a [u8],
+        arena: &'arena keleusma_arena::Arena,
+    ) -> Result<Self, VmError> {
         // Framing validation only (magic, length, CRC, version, sizes).
         // No rkyv structural validation, no execution-side verification.
         let _ = Module::access_bytes(bytes)?;
@@ -467,11 +465,11 @@ impl<'a> Vm<'a> {
         let data = vec![Value::Unit; data_len];
         Ok(Self {
             bytecode: BytecodeStore::Borrowed(bytes),
-            stack: Vec::new(),
-            frames: Vec::new(),
+            stack: ArenaVec::new_in(arena.bottom_handle()),
+            frames: ArenaVec::new_in(arena.bottom_handle()),
             natives: Vec::new(),
             data,
-            arena: keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY),
+            arena,
             started: false,
         })
     }
@@ -482,7 +480,7 @@ impl<'a> Vm<'a> {
     /// constructors. Serializes the owned module to an aligned vector
     /// for archived access during execution. The data segment is
     /// initialized to `Unit` for each declared slot.
-    fn construct(module: Module, arena_capacity: usize) -> Result<Self, VmError> {
+    fn construct(module: Module, arena: &'arena keleusma_arena::Arena) -> Result<Self, VmError> {
         let data_len = module.data_layout.as_ref().map_or(0, |dl| dl.slots.len());
         let data = vec![Value::Unit; data_len];
         let bytes = module.to_bytes()?;
@@ -490,11 +488,11 @@ impl<'a> Vm<'a> {
         aligned.extend_from_slice(&bytes);
         Ok(Self {
             bytecode: BytecodeStore::Owned(aligned),
-            stack: Vec::new(),
-            frames: Vec::new(),
+            stack: ArenaVec::new_in(arena.bottom_handle()),
+            frames: ArenaVec::new_in(arena.bottom_handle()),
             natives: Vec::new(),
             data,
-            arena: keleusma_arena::Arena::with_capacity(arena_capacity),
+            arena,
             started: false,
         })
     }
@@ -544,13 +542,58 @@ impl<'a> Vm<'a> {
     /// dynamic strings or other arena-resident values. The arena is reset
     /// at every `Op::Reset` boundary, so host-allocated values do not
     /// survive across stream phases.
-    pub fn arena(&self) -> &keleusma_arena::Arena {
-        &self.arena
+    pub fn arena(&self) -> &'arena keleusma_arena::Arena {
+        self.arena
     }
 
-    /// Mutable borrow of the VM's arena.
-    pub fn arena_mut(&mut self) -> &mut keleusma_arena::Arena {
-        &mut self.arena
+    /// Reset the arena's top region and advance the epoch, leaving
+    /// the bottom region intact.
+    ///
+    /// Used by `Op::Reset` to invalidate scratch allocations and
+    /// dynamic string handles between stream iterations while
+    /// preserving the operand stack and call-frame stack. The bottom
+    /// region holds the operand stack and frames, both of which carry
+    /// state across the reset.
+    ///
+    /// Outstanding [`keleusma_arena::ArenaHandle`] values, regardless
+    /// of which end produced them, return [`keleusma_arena::Stale`]
+    /// on access after this call.
+    ///
+    /// Returns [`keleusma_arena::EpochSaturated`] when the epoch
+    /// counter is exhausted.
+    fn reset_arena_internal(&self) -> Result<(), keleusma_arena::EpochSaturated> {
+        // SAFETY: The top region holds only short-lived scratch and
+        // dynamic strings. No `Vec<T, TopHandle>` in the VM holds
+        // non-zero capacity. The bottom-region operand stack and
+        // frames are unaffected.
+        unsafe { self.arena.reset_top_unchecked() }
+    }
+
+    /// Drop the operand and frame stacks, reset both arena ends, and
+    /// advance the epoch.
+    ///
+    /// Used by error recovery and hot-swap where the VM transitions
+    /// to a clean callable state with no retained execution context.
+    /// The arena-backed stacks would otherwise hold storage in the
+    /// bottom region whose addresses alias memory the bump allocator
+    /// will return for subsequent allocations once the bump pointer
+    /// is rewound, so they must be dropped before the bottom-region
+    /// reset advances the bump pointer.
+    fn full_reset_arena_internal(&mut self) -> Result<(), keleusma_arena::EpochSaturated> {
+        // Drop the old arena-backed stacks before clearing the bottom
+        // bump pointer. Drop runs each contained value's destructor
+        // and calls `BottomHandle::deallocate`, which is a no-op for
+        // the bump allocator. The fresh stacks have zero capacity
+        // and therefore do not allocate.
+        self.stack = ArenaVec::new_in(self.arena.bottom_handle());
+        self.frames = ArenaVec::new_in(self.arena.bottom_handle());
+        // SAFETY: After the assignments above, no `Vec<T, BottomHandle>`
+        // in the VM holds non-zero capacity. The data segment is
+        // globally-allocated. Dynamic string handles produced through
+        // `KString::alloc` are epoch-tagged and return `Stale` on
+        // access after the reset rather than dereferencing reclaimed
+        // memory.
+        unsafe { self.arena.reset_unchecked() }
     }
 
     /// Recover from a runtime error and return the VM to a clean
@@ -584,9 +627,10 @@ impl<'a> Vm<'a> {
     /// (such as `InvalidBytecode`) may indicate a corrupt module and
     /// the host should consider whether retrying is appropriate.
     pub fn reset_after_error(&mut self) {
-        self.stack.clear();
-        self.frames.clear();
-        self.arena.reset();
+        // `full_reset_arena_internal` drops and recreates the
+        // arena-backed stacks and clears both arena ends. The volatile
+        // state is cleared as a side effect.
+        let _ = self.full_reset_arena_internal();
         self.started = false;
     }
 
@@ -643,9 +687,9 @@ impl<'a> Vm<'a> {
         aligned.extend_from_slice(&bytes);
         self.bytecode = BytecodeStore::Owned(aligned);
         self.data = initial_data;
-        self.frames.clear();
-        self.stack.clear();
-        self.arena.reset();
+        // `full_reset_arena_internal` drops and recreates the
+        // arena-backed stacks before clearing both ends.
+        let _ = self.full_reset_arena_internal();
         self.started = false;
 
         Ok(())
@@ -1112,7 +1156,7 @@ impl<'a> Vm<'a> {
                     // Reset both arena bump pointers (R32). Host-allocated
                     // dynamic strings and other arena values are reclaimed
                     // here.
-                    self.arena.reset();
+                    let _ = self.reset_arena_internal();
 
                     // Find Stream instruction and set IP to instruction after it.
                     let stream_ip = self.archived().chunks[reset_chunk_idx]
@@ -1506,7 +1550,8 @@ mod tests {
         let tokens = tokenize(src).expect("lex error");
         let program = parse(&tokens).expect("parse error");
         let module = compile(&program).expect("compile error");
-        let mut vm = Vm::new(module)?;
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let mut vm = Vm::new(module, &arena)?;
         vm.call(args)
     }
 
@@ -1672,7 +1717,8 @@ mod tests {
         let tokens = tokenize(src).expect("lex error");
         let program = parse(&tokens).expect("parse error");
         let module = compile(&program).expect("compile error");
-        let mut vm = Vm::new(module).unwrap();
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let mut vm = Vm::new(module, &arena).unwrap();
 
         // First call: main(5) -> yields 5 * 2 = 10.
         match vm.call(&[Value::Int(5)]).unwrap() {
@@ -1768,7 +1814,8 @@ mod tests {
         let tokens = tokenize(src).expect("lex error");
         let program = parse(&tokens).expect("parse error");
         let module = compile(&program).expect("compile error");
-        let mut vm = Vm::new(module).unwrap();
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let mut vm = Vm::new(module, &arena).unwrap();
         vm.register_native("math::add_one", |args| match &args[0] {
             Value::Int(x) => Ok(Value::Int(x + 1)),
             _ => Err(VmError::TypeError(String::from("expected Int"))),
@@ -1906,7 +1953,8 @@ mod tests {
         let tokens = tokenize(src).expect("lex error");
         let program = parse(&tokens).expect("parse error");
         let module = compile(&program).expect("compile error");
-        let mut vm = Vm::new(module).unwrap();
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let mut vm = Vm::new(module, &arena).unwrap();
         vm.set_data(0, Value::Int(42)).unwrap();
         match vm.call(&[]).unwrap() {
             VmState::Finished(v) => assert_eq!(v, Value::Int(42)),
@@ -1928,7 +1976,8 @@ mod tests {
         let tokens = tokenize(src).expect("lex error");
         let program = parse(&tokens).expect("parse error");
         let module = compile(&program).expect("compile error");
-        let mut vm = Vm::new(module).unwrap();
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let mut vm = Vm::new(module, &arena).unwrap();
         match vm.call(&[]).unwrap() {
             VmState::Finished(v) => assert_eq!(v, Value::Int(100)),
             other => panic!("expected finished, got {:?}", other),
@@ -1950,7 +1999,8 @@ mod tests {
         let tokens = tokenize(src).expect("lex error");
         let program = parse(&tokens).expect("parse error");
         let module = compile(&program).expect("compile error");
-        let mut vm = Vm::new(module).unwrap();
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let mut vm = Vm::new(module, &arena).unwrap();
         vm.set_data(0, Value::Int(0)).unwrap();
 
         // First call: counter 0 + 1 = 1, yield 1.
@@ -2001,7 +2051,8 @@ mod tests {
         let tokens = tokenize(src).expect("lex error");
         let program = parse(&tokens).expect("parse error");
         let module = compile(&program).expect("compile error");
-        let mut vm = Vm::new(module).unwrap();
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let mut vm = Vm::new(module, &arena).unwrap();
 
         // First yield: ctx.value = 99, yield 99.
         match vm.call(&[Value::Int(0)]).unwrap() {
@@ -2034,7 +2085,8 @@ mod tests {
         let tokens = tokenize(src).expect("lex error");
         let program = parse(&tokens).expect("parse error");
         let module = compile(&program).expect("compile error");
-        let mut vm = Vm::new(module).unwrap();
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let mut vm = Vm::new(module, &arena).unwrap();
         match vm.call(&[]).unwrap() {
             VmState::Finished(v) => assert_eq!(v, Value::Int(60)),
             other => panic!("expected finished, got {:?}", other),
@@ -2053,7 +2105,8 @@ mod tests {
         let tokens = tokenize(src).expect("lex error");
         let program = parse(&tokens).expect("parse error");
         let module = compile(&program).expect("compile error");
-        let mut vm = Vm::new(module).unwrap();
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let mut vm = Vm::new(module, &arena).unwrap();
         vm.set_data(0, Value::Int(100)).unwrap();
         vm.set_data(1, Value::Int(200)).unwrap();
         match vm.call(&[]).unwrap() {
@@ -2080,7 +2133,8 @@ mod tests {
         let mod_a = build_module(src_a);
         let mod_b = build_module(src_b);
 
-        let mut vm = Vm::new(mod_a).unwrap();
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let mut vm = Vm::new(mod_a, &arena).unwrap();
         vm.set_data(0, Value::Int(5)).unwrap();
         match vm.call(&[]).unwrap() {
             VmState::Finished(v) => assert_eq!(v, Value::Int(15)),
@@ -2108,7 +2162,8 @@ mod tests {
         let mod_a = build_module(src_a);
         let mod_b = build_module(src_b);
 
-        let mut vm = Vm::new(mod_a).unwrap();
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let mut vm = Vm::new(mod_a, &arena).unwrap();
         vm.set_data(0, Value::Int(7)).unwrap();
         assert_eq!(vm.data_len(), 1);
 
@@ -2133,7 +2188,8 @@ mod tests {
         let mod_a = build_module(src_a);
         let mod_b = build_module(src_b);
 
-        let mut vm = Vm::new(mod_a).unwrap();
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let mut vm = Vm::new(mod_a, &arena).unwrap();
         // Supplying one value when the new module declares two slots must fail.
         let err = vm
             .replace_module(mod_b, alloc::vec![Value::Int(99)])
@@ -2152,7 +2208,8 @@ mod tests {
         let mod_a = build_module(src_a);
         let mod_b = build_module(src_b);
 
-        let mut vm = Vm::new(mod_a).unwrap();
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let mut vm = Vm::new(mod_a, &arena).unwrap();
         vm.replace_module(mod_b, Vec::new()).unwrap();
         assert_eq!(vm.data_len(), 0);
         match vm.call(&[]).unwrap() {
@@ -2179,7 +2236,8 @@ mod tests {
         let mod_a = build_module(src_a);
         let mod_b = build_module(src_b);
 
-        let mut vm = Vm::new(mod_a).unwrap();
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let mut vm = Vm::new(mod_a, &arena).unwrap();
         vm.set_data(0, Value::Int(0)).unwrap();
 
         // Run module A: yield 1.
@@ -2215,7 +2273,8 @@ mod tests {
         let mod_v2 = build_module(src_v2);
 
         // Start with v1, snapshot the value 5.
-        let mut vm = Vm::new(mod_v1.clone()).unwrap();
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let mut vm = Vm::new(mod_v1.clone(), &arena).unwrap();
         vm.set_data(0, Value::Int(5)).unwrap();
         match vm.call(&[]).unwrap() {
             VmState::Finished(v) => assert_eq!(v, Value::Int(6)),
@@ -2248,7 +2307,8 @@ mod tests {
         let tokens = tokenize(src).expect("lex error");
         let program = parse(&tokens).expect("parse error");
         let module = compile(&program).expect("compile error");
-        let mut vm = Vm::new(module).unwrap();
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let mut vm = Vm::new(module, &arena).unwrap();
         match vm.call(&[Value::Int(0)]).unwrap() {
             VmState::Yielded(v) => assert_eq!(v, Value::StaticStr(String::from("static"))),
             other => panic!("expected yield, got {:?}", other),
@@ -2264,7 +2324,8 @@ mod tests {
         let tokens = tokenize(src).expect("lex error");
         let program = parse(&tokens).expect("parse error");
         let module = compile(&program).expect("compile error");
-        let mut vm = Vm::new(module).unwrap();
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let mut vm = Vm::new(module, &arena).unwrap();
         crate::utility_natives::register_utility_natives(&mut vm);
         let err = vm.call(&[Value::Int(42)]).unwrap_err();
         match err {
@@ -2284,7 +2345,8 @@ mod tests {
         let tokens = tokenize(src).expect("lex error");
         let program = parse(&tokens).expect("parse error");
         let module = compile(&program).expect("compile error");
-        let mut vm = Vm::new(module).unwrap();
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let mut vm = Vm::new(module, &arena).unwrap();
         crate::utility_natives::register_utility_natives(&mut vm);
         let err = vm.call(&[Value::Int(7)]).unwrap_err();
         match err {
@@ -2298,7 +2360,8 @@ mod tests {
     #[test]
     fn vm_has_arena_with_default_capacity() {
         let module = build_module("fn main() -> i64 { 42 }");
-        let vm = Vm::new(module).unwrap();
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let vm = Vm::new(module, &arena).unwrap();
         assert_eq!(vm.arena().capacity(), DEFAULT_ARENA_CAPACITY);
         assert_eq!(vm.arena().bottom_used(), 0);
         assert_eq!(vm.arena().top_used(), 0);
@@ -2307,48 +2370,52 @@ mod tests {
     #[test]
     fn vm_arena_capacity_configurable() {
         let module = build_module("fn main() -> i64 { 42 }");
-        let vm = Vm::new_with_arena_capacity(module, 4096).unwrap();
+        let arena = keleusma_arena::Arena::with_capacity(4096);
+        let vm = Vm::new(module, &arena).unwrap();
         assert_eq!(vm.arena().capacity(), 4096);
     }
 
     #[test]
     fn vm_arena_reset_at_op_reset() {
-        // Stream function that allocates from arena via the arena_mut
-        // accessor before yield. The arena is not reset at yield, but is
-        // reset at the Op::Reset boundary.
-        use core::alloc::Layout;
-        use keleusma_arena::Arena;
+        // Stream function that allocates from the arena's top region
+        // before yield. The arena is not reset at yield. At the
+        // Op::Reset boundary the top region is cleared and the epoch
+        // advances. The bottom region is preserved because the
+        // operand stack and call frames are bottom-allocated and
+        // carry state across the reset.
+        use keleusma_arena::KString;
 
         let src = "loop main(input: i64) -> i64 { let input = yield input; input }";
         let module = build_module(src);
-        let mut vm = Vm::new(module).unwrap();
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let mut vm = Vm::new(module, &arena).unwrap();
 
-        // Host allocates from arena before first call.
-        {
-            let layout = Layout::new::<u64>();
-            let handle = vm.arena().bottom_handle();
-            let _p = allocator_api2::alloc::Allocator::allocate(&handle, layout).unwrap();
-        }
-        assert!(vm.arena().bottom_used() > 0);
-        let _ = &vm; // fence for readability
+        // Host allocates a string from the arena's top region. The
+        // KString is the boundary type that becomes stale on reset.
+        let handle = KString::alloc(vm.arena(), "scratch").unwrap();
+        assert!(vm.arena().top_used() > 0);
 
         // First call yields, arena not reset at yield.
         match vm.call(&[Value::Int(0)]).unwrap() {
             VmState::Yielded(_) => {}
             other => panic!("expected yield, got {:?}", other),
         }
-        assert!(vm.arena().bottom_used() > 0);
+        assert!(vm.arena().top_used() > 0);
+        // The handle resolves while the epoch matches.
+        assert_eq!(handle.get(vm.arena()).unwrap(), "scratch");
 
-        // Resume to reach Reset. Arena is reset.
+        // Resume to reach Reset. Top region is cleared and the epoch
+        // advances. Bottom region is preserved (operand stack and
+        // frames remain).
+        let pre_epoch = vm.arena().epoch();
         match vm.resume(Value::Int(0)).unwrap() {
             VmState::Reset => {}
             other => panic!("expected reset, got {:?}", other),
         }
-        assert_eq!(vm.arena().bottom_used(), 0);
         assert_eq!(vm.arena().top_used(), 0);
-
-        // Suppress unused import in this nested context.
-        let _: fn(usize) -> Arena = Arena::with_capacity;
+        assert_eq!(vm.arena().epoch(), pre_epoch + 1);
+        // The handle is now stale.
+        assert!(handle.get(vm.arena()).is_err());
     }
 
     #[test]
@@ -2366,7 +2433,8 @@ mod tests {
         );
         // Decoded module runs and produces the same result as the original.
         let decoded = Module::from_bytes(&bytes).expect("decode");
-        let mut vm = Vm::new(decoded).unwrap();
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let mut vm = Vm::new(decoded, &arena).unwrap();
         match vm.call(&[]).unwrap() {
             VmState::Finished(v) => assert_eq!(v, Value::Int(42)),
             other => panic!("expected finished, got {:?}", other),
@@ -2380,7 +2448,8 @@ mod tests {
         let program = parse(&tokens).expect("parse");
         let module = compile(&program).expect("compile");
         let bytes = module.to_bytes().expect("encode");
-        let mut vm = Vm::load_bytes(&bytes).expect("load");
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let mut vm = Vm::load_bytes(&bytes, &arena).expect("load");
         match vm.call(&[]).unwrap() {
             VmState::Finished(v) => assert_eq!(v, Value::Int(42)),
             other => panic!("expected finished, got {:?}", other),
@@ -2498,7 +2567,8 @@ mod tests {
         );
         // Round-trip verifies the deserializer reads the golden bytes
         // correctly and the resulting program executes.
-        let mut vm = Vm::load_bytes(&expected).expect("load");
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let mut vm = Vm::load_bytes(&expected, &arena).expect("load");
         match vm.call(&[]).unwrap() {
             VmState::Finished(v) => assert_eq!(v, Value::Int(1)),
             other => panic!("expected finished, got {:?}", other),
@@ -2518,7 +2588,8 @@ mod tests {
         let bytes = module.to_bytes().expect("encode");
         let mut aligned = rkyv::util::AlignedVec::<8>::with_capacity(bytes.len());
         aligned.extend_from_slice(&bytes);
-        let mut vm = Vm::view_bytes(&aligned).expect("view");
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let mut vm = Vm::view_bytes(&aligned, &arena).expect("view");
         match vm.call(&[]).unwrap() {
             VmState::Finished(v) => assert_eq!(v, Value::Int(42)),
             other => panic!("expected finished, got {:?}", other),
@@ -2571,7 +2642,9 @@ mod tests {
         aligned.extend_from_slice(&bytes);
         // Construct a VM that borrows from `aligned`. The lifetime
         // parameter on Vm is tied to the slice.
-        let mut vm: Vm<'_> = unsafe { Vm::view_bytes_zero_copy(&aligned[..]).expect("view") };
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let mut vm: Vm<'_, '_> =
+            unsafe { Vm::view_bytes_zero_copy(&aligned[..], &arena).expect("view") };
         match vm.call(&[]).unwrap() {
             VmState::Finished(v) => assert_eq!(v, Value::Int(42)),
             other => panic!("expected finished, got {:?}", other),
@@ -2622,9 +2695,9 @@ mod tests {
         let main_chunk = &archived.chunks[0];
         for (i, archived_val) in main_chunk.constants.iter().enumerate() {
             let owned = value_from_archived(archived_val);
-            let original = &module.chunks[0].constants[i];
+            let original = module.chunks[0].constants[i].clone().into_value();
             assert_eq!(
-                &owned, original,
+                owned, original,
                 "constant at index {} mismatches across archive round trip",
                 i
             );
@@ -2667,10 +2740,9 @@ mod tests {
         let module = compile(&program).expect("compile");
         let mut bytes = module.to_bytes().expect("encode");
         bytes.extend_from_slice(&[0xAA; 32]);
-        let mut vm = Module::from_bytes(&bytes)
-            .map(Vm::new)
-            .expect("decode")
-            .expect("verify");
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let module = Module::from_bytes(&bytes).expect("decode");
+        let mut vm = Vm::new(module, &arena).expect("verify");
         match vm.call(&[]).unwrap() {
             VmState::Finished(v) => assert_eq!(v, Value::Int(1)),
             other => panic!("expected finished, got {:?}", other),
@@ -2784,7 +2856,8 @@ mod tests {
         let trailer_start = bytes.len() - 4;
         let new_crc = crate::bytecode::crc32(&bytes[..trailer_start]);
         bytes[trailer_start..].copy_from_slice(&new_crc.to_le_bytes());
-        let mut vm = Vm::load_bytes(&bytes).expect("narrower bytecode should be admitted");
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let mut vm = Vm::load_bytes(&bytes, &arena).expect("narrower bytecode should be admitted");
         match vm.call(&[]).unwrap() {
             VmState::Finished(v) => assert_eq!(v, Value::Int(1)),
             other => panic!("expected finished, got {:?}", other),
@@ -2803,7 +2876,8 @@ mod tests {
         let program = parse(&tokens).expect("parse");
         let mut module = compile(&program).expect("compile");
         module.word_bits_log2 = 5;
-        let mut vm = Vm::new(module).expect("verify");
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let mut vm = Vm::new(module, &arena).expect("verify");
         match vm.call(&[]).unwrap() {
             VmState::Finished(v) => assert_eq!(v, Value::Int(-2147483648)),
             other => panic!("expected finished, got {:?}", other),
@@ -2835,7 +2909,8 @@ mod tests {
             b'X', b'X', b'X', b'X', 0x04, 0x00, 0x14, 0x00, 0x00, 0x00, 6, 6, 0x00, 0x00, 0x00,
             0x00, 0x00, 0x00, 0x00, 0x00,
         ];
-        match Vm::load_bytes(&bytes) {
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        match Vm::load_bytes(&bytes, &arena) {
             Err(VmError::LoadError(_)) => {}
             Err(other) => panic!("expected VmError::LoadError, got {:?}", other),
             Ok(_) => panic!("expected error, got VM"),
@@ -2854,12 +2929,14 @@ mod tests {
         let module = compile(&program).expect("compile");
 
         // The verifying constructor rejects.
-        let rejected = Vm::new_with_arena_capacity(module.clone(), 1);
+        let arena = keleusma_arena::Arena::with_capacity(1);
+        let rejected = Vm::new(module.clone(), &arena);
         assert!(matches!(rejected, Err(VmError::VerifyError(_))));
 
         // The unchecked constructor admits the same module under the
         // same tiny capacity. Structural verification still runs.
-        let admitted = unsafe { Vm::new_unchecked_with_arena_capacity(module, 1) };
+        let arena = keleusma_arena::Arena::with_capacity(1);
+        let admitted = unsafe { Vm::new_unchecked(module, &arena) };
         assert!(admitted.is_ok());
     }
 
@@ -2868,11 +2945,11 @@ mod tests {
         // Construct a module that fails structural verification by
         // manually corrupting the chunk's block type. A `Stream` chunk
         // without a yield is rejected.
-        use crate::bytecode::{BlockType, Chunk, Module, Op};
+        use crate::bytecode::{BlockType, Chunk, ConstValue, Module, Op};
         let chunk = Chunk {
             name: alloc::string::String::from("main"),
             ops: alloc::vec![Op::Const(0), Op::Reset],
-            constants: alloc::vec![Value::Int(0)],
+            constants: alloc::vec![ConstValue::Int(0)],
             struct_templates: alloc::vec![],
             local_count: 0,
             param_count: 0,
@@ -2887,7 +2964,8 @@ mod tests {
             addr_bits_log2: crate::bytecode::RUNTIME_ADDRESS_BITS_LOG2,
         };
         // The unchecked constructor still rejects on structural grounds.
-        let result = unsafe { Vm::new_unchecked(module) };
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let result = unsafe { Vm::new_unchecked(module, &arena) };
         assert!(matches!(result, Err(VmError::VerifyError(_))));
     }
 
@@ -2932,7 +3010,8 @@ mod tests {
         let tokens = tokenize(src).expect("lex");
         let program = parse(&tokens).expect("parse");
         let module = compile(&program).expect("compile");
-        let mut vm = Vm::new(module).unwrap();
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let mut vm = Vm::new(module, &arena).unwrap();
         vm.set_data(0, Value::Int(5)).unwrap();
 
         // First iteration: yield 6.
@@ -2965,19 +3044,17 @@ mod tests {
         // A program that traps. The host catches the error, calls
         // reset_after_error, then runs the program again successfully.
         let trap_src = "fn main() -> i64 { let x = 0; if x == 0 { 1 / x } else { 0 } }";
-        let mut vm = match run_program(trap_src, &[]) {
-            Err(VmError::DivisionByZero) => {
-                // Reuse the run_program helper produced a one-shot VM
-                // that returned the error. We can't reuse it here
-                // because run_program owns the VM. Instead, build the
-                // VM directly so we can recover.
-                let tokens = tokenize(trap_src).expect("lex");
-                let program = parse(&tokens).expect("parse");
-                let module = compile(&program).expect("compile");
-                Vm::new(module).unwrap()
-            }
+        match run_program(trap_src, &[]) {
+            Err(VmError::DivisionByZero) => {}
             other => panic!("expected DivisionByZero precheck, got {:?}", other),
-        };
+        }
+        // Build the VM directly so we own its lifetime here and can
+        // recover after the error.
+        let tokens = tokenize(trap_src).expect("lex");
+        let program = parse(&tokens).expect("parse");
+        let module = compile(&program).expect("compile");
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let mut vm = Vm::new(module, &arena).unwrap();
 
         // First run produces the error.
         match vm.call(&[]) {
@@ -3005,7 +3082,8 @@ mod tests {
         let tokens = tokenize(src).expect("lex");
         let program = parse(&tokens).expect("parse");
         let module = compile(&program).expect("compile");
-        let mut vm = Vm::new(module).unwrap();
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let mut vm = Vm::new(module, &arena).unwrap();
         vm.reset_after_error();
         vm.reset_after_error();
         vm.reset_after_error();
@@ -3036,7 +3114,8 @@ mod tests {
         // Constructing the VM runs the strict-mode verifier. A
         // successful construction confirms the iteration bound was
         // extractable from the typed return.
-        let _vm = Vm::new(module).expect("verify");
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let _vm = Vm::new(module, &arena).expect("verify");
     }
 
     #[test]
@@ -3053,7 +3132,8 @@ mod tests {
         let tokens = tokenize(src).expect("lex");
         let program = parse(&tokens).expect("parse");
         let module = compile(&program).expect("compile");
-        let _vm = Vm::new(module).expect("verify");
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let _vm = Vm::new(module, &arena).expect("verify");
     }
 
     #[test]
@@ -3073,7 +3153,8 @@ mod tests {
         let tokens = tokenize(src).expect("lex");
         let program = parse(&tokens).expect("parse");
         let module = compile(&program).expect("compile");
-        let _vm = Vm::new(module).expect("verify");
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let _vm = Vm::new(module, &arena).expect("verify");
     }
 
     #[test]
@@ -3090,7 +3171,8 @@ mod tests {
         let tokens = tokenize(src).expect("lex");
         let program = parse(&tokens).expect("parse");
         let module = compile(&program).expect("compile");
-        let _vm = Vm::new(module).expect("verify");
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let _vm = Vm::new(module, &arena).expect("verify");
     }
 
     #[test]
@@ -3107,7 +3189,8 @@ mod tests {
         let tokens = tokenize(src).expect("lex");
         let program = parse(&tokens).expect("parse");
         let module = compile(&program).expect("compile");
-        let _vm = Vm::new(module).expect("verify");
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let _vm = Vm::new(module, &arena).expect("verify");
     }
 
     #[test]
@@ -3126,7 +3209,8 @@ mod tests {
         let tokens = tokenize(src).expect("lex");
         let program = parse(&tokens).expect("parse");
         let module = compile(&program).expect("compile");
-        let _vm = Vm::new(module).expect("verify");
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let _vm = Vm::new(module, &arena).expect("verify");
     }
 
     #[test]
@@ -3154,7 +3238,8 @@ mod tests {
         let tokens = tokenize(src).expect("lex");
         let program = parse(&tokens).expect("parse");
         let module = compile(&program).expect("compile");
-        let _vm = Vm::new(module).expect("verify");
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let _vm = Vm::new(module, &arena).expect("verify");
     }
 
     #[test]
@@ -3186,7 +3271,8 @@ mod tests {
         let tokens = tokenize(src).expect("lex");
         let program = parse(&tokens).expect("parse");
         let module = compile(&program).expect("compile");
-        let mut vm = Vm::new(module).expect("verify");
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let mut vm = Vm::new(module, &arena).expect("verify");
         vm.set_data(0, Value::Int(0)).expect("init sum");
         match vm.call(&[]) {
             Ok(VmState::Finished(Value::Int(v))) => assert_eq!(v, 107),
@@ -3222,7 +3308,8 @@ mod tests {
         let tokens = tokenize(src).expect("lex");
         let program = parse(&tokens).expect("parse");
         let module = compile(&program).expect("compile");
-        let mut vm = Vm::new(module).expect("verify");
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let mut vm = Vm::new(module, &arena).expect("verify");
         vm.set_data(0, Value::Int(0)).expect("init hits");
         match vm.call(&[]) {
             Ok(VmState::Finished(Value::Int(v))) => assert_eq!(v, 107),
@@ -3254,7 +3341,8 @@ mod tests {
         let tokens = tokenize(src).expect("lex");
         let program = parse(&tokens).expect("parse");
         let module = compile(&program).expect("compile");
-        let mut vm = Vm::new(module).expect("verify");
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let mut vm = Vm::new(module, &arena).expect("verify");
         vm.set_data(0, Value::Int(0)).expect("init total");
         match vm.call(&[]) {
             Ok(VmState::Finished(Value::Int(v))) => {

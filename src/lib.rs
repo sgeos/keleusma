@@ -14,7 +14,9 @@ pub mod utility_natives;
 pub mod verify;
 pub mod vm;
 
-pub use keleusma_arena::{Arena, BottomHandle, Budget, TopHandle};
+pub use keleusma_arena::{
+    Arena, ArenaHandle, BottomHandle, Budget, EpochSaturated, KString, Stale, TopHandle,
+};
 
 pub use bytecode::Value;
 pub use keleusma_macros::KeleusmaType;

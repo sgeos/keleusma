@@ -22,6 +22,11 @@ fn native_to_string(args: &[Value]) -> Result<Value, VmError> {
         Value::Float(f) => format!("{}", f),
         Value::Bool(b) => format!("{}", b),
         Value::StaticStr(s) | Value::DynStr(s) => s.clone(),
+        // KStr without arena access: the native function does not
+        // currently receive the arena, so we cannot resolve the
+        // handle here. Convert to a placeholder. A future revision
+        // of the native ABI threads the arena through.
+        Value::KStr(_) => String::from("<arena-string>"),
         Value::Unit => String::from("()"),
         Value::None => String::from("None"),
         Value::Tuple(elems) => {
@@ -122,7 +127,7 @@ fn native_println(args: &[Value]) -> Result<Value, VmError> {
 /// `to_string`, `length`, and `println` accept any `Value` variant and so
 /// remain registered through `register_native`. The math functions take
 /// fixed primitive types and use the ergonomic `register_fn` API.
-pub fn register_utility_natives<'a>(vm: &mut Vm<'a>) {
+pub fn register_utility_natives<'a, 'arena>(vm: &mut Vm<'a, 'arena>) {
     vm.register_native("to_string", native_to_string);
     vm.register_native("length", native_length);
     vm.register_native("println", native_println);
@@ -140,13 +145,14 @@ mod tests {
     use crate::compiler::compile;
     use crate::lexer::tokenize;
     use crate::parser::parse;
-    use crate::vm::VmState;
+    use crate::vm::{DEFAULT_ARENA_CAPACITY, VmState};
 
     fn run_with_utilities(src: &str) -> Value {
         let tokens = tokenize(src).expect("lex error");
         let program = parse(&tokens).expect("parse error");
         let module = compile(&program).expect("compile error");
-        let mut vm = Vm::new(module).unwrap();
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let mut vm = Vm::new(module, &arena).unwrap();
         register_utility_natives(&mut vm);
         match vm.call(&[]).unwrap() {
             VmState::Finished(v) => v,

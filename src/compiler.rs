@@ -183,14 +183,18 @@ impl FuncCompiler {
     }
 
     fn add_constant(&mut self, value: Value) -> u16 {
-        // Reuse existing constant if possible.
+        // The compiler emits compile-time constants only. The
+        // conversion below rejects runtime-only variants by panicking
+        // because reaching this with a `DynStr` or `KStr` would be a
+        // compiler bug rather than user-visible.
+        let cv = ConstValue::try_from_value(value).expect("compile-time constant only");
         for (i, c) in self.chunk.constants.iter().enumerate() {
-            if *c == value {
+            if *c == cv {
                 return i as u16;
             }
         }
         let idx = self.chunk.constants.len() as u16;
-        self.chunk.constants.push(value);
+        self.chunk.constants.push(cv);
         idx
     }
 

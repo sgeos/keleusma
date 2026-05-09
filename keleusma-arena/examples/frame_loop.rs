@@ -17,7 +17,7 @@ fn main() {
 
     for frame in 0..FRAME_COUNT {
         // Reset reclaims all allocations from the previous frame.
-        arena.reset();
+        arena.reset().expect("epoch saturated");
 
         // Each frame allocates a transient buffer for visible entities
         // from the stack-like region.

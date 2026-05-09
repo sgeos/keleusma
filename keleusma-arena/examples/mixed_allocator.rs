@@ -28,7 +28,7 @@ fn main() {
     for &input in &inputs {
         // Reset the arena at the start of each iteration. Allocations
         // from the previous iteration are reclaimed in bulk.
-        arena.reset();
+        arena.reset().expect("epoch saturated");
 
         // Transient buffer in the arena. Holds derived values for this
         // iteration only.

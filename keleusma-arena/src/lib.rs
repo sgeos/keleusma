@@ -168,6 +168,26 @@ enum Storage {
 /// not provide such a wrapper because doing so well requires choices
 /// that depend on the host's threading and synchronization model.
 ///
+/// ## Generations and stale-pointer detection
+///
+/// The arena carries an `epoch` counter that increments on [`Arena::reset`].
+/// The `ArenaHandle` family of safe wrappers captures the epoch at
+/// construction and validates it on access, returning [`Stale`] if the
+/// arena has been reset since the handle was issued. The counter is
+/// `u64` and uses checked arithmetic. A saturated counter halts the
+/// arena's reset path with [`EpochSaturated`]. Saturation requires
+/// roughly five hundred eighty four thousand years at one reset per
+/// microsecond and is documentation rather than a real failure mode in
+/// expected use.
+///
+/// In-process recovery from saturation is possible through
+/// [`Arena::force_reset_epoch`], which is unsafe and requires the
+/// caller to certify that no `ArenaHandle` from any prior epoch is
+/// reachable. Cross-process recovery for very long-lived deployments
+/// uses checkpoint and restart against host-owned non-volatile storage.
+/// `ArenaHandle` is intentionally not serializable because its pointer
+/// is not stable across processes.
+///
 /// See the crate-level documentation for the design overview.
 pub struct Arena {
     /// Pointer to the start of the backing buffer. Stable for the
@@ -187,10 +207,31 @@ pub struct Arena {
     /// Lowest observed value of `top_top`. Combined with `capacity`
     /// gives the peak top usage.
     top_peak_low: Cell<usize>,
+    /// Generation counter. Incremented on [`Arena::reset`]. Captured by
+    /// [`ArenaHandle`] values and validated on access for stale-pointer
+    /// detection. Saturates at `u64::MAX`, at which point further
+    /// resets fail with [`EpochSaturated`] until the caller invokes
+    /// [`Arena::force_reset_epoch`].
+    epoch: Cell<u64>,
     /// Storage discriminator. The field is read implicitly via `Drop`.
     #[allow(dead_code)]
     storage: Storage,
 }
+
+/// Hard halt error returned by [`Arena::reset`] when the epoch counter
+/// would saturate.
+///
+/// Saturation requires roughly five hundred eighty four thousand years
+/// at one reset per microsecond, but explicit refusal at saturation is
+/// the correct posture for safety-critical use. Recovery is via
+/// [`Arena::force_reset_epoch`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EpochSaturated;
+
+/// Error returned by [`ArenaHandle::get`] when the arena has been
+/// reset since the handle was issued.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Stale;
 
 // SAFETY: The arena uses `Cell` for interior mutability of the bump
 // pointers and peaks. `Cell` is `Send` but not `Sync`. The arena itself
@@ -252,6 +293,7 @@ impl Arena {
             top_top: Cell::new(capacity),
             bottom_peak: Cell::new(0),
             top_peak_low: Cell::new(capacity),
+            epoch: Cell::new(0),
             storage: Storage::Owned,
         }
     }
@@ -274,6 +316,7 @@ impl Arena {
             top_top: Cell::new(capacity),
             bottom_peak: Cell::new(0),
             top_peak_low: Cell::new(capacity),
+            epoch: Cell::new(0),
             storage: Storage::External,
         }
     }
@@ -311,6 +354,7 @@ impl Arena {
             top_top: Cell::new(capacity),
             bottom_peak: Cell::new(0),
             top_peak_low: Cell::new(capacity),
+            epoch: Cell::new(0),
             storage: Storage::External,
         }
     }
@@ -365,13 +409,116 @@ impl Arena {
     /// subsequent allocations will overwrite as needed. Does not clear
     /// peak watermarks; use [`Arena::clear_peaks`] for that.
     ///
+    /// Advances the epoch counter, invalidating every outstanding
+    /// [`ArenaHandle`]. Returns [`EpochSaturated`] if the counter is
+    /// already at `u64::MAX`. See [`Arena::force_reset_epoch`] for
+    /// recovery.
+    ///
     /// Takes `&mut self` so the borrow checker prevents calling reset
     /// while any handle borrows the arena. This guarantees no live
     /// allocations through `Allocator` trait users at the moment of
     /// reset.
-    pub fn reset(&mut self) {
+    pub fn reset(&mut self) -> Result<(), EpochSaturated> {
+        let next = self.epoch.get().checked_add(1).ok_or(EpochSaturated)?;
         self.bottom_top.set(0);
         self.top_top.set(self.capacity);
+        self.epoch.set(next);
+        Ok(())
+    }
+
+    /// Reset both ends and advance the epoch through a shared reference.
+    ///
+    /// Companion to [`Arena::reset`] for callers that hold the arena
+    /// through a shared reference and cannot temporarily acquire
+    /// exclusive access. The interior-mutable bump pointers and epoch
+    /// counter make the implementation race-free for single-threaded
+    /// use.
+    ///
+    /// # Safety
+    ///
+    /// The caller must certify that no allocator-bound collection
+    /// holds storage in the arena at the moment of reset. Concretely,
+    /// no `allocator_api2::vec::Vec<T, BottomHandle>` or
+    /// `allocator_api2::vec::Vec<T, TopHandle>` value may have non-zero
+    /// capacity when this is called. Outstanding [`ArenaHandle`] values
+    /// are correctly invalidated by the epoch advance and remain safe.
+    ///
+    /// Returns [`EpochSaturated`] when the epoch counter is at
+    /// `u64::MAX`. Recovery is via [`Arena::force_reset_epoch`].
+    pub unsafe fn reset_unchecked(&self) -> Result<(), EpochSaturated> {
+        let next = self.epoch.get().checked_add(1).ok_or(EpochSaturated)?;
+        self.bottom_top.set(0);
+        self.top_top.set(self.capacity);
+        self.epoch.set(next);
+        Ok(())
+    }
+
+    /// Reset the top end and advance the epoch through a shared
+    /// reference, leaving the bottom end untouched.
+    ///
+    /// Intended for hosts that use the bottom end for long-lived
+    /// allocator-bound collections (such as an operand stack) while
+    /// using the top end for short-lived scratch (such as dynamic
+    /// strings). The epoch advance invalidates every outstanding
+    /// [`ArenaHandle`] regardless of which end produced it. This is
+    /// the desired discipline because handles do not record which end
+    /// they came from and any handle that survives a reset is by
+    /// definition stale.
+    ///
+    /// # Safety
+    ///
+    /// The caller must certify that no allocator-bound collection
+    /// holds storage in the top end at the moment of reset. Bottom-end
+    /// allocator-bound collections are unaffected by this call and
+    /// retain their storage. Outstanding [`ArenaHandle`] values are
+    /// correctly invalidated by the epoch advance and remain safe.
+    ///
+    /// Returns [`EpochSaturated`] when the epoch counter is at
+    /// `u64::MAX`. Recovery is via [`Arena::force_reset_epoch`].
+    pub unsafe fn reset_top_unchecked(&self) -> Result<(), EpochSaturated> {
+        let next = self.epoch.get().checked_add(1).ok_or(EpochSaturated)?;
+        self.top_top.set(self.capacity);
+        self.epoch.set(next);
+        Ok(())
+    }
+
+    /// Current epoch counter value.
+    ///
+    /// Captured by [`ArenaHandle`] at construction and compared on
+    /// access. Hosts performing long-running missions may consult this
+    /// alongside [`Arena::epoch_remaining`] to schedule a graceful
+    /// restart well before saturation.
+    pub fn epoch(&self) -> u64 {
+        self.epoch.get()
+    }
+
+    /// Number of resets remaining before the epoch counter saturates.
+    pub fn epoch_remaining(&self) -> u64 {
+        u64::MAX - self.epoch.get()
+    }
+
+    /// Reset the epoch counter to zero.
+    ///
+    /// Recovery path for [`EpochSaturated`]. Resets bump pointers as
+    /// well so the arena is in the same observable state as a freshly
+    /// constructed arena, except for retained capacity.
+    ///
+    /// # Safety
+    ///
+    /// The caller must certify that no [`ArenaHandle`] produced under
+    /// any prior epoch is reachable. Calling this while such handles
+    /// exist invalidates the stale-detection guarantee and may permit
+    /// use after invalidation that the type system would otherwise
+    /// catch through epoch comparison.
+    ///
+    /// The intended use is recovery after a [`Arena::reset`] call has
+    /// returned [`EpochSaturated`]. The host halts every consumer of
+    /// the arena, drains every cache that holds an [`ArenaHandle`],
+    /// and only then invokes this method.
+    pub unsafe fn force_reset_epoch(&mut self) {
+        self.bottom_top.set(0);
+        self.top_top.set(self.capacity);
+        self.epoch.set(0);
     }
 
     /// Clear the peak watermarks for both ends.
@@ -639,6 +786,134 @@ unsafe impl Allocator for TopHandle<'_> {
     }
 }
 
+/// Lifetime-free safe handle to a value stored in an arena.
+///
+/// Stores a raw pointer to a value of type `T` together with the epoch
+/// at which the value was allocated. Access goes through [`ArenaHandle::get`],
+/// which takes a borrow of the arena and validates the epoch. A mismatch
+/// returns [`Stale`].
+///
+/// `ArenaHandle` does not borrow the arena directly. This makes it safe
+/// to embed inside types whose lifetime is unrelated to the arena, such
+/// as a runtime value enum that flows through caches and channels in
+/// the host. The trade-off is that every dereference requires explicit
+/// arena context. The wrapper does not implement `Deref` for that
+/// reason.
+///
+/// `T: ?Sized` is supported. `T = str` is the canonical use through the
+/// [`KString`] alias, where `NonNull<str>` is a wide pointer that
+/// carries the byte length alongside the data pointer.
+///
+/// # Safety contract
+///
+/// The pointer must reference a region of the same arena that produced
+/// the handle. The region must remain unmodified across resets while
+/// the epoch is unchanged. The constructors in this crate uphold this
+/// contract. Hand-rolled construction through public fields is not
+/// possible because the fields are private.
+///
+/// # Serialization
+///
+/// `ArenaHandle` is intentionally not serializable. Its pointer is not
+/// stable across processes. Long-lived deployments must convert handles
+/// to owned bytes before checkpointing.
+pub struct ArenaHandle<T: ?Sized> {
+    ptr: NonNull<T>,
+    epoch: u64,
+}
+
+// SAFETY: `ArenaHandle` is `Copy` for any `T: ?Sized` because both
+// fields are `Copy`. `NonNull<T>` is `Copy` for unsized `T`.
+impl<T: ?Sized> Copy for ArenaHandle<T> {}
+
+impl<T: ?Sized> Clone for ArenaHandle<T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<T: ?Sized> core::fmt::Debug for ArenaHandle<T> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("ArenaHandle")
+            .field("ptr", &self.ptr.as_ptr())
+            .field("epoch", &self.epoch)
+            .finish()
+    }
+}
+
+// `ArenaHandle` is intentionally not `Send` or `Sync` because the
+// arena it references is single-threaded. The pointer is `*mut` under
+// `NonNull`, which inherits the conservative auto-trait posture.
+
+impl<T: ?Sized> ArenaHandle<T> {
+    /// Resolve the handle against the arena that produced it.
+    ///
+    /// Returns [`Stale`] if the arena has been reset since the handle
+    /// was issued. The borrow of `arena` ties the returned reference's
+    /// lifetime to the arena, preventing the reference from outliving
+    /// the next reset.
+    ///
+    /// # Safety
+    ///
+    /// The arena must be the same arena that produced the handle. Mixing
+    /// handles between arenas is a logic error. The arena allocations
+    /// are uniquely owned by the arena, so passing the wrong arena will
+    /// dereference memory that is not the original allocation. This
+    /// would be unsound if the wrong arena's epoch happened to match.
+    pub fn get<'a>(&self, arena: &'a Arena) -> Result<&'a T, Stale> {
+        if arena.epoch() != self.epoch {
+            return Err(Stale);
+        }
+        // SAFETY: The handle was issued under the current epoch. The
+        // arena guarantees that allocated regions remain intact until
+        // the next reset, which advances the epoch.
+        Ok(unsafe { self.ptr.as_ref() })
+    }
+
+    /// Epoch captured when the handle was issued.
+    pub fn epoch(&self) -> u64 {
+        self.epoch
+    }
+}
+
+/// Lifetime-free arena-backed string handle.
+///
+/// Specialization of [`ArenaHandle`] for `T = str`. Stores a wide
+/// pointer that already carries the string's byte length, plus the
+/// arena epoch at allocation time.
+pub type KString = ArenaHandle<str>;
+
+impl KString {
+    /// Allocate a copy of `s` in the arena's top region and return a
+    /// handle to it.
+    ///
+    /// The bytes are copied; the source slice is not retained. The
+    /// resulting handle is valid until the next [`Arena::reset`].
+    #[cfg(feature = "alloc")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "alloc")))]
+    pub fn alloc(arena: &Arena, s: &str) -> Result<Self, AllocError> {
+        let bytes = s.as_bytes();
+        let buffer = arena.alloc_top_bytes(bytes.len())?;
+        let dst = buffer.as_ptr() as *mut u8;
+        // SAFETY: `buffer` is unique storage of `bytes.len()` bytes
+        // freshly allocated from the arena. The source is a valid byte
+        // slice. The regions do not overlap because the allocator
+        // returns previously unused memory.
+        unsafe { core::ptr::copy_nonoverlapping(bytes.as_ptr(), dst, bytes.len()) };
+        // Construct a `*mut str` from the freshly-written bytes. The
+        // layout of `*mut str` matches `*mut [u8]`.
+        let raw_slice: *mut [u8] = core::ptr::slice_from_raw_parts_mut(dst, bytes.len());
+        let raw_str: *mut str = raw_slice as *mut str;
+        // SAFETY: `raw_str` is non-null because `dst` came from a
+        // successful arena allocation.
+        let nn = unsafe { NonNull::new_unchecked(raw_str) };
+        Ok(ArenaHandle {
+            ptr: nn,
+            epoch: arena.epoch(),
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     extern crate alloc as test_alloc;
@@ -749,9 +1024,10 @@ mod tests {
         }
         assert_eq!(arena.bottom_used(), 8);
         assert_eq!(arena.top_used(), 8);
-        arena.reset();
+        arena.reset().unwrap();
         assert_eq!(arena.bottom_used(), 0);
         assert_eq!(arena.top_used(), 0);
+        assert_eq!(arena.epoch(), 1);
     }
 
     #[cfg(feature = "alloc")]
@@ -780,7 +1056,7 @@ mod tests {
         let layout = Layout::new::<u64>();
         let _a = arena.bottom_handle().allocate(layout).unwrap();
         assert_eq!(arena.bottom_peak(), 8);
-        arena.reset();
+        arena.reset().unwrap();
         assert_eq!(arena.bottom_used(), 0);
         // Peak persists after reset.
         assert_eq!(arena.bottom_peak(), 8);
@@ -836,6 +1112,76 @@ mod tests {
         }
         assert_eq!(v.iter().sum::<i64>(), 45);
         assert!(arena.bottom_used() > 0);
+    }
+
+    #[cfg(feature = "alloc")]
+    #[test]
+    fn epoch_advances_on_reset() {
+        let mut arena = Arena::with_capacity(64);
+        assert_eq!(arena.epoch(), 0);
+        arena.reset().unwrap();
+        assert_eq!(arena.epoch(), 1);
+        arena.reset().unwrap();
+        assert_eq!(arena.epoch(), 2);
+    }
+
+    #[cfg(feature = "alloc")]
+    #[test]
+    fn epoch_saturates() {
+        let mut arena = Arena::with_capacity(16);
+        // Force the epoch to one below saturation.
+        arena.epoch.set(u64::MAX - 1);
+        // First reset advances to u64::MAX.
+        arena.reset().unwrap();
+        assert_eq!(arena.epoch(), u64::MAX);
+        assert_eq!(arena.epoch_remaining(), 0);
+        // Second reset must refuse.
+        let result = arena.reset();
+        assert!(matches!(result, Err(EpochSaturated)));
+    }
+
+    #[cfg(feature = "alloc")]
+    #[test]
+    fn force_reset_epoch_recovers() {
+        let mut arena = Arena::with_capacity(16);
+        arena.epoch.set(u64::MAX);
+        assert!(matches!(arena.reset(), Err(EpochSaturated)));
+        // SAFETY: No `ArenaHandle` exists in this test scope.
+        unsafe {
+            arena.force_reset_epoch();
+        }
+        assert_eq!(arena.epoch(), 0);
+        arena.reset().unwrap();
+        assert_eq!(arena.epoch(), 1);
+    }
+
+    #[cfg(feature = "alloc")]
+    #[test]
+    fn kstring_roundtrip() {
+        let arena = Arena::with_capacity(256);
+        let handle = KString::alloc(&arena, "hello").unwrap();
+        let s = handle.get(&arena).unwrap();
+        assert_eq!(s, "hello");
+    }
+
+    #[cfg(feature = "alloc")]
+    #[test]
+    fn kstring_stale_after_reset() {
+        let mut arena = Arena::with_capacity(256);
+        let handle = KString::alloc(&arena, "ephemeral").unwrap();
+        assert_eq!(handle.get(&arena).unwrap(), "ephemeral");
+        arena.reset().unwrap();
+        assert!(matches!(handle.get(&arena), Err(Stale)));
+    }
+
+    #[cfg(feature = "alloc")]
+    #[test]
+    fn kstring_handle_is_copy() {
+        let arena = Arena::with_capacity(256);
+        let handle = KString::alloc(&arena, "shared").unwrap();
+        let copy = handle;
+        assert_eq!(handle.get(&arena).unwrap(), "shared");
+        assert_eq!(copy.get(&arena).unwrap(), "shared");
     }
 
     #[cfg(feature = "alloc")]

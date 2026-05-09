@@ -13,6 +13,6 @@ categories = ["no-std", "compilers"]
 [dependencies]
 libm = "0.2"
 keleusma-macros = { path = "keleusma-macros", version = "0.1.0" }
-keleusma-arena = { version = "0.1", features = ["alloc"] }
+keleusma-arena = { version = "0.1", path = "keleusma-arena", features = ["alloc"] }
 allocator-api2 = { version = "0.4", default-features = false, features = ["alloc"] }
 rkyv = { version = "0.8", default-features = false, features = ["alloc", "bytecheck"] }

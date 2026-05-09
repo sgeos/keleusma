@@ -2,7 +2,7 @@ extern crate alloc;
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use crate::bytecode::{BlockType, Chunk, Module, Op, Value};
+use crate::bytecode::{BlockType, Chunk, ConstValue, Module, Op};
 
 /// An error produced by structural verification.
 #[derive(Debug, Clone)]
@@ -310,7 +310,7 @@ fn trace_const_set_local(chunk: &Chunk, before_ip: usize, slot: u16) -> Option<i
             }
             // Pattern 1: direct integer constant.
             if let Op::Const(idx) = &ops[ip - 1]
-                && let Some(Value::Int(n)) = chunk.constants.get(*idx as usize)
+                && let Some(ConstValue::Int(n)) = chunk.constants.get(*idx as usize)
             {
                 return Some(*n);
             }
@@ -1359,7 +1359,7 @@ pub fn verify(module: &Module) -> Result<(), VerifyError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::bytecode::{BlockType, Chunk, Module, Op, Value};
+    use crate::bytecode::{BlockType, Chunk, ConstValue, Module, Op};
     use alloc::vec;
 
     fn make_module(chunks: Vec<Chunk>) -> Module {
@@ -2076,7 +2076,7 @@ mod tests {
             BlockType::Stream,
         );
         chunk.local_count = 1;
-        chunk.constants = vec![Value::Int(0)];
+        chunk.constants = vec![ConstValue::Int(0)];
         let (stack, _heap) = wcmu_stream_iteration(&chunk).unwrap();
         // Then branch peaks at 3 above the IfBoolPop. Plus local frame.
         // The actual peak should be at least 3 slots above the local frame.
@@ -2100,7 +2100,7 @@ mod tests {
             BlockType::Stream,
         );
         chunk.local_count = 0;
-        chunk.constants = vec![Value::Int(0)];
+        chunk.constants = vec![ConstValue::Int(0)];
         chunk.struct_templates = vec![StructTemplate {
             type_name: String::from("Point"),
             field_names: vec![String::from("x"), String::from("y")],
@@ -2126,7 +2126,7 @@ mod tests {
             ],
             BlockType::Stream,
         );
-        chunk.constants = vec![Value::Int(0)];
+        chunk.constants = vec![ConstValue::Int(0)];
         let (_stack, heap) = wcmu_stream_iteration(&chunk).unwrap();
         assert_eq!(heap, 3 * VALUE_SLOT_SIZE_BYTES);
     }
@@ -2168,7 +2168,7 @@ mod tests {
             BlockType::Stream,
         );
         chunk.local_count = 4;
-        chunk.constants = vec![Value::Int(0)];
+        chunk.constants = vec![ConstValue::Int(0)];
         let module = make_module(vec![chunk]);
         // Arena of 16 bytes is much smaller than the stream's WCMU.
         let err = verify_resource_bounds(&module, 16).unwrap_err();
@@ -2219,7 +2219,7 @@ mod tests {
             ],
             BlockType::Func,
         );
-        callee.constants = vec![Value::Int(0)];
+        callee.constants = vec![ConstValue::Int(0)];
 
         let stream_chunk = make_chunk(
             "tick",
@@ -2428,7 +2428,7 @@ mod tests {
             ],
             BlockType::Func,
         );
-        chunk.constants = vec![Value::Int(0), Value::Int(10)];
+        chunk.constants = vec![ConstValue::Int(0), ConstValue::Int(10)];
 
         let count = extract_loop_iteration_bound(&chunk, 4);
         assert_eq!(count, Some(10));
@@ -2493,7 +2493,7 @@ mod tests {
             ],
             BlockType::Stream,
         );
-        chunk.constants = vec![Value::StaticStr(String::from("trap"))];
+        chunk.constants = vec![ConstValue::StaticStr(String::from("trap"))];
         // Hmm the Loop target needs to point past EndLoop. Let me fix.
         // Loop(5) means jump to ip 5, which would be Yield. Plausible.
         // EndLoop(2) means back-edge to ip 2 (Trap). Plausible.
@@ -2530,7 +2530,7 @@ mod tests {
             ],
             BlockType::Stream,
         );
-        chunk.constants = vec![Value::Int(5), Value::Int(5), Value::Int(0)];
+        chunk.constants = vec![ConstValue::Int(5), ConstValue::Int(5), ConstValue::Int(0)];
         chunk.local_count = 2;
         let (_stack, heap) = wcmu_stream_iteration(&chunk).unwrap();
         // 0 iterations means the body's heap allocation does not count.

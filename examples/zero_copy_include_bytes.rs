@@ -53,8 +53,9 @@ fn main() {
     // compiler in `regenerate_zero_copy_bytecode` and was previously
     // verified at that step. The host attests through the unsafe
     // marker that the wire format and structural invariants hold.
-    let mut vm: Vm<'static> =
-        unsafe { Vm::view_bytes_zero_copy(&BYTECODE.0).expect("framing valid") };
+    let arena = keleusma::Arena::with_capacity(64 * 1024);
+    let mut vm: Vm<'static, '_> =
+        unsafe { Vm::view_bytes_zero_copy(&BYTECODE.0, &arena).expect("framing valid") };
 
     println!("buffer len {} bytes", BYTECODE.0.len());
     println!("buffer base address 0x{:x}", BYTECODE.0.as_ptr() as usize);

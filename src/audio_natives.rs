@@ -14,7 +14,7 @@ use crate::vm::{Vm, VmError};
 ///
 /// These are pure functions that do not require engine access.
 /// They are available under the `audio` and `math` namespaces.
-pub fn register_audio_natives<'a>(vm: &mut Vm<'a>) {
+pub fn register_audio_natives<'a, 'arena>(vm: &mut Vm<'a, 'arena>) {
     // MIDI note to frequency. Standard formula 440 * 2^((note - 69) / 12).
     vm.register_fn("audio::midi_to_freq", |note: i64| -> f64 {
         440.0 * libm::pow(2.0, (note - 69) as f64 / 12.0)
@@ -80,12 +80,14 @@ mod tests {
     use crate::compiler::compile;
     use crate::lexer::tokenize;
     use crate::parser::parse;
+    use crate::vm::DEFAULT_ARENA_CAPACITY;
 
     fn run_with_natives(src: &str) -> Value {
         let tokens = tokenize(src).expect("lex error");
         let program = parse(&tokens).expect("parse error");
         let module = compile(&program).expect("compile error");
-        let mut vm = Vm::new(module).unwrap();
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let mut vm = Vm::new(module, &arena).unwrap();
         register_audio_natives(&mut vm);
         match vm.call(&[]).unwrap() {
             crate::vm::VmState::Finished(v) => v,
