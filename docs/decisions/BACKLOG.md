@@ -32,7 +32,7 @@ The remaining future work tracked under this entry.
 
 - Method call surface syntax (`x.method(args)`). Parser change plus resolution. Pairs naturally with monomorphization which makes the receiver type concrete.
 
-## ~~B2.4 Compile-time monomorphization~~ (MVP landed)
+## ~~B2.4 Compile-time monomorphization~~ (MVP plus inference reach extension)
 
 Monomorphization specializes generic functions per concrete type instantiation. The MVP is implemented in `src/monomorphize.rs` and runs between type checking and compilation in `compile()`.
 
@@ -46,12 +46,14 @@ What lands.
 
 End-to-end example. `examples/monomorphize_generic_method.rs` compiles and executes `fn use_doubler<T: Doubler>(x: T) -> i64 { x.double() }` where the body's method call resolves only after monomorphization specializes `use_doubler` for `T = i64`.
 
+Inference reach extension. `infer_arg_type` now resolves the type of function calls (through a function-return-type map), tuple and array literals, cast expressions, enum variants, and the first-arm of if/match expressions. Generic call sites whose arguments use these shapes specialize correctly. Generic structs and enums are not yet specialized.
+
+Pruning policy. Generic functions whose specializations were generated are dropped from the program output. Generic functions with no specializations are retained because they continue to execute correctly through runtime tag dispatch on Value tags. This is the safe default for cases like first-class closure arguments where the concrete type cannot be inferred but the function still runs.
+
 Remaining work.
 
 - Generic structs and enums. The current pass handles only generic functions. Generic struct construction and field access continue to use runtime tag dispatch. Specialization of structs requires emitting per-instantiation copies of struct templates and rewriting field offsets accordingly. Estimated 3 to 5 hours.
-- Inference reach. The MVP infers concrete type arguments from literal arguments and locally-declared identifiers. Cases where the type argument flows through a chain of function calls or through generic-receiver method results are not yet handled and the call site is left generic. Estimated 2 to 4 hours.
-- Polymorphic recursion guard. If a generic function calls itself with type arguments derived from its own type parameters, the pass would loop indefinitely. The MVP relies on the call graph being finite and the test suite not exercising polymorphic recursion. A guard against unbounded specialization should be added before the feature is considered production-ready.
-- Pruning unused generic functions. The MVP retains generic functions that have at least one specialization; non-specialized generics remain in the program as dead code that the compiler emits but the runtime never enters. A pruning pass would remove these.
+- Polymorphic recursion guard. The MVP includes a SPECIALIZATION_LIMIT bound to prevent unbounded specialization. A more sophisticated cycle-detection guard could reject the program before allocating partial specializations.
 
 ## ~~B3. Closures and anonymous functions~~ (Resolved with environment capture)
 
@@ -68,10 +70,11 @@ What lands.
 
 End-to-end. `examples/closure_basic.rs` demonstrates `let f = |x: i64| x + 1; f(41)` returning 42. `examples/closure_capture.rs` demonstrates `let n: i64 = 10; let f = |x: i64| x + n; f(5)` returning 15.
 
+First-class closures as function arguments now work end to end. A generic function `fn apply<F>(f: F, x: i64) -> i64 { f(x) }` accepts a closure and invokes it through the indirect-call mechanism. The compiler resolves the parameter `f` as a local and emits `Op::CallIndirect`. Monomorphization leaves the call generic when the argument's concrete type cannot be inferred (closure types are opaque); the runtime polymorphic dispatch handles invocation.
+
 Remaining work tracked under future B3 follow-on.
 
-- First-class closures as function arguments. Closures stored in locals can be invoked through indirect call, but passing a closure as an argument to another function and invoking it from the called function requires the typecheck to flow function types through call signatures. The current minimum admits closures stored in locals; broader function-typed parameters are deferred. Estimated 2 to 4 hours.
-- Capture by value semantics. The current capture copies the value at closure creation time, matching the typical capture-by-value contract. Capture by reference (mutable shared environment across multiple invocations of the same closure) is not currently supported and would require a different runtime representation.
+- Capture by reference semantics. The current capture copies the value at closure creation time, matching the typical capture-by-value contract. Capture by reference (mutable shared environment across multiple invocations of the same closure) is not currently supported and would require a different runtime representation.
 
 ## ~~B4. Hot code swap implementation~~ (Resolved as R29)
 

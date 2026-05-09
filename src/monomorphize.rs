@@ -48,6 +48,14 @@ pub fn monomorphize(program: Program) -> Program {
         .map(|f| (f.name.clone(), f.clone()))
         .collect();
 
+    // Function-return-type map for argument-type inference. Used by
+    // `infer_arg_type` to resolve types of nested function calls
+    // appearing in generic call arguments.
+    let mut fn_returns: BTreeMap<String, TypeExpr> = BTreeMap::new();
+    for f in &program.functions {
+        fn_returns.insert(f.name.clone(), f.return_type.clone());
+    }
+
     // Local-type information for argument-type inference.
     let mut local_types: BTreeMap<String, TypeExpr> = BTreeMap::new();
     // Specializations generated. Keyed on (function, type_args
@@ -72,6 +80,7 @@ pub fn monomorphize(program: Program) -> Program {
                 &mut local_types,
                 &mut specs,
                 &mut new_functions,
+                &fn_returns,
             );
         }
     }
@@ -116,23 +125,26 @@ pub fn monomorphize(program: Program) -> Program {
             &mut local_types,
             &mut specs,
             &mut new_functions,
+            &fn_returns,
         );
         new_functions[idx].body = body_clone;
         idx += 1;
     }
 
     program.functions.extend(new_functions);
-    // Drop every generic function from the output. Specialized
-    // copies have been generated for call sites the pass could
-    // analyze, and the corresponding call sites have been rewritten
-    // to specialized names. Generic functions retained in the
-    // output would compile to dead-code chunks that the runtime
-    // never enters, and any remaining call site that still
-    // references a generic name would indicate that the pass
-    // failed to monomorphize the call. Dropping the generics
-    // surfaces such failures as compile-time errors rather than
-    // silent dead code.
-    program.functions.retain(|f| f.type_params.is_empty());
+    // Drop generic functions that have at least one specialization
+    // generated. Generics with no specializations remain in the
+    // program because some call sites may not have been reachable
+    // for inference and the original generic chunks still execute
+    // correctly through runtime tag dispatch. The polymorphic
+    // representation continues to be sound for closure-typed
+    // arguments and other shapes whose concrete types cannot be
+    // statically inferred.
+    let specialized_origins: alloc::collections::BTreeSet<String> =
+        specs.keys().map(|(name, _)| name.clone()).collect();
+    program
+        .functions
+        .retain(|f| !specialized_origins.contains(&f.name));
     program
 }
 
@@ -187,7 +199,11 @@ fn type_arg_canonical(t: &TypeExpr) -> String {
 /// information. The pass returns `None` for expressions whose type
 /// cannot be determined, in which case the call site is not
 /// specialized and the runtime falls back to the generic dispatch.
-fn infer_arg_type(expr: &Expr, locals: &BTreeMap<String, TypeExpr>) -> Option<TypeExpr> {
+fn infer_arg_type(
+    expr: &Expr,
+    locals: &BTreeMap<String, TypeExpr>,
+    fn_returns: &BTreeMap<String, TypeExpr>,
+) -> Option<TypeExpr> {
     match expr {
         Expr::Literal { value, span } => Some(match value {
             Literal::Int(_) => TypeExpr::Prim(PrimType::I64, *span),
@@ -199,6 +215,55 @@ fn infer_arg_type(expr: &Expr, locals: &BTreeMap<String, TypeExpr>) -> Option<Ty
         Expr::Ident { name, .. } => locals.get(name).cloned(),
         Expr::StructInit { name, span, .. } => {
             Some(TypeExpr::Named(name.clone(), Vec::new(), *span))
+        }
+        Expr::EnumVariant {
+            enum_name, span, ..
+        } => Some(TypeExpr::Named(enum_name.clone(), Vec::new(), *span)),
+        Expr::Call { name, .. } => fn_returns.get(name).cloned(),
+        Expr::Cast { target, .. } => Some(target.clone()),
+        Expr::TupleLiteral { elements, span } => {
+            let parts: Option<Vec<TypeExpr>> = elements
+                .iter()
+                .map(|e| infer_arg_type(e, locals, fn_returns))
+                .collect();
+            parts.map(|p| TypeExpr::Tuple(p, *span))
+        }
+        Expr::ArrayLiteral { elements, span } => {
+            let elem = elements.first()?;
+            let elem_ty = infer_arg_type(elem, locals, fn_returns)?;
+            Some(TypeExpr::Array(
+                Box::new(elem_ty),
+                elements.len() as i64,
+                *span,
+            ))
+        }
+        Expr::If {
+            then_block,
+            else_block,
+            ..
+        } => {
+            // Use the type of the then-branch's tail expression.
+            let tail = then_block.tail_expr.as_ref()?;
+            infer_arg_type(tail, locals, fn_returns).or_else(|| {
+                else_block
+                    .as_ref()
+                    .and_then(|b| b.tail_expr.as_ref())
+                    .and_then(|e| infer_arg_type(e, locals, fn_returns))
+            })
+        }
+        Expr::Match { arms, .. } => {
+            // All arms agree on type per the type checker. Use the
+            // first arm's expression type.
+            let first = arms.first()?;
+            infer_arg_type(&first.expr, locals, fn_returns)
+        }
+        Expr::FieldAccess { object, field, .. } => {
+            // For a known local of a known struct, the field's type
+            // could be looked up. The current `locals` map only
+            // records the struct's nominal type. Without struct
+            // field tables threaded here, return None for now.
+            let _ = (object, field);
+            None
         }
         _ => None,
     }
@@ -519,12 +584,13 @@ fn rewrite_block(
     locals: &mut BTreeMap<String, TypeExpr>,
     specs: &mut BTreeMap<(String, String), String>,
     new_functions: &mut Vec<FunctionDef>,
+    fn_returns: &BTreeMap<String, TypeExpr>,
 ) {
     for stmt in &mut block.stmts {
-        rewrite_stmt(stmt, generics, locals, specs, new_functions);
+        rewrite_stmt(stmt, generics, locals, specs, new_functions, fn_returns);
     }
     if let Some(e) = block.tail_expr.as_mut() {
-        rewrite_expr(e, generics, locals, specs, new_functions);
+        rewrite_expr(e, generics, locals, specs, new_functions, fn_returns);
     }
 }
 
@@ -534,30 +600,52 @@ fn rewrite_stmt(
     locals: &mut BTreeMap<String, TypeExpr>,
     specs: &mut BTreeMap<(String, String), String>,
     new_functions: &mut Vec<FunctionDef>,
+    fn_returns: &BTreeMap<String, TypeExpr>,
 ) {
     match stmt {
         Stmt::Let(l) => {
-            rewrite_expr(&mut l.value, generics, locals, specs, new_functions);
+            rewrite_expr(
+                &mut l.value,
+                generics,
+                locals,
+                specs,
+                new_functions,
+                fn_returns,
+            );
             // Record local type for subsequent type inference at call
             // sites that reference this binding.
             if let Pattern::Variable(name, _) = &l.pattern
                 && let Some(t) = l
                     .type_expr
                     .clone()
-                    .or_else(|| infer_arg_type(&l.value, locals))
+                    .or_else(|| infer_arg_type(&l.value, locals, fn_returns))
             {
                 locals.insert(name.clone(), t);
             }
         }
         Stmt::For(f) => {
-            rewrite_iterable(&mut f.iterable, generics, locals, specs, new_functions);
-            rewrite_block(&mut f.body, generics, locals, specs, new_functions);
+            rewrite_iterable(
+                &mut f.iterable,
+                generics,
+                locals,
+                specs,
+                new_functions,
+                fn_returns,
+            );
+            rewrite_block(
+                &mut f.body,
+                generics,
+                locals,
+                specs,
+                new_functions,
+                fn_returns,
+            );
         }
         Stmt::Break(_) => {}
         Stmt::DataFieldAssign { value, .. } => {
-            rewrite_expr(value, generics, locals, specs, new_functions);
+            rewrite_expr(value, generics, locals, specs, new_functions, fn_returns);
         }
-        Stmt::Expr(e) => rewrite_expr(e, generics, locals, specs, new_functions),
+        Stmt::Expr(e) => rewrite_expr(e, generics, locals, specs, new_functions, fn_returns),
     }
 }
 
@@ -567,13 +655,14 @@ fn rewrite_iterable(
     locals: &mut BTreeMap<String, TypeExpr>,
     specs: &mut BTreeMap<(String, String), String>,
     new_functions: &mut Vec<FunctionDef>,
+    fn_returns: &BTreeMap<String, TypeExpr>,
 ) {
     match it {
         Iterable::Range(start, end) => {
-            rewrite_expr(start, generics, locals, specs, new_functions);
-            rewrite_expr(end, generics, locals, specs, new_functions);
+            rewrite_expr(start, generics, locals, specs, new_functions, fn_returns);
+            rewrite_expr(end, generics, locals, specs, new_functions, fn_returns);
         }
-        Iterable::Expr(e) => rewrite_expr(e, generics, locals, specs, new_functions),
+        Iterable::Expr(e) => rewrite_expr(e, generics, locals, specs, new_functions, fn_returns),
     }
 }
 
@@ -583,83 +672,125 @@ fn rewrite_expr(
     locals: &mut BTreeMap<String, TypeExpr>,
     specs: &mut BTreeMap<(String, String), String>,
     new_functions: &mut Vec<FunctionDef>,
+    fn_returns: &BTreeMap<String, TypeExpr>,
 ) {
     // First descend so nested calls are rewritten before this one.
     match expr {
         Expr::BinOp { left, right, .. } => {
-            rewrite_expr(left, generics, locals, specs, new_functions);
-            rewrite_expr(right, generics, locals, specs, new_functions);
+            rewrite_expr(left, generics, locals, specs, new_functions, fn_returns);
+            rewrite_expr(right, generics, locals, specs, new_functions, fn_returns);
         }
         Expr::UnaryOp { operand, .. } => {
-            rewrite_expr(operand, generics, locals, specs, new_functions);
+            rewrite_expr(operand, generics, locals, specs, new_functions, fn_returns);
         }
         Expr::Call { args, .. } => {
             for a in args.iter_mut() {
-                rewrite_expr(a, generics, locals, specs, new_functions);
+                rewrite_expr(a, generics, locals, specs, new_functions, fn_returns);
             }
         }
         Expr::Pipeline { left, args, .. } => {
-            rewrite_expr(left, generics, locals, specs, new_functions);
+            rewrite_expr(left, generics, locals, specs, new_functions, fn_returns);
             for a in args.iter_mut() {
-                rewrite_expr(a, generics, locals, specs, new_functions);
+                rewrite_expr(a, generics, locals, specs, new_functions, fn_returns);
             }
         }
-        Expr::Yield { value, .. } => rewrite_expr(value, generics, locals, specs, new_functions),
+        Expr::Yield { value, .. } => {
+            rewrite_expr(value, generics, locals, specs, new_functions, fn_returns)
+        }
         Expr::If {
             condition,
             then_block,
             else_block,
             ..
         } => {
-            rewrite_expr(condition, generics, locals, specs, new_functions);
-            rewrite_block(then_block, generics, locals, specs, new_functions);
+            rewrite_expr(
+                condition,
+                generics,
+                locals,
+                specs,
+                new_functions,
+                fn_returns,
+            );
+            rewrite_block(
+                then_block,
+                generics,
+                locals,
+                specs,
+                new_functions,
+                fn_returns,
+            );
             if let Some(b) = else_block.as_mut() {
-                rewrite_block(b, generics, locals, specs, new_functions);
+                rewrite_block(b, generics, locals, specs, new_functions, fn_returns);
             }
         }
         Expr::Match {
             scrutinee, arms, ..
         } => {
-            rewrite_expr(scrutinee, generics, locals, specs, new_functions);
+            rewrite_expr(
+                scrutinee,
+                generics,
+                locals,
+                specs,
+                new_functions,
+                fn_returns,
+            );
             for arm in arms.iter_mut() {
-                rewrite_expr(&mut arm.expr, generics, locals, specs, new_functions);
+                rewrite_expr(
+                    &mut arm.expr,
+                    generics,
+                    locals,
+                    specs,
+                    new_functions,
+                    fn_returns,
+                );
             }
         }
-        Expr::Loop { body, .. } => rewrite_block(body, generics, locals, specs, new_functions),
+        Expr::Loop { body, .. } => {
+            rewrite_block(body, generics, locals, specs, new_functions, fn_returns)
+        }
         Expr::FieldAccess { object, .. } => {
-            rewrite_expr(object, generics, locals, specs, new_functions);
+            rewrite_expr(object, generics, locals, specs, new_functions, fn_returns);
         }
         Expr::MethodCall { receiver, args, .. } => {
-            rewrite_expr(receiver, generics, locals, specs, new_functions);
+            rewrite_expr(receiver, generics, locals, specs, new_functions, fn_returns);
             for a in args.iter_mut() {
-                rewrite_expr(a, generics, locals, specs, new_functions);
+                rewrite_expr(a, generics, locals, specs, new_functions, fn_returns);
             }
         }
         Expr::TupleIndex { object, .. } => {
-            rewrite_expr(object, generics, locals, specs, new_functions);
+            rewrite_expr(object, generics, locals, specs, new_functions, fn_returns);
         }
         Expr::ArrayIndex { object, index, .. } => {
-            rewrite_expr(object, generics, locals, specs, new_functions);
-            rewrite_expr(index, generics, locals, specs, new_functions);
+            rewrite_expr(object, generics, locals, specs, new_functions, fn_returns);
+            rewrite_expr(index, generics, locals, specs, new_functions, fn_returns);
         }
         Expr::StructInit { fields, .. } => {
             for f in fields.iter_mut() {
-                rewrite_expr(&mut f.value, generics, locals, specs, new_functions);
+                rewrite_expr(
+                    &mut f.value,
+                    generics,
+                    locals,
+                    specs,
+                    new_functions,
+                    fn_returns,
+                );
             }
         }
         Expr::EnumVariant { args, .. } => {
             for a in args.iter_mut() {
-                rewrite_expr(a, generics, locals, specs, new_functions);
+                rewrite_expr(a, generics, locals, specs, new_functions, fn_returns);
             }
         }
         Expr::ArrayLiteral { elements, .. } | Expr::TupleLiteral { elements, .. } => {
             for e in elements.iter_mut() {
-                rewrite_expr(e, generics, locals, specs, new_functions);
+                rewrite_expr(e, generics, locals, specs, new_functions, fn_returns);
             }
         }
-        Expr::Cast { expr, .. } => rewrite_expr(expr, generics, locals, specs, new_functions),
+        Expr::Cast { expr, .. } => {
+            rewrite_expr(expr, generics, locals, specs, new_functions, fn_returns)
+        }
         Expr::Closure { body, .. } => {
-            rewrite_block(body, generics, locals, specs, new_functions);
+            rewrite_block(body, generics, locals, specs, new_functions, fn_returns);
         }
         Expr::ClosureRef { .. } => {}
         Expr::Literal { .. } | Expr::Ident { .. } | Expr::Placeholder { .. } => {}
@@ -691,7 +822,7 @@ fn rewrite_expr(
                 if let Some(TypeExpr::Named(n, _, _)) = &param.type_expr
                     && *n == tp.name
                     && let Some(arg) = args.get(param_idx)
-                    && let Some(t) = infer_arg_type(arg, locals)
+                    && let Some(t) = infer_arg_type(arg, locals, fn_returns)
                 {
                     inferred = Some(t);
                     break;

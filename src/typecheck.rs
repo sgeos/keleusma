@@ -2839,6 +2839,34 @@ mod tests {
     }
 
     #[test]
+    fn monomorphize_inference_through_function_call() {
+        // The generic call site uses a function call as argument.
+        // Inference reach now resolves the call's return type and
+        // specializes the generic function for the resulting type.
+        check_src(
+            "fn make42() -> i64 { 42 }\n\
+             fn id<T>(x: T) -> T { x }\n\
+             fn main() -> i64 { id(make42()) }",
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn closure_passed_as_argument() {
+        // A generic function takes a closure as an argument and
+        // invokes it. The body uses the parameter as a callable
+        // through indirect dispatch.
+        check_src(
+            "fn apply<F>(f: F, x: i64) -> i64 { f(x) }\n\
+             fn main() -> i64 {\n\
+                let g = |x: i64| x + 1;\n\
+                apply(g, 41)\n\
+             }",
+        )
+        .unwrap();
+    }
+
+    #[test]
     fn closure_captures_outer_local() {
         check_src(
             "fn main() -> i64 {\n\

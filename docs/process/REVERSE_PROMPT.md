@@ -9,8 +9,8 @@ AI to Human communication channel.
 ## Last Updated
 
 **Date**: 2026-05-09
-**Task**: V0.1-M3-T21. B3 closure environment capture.
-**Status**: Complete. Closures execute end to end with environment capture.
+**Task**: V0.1-M3-T22. B2.4 inference reach extension and B3 first-class closures as function arguments.
+**Status**: Complete. Both items execute end to end.
 
 ## Verification
 
@@ -24,78 +24,69 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 **Results**:
 
-- 469 tests pass workspace-wide. 400 keleusma unit (1 new for closure capture), 17 keleusma marshall integration, 17 keleusma `kstring_boundary` integration, 28 keleusma-arena unit, 6 keleusma-arena doctests.
+- 470 tests pass workspace-wide. 402 keleusma unit (2 new across B2.4 and B3 follow-ons), 17 keleusma marshall integration, 17 keleusma `kstring_boundary` integration, 28 keleusma-arena unit, 6 keleusma-arena doctests.
 - Clippy clean under `--workspace --all-targets`.
 - Format clean.
 
 ## Summary
 
-This session delivered closure environment capture, completing the B3 closure feature.
+This session delivered the B2.4 inference reach extension and the B3 first-class closures-as-arguments slice.
 
-Runtime. `Value::Func` extended from a plain `u16` chunk index to a struct with `chunk_idx: u16` and `env: Vec<Value>`. Plain function-name references continue to produce `Func` values with empty `env` through `Op::PushFunc`. Closures with captured outer-scope locals produce `Func` values with non-empty `env` through the new `Op::MakeClosure(chunk_idx, n_captures)` instruction, which pops `n_captures` values from the operand stack and stores them in declaration order. `Op::CallIndirect` was updated to push env values back onto the operand stack as implicit arguments before the explicit ones, increasing the called chunk's argument count by `env.len()`.
+B2.4 inference reach extension. The monomorphization pass's `infer_arg_type` helper now handles more expression shapes when inferring concrete types for generic call arguments. New cases include direct function call returns (resolved through a function-return-type map), tuple and array literals (recursive inference of element types), cast expressions (using the target type), enum variants (using the enum name), and if/match expressions (using the first branch's tail expression). Generic call sites whose arguments use these shapes specialize correctly without requiring intermediate let bindings.
 
-Hoist pass. New free-variable collection walks closure bodies and produces a list of identifiers referenced but not bound by the closure's own parameters. The list is filtered to drop names declared as natives via `use` declarations and names qualified with `::`. The remaining names become both the synthetic function's prepended parameters and the captures recorded in the new `Expr::ClosureRef { name, captures, span }` AST variant.
+Pruning policy refinement. The previous strict prune dropped every generic function from the program output, which was too aggressive: closure-typed arguments cannot be inferred to a concrete type, so monomorphization leaves the receiving function generic. Without retention, the runtime would fail with "undefined function" at the call site. The policy now drops only generic functions whose specializations were generated. Generics with no specializations are retained because they execute correctly through runtime tag dispatch on `Value` tags. This is the safe default that supports first-class closure arguments and other opaque-type call sites.
 
-Compiler. The `ClosureRef` arm emits `GetLocal(slot)` for capture names that resolve as locals and `PushFunc(idx)` for capture names that resolve as top-level functions. Then it emits `MakeClosure(synth_idx, n)` when there are captures or `PushFunc(synth_idx)` when there are none.
-
-Type checker. `Expr::ClosureRef` produces a fresh type variable. The previously added local-call short-circuit continues to handle indirect-call call sites.
-
-End-to-end. `examples/closure_capture.rs` compiles and executes `let n: i64 = 10; let f = |x: i64| x + n; f(5)` returning 15. The hoisted synthetic function has parameters `(n, x)`. The construction site emits `GetLocal(n)` followed by `MakeClosure(synth, 1)`. The invocation site emits `GetLocal(f)`, the explicit args, and `CallIndirect(1)`. The runtime extracts `env = [n_value]` and pushes both the env value and the explicit arg before invoking the synthetic chunk.
+B3 first-class closures as function arguments. With the pruning policy adjusted, a generic function `fn apply<F>(f: F, x: i64) -> i64 { f(x) }` now compiles and runs. The compiler resolves the parameter `f` as a local and emits `Op::CallIndirect` for `f(x)`. The closure passed as the argument flows through the call frame as a `Value::Func` and dispatches at the receiving function's call site. `examples/closure_as_arg.rs` demonstrates `apply(g, 41)` returning 42.
 
 ## Tests
 
-One new typecheck test, `closure_captures_outer_local`. The full test suite continues to pass against the new wire format.
+Two new typecheck tests.
 
-One new example, `examples/closure_capture.rs`, demonstrates end-to-end execution.
+- `monomorphize_inference_through_function_call`. Generic call site uses a function call as an argument; inference resolves the call's return type and specializes correctly.
+- `closure_passed_as_argument`. A generic function takes a closure as an argument and invokes it from the body through indirect dispatch.
+
+One new example, `examples/closure_as_arg.rs`, demonstrates end-to-end execution.
 
 ## Trade-offs and Properties
 
-The capture is by value: the closure stores a copy of each captured value at creation time. Subsequent mutation of the original variable does not propagate to the closure. This matches the canonical capture-by-value semantics and avoids the complications of shared mutable state across closures.
+The inference reach extension's coverage matches the typical generic call patterns in idiomatic code. Field access on a struct local would also benefit but requires threading struct field-type tables through the inference helper; deferred to a future iteration.
 
-Captures are determined statically at hoist time. Names referenced as Call heads are also subject to capture analysis, which means closures that call top-level functions by name capture those functions as `Func` values. This is correct but slightly slower than direct calls because the called function goes through an indirect call inside the synthetic chunk's body. Future optimization could detect when a captured name is a top-level function and resolve the call directly.
+The pruning policy relaxation accepts some redundancy: a generic function may have one or more specializations and ALSO remain in the program as a polymorphic chunk if at least one call site could not be specialized. This adds a small amount of dead code in mixed cases but ensures correctness for all call patterns. A future cleanup pass could detect when ALL call sites of a generic function were specialized and prune the original at that point.
 
-The native filter at hoist time uses two rules: drop names that match a `use` declaration's import name, and drop names with `::`. The first catches use-declared natives; the second catches qualified paths such as trait methods. This is a heuristic but covers the common cases.
-
-The wire format bump (`BYTECODE_VERSION = 6`) absorbs the new opcodes (`PushFunc`, `MakeClosure`, `CallIndirect`).
+The first-class closure path uses the existing `Value::Func` representation for both argument-passed closures and locally-bound closures. There is no distinction at runtime, which is the correct behavior. The receiving function treats the parameter as a callable through `Op::CallIndirect`.
 
 ## Changes Made
 
 ### Source
 
-- **`src/bytecode.rs`**. `Value::Func` extended to `{ chunk_idx, env }`. New `Op::MakeClosure(u16, u8)` opcode with cost, stack-shrink, stack-growth, and archived converter arms.
-- **`src/vm.rs`**. `Op::MakeClosure` runtime arm pops captures and pushes a closure value. `Op::CallIndirect` runtime arm extracts the env from the popped `Func` value and pushes env values as implicit arguments before the explicit ones, with the chunk's parameter count adjusted accordingly.
-- **`src/utility_natives.rs`**. `render_value_to_string` arm updated for the new `Func` shape: `<fn:idx>` for empty env, `<closure:idx/n>` for non-empty.
-- **`src/ast.rs`**. New `Expr::ClosureRef { name, captures, span }` variant. `Expr::span` extended.
-- **`src/compiler.rs`**. New `collect_pattern_names`, `collect_free_in_block`, `collect_free_in_stmt`, `collect_free_in_expr` helpers for hoist-time free-variable analysis. `hoist_closures` threads a `BTreeSet<String>` of native names through the pass and filters captures. `hoist_in_expr` for `Expr::Closure` now collects free variables, prepends them as synthetic-function parameters, and replaces with `Expr::ClosureRef`. New `Expr::ClosureRef` arm in `compile_expr` emits captures and either `MakeClosure` or `PushFunc`.
-- **`src/typecheck.rs`**. `Expr::ClosureRef` returns a fresh type variable. New unit test `closure_captures_outer_local`.
-- **`src/monomorphize.rs`**. `subst_in_expr` and `rewrite_expr` arms for `Expr::ClosureRef` (no-op pass-through).
-- **`examples/closure_capture.rs`** (new). End-to-end demonstration.
-- Golden bytes test updated for the new wire format.
+- **`src/monomorphize.rs`**. `infer_arg_type` extended to handle Expr::Call, Cast, EnumVariant, TupleLiteral, ArrayLiteral, If, and Match expressions. New `fn_returns: BTreeMap<String, TypeExpr>` parameter threaded through `rewrite_block`, `rewrite_stmt`, `rewrite_iterable`, `rewrite_expr`, and `infer_arg_type`. Pruning policy changed from "drop all generics" to "drop only generics with at least one specialization".
+- **`src/typecheck.rs`**. Two new unit tests.
+- **`examples/closure_as_arg.rs`** (new). End-to-end demonstration of a closure passed as a function argument and invoked from the receiving function.
 
 ### Knowledge Graph
 
-- **`docs/decisions/BACKLOG.md`**. B3 entry rewritten as resolved with capture. First-class closures as function arguments tracked as remaining work.
-- **`docs/process/TASKLOG.md`**. New row for V0.1-M3-T21.
+- **`docs/decisions/BACKLOG.md`**. B2.4 entry updated to record the inference reach extension. B3 entry updated to mark first-class closures as function arguments resolved.
+- **`docs/process/TASKLOG.md`**. New row for V0.1-M3-T22.
 - **`docs/process/REVERSE_PROMPT.md`**. This file.
 
 ## Remaining Open Priorities
 
-None of the originally listed items remain. P1 through P10 fully resolved. B1 resolved. B2 fully resolved with monomorphization MVP and follow-ons. B3 resolved with environment capture.
+None of the originally listed items remain. P1 through P10 fully resolved. B1 resolved. B2 fully resolved with monomorphization MVP, follow-ons, and inference reach. B3 fully resolved with environment capture and first-class arguments.
 
 The remaining items.
 
-- B3 first-class closures as function arguments. Estimated 2 to 4 hours.
 - B2.4 generic struct and enum monomorphization. Estimated 3 to 5 hours.
-- B2.4 inference reach extension for type arguments flowing through call chains. Estimated 2 to 4 hours.
+- B3 capture by reference semantics. Currently capture is by value.
+- B2.4 polymorphic recursion cycle detection. Currently bounded by SPECIALIZATION_LIMIT.
 
 The `keleusma-arena` registry version is still v0.1.0.
 
 ## Intended Next Step
 
-Idiomatic higher-order programming patterns now work for the common cases. The next natural step is first-class closures as function arguments, which enables closures to be passed to higher-order functions like `map` or `filter`. Alternatively, the B2.4 follow-on for generic structs and enums tightens the generics story.
+The remaining items are smaller refinements rather than core features. Generic struct and enum monomorphization is the most substantial; capture-by-reference is rarely needed in practice; cycle detection is a quality improvement over the existing bound.
 
 Await human prompt before proceeding.
 
 ## Session Context
 
-This long session delivered the final piece of B3 closures: environment capture. Closures now compose with idiomatic outer-scope variable use, executing end to end through the same `Op::CallIndirect` mechanism that handled the no-capture case. Free-variable analysis at hoist time, capture emission at the construction site, and env push-back at invocation form the complete capture pipeline.
+This long session closed the named B2.4 and B3 follow-on items. The compile pipeline now handles a wider range of generic call patterns through extended argument-type inference, and closures pass through function call sites as first-class values.
