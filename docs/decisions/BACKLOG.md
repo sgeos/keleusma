@@ -4,19 +4,37 @@
 
 Deferred decisions for future consideration. These are explicitly out of scope for the current development phase.
 
-## ~~B1. Hindley-Milner type inference~~ (Foundation in place)
+## ~~B1. Hindley-Milner type inference~~ (Resolved)
 
-Hindley-Milner foundation primitives are implemented in `src/typecheck.rs`. The `Type` enum gains a `Var(u32)` variant. The `Subst` type maps type variables to types. The `unify` function implements Robinson's algorithm with the occurs check. The `VarGen` allocator produces fresh type variables. The typing context carries the substitution and variable allocator across a function check.
+Hindley-Milner is in place in `src/typecheck.rs`.
 
-The existing checker is now constraint-based. `types_compatible` calls `unify` and records relationships in the substitution. Unannotated positions that previously returned `Type::Unknown` now allocate fresh type variables, so constraints propagate across let bindings, function calls, returns, and conditional branches.
+Foundation. The `Type` enum carries a `Var(u32)` variant. `Subst` maps type variables to types. `unify` implements Robinson's algorithm with the occurs check. `VarGen` allocates fresh type variables. The typing context carries the substitution and variable allocator across a function check.
 
-Without generic type parameters (B2), inference is monomorphic. Each unannotated position has at most one resolved type once constraints are solved. The remaining future work for full HM is the substitution-application pass at end of function with explicit reporting of unresolved type variables, and removal of the `Type::Unknown` sentinel that backstops permissive matching during the transition. These are tracked under future-session work.
+Integration. `types_compatible` calls `unify` and records relationships in the substitution. Unannotated positions that previously returned `Type::Unknown` now allocate fresh type variables, so constraints propagate across let bindings, function calls, returns, and conditional branches. The substitution-application pass at end of `check_function` resolves locals to their inferred types and rolls back per-function variables so cross-function checking remains independent.
 
-The original deferral reasoning, namely the lack of generic types, is preserved as B2.
+Generic functions (B2) reuse the same machinery: each generic call site instantiates the function's abstract type variables with fresh per-call variables before unifying with actual arguments.
 
-## B2. Traits or generic type parameters
+The `Type::Unknown` sentinel is retained as a permissive transitional anchor for runtime-only dispatch positions (such as native function call results without declared signatures). Removing it would require declaring native signatures, which is recorded as future work in the typecheck module documentation.
 
-Traits or generic type parameters would enable polymorphic functions and reusable abstractions across different data types. Deferred to keep the VM and compiler simple during early development.
+## ~~B2. Generic type parameters on functions~~ (Resolved for functions)
+
+Generic functions are supported in the language end to end.
+
+Surface syntax. `fn name<T, U>(args) -> ret { body }`. Type parameters are upper-case identifiers. Bounds and trait constraints are reserved for future work.
+
+AST. `FunctionDef` carries a `type_params: Vec<TypeParam>` field. The list is empty for non-generic functions.
+
+Type checking. Each generic function's signature records the abstract `Type::Var` allocated per type parameter. At call sites, [`instantiate_sig`] generates a fresh substitution from the abstract variables to per-call fresh variables and applies it to the parameter and return types before unifying against actual arguments. Two distinct call sites of the same generic function instantiate the type parameter independently, so the same generic function flows through different concrete types in the same module.
+
+Compilation and runtime. Keleusma's `Value` enum is runtime-tagged. Bytecode operations dispatch on the tag, so a generic chunk that flows values through unchanged works for any concrete type without compile-time monomorphization. Operations that constrain `T` to a specific shape (such as arithmetic that requires numeric `T`) currently rely on runtime tag dispatch; static enforcement would require trait bounds, which are tracked separately.
+
+The remaining future work tracked under this entry.
+
+- Generic struct and enum declarations (`struct Pair<T, U> { a: T, b: U }`).
+- Trait declarations and trait bounds (`fn add<T: Numeric>(...)`).
+- Compile-time monomorphization as a performance optimization. The current dispatch is correct but pays a runtime tag-check cost on every operation. Monomorphization would specialize each generic chunk per (function, type_args) pair and elide the dispatch.
+
+These are future-session work and do not block the current generic-function functionality.
 
 ## B3. Closures or anonymous functions
 

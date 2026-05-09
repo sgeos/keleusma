@@ -335,6 +335,26 @@ impl<'a> Parser<'a> {
         };
 
         let (name, _) = self.expect_lower_ident()?;
+
+        // Optional generic type parameter list: `fn name<T, U>(...)`.
+        // Each parameter is an upper-case identifier such as `T`. The
+        // empty list is permitted but conventionally elided. Bounds
+        // and trait constraints are reserved for future work and are
+        // not parsed here.
+        let mut type_params: Vec<TypeParam> = Vec::new();
+        if self.eat(&TokenKind::Lt) {
+            if !self.at(&TokenKind::Gt) {
+                type_params.push(self.parse_type_param()?);
+                while self.eat(&TokenKind::Comma) {
+                    if self.at(&TokenKind::Gt) {
+                        break;
+                    }
+                    type_params.push(self.parse_type_param()?);
+                }
+            }
+            self.expect(&TokenKind::Gt)?;
+        }
+
         self.expect(&TokenKind::LParen)?;
 
         let mut params = Vec::new();
@@ -364,12 +384,18 @@ impl<'a> Parser<'a> {
         Ok(FunctionDef {
             category,
             name,
+            type_params,
             params,
             return_type,
             guard,
             body,
             span: merge_spans(start, end),
         })
+    }
+
+    fn parse_type_param(&mut self) -> Result<TypeParam, ParseError> {
+        let (name, span) = self.expect_upper_ident()?;
+        Ok(TypeParam { name, span })
     }
 
     fn parse_param(&mut self) -> Result<Param, ParseError> {
@@ -1581,8 +1607,45 @@ mod tests {
         let f = &program.functions[0];
         assert_eq!(f.category, FunctionCategory::Fn);
         assert_eq!(f.name, "add");
+        assert_eq!(f.type_params.len(), 0);
         assert_eq!(f.params.len(), 2);
         assert!(f.body.tail_expr.is_some());
+    }
+
+    #[test]
+    fn parse_fn_with_single_type_param() {
+        let src = "fn id<T>(x: T) -> T { x }";
+        let program = parse_str(src).unwrap();
+        let f = &program.functions[0];
+        assert_eq!(f.name, "id");
+        assert_eq!(f.type_params.len(), 1);
+        assert_eq!(f.type_params[0].name, "T");
+    }
+
+    #[test]
+    fn parse_fn_with_multiple_type_params() {
+        let src = "fn pair<T, U>(a: T, b: U) -> T { a }";
+        let program = parse_str(src).unwrap();
+        let f = &program.functions[0];
+        assert_eq!(f.type_params.len(), 2);
+        assert_eq!(f.type_params[0].name, "T");
+        assert_eq!(f.type_params[1].name, "U");
+    }
+
+    #[test]
+    fn parse_fn_with_trailing_comma_in_type_params() {
+        let src = "fn id<T,>(x: T) -> T { x }";
+        let program = parse_str(src).unwrap();
+        assert_eq!(program.functions[0].type_params.len(), 1);
+    }
+
+    #[test]
+    fn parse_fn_empty_type_params_accepted() {
+        // `fn name<>(...)` is admitted as the trivial empty-list case.
+        // Conventional callers elide the brackets.
+        let src = "fn nogen<>(x: i64) -> i64 { x }";
+        let program = parse_str(src).unwrap();
+        assert_eq!(program.functions[0].type_params.len(), 0);
     }
 
     #[test]

@@ -107,10 +107,26 @@ pub enum FunctionCategory {
 pub struct FunctionDef {
     pub category: FunctionCategory,
     pub name: String,
+    /// Generic type parameters declared in `<T, U>` form between the
+    /// function name and the parameter list. Empty vector for
+    /// non-generic functions. The order is significant for
+    /// monomorphization: each call site instantiates these in order.
+    pub type_params: Vec<TypeParam>,
     pub params: Vec<Param>,
     pub return_type: TypeExpr,
     pub guard: Option<Box<Expr>>,
     pub body: Block,
+    pub span: Span,
+}
+
+/// A generic type parameter declared in a function signature.
+///
+/// Carries the parameter's name and source location. Bounds and trait
+/// constraints are reserved for future work and not part of this
+/// representation.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TypeParam {
+    pub name: String,
     pub span: Span,
 }
 

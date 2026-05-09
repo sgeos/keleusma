@@ -102,6 +102,20 @@ pub enum Type {
 
 impl Type {
     fn from_expr(expr: &TypeExpr, defined_types: &BTreeMap<String, TypeKind>) -> Type {
+        Type::from_expr_with_params(expr, defined_types, &BTreeMap::new())
+    }
+
+    /// Resolve a [`TypeExpr`] under a generic type parameter mapping.
+    ///
+    /// Names that match a key in `type_params` resolve to the mapped
+    /// [`Type`], typically a [`Type::Var`] allocated at signature
+    /// construction. Names that are not type parameters fall back to
+    /// the existing struct/enum/opaque resolution.
+    fn from_expr_with_params(
+        expr: &TypeExpr,
+        defined_types: &BTreeMap<String, TypeKind>,
+        type_params: &BTreeMap<String, Type>,
+    ) -> Type {
         match expr {
             TypeExpr::Prim(p, _) => match p {
                 PrimType::I64 => Type::I64,
@@ -112,20 +126,32 @@ impl Type {
             TypeExpr::Unit(_) => Type::Unit,
             TypeExpr::Tuple(ts, _) => Type::Tuple(
                 ts.iter()
-                    .map(|t| Type::from_expr(t, defined_types))
+                    .map(|t| Type::from_expr_with_params(t, defined_types, type_params))
                     .collect(),
             ),
-            TypeExpr::Array(elem, len, _) => {
-                Type::Array(Box::new(Type::from_expr(elem, defined_types)), *len)
+            TypeExpr::Array(elem, len, _) => Type::Array(
+                Box::new(Type::from_expr_with_params(
+                    elem,
+                    defined_types,
+                    type_params,
+                )),
+                *len,
+            ),
+            TypeExpr::Option(inner, _) => Type::Option(Box::new(Type::from_expr_with_params(
+                inner,
+                defined_types,
+                type_params,
+            ))),
+            TypeExpr::Named(name, _) => {
+                if let Some(t) = type_params.get(name) {
+                    return t.clone();
+                }
+                match defined_types.get(name) {
+                    Some(TypeKind::Struct) => Type::Struct(name.clone()),
+                    Some(TypeKind::Enum) => Type::Enum(name.clone()),
+                    None => Type::Opaque(name.clone()),
+                }
             }
-            TypeExpr::Option(inner, _) => {
-                Type::Option(Box::new(Type::from_expr(inner, defined_types)))
-            }
-            TypeExpr::Named(name, _) => match defined_types.get(name) {
-                Some(TypeKind::Struct) => Type::Struct(name.clone()),
-                Some(TypeKind::Enum) => Type::Enum(name.clone()),
-                None => Type::Opaque(name.clone()),
-            },
         }
     }
 
@@ -333,8 +359,23 @@ enum TypeKind {
 }
 
 /// Function signature derived from an AST function definition.
+///
+/// Generic functions record their type parameters and the
+/// `Type::Var` identifiers assigned to each one at signature
+/// construction time. Call-site instantiation generates a fresh
+/// substitution from the recorded variables to fresh per-call
+/// variables and applies it to the parameter and return types
+/// before unifying against actual arguments.
 #[derive(Debug, Clone)]
 struct FnSig {
+    /// Generic type parameter names in declaration order. Empty for
+    /// non-generic functions.
+    type_params: Vec<String>,
+    /// `Type::Var` allocated for each type parameter at signature
+    /// construction. Indexed in the same order as `type_params`. Used
+    /// for monomorphic checking of the function body and as the
+    /// abstract variables that call-site instantiation substitutes.
+    type_param_vars: Vec<Type>,
     params: Vec<Type>,
     return_type: Type,
 }
@@ -419,6 +460,31 @@ impl Ctx {
     fn fresh(&mut self) -> Type {
         self.vargen.fresh()
     }
+}
+
+/// Instantiate a generic function signature with fresh per-call type
+/// variables.
+///
+/// For each abstract type parameter variable in the signature,
+/// allocate a fresh `Type::Var` and build a substitution mapping the
+/// abstract variable to the fresh one. Apply this substitution to the
+/// parameter and return types before unification with the call's
+/// actual argument types. The result is a pair of instantiated
+/// parameter types and the instantiated return type.
+fn instantiate_sig(ctx: &mut Ctx, sig: &FnSig) -> (Vec<Type>, Type) {
+    if sig.type_params.is_empty() {
+        return (sig.params.clone(), sig.return_type.clone());
+    }
+    let mut inst = Subst::new();
+    for var in &sig.type_param_vars {
+        if let Type::Var(v) = var {
+            let fresh = ctx.vargen.fresh();
+            inst.insert(*v, fresh);
+        }
+    }
+    let params: Vec<Type> = sig.params.iter().map(|t| t.apply(&inst)).collect();
+    let return_type = sig.return_type.apply(&inst);
+    (params, return_type)
 }
 
 /// Check that two types unify under the current substitution.
@@ -519,19 +585,38 @@ pub fn check(program: &Program) -> Result<(), TypeError> {
     }
 
     // Pass 1c. Build function signatures.
+    //
+    // Generic functions allocate a fresh `Type::Var` for each
+    // declared type parameter. Parameter and return type expressions
+    // resolve type parameter names through this mapping so the
+    // signature reflects the abstract bindings. Call-site
+    // instantiation later substitutes these abstract variables with
+    // fresh per-call variables before unifying with actual argument
+    // types.
     for func in &program.functions {
+        let mut tp_map: BTreeMap<String, Type> = BTreeMap::new();
+        let mut tp_vars: Vec<Type> = Vec::new();
+        let mut tp_names: Vec<String> = Vec::new();
+        for tp in &func.type_params {
+            let v = ctx.fresh();
+            tp_map.insert(tp.name.clone(), v.clone());
+            tp_vars.push(v);
+            tp_names.push(tp.name.clone());
+        }
         let params: Vec<Type> = func
             .params
             .iter()
             .map(|p| match &p.type_expr {
-                Some(t) => Type::from_expr(t, &ctx.types),
+                Some(t) => Type::from_expr_with_params(t, &ctx.types, &tp_map),
                 None => ctx.fresh(),
             })
             .collect();
-        let return_type = Type::from_expr(&func.return_type, &ctx.types);
+        let return_type = Type::from_expr_with_params(&func.return_type, &ctx.types, &tp_map);
         ctx.functions.insert(
             func.name.clone(),
             FnSig {
+                type_params: tp_names,
+                type_param_vars: tp_vars,
                 params,
                 return_type,
             },
@@ -547,6 +632,12 @@ pub fn check(program: &Program) -> Result<(), TypeError> {
 }
 
 fn check_function(ctx: &mut Ctx, func: &FunctionDef) -> Result<(), TypeError> {
+    // Snapshot the substitution at function entry so the per-function
+    // resolution does not pollute later functions with this function's
+    // local type variables. The vargen counter continues monotonically
+    // across functions because variable identifiers are unique even
+    // after substitution snapshots.
+    let subst_snapshot = ctx.subst.clone();
     ctx.push_scope();
     let return_type = ctx
         .functions
@@ -570,18 +661,39 @@ fn check_function(ctx: &mut Ctx, func: &FunctionDef) -> Result<(), TypeError> {
     if !types_compatible(ctx, &body_type, &return_type) {
         ctx.pop_scope();
         ctx.current_return = None;
+        // Display the body type with the latest substitution applied so
+        // the user sees the most-resolved form.
+        let body_resolved = body_type.apply(&ctx.subst);
+        let return_resolved = return_type.apply(&ctx.subst);
         return Err(TypeError::new(
             format!(
                 "function `{}` returns {} but body produces {}",
                 func.name,
-                return_type.display(),
-                body_type.display()
+                return_resolved.display(),
+                body_resolved.display()
             ),
             func.body.span,
         ));
     }
     ctx.pop_scope();
     ctx.current_return = None;
+    // Apply the substitution accumulated during this function check
+    // back to the function's parameter types so the global FnSig
+    // entry reflects any inference performed against unannotated
+    // positions. This makes the resolved types visible to call-site
+    // checks of subsequent functions in the same module.
+    if let Some(sig) = ctx.functions.get_mut(&func.name) {
+        sig.return_type = sig.return_type.apply(&ctx.subst);
+        for p in sig.params.iter_mut() {
+            *p = p.apply(&ctx.subst);
+        }
+    }
+    // Roll back the substitution to the snapshot so type variables
+    // local to this function do not leak into the next function's
+    // checking. The Hindley-Milner discipline is per-function in
+    // monomorphic Keleusma; cross-function generalization is the
+    // domain of B2 generic parameters.
+    ctx.subst = subst_snapshot;
     Ok(())
 }
 
@@ -1152,7 +1264,11 @@ fn type_of_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Type, TypeError> {
                     *span,
                 ));
             }
-            for (arg, param_ty) in args.iter().zip(sig.params.iter()) {
+            // Instantiate generic type parameters with fresh per-call
+            // type variables before unifying with actual argument
+            // types. For non-generic functions this is a no-op clone.
+            let (inst_params, inst_return) = instantiate_sig(ctx, &sig);
+            for (arg, param_ty) in args.iter().zip(inst_params.iter()) {
                 let arg_ty = type_of_expr(ctx, arg)?;
                 if !types_compatible(ctx, &arg_ty, param_ty) {
                     return Err(TypeError::new(
@@ -1166,7 +1282,7 @@ fn type_of_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Type, TypeError> {
                     ));
                 }
             }
-            Ok(sig.return_type)
+            Ok(inst_return)
         }
         Expr::Pipeline {
             left,
@@ -1929,5 +2045,44 @@ mod tests {
         unify(&Type::Var(0), &Type::Var(1), &mut s).unwrap();
         let resolved = Type::Var(1).apply(&s);
         assert_eq!(resolved, Type::I64);
+    }
+
+    // -- B2 generic function checks --
+
+    #[test]
+    fn generic_identity_function_typechecks() {
+        check_src("fn id<T>(x: T) -> T { x }\nfn main() -> i64 { id(42) }").unwrap();
+    }
+
+    #[test]
+    fn generic_function_called_with_two_types_separately() {
+        // Two distinct call sites instantiate the type parameter
+        // separately, so the same generic function flows through
+        // both i64 and bool.
+        check_src(
+            "fn id<T>(x: T) -> T { x }\n\
+             fn main() -> i64 {\n\
+                let a = id(1);\n\
+                let b = id(true);\n\
+                a\n\
+             }",
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn generic_function_with_two_type_params() {
+        check_src(
+            "fn first<T, U>(a: T, b: U) -> T { a }\n\
+             fn main() -> i64 { first(1, true) }",
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn generic_function_arity_mismatch_rejected() {
+        let err =
+            check_src("fn id<T>(x: T) -> T { x }\nfn main() -> i64 { id(1, 2) }").unwrap_err();
+        assert!(err.message.contains("expects 1 arguments"));
     }
 }
