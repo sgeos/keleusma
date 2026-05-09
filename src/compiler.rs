@@ -1,4 +1,5 @@
 extern crate alloc;
+use alloc::boxed::Box;
 use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::format;
 use alloc::string::String;
@@ -21,6 +22,10 @@ struct Local {
     name: String,
     slot: u16,
     depth: u32,
+    /// Declared or inferred type expression. Used by selected
+    /// optimizations such as for-in iteration bound inference (P2)
+    /// to resolve field access on locals to typed arrays.
+    ty: Option<TypeExpr>,
 }
 
 /// Static type information collected from the AST and used by the
@@ -108,18 +113,27 @@ impl FuncCompiler {
                     .and_then(|fields| fields.get(field))?;
                 array_length_of_type(field_type)
             }
+            Expr::Ident { name, .. } => {
+                let ty = self.local_type(name)?;
+                array_length_of_type(ty)
+            }
             _ => None,
         }
     }
 
     /// Return the struct or data block name for an expression that
     /// resolves to a named composite. Used by `static_for_in_length`
-    /// to look up field types.
+    /// to look up field types. Consults data block names first, then
+    /// the type recorded for the local variable.
     fn struct_name_of(&self, expr: &Expr) -> Option<String> {
         match expr {
             Expr::Ident { name, .. } => {
                 if self.data_fields.contains_key(name) {
                     return Some(name.clone());
+                }
+                let ty = self.local_type(name)?;
+                if let TypeExpr::Named(struct_name, _) = ty {
+                    return Some(struct_name.clone());
                 }
                 None
             }
@@ -200,6 +214,10 @@ impl FuncCompiler {
     }
 
     fn declare_local(&mut self, name: &str) -> u16 {
+        self.declare_local_typed(name, None)
+    }
+
+    fn declare_local_typed(&mut self, name: &str, ty: Option<TypeExpr>) -> u16 {
         let slot = self.next_slot;
         self.next_slot += 1;
         if self.next_slot > self.chunk.local_count {
@@ -209,8 +227,19 @@ impl FuncCompiler {
             name: String::from(name),
             slot,
             depth: self.scope_depth,
+            ty,
         });
         slot
+    }
+
+    /// Look up the declared or inferred type of a local by name.
+    fn local_type(&self, name: &str) -> Option<&TypeExpr> {
+        for local in self.locals.iter().rev() {
+            if local.name == name {
+                return local.ty.as_ref();
+            }
+        }
+        None
     }
 
     fn begin_scope(&mut self) {
@@ -516,7 +545,12 @@ fn compile_function_group(
     if defs.len() == 1 && !has_non_trivial_pattern(&first.params) && first.guard.is_none() {
         // Single-headed, simple parameters: bind parameter names directly.
         for (i, param) in first.params.iter().enumerate() {
-            bind_param_pattern(&mut fc, &param.pattern, param_slots[i]);
+            bind_param_pattern(
+                &mut fc,
+                &param.pattern,
+                param_slots[i],
+                param.type_expr.clone(),
+            );
         }
 
         if block_type == BlockType::Stream {
@@ -603,13 +637,18 @@ fn has_non_trivial_pattern(params: &[Param]) -> bool {
 }
 
 /// Bind a simple variable pattern to a parameter slot (alias).
-fn bind_param_pattern(fc: &mut FuncCompiler, pattern: &Pattern, slot: u16) {
+///
+/// The parameter's declared type, when present, is recorded on the
+/// resulting local so that downstream optimizations such as the
+/// for-in iteration bound inference can consult it.
+fn bind_param_pattern(fc: &mut FuncCompiler, pattern: &Pattern, slot: u16, ty: Option<TypeExpr>) {
     if let Pattern::Variable(name, _) = pattern {
         // Create a named local that aliases the parameter slot.
         fc.locals.push(Local {
             name: name.clone(),
             slot,
             depth: fc.scope_depth,
+            ty,
         });
     }
     // Wildcards and other patterns in simple mode are ignored.
@@ -653,8 +692,16 @@ fn compile_data_field_assign(
 fn compile_stmt(fc: &mut FuncCompiler, stmt: &Stmt) -> Result<(), CompileError> {
     match stmt {
         Stmt::Let(let_stmt) => {
+            // Determine the binding's type. If annotated, use the
+            // annotation. Otherwise infer from the value expression
+            // through a narrow set of patterns sufficient for the
+            // for-in optimization (P2).
+            let ty = let_stmt
+                .type_expr
+                .clone()
+                .or_else(|| infer_expr_type(fc, &let_stmt.value));
             compile_expr(fc, &let_stmt.value)?;
-            compile_let_pattern(fc, &let_stmt.pattern)?;
+            compile_let_pattern_typed(fc, &let_stmt.pattern, ty)?;
         }
         Stmt::For(for_stmt) => {
             compile_for(fc, for_stmt)?;
@@ -687,11 +734,73 @@ fn compile_stmt(fc: &mut FuncCompiler, stmt: &Stmt) -> Result<(), CompileError> 
     Ok(())
 }
 
+/// Infer a type expression for a let binding's right-hand side.
+///
+/// Returns `Some(TypeExpr)` when the value's type is determinable
+/// from a narrow set of patterns:
+/// - Struct construction. `Type { ... }` has type `Type`.
+/// - Function call. The function's declared return type.
+/// - Identifier. The local's recorded type.
+/// - Field access. The struct or data field's declared type.
+/// - Array literal with elements of inferable type.
+/// - Literal value.
+///
+/// Used by the let-binding compile path so that locals carry type
+/// information for downstream optimizations such as for-in iteration
+/// bound inference. Returns `None` for expressions whose type is not
+/// determinable through this narrow set of patterns.
+fn infer_expr_type(fc: &FuncCompiler, expr: &Expr) -> Option<TypeExpr> {
+    match expr {
+        Expr::StructInit { name, span, .. } => Some(TypeExpr::Named(name.clone(), *span)),
+        Expr::Call { name, .. } => fc.type_info.function_returns.get(name).cloned(),
+        Expr::Ident { name, .. } => fc.local_type(name).cloned(),
+        Expr::FieldAccess { object, field, .. } => {
+            let owner = fc.struct_name_of(object)?;
+            let field_type = fc
+                .type_info
+                .structs
+                .get(&owner)
+                .or_else(|| fc.type_info.data_field_types.get(&owner))
+                .and_then(|fields| fields.get(field))?;
+            Some(field_type.clone())
+        }
+        Expr::ArrayLiteral { elements, span } => {
+            let elem_ty = elements.first().and_then(|e| infer_expr_type(fc, e))?;
+            Some(TypeExpr::Array(
+                Box::new(elem_ty),
+                elements.len() as i64,
+                *span,
+            ))
+        }
+        Expr::Literal { value, span } => Some(match value {
+            Literal::Int(_) => TypeExpr::Prim(PrimType::I64, *span),
+            Literal::Float(_) => TypeExpr::Prim(PrimType::F64, *span),
+            Literal::Bool(_) => TypeExpr::Prim(PrimType::Bool, *span),
+            Literal::String(_) => TypeExpr::Prim(PrimType::KString, *span),
+            Literal::Unit => TypeExpr::Unit(*span),
+        }),
+        _ => None,
+    }
+}
+
 /// Compile a let binding pattern (allocate locals and store values).
 fn compile_let_pattern(fc: &mut FuncCompiler, pattern: &Pattern) -> Result<(), CompileError> {
+    compile_let_pattern_typed(fc, pattern, None)
+}
+
+/// Compile a let binding pattern with an associated type expression.
+///
+/// The type, when present, is recorded on the resulting local for
+/// downstream optimization passes. Compound patterns destructure the
+/// type along with the value.
+fn compile_let_pattern_typed(
+    fc: &mut FuncCompiler,
+    pattern: &Pattern,
+    ty: Option<TypeExpr>,
+) -> Result<(), CompileError> {
     match pattern {
         Pattern::Variable(name, _) => {
-            let slot = fc.declare_local(name);
+            let slot = fc.declare_local_typed(name, ty);
             fc.emit(Op::SetLocal(slot));
         }
         Pattern::Wildcard(_) => {

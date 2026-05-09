@@ -3057,6 +3057,43 @@ mod tests {
     }
 
     #[test]
+    fn for_in_over_struct_field_from_local_passes_strict_verify() {
+        // For-in over a struct field accessed through a local
+        // variable. The compiler tracks the local's declared or
+        // inferred type and resolves `b.items` to `[i64; 3]` from
+        // the struct definition. The verifier accepts the
+        // resulting Const(3) end bound.
+        let src = "struct Box { items: [i64; 3] }\n\
+                   fn main() -> i64 {\n\
+                       let b = Box { items: [1, 2, 3] };\n\
+                       let last = 0;\n\
+                       for x in b.items { let last = x; }\n\
+                       last\n\
+                   }";
+        let tokens = tokenize(src).expect("lex");
+        let program = parse(&tokens).expect("parse");
+        let module = compile(&program).expect("compile");
+        let _vm = Vm::new(module).expect("verify");
+    }
+
+    #[test]
+    fn for_in_over_param_array_passes_strict_verify() {
+        // For-in over an array parameter typed `[T; N]`. The
+        // compiler records the parameter's declared type on the
+        // local and the for-in source resolves to a typed array.
+        let src = "fn sum_n(arr: [i64; 4]) -> i64 {\n\
+                       let s = 0;\n\
+                       for x in arr { let s = s + x; }\n\
+                       s\n\
+                   }\n\
+                   fn main() -> i64 { sum_n([1, 2, 3, 4]) }";
+        let tokens = tokenize(src).expect("lex");
+        let program = parse(&tokens).expect("parse");
+        let module = compile(&program).expect("compile");
+        let _vm = Vm::new(module).expect("verify");
+    }
+
+    #[test]
     fn for_in_over_array_literal_runs() {
         let val = run_expect(
             "fn main() -> i64 {\n\
