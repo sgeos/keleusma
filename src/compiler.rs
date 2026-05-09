@@ -150,7 +150,7 @@ impl FuncCompiler {
                     return Some(name.clone());
                 }
                 let ty = self.local_type(name)?;
-                if let TypeExpr::Named(struct_name, _) = ty {
+                if let TypeExpr::Named(struct_name, _, _) = ty {
                     return Some(struct_name.clone());
                 }
                 None
@@ -502,7 +502,7 @@ fn validate_data_field_type(
         }
         TypeExpr::Array(elem, _len, _) => validate_data_field_type(elem, types, visiting),
         TypeExpr::Option(inner, _) => validate_data_field_type(inner, types, visiting),
-        TypeExpr::Named(name, span) => {
+        TypeExpr::Named(name, _args, span) => {
             if visiting.contains(name) {
                 return Err(CompileError {
                     message: format!(
@@ -800,7 +800,9 @@ fn compile_stmt(fc: &mut FuncCompiler, stmt: &Stmt) -> Result<(), CompileError> 
 /// determinable through this narrow set of patterns.
 fn infer_expr_type(fc: &FuncCompiler, expr: &Expr) -> Option<TypeExpr> {
     match expr {
-        Expr::StructInit { name, span, .. } => Some(TypeExpr::Named(name.clone(), *span)),
+        Expr::StructInit { name, span, .. } => {
+            Some(TypeExpr::Named(name.clone(), Vec::new(), *span))
+        }
         Expr::Call { name, .. } => fc.type_info.function_returns.get(name).cloned(),
         Expr::Ident { name, .. } => fc.local_type(name).cloned(),
         Expr::FieldAccess { object, field, .. } => {

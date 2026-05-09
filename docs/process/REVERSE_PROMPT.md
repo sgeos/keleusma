@@ -9,8 +9,8 @@ AI to Human communication channel.
 ## Last Updated
 
 **Date**: 2026-05-09
-**Task**: V0.1-M3-T15. B2.2 Generic struct and enum declarations.
-**Status**: Complete. Generic structs and enums work end to end. Trait declarations, monomorphization, and B3 closures are documented as next-session work.
+**Task**: V0.1-M3-T16. B2.2 follow-on and B2.3 traits + bounds.
+**Status**: Complete. Generic types compose with field/parameter/return positions, and trait declarations with bound enforcement at call sites are functional. Method dispatch and impl-method-vs-trait validation are deferred.
 
 ## Verification
 
@@ -24,85 +24,85 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 **Results**:
 
-- 446 tests pass workspace-wide. 378 keleusma unit (5 new for B2.2 generic struct/enum), 17 keleusma marshall integration, 17 keleusma `kstring_boundary` integration, 28 keleusma-arena unit, 6 keleusma-arena doctests.
+- 454 tests pass workspace-wide. 386 keleusma unit (8 new for B2.2 follow-on and B2.3), 17 keleusma marshall integration, 17 keleusma `kstring_boundary` integration, 28 keleusma-arena unit, 6 keleusma-arena doctests.
 - Clippy clean under `--workspace --all-targets`.
 - Format clean.
 
 ## Summary
 
-This session resolved B2.2 (generic struct and enum declarations). The remaining items the user listed (trait declarations, compile-time monomorphization, and B3 closures) are scoped as next-session work.
+This session delivered the B2.2 follow-on (`TypeExpr::Named` carries generic arguments) and B2.3 trait declarations with bound enforcement.
 
-Surface syntax. `struct Name<T, U> { fields }` and `enum Name<T, U> { variants }`. Type parameters are upper-case identifiers, parsed through the `parse_optional_type_params` helper that is shared with `parse_function_def`.
+B2.2 follow-on. The previous session's generic structs and enums could not be referenced as field, parameter, or return types because `TypeExpr::Named` only carried a name. Extended to `TypeExpr::Named(String, Vec<TypeExpr>, Span)`. The parser accepts `Cell<T>` syntax in any type position. The type checker resolves generic arguments through `from_expr_with_params` so they participate in unification. Pattern matching on a generic enum payload binds the variable to the per-instance instantiation correctly.
 
-AST. `StructDef` and `EnumDef` each gain a `type_params: Vec<TypeParam>` field. Empty for non-generic declarations.
+B2.3 traits and bounds. Surface syntax `trait Name<T> { fn method(args) -> ret; }` and `impl Trait for Type { method definitions }`. New `Trait` and `Impl` keywords. New `TraitDef`, `ImplBlock`, and `TraitMethodSig` AST nodes. `TypeParam` carries `bounds: Vec<String>` populated from `<T: Trait1 + Trait2>` syntax with the `+` separator for multiple bounds. `FnSig` records `type_param_bounds` parallel to `type_param_vars`.
 
-Type representation. `Type::Struct(String, Vec<Type>)` and `Type::Enum(String, Vec<Type>)` carry per-instance type arguments. The empty vector represents a non-generic type. `Type::occurs`, `Type::apply`, and `Type::display` recurse through the arguments. `unify` matches struct and enum heads when the names agree and the argument lists have the same length, then unifies pairwise.
+Bound enforcement at call sites. `instantiate_sig` now returns the per-call fresh type variables alongside the instantiated parameter and return types. After argument unification records the substitution, each bounded fresh variable is resolved through the active substitution and the resulting head type checks against the trait `impls` registry. Types lacking an impl are rejected with a precise error.
 
-Type checking. Pass 1b allocates a fresh `Type::Var` per declared type parameter and resolves field/variant type expressions through `from_expr_with_params`. The abstract variables are recorded in two new context maps, `struct_type_param_vars` and `enum_type_param_vars`. The new `build_instance_subst` helper builds a per-construction substitution from abstract variables to fresh per-instance variables. Construction sites apply this substitution to declared field or payload types before unifying with provided values. Field access on `Type::Struct(name, args)` constructs a per-instance substitution from the abstract variables to the captured `args` and applies it to the declared field type, so generic field access returns the correctly instantiated type.
-
-A subtle correctness fix landed in `types_compatible`. The earlier permissive treatment of `Type::Var` short-circuited unification, which masked failures when distinct generic instantiations should have been incompatible. The function now only short-circuits on the legacy `Type::Unknown` sentinel and routes `Type::Var` through `unify` so constraints are properly recorded.
-
-Compilation and runtime. Generic structs and enums leverage the same runtime polymorphism as generic functions. Field access dispatches on the runtime `Value` tag and the bytecode is identical regardless of the type instantiation. The `examples/generic_struct.rs` demonstrates `struct Cell<T> { value: T }` constructing and projecting end to end.
+Method dispatch deferred. Impl method bodies are parsed and stored but not yet wired through the compiler. Receiver-style calls `x.method(args)` resolving to the impl for `x`'s type are next-session work. The bound enforcement prevents incorrect calls at compile time; the method invocation itself awaits the dispatch implementation.
 
 ## Tests
 
-Five new unit tests in `src/typecheck.rs`.
+Eight new unit tests in `src/typecheck.rs`.
 
-- `generic_struct_with_one_param_typechecks`. The minimal generic struct with field access.
-- `generic_struct_with_two_params_typechecks`. Multiple type parameters.
-- `generic_struct_field_access_uses_instantiation`. Two distinct instantiations of the same struct preserve their respective field types.
-- `generic_enum_construction_typechecks`. Generic enum variant construction.
-- `generic_struct_same_type_param_constraint`. The same type parameter appearing in multiple fields constrains them to the same concrete type, so inconsistent values produce a type error.
+B2.2 follow-on (2):
 
-One example program at `examples/generic_struct.rs` demonstrates end-to-end compilation and execution.
+- `generic_struct_pattern_match_on_enum`. Pattern matching on `Maybe<T>::Just(x)` binds `x` to the instantiated payload type and the match expression returns the correct type.
+- `generic_struct_referenced_by_field_type`. A generic struct used as a field type inside another struct (`struct Wrap<T> { inner: Cell<T> }`) parses and type-checks.
+
+B2.3 (6):
+
+- `trait_declaration_parses_and_typechecks`. Minimal trait, impl, and bounded function compile and run.
+- `trait_bound_satisfied_by_impl`. Bound is admitted when the impl exists.
+- `trait_bound_unsatisfied_rejects_call`. Bound is rejected when the impl does not exist for the call's argument type.
+- `unbounded_type_param_admits_any_type`. Without bounds, any concrete argument is accepted.
+- `multiple_trait_bounds_on_one_param`. `T: A + B` admits a type that implements both.
+- `missing_one_of_multiple_bounds_rejected`. `T: A + B` rejects a type that implements only one.
+
+One new example, `examples/generic_match.rs`, demonstrates pattern matching on a generic enum and nested generic structs running end to end.
 
 ## Trade-offs and Properties
 
-The B2.2 design uses `Type::Struct(String, Vec<Type>)` to track per-instance type arguments. The empty argument vector preserves backward compatibility for non-generic structs. All match sites on `Type::Struct` and `Type::Enum` were updated to bind or ignore the argument list. Tests that constructed these types literally were updated to include the empty vector.
+The B2.3 implementation enforces bounds at call sites but does not yet dispatch trait methods at runtime. This means a function `fn use_tag<T: Tag>(x: T) -> i64` can be type-checked and called with a constrained `T`, but if its body invokes `x.tag()`, the call would not yet resolve to the impl-defined method. The current value of the trait machinery is the static type-level guarantee; the runtime dispatch is the next layer.
 
-The `types_compatible` correctness fix removes a permissive short-circuit on `Type::Var`. This tightens the checker. Existing tests continue to pass because the prior tests did not exercise distinct generic instantiations within the same expression context, and the cases that did rely on `Type::Var` flexibility (such as native function results) flow through `Type::Unknown` paths rather than direct `Type::Var` comparisons.
+Multiple bounds are stored as a flat `Vec<String>`. A future enhancement would deduplicate or canonicalize the order, but the current code admits duplicates without harm.
 
-The session did not implement trait declarations, compile-time monomorphization, or B3 closures. Each is a substantial multi-session effort. Attempting all four in one pass would leave multiple half-finished features. Their scope is documented at the bottom of this prompt.
+The `type_head_name` helper canonicalizes `Type` to its impl-key string (`i64`, `Pair`, etc.). Tuples, arrays, and options receive uniform names (`tuple`, `array`, `Option`) which means an impl of `Tag for tuple` would match any tuple regardless of arity. This is a coarse approximation; future work refines it once method dispatch lands.
 
 ## Changes Made
 
 ### Source
 
-- **`src/ast.rs`**. `StructDef` and `EnumDef` gain `type_params: Vec<TypeParam>`.
-- **`src/parser.rs`**. New `parse_optional_type_params` helper. `parse_struct_def` and `parse_enum_def` accept an optional `<T, U>` block after the type name.
-- **`src/typecheck.rs`**. `Type::Struct` and `Type::Enum` carry `Vec<Type>` of per-instance arguments. New `struct_type_param_vars` and `enum_type_param_vars` maps in `Ctx`. New `build_instance_subst` helper. Pass 1b allocates abstract type variables and resolves field/variant types through `from_expr_with_params`. `Expr::StructInit` and `Expr::EnumVariant` paths instantiate per-construction. Field access on `Type::Struct(name, args)` applies the per-instance substitution. `types_compatible` no longer short-circuits on `Type::Var`. Five new unit tests added.
-- **`examples/generic_struct.rs`**. Demonstration of end-to-end execution.
+- **`src/token.rs`**. New `Trait` and `Impl` keyword tokens.
+- **`src/ast.rs`**. `TypeExpr::Named` carries `Vec<TypeExpr>` of generic arguments. New `TraitDef`, `ImplBlock`, and `TraitMethodSig` types. `TypeParam` carries `bounds: Vec<String>`. `Program` carries `traits` and `impls` fields.
+- **`src/parser.rs`**. New `parse_trait_def` and `parse_impl_block`. `parse_type_param` parses optional bounds (`: Trait1 + Trait2`). `parse_optional_type_params` shared between functions, structs, and enums. Generic-argument parsing in named type positions.
+- **`src/typecheck.rs`**. New `traits` and `impls` maps in `Ctx`. Pass 1d registers trait declarations and impl blocks. `FnSig` carries `type_param_bounds`. `instantiate_sig` returns the per-call fresh variables. Call-site bound enforcement after unification. New `type_head_name` helper. `from_expr_with_params` resolves named generic arguments through the type-param mapping.
+- **`src/compiler.rs`**. Pattern updates for the extended `TypeExpr::Named` shape.
+- **`examples/generic_match.rs`**. End-to-end demonstration of pattern matching on generic enums and nested generic structs.
 
 ### Knowledge Graph
 
-- **`docs/decisions/BACKLOG.md`**. B2 entry rewritten to record functions, structs, and enums as resolved with the remaining traits and monomorphization work documented.
-- **`docs/process/TASKLOG.md`**. New row for V0.1-M3-T15.
+- **`docs/decisions/BACKLOG.md`**. B2 entry rewritten to record functions, structs, enums, traits, and bounds as resolved, with method dispatch and monomorphization documented as remaining work.
+- **`docs/process/TASKLOG.md`**. New row for V0.1-M3-T16.
 - **`docs/process/REVERSE_PROMPT.md`**. This file.
 
 ## Remaining Open Priorities
 
-None. P1 through P10 fully resolved. B1 resolved. B2 resolved for functions, structs, and enums.
+None. P1 through P10 fully resolved. B1 resolved. B2 resolved for declarations and bound enforcement.
 
 The remaining items the user listed in the most recent prompt.
 
-- Trait declarations and trait bounds. Adds static enforcement to currently runtime-checked constraints. Estimated 8 to 12 hours.
-- Compile-time monomorphization for performance. Specializes each generic chunk per (function or type, type_args) pair and elides the runtime tag-dispatch cost. Estimated 4 to 8 hours, partially dependent on traits for full benefit.
-- B3 closures and anonymous functions. Adds closure syntax, environment capture in the VM, and a closure type representation. Independent of the generics track. Estimated 6 to 10 hours.
+- Trait method dispatch. Wires `x.method(args)` through the compiler and runtime so impl-defined methods can actually be invoked. Pairs naturally with the just-landed bound enforcement. Estimated 4 to 6 hours.
+- Compile-time monomorphization for performance. Specializes each generic chunk per (function or type, type_args) pair and elides the runtime tag-dispatch cost. Estimated 4 to 8 hours.
+- B3 closures and anonymous functions. Independent of the generics track. Adds closure syntax, environment capture in the VM, and a closure type representation. Estimated 6 to 10 hours.
 
-The `keleusma-arena` registry version is still v0.1.0 and the local crate has new APIs.
+The `keleusma-arena` registry version is still v0.1.0.
 
 ## Intended Next Step
 
-The user requested all three remaining items. Recommend tackling them in this order across separate sessions.
-
-A. Trait declarations and bounds. Builds on the generic infrastructure just landed.
-
-B. Compile-time monomorphization. Pairs naturally with trait-aware specialization.
-
-C. B3 closures and anonymous functions. Independent feature. Best as a focused single-feature session.
+The natural next session is trait method dispatch, which closes the trait loop end to end. Then compile-time monomorphization for performance. B3 closures can land in any session as an independent feature.
 
 Await human prompt before proceeding.
 
 ## Session Context
 
-This session resolved B2.2 (generic struct and enum declarations) building on the B2 generic-function infrastructure from the previous session. The type checker now correctly handles per-instance type arguments and unifies them across distinct instantiations. The runtime continues to dispatch polymorphically on `Value` tags, so generic types work without compile-time monomorphization.
+This long session resolved the B2.2 follow-on (`TypeExpr::Named` generic arguments) and the B2.3 trait declaration and bound enforcement slice. The type checker now performs Hindley-Milner inference, supports generic functions, structs, and enums with per-instance type arguments, and validates trait bounds at call sites against an impl registry. The runtime continues to dispatch polymorphically on `Value` tags. Trait method dispatch and compile-time monomorphization remain as next-session work.

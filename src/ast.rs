@@ -12,6 +12,56 @@ pub struct Program {
     pub types: Vec<TypeDef>,
     pub data_decls: Vec<DataDecl>,
     pub functions: Vec<FunctionDef>,
+    pub traits: Vec<TraitDef>,
+    pub impls: Vec<ImplBlock>,
+    pub span: Span,
+}
+
+/// A trait declaration.
+///
+/// Traits declare a set of method signatures that an implementing
+/// type provides. The body of a trait method declaration is the
+/// signature only; concrete implementations are supplied by `impl`
+/// blocks. Bounded type parameters in function signatures restrict
+/// the parameter to types that implement the named trait.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TraitDef {
+    pub name: String,
+    pub type_params: Vec<TypeParam>,
+    pub methods: Vec<TraitMethodSig>,
+    pub span: Span,
+}
+
+/// A method signature inside a trait declaration.
+///
+/// The signature mirrors a function declaration without a body. The
+/// implicit `self` parameter is the first parameter when present and
+/// has type `Self` (the implementing type).
+#[derive(Debug, Clone, PartialEq)]
+pub struct TraitMethodSig {
+    pub name: String,
+    pub params: Vec<Param>,
+    pub return_type: TypeExpr,
+    pub span: Span,
+}
+
+/// A trait implementation for a concrete type.
+///
+/// `impl Trait for Type { method definitions }`. The methods supply
+/// the concrete bodies for the trait's declared signatures. The
+/// implementation registers a method-resolution table entry keyed on
+/// the (Trait, Type, method) triple at compile time.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ImplBlock {
+    pub trait_name: String,
+    /// Type parameters introduced by the impl block itself, allowing
+    /// `impl Trait for Box<T>` style declarations. Empty for
+    /// concrete-type impls.
+    pub type_params: Vec<TypeParam>,
+    /// The implementing type expression. For nominal types this is
+    /// typically `TypeExpr::Named(Type, args)`.
+    pub for_type: TypeExpr,
+    pub methods: Vec<FunctionDef>,
     pub span: Span,
 }
 
@@ -133,14 +183,17 @@ pub struct FunctionDef {
     pub span: Span,
 }
 
-/// A generic type parameter declared in a function signature.
+/// A generic type parameter declared in a signature.
 ///
-/// Carries the parameter's name and source location. Bounds and trait
-/// constraints are reserved for future work and not part of this
-/// representation.
+/// Carries the parameter's name, optional trait bounds, and source
+/// location. A bound restricts the parameter to types implementing
+/// the named trait. Multiple bounds can be specified using `+`
+/// syntax: `<T: Trait1 + Trait2>`. The empty bounds vector represents
+/// an unconstrained parameter.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TypeParam {
     pub name: String,
+    pub bounds: Vec<String>,
     pub span: Span,
 }
 
@@ -382,8 +435,10 @@ pub struct FieldInit {
 pub enum TypeExpr {
     /// Primitive type (`i64`, `f64`, `bool`, `String`).
     Prim(PrimType, Span),
-    /// Named type (struct, enum, or opaque).
-    Named(String, Span),
+    /// Named type (struct, enum, or opaque) with optional generic
+    /// arguments. The `Vec<TypeExpr>` is empty for non-generic
+    /// references.
+    Named(String, Vec<TypeExpr>, Span),
     /// Tuple type: `(T, U)`.
     Tuple(Vec<TypeExpr>, Span),
     /// Array type: `[T; N]`.
@@ -398,7 +453,7 @@ impl TypeExpr {
     pub fn span(&self) -> Span {
         match self {
             TypeExpr::Prim(_, span)
-            | TypeExpr::Named(_, span)
+            | TypeExpr::Named(_, _, span)
             | TypeExpr::Tuple(_, span)
             | TypeExpr::Array(_, _, span)
             | TypeExpr::Option(_, span)

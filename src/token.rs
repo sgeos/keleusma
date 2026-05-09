@@ -47,6 +47,8 @@ pub enum TokenKind {
     Or,
     Pure,
     Data,
+    Trait,
+    Impl,
 
     // Identifiers
     /// Lowercase identifier: `[a-z_][a-z0-9_]*`
@@ -132,6 +134,8 @@ impl TokenKind {
             "or" => Some(TokenKind::Or),
             "pure" => Some(TokenKind::Pure),
             "data" => Some(TokenKind::Data),
+            "trait" => Some(TokenKind::Trait),
+            "impl" => Some(TokenKind::Impl),
             _ => None,
         }
     }

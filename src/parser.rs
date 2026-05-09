@@ -156,7 +156,10 @@ impl<'a> Parser<'a> {
             uses.push(self.parse_use_decl()?);
         }
 
-        // Parse type definitions, data declarations, and function definitions.
+        // Parse type definitions, data declarations, function
+        // definitions, traits, and impl blocks.
+        let mut traits: Vec<TraitDef> = Vec::new();
+        let mut impls: Vec<ImplBlock> = Vec::new();
         while !self.at_end() {
             match self.peek() {
                 TokenKind::Struct => types.push(TypeDef::Struct(self.parse_struct_def()?)),
@@ -165,9 +168,11 @@ impl<'a> Parser<'a> {
                 TokenKind::Fn | TokenKind::Yield | TokenKind::Loop | TokenKind::Pure => {
                     functions.push(self.parse_function_def()?);
                 }
+                TokenKind::Trait => traits.push(self.parse_trait_def()?),
+                TokenKind::Impl => impls.push(self.parse_impl_block()?),
                 _ => {
                     return Err(self.error(
-                        "expected type definition, data declaration, or function definition",
+                        "expected type definition, data declaration, function, trait, or impl",
                     ));
                 }
             }
@@ -179,6 +184,73 @@ impl<'a> Parser<'a> {
             types,
             data_decls,
             functions,
+            traits,
+            impls,
+            span: merge_spans(start, end),
+        })
+    }
+
+    fn parse_trait_def(&mut self) -> Result<TraitDef, ParseError> {
+        let start = self.expect(&TokenKind::Trait)?;
+        let (name, _) = self.expect_upper_ident()?;
+        let type_params = self.parse_optional_type_params()?;
+        self.expect(&TokenKind::LBrace)?;
+        let mut methods: Vec<TraitMethodSig> = Vec::new();
+        while !self.at(&TokenKind::RBrace) {
+            // Trait method: `fn name(args) -> ret;` (no body, semicolon
+            // terminator). The optional `pure` and `fn`/`yield`/`loop`
+            // category keywords are accepted in body positions only;
+            // trait methods declare the signature shape only.
+            self.expect(&TokenKind::Fn)?;
+            let (mname, mspan) = self.expect_lower_ident()?;
+            self.expect(&TokenKind::LParen)?;
+            let mut params: Vec<Param> = Vec::new();
+            if !self.at(&TokenKind::RParen) {
+                params.push(self.parse_param()?);
+                while self.eat(&TokenKind::Comma) {
+                    if self.at(&TokenKind::RParen) {
+                        break;
+                    }
+                    params.push(self.parse_param()?);
+                }
+            }
+            self.expect(&TokenKind::RParen)?;
+            self.expect(&TokenKind::Arrow)?;
+            let return_type = self.parse_type_expr()?;
+            let end = self.expect(&TokenKind::Semicolon)?;
+            methods.push(TraitMethodSig {
+                name: mname,
+                params,
+                return_type,
+                span: merge_spans(mspan, end),
+            });
+        }
+        let end = self.expect(&TokenKind::RBrace)?;
+        Ok(TraitDef {
+            name,
+            type_params,
+            methods,
+            span: merge_spans(start, end),
+        })
+    }
+
+    fn parse_impl_block(&mut self) -> Result<ImplBlock, ParseError> {
+        let start = self.expect(&TokenKind::Impl)?;
+        let type_params = self.parse_optional_type_params()?;
+        let (trait_name, _) = self.expect_upper_ident()?;
+        self.expect(&TokenKind::For)?;
+        let for_type = self.parse_type_expr()?;
+        self.expect(&TokenKind::LBrace)?;
+        let mut methods: Vec<FunctionDef> = Vec::new();
+        while !self.at(&TokenKind::RBrace) {
+            methods.push(self.parse_function_def()?);
+        }
+        let end = self.expect(&TokenKind::RBrace)?;
+        Ok(ImplBlock {
+            trait_name,
+            type_params,
+            for_type,
+            methods,
             span: merge_spans(start, end),
         })
     }
@@ -420,7 +492,19 @@ impl<'a> Parser<'a> {
 
     fn parse_type_param(&mut self) -> Result<TypeParam, ParseError> {
         let (name, span) = self.expect_upper_ident()?;
-        Ok(TypeParam { name, span })
+        let mut bounds: Vec<alloc::string::String> = Vec::new();
+        if self.eat(&TokenKind::Colon) {
+            // First bound is required after the colon.
+            let (b, _) = self.expect_upper_ident()?;
+            bounds.push(b);
+            // Additional bounds via `+ Trait`.
+            while self.at(&TokenKind::Plus) {
+                self.bump();
+                let (b, _) = self.expect_upper_ident()?;
+                bounds.push(b);
+            }
+        }
+        Ok(TypeParam { name, bounds, span })
     }
 
     fn parse_param(&mut self) -> Result<Param, ParseError> {
@@ -1109,10 +1193,26 @@ impl<'a> Parser<'a> {
             return Ok(TypeExpr::Option(Box::new(inner), merge_spans(span, end)));
         }
 
-        // Named type (other upper ident).
+        // Named type (other upper ident) with optional generic
+        // arguments. `Cell` is a non-generic reference; `Cell<T>` is
+        // a generic instantiation.
         if self.at(&TokenKind::UpperIdent(String::new())) {
             let (name, name_span) = self.expect_upper_ident()?;
-            return Ok(TypeExpr::Named(name, name_span));
+            let mut args: Vec<TypeExpr> = Vec::new();
+            let mut end = name_span;
+            if self.eat(&TokenKind::Lt) {
+                if !self.at(&TokenKind::Gt) {
+                    args.push(self.parse_type_expr()?);
+                    while self.eat(&TokenKind::Comma) {
+                        if self.at(&TokenKind::Gt) {
+                            break;
+                        }
+                        args.push(self.parse_type_expr()?);
+                    }
+                }
+                end = self.expect(&TokenKind::Gt)?;
+            }
+            return Ok(TypeExpr::Named(name, args, merge_spans(name_span, end)));
         }
 
         // Unit type `()` or tuple type `(T, U, ...)`.
