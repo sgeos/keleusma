@@ -3038,6 +3038,55 @@ mod tests {
     }
 
     #[test]
+    fn monomorphize_inference_through_method_call() {
+        // The argument is a method call. The monomorphize pass infers
+        // the result type from the impl method's declared return
+        // type, looked up under the `<head>::<method>` key in the
+        // function-return map populated from program.impls.
+        compile_src(
+            "trait Doubler { fn double(x: i64) -> i64; }\n\
+             impl Doubler for i64 { fn double(x: i64) -> i64 { x + x } }\n\
+             fn use_doubler<T: Doubler>(x: T) -> i64 { x.double() }\n\
+             fn main() -> i64 {\n\
+                 use_doubler((21).double())\n\
+             }",
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn monomorphize_inference_through_unary_op() {
+        // The argument is `-n` where `n: i64`. UnaryOp::Neg preserves
+        // the operand type.
+        compile_src(
+            "trait Doubler { fn double(x: i64) -> i64; }\n\
+             impl Doubler for i64 { fn double(x: i64) -> i64 { x + x } }\n\
+             fn use_doubler<T: Doubler>(x: T) -> i64 { x.double() }\n\
+             fn main() -> i64 {\n\
+                 let n: i64 = 21;\n\
+                 use_doubler(-n)\n\
+             }",
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn monomorphize_inference_through_bin_op() {
+        // The argument is `n + 11`. Arithmetic BinOps preserve operand
+        // type, which the analysis takes from the left operand.
+        compile_src(
+            "trait Doubler { fn double(x: i64) -> i64; }\n\
+             impl Doubler for i64 { fn double(x: i64) -> i64 { x + x } }\n\
+             fn use_doubler<T: Doubler>(x: T) -> i64 { x.double() }\n\
+             fn main() -> i64 {\n\
+                 let n: i64 = 10;\n\
+                 use_doubler(n + 11)\n\
+             }",
+        )
+        .unwrap();
+    }
+
+    #[test]
     fn monomorphize_inference_through_array_index() {
         // The argument is an array index expression. The monomorphize
         // pass infers the element type from the array's declared

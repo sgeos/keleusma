@@ -50,10 +50,28 @@ pub fn monomorphize(program: Program) -> Program {
 
     // Function-return-type map for argument-type inference. Used by
     // `infer_arg_type` to resolve types of nested function calls
-    // appearing in generic call arguments.
+    // and method calls appearing in generic call arguments.
+    //
+    // Top-level functions are keyed on their bare name. Impl method
+    // returns are also folded into this map under a `<head>::<method>`
+    // mangled key so the `MethodCall` arm of `infer_arg_type` can
+    // resolve a method call's return type from its receiver's head
+    // and method name without threading a separate impl-method map
+    // through the rewrite chain. The mangling form differs from the
+    // compiler's `Trait::<head>::<method>` chunk-folding mangling so
+    // the two namespaces remain disjoint.
     let mut fn_returns: BTreeMap<String, TypeExpr> = BTreeMap::new();
     for f in &program.functions {
         fn_returns.insert(f.name.clone(), f.return_type.clone());
+    }
+    for impl_block in &program.impls {
+        let head = type_head_for_impl(&impl_block.for_type);
+        for method in &impl_block.methods {
+            fn_returns.insert(
+                alloc::format!("{}::{}", head, method.name),
+                method.return_type.clone(),
+            );
+        }
     }
 
     // Struct-definition map for field-access type inference. Used by
@@ -1267,7 +1285,70 @@ fn infer_arg_type(
                 Some(field_decl.type_expr.clone())
             }
         }
+        Expr::UnaryOp { op, operand, .. } => {
+            // Negation preserves the operand's type. Logical-not
+            // returns Bool. Both arms recurse on the operand for
+            // type information.
+            match op {
+                UnaryOp::Neg => infer_arg_type(operand, locals, fn_returns, structs),
+                UnaryOp::Not => Some(TypeExpr::Prim(PrimType::Bool, operand.span())),
+            }
+        }
+        Expr::BinOp { op, left, span, .. } => {
+            // Arithmetic operators preserve the operand types under
+            // the type checker's existing same-type unification.
+            // Comparison and logical operators return Bool.
+            match op {
+                BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod => {
+                    infer_arg_type(left, locals, fn_returns, structs)
+                }
+                BinOp::Eq
+                | BinOp::NotEq
+                | BinOp::Lt
+                | BinOp::Gt
+                | BinOp::LtEq
+                | BinOp::GtEq
+                | BinOp::And
+                | BinOp::Or => Some(TypeExpr::Prim(PrimType::Bool, *span)),
+            }
+        }
+        Expr::MethodCall {
+            receiver, method, ..
+        } => {
+            // Resolve the receiver's nominal type, take its head, and
+            // look up the impl method's return type in fn_returns
+            // under the `<head>::<method>` mangling. The map was
+            // populated at the top of `monomorphize` from
+            // `program.impls`. When the lookup fails (no impl found,
+            // or the receiver type is not yet concrete), return None.
+            let recv_ty = infer_arg_type(receiver, locals, fn_returns, structs)?;
+            let head = type_head_for_impl(&recv_ty);
+            let key = alloc::format!("{}::{}", head, method);
+            fn_returns.get(&key).cloned()
+        }
         _ => None,
+    }
+}
+
+/// Compute the head string for a `TypeExpr` used to key impl method
+/// returns and impl-method chunk lookups. Mirrors the compiler's
+/// existing convention so the `<head>::<method>` mangling here is
+/// consistent with the compiler's `Trait::<head>::<method>` chunk
+/// names.
+fn type_head_for_impl(ty: &TypeExpr) -> String {
+    use alloc::string::ToString;
+    match ty {
+        TypeExpr::Prim(p, _) => match p {
+            PrimType::I64 => "i64".to_string(),
+            PrimType::F64 => "f64".to_string(),
+            PrimType::Bool => "bool".to_string(),
+            PrimType::KString => "String".to_string(),
+        },
+        TypeExpr::Unit(_) => "()".to_string(),
+        TypeExpr::Named(name, _, _) => name.clone(),
+        TypeExpr::Tuple(_, _) => "tuple".to_string(),
+        TypeExpr::Array(_, _, _) => "array".to_string(),
+        TypeExpr::Option(_, _) => "Option".to_string(),
     }
 }
 

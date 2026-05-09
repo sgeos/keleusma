@@ -9,8 +9,8 @@ AI to Human communication channel.
 ## Last Updated
 
 **Date**: 2026-05-09
-**Task**: V0.1-M3-T27. WCET safety for recursive closures.
-**Status**: Complete. The recursive-closure feature added in V0.1-M3-T26 was inconsistent with the WCET and WCMU analyses by construction. This session corrects the soundness gap by rejecting `Op::MakeRecursiveClosure` in `verify_resource_bounds` and explicitly documents the WCET implications of indirect dispatch over closures.
+**Task**: V0.1-M3-T28. B2.4 inference reach for `MethodCall`, `UnaryOp`, and `BinOp`.
+**Status**: Complete. Three remaining inference gaps closed. Each gap was a real failure where a generic call argument's type was not inferred and the program failed to compile.
 
 ## Verification
 
@@ -24,61 +24,76 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 **Results**:
 
-- 480 tests pass workspace-wide. 412 keleusma unit (1 new), 17 keleusma marshall integration, 17 keleusma `kstring_boundary` integration, 28 keleusma-arena unit, 6 keleusma-arena doctests.
+- 482 tests pass workspace-wide. 415 keleusma unit (3 new), 17 keleusma marshall integration, 17 keleusma `kstring_boundary` integration, 28 keleusma-arena unit, 6 keleusma-arena doctests.
 - Clippy clean under `--workspace --all-targets`.
 - Format clean.
 
 ## Summary
 
-The user reminded that the broader language goal is WCET and WCMU analysis, which means certain features must remain out of scope. The recursive-closure feature added in the prior session dispatches through `Op::CallIndirect`, which the WCMU analysis cannot follow. The pre-existing `topological_call_order` walk over the call graph traces only `Op::Call` edges and rejects direct-call cycles. Recursive closures escape this cycle detection by construction because their self-reference flows through indirect dispatch.
+A probe identified three inference shapes that previously failed compilation when used as generic call arguments:
 
-To preserve the soundness of the resource-bounds verifier, `verify::module_wcmu` now rejects any module that contains `Op::MakeRecursiveClosure` with a clear error message. The safe constructors `Vm::new` and `Vm::load_bytes` therefore reject recursive-closure programs by default. Hosts that need recursive closures and accept the unbounded-recursion risk must construct the VM through `Vm::new_unchecked` or `Vm::load_bytes_unchecked`, which skip the resource-bounds check while preserving structural verification. The `examples/closure_recursive.rs` example was updated to use `Vm::new_unchecked` and now documents the trade-off in the source comment.
+- A method-call return value such as `use_doubler((21).double())`.
+- A unary-negation such as `use_doubler(-n)` where `n: i64`.
+- An arithmetic binary operation such as `use_doubler(n + 11)`.
 
-A broader observation about indirect dispatch is documented in EXECUTION_MODEL: the WCMU analysis does not follow `Op::CallIndirect` targets, so programs that construct unbounded recursion through indirect dispatch over non-recursive closures (for example `apply(apply, x)` where `apply<F>(f: F, x: i64)` invokes its first argument indirectly) are admissible by the verifier despite being unbounded at runtime. Tightening this would require either a conservative max-cost-over-all-chunks bound for `Op::CallIndirect` or a flow analysis that tracks which chunks each Func value may resolve to. The approximation is recorded as a known limitation rather than fixed in this session because it requires substantial design work and the explicit rejection of `Op::MakeRecursiveClosure` already covers the common path through which the surface language can express unbounded recursion.
+Each failed because `monomorphize::infer_arg_type` returned `None` for the corresponding `Expr` variant, which caused the call site to remain generic. After re-typecheck against the unspecialized body, the receiver type was abstract and the method dispatch could not resolve, surfacing as `type T has no method <name>`.
+
+The three arms now resolve as follows:
+
+- `Expr::MethodCall` looks up the impl method's declared return type under a `<head>::<method>` mangled key in `fn_returns`. The map is populated at the top of `monomorphize` from `program.impls` alongside top-level functions, using a new `type_head_for_impl` helper that mirrors the compiler's existing `type_expr_head` convention. The mangling is intentionally distinct from the compiler's `Trait::<head>::<method>` chunk-folding mangling so the two namespaces stay disjoint.
+- `Expr::UnaryOp` recurses on the operand for `Neg` and returns `Prim(Bool)` for `Not`.
+- `Expr::BinOp` recurses on the left operand for arithmetic operators (`Add`, `Sub`, `Mul`, `Div`, `Mod`) and returns `Prim(Bool)` for comparison and logical operators (`Eq`, `NotEq`, `Lt`, `Gt`, `LtEq`, `GtEq`, `And`, `Or`).
+
+These extensions remain consistent with the WCET goal because they only widen the static type information available at monomorphize time. They do not introduce any new runtime mechanism, indirect dispatch path, or unbounded execution shape.
 
 ## Tests
 
-One new verifier test:
+Three new typecheck tests, each exercising the full compile pipeline through `compile_src`:
 
-- `verify_resource_bounds_rejects_recursive_closures` constructs a stream chunk that contains `Op::MakeRecursiveClosure` and asserts that `verify_resource_bounds` rejects the module with an error message identifying the cause.
+- `monomorphize_inference_through_method_call`
+- `monomorphize_inference_through_unary_op`
+- `monomorphize_inference_through_bin_op`
 
 ## Trade-offs and Properties
 
-The chosen rejection point is `verify::module_wcmu`. This sits between the `verify` structural pass and the per-Stream-chunk arena-budget check. The rejection happens before any chunk's WCMU is computed, so the error path is clean and has a focused message.
+The choice to fold impl method returns into `fn_returns` under a single namespace, rather than threading a separate map through the rewrite chain, kept the diff narrow. The mangled key `<head>::<method>` cannot collide with a top-level function name because Keleusma identifiers cannot contain `::`.
 
-An alternative approach would be a recursion-depth attestation API analogous to `Vm::set_native_bounds`. The host would declare the maximum recursion depth for each recursive closure, and the analysis would multiply that closure's per-invocation WCET and WCMU by the declared depth. This is a future refinement and is recorded in BACKLOG as a follow-on item. For real-time embedding without external attestation, recursive closures remain out of scope and the safe constructor's rejection is the correct contract.
+The arithmetic-binop arm uses the left operand's type as the result type. The type checker's existing same-type unification means the right operand has an equal type at type-check time, so taking the left is correct under the type checker's contract. If the operands' types are not unified, the receiver's method dispatch will fail to resolve at re-typecheck and the program will be rejected, which is the desired behavior.
 
-The example continues to demonstrate the recursive-closure feature end to end, but now uses `Vm::new_unchecked` and documents the trade-off in the source comment. This keeps the feature available for development, scripting, and tests while making the WCET implications explicit at the call site.
+The unary-not arm returns `Bool` rather than recursing on the operand. Keleusma uses `Not` for logical negation only (no bitwise `!`), so the result is always boolean.
+
+The method-call return type returned by `fn_returns.get(<head>::<method>)` is the declared return type from the impl method's signature. If the trait declares the method generically (which is not currently expressible because trait method signatures are concrete), the substitution would need to propagate; this is not a real case in the present language.
 
 ## Changes Made
 
 ### Source
 
-- **`src/verify.rs`**. `module_wcmu` now scans every chunk for `Op::MakeRecursiveClosure` and returns a `VerifyError` if any is present. New unit test `verify_resource_bounds_rejects_recursive_closures`.
-- **`examples/closure_recursive.rs`**. Updated to use `Vm::new_unchecked` and to document the WCET trade-off in the doc comment and at the constructor call site.
+- **`src/monomorphize.rs`**. `monomorphize` now folds impl method returns into `fn_returns` under `<head>::<method>` keys, using a new `type_head_for_impl` helper. `infer_arg_type` gains arms for `Expr::UnaryOp`, `Expr::BinOp`, and `Expr::MethodCall`.
+- **`src/typecheck.rs`**. Three new tests exercising the inference reach extensions through the full compile pipeline.
 
 ### Knowledge Graph
 
-- **`docs/architecture/EXECUTION_MODEL.md`**. New "Indirect Dispatch and Recursion" subsection inside "Structural Verification" documents how the analyses handle indirect dispatch, the rejection of `Op::MakeRecursiveClosure` by the safe constructor, the unsafe constructor opt-out path, and the known approximation that the analysis does not follow `Op::CallIndirect` targets.
-- **`docs/decisions/BACKLOG.md`**. B3 entry expanded with the WCET and WCMU implications, the verifier behavior, and the future recursion-depth attestation refinement.
-- **`docs/process/TASKLOG.md`**. New row for V0.1-M3-T27.
+- **`docs/decisions/BACKLOG.md`**. B2.4 entry's "Inference reach extension" paragraph extended with the new shapes.
+- **`docs/process/TASKLOG.md`**. New row for V0.1-M3-T28.
 - **`docs/process/REVERSE_PROMPT.md`**. This file.
 
 ## Remaining Open Priorities
 
-Recursive closures are now WCET-safe in the sense that the safe constructor refuses to admit them. Hosts that need recursive closures must opt out of the resource-bounds verification through the unsafe constructor.
+The named B1, B2.2, B2.3, B2.4, and B3 work has now been exhaustively exercised. Inference reach covers literals, identifiers, function-call returns, method-call returns, unary and binary operators, casts, enum variants, struct constructions, tuple and array literals, if and match arms, field access, tuple-index, and array-index. The closure subsystem covers first-class arguments, environment capture, transitive nested capture, and recursive let-bound closures, with the WCET-incompatible recursive case rejected by the safe verifier.
 
-The known approximations are documented:
+Known approximations that remain documented but not addressed in this session, consistent with the user's reminder that certain features must remain out of scope:
 
-- `Op::CallIndirect` cost analysis does not follow indirect-dispatch targets. Unbounded recursion via patterns like `apply(apply, x)` is admissible despite being unbounded.
-- A recursion-depth attestation API for recursive closures would re-admit them under a host-declared bound. Not implemented.
+- The WCMU and WCET analyses do not follow `Op::CallIndirect` targets. Programs that construct unbounded recursion through indirect dispatch over non-recursive closures (such as `apply(apply, x)`) are admissible despite being unbounded at runtime.
+- A recursion-depth attestation API for recursive closures would re-admit them under a host-declared bound; not implemented.
+- Block expressions `{ ... }` are not currently parseable as primary expressions, so a closure constructed inside an immediately-evaluated block is rejected at parse time. Parser-level concern, not in current scope.
+- The B1 `Type::Unknown` sentinel is retained as a permissive transitional anchor for runtime-only dispatch positions. Removing it would require declaring native function signatures. Type-system tightening rather than WCET concern.
 
 The `keleusma-arena` registry version is still v0.1.0.
 
 ## Intended Next Step
 
-Await human prompt before proceeding. Subsequent work falls outside the named B1, B2.2, B2.3, B2.4, and B3 scope or pertains to WCET refinements (the `Op::CallIndirect` flow analysis or the recursion-depth attestation) that need design work before implementation.
+Await human prompt before proceeding. Subsequent work falls outside the named B1, B2.2, B2.3, B2.4, and B3 scope, or pertains to the documented WCET refinements and B1 sentinel cleanup.
 
 ## Session Context
 
-This session was a corrective pass: the recursive-closure feature added in V0.1-M3-T26 was inconsistent with the broader WCET and WCMU goal. The verifier now rejects recursive-closure programs by default, hosts can opt out explicitly through the unsafe constructor, and the WCET implications of indirect dispatch are documented in EXECUTION_MODEL. The closure subsystem is now feature-complete and aligned with the language's analysis goals.
+This session closed the residual inference gaps in B2.4 that surfaced through a comprehensive probe of common expression shapes used as generic call arguments. The inference reach is now uniform across the practical surface of expressions whose result types can be statically determined.
