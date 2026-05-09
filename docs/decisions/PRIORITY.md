@@ -6,7 +6,14 @@ Open decisions that may block near-term development.
 
 ## ~~P1. Type checker implementation~~ (Resolved)
 
-A static type checker is in place at `src/typecheck.rs` and is invoked from `compile`. Type errors are surfaced as `CompileError` before bytecode emission. The parser now represents the unit literal `()` as `Literal::Unit` rather than `Literal::Int(0)`. The compiler emits `Op::PushUnit` for the new variant. The type checker recognizes `Literal::Unit` as `Type::Unit`. Five existing tests that relied on lax behavior (programs referencing struct or enum names without definitions, or returning a tuple from a unit-typed function) were updated to declare the types they reference.
+A static type checker is in place at `src/typecheck.rs` and is invoked from `compile`. Type errors are surfaced as `CompileError` before bytecode emission. The parser now represents the unit literal `()` as `Literal::Unit` rather than `Literal::Int(0)`. The compiler emits `Op::PushUnit` for the new variant. The type checker recognizes `Literal::Unit` as `Type::Unit`. Five existing tests that relied on lax behavior were updated to declare the types they reference.
+
+Subsequent passes closed four type checker gaps.
+
+- Multiheaded function parameter types are now recorded on the bound locals through `compile_pattern_bind_typed`. The compiler's `TypeInfo` gained an `enums` map for variant payload type lookup. Tuple, struct, and enum patterns all decompose the type expression structurally.
+- Native function call type checking distinguishes between user-defined functions (full signature check), names imported via `use` (accepted with any args), names qualified with `::` (treated as natives), and truly undefined names (rejected with a clear error). The earlier silent-pass behavior for unknown names is replaced with explicit categorization.
+- Pattern type checking against the scrutinee. Match arms are structurally validated against the scrutinee's static type. Tuple arity must match. Enum variants must exist and have the right payload arity. Struct field names must be declared. Literal pattern types must be compatible with the scrutinee.
+- Match arm exhaustiveness. Enum scrutinees must cover every variant or have a wildcard arm. Bool scrutinees must cover both true and false or have a wildcard. Unit scrutinees must cover `()` or have a wildcard. Other types require a wildcard arm.
 
 Coverage in place.
 

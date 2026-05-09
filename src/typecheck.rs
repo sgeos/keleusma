@@ -5,8 +5,7 @@
 //! [`crate::vm::VmError::TypeError`]. The pass is deliberately narrow.
 //! It checks declared signatures and explicit annotations against
 //! computed expression types. It does not perform Hindley-Milner
-//! inference (B1) or check against native function signatures because
-//! natives are registered at runtime through `Vm::register_*`.
+//! inference (B1).
 //!
 //! Coverage. The pass currently catches the following at compile time.
 //!
@@ -19,19 +18,28 @@
 //! - Struct construction provides defined fields with the right types.
 //! - Cast operations are between admissible types (i64 to f64 and back).
 //! - Identifier references resolve to known locals or function names.
+//! - Undefined function calls are rejected. Names declared in `use`
+//!   declarations or names qualified with `::` are accepted as
+//!   natives without signature checks because native signatures are
+//!   not declared at compile time.
+//! - Match arm patterns are structurally checked against the
+//!   scrutinee's static type. Tuple arity, enum variant existence
+//!   and payload arity, struct field name validity, and literal
+//!   pattern type compatibility are all checked.
+//! - Match arm exhaustiveness. Enum scrutinees must cover every
+//!   variant or have a wildcard arm. Bool scrutinees must cover both
+//!   true and false or have a wildcard. Unit scrutinees must cover
+//!   `()` or have a wildcard. Other types require a wildcard.
 //!
 //! Out of scope for this pass.
 //!
-//! - Match arm exhaustiveness. The runtime detects nonexhaustive
-//!   matches through the `NoMatch` error.
-//! - Detailed enum variant field validation beyond variant existence.
-//! - Native function call types.
-//! - Pattern type checking against the scrutinee. Patterns are accepted
-//!   structurally and the runtime detects mismatches.
+//! - Hindley-Milner inference (B1).
+//! - Native function signatures (sound only with explicit
+//!   `use ... : fn(...) -> ...` extensions, not yet supported).
 
 extern crate alloc;
 use alloc::boxed::Box;
-use alloc::collections::BTreeMap;
+use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
@@ -155,6 +163,10 @@ struct Ctx {
     structs: BTreeMap<String, BTreeMap<String, Type>>,
     enums: BTreeMap<String, BTreeMap<String, Vec<Type>>>,
     functions: BTreeMap<String, FnSig>,
+    /// Native function names imported via `use` declarations. Calls
+    /// to these names are accepted with any argument types because
+    /// native signatures are not declared at compile time.
+    natives: BTreeSet<String>,
     /// Data block field types, keyed by data name then field name.
     data: BTreeMap<String, BTreeMap<String, Type>>,
     /// Stack of local variable scopes. Inner scopes shadow outer.
@@ -170,6 +182,7 @@ impl Ctx {
             structs: BTreeMap::new(),
             enums: BTreeMap::new(),
             functions: BTreeMap::new(),
+            natives: BTreeSet::new(),
             data: BTreeMap::new(),
             locals: Vec::new(),
             current_return: None,
@@ -266,6 +279,30 @@ pub fn check(program: &Program) -> Result<(), TypeError> {
         ctx.data.insert(data.name.clone(), fields);
     }
 
+    // Pass 1c0. Collect native names from `use` declarations.
+    // Names take the form `path::name` or just `name` for use without
+    // path. Wildcard imports cannot be resolved at compile time and
+    // are treated leniently elsewhere.
+    for use_decl in &program.uses {
+        if let ImportItem::Name(name) = &use_decl.import {
+            let full = if use_decl.path.is_empty() {
+                name.clone()
+            } else {
+                let mut full = String::new();
+                for (i, seg) in use_decl.path.iter().enumerate() {
+                    if i > 0 {
+                        full.push_str("::");
+                    }
+                    full.push_str(seg);
+                }
+                full.push_str("::");
+                full.push_str(name);
+                full
+            };
+            ctx.natives.insert(full);
+        }
+    }
+
     // Pass 1c. Build function signatures.
     for func in &program.functions {
         let params: Vec<Type> = func
@@ -349,10 +386,275 @@ fn bind_pattern(ctx: &mut Ctx, pattern: &Pattern, ty: Type) {
                 }
             }
         }
-        // For literal, struct, and enum patterns we do not introduce
-        // bindings here. Variables nested inside struct or enum
-        // patterns are bound during match-arm checking.
-        _ => {}
+        Pattern::Enum(enum_name, variant, sub_pats, _) => {
+            // Look up the variant's payload types.
+            let payload = ctx
+                .enums
+                .get(enum_name)
+                .and_then(|vs| vs.get(variant))
+                .cloned();
+            for (i, sub_pat) in sub_pats.iter().enumerate() {
+                let sub_ty = payload
+                    .as_ref()
+                    .and_then(|tys| tys.get(i).cloned())
+                    .unwrap_or(Type::Unknown);
+                bind_pattern(ctx, sub_pat, sub_ty);
+            }
+        }
+        Pattern::Struct(struct_name, field_pats, _) => {
+            // Look up field types from the struct definition.
+            let struct_fields = ctx.structs.get(struct_name).cloned();
+            for field_pat in field_pats {
+                let field_ty = struct_fields
+                    .as_ref()
+                    .and_then(|fields| fields.get(&field_pat.name).cloned())
+                    .unwrap_or(Type::Unknown);
+                if let Some(pat) = &field_pat.pattern {
+                    bind_pattern(ctx, pat, field_ty);
+                } else {
+                    // Shorthand: `Name { field }` binds field to a
+                    // local of the same name at the field's type.
+                    ctx.add_local(field_pat.name.clone(), field_ty);
+                }
+            }
+        }
+        Pattern::Literal(_, _) => {}
+    }
+}
+
+/// Check that a pattern's shape matches the scrutinee's static type.
+///
+/// Surfaces shape mismatches such as a tuple pattern against a
+/// non-tuple scrutinee, an enum variant pattern against a non-enum
+/// scrutinee, an unknown variant name, or a wrong number of payload
+/// elements. Variables and wildcards always succeed.
+fn check_pattern_against_type(
+    ctx: &Ctx,
+    pattern: &Pattern,
+    scrutinee_ty: &Type,
+) -> Result<(), TypeError> {
+    match pattern {
+        Pattern::Wildcard(_) | Pattern::Variable(_, _) => Ok(()),
+        Pattern::Literal(lit, span) => {
+            let lit_ty = match lit {
+                Literal::Int(_) => Type::I64,
+                Literal::Float(_) => Type::F64,
+                Literal::String(_) => Type::Str,
+                Literal::Bool(_) => Type::Bool,
+                Literal::Unit => Type::Unit,
+            };
+            if !types_compatible(&lit_ty, scrutinee_ty) {
+                return Err(TypeError::new(
+                    format!(
+                        "literal pattern of type {} does not match scrutinee type {}",
+                        lit_ty.display(),
+                        scrutinee_ty.display()
+                    ),
+                    *span,
+                ));
+            }
+            Ok(())
+        }
+        Pattern::Tuple(parts, span) => match scrutinee_ty {
+            Type::Tuple(elem_types) => {
+                if parts.len() != elem_types.len() {
+                    return Err(TypeError::new(
+                        format!(
+                            "tuple pattern of {} elements does not match scrutinee {} of {} elements",
+                            parts.len(),
+                            scrutinee_ty.display(),
+                            elem_types.len()
+                        ),
+                        *span,
+                    ));
+                }
+                for (pat, elem_ty) in parts.iter().zip(elem_types.iter()) {
+                    check_pattern_against_type(ctx, pat, elem_ty)?;
+                }
+                Ok(())
+            }
+            Type::Unknown => Ok(()),
+            _ => Err(TypeError::new(
+                format!(
+                    "tuple pattern does not match scrutinee type {}",
+                    scrutinee_ty.display()
+                ),
+                *span,
+            )),
+        },
+        Pattern::Enum(enum_name, variant, sub_pats, span) => {
+            // Check enum name matches scrutinee.
+            match scrutinee_ty {
+                Type::Enum(scrutinee_name) if scrutinee_name == enum_name => {}
+                Type::Unknown => return Ok(()),
+                _ => {
+                    return Err(TypeError::new(
+                        format!(
+                            "enum pattern `{}::{}` does not match scrutinee type {}",
+                            enum_name,
+                            variant,
+                            scrutinee_ty.display()
+                        ),
+                        *span,
+                    ));
+                }
+            }
+            // Check variant exists and arity matches.
+            let payload = ctx
+                .enums
+                .get(enum_name)
+                .and_then(|vs| vs.get(variant))
+                .cloned()
+                .ok_or_else(|| {
+                    TypeError::new(
+                        format!("enum `{}` has no variant `{}`", enum_name, variant),
+                        *span,
+                    )
+                })?;
+            if sub_pats.len() != payload.len() {
+                return Err(TypeError::new(
+                    format!(
+                        "variant `{}::{}` expects {} payload elements, pattern has {}",
+                        enum_name,
+                        variant,
+                        payload.len(),
+                        sub_pats.len()
+                    ),
+                    *span,
+                ));
+            }
+            for (sub_pat, payload_ty) in sub_pats.iter().zip(payload.iter()) {
+                check_pattern_against_type(ctx, sub_pat, payload_ty)?;
+            }
+            Ok(())
+        }
+        Pattern::Struct(name, field_pats, span) => {
+            match scrutinee_ty {
+                Type::Struct(scrutinee_name) if scrutinee_name == name => {}
+                Type::Unknown => return Ok(()),
+                _ => {
+                    return Err(TypeError::new(
+                        format!(
+                            "struct pattern `{}` does not match scrutinee type {}",
+                            name,
+                            scrutinee_ty.display()
+                        ),
+                        *span,
+                    ));
+                }
+            }
+            let fields = ctx
+                .structs
+                .get(name)
+                .cloned()
+                .ok_or_else(|| TypeError::new(format!("unknown struct `{}`", name), *span))?;
+            for field_pat in field_pats {
+                let field_ty = fields.get(&field_pat.name).ok_or_else(|| {
+                    TypeError::new(
+                        format!("struct `{}` has no field `{}`", name, field_pat.name),
+                        field_pat.span,
+                    )
+                })?;
+                if let Some(pat) = &field_pat.pattern {
+                    check_pattern_against_type(ctx, pat, field_ty)?;
+                }
+            }
+            Ok(())
+        }
+    }
+}
+
+/// Check that a sequence of match arms exhaustively covers a
+/// scrutinee's type. A wildcard or unbound variable arm satisfies
+/// any type. For enum scrutinees, every variant must be covered.
+/// For bool scrutinees, both true and false must be covered. For
+/// other types, a wildcard or variable arm is required.
+fn check_exhaustiveness(
+    ctx: &Ctx,
+    arms: &[MatchArm],
+    scrutinee_ty: &Type,
+    span: Span,
+) -> Result<(), TypeError> {
+    let has_catchall = arms
+        .iter()
+        .any(|arm| matches!(arm.pattern, Pattern::Wildcard(_) | Pattern::Variable(_, _)));
+    if has_catchall {
+        return Ok(());
+    }
+    match scrutinee_ty {
+        Type::Bool => {
+            let mut has_true = false;
+            let mut has_false = false;
+            for arm in arms {
+                if let Pattern::Literal(Literal::Bool(b), _) = &arm.pattern {
+                    if *b {
+                        has_true = true;
+                    } else {
+                        has_false = true;
+                    }
+                }
+            }
+            if !has_true || !has_false {
+                return Err(TypeError::new(
+                    String::from(
+                        "non-exhaustive match on bool: needs both true and false arms or a wildcard",
+                    ),
+                    span,
+                ));
+            }
+            Ok(())
+        }
+        Type::Enum(enum_name) => {
+            let variants = ctx
+                .enums
+                .get(enum_name)
+                .ok_or_else(|| TypeError::new(format!("unknown enum `{}`", enum_name), span))?;
+            let mut covered: BTreeSet<String> = BTreeSet::new();
+            for arm in arms {
+                if let Pattern::Enum(en, variant, _, _) = &arm.pattern
+                    && en == enum_name
+                {
+                    covered.insert(variant.clone());
+                }
+            }
+            let missing: Vec<&String> = variants.keys().filter(|k| !covered.contains(*k)).collect();
+            if !missing.is_empty() {
+                let names: Vec<String> = missing.iter().map(|s| (*s).clone()).collect();
+                return Err(TypeError::new(
+                    format!(
+                        "non-exhaustive match on enum `{}`: missing variant(s) {}",
+                        enum_name,
+                        names.join(", ")
+                    ),
+                    span,
+                ));
+            }
+            Ok(())
+        }
+        Type::Unit => {
+            // Unit has only one value. A literal Unit pattern or a
+            // variable/wildcard arm covers it. We checked for
+            // catchall above, so check for a Unit literal arm.
+            let has_unit_lit = arms
+                .iter()
+                .any(|arm| matches!(arm.pattern, Pattern::Literal(Literal::Unit, _)));
+            if has_unit_lit {
+                Ok(())
+            } else {
+                Err(TypeError::new(
+                    String::from("non-exhaustive match on (): requires `()` or wildcard arm"),
+                    span,
+                ))
+            }
+        }
+        Type::Unknown => Ok(()),
+        other => Err(TypeError::new(
+            format!(
+                "non-exhaustive match on {}: requires a wildcard arm",
+                other.display()
+            ),
+            span,
+        )),
     }
 }
 
@@ -592,11 +894,26 @@ fn type_of_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Type, TypeError> {
         }
         Expr::Call { name, args, span } => {
             // Native functions are registered at runtime and have no
-            // compile-time signature in this MVP. Treat unknown names
-            // as natives and accept any argument types.
+            // compile-time signature. Names declared in `use` or
+            // qualified with `::` are treated as natives and accept
+            // any argument types. Other unknown names are rejected
+            // as undefined.
             let sig = match ctx.functions.get(name).cloned() {
                 Some(s) => s,
-                None => return Ok(Type::Unknown),
+                None => {
+                    if ctx.natives.contains(name) || name.contains("::") {
+                        // Type-check arguments for syntax errors but
+                        // do not enforce signatures.
+                        for arg in args {
+                            type_of_expr(ctx, arg)?;
+                        }
+                        return Ok(Type::Unknown);
+                    }
+                    return Err(TypeError::new(
+                        format!("undefined function `{}`", name),
+                        *span,
+                    ));
+                }
             };
             if args.len() != sig.params.len() {
                 return Err(TypeError::new(
@@ -626,7 +943,10 @@ fn type_of_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Type, TypeError> {
             Ok(sig.return_type)
         }
         Expr::Pipeline {
-            left, func, args, ..
+            left,
+            func,
+            args,
+            span,
         } => {
             let left_ty = type_of_expr(ctx, left)?;
             // A pipeline desugars to func(left, args...). For the
@@ -671,12 +991,18 @@ fn type_of_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Type, TypeError> {
                     }
                 }
                 Ok(sig.return_type)
-            } else {
-                // Native pipeline target. Accept.
+            } else if ctx.natives.contains(func) || func.contains("::") {
+                // Native pipeline target. Accept arguments without
+                // signature check.
                 for arg in args {
                     let _ = type_of_expr(ctx, arg)?;
                 }
                 Ok(Type::Unknown)
+            } else {
+                Err(TypeError::new(
+                    format!("undefined function `{}`", func),
+                    *span,
+                ))
             }
         }
         Expr::Yield { value, .. } => {
@@ -718,16 +1044,17 @@ fn type_of_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Type, TypeError> {
             }
         }
         Expr::Match {
-            scrutinee, arms, ..
+            scrutinee,
+            arms,
+            span,
         } => {
-            let _ = type_of_expr(ctx, scrutinee)?;
+            let scrutinee_ty = type_of_expr(ctx, scrutinee)?;
             // Type the body of each arm. The arm bodies must agree.
             let mut common: Option<Type> = None;
             for arm in arms {
+                check_pattern_against_type(ctx, &arm.pattern, &scrutinee_ty)?;
                 ctx.push_scope();
-                // Bind any variables introduced by the pattern. Without
-                // detailed pattern checking we bind to Unknown.
-                bind_pattern(ctx, &arm.pattern, Type::Unknown);
+                bind_pattern(ctx, &arm.pattern, scrutinee_ty.clone());
                 let arm_ty = type_of_expr(ctx, &arm.expr)?;
                 ctx.pop_scope();
                 match &common {
@@ -746,6 +1073,7 @@ fn type_of_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Type, TypeError> {
                     }
                 }
             }
+            check_exhaustiveness(ctx, arms, &scrutinee_ty, *span)?;
             Ok(common.unwrap_or(Type::Unit))
         }
         Expr::Loop { body, .. } => {
@@ -1067,5 +1395,128 @@ mod tests {
     fn undefined_identifier_rejected() {
         let err = check_src("fn main() -> i64 { x }").unwrap_err();
         assert!(err.message.contains("undefined"));
+    }
+
+    // -- #13 Native function call types --
+
+    #[test]
+    fn undefined_function_rejected() {
+        let err = check_src("fn main() -> i64 { foo() }").unwrap_err();
+        assert!(err.message.contains("undefined function `foo`"));
+    }
+
+    #[test]
+    fn used_native_accepted() {
+        check_src("use math::sqrt\nfn main() -> f64 { math::sqrt(9.0) }").unwrap();
+    }
+
+    #[test]
+    fn qualified_call_treated_as_native() {
+        // Qualified names with `::` are treated as natives even
+        // without an explicit `use` declaration.
+        check_src("fn main() -> () { audio::do_thing(1, 2.0) }").unwrap();
+    }
+
+    // -- #12 Pattern type checking against scrutinee --
+
+    #[test]
+    fn enum_pattern_unknown_variant_rejected() {
+        let err = check_src(
+            "enum Color { Red, Green }\n\
+             fn main() -> i64 { match Color::Red() { Color::Blue() => 1, _ => 0 } }",
+        )
+        .unwrap_err();
+        assert!(
+            err.message.contains("no variant `Blue`")
+                || err.message.contains("unknown enum variant"),
+            "unexpected error: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn enum_pattern_wrong_arity_rejected() {
+        let err = check_src(
+            "enum Shape { Square(i64), Circle(i64) }\n\
+             fn main() -> i64 { match Shape::Square(1) { Shape::Square(a, b) => 0, _ => 1 } }",
+        )
+        .unwrap_err();
+        assert!(
+            err.message.contains("payload elements"),
+            "unexpected error: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn tuple_pattern_wrong_arity_rejected() {
+        let err =
+            check_src("fn main() -> i64 { match (1, 2) { (a, b, c) => 0, _ => 1 } }").unwrap_err();
+        assert!(err.message.contains("tuple pattern"));
+    }
+
+    #[test]
+    fn tuple_pattern_against_non_tuple_rejected() {
+        let err = check_src("fn main() -> i64 { match 5 { (a, b) => 0, _ => 1 } }").unwrap_err();
+        assert!(err.message.contains("tuple pattern"));
+    }
+
+    #[test]
+    fn literal_pattern_type_mismatch_rejected() {
+        let err = check_src("fn main() -> i64 { match 5 { true => 1, _ => 0 } }").unwrap_err();
+        assert!(err.message.contains("literal pattern"));
+    }
+
+    // -- #11 Match arm exhaustiveness --
+
+    #[test]
+    fn enum_match_missing_variant_rejected() {
+        let err = check_src(
+            "enum Color { Red, Green, Blue }\n\
+             fn main() -> i64 { match Color::Red() { Color::Red() => 0, Color::Green() => 1 } }",
+        )
+        .unwrap_err();
+        assert!(err.message.contains("non-exhaustive match"));
+        assert!(err.message.contains("Blue"));
+    }
+
+    #[test]
+    fn enum_match_with_wildcard_accepted() {
+        check_src(
+            "enum Color { Red, Green, Blue }\n\
+             fn main() -> i64 { match Color::Red() { Color::Red() => 0, _ => 1 } }",
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn enum_match_with_all_variants_accepted() {
+        check_src(
+            "enum Color { Red, Green }\n\
+             fn main() -> i64 { match Color::Red() { Color::Red() => 0, Color::Green() => 1 } }",
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn bool_match_missing_arm_rejected() {
+        let err = check_src("fn main() -> i64 { match true { true => 1 } }").unwrap_err();
+        assert!(err.message.contains("non-exhaustive match"));
+    }
+
+    #[test]
+    fn bool_match_complete_accepted() {
+        check_src("fn main() -> i64 { match true { true => 1, false => 0 } }").unwrap();
+    }
+
+    #[test]
+    fn i64_match_without_wildcard_rejected() {
+        let err = check_src("fn main() -> i64 { match 1 { 1 => 1, 2 => 2 } }").unwrap_err();
+        assert!(err.message.contains("non-exhaustive match"));
+    }
+
+    #[test]
+    fn i64_match_with_wildcard_accepted() {
+        check_src("fn main() -> i64 { match 1 { 1 => 1, _ => 0 } }").unwrap();
     }
 }

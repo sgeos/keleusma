@@ -36,6 +36,8 @@ struct Local {
 struct TypeInfo {
     /// Struct name to (field name to declared field type).
     structs: BTreeMap<String, BTreeMap<String, TypeExpr>>,
+    /// Enum name to (variant name to payload field types).
+    enums: BTreeMap<String, BTreeMap<String, Vec<TypeExpr>>>,
     /// Function name to declared return type.
     function_returns: BTreeMap<String, TypeExpr>,
     /// Data block name to (field name to declared field type).
@@ -408,12 +410,21 @@ pub fn compile(program: &Program) -> Result<Module, CompileError> {
     // Build type info for the compiler's static analyses.
     let mut type_info = TypeInfo::default();
     for type_def in &program.types {
-        if let TypeDef::Struct(s) = type_def {
-            let mut fields = BTreeMap::new();
-            for f in &s.fields {
-                fields.insert(f.name.clone(), f.type_expr.clone());
+        match type_def {
+            TypeDef::Struct(s) => {
+                let mut fields = BTreeMap::new();
+                for f in &s.fields {
+                    fields.insert(f.name.clone(), f.type_expr.clone());
+                }
+                type_info.structs.insert(s.name.clone(), fields);
             }
-            type_info.structs.insert(s.name.clone(), fields);
+            TypeDef::Enum(e) => {
+                let mut variants = BTreeMap::new();
+                for v in &e.variants {
+                    variants.insert(v.name.clone(), v.fields.clone());
+                }
+                type_info.enums.insert(e.name.clone(), variants);
+            }
         }
     }
     for func in &program.functions {
@@ -622,9 +633,17 @@ fn compile_function_group(
                 fail_jumps.extend(fail);
             }
 
-            // Bind pattern variables before guard (guard may reference them).
+            // Bind pattern variables before guard (guard may reference
+            // them). Pass the parameter's declared type so the bound
+            // variables carry type information for downstream
+            // optimizations.
             for (i, param) in def.params.iter().enumerate() {
-                compile_pattern_bind(&mut fc, &param.pattern, param_slots[i])?;
+                compile_pattern_bind_typed(
+                    &mut fc,
+                    &param.pattern,
+                    param_slots[i],
+                    param.type_expr.clone(),
+                )?;
             }
 
             // Test guard clause if present.
@@ -1522,70 +1541,111 @@ fn compile_pattern_bind(
     pattern: &Pattern,
     value_slot: u16,
 ) -> Result<(), CompileError> {
+    compile_pattern_bind_typed(fc, pattern, value_slot, None)
+}
+
+/// Compile a pattern bind with the value's known type expression.
+///
+/// The type, when present, is recorded on `Pattern::Variable` bindings
+/// so downstream optimizations such as the for-in iteration bound
+/// inference can consult it. For composite patterns (Tuple, Enum,
+/// Struct) the type is decomposed structurally where the AST permits.
+/// Patterns whose type cannot be statically decomposed propagate
+/// `None` to inner binds.
+fn compile_pattern_bind_typed(
+    fc: &mut FuncCompiler,
+    pattern: &Pattern,
+    value_slot: u16,
+    ty: Option<TypeExpr>,
+) -> Result<(), CompileError> {
     match pattern {
         Pattern::Variable(name, _) => {
             fc.emit(Op::GetLocal(value_slot));
-            let slot = fc.declare_local(name);
+            let slot = fc.declare_local_typed(name, ty);
             fc.emit(Op::SetLocal(slot));
         }
         Pattern::Wildcard(_) | Pattern::Literal(_, _) => {
             // Nothing to bind.
         }
-        Pattern::Enum(_, _, sub_pats, _) => {
+        Pattern::Enum(enum_name, variant, sub_pats, _) => {
+            // For enum sub-pattern bindings, look up the variant's
+            // payload types from the type info when available.
+            let payload_types: Vec<Option<TypeExpr>> = fc
+                .type_info
+                .enums
+                .get(enum_name)
+                .and_then(|variants| variants.get(variant))
+                .map(|tys| tys.iter().cloned().map(Some).collect())
+                .unwrap_or_else(|| sub_pats.iter().map(|_| None).collect());
             for (i, sub_pat) in sub_pats.iter().enumerate() {
                 if matches!(sub_pat, Pattern::Wildcard(_) | Pattern::Literal(_, _)) {
                     continue;
                 }
                 fc.emit(Op::GetLocal(value_slot));
                 fc.emit(Op::GetEnumField(i as u8));
+                let sub_ty = payload_types.get(i).cloned().unwrap_or(None);
                 if let Pattern::Variable(name, _) = sub_pat {
-                    let slot = fc.declare_local(name);
+                    let slot = fc.declare_local_typed(name, sub_ty);
                     fc.emit(Op::SetLocal(slot));
                 } else {
-                    // Nested non-trivial pattern: store in temp and recurse.
                     let temp = fc.declare_local(&format!("__bind_tmp{}", i));
                     fc.emit(Op::SetLocal(temp));
-                    compile_pattern_bind(fc, sub_pat, temp)?;
+                    compile_pattern_bind_typed(fc, sub_pat, temp, sub_ty)?;
                 }
             }
         }
-        Pattern::Struct(_, field_pats, _) => {
+        Pattern::Struct(struct_name, field_pats, _) => {
+            // Look up field types for nested pattern bindings.
+            let field_types: BTreeMap<String, TypeExpr> = fc
+                .type_info
+                .structs
+                .get(struct_name)
+                .cloned()
+                .unwrap_or_default();
             for field_pat in field_pats {
                 let name_const = fc.add_string_constant(&field_pat.name);
                 fc.emit(Op::GetLocal(value_slot));
                 fc.emit(Op::GetField(name_const));
+                let field_ty = field_types.get(&field_pat.name).cloned();
                 if let Some(pat) = &field_pat.pattern {
                     if let Pattern::Variable(vname, _) = pat {
-                        let slot = fc.declare_local(vname);
+                        let slot = fc.declare_local_typed(vname, field_ty);
                         fc.emit(Op::SetLocal(slot));
                     } else if matches!(pat, Pattern::Wildcard(_)) {
                         fc.emit(Op::Pop);
                     } else {
                         let temp = fc.declare_local(&format!("__sf_{}", field_pat.name));
                         fc.emit(Op::SetLocal(temp));
-                        compile_pattern_bind(fc, pat, temp)?;
+                        compile_pattern_bind_typed(fc, pat, temp, field_ty)?;
                     }
                 } else {
-                    // Shorthand: `Name { field }` binds field to a variable of the same name.
-                    let slot = fc.declare_local(&field_pat.name);
+                    let slot = fc.declare_local_typed(&field_pat.name, field_ty);
                     fc.emit(Op::SetLocal(slot));
                 }
             }
         }
         Pattern::Tuple(pats, _) => {
+            // Decompose the tuple type structurally if present.
+            let elem_types: Vec<Option<TypeExpr>> = match &ty {
+                Some(TypeExpr::Tuple(ts, _)) if ts.len() == pats.len() => {
+                    ts.iter().cloned().map(Some).collect()
+                }
+                _ => pats.iter().map(|_| None).collect(),
+            };
             for (i, pat) in pats.iter().enumerate() {
                 if matches!(pat, Pattern::Wildcard(_) | Pattern::Literal(_, _)) {
                     continue;
                 }
                 fc.emit(Op::GetLocal(value_slot));
                 fc.emit(Op::GetTupleField(i as u8));
+                let sub_ty = elem_types.get(i).cloned().unwrap_or(None);
                 if let Pattern::Variable(name, _) = pat {
-                    let slot = fc.declare_local(name);
+                    let slot = fc.declare_local_typed(name, sub_ty);
                     fc.emit(Op::SetLocal(slot));
                 } else {
                     let temp = fc.declare_local(&format!("__tup_bind{}", i));
                     fc.emit(Op::SetLocal(temp));
-                    compile_pattern_bind(fc, pat, temp)?;
+                    compile_pattern_bind_typed(fc, pat, temp, sub_ty)?;
                 }
             }
         }
