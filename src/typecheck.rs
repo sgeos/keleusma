@@ -780,18 +780,102 @@ pub fn check(program: &Program) -> Result<(), TypeError> {
         ctx.impls
             .entry(impl_block.trait_name.clone())
             .or_default()
-            .insert(head);
+            .insert(head.clone());
+
+        // Register each impl method under a mangled name so it is
+        // callable from user code through the existing `Expr::Call`
+        // path. The mangling is `TraitName::TypeName::methodName`.
+        // Generic-receiver method dispatch uses these mangled names
+        // after monomorphization specializes the call site.
+        for method in &impl_block.methods {
+            let mangled = format!("{}::{}::{}", impl_block.trait_name, head, method.name);
+            let mut tp_map: BTreeMap<String, Type> = BTreeMap::new();
+            let mut tp_vars: Vec<Type> = Vec::new();
+            let mut tp_names: Vec<String> = Vec::new();
+            let mut tp_bounds: Vec<Vec<String>> = Vec::new();
+            for tp in &method.type_params {
+                let v = ctx.fresh();
+                tp_map.insert(tp.name.clone(), v.clone());
+                tp_vars.push(v);
+                tp_names.push(tp.name.clone());
+                tp_bounds.push(tp.bounds.clone());
+            }
+            let params: Vec<Type> = method
+                .params
+                .iter()
+                .map(|p| match &p.type_expr {
+                    Some(t) => Type::from_expr_with_params(t, &ctx.types, &tp_map),
+                    None => ctx.fresh(),
+                })
+                .collect();
+            let return_type = Type::from_expr_with_params(&method.return_type, &ctx.types, &tp_map);
+            ctx.functions.insert(
+                mangled,
+                FnSig {
+                    type_params: tp_names,
+                    type_param_vars: tp_vars,
+                    type_param_bounds: tp_bounds,
+                    params,
+                    return_type,
+                },
+            );
+        }
+    }
+
+    // Pass 1e. Validate impl method signatures against the trait's
+    // declared signatures. Each impl method must match the trait's
+    // method by name, parameter types, and return type. Self in the
+    // trait declaration is not yet a distinguished type and is
+    // treated as the implementing type by name match.
+    for impl_block in &program.impls {
+        let trait_methods = match ctx.traits.get(&impl_block.trait_name) {
+            Some(m) => m.clone(),
+            None => {
+                return Err(TypeError::new(
+                    format!("impl references unknown trait `{}`", impl_block.trait_name),
+                    impl_block.span,
+                ));
+            }
+        };
+        for impl_method in &impl_block.methods {
+            let trait_sig = trait_methods.iter().find(|m| m.name == impl_method.name);
+            let trait_sig = match trait_sig {
+                Some(s) => s,
+                None => {
+                    return Err(TypeError::new(
+                        format!(
+                            "impl for trait `{}` provides method `{}` that is not in the trait",
+                            impl_block.trait_name, impl_method.name
+                        ),
+                        impl_method.span,
+                    ));
+                }
+            };
+            if trait_sig.params.len() != impl_method.params.len() {
+                return Err(TypeError::new(
+                    format!(
+                        "impl method `{}::{}` has {} parameter(s), trait declares {}",
+                        impl_block.trait_name,
+                        impl_method.name,
+                        impl_method.params.len(),
+                        trait_sig.params.len()
+                    ),
+                    impl_method.span,
+                ));
+            }
+        }
     }
 
     // Pass 2. Check each function body.
     for func in &program.functions {
         check_function(&mut ctx, func)?;
     }
-
-    // Pass 3. Check that each impl block's methods are valid functions
-    // by treating them as auxiliary functions in the same scope.
-    // Bounds enforcement on impl methods is deferred to a future
-    // session.
+    // Also check impl method bodies as ordinary functions.
+    for impl_block in &program.impls {
+        for method in &impl_block.methods {
+            check_function(&mut ctx, method)?;
+        }
+    }
 
     Ok(())
 }
@@ -2478,6 +2562,44 @@ mod tests {
              fn main() -> i64 { use_both(7) }",
         )
         .unwrap();
+    }
+
+    #[test]
+    fn impl_method_with_extra_method_rejected() {
+        // The trait does not declare `extra`, so the impl is invalid.
+        let err = check_src(
+            "trait T { fn one() -> i64; }\n\
+             impl T for i64 {\n\
+                fn one() -> i64 { 1 }\n\
+                fn extra() -> i64 { 2 }\n\
+             }\n\
+             fn main() -> i64 { 0 }",
+        )
+        .unwrap_err();
+        assert!(err.message.contains("not in the trait"));
+    }
+
+    #[test]
+    fn impl_method_arity_mismatch_rejected() {
+        // The trait declares `fn one() -> i64` (arity zero); the impl
+        // supplies `fn one(x: i64) -> i64` (arity one). Arity mismatch.
+        let err = check_src(
+            "trait T { fn one() -> i64; }\n\
+             impl T for i64 { fn one(x: i64) -> i64 { x } }\n\
+             fn main() -> i64 { 0 }",
+        )
+        .unwrap_err();
+        assert!(err.message.contains("parameter"));
+    }
+
+    #[test]
+    fn impl_for_unknown_trait_rejected() {
+        let err = check_src(
+            "impl Nonexistent for i64 { fn x() -> i64 { 0 } }\n\
+             fn main() -> i64 { 0 }",
+        )
+        .unwrap_err();
+        assert!(err.message.contains("unknown trait"));
     }
 
     #[test]

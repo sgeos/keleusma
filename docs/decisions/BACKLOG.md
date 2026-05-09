@@ -16,25 +16,46 @@ Generic functions (B2) reuse the same machinery: each generic call site instanti
 
 The `Type::Unknown` sentinel is retained as a permissive transitional anchor for runtime-only dispatch positions (such as native function call results without declared signatures). Removing it would require declaring native signatures, which is recorded as future work in the typecheck module documentation.
 
-## ~~B2. Generic type parameters and trait bounds~~ (Resolved for declaration and bound enforcement)
+## ~~B2. Generic type parameters and trait bounds~~ (Resolved for declaration, bound enforcement, and impl validation)
 
-Generic functions, structs, enums, traits, and trait bounds are all parsed, represented in the AST, and validated by the type checker.
+Generic functions, structs, enums, traits, trait bounds, and impl signature validation are all in place. Impl methods register as compiled chunks under their mangled name `Trait::TypeHead::method`.
 
 Surface syntax. `fn name<T, U>(args) -> ret { body }`, `struct Name<T, U> { fields }`, `enum Name<T, U> { variants }`, `trait Name { fn method(args) -> ret; }`, `impl Trait for Type { method definitions }`, and `fn name<T: Trait1 + Trait2>(...)` for bounds.
 
-AST. `FunctionDef`, `StructDef`, and `EnumDef` carry `type_params: Vec<TypeParam>`. `TypeParam` carries `bounds: Vec<String>` for trait constraints. `TraitDef` and `ImplBlock` are top-level declarations. `TypeExpr::Named` carries `Vec<TypeExpr>` for generic instantiation references.
+AST. `FunctionDef`, `StructDef`, and `EnumDef` carry `type_params: Vec<TypeParam>`. `TypeParam` carries `bounds: Vec<String>`. `TraitDef`, `ImplBlock`, and `TraitMethodSig` are top-level declarations. `TypeExpr::Named` carries `Vec<TypeExpr>` for generic instantiation references.
 
-Type checking. Each generic declaration's signature records the abstract `Type::Var` allocated per type parameter and the declared bounds. At call sites, fresh per-instance variables are allocated and the substitution is applied to declared parameter/field/payload types before unifying with provided values. After unification, the per-call fresh variables resolve through the active substitution and each bounded type parameter checks against the trait `impls` registry. `Type::Struct(String, Vec<Type>)` and `Type::Enum(String, Vec<Type>)` carry per-instance type arguments. Field access on a generic struct constructs a per-instance substitution from the abstract variables to the captured arguments and applies it to the declared field type.
+Type checking. Generic declarations record abstract `Type::Var` per type parameter. Call sites instantiate fresh per-call variables, unify with arguments, and validate trait bounds against the `impls` registry. Impl method signatures are validated against the trait declaration: arity match, name match. Each impl method is also registered as a compiled chunk under its mangled name `Trait::TypeHead::method`.
 
-Compilation and runtime. Keleusma's `Value` enum is runtime-tagged. Bytecode operations dispatch on the tag, so generic chunks work for any concrete type without compile-time monomorphization. Operations constrained by trait bounds rely on runtime tag dispatch when the method itself is invoked; the bound enforcement at compile time prevents calls with types that lack the required impl.
+Compilation and runtime. Keleusma's runtime-tagged `Value` enum dispatches polymorphically. Generic chunks work for any concrete type. Impl methods are emitted as regular chunks under mangled names. Receiver-style method dispatch (`x.method(args)` resolving to the impl for `x`'s type) requires either monomorphization-rewriting at compile time or runtime lookup; the parser does not yet have a method-call syntax distinct from struct field access.
 
 The remaining future work tracked under this entry.
 
-- Trait method dispatch. Currently impl methods are parsed and registered but the receiver-based method call (`x.method(args)` resolving to the impl for x's type) is not yet wired through the compiler and runtime. The bound enforcement at the call site prevents incorrect calls; the method body invocation is deferred.
-- Validation of impl method signatures against the trait declaration.
-- Compile-time monomorphization as a performance optimization. The current dispatch is correct but pays a runtime tag-check cost on every operation. Monomorphization would specialize each generic chunk per (function or type, type_args) pair and elide the dispatch.
+- Method call surface syntax (`x.method(args)`). Parser change plus resolution. Pairs naturally with monomorphization which makes the receiver type concrete.
 
-These are future-session work and do not block the current declaration and bound enforcement functionality.
+## B2.4 Compile-time monomorphization
+
+Monomorphization specializes each generic chunk per concrete type instantiation, eliminating runtime tag dispatch for generic operations and providing a path for trait method dispatch.
+
+Design phases.
+
+Phase 1. Call-graph traversal from `main`. Walk the program from the entry point, following calls. At each call to a generic function, record the concrete `Vec<Type>` that satisfies the call's type parameters. Each unique `(function, type_args)` pair is one specialization.
+
+Phase 2. Specialization generation. For each `(function, type_args)` pair, clone the function's body and substitute the abstract type-parameter variables with the concrete types throughout. The specialization name is the original function name suffixed with the canonical encoding of the type args.
+
+Phase 3. Trait method resolution within specializations. After substitution, every use of a trait method on a known-concrete type rewrites to the impl's mangled name (`Trait::TypeHead::method`). The runtime dispatch becomes a direct chunk-index call.
+
+Phase 4. Output. The compiler emits only the monomorphic specializations. The original generic functions are dropped from the bytecode. Calls in the program are rewritten to point to the specializations.
+
+Implementation considerations.
+
+- Generic structs and enums are similarly monomorphized. The runtime representation can stay tag-based for now (`Type::Struct(name, args)`); future work could specialize the runtime representation per instantiation.
+- Polymorphic recursion is rejected because it produces unbounded specializations.
+- Caching the specializations by `(function, type_args)` ensures finite output.
+- The substitution applied is the function's signature substitution at the call site, captured by the type checker.
+
+Estimated implementation effort. Four to eight hours for generic functions; trait method dispatch within specializations adds two to four hours. Generic structs and enums are roughly equivalent to functions.
+
+This is the next major language work. Without monomorphization, trait methods cannot be invoked through a clean surface syntax, and the runtime pays a tag-dispatch cost on every operation.
 
 ## B3. Closures or anonymous functions
 

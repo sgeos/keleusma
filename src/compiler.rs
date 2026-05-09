@@ -399,9 +399,37 @@ pub fn compile(program: &Program) -> Result<Module, CompileError> {
         })
     };
 
-    // Group function definitions by name.
+    // Group function definitions by name. Impl method definitions
+    // are folded in under their mangled name `Trait::Type::method`
+    // so the compiler treats them as regular callable functions.
+    // Owned synthetic FunctionDefs hold the renamed methods because
+    // the existing impl methods are borrowed.
+    let mut synth_impl_methods: Vec<FunctionDef> = Vec::new();
+    for impl_block in &program.impls {
+        let head = match &impl_block.for_type {
+            TypeExpr::Prim(p, _) => match p {
+                PrimType::I64 => String::from("i64"),
+                PrimType::F64 => String::from("f64"),
+                PrimType::Bool => String::from("bool"),
+                PrimType::KString => String::from("String"),
+            },
+            TypeExpr::Unit(_) => String::from("()"),
+            TypeExpr::Named(name, _, _) => name.clone(),
+            TypeExpr::Tuple(_, _) => String::from("tuple"),
+            TypeExpr::Array(_, _, _) => String::from("array"),
+            TypeExpr::Option(_, _) => String::from("Option"),
+        };
+        for method in &impl_block.methods {
+            let mut renamed = method.clone();
+            renamed.name = format!("{}::{}::{}", impl_block.trait_name, head, method.name);
+            synth_impl_methods.push(renamed);
+        }
+    }
     let mut groups: BTreeMap<String, Vec<&FunctionDef>> = BTreeMap::new();
     for func in &program.functions {
+        groups.entry(func.name.clone()).or_default().push(func);
+    }
+    for func in &synth_impl_methods {
         groups.entry(func.name.clone()).or_default().push(func);
     }
 
