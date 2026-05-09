@@ -148,13 +148,17 @@ The deeper integration of the operand stack and dynamic-string storage with the 
 
 The dependency on `allocator-api2` adds about 0.04 megabytes of dependency code and no runtime cost. The crate is a stable polyfill of the unstable `core::alloc::Allocator` trait. When the standard trait stabilizes, the dependency may be removed in favor of the standard library.
 
-## R38. Bounded-iteration loop analysis for WCMU and WCET
+## R38. Strict-mode bounded-iteration loop analysis for WCMU and WCET
 
-The WCMU and WCET analyses are extended to account for the iteration count of bounded for-range loops. The helper `extract_loop_iteration_bound` in `src/verify.rs` recognizes the canonical for-range bytecode shape emitted by the compiler, namely `Loop GetLocal(var) GetLocal(end) CmpGe BreakIf body... EndLoop`, and traces backward through the bytecode to find the literal `Const` initializers of the var and end local slots. The iteration count is computed as `end - start` for non-negative integer bounds. The analyses multiply the body's heap allocation and time cost by the iteration count. Stack peak does not multiply because peak is a maximum across iterations, not a sum.
+The WCMU and WCET analyses operate in strict mode for loops. A loop whose body falls through to its EndLoop must have its iteration count statically extractable through the canonical bytecode patterns. Loops whose body always exits via Break or Trap are accepted with iteration count one because the body executes at most once. All other loops are rejected at verification time.
 
-Loops whose bounds are not literal integers, including loops over runtime-computed ranges or arrays whose length is not statically known, fall back to the conservative one-iteration treatment. The fallback is sound but produces an underestimate. Programs that rely on tight bounds in such cases must either use literal bounds or accept manual-attestation through host-supplied wrappers.
+The helper `extract_loop_iteration_bound` in `src/verify.rs` recognizes two patterns. The for-range pattern uses `Loop GetLocal(var) GetLocal(end) CmpGe BreakIf body... EndLoop` with `var` and `end` set by literal constants. The for-in over literal array pattern uses `NewArray(n) SetLocal(arr) GetLocal(arr) Len SetLocal(end) ... Loop GetLocal(idx) GetLocal(end) ...`, and the helper chases through `GetLocal -> SetLocal` aliasing chains so that for-in over a let-bound literal array is recognized. The iteration count is computed as `end - start` for non-negative integer bounds.
 
-Sound rejection of programs with non-statically-computable iteration counts is admissible but not yet implemented. The current behavior is to under-bound rather than reject, which is a deliberate trade-off favoring expressiveness over conservatism for this milestone. Future work could add a strict mode that rejects loops whose iteration count cannot be extracted.
+`Op::Trap` is treated as a path-exit similar to `Op::Break`. The path does not fall through; it does not propagate to the enclosing loop's break states. This is the correct semantics for the match expression's virtual loop, whose no-arm-matched fallback reaches a Trap.
+
+The return types of `wcmu_region`, `wcmu_subregion`, and `wcet_region` change to `Result<Option<...>, VerifyError>` to propagate strict mode rejection. The `Option` distinguishes fall-through from path-exit; the `Result` carries the rejection error.
+
+Strict mode is mandatory rather than optional. There is no permissive variant. Programs that the analysis cannot bound are not accepted. This trade-off favors soundness over expressiveness, consistent with Keleusma's stated certification posture.
 
 ## R37. Call-graph integration and auto-arena sizing for WCMU
 

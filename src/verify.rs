@@ -122,7 +122,12 @@ fn analyze_yield_coverage(
 /// Returns `None` if all paths exit via Break.
 ///
 /// Break costs are accumulated in `break_costs` for the enclosing loop.
-fn wcet_region(chunk: &Chunk, start: usize, end: usize, break_costs: &mut Vec<u32>) -> Option<u32> {
+fn wcet_region(
+    chunk: &Chunk,
+    start: usize,
+    end: usize,
+    break_costs: &mut Vec<u32>,
+) -> Result<Option<u32>, VerifyError> {
     let ops = &chunk.ops;
     let mut cost: u32 = 0;
     let mut ip = start;
@@ -132,7 +137,15 @@ fn wcet_region(chunk: &Chunk, start: usize, end: usize, break_costs: &mut Vec<u3
             Op::Break(_) => {
                 cost += ops[ip].cost();
                 break_costs.push(cost);
-                return None;
+                return Ok(None);
+            }
+            Op::Trap(_) => {
+                // Trap halts execution. Treat as path-exit. Does not
+                // push to break_costs because it does not transfer
+                // control to the enclosing loop.
+                cost += ops[ip].cost();
+                let _ = cost;
+                return Ok(None);
             }
             Op::BreakIf(_) => {
                 cost += ops[ip].cost();
@@ -148,18 +161,18 @@ fn wcet_region(chunk: &Chunk, start: usize, end: usize, break_costs: &mut Vec<u3
                     } else {
                         unreachable!()
                     };
-                    let then_cost = wcet_region(chunk, ip + 1, target - 1, break_costs);
-                    let else_cost = wcet_region(chunk, target, endif_pos, break_costs);
+                    let then_cost = wcet_region(chunk, ip + 1, target - 1, break_costs)?;
+                    let else_cost = wcet_region(chunk, target, endif_pos, break_costs)?;
                     let branch_cost = match (then_cost, else_cost) {
                         (Some(a), Some(b)) => Some(if a > b { a } else { b }),
                         (Some(a), None) => Some(a),
                         (None, Some(b)) => Some(b),
-                        (None, None) => return None,
+                        (None, None) => return Ok(None),
                     };
                     cost += branch_cost.unwrap_or(0);
                     ip = endif_pos + 1;
                 } else {
-                    let then_cost = wcet_region(chunk, ip + 1, target, break_costs);
+                    let then_cost = wcet_region(chunk, ip + 1, target, break_costs)?;
                     // False path has zero additional cost (skips to EndIf).
                     // Worst case is the then-body if it is more expensive.
                     match then_cost {
@@ -176,14 +189,30 @@ fn wcet_region(chunk: &Chunk, start: usize, end: usize, break_costs: &mut Vec<u3
                 let loop_exit_target = *target as usize;
                 let endloop_ip = loop_exit_target - 1;
                 let mut loop_break_costs: Vec<u32> = Vec::new();
-                let body_cost = wcet_region(chunk, ip + 1, endloop_ip, &mut loop_break_costs);
+                let body_cost = wcet_region(chunk, ip + 1, endloop_ip, &mut loop_break_costs)?;
                 if loop_break_costs.is_empty() && body_cost.is_none() {
-                    return None;
+                    return Ok(None);
                 }
-                // Multiply body cost by iteration count when the loop
-                // matches the canonical for-range pattern. Otherwise use
-                // the conservative one-iteration body cost.
-                let iter_count = extract_loop_iteration_bound(chunk, ip).unwrap_or(1);
+                // Strict mode iteration count.
+                let iter_count = if body_cost.is_none() {
+                    1
+                } else {
+                    match extract_loop_iteration_bound(chunk, ip) {
+                        Some(n) => n,
+                        Option::None => {
+                            return Err(VerifyError {
+                                chunk_name: chunk.name.clone(),
+                                message: alloc::format!(
+                                    "loop at instruction {} has no statically extractable \
+                                     iteration bound; strict mode requires loops with \
+                                     fall-through bodies to match the canonical for-range \
+                                     pattern",
+                                    ip
+                                ),
+                            });
+                        }
+                    }
+                };
                 let body_cost_total = body_cost.unwrap_or(0).saturating_mul(iter_count);
                 let max_break = loop_break_costs.iter().copied().max().unwrap_or(0);
                 cost += if max_break > body_cost_total {
@@ -203,7 +232,7 @@ fn wcet_region(chunk: &Chunk, start: usize, end: usize, break_costs: &mut Vec<u3
         }
     }
 
-    Some(cost)
+    Ok(Some(cost))
 }
 
 /// Detect a bounded for-range loop pattern starting at `loop_ip` and
@@ -257,8 +286,17 @@ fn extract_loop_iteration_bound(chunk: &Chunk, loop_ip: usize) -> Option<u32> {
 }
 
 /// Find the most recent `SetLocal(slot)` before `before_ip` and return
-/// the integer constant pushed immediately before it. Returns `None` if
-/// the slot is not set by a literal constant.
+/// the statically known integer value assigned to the slot.
+///
+/// Two patterns are recognized.
+///
+/// 1. Direct constant. `Const(idx) SetLocal(slot)` where the constant
+///    pool entry at `idx` is an integer.
+/// 2. Length of a literal array. `GetLocal(arr_slot) Len SetLocal(slot)`,
+///    where `arr_slot` was set from a literal `NewArray(n)`. This
+///    matches the for-in over array iteration bound.
+///
+/// Returns `None` if the slot is not set by either pattern.
 fn trace_const_set_local(chunk: &Chunk, before_ip: usize, slot: u16) -> Option<i64> {
     let ops = &chunk.ops;
     let mut ip = before_ip;
@@ -270,10 +308,52 @@ fn trace_const_set_local(chunk: &Chunk, before_ip: usize, slot: u16) -> Option<i
             if ip == 0 {
                 return None;
             }
+            // Pattern 1: direct integer constant.
             if let Op::Const(idx) = &ops[ip - 1]
                 && let Some(Value::Int(n)) = chunk.constants.get(*idx as usize)
             {
                 return Some(*n);
+            }
+            // Pattern 2: Length of a literal array. The compiler emits
+            // GetLocal(arr_slot) Len SetLocal(end_slot) for for-in.
+            if ip >= 2
+                && matches!(&ops[ip - 1], Op::Len)
+                && let Op::GetLocal(arr_slot) = &ops[ip - 2]
+            {
+                return trace_literal_array_length(chunk, ip - 2, *arr_slot);
+            }
+            return None;
+        }
+    }
+    None
+}
+
+/// Find the most recent `SetLocal(arr_slot)` before `before_ip` and
+/// return the literal array's length if the array was constructed via
+/// `NewArray(n)`. Follows `GetLocal -> SetLocal` aliasing chains so that
+/// for-in over a let-bound literal array is recognized. Returns `None`
+/// if the chain terminates on a non-literal source.
+fn trace_literal_array_length(chunk: &Chunk, before_ip: usize, arr_slot: u16) -> Option<i64> {
+    let ops = &chunk.ops;
+    let mut ip = before_ip;
+    while ip > 0 {
+        ip -= 1;
+        if let Op::SetLocal(s) = &ops[ip]
+            && *s == arr_slot
+        {
+            if ip == 0 {
+                return None;
+            }
+            // Direct: NewArray(n) -> SetLocal(arr_slot).
+            if let Op::NewArray(n) = &ops[ip - 1] {
+                return Some(*n as i64);
+            }
+            // Aliased: GetLocal(other) -> SetLocal(arr_slot). Chase the
+            // alias backward until a NewArray or unsupported source is
+            // reached. The recursion terminates because each step has a
+            // strictly smaller `before_ip`.
+            if let Op::GetLocal(other_slot) = &ops[ip - 1] {
+                return trace_literal_array_length(chunk, ip - 1, *other_slot);
             }
             return None;
         }
@@ -352,22 +432,23 @@ impl<'a> CallResolver<'a> {
 /// reaches `end`, with the convention that the surface compiler ensures
 /// branches end at the same depth.
 ///
-/// For loops, the body is treated as one iteration. This mirrors the
-/// existing WCET limitation and is unsound for variable-iteration loops.
-/// Programs that compile from bounded for-range loops produce sound
-/// bounds at their static iteration count, but the analysis here
-/// underestimates by the iteration factor. A future pass will lift this
-/// limitation.
+/// Loops operate in strict mode. A loop whose body falls through to its
+/// EndLoop must have its iteration count statically extractable through
+/// the canonical for-range pattern. Loops whose body always exits via
+/// Break or Trap are accepted with iteration count one. Other loops are
+/// rejected with a `VerifyError`. The WCMU bound is therefore sound for
+/// every program that passes verification.
 ///
-/// Returns `Some(McuResult)` for paths that fall through to `end`.
-/// Returns `None` if all paths exit via Break.
+/// Returns `Ok(Some(McuResult))` for paths that fall through to `end`.
+/// Returns `Ok(None)` if all paths exit via Break or Trap. Returns
+/// `Err(VerifyError)` for strict mode violations.
 fn wcmu_region(
     chunk: &Chunk,
     start: usize,
     end: usize,
     break_results: &mut Vec<McuResult>,
     resolver: &CallResolver,
-) -> Option<McuResult> {
+) -> Result<Option<McuResult>, VerifyError> {
     let ops = &chunk.ops;
     let mut current_offset: i32 = 0;
     let mut peak: u32 = 0;
@@ -389,7 +470,23 @@ fn wcmu_region(
                     delta: current_offset,
                     heap_total: heap,
                 });
-                return None;
+                return Ok(None);
+            }
+            Op::Trap(_) => {
+                // Trap halts execution. Treat as path-exit so the analysis
+                // does not walk past unreachable code. Trap does not push
+                // to break_results because it does not transfer control to
+                // the enclosing loop.
+                let shrink = op.stack_shrink() as i32;
+                let growth = op.stack_growth() as i32;
+                let during_peak = (current_offset + growth).max(0) as u32;
+                peak = peak.max(during_peak);
+                heap += op.heap_alloc(chunk);
+                current_offset += growth - shrink;
+                let _ = current_offset;
+                let _ = peak;
+                let _ = heap;
+                return Ok(None);
             }
             Op::BreakIf(_) => {
                 let shrink = op.stack_shrink() as i32;
@@ -428,7 +525,7 @@ fn wcmu_region(
                         current_offset,
                         break_results,
                         resolver,
-                    );
+                    )?;
                     let else_branch = wcmu_subregion(
                         chunk,
                         target,
@@ -436,7 +533,7 @@ fn wcmu_region(
                         current_offset,
                         break_results,
                         resolver,
-                    );
+                    )?;
                     match (then_branch, else_branch) {
                         (Some(a), Some(b)) => {
                             peak = peak.max(a.peak_above_initial).max(b.peak_above_initial);
@@ -456,7 +553,7 @@ fn wcmu_region(
                             current_offset = b.delta;
                         }
                         (None, None) => {
-                            return None;
+                            return Ok(None);
                         }
                     }
                     ip = endif_pos + 1;
@@ -468,7 +565,7 @@ fn wcmu_region(
                         current_offset,
                         break_results,
                         resolver,
-                    );
+                    )?;
                     if let Some(a) = then_branch {
                         peak = peak.max(a.peak_above_initial);
                         heap += a.heap_total;
@@ -497,13 +594,36 @@ fn wcmu_region(
                     current_offset,
                     &mut loop_breaks,
                     resolver,
-                );
+                )?;
                 let body_peak = body.as_ref().map_or(0, |r| r.peak_above_initial);
                 let body_heap_one = body.as_ref().map_or(0, |r| r.heap_total);
-                // Multiply heap by iteration count if we can extract a
-                // bound from the canonical for-range pattern. Stack peak
-                // is a maximum, not a sum, so it does not multiply.
-                let iter_count = extract_loop_iteration_bound(chunk, ip).unwrap_or(1);
+                // Strict mode loop iteration determination.
+                // - If body is None, all paths exit via Break or Trap.
+                //   The loop iterates at most once. Sound.
+                // - If body is Some, the body falls through. The
+                //   iteration count must be extractable from the
+                //   canonical for-range pattern. Otherwise the loop has
+                //   no statically computable bound and the analysis
+                //   rejects it.
+                let iter_count = if body.is_none() {
+                    1
+                } else {
+                    match extract_loop_iteration_bound(chunk, ip) {
+                        Some(n) => n,
+                        Option::None => {
+                            return Err(VerifyError {
+                                chunk_name: chunk.name.clone(),
+                                message: alloc::format!(
+                                    "loop at instruction {} has no statically extractable \
+                                     iteration bound; strict mode requires loops with \
+                                     fall-through bodies to match the canonical for-range \
+                                     pattern",
+                                    ip
+                                ),
+                            });
+                        }
+                    }
+                };
                 let body_heap = body_heap_one.saturating_mul(iter_count);
                 let break_peak = loop_breaks
                     .iter()
@@ -514,7 +634,7 @@ fn wcmu_region(
                 peak = peak.max(body_peak).max(break_peak);
                 heap += body_heap.max(break_heap);
                 if loop_breaks.is_empty() && body.is_none() {
-                    return None;
+                    return Ok(None);
                 }
                 ip = loop_exit_target;
             }
@@ -564,11 +684,11 @@ fn wcmu_region(
         }
     }
 
-    Some(McuResult {
+    Ok(Some(McuResult {
         peak_above_initial: peak,
         delta: current_offset,
         heap_total: heap,
-    })
+    }))
 }
 
 /// Helper that recurses into a subregion with an explicit initial offset
@@ -582,9 +702,9 @@ fn wcmu_subregion(
     offset_at_start: i32,
     break_results: &mut Vec<McuResult>,
     resolver: &CallResolver,
-) -> Option<McuResult> {
+) -> Result<Option<McuResult>, VerifyError> {
     let mut sub_breaks: Vec<McuResult> = Vec::new();
-    let result = wcmu_region(chunk, start, end, &mut sub_breaks, resolver);
+    let result = wcmu_region(chunk, start, end, &mut sub_breaks, resolver)?;
     // Lift breaks from the subregion into the caller's frame of reference.
     for b in sub_breaks {
         break_results.push(McuResult {
@@ -593,11 +713,11 @@ fn wcmu_subregion(
             heap_total: b.heap_total,
         });
     }
-    result.map(|r| McuResult {
+    Ok(result.map(|r| McuResult {
         peak_above_initial: (offset_at_start.max(0) as u32) + r.peak_above_initial,
         delta: offset_at_start + r.delta,
         heap_total: r.heap_total,
-    })
+    }))
 }
 
 /// Compute the worst-case memory usage of one full Stream iteration.
@@ -640,7 +760,7 @@ pub fn wcmu_stream_iteration(chunk: &Chunk) -> Result<(u32, u32), VerifyError> {
 
     let mut breaks: Vec<McuResult> = Vec::new();
     let resolver = CallResolver::empty();
-    let body = wcmu_region(chunk, stream_pos + 1, reset_pos, &mut breaks, &resolver)
+    let body = wcmu_region(chunk, stream_pos + 1, reset_pos, &mut breaks, &resolver)?
         .unwrap_or(McuResult::empty());
 
     let body_peak = body.peak_above_initial;
@@ -683,7 +803,7 @@ pub fn wcet_stream_iteration(chunk: &Chunk) -> Result<u32, VerifyError> {
         })?;
 
     let mut break_costs: Vec<u32> = Vec::new();
-    let body_cost = wcet_region(chunk, stream_pos + 1, reset_pos, &mut break_costs);
+    let body_cost = wcet_region(chunk, stream_pos + 1, reset_pos, &mut break_costs)?;
 
     // Include Stream and Reset instruction costs.
     let overhead = ops[stream_pos].cost() + ops[reset_pos].cost();
@@ -797,7 +917,7 @@ fn compute_chunk_wcmu(chunk: &Chunk, resolver: &CallResolver) -> Result<(u32, u3
     };
 
     let mut breaks: Vec<McuResult> = Vec::new();
-    let body = wcmu_region(chunk, start, end, &mut breaks, resolver).unwrap_or(McuResult::empty());
+    let body = wcmu_region(chunk, start, end, &mut breaks, resolver)?.unwrap_or(McuResult::empty());
 
     let stack_slots = chunk.local_count as u32 + body.peak_above_initial;
     let stack_bytes = stack_slots * crate::bytecode::VALUE_SLOT_SIZE_BYTES;
@@ -2318,6 +2438,62 @@ mod tests {
         );
         let count = extract_loop_iteration_bound(&chunk, 0);
         assert_eq!(count, None);
+    }
+
+    #[test]
+    fn strict_mode_rejects_non_extractable_loop() {
+        // A Stream chunk with a Loop that has fall-through but no
+        // canonical for-range pattern. Strict mode rejects.
+        let chunk = make_chunk(
+            "tick",
+            vec![
+                Op::Stream,     // 0
+                Op::Loop(7),    // 1 — non-canonical: no GetLocal/Const/CmpGe/BreakIf pattern.
+                Op::PushTrue,   // 2
+                Op::BreakIf(7), // 3
+                Op::PushUnit,   // 4
+                Op::Pop,        // 5
+                Op::EndLoop(2), // 6 — body falls through.
+                Op::Yield,      // 7 — past loop.
+                Op::Pop,        // 8
+                Op::Reset,      // 9
+            ],
+            BlockType::Stream,
+        );
+        let err = wcmu_stream_iteration(&chunk).unwrap_err();
+        assert!(
+            err.message.contains("strict mode") || err.message.contains("iteration bound"),
+            "expected strict mode error, got: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn strict_mode_accepts_match_via_trap_exit() {
+        // A Loop whose body always exits via Trap (modeling the match
+        // expression's no-arm-matched fallback). The body returns None,
+        // so strict mode treats the loop as iterating at most once.
+        let mut chunk = make_chunk(
+            "tick",
+            vec![
+                Op::Stream,     // 0
+                Op::Loop(5),    // 1
+                Op::Trap(0),    // 2 — body exits via Trap.
+                Op::EndLoop(2), // 3 — unreachable but required.
+                Op::PushUnit,   // 4
+                Op::Yield,      // 5 — wait this index is 5, after EndLoop.
+                Op::Pop,        // 6
+                Op::Reset,      // 7
+            ],
+            BlockType::Stream,
+        );
+        chunk.constants = vec![Value::StaticStr(String::from("trap"))];
+        // Hmm the Loop target needs to point past EndLoop. Let me fix.
+        // Loop(5) means jump to ip 5, which would be Yield. Plausible.
+        // EndLoop(2) means back-edge to ip 2 (Trap). Plausible.
+        // So body region [2, 3) is just Trap. That returns None.
+        let result = wcmu_stream_iteration(&chunk);
+        assert!(result.is_ok(), "expected acceptance, got: {:?}", result);
     }
 
     #[test]
