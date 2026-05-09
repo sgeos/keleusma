@@ -3094,6 +3094,42 @@ mod tests {
     }
 
     #[test]
+    fn for_in_over_nested_array_index_passes_strict_verify() {
+        // For-in over the result of indexing a nested array. The
+        // compiler infers `m[0]` to have the matrix's element type
+        // `[i64; 3]` and emits `Const(3)` for the iteration bound.
+        let src = "fn main() -> i64 {\n\
+                       let m: [[i64; 3]; 2] = [[1, 2, 3], [4, 5, 6]];\n\
+                       let last = 0;\n\
+                       for x in m[0] { let last = x; }\n\
+                       last\n\
+                   }";
+        let tokens = tokenize(src).expect("lex");
+        let program = parse(&tokens).expect("parse");
+        let module = compile(&program).expect("compile");
+        let _vm = Vm::new(module).expect("verify");
+    }
+
+    #[test]
+    fn for_in_over_match_array_result_passes_strict_verify() {
+        // For-in over a match expression that returns an array. The
+        // compiler infers the match result type from the first arm's
+        // expression and uses it for the iteration bound.
+        let src = "fn main() -> i64 {\n\
+                       let cond = 1;\n\
+                       let last = 0;\n\
+                       for x in match cond { 0 => [1, 2, 3], _ => [4, 5, 6] } {\n\
+                           let last = x;\n\
+                       }\n\
+                       last\n\
+                   }";
+        let tokens = tokenize(src).expect("lex");
+        let program = parse(&tokens).expect("parse");
+        let module = compile(&program).expect("compile");
+        let _vm = Vm::new(module).expect("verify");
+    }
+
+    #[test]
     fn for_in_over_array_literal_runs() {
         let val = run_expect(
             "fn main() -> i64 {\n\

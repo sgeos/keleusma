@@ -117,6 +117,22 @@ impl FuncCompiler {
                 let ty = self.local_type(name)?;
                 array_length_of_type(ty)
             }
+            Expr::ArrayIndex { object, .. } => {
+                // The result of indexing is the element type. For
+                // `for x in matrix[0]` where matrix is [[T; N]; M],
+                // the indexed expression has type [T; N].
+                let object_ty = infer_expr_type(self, object)?;
+                let elem_ty = element_type_of(&object_ty)?;
+                array_length_of_type(&elem_ty)
+            }
+            Expr::Match { arms, .. } => {
+                // All arms must agree on type (enforced by the type
+                // checker P1). The iteration bound is the array length
+                // of the first arm's expression.
+                let first = arms.first()?;
+                let arm_ty = infer_expr_type(self, &first.expr)?;
+                array_length_of_type(&arm_ty)
+            }
             _ => None,
         }
     }
@@ -279,6 +295,15 @@ impl FuncCompiler {
 fn array_length_of_type(t: &TypeExpr) -> Option<i64> {
     match t {
         TypeExpr::Array(_, n, _) => Some(*n),
+        _ => None,
+    }
+}
+
+/// Extract the element type of an array type expression. Returns
+/// `Some(T)` for `[T; N]` and `None` for other shapes.
+fn element_type_of(t: &TypeExpr) -> Option<TypeExpr> {
+    match t {
+        TypeExpr::Array(elem, _, _) => Some((**elem).clone()),
         _ => None,
     }
 }
@@ -771,6 +796,14 @@ fn infer_expr_type(fc: &FuncCompiler, expr: &Expr) -> Option<TypeExpr> {
                 elements.len() as i64,
                 *span,
             ))
+        }
+        Expr::ArrayIndex { object, .. } => {
+            let object_ty = infer_expr_type(fc, object)?;
+            element_type_of(&object_ty)
+        }
+        Expr::Match { arms, .. } => {
+            let first = arms.first()?;
+            infer_expr_type(fc, &first.expr)
         }
         Expr::Literal { value, span } => Some(match value {
             Literal::Int(_) => TypeExpr::Prim(PrimType::I64, *span),

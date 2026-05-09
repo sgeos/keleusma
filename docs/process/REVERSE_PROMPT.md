@@ -9,8 +9,8 @@ AI to Human communication channel.
 ## Last Updated
 
 **Date**: 2026-05-09
-**Task**: V0.1-M3-T5. P2 local type tracking for for-in struct field access.
-**Status**: Complete. P2 fully resolved for practical cases.
+**Task**: V0.1-M3-T6. P2 for-in over nested array indexing and match expression results.
+**Status**: Complete. P2 has no remaining deferred cases.
 
 ## Verification
 
@@ -24,78 +24,70 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 **Results**:
 
-- 368 tests pass workspace-wide. 323 keleusma unit including 2 new for the deferred for-in cases, 17 keleusma integration, 22 keleusma-arena unit, 6 keleusma-arena doctests.
+- 370 tests pass workspace-wide. 325 keleusma unit including 2 new for the deferred cases just resolved, 17 keleusma integration, 22 keleusma-arena unit, 6 keleusma-arena doctests.
 - Clippy clean under `--workspace --all-targets`.
 - Format clean.
 
 ## Summary
 
-The deferred P2 case is now resolved. The compiler tracks local variable types and the for-in iteration bound resolves through identifier locals.
+P2's previously deferred cases now pass strict-mode WCMU verification.
 
-`Local` struct gained a `ty: Option<TypeExpr>` field. Let bindings record their declared annotation or inferred type. Parameters record their declared type at function entry. The `static_for_in_length` helper consults the type of identifier expressions through the local table, in addition to function returns and data block fields.
+Nested array indexing. `for x in matrix[0]` where `matrix` is `[[T; N]; M]`. The compiler infers the indexed expression's type as the element type of the matrix and uses it for the iteration bound.
 
-Type inference covers a narrow set of patterns sufficient for the for-in optimization.
+Match expression results. `for x in match cond { ... => arr1, _ => arr2 }`. The compiler infers the match result type from the first arm's expression. The type checker (P1) ensures all arms agree on type.
 
-- Struct construction. `Type { ... }` has type `Type`.
-- Function call. The function's declared return type.
-- Identifier. The local's recorded type.
-- Field access. The struct or data field's declared type.
-- Array literal with elements of inferable type.
-- Literal value. The corresponding primitive or unit type.
+Implementation. The `infer_expr_type` helper gained two new arms.
 
-The two new tests cover the previously deferred paths.
+`Expr::ArrayIndex { object, .. }`. Recursively infers the object's type, then extracts its element type. For a `[[T; N]; M]` matrix, indexing yields `[T; N]`.
 
-`for_in_over_struct_field_from_local_passes_strict_verify`. A program declares `struct Box { items: [i64; 3] }` and constructs `let b = Box { items: [..] }`. The for-in loop `for x in b.items` resolves through `b`'s type to the struct's field type and emits a `Const(3)` end bound that the verifier accepts.
+`Expr::Match { arms, .. }`. Returns the type of the first arm's expression. The type checker enforces arm type agreement at compile time.
 
-`for_in_over_param_array_passes_strict_verify`. A function `sum_n(arr: [i64; 4])` iterates over its parameter. The parameter's declared type is recorded on the local and consulted by the for-in optimizer.
+A new `element_type_of` helper extracts the element type from `TypeExpr::Array`. The `static_for_in_length` helper now handles `Expr::ArrayIndex` and `Expr::Match` directly, calling `infer_expr_type` for the recursive cases.
 
-P2 is now fully resolved for the practical cases. Two cases remain deferred and are documented as future enhancement.
+## Tests
 
-## Deferred Future Enhancements
+Two new tests cover the resolved paths.
 
-- Nested array access. `for x in matrix[0]` where `matrix` is `[[T; N]; M]`. The result type of `[]` indexing is not yet inferred. The fix is to extend `infer_expr_type` to handle `Expr::ArrayIndex` by extracting the element type from the indexed array's type.
-- Match expression results. `for x in match cond { ... => arr1, _ => arr2 }`. Match arms' result type tracking through inference is not yet implemented.
+`for_in_over_nested_array_index_passes_strict_verify`. A program declares a `[[i64; 3]; 2]` matrix as a let-bound local and iterates over `m[0]`. The verifier accepts the resulting `Const(3)` end bound.
+
+`for_in_over_match_array_result_passes_strict_verify`. A program iterates over a match expression that returns an array literal in each arm. The compiler infers the match result type from the first arm and emits `Const(N)`.
+
+P2 now has no remaining deferred cases for the practical for-in patterns.
 
 ## Changes Made
 
 ### Source
 
-- **`src/compiler.rs`**: `Local` struct gains `ty: Option<TypeExpr>` field. New `declare_local_typed` and `local_type` helpers. New `infer_expr_type` free function that infers a type from a narrow set of expression patterns. `compile_let_pattern_typed` records the declared or inferred type on the resulting local. `bind_param_pattern` accepts and records the parameter's declared type. `static_for_in_length` consults `Expr::Ident` through the local table. `struct_name_of` resolves identifiers through local types in addition to data block names.
-- **`src/vm.rs`**: Two new tests covering the previously deferred for-in cases.
+- **`src/compiler.rs`**: New `element_type_of` helper extracts the element type from `TypeExpr::Array`. `infer_expr_type` gains `Expr::ArrayIndex` and `Expr::Match` arms. `static_for_in_length` gains the same arms, calling `infer_expr_type` recursively where needed.
+- **`src/vm.rs`**: Two new tests covering the resolved deferred cases.
 
 ### Knowledge Graph
 
-- **`docs/decisions/PRIORITY.md`**: P2 marked fully resolved. The newly handled cases are listed alongside the previous ones. Out-of-scope cases are documented.
-- **`docs/process/TASKLOG.md`**: V0.1-M3-T5 row added. New history row.
+- **`docs/decisions/PRIORITY.md`**: P2 entry expanded. The previously deferred cases are listed as resolved alongside the original cases. Tests count updated to seven.
+- **`docs/process/TASKLOG.md`**: V0.1-M3-T6 row added. New history row.
 - **`docs/process/REVERSE_PROMPT.md`**: This file.
 
 ## Trade-offs and Properties
 
-The local type tracking is bounded to what the for-in optimization needs. It is not a full type checker (P1 covers that). The compiler-side type info is computed lazily during compilation, with each let binding inferring once at its declaration site and parameters recording their declared type.
+The match expression inference uses the first arm's type. The type checker (P1) enforces that all arms agree, so the first arm's type is correct for the entire match. If the first arm's expression is itself complex (a nested match, etc.), the recursive `infer_expr_type` call handles it.
 
-The infer_expr_type helper handles a narrow set of patterns. When a pattern is not recognized, the helper returns `None` and the local's type remains unset. Downstream, `static_for_in_length` falls back to `Op::Len` for sources whose length is not statically known. The compiler still emits valid bytecode for these cases; the strict-mode verifier rejects loops without an extractable bound.
+The array index inference is recursive in the object expression. For `matrix[i][j]` style chained indexing, each level of `Expr::ArrayIndex` recurses into the object until a typed source is found. The bound on recursion is the depth of the AST, which is bounded by the source program.
 
-Inference is shallow rather than recursive in some places. For example, `let x = some_func_returning_complex_type()` records the function's return type, but if the program then does `let y = x.field.subfield`, the chain is fully recursive through `infer_expr_type`. The let-time inference visits patterns recursively and produces correct types for the cases supported.
+For for-in over an unsupported expression shape, the helper returns `None` and the compiler emits the fallback `Op::Len` pattern. The strict-mode verifier rejects these. The fallback is preserved for cases where dynamic-length iteration becomes admissible in a future relaxed mode.
 
-## Unaddressed Concerns
+## Remaining Open Priorities
 
-1. **Nested array access in for-in source.** Documented above as future enhancement.
+P7 follow-on. Operand stack and DynStr arena migration. Substantial refactor that closes the bounded-memory guarantee end to end.
 
-2. **Match expression results.** Documented above.
-
-3. **Type-tracked compilation more broadly.** The compiler now has more type information than before but does not unify with the type checker's pass. A future iteration could expose typecheck's computed types to the compiler to remove the duplication. Not blocking.
-
-4. **Multiheaded function parameter types.** When a function has multiple heads (multiheaded dispatch), parameters are bound through the dispatch path rather than directly. The current implementation tracks types only on the simple-binding path. Multiheaded parameters will not get type tracking until the dispatch path is updated. Acceptable for the for-in use case because multiheaded functions typically have non-trivial patterns rather than simple variable bindings.
+Resolved priorities to date. P1, P2, P3, P4, P5, P8, P9, P10.
 
 ## Intended Next Step
 
-Three paths.
+Two paths.
 
-A. Pivot to P7 follow-on. Operand stack and DynStr arena migration. Closes the bounded-memory guarantee end to end. Substantial refactor.
+A. Pivot to P7 follow-on. The arena exists and the WCMU analysis runs, but the operand stack and dynamic strings still allocate from the global allocator. Routing them through the arena completes the bounded-memory guarantee. Substantial refactor that cascades through the `Value` lifetime story.
 
 B. Publish keleusma main crate to crates.io now that P1, P2, P3, and P10 are fully resolved.
-
-C. Continue with backlog items such as B7 (bidirectional errors through yield) which couples with the resolved P3.
 
 Recommend B if external visibility is the priority. Recommend A if the bounded-memory guarantee is load-bearing for upcoming use cases.
 
@@ -103,4 +95,4 @@ Await human prompt before proceeding.
 
 ## Session Context
 
-This long session resolved P10 across all phases, P1 with pipeline integration, P3 (explicit error recovery), P2 fully (typed for-in cases plus the deferred local field access case). The remaining open priority item is P7 follow-on. The session has produced extensive infrastructure for the embedded distribution story and the safety-critical positioning.
+This long session resolved P10 across all phases, P1 with pipeline integration, P3 (explicit error recovery), and P2 fully (including the originally deferred local field access case and the two enhancements just landed). The remaining open priority is P7 follow-on.

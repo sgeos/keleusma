@@ -52,14 +52,14 @@ For-in over array expressions is supported when the source expression's static a
 - Local of typed array. `let arr: [i64; 4] = make(); for x in arr`. The local's annotated type carries through.
 - Function parameter typed array. `fn sum(arr: [i64; N]) -> i64 { for x in arr ... }`. Parameter types are recorded on the locals at function entry.
 
-Five tests cover the resolved paths. `for_in_over_function_return_passes_strict_verify`, `for_in_over_data_segment_field_passes_strict_verify`, `for_in_over_array_literal_runs`, `for_in_over_struct_field_from_local_passes_strict_verify`, and `for_in_over_param_array_passes_strict_verify`.
+Seven tests cover the resolved paths. `for_in_over_function_return_passes_strict_verify`, `for_in_over_data_segment_field_passes_strict_verify`, `for_in_over_array_literal_runs`, `for_in_over_struct_field_from_local_passes_strict_verify`, `for_in_over_param_array_passes_strict_verify`, `for_in_over_nested_array_index_passes_strict_verify`, and `for_in_over_match_array_result_passes_strict_verify`.
 
-Implementation. The compiler tracks local variable types. The `Local` struct gained a `ty: Option<TypeExpr>` field. Let bindings record their declared annotation or inferred type. Parameters record their declared type. The `infer_expr_type` helper covers struct construction, function calls, identifiers, field access, array literals, and literal values for type inference at let-binding time. The `static_for_in_length` helper consults the type of identifier expressions through the local table, in addition to function returns and data block fields. The result is that for-in over any expression whose static type is `[T; N]` produces a `Const(N)` end bound rather than `Op::Len`.
+Additional cases now resolved.
 
-Out of scope and deferred.
+- Nested array indexing. `for x in matrix[0]` where `matrix` is `[[T; N]; M]`. The compiler infers the index expression's type as the element type of the matrix and uses it for the iteration bound.
+- Match expression results. `for x in match cond { ... => arr1, _ => arr2 }`. The compiler infers the match result type from the first arm's expression. The type checker (P1) ensures all arms agree.
 
-- Nested array access. `for x in matrix[0]` where `matrix` is `[[T; N]; M]`. The result type of `[]` indexing is not yet inferred. The fix is to extend `infer_expr_type` to handle `Expr::ArrayIndex` by extracting the element type from the indexed array's type. Admissible as a future enhancement.
-- Match expression results. `for x in match cond { ... => arr1, _ => arr2 }`. Match arms' result type tracking through inference is not yet implemented.
+Implementation. The compiler tracks local variable types. The `Local` struct gained a `ty: Option<TypeExpr>` field. Let bindings record their declared annotation or inferred type. Parameters record their declared type. The `infer_expr_type` helper covers struct construction, function calls, identifiers, field access, array literals, array indexing, match expressions, and literal values for type inference at let-binding time. The `element_type_of` helper extracts the element type from `TypeExpr::Array`. The `static_for_in_length` helper consults the type of identifier expressions through the local table, of array index expressions through their object's element type, and of match expressions through their first arm. The result is that for-in over any expression whose static type is `[T; N]` produces a `Const(N)` end bound rather than `Op::Len`.
 
 ## ~~P3. Error recovery model~~ (Resolved)
 
