@@ -147,6 +147,18 @@ The deserialized Module owns heap-allocated data and does not borrow from the in
 
 The unchecked path is for hosts that load precompiled bytecode whose resource bounds were validated during the build pipeline. The unsafe marker captures the trust contract. The host attests that bytecode was previously verified or originates from a trusted compiler. The bounded-memory and bounded-step guarantees are weakened to host attestation under this path. Exceeding the bound at runtime produces an arena allocation failure rather than memory unsafety. See R39 for the full design rationale.
 
+## Error Recovery
+
+When the VM encounters a runtime error during `Vm::call` or `Vm::resume`, the call returns `Err(VmError)` and the VM is left in an undefined intermediate state. The host inspects the error and decides how to proceed.
+
+`Vm::reset_after_error()` is the explicit recovery API. It clears the operand stack, the call frames, and the arena, returning the VM to a clean callable state. The data segment and the bytecode store are preserved. After recovery, the host can call `Vm::call` to start a fresh iteration of the entry point with accumulated data intact.
+
+This design extends the existing per-iteration RESET model to errors. Streams already use `Op::Reset` as the natural recovery boundary at the script level. Error recovery puts the same boundary mechanism under host control. The host decides whether to retry the same script, replace the module via `Vm::replace_module`, or escalate the error.
+
+The recovery model is consistent with the hot-swap design (R26, R27). Both clear volatile state while letting the host control data continuity. Hosts that want to also reset the data segment can follow `reset_after_error` with calls to `Vm::set_data` for each slot, or use `Vm::replace_module` to swap to a new code image with new initial data.
+
+Bidirectional error handling between the script and the host through the yield boundary is tracked separately as B7.
+
 ## Hot Code Swapping
 
 Hot code swapping occurs only at RESET boundaries. The following requirements apply.

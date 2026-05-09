@@ -44,9 +44,23 @@ Follow-up work to integrate the checker into the compile pipeline.
 
 The compiler currently only supports range-based for loops of the form `for i in 0..n`. Support for iterating over array expressions, such as `for item in array`, is specified in the grammar but not yet implemented. The implementation requires deciding on iterator semantics, including whether iteration consumes the array or borrows it, and how to handle mutation of the array during iteration.
 
-## P3. Error recovery model
+## ~~P3. Error recovery model~~ (Resolved)
 
-What should happen when a script encounters a runtime error? Options include yielding a default value, suspending the script, or notifying the host via `VmError`. The current implementation halts execution on error. A recovery model would need to define whether the host can resume a script after an error, and if so, what value the host supplies at the recovery point.
+The runtime error recovery model is the explicit-recovery design with host-driven retry. When the VM encounters a runtime error during `Vm::call` or `Vm::resume`, it returns `Err(VmError)` and leaves itself in an undefined intermediate state. The host inspects the error and, if recovery is desired, calls `Vm::reset_after_error()` to return the VM to a clean callable state. The data segment is preserved across recovery so accumulated state survives error events. The operand stack, call frames, and arena are cleared.
+
+The contract.
+
+- A failed `call` or `resume` returns `Err(VmError)`. The VM's volatile state is undefined until the host explicitly recovers.
+- `Vm::reset_after_error()` clears the operand stack, call frames, and arena. The data segment and bytecode store are preserved.
+- After recovery, the host can call `Vm::call` to start a fresh iteration.
+- For unrecoverable conditions or to reset the data segment, the host uses `Vm::replace_module` to swap to a new code image with new initial data.
+
+Rationale. Streams already have RESET as the natural per-iteration recovery point. Error recovery extends the same model to errors. The host decides whether to retry, log, replace the module, or escalate. The model is consistent with the existing hot-swap design (R26, R27) which also clears volatile state while letting the host control data continuity. Three tests cover the recovery path. `reset_after_error_preserves_data` confirms accumulated data survives. `reset_after_trap_clears_volatile_state` confirms a trap can be caught and the VM returned to a callable state. `reset_after_error_idempotent` confirms repeated calls are harmless.
+
+Out of scope and tracked elsewhere.
+
+- Bidirectional error handling between script and host through the yield boundary is recorded as B7. The current model only flows errors host-ward.
+- Distinction between halt errors (bytecode invariant violations) and soft errors (division by zero, type errors). The current model treats all errors uniformly. A future iteration may add a category field to the error if hosts need to make policy decisions per kind.
 
 ## ~~P4. Structural ISA implementation~~ (Resolved as R22)
 

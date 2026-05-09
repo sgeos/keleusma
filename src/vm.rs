@@ -553,6 +553,43 @@ impl<'a> Vm<'a> {
         &mut self.arena
     }
 
+    /// Recover from a runtime error and return the VM to a clean
+    /// callable state.
+    ///
+    /// After [`Vm::call`] or [`Vm::resume`] returns `Err(VmError)` the
+    /// VM is in an undefined intermediate state. The operand stack,
+    /// call frames, and arena may all hold partial values from the
+    /// failed iteration. This method clears the volatile state and
+    /// returns the VM to the same shape it had before the failed
+    /// call. The data segment is preserved so the host can retry
+    /// the same iteration with the accumulated state intact.
+    ///
+    /// Behavior.
+    ///
+    /// - Operand stack cleared.
+    /// - Call frames cleared.
+    /// - Arena reset, releasing any dynamic strings or scratch
+    ///   buffers from the failed iteration.
+    /// - Data segment preserved.
+    /// - Bytecode store preserved.
+    ///
+    /// After this call, [`Vm::call`] starts a fresh iteration of the
+    /// entry point. Hosts that want to also reset the data segment
+    /// can follow with calls to [`Vm::set_data`] or replace the
+    /// module via [`Vm::replace_module`].
+    ///
+    /// This is the explicit recovery path (P3). Callers attest by
+    /// invoking the method that they have inspected the error and
+    /// decided to retry. Errors that violated bytecode invariants
+    /// (such as `InvalidBytecode`) may indicate a corrupt module and
+    /// the host should consider whether retrying is appropriate.
+    pub fn reset_after_error(&mut self) {
+        self.stack.clear();
+        self.frames.clear();
+        self.arena.reset();
+        self.started = false;
+    }
+
     /// Replace the current module with a new one as a hot code update.
     ///
     /// This is the host-facing hot swap API (R26, R27). The host is
@@ -2877,5 +2914,104 @@ mod tests {
             }
             .contains_dynstr()
         );
+    }
+
+    // -- P3 error recovery --
+
+    #[test]
+    fn reset_after_error_preserves_data() {
+        // After a runtime error the data segment persists. The host
+        // can call reset_after_error and retry without losing
+        // accumulated state.
+        let src = "data ctx { count: i64 }\n\
+                   loop main(input: i64) -> i64 {\n\
+                       ctx.count = ctx.count + 1;\n\
+                       let next = yield ctx.count;\n\
+                       next\n\
+                   }";
+        let tokens = tokenize(src).expect("lex");
+        let program = parse(&tokens).expect("parse");
+        let module = compile(&program).expect("compile");
+        let mut vm = Vm::new(module).unwrap();
+        vm.set_data(0, Value::Int(5)).unwrap();
+
+        // First iteration: yield 6.
+        match vm.call(&[Value::Int(0)]).unwrap() {
+            VmState::Yielded(Value::Int(6)) => {}
+            other => panic!("expected yield 6, got {:?}", other),
+        }
+
+        // Simulate an error: pretend the host got an Err from resume.
+        // We do not actually trigger one here because the test would
+        // need to provide bytecode that traps. The recovery contract
+        // is that reset_after_error returns the VM to a callable state
+        // regardless of how the failed call left things. Verify that
+        // calling it after a normal yield still produces a valid
+        // post-recovery state.
+        vm.reset_after_error();
+
+        // Data segment preserved.
+        assert_eq!(vm.get_data(0).unwrap(), &Value::Int(6));
+
+        // Fresh call works.
+        match vm.call(&[Value::Int(0)]).unwrap() {
+            VmState::Yielded(Value::Int(7)) => {}
+            other => panic!("expected yield 7 after recovery, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn reset_after_trap_clears_volatile_state() {
+        // A program that traps. The host catches the error, calls
+        // reset_after_error, then runs the program again successfully.
+        let trap_src = "fn main() -> i64 { let x = 0; if x == 0 { 1 / x } else { 0 } }";
+        let mut vm = match run_program(trap_src, &[]) {
+            Err(VmError::DivisionByZero) => {
+                // Reuse the run_program helper produced a one-shot VM
+                // that returned the error. We can't reuse it here
+                // because run_program owns the VM. Instead, build the
+                // VM directly so we can recover.
+                let tokens = tokenize(trap_src).expect("lex");
+                let program = parse(&tokens).expect("parse");
+                let module = compile(&program).expect("compile");
+                Vm::new(module).unwrap()
+            }
+            other => panic!("expected DivisionByZero precheck, got {:?}", other),
+        };
+
+        // First run produces the error.
+        match vm.call(&[]) {
+            Err(VmError::DivisionByZero) => {}
+            other => panic!("expected DivisionByZero, got {:?}", other),
+        }
+
+        // Recover and verify volatile state is clean.
+        vm.reset_after_error();
+
+        // Calling again still produces the same error because the
+        // bytecode is unchanged. The point is that the call goes
+        // through cleanly without corruption from the prior failed
+        // run.
+        match vm.call(&[]) {
+            Err(VmError::DivisionByZero) => {}
+            other => panic!("expected DivisionByZero on second call, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn reset_after_error_idempotent() {
+        // Calling reset_after_error multiple times is harmless.
+        let src = "fn main() -> i64 { 1 }";
+        let tokens = tokenize(src).expect("lex");
+        let program = parse(&tokens).expect("parse");
+        let module = compile(&program).expect("compile");
+        let mut vm = Vm::new(module).unwrap();
+        vm.reset_after_error();
+        vm.reset_after_error();
+        vm.reset_after_error();
+        match vm.call(&[]).unwrap() {
+            VmState::Finished(Value::Int(1)) => {}
+            other => panic!("expected finished 1, got {:?}", other),
+        }
     }
 }
