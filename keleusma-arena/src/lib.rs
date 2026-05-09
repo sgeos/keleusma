@@ -25,6 +25,15 @@
 //! `StackHandle` and `HeapHandle`. The arena imposes no semantic
 //! distinction between the two ends.
 //!
+//! Aligned allocations go through the `Allocator` trait with a
+//! `Layout` that carries the desired alignment. Alignment is computed
+//! against the actual buffer base address, so any base alignment is
+//! supported. Unaligned byte allocations have direct convenience
+//! methods [`Arena::alloc_bottom_bytes`] and [`Arena::alloc_top_bytes`]
+//! that allocate `n` bytes without padding for alignment. Use the
+//! aligned form for typed values and pointers; use the byte form for
+//! packed byte buffers.
+//!
 //! # Reset, Rewind, and Marks
 //!
 //! [`Arena::reset`] takes `&mut self` and clears both ends safely. Each
@@ -217,11 +226,16 @@ impl Arena {
 
     /// Create an arena from a raw pointer and length.
     ///
+    /// The buffer's base alignment does not need to match the alignment
+    /// of any particular allocation type. The arena computes alignment
+    /// against the actual buffer base address and pads as needed for
+    /// each aligned allocation.
+    ///
     /// # Safety
     ///
     /// The caller must uphold the following.
     ///
-    /// - `ptr` is non-null and aligned to at least byte alignment.
+    /// - `ptr` is non-null.
     /// - `ptr` is valid for reads and writes of `capacity` bytes for the
     ///   entire lifetime of the returned arena.
     /// - No other code accesses the buffer through any path that would
@@ -387,12 +401,42 @@ impl Arena {
         TopHandle(self)
     }
 
+    /// Allocate `n` bytes from the bottom end with no alignment
+    /// requirement. Convenience wrapper for byte buffers and similar
+    /// allocations where the caller does not care about alignment.
+    ///
+    /// Equivalent to allocating with a `Layout::from_size_align(n, 1)`
+    /// through the `BottomHandle` Allocator implementation.
+    pub fn alloc_bottom_bytes(&self, n: usize) -> Result<NonNull<[u8]>, AllocError> {
+        let layout = Layout::from_size_align(n, 1).map_err(|_| AllocError)?;
+        self.alloc_bottom(layout)
+    }
+
+    /// Allocate `n` bytes from the top end with no alignment requirement.
+    pub fn alloc_top_bytes(&self, n: usize) -> Result<NonNull<[u8]>, AllocError> {
+        let layout = Layout::from_size_align(n, 1).map_err(|_| AllocError)?;
+        self.alloc_top(layout)
+    }
+
     /// Allocate from the bottom end.
+    ///
+    /// Alignment is computed against the actual buffer base address, not
+    /// the offset within the buffer. This makes the arena correct for
+    /// buffers with any base alignment, including buffers obtained from
+    /// allocators that only guarantee one-byte alignment and static
+    /// arrays declared without explicit alignment annotations.
     fn alloc_bottom(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
         let cur = self.bottom_top.get();
+        let base_addr = self.buffer.as_ptr() as usize;
+        let cur_addr = base_addr.checked_add(cur).ok_or(AllocError)?;
         let align_mask = layout.align().saturating_sub(1);
-        let aligned = cur.checked_add(align_mask).ok_or(AllocError)? & !align_mask;
-        let new_top = aligned.checked_add(layout.size()).ok_or(AllocError)?;
+        let aligned_addr = cur_addr.checked_add(align_mask).ok_or(AllocError)? & !align_mask;
+        // `aligned_addr >= cur_addr >= base_addr`, so the subtraction
+        // does not underflow.
+        let aligned_offset = aligned_addr - base_addr;
+        let new_top = aligned_offset
+            .checked_add(layout.size())
+            .ok_or(AllocError)?;
         if new_top > self.top_top.get() {
             return Err(AllocError);
         }
@@ -400,32 +444,44 @@ impl Arena {
         if new_top > self.bottom_peak.get() {
             self.bottom_peak.set(new_top);
         }
-        // SAFETY: `aligned` is within `[0, capacity)` because it is at
-        // most `top_top` which is at most `capacity`. The reserved range
-        // `[aligned, new_top)` is exclusive to this allocation until
-        // the next reset or rewind.
-        let ptr = unsafe { self.buffer.as_ptr().add(aligned) };
+        // SAFETY: `aligned_offset` is within `[0, top_top)` which is a
+        // subset of `[0, capacity)`. The reserved range
+        // `[aligned_offset, new_top)` is exclusive to this allocation
+        // until the next reset or rewind.
+        let ptr = unsafe { self.buffer.as_ptr().add(aligned_offset) };
         let slice = core::ptr::slice_from_raw_parts_mut(ptr, layout.size());
         NonNull::new(slice).ok_or(AllocError)
     }
 
     /// Allocate from the top end.
+    ///
+    /// Alignment is computed against the actual buffer base address.
     fn alloc_top(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
         let cur = self.top_top.get();
-        let new_end = cur.checked_sub(layout.size()).ok_or(AllocError)?;
+        let new_end_offset = cur.checked_sub(layout.size()).ok_or(AllocError)?;
+        let base_addr = self.buffer.as_ptr() as usize;
+        let new_end_addr = base_addr.checked_add(new_end_offset).ok_or(AllocError)?;
         let align_mask = layout.align().saturating_sub(1);
-        let aligned_start = new_end & !align_mask;
-        if aligned_start < self.bottom_top.get() {
+        // Round down to alignment. The result may be less than
+        // `base_addr` if the buffer base is itself misaligned and the
+        // allocation is near the bottom of the buffer; that case fails.
+        let aligned_addr = new_end_addr & !align_mask;
+        if aligned_addr < base_addr {
             return Err(AllocError);
         }
-        self.top_top.set(aligned_start);
-        if aligned_start < self.top_peak_low.get() {
-            self.top_peak_low.set(aligned_start);
+        let aligned_offset = aligned_addr - base_addr;
+        if aligned_offset < self.bottom_top.get() {
+            return Err(AllocError);
         }
-        // SAFETY: `aligned_start` is within `[bottom_top, capacity)` and
-        // the reserved range `[aligned_start, aligned_start + size)` is
-        // exclusive to this allocation until the next reset or rewind.
-        let ptr = unsafe { self.buffer.as_ptr().add(aligned_start) };
+        self.top_top.set(aligned_offset);
+        if aligned_offset < self.top_peak_low.get() {
+            self.top_peak_low.set(aligned_offset);
+        }
+        // SAFETY: `aligned_offset` is within `[bottom_top, capacity)`
+        // and the reserved range `[aligned_offset, aligned_offset + size)`
+        // is exclusive to this allocation until the next reset or
+        // rewind.
+        let ptr = unsafe { self.buffer.as_ptr().add(aligned_offset) };
         let slice = core::ptr::slice_from_raw_parts_mut(ptr, layout.size());
         NonNull::new(slice).ok_or(AllocError)
     }
@@ -719,6 +775,88 @@ mod tests {
         let arena = Arena::with_capacity(64);
         let layout = Layout::new::<()>();
         assert!(arena.bottom_handle().allocate(layout).is_ok());
+        assert_eq!(arena.bottom_used(), 0);
+    }
+
+    #[test]
+    fn arena_misaligned_base_produces_aligned_allocation() {
+        // Construct an arena over a buffer whose base address is
+        // deliberately offset by one byte from the underlying storage.
+        // The base is therefore at most byte-aligned. The arena must
+        // still produce u64-aligned pointers for u64 allocations.
+        let mut backing = test_alloc::vec![0u8; 256];
+        let raw_ptr = backing.as_mut_ptr();
+        // SAFETY: The backing vector lives until the end of the test.
+        // We deliberately offset by one to create a misaligned base.
+        let arena = unsafe { Arena::from_buffer_unchecked(raw_ptr.add(1), 200) };
+
+        // Allocate a u64. The pointer must be 8-byte aligned regardless
+        // of the misaligned base.
+        let p_u64 = arena
+            .bottom_handle()
+            .allocate(Layout::new::<u64>())
+            .unwrap();
+        let addr = p_u64.as_ptr() as *const u8 as usize;
+        assert_eq!(addr % 8, 0, "allocation must be 8-byte aligned");
+
+        // Allocate a u128. The pointer must be 16-byte aligned.
+        let p_u128 = arena
+            .bottom_handle()
+            .allocate(Layout::new::<u128>())
+            .unwrap();
+        let addr = p_u128.as_ptr() as *const u8 as usize;
+        assert_eq!(addr % 16, 0, "allocation must be 16-byte aligned");
+
+        // Top-end allocation also aligned.
+        let p_top = arena.top_handle().allocate(Layout::new::<u64>()).unwrap();
+        let addr = p_top.as_ptr() as *const u8 as usize;
+        assert_eq!(addr % 8, 0, "top allocation must be 8-byte aligned");
+
+        // Keep `backing` alive until here.
+        drop(backing);
+    }
+
+    #[cfg(feature = "alloc")]
+    #[test]
+    fn arena_byte_allocation_packs_tightly() {
+        // alloc_bottom_bytes does not enforce alignment. Three u8
+        // allocations of one byte each consume exactly three bytes.
+        let arena = Arena::with_capacity(64);
+        let _a = arena.alloc_bottom_bytes(1).unwrap();
+        let _b = arena.alloc_bottom_bytes(1).unwrap();
+        let _c = arena.alloc_bottom_bytes(1).unwrap();
+        assert_eq!(arena.bottom_used(), 3);
+    }
+
+    #[cfg(feature = "alloc")]
+    #[test]
+    fn arena_aligned_allocation_pads() {
+        // After one byte, an aligned u64 allocation pads to align 8.
+        // Total used should be 8 + 8 = 16 bytes.
+        let arena = Arena::with_capacity(64);
+        let _a = arena.alloc_bottom_bytes(1).unwrap();
+        assert_eq!(arena.bottom_used(), 1);
+        let _b = arena
+            .bottom_handle()
+            .allocate(Layout::new::<u64>())
+            .unwrap();
+        assert_eq!(arena.bottom_used(), 16);
+    }
+
+    #[cfg(feature = "alloc")]
+    #[test]
+    fn arena_top_byte_allocation() {
+        let arena = Arena::with_capacity(64);
+        let _a = arena.alloc_top_bytes(3).unwrap();
+        assert_eq!(arena.top_used(), 3);
+    }
+
+    #[cfg(feature = "alloc")]
+    #[test]
+    fn arena_byte_allocation_zero_size() {
+        let arena = Arena::with_capacity(64);
+        // Zero-size byte allocation is admissible and consumes nothing.
+        let _a = arena.alloc_bottom_bytes(0).unwrap();
         assert_eq!(arena.bottom_used(), 0);
     }
 }
