@@ -22,13 +22,31 @@ keleusma --help
 keleusma run hello.kel
 ```
 
-Or as a shorthand, any argument ending in `.kel` is treated as a script to run:
+Or as a shorthand, any first argument that names an existing file is treated as a script to run:
 
 ```sh
 keleusma hello.kel
 ```
 
-The runner parses, compiles, verifies, and executes the script through the default safe constructor. Utility and math natives are pre-registered. The script's `main` function is called with no arguments. If `main` returns a value, the value is printed.
+The runner detects whether the file is source or compiled bytecode by inspecting the first bytes (after any shebang envelope). Source files are parsed, compiled, verified, and executed through the default safe constructor. Bytecode files load through `Vm::load_bytes`. Utility and math natives are pre-registered. The script's `main` function is called with no arguments. If `main` returns a value, the value is printed.
+
+### Shebang scripts
+
+Both source and compiled bytecode can be Unix-executable through a shebang line.
+
+```keleusma
+#!/usr/bin/env keleusma
+fn main() -> i64 { 42 }
+```
+
+Mark executable and invoke directly:
+
+```sh
+chmod +x my_script
+./my_script
+```
+
+The lexer skips a leading `#!` line in source. The bytecode loader strips a leading `#!...\n` envelope before validating magic and CRC, so a file produced by `cat <(printf '#!/usr/bin/env keleusma\n') script.kel.bin` is also directly executable. The CRC trailer covers only the post-strip range; the envelope is not part of the signed payload.
 
 ### Compile a script to bytecode
 
