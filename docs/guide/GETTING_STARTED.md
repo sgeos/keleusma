@@ -95,8 +95,8 @@ Add Keleusma to `Cargo.toml`.
 
 ````
 [dependencies]
-keleusma = { path = "../keleusma" }
-keleusma-arena = { path = "../keleusma/keleusma-arena" }
+keleusma = "0.1.1"
+keleusma-arena = "0.2.0"
 ````
 
 Replace `src/main.rs` with the following.
