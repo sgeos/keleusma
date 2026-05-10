@@ -31,7 +31,7 @@ use keleusma::{Value, vm::Vm, vm::VmState};
 /// Length of the included bytecode binary. Hardcoded to match the
 /// file size. If the wire format changes and the file size changes,
 /// regenerate the binary and update this constant.
-const BYTECODE_LEN: usize = 252;
+const BYTECODE_LEN: usize = 268;
 
 /// Align the included byte array to 16 bytes so the rkyv body at
 /// offset 16 is 8-byte aligned. The body alignment is required by

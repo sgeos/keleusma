@@ -532,7 +532,7 @@ pub fn compile_with_target(
 
     let entry_point = function_map.get("main").map(|&idx| idx as usize);
 
-    let module = Module {
+    let mut module = Module {
         chunks,
         native_names,
         entry_point,
@@ -540,6 +540,9 @@ pub fn compile_with_target(
         word_bits_log2: target.word_bits_log2,
         addr_bits_log2: target.addr_bits_log2,
         float_bits_log2: target.float_bits_log2,
+        // Populated below after structural verification succeeds.
+        wcet_cycles: 0,
+        wcmu_bytes: 0,
     };
 
     // Compile-time defense-in-depth for the WCET and WCMU contract.
@@ -597,6 +600,49 @@ pub fn compile_with_target(
             }
         }
     }
+
+    // Populate the declared WCET and WCMU fields in the framing
+    // header. The compile-time bounds use the bundled nominal cost
+    // model and zero native attestations, since native attestations
+    // are host-supplied at load time. The runtime re-runs the
+    // analysis at `Vm::new` against the host's actual cost model and
+    // attestations and may surface a tighter or looser bound.
+    //
+    // For atomic-total programs (no Stream chunks), the values stay
+    // at 0 (auto). For Stream programs, the values are the maximum
+    // across Stream chunks. Saturation to `u32::MAX` signals that
+    // computation overflowed; safe `Vm::new` rejects on `u32::MAX`.
+    let mut max_wcet: u32 = 0;
+    let mut max_wcmu: u32 = 0;
+    let mut wcet_overflow = false;
+    let mut wcmu_overflow = false;
+    for chunk in &module.chunks {
+        if matches!(chunk.block_type, crate::bytecode::BlockType::Stream) {
+            match crate::verify::wcet_stream_iteration(chunk) {
+                Ok(c) => {
+                    max_wcet = max_wcet.max(c);
+                }
+                Err(_) => {
+                    wcet_overflow = true;
+                }
+            }
+            match crate::verify::wcmu_stream_iteration(chunk) {
+                Ok((stack, heap)) => {
+                    let total = stack.saturating_add(heap);
+                    if total == u32::MAX {
+                        wcmu_overflow = true;
+                    } else {
+                        max_wcmu = max_wcmu.max(total);
+                    }
+                }
+                Err(_) => {
+                    wcmu_overflow = true;
+                }
+            }
+        }
+    }
+    module.wcet_cycles = if wcet_overflow { u32::MAX } else { max_wcet };
+    module.wcmu_bytes = if wcmu_overflow { u32::MAX } else { max_wcmu };
 
     Ok(module)
 }

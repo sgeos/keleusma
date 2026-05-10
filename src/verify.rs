@@ -1458,6 +1458,8 @@ mod tests {
             word_bits_log2: crate::bytecode::RUNTIME_WORD_BITS_LOG2,
             addr_bits_log2: crate::bytecode::RUNTIME_ADDRESS_BITS_LOG2,
             float_bits_log2: crate::bytecode::RUNTIME_FLOAT_BITS_LOG2,
+            wcet_cycles: 0,
+            wcmu_bytes: 0,
         }
     }
 
@@ -2062,6 +2064,8 @@ mod tests {
             word_bits_log2: crate::bytecode::RUNTIME_WORD_BITS_LOG2,
             addr_bits_log2: crate::bytecode::RUNTIME_ADDRESS_BITS_LOG2,
             float_bits_log2: crate::bytecode::RUNTIME_FLOAT_BITS_LOG2,
+            wcet_cycles: 0,
+            wcmu_bytes: 0,
             data_layout: Some(DataLayout {
                 slots: vec![DataSlot {
                     name: String::from("ctx.x"),
@@ -2097,6 +2101,8 @@ mod tests {
             word_bits_log2: crate::bytecode::RUNTIME_WORD_BITS_LOG2,
             addr_bits_log2: crate::bytecode::RUNTIME_ADDRESS_BITS_LOG2,
             float_bits_log2: crate::bytecode::RUNTIME_FLOAT_BITS_LOG2,
+            wcet_cycles: 0,
+            wcmu_bytes: 0,
             data_layout: Some(DataLayout {
                 slots: vec![
                     DataSlot {

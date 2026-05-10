@@ -118,6 +118,8 @@ fn build_benchmark_chunk(pattern: &[Op], constants: &[ConstValue], repetitions: 
         word_bits_log2: RUNTIME_WORD_BITS_LOG2,
         addr_bits_log2: RUNTIME_ADDRESS_BITS_LOG2,
         float_bits_log2: RUNTIME_FLOAT_BITS_LOG2,
+        wcet_cycles: 0,
+        wcmu_bytes: 0,
     }
 }
 

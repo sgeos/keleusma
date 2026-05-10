@@ -29,7 +29,7 @@ Initial release.
 - Dual-end bump-allocated arena via the `keleusma-arena` crate, used for the operand stack at the bottom and dynamic strings at the top.
 - `KString` newtype around `keleusma_arena::ArenaHandle<str>` for arena-backed dynamic-string handles with epoch-tagged stale-pointer detection. The `&str` copy semantics live in the runtime crate; the generic epoch-handle mechanism remains in `keleusma-arena`.
 - Hot code swap at the reset boundary of a `loop` script. Dialogue type, the yielded type and the resume type, must remain stable across swaps. Native registrations persist; the data segment is supplied fresh by the host.
-- Bytecode wire format with magic, length, version, target word and address widths, body, and CRC trailer. Self-describing through the framing header.
+- Bytecode wire format with magic, length, version, target word and address widths, declared WCET in pipelined cycles per Stream-to-Reset slice, declared WCMU in bytes per Stream-to-Reset slice, body, and CRC-32 trailer. Self-describing through the framing header. Header WCET and WCMU fields use `0` to mean "auto" (runtime computes via verifier) and `u32::MAX` to mean "overflow" (rejected at safe `Vm::new`). The compiler populates declared values for Stream programs from `wcet_stream_iteration` and `wcmu_stream_iteration`; atomic-total programs ship with `0`.
 - Zero-copy execution against borrowed `rkyv` archived bytecode through the `Vm::view_bytes_zero_copy` constructor.
 
 ### Verification

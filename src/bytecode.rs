@@ -932,6 +932,29 @@ pub struct Module {
     /// B10. Mirrored in the framing header for fast pre-decode
     /// rejection.
     pub float_bits_log2: u8,
+    /// Declared worst-case execution time per Stream-to-Reset slice,
+    /// in pipelined cycles. Producer's claim about the maximum cycles
+    /// the script consumes between two yield boundaries.
+    ///
+    /// - `0` means **auto**: the producer did not declare a value;
+    ///   the runtime computes the bound at load time through its own
+    ///   verifier pass.
+    /// - `u32::MAX` means **overflow**: the producer attempted to
+    ///   compute the bound but the result exceeds the field's range.
+    ///   Programs declaring `u32::MAX` are rejected at the safe
+    ///   constructor `Vm::new` because no representable bound exists.
+    /// - Any other value is the producer's bound. The safe runtime
+    ///   accepts the value as-is; trust skip applies to declared
+    ///   values just as it does to arena capacity.
+    ///
+    /// Mirrored in the framing header for inspection without body
+    /// decode.
+    pub wcet_cycles: u32,
+    /// Declared worst-case memory usage per Stream-to-Reset slice,
+    /// in bytes. Same `0`/`u32::MAX` conventions as
+    /// [`Module::wcet_cycles`]. Total of stack and heap regions.
+    /// Mirrored in the framing header.
+    pub wcmu_bytes: u32,
 }
 
 /// Magic prefix identifying serialized Keleusma bytecode (`KELE`).
@@ -939,7 +962,7 @@ pub const BYTECODE_MAGIC: [u8; 4] = *b"KELE";
 
 /// Wire format version for serialized bytecode. Bytecode produced under a
 /// different version is rejected at load time.
-pub const BYTECODE_VERSION: u16 = 7;
+pub const BYTECODE_VERSION: u16 = 8;
 
 /// Word size in bits assumed by this runtime build, encoded as the
 /// base-2 exponent. Actual width in bits is `1 << RUNTIME_WORD_BITS_LOG2`.
@@ -970,11 +993,24 @@ pub const RUNTIME_FLOAT_BITS_LOG2: u8 = 6;
 /// - bytes 10..11: word_bits_log2 (u8). Actual width is `1 << value`.
 /// - bytes 11..12: addr_bits_log2 (u8). Actual width is `1 << value`.
 /// - bytes 12..13: float_bits_log2 (u8). Actual width is `1 << value`.
-/// - bytes 13..16: reserved (zero). Pads the header so the rkyv body
-///   begins at an 8-byte-aligned offset within the buffer when the
-///   buffer base is itself 8-byte-aligned. Required for in-place
-///   access through `rkyv::access`.
-const HEADER_LEN: usize = 16;
+/// - bytes 13..16: reserved (zero), preserved for backward layout.
+/// - bytes 16..20: declared WCET in pipelined cycles per Stream-to-Reset
+///   slice (u32 little-endian). `0` means auto (runtime computes).
+///   `u32::MAX` means overflow (rejected at safe `Vm::new`).
+/// - bytes 20..24: declared WCMU in bytes per Stream-to-Reset slice
+///   (u32 little-endian). Same `0`/`u32::MAX` conventions.
+///
+/// 24 bytes is divisible by 8, so the rkyv body begins at an
+/// 8-byte-aligned offset within the buffer when the buffer base is
+/// itself 8-byte-aligned. Required for in-place access through
+/// `rkyv::access`.
+const HEADER_LEN: usize = 24;
+
+/// Offset of the declared WCET field in the framing header.
+const HEADER_WCET_OFFSET: usize = 16;
+
+/// Offset of the declared WCMU field in the framing header.
+const HEADER_WCMU_OFFSET: usize = 20;
 
 /// Footer length in bytes (4-byte little-endian CRC-32).
 const FOOTER_LEN: usize = 4;
@@ -1066,6 +1102,16 @@ pub enum LoadError {
     /// residue. The bytecode is corrupted or was produced by a different
     /// CRC implementation.
     BadChecksum,
+    /// The declared WCET in the framing header is `u32::MAX`, signaling
+    /// that the producer attempted to compute a bound but the result
+    /// exceeded the field's range. No representable bound exists, so
+    /// safe loading is refused.
+    WcetOverflow,
+    /// The declared WCMU in the framing header is `u32::MAX`, signaling
+    /// that the producer attempted to compute a bound but the result
+    /// exceeded the field's range. No representable bound exists, so
+    /// safe loading is refused.
+    WcmuOverflow,
     /// The body could not be encoded or decoded.
     Codec(String),
 }
@@ -1109,6 +1155,12 @@ impl core::fmt::Display for LoadError {
                 )
             }
             LoadError::BadChecksum => f.write_str("bytecode CRC-32 residue check failed"),
+            LoadError::WcetOverflow => {
+                f.write_str("declared WCET is u32::MAX (overflow); no representable bound")
+            }
+            LoadError::WcmuOverflow => {
+                f.write_str("declared WCMU is u32::MAX (overflow); no representable bound")
+            }
             LoadError::Codec(msg) => write!(f, "bytecode codec error: {}", msg),
         }
     }
@@ -1148,9 +1200,13 @@ impl Module {
         buf.push(self.word_bits_log2);
         buf.push(self.addr_bits_log2);
         buf.push(self.float_bits_log2);
-        // Reserved bytes pad the header to 16 so the rkyv body begins
-        // at an 8-byte-aligned offset within the buffer.
+        // Reserved bytes preserved for backward layout. The header
+        // grows past offset 16 with the declared WCET and WCMU fields.
         buf.extend_from_slice(&[0u8; 3]);
+        buf.extend_from_slice(&self.wcet_cycles.to_le_bytes());
+        buf.extend_from_slice(&self.wcmu_bytes.to_le_bytes());
+        // Total header width is 24 bytes, divisible by 8, so the rkyv
+        // body begins at an 8-byte-aligned offset.
         buf.extend_from_slice(&body);
         let crc = crc32(&buf);
         buf.extend_from_slice(&crc.to_le_bytes());
@@ -1225,6 +1281,24 @@ impl Module {
                 max_supported: RUNTIME_FLOAT_BITS_LOG2,
             });
         }
+        let header_wcet = u32::from_le_bytes([
+            bytes[HEADER_WCET_OFFSET],
+            bytes[HEADER_WCET_OFFSET + 1],
+            bytes[HEADER_WCET_OFFSET + 2],
+            bytes[HEADER_WCET_OFFSET + 3],
+        ]);
+        let header_wcmu = u32::from_le_bytes([
+            bytes[HEADER_WCMU_OFFSET],
+            bytes[HEADER_WCMU_OFFSET + 1],
+            bytes[HEADER_WCMU_OFFSET + 2],
+            bytes[HEADER_WCMU_OFFSET + 3],
+        ]);
+        if header_wcet == u32::MAX {
+            return Err(LoadError::WcetOverflow);
+        }
+        if header_wcmu == u32::MAX {
+            return Err(LoadError::WcmuOverflow);
+        }
         let body = &bytes[HEADER_LEN..length - FOOTER_LEN];
         // rkyv requires the body buffer to be 8-byte aligned. Copy
         // into an AlignedVec to satisfy this for arbitrary host slices.
@@ -1298,6 +1372,24 @@ impl Module {
                 got: float_bits_log2,
                 max_supported: RUNTIME_FLOAT_BITS_LOG2,
             });
+        }
+        let header_wcet = u32::from_le_bytes([
+            bytes[HEADER_WCET_OFFSET],
+            bytes[HEADER_WCET_OFFSET + 1],
+            bytes[HEADER_WCET_OFFSET + 2],
+            bytes[HEADER_WCET_OFFSET + 3],
+        ]);
+        let header_wcmu = u32::from_le_bytes([
+            bytes[HEADER_WCMU_OFFSET],
+            bytes[HEADER_WCMU_OFFSET + 1],
+            bytes[HEADER_WCMU_OFFSET + 2],
+            bytes[HEADER_WCMU_OFFSET + 3],
+        ]);
+        if header_wcet == u32::MAX {
+            return Err(LoadError::WcetOverflow);
+        }
+        if header_wcmu == u32::MAX {
+            return Err(LoadError::WcmuOverflow);
         }
         let body = &bytes[HEADER_LEN..length - FOOTER_LEN];
         if !(body.as_ptr() as usize).is_multiple_of(8) {
