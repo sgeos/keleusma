@@ -94,25 +94,28 @@ pub fn monomorphize(program: Program) -> Program {
     // New specialized functions to add to the program.
     let mut new_functions: Vec<FunctionDef> = Vec::new();
 
-    for func in &mut program.functions {
-        if func.type_params.is_empty() {
-            local_types.clear();
-            for param in &func.params {
-                if let Some(t) = &param.type_expr
-                    && let Pattern::Variable(name, _) = &param.pattern
-                {
-                    local_types.insert(name.clone(), t.clone());
+    {
+        use crate::visitor::MutVisitor;
+        for func in &mut program.functions {
+            if func.type_params.is_empty() {
+                local_types.clear();
+                for param in &func.params {
+                    if let Some(t) = &param.type_expr
+                        && let Pattern::Variable(name, _) = &param.pattern
+                    {
+                        local_types.insert(name.clone(), t.clone());
+                    }
                 }
+                let mut visitor = CallSpecializer {
+                    generics: &generics,
+                    locals: &mut local_types,
+                    specs: &mut specs,
+                    new_functions: &mut new_functions,
+                    fn_returns: &fn_returns,
+                    struct_table: &struct_table,
+                };
+                visitor.visit_block(&mut func.body);
             }
-            rewrite_block(
-                &mut func.body,
-                &generics,
-                &mut local_types,
-                &mut specs,
-                &mut new_functions,
-                &fn_returns,
-                &struct_table,
-            );
         }
     }
 
@@ -170,15 +173,18 @@ pub fn monomorphize(program: Program) -> Program {
         // new_functions mutably for inserting nested specializations.
         let len_before = new_functions.len();
         let mut body_clone = new_functions[idx].body.clone();
-        rewrite_block(
-            &mut body_clone,
-            &generics,
-            &mut local_types,
-            &mut specs,
-            &mut new_functions,
-            &fn_returns,
-            &struct_table,
-        );
+        {
+            use crate::visitor::MutVisitor;
+            let mut visitor = CallSpecializer {
+                generics: &generics,
+                locals: &mut local_types,
+                specs: &mut specs,
+                new_functions: &mut new_functions,
+                fn_returns: &fn_returns,
+                struct_table: &struct_table,
+            };
+            visitor.visit_block(&mut body_clone);
+        }
         new_functions[idx].body = body_clone;
         // Update per-function counts for any specializations
         // introduced by rewriting this function's body.
@@ -238,6 +244,7 @@ pub fn monomorphize(program: Program) -> Program {
 /// specialization, with variant payload types in place of struct
 /// field types.
 fn specialize_enums(mut program: Program, fn_returns: &BTreeMap<String, TypeExpr>) -> Program {
+    use crate::visitor::MutVisitor;
     let generic_enums: BTreeMap<String, EnumDef> = program
         .types
         .iter()
@@ -261,19 +268,106 @@ fn specialize_enums(mut program: Program, fn_returns: &BTreeMap<String, TypeExpr
                 local_types.insert(name.clone(), t.clone());
             }
         }
-        rewrite_enum_variants_block(
-            &mut func.body,
-            &generic_enums,
-            &mut local_types,
-            &mut enum_specs,
-            &mut new_enums,
+        let mut visitor = EnumSpecializer {
+            generic_enums: &generic_enums,
+            locals: &mut local_types,
+            specs: &mut enum_specs,
+            new_enums: &mut new_enums,
             fn_returns,
-        );
+        };
+        visitor.visit_block(&mut func.body);
     }
     program
         .types
         .extend(new_enums.into_iter().map(TypeDef::Enum));
     program
+}
+
+/// AST visitor that rewrites generic `Expr::EnumVariant` constructions
+/// to specialized enum names, emitting a fresh `EnumDef` per
+/// concrete instantiation.
+struct EnumSpecializer<'a> {
+    generic_enums: &'a BTreeMap<String, EnumDef>,
+    locals: &'a mut BTreeMap<String, TypeExpr>,
+    specs: &'a mut BTreeMap<(String, String), String>,
+    new_enums: &'a mut Vec<EnumDef>,
+    fn_returns: &'a BTreeMap<String, TypeExpr>,
+}
+
+impl crate::visitor::MutVisitor for EnumSpecializer<'_> {
+    fn visit_stmt(&mut self, stmt: &mut Stmt) {
+        if let Stmt::Let(l) = stmt {
+            self.visit_expr(&mut l.value);
+            if let Pattern::Variable(name, _) = &l.pattern
+                && let Some(t) = l
+                    .type_expr
+                    .clone()
+                    .or_else(|| infer_arg_type(&l.value, self.locals, self.fn_returns, None))
+            {
+                self.locals.insert(name.clone(), t);
+            }
+            return;
+        }
+        self.walk_stmt(stmt);
+    }
+
+    fn visit_expr(&mut self, expr: &mut Expr) {
+        // Recurse into children first so nested EnumVariant
+        // constructions are specialized bottom-up.
+        self.walk_expr(expr);
+        // Then check this node for a generic EnumVariant to specialize.
+        let Expr::EnumVariant {
+            enum_name,
+            variant,
+            args,
+            ..
+        } = expr
+        else {
+            return;
+        };
+        let Some(enum_def) = self.generic_enums.get(enum_name) else {
+            return;
+        };
+        let Some(decl_variant) = enum_def.variants.iter().find(|v| v.name == *variant) else {
+            return;
+        };
+        let mut type_args: Vec<TypeExpr> = Vec::new();
+        for tp in &enum_def.type_params {
+            let mut inferred: Option<TypeExpr> = None;
+            for (i, decl_ty) in decl_variant.fields.iter().enumerate() {
+                if let TypeExpr::Named(n, _, _) = decl_ty
+                    && *n == tp.name
+                    && let Some(arg) = args.get(i)
+                    && let Some(t) = infer_arg_type(arg, self.locals, self.fn_returns, None)
+                {
+                    inferred = Some(t);
+                    break;
+                }
+            }
+            match inferred {
+                Some(t) => type_args.push(t),
+                None => return,
+            }
+        }
+        if type_args.len() != enum_def.type_params.len() {
+            return;
+        }
+        let key_args: Vec<String> = type_args.iter().map(type_arg_canonical).collect();
+        let canonical = key_args.join(",");
+        let cache_key = (enum_name.clone(), canonical);
+        let spec_name = if let Some(existing) = self.specs.get(&cache_key) {
+            existing.clone()
+        } else {
+            let spec_name = mangle_struct(enum_name, &type_args);
+            let specialized = specialize_enum(enum_def, &type_args, spec_name.clone());
+            self.specs.insert(cache_key, spec_name.clone());
+            self.new_enums.push(specialized);
+            spec_name
+        };
+        if let Expr::EnumVariant { enum_name, .. } = expr {
+            *enum_name = spec_name;
+        }
+    }
 }
 
 fn specialize_enum(enum_def: &EnumDef, type_args: &[TypeExpr], spec_name: String) -> EnumDef {
@@ -302,303 +396,6 @@ fn specialize_enum(enum_def: &EnumDef, type_args: &[TypeExpr], spec_name: String
     }
 }
 
-fn rewrite_enum_variants_block(
-    block: &mut Block,
-    generic_enums: &BTreeMap<String, EnumDef>,
-    locals: &mut BTreeMap<String, TypeExpr>,
-    specs: &mut BTreeMap<(String, String), String>,
-    new_enums: &mut Vec<EnumDef>,
-    fn_returns: &BTreeMap<String, TypeExpr>,
-) {
-    for stmt in block.stmts.iter_mut() {
-        rewrite_enum_variants_stmt(stmt, generic_enums, locals, specs, new_enums, fn_returns);
-    }
-    if let Some(e) = block.tail_expr.as_mut() {
-        rewrite_enum_variants_expr(e, generic_enums, locals, specs, new_enums, fn_returns);
-    }
-}
-
-fn rewrite_enum_variants_stmt(
-    stmt: &mut Stmt,
-    generic_enums: &BTreeMap<String, EnumDef>,
-    locals: &mut BTreeMap<String, TypeExpr>,
-    specs: &mut BTreeMap<(String, String), String>,
-    new_enums: &mut Vec<EnumDef>,
-    fn_returns: &BTreeMap<String, TypeExpr>,
-) {
-    match stmt {
-        Stmt::Let(l) => {
-            rewrite_enum_variants_expr(
-                &mut l.value,
-                generic_enums,
-                locals,
-                specs,
-                new_enums,
-                fn_returns,
-            );
-            if let Pattern::Variable(name, _) = &l.pattern
-                && let Some(t) = l
-                    .type_expr
-                    .clone()
-                    .or_else(|| infer_arg_type(&l.value, locals, fn_returns, None))
-            {
-                locals.insert(name.clone(), t);
-            }
-        }
-        Stmt::For(f) => {
-            match &mut f.iterable {
-                Iterable::Range(s, e) => {
-                    rewrite_enum_variants_expr(
-                        s,
-                        generic_enums,
-                        locals,
-                        specs,
-                        new_enums,
-                        fn_returns,
-                    );
-                    rewrite_enum_variants_expr(
-                        e,
-                        generic_enums,
-                        locals,
-                        specs,
-                        new_enums,
-                        fn_returns,
-                    );
-                }
-                Iterable::Expr(e) => {
-                    rewrite_enum_variants_expr(
-                        e,
-                        generic_enums,
-                        locals,
-                        specs,
-                        new_enums,
-                        fn_returns,
-                    );
-                }
-            }
-            rewrite_enum_variants_block(
-                &mut f.body,
-                generic_enums,
-                locals,
-                specs,
-                new_enums,
-                fn_returns,
-            );
-        }
-        Stmt::Break(_) => {}
-        Stmt::DataFieldAssign { value, .. } => {
-            rewrite_enum_variants_expr(value, generic_enums, locals, specs, new_enums, fn_returns);
-        }
-        Stmt::Expr(e) => {
-            rewrite_enum_variants_expr(e, generic_enums, locals, specs, new_enums, fn_returns);
-        }
-    }
-}
-
-fn rewrite_enum_variants_expr(
-    expr: &mut Expr,
-    generic_enums: &BTreeMap<String, EnumDef>,
-    locals: &mut BTreeMap<String, TypeExpr>,
-    specs: &mut BTreeMap<(String, String), String>,
-    new_enums: &mut Vec<EnumDef>,
-    fn_returns: &BTreeMap<String, TypeExpr>,
-) {
-    // Recurse first.
-    match expr {
-        Expr::BinOp { left, right, .. } => {
-            rewrite_enum_variants_expr(left, generic_enums, locals, specs, new_enums, fn_returns);
-            rewrite_enum_variants_expr(right, generic_enums, locals, specs, new_enums, fn_returns);
-        }
-        Expr::UnaryOp { operand, .. } => {
-            rewrite_enum_variants_expr(
-                operand,
-                generic_enums,
-                locals,
-                specs,
-                new_enums,
-                fn_returns,
-            );
-        }
-        Expr::Call { args, .. } => {
-            for a in args.iter_mut() {
-                rewrite_enum_variants_expr(a, generic_enums, locals, specs, new_enums, fn_returns);
-            }
-        }
-        Expr::Pipeline { left, args, .. } => {
-            rewrite_enum_variants_expr(left, generic_enums, locals, specs, new_enums, fn_returns);
-            for a in args.iter_mut() {
-                rewrite_enum_variants_expr(a, generic_enums, locals, specs, new_enums, fn_returns);
-            }
-        }
-        Expr::Yield { value, .. } => {
-            rewrite_enum_variants_expr(value, generic_enums, locals, specs, new_enums, fn_returns);
-        }
-        Expr::If {
-            condition,
-            then_block,
-            else_block,
-            ..
-        } => {
-            rewrite_enum_variants_expr(
-                condition,
-                generic_enums,
-                locals,
-                specs,
-                new_enums,
-                fn_returns,
-            );
-            rewrite_enum_variants_block(
-                then_block,
-                generic_enums,
-                locals,
-                specs,
-                new_enums,
-                fn_returns,
-            );
-            if let Some(b) = else_block.as_mut() {
-                rewrite_enum_variants_block(b, generic_enums, locals, specs, new_enums, fn_returns);
-            }
-        }
-        Expr::Match {
-            scrutinee, arms, ..
-        } => {
-            rewrite_enum_variants_expr(
-                scrutinee,
-                generic_enums,
-                locals,
-                specs,
-                new_enums,
-                fn_returns,
-            );
-            for arm in arms.iter_mut() {
-                rewrite_enum_variants_expr(
-                    &mut arm.expr,
-                    generic_enums,
-                    locals,
-                    specs,
-                    new_enums,
-                    fn_returns,
-                );
-            }
-        }
-        Expr::Loop { body, .. } => {
-            rewrite_enum_variants_block(body, generic_enums, locals, specs, new_enums, fn_returns);
-        }
-        Expr::FieldAccess { object, .. } => {
-            rewrite_enum_variants_expr(object, generic_enums, locals, specs, new_enums, fn_returns);
-        }
-        Expr::MethodCall { receiver, args, .. } => {
-            rewrite_enum_variants_expr(
-                receiver,
-                generic_enums,
-                locals,
-                specs,
-                new_enums,
-                fn_returns,
-            );
-            for a in args.iter_mut() {
-                rewrite_enum_variants_expr(a, generic_enums, locals, specs, new_enums, fn_returns);
-            }
-        }
-        Expr::TupleIndex { object, .. } => {
-            rewrite_enum_variants_expr(object, generic_enums, locals, specs, new_enums, fn_returns);
-        }
-        Expr::ArrayIndex { object, index, .. } => {
-            rewrite_enum_variants_expr(object, generic_enums, locals, specs, new_enums, fn_returns);
-            rewrite_enum_variants_expr(index, generic_enums, locals, specs, new_enums, fn_returns);
-        }
-        Expr::StructInit { fields, .. } => {
-            for f in fields.iter_mut() {
-                rewrite_enum_variants_expr(
-                    &mut f.value,
-                    generic_enums,
-                    locals,
-                    specs,
-                    new_enums,
-                    fn_returns,
-                );
-            }
-        }
-        Expr::EnumVariant { args, .. } => {
-            for a in args.iter_mut() {
-                rewrite_enum_variants_expr(a, generic_enums, locals, specs, new_enums, fn_returns);
-            }
-        }
-        Expr::ArrayLiteral { elements, .. } | Expr::TupleLiteral { elements, .. } => {
-            for e in elements.iter_mut() {
-                rewrite_enum_variants_expr(e, generic_enums, locals, specs, new_enums, fn_returns);
-            }
-        }
-        Expr::Cast { expr, .. } => {
-            rewrite_enum_variants_expr(expr, generic_enums, locals, specs, new_enums, fn_returns);
-        }
-        Expr::Closure { body, .. } => {
-            rewrite_enum_variants_block(body, generic_enums, locals, specs, new_enums, fn_returns);
-        }
-        Expr::ClosureRef { .. }
-        | Expr::Literal { .. }
-        | Expr::Ident { .. }
-        | Expr::Placeholder { .. } => {}
-    }
-
-    // Now check the expression itself for a generic EnumVariant
-    // construction that should specialize.
-    if let Expr::EnumVariant {
-        enum_name,
-        variant,
-        args,
-        ..
-    } = expr
-        && let Some(enum_def) = generic_enums.get(enum_name)
-    {
-        // Find the variant declaration whose name matches.
-        let decl_variant = enum_def.variants.iter().find(|v| v.name == *variant);
-        let decl_variant = match decl_variant {
-            Some(v) => v,
-            None => return,
-        };
-        // For each type parameter of the enum, find a payload field
-        // whose declared type is `Named(tp.name)` and infer from the
-        // matching argument's value.
-        let mut type_args: Vec<TypeExpr> = Vec::new();
-        for tp in &enum_def.type_params {
-            let mut inferred: Option<TypeExpr> = None;
-            for (i, decl_ty) in decl_variant.fields.iter().enumerate() {
-                if let TypeExpr::Named(n, _, _) = decl_ty
-                    && *n == tp.name
-                    && let Some(arg) = args.get(i)
-                    && let Some(t) = infer_arg_type(arg, locals, fn_returns, None)
-                {
-                    inferred = Some(t);
-                    break;
-                }
-            }
-            match inferred {
-                Some(t) => type_args.push(t),
-                None => return,
-            }
-        }
-        if type_args.len() != enum_def.type_params.len() {
-            return;
-        }
-        let key_args: Vec<String> = type_args.iter().map(type_arg_canonical).collect();
-        let canonical = key_args.join(",");
-        let cache_key = (enum_name.clone(), canonical);
-        let spec_name = if let Some(existing) = specs.get(&cache_key) {
-            existing.clone()
-        } else {
-            let spec_name = mangle_struct(enum_name, &type_args);
-            let specialized = specialize_enum(enum_def, &type_args, spec_name.clone());
-            specs.insert(cache_key, spec_name.clone());
-            new_enums.push(specialized);
-            spec_name
-        };
-        if let Expr::EnumVariant { enum_name, .. } = expr {
-            *enum_name = spec_name;
-        }
-    }
-}
-
 /// Generic struct specialization pass.
 ///
 /// Walks the program for `Expr::StructInit` expressions whose target
@@ -609,7 +406,7 @@ fn rewrite_enum_variants_expr(
 /// rewrites the `StructInit`'s name to a mangled form. The original
 /// generic struct is retained alongside the specialization.
 fn specialize_structs(mut program: Program, fn_returns: &BTreeMap<String, TypeExpr>) -> Program {
-    // Map from generic struct name to its declaration.
+    use crate::visitor::MutVisitor;
     let generic_structs: BTreeMap<String, StructDef> = program
         .types
         .iter()
@@ -633,19 +430,96 @@ fn specialize_structs(mut program: Program, fn_returns: &BTreeMap<String, TypeEx
                 local_types.insert(name.clone(), t.clone());
             }
         }
-        rewrite_struct_inits_block(
-            &mut func.body,
-            &generic_structs,
-            &mut local_types,
-            &mut struct_specs,
-            &mut new_structs,
+        let mut visitor = StructSpecializer {
+            generic_structs: &generic_structs,
+            locals: &mut local_types,
+            specs: &mut struct_specs,
+            new_structs: &mut new_structs,
             fn_returns,
-        );
+        };
+        visitor.visit_block(&mut func.body);
     }
     program
         .types
         .extend(new_structs.into_iter().map(TypeDef::Struct));
     program
+}
+
+/// AST visitor that rewrites generic `Expr::StructInit` constructions
+/// to specialized struct names, emitting a fresh `StructDef` per
+/// concrete instantiation.
+struct StructSpecializer<'a> {
+    generic_structs: &'a BTreeMap<String, StructDef>,
+    locals: &'a mut BTreeMap<String, TypeExpr>,
+    specs: &'a mut BTreeMap<(String, String), String>,
+    new_structs: &'a mut Vec<StructDef>,
+    fn_returns: &'a BTreeMap<String, TypeExpr>,
+}
+
+impl crate::visitor::MutVisitor for StructSpecializer<'_> {
+    fn visit_stmt(&mut self, stmt: &mut Stmt) {
+        if let Stmt::Let(l) = stmt {
+            self.visit_expr(&mut l.value);
+            if let Pattern::Variable(name, _) = &l.pattern
+                && let Some(t) = l
+                    .type_expr
+                    .clone()
+                    .or_else(|| infer_arg_type(&l.value, self.locals, self.fn_returns, None))
+            {
+                self.locals.insert(name.clone(), t);
+            }
+            return;
+        }
+        self.walk_stmt(stmt);
+    }
+
+    fn visit_expr(&mut self, expr: &mut Expr) {
+        // Recurse into children first so nested StructInit
+        // constructions specialize bottom-up.
+        self.walk_expr(expr);
+        let Expr::StructInit { name, fields, .. } = expr else {
+            return;
+        };
+        let Some(struct_def) = self.generic_structs.get(name) else {
+            return;
+        };
+        let mut type_args: Vec<TypeExpr> = Vec::new();
+        for tp in &struct_def.type_params {
+            let mut inferred: Option<TypeExpr> = None;
+            for decl_field in &struct_def.fields {
+                if let TypeExpr::Named(n, _, _) = &decl_field.type_expr
+                    && *n == tp.name
+                    && let Some(init) = fields.iter().find(|f| f.name == decl_field.name)
+                    && let Some(t) = infer_arg_type(&init.value, self.locals, self.fn_returns, None)
+                {
+                    inferred = Some(t);
+                    break;
+                }
+            }
+            match inferred {
+                Some(t) => type_args.push(t),
+                None => return,
+            }
+        }
+        if type_args.len() != struct_def.type_params.len() {
+            return;
+        }
+        let key_args: Vec<String> = type_args.iter().map(type_arg_canonical).collect();
+        let canonical = key_args.join(",");
+        let cache_key = (name.clone(), canonical);
+        let spec_name = if let Some(existing) = self.specs.get(&cache_key) {
+            existing.clone()
+        } else {
+            let spec_name = mangle_struct(name, &type_args);
+            let specialized = specialize_struct(struct_def, &type_args, spec_name.clone());
+            self.specs.insert(cache_key, spec_name.clone());
+            self.new_structs.push(specialized);
+            spec_name
+        };
+        if let Expr::StructInit { name, .. } = expr {
+            *name = spec_name;
+        }
+    }
 }
 
 fn mangle_struct(name: &str, type_args: &[TypeExpr]) -> String {
@@ -680,429 +554,6 @@ fn specialize_struct(
         type_params: Vec::new(),
         fields,
         span: struct_def.span,
-    }
-}
-
-fn rewrite_struct_inits_block(
-    block: &mut Block,
-    generic_structs: &BTreeMap<String, StructDef>,
-    locals: &mut BTreeMap<String, TypeExpr>,
-    specs: &mut BTreeMap<(String, String), String>,
-    new_structs: &mut Vec<StructDef>,
-    fn_returns: &BTreeMap<String, TypeExpr>,
-) {
-    for stmt in block.stmts.iter_mut() {
-        rewrite_struct_inits_stmt(
-            stmt,
-            generic_structs,
-            locals,
-            specs,
-            new_structs,
-            fn_returns,
-        );
-    }
-    if let Some(e) = block.tail_expr.as_mut() {
-        rewrite_struct_inits_expr(e, generic_structs, locals, specs, new_structs, fn_returns);
-    }
-}
-
-fn rewrite_struct_inits_stmt(
-    stmt: &mut Stmt,
-    generic_structs: &BTreeMap<String, StructDef>,
-    locals: &mut BTreeMap<String, TypeExpr>,
-    specs: &mut BTreeMap<(String, String), String>,
-    new_structs: &mut Vec<StructDef>,
-    fn_returns: &BTreeMap<String, TypeExpr>,
-) {
-    match stmt {
-        Stmt::Let(l) => {
-            rewrite_struct_inits_expr(
-                &mut l.value,
-                generic_structs,
-                locals,
-                specs,
-                new_structs,
-                fn_returns,
-            );
-            if let Pattern::Variable(name, _) = &l.pattern
-                && let Some(t) = l
-                    .type_expr
-                    .clone()
-                    .or_else(|| infer_arg_type(&l.value, locals, fn_returns, None))
-            {
-                locals.insert(name.clone(), t);
-            }
-        }
-        Stmt::For(f) => {
-            match &mut f.iterable {
-                Iterable::Range(s, e) => {
-                    rewrite_struct_inits_expr(
-                        s,
-                        generic_structs,
-                        locals,
-                        specs,
-                        new_structs,
-                        fn_returns,
-                    );
-                    rewrite_struct_inits_expr(
-                        e,
-                        generic_structs,
-                        locals,
-                        specs,
-                        new_structs,
-                        fn_returns,
-                    );
-                }
-                Iterable::Expr(e) => {
-                    rewrite_struct_inits_expr(
-                        e,
-                        generic_structs,
-                        locals,
-                        specs,
-                        new_structs,
-                        fn_returns,
-                    );
-                }
-            }
-            rewrite_struct_inits_block(
-                &mut f.body,
-                generic_structs,
-                locals,
-                specs,
-                new_structs,
-                fn_returns,
-            );
-        }
-        Stmt::Break(_) => {}
-        Stmt::DataFieldAssign { value, .. } => {
-            rewrite_struct_inits_expr(
-                value,
-                generic_structs,
-                locals,
-                specs,
-                new_structs,
-                fn_returns,
-            );
-        }
-        Stmt::Expr(e) => {
-            rewrite_struct_inits_expr(e, generic_structs, locals, specs, new_structs, fn_returns);
-        }
-    }
-}
-
-fn rewrite_struct_inits_expr(
-    expr: &mut Expr,
-    generic_structs: &BTreeMap<String, StructDef>,
-    locals: &mut BTreeMap<String, TypeExpr>,
-    specs: &mut BTreeMap<(String, String), String>,
-    new_structs: &mut Vec<StructDef>,
-    fn_returns: &BTreeMap<String, TypeExpr>,
-) {
-    // Recurse into sub-expressions first.
-    match expr {
-        Expr::BinOp { left, right, .. } => {
-            rewrite_struct_inits_expr(
-                left,
-                generic_structs,
-                locals,
-                specs,
-                new_structs,
-                fn_returns,
-            );
-            rewrite_struct_inits_expr(
-                right,
-                generic_structs,
-                locals,
-                specs,
-                new_structs,
-                fn_returns,
-            );
-        }
-        Expr::UnaryOp { operand, .. } => {
-            rewrite_struct_inits_expr(
-                operand,
-                generic_structs,
-                locals,
-                specs,
-                new_structs,
-                fn_returns,
-            );
-        }
-        Expr::Call { args, .. } => {
-            for a in args.iter_mut() {
-                rewrite_struct_inits_expr(
-                    a,
-                    generic_structs,
-                    locals,
-                    specs,
-                    new_structs,
-                    fn_returns,
-                );
-            }
-        }
-        Expr::Pipeline { left, args, .. } => {
-            rewrite_struct_inits_expr(
-                left,
-                generic_structs,
-                locals,
-                specs,
-                new_structs,
-                fn_returns,
-            );
-            for a in args.iter_mut() {
-                rewrite_struct_inits_expr(
-                    a,
-                    generic_structs,
-                    locals,
-                    specs,
-                    new_structs,
-                    fn_returns,
-                );
-            }
-        }
-        Expr::Yield { value, .. } => {
-            rewrite_struct_inits_expr(
-                value,
-                generic_structs,
-                locals,
-                specs,
-                new_structs,
-                fn_returns,
-            );
-        }
-        Expr::If {
-            condition,
-            then_block,
-            else_block,
-            ..
-        } => {
-            rewrite_struct_inits_expr(
-                condition,
-                generic_structs,
-                locals,
-                specs,
-                new_structs,
-                fn_returns,
-            );
-            rewrite_struct_inits_block(
-                then_block,
-                generic_structs,
-                locals,
-                specs,
-                new_structs,
-                fn_returns,
-            );
-            if let Some(b) = else_block.as_mut() {
-                rewrite_struct_inits_block(
-                    b,
-                    generic_structs,
-                    locals,
-                    specs,
-                    new_structs,
-                    fn_returns,
-                );
-            }
-        }
-        Expr::Match {
-            scrutinee, arms, ..
-        } => {
-            rewrite_struct_inits_expr(
-                scrutinee,
-                generic_structs,
-                locals,
-                specs,
-                new_structs,
-                fn_returns,
-            );
-            for arm in arms.iter_mut() {
-                rewrite_struct_inits_expr(
-                    &mut arm.expr,
-                    generic_structs,
-                    locals,
-                    specs,
-                    new_structs,
-                    fn_returns,
-                );
-            }
-        }
-        Expr::Loop { body, .. } => {
-            rewrite_struct_inits_block(
-                body,
-                generic_structs,
-                locals,
-                specs,
-                new_structs,
-                fn_returns,
-            );
-        }
-        Expr::FieldAccess { object, .. } => {
-            rewrite_struct_inits_expr(
-                object,
-                generic_structs,
-                locals,
-                specs,
-                new_structs,
-                fn_returns,
-            );
-        }
-        Expr::MethodCall { receiver, args, .. } => {
-            rewrite_struct_inits_expr(
-                receiver,
-                generic_structs,
-                locals,
-                specs,
-                new_structs,
-                fn_returns,
-            );
-            for a in args.iter_mut() {
-                rewrite_struct_inits_expr(
-                    a,
-                    generic_structs,
-                    locals,
-                    specs,
-                    new_structs,
-                    fn_returns,
-                );
-            }
-        }
-        Expr::TupleIndex { object, .. } => {
-            rewrite_struct_inits_expr(
-                object,
-                generic_structs,
-                locals,
-                specs,
-                new_structs,
-                fn_returns,
-            );
-        }
-        Expr::ArrayIndex { object, index, .. } => {
-            rewrite_struct_inits_expr(
-                object,
-                generic_structs,
-                locals,
-                specs,
-                new_structs,
-                fn_returns,
-            );
-            rewrite_struct_inits_expr(
-                index,
-                generic_structs,
-                locals,
-                specs,
-                new_structs,
-                fn_returns,
-            );
-        }
-        Expr::StructInit { fields, .. } => {
-            for f in fields.iter_mut() {
-                rewrite_struct_inits_expr(
-                    &mut f.value,
-                    generic_structs,
-                    locals,
-                    specs,
-                    new_structs,
-                    fn_returns,
-                );
-            }
-        }
-        Expr::EnumVariant { args, .. } => {
-            for a in args.iter_mut() {
-                rewrite_struct_inits_expr(
-                    a,
-                    generic_structs,
-                    locals,
-                    specs,
-                    new_structs,
-                    fn_returns,
-                );
-            }
-        }
-        Expr::ArrayLiteral { elements, .. } | Expr::TupleLiteral { elements, .. } => {
-            for e in elements.iter_mut() {
-                rewrite_struct_inits_expr(
-                    e,
-                    generic_structs,
-                    locals,
-                    specs,
-                    new_structs,
-                    fn_returns,
-                );
-            }
-        }
-        Expr::Cast { expr, .. } => {
-            rewrite_struct_inits_expr(
-                expr,
-                generic_structs,
-                locals,
-                specs,
-                new_structs,
-                fn_returns,
-            );
-        }
-        Expr::Closure { body, .. } => {
-            // Closures are hoisted before this pass runs in the
-            // compile pipeline, but for safety recurse anyway.
-            rewrite_struct_inits_block(
-                body,
-                generic_structs,
-                locals,
-                specs,
-                new_structs,
-                fn_returns,
-            );
-        }
-        Expr::ClosureRef { .. }
-        | Expr::Literal { .. }
-        | Expr::Ident { .. }
-        | Expr::Placeholder { .. } => {}
-    }
-
-    // Now check the expression itself for a generic StructInit.
-    if let Expr::StructInit {
-        name,
-        fields,
-        span: _,
-    } = expr
-        && let Some(struct_def) = generic_structs.get(name)
-    {
-        let mut type_args: Vec<TypeExpr> = Vec::new();
-        for tp in &struct_def.type_params {
-            // Find the first declared field whose type is `Named(tp.name)`
-            // and infer from the matching provided field's value.
-            let mut inferred: Option<TypeExpr> = None;
-            for decl_field in &struct_def.fields {
-                if let TypeExpr::Named(n, _, _) = &decl_field.type_expr
-                    && *n == tp.name
-                    && let Some(init) = fields.iter().find(|f| f.name == decl_field.name)
-                    && let Some(t) = infer_arg_type(&init.value, locals, fn_returns, None)
-                {
-                    inferred = Some(t);
-                    break;
-                }
-            }
-            match inferred {
-                Some(t) => type_args.push(t),
-                None => return,
-            }
-        }
-        if type_args.len() != struct_def.type_params.len() {
-            return;
-        }
-        let key_args: Vec<String> = type_args.iter().map(type_arg_canonical).collect();
-        let canonical = key_args.join(",");
-        let cache_key = (name.clone(), canonical);
-        let spec_name = if let Some(existing) = specs.get(&cache_key) {
-            existing.clone()
-        } else {
-            let spec_name = mangle_struct(name, &type_args);
-            let specialized = specialize_struct(struct_def, &type_args, spec_name.clone());
-            specs.insert(cache_key, spec_name.clone());
-            new_structs.push(specialized);
-            spec_name
-        };
-        if let Expr::StructInit { name, .. } = expr {
-            *name = spec_name;
-        }
     }
 }
 
@@ -1660,468 +1111,67 @@ fn subst_in_expr(expr: &Expr, subst: &BTreeMap<String, TypeExpr>) -> Expr {
     }
 }
 
-/// Walk a block looking for generic call sites and rewrite them in
-/// place to reference specialized functions. Records local variable
-/// types as it descends through let bindings.
-fn rewrite_block(
-    block: &mut Block,
-    generics: &BTreeMap<String, FunctionDef>,
-    locals: &mut BTreeMap<String, TypeExpr>,
-    specs: &mut BTreeMap<(String, String), String>,
-    new_functions: &mut Vec<FunctionDef>,
-    fn_returns: &BTreeMap<String, TypeExpr>,
-    struct_table: &BTreeMap<String, StructDef>,
-) {
-    for stmt in &mut block.stmts {
-        rewrite_stmt(
-            stmt,
-            generics,
-            locals,
-            specs,
-            new_functions,
-            fn_returns,
-            struct_table,
-        );
-    }
-    if let Some(e) = block.tail_expr.as_mut() {
-        rewrite_expr(
-            e,
-            generics,
-            locals,
-            specs,
-            new_functions,
-            fn_returns,
-            struct_table,
-        );
-    }
+/// AST visitor that rewrites generic function call sites to their
+/// specialized monomorphic counterparts. Walks the program in
+/// post-order so nested generic calls are specialized bottom-up.
+/// Records local variable types as it descends through `let`
+/// bindings so subsequent call sites that reference those locals can
+/// infer concrete type arguments.
+struct CallSpecializer<'a> {
+    generics: &'a BTreeMap<String, FunctionDef>,
+    locals: &'a mut BTreeMap<String, TypeExpr>,
+    specs: &'a mut BTreeMap<(String, String), String>,
+    new_functions: &'a mut Vec<FunctionDef>,
+    fn_returns: &'a BTreeMap<String, TypeExpr>,
+    struct_table: &'a BTreeMap<String, StructDef>,
 }
 
-fn rewrite_stmt(
-    stmt: &mut Stmt,
-    generics: &BTreeMap<String, FunctionDef>,
-    locals: &mut BTreeMap<String, TypeExpr>,
-    specs: &mut BTreeMap<(String, String), String>,
-    new_functions: &mut Vec<FunctionDef>,
-    fn_returns: &BTreeMap<String, TypeExpr>,
-    struct_table: &BTreeMap<String, StructDef>,
-) {
-    match stmt {
-        Stmt::Let(l) => {
-            rewrite_expr(
-                &mut l.value,
-                generics,
-                locals,
-                specs,
-                new_functions,
-                fn_returns,
-                struct_table,
-            );
+impl crate::visitor::MutVisitor for CallSpecializer<'_> {
+    fn visit_stmt(&mut self, stmt: &mut Stmt) {
+        if let Stmt::Let(l) = stmt {
+            self.visit_expr(&mut l.value);
             // Record local type for subsequent type inference at call
             // sites that reference this binding.
             if let Pattern::Variable(name, _) = &l.pattern
-                && let Some(t) = l
-                    .type_expr
-                    .clone()
-                    .or_else(|| infer_arg_type(&l.value, locals, fn_returns, Some(struct_table)))
+                && let Some(t) = l.type_expr.clone().or_else(|| {
+                    infer_arg_type(
+                        &l.value,
+                        self.locals,
+                        self.fn_returns,
+                        Some(self.struct_table),
+                    )
+                })
             {
-                locals.insert(name.clone(), t);
+                self.locals.insert(name.clone(), t);
             }
+            return;
         }
-        Stmt::For(f) => {
-            rewrite_iterable(
-                &mut f.iterable,
-                generics,
-                locals,
-                specs,
-                new_functions,
-                fn_returns,
-                struct_table,
-            );
-            rewrite_block(
-                &mut f.body,
-                generics,
-                locals,
-                specs,
-                new_functions,
-                fn_returns,
-                struct_table,
-            );
-        }
-        Stmt::Break(_) => {}
-        Stmt::DataFieldAssign { value, .. } => {
-            rewrite_expr(
-                value,
-                generics,
-                locals,
-                specs,
-                new_functions,
-                fn_returns,
-                struct_table,
-            );
-        }
-        Stmt::Expr(e) => rewrite_expr(
-            e,
-            generics,
-            locals,
-            specs,
-            new_functions,
-            fn_returns,
-            struct_table,
-        ),
-    }
-}
-
-fn rewrite_iterable(
-    it: &mut Iterable,
-    generics: &BTreeMap<String, FunctionDef>,
-    locals: &mut BTreeMap<String, TypeExpr>,
-    specs: &mut BTreeMap<(String, String), String>,
-    new_functions: &mut Vec<FunctionDef>,
-    fn_returns: &BTreeMap<String, TypeExpr>,
-    struct_table: &BTreeMap<String, StructDef>,
-) {
-    match it {
-        Iterable::Range(start, end) => {
-            rewrite_expr(
-                start,
-                generics,
-                locals,
-                specs,
-                new_functions,
-                fn_returns,
-                struct_table,
-            );
-            rewrite_expr(
-                end,
-                generics,
-                locals,
-                specs,
-                new_functions,
-                fn_returns,
-                struct_table,
-            );
-        }
-        Iterable::Expr(e) => rewrite_expr(
-            e,
-            generics,
-            locals,
-            specs,
-            new_functions,
-            fn_returns,
-            struct_table,
-        ),
-    }
-}
-
-fn rewrite_expr(
-    expr: &mut Expr,
-    generics: &BTreeMap<String, FunctionDef>,
-    locals: &mut BTreeMap<String, TypeExpr>,
-    specs: &mut BTreeMap<(String, String), String>,
-    new_functions: &mut Vec<FunctionDef>,
-    fn_returns: &BTreeMap<String, TypeExpr>,
-    struct_table: &BTreeMap<String, StructDef>,
-) {
-    // First descend so nested calls are rewritten before this one.
-    match expr {
-        Expr::BinOp { left, right, .. } => {
-            rewrite_expr(
-                left,
-                generics,
-                locals,
-                specs,
-                new_functions,
-                fn_returns,
-                struct_table,
-            );
-            rewrite_expr(
-                right,
-                generics,
-                locals,
-                specs,
-                new_functions,
-                fn_returns,
-                struct_table,
-            );
-        }
-        Expr::UnaryOp { operand, .. } => {
-            rewrite_expr(
-                operand,
-                generics,
-                locals,
-                specs,
-                new_functions,
-                fn_returns,
-                struct_table,
-            );
-        }
-        Expr::Call { args, .. } => {
-            for a in args.iter_mut() {
-                rewrite_expr(
-                    a,
-                    generics,
-                    locals,
-                    specs,
-                    new_functions,
-                    fn_returns,
-                    struct_table,
-                );
-            }
-        }
-        Expr::Pipeline { left, args, .. } => {
-            rewrite_expr(
-                left,
-                generics,
-                locals,
-                specs,
-                new_functions,
-                fn_returns,
-                struct_table,
-            );
-            for a in args.iter_mut() {
-                rewrite_expr(
-                    a,
-                    generics,
-                    locals,
-                    specs,
-                    new_functions,
-                    fn_returns,
-                    struct_table,
-                );
-            }
-        }
-        Expr::Yield { value, .. } => rewrite_expr(
-            value,
-            generics,
-            locals,
-            specs,
-            new_functions,
-            fn_returns,
-            struct_table,
-        ),
-        Expr::If {
-            condition,
-            then_block,
-            else_block,
-            ..
-        } => {
-            rewrite_expr(
-                condition,
-                generics,
-                locals,
-                specs,
-                new_functions,
-                fn_returns,
-                struct_table,
-            );
-            rewrite_block(
-                then_block,
-                generics,
-                locals,
-                specs,
-                new_functions,
-                fn_returns,
-                struct_table,
-            );
-            if let Some(b) = else_block.as_mut() {
-                rewrite_block(
-                    b,
-                    generics,
-                    locals,
-                    specs,
-                    new_functions,
-                    fn_returns,
-                    struct_table,
-                );
-            }
-        }
-        Expr::Match {
-            scrutinee, arms, ..
-        } => {
-            rewrite_expr(
-                scrutinee,
-                generics,
-                locals,
-                specs,
-                new_functions,
-                fn_returns,
-                struct_table,
-            );
-            for arm in arms.iter_mut() {
-                rewrite_expr(
-                    &mut arm.expr,
-                    generics,
-                    locals,
-                    specs,
-                    new_functions,
-                    fn_returns,
-                    struct_table,
-                );
-            }
-        }
-        Expr::Loop { body, .. } => rewrite_block(
-            body,
-            generics,
-            locals,
-            specs,
-            new_functions,
-            fn_returns,
-            struct_table,
-        ),
-        Expr::FieldAccess { object, .. } => {
-            rewrite_expr(
-                object,
-                generics,
-                locals,
-                specs,
-                new_functions,
-                fn_returns,
-                struct_table,
-            );
-        }
-        Expr::MethodCall { receiver, args, .. } => {
-            rewrite_expr(
-                receiver,
-                generics,
-                locals,
-                specs,
-                new_functions,
-                fn_returns,
-                struct_table,
-            );
-            for a in args.iter_mut() {
-                rewrite_expr(
-                    a,
-                    generics,
-                    locals,
-                    specs,
-                    new_functions,
-                    fn_returns,
-                    struct_table,
-                );
-            }
-        }
-        Expr::TupleIndex { object, .. } => {
-            rewrite_expr(
-                object,
-                generics,
-                locals,
-                specs,
-                new_functions,
-                fn_returns,
-                struct_table,
-            );
-        }
-        Expr::ArrayIndex { object, index, .. } => {
-            rewrite_expr(
-                object,
-                generics,
-                locals,
-                specs,
-                new_functions,
-                fn_returns,
-                struct_table,
-            );
-            rewrite_expr(
-                index,
-                generics,
-                locals,
-                specs,
-                new_functions,
-                fn_returns,
-                struct_table,
-            );
-        }
-        Expr::StructInit { fields, .. } => {
-            for f in fields.iter_mut() {
-                rewrite_expr(
-                    &mut f.value,
-                    generics,
-                    locals,
-                    specs,
-                    new_functions,
-                    fn_returns,
-                    struct_table,
-                );
-            }
-        }
-        Expr::EnumVariant { args, .. } => {
-            for a in args.iter_mut() {
-                rewrite_expr(
-                    a,
-                    generics,
-                    locals,
-                    specs,
-                    new_functions,
-                    fn_returns,
-                    struct_table,
-                );
-            }
-        }
-        Expr::ArrayLiteral { elements, .. } | Expr::TupleLiteral { elements, .. } => {
-            for e in elements.iter_mut() {
-                rewrite_expr(
-                    e,
-                    generics,
-                    locals,
-                    specs,
-                    new_functions,
-                    fn_returns,
-                    struct_table,
-                );
-            }
-        }
-        Expr::Cast { expr, .. } => rewrite_expr(
-            expr,
-            generics,
-            locals,
-            specs,
-            new_functions,
-            fn_returns,
-            struct_table,
-        ),
-        Expr::Closure { body, .. } => {
-            rewrite_block(
-                body,
-                generics,
-                locals,
-                specs,
-                new_functions,
-                fn_returns,
-                struct_table,
-            );
-        }
-        Expr::ClosureRef { .. } => {}
-        Expr::Literal { .. } | Expr::Ident { .. } | Expr::Placeholder { .. } => {}
+        self.walk_stmt(stmt);
     }
 
-    // Now inspect this node for a generic call to specialize.
-    if let Expr::Call {
-        name,
-        args,
-        span: _,
-    } = expr
-        && let Some(generic_func) = generics.get(name)
-    {
+    fn visit_expr(&mut self, expr: &mut Expr) {
+        // Recurse into children first so nested generic calls are
+        // specialized bottom-up.
+        self.walk_expr(expr);
+        // Then check this node for a generic call to specialize.
+        let Expr::Call { name, args, .. } = expr else {
+            return;
+        };
+        let Some(generic_func) = self.generics.get(name) else {
+            return;
+        };
         // Infer the type arguments from the call's actual argument
-        // types. The mapping uses positional correspondence: the
-        // i-th type parameter is bound by the i-th argument's type.
-        // This is a minimum-viable inference; full inference would
-        // unify against all parameter positions and propagate
-        // constraints. For now, handle cases where the i-th
-        // parameter's declared type is exactly the i-th type
-        // parameter.
+        // types. Positional correspondence: the i-th type parameter
+        // is bound by the first parameter declared as `Named(tp.name)`.
         let mut type_args: Vec<TypeExpr> = Vec::new();
         for tp in &generic_func.type_params {
-            // Find the first parameter whose declared type is
-            // `Named(tp.name)` and infer from the corresponding
-            // argument.
             let mut inferred: Option<TypeExpr> = None;
             for (param_idx, param) in generic_func.params.iter().enumerate() {
                 if let Some(TypeExpr::Named(n, _, _)) = &param.type_expr
                     && *n == tp.name
                     && let Some(arg) = args.get(param_idx)
-                    && let Some(t) = infer_arg_type(arg, locals, fn_returns, Some(struct_table))
+                    && let Some(t) =
+                        infer_arg_type(arg, self.locals, self.fn_returns, Some(self.struct_table))
                 {
                     inferred = Some(t);
                     break;
@@ -2129,26 +1179,24 @@ fn rewrite_expr(
             }
             match inferred {
                 Some(t) => type_args.push(t),
-                None => return, // give up; leave the call generic
+                None => return,
             }
         }
         if type_args.len() != generic_func.type_params.len() {
             return;
         }
-        // Compute the canonical key for this specialization.
         let key_args: Vec<String> = type_args.iter().map(type_arg_canonical).collect();
         let canonical = key_args.join(",");
         let cache_key = (name.clone(), canonical);
-        let spec_name = if let Some(existing) = specs.get(&cache_key) {
+        let spec_name = if let Some(existing) = self.specs.get(&cache_key) {
             existing.clone()
         } else {
             let spec_name = mangle(name, &type_args);
             let specialized = specialize_function(generic_func, &type_args, spec_name.clone());
-            specs.insert(cache_key, spec_name.clone());
-            new_functions.push(specialized);
+            self.specs.insert(cache_key, spec_name.clone());
+            self.new_functions.push(specialized);
             spec_name
         };
-        // Rewrite the call's name to the specialized name.
         if let Expr::Call { name, .. } = expr {
             *name = spec_name;
         }

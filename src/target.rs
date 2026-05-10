@@ -40,6 +40,7 @@ use crate::ast::{Expr, Literal, PrimType, Program, Stmt, TypeExpr};
 use crate::bytecode::{RUNTIME_ADDRESS_BITS_LOG2, RUNTIME_FLOAT_BITS_LOG2, RUNTIME_WORD_BITS_LOG2};
 use crate::compiler::CompileError;
 use crate::token::Span;
+use crate::visitor::Visitor;
 
 /// Target descriptor describing word/address/float widths and
 /// feature flags for a compilation target.
@@ -200,207 +201,136 @@ pub(crate) fn validate_program_for_target(
     program: &Program,
     target: &Target,
 ) -> Result<(), CompileError> {
-    if !target.has_floats || !target.has_strings {
-        for func in &program.functions {
-            check_type_against_target(&func.return_type, target)?;
-            for param in &func.params {
+    if target.has_floats && target.has_strings {
+        return Ok(());
+    }
+    let mut checker = TargetChecker {
+        target,
+        first_error: None,
+    };
+    for func in &program.functions {
+        checker.check_type(&func.return_type);
+        for param in &func.params {
+            if let Some(t) = &param.type_expr {
+                checker.check_type(t);
+            }
+        }
+        checker.visit_block(&func.body);
+    }
+    for impl_block in &program.impls {
+        for method in &impl_block.methods {
+            checker.check_type(&method.return_type);
+            for param in &method.params {
                 if let Some(t) = &param.type_expr {
-                    check_type_against_target(t, target)?;
+                    checker.check_type(t);
                 }
             }
-            check_block_against_target(&func.body, target)?;
+            checker.visit_block(&method.body);
         }
-        for impl_block in &program.impls {
-            for method in &impl_block.methods {
-                check_type_against_target(&method.return_type, target)?;
-                for param in &method.params {
-                    if let Some(t) = &param.type_expr {
-                        check_type_against_target(t, target)?;
+    }
+    match checker.first_error {
+        Some(e) => Err(e),
+        None => Ok(()),
+    }
+}
+
+/// AST visitor that records the first feature-violation error
+/// encountered during a walk. Subsequent visits short-circuit so the
+/// reported error points at the earliest source position.
+struct TargetChecker<'a> {
+    target: &'a Target,
+    first_error: Option<CompileError>,
+}
+
+impl TargetChecker<'_> {
+    fn check_type(&mut self, ty: &TypeExpr) {
+        if self.first_error.is_some() {
+            return;
+        }
+        match ty {
+            TypeExpr::Prim(PrimType::F64, span) if !self.target.has_floats => {
+                self.first_error = Some(CompileError {
+                    message: String::from("target does not support floating-point types"),
+                    span: *span,
+                });
+            }
+            TypeExpr::Prim(PrimType::KString, span) if !self.target.has_strings => {
+                self.first_error = Some(CompileError {
+                    message: String::from("target does not support string types"),
+                    span: *span,
+                });
+            }
+            TypeExpr::Tuple(elems, _) => {
+                for e in elems {
+                    self.check_type(e);
+                }
+            }
+            TypeExpr::Array(elem, _, _) => self.check_type(elem),
+            TypeExpr::Option(inner, _) => self.check_type(inner),
+            TypeExpr::Named(_, args, _) => {
+                for a in args {
+                    self.check_type(a);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+impl Visitor for TargetChecker<'_> {
+    fn visit_stmt(&mut self, stmt: &Stmt) {
+        if self.first_error.is_some() {
+            return;
+        }
+        if let Stmt::Let(l) = stmt
+            && let Some(t) = &l.type_expr
+        {
+            self.check_type(t);
+        }
+        self.walk_stmt(stmt);
+    }
+
+    fn visit_expr(&mut self, expr: &Expr) {
+        if self.first_error.is_some() {
+            return;
+        }
+        match expr {
+            Expr::Literal { value, span } => match value {
+                Literal::Float(_) if !self.target.has_floats => {
+                    self.first_error = Some(CompileError {
+                        message: String::from("target does not support floating-point literals"),
+                        span: *span,
+                    });
+                }
+                Literal::String(_) if !self.target.has_strings => {
+                    self.first_error = Some(CompileError {
+                        message: String::from("target does not support string literals"),
+                        span: *span,
+                    });
+                }
+                _ => {}
+            },
+            Expr::Cast {
+                target: cast_target,
+                ..
+            } => self.check_type(cast_target),
+            Expr::Closure {
+                params,
+                return_type,
+                ..
+            } => {
+                for p in params {
+                    if let Some(t) = &p.type_expr {
+                        self.check_type(t);
                     }
                 }
-                check_block_against_target(&method.body, target)?;
-            }
-        }
-    }
-    Ok(())
-}
-
-fn check_type_against_target(ty: &TypeExpr, target: &Target) -> Result<(), CompileError> {
-    match ty {
-        TypeExpr::Prim(PrimType::F64, span) if !target.has_floats => Err(CompileError {
-            message: String::from("target does not support floating-point types"),
-            span: *span,
-        }),
-        TypeExpr::Prim(PrimType::KString, span) if !target.has_strings => Err(CompileError {
-            message: String::from("target does not support string types"),
-            span: *span,
-        }),
-        TypeExpr::Tuple(elems, _) => {
-            for e in elems {
-                check_type_against_target(e, target)?;
-            }
-            Ok(())
-        }
-        TypeExpr::Array(elem, _, _) => check_type_against_target(elem, target),
-        TypeExpr::Option(inner, _) => check_type_against_target(inner, target),
-        TypeExpr::Named(_, args, _) => {
-            for a in args {
-                check_type_against_target(a, target)?;
-            }
-            Ok(())
-        }
-        _ => Ok(()),
-    }
-}
-
-fn check_block_against_target(
-    block: &crate::ast::Block,
-    target: &Target,
-) -> Result<(), CompileError> {
-    for stmt in &block.stmts {
-        check_stmt_against_target(stmt, target)?;
-    }
-    if let Some(e) = &block.tail_expr {
-        check_expr_against_target(e, target)?;
-    }
-    Ok(())
-}
-
-fn check_stmt_against_target(stmt: &Stmt, target: &Target) -> Result<(), CompileError> {
-    match stmt {
-        Stmt::Let(l) => {
-            if let Some(t) = &l.type_expr {
-                check_type_against_target(t, target)?;
-            }
-            check_expr_against_target(&l.value, target)
-        }
-        Stmt::For(f) => {
-            match &f.iterable {
-                crate::ast::Iterable::Range(s, e) => {
-                    check_expr_against_target(s, target)?;
-                    check_expr_against_target(e, target)?;
-                }
-                crate::ast::Iterable::Expr(e) => check_expr_against_target(e, target)?,
-            }
-            check_block_against_target(&f.body, target)
-        }
-        Stmt::Break(_) => Ok(()),
-        Stmt::DataFieldAssign { value, .. } => check_expr_against_target(value, target),
-        Stmt::Expr(e) => check_expr_against_target(e, target),
-    }
-}
-
-fn check_expr_against_target(expr: &Expr, target: &Target) -> Result<(), CompileError> {
-    match expr {
-        Expr::Literal { value, span } => match value {
-            Literal::Float(_) if !target.has_floats => Err(CompileError {
-                message: String::from("target does not support floating-point literals"),
-                span: *span,
-            }),
-            Literal::String(_) if !target.has_strings => Err(CompileError {
-                message: String::from("target does not support string literals"),
-                span: *span,
-            }),
-            _ => Ok(()),
-        },
-        Expr::BinOp { left, right, .. } => {
-            check_expr_against_target(left, target)?;
-            check_expr_against_target(right, target)
-        }
-        Expr::UnaryOp { operand, .. } => check_expr_against_target(operand, target),
-        Expr::Call { args, .. } => {
-            for a in args {
-                check_expr_against_target(a, target)?;
-            }
-            Ok(())
-        }
-        Expr::Pipeline { left, args, .. } => {
-            check_expr_against_target(left, target)?;
-            for a in args {
-                check_expr_against_target(a, target)?;
-            }
-            Ok(())
-        }
-        Expr::Yield { value, .. } => check_expr_against_target(value, target),
-        Expr::If {
-            condition,
-            then_block,
-            else_block,
-            ..
-        } => {
-            check_expr_against_target(condition, target)?;
-            check_block_against_target(then_block, target)?;
-            if let Some(b) = else_block {
-                check_block_against_target(b, target)?;
-            }
-            Ok(())
-        }
-        Expr::Match {
-            scrutinee, arms, ..
-        } => {
-            check_expr_against_target(scrutinee, target)?;
-            for arm in arms {
-                check_expr_against_target(&arm.expr, target)?;
-            }
-            Ok(())
-        }
-        Expr::Loop { body, .. } => check_block_against_target(body, target),
-        Expr::FieldAccess { object, .. } => check_expr_against_target(object, target),
-        Expr::MethodCall { receiver, args, .. } => {
-            check_expr_against_target(receiver, target)?;
-            for a in args {
-                check_expr_against_target(a, target)?;
-            }
-            Ok(())
-        }
-        Expr::TupleIndex { object, .. } => check_expr_against_target(object, target),
-        Expr::ArrayIndex { object, index, .. } => {
-            check_expr_against_target(object, target)?;
-            check_expr_against_target(index, target)
-        }
-        Expr::StructInit { fields, .. } => {
-            for f in fields {
-                check_expr_against_target(&f.value, target)?;
-            }
-            Ok(())
-        }
-        Expr::EnumVariant { args, .. } => {
-            for a in args {
-                check_expr_against_target(a, target)?;
-            }
-            Ok(())
-        }
-        Expr::ArrayLiteral { elements, .. } | Expr::TupleLiteral { elements, .. } => {
-            for e in elements {
-                check_expr_against_target(e, target)?;
-            }
-            Ok(())
-        }
-        Expr::Cast {
-            expr,
-            target: cast_target,
-            ..
-        } => {
-            check_type_against_target(cast_target, target)?;
-            check_expr_against_target(expr, target)
-        }
-        Expr::Closure {
-            body,
-            params,
-            return_type,
-            ..
-        } => {
-            for p in params {
-                if let Some(t) = &p.type_expr {
-                    check_type_against_target(t, target)?;
+                if let Some(t) = return_type {
+                    self.check_type(t);
                 }
             }
-            if let Some(t) = return_type {
-                check_type_against_target(t, target)?;
-            }
-            check_block_against_target(body, target)
+            _ => {}
         }
-        Expr::ClosureRef { .. } | Expr::Ident { .. } | Expr::Placeholder { .. } => Ok(()),
+        self.walk_expr(expr);
     }
 }
 

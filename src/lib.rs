@@ -14,6 +14,7 @@ pub mod token;
 pub mod typecheck;
 pub mod utility_natives;
 pub mod verify;
+pub mod visitor;
 pub mod vm;
 
 pub use keleusma_arena::{

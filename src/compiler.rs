@@ -1156,158 +1156,113 @@ fn collect_pattern_names(
 /// bindings and for-loop variables extend `bound` for the rest of
 /// the block. Closures within the block are NOT recursed into here
 /// because they have their own free-variable analysis.
+/// Free-variable collector implemented as an immutable AST visitor.
+/// The `bound` set tracks names introduced into scope as the walk
+/// descends. The `free` list accumulates identifiers used at a
+/// position where they were not in scope.
+struct FreeVarCollector {
+    bound: alloc::collections::BTreeSet<alloc::string::String>,
+    free: Vec<alloc::string::String>,
+}
+
+impl FreeVarCollector {
+    fn record_if_free(&mut self, name: &str) {
+        if !self.bound.contains(name) && !self.free.iter().any(|n| n.as_str() == name) {
+            self.free.push(alloc::string::String::from(name));
+        }
+    }
+}
+
+impl crate::visitor::Visitor for FreeVarCollector {
+    fn visit_block(&mut self, block: &Block) {
+        // A block introduces a fresh scope. Save and restore `bound`
+        // so let bindings inside the block do not leak out.
+        let saved = self.bound.clone();
+        self.walk_block(block);
+        self.bound = saved;
+    }
+
+    fn visit_stmt(&mut self, stmt: &Stmt) {
+        match stmt {
+            Stmt::Let(l) => {
+                self.visit_expr(&l.value);
+                collect_pattern_names(&l.pattern, &mut self.bound);
+            }
+            Stmt::For(f) => {
+                match &f.iterable {
+                    Iterable::Range(s, e) => {
+                        self.visit_expr(s);
+                        self.visit_expr(e);
+                    }
+                    Iterable::Expr(e) => self.visit_expr(e),
+                }
+                // For-body introduces the iteration variable for the
+                // body's scope only.
+                let saved = self.bound.clone();
+                self.bound.insert(f.var.clone());
+                self.visit_block(&f.body);
+                self.bound = saved;
+            }
+            _ => self.walk_stmt(stmt),
+        }
+    }
+
+    fn visit_expr(&mut self, expr: &Expr) {
+        match expr {
+            Expr::Ident { name, .. } => self.record_if_free(name),
+            Expr::Call { name, args, .. } => {
+                // Conservatively treat the call name as potentially
+                // referring to a local. The compile site filters
+                // non-locals against function_map. See the original
+                // walker comment for the rationale.
+                self.record_if_free(name);
+                for a in args {
+                    self.visit_expr(a);
+                }
+            }
+            Expr::Match {
+                scrutinee, arms, ..
+            } => {
+                self.visit_expr(scrutinee);
+                for arm in arms {
+                    let saved = self.bound.clone();
+                    collect_pattern_names(&arm.pattern, &mut self.bound);
+                    self.visit_expr(&arm.expr);
+                    self.bound = saved;
+                }
+            }
+            Expr::Closure { .. } => {
+                // Should not occur after the hoist pass replaces every
+                // closure literal with a ClosureRef. Conservatively do
+                // nothing here; the surrounding pass will hoist on
+                // the next walk.
+            }
+            Expr::ClosureRef { captures, .. } => {
+                // Inner closures already hoisted. Each capture that is
+                // not bound here is a free variable of the enclosing
+                // expression, propagating transitive captures through
+                // nested closures.
+                for capture in captures {
+                    self.record_if_free(capture);
+                }
+            }
+            _ => self.walk_expr(expr),
+        }
+    }
+}
+
 fn collect_free_in_block(
     block: &Block,
     bound: &alloc::collections::BTreeSet<alloc::string::String>,
     out: &mut Vec<alloc::string::String>,
 ) {
-    let mut local_bound = bound.clone();
-    for stmt in &block.stmts {
-        collect_free_in_stmt(stmt, &mut local_bound, out);
-    }
-    if let Some(e) = &block.tail_expr {
-        collect_free_in_expr(e, &local_bound, out);
-    }
-}
-
-fn collect_free_in_stmt(
-    stmt: &Stmt,
-    bound: &mut alloc::collections::BTreeSet<alloc::string::String>,
-    out: &mut Vec<alloc::string::String>,
-) {
-    match stmt {
-        Stmt::Let(l) => {
-            collect_free_in_expr(&l.value, bound, out);
-            collect_pattern_names(&l.pattern, bound);
-        }
-        Stmt::For(f) => {
-            match &f.iterable {
-                Iterable::Range(s, e) => {
-                    collect_free_in_expr(s, bound, out);
-                    collect_free_in_expr(e, bound, out);
-                }
-                Iterable::Expr(e) => collect_free_in_expr(e, bound, out),
-            }
-            let mut inner_bound = bound.clone();
-            inner_bound.insert(f.var.clone());
-            collect_free_in_block(&f.body, &inner_bound, out);
-        }
-        Stmt::Break(_) => {}
-        Stmt::DataFieldAssign { value, .. } => collect_free_in_expr(value, bound, out),
-        Stmt::Expr(e) => collect_free_in_expr(e, bound, out),
-    }
-}
-
-fn collect_free_in_expr(
-    expr: &Expr,
-    bound: &alloc::collections::BTreeSet<alloc::string::String>,
-    out: &mut Vec<alloc::string::String>,
-) {
-    match expr {
-        Expr::Literal { .. } | Expr::Placeholder { .. } => {}
-        Expr::Ident { name, .. } => {
-            if !bound.contains(name) && !out.contains(name) {
-                out.push(name.clone());
-            }
-        }
-        Expr::BinOp { left, right, .. } => {
-            collect_free_in_expr(left, bound, out);
-            collect_free_in_expr(right, bound, out);
-        }
-        Expr::UnaryOp { operand, .. } => collect_free_in_expr(operand, bound, out),
-        Expr::Call { name, args, .. } => {
-            // Only treat the call name as a free variable if it
-            // resolves to a local (not a function). The caller
-            // doesn't know which is which here, so we conservatively
-            // include the name. The compile site filters non-locals
-            // out by checking against function_map first when
-            // capturing.
-            if !bound.contains(name) && !out.contains(name) {
-                out.push(name.clone());
-            }
-            for a in args {
-                collect_free_in_expr(a, bound, out);
-            }
-        }
-        Expr::Pipeline { left, args, .. } => {
-            collect_free_in_expr(left, bound, out);
-            for a in args {
-                collect_free_in_expr(a, bound, out);
-            }
-        }
-        Expr::Yield { value, .. } => collect_free_in_expr(value, bound, out),
-        Expr::If {
-            condition,
-            then_block,
-            else_block,
-            ..
-        } => {
-            collect_free_in_expr(condition, bound, out);
-            collect_free_in_block(then_block, bound, out);
-            if let Some(b) = else_block {
-                collect_free_in_block(b, bound, out);
-            }
-        }
-        Expr::Match {
-            scrutinee, arms, ..
-        } => {
-            collect_free_in_expr(scrutinee, bound, out);
-            for arm in arms {
-                let mut arm_bound = bound.clone();
-                collect_pattern_names(&arm.pattern, &mut arm_bound);
-                collect_free_in_expr(&arm.expr, &arm_bound, out);
-            }
-        }
-        Expr::Loop { body, .. } => collect_free_in_block(body, bound, out),
-        Expr::FieldAccess { object, .. } => collect_free_in_expr(object, bound, out),
-        Expr::MethodCall { receiver, args, .. } => {
-            collect_free_in_expr(receiver, bound, out);
-            for a in args {
-                collect_free_in_expr(a, bound, out);
-            }
-        }
-        Expr::TupleIndex { object, .. } => collect_free_in_expr(object, bound, out),
-        Expr::ArrayIndex { object, index, .. } => {
-            collect_free_in_expr(object, bound, out);
-            collect_free_in_expr(index, bound, out);
-        }
-        Expr::StructInit { fields, .. } => {
-            for f in fields {
-                collect_free_in_expr(&f.value, bound, out);
-            }
-        }
-        Expr::EnumVariant { args, .. } => {
-            for a in args {
-                collect_free_in_expr(a, bound, out);
-            }
-        }
-        Expr::ArrayLiteral { elements, .. } | Expr::TupleLiteral { elements, .. } => {
-            for e in elements {
-                collect_free_in_expr(e, bound, out);
-            }
-        }
-        Expr::Cast { expr, .. } => collect_free_in_expr(expr, bound, out),
-        Expr::Closure { .. } => {
-            // Should not occur after the hoist pass replaces every
-            // closure literal with a `ClosureRef`. Conservatively do
-            // nothing if it does appear; the surrounding pass will
-            // hoist it on the next walk.
-        }
-        Expr::ClosureRef { captures, .. } => {
-            // The inner closure has already been hoisted and its free
-            // variables recorded as captures. Each inner capture that
-            // is not bound in the outer scope is itself a free
-            // variable of the outer expression. Propagating these
-            // names lets nested closures transitively capture from
-            // enclosing scopes through the surrounding closure's
-            // synthetic chunk.
-            for capture in captures {
-                if !bound.contains(capture) && !out.contains(capture) {
-                    out.push(capture.clone());
-                }
-            }
-        }
-    }
+    use crate::visitor::Visitor;
+    let mut collector = FreeVarCollector {
+        bound: bound.clone(),
+        free: core::mem::take(out),
+    };
+    collector.visit_block(block);
+    *out = collector.free;
 }
 
 /// Closure hoisting pass.
@@ -1348,306 +1303,210 @@ fn hoist_closures(mut program: Program) -> Program {
             natives.insert(name.clone());
         }
     }
+    use crate::visitor::MutVisitor;
     let mut counter: usize = 0;
     let mut new_functions: Vec<FunctionDef> = Vec::new();
-    for func in program.functions.iter_mut() {
-        hoist_in_block(&mut func.body, &mut counter, &mut new_functions, &natives);
-    }
-    for impl_block in program.impls.iter_mut() {
-        for method in impl_block.methods.iter_mut() {
-            hoist_in_block(&mut method.body, &mut counter, &mut new_functions, &natives);
+    {
+        let mut hoister = ClosureHoister {
+            counter: &mut counter,
+            out: &mut new_functions,
+            natives: &natives,
+        };
+        for func in program.functions.iter_mut() {
+            hoister.visit_block(&mut func.body);
+        }
+        for impl_block in program.impls.iter_mut() {
+            for method in impl_block.methods.iter_mut() {
+                hoister.visit_block(&mut method.body);
+            }
         }
     }
     program.functions.extend(new_functions);
     program
 }
 
-/// Hoist a closure expression that is the value of a `let` binding,
-/// detecting self-reference. When the closure body's free variables
-/// include the let-binding name, the closure is treated as recursive.
-/// The synthetic chunk's parameter list places the binding name
-/// after the other captures, the runtime fills that slot with the
-/// closure value at each invocation, and the compiler emits
-/// `Op::MakeRecursiveClosure` at the construction site.
-fn hoist_let_bound_closure(
-    let_name: alloc::string::String,
-    expr: &mut Expr,
-    counter: &mut usize,
-    out: &mut Vec<FunctionDef>,
-    natives: &alloc::collections::BTreeSet<alloc::string::String>,
-) {
-    let (params, return_type, body, span) = match expr {
-        Expr::Closure {
-            params,
-            return_type,
-            body,
-            span,
-        } => (params, return_type, body, *span),
-        _ => return,
-    };
-    // Hoist any nested closures inside the body first.
-    hoist_in_block(body, counter, out, natives);
-    let mut bound: alloc::collections::BTreeSet<alloc::string::String> =
-        alloc::collections::BTreeSet::new();
-    for p in params.iter() {
-        collect_pattern_names(&p.pattern, &mut bound);
-    }
-    let mut free: Vec<alloc::string::String> = Vec::new();
-    collect_free_in_block(body, &bound, &mut free);
-    let recursive = free.iter().any(|n| n == &let_name);
-    if !recursive {
-        // Defer to the regular closure-hoist path if the body does
-        // not actually reference the let-binding name. This keeps
-        // the non-recursive cases identical to the previous flow.
-        hoist_in_expr(expr, counter, out, natives);
-        return;
-    }
-    // Filter out the self-reference from the regular captures list.
-    free.retain(|n| n != &let_name);
-    let name = format!("__closure_{}", *counter);
-    *counter += 1;
-    let mut all_params: Vec<Param> = Vec::with_capacity(free.len() + 1 + params.len());
-    for capture in &free {
+/// Closure hoisting visitor. Walks the AST in post-order, replacing
+/// each `Expr::Closure` with an `Expr::ClosureRef` and synthesizing
+/// a top-level `FunctionDef` per closure. `Stmt::Let` whose value is
+/// a closure receives special handling for the recursive case.
+struct ClosureHoister<'a> {
+    counter: &'a mut usize,
+    out: &'a mut Vec<FunctionDef>,
+    natives: &'a alloc::collections::BTreeSet<alloc::string::String>,
+}
+
+impl ClosureHoister<'_> {
+    /// Hoist a closure that is the value of a `let` binding,
+    /// detecting self-reference. When the closure body's free
+    /// variables include the let-binding name, the closure is
+    /// treated as recursive: the synthetic chunk's parameter list
+    /// places the binding name after the other captures, the
+    /// runtime fills that slot with the closure value at each
+    /// invocation, and the compiler emits
+    /// `Op::MakeRecursiveClosure`. Non-recursive cases fall through
+    /// to the regular `Expr::Closure` walk.
+    fn hoist_let_bound_closure(&mut self, let_name: alloc::string::String, expr: &mut Expr) {
+        use crate::visitor::MutVisitor;
+        let (params, return_type, body, span) = match expr {
+            Expr::Closure {
+                params,
+                return_type,
+                body,
+                span,
+            } => (params, return_type, body, *span),
+            _ => return,
+        };
+        // Hoist nested closures inside the body first.
+        self.visit_block(body);
+        let mut bound: alloc::collections::BTreeSet<alloc::string::String> =
+            alloc::collections::BTreeSet::new();
+        for p in params.iter() {
+            collect_pattern_names(&p.pattern, &mut bound);
+        }
+        let mut free: Vec<alloc::string::String> = Vec::new();
+        collect_free_in_block(body, &bound, &mut free);
+        let recursive = free.iter().any(|n| n == &let_name);
+        if !recursive {
+            self.visit_expr(expr);
+            return;
+        }
+        free.retain(|n| n != &let_name);
+        let name = format!("__closure_{}", *self.counter);
+        *self.counter += 1;
+        let mut all_params: Vec<Param> = Vec::with_capacity(free.len() + 1 + params.len());
+        for capture in &free {
+            all_params.push(Param {
+                pattern: Pattern::Variable(capture.clone(), span),
+                type_expr: None,
+                span,
+            });
+        }
         all_params.push(Param {
-            pattern: Pattern::Variable(capture.clone(), span),
+            pattern: Pattern::Variable(let_name.clone(), span),
             type_expr: None,
             span,
         });
-    }
-    // The self parameter sits between captures and explicit params.
-    all_params.push(Param {
-        pattern: Pattern::Variable(let_name.clone(), span),
-        type_expr: None,
-        span,
-    });
-    all_params.extend(params.iter().cloned());
-    let body_owned = core::mem::replace(
-        body,
-        Block {
-            stmts: Vec::new(),
-            tail_expr: None,
-            span,
-        },
-    );
-    let synth = FunctionDef {
-        category: FunctionCategory::Fn,
-        name: name.clone(),
-        type_params: Vec::new(),
-        params: all_params,
-        return_type: return_type.clone().unwrap_or(TypeExpr::Unit(span)),
-        guard: None,
-        body: body_owned,
-        span,
-    };
-    out.push(synth);
-    *expr = Expr::ClosureRef {
-        name,
-        captures: free,
-        recursive: true,
-        span,
-    };
-}
-
-fn hoist_in_block(
-    block: &mut Block,
-    counter: &mut usize,
-    out: &mut Vec<FunctionDef>,
-    natives: &alloc::collections::BTreeSet<alloc::string::String>,
-) {
-    for stmt in block.stmts.iter_mut() {
-        hoist_in_stmt(stmt, counter, out, natives);
-    }
-    if let Some(e) = block.tail_expr.as_mut() {
-        hoist_in_expr(e, counter, out, natives);
-    }
-}
-
-fn hoist_in_stmt(
-    stmt: &mut Stmt,
-    counter: &mut usize,
-    out: &mut Vec<FunctionDef>,
-    natives: &alloc::collections::BTreeSet<alloc::string::String>,
-) {
-    match stmt {
-        Stmt::Let(l) => {
-            // Special-case `let f = |...| ...` where the closure body
-            // references the let-binding name. The hoist pass treats
-            // the binding name as a self-reference and produces a
-            // recursive ClosureRef. The synthetic chunk's parameter
-            // list is laid out as
-            //   (other_captures..., self_param, explicit_params...)
-            // so references to the binding name inside the body
-            // resolve to the implicit self parameter and dispatch
-            // through `Op::CallIndirect`. The compiler emits
-            // `Op::MakeRecursiveClosure` at the construction site and
-            // the runtime pushes the closure value into the self
-            // slot at each invocation.
-            if let Pattern::Variable(let_name, _) = &l.pattern
-                && let Expr::Closure { .. } = &l.value
-            {
-                hoist_let_bound_closure(let_name.clone(), &mut l.value, counter, out, natives);
-            } else {
-                hoist_in_expr(&mut l.value, counter, out, natives);
-            }
-        }
-        Stmt::For(f) => {
-            match &mut f.iterable {
-                Iterable::Range(s, e) => {
-                    hoist_in_expr(s, counter, out, natives);
-                    hoist_in_expr(e, counter, out, natives);
-                }
-                Iterable::Expr(e) => hoist_in_expr(e, counter, out, natives),
-            }
-            hoist_in_block(&mut f.body, counter, out, natives);
-        }
-        Stmt::Break(_) => {}
-        Stmt::DataFieldAssign { value, .. } => hoist_in_expr(value, counter, out, natives),
-        Stmt::Expr(e) => hoist_in_expr(e, counter, out, natives),
-    }
-}
-
-fn hoist_in_expr(
-    expr: &mut Expr,
-    counter: &mut usize,
-    out: &mut Vec<FunctionDef>,
-    natives: &alloc::collections::BTreeSet<alloc::string::String>,
-) {
-    match expr {
-        Expr::BinOp { left, right, .. } => {
-            hoist_in_expr(left, counter, out, natives);
-            hoist_in_expr(right, counter, out, natives);
-        }
-        Expr::UnaryOp { operand, .. } => hoist_in_expr(operand, counter, out, natives),
-        Expr::Call { args, .. } => {
-            for a in args.iter_mut() {
-                hoist_in_expr(a, counter, out, natives);
-            }
-        }
-        Expr::Pipeline { left, args, .. } => {
-            hoist_in_expr(left, counter, out, natives);
-            for a in args.iter_mut() {
-                hoist_in_expr(a, counter, out, natives);
-            }
-        }
-        Expr::Yield { value, .. } => hoist_in_expr(value, counter, out, natives),
-        Expr::If {
-            condition,
-            then_block,
-            else_block,
-            ..
-        } => {
-            hoist_in_expr(condition, counter, out, natives);
-            hoist_in_block(then_block, counter, out, natives);
-            if let Some(b) = else_block.as_mut() {
-                hoist_in_block(b, counter, out, natives);
-            }
-        }
-        Expr::Match {
-            scrutinee, arms, ..
-        } => {
-            hoist_in_expr(scrutinee, counter, out, natives);
-            for arm in arms.iter_mut() {
-                hoist_in_expr(&mut arm.expr, counter, out, natives);
-            }
-        }
-        Expr::Loop { body, .. } => hoist_in_block(body, counter, out, natives),
-        Expr::FieldAccess { object, .. } => hoist_in_expr(object, counter, out, natives),
-        Expr::MethodCall { receiver, args, .. } => {
-            hoist_in_expr(receiver, counter, out, natives);
-            for a in args.iter_mut() {
-                hoist_in_expr(a, counter, out, natives);
-            }
-        }
-        Expr::TupleIndex { object, .. } => hoist_in_expr(object, counter, out, natives),
-        Expr::ArrayIndex { object, index, .. } => {
-            hoist_in_expr(object, counter, out, natives);
-            hoist_in_expr(index, counter, out, natives);
-        }
-        Expr::StructInit { fields, .. } => {
-            for f in fields.iter_mut() {
-                hoist_in_expr(&mut f.value, counter, out, natives);
-            }
-        }
-        Expr::EnumVariant { args, .. } => {
-            for a in args.iter_mut() {
-                hoist_in_expr(a, counter, out, natives);
-            }
-        }
-        Expr::ArrayLiteral { elements, .. } | Expr::TupleLiteral { elements, .. } => {
-            for e in elements.iter_mut() {
-                hoist_in_expr(e, counter, out, natives);
-            }
-        }
-        Expr::Cast { expr, .. } => hoist_in_expr(expr, counter, out, natives),
-        Expr::Closure {
-            params,
-            return_type,
+        all_params.extend(params.iter().cloned());
+        let body_owned = core::mem::replace(
             body,
+            Block {
+                stmts: Vec::new(),
+                tail_expr: None,
+                span,
+            },
+        );
+        let synth = FunctionDef {
+            category: FunctionCategory::Fn,
+            name: name.clone(),
+            type_params: Vec::new(),
+            params: all_params,
+            return_type: return_type.clone().unwrap_or(TypeExpr::Unit(span)),
+            guard: None,
+            body: body_owned,
             span,
-        } => {
-            // First descend into the body so nested closures are
-            // hoisted too.
-            hoist_in_block(body, counter, out, natives);
-            // Compute the set of names bound by the closure's own
-            // parameters. Identifiers in the body that are not in
-            // this set are free variables and become captures.
-            let mut bound: alloc::collections::BTreeSet<alloc::string::String> =
-                alloc::collections::BTreeSet::new();
-            for p in params.iter() {
-                collect_pattern_names(&p.pattern, &mut bound);
+        };
+        self.out.push(synth);
+        *expr = Expr::ClosureRef {
+            name,
+            captures: free,
+            recursive: true,
+            span,
+        };
+    }
+}
+
+impl crate::visitor::MutVisitor for ClosureHoister<'_> {
+    fn visit_stmt(&mut self, stmt: &mut Stmt) {
+        if let Stmt::Let(l) = stmt
+            && let Pattern::Variable(let_name, _) = &l.pattern
+            && let Expr::Closure { .. } = &l.value
+        {
+            // Special-case `let f = |...| ...` where the closure body
+            // may reference the let-binding name. See
+            // `hoist_let_bound_closure` for the recursive contract.
+            let name = let_name.clone();
+            self.hoist_let_bound_closure(name, &mut l.value);
+            return;
+        }
+        self.walk_stmt(stmt);
+    }
+
+    fn visit_expr(&mut self, expr: &mut Expr) {
+        if matches!(expr, Expr::Closure { .. }) {
+            // Recurse into the body first so nested closures are
+            // hoisted, then transform this Closure into a ClosureRef.
+            if let Expr::Closure { body, .. } = expr {
+                self.visit_block(body);
             }
-            let mut free: Vec<alloc::string::String> = Vec::new();
-            collect_free_in_block(body, &bound, &mut free);
-            // Allocate a synthetic name and assemble the synthetic
-            // function definition. Captured names become parameters
-            // prepended to the user's parameters, with `Type::Unknown`-
-            // equivalent type expressions because their concrete
-            // types flow from the call site.
-            let name = format!("__closure_{}", *counter);
-            *counter += 1;
-            let mut all_params: Vec<Param> = Vec::with_capacity(free.len() + params.len());
-            for capture in &free {
-                all_params.push(Param {
-                    pattern: Pattern::Variable(capture.clone(), *span),
-                    type_expr: None,
-                    span: *span,
-                });
-            }
-            all_params.extend(params.iter().cloned());
-            let body_owned = core::mem::replace(
+            self.hoist_closure_in_place(expr);
+            return;
+        }
+        self.walk_expr(expr);
+    }
+}
+
+impl ClosureHoister<'_> {
+    /// Replace a non-recursive `Expr::Closure` with an
+    /// `Expr::ClosureRef` and synthesize the corresponding
+    /// `FunctionDef`. The body is assumed to have been hoisted
+    /// already by the caller.
+    fn hoist_closure_in_place(&mut self, expr: &mut Expr) {
+        let (params, return_type, body, span) = match expr {
+            Expr::Closure {
+                params,
+                return_type,
                 body,
-                Block {
-                    stmts: Vec::new(),
-                    tail_expr: None,
-                    span: *span,
-                },
-            );
-            let synth = FunctionDef {
-                category: FunctionCategory::Fn,
-                name: name.clone(),
-                type_params: Vec::new(),
-                params: all_params,
-                return_type: return_type.clone().unwrap_or(TypeExpr::Unit(*span)),
-                guard: None,
-                body: body_owned,
-                span: *span,
-            };
-            out.push(synth);
-            // Replace the closure expression with a ClosureRef that
-            // carries the captured names. The compiler emits a
-            // `MakeClosure` (or `PushFunc` when there are no
-            // captures) plus `GetLocal` for each capture.
-            *expr = Expr::ClosureRef {
-                name,
-                captures: free,
-                recursive: false,
-                span: *span,
-            };
+                span,
+            } => (params, return_type, body, *span),
+            _ => return,
+        };
+        let mut bound: alloc::collections::BTreeSet<alloc::string::String> =
+            alloc::collections::BTreeSet::new();
+        for p in params.iter() {
+            collect_pattern_names(&p.pattern, &mut bound);
         }
-        Expr::ClosureRef { .. } => {
-            // Already hoisted; nothing further to do at this pass.
+        let mut free: Vec<alloc::string::String> = Vec::new();
+        collect_free_in_block(body, &bound, &mut free);
+        // Filter out names that are top-level natives (declared via
+        // `use`) since those are resolved through CallNative rather
+        // than indirect call. The `natives` set handles this.
+        free.retain(|n| !self.natives.contains(n));
+        let name = format!("__closure_{}", *self.counter);
+        *self.counter += 1;
+        let mut all_params: Vec<Param> = Vec::with_capacity(free.len() + params.len());
+        for capture in &free {
+            all_params.push(Param {
+                pattern: Pattern::Variable(capture.clone(), span),
+                type_expr: None,
+                span,
+            });
         }
-        Expr::Literal { .. } | Expr::Ident { .. } | Expr::Placeholder { .. } => {}
+        all_params.extend(params.iter().cloned());
+        let body_owned = core::mem::replace(
+            body,
+            Block {
+                stmts: Vec::new(),
+                tail_expr: None,
+                span,
+            },
+        );
+        let synth = FunctionDef {
+            category: FunctionCategory::Fn,
+            name: name.clone(),
+            type_params: Vec::new(),
+            params: all_params,
+            return_type: return_type.clone().unwrap_or(TypeExpr::Unit(span)),
+            guard: None,
+            body: body_owned,
+            span,
+        };
+        self.out.push(synth);
+        *expr = Expr::ClosureRef {
+            name,
+            captures: free,
+            recursive: false,
+            span,
+        };
     }
 }
 
