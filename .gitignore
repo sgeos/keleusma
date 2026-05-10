@@ -1,2 +1,13 @@
 /target/
 Cargo.lock
+
+# Project-local scratch directories. The directories themselves are
+# committed via .gitkeep markers; their contents are ignored. Use
+# `tmp/` for transient files such as commit messages, draft text,
+# scratch scripts, and probe outputs. Use `secret/` for files that
+# must never be committed such as credentials, API keys, and
+# environment-specific secrets.
+tmp/*
+!tmp/.gitkeep
+secret/*
+!secret/.gitkeep
