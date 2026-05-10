@@ -9,8 +9,20 @@ Keleusma processes source text through a four-stage pipeline that transforms hum
 ## Pipeline Diagram
 
 ```
-Source Text -> tokenize() -> Vec<Token> -> parse() -> Program (AST) -> compile() -> Module (Bytecode) -> verify() -> Module -> Vm::new() -> Vm -> Vm::call() -> VmState
+Source Text
+  -> tokenize()        -> Vec<Token>
+  -> parse()           -> Program (AST)
+  -> typecheck()       -> Program (validated)
+  -> monomorphize()    -> Program (specialized)
+  -> typecheck()       -> Program (re-validated under concrete types)
+  -> hoist_closures()  -> Program (closures hoisted to top-level chunks)
+  -> emit chunks       -> Module (bytecode)
+  -> verify()          -> Module (structural + WCMU + WCET admissible)
+  -> Vm::new()         -> Vm
+  -> Vm::call()        -> VmState
 ```
+
+The `compile()` entry point bundles the typecheck, monomorphize, hoist, and chunk emission steps. `Vm::new()` runs `verify()` and the resource-bounds check; `Vm::new_unchecked()` skips the bounds check while preserving structural verification.
 
 ## Stage 1: Lexer
 
@@ -47,13 +59,14 @@ Operator precedence is handled through the standard recursive descent technique 
 **Public API**:
 ```rust
 pub fn compile(program: &Program) -> Result<Module, CompileError>
+pub fn compile_with_target(program: &Program, target: &Target) -> Result<Module, CompileError>
 ```
 
-The compiler transforms the AST into a bytecode module in two passes. The first pass collects all function definitions and builds a mapping from function names to indices. The second pass compiles each function body into a sequence of bytecode operations.
+The compiler runs typecheck, then monomorphizes generic functions and structs/enums per concrete instantiation, then re-typechecks the specialized program, then hoists closure literals into top-level synthetic chunks, then emits each chunk's bytecode in a final pass. The constant pool is per-chunk and deduplicates identical values. Control flow constructs use forward jumps that are patched after the target offset is known.
 
-The compiler maintains a constant pool with deduplication so that identical constant values share a single pool entry. Control flow constructs such as if-else, match, and for loops use forward jumps that are patched after the target offset is known.
+`compile()` is a thin wrapper over `compile_with_target(program, &Target::host())`. The target descriptor is documented in [BACKLOG.md](../decisions/BACKLOG.md) under B10 and the source-level surface is `src/target.rs`. Programs that use features unsupported by the target (such as floating-point operations on a no-float target) are rejected at compile time.
 
-Recursion detection is performed during compilation. The compiler builds a call graph and rejects any program that contains call cycles, enforcing the totality guarantees of the `fn` and `yield` function categories. Guard clause validation ensures that guard expressions are valid boolean expressions and that multiheaded functions have consistent parameter counts.
+Recursion detection in the direct-call graph is performed by the verifier (`verify::topological_call_order`) at module load, not at compile. The verifier rejects modules whose direct-call graph contains a cycle, enforcing the totality guarantees of the `fn` and `yield` function categories. Recursion through `Op::CallIndirect` (recursive closures) is rejected separately by `verify::module_wcmu` because the WCMU analysis cannot bound it. See Structural Verification in [EXECUTION_MODEL.md](./EXECUTION_MODEL.md). Guard clause validation runs at typecheck time and ensures that guard expressions are valid boolean expressions and that multiheaded functions have consistent parameter counts.
 
 ## Stage 4: Structural Verification
 
@@ -81,13 +94,16 @@ The `wcet_stream_iteration()` function computes the worst-case execution cost of
 
 **Public API**:
 ```rust
-impl Vm {
-    pub fn new(module: Module) -> Result<Self, VmError>;
+impl<'a, 'arena> Vm<'a, 'arena> {
+    pub fn new(module: Module, arena: &'arena Arena) -> Result<Self, VmError>;
     pub fn register_native(&mut self, name: &str, func: fn(&[Value]) -> Result<Value, VmError>);
     pub fn call(&mut self, args: &[Value]) -> Result<VmState, VmError>;
     pub fn resume(&mut self, input: Value) -> Result<VmState, VmError>;
+    pub fn resume_err(&mut self, error_value: Value) -> Result<VmState, VmError>;
 }
 ```
+
+`Vm` carries two lifetimes: `'a` for borrowed bytecode (zero-copy execution from `&[u8]`) and `'arena` for the host-owned arena that backs the operand stack, call frames, and `KString` allocations.
 
 The virtual machine is a stack-based interpreter that executes bytecode operations from a compiled module. It maintains a value stack, a call frame stack, and the registered native function table.
 
@@ -131,7 +147,8 @@ The recommended pipeline for loading and executing a Keleusma script from the ho
 let tokens = tokenize(source)?;
 let program = parse(&tokens)?;
 let module = compile(&program)?;
-let mut vm = Vm::new(module)?;
+let arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+let mut vm = Vm::new(module, &arena)?;
 // Register native functions.
 // Initialize data segment slots if the module declares a data block.
 for (slot, value) in initial_values.iter().enumerate() {
@@ -145,7 +162,7 @@ match vm.call(&[])? {
 }
 ```
 
-`Vm::new()` runs structural verification on the module and returns an error if verification fails. The data segment is allocated to match the declared layout slot count and zero-initialized to `Value::Unit`. The host calls `set_data` to populate slots before execution begins.
+`Vm::new()` runs structural verification and the WCMU/WCET resource-bounds check; either failing returns a `VmError`. The data segment is allocated to match the declared layout slot count and zero-initialized to `Value::Unit`. The host calls `set_data` to populate slots before execution begins.
 
 Native functions are registered via `Vm::register_fn` for the ergonomic typed registration that handles arity, type coercion, and return wrapping automatically. Argument and return types must implement `KeleusmaType`, which the `#[derive(KeleusmaType)]` macro provides for host structs and enums. Use `Vm::register_fn_fallible` when the host function returns `Result<R, VmError>`. The lower-level `register_native` and `register_native_closure` remain available for functions that must inspect arbitrary `Value` variants.
 

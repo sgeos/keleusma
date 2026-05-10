@@ -70,51 +70,29 @@ Keleusma provides five static guarantees about program behavior.
 
 ## Memory Model
 
-The Keleusma runtime memory layout corresponds to the four conventional executable sections found in the Unix linker tradition and the System V Application Binary Interface, namely `.text`, `.rodata`, `.data`, and `.bss`. This analogy is the organizing frame for runtime memory. See [EXECUTION_MODEL.md](./EXECUTION_MODEL.md) for the detailed specification and [RELATED_WORK.md](../reference/RELATED_WORK.md) Section 8 for the academic and engineering precedents.
+Surface-language semantics. Script-defined values are conceptually immutable. Local bindings, the operand stack, and the arena are not observable as mutable state at the surface. The data segment is the sole region of mutable state observable to the script that persists beyond a single function activation; scripts read and write it through a fixed schema declared in a `data` block. Strings divide into two surface kinds. Static strings reside in the rodata region and may flow anywhere admissible. Dynamic strings reside in the arena heap, are produced by native function calls, and may not cross the yield boundary. See [TYPE_SYSTEM.md](../design/TYPE_SYSTEM.md) for the full string discipline.
 
-| Region | Conventional analogue | Mutability | Lifetime |
-|---|---|---|---|
-| Bytecode chunks | `.text` | Immutable | Until hot swap at RESET |
-| Constant pool and templates | `.rodata` | Immutable | Until hot swap at RESET |
-| Data segment | `.data` | Mutable | Persists across yield and reset |
-| Arena and operand stack | `.bss` | Mutable | Cleared at RESET |
-
-The Keleusma source language is purely functional with respect to script-defined values. Local bindings, the operand stack, and the arena are conceptually immutable at the surface language level. The data segment is the sole region of mutable state observable to the script that persists beyond a single function activation. The host owns the data segment storage and presents it to the script as a preinitialized `.data` section. Scripts read and write the segment through a fixed schema declared in a `data` block. The schema is fixed within a single code image and may change arbitrarily across hot updates. Cross-yield value preservation is not guaranteed. The host may write to the segment between yields. The data segment design draws on the persistent state model of the Erlang and Open Telecom Platform multi-version code coexistence pattern [H1, H2] and on the state vector model of mode automata in the synchronous reactive language tradition [H3, SC1].
-
-The arena is a single contiguous allocation with two pointers growing toward each other from opposite ends. The operand stack grows from one end. The dynamic-string heap and other arena allocations grow from the other. The arena persists across yields within an iteration but is cleared at the RESET boundary by resetting both pointers. The verifier proves that the worst-case stack growth and worst-case heap growth do not overlap, namely `stack_wcmu + heap_wcmu <= arena_size`. Memory bounds are statically analyzable in aligned bytes.
-
-Strings divide into two distinct types. Static strings reside in the rodata region and may flow anywhere admissible. Dynamic strings reside in the arena heap, are produced by native function calls, and may not cross the yield boundary. See [TYPE_SYSTEM.md](../design/TYPE_SYSTEM.md) for the full discipline.
+Runtime layout. Memory is organized into four regions analogous to the System V ABI sections `.text`, `.rodata`, `.data`, and `.bss`, with the `.bss` region implemented as a dual-end bump-allocated arena. See [EXECUTION_MODEL.md](./EXECUTION_MODEL.md) for the canonical region table, the source-level implementation mapping, and memory bookkeeping. See [RELATED_WORK.md](../reference/RELATED_WORK.md) Section 8 for the academic and engineering precedents and citations [H1, H2, H3, SC1] for the persistent-state and mode-automaton lineage.
 
 ## Hot Code Swapping
 
-Keleusma supports hot code swapping at the RESET boundary of a productive divergent function iteration. Only the dialogue type, namely the yield contract from A to B, must remain invariant across swaps. Text, rodata, and the data segment schema may all change across a swap. Different routines may have different WCETs, and each is certified independently. The arena is cleared before the new code begins executing, ensuring zero memory debt across swap boundaries. Cross-swap data segment value handling follows Replace semantics, in which the host atomically supplies the data instance appropriate for the new code version. The host may keep, modify, migrate, or substitute the underlying storage transparently. Atomicity is logical only. The new image must be resident before the candidate is eligible for installation. Rollback is mechanically identical to a forward update with an older code version selected. The model parallels the Erlang and Open Telecom Platform multi-version code coexistence pattern [H1, H2], with the simplification that the migration callback resides in the host rather than in the script. See [EXECUTION_MODEL.md](./EXECUTION_MODEL.md) for the full specification.
+Keleusma supports hot code swapping at the RESET boundary of a productive divergent function iteration. Only the dialogue type, namely the yield contract from A to B, must remain invariant across swaps. Text, rodata, and the data segment schema may all change across a swap, and each routine's WCET and reset-to-reset bound is certified independently. Cross-swap data handling follows Replace semantics, with the host atomically supplying the data instance appropriate for the new code version. The model parallels the Erlang and Open Telecom Platform multi-version code coexistence pattern [H1, H2], with the simplification that the migration callback resides in the host rather than in the script. See [EXECUTION_MODEL.md](./EXECUTION_MODEL.md) for the full specification including atomicity, rollback, and stale-slot behavior.
 
 ## WCET Analysis
 
-Worst-Case Execution Time is measured from yield to yield. Each yield-to-yield slice must have a statically provable upper bound on instructions executed. In the absence of dynamic dispatch, every execution path is a static directed acyclic graph between yield points. WCET is determined by counting weighted opcodes on the longest path between any two yield points. Wilhelm et al. provide a comprehensive survey of WCET analysis methods and tools [WC1].
+Worst-Case Execution Time is measured from yield to yield. Each yield-to-yield slice must have a statically provable upper bound on instructions executed. In the absence of dynamic dispatch, every execution path is a static directed acyclic graph between yield points; WCET counts weighted opcodes on the longest path. Wilhelm et al. provide a comprehensive survey of WCET analysis methods and tools [WC1].
 
-Each bytecode instruction carries a relative integer cost via `Op::cost()`, assigned across five tiers: 1 for data movement and control flow markers, 2 for arithmetic and comparisons, 3 for division and field lookup, 5 for composite value construction, and 10 for function calls. The `wcet_stream_iteration()` function in `src/verify.rs` computes the worst-case total cost of one Stream-to-Reset iteration by recursively analyzing block-structured control flow, taking the maximum cost branch at each join point. These cost weights are preliminary and subject to refinement as the instruction set stabilizes.
+Each bytecode instruction carries a relative integer cost via `Op::cost()`, assigned across five tiers: 1 for data movement and control flow markers, 2 for arithmetic and comparisons, 3 for division and field lookup, 5 for composite value construction, and 10 for function calls. `wcet_stream_iteration()` in `src/verify.rs` computes the worst-case total cost of one Stream-to-Reset iteration by recursively analyzing block-structured control flow. These cost weights are preliminary and subject to refinement as the instruction set stabilizes.
 
-Abstract opcode cost does not directly correspond to wall-clock execution time. Industrial WCET analysis tools such as aiT [WC2] account for pipeline effects, cache behavior, and branch prediction on the target hardware. For safety-critical certification, a sound bound on real-time WCET requires either a time-predictable execution platform (as demonstrated for JOP in [WC5]) or a validated mapping from abstract cost to physical time. Keleusma's current WCET analysis is sufficient for soft real-time applications (audio engines, game scripting) where approximate cost bounds inform scheduling decisions. See [RELATED_WORK.md](../reference/RELATED_WORK.md) Section 4 for a full discussion.
+Abstract opcode cost does not directly correspond to wall-clock execution time. Industrial WCET analysis tools such as aiT [WC2] account for pipeline effects, cache behavior, and branch prediction on the target hardware. For safety-critical certification, a sound bound on real-time WCET requires either a time-predictable execution platform (as demonstrated for JOP in [WC5]) or a validated mapping from abstract cost to physical time. Keleusma's current WCET analysis is sufficient for soft real-time applications where approximate cost bounds inform scheduling decisions. See [RELATED_WORK.md](../reference/RELATED_WORK.md) Section 4 for a full discussion. Indirect-dispatch limitations and the rejection of recursive closures by the safe verifier are documented in [EXECUTION_MODEL.md](./EXECUTION_MODEL.md) under Structural Verification.
 
-## Turing Completeness
+## Turing Completeness and Temporal Domains
 
-Individual time slices are not Turing complete. Each yield-to-yield slice executes a bounded number of instructions and then suspends. Turing completeness arises from the VM-Host pair operating over the unbounded RESET cycle. The host provides the "tape" through YIELD exchanges, supplying new input on each resumption. Computation can span arbitrarily many RESET cycles, and the host-controlled state that persists across resets serves as the unbounded external memory that completes the computational model. The language is deliberately not Turing complete in isolation. This constraint is what makes static WCET analysis and industrial certification possible.
-
-## Two Temporal Domains
-
-Keleusma separates temporal control into two domains.
-
-- **Yield domain (control clock).** Fine-grained scheduling. WCET is measured yield-to-yield. Multiple yields may occur within a single iteration.
-- **Reset domain (phase clock).** Coarse-grained phase control. Swap latency is measured reset-to-reset. Arena memory is cleared and hot swaps take effect at RESET boundaries.
+Individual yield-to-yield slices are not Turing complete by design. The language is deliberately bounded in isolation; Turing completeness arises only from the VM-Host pair operating over the unbounded RESET cycle, with the host providing input through YIELD exchanges and persistent state across RESET serving as unbounded external memory. This separation is what makes static WCET analysis and industrial certification possible. The two temporal domains (yield-to-yield for fine-grained scheduling, reset-to-reset for coarse-grained phase control) are specified in [EXECUTION_MODEL.md](./EXECUTION_MODEL.md).
 
 ## Coroutine Model
 
-Scripts execute as coroutines managed by the host. The host initiates execution by calling `call()` on the virtual machine, which begins at the designated loop function entry point. When a script yields a value, execution suspends and the host receives the yielded output along with a `VmState::Yielded` indicator.
-
-The host resumes execution by calling `resume(input)`, providing a new input value. For loop functions, this input value replaces the parameter slot so that the next iteration operates on fresh host data. For yield functions, the resume value is returned at the yield site.
-
-This model allows scripts to operate as persistent stream processors. The host drives the execution schedule, and the script never runs unboundedly without yielding control.
+Scripts execute as coroutines managed by the host. The host initiates execution by calling `Vm::call(args)`, which begins at the designated loop function entry point. When a script yields, execution suspends and the host receives the yielded output through `VmState::Yielded`. The host resumes execution by calling `Vm::resume(input)`. For loop functions, the input replaces the parameter slot so the next iteration operates on fresh host data. For yield functions, the resume value is returned at the yield site. The model allows scripts to operate as persistent stream processors with the host driving the schedule. Bidirectional error handling between host and script through the yield boundary follows the resume-value pattern documented in [BACKLOG.md](../decisions/BACKLOG.md) under B7.
 
 ## Native Function Interface
 
@@ -138,17 +116,23 @@ The `KeleusmaType` trait defines the static marshalling contract between Rust ty
 
 The static marshalling approach contrasts with the dynamic approach of Rhai, which relies on `Box<dyn Any>` to carry arbitrary Rust types. Keleusma's discipline of fixed-size, fixed-layout interop types makes static dispatch sufficient and avoids the unsafe pointer manipulation and runtime type-erasure overhead of the dynamic approach. See [RELATED_WORK.md](../reference/RELATED_WORK.md) Section 9 for the full comparison.
 
-## Scope Exclusions
+## Scope Inclusions and Exclusions
 
-The following features are explicitly excluded from the current language design.
+Features now implemented under V0.1.
 
-- Hindley-Milner type inference
-- Ownership, borrowing, and lifetimes
-- Traits and generics
-- Closures and anonymous functions
-- String interpolation
+- Hindley-Milner type inference foundation. `Type::Var`, the substitution machinery, and Robinson unification with the occurs check. `Type::Unknown` remains as a transitional sentinel for runtime-only dispatch positions; removing it requires declaring native function signatures.
+- Generics. Generic functions, structs, and enums with type parameters. Trait declarations, trait bounds with `+` separator, and impl method registration with structural validation against the trait.
+- Compile-time monomorphization. Function, struct, and enum specialization. Inference reach across literals, identifiers, function-call returns, method-call returns, unary and binary operators, casts, enum variants, struct constructions, tuple and array literals, if and match arms, field access, tuple-index, and array-index expressions.
+- Closures and anonymous functions. First-class arguments, environment capture, transitive nested capture, and recursive let-bound closures. Recursive closures bypass static WCET analysis and are rejected by the safe verifier; hosts that need them opt out through the unsafe constructor.
+- String interpolation. f-string syntax `f"text {expr} more"` desugars at lex time to a `concat`/`to_string` chain. String concatenation and slicing land as utility natives.
 
-Note: Hot code swapping at the bytecode level is part of the design and is described in [EXECUTION_MODEL.md](./EXECUTION_MODEL.md). Structural verification is implemented and described in [TARGET_ISA.md](../reference/TARGET_ISA.md).
+Features explicitly excluded from the current design.
+
+- Ownership, borrowing, and lifetimes at the surface language level. Rust's borrow checker is unnecessary because script values are conceptually immutable and the data segment is the sole mutable region.
+- Recursion in `fn` and `yield` categories. Only `loop` functions admit cyclic execution, and only through the productive RESET cycle.
+- Variable-iteration loops without static bounds. The verifier rejects programs whose loop iteration count cannot be bounded statically.
+
+Hot code swapping at the bytecode level is part of the design and is described in [EXECUTION_MODEL.md](./EXECUTION_MODEL.md). Structural verification is implemented and described in [TARGET_ISA.md](../reference/TARGET_ISA.md).
 
 Keleusma's design choices are informed by synchronous reactive language principles and are favorable for eventual safety-critical certification, but current claims of suitability for "aerospace, robotics, and flight control" are design aspirations, not certification status. See [RELATED_WORK.md](../reference/RELATED_WORK.md) Section 7 for a gap analysis between the current implementation and industrial certification readiness.
 

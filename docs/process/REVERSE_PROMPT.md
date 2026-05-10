@@ -9,8 +9,8 @@ AI to Human communication channel.
 ## Last Updated
 
 **Date**: 2026-05-09
-**Task**: V0.1-M3-T32. B10 portability and target abstraction foundation.
-**Status**: Foundation complete. The compiler accepts a `Target` descriptor; the wire format records the target's declared widths; the compiler rejects programs that use features unsupported by the target. Cross-target codegen and target-specific runtime representations remain future work, documented in BACKLOG.
+**Task**: V0.1-M3-T33 Documentation deduplication and streamlining pass.
+**Status**: Complete. Architecture docs deduplicated, Implementation Mapping subsection added to EXECUTION_MODEL, stale postcard reference corrected, LANGUAGE_DESIGN streamlined to defer to EXECUTION_MODEL for canonical specs, COMPILATION_PIPELINE accuracy updated.
 
 ## Verification
 
@@ -24,89 +24,63 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 **Results**:
 
-- 506 tests pass workspace-wide. 438 keleusma unit (9 new), 17 keleusma marshall integration, 17 keleusma `kstring_boundary` integration, 28 keleusma-arena unit, 6 keleusma-arena doctests.
-- Clippy clean under `--workspace --all-targets`.
+- 506 tests pass workspace-wide. No code changes; the test pass confirms documentation edits did not affect the build.
 - Format clean.
+- Clippy clean.
 
 ## Summary
 
-Keleusma's bytecode wire format already records the producer's declared word, address, and float widths in the framing header. The runtime accepts bytecode whose widths are at most its own, and the integer arithmetic path masks results to the declared width via `truncate_int`. What was missing was a producer-side surface that lets a host explicitly choose the compilation target and have the compiler validate the program against that target's capabilities.
+This pass surveys and streamlines the architecture documentation, removing duplication between LANGUAGE_DESIGN.md and EXECUTION_MODEL.md, fixing a stale wire-format reference, and adding the source-level Implementation Mapping subsection that the prior conversation flagged as missing.
 
-This session adds that surface as a new `crate::target::Target` descriptor and a `compile_with_target(program, target)` entry point. The descriptor carries the three width fields (encoded as base-2 exponents matching the wire-format fields) and two capability flags (`has_floats`, `has_strings`). Const presets cover the practical cases: `host` (64-bit, all features), `wasm32` (32-bit word and address with 64-bit floats), `embedded_32` (32-bit with 32-bit floats), `embedded_16` (16-bit with no floats), and `embedded_8` (8-bit word with 16-bit address per the 6502 class, no floats, no strings).
+### Implementation Mapping subsection
 
-The compiler runs two validations before lowering to bytecode. `Target::validate_against_runtime` rejects targets whose declared widths exceed the runtime's. `validate_program_for_target` walks the program AST looking for float types, string types, float literals, and string literals; programs that use features absent from the target are rejected with descriptive error messages pointing at the offending source span. After validation, the target's widths are baked into the resulting module's wire-format header, and the rest of the compilation runs unchanged.
+EXECUTION_MODEL.md gained a new subsection between the existing ABI table and the Arena/Operand/Heap subsection. The mapping table names, for each conceptual region, the source location, the construction path, and the runtime access mechanism. Lifetime invariants document how each region behaves across `Op::Reset` and `Vm::replace_module`. Memory bookkeeping clarifies which costs go through the arena's WCMU budget and which use the global allocator. The `BytecodeStore` Owned vs Borrowed mapping documents the ownership orthogonality.
 
-The pre-existing `compile(program)` entry point is now a thin wrapper over `compile_with_target(program, &Target::host())`, so existing callers see no behavior change.
+### Stale postcard reference
 
-## What is in scope
+Line 129 of EXECUTION_MODEL.md described the wire format as postcard-based. This is stale; the format moved to rkyv earlier in V0.1-M2 (Phase 1 of P10). The paragraph is rewritten to describe the rkyv format with the correct rationale (zero-copy execution from `.rodata` per P10) and the correct list of archived types. Cross-reference to R39 in RESOLVED.md added for the design decision.
 
-The pre-existing infrastructure the implementation builds on.
+### LANGUAGE_DESIGN.md streamlining
 
-- The wire format already records `word_bits_log2`, `addr_bits_log2`, and `float_bits_log2` in the 16-byte framing header. Mirror copies live in the archived module body.
-- The runtime already accepts bytecode whose declared widths are at most the runtime's. Oversized bytecode is rejected at load time with `LoadError::WordSizeMismatch`, `AddressSizeMismatch`, or `FloatSizeMismatch`.
-- The integer arithmetic path already masks results via `truncate_int` to the declared word width, so 32-bit-declared bytecode running on the 64-bit runtime produces 32-bit overflow semantics.
+Several sections of LANGUAGE_DESIGN.md duplicated content that EXECUTION_MODEL.md specifies canonically. Each was reduced to a language-level summary that references EXECUTION_MODEL.md for the full specification:
 
-The new surface lets a host explicitly choose the target, validate program features against the target's capabilities, and emit bytecode whose declared widths are accurate. The same compiled module can then run on the current 64-bit runtime during development and, in principle, on a future narrower-runtime build.
+- Memory Model. The four-region table and the long arena/data-segment paragraphs collapsed into two short paragraphs about surface-language semantics and a single reference to the canonical specification.
+- Hot Code Swapping. The detailed mechanics paragraph reduced to a language-level summary; rollback, atomicity, stale-slot behavior, and update-point details are deferred to EXECUTION_MODEL.
+- Turing Completeness. The standalone subsection collapsed into a single paragraph in the new "Turing Completeness and Temporal Domains" section, which absorbed the previously-duplicated Two Temporal Domains list as well.
+- Coroutine Model. Retained but extended with the resume-value error pattern (B7) reference.
 
-## What remains open
+### Scope section update
 
-This is a foundation, not a complete cross-target story. Several substantial extensions remain documented in BACKLOG:
+The "Scope Exclusions" section was renamed to "Scope Inclusions and Exclusions" and updated to reflect features now implemented: Hindley-Milner inference foundation (B1), generics with traits and bounds (B2.2/B2.3), monomorphization (B2.4), closures with capture and recursion (B3), f-string interpolation (B6), and string concatenation/slicing as utility natives (B5b). The previous list of these features as exclusions was misleading because they all landed during V0.1-M3.
 
-- Target-specific runtime builds. The current `Value` enum carries 64-bit `Int` and `Float` variants and uses `Vec<Value>` for the operand stack. Building a 16-bit or 8-bit native runtime requires a different `Value` layout and a corresponding execution-loop variant. The wire format declares the bytecode's intended target, but no runtime build currently consumes that declaration to choose a representation.
-- Cross-target codegen. Emitting native assembly for the 6502 or ARM64 from Keleusma bytecode is out of scope and has not been pursued. The synchronous-language tradition's approach of target-independent intermediate representations feeding target-specific backends is referenced in RELATED_WORK as the path of record.
-- Target-defined primitive types. The original B10 entry mentioned `byte`, `bit`, `word`, and `address` as candidate primitives. The current type system continues to use `i64` for integers; the target's declared word width controls arithmetic masking but does not change the surface type. Adding the new primitives would require parser, AST, and type-checker work beyond this session's scope.
+### COMPILATION_PIPELINE.md accuracy
 
-## Tests
-
-Nine new tests in `src/target.rs::tests`:
-
-- `host_target_admits_full_program` covers basic host-preset compilation.
-- `host_target_admits_floats_and_strings` covers full-feature admission.
-- `embedded_16_rejects_float_literal` covers float-literal rejection.
-- `embedded_16_rejects_float_type_in_param` covers float-type rejection in parameter signatures.
-- `embedded_8_rejects_string_literal` covers string-literal rejection.
-- `embedded_8_admits_int_only_program` covers int-only programs on the most restricted preset.
-- `target_widths_propagate_to_module` covers width propagation through to the wire format.
-- `host_widths_match_runtime_constants` covers the host-target-equals-runtime invariant.
-- `target_validation_against_runtime_rejects_oversized` covers oversized-target rejection.
-
-One new example: `examples/target_aware_compile.rs` demonstrates compilation against host, embedded_32, embedded_16, and embedded_8 targets with the appropriate float and string rejections, and prints the declared widths from the resulting modules.
+The pipeline diagram was a single-line summary that omitted the typecheck/monomorphize/hoist passes. Expanded to a multi-line layout showing each stage. The `compile()` signature documentation was extended to include `compile_with_target()` (B10). The recursion-detection note was wrong — it claimed compilation rejects cycles, but recursion detection now lives in `verify::module_wcmu`. Corrected. The `Vm::new()` signature documentation was missing the arena parameter and the lifetime annotations; updated. New `Vm::resume_err()` (B7) added to the API surface listing.
 
 ## Trade-offs and Properties
 
-The choice to put `Target` in its own module rather than fold its fields into the existing `Module` struct keeps the producer-side concern (which target am I compiling for?) separate from the artifact-side concern (what does the bytecode declare?). The two are linked by `compile_with_target` writing the target's widths into the module's header, but they remain conceptually distinct.
+The deduplication strategy chose to keep LANGUAGE_DESIGN.md focused on language-level concerns (philosophy, guarantees, surface syntax categories, type system) and EXECUTION_MODEL.md focused on runtime concerns (memory layout, temporal domains, hot swap mechanics, implementation mapping). LANGUAGE_DESIGN now references EXECUTION_MODEL for canonical runtime specifications rather than reproducing them.
 
-The capability flags `has_floats` and `has_strings` are coarse-grained on purpose. Finer gating (such as "no dynamic strings" while still allowing static string literals) would require more capability axes and is recorded as future work. The current granularity matches the practical embedded-vs-server split.
+The Implementation Mapping subsection adds concrete source-level orientation that previously required reading source comments. The cost is that the subsection now ties EXECUTION_MODEL.md to specific implementation choices; if the implementation changes (such as a future runtime build with a different `Value` representation), the table must be updated. This is acceptable because the subsection explicitly notes "the wire format does not bind to specific implementation choices" and the table describes the present runtime build.
 
-The AST walker is conservative. It rejects any occurrence of a float or string type or literal, even within unreachable branches. A more permissive variant would only reject reachable uses; the conservative variant is simpler and matches the typical static-analysis discipline.
+The net documentation size is slightly larger (LANGUAGE_DESIGN -16 lines, EXECUTION_MODEL +17 lines, COMPILATION_PIPELINE +17 lines). The increase is concentrated in concrete new information (the Implementation Mapping table) and accuracy updates. Duplication is reduced even as overall information content goes up.
 
-The `compile_with_target` API is additive. The original `compile(program)` continues to work and is now a thin wrapper that passes `Target::host()`. Callers that do not care about cross-target portability see no change.
+## Files Touched
 
-## Changes Made
-
-### Source
-
-- **`src/target.rs`** (new). Public `Target` struct, const presets (`host`, `wasm32`, `embedded_32`, `embedded_16`, `embedded_8`), bit-width accessors, runtime-validation method, AST walker for feature validation, and nine unit tests.
-- **`src/compiler.rs`**. New `compile_with_target` public entry point. Existing `compile` is now a thin wrapper. The module emission uses the target's widths instead of the runtime constants.
-- **`src/lib.rs`**. New `pub mod target` declaration.
-- **`examples/target_aware_compile.rs`** (new). End-to-end demonstration.
-
-### Knowledge Graph
-
-- **`docs/decisions/BACKLOG.md`**. B10 marked as foundation-complete with the implemented surface, pre-existing infrastructure, and remaining open work documented separately.
-- **`docs/process/TASKLOG.md`**. New row for V0.1-M3-T32.
-- **`docs/process/REVERSE_PROMPT.md`**. This file.
+- `docs/architecture/EXECUTION_MODEL.md`. Added Implementation Mapping subsection. Fixed stale postcard reference.
+- `docs/architecture/LANGUAGE_DESIGN.md`. Streamlined Memory Model, Hot Code Swapping, Turing Completeness, Two Temporal Domains. Renamed Scope Exclusions to Scope Inclusions and Exclusions, updated to reflect implemented features.
+- `docs/architecture/COMPILATION_PIPELINE.md`. Expanded pipeline diagram. Updated `compile`, `compile_with_target`, and `Vm::new` signatures. Corrected recursion-detection placement.
+- `docs/process/TASKLOG.md`. New row for V0.1-M3-T33.
+- `docs/process/REVERSE_PROMPT.md`. This file.
 
 ## Remaining Open Priorities
 
-The named B10 work has its foundation in place. The remaining open BACKLOG items are smaller refinements or items whose cost is not yet justified:
+The architecture docs are now consistent with the implementation as of V0.1-M3-T32. The standard document-strategy items remain:
 
-- B10 follow-on. Target-specific runtime builds, cross-target codegen, and target-defined primitive types.
-- Recursion-depth attestation API for recursive closures.
-- `Op::CallIndirect` flow analysis for tighter WCET bounds.
-- `Type::Unknown` sentinel removal (B1 follow-on, requires native function signatures).
-- f-string finer-grained span attribution.
-- Block expressions as primary parsing form.
+- DOCUMENTATION_STRATEGY review pass for adherence to the maintenance discipline.
+- TYPE_SYSTEM.md may reference outdated information about exclusions; not surveyed in this pass.
+- GRAMMAR.md is large (1099 lines) and may have stale entries.
+- INSTRUCTION_SET.md and TARGET_ISA.md likely need updates for the new opcodes (`Op::MakeRecursiveClosure`, `Op::PushFunc`, `Op::MakeClosure`, `Op::CallIndirect`).
 
 The `keleusma-arena` registry version is still v0.1.0.
 
@@ -116,4 +90,4 @@ Await human prompt before proceeding.
 
 ## Session Context
 
-This session added a producer-side surface for cross-architecture portability that builds on the wire-format groundwork already in place. The compiler now accepts a `Target` descriptor and validates the program against the target's capabilities before emitting bytecode. The implementation is intentionally scoped to the producer side; cross-target runtime builds and target-defined primitive types are documented as the remaining open work but not pursued here.
+This session focused on documentation hygiene rather than feature work. The output is a documentation set that is internally consistent, points to canonical specifications rather than duplicating them, and includes the Implementation Mapping subsection that the prior question flagged as missing. The accuracy updates to COMPILATION_PIPELINE close several visible drift issues.
