@@ -1,0 +1,199 @@
+// Three-channel piano roll. The host runs this script once per
+// 16th-note tick at 120 BPM (125 ms per tick). The script holds
+// per-channel position state in the data segment and emits
+// `host::play(channel, midi)` at each note boundary.
+//
+// Notes use the tuple format (Pitch, octave, duration_in_16ths).
+// Octaves follow MIDI convention: middle C is C4 = MIDI 60.
+// Duration units: 1 = sixteenth, 2 = eighth, 4 = quarter,
+//                 8 = half, 16 = whole.
+// Pitch::Rest produces silence for `duration` ticks.
+//
+// The progression is C major - A minor - F major - G major,
+// four bars total, looping forever.
+
+use host::play
+use host::silence
+
+enum Pitch { C, Cs, D, Ds, E, F, Fs, G, Gs, A, As, B, Rest }
+
+// ---------------------------------------------------------------
+// Channel 0: melody. Quarter notes outlining each chord triad.
+// ---------------------------------------------------------------
+fn melody_note(i: i64) -> (Pitch, i64, i64) {
+    match i {
+         0 => (Pitch::C,  5, 4),  // C major: C E G E
+         1 => (Pitch::E,  5, 4),
+         2 => (Pitch::G,  5, 4),
+         3 => (Pitch::E,  5, 4),
+         4 => (Pitch::A,  4, 4),  // A minor: A C E C
+         5 => (Pitch::C,  5, 4),
+         6 => (Pitch::E,  5, 4),
+         7 => (Pitch::C,  5, 4),
+         8 => (Pitch::F,  4, 4),  // F major: F A C A
+         9 => (Pitch::A,  4, 4),
+        10 => (Pitch::C,  5, 4),
+        11 => (Pitch::A,  4, 4),
+        12 => (Pitch::G,  4, 4),  // G major: G B D B
+        13 => (Pitch::B,  4, 4),
+        14 => (Pitch::D,  5, 4),
+         _ => (Pitch::B,  4, 4),
+    }
+}
+
+// ---------------------------------------------------------------
+// Channel 1: bass. Half notes on the chord roots.
+// ---------------------------------------------------------------
+fn bass_note(i: i64) -> (Pitch, i64, i64) {
+    match i {
+        0 => (Pitch::C, 3, 8),
+        1 => (Pitch::C, 3, 8),
+        2 => (Pitch::A, 2, 8),
+        3 => (Pitch::A, 2, 8),
+        4 => (Pitch::F, 2, 8),
+        5 => (Pitch::F, 2, 8),
+        6 => (Pitch::G, 2, 8),
+        _ => (Pitch::G, 2, 8),
+    }
+}
+
+// ---------------------------------------------------------------
+// Channel 2: harmony. Quarter notes on chord thirds and fifths.
+// ---------------------------------------------------------------
+fn harmony_note(i: i64) -> (Pitch, i64, i64) {
+    match i {
+         0 => (Pitch::E,  4, 4),
+         1 => (Pitch::G,  4, 4),
+         2 => (Pitch::E,  4, 4),
+         3 => (Pitch::G,  4, 4),
+         4 => (Pitch::C,  4, 4),
+         5 => (Pitch::E,  4, 4),
+         6 => (Pitch::C,  4, 4),
+         7 => (Pitch::E,  4, 4),
+         8 => (Pitch::A,  3, 4),
+         9 => (Pitch::C,  4, 4),
+        10 => (Pitch::A,  3, 4),
+        11 => (Pitch::C,  4, 4),
+        12 => (Pitch::B,  3, 4),
+        13 => (Pitch::D,  4, 4),
+        14 => (Pitch::B,  3, 4),
+         _ => (Pitch::D,  4, 4),
+    }
+}
+
+// Channel array lengths (number of note events per loop).
+fn melody_len()  -> i64 { 16 }
+fn bass_len()    -> i64 { 8 }
+fn harmony_len() -> i64 { 16 }
+
+// ---------------------------------------------------------------
+// Pitch class to MIDI offset.
+// ---------------------------------------------------------------
+fn pitch_class(p: Pitch) -> i64 {
+    match p {
+        Pitch::C    => 0,
+        Pitch::Cs   => 1,
+        Pitch::D    => 2,
+        Pitch::Ds   => 3,
+        Pitch::E    => 4,
+        Pitch::F    => 5,
+        Pitch::Fs   => 6,
+        Pitch::G    => 7,
+        Pitch::Gs   => 8,
+        Pitch::A    => 9,
+        Pitch::As   => 10,
+        Pitch::B    => 11,
+        Pitch::Rest => -1,
+    }
+}
+
+fn midi_of(p: Pitch, octave: i64) -> i64 {
+    let pc = pitch_class(p);
+    if pc < 0 {
+        -1
+    } else {
+        (octave + 1) * 12 + pc
+    }
+}
+
+// ---------------------------------------------------------------
+// Per-channel state in the data segment.
+//
+// idx_n is the index of the current note in channel n's array.
+// rem_n is the number of ticks remaining before the next note
+// boundary on channel n. When rem_n hits zero, the channel
+// advances to the next note.
+// ---------------------------------------------------------------
+data state {
+    idx0: i64, rem0: i64,
+    idx1: i64, rem1: i64,
+    idx2: i64, rem2: i64,
+}
+
+// ---------------------------------------------------------------
+// Tick loop. One iteration of the body == one 16th-note tick.
+// ---------------------------------------------------------------
+loop main(input: i64) -> i64 {
+    // Channel 0: melody.
+    if state.rem0 == 0 {
+        let n0 = melody_note(state.idx0);
+        let m0 = midi_of(n0.0, n0.1);
+        if m0 >= 0 {
+            host::play(0, m0);
+        } else {
+            host::silence(0);
+        };
+        state.rem0 = n0.2 - 1;
+        let next0 = state.idx0 + 1;
+        if next0 >= melody_len() {
+            state.idx0 = 0;
+        } else {
+            state.idx0 = next0;
+        };
+    } else {
+        state.rem0 = state.rem0 - 1;
+    };
+
+    // Channel 1: bass.
+    if state.rem1 == 0 {
+        let n1 = bass_note(state.idx1);
+        let m1 = midi_of(n1.0, n1.1);
+        if m1 >= 0 {
+            host::play(1, m1);
+        } else {
+            host::silence(1);
+        };
+        state.rem1 = n1.2 - 1;
+        let next1 = state.idx1 + 1;
+        if next1 >= bass_len() {
+            state.idx1 = 0;
+        } else {
+            state.idx1 = next1;
+        };
+    } else {
+        state.rem1 = state.rem1 - 1;
+    };
+
+    // Channel 2: harmony.
+    if state.rem2 == 0 {
+        let n2 = harmony_note(state.idx2);
+        let m2 = midi_of(n2.0, n2.1);
+        if m2 >= 0 {
+            host::play(2, m2);
+        } else {
+            host::silence(2);
+        };
+        state.rem2 = n2.2 - 1;
+        let next2 = state.idx2 + 1;
+        if next2 >= harmony_len() {
+            state.idx2 = 0;
+        } else {
+            state.idx2 = next2;
+        };
+    } else {
+        state.rem2 = state.rem2 - 1;
+    };
+
+    let _ = yield 0;
+    0
+}

@@ -9,90 +9,116 @@ AI to Human communication channel.
 ## Last Updated
 
 **Date**: 2026-05-10
-**Task**: V0.1-M3-T43 Onboarding documentation: docs/guide/ and examples/scripts/.
-**Status**: Complete. The documentation gap identified in the prior turn is closed by a new guide section, eight standalone script examples, and updates to the top-level navigation.
+**Task**: V0.1-M3-T44 SDL3 audio example: keleusma-piano-roll.
+**Status**: Complete. New workspace member `keleusma-piano-roll` provides a real-use-case example of Keleusma driving an SDL3 audio host through a tick-based control loop. Three voices play a four-bar progression in C major that auto-loops indefinitely.
 
 ## Verification
 
 **Commands**:
 
-````bash
-cargo test --workspace
-cargo fmt --all
+```bash
+cargo build --release -p keleusma-piano-roll
+cargo test --workspace --exclude keleusma-piano-roll
 cargo clippy --workspace --all-targets -- -D warnings
-for f in examples/scripts/*.kel; do echo "=== $f ==="; ./target/release/keleusma run "$f"; done
-````
+(sleep 3; echo) | ./target/release/keleusma-piano-roll
+```
 
 **Results**:
 
 - Workspace tests pass. 519 tests across the workspace.
-- Format clean.
 - Clippy clean across `--workspace --all-targets`.
-- All eight example scripts produce expected output:
-  - `01_arithmetic.kel` returns `24`.
-  - `02_struct_field.kel` returns `7`.
-  - `03_enum_match.kel` returns `100`.
-  - `04_for_in.kel` returns `40`.
-  - `05_pipeline.kel` returns `169`.
-  - `06_multiheaded.kel` returns `11`.
-  - `07_fstring.kel` returns `hello, Keleusma! 7 plus 2 is 9`.
-  - `08_method_dispatch.kel` returns `84`.
+- The piano-roll binary builds (SDL3 from source via `build-from-source-static` feature, CMake-driven, ~60 seconds first build, fast on rebuilds).
+- The binary runs end to end. It compiles the Keleusma script, opens the SDL3 audio device, drives the tick loop at 120 BPM, receives the stdin quit signal cleanly, and exits.
 
 ## Summary
 
-The user identified that the documentation, while comprehensive at the reference and architecture level, lacked an onboarding path comparable to Rhai's Book. This task closes that gap with a new guide section and a set of standalone script examples.
+The user requested a real-use-case example: Rust + SDL3 host with a Keleusma audio control loop driving a three-channel embedded piano roll. Single Rust file plus single Keleusma file. The result is the new workspace member `keleusma-piano-roll`.
 
-### New documents
+### Architecture
 
-`docs/guide/README.md` is the section index. It introduces three audience-focused documents and links to companion material under `examples/scripts/` and `examples/`.
+The example demonstrates the canonical synchronous-reactive split that Keleusma is designed for.
 
-`docs/guide/GETTING_STARTED.md` walks a first-time user through installation, writing a first script, running it through the CLI, compiling to bytecode, exploring the REPL, and embedding the same script in a twenty-line Rust host. The walkthrough is concrete and runnable end to end.
+- **Audio thread (SDL3 callback)**: receives a sample buffer to fill at sample rate (48 kHz), reads the current voice state from a `Mutex<[Voice; 3]>`, advances per-voice phase, sums the per-voice waveform contributions. The audio thread never invokes the Keleusma VM.
+- **Main thread (Keleusma)**: runs the script's `loop main` body once per tick at 125 milliseconds (16th-note resolution at 120 BPM). Each iteration emits zero or more `host::play(channel, midi)` or `host::silence(channel)` native calls that update the shared voice state. After the body's single `yield`, the host sleeps until the next tick boundary.
+- **Stdin thread**: blocks on `read_line` and flips an `AtomicBool` to signal quit. The main loop polls the flag at each tick.
 
-`docs/guide/EMBEDDING.md` documents the host-facing surface of the runtime. The document covers VM construction including `Vm::new`, `Vm::load_bytes`, the call and resume protocol with the three `VmState` variants, the four registration paths for native functions, the `KeleusmaType` derive macro for custom types, the bundled utility and audio natives, WCET and WCMU attestation through `set_native_bounds`, three arena-sizing strategies, error recovery via `reset_after_error`, hot code swapping at the reset boundary, and trust-skip construction with `Vm::new_unchecked`. Cross-references to the existing `examples/` programs are interleaved so a reader has working code for each topic.
+The script's data segment carries per-channel position state `(idx_n, rem_n)`, allowing the script to resume cleanly across many ticks without re-allocating its bookkeeping every iteration. The audio thread receives only the small `Voice` struct (`freq: f32`, `gate: bool`) per channel, so the lock holds are short relative to the audio buffer period.
 
-`docs/guide/WHY_REJECTED.md` maps verifier rejection messages to root causes and proposes rewrites. The document distinguishes the two-category taxonomy from the conservative-verification stance: first-category rejections are programs that admit unbounded execution by construction, second-category rejections are programs that are bounded in fact but whose proof is not yet implemented. Concrete error-message strings drawn from `src/verify.rs` and `src/compiler.rs` are matched to root-cause and rewrite patterns for `MakeRecursiveClosure`, `CallIndirect`, loop-iteration-bound extraction, recursive call detection, missing yield in stream blocks, and resource bounds exceeded.
+### Song
 
-### New scripts
+Four-bar progression in C major: `C - Am - F - G` (I-vi-IV-V). Each bar is sixteen 16th-note ticks, total loop length sixty-four ticks. The three channels:
 
-Eight `.kel` files under `examples/scripts/` cover the principal language features. Each script is self-contained, documents the expected output in a header comment, and runs through `keleusma run`. The scripts cover primitives and operators, structs and field access, enums and pattern matching, bounded iteration, the pipeline operator, multiheaded function dispatch, f-string interpolation, and trait method dispatch. A README in the directory tabulates the topics.
+- **Channel 0 (melody)**: square wave, sixteen quarter notes outlining each chord triad.
+- **Channel 1 (bass)**: triangle wave, eight half notes on the chord roots.
+- **Channel 2 (harmony)**: square wave, sixteen quarter notes on chord thirds and fifths.
 
-### Navigation updates
+The note format is `(Pitch, octave, duration_in_16ths)` where `Pitch` is an enum carrying the twelve chromatic pitch classes plus `Rest`. The format is musically idiomatic: `(Pitch::C, 4, 4)` reads as "C4 quarter note" without translation. The duration unit is sixteenth notes, so 1 = sixteenth, 2 = eighth, 4 = quarter, 8 = half, 16 = whole.
 
-`docs/README.md` adds the guide section to the section table and surfaces the three guide documents in the quick-reference table. The top-level `README.md` reorganizes the documentation list into Onboarding and Reference subsections, surfacing the guide and the scripts directory at the top of the documentation entry point. The crate workspace section in the top-level `README.md` is also updated to reflect the five-crate layout: `keleusma`, `keleusma-macros`, `keleusma-arena`, `keleusma-bench`, and `keleusma-cli`.
+### Editability
+
+Per the user's directive, instrument parameters live in the Rust file as `const` arrays at the top:
+
+```rust
+const WAVEFORMS: [Waveform; NUM_VOICES] = [
+    Waveform::Square,   // melody
+    Waveform::Triangle, // bass
+    Waveform::Square,   // harmony
+];
+const VOLUMES: [f32; NUM_VOICES] = [0.22, 0.18, 0.18];
+```
+
+These can be edited without touching the Keleusma script. Available waveforms include square, triangle, sawtooth, and sine; the unused variants are marked `#[allow(dead_code)]` so the file compiles clean while leaving them available.
+
+The song itself is entirely in the Keleusma script through the `melody_note`, `bass_note`, and `harmony_note` match-on-index functions plus the corresponding length functions.
+
+### Build
+
+SDL3 is pulled in through the `sdl3` 0.18 crate with the `build-from-source-static` feature. CMake is required at build time. The first build takes approximately one minute as SDL3 compiles from source; subsequent builds are fast. The trade-off is that the example is self-contained: a user can clone the repository and run `cargo run --release -p keleusma-piano-roll` without installing SDL3 system libraries through Homebrew or a package manager.
+
+### Bug Fixes During Authoring
+
+Three documentation issues surfaced as Keleusma syntax errors while writing the script. All have been corrected at the source.
+
+1. **Data block syntax**. The data block requires a name: `data state { fields }` not `data { fields }`. The `WHY_REJECTED.md` rewrite example for the recursive-factorial case had the wrong syntax and is now corrected. The corrected version also notes that data slots default to `Value::Unit` and the host must initialize them through `vm.set_data` before driving the script.
+2. **`use` declaration position**. All `use` declarations must precede every other top-level item (types, functions, data, traits, impl). The script originally placed `use host::play` and `use host::silence` after the `enum Pitch` declaration, which produced a parse error.
+3. **If-else statement-position semicolons**. The Keleusma parser requires explicit trailing semicolons after `if-else` expressions when used at statement position. Rust admits the implicit-unit form; Keleusma does not. The script was updated to add semicolons after each top-level if-else and after the inner if-else for next-index advancement.
+
+These three constraints are user-facing, not internal, and are now reflected in the corrected `WHY_REJECTED.md` example. A future enhancement to the parser could relax constraint three, but the current strictness is consistent with the language design's preference for explicit syntactic markers.
 
 ## Trade-offs and Properties
 
-The decision to make every script in `examples/scripts/` runnable through `keleusma run` rather than mixing CLI-runnable and embedding-only scripts means the script set is constrained to atomic-total `fn main` entry points. Yield-driven and stream-driven examples remain in the Rust embedding examples under `examples/` and are linked from the guide. The trade-off is that the script library does not directly demonstrate `yield` or `loop`. The benefit is that a new user can run any script with one command and see it produce a value, which is the strongest possible feedback loop for early adoption.
+The decision to use a `Mutex<[Voice; 3]>` rather than a lock-free ring buffer or per-voice atomics reflects the small lock-hold duration relative to the audio buffer period. With three `(f32, bool)` voices the entire snapshot is around twenty bytes; copying it under the lock takes nanoseconds. A lock-free design would be appropriate for hundreds of voices or for hard real-time deadlines where any unbounded wait is unacceptable; for this example the simplicity outweighs the theoretical benefit.
 
-The decision to keep `WHY_REJECTED.md` rooted in actual error-message strings rather than abstract rejection categories means the document indexes by what the user sees. A rejected program produces a verifier error message; the user can search this document for a substring of the message and find the matching root cause and rewrite. The trade-off is that adding new verifier rejections requires updating this document. The alternative, an abstract taxonomy, would not surface the user's actual error.
+The decision to have the script declare each note as a function-with-match returning a tuple, rather than as a literal array indexed in the loop body, is a performance optimization that became visible during development. Keleusma admits arrays of tuples and supports indexing them, so the literal-array form is also workable. The match-function form generates one fixed lookup per tick rather than constructing an array on every iteration. Both forms are within the verifier's capability; the match form was preferred for performance and readability.
 
-The decision to surface the immutable-locals constraint in both `04_for_in.kel` and `WHY_REJECTED.md` means new users encounter the constraint early. Keleusma's local immutability is unusual relative to Rust and is non-obvious from the surface syntax. The earlier the constraint is named, the less time a new user spends puzzling over why a `let mut` annotation is rejected and what alternatives the language offers.
+The decision to place the song in the Keleusma file and the instrument parameters in the Rust file is a clean separation of concerns: the script controls musical decisions, the host controls synthesis decisions. A user editing the song does not need to recompile the host (only the script-compile path runs); a user editing instrument parameters does need a Rust rebuild but can do so without touching the music.
 
-The pipeline-syntax fix during script authorship (`6 |> double` rejected, `6 |> double()` accepted) reflects the parser's requirement that the right-hand side of `|>` always include parentheses, even for nullary calls. The script comment notes the syntax explicitly to avoid the same error in user code.
+The decision to leave SDL3 as `build-from-source-static` rather than recommending a system-installed SDL3 library trades faster builds for portability. For an example that prioritizes "clone and run" ergonomics, this is the right default. A production deployment would prefer the system library to avoid bundling a copy of SDL3 in every binary.
 
-The chained-method-call constraint in `08_method_dispatch.kel` was discovered during smoke testing. The current monomorphization pass cannot resolve a method call on a value whose type is inferred from a previous method-call return. The script header comment documents this limitation and the workaround of adding a typed `let` binding between calls. This is a second-category rejection that a future inference-reach extension can resolve.
+The example illustrates three points that smaller examples do not: a real time-critical workload (audio with audible deadline), shared state across threads (the host wires Keleusma side-effects to a thread-safe handoff), and multi-voice control flow (three independently-sequenced channels with different note durations). These are the load-bearing pieces that distinguish a "real use case" example from a single-threaded compile-and-run demonstration.
 
 ## Files Touched
 
-- **`docs/README.md`**. Section table updated to include the guide. Quick-reference table extended with onboarding entries.
-- **`docs/guide/README.md`** (new). Section index.
-- **`docs/guide/GETTING_STARTED.md`** (new). Installation, first script, embedding walkthrough.
-- **`docs/guide/EMBEDDING.md`** (new). Host-facing API surface and patterns.
-- **`docs/guide/WHY_REJECTED.md`** (new). Verifier-error catalog and rewrite suggestions.
-- **`examples/scripts/README.md`** (new). Script-library index.
-- **`examples/scripts/01_arithmetic.kel`** through **`examples/scripts/08_method_dispatch.kel`** (new). Eight script examples.
-- **`README.md`** (top-level). Documentation list reorganized into Onboarding and Reference. Workspace section updated to reflect five crates.
-- **`docs/process/TASKLOG.md`**. New row for V0.1-M3-T43 in the Task Breakdown table and a new History row.
+- **`Cargo.toml`** at workspace root. Added `keleusma-piano-roll` to workspace members.
+- **`README.md`** (top-level). Workspace section updated to reflect six crates.
+- **`keleusma-piano-roll/Cargo.toml`** (new). Crate metadata; depends on `keleusma`, `keleusma-arena`, `sdl3` with `build-from-source-static` feature, `libm`. License 0BSD.
+- **`keleusma-piano-roll/README.md`** (new). Architecture, song description, editability notes, build instructions, "why this example" rationale.
+- **`keleusma-piano-roll/song.kel`** (new). Three-channel piano roll. Pitch enum, MIDI conversion helpers, three note-lookup match functions, length functions, data segment for position state, `loop main` driving three channels per tick.
+- **`keleusma-piano-roll/src/main.rs`** (new). SDL3 host. Mixer struct implementing `AudioCallback<f32>`, waveform synthesis, MIDI-to-frequency conversion, native registration, stdin reader thread, tick loop with `Instant`-based deadline.
+- **`docs/guide/WHY_REJECTED.md`**. Data-block syntax corrected and host-initialization note added.
+- **`docs/process/TASKLOG.md`**. New row for V0.1-M3-T44 in the Task Breakdown table and a new History row.
 - **`docs/process/REVERSE_PROMPT.md`**. This file.
 
 ## Remaining Open Priorities
 
-The new guide is functional and was smoke-tested for accuracy. Several refinements remain.
+The example is functional and was smoke-tested for end-to-end execution. Several refinements remain.
 
-- The script library does not demonstrate yield-driven or stream-driven scripts, since those require a host that drives the call and resume loop. A companion set under `examples/scripts/host/` with paired `.kel` and `.rs` files would demonstrate the full coroutine surface end to end.
-- The data-segment example pattern from `WHY_REJECTED.md` is described but not demonstrated as a runnable script. A `examples/scripts/09_data_segment_loop.kel` plus `.rs` driver would close this.
-- The chained method-call inference reach noted in `08_method_dispatch.kel` is a second-category rejection that would benefit from an explicit BACKLOG entry tracking the inference extension. The current backlog references B2.4 monomorphization broadly; a dedicated sub-item for chained-receiver inference would surface the constraint.
-- The CLI `run` command does not currently drive yield. A future CLI flag such as `--input <stream-file>` driving resume from a host-side stream would let yield scripts ship through the CLI without a Rust host. This is a CLI-level enhancement separate from the documentation work.
+- **No ADSR envelopes**. The current synthesis is gate-driven only: a voice is on or off with no attack, decay, sustain, or release. Real instruments fade in and out smoothly. Adding a per-voice envelope state machine in the audio thread would improve listenability without changing the script-host interface.
+- **Audio output not directly verifiable in CI**. The smoke test confirms the program runs and exits cleanly but does not verify the actual audio output sounds correct. A CI step that captures the audio device output and compares against a golden waveform would catch regressions; this is non-trivial and is deferred.
+- **Single-frequency-per-voice limitation**. The `Voice` struct holds one frequency; rapid note changes within a single tick are not supported. The example does not need this, but a richer use case (chord trills, ornamentation) would.
+- **No explicit thread-priority management on the audio callback**. SDL3 manages this internally for the audio thread, but a production embedding would want explicit verification on the deployment platform.
+- **Hot code swap not demonstrated**. The user explicitly excluded this from the example as the wrong fit, but documenting the swap pattern in a separate example (load v2 of the script while audio plays v1's voices) would round out the architecture pattern coverage.
+- **The `set_native_bounds` attestation pass is not exercised** in this example. The natives are zero-attested by default, which is harmless because the script does not depend on the verifier proving the native heap budget. A production audio embedding would want to attest realistic bounds for the natives.
 
 ## Intended Next Step
 
@@ -100,4 +126,4 @@ Await human prompt before proceeding.
 
 ## Session Context
 
-This session closed the onboarding-documentation gap identified by the user. The guide is structured to mirror what the user named as Rhai's coverage: a getting-started narrative, an embedding cookbook, and a troubleshooting reference for verifier rejection. The script library complements the existing Rust embedding examples by giving the new user something to type and run through the CLI immediately. The total documentation footprint grew by approximately seven hundred lines of new prose plus eight script files, and zero source code changes were required.
+This session built a real-use-case example demonstrating Keleusma in its intended deployment shape: an embedded scripting layer driving real-time audio synthesis. The example exercises the synchronous-reactive split (tick-rate logic, sample-rate audio), the bounded-step guarantee (per-tick budget on a real deadline), the productivity guarantee (yield per tick), the data segment (per-channel position state), and native interop (host functions updating shared voice state through `Mutex`). The presence of the example is significant because it counters the most common skepticism about deeply-restricted scripting languages: "if locals are immutable and recursion is forbidden, can the language do anything useful in production?" The answer here is concretely yes for the audio-engine use case the language was designed for.

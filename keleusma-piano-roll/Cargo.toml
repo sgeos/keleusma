@@ -1,0 +1,18 @@
+[package]
+name = "keleusma-piano-roll"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.87"
+description = "Three-channel piano-roll example: SDL3 audio host driven by a Keleusma tick-based control loop."
+license = "0BSD"
+publish = false
+
+[dependencies]
+keleusma = { path = "..", version = "0.1" }
+keleusma-arena = { path = "../keleusma-arena", version = "0.1" }
+sdl3 = { version = "0.18", features = ["build-from-source-static"] }
+libm = "0.2"
+
+[[bin]]
+name = "keleusma-piano-roll"
+path = "src/main.rs"

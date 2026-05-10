@@ -39,14 +39,16 @@ let factorial = |n: i64| if n <= 1 { 1 } else { n * factorial(n - 1) };
 The first is to reclassify the entry point as `loop` and accumulate across iterations through a data block.
 
 ````
-data { result: i64 }
+data state { result: i64 }
 
 loop main(input: i64) -> i64 {
-    data.result = data.result * input;
-    let _next = yield data.result;
-    data.result
+    state.result = state.result * input;
+    let _next = yield state.result;
+    state.result
 }
 ````
+
+The host must initialize `state.result` to a meaningful starting value through `vm.set_data(slot, value)` before driving the script.
 
 The second is to register a host-side fold native and call it from a `fn`.
 

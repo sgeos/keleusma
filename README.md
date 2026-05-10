@@ -219,13 +219,14 @@ Each pipeline stage produces typed errors with source locations.
 
 ## Workspace
 
-Five crates:
+Six crates:
 
 - `keleusma`. The runtime crate.
 - `keleusma-macros`. Compile-time proc macro for `#[derive(KeleusmaType)]`.
 - `keleusma-arena`. Standalone dual-end bump allocator. Published on crates.io as `keleusma-arena`.
 - `keleusma-bench`. Cost-model calibration tool that emits a measured `CostModel` for the host CPU.
 - `keleusma-cli`. Standalone command-line frontend providing `run`, `compile`, and `repl` subcommands.
+- `keleusma-piano-roll`. Three-channel SDL3 audio example driven by a Keleusma tick-based control loop.
 
 ## Documentation
 
