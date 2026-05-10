@@ -21,7 +21,9 @@ pub use keleusma_arena::{
     Arena, ArenaHandle, BottomHandle, Budget, EpochSaturated, KString, Stale, TopHandle,
 };
 
-pub use bytecode::Value;
+pub use bytecode::{
+    CostModel, NOMINAL_COST_MODEL, VALUE_SLOT_SIZE_BYTES, Value, nominal_op_cycles,
+};
 pub use keleusma_macros::KeleusmaType;
 pub use marshall::{IntoFallibleNativeFn, IntoNativeFn, KeleusmaType};
 pub use vm::{NativeCtx, VmError};

@@ -112,13 +112,31 @@ Runtime layout. Memory is organized into four regions analogous to the System V 
 
 Keleusma supports hot code swapping at the RESET boundary of a productive divergent function iteration. Only the dialogue type, namely the yield contract from A to B, must remain invariant across swaps. Text, rodata, and the data segment schema may all change across a swap, and each routine's WCET and reset-to-reset bound is certified independently. Cross-swap data handling follows Replace semantics, with the host atomically supplying the data instance appropriate for the new code version. The model parallels the Erlang and Open Telecom Platform multi-version code coexistence pattern [H1, H2], with the simplification that the migration callback resides in the host rather than in the script. See [EXECUTION_MODEL.md](./EXECUTION_MODEL.md) for the full specification including atomicity, rollback, and stale-slot behavior.
 
-## WCET Analysis
+## WCET and WCMU Analysis
 
-Worst-Case Execution Time is measured from yield to yield. Each yield-to-yield slice must have a statically provable upper bound on instructions executed. In the absence of dynamic dispatch, every execution path is a static directed acyclic graph between yield points; WCET counts weighted opcodes on the longest path. Wilhelm et al. provide a comprehensive survey of WCET analysis methods and tools [WC1].
+Worst-Case Execution Time is measured from yield to yield. Each yield-to-yield slice must have a statically provable upper bound on instructions executed. In the absence of dynamic dispatch, every execution path is a static directed acyclic graph between yield points. WCET counts weighted opcodes on the longest path. Wilhelm et al. provide a comprehensive survey of WCET analysis methods and tools [WC1].
 
-Each bytecode instruction carries a relative integer cost via `Op::cost()`, assigned across five tiers: 1 for data movement and control flow markers, 2 for arithmetic and comparisons, 3 for division and field lookup, 5 for composite value construction, and 10 for function calls. `wcet_stream_iteration()` in `src/verify.rs` computes the worst-case total cost of one Stream-to-Reset iteration by recursively analyzing block-structured control flow. These cost weights are preliminary and subject to refinement as the instruction set stabilizes.
+Worst-Case Memory Usage is measured per Stream-to-Reset iteration. The analysis computes a separate stack and heap bound. Both are summed against the arena capacity at module load.
 
-Abstract opcode cost does not directly correspond to wall-clock execution time. Industrial WCET analysis tools such as aiT [WC2] account for pipeline effects, cache behavior, and branch prediction on the target hardware. For safety-critical certification, a sound bound on real-time WCET requires either a time-predictable execution platform (as demonstrated for JOP in [WC5]) or a validated mapping from abstract cost to physical time. Keleusma's current WCET analysis is sufficient for soft real-time applications where approximate cost bounds inform scheduling decisions. See [RELATED_WORK.md](../reference/RELATED_WORK.md) Section 4 for a full discussion. Indirect-dispatch limitations and the rejection of recursive closures by the safe verifier are documented in [EXECUTION_MODEL.md](./EXECUTION_MODEL.md) under Structural Verification.
+### Units
+
+WCET is reported in **nominal cycles**. WCMU is reported in **bytes**.
+
+The byte unit is target-independent in principle. The actual byte count returned by the analysis depends on the runtime's value-slot size, which the cost model carries as `value_slot_bytes`. The current 64-bit Keleusma runtime declares 32 bytes per slot (a conservative bound that includes alignment padding for the runtime-tagged `Value` enum). A future 32-bit runtime would declare a smaller value.
+
+Nominal cycles are unmeasured estimates chosen for relative ordering of programs on a single platform. The scale assigns one cycle to data movement and trivial control flow, two to arithmetic and comparison, three to division and field lookup, five to composite construction, ten to function calls. The values are **not** validated against any specific host CPU.
+
+What this means in practice. A program with a nominal-cycle WCET of one hundred is more expensive than a program with a nominal-cycle WCET of fifty when both run on the same platform, but the absolute number does not convert to wall-clock time without a host-specific calibration. Hosts that need wall-clock WCET must construct a custom `CostModel` whose `op_cycles` returns measured cycle counts for the target hardware.
+
+### Cost model
+
+The `crate::bytecode::CostModel` struct carries the per-opcode cycle table and the value-slot byte size. The bundled `NOMINAL_COST_MODEL` constant supplies the unmeasured defaults documented above. Hosts construct a custom cost model by setting `value_slot_bytes` to the runtime's value-slot size and `op_cycles` to a function pointer that returns measured cycles per opcode. The verify entry point `verify_resource_bounds_with_cost_model` accepts a custom model.
+
+Internal threading of the host-supplied cost model through the per-chunk WCMU computation is a tracked refinement. The current implementation accepts the model parameter in the public API surface; the per-chunk computation continues to use the bundled nominal model. Hosts that build against the cost-model contract will see measured cycle and byte tables flow through to the bound when the threading work lands. The contract is stable.
+
+### Limitations
+
+Abstract opcode cost does not directly correspond to wall-clock execution time. Industrial WCET analysis tools such as aiT [WC2] account for pipeline effects, cache behavior, and branch prediction on the target hardware. For safety-critical certification, a sound bound on real-time WCET requires either a time-predictable execution platform as demonstrated for JOP in [WC5] or a validated mapping from abstract cost to physical time. Keleusma's nominal cost model is sufficient for relative comparison of programs and for soft real-time applications where approximate cost bounds inform scheduling decisions. See [RELATED_WORK.md](../reference/RELATED_WORK.md) Section 4 for a full discussion. Indirect-dispatch limitations and the rejection of recursive closures by the safe verifier are documented in [EXECUTION_MODEL.md](./EXECUTION_MODEL.md) under Structural Verification.
 
 ## Turing Completeness and Temporal Domains
 

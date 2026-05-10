@@ -501,80 +501,181 @@ pub enum Op {
 /// representation grows.
 ///
 /// On the V0.0 cycle target (R33), this constant is 32 bytes. Future work
-/// under B10 may parameterize this by target.
+/// under B10 may parameterize this by target through a [`CostModel`].
 pub const VALUE_SLOT_SIZE_BYTES: u32 = 32;
 
-impl Op {
-    /// Return the relative integer cost of this instruction.
-    ///
-    /// Costs are unitless relative weights, not cycle counts. Higher values
-    /// indicate more expensive operations. The scale is chosen so that
-    /// simple data movement operations cost 1 and complex operations cost
-    /// proportionally more. These values are preliminary and subject to
-    /// refinement as the instruction set stabilizes.
-    pub fn cost(&self) -> u32 {
-        match self {
-            // Data movement: minimal cost.
-            Op::Const(_)
-            | Op::PushUnit
-            | Op::PushTrue
-            | Op::PushFalse
-            | Op::GetLocal(_)
-            | Op::SetLocal(_)
-            | Op::GetData(_)
-            | Op::SetData(_)
-            | Op::Pop
-            | Op::Dup
-            | Op::PushNone
-            | Op::WrapSome
-            | Op::Not => 1,
+/// Per-target cost model used by the WCET and WCMU analyses.
+///
+/// Units. WCMU is reported in **bytes**. WCET is reported in
+/// **nominal cycles**. The byte unit is target-independent in
+/// principle. The actual byte count returned by the analysis depends
+/// on the value-slot size declared by the cost model. The cycle unit
+/// is target-dependent. The nominal cost model bundled with the
+/// runtime supplies unmeasured estimates suitable for relative
+/// ordering of programs on a single platform; it is **not** validated
+/// against any specific host CPU. Hosts that require wall-clock WCET
+/// in measured cycles must construct a custom `CostModel` whose
+/// `op_cycles` returns measured per-opcode cycle counts for the
+/// target hardware.
+///
+/// Custom cost models. Hosts construct a `CostModel` by setting
+/// `value_slot_bytes` to the runtime's value-slot size and
+/// `op_cycles` to a function pointer that returns the nominal cycle
+/// cost for each opcode. The function pointer is reentrant and must
+/// not allocate or fail. The convention is that the function
+/// pattern-matches on the `Op` variant and returns the corresponding
+/// cycle count from a target-specific table.
+///
+/// The bundled [`NOMINAL_COST_MODEL`] supplies the unmeasured
+/// defaults that the existing analysis APIs use when no custom model
+/// is provided.
+#[derive(Clone, Copy)]
+pub struct CostModel {
+    /// Bytes per operand-stack slot for the host runtime. Determines
+    /// the conversion from slot count to byte count in the WCMU
+    /// analysis. The current 64-bit Keleusma runtime uses 32 bytes
+    /// per slot; a future 32-bit runtime would use a smaller value.
+    pub value_slot_bytes: u32,
 
-            // Control flow markers: minimal overhead.
-            Op::If(_)
-            | Op::Else(_)
-            | Op::EndIf
-            | Op::Loop(_)
-            | Op::EndLoop(_)
-            | Op::Break(_)
-            | Op::BreakIf(_)
-            | Op::Stream
-            | Op::Reset
-            | Op::Yield
-            | Op::Trap(_) => 1,
+    /// Function returning the nominal cycle cost for the given
+    /// opcode. The nominal cost model uses an unmeasured table whose
+    /// values are relative weights rather than measured cycles.
+    /// Hosts override this for measured per-target cycle tables.
+    pub op_cycles: fn(&Op) -> u32,
+}
 
-            // Simple arithmetic and comparisons.
-            Op::Add
-            | Op::Sub
-            | Op::Mul
-            | Op::Neg
-            | Op::CmpEq
-            | Op::CmpNe
-            | Op::CmpLt
-            | Op::CmpGt
-            | Op::CmpLe
-            | Op::CmpGe
-            | Op::GetIndex
-            | Op::GetTupleField(_)
-            | Op::GetEnumField(_)
-            | Op::Len
-            | Op::IntToFloat
-            | Op::FloatToInt
-            | Op::Return => 2,
+impl CostModel {
+    /// Compute the nominal cycle cost for the opcode under this
+    /// cost model.
+    pub fn cycles(&self, op: &Op) -> u32 {
+        (self.op_cycles)(op)
+    }
 
-            // Division, field lookup, type checks (string comparison).
-            Op::Div | Op::Mod | Op::GetField(_) | Op::IsEnum(_, _) | Op::IsStruct(_) => 3,
+    /// Compute the WCMU byte cost of an operand-stack slot count
+    /// under this cost model.
+    pub fn slots_to_bytes(&self, slots: u32) -> u32 {
+        slots.saturating_mul(self.value_slot_bytes)
+    }
 
-            // Composite value construction.
-            Op::NewStruct(_) | Op::NewEnum(_, _, _) | Op::NewArray(_) | Op::NewTuple(_) => 5,
-
-            // Function calls.
-            Op::Call(_, _) | Op::CallNative(_, _) | Op::CallIndirect(_) => 10,
-            Op::PushFunc(_) => 0,
-            // MakeClosure cost is the per-capture allocation cost.
-            // Held at a small constant for the WCMU analysis.
-            Op::MakeClosure(_, _) => 5,
-            Op::MakeRecursiveClosure(_, _) => 5,
+    /// Compute the heap byte allocation for the opcode under this
+    /// cost model. For composite-construction opcodes, multiplies
+    /// the field count by the cost model's `value_slot_bytes`.
+    pub fn heap_alloc_bytes(&self, op: &Op, chunk: &Chunk) -> u32 {
+        match op {
+            Op::NewStruct(template_idx) => {
+                let idx = *template_idx as usize;
+                let field_count = chunk
+                    .struct_templates
+                    .get(idx)
+                    .map_or(0, |t| t.field_names.len() as u32);
+                self.slots_to_bytes(field_count)
+            }
+            Op::NewEnum(_, _, n) => self.slots_to_bytes(*n as u32),
+            Op::NewArray(n) => self.slots_to_bytes(*n as u32),
+            Op::NewTuple(n) => self.slots_to_bytes(*n as u32),
+            _ => 0,
         }
+    }
+}
+
+/// Default cost model for the bundled runtime. WCMU value-slot size
+/// matches the runtime's `VALUE_SLOT_SIZE_BYTES`. WCET cycles use the
+/// nominal table provided by [`nominal_op_cycles`].
+///
+/// **Nominal-cycle caveat.** The values are unmeasured estimates
+/// chosen for relative ordering, not measured cycles for any specific
+/// host CPU. The scale is one cycle for data movement and trivial
+/// control flow, two for arithmetic and comparison, three for division
+/// and field lookup, five for composite construction, ten for
+/// function calls. A program whose nominal-cycle WCET exceeds another
+/// program's nominal-cycle WCET on the same platform is more
+/// expensive in the relative sense; a measured-cycle CostModel is
+/// required to convert either bound to wall-clock time.
+pub const NOMINAL_COST_MODEL: CostModel = CostModel {
+    value_slot_bytes: VALUE_SLOT_SIZE_BYTES,
+    op_cycles: nominal_op_cycles,
+};
+
+/// The nominal-cycle cost table used by [`NOMINAL_COST_MODEL`].
+/// Returns unmeasured cycle estimates per the documented scale.
+pub fn nominal_op_cycles(op: &Op) -> u32 {
+    match op {
+        Op::Const(_)
+        | Op::PushUnit
+        | Op::PushTrue
+        | Op::PushFalse
+        | Op::GetLocal(_)
+        | Op::SetLocal(_)
+        | Op::GetData(_)
+        | Op::SetData(_)
+        | Op::Pop
+        | Op::Dup
+        | Op::PushNone
+        | Op::WrapSome
+        | Op::Not => 1,
+
+        Op::If(_)
+        | Op::Else(_)
+        | Op::EndIf
+        | Op::Loop(_)
+        | Op::EndLoop(_)
+        | Op::Break(_)
+        | Op::BreakIf(_)
+        | Op::Stream
+        | Op::Reset
+        | Op::Yield
+        | Op::Trap(_) => 1,
+
+        Op::Add
+        | Op::Sub
+        | Op::Mul
+        | Op::Neg
+        | Op::CmpEq
+        | Op::CmpNe
+        | Op::CmpLt
+        | Op::CmpGt
+        | Op::CmpLe
+        | Op::CmpGe
+        | Op::GetIndex
+        | Op::GetTupleField(_)
+        | Op::GetEnumField(_)
+        | Op::Len
+        | Op::IntToFloat
+        | Op::FloatToInt
+        | Op::Return => 2,
+
+        Op::Div | Op::Mod | Op::GetField(_) | Op::IsEnum(_, _) | Op::IsStruct(_) => 3,
+
+        Op::NewStruct(_) | Op::NewEnum(_, _, _) | Op::NewArray(_) | Op::NewTuple(_) => 5,
+
+        Op::Call(_, _) | Op::CallNative(_, _) | Op::CallIndirect(_) => 10,
+        Op::PushFunc(_) => 0,
+        Op::MakeClosure(_, _) | Op::MakeRecursiveClosure(_, _) => 5,
+    }
+}
+
+impl Op {
+    /// Return the WCET cost of this instruction in **nominal cycles**
+    /// per the [`NOMINAL_COST_MODEL`].
+    ///
+    /// **Unit.** The result is a count of nominal cycles. Nominal
+    /// cycles are unmeasured estimates chosen for relative ordering of
+    /// programs on a single platform. The scale is one cycle for data
+    /// movement and trivial control flow, two for arithmetic and
+    /// comparison, three for division and field lookup, five for
+    /// composite construction, ten for function calls. The values are
+    /// not validated against any specific host CPU. Hosts that need
+    /// wall-clock WCET in measured cycles must construct a custom
+    /// [`CostModel`] whose `op_cycles` returns measured cycle counts
+    /// for the target hardware.
+    ///
+    /// This method is a thin wrapper over [`NOMINAL_COST_MODEL`].
+    /// Analysis APIs that take an explicit `&CostModel` parameter
+    /// (such as [`crate::verify::wcet_stream_iteration_with_cost_model`])
+    /// allow per-target cost tables to flow through without changing
+    /// the rest of the analysis.
+    pub fn cost(&self) -> u32 {
+        NOMINAL_COST_MODEL.cycles(self)
     }
 
     /// Number of operand-stack slots pushed by this instruction.
@@ -696,35 +797,34 @@ impl Op {
         }
     }
 
-    /// Bytes allocated to the arena heap by this instruction, ignoring
-    /// transitive allocations through called functions.
+    /// WCMU heap allocation by this instruction in **bytes** under
+    /// the [`NOMINAL_COST_MODEL`].
     ///
-    /// For composite-construction instructions, the size is the count of
-    /// stored field slots times `VALUE_SLOT_SIZE_BYTES`. For `NewStruct`,
-    /// the field count comes from the chunk's struct templates and so is
-    /// looked up using the provided `chunk` reference.
+    /// **Unit.** The result is a count of bytes. The byte count is
+    /// computed as the field-slot count multiplied by the cost
+    /// model's `value_slot_bytes`. The slot count is target-
+    /// independent (a structural property of the opcode); the byte
+    /// conversion depends on the runtime's value representation.
     ///
-    /// Calls and native calls are reported as zero local heap. The
-    /// transitive heap contribution of a `Call` is the WCMU of the called
-    /// function and is computed at the analysis level by recursive
-    /// traversal of the call graph. The heap contribution of a
-    /// `CallNative` comes from the host's WCMU attestation, recorded
-    /// against the native function entry.
+    /// For composite-construction instructions, the size is the count
+    /// of stored field slots times `value_slot_bytes`. For
+    /// `NewStruct`, the field count comes from the chunk's struct
+    /// templates and is looked up through the provided `chunk`
+    /// reference.
+    ///
+    /// Calls and native calls report zero local heap. The transitive
+    /// heap contribution of a `Call` is the WCMU of the called
+    /// function and is computed at the analysis level. The heap
+    /// contribution of a `CallNative` comes from the host's WCMU
+    /// attestation recorded against the native function entry.
+    ///
+    /// This method is a thin wrapper over
+    /// [`CostModel::heap_alloc_bytes`] using [`NOMINAL_COST_MODEL`].
+    /// Analysis APIs that take an explicit `&CostModel` allow
+    /// per-target value-slot sizes to flow through without changing
+    /// the rest of the analysis.
     pub fn heap_alloc(&self, chunk: &Chunk) -> u32 {
-        match self {
-            Op::NewStruct(template_idx) => {
-                let idx = *template_idx as usize;
-                let field_count = chunk
-                    .struct_templates
-                    .get(idx)
-                    .map_or(0, |t| t.field_names.len() as u32);
-                field_count * VALUE_SLOT_SIZE_BYTES
-            }
-            Op::NewEnum(_, _, n) => *n as u32 * VALUE_SLOT_SIZE_BYTES,
-            Op::NewArray(n) => *n as u32 * VALUE_SLOT_SIZE_BYTES,
-            Op::NewTuple(n) => *n as u32 * VALUE_SLOT_SIZE_BYTES,
-            _ => 0,
-        }
+        NOMINAL_COST_MODEL.heap_alloc_bytes(self, chunk)
     }
 }
 
@@ -1437,4 +1537,92 @@ pub(crate) fn truncate_int(value: i64, word_bits_log2: u8) -> i64 {
     let bits = 1u32 << word_bits_log2;
     let shift = 64 - bits;
     (value << shift) >> shift
+}
+
+#[cfg(test)]
+mod cost_model_tests {
+    use super::*;
+
+    #[test]
+    fn nominal_cost_model_value_slot_bytes_matches_constant() {
+        assert_eq!(NOMINAL_COST_MODEL.value_slot_bytes, VALUE_SLOT_SIZE_BYTES);
+    }
+
+    #[test]
+    fn nominal_cost_model_cycles_match_op_cost_method() {
+        // The Op::cost backward-compatibility wrapper must agree with
+        // the nominal cost model's cycle table for every variant. Pick
+        // a representative sample across the cost tiers.
+        let ops: alloc::vec::Vec<Op> = alloc::vec![
+            Op::Const(0),
+            Op::PushUnit,
+            Op::Add,
+            Op::Mul,
+            Op::Div,
+            Op::NewArray(2),
+            Op::Call(0, 0),
+            Op::PushFunc(0),
+            Op::MakeClosure(0, 0),
+            Op::Yield,
+        ];
+        for op in &ops {
+            assert_eq!(NOMINAL_COST_MODEL.cycles(op), op.cost());
+        }
+    }
+
+    #[test]
+    fn cost_model_slots_to_bytes_uses_slot_size() {
+        let model = CostModel {
+            value_slot_bytes: 8,
+            op_cycles: nominal_op_cycles,
+        };
+        assert_eq!(model.slots_to_bytes(0), 0);
+        assert_eq!(model.slots_to_bytes(1), 8);
+        assert_eq!(model.slots_to_bytes(4), 32);
+    }
+
+    #[test]
+    fn cost_model_heap_alloc_bytes_scales_with_slot_size() {
+        // A custom cost model with half the value-slot size should
+        // halve the reported heap allocation for composite-construction
+        // opcodes. This pins the contract that `value_slot_bytes`
+        // determines the byte conversion.
+        let nominal = NOMINAL_COST_MODEL;
+        let custom = CostModel {
+            value_slot_bytes: VALUE_SLOT_SIZE_BYTES / 2,
+            op_cycles: nominal_op_cycles,
+        };
+        let chunk = Chunk {
+            name: alloc::string::String::from("test"),
+            ops: alloc::vec::Vec::new(),
+            constants: alloc::vec::Vec::new(),
+            struct_templates: alloc::vec::Vec::new(),
+            local_count: 0,
+            param_count: 0,
+            block_type: BlockType::Func,
+        };
+        let op = Op::NewArray(4);
+        let nominal_bytes = nominal.heap_alloc_bytes(&op, &chunk);
+        let custom_bytes = custom.heap_alloc_bytes(&op, &chunk);
+        assert_eq!(nominal_bytes, 4 * VALUE_SLOT_SIZE_BYTES);
+        assert_eq!(custom_bytes, 4 * (VALUE_SLOT_SIZE_BYTES / 2));
+        assert_eq!(custom_bytes * 2, nominal_bytes);
+    }
+
+    #[test]
+    fn custom_cost_model_returns_custom_cycles() {
+        // Demonstrate that a host-supplied op_cycles function flows
+        // through the model. The custom function returns a flat 100
+        // for every op; the model's `cycles` must return that value.
+        fn flat_hundred(_op: &Op) -> u32 {
+            100
+        }
+        let custom = CostModel {
+            value_slot_bytes: VALUE_SLOT_SIZE_BYTES,
+            op_cycles: flat_hundred,
+        };
+        assert_eq!(custom.cycles(&Op::Add), 100);
+        assert_eq!(custom.cycles(&Op::PushUnit), 100);
+        assert_eq!(custom.cycles(&Op::Call(0, 0)), 100);
+    }
 }

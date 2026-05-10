@@ -1006,6 +1006,39 @@ pub fn verify_resource_bounds(module: &Module, arena_capacity: usize) -> Result<
     verify_resource_bounds_with_natives(module, arena_capacity, &[])
 }
 
+/// Verify resource bounds against a host-supplied [`CostModel`].
+///
+/// **Unit contract.** WCMU is reported in **bytes** and compared
+/// against the arena capacity. WCET is reported in **nominal cycles**
+/// per the supplied cost model. The byte unit is target-independent
+/// in principle; the actual byte count depends on the cost model's
+/// `value_slot_bytes`. The cycle unit is target-dependent and the
+/// numeric values reflect the cost model's `op_cycles` table.
+///
+/// Hosts that supply a custom cost model can use this entry point to
+/// validate a module against measured per-target cycle and byte
+/// tables. The cost model parameter currently affects the API
+/// contract; full internal threading of the cost model through the
+/// per-chunk WCMU computation remains future work tracked under
+/// B10 cost-table follow-on. The present implementation delegates
+/// to [`verify_resource_bounds_with_natives`], which uses the
+/// bundled [`crate::bytecode::NOMINAL_COST_MODEL`]. A future refinement
+/// will route the host-supplied model through the per-chunk
+/// computation so that custom cycle and byte tables actually
+/// determine the bound.
+pub fn verify_resource_bounds_with_cost_model(
+    module: &Module,
+    arena_capacity: usize,
+    _cost_model: &crate::bytecode::CostModel,
+    native_wcmu: &[u32],
+) -> Result<(), VerifyError> {
+    // Internal threading of the cost model through `module_wcmu` is
+    // tracked as future work. The API surface accepts the model now
+    // so hosts can begin building against the contract; the bound is
+    // currently computed against the nominal cost model.
+    verify_resource_bounds_with_natives(module, arena_capacity, native_wcmu)
+}
+
 /// Verify that the module's worst-case memory usage fits within the
 /// given arena capacity, with full call-graph integration and native
 /// attestations.
