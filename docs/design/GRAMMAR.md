@@ -18,18 +18,21 @@ Without any host-plugged functions, Keleusma can only define pure functions that
 6. **Deterministic execution**: No floating-point ambiguity, no undefined behavior, no garbage collection pauses.
 7. **Guaranteed termination or productivity**: Three function categories ensure that scripts either terminate or yield, verifiable by static analysis.
 
-### Scope Exclusions
+### Scope Inclusions and Exclusions
 
-The following features are explicitly out of scope for the initial specification.
+The following features were originally listed as out of scope and have since shipped under V0.1.
 
-- Hindley-Milner type inference
-- Ownership, borrowing, or lifetime annotations
-- Traits or generic type parameters
-- Closures or anonymous functions
-- Hot-swap mechanism
-- String interpolation (not needed for a control language)
+- Hindley-Milner type inference with Robinson unification, the occurs check, and a transitional `Type::Var` for inferred positions.
+- Generic type parameters with trait bounds, traits, impl blocks, and compile-time monomorphization with inference reach across literals, identifiers, function-call returns, method-call returns, casts, enum variants, struct constructions, tuple and array literals, if and match arms, field access, tuple-index, and array-index.
+- Closures with environment capture and transitive nested capture. Closures are rejected by the safe verifier under the conservative-verification stance because indirect dispatch through `Op::CallIndirect` cannot be statically bounded; programs that require definitive Worst-Case Execution Time and Worst-Case Memory Usage bounds restrict themselves to direct calls.
+- Hot code swap at the reset boundary of a `loop` script. Native registrations persist across the swap; the data segment is supplied fresh by the host.
+- String interpolation through f-strings (`f"text {expr}"`), which the lexer desugars to `concat` and `to_string` calls.
 
-Note: Structural verification at the bytecode level is implemented. See [TARGET_ISA.md](../reference/TARGET_ISA.md) for the verification specification.
+The following remains explicitly out of scope.
+
+- Ownership, borrowing, or lifetime annotations at the surface language level. Rust's borrow checker is unnecessary because script values are conceptually immutable and the data segment is the sole mutable region.
+
+Structural verification at the bytecode level is implemented. See [TARGET_ISA.md](../reference/TARGET_ISA.md) for the verification specification. The conservative-verification stance is described in [LANGUAGE_DESIGN.md](../architecture/LANGUAGE_DESIGN.md#conservative-verification).
 
 ## 2. Lexical Structure
 
@@ -37,7 +40,8 @@ Note: Structural verification at the bytecode level is implemented. See [TARGET_
 
 ````
 fn  yield  loop  break  let  for  in  if  else  match
-use  struct  enum  true  false  as  when  not  and  or  pure
+use  struct  enum  trait  impl  data  true  false  as  when
+not  and  or  pure
 ````
 
 All keywords are reserved and cannot be used as identifiers.
@@ -164,13 +168,17 @@ let nothing: Option<String> = Option::None;
 
 ### Opaque Types
 
-Host-registered Rust types that scripts can pass through function calls but cannot destructure or inspect. Opaque types appear as `upper_ident` in type annotations. The compiler recognizes them from the native function registry.
+Type-system support is partial in V0.1.x. The type checker tracks an opaque type for every named type that is not declared as a struct or enum, so source code that mentions an opaque type compiles and type-checks. The runtime path is incomplete: there is no `Value::Opaque` variant and the `KeleusmaType` derive does not produce marshalling code for opaque types, so a host cannot pass a domain-specific Rust value through the native boundary as itself today. The intended pattern in V0.1.x is to pass opaque values through a primitive handle (typically `i64`) that the host translates to and from its real type at the native function boundary.
 
 ````
-// ChannelHandle is opaque; scripts can only pass it to native functions.
-let ch: ChannelHandle = audio::get_channel(0);
+// ChannelHandle is documented as opaque at the type-system level.
+// In V0.1.x the host marshals the handle as i64 across the native
+// boundary and translates internally.
+let ch: i64 = audio::get_channel(0);
 audio::set_frequency(ch, 440.0);
 ````
+
+A future release will add a `Value::Opaque` variant and a marshalling path so opaque host types can flow as themselves rather than as `i64` handles. Tracked in the backlog.
 
 ### Type Coercion
 
@@ -505,31 +513,33 @@ Guard expressions are limited to comparison operators, logical operators, arithm
 
 ## 7. Pure and Impure Functions
 
-Native functions registered by the host must be declared as either pure or impure.
+Purity is a property of native functions registered by the host. The Keleusma compiler does not verify purity; analysis and optimization trust the host's declaration. The current registration API does not require an explicit purity annotation. Future analysis passes that exploit purity will read it from a host-supplied attestation.
 
 ### Pure Functions
 
-Pure functions are declared by the host to be deterministic functions without side effects. The compiler trusts this declaration for the purposes of analysis and optimization.
+Pure functions are deterministic and side-effect-free. A Keleusma function that calls only pure native functions and other pure Keleusma functions is itself pure.
 
 ````rust
-// Rust host code (not Keleusma syntax).
-vm.register_pure_fn("math::lerp", &[Type::F64, Type::F64, Type::F64], Type::F64);
+// Rust host code, not Keleusma syntax.
+vm.register_fn("math::lerp", |a: f64, b: f64, t: f64| -> f64 {
+    a + (b - a) * t
+});
 ````
-
-A Keleusma function that calls only pure native functions and other pure Keleusma functions is itself pure.
 
 ### Impure Functions
 
 Any routine may call an impure function. Any routine that calls an impure function is itself impure. Impurity is transitive.
 
 ````rust
-// Rust host code (not Keleusma syntax).
-vm.register_fn("audio::set_frequency", &[Type::Opaque("ChannelHandle"), Type::F64], Type::Unit);
+// Rust host code, not Keleusma syntax.
+vm.register_fn("audio::set_frequency", |channel_handle: i64, freq: f64| {
+    // mutate host audio engine state here
+});
 ````
 
 ### Purity as a Host Declaration
 
-Purity is a declaration from the host, not verified by the Keleusma compiler. Analysis trusts the declaration. Certain guarantees (such as deterministic replay and optimization) will be invalid if the declaration is false.
+Purity is a declaration from the host, not verified by the Keleusma compiler. Analysis trusts the declaration. Certain guarantees, such as deterministic replay and optimization, will be invalid if the declaration is false.
 
 ## 8. Pattern Matching
 
@@ -589,49 +599,67 @@ use game::*
 
 ### Host Registration
 
-The host application registers native functions before compiling scripts. Each registration provides the function name, parameter types, return type, and purity.
+The host application registers native functions before compiling scripts. The current ergonomic API accepts ordinary Rust functions and closures of arity zero through four whose argument and return types implement the `KeleusmaType` trait. The marshalling layer derives the parameter and return types automatically; no separate type-list registration is required.
 
 ````rust
-// Rust host code (not Keleusma syntax).
-vm.register_pure_fn("math::lerp", &[Type::F64, Type::F64, Type::F64], Type::F64);
-vm.register_fn("audio::set_frequency", &[Type::Opaque("ChannelHandle"), Type::F64], Type::Unit);
-vm.register_fn("audio::play_note", &[Type::I64, Type::I64, Type::F64], Type::Unit);
-vm.register_pure_fn("game::get_relationship", &[Type::I64, Type::I64], Type::F64);
+// Rust host code, not Keleusma syntax.
+vm.register_fn("math::lerp", |a: f64, b: f64, t: f64| -> f64 {
+    a + (b - a) * t
+});
+vm.register_fn("audio::set_frequency", |channel: i64, freq: f64| {
+    // mutate host state
+});
+vm.register_fn("audio::play_note", |channel: i64, note: i64, vel: f64| {
+    // ...
+});
+vm.register_fn_fallible("game::get_relationship", |a: i64, b: i64| -> Result<f64, VmError> {
+    // ...
+});
 ````
+
+For functions that need to inspect arbitrary `Value` variants, the lower-level `register_native(name, fn(&[Value]) -> Result<Value, VmError>)` and `register_native_closure(name, Box<dyn Fn(...)>)` paths are also available. Native functions that allocate dynamic strings into the host-owned arena register through `register_native_with_ctx` and receive a `NativeCtx<'_>` carrying a borrow of the arena. See [EMBEDDING.md](../guide/EMBEDDING.md) for the complete registration surface.
 
 ### Type Validation
 
-The compiler validates all native function calls against the registry at compile time. Calling an unregistered function or passing arguments of the wrong type produces a compile error.
+The compiler validates all native function calls against the registered set at compile time. Calling an unregistered function produces a compile error. Argument-type validation happens at the marshalling boundary at runtime; type mismatches surface as `VmError::TypeError`.
 
 ### Opaque Types
 
-Opaque types represent host-side Rust values that scripts can receive and pass to other native functions but cannot inspect, destructure, or create.
+Opaque type support is partial in V0.1.x. The type checker tracks opaque types correctly and the compiler accepts them in parameter and return positions, but the marshalling layer does not yet have a path for opaque host values to flow across the native boundary as themselves. The recommended pattern for V0.1.x is to pass opaque host values through a primitive handle (typically `i64`) that the host translates to and from its real Rust type at the native function boundary.
 
 ````
-let ch: ChannelHandle = audio::get_channel(0);
+let ch: i64 = audio::get_channel(0);
 audio::set_frequency(ch, 440.0);
-// ch.internal_field    // ERROR: Cannot access fields of opaque type.
 ````
+
+A future release will add a `Value::Opaque` variant and a marshalling path so that opaque host types can flow as themselves rather than as `i64` handles. Tracked in the backlog.
 
 ## 10. Module System
 
 Each script file constitutes one module. Modules cannot import other Keleusma modules. All external functionality comes from native function registrations.
 
 ````
-// audio_track.kma
-use audio::*;
+// audio_track.kel
+use audio::*
 
 loop main(cmd: AudioCommand) -> AudioAction {
   let cmd = yield process(cmd);
 }
 ````
 
-File extension: `.kma`
+File extension is `.kel` for source files and `.kel.bin` for compiled bytecode.
 
 ## 11. Formal Grammar (EBNF)
 
 ````
-program         = { use_decl } { type_def | data_decl } { function_def }
+program         = [ shebang_line ]
+                  { use_decl }
+                  { type_def | data_decl | trait_def | impl_block | function_def }
+
+(* Shebang. The lexer skips a leading '#!...' line so source scripts may
+   carry a Unix shebang. Line numbers in error messages start from line 2
+   in that case. *)
+shebang_line    = '#!' { ? any character except newline ? } newline
 
 (* Imports *)
 use_decl        = 'use' module_path '::' ( lower_ident | '*' )
@@ -639,99 +667,133 @@ module_path     = lower_ident { '::' lower_ident }
 
 (* Type Definitions *)
 type_def        = struct_def | enum_def
-struct_def      = 'struct' upper_ident '{' { field_decl } '}'
+struct_def      = 'struct' upper_ident [ type_params ] '{' { field_decl } '}'
 field_decl      = lower_ident ':' type_expr
-enum_def        = 'enum' upper_ident '{' { variant_decl } '}'
-variant_decl    = upper_ident [ '(' type_list ')' ]
+enum_def        = 'enum' upper_ident [ type_params ] '{' { variant_decl } '}'
+variant_decl    = upper_ident [ '(' type_list ')' | '{' field_decl_list '}' ]
 type_list       = type_expr { ',' type_expr }
+field_decl_list = field_decl { ',' field_decl }
+
+(* Generic Type Parameters and Bounds *)
+type_params     = '<' type_param { ',' type_param } '>'
+type_param      = upper_ident [ ':' trait_bound_list ]
+trait_bound_list = upper_ident { '+' upper_ident }
+
+(* Trait Declarations *)
+trait_def       = 'trait' upper_ident [ type_params ] '{'
+                  { trait_method_sig } '}'
+trait_method_sig = 'fn' lower_ident '(' [ type_signature_list ] ')' '->' type_expr ';'
+type_signature_list = type_expr { ',' type_expr }
+
+(* Impl Blocks *)
+impl_block      = 'impl' [ type_params ] upper_ident 'for' type_expr '{'
+                  { impl_method } '}'
+impl_method     = 'fn' lower_ident '(' [ param_list ] ')' '->' type_expr
+                  '{' block '}'
 
 (* Data Declarations *)
 data_decl       = 'data' lower_ident '{' { data_field_decl } '}'
 data_field_decl = lower_ident ':' type_expr
 
 (* Types *)
-type_expr       = prim_type | upper_ident | tuple_type | array_type | option_type
+type_expr       = prim_type | named_type | tuple_type | array_type | option_type
 prim_type       = 'i64' | 'f64' | 'bool' | 'String' | '(' ')'
+named_type      = upper_ident [ '<' type_expr { ',' type_expr } '>' ]
 tuple_type      = '(' type_expr ',' type_expr { ',' type_expr } ')'
 array_type      = '[' type_expr ';' integer_lit ']'
 option_type     = 'Option' '<' type_expr '>'
 
 (* Functions *)
 function_def    = fn_def | yield_def | loop_def
-fn_def          = 'fn' lower_ident '(' [ param_list ] ')' '->' type_expr
+fn_def          = 'fn' lower_ident [ type_params ] '(' [ param_list ] ')' '->' type_expr
                   [ 'when' guard_expr ] '{' block '}'
-yield_def       = 'yield' lower_ident '(' [ param_list ] ')' '->' type_expr
+yield_def       = 'yield' lower_ident [ type_params ] '(' [ param_list ] ')' '->' type_expr
                   [ 'when' guard_expr ] '{' block '}'
-loop_def        = 'loop' lower_ident '(' [ param_list ] ')' '->' type_expr
+loop_def        = 'loop' lower_ident [ type_params ] '(' [ param_list ] ')' '->' type_expr
                   [ 'when' guard_expr ] '{' block '}'
 param_list      = param { ',' param }
 param           = pattern ':' type_expr
                 | pattern
 
-(* Guard expressions: restricted to comparisons and logic *)
+(* Guard expressions, restricted to comparisons and logic. *)
 guard_expr      = guard_term { ('and' | 'or') guard_term }
 guard_term      = [ 'not' ] guard_atom
-guard_atom      = expr comparison_op expr
+guard_atom      = expression comparison_op expression
                 | '(' guard_expr ')'
 comparison_op   = '==' | '!=' | '<' | '>' | '<=' | '>='
 
 (* Blocks and Statements *)
 block           = { statement } [ expression ]
-statement       = let_stmt | for_stmt | break_stmt | expr_stmt
+statement       = let_stmt | for_stmt | break_stmt | data_field_assign | expr_stmt
 let_stmt        = 'let' pattern [ ':' type_expr ] '=' expression ';'
 for_stmt        = 'for' lower_ident 'in' iterable '{' block '}'
 iterable        = expression
                 | expression '..' expression
 break_stmt      = 'break' ';'
+data_field_assign = lower_ident '.' lower_ident '=' expression ';'
 expr_stmt       = expression ';'
 
 (* Expressions *)
 expression      = pipeline_expr
-pipeline_expr   = logical_expr { '|>' function_call }
+pipeline_expr   = logical_expr { '|>' qualified_name '(' [ arg_list ] ')' }
 logical_expr    = comparison_expr { ('and' | 'or') comparison_expr }
 comparison_expr = additive_expr [ comparison_op additive_expr ]
 additive_expr   = multiplicative_expr { ('+' | '-') multiplicative_expr }
 multiplicative_expr = unary_expr { ('*' | '/' | '%') unary_expr }
 unary_expr      = [ 'not' | '-' ] postfix_expr
-postfix_expr    = primary_expr { '.' lower_ident | '.' integer_lit | '[' expression ']' }
+postfix_expr    = primary_expr { method_call | field_access | tuple_index | array_index }
+method_call     = '.' lower_ident '(' [ arg_list ] ')'
+field_access    = '.' lower_ident
+tuple_index     = '.' integer_lit
+array_index     = '[' expression ']'
 primary_expr    = literal
+                | fstring_lit
                 | lower_ident
                 | upper_ident '::' upper_ident [ '(' [ arg_list ] ')' ]
-                | upper_ident '{' field_init_list '}'
+                | upper_ident [ '{' field_init_list '}' ]
                 | function_call
                 | yield_expr
                 | if_expr
                 | match_expr
-                | loop_expr
+                | closure_expr
                 | '(' ')'
                 | '(' expression ')'
                 | '(' expression ',' expression { ',' expression } [ ',' ] ')'
                 | '[' [ arg_list ] ']'
                 | expression 'as' type_expr
 
+(* Closures. Body may be a single expression or a block. *)
+closure_expr    = '|' [ closure_params ] '|' [ '->' type_expr ] closure_body
+closure_params  = closure_param { ',' closure_param }
+closure_param   = lower_ident [ ':' type_expr ]
+closure_body    = expression
+                | '{' block '}'
+
 literal         = integer_lit | float_lit | string_lit | bool_lit
-function_call   = lower_ident '(' [ arg_list ] ')'
+qualified_name  = lower_ident { '::' lower_ident }
+function_call   = qualified_name '(' [ arg_list ] ')'
 arg_list        = expression { ',' expression }
                 | expression { ',' expression } ',' '_'
                 | '_' { ',' expression }
 field_init_list = field_init { ',' field_init }
 field_init      = lower_ident ':' expression
 
+(* F-strings. Lexer-level desugaring to a chain of `concat` and
+   `to_string` native calls. The literal segments are static strings;
+   the interpolated segments are arbitrary expressions. *)
+fstring_lit     = 'f"' { fstring_segment } '"'
+fstring_segment = fstring_text | '{' expression '}'
+fstring_text    = ? any character except '"' or '{' ?
+
 (* Yield *)
 yield_expr      = 'yield' expression
 
-(* If/Else *)
+(* If / Else *)
 if_expr         = 'if' expression '{' block '}' [ 'else' '{' block '}' ]
 
 (* Match *)
 match_expr      = 'match' expression '{' { match_arm } '}'
-match_arm       = pattern '=>' expression
-
-(* Loop expression - only valid inside loop functions *)
-loop_expr       = 'loop' '{' block '}'
-
-(* For Loop *)
-for_expr        = 'for' lower_ident 'in' iterable '{' block '}'
+match_arm       = pattern '=>' expression ','
 
 (* Patterns *)
 pattern         = literal_pattern
@@ -740,8 +802,9 @@ pattern         = literal_pattern
                 | tuple_pattern
                 | wildcard_pattern
                 | variable_pattern
-literal_pattern = integer_lit | float_lit | string_lit | bool_lit
-enum_pattern    = upper_ident '::' upper_ident [ '(' pattern_list ')' ]
+literal_pattern = integer_lit | float_lit | string_lit | bool_lit | '(' ')'
+enum_pattern    = upper_ident '::' upper_ident [ '(' pattern_list ')'
+                                                | '{' field_pattern_list '}' ]
 struct_pattern  = upper_ident '{' field_pattern_list '}'
 tuple_pattern   = '(' pattern ',' pattern { ',' pattern } ')'
 wildcard_pattern = '_'
@@ -762,6 +825,18 @@ bool_lit        = 'true' | 'false'
 line_comment    = '//' { any_char } newline
 block_comment   = '/*' { any_char } '*/'
 ````
+
+### Notes on the EBNF
+
+The grammar is descriptive, not normative. The reference implementation is the parser at [`src/parser.rs`](../../src/parser.rs); when the two disagree, the parser wins and the EBNF should be updated.
+
+The grammar describes the surface only. The verifier rejects programs whose Worst-Case Execution Time or Worst-Case Memory Usage cannot be statically bounded under the conservative-verification stance, and the type checker enforces additional constraints around generics, trait bounds, exhaustive match, and the data-segment fixed-size discipline. See [LANGUAGE_DESIGN.md](../architecture/LANGUAGE_DESIGN.md) for those layers.
+
+Closures parse but the safe verifier rejects programs that invoke them through `Op::CallIndirect`. This is a deliberate property of the conservative-verification stance, not a parser limitation. Programs that require definitive Worst-Case Execution Time and Worst-Case Memory Usage bounds restrict themselves to direct calls.
+
+The pipeline operator `|>` requires parentheses on the right-hand call even when the call is nullary; `expr |> f` is a parse error, `expr |> f()` is correct.
+
+If-else and match expressions used at statement position require an explicit trailing semicolon when followed by another statement, even though they evaluate to unit. The parser does not auto-insert.
 
 ## 12. Example Programs
 
@@ -1053,47 +1128,61 @@ Formal verification of soundness (a machine-checked proof that the verifier corr
 
 ## 15. Error Propagation
 
-Error propagation through yield is an optional feature. If implemented, `yield` returns `Result<T, E>` where `T` is the normal input type and `E` is an error type. This allows the host to signal errors to the script.
+Error propagation through `yield` is supported through the resume-value pattern (B7). The `yield` and `resume` cycle accepts any `Value` as the resumed input, so the script chooses an appropriate dialogue type. The script declares a `Result`-shaped enum (or any other variant union appropriate to the dialogue surface) and pattern-matches on the resumed value. The host signals errors by constructing the `Err` variant when calling `Vm::resume`. The convenience alias `Vm::resume_err` documents host intent without changing the underlying mechanism.
 
 ````
-yield configure(ch: i64, cmd: AudioCommand) -> Result<AudioAction, String> {
-  let result = yield AudioAction::SetChannelParam(ch, "vco", 1.0);
-  match result {
-    Result::Ok(cmd) => process(cmd),
-    Result::Err(msg) => AudioAction::NoOp,
-  }
+enum Reply { Ok(i64), Err }
+
+loop main(input: Reply) -> i64 {
+    let reply = yield 0;
+    match reply {
+        Reply::Ok(v) => v,
+        Reply::Err => -1,
+    }
 }
 ````
 
-This feature adds complexity to the type system and VM. If implementation proves difficult, it will be deferred to the feature backlog. Scripts can use sentinel values or Option types as an alternative error signaling mechanism.
+The host calls `vm.resume(Value::Enum { ... Ok ... })` for success and `vm.resume_err(Value::Enum { ... Err ... })` for failure. Both go through the same operand-stack mechanism. This pattern requires no special compiler or runtime support beyond the existing yield and resume cycle. See [`examples/yield_error.rs`](../../examples/yield_error.rs) for a runnable demonstration.
 
 ## 16. Resolved Design Decisions
 
-The following questions from the initial specification have been resolved by the project owner.
+The following questions from the initial specification have been resolved.
 
 | Question | Resolution |
 |----------|-----------|
-| String interpolation | Not needed. Keleusma is a control language. |
-| Array iteration | `for` loops iterate over arrays and ranges. Any iterable that can be guaranteed to terminate is acceptable. |
-| Error propagation | Acceptable but optional. Implies `yield` returns `Result<T, E>`. Can be deferred if complicated. |
+| String interpolation | Implemented as f-string desugaring. `f"text {expr}"` compiles to `concat` and `to_string` calls at lex time. |
+| Array iteration | `for` loops iterate over arrays and bounded ranges. The compiler infers static array length from declared types and emits a `Const(N)` end bound for the strict-mode WCMU verifier. |
+| Error propagation | Implemented as the resume-value pattern (B7). The script declares a `Result`-shaped enum and pattern-matches on the resumed value. No `Result<T, E>` syntactic sugar at the `yield` site; the dialogue type is the script's own enum. |
 | Numeric literal suffixes | Supported. `42i64` and `3.14f64` are valid. |
 | Nested yield | Yield-propagating functions must share the caller's yield contract (same input and output types). Enforced via the `yield` function category keyword. |
-| Block delimiters | Curly braces `{ }` instead of `do`/`end`. Consistent with Rust host language. |
-| Function categories | Three categories: `loop` (productive divergent), `yield` (non-atomic total), `fn` (atomic total). |
-| Pure/impure | Host declares purity. Analysis trusts the declaration. Impurity is transitive. |
-| Comment syntax | `//` line comments and `/* */` block comments. Consistent with Rust host language. |
+| Block delimiters | Curly braces. Consistent with Rust host language. |
+| Function categories | Three categories. `loop` for productive divergent, `yield` for non-atomic total, `fn` for atomic total. |
+| Pure / impure | Host declares purity. Analysis trusts the declaration. Impurity is transitive. |
+| Comment syntax | `//` line comments and `/* */` block comments. The lexer additionally skips a leading `#!` line so source scripts may carry a Unix shebang. |
 | Statement termination | Semicolons required, as in Rust. Last expression in a block is the return value (no semicolon). |
-| Recursion | Explicitly prohibited. The compiler rejects all call graph cycles. Recursive algorithms must be supplied by the host. |
-| `for..in` finiteness | All host-provided iterable types are assumed finite by contract. The compiler checks that only iterable types are used. The host is responsible for not providing infinite iterators. |
+| Recursion | Explicitly prohibited in `fn` and `yield` categories. Only `loop` functions admit cyclic execution, and only through the productive RESET cycle. Compiler rejects all call-graph cycles. |
+| `for..in` finiteness | All host-provided iterable types are assumed finite by contract. The compiler checks that only iterable types are used. |
 | `break` keyword | Allowed in `for` loops. Not allowed in `loop` functions (which must always yield). |
 | Language classification | Total Functional Stream Processor. Without host-plugged functions, only pure functions that yield or exit can be defined. |
+| Hindley-Milner inference | Implemented (B1) with Robinson unification and the occurs check. `Type::Var` represents inferred positions; substitution applies at end of `check_function`. |
+| Generics with traits and bounds | Implemented (B2 / B2.3 / B2.4). Generic functions, structs, and enums with type parameters and trait bounds; impl-method registration with structural validation against the trait declaration. |
+| Compile-time monomorphization | Implemented (B2.4). Specialization across literals, identifiers, function-call returns, method-call returns, casts, enum variants, struct constructions, tuple and array literals, if and match arms, field access, tuple-index, and array-index. Generic functions with no specializations are retained for runtime tag dispatch on `Value` tags. |
+| Closures | Implemented (B3) with environment capture and transitive nested capture. Rejected by the safe verifier under the conservative-verification stance because indirect dispatch through `Op::CallIndirect` cannot be statically bounded. The construct exists in the language so the rejection can be precise rather than approximate. |
+| Hot code swap | Implemented at the reset boundary of a `loop` script through `Vm::replace_module`. Native registrations persist; the data segment is supplied fresh by the host. Dialogue type must remain stable across swaps. |
+| Error recovery model | `Vm::reset_after_error` clears volatile state (operand stack, frames, arena top) and preserves the data segment. Hosts call this after `Err` from `call` or `resume` to return the VM to a clean callable state. |
+| WCET unit | Pipelined cycles per Stream-to-Reset slice. The bundled `NOMINAL_COST_MODEL` is unmeasured and provides relative ordering only; hosts construct a calibrated `CostModel` whose `op_cycles` returns measured pipelined cycles for the target hardware (the `keleusma-bench` workspace member generates such tables). |
+| WCMU unit | Bytes per Stream-to-Reset slice, separately for stack and heap regions. Both are summed and checked against the arena capacity at module load. |
+| Conservative-verification stance | The compile pipeline admits a broader surface than the WCET and WCMU analyses can prove bounded. The safe constructor `Vm::new` is the source of truth for what loads. See [LANGUAGE_DESIGN.md](../architecture/LANGUAGE_DESIGN.md#conservative-verification). |
+| VM allocation model | Per-VM arena with a single-ownership contract. A shared arena across multiple `Vm` instances was considered and rejected as not-applicable; see B8 in BACKLOG. The arena itself is host-owned and borrowed by the VM under a lifetime parameter. |
 
 ## 17. Unresolved Questions
 
-1. **Audio tick granularity**: What is the update rate for the audio DSL? The 48kHz sample rate is too fast for per-sample scripting. A reasonable granularity would be per-buffer (every 256-1024 samples, giving 47-187 Hz update rate) or per-beat subdivision.
+The remaining open questions concern target-application policy and ecosystem rather than language semantics.
 
-2. **VM allocation model**: Should the VM allocate per-script or share an arena across all active scripts?
+1. **Tick granularity for audio embedders.** The CPU sample rate (typically 44.1 or 48 kHz) is too fast for per-sample scripting; per-buffer or per-beat subdivision is the realistic granularity. The SDL3 piano-roll example uses 16th-note ticks at 120 BPM (125 ms per tick). The host application chooses the granularity that fits its real-time deadline. No language change required.
 
-3. **Error recovery model**: What should happen when a script encounters a runtime error during audio rendering? A panic could cause audio glitches. Options include yielding a default value, suspending the script, or notifying the host.
+2. **AArch64 cost-model calibration.** The `keleusma-bench` calibration tool produces useful measurements on x86 (RDTSC) and degenerate "everything is one cycle" output on AArch64 because the architectural counter `CNTVCT_EL0` runs at the system counter frequency, not the CPU clock. The fix is either reading `CNTFRQ_EL0` and converting through CPU frequency, or using `PMCCNTR_EL0` (which requires kernel-level enable). Tracked in the backlog.
 
-4. **Game DSL state access**: Should game scripts have read access to the full GameState or a restricted view?
+3. **Opaque-type runtime path.** The type checker tracks opaque types but the runtime cannot marshal them across the native boundary as themselves. Adding a `Value::Opaque` variant and a marshalling path is tracked for a future release; in the meantime, hosts pass opaque values as `i64` handles.
+
+4. **Application-domain DSL conventions.** Audio engines, game scripting, embedded control loops, and UAV mission control each have their own register-fn vocabularies. Conventions for these domains will emerge from real adopters rather than from up-front specification.
