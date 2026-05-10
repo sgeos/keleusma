@@ -532,7 +532,7 @@ pub fn compile_with_target(
 
     let entry_point = function_map.get("main").map(|&idx| idx as usize);
 
-    Ok(Module {
+    let module = Module {
         chunks,
         native_names,
         entry_point,
@@ -540,7 +540,65 @@ pub fn compile_with_target(
         word_bits_log2: target.word_bits_log2,
         addr_bits_log2: target.addr_bits_log2,
         float_bits_log2: target.float_bits_log2,
-    })
+    };
+
+    // Compile-time defense-in-depth for the WCET and WCMU contract.
+    // The conservative-verification stance requires that programs
+    // whose bound cannot be proved are rejected at both compilation
+    // and loading. The structural verifier and the unbounded-
+    // construct scan run here so build pipelines that emit bytecode
+    // without an immediate VM construction surface these rejections
+    // at the build step rather than deferring them to load.
+    //
+    // Two checks fire at compile time:
+    //
+    // 1. Structural verification (block nesting, jump offsets,
+    //    block-type constraints, break containment, productivity
+    //    rule). Runs on every chunk.
+    //
+    // 2. Unbounded-construct scan (`Op::CallIndirect`,
+    //    `Op::MakeRecursiveClosure`). Identical to the rejection
+    //    that `verify::module_wcmu` performs at load time.
+    //
+    // The full WCMU and WCET computation including loop iteration
+    // bound extraction and arena-capacity check remain deferred to
+    // `Vm::new` because they require the host's arena capacity and
+    // because some Func chunks have parameter-dependent loops whose
+    // bounds the present analysis cannot extract; those chunks are
+    // legitimate when never reached from a Stream chunk's call graph.
+    // See LANGUAGE_DESIGN.md Conservative Verification for the
+    // design statement.
+    crate::verify::verify(&module).map_err(|e| CompileError {
+        message: format!("structural verification: {}: {}", e.chunk_name, e.message),
+        span: crate::token::Span::default(),
+    })?;
+    for chunk in &module.chunks {
+        for op in &chunk.ops {
+            match op {
+                crate::bytecode::Op::CallIndirect(_) => {
+                    return Err(CompileError {
+                        message: format!(
+                            "WCET verification: {}: CallIndirect resolves its target chunk at runtime and cannot be statically bounded for WCET/WCMU analysis. First-class function dispatch is not admitted by the safe build pipeline. Restrict the program to direct calls.",
+                            chunk.name
+                        ),
+                        span: crate::token::Span::default(),
+                    });
+                }
+                crate::bytecode::Op::MakeRecursiveClosure(target, _) => {
+                    return Err(CompileError {
+                        message: format!(
+                            "WCET verification: {}: MakeRecursiveClosure(chunk={}) introduces unbounded recursion that cannot be statically bounded for WCET/WCMU analysis. Recursive closures are not admitted by the safe build pipeline.",
+                            chunk.name, target
+                        ),
+                        span: crate::token::Span::default(),
+                    });
+                }
+                _ => {}
+            }
+        }
+    }
+
+    Ok(module)
 }
 
 /// Validate that a data segment field type has a statically known fixed size.

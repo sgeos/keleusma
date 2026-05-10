@@ -2878,36 +2878,46 @@ mod tests {
     }
 
     #[test]
-    fn recursive_closure_typechecks() {
-        // The closure body references its own let-binding name.
-        // The type checker now registers a fresh type variable for
-        // the binding before walking the value, so the body's
-        // self-reference resolves rather than failing with
-        // "undefined function". The full compile pipeline must
-        // succeed because the hoist pass produces a recursive
-        // ClosureRef and the compiler emits MakeRecursiveClosure.
-        compile_src(
+    fn recursive_closure_rejected_by_compile_pipeline() {
+        // The closure body references its own let-binding name. The
+        // type checker accepts the program, the hoist pass produces a
+        // recursive ClosureRef, and the compiler emits
+        // MakeRecursiveClosure. The compile-time WCET check then
+        // rejects the program because recursive closures introduce
+        // unbounded recursion. This is the conservative-verification
+        // stance applied at the build step.
+        let err = compile_src(
             "fn main() -> i64 {\n\
                 let fact = |n: i64| if n <= 1 { 1 } else { n * fact(n - 1) };\n\
                 fact(5)\n\
              }",
         )
-        .unwrap();
+        .unwrap_err();
+        assert!(
+            err.contains("MakeRecursiveClosure") || err.contains("CallIndirect"),
+            "unexpected error: {}",
+            err,
+        );
     }
 
     #[test]
-    fn recursive_closure_with_capture_typechecks() {
-        // A recursive closure can also capture an outer-function
-        // local. The hoist pass orders the synthetic chunk's
-        // parameters as (other_captures..., self, explicit_params...).
-        compile_src(
+    fn recursive_closure_with_capture_rejected_by_compile_pipeline() {
+        // A recursive closure that also captures an outer-function
+        // local is rejected for the same reason as the simpler
+        // recursive case.
+        let err = compile_src(
             "fn main() -> i64 {\n\
                 let base: i64 = 1000;\n\
                 let fact = |n: i64| if n <= 1 { base } else { n * fact(n - 1) };\n\
                 fact(3)\n\
              }",
         )
-        .unwrap();
+        .unwrap_err();
+        assert!(
+            err.contains("MakeRecursiveClosure") || err.contains("CallIndirect"),
+            "unexpected error: {}",
+            err,
+        );
     }
 
     #[test]

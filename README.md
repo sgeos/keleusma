@@ -1,20 +1,32 @@
 # Keleusma
 
-A Total Functional Stream Processor that compiles to bytecode and runs on a stack-based virtual machine. Keleusma is designed for embedded scripting in audio engines, game simulations, and domains where deterministic execution, bounded-step guarantees, and coroutine-based stream processing are required. The crate targets `no_std+alloc` environments.
+A Total Functional Stream Processor that compiles to bytecode and runs on a stack-based virtual machine. Keleusma targets `no_std + alloc` environments.
+
+The ecosystem value proposition is **definitive WCET and WCMU**. Programs whose worst-case execution time or worst-case memory usage cannot be statically bounded are rejected by the safe verifier. Programs that pass verification carry a definitive bound on stream-iteration execution time and memory consumption.
 
 The name derives from the Greek word for a command or signal, specifically the rhythmic calls used by ancient Greek rowing masters to coordinate oar strokes.
 
+## Conservative-Verification Stance
+
+The compile pipeline (parse, type-check, monomorphize, hoist, emit) admits a broader surface than the WCET and WCMU analyses can prove bounded. The verifier rejects programs whose bound is unprovable or whose bound is provable in principle but the analysis is not yet implemented. This rejection is intentional and defines the language's contract. See [`docs/architecture/LANGUAGE_DESIGN.md`](docs/architecture/LANGUAGE_DESIGN.md#conservative-verification) for the full statement.
+
+`Vm::new_unchecked` exists for trust-skip of precompiled bytecode validated during the build pipeline. Using it to admit programs that would fail verification is intentional misuse outside the WCET contract.
+
 ## Features
 
-- **Three function categories** with static guarantees: `fn` (atomic total), `yield` (non-atomic total), `loop` (productive divergent)
-- **Coroutine model** with typed yield/resume for host-driven stream processing
-- **Multiheaded functions** with pattern matching and guard clauses
-- **Pipeline expressions** (`|>`) with placeholder support
-- **Block-structured ISA** enabling single-pass structural verification
-- **Productivity verification** ensuring every stream iteration yields observable output
-- **WCET analysis** providing worst-case execution time bounds per yield slice
-- **Native function binding** for host-defined domain-specific operations
-- **`no_std+alloc` compatible** with a single external dependency (`libm`)
+- **Five static guarantees.** Totality, productivity, bounded-step, bounded-memory, safe swapping.
+- **Three function categories** with static enforcement: `fn` (atomic total), `yield` (non-atomic total), `loop` (productive divergent).
+- **Coroutine model** with typed yield and resume for host-driven stream processing.
+- **Multiheaded functions** with pattern matching, guard clauses, and pipeline expressions.
+- **Block-structured ISA** enabling single-pass structural verification.
+- **WCMU and WCET analysis** providing worst-case bounds at module load.
+- **Target descriptor** for cross-architecture portability across word and address widths.
+- **Hot code swap** at RESET boundaries with persistent data segment.
+- **Hindley-Milner type inference** with generics, traits, and bounds.
+- **Compile-time monomorphization** of generic functions, structs, and enums.
+- **f-string interpolation** desugared at lex time to concat and to_string.
+- **Static marshalling** through `KeleusmaType` derive for ergonomic native registration.
+- **`no_std + alloc` compatible** with a minimal dependency set.
 
 ## Quick Start
 
@@ -22,7 +34,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-keleusma = { path = "path/to/keleusma" }
+keleusma = "0.1"
 ```
 
 Compile and run a script:
@@ -31,18 +43,19 @@ Compile and run a script:
 use keleusma::lexer::tokenize;
 use keleusma::parser::parse;
 use keleusma::compiler::compile;
-use keleusma::vm::{Vm, VmState};
-use keleusma::bytecode::Value;
+use keleusma::vm::{DEFAULT_ARENA_CAPACITY, Vm, VmState};
+use keleusma::{Arena, Value};
 
 let source = r#"
     fn double(x: i64) -> i64 { x * 2 }
     fn main(n: i64) -> i64 { n |> double() }
 "#;
 
-let tokens = tokenize(source).expect("lex error");
-let program = parse(&tokens).expect("parse error");
-let module = compile(&program).expect("compile error");
-let mut vm = Vm::new(module).expect("verification error");
+let tokens = tokenize(source).expect("lex");
+let program = parse(&tokens).expect("parse");
+let module = compile(&program).expect("compile");
+let arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+let mut vm = Vm::new(module, &arena).expect("verify");
 
 match vm.call(&[Value::Int(21)]).unwrap() {
     VmState::Finished(value) => println!("result: {:?}", value),
@@ -51,25 +64,27 @@ match vm.call(&[Value::Int(21)]).unwrap() {
 // Output: result: Int(42)
 ```
 
+The `Vm` borrows a host-owned `Arena` for the operand stack, call frames, and dynamic-string allocations. The arena's bottom region holds the operand stack; the top region holds `KString` allocations. The verifier checks worst-case memory usage against the arena's capacity at construction.
+
 ## Language Overview
 
-### Three Function Categories
+### Three function categories
 
 ```
-// Atomic total: must terminate, no yields.
+// Atomic total. Must terminate, no yields, no recursion.
 fn clamp(val: i64, lo: i64, hi: i64) -> i64 {
     if val < lo { lo }
     else if val > hi { hi }
     else { val }
 }
 
-// Non-atomic total: may yield, must eventually return.
+// Non-atomic total. May yield, must eventually return.
 yield prompt(question: String) -> String {
     let answer = yield question;
     answer
 }
 
-// Productive divergent: never returns, must yield every iteration.
+// Productive divergent. Never returns, must yield every iteration.
 loop main(input: i64) -> i64 {
     let result = input * 2;
     let input = yield result;
@@ -77,7 +92,7 @@ loop main(input: i64) -> i64 {
 }
 ```
 
-### Pattern Matching and Guard Clauses
+### Pattern matching and guard clauses
 
 ```
 fn classify(0) -> String { "zero" }
@@ -93,15 +108,25 @@ fn describe(msg: Message) -> String {
 }
 ```
 
-### Pipeline Expressions
+### Generics and traits
 
 ```
-fn process(x: i64) -> String {
-    x |> double() |> clamp(_, 0, 100) |> to_string()
+trait Doubler { fn double(x: i64) -> i64; }
+impl Doubler for i64 { fn double(x: i64) -> i64 { x + x } }
+
+fn use_doubler<T: Doubler>(x: T) -> i64 { x.double() }
+fn main() -> i64 { use_doubler(21) }
+```
+
+### f-string interpolation
+
+```
+fn greet(name: String) -> String {
+    f"hello, {name}!"
 }
 ```
 
-### Coroutine Yield and Resume
+### Coroutine yield and resume
 
 ```
 loop audio_processor(sample: f64) -> f64 {
@@ -114,46 +139,31 @@ loop audio_processor(sample: f64) -> f64 {
 The host drives execution:
 
 ```rust
-// Start the stream with an initial sample.
+let arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+let mut vm = Vm::new(module, &arena).expect("verify");
+
 let state = vm.call(&[Value::Float(1.0)]).unwrap();
 // VmState::Yielded(Float(0.5))
 
-// Resume with a new sample.
 let state = vm.resume(Value::Float(0.8)).unwrap();
-// VmState::Reset -- iteration complete, arena cleared.
+// VmState::Reset
 
-// Resume after reset with the next sample.
 let state = vm.resume(Value::Float(0.8)).unwrap();
 // VmState::Yielded(Float(0.4))
 ```
 
 ## Native Function Registration
 
-Register host functions before calling the VM:
+The ergonomic typed registration uses `KeleusmaType`-implementing argument and return types:
 
 ```rust
-use keleusma::vm::{Vm, VmError};
-use keleusma::bytecode::Value;
-
-// Function pointer.
-vm.register_native("square", |args: &[Value]| {
-    match &args[0] {
-        Value::Int(x) => Ok(Value::Int(x * x)),
-        _ => Err(VmError::TypeError("expected Int".into())),
-    }
-});
-
-// Closure capturing state.
-let scale_factor = 2.0;
-vm.register_native_closure("scale", move |args: &[Value]| {
-    match &args[0] {
-        Value::Float(x) => Ok(Value::Float(x * scale_factor)),
-        _ => Err(VmError::TypeError("expected Float".into())),
-    }
-});
+vm.register_fn("square", |x: i64| -> i64 { x * x });
+vm.register_fn("scale", |x: f64| -> f64 { x * 2.0 });
 ```
 
-Scripts declare native function usage with `use`:
+Lower-level paths exist for functions that inspect arbitrary `Value` variants. See `docs/architecture/LANGUAGE_DESIGN.md` for the full registration contract.
+
+Scripts declare native usage with `use`:
 
 ```
 use square
@@ -165,67 +175,69 @@ fn main() -> f64 {
 }
 ```
 
-## Provided Native Functions
+## Cross-Architecture Targeting
 
-### Audio and Math (`register_audio_natives`)
+The compiler accepts a `Target` descriptor that bakes word, address, and float widths into the bytecode wire format. The verifier rejects programs that use features unsupported by the target.
 
-| Function | Description |
-|----------|-------------|
-| `audio::midi_to_freq` | MIDI note number to frequency in Hz |
-| `audio::freq_to_midi` | Frequency in Hz to nearest MIDI note |
-| `audio::db_to_linear` | Decibels to linear amplitude |
-| `audio::linear_to_db` | Linear amplitude to decibels |
-| `math::clamp` | Clamp value to range |
-| `math::lerp` | Linear interpolation |
-| `math::sin`, `math::cos` | Trigonometric functions |
-| `math::pow` | Exponentiation |
-| `math::abs` | Absolute value |
-| `math::min`, `math::max` | Minimum and maximum |
+```rust
+use keleusma::compiler::compile_with_target;
+use keleusma::target::Target;
 
-### Utility (`register_utility_natives`)
+let module = compile_with_target(&program, &Target::embedded_16())
+    .expect("compile");
+```
 
-| Function | Description |
-|----------|-------------|
-| `to_string` | Convert any value to string |
-| `length` | Length of array, string, or tuple |
-| `println` | Debug print (no-op in `no_std`) |
-| `math::sqrt` | Square root |
-| `math::floor` | Floor rounding |
-| `math::ceil` | Ceiling rounding |
-| `math::round` | Nearest integer rounding |
-| `math::log2` | Base-2 logarithm |
+Presets include `host`, `wasm32`, `embedded_32`, `embedded_16`, and `embedded_8` (8-bit word with 16-bit address per the 6502 class). See `docs/decisions/BACKLOG.md` entry B10 for the portability story.
 
 ## Compilation Pipeline
 
 ```
-Source Code -> Lexer -> Tokens -> Parser -> AST -> Compiler -> Module -> Verifier -> VM
+Source Code -> tokenize -> parse -> typecheck -> monomorphize -> hoist -> emit -> Module
+Module -> verify (structural + WCMU + WCET) -> Vm
 ```
 
-1. **Lexer** (`tokenize`): Source text to tokens with source locations.
-2. **Parser** (`parse`): Tokens to abstract syntax tree.
-3. **Compiler** (`compile`): AST to bytecode module.
-4. **Verifier** (runs automatically in `Vm::new`): Structural verification, productivity checking, WCET analysis.
-5. **VM** (`call`, `resume`): Bytecode execution with yield/resume protocol.
+Stages:
+
+1. **Lexer** (`tokenize`). Source text to tokens with source locations. f-strings desugar at this layer.
+2. **Parser** (`parse`). Tokens to abstract syntax tree.
+3. **Type checker** (`typecheck::check`). Hindley-Milner inference with generics, traits, and bounds.
+4. **Monomorphization** (`monomorphize::monomorphize`). Specializes generic functions, structs, and enums per concrete instantiation.
+5. **Closure hoisting** (`hoist_closures`). Lifts closure literals to top-level synthetic chunks.
+6. **Emission** (`compile`). Lowers the AST to bytecode.
+7. **Verifier** (runs automatically in `Vm::new`). Structural verification, productivity check, WCMU and WCET bounds.
+8. **VM** (`call`, `resume`). Bytecode execution with the yield-and-resume protocol.
 
 ## Error Handling
 
-Each pipeline stage produces typed errors with source locations:
+Each pipeline stage produces typed errors with source locations.
 
-- `LexError`: Invalid characters, unterminated strings or comments.
-- `ParseError`: Syntax errors with line and column.
-- `CompileError`: Undefined variables, undefined functions, break outside loop.
-- `VmError`: Type errors, division by zero, index out of bounds, verification failures.
+- `LexError` for tokenization failures.
+- `ParseError` for syntax errors.
+- `CompileError` for type-check, monomorphization, hoisting, and emission failures.
+- `VerifyError` for structural and resource-bound failures.
+- `VmError` for runtime errors during `call` and `resume`.
+
+## Workspace
+
+Three crates:
+
+- `keleusma`. The runtime crate.
+- `keleusma-macros`. Compile-time proc macro for `#[derive(KeleusmaType)]`.
+- `keleusma-arena`. Standalone dual-end bump allocator. Published on crates.io as `keleusma-arena`.
 
 ## Documentation
 
-See [docs/README.md](docs/README.md) for the full documentation knowledge graph, including:
+See [docs/README.md](docs/README.md) for the full documentation knowledge graph.
 
-- [Language Design](docs/architecture/LANGUAGE_DESIGN.md): Design philosophy, guarantees, memory model.
-- [Grammar Specification](docs/design/GRAMMAR.md): Formal EBNF grammar and design decisions.
-- [Execution Model](docs/architecture/EXECUTION_MODEL.md): Temporal domains, structural verification.
-- [Instruction Set](docs/reference/INSTRUCTION_SET.md): Complete bytecode reference with costs.
-- [Related Work](docs/reference/RELATED_WORK.md): Academic and industrial context with citations.
+- [Language Design](docs/architecture/LANGUAGE_DESIGN.md). Design philosophy, guarantees, conservative-verification stance, memory model.
+- [Execution Model](docs/architecture/EXECUTION_MODEL.md). Temporal domains, structural verification, indirect-dispatch rejection contract, hot code swap.
+- [Compilation Pipeline](docs/architecture/COMPILATION_PIPELINE.md). Stage-by-stage description.
+- [Grammar](docs/design/GRAMMAR.md). Formal EBNF grammar.
+- [Type System](docs/design/TYPE_SYSTEM.md). Static type discipline, data segment fixed-size constraint.
+- [Instruction Set](docs/reference/INSTRUCTION_SET.md). Bytecode reference with costs.
+- [Related Work](docs/reference/RELATED_WORK.md). Academic and industrial context with citations.
+- [Decisions](docs/decisions/). Resolved, priority, and backlog decisions.
 
 ## License
 
-MIT
+0BSD. See LICENSE file.

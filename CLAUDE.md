@@ -4,9 +4,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Keleusma is a Total Functional Stream Processor that compiles to bytecode and runs on a stack-based virtual machine. It is a lightweight, embeddable scripting language targeting `no_std+alloc` environments. Without host-plugged functions, Keleusma can only define pure functions that are guaranteed to yield or exit. All domain functionality is provided by native Rust functions registered by the host application.
+Keleusma is a Total Functional Stream Processor that compiles to bytecode and runs on a stack-based virtual machine. It is a lightweight, embeddable scripting language targeting `no_std+alloc` environments. The ecosystem value proposition is **definitive WCET and WCMU**. Programs whose worst-case execution time or worst-case memory usage cannot be statically bounded are rejected by the safe verifier. Without host-plugged functions, the language admits only pure total functions and the productive divergent `loop` block. All domain functionality is provided by native Rust functions registered by the host application.
 
-**Status**: V0.0 Complete. Language pipeline (lexer, parser, compiler, VM) functional. Ready for V0.1 planning.
+**Status**: V0.1-M3 substantially complete. Hindley-Milner inference, generics with traits and bounds, compile-time monomorphization, closures (rejected by the safe verifier as not WCET-safe), f-string interpolation, target descriptor for cross-architecture portability, hot code swap, and the conservative-verification stance are all in place. The runtime is at BYTECODE_VERSION 7. Approximately 508 tests pass workspace-wide.
+
+**Conservative-verification stance.** The compile pipeline admits a broader surface than the WCET and WCMU analyses can prove bounded. The verifier rejects programs whose bound is unprovable (first category) or whose bound is provable in principle but the analysis is not yet implemented (second category). See [`docs/architecture/LANGUAGE_DESIGN.md`](docs/architecture/LANGUAGE_DESIGN.md#conservative-verification) for the full statement. `Vm::new_unchecked` exists for trust-skip of precompiled bytecode and is intentional misuse if used to admit programs that would fail verification.
 
 **Engineering Classification**: Library. See `docs/process/PROCESS_STRATEGY.md`.
 
@@ -19,16 +21,20 @@ keleusma/
 ├── src/                       # Runtime package source
 │   ├── lib.rs                 # Crate root (no_std, module declarations, re-exports)
 │   ├── token.rs               # Token definitions and keyword recognition
-│   ├── lexer.rs               # Tokenization (public API: tokenize)
+│   ├── lexer.rs               # Tokenization (public API: tokenize), includes f-string desugaring
 │   ├── ast.rs                 # Abstract Syntax Tree node definitions
 │   ├── parser.rs              # Recursive descent parser (public API: parse)
-│   ├── bytecode.rs            # Runtime values and instruction set
-│   ├── compiler.rs            # Source-to-bytecode compilation (public API: compile)
-│   ├── vm.rs                  # Stack-based VM with coroutine support (public API: Vm)
-│   ├── verify.rs              # Structural verifier (public API: verify, wcet_stream_iteration, wcmu_stream_iteration, verify_resource_bounds)
+│   ├── visitor.rs             # MutVisitor and Visitor traits with default walk methods over Block, Stmt, Expr, Iterable
+│   ├── typecheck.rs           # Hindley-Milner type checker (public API: check), generics, traits, impl method validation
+│   ├── monomorphize.rs        # Compile-time monomorphization for generic functions, structs, enums (public API: monomorphize)
+│   ├── target.rs              # Target descriptor for cross-architecture portability (public API: Target)
+│   ├── bytecode.rs            # Runtime values, instruction set, wire format, target-aware width fields
+│   ├── compiler.rs            # Source-to-bytecode compilation (public API: compile, compile_with_target)
+│   ├── vm.rs                  # Stack-based VM with coroutine support (public API: Vm), per-op decode cache
+│   ├── verify.rs              # Structural verifier (public API: verify, wcet_stream_iteration, wcmu_stream_iteration, verify_resource_bounds, module_wcmu)
 │   ├── marshall.rs            # KeleusmaType trait and IntoNativeFn family
 │   ├── audio_natives.rs       # Built-in audio and math native functions
-│   └── utility_natives.rs     # to_string, length, println, math utilities
+│   └── utility_natives.rs     # to_string, length, concat, slice, println, math utilities
 ├── tests/                     # Integration tests
 │   └── marshall.rs            # KeleusmaType derive and register_fn end-to-end
 ├── keleusma-macros/           # Proc-macro crate (workspace member)
@@ -138,5 +144,6 @@ All public API functions return `Result` types with error structs that include s
 - **libm 0.2** (math functions for no_std environments)
 - **allocator-api2 0.4** (stable polyfill of the unstable allocator API, used by `keleusma-arena`)
 - **syn 2, quote 1, proc-macro2 1** (compile-time only, used by `keleusma-macros`)
-- Cargo workspace with three members: `keleusma` (runtime), `keleusma-macros` (proc-macro), and `keleusma-arena` (standalone arena allocator)
-- 300 tests across the workspace covering lexer, parser, compiler, VM, verifier, marshall, arena, audio natives, utility natives, and integration tests
+- **rkyv 0.8** (zero-copy archived bytecode format)
+- Cargo workspace with three members: `keleusma` (runtime), `keleusma-macros` (proc-macro), and `keleusma-arena` (standalone arena allocator on crates.io v0.1.0)
+- Approximately 508 tests across the workspace covering lexer, parser, type checker, monomorphizer, compiler, VM, verifier, marshall, arena, audio natives, utility natives, target descriptor, visitor pattern, and integration tests
