@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-05-10
+
+Adds the epoch system for stale-pointer detection on safe arena handles. The 0.1.0 surface is preserved unchanged; this release is purely additive at the API level.
+
+### Added
+
+- `Arena::reset` returning `Result<(), EpochSaturated>`. Advances the epoch counter, clears both the bottom and top regions, and refuses if the counter has saturated. This is the safe full-reset operation; the older `reset_bottom` and `reset_top` remain available as unsafe per-end resets.
+- `Arena::reset_unchecked` and `Arena::reset_top_unchecked`, the unsafe variants suitable for callers who hold an active borrow into the arena and have certified that no allocator-bound collection retains storage at the moment of reset. Both advance the epoch.
+- `Arena::force_reset_epoch`, an unsafe recovery path for the saturated case. The caller certifies that no `ArenaHandle` from any prior epoch is still in use.
+- `Arena::epoch` and `Arena::epoch_remaining` for observability.
+- `EpochSaturated` error type returned by the safe reset path when the epoch counter cannot advance further. `u64::MAX` epochs are sufficient for almost all deployments; the type exists to make the saturating refusal explicit.
+- `ArenaHandle<T: ?Sized>`, a generic safe wrapper around an arena pointer that captures the epoch at construction. The `get(&arena)` accessor returns `Result<&T, Stale>`, so a handle from a prior epoch is detected at access rather than producing undefined behavior.
+- `KString = ArenaHandle<str>` alias for the common arena-allocated string case. `KString::alloc(arena, s)` copies a `&str` into the arena's top region and returns a stale-detecting handle.
+- `Stale` error type returned by `ArenaHandle::get` when the captured epoch no longer matches the arena's current epoch.
+
+### Tested
+
+- Six new tests covering the epoch surface: handle access in the same epoch, handle access after reset (`Stale`), epoch saturation refusal, `force_reset_epoch` recovery, `reset_top_unchecked` preserving bottom-region collections, and `KString` round-trip. Total tests: 28 unit plus 6 doctests.
+- The existing 0.1.0 tests continue to pass unchanged.
+
+### Notes
+
+- This is a feature release. SemVer-correct under 0.x because the addition is large enough that downstream consumers should opt in explicitly through their version requirement. Existing users on `keleusma-arena = "0.1"` are not auto-upgraded; bump the requirement to `"0.2"` to consume the new surface.
+- The 0.1.0 public surface is preserved unchanged. Existing call sites compile against 0.2.0 without modification.
+
 ## [0.1.0] - 2026-05-08
 
 Initial release.

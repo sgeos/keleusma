@@ -9,104 +9,113 @@ AI to Human communication channel.
 ## Last Updated
 
 **Date**: 2026-05-10
-**Task**: V0.1-M3-T48 Pre-publication polish.
-**Status**: Complete. Five quality items addressed; the one hard publication blocker (`keleusma-macros` not yet on crates.io) is left for manual operator action.
+**Task**: V0.1-M3-T49 keleusma-arena 0.2.0 publication readiness.
+**Status**: Complete. Version bump, CHANGELOG, README, new example, sibling dep updates. Crate is publication-ready modulo a flagged naming concern that is the operator's call.
 
 ## Verification
 
 **Commands**:
 
 ```bash
-cargo doc --no-deps                                 # zero warnings
-cargo test --workspace                              # 519 pass
+cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --check
-cargo build -p keleusma --target thumbv7em-none-eabihf   # no_std verified
-cargo build --release --example piano_roll --features sdl3-example
-(printf '\n') | ./target/release/examples/piano_roll
+cargo doc -p keleusma-arena --no-deps
+cargo run --example epoch_handle -p keleusma-arena
+cargo publish -p keleusma-arena --dry-run --allow-dirty
 ```
 
 **Results**:
 
-- Rustdoc clean. The four prior warnings are gone.
-- 519 workspace tests pass.
-- Clippy clean across the workspace and the feature-gated example.
+- 520 workspace tests pass.
+- Clippy clean.
 - Format clean.
-- `keleusma` builds for `thumbv7em-none-eabihf` (verified locally; CI now exercises this on every push).
-- The piano-roll example builds and smoke-tests cleanly after the `Module` re-export.
+- Rustdoc clean for keleusma-arena.
+- The new `epoch_handle` example runs and prints the expected output: handle dereferences in epoch 0, reports `Stale` after reset, fresh handle dereferences in epoch 1, observability reports remaining epochs.
+- `cargo publish -p keleusma-arena --dry-run --allow-dirty` reports `Packaged 13 files, 75.2KiB (20.5KiB compressed)` with no version-conflict warning. The 0.1.0 dry-run had warned `crate keleusma-arena@0.1.0 already exists on crates.io index`; that warning is gone.
 
 ## Summary
 
-The user observed that the SDL3 example surfaced an awkward `keleusma::bytecode::Module` import path and asked whether `keleusma-macros` makes sense outside `keleusma`. Combined with the publication-readiness review from the prior turn, this session closed five items.
+The user observed that the previously-published `keleusma-arena` v0.1.0 had been subsequently extended in the workspace with the epoch-tagged stale-pointer detection surface (`ArenaHandle<T>`, `KString`, `EpochSaturated`, `Stale`, the safe `Arena::reset`, `force_reset_epoch`, `reset_unchecked`, `reset_top_unchecked`, `epoch`, `epoch_remaining`) but never re-versioned, never re-changelogged, never re-described in the README, and never exemplified. This session brings the crate to a publishable state for an 0.2.0 release.
 
-### keleusma-macros stance
+### Version bump
 
-`keleusma-macros` is the proc-macro backend for the `KeleusmaType` derive. Its expansion produces impl blocks that reference the `KeleusmaType` trait defined in `keleusma::marshall`. Standalone, the macro generates code that does not compile, so the crate has no use independent of `keleusma`. Publication is required only because Cargo demands proc-macro crates to be separate libraries; the same shape is established practice with `serde` + `serde_derive` and `tokio` + `tokio-macros`. The session marked this explicitly through Cargo metadata and a new README that tells users to depend on `keleusma` and treat `keleusma-macros` as an implementation detail.
+`keleusma-arena/Cargo.toml`: `version = "0.2.0"`. The 0.1.0 surface is preserved unchanged; the bump signals substantive new public API. Cargo treats `^0.2` and `^0.1` as incompatible ranges under 0.x semantics, so callers explicitly opt into the new surface by updating their version requirement.
 
-### Rustdoc warnings
+### CHANGELOG
 
-Four warnings cleared at the source.
+`keleusma-arena/CHANGELOG.md` gained a 0.2.0 entry covering each new type and method, the saturating-refusal contract on the safe `Arena::reset`, and an explicit note that the epoch model is opt-in and that 0.1.0-style mark-and-rewind callers continue to work without modification.
 
-1. `bytecode::Module::access_bytes` doc referenced private `HEADER_LEN` through a `[` `]` link. Rewritten as prose ("the header is sixteen bytes") since the constant is internal.
-2. `typecheck` module doc referenced private `Ctx::fresh`. Rewritten as prose ("the internal context") since the type is module-private.
-3. `verify::verify_resource_bounds_with_cost_model` referenced bare `CostModel`, which rustdoc could not resolve from the verify module's namespace. Replaced with the absolute path `[`crate::bytecode::CostModel`]`.
-4. The `Vm` struct doc referenced `Vm::reset_arena`, which does not exist. The actual method is `Vm::reset_after_error`. Updated the link to the correct method.
+### README
 
-The first two were latent doc bugs visible only to docs.rs readers. The third and fourth would have produced unresolved links on docs.rs; the fourth in particular was actively misleading.
+`keleusma-arena/README.md` gained a new "Epoch and Stale-Pointer Detection" section. The section sits between Budget Contract and Naming, explains the lifecycle in two paragraphs, demonstrates `KString::alloc` and `Arena::reset` in a runnable five-line snippet, documents the saturation behavior, and notes the opt-in nature for callers who prefer the older mark-and-rewind discipline.
 
-### Module re-export
+### Example
 
-`pub use bytecode::Module` was added to `lib.rs`. The piano-roll example was updated to import as `use keleusma::Module`. Both forms continue to work because `Module` remains accessible at `keleusma::bytecode::Module`. This closes the small ergonomic wart the example surfaced.
+`keleusma-arena/examples/epoch_handle.rs` (new). Demonstrates handle access in the current epoch, stale-detection after `Arena::reset`, fresh allocation in the new epoch, and the `epoch_remaining` observability path. Run with `cargo run --example epoch_handle -p keleusma-arena`. Output:
 
-### CHANGELOG.md
+```
+epoch 0: hello, arena
+epoch 1: prior handle correctly reported Stale
+epoch 1: and again
+epochs remaining before saturation: 18446744073709551614
+```
 
-A new file at the workspace root in Keep a Changelog format. The 0.1.0 entry documents the V0.1.0 public surface across seven sections: Language, Runtime, Verification, Host Interface, Tooling, Examples, and Documentation. Closing notes call out the 0.x stability expectation, the workspace member relationships, and the implementation-detail status of `keleusma-macros`.
+### Sibling crate dependency updates
 
-### CI workflow
+Three Cargo.toml files updated to track the new arena version requirement:
 
-The single `msrv` job split into two: `msrv-arena` pinning to 1.85 (the arena's MSRV) and `msrv-keleusma` pinning to 1.87 (the main crate's actual MSRV). The previous CI did not pin the main crate's MSRV at all, so MSRV drift went undetected.
+- `Cargo.toml` (workspace root, the `keleusma` crate): `keleusma-arena = { version = "0.2", path = "keleusma-arena", features = ["alloc"] }`
+- `keleusma-cli/Cargo.toml`: `keleusma-arena = { path = "../keleusma-arena", version = "0.2" }`
+- `keleusma-bench/Cargo.toml`: `keleusma-arena = { path = "../keleusma-arena", version = "0.2" }`
 
-A new `no-std` job builds `keleusma` against `thumbv7em-none-eabihf`, an embedded ARM target without `std`. The crate's `#![no_std]` attribute and `extern crate alloc;` declarations are now machine-verified per push, not just stated.
+Without these updates, sibling crates would fail to resolve the workspace member because Cargo refused `^0.1` against the 0.2.0 manifest.
 
-### keleusma-macros metadata
+### Naming concern flagged
 
-Cargo.toml gained homepage, repository, documentation, readme, rust-version, keywords, and categories. A new README.md tells users to depend on `keleusma` rather than this crate directly, mirrors the serde + serde_derive shape, and documents the version-coupling expectation.
+The user asked whether `KString` belongs in `keleusma-arena`. It does — defined at `keleusma-arena/src/lib.rs:884` as `pub type KString = ArenaHandle<str>;`. The `keleusma` main crate re-exports it but does not own it.
+
+The "K" prefix imports Keleusma-specific branding into a crate marketed as standalone-useful (the existing arena README emphasizes general embedded-systems applicability). A more neutral name such as `StrHandle` would be more honest for a general-purpose allocator crate; the parent crate could continue offering `KString` as an alias at the Keleusma-facing boundary if desired.
+
+This rename is cheap if done in the same 0.2.0 release. Done after publication, it would force a 0.3.0 bump for the rename. The rename has not been performed in this task; flagged for the operator's decision.
 
 ## Trade-offs and Properties
 
-The decision to use prose rather than `[Type]` links for `HEADER_LEN` and `Ctx::fresh` reflects that those identifiers are private. Two alternatives existed: make them `pub(crate)` and link to them, or make them `pub` and link to them. The first does not satisfy rustdoc's link resolver (which scans only public items). The second over-exposes implementation detail. Prose was the right answer; the doc no longer makes a promise about a specific identifier name that could shift.
+The decision to bump to 0.2.0 rather than 0.1.1 reflects the size of the addition. Six new types (`ArenaHandle`, `KString`, `EpochSaturated`, `Stale`, plus the implicit semantic addition of the epoch counter and saturating refusal) and six new methods on `Arena` are substantial enough to deserve a minor-version signal. Under 0.x semantics, both choices are SemVer-correct because the addition is purely additive; the choice is about communication, not technical compatibility.
 
-The decision to split MSRV into per-crate jobs reflects that the workspace contains crates with different MSRVs (1.85 for arena, 1.87 for keleusma), and the current MSRV declarations should be verified separately. A unified MSRV at 1.87 would be simpler but would force arena downstream consumers off 1.85; a unified MSRV at 1.85 would prevent keleusma from using 1.87-only constructs (which it does, hence the discrepancy). Two separate jobs preserve both the arena's wider compatibility and keleusma's freedom to use newer language features.
+The decision to keep the 0.1.0 surface unchanged (`reset_bottom`, `reset_top`, `rewind_bottom`, `rewind_top`, `bottom_mark`, `top_mark`, plus all allocation handles) supports the migration path. Callers on 0.1.0 update their version requirement and rebuild; no source changes are required. New callers can adopt the safer epoch-tagged handles, and existing callers can continue with the original LIFO discipline.
 
-The decision to verify no_std against `thumbv7em-none-eabihf` rather than `aarch64-unknown-none` or `wasm32-unknown-unknown` reflects the embedded-scripting target audience. ARM Cortex-M is the canonical embedded target the crate's `embedded` and `no-std` Cargo categories speak to. Verifying against one such target is sufficient to catch most no_std regressions; future tasks could broaden the matrix.
+The decision to make the epoch counter `u64` and saturate at `u64::MAX` rather than wrap around reflects safety-critical concerns. Wrapping would silently produce false-positive accept results on stale handles (the epoch happens to match by coincidence after wrap). Saturation is a hard halt that requires unsafe acknowledgment via `force_reset_epoch`. The 18-quintillion-epoch budget is sufficient for almost all deployments; a system resetting once per millisecond would require approximately 584 million years to reach saturation.
 
-The CHANGELOG entry is more verbose than the arena's. The arena was a focused allocator; keleusma is a language with seven distinct surfaces. Verbose is appropriate here because the changelog is a user's first survey of the V0.1.0 capabilities and is the document linked from crates.io.
+The decision to add only one example (`epoch_handle`) rather than separate examples for each new type reflects that the types compose into a single coherent pattern (allocate, validate on access, reset, recover). One self-contained example demonstrates the pattern more clearly than three examples each demonstrating a fragment. The comparison test pattern (allocate, reset, expect Stale) is the most load-bearing assertion the crate makes.
 
 ## Files Touched
 
-- **`src/bytecode.rs`**. Doc comment on `Module::access_bytes` reworded.
-- **`src/typecheck.rs`**. Module-level doc comment reworded.
-- **`src/verify.rs`**. Doc comment on `verify_resource_bounds_with_cost_model` uses absolute path for `CostModel`.
-- **`src/vm.rs`**. Doc comment on `Vm` struct corrected to reference `Vm::reset_after_error`.
-- **`src/lib.rs`**. `Module` added to the bytecode re-exports.
-- **`examples/piano_roll.rs`**. Import simplified to `use keleusma::{Arena, Module, Value}`. Format pass applied.
-- **`CHANGELOG.md`** (new). Keep a Changelog format. V0.1.0 entry covering the seven public surfaces.
-- **`.github/workflows/ci.yml`**. `msrv` job split into `msrv-arena` and `msrv-keleusma`. New `no-std` job.
-- **`keleusma-macros/Cargo.toml`**. Metadata enriched.
-- **`keleusma-macros/README.md`** (new). Implementation-detail framing.
-- **`docs/process/TASKLOG.md`**. New row for V0.1-M3-T48 plus history entry.
+- **`keleusma-arena/Cargo.toml`**. Version bumped from 0.1.0 to 0.2.0.
+- **`keleusma-arena/CHANGELOG.md`**. New 0.2.0 entry.
+- **`keleusma-arena/README.md`**. New "Epoch and Stale-Pointer Detection" section.
+- **`keleusma-arena/examples/epoch_handle.rs`** (new). End-to-end demonstration.
+- **`Cargo.toml`** (workspace root, `keleusma` crate). Arena dep version requirement bumped to "0.2".
+- **`keleusma-cli/Cargo.toml`**. Arena dep version requirement bumped to "0.2".
+- **`keleusma-bench/Cargo.toml`**. Arena dep version requirement bumped to "0.2".
+- **`docs/process/TASKLOG.md`**. New row for V0.1-M3-T49 plus history entry.
 - **`docs/process/REVERSE_PROMPT.md`**. This file.
 
 ## Remaining Open Priorities
 
-The remaining hard blocker before crates.io publication is `keleusma-macros` not yet existing on crates.io. The publication order is `keleusma-arena` (already published), `keleusma-macros` (next), then `keleusma` (final). Publication is the operator's decision, not the agent's; the dry-run command is `cargo publish -p keleusma-macros --dry-run` followed by `cargo publish -p keleusma-macros`. Once the macro crate is on crates.io and propagated through the registry, `cargo publish -p keleusma --dry-run` should succeed and the main crate can publish.
+The publication order remains. `keleusma-arena 0.2.0` is now ready for `cargo publish`. After it propagates through the registry, `keleusma-macros 0.1.0` is the next step, followed by `keleusma 0.1.0`. The agent does not perform `cargo publish`; the operator does.
 
-Items deferred from prior tasks remain. None are blockers.
+The `KString` naming concern is the only open question this task surfaced. Two paths:
+
+1. Accept the brand leakage and ship as-is.
+2. Rename to `StrHandle` in `keleusma-arena` and add `pub type KString = keleusma_arena::StrHandle;` at the `keleusma` re-export site. The user-facing API in the parent crate is unchanged.
+
+Path 2 is cheap if done before 0.2.0 publishes; expensive (requires 0.3.0) if done after. The agent has not chosen between them.
 
 ## Intended Next Step
 
-Await human prompt before proceeding. The natural next step the agent cannot take is `cargo publish` on `keleusma-macros` and `keleusma`.
+Await human prompt before proceeding, including on the naming question.
 
 ## Session Context
 
-This session put the codebase in publishable shape modulo the manual `cargo publish` step. The crates.io rendering will pick up an accurate description, a Keep a Changelog file, complete metadata, and a README. The docs.rs rendering will be free of warnings and unresolved links. The CI workflow will verify both the language-level MSRV claim and the no_std + alloc target claim on every push. The `keleusma-macros` crate is now framed as an implementation detail rather than a peer crate, which is the truthful relationship and matches established Rust ecosystem precedent.
+This session brought `keleusma-arena` to a publishable state for an 0.2.0 release. The local source had been carrying the new epoch surface for several sessions under the still-published 0.1.0 version number, which would have produced a publication failure on first attempt. The `cargo publish --dry-run --allow-dirty` check now passes cleanly. The workspace remains internally consistent: sibling crates' version requirements track the new arena version, `cargo test --workspace` and `cargo clippy --workspace --all-targets` succeed, and the new example is smoke-tested.

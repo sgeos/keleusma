@@ -114,6 +114,27 @@ assert!(arena.fits_budget(&budget));
 
 For a concrete example of computing a budget from a static analysis and using it to verify admissibility, see the Keleusma scripting runtime, which computes a `Budget` from bytecode worst-case memory usage analysis and uses `fits_budget` to enforce the bounded-memory guarantee at module load time. The Keleusma project is the original consumer of this crate and demonstrates the discipline end-to-end.
 
+## Epoch and Stale-Pointer Detection
+
+`Arena::reset` advances an internal `epoch` counter and clears both regions in one operation. Safe wrappers in the `ArenaHandle<T>` family capture the epoch at the moment of allocation and validate it on access through `handle.get(&arena)`, which returns `Result<&T, Stale>`. A handle from a prior epoch is detected at the access site and produces a typed `Stale` error rather than returning a dangling reference.
+
+```rust
+use keleusma_arena::{Arena, KString};
+
+let mut arena = Arena::with_capacity(4096);
+let s = KString::alloc(&arena, "hello").unwrap();
+assert_eq!(s.get(&arena).unwrap(), "hello");
+
+arena.reset().unwrap();             // advances epoch
+assert!(s.get(&arena).is_err());    // Stale: handle was from prior epoch
+```
+
+`KString = ArenaHandle<str>` is a typed alias for the common arena-allocated string case. Other `T: ?Sized` types compose through `ArenaHandle<T>` directly.
+
+The epoch counter is `u64` and saturates at `u64::MAX`. The safe `Arena::reset` returns `EpochSaturated` once the counter cannot advance further; recovery is through `Arena::force_reset_epoch`, which is unsafe because the caller must certify that no `ArenaHandle` from any prior epoch is still in use. The unsafe variants `Arena::reset_unchecked` and `Arena::reset_top_unchecked` are available for callers who hold an active borrow into the arena and have certified the same condition for that borrow.
+
+The epoch model is opt-in. Callers who prefer the 0.1.0-style mark-and-rewind discipline can continue to use `bottom_mark`, `top_mark`, `rewind_bottom`, `rewind_top`, `reset_bottom`, and `reset_top` without ever constructing an `ArenaHandle`; those operations remain available with their original semantics.
+
 ## Naming
 
 The canonical handle types are `BottomHandle` and `TopHandle`, matching a vertical-buffer model where the bottom end starts at low addresses and grows up while the top end starts at high addresses and grows down. Code that prefers a CPU-memory mental model may use the `stack_handle()` and `heap_handle()` method aliases. The arena imposes no semantic distinction between the two ends.

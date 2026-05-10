@@ -14,7 +14,7 @@ categories = ["command-line-utilities", "compilers"]
 
 [dependencies]
 keleusma = { path = "..", version = "0.1" }
-keleusma-arena = { path = "../keleusma-arena", version = "0.1" }
+keleusma-arena = { path = "../keleusma-arena", version = "0.2" }
 
 [[bin]]
 name = "keleusma"

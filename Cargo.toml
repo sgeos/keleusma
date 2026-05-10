@@ -26,7 +26,7 @@ sdl3-example = ["dep:sdl3"]
 [dependencies]
 libm = "0.2"
 keleusma-macros = { path = "keleusma-macros", version = "0.1.0" }
-keleusma-arena = { version = "0.1", path = "keleusma-arena", features = ["alloc"] }
+keleusma-arena = { version = "0.2", path = "keleusma-arena", features = ["alloc"] }
 allocator-api2 = { version = "0.4", default-features = false, features = ["alloc"] }
 rkyv = { version = "0.8", default-features = false, features = ["alloc", "bytecheck"] }
 sdl3 = { version = "0.18", features = ["build-from-source-static"], optional = true }
