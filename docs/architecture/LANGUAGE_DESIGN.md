@@ -68,6 +68,40 @@ Keleusma provides five static guarantees about program behavior.
 4. **Bounded-memory.** There exists a statically provable upper bound on arena memory consumed during one Stream-to-Reset cycle, separately for the stack region and the heap region. The Worst-Case Memory Usage (WCMU) analysis is the memory analog of WCET. The arena is sized to accommodate the worst case the program can produce. Programs whose WCMU cannot be statically computed are rejected at verification time. This guarantee parallels the timing bound and is required for full safety-critical certification under DO-178C and ISO 26262.
 5. **Safe swapping.** Hot code swaps preserve type safety and stream continuity. Only the dialogue type must remain invariant across swaps.
 
+## Conservative Verification
+
+Keleusma's surface language admits the description of programs that the verifier may reject. The separation between description and admission is intentional and is part of the language's contract. This property may seem alien to readers coming from programming paradigms where successfully compiling means the program is admitted at runtime.
+
+The compile pipeline admits a broader surface than the WCET and WCMU analyses can prove bounded. The pipeline includes the parser, the type checker, the monomorphizer, the closure-hoisting pass, and the bytecode emitter. The verifier runs at the safe constructors `Vm::new` and `Vm::load_bytes`. It rejects any program whose execution time or memory use cannot be statically bounded.
+
+Two categories of programs fall in the gap between the surface and the verifier's admittance set.
+
+**First category, provably unbounded constructs.** A program that demonstrably admits unbounded execution at runtime falls in this category. An example is a closure that dispatches to itself through indirect call. The language describes the construct so the verifier can definitively reject it. A future verifier with stronger analysis will not admit such programs because they are unbounded by construction.
+
+**Second category, bounded but not yet proven constructs.** A program whose execution is bounded in fact but whose proof has not yet been implemented also falls in this category. An example is a non-recursive closure invocation such as `let f = |x| x + 1; f(5)`. The runtime behavior is bounded, but the present verifier rejects the program because indirect dispatch through `Op::CallIndirect` requires a flow analysis that has not been implemented. Future analysis improvements can move such programs out of the rejection set without changing the surface language.
+
+This stance differs from the conventional pattern in most programming languages. There, programs that compile typically admit runtime execution, and analysis tools layer on top to flag potential issues. In Keleusma, the verifier is the source of truth. Programs that fail verification are rejected at the safe constructor regardless of whether they would have terminated in practice. The two categories above are coherent because the language treats rejection as the safety property: a program admitted by `Vm::new` is one whose bound is proved, not one whose bound exists.
+
+### Implications
+
+Hosts develop scripts knowing that the verifier defines the admitted set. Programs that ship through real-time embedding must be designed within the verifier's current capability. Programs that require richer constructs and accept the unbounded risk can use `Vm::new_unchecked`, which is intentional misuse outside the WCET contract.
+
+Tooling can highlight verifier-rejected constructs so developers see the gap before runtime.
+
+The language can grow its admitted set without surface changes. As analysis techniques mature, more programs become admissible. Candidate techniques include flow analysis for indirect dispatch, attestation APIs for declared bounds, and inter-procedural reach extension. The surface remains stable. Only the verifier's reach changes.
+
+The rejection-by-default stance is the dual of the conventional acceptance-by-default stance. Both are coherent design choices. Keleusma's choice follows from its safety-critical positioning. A sound bound on time and memory is the load-bearing guarantee. The safest place to draw the boundary is the analysis's current capability.
+
+### Worked examples
+
+`Op::CallIndirect` invocation is rejected as a second-category construct. The runtime behavior is bounded for non-recursive closure use, but the static bound is not yet computed. A future flow analysis would admit non-recursive closure programs while still rejecting recursive ones.
+
+`Op::MakeRecursiveClosure` construction is rejected as a first-category construct. Self-referential dispatch admits unbounded recursion within a single Stream-to-Reset slice by construction. No analysis admits such a program without an external attestation of recursion depth.
+
+The pattern `apply(apply, x)` on a generic identity-applier is rejected as a first-category construct. The pattern admits unbounded recursion through indirect dispatch regardless of which closure-construction op produced the value.
+
+The closure feature in general is described in BACKLOG entry B3 as "Implemented; not WCET-safe". The implementation is complete in the language pipeline so that the verifier can reject the runtime invocation through `Op::CallIndirect` definitively. The construct exists in the language so that the rejection can be precise rather than approximate.
+
 ## Memory Model
 
 Surface-language semantics. Script-defined values are conceptually immutable. Local bindings, the operand stack, and the arena are not observable as mutable state at the surface. The data segment is the sole region of mutable state observable to the script that persists beyond a single function activation; scripts read and write it through a fixed schema declared in a `data` block. Strings divide into two surface kinds. Static strings reside in the rodata region and may flow anywhere admissible. Dynamic strings reside in the arena heap, are produced by native function calls, and may not cross the yield boundary. See [TYPE_SYSTEM.md](../design/TYPE_SYSTEM.md) for the full string discipline.
@@ -139,8 +173,9 @@ Keleusma's design choices are informed by synchronous reactive language principl
 ## Cross-References
 
 - [GRAMMAR.md](../design/GRAMMAR.md) provides the formal EBNF grammar specification.
-- [EXECUTION_MODEL.md](./EXECUTION_MODEL.md) describes the target execution model with temporal domains.
+- [EXECUTION_MODEL.md](./EXECUTION_MODEL.md) describes the target execution model with temporal domains, including the canonical specification of the conservative-verification rejection at `verify::module_wcmu` for `Op::CallIndirect` and `Op::MakeRecursiveClosure`.
 - [TARGET_ISA.md](../reference/TARGET_ISA.md) describes the structural ISA specification.
+- [BACKLOG.md](../decisions/BACKLOG.md) records features that fall outside the verifier's current admittance set, including B3 closures.
 - [RELATED_WORK.md](../reference/RELATED_WORK.md) positions Keleusma within the academic and industrial landscape.
 
 ## Citation Key

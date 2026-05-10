@@ -231,7 +231,9 @@ Additionally, `wcet_stream_iteration()` computes the worst-case execution cost o
 
 ### Indirect Dispatch and Recursion
 
-Definitive WCET and WCMU is the language's load-bearing guarantee. The verifier rejects any program whose execution time or memory use cannot be statically bounded. The two op kinds that violate this contract are rejected outright by `verify::module_wcmu`.
+Definitive WCET and WCMU is the language's load-bearing guarantee. The verifier rejects any program whose execution time or memory use cannot be statically bounded. The rejection is conservative by design: programs whose bound is unprovable, and programs whose bound is provable in principle but not yet computable by the current analysis, are both rejected. See [LANGUAGE_DESIGN.md Conservative Verification](./LANGUAGE_DESIGN.md#conservative-verification) for the design stance behind this choice.
+
+The two op kinds that violate the WCET contract are rejected outright by `verify::module_wcmu`.
 
 1. `Op::MakeRecursiveClosure` constructs a self-referential closure whose body dispatches to itself through indirect call. The resulting program admits unbounded recursion within a single Stream-to-Reset iteration. Rejected at module verification.
 
