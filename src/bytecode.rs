@@ -507,28 +507,41 @@ pub const VALUE_SLOT_SIZE_BYTES: u32 = 32;
 /// Per-target cost model used by the WCET and WCMU analyses.
 ///
 /// Units. WCMU is reported in **bytes**. WCET is reported in
-/// **nominal cycles**. The byte unit is target-independent in
-/// principle. The actual byte count returned by the analysis depends
-/// on the value-slot size declared by the cost model. The cycle unit
-/// is target-dependent. The nominal cost model bundled with the
-/// runtime supplies unmeasured estimates suitable for relative
-/// ordering of programs on a single platform; it is **not** validated
-/// against any specific host CPU. Hosts that require wall-clock WCET
-/// in measured cycles must construct a custom `CostModel` whose
-/// `op_cycles` returns measured per-opcode cycle counts for the
-/// target hardware.
+/// **pipelined cycles**. A pipelined cycle is a CPU cycle in which
+/// the host's pipeline operates at steady-state throughput, assuming
+/// warm instruction and data caches, correctly predicted branches,
+/// and no contention on the memory bus. The pipelined-cycle metric
+/// is what CPU optimization tables call "throughput" or "reciprocal
+/// throughput" per instruction. It is observable through standard
+/// benchmarking with warm caches and a stable predictor.
+///
+/// What the analysis bounds, and what it does not. The pipelined-
+/// cycle bound is sound for the abstract metric. Actual cycles on
+/// real hardware exceed the bound by the host's stall budget,
+/// covering cache misses, branch mispredictions, and memory-bus
+/// contention. Wall-clock time additionally depends on the clock
+/// period and on frequency scaling. The conversion from pipelined-
+/// cycle bound to wall-clock WCET is a platform-specific scalar,
+/// conventionally called the calibration factor or dilation factor
+/// in the WCET literature. The host establishes this factor during
+/// deployment validation. For many practical applications, the
+/// pipelined-cycle bound multiplied by a measured calibration factor
+/// is an effective approximation of the worst-case wall-clock
+/// execution time.
 ///
 /// Custom cost models. Hosts construct a `CostModel` by setting
 /// `value_slot_bytes` to the runtime's value-slot size and
-/// `op_cycles` to a function pointer that returns the nominal cycle
+/// `op_cycles` to a function pointer that returns the pipelined-cycle
 /// cost for each opcode. The function pointer is reentrant and must
 /// not allocate or fail. The convention is that the function
 /// pattern-matches on the `Op` variant and returns the corresponding
 /// cycle count from a target-specific table.
 ///
-/// The bundled [`NOMINAL_COST_MODEL`] supplies the unmeasured
-/// defaults that the existing analysis APIs use when no custom model
-/// is provided.
+/// The bundled [`NOMINAL_COST_MODEL`] supplies unmeasured pipelined-
+/// cycle estimates that the existing analysis APIs use when no
+/// custom model is provided. The estimates are suitable for relative
+/// ordering of programs on a single platform but are not validated
+/// against any specific host CPU.
 #[derive(Clone, Copy)]
 pub struct CostModel {
     /// Bytes per operand-stack slot for the host runtime. Determines
@@ -579,25 +592,32 @@ impl CostModel {
 }
 
 /// Default cost model for the bundled runtime. WCMU value-slot size
-/// matches the runtime's `VALUE_SLOT_SIZE_BYTES`. WCET cycles use the
-/// nominal table provided by [`nominal_op_cycles`].
+/// matches the runtime's `VALUE_SLOT_SIZE_BYTES`. WCET pipelined
+/// cycles come from the unmeasured table provided by
+/// [`nominal_op_cycles`].
 ///
-/// **Nominal-cycle caveat.** The values are unmeasured estimates
-/// chosen for relative ordering, not measured cycles for any specific
-/// host CPU. The scale is one cycle for data movement and trivial
-/// control flow, two for arithmetic and comparison, three for division
-/// and field lookup, five for composite construction, ten for
-/// function calls. A program whose nominal-cycle WCET exceeds another
-/// program's nominal-cycle WCET on the same platform is more
-/// expensive in the relative sense; a measured-cycle CostModel is
-/// required to convert either bound to wall-clock time.
+/// **Pipelined-cycle caveat.** The bundled values are unmeasured
+/// estimates chosen for relative ordering, not measured pipelined
+/// cycles for any specific host CPU. The scale is one cycle for data
+/// movement and trivial control flow, two for arithmetic and
+/// comparison, three for division and field lookup, five for
+/// composite construction, ten for function calls. A program whose
+/// pipelined-cycle WCET exceeds another program's pipelined-cycle
+/// WCET on the same platform is more expensive in the relative
+/// sense. Hosts that need a wall-clock bound apply a platform-
+/// specific calibration factor to convert pipelined cycles to actual
+/// cycles and to wall-clock time. A measured-cycle CostModel
+/// improves the approximation by replacing the bundled estimates
+/// with measured pipelined cycles for the target CPU.
 pub const NOMINAL_COST_MODEL: CostModel = CostModel {
     value_slot_bytes: VALUE_SLOT_SIZE_BYTES,
     op_cycles: nominal_op_cycles,
 };
 
-/// The nominal-cycle cost table used by [`NOMINAL_COST_MODEL`].
-/// Returns unmeasured cycle estimates per the documented scale.
+/// The pipelined-cycle cost table used by [`NOMINAL_COST_MODEL`].
+/// Returns unmeasured pipelined-cycle estimates per the documented
+/// scale. The values are intended to be replaced with measured
+/// pipelined cycles during deployment validation.
 pub fn nominal_op_cycles(op: &Op) -> u32 {
     match op {
         Op::Const(_)
@@ -655,23 +675,26 @@ pub fn nominal_op_cycles(op: &Op) -> u32 {
 }
 
 impl Op {
-    /// Return the WCET cost of this instruction in **nominal cycles**
-    /// per the [`NOMINAL_COST_MODEL`].
+    /// Return the WCET cost of this instruction in **pipelined
+    /// cycles** per the [`NOMINAL_COST_MODEL`].
     ///
-    /// **Unit.** The result is a count of nominal cycles. Nominal
-    /// cycles are unmeasured estimates chosen for relative ordering of
-    /// programs on a single platform. The scale is one cycle for data
-    /// movement and trivial control flow, two for arithmetic and
-    /// comparison, three for division and field lookup, five for
-    /// composite construction, ten for function calls. The values are
-    /// not validated against any specific host CPU. Hosts that need
-    /// wall-clock WCET in measured cycles must construct a custom
-    /// [`CostModel`] whose `op_cycles` returns measured cycle counts
-    /// for the target hardware.
+    /// **Unit.** The result is a count of pipelined cycles. A
+    /// pipelined cycle is a CPU cycle in which the host's pipeline
+    /// operates at steady-state throughput, assuming warm caches,
+    /// correctly predicted branches, and no memory-bus contention.
+    /// The bundled values are unmeasured estimates chosen for
+    /// relative ordering of programs on a single platform. The scale
+    /// is one cycle for data movement and trivial control flow, two
+    /// for arithmetic and comparison, three for division and field
+    /// lookup, five for composite construction, ten for function
+    /// calls. The values are not validated against any specific host
+    /// CPU. Hosts that need wall-clock WCET apply a platform-specific
+    /// calibration factor to the pipelined-cycle bound, or construct
+    /// a custom [`CostModel`] whose `op_cycles` returns measured
+    /// pipelined cycles for the target hardware.
     ///
     /// This method is a thin wrapper over [`NOMINAL_COST_MODEL`].
     /// Analysis APIs that take an explicit `&CostModel` parameter
-    /// (such as [`crate::verify::wcet_stream_iteration_with_cost_model`])
     /// allow per-target cost tables to flow through without changing
     /// the rest of the analysis.
     pub fn cost(&self) -> u32 {

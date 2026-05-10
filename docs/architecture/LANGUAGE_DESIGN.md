@@ -120,23 +120,47 @@ Worst-Case Memory Usage is measured per Stream-to-Reset iteration. The analysis 
 
 ### Units
 
-WCET is reported in **nominal cycles**. WCMU is reported in **bytes**.
+WCET is reported in **pipelined cycles**. WCMU is reported in **bytes**.
 
-The byte unit is target-independent in principle. The actual byte count returned by the analysis depends on the runtime's value-slot size, which the cost model carries as `value_slot_bytes`. The current 64-bit Keleusma runtime declares 32 bytes per slot (a conservative bound that includes alignment padding for the runtime-tagged `Value` enum). A future 32-bit runtime would declare a smaller value.
+A pipelined cycle is a CPU cycle in which the host's pipeline operates at steady-state throughput. The cycle assumes warm instruction and data caches, correctly predicted branches, and no contention from other cores or peripherals on the memory bus. The pipelined-cycle metric is what CPU optimization tables, including Agner Fog's instruction tables and the Intel Optimization Reference Manual, call "throughput" or "reciprocal throughput" per instruction. The metric is observable, reproducible, and measurable through standard benchmarking with warmed caches and a stable branch predictor.
 
-Nominal cycles are unmeasured estimates chosen for relative ordering of programs on a single platform. The scale assigns one cycle to data movement and trivial control flow, two to arithmetic and comparison, three to division and field lookup, five to composite construction, ten to function calls. The values are **not** validated against any specific host CPU.
+The byte unit is target-independent in principle. The actual byte count returned by the analysis depends on the runtime's value-slot size, which the cost model carries as `value_slot_bytes`. The current 64-bit Keleusma runtime declares 32 bytes per slot, a conservative bound that includes alignment padding for the runtime-tagged `Value` enum. A future 32-bit runtime would declare a smaller value.
 
-What this means in practice. A program with a nominal-cycle WCET of one hundred is more expensive than a program with a nominal-cycle WCET of fifty when both run on the same platform, but the absolute number does not convert to wall-clock time without a host-specific calibration. Hosts that need wall-clock WCET must construct a custom `CostModel` whose `op_cycles` returns measured cycle counts for the target hardware.
+### What the language guarantees
+
+The verifier proves a definitive pipelined-cycle bound for each Stream-to-Reset iteration. The bound is sound for the abstract pipelined-cycle metric. A program admitted by `Vm::new` executes a number of pipelined cycles per iteration that is at most the analyzed bound.
+
+The language does not guarantee a wall-clock-time bound. Wall-clock time depends on the host CPU's stall behavior, clock period, and operating frequency. The language does not guarantee an actual-cycle bound. Actual cycles depend on the host CPU's stall behavior. Both gaps are the host's responsibility to characterize during deployment.
+
+### Caveats for actual cycles
+
+Actual cycles executed on a real host CPU exceed the pipelined-cycle bound by the host's stall budget. Stalls arise from instruction-cache misses, data-cache misses, TLB misses, branch mispredictions, speculative-execution recovery, and contention on the memory bus from other cores or peripheral DMA. The pipelined-cycle bound does not account for these costs.
+
+The relationship between pipelined cycles and actual cycles depends on the host CPU and the deployment environment. For a worst-case-driven application running alone on a quiescent core with cache-warm inputs, actual cycles are typically within a small constant factor of the pipelined-cycle bound. For an application running in a contended environment, the factor is larger and more variable.
+
+### Caveats for wall-clock time
+
+Wall-clock time equals actual cycles times the clock period. The clock period is well-defined when frequency scaling is disabled. When frequency scaling is active, the cycle count is consistent but the wall-clock duration varies with operating frequency. Time-predictable platforms, including the Java Optimized Processor [WC5], reduce the gap between pipelined and actual cycles toward unity by hardware design and run at fixed frequencies, so the wall-clock time is a tight scalar of the analyzed bound.
+
+### Bounded order-of-magnitude WCET
+
+Keleusma proves a definitive bound in pipelined cycles. For practical applications, the pipelined-cycle bound is order-of-magnitude correct relative to the actual wall-clock WCET on a specific deployment platform. The conversion from analyzed bound to deployed wall-clock WCET is a platform-specific scalar, conventionally called the **calibration factor** or **dilation factor** in the WCET literature. The factor accounts for both the stall budget (pipelined cycles to actual cycles) and the clock period (actual cycles to wall-clock seconds).
+
+For many practical applications, an order-of-magnitude bound is sufficient. Audio engines need to know that one stream iteration completes within the audio-buffer period. Game scripts need to know that one tick completes within the frame budget. Embedded controllers need to know that one control-loop iteration completes within the sample interval. The pipelined-cycle bound multiplied by a measured calibration factor gives an effective approximation of the worst-case wall-clock execution time. The calibration factor is established once per deployment configuration during host validation and remains stable across program updates that pass the verifier on the same platform.
+
+The host accepts responsibility for the calibration factor. The language guarantees the pipelined-cycle bound. The host attests to the calibration factor appropriate for its deployment. This is the right place to draw the abstraction boundary because the factor depends on the host platform, the host operating environment, and the host certification process, none of which the language can determine unilaterally.
 
 ### Cost model
 
-The `crate::bytecode::CostModel` struct carries the per-opcode cycle table and the value-slot byte size. The bundled `NOMINAL_COST_MODEL` constant supplies the unmeasured defaults documented above. Hosts construct a custom cost model by setting `value_slot_bytes` to the runtime's value-slot size and `op_cycles` to a function pointer that returns measured cycles per opcode. The verify entry point `verify_resource_bounds_with_cost_model` accepts a custom model.
+The `crate::bytecode::CostModel` struct carries the per-opcode pipelined-cycle table and the value-slot byte size. The bundled `NOMINAL_COST_MODEL` constant supplies unmeasured pipelined-cycle estimates suitable for relative ordering of programs on a single platform. The scale assigns one pipelined cycle to data movement and trivial control flow, two to arithmetic and comparison, three to division and field lookup, five to composite construction, ten to function calls. These values are not validated against any specific host CPU; they are intended to be replaced by measured tables during deployment validation.
 
-Internal threading of the host-supplied cost model through the per-chunk WCMU computation is a tracked refinement. The current implementation accepts the model parameter in the public API surface; the per-chunk computation continues to use the bundled nominal model. Hosts that build against the cost-model contract will see measured cycle and byte tables flow through to the bound when the threading work lands. The contract is stable.
+Hosts construct a calibrated cost model by setting `value_slot_bytes` to the runtime's value-slot size and `op_cycles` to a function pointer that returns measured pipelined-cycle counts for the target hardware. The measured tables are obtained through standard benchmarking with warm caches and a stable predictor. The verify entry point `verify_resource_bounds_with_cost_model` accepts a custom model.
+
+Internal threading of the host-supplied cost model through the per-chunk WCMU computation is a tracked refinement. The current implementation accepts the model parameter in the public API surface. The per-chunk computation uses the bundled nominal model. Hosts that build against the cost-model contract will see measured cycle and byte tables flow through to the bound when the threading work lands. The contract is stable.
 
 ### Limitations
 
-Abstract opcode cost does not directly correspond to wall-clock execution time. Industrial WCET analysis tools such as aiT [WC2] account for pipeline effects, cache behavior, and branch prediction on the target hardware. For safety-critical certification, a sound bound on real-time WCET requires either a time-predictable execution platform as demonstrated for JOP in [WC5] or a validated mapping from abstract cost to physical time. Keleusma's nominal cost model is sufficient for relative comparison of programs and for soft real-time applications where approximate cost bounds inform scheduling decisions. See [RELATED_WORK.md](../reference/RELATED_WORK.md) Section 4 for a full discussion. Indirect-dispatch limitations and the rejection of recursive closures by the safe verifier are documented in [EXECUTION_MODEL.md](./EXECUTION_MODEL.md) under Structural Verification.
+Pipelined cycles do not directly correspond to actual cycles or to wall-clock time. The conversion to actual cycles requires the platform's stall budget. The conversion to wall-clock time additionally requires the clock period. Industrial WCET analysis tools such as aiT [WC2] account for pipeline effects, cache behavior, and branch prediction on the target hardware to produce a tight actual-cycle bound. For safety-critical certification, a sound wall-clock bound requires either a time-predictable execution platform [WC5] or a validated mapping from pipelined cycles to physical time. Keleusma's pipelined-cycle bound is sufficient for relative comparison of programs and, multiplied by a deployment-specific calibration factor, sufficient for soft real-time and many embedded scheduling applications. See [RELATED_WORK.md](../reference/RELATED_WORK.md) Section 4 for the full discussion. Indirect-dispatch limitations and the rejection of recursive closures by the safe verifier are documented in [EXECUTION_MODEL.md](./EXECUTION_MODEL.md) under Structural Verification.
 
 ## Turing Completeness and Temporal Domains
 

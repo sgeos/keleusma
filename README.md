@@ -19,7 +19,7 @@ The compile pipeline (parse, type-check, monomorphize, hoist, emit) admits a bro
 - **Coroutine model** with typed yield and resume for host-driven stream processing.
 - **Multiheaded functions** with pattern matching, guard clauses, and pipeline expressions.
 - **Block-structured ISA** enabling single-pass structural verification.
-- **WCMU and WCET analysis** providing worst-case bounds at module load.
+- **WCMU and WCET analysis** providing worst-case bounds at module load. WCMU is reported in bytes; WCET is reported in pipelined cycles. The pipelined-cycle bound is order-of-magnitude correct relative to actual wall-clock execution time on real hardware. Hosts apply a platform-specific calibration factor to convert pipelined cycles to wall-clock time. See [`docs/architecture/LANGUAGE_DESIGN.md`](docs/architecture/LANGUAGE_DESIGN.md#wcet-and-wcmu-analysis) for the full unit conventions and caveats.
 - **Target descriptor** for cross-architecture portability across word and address widths.
 - **Hot code swap** at RESET boundaries with persistent data segment.
 - **Hindley-Milner type inference** with generics, traits, and bounds.

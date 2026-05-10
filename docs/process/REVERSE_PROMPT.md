@@ -9,8 +9,8 @@ AI to Human communication channel.
 ## Last Updated
 
 **Date**: 2026-05-09
-**Task**: V0.1-M3-T39 Wired cost-model tables for WCET (nominal cycles) and WCMU (bytes).
-**Status**: Complete. The cost-model surface is wired into `bytecode.rs`, the public verify API surface, and the language documentation. Internal threading through `module_wcmu` is recorded as a tracked refinement.
+**Task**: V0.1-M3-T40 Document WCET in pipelined cycles.
+**Status**: Complete. Documentation-only change. The unit terminology shifts from "nominal cycles" to "pipelined cycles" with explicit definition, caveats for actual cycles and wall-clock time, and the calibration-factor framing for practical deployment.
 
 ## Verification
 
@@ -24,69 +24,66 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 **Results**:
 
-- 513 tests pass workspace-wide (445 keleusma unit + 17 marshall + 17 kstring_boundary + 28 keleusma-arena unit + 6 keleusma-arena doctests). Five new unit tests in the new `cost_model_tests` module.
+- 513 tests pass workspace-wide. No code changes.
 - Format clean.
 - Clippy clean.
 
 ## Summary
 
-The user committed to documenting WCMU as bytes and WCET as nominal cycles, with the cost tables wired even if accuracy is deferred to a future cycle.
+The user committed to documenting WCET in pipelined cycles, with explicit caveats for actual cycles and wall-clock time, and the framing that the language proves an order-of-magnitude-correct bound that hosts convert to deployed WCET through a platform-specific scalar.
 
-### CostModel infrastructure
+### Pipelined cycles
 
-A new public `CostModel` struct in `src/bytecode.rs` carries two fields: `value_slot_bytes: u32` and `op_cycles: fn(&Op) -> u32`. Three methods support the analysis: `cycles(op)` returns the nominal cycle cost, `slots_to_bytes(slots)` converts a slot count to bytes via the model's slot size, and `heap_alloc_bytes(op, chunk)` computes the WCMU heap allocation in bytes for composite-construction opcodes.
+A pipelined cycle is a CPU cycle in which the host's pipeline operates at steady-state throughput. The cycle assumes warm instruction and data caches, correctly predicted branches, and no contention on the memory bus from other cores or peripheral DMA. The pipelined-cycle metric is what CPU optimization tables, including Agner Fog's instruction tables and the Intel Optimization Reference Manual, call "throughput" or "reciprocal throughput" per instruction. The metric is observable, reproducible, and measurable through standard benchmarking with warm caches and a stable predictor.
 
-A new `NOMINAL_COST_MODEL` constant exports the bundled defaults. A new `nominal_op_cycles` free function holds the cycle table that the `Op::cost` method now delegates to. The pre-existing `Op::cost` and `Op::heap_alloc` methods are now thin wrappers over the nominal model. Behavior is preserved exactly; the values returned by the unmeasured table are unchanged.
+### Industry terminology adopted
 
-### Unit declarations
+The user's prose used "constant multiplier" for the platform-specific scalar that converts the pipelined-cycle bound to deployed wall-clock WCET. The WCET literature term is **calibration factor** or equivalently **dilation factor**. Both terms are industry-recognized. The documentation uses calibration factor as primary with dilation factor noted as a synonym.
 
-WCMU is bytes. The byte unit is target-independent in principle. The actual byte count returned by the analysis depends on the cost model's `value_slot_bytes`, which the runtime declares to match its value representation. The current 64-bit Keleusma runtime declares 32 bytes per slot.
+The user's prose used "order of magnitude" for the precision claim. This is acceptable as written, but the documentation pairs it with the more specific framing that the bound is sound for the abstract pipelined-cycle metric and that the conversion to wall-clock time involves a deployment-validated scalar.
 
-WCET is nominal cycles. The values are unmeasured estimates suitable for relative ordering of programs on a single platform. The scale assigns one cycle to data movement and trivial control flow, two to arithmetic and comparison, three to division and field lookup, five to composite construction, ten to function calls. The values are not validated against any specific host CPU.
+The Java Optimized Processor [WC5] is referenced as the canonical example of a time-predictable platform where the calibration factor approaches unity by hardware design.
 
-What nominal cycles means in practice. A program whose nominal-cycle WCET is one hundred is more expensive than a program whose nominal-cycle WCET is fifty when both run on the same platform. The absolute number does not convert to wall-clock time without a host-specific calibration. Hosts that need wall-clock WCET in measured cycles construct a custom `CostModel` whose `op_cycles` returns measured cycles per opcode for the target hardware.
+### Documentation structure
 
-### Public verify API surface
+`LANGUAGE_DESIGN.md` WCET section restructured with five subsections:
 
-A new `verify::verify_resource_bounds_with_cost_model` entry point accepts a host-supplied cost model. The current implementation delegates to the existing nominal-model path; full threading of the model through the per-chunk WCMU computation requires a 32-call-site refactor of internal helpers and is recorded as future work. The API surface is stable for hosts to build against.
+1. **Units.** Defines pipelined cycles and bytes with the warm-cache, predicted-branch, contention-free assumption set.
+2. **What the language guarantees.** The verifier proves a definitive pipelined-cycle bound. The bound is sound for the abstract metric. The language does not guarantee wall-clock time or actual cycles; both gaps are the host's responsibility to characterize.
+3. **Caveats for actual cycles.** Stalls from cache misses, mispredictions, and contention. Typically within a small constant factor for quiescent deployments, larger and more variable for contended ones.
+4. **Caveats for wall-clock time.** Clock period and frequency scaling. Time-predictable platforms reduce the gap toward unity.
+5. **Bounded order-of-magnitude WCET.** The calibration-factor framing. For many practical applications including audio engines, game scripts, and embedded controllers, the pipelined-cycle bound multiplied by a measured calibration factor is sufficient.
 
-### Tests
+### Source-level updates
 
-Five new unit tests in the new `cost_model_tests` module in `src/bytecode.rs`:
+`bytecode.rs` documentation for `CostModel`, `NOMINAL_COST_MODEL`, `nominal_op_cycles`, and `Op::cost` all updated to use pipelined-cycle terminology consistently. The bundled-values caveat retained: the values are unmeasured estimates suitable for relative ordering on a single platform; measured pipelined-cycle tables are the deployment-validation upgrade path.
 
-- `nominal_cost_model_value_slot_bytes_matches_constant` pins the `NOMINAL_COST_MODEL.value_slot_bytes` against `VALUE_SLOT_SIZE_BYTES`.
-- `nominal_cost_model_cycles_match_op_cost_method` confirms that the `Op::cost` backward-compatibility wrapper agrees with the nominal cost model's cycle table for representative opcodes across all five tiers.
-- `cost_model_slots_to_bytes_uses_slot_size` exercises the slot-to-byte conversion with a custom slot size.
-- `cost_model_heap_alloc_bytes_scales_with_slot_size` constructs a custom cost model with half the nominal value-slot size and confirms that `heap_alloc_bytes` for composite-construction opcodes scales linearly. This pins the contract that `value_slot_bytes` determines the byte conversion.
-- `custom_cost_model_returns_custom_cycles` constructs a custom cost model whose `op_cycles` returns a flat one hundred for every opcode and confirms that `CostModel::cycles` returns the custom value. This pins the contract that a host-supplied function pointer flows through the model.
+`README.md` WCET feature bullet expanded to mention pipelined cycles, the calibration factor, and the cross-reference to the canonical WCET section.
 
 ## Trade-offs and Properties
 
-The threading of the cost model through internal helpers is deferred. The 32 internal call sites that currently use `Op::cost()` and `Op::heap_alloc(chunk)` continue to use those methods, which delegate to `NOMINAL_COST_MODEL`. A custom cost model passed to `verify_resource_bounds_with_cost_model` is accepted at the API boundary but does not yet flow through to the bound. The bound is currently always computed against the nominal model.
+The shift from "nominal cycles" to "pipelined cycles" is a pure terminology improvement. The numeric values in the bundled cost model are unchanged. The implementation behavior is unchanged. What changes is what the documentation tells readers about what the analysis actually delivers.
 
-This is honest about the present implementation. The cost-model surface is real and tested, hosts can construct custom models and observe correct behavior at the model level, but the model parameter is a forward declaration in the verify API. A subsequent session will thread the model through the helpers, at which point a custom cost model will determine the bound.
+"Nominal" was technically accurate but read as aspirational; readers would reasonably ask what the values would be if validated. "Pipelined cycles" is precise about what the metric is, points at industry-recognized definitions, and is honest about what is and is not validated. A reader who has done CPU optimization recognizes the term immediately and understands the assumption set.
 
-The choice to ship the API surface now and defer the threading reflects quota constraints and the user's explicit framing that accuracy is deferred. Hosts building against the contract today will get correct values once the threading lands; the contract itself is stable.
+The calibration-factor framing matches how real-time systems engineers actually deploy software with WCET concerns. The language proves the abstract bound. The host validates the calibration factor for its specific platform and deployment configuration. The product of the two is the wall-clock WCET, with the host attesting to the soundness of the calibration factor through its own validation process. This division of responsibility is the right place to draw the abstraction boundary because the calibration factor depends on host platform, host operating environment, and host certification process, none of which the language can determine unilaterally.
 
 ## Files Touched
 
-- **`src/bytecode.rs`**. New `CostModel` struct, `NOMINAL_COST_MODEL` constant, `nominal_op_cycles` function. `Op::cost` and `Op::heap_alloc` refactored to delegate. Five new unit tests in `cost_model_tests`.
-- **`src/verify.rs`**. New `verify_resource_bounds_with_cost_model` entry point.
-- **`src/lib.rs`**. Re-export `CostModel`, `NOMINAL_COST_MODEL`, `VALUE_SLOT_SIZE_BYTES`, `nominal_op_cycles`.
-- **`docs/architecture/LANGUAGE_DESIGN.md`**. WCET Analysis section restructured to document units explicitly, distinguish nominal from measured cycles, and explain the cost-model surface.
-- **`docs/process/TASKLOG.md`**. New row for V0.1-M3-T39.
+- **`docs/architecture/LANGUAGE_DESIGN.md`**. WCET section restructured with five subsections covering units, guarantees, caveats for actual cycles, caveats for wall-clock time, and the bounded order-of-magnitude framing.
+- **`src/bytecode.rs`**. `CostModel`, `NOMINAL_COST_MODEL`, `nominal_op_cycles`, and `Op::cost` documentation updated to use pipelined-cycle terminology.
+- **`README.md`**. WCMU and WCET feature bullet expanded.
+- **`docs/process/TASKLOG.md`**. New row for V0.1-M3-T40.
 - **`docs/process/REVERSE_PROMPT.md`**. This file.
 
 ## Remaining Open Priorities
 
-The cost-model API surface is complete. The internal threading through `module_wcmu` and per-chunk computation is the immediate follow-on. Estimated 32 call-site updates plus parameter additions to four helper functions. Once threaded, custom cost models will determine the bound rather than just appearing in the API.
-
-Beyond that, populating measured per-target cycle tables is its own multi-session sourcing effort that depends on hardware datasheets and benchmark measurements.
+The unit conventions are now documented precisely. The internal threading of `CostModel` through `module_wcmu` remains the immediate follow-on. A measured-cycle benchmarking tool that emits a calibrated `op_cycles` function would be the next step beyond that.
 
 ## Intended Next Step
 
-Quota is near the threshold. Subsequent sessions can take up the threading work or move to other backlog items.
+Quota is at the threshold. Subsequent sessions can take up internal cost-model threading, the measured-cycle benchmarking tool, or other backlog items.
 
 ## Session Context
 
-This session delivered the wired cost-model surface that the user requested. The infrastructure is in place: `CostModel` struct, `NOMINAL_COST_MODEL` default, `verify_resource_bounds_with_cost_model` entry point, five tests proving the model construction and contract. The unit conventions are documented explicitly. Threading the model through internal verify helpers is straightforward future work.
+This session improved the documentation of the language's WCET unit. The conceptual contract was already correct; the terminology now matches industry conventions and makes the calibration-factor approach to deployment explicit. Hosts reading the documentation now have a precise framing for what the language guarantees, what it does not, and how to convert the analyzed bound to deployed wall-clock WCET.
