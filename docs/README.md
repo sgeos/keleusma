@@ -35,6 +35,9 @@ This documentation is structured as a **knowledge graph** encoded in the file sy
 | Terminology | [reference/GLOSSARY.md](./reference/GLOSSARY.md) |
 | Related work and citations | [reference/RELATED_WORK.md](./reference/RELATED_WORK.md) |
 | Development roadmap | [roadmap/README.md](./roadmap/README.md) |
+| Standalone scripts to run | [`examples/scripts/`](../examples/scripts) |
+| Rust embedding examples | [`examples/`](../examples) |
+| End-to-end SDL3 audio demo with hot swap | [`examples/piano_roll.rs`](../examples/piano_roll.rs) |
 
 ## Meta
 

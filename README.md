@@ -231,11 +231,18 @@ Five crates:
 
 Rust embedding examples live under [`examples/`](examples). Run any of them with `cargo run --example <name>`.
 
-A larger end-to-end example, [`piano_roll`](examples/piano_roll.rs), is a three-channel SDL3 audio host driven by a Keleusma tick-based control loop. It is gated behind the `sdl3-example` feature because SDL3 is built from source via CMake. Run with:
+A larger end-to-end example, [`piano_roll`](examples/piano_roll.rs), is a three-channel SDL3 audio host driven by a Keleusma tick-based control loop. It exercises the principal capabilities Keleusma is designed for: bounded-step execution under a real-time deadline (audio rendering), thread-safe handoff between the Keleusma main thread and the SDL3 audio callback, multi-voice control flow through the data segment, and hot code swap between two precompiled songs at the reset boundary.
+
+The example is gated behind the `sdl3-example` feature because SDL3 is built from source via CMake. Run with:
 
 ```sh
 cargo run --release --example piano_roll --features sdl3-example
 ```
+
+Controls:
+
+- Press `s` then Enter to swap songs.
+- Press Enter alone to quit.
 
 ## Documentation
 

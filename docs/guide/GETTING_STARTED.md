@@ -150,3 +150,4 @@ The walkthrough above produces a running Keleusma host. Common next steps includ
 - Read [WHY_REJECTED.md](./WHY_REJECTED.md) when the verifier rejects a program. The document maps error messages to root causes and proposes rewrites.
 - Explore [`examples/scripts/`](../../examples/scripts) for short scripts demonstrating common language features. Each script runs through `keleusma run`.
 - Explore [`examples/`](../../examples) for Rust embedding examples that demonstrate WCMU computation, native attestation, error propagation through yield, and string interoperability.
+- Run [`examples/piano_roll.rs`](../../examples/piano_roll.rs) for a feature-gated end-to-end SDL3 audio demonstration. Three voices sequenced by a Keleusma tick loop with hot code swap between two precompiled songs. Run with `cargo run --release --example piano_roll --features sdl3-example`. Press `s` then Enter to swap; press Enter alone to quit.

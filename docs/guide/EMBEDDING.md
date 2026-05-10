@@ -235,20 +235,26 @@ The data segment, if declared, persists across error events. Long-running stream
 
 ## Hot Code Swapping
 
-The VM supports replacing the loaded module at the reset boundary of a `loop` script. The host calls `Vm::replace_module` between a `VmState::Reset` and the next `resume`.
+The VM supports replacing the loaded module at the reset boundary of a `loop` script. The host calls `Vm::replace_module` after observing `VmState::Reset` and starts the new module's entry point with `Vm::call`. The signature takes the new module and an initial data-segment vector whose length must match the new module's declared schema.
 
 ````rust
-match vm.call(&[seed])? {
+match vm.resume(input)? {
     VmState::Reset => {
         let new_module = recompile_or_load_new_version()?;
-        vm.replace_module(new_module)?;
-        vm.resume(Value::Int(next_seed))?;
+        // Re-initialise the data segment. Length must match the
+        // new module's declared `data` block size; preserve or
+        // migrate values as appropriate.
+        let initial_data = vec![Value::Int(0); new_module_data_slot_count];
+        vm.replace_module(new_module, initial_data)?;
+        // The swap clears coroutine state. Drive the new module
+        // from the entry point, not via `resume`.
+        vm.call(&[Value::Int(next_seed)])?;
     }
-    other => panic!(),
+    other => { /* ... */ }
 }
 ````
 
-The dialogue type, the yielded type and the resume type, must remain stable across swaps. The data segment may carry forward, may be re-initialized to the new schema, or may be replaced by host migration code. See [EXECUTION_MODEL.md](../architecture/EXECUTION_MODEL.md) for the full hot-swap specification.
+The dialogue type, the yielded type and the resume type, must remain stable across swaps. The data segment may carry forward (pass current values), may be re-initialized to the new schema, or may be replaced by host migration code. Native function registrations live on the VM, not on the module, and persist across swaps. See [EXECUTION_MODEL.md](../architecture/EXECUTION_MODEL.md) for the full hot-swap specification, and [`examples/piano_roll.rs`](../../examples/piano_roll.rs) for a runnable end-to-end demonstration.
 
 ## Trust-Skip Construction
 
@@ -268,6 +274,7 @@ This is intentional misuse if used to admit programs that would fail the safe ve
 - [`examples/string_ops.rs`](../../examples/string_ops.rs) shows string concatenation and slicing through utility natives.
 - [`examples/yield_error.rs`](../../examples/yield_error.rs) shows error propagation through yield with a script-defined `Result`-shaped enum.
 - [`examples/method_call.rs`](../../examples/method_call.rs) shows method dispatch through receiver-style syntax.
+- [`examples/piano_roll.rs`](../../examples/piano_roll.rs) is a feature-gated end-to-end SDL3 audio host. It exercises bounded-step execution under a real-time audio deadline, thread-safe handoff between the Keleusma main thread and the SDL3 audio callback, multi-voice control flow through the data segment, and hot code swap between two precompiled songs (`piano_roll.kel` and `piano_roll_2.kel`). Run with `cargo run --release --example piano_roll --features sdl3-example`. Press `s` then Enter to swap; press Enter alone to quit.
 - [LANGUAGE_DESIGN.md](../architecture/LANGUAGE_DESIGN.md) describes the language model.
 - [EXECUTION_MODEL.md](../architecture/EXECUTION_MODEL.md) describes the runtime model.
 - [WHY_REJECTED.md](./WHY_REJECTED.md) describes verifier rejection categories.

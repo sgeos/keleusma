@@ -18,6 +18,7 @@ Onboarding-oriented documentation for new users and embedders. Where the [archit
 |------|---------|
 | [`examples/scripts/`](../../examples/scripts) | Standalone `.kel` files demonstrating language features. Run any of them with `keleusma run examples/scripts/<file>.kel` |
 | [`examples/`](../../examples) | Rust embedding examples. Run with `cargo run --example <name>` |
+| [`examples/piano_roll.rs`](../../examples/piano_roll.rs) | End-to-end SDL3 audio host with hot code swap between two songs. Feature-gated. Run with `cargo run --release --example piano_roll --features sdl3-example` |
 | [`keleusma-cli/`](../../keleusma-cli) | The standalone command-line frontend |
 
 ## Reference Cross-Links
