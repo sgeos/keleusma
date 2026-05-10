@@ -1,5 +1,5 @@
 [workspace]
-members = ["keleusma-macros", "keleusma-arena", "keleusma-bench"]
+members = ["keleusma-macros", "keleusma-arena", "keleusma-bench", "keleusma-cli"]
 
 [package]
 name = "keleusma"
