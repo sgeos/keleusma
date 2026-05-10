@@ -149,11 +149,26 @@ struct Lexer<'a> {
 
 impl<'a> Lexer<'a> {
     fn new(source: &'a str) -> Self {
+        let bytes = source.as_bytes();
+        // If the source begins with a shebang line, skip past the next
+        // newline so the lexer starts on line 2. This allows scripts to
+        // be Unix-executable through a `#!/usr/bin/env keleusma` prefix.
+        // Line numbers in error messages are preserved relative to the
+        // original source: the shebang is line 1 and the first lexed
+        // token reports line 2.
+        let (start, line, line_start) = if bytes.starts_with(b"#!") {
+            match bytes.iter().position(|&b| b == b'\n') {
+                Some(nl) => (nl + 1, 2, nl + 1),
+                None => (bytes.len(), 1, 0),
+            }
+        } else {
+            (0, 1, 0)
+        };
         Self {
-            source: source.as_bytes(),
-            pos: 0,
-            line: 1,
-            line_start: 0,
+            source: bytes,
+            pos: start,
+            line,
+            line_start,
             pending: VecDeque::new(),
         }
     }

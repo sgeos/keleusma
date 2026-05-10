@@ -51,11 +51,20 @@ fn main() -> ExitCode {
             println!("keleusma {}", env!("CARGO_PKG_VERSION"));
             ExitCode::SUCCESS
         }
-        other if other.ends_with(".kel") => run_file(other),
         other => {
-            eprintln!("error: unknown subcommand `{}`", other);
-            print_help();
-            ExitCode::FAILURE
+            // Treat any remaining argument as a script path. This
+            // covers both `keleusma file.kel` (extension shorthand)
+            // and `keleusma /path/to/extensionless-shebang-script`
+            // when the kernel invokes us through a `#!/usr/bin/env
+            // keleusma` line. If the file is missing, the error
+            // surfaces in `run_file`.
+            if std::path::Path::new(other).is_file() {
+                run_file(other)
+            } else {
+                eprintln!("error: unknown subcommand or missing file `{}`", other);
+                print_help();
+                ExitCode::FAILURE
+            }
         }
     }
 }
@@ -90,23 +99,61 @@ fn run_subcommand(args: &[String]) -> ExitCode {
 }
 
 fn run_file(path: &str) -> ExitCode {
-    let source = match fs::read_to_string(path) {
-        Ok(s) => s,
+    let bytes = match fs::read(path) {
+        Ok(b) => b,
         Err(e) => {
             eprintln!("error: reading {}: {}", path, e);
             return ExitCode::FAILURE;
         }
     };
-    match execute_source(&source) {
-        Ok(value) => {
-            print_value(&value);
-            ExitCode::SUCCESS
+    // Detect compiled bytecode by magic. The bytecode loader strips
+    // a leading shebang line, so check both at offset 0 and after a
+    // `#!...\n` envelope.
+    if looks_like_bytecode(&bytes) {
+        match execute_bytecode(&bytes) {
+            Ok(value) => {
+                print_value(&value);
+                ExitCode::SUCCESS
+            }
+            Err(e) => {
+                eprintln!("error: {}", e);
+                ExitCode::FAILURE
+            }
         }
-        Err(e) => {
-            eprintln!("error: {}", e);
-            ExitCode::FAILURE
+    } else {
+        let source = match core::str::from_utf8(&bytes) {
+            Ok(s) => s,
+            Err(_) => {
+                eprintln!(
+                    "error: {} is neither valid UTF-8 source nor recognised bytecode",
+                    path
+                );
+                return ExitCode::FAILURE;
+            }
+        };
+        match execute_source(source) {
+            Ok(value) => {
+                print_value(&value);
+                ExitCode::SUCCESS
+            }
+            Err(e) => {
+                eprintln!("error: {}", e);
+                ExitCode::FAILURE
+            }
         }
     }
+}
+
+fn looks_like_bytecode(bytes: &[u8]) -> bool {
+    let after_shebang = if bytes.starts_with(b"#!") {
+        match bytes.iter().position(|&b| b == b'\n') {
+            Some(nl) => &bytes[nl + 1..],
+            None => return false,
+        }
+    } else {
+        bytes
+    };
+    after_shebang.starts_with(b"KELE")
 }
 
 fn compile_subcommand(args: &[String]) -> ExitCode {
@@ -368,7 +415,17 @@ fn execute_source(source: &str) -> Result<Value, String> {
     let module = compile_source(source)?;
     let arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
     let mut vm = Vm::new(module, &arena).map_err(|e| format!("verify: {:?}", e))?;
-    register_utility_natives(&mut vm);
+    drive_to_completion(&mut vm)
+}
+
+fn execute_bytecode(bytes: &[u8]) -> Result<Value, String> {
+    let arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+    let mut vm = Vm::load_bytes(bytes, &arena).map_err(|e| format!("load_bytes: {:?}", e))?;
+    drive_to_completion(&mut vm)
+}
+
+fn drive_to_completion(vm: &mut Vm) -> Result<Value, String> {
+    register_utility_natives(vm);
     match vm.call(&[]).map_err(|e| format!("vm: {:?}", e))? {
         VmState::Finished(v) => Ok(v),
         VmState::Yielded(v) => Err(format!(

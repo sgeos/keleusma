@@ -962,7 +962,7 @@ pub const BYTECODE_MAGIC: [u8; 4] = *b"KELE";
 
 /// Wire format version for serialized bytecode. Bytecode produced under a
 /// different version is rejected at load time.
-pub const BYTECODE_VERSION: u16 = 8;
+pub const BYTECODE_VERSION: u16 = 1;
 
 /// Word size in bits assumed by this runtime build, encoded as the
 /// base-2 exponent. Actual width in bits is `1 << RUNTIME_WORD_BITS_LOG2`.
@@ -1036,6 +1036,30 @@ const CRC32_RESIDUE: u32 = 0x2144DF1C;
 /// [`CRC32_RESIDUE`]. Visibility is `pub(crate)` for use by integrity
 /// tests that need to construct bytecode with a hand-tweaked field and
 /// a recomputed checksum.
+/// If `bytes` begins with a shebang line (`#!...`), return the slice
+/// starting after the next `\n`. Otherwise return `bytes` unchanged.
+///
+/// Allows compiled bytecode files to be Unix-executable through a
+/// `#!/usr/bin/env keleusma` prefix. The bytecode loader strips the
+/// envelope before validating the magic and CRC residue. The CRC trailer
+/// covers only the post-strip range, so the envelope is not part of the
+/// signed payload.
+///
+/// Note that the post-strip slice generally is not 8-byte aligned, so
+/// shebang-prefixed bytecode does not satisfy the alignment requirement
+/// of [`Module::access_bytes`] (zero-copy). Hosts that want the zero-copy
+/// path must hand the loader an aligned, shebang-free buffer; the
+/// allocating [`Module::from_bytes`] path copies to `AlignedVec` and
+/// works regardless.
+fn strip_shebang_prefix(bytes: &[u8]) -> &[u8] {
+    if bytes.starts_with(b"#!") {
+        if let Some(nl) = bytes.iter().position(|&b| b == b'\n') {
+            return &bytes[nl + 1..];
+        }
+    }
+    bytes
+}
+
 pub(crate) fn crc32(bytes: &[u8]) -> u32 {
     let mut crc: u32 = 0xFFFFFFFF;
     for &byte in bytes {
@@ -1232,6 +1256,7 @@ impl Module {
     /// the bounds checks.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, LoadError> {
         use alloc::format;
+        let bytes = strip_shebang_prefix(bytes);
         if bytes.len() < HEADER_LEN + FOOTER_LEN {
             return Err(LoadError::Truncated);
         }
@@ -1331,6 +1356,7 @@ impl Module {
     /// header validation failures.
     pub fn access_bytes(bytes: &[u8]) -> Result<&ArchivedModule, LoadError> {
         use alloc::format;
+        let bytes = strip_shebang_prefix(bytes);
         if bytes.len() < HEADER_LEN + FOOTER_LEN {
             return Err(LoadError::Truncated);
         }
