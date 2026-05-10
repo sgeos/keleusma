@@ -2,8 +2,15 @@
 name = "keleusma-macros"
 version = "0.1.0"
 edition = "2024"
-description = "Procedural macros for the Keleusma scripting language"
+description = "Procedural macros for the Keleusma scripting language. Implementation detail of the keleusma crate; depend on `keleusma` rather than this crate directly."
 license = "0BSD"
+homepage = "https://github.com/sgeos/keleusma"
+repository = "https://github.com/sgeos/keleusma"
+documentation = "https://docs.rs/keleusma-macros"
+readme = "README.md"
+rust-version = "1.85"
+keywords = ["keleusma", "proc-macro", "derive"]
+categories = ["development-tools::procedural-macro-helpers"]
 
 [lib]
 proc-macro = true

@@ -1243,9 +1243,9 @@ impl Module {
     /// runs `rkyv::access` on the body to obtain a `&'a ArchivedModule`
     /// without deserialization.
     ///
-    /// The body must be 8-byte aligned within the slice. Because
-    /// [`HEADER_LEN`] is 16, the body is 8-byte aligned within the slice
-    /// when the slice base itself is 8-byte aligned. Hosts that compute
+    /// The body must be 8-byte aligned within the slice. Because the
+    /// header is sixteen bytes, the body is 8-byte aligned within the
+    /// slice when the slice base itself is 8-byte aligned. Hosts that compute
     /// or load bytecode into an `rkyv::util::AlignedVec` or a static
     /// buffer with `#[repr(align(8))]` satisfy this requirement.
     /// Bytecode placed by the linker into a section that aligns to at

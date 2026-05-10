@@ -74,8 +74,7 @@ use keleusma::compiler::compile;
 use keleusma::lexer::tokenize;
 use keleusma::parser::parse;
 use keleusma::vm::{DEFAULT_ARENA_CAPACITY, Vm, VmError, VmState};
-use keleusma::bytecode::Module;
-use keleusma::{Arena, Value};
+use keleusma::{Arena, Module, Value};
 
 use sdl3::audio::{AudioCallback, AudioFormat, AudioSpec, AudioStream};
 
@@ -219,8 +218,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let module_b = build_module(SCRIPT_B)?;
 
     let arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
-    let mut vm =
-        Vm::new(module_a.clone(), &arena).map_err(|e| format!("verify: {:?}", e))?;
+    let mut vm = Vm::new(module_a.clone(), &arena).map_err(|e| format!("verify: {:?}", e))?;
 
     init_data(&mut vm)?;
 
@@ -343,11 +341,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         {
                             VmState::Yielded(_) => break,
                             other => {
-                                return Err(format!(
-                                    "swapped module did not yield: {:?}",
-                                    other
-                                )
-                                .into());
+                                return Err(
+                                    format!("swapped module did not yield: {:?}", other).into()
+                                );
                             }
                         }
                     }
@@ -426,9 +422,6 @@ fn register_natives(vm: &mut Vm, voices: &SharedVoices) {
 fn as_i64(v: &Value) -> Result<i64, VmError> {
     match v {
         Value::Int(n) => Ok(*n),
-        other => Err(VmError::TypeError(format!(
-            "expected Int, got {:?}",
-            other
-        ))),
+        other => Err(VmError::TypeError(format!("expected Int, got {:?}", other))),
     }
 }

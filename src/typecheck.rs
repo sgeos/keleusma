@@ -32,7 +32,7 @@
 //!
 //! The pass uses Robinson-style unification through the [`unify`]
 //! function and the [`Subst`] type. Inferred positions allocate fresh
-//! type variables through [`Ctx::fresh`]. Unannotated let bindings,
+//! type variables through the internal context. Unannotated let bindings,
 //! unannotated function parameters, and recursive expression types
 //! receive [`Type::Var`] placeholders that are resolved through
 //! constraint solving as the pass walks the program.

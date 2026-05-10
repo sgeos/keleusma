@@ -46,14 +46,34 @@ jobs:
           components: rustfmt
       - run: cargo fmt --check
 
-  msrv:
-    name: MSRV (1.85)
+  msrv-arena:
+    name: MSRV keleusma-arena (1.85)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.85
       - run: cargo check -p keleusma-arena
       - run: cargo check -p keleusma-arena --no-default-features
+
+  msrv-keleusma:
+    name: MSRV keleusma (1.87)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.87
+      - run: cargo check -p keleusma
+      - run: cargo check -p keleusma --tests
+
+  no-std:
+    name: no_std build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: thumbv7em-none-eabihf
+      - name: Build keleusma against thumbv7em-none-eabihf
+        run: cargo build -p keleusma --target thumbv7em-none-eabihf
 
   miri:
     name: Miri

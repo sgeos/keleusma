@@ -1006,7 +1006,7 @@ pub fn verify_resource_bounds(module: &Module, arena_capacity: usize) -> Result<
     verify_resource_bounds_with_natives(module, arena_capacity, &[])
 }
 
-/// Verify resource bounds against a host-supplied [`CostModel`].
+/// Verify resource bounds against a host-supplied [`crate::bytecode::CostModel`].
 ///
 /// **Unit contract.** WCMU is reported in **bytes** and compared
 /// against the arena capacity. WCET is reported in **nominal cycles**

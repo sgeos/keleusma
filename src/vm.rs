@@ -221,8 +221,8 @@ impl<'a> BytecodeStore<'a> {
 /// arena at the moment of reset. Hosts that want to reset the arena
 /// from outside the VM must do so when the VM is not borrowing the
 /// arena, which means the VM must be dropped first or the host must
-/// invoke [`Vm::reset_arena`] which routes through the unsafe path
-/// with the same safety justification.
+/// invoke [`Vm::reset_after_error`] which routes through the unsafe
+/// path with the same safety justification.
 pub struct Vm<'a, 'arena> {
     bytecode: BytecodeStore<'a>,
     /// Per-op decode cache, populated at VM construction and at every
