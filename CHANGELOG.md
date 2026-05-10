@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-05-10
+
+### Fixed
+
+- **MSRV claim corrected.** `keleusma 0.1.0` declared `rust-version = "1.87"`, but the source uses let-chains (`if let X = a && let Y = b`) which were stabilized in Rust 1.88. The CI MSRV job surfaced the mismatch immediately after the 0.1.0 publish. This release bumps `rust-version` to `1.88` to match the actual feature use. Users on Rust 1.87 should pin `keleusma = "0.1.1"` or upgrade their toolchain. The CI workflow's `msrv-keleusma` job is correspondingly bumped from 1.87 to 1.88 so future MSRV drift is caught locally rather than at publish time. No source changes; runtime behavior is identical to 0.1.0.
+
 ## [0.1.0] - 2026-05-10
 
 Initial release.

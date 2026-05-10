@@ -3,7 +3,7 @@ members = ["keleusma-macros", "keleusma-arena", "keleusma-bench", "keleusma-cli"
 
 [package]
 name = "keleusma"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 description = "Total Functional Stream Processor with definitive WCET and WCMU verification, targeting no_std + alloc embedded scripting"
 license = "0BSD"
@@ -13,7 +13,7 @@ homepage = "https://github.com/sgeos/keleusma"
 repository = "https://github.com/sgeos/keleusma"
 documentation = "https://docs.rs/keleusma"
 readme = "README.md"
-rust-version = "1.87"
+rust-version = "1.88"
 
 [package.metadata.docs.rs]
 rustdoc-args = ["--cfg", "docsrs"]

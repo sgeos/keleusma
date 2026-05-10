@@ -2,7 +2,7 @@
 name = "keleusma-cli"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.87"
+rust-version = "1.88"
 description = "Standalone command-line frontend for Keleusma. Provides a script runner, a bytecode compiler, and an interactive REPL so users can work with Keleusma scripts without writing any Rust host code."
 license = "0BSD"
 homepage = "https://github.com/sgeos/keleusma"

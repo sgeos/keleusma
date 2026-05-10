@@ -56,11 +56,11 @@ jobs:
       - run: cargo check -p keleusma-arena --no-default-features
 
   msrv-keleusma:
-    name: MSRV keleusma (1.87)
+    name: MSRV keleusma (1.88)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.87
+      - uses: dtolnay/rust-toolchain@1.88
       - run: cargo check -p keleusma
       - run: cargo check -p keleusma --tests
 

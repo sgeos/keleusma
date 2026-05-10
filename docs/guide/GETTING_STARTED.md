@@ -2,7 +2,7 @@
 
 > **Navigation**: [Guide](./README.md) | [Documentation Root](../README.md)
 
-This document walks a new user through installing the Keleusma command-line frontend, writing and running a first script, and embedding the same script in a Rust host program. The walkthrough assumes a working Rust toolchain at edition 2024 and minimum supported Rust version 1.87.
+This document walks a new user through installing the Keleusma command-line frontend, writing and running a first script, and embedding the same script in a Rust host program. The walkthrough assumes a working Rust toolchain at edition 2024 and minimum supported Rust version 1.88.
 
 ## Install the CLI
 

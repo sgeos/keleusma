@@ -2,7 +2,7 @@
 name = "keleusma-bench"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.87"
+rust-version = "1.88"
 description = "Cost-model calibration tool for Keleusma. Measures pipelined cycles per opcode on a host CPU and emits a CostModel implementation suitable for the runtime's WCET analysis."
 license = "0BSD"
 homepage = "https://github.com/sgeos/keleusma"
