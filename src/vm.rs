@@ -249,7 +249,7 @@ pub struct Vm<'a, 'arena> {
     data: Vec<Value>,
     /// Host-owned dual-end bump-allocated arena. Borrowed for the
     /// lifetime of the VM. Native functions that allocate dynamic
-    /// strings pass `vm.arena()` to [`keleusma_arena::KString::alloc`].
+    /// strings pass `vm.arena()` to [`crate::kstring::KString::alloc`].
     arena: &'arena keleusma_arena::Arena,
     started: bool,
 }
@@ -801,7 +801,7 @@ impl<'a, 'arena> Vm<'a, 'arena> {
     /// The function gains access to the host-owned arena through the
     /// [`NativeCtx`] argument. Use this for natives that produce
     /// arena-allocated dynamic strings via
-    /// [`keleusma_arena::KString::alloc`] and return them as
+    /// [`crate::kstring::KString::alloc`] and return them as
     /// [`Value::KStr`]. The boundary type carries epoch-tagged
     /// stale-pointer detection. Outstanding handles become
     /// [`keleusma_arena::Stale`] on the next reset.
@@ -2747,7 +2747,7 @@ mod tests {
         // advances. The bottom region is preserved because the
         // operand stack and call frames are bottom-allocated and
         // carry state across the reset.
-        use keleusma_arena::KString;
+        use crate::kstring::KString;
 
         let src = "loop main(input: i64) -> i64 { let input = yield input; input }";
         let module = build_module(src);

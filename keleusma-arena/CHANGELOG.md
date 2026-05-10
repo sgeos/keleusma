@@ -19,12 +19,12 @@ Adds the epoch system for stale-pointer detection on safe arena handles. The 0.1
 - `Arena::epoch` and `Arena::epoch_remaining` for observability.
 - `EpochSaturated` error type returned by the safe reset path when the epoch counter cannot advance further. `u64::MAX` epochs are sufficient for almost all deployments; the type exists to make the saturating refusal explicit.
 - `ArenaHandle<T: ?Sized>`, a generic safe wrapper around an arena pointer that captures the epoch at construction. The `get(&arena)` accessor returns `Result<&T, Stale>`, so a handle from a prior epoch is detected at access rather than producing undefined behavior.
-- `KString = ArenaHandle<str>` alias for the common arena-allocated string case. `KString::alloc(arena, s)` copies a `&str` into the arena's top region and returns a stale-detecting handle.
+- `ArenaHandle::from_raw_parts(ptr: NonNull<T>, epoch: u64) -> Self`, an unsafe constructor for downstream crates that allocate typed storage in the arena and want to wrap the resulting pointer in a stale-detecting handle.
 - `Stale` error type returned by `ArenaHandle::get` when the captured epoch no longer matches the arena's current epoch.
 
 ### Tested
 
-- Six new tests covering the epoch surface: handle access in the same epoch, handle access after reset (`Stale`), epoch saturation refusal, `force_reset_epoch` recovery, `reset_top_unchecked` preserving bottom-region collections, and `KString` round-trip. Total tests: 28 unit plus 6 doctests.
+- Six new tests covering the epoch surface: handle round-trip via `ArenaHandle::from_raw_parts`, handle access after reset (`Stale`), `Copy` semantics on the handle, epoch saturation refusal, `force_reset_epoch` recovery, and `reset_top_unchecked` preserving bottom-region collections.
 - The existing 0.1.0 tests continue to pass unchanged.
 
 ### Notes

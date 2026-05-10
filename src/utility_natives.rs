@@ -3,7 +3,8 @@ use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use keleusma_arena::{Arena, KString};
+use crate::kstring::KString;
+use keleusma_arena::Arena;
 
 use crate::bytecode::Value;
 use crate::vm::{NativeCtx, Vm, VmError};

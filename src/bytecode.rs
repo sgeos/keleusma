@@ -3,7 +3,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use rkyv::{Archive, Deserialize, Serialize};
 
-use keleusma_arena::KString;
+use crate::kstring::KString;
 
 /// A compile-time constant, the variant of [`Value`] that the compiler
 /// emits into the bytecode's constant pool.
@@ -89,7 +89,7 @@ pub enum Value {
     /// reside in the data segment.
     DynStr(String),
     /// Dynamic string allocated in the host-owned arena's top region.
-    /// Carries a [`keleusma_arena::KString`] handle that becomes
+    /// Carries a [`crate::kstring::KString`] handle that becomes
     /// [`keleusma_arena::Stale`] on access if the arena has been reset
     /// since the handle was issued. Subject to the cross-yield
     /// prohibition because the underlying storage does not survive a

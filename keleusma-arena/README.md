@@ -116,20 +116,34 @@ For a concrete example of computing a budget from a static analysis and using it
 
 ## Epoch and Stale-Pointer Detection
 
-`Arena::reset` advances an internal `epoch` counter and clears both regions in one operation. Safe wrappers in the `ArenaHandle<T>` family capture the epoch at the moment of allocation and validate it on access through `handle.get(&arena)`, which returns `Result<&T, Stale>`. A handle from a prior epoch is detected at the access site and produces a typed `Stale` error rather than returning a dangling reference.
+`Arena::reset` advances an internal `epoch` counter and clears both regions in one operation. The safe wrapper `ArenaHandle<T>` captures the epoch at construction and validates it on access through `handle.get(&arena)`, which returns `Result<&T, Stale>`. A handle from a prior epoch is detected at the access site and produces a typed `Stale` error rather than returning a dangling reference.
+
+The crate exposes `ArenaHandle<T>` as the generic mechanism. Higher-level helpers — for example a string handle in a downstream crate — allocate typed storage in the arena and wrap the resulting pointer through the unsafe `ArenaHandle::from_raw_parts(ptr, epoch)` constructor. The example below allocates a single `u64` and demonstrates the lifecycle.
 
 ```rust
-use keleusma_arena::{Arena, KString};
+use core::alloc::Layout;
+use core::ptr::NonNull;
+use allocator_api2::alloc::Allocator;
+use keleusma_arena::{Arena, ArenaHandle};
 
 let mut arena = Arena::with_capacity(4096);
-let s = KString::alloc(&arena, "hello").unwrap();
-assert_eq!(s.get(&arena).unwrap(), "hello");
 
-arena.reset().unwrap();             // advances epoch
-assert!(s.get(&arena).is_err());    // Stale: handle was from prior epoch
+// Allocate a u64 from the arena's top region and wrap in a handle.
+let layout = Layout::new::<u64>();
+let raw = arena.top_handle().allocate(layout).unwrap();
+let typed: NonNull<u64> = raw.cast();
+unsafe { typed.as_ptr().write(42) };
+let handle: ArenaHandle<u64> = unsafe {
+    ArenaHandle::from_raw_parts(typed, arena.epoch())
+};
+assert_eq!(*handle.get(&arena).unwrap(), 42);
+
+// Reset advances the epoch and invalidates the prior handle.
+arena.reset().unwrap();
+assert!(handle.get(&arena).is_err());
 ```
 
-`KString = ArenaHandle<str>` is a typed alias for the common arena-allocated string case. Other `T: ?Sized` types compose through `ArenaHandle<T>` directly.
+See `examples/epoch_handle.rs` for the runnable variant. For an arena-backed `&str` handle that encapsulates the byte copy and `*mut str` construction, see the `KString` newtype in the [`keleusma`](https://crates.io/crates/keleusma) crate; that name is intentionally kept in the parent crate because it carries Keleusma-specific semantics around dynamic-string flow.
 
 The epoch counter is `u64` and saturates at `u64::MAX`. The safe `Arena::reset` returns `EpochSaturated` once the counter cannot advance further; recovery is through `Arena::force_reset_epoch`, which is unsafe because the caller must certify that no `ArenaHandle` from any prior epoch is still in use. The unsafe variants `Arena::reset_unchecked` and `Arena::reset_top_unchecked` are available for callers who hold an active borrow into the arena and have certified the same condition for that borrow.
 

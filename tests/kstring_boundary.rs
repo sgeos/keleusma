@@ -136,17 +136,14 @@ fn boundary_copy_out_pattern() {
 #[test]
 fn arena_handle_generic_supports_other_unsized_types() {
     // The ArenaHandle wrapper is generic over `T: ?Sized`. The
-    // `KString` alias specializes it to `str`. For other types the
-    // wrapper is constructed through the appropriate allocation path,
-    // which the crate does not yet expose for non-string types. This
-    // test is a placeholder that documents the generic shape.
-    //
-    // The presence of the type alias and the `Copy` impl is observed
-    // at compile time.
-    fn _expect_arena_handle<T: ?Sized>(_: ArenaHandle<T>) {}
+    // KString newtype wraps `ArenaHandle<str>` and exposes the
+    // generic handle through `as_handle()` for callers that need
+    // the unparameterised mechanism. This test is a placeholder
+    // that documents the generic shape.
+    fn _expect_arena_handle<T: ?Sized>(_: &ArenaHandle<T>) {}
     let arena = Arena::with_capacity(64);
     let handle = KString::alloc(&arena, "x").unwrap();
-    _expect_arena_handle(handle);
+    _expect_arena_handle(handle.as_handle());
 }
 
 #[test]

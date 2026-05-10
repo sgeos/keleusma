@@ -800,9 +800,12 @@ unsafe impl Allocator for TopHandle<'_> {
 /// arena context. The wrapper does not implement `Deref` for that
 /// reason.
 ///
-/// `T: ?Sized` is supported. `T = str` is the canonical use through the
-/// [`KString`] alias, where `NonNull<str>` is a wide pointer that
-/// carries the byte length alongside the data pointer.
+/// `T: ?Sized` is supported. `T = str` and `T = [U]` are the canonical
+/// unsized cases; the wide pointer carries the slice length alongside
+/// the data pointer. Higher-level helpers (for example a string handle
+/// in a downstream crate) build on top of this generic mechanism by
+/// allocating storage in the arena and wrapping the resulting pointer
+/// through [`ArenaHandle::from_raw_parts`].
 ///
 /// # Safety contract
 ///
@@ -846,6 +849,31 @@ impl<T: ?Sized> core::fmt::Debug for ArenaHandle<T> {
 // `NonNull`, which inherits the conservative auto-trait posture.
 
 impl<T: ?Sized> ArenaHandle<T> {
+    /// Construct a handle from raw parts.
+    ///
+    /// Used by higher-level helpers that allocate typed storage in the
+    /// arena (for example a string or boxed-value helper) and want to
+    /// wrap the resulting pointer in a stale-detecting handle.
+    ///
+    /// # Safety
+    ///
+    /// The caller must guarantee both of the following until the next
+    /// arena reset.
+    ///
+    /// - `ptr` references storage that lives in the arena whose
+    ///   `epoch()` returned `epoch` at allocation time, and the storage
+    ///   is initialised and aligned for `T`.
+    /// - The bytes addressed by `ptr` are not aliased by any other
+    ///   live reference for as long as the handle is held.
+    ///
+    /// Mixing handles between arenas is a logic error: passing the
+    /// wrong arena to [`ArenaHandle::get`] would dereference memory
+    /// that belongs to a different allocator if the wrong arena's
+    /// epoch happened to match.
+    pub unsafe fn from_raw_parts(ptr: NonNull<T>, epoch: u64) -> Self {
+        Self { ptr, epoch }
+    }
+
     /// Resolve the handle against the arena that produced it.
     ///
     /// Returns [`Stale`] if the arena has been reset since the handle
@@ -873,44 +901,6 @@ impl<T: ?Sized> ArenaHandle<T> {
     /// Epoch captured when the handle was issued.
     pub fn epoch(&self) -> u64 {
         self.epoch
-    }
-}
-
-/// Lifetime-free arena-backed string handle.
-///
-/// Specialization of [`ArenaHandle`] for `T = str`. Stores a wide
-/// pointer that already carries the string's byte length, plus the
-/// arena epoch at allocation time.
-pub type KString = ArenaHandle<str>;
-
-impl KString {
-    /// Allocate a copy of `s` in the arena's top region and return a
-    /// handle to it.
-    ///
-    /// The bytes are copied; the source slice is not retained. The
-    /// resulting handle is valid until the next [`Arena::reset`].
-    #[cfg(feature = "alloc")]
-    #[cfg_attr(docsrs, doc(cfg(feature = "alloc")))]
-    pub fn alloc(arena: &Arena, s: &str) -> Result<Self, AllocError> {
-        let bytes = s.as_bytes();
-        let buffer = arena.alloc_top_bytes(bytes.len())?;
-        let dst = buffer.as_ptr() as *mut u8;
-        // SAFETY: `buffer` is unique storage of `bytes.len()` bytes
-        // freshly allocated from the arena. The source is a valid byte
-        // slice. The regions do not overlap because the allocator
-        // returns previously unused memory.
-        unsafe { core::ptr::copy_nonoverlapping(bytes.as_ptr(), dst, bytes.len()) };
-        // Construct a `*mut str` from the freshly-written bytes. The
-        // layout of `*mut str` matches `*mut [u8]`.
-        let raw_slice: *mut [u8] = core::ptr::slice_from_raw_parts_mut(dst, bytes.len());
-        let raw_str: *mut str = raw_slice as *mut str;
-        // SAFETY: `raw_str` is non-null because `dst` came from a
-        // successful arena allocation.
-        let nn = unsafe { NonNull::new_unchecked(raw_str) };
-        Ok(ArenaHandle {
-            ptr: nn,
-            epoch: arena.epoch(),
-        })
     }
 }
 
@@ -1156,32 +1146,46 @@ mod tests {
     }
 
     #[cfg(feature = "alloc")]
-    #[test]
-    fn kstring_roundtrip() {
-        let arena = Arena::with_capacity(256);
-        let handle = KString::alloc(&arena, "hello").unwrap();
-        let s = handle.get(&arena).unwrap();
-        assert_eq!(s, "hello");
+    fn alloc_u64(arena: &Arena, value: u64) -> ArenaHandle<u64> {
+        use allocator_api2::alloc::Allocator;
+        use core::alloc::Layout;
+        let layout = Layout::new::<u64>();
+        let raw = arena.top_handle().allocate(layout).expect("alloc");
+        let typed: NonNull<u64> = raw.cast();
+        // SAFETY: `typed` is freshly allocated unique storage of the
+        // correct layout for `u64`.
+        unsafe { typed.as_ptr().write(value) };
+        // SAFETY: `typed` references storage in `arena`'s top region
+        // freshly allocated under the current epoch.
+        unsafe { ArenaHandle::from_raw_parts(typed, arena.epoch()) }
     }
 
     #[cfg(feature = "alloc")]
     #[test]
-    fn kstring_stale_after_reset() {
+    fn arena_handle_from_raw_parts_roundtrip() {
+        let arena = Arena::with_capacity(256);
+        let handle = alloc_u64(&arena, 0xdeadbeef);
+        assert_eq!(*handle.get(&arena).unwrap(), 0xdeadbeef);
+    }
+
+    #[cfg(feature = "alloc")]
+    #[test]
+    fn arena_handle_stale_after_reset() {
         let mut arena = Arena::with_capacity(256);
-        let handle = KString::alloc(&arena, "ephemeral").unwrap();
-        assert_eq!(handle.get(&arena).unwrap(), "ephemeral");
+        let handle = alloc_u64(&arena, 7);
+        assert_eq!(*handle.get(&arena).unwrap(), 7);
         arena.reset().unwrap();
         assert!(matches!(handle.get(&arena), Err(Stale)));
     }
 
     #[cfg(feature = "alloc")]
     #[test]
-    fn kstring_handle_is_copy() {
+    fn arena_handle_is_copy() {
         let arena = Arena::with_capacity(256);
-        let handle = KString::alloc(&arena, "shared").unwrap();
+        let handle = alloc_u64(&arena, 99);
         let copy = handle;
-        assert_eq!(handle.get(&arena).unwrap(), "shared");
-        assert_eq!(copy.get(&arena).unwrap(), "shared");
+        assert_eq!(*handle.get(&arena).unwrap(), 99);
+        assert_eq!(*copy.get(&arena).unwrap(), 99);
     }
 
     #[cfg(feature = "alloc")]
