@@ -9,6 +9,7 @@ pub mod lexer;
 pub mod marshall;
 pub mod monomorphize;
 pub mod parser;
+pub mod target;
 pub mod token;
 pub mod typecheck;
 pub mod utility_natives;

@@ -325,6 +325,29 @@ fn element_type_of(t: &TypeExpr) -> Option<TypeExpr> {
 /// runtime through `Vm::register_*`. See `crate::typecheck` for the
 /// full coverage list.
 pub fn compile(program: &Program) -> Result<Module, CompileError> {
+    compile_with_target(program, &crate::target::Target::host())
+}
+
+/// Compile a program against an explicit target descriptor.
+///
+/// The target's word/address/float widths are baked into the
+/// resulting module's wire-format header. The compiler validates
+/// that the program does not use features unsupported by the target
+/// (such as floating-point operations on a no-float target) and
+/// rejects offending programs at compile time. The current 64-bit
+/// runtime accepts bytecode with widths at most its own; emitting
+/// for a narrower target produces bytecode the runtime can still
+/// load, with integer arithmetic masked to the declared width via
+/// `truncate_int`.
+///
+/// See `crate::target::Target` for available presets and the
+/// portability story.
+pub fn compile_with_target(
+    program: &Program,
+    target: &crate::target::Target,
+) -> Result<Module, CompileError> {
+    target.validate_against_runtime()?;
+    crate::target::validate_program_for_target(program, target)?;
     crate::typecheck::check(program).map_err(|e| CompileError {
         message: format!("type error: {}", e.message),
         span: e.span,
@@ -514,9 +537,9 @@ pub fn compile(program: &Program) -> Result<Module, CompileError> {
         native_names,
         entry_point,
         data_layout,
-        word_bits_log2: crate::bytecode::RUNTIME_WORD_BITS_LOG2,
-        addr_bits_log2: crate::bytecode::RUNTIME_ADDRESS_BITS_LOG2,
-        float_bits_log2: crate::bytecode::RUNTIME_FLOAT_BITS_LOG2,
+        word_bits_log2: target.word_bits_log2,
+        addr_bits_log2: target.addr_bits_log2,
+        float_bits_log2: target.float_bits_log2,
     })
 }
 

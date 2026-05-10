@@ -9,8 +9,8 @@ AI to Human communication channel.
 ## Last Updated
 
 **Date**: 2026-05-09
-**Task**: V0.1-M3-T31. B11 per-op decode optimization.
-**Status**: Complete. Hot dispatch loop now reads decoded ops from a per-chunk cache populated once at construction.
+**Task**: V0.1-M3-T32. B10 portability and target abstraction foundation.
+**Status**: Foundation complete. The compiler accepts a `Target` descriptor; the wire format records the target's declared widths; the compiler rejects programs that use features unsupported by the target. Cross-target codegen and target-specific runtime representations remain future work, documented in BACKLOG.
 
 ## Verification
 
@@ -24,65 +24,87 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 **Results**:
 
-- 497 tests pass workspace-wide. 429 keleusma unit, 17 keleusma marshall integration, 17 keleusma `kstring_boundary` integration, 28 keleusma-arena unit, 6 keleusma-arena doctests.
+- 506 tests pass workspace-wide. 438 keleusma unit (9 new), 17 keleusma marshall integration, 17 keleusma `kstring_boundary` integration, 28 keleusma-arena unit, 6 keleusma-arena doctests.
 - Clippy clean under `--workspace --all-targets`.
 - Format clean.
 
 ## Summary
 
-The hot dispatch loop previously called `op_from_archived(&chunk.ops[ip])` per instruction fetch. That function performed a discriminant match across the archived `Op` form and produced a small payload copy. For hot loops the cost compounds with the iteration count.
+Keleusma's bytecode wire format already records the producer's declared word, address, and float widths in the framing header. The runtime accepts bytecode whose widths are at most its own, and the integer arithmetic path masks results to the declared width via `truncate_int`. What was missing was a producer-side surface that lets a host explicitly choose the compilation target and have the compiler validate the program against that target's capabilities.
 
-The VM now caches a per-chunk `Vec<Op>` populated at construction. The hot path reads through `decoded_ops[chunk_idx][ip]`, which is a constant-time slice index. The previous per-fetch decoding is performed once at construction and at every `replace_module`.
+This session adds that surface as a new `crate::target::Target` descriptor and a `compile_with_target(program, target)` entry point. The descriptor carries the three width fields (encoded as base-2 exponents matching the wire-format fields) and two capability flags (`has_floats`, `has_strings`). Const presets cover the practical cases: `host` (64-bit, all features), `wasm32` (32-bit word and address with 64-bit floats), `embedded_32` (32-bit with 32-bit floats), `embedded_16` (16-bit with no floats), and `embedded_8` (8-bit word with 16-bit address per the 6502 class, no floats, no strings).
 
-Implementation:
+The compiler runs two validations before lowering to bytecode. `Target::validate_against_runtime` rejects targets whose declared widths exceed the runtime's. `validate_program_for_target` walks the program AST looking for float types, string types, float literals, and string literals; programs that use features absent from the target are rejected with descriptive error messages pointing at the offending source span. After validation, the target's widths are baked into the resulting module's wire-format header, and the rest of the compilation runs unchanged.
 
-- New `decoded_ops: Vec<Vec<Op>>` field on `Vm` indexed as `decoded_ops[chunk_idx][ip]`.
-- New `decode_all_ops` helper walks the archived module's chunks and decodes every op into the cache.
-- `Vm::construct` (owned bytecode path) populates the cache via `decode_all_ops`.
-- `Vm::view_bytes_zero_copy` (borrowed bytecode path) populates the cache inline because its archived view comes from a borrowed slice rather than a copied `AlignedVec`.
-- `Vm::replace_module` re-decodes for the new module after the bytecode swap.
-- `Vm::chunk_op` simplified to a direct slice index. The archived form is no longer consulted on the hot path.
+The pre-existing `compile(program)` entry point is now a thin wrapper over `compile_with_target(program, &Target::host())`, so existing callers see no behavior change.
 
-Trade-offs.
+## What is in scope
 
-- Cost: one heap allocation per chunk at construction, proportional to the program's total op count. The `Op` type is `Copy` (a small enum with payload), so the per-op storage is small.
-- Zero-copy contract: constants and string data continue to be read on demand from the archived form. Only the op slice is materialized eagerly. The wire-format zero-copy benefit for constant pools, string data, and metadata is preserved.
-- One-shot scripts: cost is roughly equal to the previous per-fetch decoding (the same number of decodings happen, just amortized differently).
-- Hot-loop scripts: per-iteration savings compound with iteration count.
+The pre-existing infrastructure the implementation builds on.
 
-Option B from the original B11 entry (specialized dispatch tables for a small set of hot opcodes) was not pursued. The simpler cache approach removes the per-fetch decode cost without the codegen complexity, and benchmark-driven workload analysis would be needed to identify which opcodes are hot enough to merit specialization. Option A is the conservative win.
+- The wire format already records `word_bits_log2`, `addr_bits_log2`, and `float_bits_log2` in the 16-byte framing header. Mirror copies live in the archived module body.
+- The runtime already accepts bytecode whose declared widths are at most the runtime's. Oversized bytecode is rejected at load time with `LoadError::WordSizeMismatch`, `AddressSizeMismatch`, or `FloatSizeMismatch`.
+- The integer arithmetic path already masks results via `truncate_int` to the declared word width, so 32-bit-declared bytecode running on the 64-bit runtime produces 32-bit overflow semantics.
+
+The new surface lets a host explicitly choose the target, validate program features against the target's capabilities, and emit bytecode whose declared widths are accurate. The same compiled module can then run on the current 64-bit runtime during development and, in principle, on a future narrower-runtime build.
+
+## What remains open
+
+This is a foundation, not a complete cross-target story. Several substantial extensions remain documented in BACKLOG:
+
+- Target-specific runtime builds. The current `Value` enum carries 64-bit `Int` and `Float` variants and uses `Vec<Value>` for the operand stack. Building a 16-bit or 8-bit native runtime requires a different `Value` layout and a corresponding execution-loop variant. The wire format declares the bytecode's intended target, but no runtime build currently consumes that declaration to choose a representation.
+- Cross-target codegen. Emitting native assembly for the 6502 or ARM64 from Keleusma bytecode is out of scope and has not been pursued. The synchronous-language tradition's approach of target-independent intermediate representations feeding target-specific backends is referenced in RELATED_WORK as the path of record.
+- Target-defined primitive types. The original B10 entry mentioned `byte`, `bit`, `word`, and `address` as candidate primitives. The current type system continues to use `i64` for integers; the target's declared word width controls arithmetic masking but does not change the surface type. Adding the new primitives would require parser, AST, and type-checker work beyond this session's scope.
 
 ## Tests
 
-No new tests added. The existing 429 keleusma unit tests cover the whole execution loop across many opcodes, which collectively verify the decode cache is correct. A failure in `op_from_archived` would surface as an op-mismatch in any test that exercises the relevant opcode; the test surface is broad enough that adding a dedicated decode-cache test would be redundant.
+Nine new tests in `src/target.rs::tests`:
+
+- `host_target_admits_full_program` covers basic host-preset compilation.
+- `host_target_admits_floats_and_strings` covers full-feature admission.
+- `embedded_16_rejects_float_literal` covers float-literal rejection.
+- `embedded_16_rejects_float_type_in_param` covers float-type rejection in parameter signatures.
+- `embedded_8_rejects_string_literal` covers string-literal rejection.
+- `embedded_8_admits_int_only_program` covers int-only programs on the most restricted preset.
+- `target_widths_propagate_to_module` covers width propagation through to the wire format.
+- `host_widths_match_runtime_constants` covers the host-target-equals-runtime invariant.
+- `target_validation_against_runtime_rejects_oversized` covers oversized-target rejection.
+
+One new example: `examples/target_aware_compile.rs` demonstrates compilation against host, embedded_32, embedded_16, and embedded_8 targets with the appropriate float and string rejections, and prints the declared widths from the resulting modules.
 
 ## Trade-offs and Properties
 
-The decoded cache is owned by the VM and lives for the VM's lifetime. Memory cost is bounded by the program's total op count and is fixed at construction or hot-swap time; there is no growth at runtime. The cache survives `Op::Reset` since the bytecode does not change at reset; only the operand stack and arena top region are cleared.
+The choice to put `Target` in its own module rather than fold its fields into the existing `Module` struct keeps the producer-side concern (which target am I compiling for?) separate from the artifact-side concern (what does the bytecode declare?). The two are linked by `compile_with_target` writing the target's widths into the module's header, but they remain conceptually distinct.
 
-The borrowed-bytecode zero-copy constructor `Vm::view_bytes_zero_copy` was previously the path that minimized memory overhead at construction. It now allocates the decoded cache, increasing its memory footprint. The trade-off is justified: the zero-copy constructor is intended for hot-loop dispatch where the per-iteration savings dominate the per-construction cost. A future refinement could expose a constructor flag to opt out of the cache for hosts that genuinely need minimum-construction-overhead, but no such use case has been observed.
+The capability flags `has_floats` and `has_strings` are coarse-grained on purpose. Finer gating (such as "no dynamic strings" while still allowing static string literals) would require more capability axes and is recorded as future work. The current granularity matches the practical embedded-vs-server split.
 
-The cache is reconstructed at `replace_module`. The cost is the same as construction. Hot swap is rare relative to dispatch, so this is negligible.
+The AST walker is conservative. It rejects any occurrence of a float or string type or literal, even within unreachable branches. A more permissive variant would only reject reachable uses; the conservative variant is simpler and matches the typical static-analysis discipline.
+
+The `compile_with_target` API is additive. The original `compile(program)` continues to work and is now a thin wrapper that passes `Target::host()`. Callers that do not care about cross-target portability see no change.
 
 ## Changes Made
 
 ### Source
 
-- **`src/vm.rs`**. New `Vm::decoded_ops` field. New module-level `decode_all_ops` helper. `Vm::construct`, `Vm::view_bytes_zero_copy`, and `Vm::replace_module` populate the cache. `Vm::chunk_op` reads from the cache instead of decoding on demand.
+- **`src/target.rs`** (new). Public `Target` struct, const presets (`host`, `wasm32`, `embedded_32`, `embedded_16`, `embedded_8`), bit-width accessors, runtime-validation method, AST walker for feature validation, and nine unit tests.
+- **`src/compiler.rs`**. New `compile_with_target` public entry point. Existing `compile` is now a thin wrapper. The module emission uses the target's widths instead of the runtime constants.
+- **`src/lib.rs`**. New `pub mod target` declaration.
+- **`examples/target_aware_compile.rs`** (new). End-to-end demonstration.
 
 ### Knowledge Graph
 
-- **`docs/decisions/BACKLOG.md`**. B11 marked resolved with the option-A implementation documented.
-- **`docs/process/TASKLOG.md`**. New row for V0.1-M3-T31.
+- **`docs/decisions/BACKLOG.md`**. B10 marked as foundation-complete with the implemented surface, pre-existing infrastructure, and remaining open work documented separately.
+- **`docs/process/TASKLOG.md`**. New row for V0.1-M3-T32.
 - **`docs/process/REVERSE_PROMPT.md`**. This file.
 
 ## Remaining Open Priorities
 
-The named B11 work is closed. The remaining open BACKLOG items are smaller refinements or items deferred earlier in V0.1-M3:
+The named B10 work has its foundation in place. The remaining open BACKLOG items are smaller refinements or items whose cost is not yet justified:
 
-- Recursion-depth attestation API for recursive closures (a refinement over the safe-constructor rejection of `Op::MakeRecursiveClosure`).
-- `Op::CallIndirect` flow analysis to tighten WCET bounds for non-recursive indirect dispatch.
-- Removing the `Type::Unknown` sentinel from B1 (requires declaring native function signatures).
+- B10 follow-on. Target-specific runtime builds, cross-target codegen, and target-defined primitive types.
+- Recursion-depth attestation API for recursive closures.
+- `Op::CallIndirect` flow analysis for tighter WCET bounds.
+- `Type::Unknown` sentinel removal (B1 follow-on, requires native function signatures).
 - f-string finer-grained span attribution.
 - Block expressions as primary parsing form.
 
@@ -94,4 +116,4 @@ Await human prompt before proceeding.
 
 ## Session Context
 
-This session optimized the hot dispatch loop by caching decoded ops at VM construction. The change is structurally simple, preserves the zero-copy contract for constant data, and removes a per-fetch overhead that compounded across hot loops. No tests were added because the existing 429 unit tests cover the dispatch loop comprehensively.
+This session added a producer-side surface for cross-architecture portability that builds on the wire-format groundwork already in place. The compiler now accepts a `Target` descriptor and validates the program against the target's capabilities before emitting bytecode. The implementation is intentionally scoped to the producer side; cross-target runtime builds and target-defined primitive types are documented as the remaining open work but not pursued here.
