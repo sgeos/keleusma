@@ -219,15 +219,26 @@ Each pipeline stage produces typed errors with source locations.
 
 ## Workspace
 
-Three crates:
+Five crates:
 
 - `keleusma`. The runtime crate.
 - `keleusma-macros`. Compile-time proc macro for `#[derive(KeleusmaType)]`.
 - `keleusma-arena`. Standalone dual-end bump allocator. Published on crates.io as `keleusma-arena`.
+- `keleusma-bench`. Cost-model calibration tool that emits a measured `CostModel` for the host CPU.
+- `keleusma-cli`. Standalone command-line frontend providing `run`, `compile`, and `repl` subcommands.
 
 ## Documentation
 
 See [docs/README.md](docs/README.md) for the full documentation knowledge graph.
+
+**Onboarding**
+
+- [Getting Started](docs/guide/GETTING_STARTED.md). Install the CLI, write a first script, embed it in a Rust host.
+- [Embedding](docs/guide/EMBEDDING.md). Native function registration, arena sizing, call and resume protocol, error recovery.
+- [Why Was My Program Rejected](docs/guide/WHY_REJECTED.md). Verifier rejection messages mapped to root causes and rewrites.
+- [Script Examples](examples/scripts/README.md). Standalone `.kel` files demonstrating language features.
+
+**Reference**
 
 - [Language Design](docs/architecture/LANGUAGE_DESIGN.md). Design philosophy, guarantees, conservative-verification stance, memory model.
 - [Execution Model](docs/architecture/EXECUTION_MODEL.md). Temporal domains, structural verification, indirect-dispatch rejection contract, hot code swap.

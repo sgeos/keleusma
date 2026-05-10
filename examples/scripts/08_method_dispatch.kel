@@ -1,0 +1,30 @@
+// Trait declaration, impl, and method-call dispatch.
+//
+// Methods are declared in a `trait` and implemented for concrete
+// types in `impl` blocks. The receiver-style call `x.method()`
+// resolves to the impl-method registered under the mangled name
+// `Trait::Type::method`, dispatched at compile time.
+//
+// Run: keleusma run examples/scripts/08_method_dispatch.kel
+// Expected output: 84
+//
+// Note: chaining method calls such as `n.double().double()` requires
+// the receiver type to flow through the local-type inference, which
+// is partial at present. Use a typed `let` binding between calls
+// when chaining is desired, or wait for the monomorphization pass
+// to extend its inference reach.
+
+trait Doubler {
+    fn double(x: i64) -> i64;
+}
+
+impl Doubler for i64 {
+    fn double(x: i64) -> i64 {
+        x + x
+    }
+}
+
+fn main() -> i64 {
+    let n: i64 = 42;
+    n.double()
+}

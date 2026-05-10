@@ -1,0 +1,23 @@
+// Enum declaration, variant construction, and pattern matching.
+//
+// Run: keleusma run examples/scripts/03_enum_match.kel
+// Expected output: 100
+
+enum Shape {
+    Circle(i64),
+    Rectangle(i64, i64),
+    Square(i64),
+}
+
+fn area_estimate(s: Shape) -> i64 {
+    match s {
+        Shape::Circle(r) => 3 * r * r,
+        Shape::Rectangle(w, h) => w * h,
+        Shape::Square(side) => side * side,
+    }
+}
+
+fn main() -> i64 {
+    let shape = Shape::Rectangle(20, 5);
+    area_estimate(shape)
+}

@@ -1,0 +1,16 @@
+// Primitives and operators.
+//
+// Run: keleusma run examples/scripts/01_arithmetic.kel
+// Expected output: 24
+
+fn square(x: i64) -> i64 {
+    x * x
+}
+
+fn main() -> i64 {
+    let a: i64 = 3;
+    let b: i64 = 4;
+    let sum_of_squares = square(a) + square(b);
+    let scaled = sum_of_squares - 1;
+    scaled
+}

@@ -1,0 +1,25 @@
+// Bounded iteration over a range and over an array.
+//
+// Local bindings in Keleusma are immutable, so accumulation across
+// loop iterations is not possible inside an atomic-total `fn` body.
+// for-in is most useful in `loop`-classified scripts where the body
+// drives `yield` or updates the data segment. This script
+// demonstrates the syntax for both iteration forms and returns a
+// value computed by direct indexing.
+//
+// Run: keleusma run examples/scripts/04_for_in.kel
+// Expected output: 40
+
+fn main() -> i64 {
+    let xs = [10, 20, 30, 40];
+
+    for x in xs {
+        let _doubled = x * 2;
+    }
+
+    for i in 0..4 {
+        let _squared = i * i;
+    }
+
+    xs[3]
+}

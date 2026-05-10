@@ -1,0 +1,28 @@
+// Pipeline operator |>.
+//
+// `x |> f(args)` is sugar for `f(x, args)`, threading the result of
+// the left expression as the first argument to the right call. The
+// pipeline reads left to right and reduces nesting in transformation
+// chains.
+//
+// Run: keleusma run examples/scripts/05_pipeline.kel
+// Expected output: 169
+
+fn double(x: i64) -> i64 {
+    x + x
+}
+
+fn add(x: i64, y: i64) -> i64 {
+    x + y
+}
+
+fn square(x: i64) -> i64 {
+    x * x
+}
+
+fn main() -> i64 {
+    6
+    |> double()         // 12
+    |> add(1)           // 13
+    |> square()         // 169
+}

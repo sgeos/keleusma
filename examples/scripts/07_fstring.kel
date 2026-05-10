@@ -1,0 +1,23 @@
+// String interpolation through f-strings.
+//
+// `f"text {expr} more"` desugars at lex time into a chain of
+// `concat` and `to_string` calls. The desugaring requires
+// `to_string` and `concat` to be available, which the CLI runner
+// provides through `register_utility_natives`.
+//
+// Run: keleusma run examples/scripts/07_fstring.kel
+// Expected output: hello, Keleusma! 7 plus 2 is 9
+
+use to_string
+use concat
+
+fn add(a: i64, b: i64) -> i64 {
+    a + b
+}
+
+fn main() -> String {
+    let name = "Keleusma";
+    let a: i64 = 7;
+    let b: i64 = 2;
+    f"hello, {name}! {a} plus {b} is {add(a, b)}"
+}

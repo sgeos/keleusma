@@ -1,0 +1,21 @@
+// Multiheaded function dispatch.
+//
+// A single function name may have multiple heads, each with its own
+// parameter pattern. The runtime tries the heads in source order and
+// dispatches to the first one whose pattern matches the actual
+// arguments. This is Elixir-style dispatch encoded in Rust syntax.
+//
+// Run: keleusma run examples/scripts/06_multiheaded.kel
+// Expected output: 11
+
+fn classify(0)            -> i64 { 0 }
+fn classify(1)            -> i64 { 1 }
+fn classify(n: i64)       -> i64 { n + 10 }
+
+fn main() -> i64 {
+    let a = classify(0);    // 0
+    let b = classify(1);    // 1
+    let c = classify(11);   // 21
+    let d = classify(7);    // 17
+    a + b + c + d - 28      // 11
+}
