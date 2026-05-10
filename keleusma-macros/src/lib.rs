@@ -1,13 +1,39 @@
 //! Procedural macros for the Keleusma scripting language.
 //!
-//! This crate provides the `KeleusmaType` derive macro, which generates
-//! `KeleusmaType` trait implementations for host-defined structs and enums
-//! whose field and payload types are admissible interop types. The generated
-//! code converts between the host type and the runtime `Value` enum at the
-//! native function boundary.
+//! This crate is the proc-macro backend for the
+//! [`keleusma::KeleusmaType`](https://docs.rs/keleusma/latest/keleusma/trait.KeleusmaType.html)
+//! derive. The expansion generates `KeleusmaType` trait implementations
+//! that convert between the host type and the runtime `Value` enum at
+//! the native function boundary.
 //!
-//! See the runtime crate documentation for details on the trait and the
-//! admissibility rules.
+//! # Implementation detail
+//!
+//! Depend on the `keleusma` crate, not on this one. The derive is
+//! re-exported as `keleusma::KeleusmaType`. This crate is published
+//! only because Cargo requires proc-macro implementations to live in
+//! a separate library; the expansion references types defined in the
+//! parent crate and is not standalone-useful.
+//!
+//! # Supported input shapes
+//!
+//! - **Named-field structs**: `struct Point { x: f64, y: f64 }`.
+//! - **Enums with unit variants**: `enum Color { Red, Green, Blue }`.
+//! - **Enums with tuple variants**: `enum Shape { Circle(f64), Rect(f64, f64) }`.
+//! - **Enums with struct-style variants**: `enum Event { Click { x: i64, y: i64 } }`.
+//!
+//! Each field or payload type must itself implement `KeleusmaType`.
+//!
+//! # Rejected inputs
+//!
+//! - **Tuple structs** (`struct Wrapper(i64);`) and **unit structs**
+//!   (`struct Marker;`) produce a `compile_error!` at expansion time.
+//!   Use a named-field struct or the bare tuple type instead.
+//! - **Unions** produce a `syn::Error` before expansion. Unions cannot
+//!   be safely projected into the runtime `Value` enum because the
+//!   active variant is not statically known.
+//!
+//! See the runtime crate documentation for the full trait contract and
+//! the admissibility rules for field types.
 
 extern crate proc_macro;
 
@@ -16,8 +42,29 @@ use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 use syn::{Data, DataEnum, DataStruct, DeriveInput, Fields, Ident, parse_macro_input};
 
-/// Derive `KeleusmaType` for a struct or enum whose fields and payloads are
-/// admissible interop types.
+/// Derive [`keleusma::KeleusmaType`] for a struct or enum.
+///
+/// Generates an `impl ::keleusma::KeleusmaType for T` block whose
+/// `from_value` and `into_value` methods route between the host type
+/// and the runtime `Value` enum at the native function boundary.
+///
+/// # Accepted inputs
+///
+/// - Named-field structs.
+/// - Enums whose variants are any combination of unit, tuple-style,
+///   and struct-style.
+///
+/// Each field or payload type must itself implement `KeleusmaType`.
+///
+/// # Compile errors
+///
+/// - Unions: rejected before expansion with a `syn::Error` message
+///   `"KeleusmaType cannot be derived for unions"`.
+/// - Tuple structs and unit structs: rejected during expansion with a
+///   `compile_error!` directing the user to a named-field struct or
+///   the bare tuple type.
+///
+/// [`keleusma::KeleusmaType`]: https://docs.rs/keleusma/latest/keleusma/trait.KeleusmaType.html
 #[proc_macro_derive(KeleusmaType)]
 pub fn derive_keleusma_type(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);

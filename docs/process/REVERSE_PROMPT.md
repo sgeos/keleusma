@@ -9,119 +9,71 @@ AI to Human communication channel.
 ## Last Updated
 
 **Date**: 2026-05-10
-**Task**: V0.1-M3-T51 Publication-readiness verification for `keleusma-arena` and `keleusma-macros`.
-**Status**: Complete. Both crates are publication-ready. Two minor gaps in `keleusma-macros` (missing LICENSE file, missing CHANGELOG) closed.
+**Task**: V0.1-M3-T52 Documentation polish for `keleusma-macros`.
+**Status**: Complete. Four documentation additions close the gap between "minimal but adequate" and "self-explanatory on docs.rs". The crate keeps its implementation-detail framing.
 
 ## Verification
 
 **Commands**:
 
 ```bash
-cargo publish -p keleusma-arena   --dry-run --allow-dirty
-cargo publish -p keleusma-macros  --dry-run --allow-dirty
-cargo package --list -p keleusma-arena
-cargo package --list -p keleusma-macros --allow-dirty
+cargo doc --no-deps -p keleusma-macros
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --check
-cargo doc --no-deps -p keleusma-arena
-cargo doc --no-deps -p keleusma-macros
-cargo build -p keleusma-arena --target thumbv7em-none-eabihf
-cargo build -p keleusma-arena --target thumbv7em-none-eabihf --no-default-features
-rustup run 1.85 cargo check -p keleusma-arena
-rustup run 1.85 cargo check -p keleusma-arena --no-default-features
+cargo publish -p keleusma-macros --dry-run --allow-dirty
 ```
 
 **Results**:
 
-- `keleusma-arena 0.2.0` dry-run: 13 files, 77.1 KiB packaged, 20.9 KiB compressed. Verification compiles cleanly. No "already exists" warning.
-- `keleusma-macros 0.1.0` dry-run after fixes: 8 files, 17.2 KiB packaged, 4.8 KiB compressed. Verification compiles cleanly.
-- Workspace tests: 520 pass.
-- Clippy clean across the workspace.
+- Rustdoc clean for `keleusma-macros`.
+- 520 workspace tests pass.
+- Clippy clean.
 - Format clean.
-- Rustdoc clean for both crates.
-- Arena builds against `thumbv7em-none-eabihf` with both default features (alloc + heap arena) and no-default-features (core-only).
-- Arena MSRV (Rust 1.85) verified for default features and no-default-features.
+- `cargo publish -p keleusma-macros --dry-run --allow-dirty`: 8 files, 20.3 KiB packaged, 5.5 KiB compressed. Verification compiles cleanly. Package size grew from 17.2 KiB to 20.3 KiB; the 3 KiB increase is the README and doc-comment expansion.
 
 ## Summary
 
-The user asked for publication-readiness verification on `keleusma-arena` and `keleusma-macros`. The check ran the full publication-relevant test matrix: dry-run packaging, package contents, MSRV pin, no-std build, cross-architecture build, full test suite, clippy, format, rustdoc.
+The user observed that the `keleusma-macros` README and crate-level documentation were "adequate but minimal" and asked for four targeted additions.
 
-### keleusma-arena 0.2.0
+### README
 
-The crate is publication-ready as-is. Package contents:
+A new "Supported Input Shapes" section sits between the implementation-detail framing and the stability statement. The section lists what the derive accepts (named-field structs, enums with unit variants, enums with tuple variants, enums with struct-style variants) and what it rejects (tuple structs, unit structs, unions), with a one-line rationale for each rejection. The closing of the section links to the parent crate's `keleusma::KeleusmaType` trait documentation at the canonical docs.rs URL so a reader who needs the full trait contract has a one-click path.
 
-```
-.cargo_vcs_info.json
-CHANGELOG.md
-Cargo.lock
-Cargo.toml
-Cargo.toml.orig
-LICENSE
-README.md
-examples/basic.rs
-examples/budget_check.rs
-examples/epoch_handle.rs
-examples/frame_loop.rs
-examples/mixed_allocator.rs
-src/lib.rs
-```
+The Stability section gained a link to the new `CHANGELOG.md` so users can find version history.
 
-The five examples are included in the package. CHANGELOG and README are present and accurate following the V0.1-M3-T49/T50 work. License is BSD Zero Clause License; the LICENSE file is included. The 0.2.0 surface is `ArenaHandle<T>`, `from_raw_parts`, the safe `Arena::reset`, `EpochSaturated`, `Stale`, plus the preserved 0.1.0 surface (handles, budget, marks, rewinds, peaks, byte allocators).
+### Module-level doc comment
 
-### keleusma-macros 0.1.0
+The `src/lib.rs` `//!` block was rewritten to mirror the README structure: a one-paragraph framing, an "Implementation detail" subsection that names the parent crate as the user-facing API, a "Supported input shapes" subsection listing the four accepted shapes with example syntax, and a "Rejected inputs" subsection listing the three rejected shapes with the rationale for each. The opening references the parent crate's trait documentation directly through a docs.rs link.
 
-Two gaps were found and fixed in this task.
+### Derive function doc comment
 
-**Missing per-crate LICENSE file.** The workspace root has a `LICENSE` file but the `keleusma-macros` directory did not. Cargo.toml declared `license = "0BSD"`, which is the SPDX identifier; crates.io would have accepted publication with the SPDX identifier alone, but consumers downloading the crate's source would receive a tarball without the actual license text. Fix: `cp LICENSE keleusma-macros/LICENSE`. The license file is identical to the workspace root's because both cover the same project under the same terms.
+The `derive_keleusma_type` proc-macro doc went from two lines to a structured block. The first line names the trait. The second sentence explains what the expansion produces. An "Accepted inputs" subsection enumerates the four accepted shapes. A "Compile errors" subsection documents the three rejection paths and their respective error mechanisms (`syn::Error` for unions, `compile_error!` for tuple/unit structs). The block closes with a docs.rs link to the trait.
 
-**Missing CHANGELOG.md.** `keleusma-arena` has one and crates.io users expect to find one alongside any nontrivial published crate. Fix: new `keleusma-macros/CHANGELOG.md` in Keep a Changelog format with a 0.1.0 entry that documents the `KeleusmaType` derive macro, the supported Rust input shapes (named-field structs, all enum variant kinds), and the implementation-detail framing. The framing matches the existing README and Cargo metadata: depend on `keleusma`, not on this crate directly.
-
-After both fixes, the package contents are:
-
-```
-.cargo_vcs_info.json
-CHANGELOG.md
-Cargo.lock
-Cargo.toml
-Cargo.toml.orig
-LICENSE
-README.md
-src/lib.rs
-```
-
-The 8-file package at 17.2 KiB / 4.8 KiB compressed is appropriate for an implementation-detail proc-macro crate.
+The minimal style is preserved where it belongs: the public API surface is one derive macro and the trait contract lives in the parent crate. The documentation now points cleanly at the right places without duplicating content from the parent crate.
 
 ## Trade-offs and Properties
 
-The decision to copy the workspace `LICENSE` rather than create a different file reflects that `keleusma-macros` is part of the same project under the same license. A symbolic link would also work but is less portable across operating systems and across crates.io's tarball processing; a regular file copy is simpler and unambiguous.
+The decision to enumerate the input shapes in three places (README, module doc, derive doc) reflects the three different reading paths a user takes. A README reader is browsing crates.io. A module-doc reader has clicked into the crate on docs.rs. A derive-doc reader has clicked into the specific derive macro. Each surface should answer the same question with the appropriate granularity. The README is the most user-facing and therefore most prose-oriented; the derive doc is the most reference-oriented and therefore most concise.
 
-The decision to add `CHANGELOG.md` even for an implementation-detail crate reflects two concerns. First, the version coupling between `keleusma` and `keleusma-macros` may not always be one-to-one across all future versions; a changelog gives the macro crate space to record its own breaking changes when they occur. Second, crates.io users routinely look for a CHANGELOG and its absence raises a small but real question of whether the maintainer is paying attention.
+The decision to use `https://docs.rs/keleusma/latest/keleusma/trait.KeleusmaType.html` as the canonical trait link rather than a relative reference reflects the absence of a working intra-doc link path between independent crates on docs.rs. Until both crates are published and indexed together, the absolute URL is the only reliable target.
 
-The decision not to bump `keleusma-macros` to 0.2.0 alongside `keleusma-arena` reflects that the macro crate's surface has not changed. The version coupling is at the major-minor of `keleusma` (when that crate releases), not at the major-minor of `keleusma-arena`. The macro crate ships at 0.1.0 because its public API (the derive) is at version 0.1.0 of the `keleusma` API contract.
+The decision not to expand the documentation with code examples beyond the existing `Point` example reflects that the parent crate already carries the canonical examples in its own documentation. Duplicating them here would create a maintenance hazard if the parent updates an example shape.
 
-The decision to verify MSRV for `keleusma-arena` against both default-features and no-default-features reflects that the crate's main embedded use case is core-only (no `alloc`), which is a different code path through the lib (the `with_capacity` constructor is gated behind the `alloc` feature). Verifying both prevents regressions where MSRV-affecting language features sneak into one path but not the other.
-
-The decision not to verify MSRV for `keleusma-macros` reflects that its declared MSRV (1.85) is purely a compatibility statement; the macro crate uses only stable proc-macro APIs (`syn`, `quote`, `proc-macro2`) that have wide MSRV compatibility. Pinning the macros crate to 1.85 in CI would be belt-and-braces but is not currently in the workflow.
+The decision to keep tuple-struct and unit-struct rejections explicit in the documentation, rather than treating them as obvious, reflects that Rust users frequently reach for tuple structs as compact wrappers (`pub struct Wrapper(i64);`) and the rejection error message would otherwise be the user's first signal that the shape is not supported. Documenting it in the README and the derive doc puts the constraint on the same surface as the reach.
 
 ## Files Touched
 
-- **`keleusma-macros/LICENSE`** (new). Copy of the workspace `LICENSE`.
-- **`keleusma-macros/CHANGELOG.md`** (new). Keep a Changelog 0.1.0 entry.
-- **`docs/process/TASKLOG.md`**. New row for V0.1-M3-T51 plus history entry.
+- **`keleusma-macros/README.md`**. New "Supported Input Shapes" section. Trait-docs link added. CHANGELOG link added.
+- **`keleusma-macros/src/lib.rs`**. Module-level `//!` block expanded. `derive_keleusma_type` doc comment expanded with accepted-inputs and compile-errors subsections.
+- **`docs/process/TASKLOG.md`**. New row for V0.1-M3-T52 plus history entry.
 - **`docs/process/REVERSE_PROMPT.md`**. This file.
 
 ## Remaining Open Priorities
 
-The only remaining publication blocker is the manual `cargo publish` step. The order is:
+The publication chain is unchanged: the operator runs `cargo publish` for `keleusma-arena 0.2.0`, then for `keleusma-macros 0.1.0`, then for `keleusma 0.1.0`. The agent does not perform `cargo publish`.
 
-1. `cargo publish -p keleusma-arena` (currently 0.2.0 in source; 0.1.0 already on crates.io).
-2. Wait for the index to propagate (typically a few seconds, occasionally longer).
-3. `cargo publish -p keleusma-macros` (0.1.0).
-4. Wait for the index to propagate.
-5. `cargo publish -p keleusma`. The main crate's `Cargo.toml` references `keleusma-arena = "0.2"` and `keleusma-macros = "0.1.0"`; both must be on crates.io before this step succeeds.
-
-The agent does not perform `cargo publish`; the operator does. Once the publication chain completes, the workspace's `cargo publish --dry-run` checks will close out the publication-readiness story.
+`keleusma-macros` is now adequate for users landing on docs.rs without ever visiting the parent crate. A reader who lands on either the README or the module doc finds the implementation-detail framing, the input-shape coverage, and a link to the parent crate's trait contract.
 
 ## Intended Next Step
 
@@ -129,4 +81,4 @@ Await human prompt before proceeding.
 
 ## Session Context
 
-This session ran a thorough publication-readiness check on the two crates that need to publish before the main `keleusma` crate can. `keleusma-arena 0.2.0` was found ready as-is. `keleusma-macros 0.1.0` had two minor packaging gaps (missing per-crate LICENSE, missing CHANGELOG) that have now been closed. Both crates' `cargo publish --dry-run` invocations succeed cleanly. No outstanding correctness, documentation, or metadata issues remain in either crate. The path to crates.io publication is now a sequence of `cargo publish` invocations awaiting operator action.
+This session closed the documentation gap on `keleusma-macros`. The four additions are deliberate: enough to make the crate self-explanatory on docs.rs without duplicating the parent crate's user-facing material. The crate remains an intentional implementation detail. The publication chain is one manual step closer to executable.
