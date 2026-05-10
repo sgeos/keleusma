@@ -9,8 +9,8 @@ AI to Human communication channel.
 ## Last Updated
 
 **Date**: 2026-05-10
-**Task**: V0.1-M3-T45 Refactor SDL3 example into a feature-gated Cargo example.
-**Status**: Complete. The previously-introduced `keleusma-piano-roll` workspace member is now a Cargo example at `examples/piano_roll.rs` with SDL3 gated behind the `sdl3-example` feature on the parent crate.
+**Task**: V0.1-M3-T46 Hot code swap in the SDL3 piano-roll example.
+**Status**: Complete. The example now exercises `Vm::replace_module` between two precompiled songs, audio continues across the swap, and the user toggles with the key the user specified.
 
 ## Verification
 
@@ -22,82 +22,76 @@ cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 cargo build --release --example piano_roll --features sdl3-example
 cargo clippy --example piano_roll --features sdl3-example -- -D warnings
-cargo run --example piano_roll                # expect actionable error
-(sleep 2; echo) | ./target/release/examples/piano_roll
+(sleep 1; printf 's\n'; sleep 1; printf 's\n'; sleep 1; printf '\n') | ./target/release/examples/piano_roll
 ```
 
 **Results**:
 
-- `cargo build --workspace` completes in seconds without compiling `sdl3` or `sdl3-sys`. The previous workspace-member arrangement triggered a roughly sixty-second CMake build of SDL3 on every `--workspace` invocation; this is fully eliminated.
-- `cargo test --workspace` passes. 519 tests across the workspace, unchanged from prior count.
-- Clippy clean on the workspace.
-- Clippy clean on the feature-gated example.
-- `cargo run --example piano_roll` without the feature produces the expected Cargo error: `target piano_roll in package keleusma requires the features: sdl3-example`. The error is actionable.
-- The example runs end to end, opens the SDL3 audio device, drives the tick loop, and exits cleanly on stdin Enter.
+- Workspace build remains SDL3-free; first invocation reports `Finished` with no SDL3 compilation.
+- 519 workspace tests pass, unchanged from prior baseline.
+- Clippy clean across the workspace and across the feature-gated example.
+- The smoke-test sequence prints, in order: the welcome banner, `[ swapped to song 2 ]`, `[ swapped to song 1 ]`, `bye.`. Round-trip swap is verified.
 
 ## Summary
 
-The previous task introduced the SDL3 audio example as a workspace member (`keleusma-piano-roll`). The user observed that this was the wrong shape: an audio demonstration belongs in `examples/`, not as a sibling crate. The workspace-member arrangement was originally chosen to isolate SDL3's heavy build cost from `cargo --workspace` invocations, but the idiomatic Cargo way to handle that is `[[example]]` plus `required-features` plus optional dependency, not workspace structure.
+The user requested hot code swap in the existing SDL3 piano-roll example, with `s` followed by Enter as the swap key, and provided the second song as Keleusma source. The implementation adds the second song as `examples/piano_roll_2.kel`, precompiles both modules at startup, and threads an `mpsc` command channel from the stdin reader to the tick loop.
 
-This task implements the correct shape.
+### Swap protocol
 
-### Cargo wiring
+The protocol mirrors the existing `Vm::replace_module` test cases.
 
-The parent `keleusma` Cargo.toml now contains:
+1. The tick loop drains the stdin command channel non-blocking at each tick boundary. A `Command::Swap` flips a `swap_pending` flag; a `Command::Quit` breaks the outer loop.
+2. The inner resume loop drives the script until the next `VmState::Yielded`. Between body iterations the script transits `VmState::Reset`. The current code already consumed `Reset` transparently, but now also checks `swap_pending`.
+3. On `Reset` with `swap_pending` true, the host calls `vm.replace_module(next_module, fresh_data())`, where `fresh_data` returns six `Value::Int(0)` slots so the incoming song starts at the beginning of its phrase. The data-segment schema is identical between the two songs, so the size check on `replace_module` succeeds.
+4. After `replace_module`, the host calls `vm.call(&[Value::Int(tick)])` to start the new module's entry point, drives to the first yield, and counts that as the current tick.
+5. Voices are explicitly silenced after swap so the new song does not inherit gate state from the outgoing song.
 
-```toml
-[features]
-sdl3-example = ["dep:sdl3"]
+### Voice continuity across swap
 
-[dependencies]
-sdl3 = { version = "0.18", features = ["build-from-source-static"], optional = true }
+Audio rendering continues without interruption across the swap. The audio thread reads from the same `Mutex<[Voice; 3]>` regardless of which Keleusma module is active. Native registrations are stored on the VM, not on the module, so they persist across `replace_module`. This is the embedding-grade hot-swap property the language is designed to support.
 
-[[example]]
-name = "piano_roll"
-required-features = ["sdl3-example"]
-```
+The decision to silence voices on swap rather than let them ring through the swap is conservative. The alternative behavior would let the outgoing song's gated voices continue until the incoming song chose to retrigger or silence them. Both behaviors are defensible; silence-on-swap was chosen because it makes the swap audibly clean and avoids a class of subtle bugs where the new song's first tick produces no `host::play` call on a particular channel and the outgoing song's pitch lingers indefinitely.
 
-The `package.metadata.docs.rs` block dropped its prior `all-features = true` entry. Without that change, docs.rs builds would attempt to enable `sdl3-example` and trigger an SDL3 source build during documentation generation, which is undesirable.
+### Song 2 design
 
-### File moves
+The user supplied the note tables for song 2. Song 2 uses an eighth-note arpeggiated melody (compared to song 1's quarter-note triadic melody), a quarter-note alternating-harmony line (compared to song 1's quarter-note triadic harmony), and a staccato bass with rests on every other slot (compared to song 1's continuous half-note bass). Both songs share the C major progression I-vi-IV-V (`C - Am - F - G`).
 
-Three files transitioned from the removed workspace-member directory.
+Song 2 also reorders the channel-to-musical-role mapping. In song 1, channel 1 carries the bass and channel 2 carries the harmony. In song 2, channel 1 carries the harmony and channel 2 carries the bass. The host's per-channel waveform table (`[Square, Triangle, Square]`) is fixed across the swap, so this reordering produces a deliberate timbral shift: the bass moves from a triangle voice (song 1) to a square voice (song 2), and the harmony moves the other direction. This emergent property of the swap is intentional and shows that the script controls musical assignment while the host owns synthesis.
 
-- `keleusma-piano-roll/src/main.rs` -> `examples/piano_roll.rs`. The internal `include_str!` path was updated from `"../song.kel"` to `"piano_roll.kel"`. The header doc comment was upgraded from line comments to a `//!` block and absorbed the architecture notes that previously lived in the workspace-member README. The "Run" instruction in the header was updated to the new invocation form.
-- `keleusma-piano-roll/song.kel` -> `examples/piano_roll.kel`. No content change.
-- `keleusma-piano-roll/README.md` -> deleted. Its content was distilled into the file-level doc comment on `piano_roll.rs`.
+### Stdin command channel
 
-The `keleusma-piano-roll/` directory was removed entirely.
+The previous implementation used an `AtomicBool` quit flag set by a stdin reader thread. The new implementation uses `std::sync::mpsc::Sender<Command>` / `Receiver<Command>` with a small `Command` enum having `Swap` and `Quit` variants. The stdin thread now runs in a loop: each line is parsed, "s" sends `Swap` and continues, anything else sends `Quit` and exits. The main loop's `try_recv` is non-blocking, so the tick clock is unaffected by stdin idle time.
 
-### Top-level navigation
-
-The top-level README workspace-crate list was reduced from six entries to five. A new "Examples" section points at `examples/` and the `piano_roll` example with the explicit feature-flag invocation. The workspace member listing in the workspace `Cargo.toml` was reduced to four entries.
+A line-buffered terminal does not capture single keystrokes without raw-mode support, so "press 's'" is in practice "type s and press Enter". The banner is explicit about this.
 
 ## Trade-offs and Properties
 
-Putting SDL3 as an optional dependency on the parent crate, rather than scoping it tightly to the example, accepts a small surface-area expansion on `keleusma`'s declared dependency tree. The benefit is that the standard Cargo convention (optional dep + feature + required-features) does the right thing automatically: the dep does not download, compile, or appear in the dependency graph unless the feature is enabled. Downstream users of `keleusma` see no behavior change because their builds do not enable `sdl3-example`.
+The decision to precompile both songs at startup, rather than recompile from source on each swap, reflects the example's pedagogical purpose: hot code swap is the language feature being demonstrated, not script compilation latency. A production embedder might recompile on swap if the script content can change at runtime; for the example, both songs are known at build time and embedded via `include_str!`.
 
-The decision to leave the architecture notes in the file-level doc comment on `piano_roll.rs` rather than create a separate `examples/piano_roll.md` keeps the example self-contained: a reader who opens the file sees the rationale alongside the code. The trade-off is that file-level doc comments do not render as nicely on docs.rs as standalone markdown, but examples are not the primary docs.rs surface.
+The decision to keep `module_a` and `module_b` as cloneable `Module` values rather than `Rc<Module>` or boxed values is motivated by `replace_module`'s ownership signature, which takes an owned `Module`. `Module` derives `Clone`, so cloning at swap time is cheap relative to the other costs of replacement.
 
-The decision to use `include_str!("piano_roll.kel")` rather than `std::fs::read_to_string("examples/piano_roll.kel")` keeps the example self-contained at runtime. The compiled binary embeds the script bytes; users can run the binary from any working directory. The trade-off is that the example's script is not editable without recompilation; for a demonstration, this is the right trade.
+The decision to reset the data segment to all zeros at swap rather than carry it across is consistent with the user's "Replace semantics" choice from prior architecture decisions. The data segment of song 1 holds song-1 channel positions, which would be meaningless to song 2. A future enhancement could let the host migrate selected slots, but for the same-schema case here, fresh-zero is the right default.
 
-The `sdl3-example` feature name is used per the user's directive and is consistent with the example file name. A more general name like `audio` was considered and rejected because the feature gates SDL3 specifically, not audio capability in general; future audio examples on a different backend would warrant their own feature.
+The decision to silence voices at swap (`silence_all`) sits inside the swap branch, so the silencing is paired with the module replacement. The audio thread observes a brief moment of total silence before the new song's first tick fires `host::play` calls. The duration of the gap is one tick interval (125 ms) at most, which is below most listeners' threshold for noticing a phrase break.
+
+The example deliberately does not demonstrate same-song reload. The interesting test case is two genuinely different songs, which exercises both verification (the new module re-runs structural and resource verification at swap) and dialogue compatibility (both songs export the same six-slot data schema).
 
 ## Files Touched
 
-- **`Cargo.toml`** (workspace root). Removed `keleusma-piano-roll` from `[workspace] members`. Added `[features] sdl3-example`. Added `sdl3` as an optional dependency. Added `[[example]] name = "piano_roll" required-features = ["sdl3-example"]`. Removed `all-features = true` from `package.metadata.docs.rs`.
-- **`README.md`** (top-level). Reduced workspace crate list to five. Added an "Examples" section pointing at the gated `piano_roll` invocation.
-- **`examples/piano_roll.rs`** (moved from `keleusma-piano-roll/src/main.rs`). Header rewritten as a `//!` doc block absorbing the rationale from the removed workspace-member README. `include_str!` path updated.
-- **`examples/piano_roll.kel`** (moved from `keleusma-piano-roll/song.kel`). Unchanged content.
-- **`keleusma-piano-roll/`**. Removed.
-- **`docs/process/TASKLOG.md`**. New row for V0.1-M3-T45.
+- **`examples/piano_roll.kel`**. Unchanged from the prior task.
+- **`examples/piano_roll_2.kel`** (new). Second song. Pitch enum, MIDI helpers, three note-lookup match functions, length functions, data-segment schema identical to song 1, `loop main` with reordered channel-to-role routing.
+- **`examples/piano_roll.rs`**. Doc header rewritten to describe the hot-swap protocol. Imports updated to add `mpsc` and `keleusma::bytecode::Module`. Two `SCRIPT_*` constants. New `Command` enum. Stdin thread parses lines and sends commands instead of flipping a flag. Tick loop drains the command channel and threads `swap_pending` through the inner resume loop. New helpers: `build_module`, `init_data`, `fresh_data`, `silence_all`, `register_natives`. Banner updated.
+- **`docs/process/TASKLOG.md`**. New row for V0.1-M3-T46.
 - **`docs/process/REVERSE_PROMPT.md`**. This file.
 
 ## Remaining Open Priorities
 
-The carry-over open priorities from V0.1-M3-T44 still apply (no ADSR envelopes, no audio-output golden test in CI, single-frequency-per-voice limitation, no explicit audio thread priority management, hot code swap not demonstrated, `set_native_bounds` not exercised). None are blocking.
+Most refinements from prior tasks still apply. New items raised by this task.
 
-The `package.metadata.docs.rs` change removed `all-features = true`. If any future feature genuinely should be on for docs.rs, an explicit `features = ["..."]` line should replace the absent setting.
+- **Same-song silence gap.** Voices are silenced for one tick interval at swap. A short crossfade in the audio mixer would smooth the transition, at the cost of tracking pre-swap and post-swap voice state. Not blocking; the gap is barely perceptible at 125 ms.
+- **Stdin parsing is line-based.** True any-key swap (no Enter required) needs raw-mode terminal support, which would add a `crossterm`-class dependency. For the current line-buffered design, the user types `s` then Enter. The banner is explicit.
+- **No persistence of swap history.** The stdin parser sends `Quit` on any non-`s` line, including obvious typos. A future enhancement could allow `quit` or `q` as the explicit quit command and ignore other input. The current behavior is conservative ("don't try to be clever"); any unrecognised input means "stop".
+- **No demonstration of dialogue-incompatible swap.** Both songs share the data-segment schema, so the swap path exercises only the value-preserving case. A second example showing a swap with a `replace_module` that fails on schema mismatch would round out the hot-swap coverage but is not core to this example's pedagogical purpose.
 
 ## Intended Next Step
 
@@ -105,4 +99,4 @@ Await human prompt before proceeding.
 
 ## Session Context
 
-This session closed an architectural mismatch in the prior task. The audio demonstration is now organized as the user expected. The shape is the idiomatic Rust pattern for examples that depend on heavy optional crates: optional dependency, feature flag, `[[example]] required-features`. Workspace builds stay fast and SDL3-free; the example builds cleanly when explicitly requested.
+This session added hot code swap to the SDL3 piano-roll example, completing the architectural pattern coverage requested across the recent sessions. The example now demonstrates the principal load-bearing capabilities Keleusma is designed for: bounded-step execution under a real-time deadline (audio rendering), shared state across threads (the `Mutex<[Voice; 3]>` handoff between Keleusma main thread and SDL3 audio thread), multi-voice control flow (three independently-sequenced channels through the data segment), and now hot code swap (two precompiled modules, swap at the reset boundary, audio continuity across the swap). The user's "Press Enter to quit" prior preference is preserved as the quit affordance, with `s` plus Enter added as the swap affordance, both communicated explicitly in the welcome banner.

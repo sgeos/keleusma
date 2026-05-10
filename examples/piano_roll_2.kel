@@ -1,0 +1,193 @@
+// Three-channel piano roll, second song. Hot-swap target for the
+// piano_roll example. Same data-segment schema as piano_roll.kel
+// so swap is value-preserving.
+//
+// Channel routing differs from song 1: channel 1 carries harmony
+// (triangle waveform) and channel 2 carries bass (square waveform).
+// The waveform-to-channel mapping in the host is fixed, so the
+// swap also produces a timbral change: bass moves from a triangle
+// voice to a square voice, and harmony moves the other direction.
+//
+// The progression matches song 1 (C - Am - F - G), but with eighth
+// notes on the melody for a busier line and a sparser staccato bass.
+
+use host::play
+use host::silence
+
+enum Pitch { C, Cs, D, Ds, E, F, Fs, G, Gs, A, As, B, Rest }
+
+// ---------------------------------------------------------------
+// Channel 0: melody (lead). Sixteen eighth notes per loop.
+// ---------------------------------------------------------------
+fn melody_note(i: i64) -> (Pitch, i64, i64) {
+    match i {
+         0 => (Pitch::C,  5, 2),  // Bar 1: C major arpeggio with leading-tone return.
+         1 => (Pitch::E,  5, 2),
+         2 => (Pitch::G,  5, 2),
+         3 => (Pitch::E,  5, 2),
+         4 => (Pitch::A,  5, 2),  // Bar 2: A minor arpeggio reaching to C6.
+         5 => (Pitch::C,  6, 2),
+         6 => (Pitch::E,  5, 2),
+         7 => (Pitch::C,  5, 2),
+         8 => (Pitch::F,  5, 2),  // Bar 3: F major arpeggio.
+         9 => (Pitch::A,  5, 2),
+        10 => (Pitch::C,  6, 2),
+        11 => (Pitch::A,  5, 2),
+        12 => (Pitch::G,  5, 2),  // Bar 4: G major arpeggio.
+        13 => (Pitch::B,  5, 2),
+        14 => (Pitch::D,  6, 2),
+         _ => (Pitch::B,  5, 2),
+    }
+}
+fn melody_len() -> i64 { 16 }
+
+// ---------------------------------------------------------------
+// Channel 1: harmony. Sixteen quarter notes per loop. Two-note
+// alternation per chord, third up to fifth.
+// ---------------------------------------------------------------
+fn harmony_note(i: i64) -> (Pitch, i64, i64) {
+    match i {
+         0 => (Pitch::E, 4, 4),
+         1 => (Pitch::G, 4, 4),
+         2 => (Pitch::C, 5, 4),
+         3 => (Pitch::G, 4, 4),
+         4 => (Pitch::C, 5, 4),
+         5 => (Pitch::E, 5, 4),
+         6 => (Pitch::A, 4, 4),
+         7 => (Pitch::E, 5, 4),
+         8 => (Pitch::A, 4, 4),
+         9 => (Pitch::C, 5, 4),
+        10 => (Pitch::F, 4, 4),
+        11 => (Pitch::C, 5, 4),
+        12 => (Pitch::B, 4, 4),
+        13 => (Pitch::D, 5, 4),
+        14 => (Pitch::G, 4, 4),
+         _ => (Pitch::D, 5, 4),
+    }
+}
+fn harmony_len() -> i64 { 16 }
+
+// ---------------------------------------------------------------
+// Channel 2: rhythm / bass. Eight slots, on-beat staccato pattern.
+// ---------------------------------------------------------------
+fn bass_note(i: i64) -> (Pitch, i64, i64) {
+    match i {
+        0 => (Pitch::C,    3, 4),
+        1 => (Pitch::Rest, 0, 4),
+        2 => (Pitch::A,    2, 4),
+        3 => (Pitch::Rest, 0, 4),
+        4 => (Pitch::F,    2, 4),
+        5 => (Pitch::Rest, 0, 4),
+        6 => (Pitch::G,    2, 4),
+        _ => (Pitch::Rest, 0, 4),
+    }
+}
+fn bass_len() -> i64 { 8 }
+
+// ---------------------------------------------------------------
+// Pitch class to MIDI offset.
+// ---------------------------------------------------------------
+fn pitch_class(p: Pitch) -> i64 {
+    match p {
+        Pitch::C    => 0,
+        Pitch::Cs   => 1,
+        Pitch::D    => 2,
+        Pitch::Ds   => 3,
+        Pitch::E    => 4,
+        Pitch::F    => 5,
+        Pitch::Fs   => 6,
+        Pitch::G    => 7,
+        Pitch::Gs   => 8,
+        Pitch::A    => 9,
+        Pitch::As   => 10,
+        Pitch::B    => 11,
+        Pitch::Rest => -1,
+    }
+}
+
+fn midi_of(p: Pitch, octave: i64) -> i64 {
+    let pc = pitch_class(p);
+    if pc < 0 {
+        -1
+    } else {
+        (octave + 1) * 12 + pc
+    }
+}
+
+// ---------------------------------------------------------------
+// Per-channel state. Same six-slot schema as song 1.
+// ---------------------------------------------------------------
+data state {
+    idx0: i64, rem0: i64,
+    idx1: i64, rem1: i64,
+    idx2: i64, rem2: i64,
+}
+
+// ---------------------------------------------------------------
+// Tick loop. Channel 1 plays harmony, channel 2 plays bass.
+// (Song 1 had this routing reversed.)
+// ---------------------------------------------------------------
+loop main(input: i64) -> i64 {
+    // Channel 0: melody.
+    if state.rem0 == 0 {
+        let n0 = melody_note(state.idx0);
+        let m0 = midi_of(n0.0, n0.1);
+        if m0 >= 0 {
+            host::play(0, m0);
+        } else {
+            host::silence(0);
+        };
+        state.rem0 = n0.2 - 1;
+        let next0 = state.idx0 + 1;
+        if next0 >= melody_len() {
+            state.idx0 = 0;
+        } else {
+            state.idx0 = next0;
+        };
+    } else {
+        state.rem0 = state.rem0 - 1;
+    };
+
+    // Channel 1: harmony.
+    if state.rem1 == 0 {
+        let n1 = harmony_note(state.idx1);
+        let m1 = midi_of(n1.0, n1.1);
+        if m1 >= 0 {
+            host::play(1, m1);
+        } else {
+            host::silence(1);
+        };
+        state.rem1 = n1.2 - 1;
+        let next1 = state.idx1 + 1;
+        if next1 >= harmony_len() {
+            state.idx1 = 0;
+        } else {
+            state.idx1 = next1;
+        };
+    } else {
+        state.rem1 = state.rem1 - 1;
+    };
+
+    // Channel 2: bass.
+    if state.rem2 == 0 {
+        let n2 = bass_note(state.idx2);
+        let m2 = midi_of(n2.0, n2.1);
+        if m2 >= 0 {
+            host::play(2, m2);
+        } else {
+            host::silence(2);
+        };
+        state.rem2 = n2.2 - 1;
+        let next2 = state.idx2 + 1;
+        if next2 >= bass_len() {
+            state.idx2 = 0;
+        } else {
+            state.idx2 = next2;
+        };
+    } else {
+        state.rem2 = state.rem2 - 1;
+    };
+
+    let _ = yield 0;
+    0
+}
