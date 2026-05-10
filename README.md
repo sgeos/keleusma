@@ -219,14 +219,23 @@ Each pipeline stage produces typed errors with source locations.
 
 ## Workspace
 
-Six crates:
+Five crates:
 
 - `keleusma`. The runtime crate.
 - `keleusma-macros`. Compile-time proc macro for `#[derive(KeleusmaType)]`.
 - `keleusma-arena`. Standalone dual-end bump allocator. Published on crates.io as `keleusma-arena`.
 - `keleusma-bench`. Cost-model calibration tool that emits a measured `CostModel` for the host CPU.
 - `keleusma-cli`. Standalone command-line frontend providing `run`, `compile`, and `repl` subcommands.
-- `keleusma-piano-roll`. Three-channel SDL3 audio example driven by a Keleusma tick-based control loop.
+
+## Examples
+
+Rust embedding examples live under [`examples/`](examples). Run any of them with `cargo run --example <name>`.
+
+A larger end-to-end example, [`piano_roll`](examples/piano_roll.rs), is a three-channel SDL3 audio host driven by a Keleusma tick-based control loop. It is gated behind the `sdl3-example` feature because SDL3 is built from source via CMake. Run with:
+
+```sh
+cargo run --release --example piano_roll --features sdl3-example
+```
 
 ## Documentation
 

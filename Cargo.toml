@@ -1,5 +1,5 @@
 [workspace]
-members = ["keleusma-macros", "keleusma-arena", "keleusma-bench", "keleusma-cli", "keleusma-piano-roll"]
+members = ["keleusma-macros", "keleusma-arena", "keleusma-bench", "keleusma-cli"]
 
 [package]
 name = "keleusma"
@@ -16,8 +16,12 @@ readme = "README.md"
 rust-version = "1.87"
 
 [package.metadata.docs.rs]
-all-features = true
 rustdoc-args = ["--cfg", "docsrs"]
+
+[features]
+# Enables the SDL3 audio piano-roll example. Pulls in SDL3 (built
+# from source via CMake) and is therefore opt-in.
+sdl3-example = ["dep:sdl3"]
 
 [dependencies]
 libm = "0.2"
@@ -25,3 +29,8 @@ keleusma-macros = { path = "keleusma-macros", version = "0.1.0" }
 keleusma-arena = { version = "0.1", path = "keleusma-arena", features = ["alloc"] }
 allocator-api2 = { version = "0.4", default-features = false, features = ["alloc"] }
 rkyv = { version = "0.8", default-features = false, features = ["alloc", "bytecheck"] }
+sdl3 = { version = "0.18", features = ["build-from-source-static"], optional = true }
+
+[[example]]
+name = "piano_roll"
+required-features = ["sdl3-example"]

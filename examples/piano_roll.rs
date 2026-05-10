@@ -1,18 +1,50 @@
-// keleusma-piano-roll: a three-channel SDL3 audio host driven by a
-// Keleusma tick-based control loop.
-//
-// Architecture: the Keleusma script (`song.kel`) runs on the main
-// thread at one yield per 16th-note tick (125 ms at 120 BPM). At each
-// tick the script emits `host::play(channel, midi)` or
-// `host::silence(channel)` calls. These natives update voice state
-// shared with the SDL3 audio callback, which renders samples on
-// the audio thread.
-//
-// Run from the workspace root:
-//
-//     cargo run --release -p keleusma-piano-roll
-//
-// Press Enter to quit.
+//! Three-channel SDL3 audio piano roll driven by a Keleusma tick
+//! control loop.
+//!
+//! # Architecture
+//!
+//! The Keleusma script `piano_roll.kel` runs on the main thread at
+//! one yield per 16th-note tick (125 ms at 120 BPM). At each tick
+//! the script emits `host::play(channel, midi)` or
+//! `host::silence(channel)` native calls. These natives update
+//! voice state shared with the SDL3 audio callback, which renders
+//! samples on the audio thread.
+//!
+//! - **Audio thread (SDL3 callback)**: receives a sample buffer to
+//!   fill at sample rate (48 kHz), reads the current voice state
+//!   from a `Mutex<[Voice; 3]>`, advances per-voice phase, sums
+//!   per-voice waveforms. Never invokes the Keleusma VM.
+//! - **Main thread (Keleusma)**: runs `loop main` once per tick.
+//!   Each iteration calls zero or more native side-effects to
+//!   update shared voice state, then yields. The host sleeps
+//!   until the next tick boundary.
+//! - **Stdin thread**: blocks on `read_line` and flips an
+//!   `AtomicBool` to signal quit on Enter.
+//!
+//! # Song
+//!
+//! Four-bar progression in C major: `C - Am - F - G` (I-vi-IV-V),
+//! sixty-four 16th-note ticks total, auto-looping. Channel 0 is a
+//! square-wave melody, channel 1 a triangle-wave bass, channel 2
+//! a square-wave harmony.
+//!
+//! # Editing
+//!
+//! Per-channel instrument parameters (waveform, volume) are
+//! constants near the top of this file. Song notes are in
+//! `examples/piano_roll.kel` as match-on-index functions returning
+//! `(Pitch, octave, duration_in_16ths)` tuples.
+//!
+//! # Run
+//!
+//! ```text
+//! cargo run --release --example piano_roll --features sdl3-example
+//! ```
+//!
+//! SDL3 builds from source through the `build-from-source-static`
+//! feature on first build. CMake is required.
+//!
+//! Press Enter in the terminal to quit.
 
 use std::io::{self, BufRead};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -30,7 +62,7 @@ use sdl3::audio::{AudioCallback, AudioFormat, AudioSpec, AudioStream};
 
 // ---------------------------------------------------------------
 // Tunable instrument parameters. Edit these to change the sound
-// without touching `song.kel`.
+// without touching `piano_roll.kel`.
 // ---------------------------------------------------------------
 
 const SAMPLE_RATE: u32 = 48_000;
@@ -147,7 +179,7 @@ fn midi_to_freq_hz(midi: i64) -> f32 {
 // Entry point.
 // ---------------------------------------------------------------
 
-const SCRIPT: &str = include_str!("../song.kel");
+const SCRIPT: &str = include_str!("piano_roll.kel");
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Compile the Keleusma script.

@@ -9,116 +9,95 @@ AI to Human communication channel.
 ## Last Updated
 
 **Date**: 2026-05-10
-**Task**: V0.1-M3-T44 SDL3 audio example: keleusma-piano-roll.
-**Status**: Complete. New workspace member `keleusma-piano-roll` provides a real-use-case example of Keleusma driving an SDL3 audio host through a tick-based control loop. Three voices play a four-bar progression in C major that auto-loops indefinitely.
+**Task**: V0.1-M3-T45 Refactor SDL3 example into a feature-gated Cargo example.
+**Status**: Complete. The previously-introduced `keleusma-piano-roll` workspace member is now a Cargo example at `examples/piano_roll.rs` with SDL3 gated behind the `sdl3-example` feature on the parent crate.
 
 ## Verification
 
 **Commands**:
 
 ```bash
-cargo build --release -p keleusma-piano-roll
-cargo test --workspace --exclude keleusma-piano-roll
+cargo build --workspace
+cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
-(sleep 3; echo) | ./target/release/keleusma-piano-roll
+cargo build --release --example piano_roll --features sdl3-example
+cargo clippy --example piano_roll --features sdl3-example -- -D warnings
+cargo run --example piano_roll                # expect actionable error
+(sleep 2; echo) | ./target/release/examples/piano_roll
 ```
 
 **Results**:
 
-- Workspace tests pass. 519 tests across the workspace.
-- Clippy clean across `--workspace --all-targets`.
-- The piano-roll binary builds (SDL3 from source via `build-from-source-static` feature, CMake-driven, ~60 seconds first build, fast on rebuilds).
-- The binary runs end to end. It compiles the Keleusma script, opens the SDL3 audio device, drives the tick loop at 120 BPM, receives the stdin quit signal cleanly, and exits.
+- `cargo build --workspace` completes in seconds without compiling `sdl3` or `sdl3-sys`. The previous workspace-member arrangement triggered a roughly sixty-second CMake build of SDL3 on every `--workspace` invocation; this is fully eliminated.
+- `cargo test --workspace` passes. 519 tests across the workspace, unchanged from prior count.
+- Clippy clean on the workspace.
+- Clippy clean on the feature-gated example.
+- `cargo run --example piano_roll` without the feature produces the expected Cargo error: `target piano_roll in package keleusma requires the features: sdl3-example`. The error is actionable.
+- The example runs end to end, opens the SDL3 audio device, drives the tick loop, and exits cleanly on stdin Enter.
 
 ## Summary
 
-The user requested a real-use-case example: Rust + SDL3 host with a Keleusma audio control loop driving a three-channel embedded piano roll. Single Rust file plus single Keleusma file. The result is the new workspace member `keleusma-piano-roll`.
+The previous task introduced the SDL3 audio example as a workspace member (`keleusma-piano-roll`). The user observed that this was the wrong shape: an audio demonstration belongs in `examples/`, not as a sibling crate. The workspace-member arrangement was originally chosen to isolate SDL3's heavy build cost from `cargo --workspace` invocations, but the idiomatic Cargo way to handle that is `[[example]]` plus `required-features` plus optional dependency, not workspace structure.
 
-### Architecture
+This task implements the correct shape.
 
-The example demonstrates the canonical synchronous-reactive split that Keleusma is designed for.
+### Cargo wiring
 
-- **Audio thread (SDL3 callback)**: receives a sample buffer to fill at sample rate (48 kHz), reads the current voice state from a `Mutex<[Voice; 3]>`, advances per-voice phase, sums the per-voice waveform contributions. The audio thread never invokes the Keleusma VM.
-- **Main thread (Keleusma)**: runs the script's `loop main` body once per tick at 125 milliseconds (16th-note resolution at 120 BPM). Each iteration emits zero or more `host::play(channel, midi)` or `host::silence(channel)` native calls that update the shared voice state. After the body's single `yield`, the host sleeps until the next tick boundary.
-- **Stdin thread**: blocks on `read_line` and flips an `AtomicBool` to signal quit. The main loop polls the flag at each tick.
+The parent `keleusma` Cargo.toml now contains:
 
-The script's data segment carries per-channel position state `(idx_n, rem_n)`, allowing the script to resume cleanly across many ticks without re-allocating its bookkeeping every iteration. The audio thread receives only the small `Voice` struct (`freq: f32`, `gate: bool`) per channel, so the lock holds are short relative to the audio buffer period.
+```toml
+[features]
+sdl3-example = ["dep:sdl3"]
 
-### Song
+[dependencies]
+sdl3 = { version = "0.18", features = ["build-from-source-static"], optional = true }
 
-Four-bar progression in C major: `C - Am - F - G` (I-vi-IV-V). Each bar is sixteen 16th-note ticks, total loop length sixty-four ticks. The three channels:
-
-- **Channel 0 (melody)**: square wave, sixteen quarter notes outlining each chord triad.
-- **Channel 1 (bass)**: triangle wave, eight half notes on the chord roots.
-- **Channel 2 (harmony)**: square wave, sixteen quarter notes on chord thirds and fifths.
-
-The note format is `(Pitch, octave, duration_in_16ths)` where `Pitch` is an enum carrying the twelve chromatic pitch classes plus `Rest`. The format is musically idiomatic: `(Pitch::C, 4, 4)` reads as "C4 quarter note" without translation. The duration unit is sixteenth notes, so 1 = sixteenth, 2 = eighth, 4 = quarter, 8 = half, 16 = whole.
-
-### Editability
-
-Per the user's directive, instrument parameters live in the Rust file as `const` arrays at the top:
-
-```rust
-const WAVEFORMS: [Waveform; NUM_VOICES] = [
-    Waveform::Square,   // melody
-    Waveform::Triangle, // bass
-    Waveform::Square,   // harmony
-];
-const VOLUMES: [f32; NUM_VOICES] = [0.22, 0.18, 0.18];
+[[example]]
+name = "piano_roll"
+required-features = ["sdl3-example"]
 ```
 
-These can be edited without touching the Keleusma script. Available waveforms include square, triangle, sawtooth, and sine; the unused variants are marked `#[allow(dead_code)]` so the file compiles clean while leaving them available.
+The `package.metadata.docs.rs` block dropped its prior `all-features = true` entry. Without that change, docs.rs builds would attempt to enable `sdl3-example` and trigger an SDL3 source build during documentation generation, which is undesirable.
 
-The song itself is entirely in the Keleusma script through the `melody_note`, `bass_note`, and `harmony_note` match-on-index functions plus the corresponding length functions.
+### File moves
 
-### Build
+Three files transitioned from the removed workspace-member directory.
 
-SDL3 is pulled in through the `sdl3` 0.18 crate with the `build-from-source-static` feature. CMake is required at build time. The first build takes approximately one minute as SDL3 compiles from source; subsequent builds are fast. The trade-off is that the example is self-contained: a user can clone the repository and run `cargo run --release -p keleusma-piano-roll` without installing SDL3 system libraries through Homebrew or a package manager.
+- `keleusma-piano-roll/src/main.rs` -> `examples/piano_roll.rs`. The internal `include_str!` path was updated from `"../song.kel"` to `"piano_roll.kel"`. The header doc comment was upgraded from line comments to a `//!` block and absorbed the architecture notes that previously lived in the workspace-member README. The "Run" instruction in the header was updated to the new invocation form.
+- `keleusma-piano-roll/song.kel` -> `examples/piano_roll.kel`. No content change.
+- `keleusma-piano-roll/README.md` -> deleted. Its content was distilled into the file-level doc comment on `piano_roll.rs`.
 
-### Bug Fixes During Authoring
+The `keleusma-piano-roll/` directory was removed entirely.
 
-Three documentation issues surfaced as Keleusma syntax errors while writing the script. All have been corrected at the source.
+### Top-level navigation
 
-1. **Data block syntax**. The data block requires a name: `data state { fields }` not `data { fields }`. The `WHY_REJECTED.md` rewrite example for the recursive-factorial case had the wrong syntax and is now corrected. The corrected version also notes that data slots default to `Value::Unit` and the host must initialize them through `vm.set_data` before driving the script.
-2. **`use` declaration position**. All `use` declarations must precede every other top-level item (types, functions, data, traits, impl). The script originally placed `use host::play` and `use host::silence` after the `enum Pitch` declaration, which produced a parse error.
-3. **If-else statement-position semicolons**. The Keleusma parser requires explicit trailing semicolons after `if-else` expressions when used at statement position. Rust admits the implicit-unit form; Keleusma does not. The script was updated to add semicolons after each top-level if-else and after the inner if-else for next-index advancement.
-
-These three constraints are user-facing, not internal, and are now reflected in the corrected `WHY_REJECTED.md` example. A future enhancement to the parser could relax constraint three, but the current strictness is consistent with the language design's preference for explicit syntactic markers.
+The top-level README workspace-crate list was reduced from six entries to five. A new "Examples" section points at `examples/` and the `piano_roll` example with the explicit feature-flag invocation. The workspace member listing in the workspace `Cargo.toml` was reduced to four entries.
 
 ## Trade-offs and Properties
 
-The decision to use a `Mutex<[Voice; 3]>` rather than a lock-free ring buffer or per-voice atomics reflects the small lock-hold duration relative to the audio buffer period. With three `(f32, bool)` voices the entire snapshot is around twenty bytes; copying it under the lock takes nanoseconds. A lock-free design would be appropriate for hundreds of voices or for hard real-time deadlines where any unbounded wait is unacceptable; for this example the simplicity outweighs the theoretical benefit.
+Putting SDL3 as an optional dependency on the parent crate, rather than scoping it tightly to the example, accepts a small surface-area expansion on `keleusma`'s declared dependency tree. The benefit is that the standard Cargo convention (optional dep + feature + required-features) does the right thing automatically: the dep does not download, compile, or appear in the dependency graph unless the feature is enabled. Downstream users of `keleusma` see no behavior change because their builds do not enable `sdl3-example`.
 
-The decision to have the script declare each note as a function-with-match returning a tuple, rather than as a literal array indexed in the loop body, is a performance optimization that became visible during development. Keleusma admits arrays of tuples and supports indexing them, so the literal-array form is also workable. The match-function form generates one fixed lookup per tick rather than constructing an array on every iteration. Both forms are within the verifier's capability; the match form was preferred for performance and readability.
+The decision to leave the architecture notes in the file-level doc comment on `piano_roll.rs` rather than create a separate `examples/piano_roll.md` keeps the example self-contained: a reader who opens the file sees the rationale alongside the code. The trade-off is that file-level doc comments do not render as nicely on docs.rs as standalone markdown, but examples are not the primary docs.rs surface.
 
-The decision to place the song in the Keleusma file and the instrument parameters in the Rust file is a clean separation of concerns: the script controls musical decisions, the host controls synthesis decisions. A user editing the song does not need to recompile the host (only the script-compile path runs); a user editing instrument parameters does need a Rust rebuild but can do so without touching the music.
+The decision to use `include_str!("piano_roll.kel")` rather than `std::fs::read_to_string("examples/piano_roll.kel")` keeps the example self-contained at runtime. The compiled binary embeds the script bytes; users can run the binary from any working directory. The trade-off is that the example's script is not editable without recompilation; for a demonstration, this is the right trade.
 
-The decision to leave SDL3 as `build-from-source-static` rather than recommending a system-installed SDL3 library trades faster builds for portability. For an example that prioritizes "clone and run" ergonomics, this is the right default. A production deployment would prefer the system library to avoid bundling a copy of SDL3 in every binary.
-
-The example illustrates three points that smaller examples do not: a real time-critical workload (audio with audible deadline), shared state across threads (the host wires Keleusma side-effects to a thread-safe handoff), and multi-voice control flow (three independently-sequenced channels with different note durations). These are the load-bearing pieces that distinguish a "real use case" example from a single-threaded compile-and-run demonstration.
+The `sdl3-example` feature name is used per the user's directive and is consistent with the example file name. A more general name like `audio` was considered and rejected because the feature gates SDL3 specifically, not audio capability in general; future audio examples on a different backend would warrant their own feature.
 
 ## Files Touched
 
-- **`Cargo.toml`** at workspace root. Added `keleusma-piano-roll` to workspace members.
-- **`README.md`** (top-level). Workspace section updated to reflect six crates.
-- **`keleusma-piano-roll/Cargo.toml`** (new). Crate metadata; depends on `keleusma`, `keleusma-arena`, `sdl3` with `build-from-source-static` feature, `libm`. License 0BSD.
-- **`keleusma-piano-roll/README.md`** (new). Architecture, song description, editability notes, build instructions, "why this example" rationale.
-- **`keleusma-piano-roll/song.kel`** (new). Three-channel piano roll. Pitch enum, MIDI conversion helpers, three note-lookup match functions, length functions, data segment for position state, `loop main` driving three channels per tick.
-- **`keleusma-piano-roll/src/main.rs`** (new). SDL3 host. Mixer struct implementing `AudioCallback<f32>`, waveform synthesis, MIDI-to-frequency conversion, native registration, stdin reader thread, tick loop with `Instant`-based deadline.
-- **`docs/guide/WHY_REJECTED.md`**. Data-block syntax corrected and host-initialization note added.
-- **`docs/process/TASKLOG.md`**. New row for V0.1-M3-T44 in the Task Breakdown table and a new History row.
+- **`Cargo.toml`** (workspace root). Removed `keleusma-piano-roll` from `[workspace] members`. Added `[features] sdl3-example`. Added `sdl3` as an optional dependency. Added `[[example]] name = "piano_roll" required-features = ["sdl3-example"]`. Removed `all-features = true` from `package.metadata.docs.rs`.
+- **`README.md`** (top-level). Reduced workspace crate list to five. Added an "Examples" section pointing at the gated `piano_roll` invocation.
+- **`examples/piano_roll.rs`** (moved from `keleusma-piano-roll/src/main.rs`). Header rewritten as a `//!` doc block absorbing the rationale from the removed workspace-member README. `include_str!` path updated.
+- **`examples/piano_roll.kel`** (moved from `keleusma-piano-roll/song.kel`). Unchanged content.
+- **`keleusma-piano-roll/`**. Removed.
+- **`docs/process/TASKLOG.md`**. New row for V0.1-M3-T45.
 - **`docs/process/REVERSE_PROMPT.md`**. This file.
 
 ## Remaining Open Priorities
 
-The example is functional and was smoke-tested for end-to-end execution. Several refinements remain.
+The carry-over open priorities from V0.1-M3-T44 still apply (no ADSR envelopes, no audio-output golden test in CI, single-frequency-per-voice limitation, no explicit audio thread priority management, hot code swap not demonstrated, `set_native_bounds` not exercised). None are blocking.
 
-- **No ADSR envelopes**. The current synthesis is gate-driven only: a voice is on or off with no attack, decay, sustain, or release. Real instruments fade in and out smoothly. Adding a per-voice envelope state machine in the audio thread would improve listenability without changing the script-host interface.
-- **Audio output not directly verifiable in CI**. The smoke test confirms the program runs and exits cleanly but does not verify the actual audio output sounds correct. A CI step that captures the audio device output and compares against a golden waveform would catch regressions; this is non-trivial and is deferred.
-- **Single-frequency-per-voice limitation**. The `Voice` struct holds one frequency; rapid note changes within a single tick are not supported. The example does not need this, but a richer use case (chord trills, ornamentation) would.
-- **No explicit thread-priority management on the audio callback**. SDL3 manages this internally for the audio thread, but a production embedding would want explicit verification on the deployment platform.
-- **Hot code swap not demonstrated**. The user explicitly excluded this from the example as the wrong fit, but documenting the swap pattern in a separate example (load v2 of the script while audio plays v1's voices) would round out the architecture pattern coverage.
-- **The `set_native_bounds` attestation pass is not exercised** in this example. The natives are zero-attested by default, which is harmless because the script does not depend on the verifier proving the native heap budget. A production audio embedding would want to attest realistic bounds for the natives.
+The `package.metadata.docs.rs` change removed `all-features = true`. If any future feature genuinely should be on for docs.rs, an explicit `features = ["..."]` line should replace the absent setting.
 
 ## Intended Next Step
 
@@ -126,4 +105,4 @@ Await human prompt before proceeding.
 
 ## Session Context
 
-This session built a real-use-case example demonstrating Keleusma in its intended deployment shape: an embedded scripting layer driving real-time audio synthesis. The example exercises the synchronous-reactive split (tick-rate logic, sample-rate audio), the bounded-step guarantee (per-tick budget on a real deadline), the productivity guarantee (yield per tick), the data segment (per-channel position state), and native interop (host functions updating shared voice state through `Mutex`). The presence of the example is significant because it counters the most common skepticism about deeply-restricted scripting languages: "if locals are immutable and recursion is forbidden, can the language do anything useful in production?" The answer here is concretely yes for the audio-engine use case the language was designed for.
+This session closed an architectural mismatch in the prior task. The audio demonstration is now organized as the user expected. The shape is the idiomatic Rust pattern for examples that depend on heavy optional crates: optional dependency, feature flag, `[[example]] required-features`. Workspace builds stay fast and SDL3-free; the example builds cleanly when explicitly requested.
