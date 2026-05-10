@@ -9,8 +9,8 @@ AI to Human communication channel.
 ## Last Updated
 
 **Date**: 2026-05-09
-**Task**: V0.1-M3-T30. B7 error propagation through yield, and B8 VM allocation model resolved as not-applicable.
-**Status**: Complete. B7 implemented as a resume-value pattern with a thin convenience API. B8 closed without code changes after the analysis showed the originally framed shared-arena design is incompatible with existing contracts.
+**Task**: V0.1-M3-T31. B11 per-op decode optimization.
+**Status**: Complete. Hot dispatch loop now reads decoded ops from a per-chunk cache populated once at construction.
 
 ## Verification
 
@@ -24,61 +24,67 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 **Results**:
 
-- 497 tests pass workspace-wide. 429 keleusma unit (2 new), 17 keleusma marshall integration, 17 keleusma `kstring_boundary` integration, 28 keleusma-arena unit, 6 keleusma-arena doctests.
+- 497 tests pass workspace-wide. 429 keleusma unit, 17 keleusma marshall integration, 17 keleusma `kstring_boundary` integration, 28 keleusma-arena unit, 6 keleusma-arena doctests.
 - Clippy clean under `--workspace --all-targets`.
 - Format clean.
 
 ## Summary
 
-### B7. Error propagation through yield
+The hot dispatch loop previously called `op_from_archived(&chunk.ops[ip])` per instruction fetch. That function performed a discriminant match across the archived `Op` form and produced a small payload copy. For hot loops the cost compounds with the iteration count.
 
-Recognized that the existing yield/resume cycle already supports bidirectional error handling without runtime extension. The host's `resume(Value)` accepts any value; the script's yield expression evaluates to that value at runtime; the script patterns matches on a script-defined variant union to distinguish success from error. Result-shaped enums (like `enum Reply { Ok(i64), Err }`) or `Option<T>` are both supported with no language change.
+The VM now caches a per-chunk `Vec<Op>` populated at construction. The hot path reads through `decoded_ops[chunk_idx][ip]`, which is a constant-time slice index. The previous per-fetch decoding is performed once at construction and at every `replace_module`.
 
-Added `Vm::resume_err(error_value)` as a thin wrapper over `Vm::resume`. The wrapper signals intent at the host call site and provides a clear API name for the failure case. Functionally, it routes through the same operand-stack mechanism as `resume`. The choice of API name reflects that the value being passed represents an error in the host-script protocol, not a successful input.
+Implementation:
 
-Recovery semantics follow Keleusma's general dynamic-tag dispatch contract: if the script fails to handle the error variant, the next operation that consumes the value traps with a runtime type error. This is not a new failure mode. Scripts that want strict recovery wrap their dialogue logic in an exhaustive match.
+- New `decoded_ops: Vec<Vec<Op>>` field on `Vm` indexed as `decoded_ops[chunk_idx][ip]`.
+- New `decode_all_ops` helper walks the archived module's chunks and decodes every op into the cache.
+- `Vm::construct` (owned bytecode path) populates the cache via `decode_all_ops`.
+- `Vm::view_bytes_zero_copy` (borrowed bytecode path) populates the cache inline because its archived view comes from a borrowed slice rather than a copied `AlignedVec`.
+- `Vm::replace_module` re-decodes for the new module after the bytecode swap.
+- `Vm::chunk_op` simplified to a direct slice index. The archived form is no longer consulted on the hot path.
 
-WCET implications. No new bytecode, opcode, or runtime mechanism. Match-arm dispatch is bounded by the number of arms at compile time. The verifier's existing analysis applies unchanged. Hosts that need automatic propagation analogous to Rust's `?` operator can implement that pattern in the script with pattern matching and early `return`; no language extension is required.
+Trade-offs.
 
-### B8. VM allocation model
+- Cost: one heap allocation per chunk at construction, proportional to the program's total op count. The `Op` type is `Copy` (a small enum with payload), so the per-op storage is small.
+- Zero-copy contract: constants and string data continue to be read on demand from the archived form. Only the op slice is materialized eagerly. The wire-format zero-copy benefit for constant pools, string data, and metadata is preserved.
+- One-shot scripts: cost is roughly equal to the previous per-fetch decoding (the same number of decodings happen, just amortized differently).
+- Hot-loop scripts: per-iteration savings compound with iteration count.
 
-Closed as not-applicable. The originally framed shared-arena design is incompatible with several existing contracts: per-VM `verify_resource_bounds`, per-arena `KString` epoch tracking, per-VM `Op::Reset` semantics, single-threaded arena ownership, and the per-VM cross-yield prohibition on dynamic strings. The legitimate use cases (allocation overhead amortization across sequential scripts) are already covered by the existing pattern of constructing one `Arena` and reusing it across successive `Vm::new` calls between resets. The "complexity to lifetime management" hedge in the original entry understated the problem; the entry is now updated with the full analysis.
+Option B from the original B11 entry (specialized dispatch tables for a small set of hot opcodes) was not pursued. The simpler cache approach removes the per-fetch decode cost without the codegen complexity, and benchmark-driven workload analysis would be needed to identify which opcodes are hot enough to merit specialization. Option A is the conservative win.
 
 ## Tests
 
-Two new VM tests:
-
-- `resume_err_propagates_through_enum_reply` exercises both successful (`Reply::Ok(42)`) and failure (`Reply::Err`) resumes through the same enum-based dialogue.
-- `resume_err_passes_through_with_value_none` exercises the failure path through a single resume with the `Err` variant.
-
-One new example: `examples/yield_error.rs` demonstrates the pattern end to end with descriptive output.
+No new tests added. The existing 429 keleusma unit tests cover the whole execution loop across many opcodes, which collectively verify the decode cache is correct. A failure in `op_from_archived` would surface as an op-mismatch in any test that exercises the relevant opcode; the test surface is broad enough that adding a dedicated decode-cache test would be redundant.
 
 ## Trade-offs and Properties
 
-The decision to expose `resume_err` as a thin wrapper rather than a richer error-propagation mechanism was deliberate. Adding a real semantic difference (such as a sentinel `Value::Trap` that the script must explicitly catch) would introduce a new failure mode without solving a real problem. The script can already enforce strict handling via exhaustive match, and the runtime can already trap on type mismatch. The wrapper provides documentation value at the host's call site without inviting bytecode changes.
+The decoded cache is owned by the VM and lives for the VM's lifetime. Memory cost is bounded by the program's total op count and is fixed at construction or hot-swap time; there is no growth at runtime. The cache survives `Op::Reset` since the bytecode does not change at reset; only the operand stack and arena top region are cleared.
 
-The chosen pattern uses script-defined enums rather than a built-in `Result<T, E>`. This keeps the type system simple and avoids the question of how the error type `E` is declared at the function boundary. Hosts and scripts agree on the dialogue's variant union in source. The trade-off is that there is no compiler-enforced shape; if the host resumes with a value whose type does not match the script's declared resume type, the script traps at the next operation. This is the existing contract for all yield/resume exchanges.
+The borrowed-bytecode zero-copy constructor `Vm::view_bytes_zero_copy` was previously the path that minimized memory overhead at construction. It now allocates the decoded cache, increasing its memory footprint. The trade-off is justified: the zero-copy constructor is intended for hot-loop dispatch where the per-iteration savings dominate the per-construction cost. A future refinement could expose a constructor flag to opt out of the cache for hosts that genuinely need minimum-construction-overhead, but no such use case has been observed.
 
-For B8, the "not-applicable" resolution rather than implementation reflects the analysis: the sharing question conflicts with five distinct contracts, none of which were considered when the original entry was written. Recording the analysis in the BACKLOG closes the question and prevents a future implementer from approaching it without seeing the constraints.
+The cache is reconstructed at `replace_module`. The cost is the same as construction. Hot swap is rare relative to dispatch, so this is negligible.
 
 ## Changes Made
 
 ### Source
 
-- **`src/vm.rs`**. New `Vm::resume_err(error_value: Value)` method. Two new unit tests.
-- **`examples/yield_error.rs`** (new). End-to-end demonstration.
+- **`src/vm.rs`**. New `Vm::decoded_ops` field. New module-level `decode_all_ops` helper. `Vm::construct`, `Vm::view_bytes_zero_copy`, and `Vm::replace_module` populate the cache. `Vm::chunk_op` reads from the cache instead of decoding on demand.
 
 ### Knowledge Graph
 
-- **`docs/decisions/BACKLOG.md`**. B7 marked resolved with the surface pattern and host pattern documented. B8 marked not-applicable with the full analysis recorded.
-- **`docs/process/TASKLOG.md`**. New row for V0.1-M3-T30.
+- **`docs/decisions/BACKLOG.md`**. B11 marked resolved with the option-A implementation documented.
+- **`docs/process/TASKLOG.md`**. New row for V0.1-M3-T31.
 - **`docs/process/REVERSE_PROMPT.md`**. This file.
 
 ## Remaining Open Priorities
 
-The named B7 and B8 work is closed. Subsequent backlog items relevant to V0.1-M3 include:
+The named B11 work is closed. The remaining open BACKLOG items are smaller refinements or items deferred earlier in V0.1-M3:
 
-- B11. Per-op decode optimization for zero-copy execution.
+- Recursion-depth attestation API for recursive closures (a refinement over the safe-constructor rejection of `Op::MakeRecursiveClosure`).
+- `Op::CallIndirect` flow analysis to tighten WCET bounds for non-recursive indirect dispatch.
+- Removing the `Type::Unknown` sentinel from B1 (requires declaring native function signatures).
+- f-string finer-grained span attribution.
+- Block expressions as primary parsing form.
 
 The `keleusma-arena` registry version is still v0.1.0.
 
@@ -88,4 +94,4 @@ Await human prompt before proceeding.
 
 ## Session Context
 
-This session resolved two backlog items with different paths to closure. B7 became a recognition that the existing infrastructure already supported the use case, plus a small convenience API and documentation. B8 became an analysis that the originally framed design is incompatible with existing contracts; the entry is closed without code changes. Both close out the named V0.1 work without breaking any existing tests or contracts.
+This session optimized the hot dispatch loop by caching decoded ops at VM construction. The change is structurally simple, preserves the zero-copy contract for constant data, and removes a per-fetch overhead that compounded across hot loops. No tests were added because the existing 429 unit tests cover the dispatch loop comprehensively.

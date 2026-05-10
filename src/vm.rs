@@ -127,6 +127,32 @@ pub const DEFAULT_NATIVE_WCMU_BYTES: u32 = 0;
 /// can override this by calling `Vm::new_with_arena_capacity`.
 pub const DEFAULT_ARENA_CAPACITY: usize = 64 * 1024;
 
+/// Decode every op in every chunk of an aligned bytecode buffer and
+/// return the resulting per-chunk owned op vectors.
+///
+/// The returned vector is indexed by chunk index. Each inner vector
+/// contains the chunk's ops in instruction order. The hot dispatch
+/// loop reads from these vectors directly through `chunk_op` to
+/// avoid the per-fetch discriminant match against the archived form.
+///
+/// The aligned buffer's framing is validated through
+/// `Module::access_bytes`. The op decoding uses `op_from_archived`
+/// for each op slot. This is the same conversion that the previous
+/// hot-path fetch performed; pre-decoding amortizes its cost across
+/// VM lifetime instead of paying it per fetch.
+fn decode_all_ops(aligned: &rkyv::util::AlignedVec<8>) -> Result<Vec<Vec<Op>>, VmError> {
+    let archived = crate::bytecode::Module::access_bytes(aligned.as_slice())?;
+    let mut decoded: Vec<Vec<Op>> = Vec::with_capacity(archived.chunks.len());
+    for chunk in archived.chunks.iter() {
+        let mut ops: Vec<Op> = Vec::with_capacity(chunk.ops.len());
+        for op in chunk.ops.iter() {
+            ops.push(crate::bytecode::op_from_archived(op));
+        }
+        decoded.push(ops);
+    }
+    Ok(decoded)
+}
+
 /// Compute the smallest arena capacity that admits the given module
 /// under the supplied native attestations. Returns the maximum WCMU sum
 /// across Stream chunks, or zero if the module has no Stream chunks.
@@ -193,6 +219,18 @@ impl<'a> BytecodeStore<'a> {
 /// with the same safety justification.
 pub struct Vm<'a, 'arena> {
     bytecode: BytecodeStore<'a>,
+    /// Per-op decode cache, populated at VM construction and at every
+    /// `replace_module`. Indexed as `decoded_ops[chunk_idx][ip]`. The
+    /// hot dispatch loop reads from this slice directly, which avoids
+    /// the per-fetch discriminant match and payload copy that
+    /// `op_from_archived` performs against the archived form.
+    ///
+    /// The cost is one heap allocation proportional to the program's
+    /// total op count at construction. Constants and string data
+    /// continue to be read on demand from the archived form, so the
+    /// zero-copy contract for those is preserved. The `Op` type is
+    /// `Copy`, so the slice access is a trivial load on the hot path.
+    decoded_ops: Vec<Vec<Op>>,
     /// Operand stack. Bump-allocated from the arena's bottom region.
     /// Recreated at every arena reset because the bump allocator's
     /// `deallocate` is a no-op and the Vec's storage would otherwise
@@ -235,10 +273,12 @@ impl<'a, 'arena> Vm<'a, 'arena> {
         Ok(Module::from_bytes(self.bytecode.as_slice())?)
     }
 
-    /// Materialize the op at `(chunk_idx, ip)` from archived storage.
+    /// Read the op at `(chunk_idx, ip)` from the per-op decode cache
+    /// populated at VM construction. The hot dispatch loop calls this
+    /// per fetch, so the implementation is a direct slice index. The
+    /// archived form is no longer consulted on the hot path.
     fn chunk_op(&self, chunk_idx: usize, ip: usize) -> Op {
-        let chunk = &self.archived().chunks[chunk_idx];
-        crate::bytecode::op_from_archived(&chunk.ops[ip])
+        self.decoded_ops[chunk_idx][ip]
     }
 
     /// Materialize the constant at `(chunk_idx, idx)` from archived storage.
@@ -481,8 +521,28 @@ impl<'a, 'arena> Vm<'a, 'arena> {
             archived.data_layout.as_ref().map_or(0, |dl| dl.slots.len())
         };
         let data = vec![Value::Unit; data_len];
+        // Pre-decode every chunk's ops for the hot dispatch loop. The
+        // borrowed-bytes constructor cannot reuse `decode_all_ops`'s
+        // aligned-vec entry point because the bytes are borrowed
+        // rather than copied; instead, the archived view is taken
+        // directly through `access_bytes` and the ops decoded inline.
+        let decoded_ops: Vec<Vec<Op>> = {
+            let archived = crate::bytecode::Module::access_bytes(bytes)?;
+            archived
+                .chunks
+                .iter()
+                .map(|chunk| {
+                    chunk
+                        .ops
+                        .iter()
+                        .map(crate::bytecode::op_from_archived)
+                        .collect::<Vec<Op>>()
+                })
+                .collect()
+        };
         Ok(Self {
             bytecode: BytecodeStore::Borrowed(bytes),
+            decoded_ops,
             stack: ArenaVec::new_in(arena.bottom_handle()),
             frames: ArenaVec::new_in(arena.bottom_handle()),
             natives: Vec::new(),
@@ -504,8 +564,10 @@ impl<'a, 'arena> Vm<'a, 'arena> {
         let bytes = module.to_bytes()?;
         let mut aligned = rkyv::util::AlignedVec::<8>::with_capacity(bytes.len());
         aligned.extend_from_slice(&bytes);
+        let decoded_ops = decode_all_ops(&aligned)?;
         Ok(Self {
             bytecode: BytecodeStore::Owned(aligned),
+            decoded_ops,
             stack: ArenaVec::new_in(arena.bottom_handle()),
             frames: ArenaVec::new_in(arena.bottom_handle()),
             natives: Vec::new(),
@@ -703,7 +765,9 @@ impl<'a, 'arena> Vm<'a, 'arena> {
         let bytes = new_module.to_bytes()?;
         let mut aligned = rkyv::util::AlignedVec::<8>::with_capacity(bytes.len());
         aligned.extend_from_slice(&bytes);
+        let decoded_ops = decode_all_ops(&aligned)?;
         self.bytecode = BytecodeStore::Owned(aligned);
+        self.decoded_ops = decoded_ops;
         self.data = initial_data;
         // `full_reset_arena_internal` drops and recreates the
         // arena-backed stacks before clearing both ends.
