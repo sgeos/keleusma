@@ -54,9 +54,13 @@ Pruning policy. Generic functions whose specializations were generated are dropp
 
 Polymorphic recursion cycle detection. Two complementary bounds guard the fixed-point loop. The global `SPECIALIZATION_LIMIT` caps the total number of specializations. The `PER_FUNCTION_LIMIT` caps the number of specializations any single generic function may produce, which is the structural signature of polymorphic recursion. When the per-function bound is reached, the loop exits early and the remaining work is left unspecialized; subsequent compilation will surface the truncation through the bytecode chunk count limit, which produces a clearer error path than infinite expansion.
 
-## ~~B3. Closures and anonymous functions~~ (Resolved with environment capture)
+## ~~B3. Closures and anonymous functions~~ (Implemented; not WCET-safe)
 
-Surface syntax `|args| body` and `|args| -> ret { body }`. Closures capture outer-scope locals and execute end to end through hoisted chunks plus the indirect-call mechanism.
+Surface syntax `|args| body` and `|args| -> ret { body }` parses, type-checks, monomorphizes, and emits bytecode. The runtime supports first-class function values through `Op::PushFunc`, `Op::MakeClosure`, `Op::MakeRecursiveClosure`, and `Op::CallIndirect`.
+
+WCET status. **Programs that invoke closures through `Op::CallIndirect` are rejected by the safe verifier.** The static WCET and WCMU analysis cannot follow indirect-dispatch edges through the call graph. `verify::module_wcmu` rejects any module containing `Op::CallIndirect` or `Op::MakeRecursiveClosure`. The construction ops `Op::PushFunc` and `Op::MakeClosure` remain admissible because they produce values that can be yielded or stored without invocation; only dispatch through `Op::CallIndirect` is the load-bearing rejection. The valid form of unbounded execution is the top-level `loop` block, which the structural verifier admits through the productivity rule.
+
+`Vm::new_unchecked` and `Vm::load_bytes_unchecked` exist for trust-skip of precompiled bytecode that was verified during the build pipeline. Using them to admit unbounded programs at runtime is intentional misuse outside the WCET contract. The closure feature is therefore not part of the WCET-safe surface; programs that need definitive bounds must restrict themselves to direct calls.
 
 What lands.
 
@@ -67,56 +71,9 @@ What lands.
 - VM execution. `Op::MakeClosure` pops `n` captures and pushes `Value::Func` with the captured env. `Op::CallIndirect` pops args plus the `Func` value, then pushes the env values back onto the operand stack as implicit arguments before the explicit ones, and invokes the referenced chunk.
 - Type checker accepts `ClosureRef` and indirect-call call sites with fresh type variables.
 
-End-to-end. `examples/closure_basic.rs` demonstrates `let f = |x: i64| x + 1; f(41)` returning 42. `examples/closure_capture.rs` demonstrates `let n: i64 = 10; let f = |x: i64| x + n; f(5)` returning 15.
+Implementation surface. The language continues to support closures end to end at the parse, type-check, monomorphize, and runtime levels. First-class function arguments, environment capture, transitive nested capture, and recursive let-binding self-reference all work through the language pipeline. The runtime executes closures correctly when constructed through `Vm::new_unchecked` because the unsafe path skips the resource-bounds rejection while preserving structural verification. Hosts that have non-real-time requirements may use the unsafe constructor at their own risk, but the language does not advertise closures as part of the WCET-safe surface. The repository does not include closure examples because all such examples either fail at the safe constructor or require the unsafe constructor, and the latter would model a usage pattern outside the language's contract.
 
-First-class closures as function arguments now work end to end. A generic function `fn apply<F>(f: F, x: i64) -> i64 { f(x) }` accepts a closure and invokes it through the indirect-call mechanism. The compiler resolves the parameter `f` as a local and emits `Op::CallIndirect`. Monomorphization leaves the call generic when the argument's concrete type cannot be inferred (closure types are opaque); the runtime polymorphic dispatch handles invocation.
-
-Nested closures with transitive capture work end to end. When a closure is hoisted, the resulting `Expr::ClosureRef` carries the inner closure's free-variable list. The free-variable analysis for any enclosing closure now treats each entry of an inner `ClosureRef`'s captures list as a free variable of the enclosing expression unless it is bound in the enclosing scope. This propagation lets an inner closure capture a name from an outer-function local through an outer closure's synthetic chunk: the outer closure's hoisted body is given the name as an additional implicit parameter, and at the inner closure's construction site that local is in scope and is captured normally.
-
-Recursive closures via let-binding work end to end. The form
-`let f = |...| ... f(...) ...` declares a closure whose body
-references its own let-binding name. The hoist pass detects this
-pattern in `Stmt::Let` and synthesizes a chunk whose parameter list
-is `(other_captures..., self_param, explicit_params...)` where
-`self_param` carries the binding name. The compiler emits the new
-`Op::MakeRecursiveClosure(chunk_idx, n_captures)` instead of
-`Op::MakeClosure`, producing a `Value::Func { recursive: true }`. At
-each invocation through `Op::CallIndirect`, the runtime pushes the
-closure value itself into the self slot before the explicit
-arguments, so references to the binding name inside the body
-resolve to the closure value and dispatch through indirect call.
-The type checker registers a fresh type variable for the binding
-before checking the closure value, allowing the body's
-self-reference to type-check rather than failing as undefined.
-Recursive closures also support regular captures: the synthetic
-chunk's parameter order places captures before the self slot, and
-`MakeRecursiveClosure` pops the captures into the env identically
-to `MakeClosure`. End-to-end demonstration:
-`examples/closure_recursive.rs` computes `fact(5) == 120` using
-`Vm::new_unchecked` to opt out of resource-bounds verification.
-Bytecode version is bumped to `7`.
-
-WCET and WCMU implications. Recursive closures introduce unbounded
-recursion that cannot be statically bounded by the present analysis.
-The pre-existing `topological_call_order` walk over the call graph
-detects recursion through `Op::Call` only and never traverses
-`Op::CallIndirect`, so a self-referential closure escapes the
-recursion check by construction. To preserve the soundness of the
-WCET and WCMU analyses, `verify::module_wcmu` rejects any module
-that contains `Op::MakeRecursiveClosure` with a clear error
-message. The safe constructors `Vm::new` and `Vm::load_bytes`
-therefore reject recursive-closure programs by default. Hosts that
-need recursive closures and accept the unbounded-recursion risk
-must construct the VM through `Vm::new_unchecked` or
-`Vm::load_bytes_unchecked`. A future refinement could add a
-recursion-depth attestation API analogous to `set_native_bounds`,
-multiplying the closure's per-invocation WCET and WCMU by the
-declared depth, but that is not implemented and is recorded as a
-follow-on item. For real-time embedding without an external
-attestation, recursive closures are out of scope and the safe
-constructor's rejection is the correct contract.
-
-Capture by reference disposition. Capture by reference is not meaningful in Keleusma's pure-functional surface. The language's `let` bindings are immutable by design. There is no surface assignment operator that mutates a previously bound local, which means a captured local cannot diverge from the captured snapshot regardless of whether the capture is by value or by reference. The only mutable mechanism is the data segment, which is accessed through `data.field` and `data.field = expr` syntax that is independent of closure capture. A closure that wants to mutate shared state therefore reads and writes data segment slots directly. Capture by reference would only matter in a language with mutable locals, which Keleusma intentionally does not have. The item is therefore closed as not applicable rather than deferred.
+Capture by reference disposition. Capture by reference is not meaningful in Keleusma's pure-functional surface. The language's `let` bindings are immutable by design. There is no surface assignment operator that mutates a previously bound local, so a captured local cannot diverge from the captured snapshot regardless of whether the capture is by value or by reference. The only mutable mechanism is the data segment, which is accessed through `data.field` and `data.field = expr` syntax independent of closure capture. The item is closed as not applicable rather than deferred.
 
 ## ~~B4. Hot code swap implementation~~ (Resolved as R29)
 
