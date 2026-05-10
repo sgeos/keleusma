@@ -1,0 +1,24 @@
+[package]
+name = "keleusma-bench"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.87"
+description = "Cost-model calibration tool for Keleusma. Measures pipelined cycles per opcode on a host CPU and emits a CostModel implementation suitable for the runtime's WCET analysis."
+license = "0BSD"
+homepage = "https://github.com/sgeos/keleusma"
+repository = "https://github.com/sgeos/keleusma"
+documentation = "https://docs.rs/keleusma-bench"
+readme = "README.md"
+keywords = ["benchmark", "wcet", "cycle", "calibration", "bytecode"]
+categories = ["development-tools::profiling", "embedded"]
+
+[dependencies]
+keleusma = { path = "..", version = "0.1" }
+keleusma-arena = { path = "../keleusma-arena", version = "0.1" }
+
+[[bin]]
+name = "keleusma-bench"
+path = "src/main.rs"
+
+[lib]
+path = "src/lib.rs"

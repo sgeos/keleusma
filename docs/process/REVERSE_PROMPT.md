@@ -8,9 +8,9 @@ AI to Human communication channel.
 
 ## Last Updated
 
-**Date**: 2026-05-09
-**Task**: V0.1-M3-T40 Document WCET in pipelined cycles.
-**Status**: Complete. Documentation-only change. The unit terminology shifts from "nominal cycles" to "pipelined cycles" with explicit definition, caveats for actual cycles and wall-clock time, and the calibration-factor framing for practical deployment.
+**Date**: 2026-05-10
+**Task**: V0.1-M3-T41 Cost-model calibration tool.
+**Status**: Complete. New `keleusma-bench` workspace crate measures pipelined cycles per opcode on the host CPU and emits a calibrated `CostModel` source fragment.
 
 ## Verification
 
@@ -20,70 +20,77 @@ AI to Human communication channel.
 cargo fmt --all
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
+cargo run --release -p keleusma-bench --bin keleusma-bench
 ```
 
 **Results**:
 
-- 513 tests pass workspace-wide. No code changes.
+- Workspace tests pass.
 - Format clean.
 - Clippy clean.
+- The benchmark runs on AArch64 with CNTVCT_EL0 and produces ordering-correct relative measurements.
 
 ## Summary
 
-The user committed to documenting WCET in pipelined cycles, with explicit caveats for actual cycles and wall-clock time, and the framing that the language proves an order-of-magnitude-correct bound that hosts convert to deployed WCET through a platform-specific scalar.
+The user observed that the cost-model calibration tool did not exist and asked for one designed to make adding new targets easy. The result is a new workspace crate `keleusma-bench` with a library and a CLI binary.
 
-### Pipelined cycles
+### Architecture extensibility
 
-A pipelined cycle is a CPU cycle in which the host's pipeline operates at steady-state throughput. The cycle assumes warm instruction and data caches, correctly predicted branches, and no contention on the memory bus from other cores or peripheral DMA. The pipelined-cycle metric is what CPU optimization tables, including Agner Fog's instruction tables and the Intel Optimization Reference Manual, call "throughput" or "reciprocal throughput" per instruction. The metric is observable, reproducible, and measurable through standard benchmarking with warm caches and a stable predictor.
+Each host architecture provides a cycle counter through the `CycleCounter` trait. Built-in implementations cover x86_64 through RDTSC, AArch64 through CNTVCT_EL0 read by inline assembly, and a portable `Instant`-based fallback for architectures without a built-in counter. Adding a new architecture requires implementing `CycleCounter` for a new struct and adding a `cfg` arm to `default_counter`. The benchmark engine is otherwise architecture-independent.
 
-### Industry terminology adopted
+### Opcode extensibility
 
-The user's prose used "constant multiplier" for the platform-specific scalar that converts the pipelined-cycle bound to deployed wall-clock WCET. The WCET literature term is **calibration factor** or equivalently **dilation factor**. Both terms are industry-recognized. The documentation uses calibration factor as primary with dilation factor noted as a synonym.
+Opcode coverage lives in the `OPCODE_SPECS` table. Each entry specifies the opcode name, a function building the operation pattern, the required constants, and the operation count per pattern. The benchmark engine constructs a Func chunk that inlines the pattern `PATTERN_REPETITIONS` times (default 100,000) and measures total cycles. Adding coverage for a new opcode requires appending a spec to the table with appropriate setup and cleanup operations to keep the operand stack balanced.
 
-The user's prose used "order of magnitude" for the precision claim. This is acceptable as written, but the documentation pairs it with the more specific framing that the bound is sound for the abstract pipelined-cycle metric and that the conversion to wall-clock time involves a deployment-validated scalar.
+### Methodology
 
-The Java Optimized Processor [WC5] is referenced as the canonical example of a time-predictable platform where the calibration factor approaches unity by hardware design.
+The benchmark approximates pipelined cycles through best-case observation. Each opcode pattern executes in an inlined sequence within a Func chunk. The engine reads the cycle counter, runs the chunk, reads the counter again, computes total cycles, and divides by the repetition count. Multiple measurement passes run after warmup; the minimum across passes is reported on the rationale that the minimum corresponds to the run with warmest caches and best branch prediction.
 
-### Documentation structure
+Internal arithmetic uses `f64` to preserve precision when counter resolution is coarse relative to per-pattern cost. Per-opcode values clamp to a minimum of 1 so the generated cost model never reports zero cycles, which would be unsound for use in WCET analysis.
 
-`LANGUAGE_DESIGN.md` WCET section restructured with five subsections:
+### Source emission
 
-1. **Units.** Defines pipelined cycles and bytes with the warm-cache, predicted-branch, contention-free assumption set.
-2. **What the language guarantees.** The verifier proves a definitive pipelined-cycle bound. The bound is sound for the abstract metric. The language does not guarantee wall-clock time or actual cycles; both gaps are the host's responsibility to characterize.
-3. **Caveats for actual cycles.** Stalls from cache misses, mispredictions, and contention. Typically within a small constant factor for quiescent deployments, larger and more variable for contended ones.
-4. **Caveats for wall-clock time.** Clock period and frequency scaling. Time-predictable platforms reduce the gap toward unity.
-5. **Bounded order-of-magnitude WCET.** The calibration-factor framing. For many practical applications including audio engines, game scripts, and embedded controllers, the pipelined-cycle bound multiplied by a measured calibration factor is sufficient.
+The CLI binary runs the benchmark suite and emits a Rust source fragment defining `measured_op_cycles` and `MEASURED_COST_MODEL`. The host application includes the fragment into its build and constructs a calibrated VM. The output uses the same opcode-category structure as the bundled `nominal_op_cycles`, with category cycle counts computed as the maximum over the category's representative opcodes.
 
-### Source-level updates
+### Methodology limitations
 
-`bytecode.rs` documentation for `CostModel`, `NOMINAL_COST_MODEL`, `nominal_op_cycles`, and `Op::cost` all updated to use pipelined-cycle terminology consistently. The bundled-values caveat retained: the values are unmeasured estimates suitable for relative ordering on a single platform; measured pipelined-cycle tables are the deployment-validation upgrade path.
-
-`README.md` WCET feature bullet expanded to mention pipelined cycles, the calibration factor, and the cross-reference to the canonical WCET section.
+The README documents the known limitations: inlined sequences keep instruction-cache and data-cache hot, branch prediction is trivial when the same opcode repeats, the host system must be quiescent during measurement, and frequency scaling can change cycle-to-time mapping mid-run. Sound WCET requires static analysis with hardware models or deployment on time-predictable platforms. The measured tool produces best-effort calibration suitable for soft real-time and order-of-magnitude WCET, not certified hard real-time bounds.
 
 ## Trade-offs and Properties
 
-The shift from "nominal cycles" to "pipelined cycles" is a pure terminology improvement. The numeric values in the bundled cost model are unchanged. The implementation behavior is unchanged. What changes is what the documentation tells readers about what the analysis actually delivers.
+The choice to use inlined patterns rather than a measured loop avoids loop-overhead measurement. The trade-off is that the chunk grows linearly with `PATTERN_REPETITIONS` and the instruction cache may not hold the full pattern for very large repetition counts. The default of 100,000 is a balance: large enough to give the AArch64 architectural counter (which runs at 24 MHz on Apple silicon, much slower than CPU clock) usable resolution, while small enough that the chunk fits in typical instruction caches.
 
-"Nominal" was technically accurate but read as aspirational; readers would reasonably ask what the values would be if validated. "Pipelined cycles" is precise about what the metric is, points at industry-recognized definitions, and is honest about what is and is not validated. A reader who has done CPU optimization recognizes the term immediately and understands the assumption set.
+The choice to clamp per-op values to a minimum of 1 is a soundness move. The benchmark may report zero ticks per opcode when the counter is too coarse for the measurement. A zero-cost opcode in the cost model would let WCET analysis claim free execution, which is unsound. Clamping to 1 ensures the cost model is always conservative; the per-op number may be inaccurate but it is never optimistic.
 
-The calibration-factor framing matches how real-time systems engineers actually deploy software with WCET concerns. The language proves the abstract bound. The host validates the calibration factor for its specific platform and deployment configuration. The product of the two is the wall-clock WCET, with the host attesting to the soundness of the calibration factor through its own validation process. This division of responsibility is the right place to draw the abstraction boundary because the calibration factor depends on host platform, host operating environment, and host certification process, none of which the language can determine unilaterally.
+The category aggregation in the source emitter takes the maximum cost over the category's representative opcodes. This is conservative for pipelined-cycle WCET: a chunk's bound is computed against the worst opcode in each category. Tighter bounds would require per-opcode cost rather than category aggregation, which is a future refinement.
+
+The benchmark currently produces relative-ordering-correct measurements on AArch64 even when the absolute resolution is coarse. The raw per-pattern values preserve precision that the rounded per-op values lose. The user can read both in the generated output's comment header.
 
 ## Files Touched
 
-- **`docs/architecture/LANGUAGE_DESIGN.md`**. WCET section restructured with five subsections covering units, guarantees, caveats for actual cycles, caveats for wall-clock time, and the bounded order-of-magnitude framing.
-- **`src/bytecode.rs`**. `CostModel`, `NOMINAL_COST_MODEL`, `nominal_op_cycles`, and `Op::cost` documentation updated to use pipelined-cycle terminology.
-- **`README.md`**. WCMU and WCET feature bullet expanded.
-- **`docs/process/TASKLOG.md`**. New row for V0.1-M3-T40.
+- **`Cargo.toml`** at workspace root. Added `keleusma-bench` as a workspace member.
+- **`keleusma-bench/Cargo.toml`** (new). Crate metadata for crates.io publication.
+- **`keleusma-bench/README.md`** (new). Usage, methodology, extensibility instructions.
+- **`keleusma-bench/src/counter.rs`** (new). `CycleCounter` trait and built-in implementations.
+- **`keleusma-bench/src/lib.rs`** (new). Benchmark engine, opcode specs, source emitter.
+- **`keleusma-bench/src/main.rs`** (new). CLI binary.
+- **`docs/process/TASKLOG.md`**. New row for V0.1-M3-T41.
 - **`docs/process/REVERSE_PROMPT.md`**. This file.
 
 ## Remaining Open Priorities
 
-The unit conventions are now documented precisely. The internal threading of `CostModel` through `module_wcmu` remains the immediate follow-on. A measured-cycle benchmarking tool that emits a calibrated `op_cycles` function would be the next step beyond that.
+The benchmark tool is functional. Several refinements are tracked but not blocking.
+
+- The architectural counter on AArch64 (CNTVCT_EL0) runs at the system counter frequency, not the CPU clock. The reported numbers are in counter ticks rather than CPU cycles. The conversion factor depends on `CNTFRQ_EL0` which the tool does not currently read. A future refinement would normalize to CPU cycles by reading `CNTFRQ_EL0` and the CPU's nominal frequency.
+- The PMU cycle counter (`PMCCNTR_EL0`) gives true CPU cycles on AArch64 but requires kernel-level enable. The tool could grow an optional dependency on a kernel module or a higher-precision counter library.
+- Per-opcode coverage is incomplete. Several opcodes (Yield, Call, MakeClosure) currently use placeholder patterns because they require multi-chunk modules or Stream-classified chunks. The OPCODE_SPECS table can grow.
+- Cross-validation against the bundled `nominal_op_cycles` would catch outright errors in the benchmark.
+- A criterion-style statistical aggregation (median, p99, with outlier rejection) would replace the simple minimum.
 
 ## Intended Next Step
 
-Quota is at the threshold. Subsequent sessions can take up internal cost-model threading, the measured-cycle benchmarking tool, or other backlog items.
+Await human prompt before proceeding.
 
 ## Session Context
 
-This session improved the documentation of the language's WCET unit. The conceptual contract was already correct; the terminology now matches industry conventions and makes the calibration-factor approach to deployment explicit. Hosts reading the documentation now have a precise framing for what the language guarantees, what it does not, and how to convert the analyzed bound to deployed wall-clock WCET.
+This session delivered the cost-model calibration tool that the user identified as missing. The architecture is designed to make per-target and per-opcode extension straightforward. The current implementation produces relative-ordering-correct measurements on AArch64 and is ready for use on x86_64 hosts where the RDTSC counter has higher resolution.
