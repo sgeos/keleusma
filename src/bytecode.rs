@@ -1052,10 +1052,10 @@ const CRC32_RESIDUE: u32 = 0x2144DF1C;
 /// allocating [`Module::from_bytes`] path copies to `AlignedVec` and
 /// works regardless.
 fn strip_shebang_prefix(bytes: &[u8]) -> &[u8] {
-    if bytes.starts_with(b"#!") {
-        if let Some(nl) = bytes.iter().position(|&b| b == b'\n') {
-            return &bytes[nl + 1..];
-        }
+    if bytes.starts_with(b"#!")
+        && let Some(nl) = bytes.iter().position(|&b| b == b'\n')
+    {
+        return &bytes[nl + 1..];
     }
     bytes
 }
