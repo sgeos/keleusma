@@ -9,8 +9,8 @@ AI to Human communication channel.
 ## Last Updated
 
 **Date**: 2026-05-09
-**Task**: V0.1-M3-T29. B5b string discipline extensions and B6 f-string interpolation.
-**Status**: Complete. Both features land with explicit WCET trade-offs documented.
+**Task**: V0.1-M3-T30. B7 error propagation through yield, and B8 VM allocation model resolved as not-applicable.
+**Status**: Complete. B7 implemented as a resume-value pattern with a thin convenience API. B8 closed without code changes after the analysis showed the originally framed shared-arena design is incompatible with existing contracts.
 
 ## Verification
 
@@ -24,90 +24,68 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 **Results**:
 
-- 495 tests pass workspace-wide. 427 keleusma unit (12 new), 17 keleusma marshall integration, 17 keleusma `kstring_boundary` integration, 28 keleusma-arena unit, 6 keleusma-arena doctests.
+- 497 tests pass workspace-wide. 429 keleusma unit (2 new), 17 keleusma marshall integration, 17 keleusma `kstring_boundary` integration, 28 keleusma-arena unit, 6 keleusma-arena doctests.
 - Clippy clean under `--workspace --all-targets`.
 - Format clean.
 
 ## Summary
 
-The user explicitly opted into B5b and B6 work despite the prior backlog stance that "Keleusma is not a value-add for string work." This session implements both with WCET-aware framing.
+### B7. Error propagation through yield
 
-### B5b. Concatenation and slicing as utility natives
+Recognized that the existing yield/resume cycle already supports bidirectional error handling without runtime extension. The host's `resume(Value)` accepts any value; the script's yield expression evaluates to that value at runtime; the script patterns matches on a script-defined variant union to distinguish success from error. Result-shaped enums (like `enum Reply { Ok(i64), Err }`) or `Option<T>` are both supported with no language change.
 
-Two new natives in `src/utility_natives.rs`, each in two variants:
+Added `Vm::resume_err(error_value)` as a thin wrapper over `Vm::resume`. The wrapper signals intent at the host call site and provides a clear API name for the failure case. Functionally, it routes through the same operand-stack mechanism as `resume`. The choice of API name reflects that the value being passed represents an error in the host-script protocol, not a successful input.
 
-- `concat(s1: String, s2: String) -> String` returns the catenation. The non-context variant returns `Value::DynStr`. The context variant `concat_with_ctx` resolves `Value::KStr` operands through the supplied arena and returns `Value::KStr` allocated in the arena's top region.
-- `slice(s: String, start: i64, end: i64) -> String` returns the substring at the given character indices. Indices are Unicode code-point counts, matching the existing `length` semantics. Out-of-range indices return a `NativeError`. The context variant `slice_with_ctx` follows the same arena pattern as `concat_with_ctx`.
+Recovery semantics follow Keleusma's general dynamic-tag dispatch contract: if the script fails to handle the error variant, the next operation that consumes the value traps with a runtime type error. This is not a new failure mode. Scripts that want strict recovery wrap their dialogue logic in an exhaustive match.
 
-Three helpers factor the shared logic. `string_view_no_arena` projects a `Value` to `&str`, rejecting `Value::KStr`. `string_view_with_arena` resolves `Value::KStr` through the arena. `slice_chars` extracts the code-point range with bounds checking. Both natives register through `register_utility_natives` and `register_utility_natives_with_ctx`.
+WCET implications. No new bytecode, opcode, or runtime mechanism. Match-arm dispatch is bounded by the number of arms at compile time. The verifier's existing analysis applies unchanged. Hosts that need automatic propagation analogous to Rust's `?` operator can implement that pattern in the script with pattern matching and early `return`; no language extension is required.
 
-### B6. f-string interpolation
+### B8. VM allocation model
 
-f-strings land as a lex-time desugaring. The lexer recognizes `f"..."` ahead of regular identifier lexing. Inside the body, `{...}` markers delimit interpolated expressions. The lexer scans the body, collects alternating literal and interpolation parts via a new `FStringPart` enum, and emits a desugared token stream:
-
-- Empty f-string produces `StringLit("")`.
-- Literal-only produces the bare `StringLit`.
-- Single interpolation produces `to_string(<expr>)`.
-- Mixed produces a left-associative chain of `concat` calls.
-
-The interpolated expression is recursively tokenized through the public `tokenize` entry point; the trailing `Eof` is dropped at splice. Lex errors inside an interpolation propagate to the outer call. The lexer uses a new `pending: VecDeque<Token>` buffer so the multi-token desugared stream can be returned through the standard `next_token` interface. Escapes `\{` and `\}` produce literal braces. Newlines inside f-strings or interpolations are rejected. Unmatched `}` is rejected.
-
-The desugaring depends on the runtime registration of `to_string` and `concat`. Programs using f-strings must register the corresponding natives at host setup time. The compile pipeline does not detect missing registrations until VM construction.
-
-## WCET and WCMU Considerations
-
-Both features produce dynamic strings whose worst-case output length is bounded by input lengths but is not a compile-time constant. The current verifier treats native allocations as the per-native attestation supplied through `Vm::set_native_bounds`. Hosts that rely on `verify_resource_bounds` for real-time embedding must declare heap bounds for `concat` and `slice` (and any other string-producing native they register) before constructing the VM through the safe constructor. Without an attestation, the analysis treats the native as zero-cost, which is unsound for unbounded inputs.
-
-This is consistent with the existing contract for native attestation and does not introduce a new soundness gap. The trade-off is documented in `BACKLOG.md` for both B5b and B6 entries.
+Closed as not-applicable. The originally framed shared-arena design is incompatible with several existing contracts: per-VM `verify_resource_bounds`, per-arena `KString` epoch tracking, per-VM `Op::Reset` semantics, single-threaded arena ownership, and the per-VM cross-yield prohibition on dynamic strings. The legitimate use cases (allocation overhead amortization across sequential scripts) are already covered by the existing pattern of constructing one `Arena` and reusing it across successive `Vm::new` calls between resets. The "complexity to lifetime management" hedge in the original entry understated the problem; the entry is now updated with the full analysis.
 
 ## Tests
 
-Twelve new unit tests in `src/utility_natives.rs::tests`:
+Two new VM tests:
 
-- B5b natives: `concat_two_static_strings`, `concat_static_with_dynamic`, `slice_basic`, `slice_full_range`, `slice_empty_range`, `concat_with_ctx_returns_kstr`, `slice_with_ctx_returns_kstr`.
-- B6 f-strings: `fstring_no_interpolation`, `fstring_single_interp`, `fstring_mixed_interp`, `fstring_multiple_interps`, `fstring_escaped_braces`.
+- `resume_err_propagates_through_enum_reply` exercises both successful (`Reply::Ok(42)`) and failure (`Reply::Err`) resumes through the same enum-based dialogue.
+- `resume_err_passes_through_with_value_none` exercises the failure path through a single resume with the `Err` variant.
 
-One new example: `examples/string_ops.rs` exercises the combined feature end to end. The program builds an interpolated greeting, slices its head, and concatenates a suffix to demonstrate the natives and the f-string desugaring path returning the expected value.
+One new example: `examples/yield_error.rs` demonstrates the pattern end to end with descriptive output.
 
 ## Trade-offs and Properties
 
-The lexer-side desugaring is invisible to the parser. Once the f-string body is split and folded into the token stream for `concat`/`to_string` calls, the parser produces a regular `Expr::Call` AST. This keeps the parser, type checker, monomorphizer, and compiler unchanged.
+The decision to expose `resume_err` as a thin wrapper rather than a richer error-propagation mechanism was deliberate. Adding a real semantic difference (such as a sentinel `Value::Trap` that the script must explicitly catch) would introduce a new failure mode without solving a real problem. The script can already enforce strict handling via exhaustive match, and the runtime can already trap on type mismatch. The wrapper provides documentation value at the host's call site without inviting bytecode changes.
 
-The recursive use of `tokenize` for interpolation expressions reuses the public lexer entry point. There is no new exposed API. The Eof token in the recursive lex output is dropped before splicing. The synthesized tokens carry the f-string's outer span as a single source location, so error messages from later passes point at the f-string rather than at character offsets inside it. This is acceptable for a first iteration; finer-grained span attribution is recorded as a future refinement.
+The chosen pattern uses script-defined enums rather than a built-in `Result<T, E>`. This keeps the type system simple and avoids the question of how the error type `E` is declared at the function boundary. Hosts and scripts agree on the dialogue's variant union in source. The trade-off is that there is no compiler-enforced shape; if the host resumes with a value whose type does not match the script's declared resume type, the script traps at the next operation. This is the existing contract for all yield/resume exchanges.
 
-`slice` uses code-point indices rather than byte offsets. This matches `length` and prevents multi-byte UTF-8 sequences from being split. The trade-off is that slicing an N-character string is O(N) due to the code-point traversal. For real-time embedding this cost contributes to the native's WCET attestation.
-
-The non-context-aware `concat` and `slice` reject `Value::KStr` operands because no arena is available for resolution. Hosts mixing arena and non-arena strings must use the context-aware variants. This is consistent with the existing `length` contract.
+For B8, the "not-applicable" resolution rather than implementation reflects the analysis: the sharing question conflicts with five distinct contracts, none of which were considered when the original entry was written. Recording the analysis in the BACKLOG closes the question and prevents a future implementer from approaching it without seeing the constraints.
 
 ## Changes Made
 
 ### Source
 
-- **`src/utility_natives.rs`**. New `native_concat`, `native_concat_with_ctx`, `native_slice`, `native_slice_with_ctx` natives. Helpers `string_view_no_arena`, `string_view_with_arena`, `slice_chars`. Both `register_utility_natives` and `register_utility_natives_with_ctx` updated. Twelve new unit tests.
-- **`src/lexer.rs`**. New `FStringPart` enum, `emit_fstring_desugar` helper, `Lexer::pending` buffer drained by `next_token`, `Lexer::lex_fstring` body scanner, recognizer for `f"` prefix.
-- **`examples/string_ops.rs`** (new). End-to-end demonstration.
+- **`src/vm.rs`**. New `Vm::resume_err(error_value: Value)` method. Two new unit tests.
+- **`examples/yield_error.rs`** (new). End-to-end demonstration.
 
 ### Knowledge Graph
 
-- **`docs/decisions/BACKLOG.md`**. B5b and B6 both marked resolved with the new mechanisms documented. WCET implications recorded for hosts that rely on `verify_resource_bounds`.
-- **`docs/process/TASKLOG.md`**. New row for V0.1-M3-T29.
+- **`docs/decisions/BACKLOG.md`**. B7 marked resolved with the surface pattern and host pattern documented. B8 marked not-applicable with the full analysis recorded.
+- **`docs/process/TASKLOG.md`**. New row for V0.1-M3-T30.
 - **`docs/process/REVERSE_PROMPT.md`**. This file.
 
 ## Remaining Open Priorities
 
-The string subsystem is now feature-complete for the agreed scope: catenation, slicing, and interpolation. Format specifiers (`{x:.2}` and similar) are explicitly out of scope; hosts that want them can register additional natives.
+The named B7 and B8 work is closed. Subsequent backlog items relevant to V0.1-M3 include:
 
-Known limitations and future refinements:
-
-- f-string spans collapse to the outer literal's span, so error messages from interpolation expressions point at the whole f-string rather than at the offending sub-expression. A finer-grained span attribution would track per-interpolation source offsets.
-- f-strings depend on registered `to_string` and `concat` natives. Missing registrations surface only at VM construction. Compile-time detection would require a registration manifest known to the compiler.
+- B11. Per-op decode optimization for zero-copy execution.
 
 The `keleusma-arena` registry version is still v0.1.0.
 
 ## Intended Next Step
 
-Await human prompt before proceeding. The named B1, B2, B3, B5b, and B6 work is now closed.
+Await human prompt before proceeding.
 
 ## Session Context
 
-This session implemented the string-discipline extensions and string interpolation that the user explicitly opted into. The lex-time desugaring approach for f-strings keeps the parser, type checker, monomorphizer, and compiler unchanged. The natives follow the established context-aware/non-context-aware pattern. The WCET implications are recorded in `BACKLOG.md` so hosts know to declare heap bounds for the string natives if they rely on `verify_resource_bounds`.
+This session resolved two backlog items with different paths to closure. B7 became a recognition that the existing infrastructure already supported the use case, plus a small convenience API and documentation. B8 became an analysis that the originally framed design is incompatible with existing contracts; the entry is closed without code changes. Both close out the named V0.1 work without breaking any existing tests or contracts.

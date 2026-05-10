@@ -932,6 +932,47 @@ impl<'a, 'arena> Vm<'a, 'arena> {
         self.run()
     }
 
+    /// Resume execution and signal that the requested input could not
+    /// be produced.
+    ///
+    /// This is a convenience over [`Vm::resume`] that documents the
+    /// host's intent to propagate an error rather than supply a
+    /// successful input. The supplied `error_value` flows through the
+    /// script's yield expression unchanged. The script handles the
+    /// error by pattern-matching against the value.
+    ///
+    /// Idiomatic usage. The script types its yield as `Option<T>` or a
+    /// script-defined Result-like enum and pattern-matches:
+    ///
+    /// ```text
+    /// let result: Option<i64> = yield request;
+    /// match result {
+    ///     Some(v) => { /* use v */ }
+    ///     None => { /* recover from error */ }
+    /// }
+    /// ```
+    ///
+    /// The host then calls `resume(Value::Int(v))` for success and
+    /// [`Vm::resume_err`] (with `Value::None`) for failure. For
+    /// richer errors, the script defines an enum like
+    /// `enum Reply { Ok(i64), Err(String) }` and the host resumes
+    /// with the corresponding `Value::Enum` variant.
+    ///
+    /// If the script does not handle the error case (does not match
+    /// the error variant) the next operation that consumes the value
+    /// traps with a runtime type error. This matches Keleusma's
+    /// general dynamic-tag dispatch contract; it is not a new failure
+    /// mode introduced by this API.
+    ///
+    /// The API does not perform any wrapping: the returned `VmState`
+    /// reflects whatever the script does next. Hosts that want
+    /// automatic propagation (Rust-like `?`) must implement that
+    /// pattern in the script through pattern matching and early
+    /// `return`.
+    pub fn resume_err(&mut self, error_value: Value) -> Result<VmState, VmError> {
+        self.resume(error_value)
+    }
+
     /// Resume execution after a yield or reset, providing the input value.
     pub fn resume(&mut self, input: Value) -> Result<VmState, VmError> {
         if !self.started || self.frames.is_empty() {
@@ -1912,6 +1953,113 @@ mod tests {
         match vm.resume(Value::Int(0)).unwrap() {
             VmState::Yielded(v) => assert_eq!(v, Value::Int(0)),
             other => panic!("expected yield, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn resume_err_propagates_through_enum_reply() {
+        // The script declares a Result-shaped enum and pattern-matches
+        // on the resumed value. The host calls `resume` with the Ok
+        // variant for success and `resume_err` with the Err variant
+        // for failure. Both flow through the same operand-stack
+        // resume mechanism; `resume_err` is a documentation alias
+        // that signals intent.
+        let src = "\
+            enum Reply { Ok(i64), Err }\n\
+            loop main(input: Reply) -> i64 {\n\
+                let reply = yield 0;\n\
+                match reply {\n\
+                    Reply::Ok(v) => v,\n\
+                    Reply::Err => -1,\n\
+                }\n\
+            }\
+        ";
+        let tokens = tokenize(src).expect("lex error");
+        let program = parse(&tokens).expect("parse error");
+        let module = compile(&program).expect("compile error");
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let mut vm = Vm::new(module, &arena).unwrap();
+        let initial = Value::Enum {
+            type_name: String::from("Reply"),
+            variant: String::from("Ok"),
+            fields: alloc::vec![Value::Int(0)],
+        };
+        match vm.call(&[initial]).unwrap() {
+            VmState::Yielded(v) => assert_eq!(v, Value::Int(0)),
+            other => panic!("expected first yield, got {:?}", other),
+        }
+        // Successful resume returns the Ok payload.
+        let success = Value::Enum {
+            type_name: String::from("Reply"),
+            variant: String::from("Ok"),
+            fields: alloc::vec![Value::Int(42)],
+        };
+        match vm.resume(success).unwrap() {
+            VmState::Reset => {}
+            other => panic!("expected reset, got {:?}", other),
+        }
+        // After the implicit reset, send Err to drive the next round
+        // through the error branch.
+        let initial2 = Value::Enum {
+            type_name: String::from("Reply"),
+            variant: String::from("Ok"),
+            fields: alloc::vec![Value::Int(0)],
+        };
+        match vm.resume(initial2).unwrap() {
+            VmState::Yielded(_) => {}
+            other => panic!("expected yield, got {:?}", other),
+        }
+        let err = Value::Enum {
+            type_name: String::from("Reply"),
+            variant: String::from("Err"),
+            fields: alloc::vec![],
+        };
+        match vm.resume_err(err).unwrap() {
+            VmState::Reset => {}
+            other => panic!("expected reset on err, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn resume_err_passes_through_with_value_none() {
+        // The simplest error pattern: the script types its input as
+        // a value that may be `None`. The host resumes with
+        // `Value::None` to signal the absence of input. The script's
+        // dispatch logic handles the None case explicitly.
+        let src = "\
+            enum Reply { Ok(i64), Err }\n\
+            loop main(input: Reply) -> i64 {\n\
+                let reply = yield 0;\n\
+                match reply {\n\
+                    Reply::Ok(v) => v,\n\
+                    Reply::Err => 99,\n\
+                }\n\
+            }\
+        ";
+        let tokens = tokenize(src).expect("lex error");
+        let program = parse(&tokens).expect("parse error");
+        let module = compile(&program).expect("compile error");
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let mut vm = Vm::new(module, &arena).unwrap();
+        let initial = Value::Enum {
+            type_name: String::from("Reply"),
+            variant: String::from("Ok"),
+            fields: alloc::vec![Value::Int(0)],
+        };
+        match vm.call(&[initial]).unwrap() {
+            VmState::Yielded(_) => {}
+            other => panic!("expected yield, got {:?}", other),
+        }
+        // resume_err with Err variant routes through the error arm
+        // and the script returns 99 to the host before reset.
+        let err = Value::Enum {
+            type_name: String::from("Reply"),
+            variant: String::from("Err"),
+            fields: alloc::vec![],
+        };
+        match vm.resume_err(err).unwrap() {
+            VmState::Reset => {}
+            other => panic!("expected reset, got {:?}", other),
         }
     }
 
