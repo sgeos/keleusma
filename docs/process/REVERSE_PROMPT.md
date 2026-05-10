@@ -9,8 +9,8 @@ AI to Human communication channel.
 ## Last Updated
 
 **Date**: 2026-05-09
-**Task**: V0.1-M3-T33 Documentation deduplication and streamlining pass.
-**Status**: Complete. Architecture docs deduplicated, Implementation Mapping subsection added to EXECUTION_MODEL, stale postcard reference corrected, LANGUAGE_DESIGN streamlined to defer to EXECUTION_MODEL for canonical specs, COMPILATION_PIPELINE accuracy updated.
+**Task**: V0.1-M3-T34 Code deduplication pass.
+**Status**: Complete. Three concrete consolidations land. All 506 workspace tests pass; clippy and format clean.
 
 ## Verification
 
@@ -24,65 +24,88 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 **Results**:
 
-- 506 tests pass workspace-wide. No code changes; the test pass confirms documentation edits did not affect the build.
+- 506 tests pass workspace-wide. No test count change; consolidation is behavior-preserving.
 - Format clean.
 - Clippy clean.
 
 ## Summary
 
-This pass surveys and streamlines the architecture documentation, removing duplication between LANGUAGE_DESIGN.md and EXECUTION_MODEL.md, fixing a stale wire-format reference, and adding the source-level Implementation Mapping subsection that the prior conversation flagged as missing.
+This pass identifies and removes three concrete duplications in the runtime crate. Each is a behavior-preserving refactor verified by the existing test suite.
 
-### Implementation Mapping subsection
+### Span literal repetition
 
-EXECUTION_MODEL.md gained a new subsection between the existing ABI table and the Arena/Operand/Heap subsection. The mapping table names, for each conceptual region, the source location, the construction path, and the runtime access mechanism. Lifetime invariants document how each region behaves across `Op::Reset` and `Vm::replace_module`. Memory bookkeeping clarifies which costs go through the arena's WCMU budget and which use the global allocator. The `BytecodeStore` Owned vs Borrowed mapping documents the ownership orthogonality.
+`Span` is a four-field record (`start`, `end`, `line`, `column`). Constructions of the all-zero "synthetic" span appeared in `target.rs` as repeated four-field struct literals. The struct now derives `Default`, and the literals are replaced with `Span::default()`. Future code that needs a synthetic span no longer needs to repeat the field initializers, and the choice of zero-initialization is codified once.
 
-### Stale postcard reference
+### Native string-helper consolidation
 
-Line 129 of EXECUTION_MODEL.md described the wire format as postcard-based. This is stale; the format moved to rkyv earlier in V0.1-M2 (Phase 1 of P10). The paragraph is rewritten to describe the rkyv format with the correct rationale (zero-copy execution from `.rodata` per P10) and the correct list of archived types. Cross-reference to R39 in RESOLVED.md added for the design decision.
+Eight native functions in `utility_natives.rs` (`to_string`, `to_string_with_ctx`, `length`, `length_with_ctx`, `concat`, `concat_with_ctx`, `slice`, `slice_with_ctx`, plus `println`) shared four code shapes that were copy-pasted with small variations:
 
-### LANGUAGE_DESIGN.md streamlining
+1. The argument-count check.
+2. The string-from-Value extraction, with two variants depending on whether arena context was available.
+3. The i64-from-Value extraction with a typed error message.
+4. The string-result wrapping in either `Value::DynStr` or `Value::KStr` depending on arena presence.
 
-Several sections of LANGUAGE_DESIGN.md duplicated content that EXECUTION_MODEL.md specifies canonically. Each was reduced to a language-level summary that references EXECUTION_MODEL.md for the full specification:
+Four new helpers consolidate these patterns:
 
-- Memory Model. The four-region table and the long arena/data-segment paragraphs collapsed into two short paragraphs about surface-language semantics and a single reference to the canonical specification.
-- Hot Code Swapping. The detailed mechanics paragraph reduced to a language-level summary; rollback, atomicity, stale-slot behavior, and update-point details are deferred to EXECUTION_MODEL.
-- Turing Completeness. The standalone subsection collapsed into a single paragraph in the new "Turing Completeness and Temporal Domains" section, which absorbed the previously-duplicated Two Temporal Domains list as well.
-- Coroutine Model. Retained but extended with the resume-value error pattern (B7) reference.
+- `check_arity(name, expected, args)` returns `Err` with a uniform message when the count does not match.
+- `read_string_arg(arena: Option<&Arena>, v)` extracts an owned `String`, optionally resolving arena-backed `Value::KStr` through the supplied arena. The single function now covers both the no-arena and with-arena paths through the `Option`.
+- `read_i64_arg(name, arg_label, v)` extracts an `i64` with a uniform typed error.
+- `finalize_string_result(name, arena, out)` wraps a produced `String` in either `Value::DynStr` or `Value::KStr`, choosing based on the arena presence and producing a uniform allocation-failure message.
 
-### Scope section update
+The `native_concat` / `native_concat_with_ctx` pair are now thin wrappers over `concat_impl(arena: Option<&Arena>, args)`, and the `native_slice` / `native_slice_with_ctx` pair are thin wrappers over `slice_impl`. The shared logic lives once. Other natives (`to_string`, `length`, `println`) adopted `check_arity` for the argument-count check.
 
-The "Scope Exclusions" section was renamed to "Scope Inclusions and Exclusions" and updated to reflect features now implemented: Hindley-Milner inference foundation (B1), generics with traits and bounds (B2.2/B2.3), monomorphization (B2.4), closures with capture and recursion (B3), f-string interpolation (B6), and string concatenation/slicing as utility natives (B5b). The previous list of these features as exclusions was misleading because they all landed during V0.1-M3.
+### Decode-cache helper signature
 
-### COMPILATION_PIPELINE.md accuracy
+`decode_all_ops` previously accepted a borrowed `AlignedVec<8>`, so the owned-bytecode constructor and the borrowed-bytecode constructor could not share the same call. The signature now accepts a plain `&[u8]`, which both paths can pass: `Vm::construct` passes `aligned.as_slice()` from its newly serialized bytes; `Vm::view_bytes_zero_copy` passes the borrowed bytes directly. The borrowed path previously inlined the iteration loop with the same logic as the helper; that duplication is gone.
 
-The pipeline diagram was a single-line summary that omitted the typecheck/monomorphize/hoist passes. Expanded to a multi-line layout showing each stage. The `compile()` signature documentation was extended to include `compile_with_target()` (B10). The recursion-detection note was wrong — it claimed compilation rejects cycles, but recursion detection now lives in `verify::module_wcmu`. Corrected. The `Vm::new()` signature documentation was missing the arena parameter and the lifetime annotations; updated. New `Vm::resume_err()` (B7) added to the API surface listing.
+## What was deferred
+
+A more ambitious abstraction would extract the AST walker pattern that recurs across `monomorphize.rs`, `compiler.rs::hoist_*`, and `target.rs::check_*_against_target`. Each of these has a structural recursion through `Block`, `Stmt`, `Expr`, and `Iterable` that could share a `MutVisitor` trait with default-implemented walk methods. The refactor was not undertaken in this session because:
+
+1. The three walker families track different per-pass state (locals tables, specialization caches, validation context). A clean trait-based abstraction would require restructuring each pass's state into a struct and migrating the parameter-threading style to method dispatch.
+2. The risk of subtle behavior change is non-trivial. The walker functions in monomorphize alone are about 800 lines spread across three families; any structural reorganization would need extensive cross-checking.
+3. The existing duplication is structural (the recursion shape is the same) but not behavioral (each pass acts differently at each node). The Rust idiom for this case is the visitor trait, but the cost of introducing the abstraction must be weighed against the cost of maintaining the explicit walks. The current code is straightforward to read and modify per pass.
+
+The visitor abstraction remains available as future work if a fourth walker family lands or if the existing families need significant changes that would benefit from shared infrastructure. It is recorded as a tracked refinement rather than a closed gap.
+
+## Net Size Change
+
+| File | Before | After | Delta |
+|---|---|---|---|
+| `src/utility_natives.rs` | 696 | 638 | -58 |
+| `src/vm.rs` | 3748 | 3736 | -12 |
+| `src/target.rs` | 538 | 523 | -15 |
+| `src/token.rs` | small | 143 | +1 (Default derive) |
+
+Total: approximately 84 lines removed. Modest but representative of the duplication that was actually present. The remaining duplication is in walker structures whose unification is deferred per the analysis above.
 
 ## Trade-offs and Properties
 
-The deduplication strategy chose to keep LANGUAGE_DESIGN.md focused on language-level concerns (philosophy, guarantees, surface syntax categories, type system) and EXECUTION_MODEL.md focused on runtime concerns (memory layout, temporal domains, hot swap mechanics, implementation mapping). LANGUAGE_DESIGN now references EXECUTION_MODEL for canonical runtime specifications rather than reproducing them.
+The native-helper consolidation merged the arena-context dichotomy that the code previously expressed as separate functions into a single `Option<&Arena>` parameter. Callers that always have an arena (the with-ctx path) pass `Some(arena)`; callers that do not (the non-context path) pass `None`. The runtime cost is one branch per call, which is negligible for native functions whose dominant cost is their logic.
 
-The Implementation Mapping subsection adds concrete source-level orientation that previously required reading source comments. The cost is that the subsection now ties EXECUTION_MODEL.md to specific implementation choices; if the implementation changes (such as a future runtime build with a different `Value` representation), the table must be updated. This is acceptable because the subsection explicitly notes "the wire format does not bind to specific implementation choices" and the table describes the present runtime build.
+The `Option<&Arena>` pattern in `read_string_arg` may invite the question of whether to mask `KStr` resolution failures uniformly or to surface different errors depending on the arena presence. The implementation distinguishes: missing arena context produces an error pointing at the registration mismatch (the host registered a string-producing native through the no-context path but supplied a `KStr` argument); a stale handle in an arena-aware call produces the standard "stale (arena reset since allocation)" error. The two error messages remain distinguishable.
 
-The net documentation size is slightly larger (LANGUAGE_DESIGN -16 lines, EXECUTION_MODEL +17 lines, COMPILATION_PIPELINE +17 lines). The increase is concentrated in concrete new information (the Implementation Mapping table) and accuracy updates. Duplication is reduced even as overall information content goes up.
+The `decode_all_ops` signature change from `&AlignedVec<8>` to `&[u8]` is a strict generalization. Any caller that previously passed an `AlignedVec` continues to work via `aligned.as_slice()`. Callers with borrowed bytes can use the helper directly.
 
-## Files Touched
+## Changes Made
 
-- `docs/architecture/EXECUTION_MODEL.md`. Added Implementation Mapping subsection. Fixed stale postcard reference.
-- `docs/architecture/LANGUAGE_DESIGN.md`. Streamlined Memory Model, Hot Code Swapping, Turing Completeness, Two Temporal Domains. Renamed Scope Exclusions to Scope Inclusions and Exclusions, updated to reflect implemented features.
-- `docs/architecture/COMPILATION_PIPELINE.md`. Expanded pipeline diagram. Updated `compile`, `compile_with_target`, and `Vm::new` signatures. Corrected recursion-detection placement.
-- `docs/process/TASKLOG.md`. New row for V0.1-M3-T33.
-- `docs/process/REVERSE_PROMPT.md`. This file.
+### Source
+
+- **`src/token.rs`**. `Span` derives `Default`.
+- **`src/target.rs`**. Replaced four-field `Span` literals with `Span::default()`.
+- **`src/utility_natives.rs`**. New helpers `check_arity`, `read_string_arg`, `read_i64_arg`, `finalize_string_result`. Removed previous helpers `string_view_no_arena` and `string_view_with_arena` in favor of the single `read_string_arg`. Native pairs `concat`/`concat_with_ctx` and `slice`/`slice_with_ctx` consolidated to `*_impl` shared bodies. Other natives adopted `check_arity`.
+- **`src/vm.rs`**. `decode_all_ops` signature changed from `&AlignedVec<8>` to `&[u8]`. Borrowed-bytecode constructor inlined logic removed; both call sites use the helper.
+
+### Knowledge Graph
+
+- **`docs/process/TASKLOG.md`**. New row for V0.1-M3-T34.
+- **`docs/process/REVERSE_PROMPT.md`**. This file.
 
 ## Remaining Open Priorities
 
-The architecture docs are now consistent with the implementation as of V0.1-M3-T32. The standard document-strategy items remain:
+The visitor-trait refactor for AST walkers across monomorphize, compiler::hoist, and target validation is recorded as a tracked refinement. It is not in any backlog entry yet; if pursued it would warrant a new entry describing the abstraction surface and the migration plan.
 
-- DOCUMENTATION_STRATEGY review pass for adherence to the maintenance discipline.
-- TYPE_SYSTEM.md may reference outdated information about exclusions; not surveyed in this pass.
-- GRAMMAR.md is large (1099 lines) and may have stale entries.
-- INSTRUCTION_SET.md and TARGET_ISA.md likely need updates for the new opcodes (`Op::MakeRecursiveClosure`, `Op::PushFunc`, `Op::MakeClosure`, `Op::CallIndirect`).
-
-The `keleusma-arena` registry version is still v0.1.0.
+The named V0.1 work continues to be closed. The `keleusma-arena` registry version is still v0.1.0.
 
 ## Intended Next Step
 
@@ -90,4 +113,4 @@ Await human prompt before proceeding.
 
 ## Session Context
 
-This session focused on documentation hygiene rather than feature work. The output is a documentation set that is internally consistent, points to canonical specifications rather than duplicating them, and includes the Implementation Mapping subsection that the prior question flagged as missing. The accuracy updates to COMPILATION_PIPELINE close several visible drift issues.
+This session focused on duplication of the small, explicit kind: repeated literals, near-identical function bodies, and a helper whose signature could not be shared between two callers. The visitor-trait refactor for AST walkers is the larger remaining duplication; it is documented but deferred because the cost of introducing the abstraction exceeds the cost of the present explicit walks.

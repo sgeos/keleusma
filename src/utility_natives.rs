@@ -92,12 +92,7 @@ fn render_value_to_string(arena: Option<&Arena>, val: &Value) -> String {
 /// `Value::KStr` with bounded-memory accounting and stale-pointer
 /// detection.
 fn native_to_string(args: &[Value]) -> Result<Value, VmError> {
-    if args.len() != 1 {
-        return Err(VmError::NativeError(format!(
-            "to_string: expected 1 argument, got {}",
-            args.len()
-        )));
-    }
+    check_arity("to_string", 1, args)?;
     Ok(Value::DynStr(render_value_to_string(None, &args[0])))
 }
 
@@ -107,19 +102,9 @@ fn native_to_string(args: &[Value]) -> Result<Value, VmError> {
 /// region. The result becomes [`keleusma_arena::Stale`] on the next
 /// reset. Use this variant for the bounded-memory path.
 fn native_to_string_with_ctx(ctx: &NativeCtx<'_>, args: &[Value]) -> Result<Value, VmError> {
-    if args.len() != 1 {
-        return Err(VmError::NativeError(format!(
-            "to_string: expected 1 argument, got {}",
-            args.len()
-        )));
-    }
+    check_arity("to_string", 1, args)?;
     let s = render_value_to_string(Some(ctx.arena), &args[0]);
-    let handle = KString::alloc(ctx.arena, &s).map_err(|_| {
-        VmError::NativeError(String::from(
-            "to_string: arena allocation failed (out of memory)",
-        ))
-    })?;
-    Ok(Value::KStr(handle))
+    finalize_string_result("to_string", Some(ctx.arena), s)
 }
 
 /// Get the length of an array, string, or tuple.
@@ -129,12 +114,7 @@ fn native_to_string_with_ctx(ctx: &NativeCtx<'_>, args: &[Value]) -> Result<Valu
 /// before counting characters. The non-arena variant returns an error
 /// for `KStr` because resolution requires arena context.
 fn native_length(args: &[Value]) -> Result<Value, VmError> {
-    if args.len() != 1 {
-        return Err(VmError::NativeError(format!(
-            "length: expected 1 argument, got {}",
-            args.len()
-        )));
-    }
+    check_arity("length", 1, args)?;
     match &args[0] {
         Value::Array(arr) => Ok(Value::Int(arr.len() as i64)),
         Value::StaticStr(s) | Value::DynStr(s) => Ok(Value::Int(s.chars().count() as i64)),
@@ -154,12 +134,7 @@ fn native_length(args: &[Value]) -> Result<Value, VmError> {
 /// Resolves [`Value::KStr`] handles through the arena. Otherwise
 /// identical to [`native_length`].
 fn native_length_with_ctx(ctx: &NativeCtx<'_>, args: &[Value]) -> Result<Value, VmError> {
-    if args.len() != 1 {
-        return Err(VmError::NativeError(format!(
-            "length: expected 1 argument, got {}",
-            args.len()
-        )));
-    }
+    check_arity("length", 1, args)?;
     match &args[0] {
         Value::Array(arr) => Ok(Value::Int(arr.len() as i64)),
         Value::StaticStr(s) | Value::DynStr(s) => Ok(Value::Int(s.chars().count() as i64)),
@@ -177,59 +152,114 @@ fn native_length_with_ctx(ctx: &NativeCtx<'_>, args: &[Value]) -> Result<Value, 
     }
 }
 
+/// Helper: read a string Value as an owned `String`, optionally
+/// resolving arena-backed `Value::KStr` through the supplied arena.
+///
+/// When `arena` is `None`, `Value::KStr` is rejected with a clear
+/// error indicating that arena context is required. When `arena` is
+/// `Some`, `Value::KStr` is resolved through `KString::get`. The
+/// other string variants (`StaticStr`, `DynStr`) clone their content
+/// in either case.
+fn read_string_arg(arena: Option<&Arena>, v: &Value) -> Result<String, VmError> {
+    match v {
+        Value::StaticStr(s) | Value::DynStr(s) => Ok(s.clone()),
+        Value::KStr(h) => match arena {
+            Some(a) => match h.get(a) {
+                Ok(s) => Ok(String::from(s)),
+                Err(_) => Err(VmError::NativeError(String::from(
+                    "KStr is stale (arena reset since allocation)",
+                ))),
+            },
+            None => Err(VmError::NativeError(String::from(
+                "expected String argument; arena-backed KStr requires arena context",
+            ))),
+        },
+        other => Err(VmError::TypeError(format!(
+            "expected String, got {}",
+            other.type_name()
+        ))),
+    }
+}
+
+/// Helper: validate that the argument count matches `expected` and
+/// produce a uniform error message otherwise. Used by every native
+/// in this module that has a fixed arity.
+fn check_arity(name: &str, expected: usize, args: &[Value]) -> Result<(), VmError> {
+    if args.len() != expected {
+        return Err(VmError::NativeError(format!(
+            "{}: expected {} argument{}, got {}",
+            name,
+            expected,
+            if expected == 1 { "" } else { "s" },
+            args.len()
+        )));
+    }
+    Ok(())
+}
+
+/// Helper: read an i64 argument or produce a typed error.
+fn read_i64_arg(name: &str, arg_label: &str, v: &Value) -> Result<i64, VmError> {
+    match v {
+        Value::Int(i) => Ok(*i),
+        other => Err(VmError::TypeError(format!(
+            "{}: {} must be i64, got {}",
+            name,
+            arg_label,
+            other.type_name()
+        ))),
+    }
+}
+
+/// Helper: wrap a produced `String` in either `Value::DynStr` (when
+/// the call has no arena context) or `Value::KStr` (when an arena is
+/// supplied). The arena path produces a clear allocation-failure
+/// error message that mentions the originating native name.
+fn finalize_string_result(
+    name: &str,
+    arena: Option<&Arena>,
+    out: String,
+) -> Result<Value, VmError> {
+    match arena {
+        None => Ok(Value::DynStr(out)),
+        Some(a) => {
+            let handle = KString::alloc(a, &out).map_err(|_| {
+                VmError::NativeError(format!("{}: arena allocation failed (out of memory)", name))
+            })?;
+            Ok(Value::KStr(handle))
+        }
+    }
+}
+
 /// Concatenate two strings.
 ///
-/// Resolves either operand, including arena-backed `Value::KStr`,
-/// when an arena is supplied. Returns `Value::DynStr` containing the
-/// catenation. Subject to the cross-yield prohibition on dynamic
-/// strings. The arena-aware variant [`native_concat_with_ctx`]
-/// returns `Value::KStr` for the bounded-memory path.
+/// Routes through [`concat_impl`] with `arena = None` so the result
+/// is produced as `Value::DynStr` from the global allocator. The
+/// arena-aware variant [`native_concat_with_ctx`] threads the arena
+/// for `Value::KStr` output.
 ///
-/// Worst-case output length is the sum of the operand lengths, so
-/// hosts that rely on `verify_resource_bounds` for real-time
+/// Worst-case output length is the sum of the operand lengths.
+/// Hosts that rely on `verify_resource_bounds` for real-time
 /// embedding must declare a heap bound through `set_native_bounds`
 /// before invoking the VM. Without an attestation, the analysis
 /// treats `concat` as zero-cost, which is unsound for unbounded
 /// inputs.
 fn native_concat(args: &[Value]) -> Result<Value, VmError> {
-    if args.len() != 2 {
-        return Err(VmError::NativeError(format!(
-            "concat: expected 2 arguments, got {}",
-            args.len()
-        )));
-    }
-    let a = string_view_no_arena(&args[0])?;
-    let b = string_view_no_arena(&args[1])?;
-    let mut out = String::with_capacity(a.len() + b.len());
-    out.push_str(a);
-    out.push_str(b);
-    Ok(Value::DynStr(out))
+    concat_impl(None, args)
 }
 
-/// Concatenate two strings with arena context.
-///
-/// Resolves arena-backed `Value::KStr` handles before catenation and
-/// allocates the result through the host-owned arena's top region as
-/// `Value::KStr`. The result becomes [`keleusma_arena::Stale`] on the
-/// next reset.
+/// Concatenate two strings with arena context. See [`native_concat`].
 fn native_concat_with_ctx(ctx: &NativeCtx<'_>, args: &[Value]) -> Result<Value, VmError> {
-    if args.len() != 2 {
-        return Err(VmError::NativeError(format!(
-            "concat: expected 2 arguments, got {}",
-            args.len()
-        )));
-    }
-    let a = string_view_with_arena(ctx.arena, &args[0])?;
-    let b = string_view_with_arena(ctx.arena, &args[1])?;
+    concat_impl(Some(ctx.arena), args)
+}
+
+fn concat_impl(arena: Option<&Arena>, args: &[Value]) -> Result<Value, VmError> {
+    check_arity("concat", 2, args)?;
+    let a = read_string_arg(arena, &args[0])?;
+    let b = read_string_arg(arena, &args[1])?;
     let mut out = String::with_capacity(a.len() + b.len());
     out.push_str(&a);
     out.push_str(&b);
-    let handle = KString::alloc(ctx.arena, &out).map_err(|_| {
-        VmError::NativeError(String::from(
-            "concat: arena allocation failed (out of memory)",
-        ))
-    })?;
-    Ok(Value::KStr(handle))
+    finalize_string_result("concat", arena, out)
 }
 
 /// Substring slice from `start` (inclusive) to `end` (exclusive).
@@ -239,110 +269,27 @@ fn native_concat_with_ctx(ctx: &NativeCtx<'_>, args: &[Value]) -> Result<Value, 
 /// code points (matching `length`'s semantics), not byte offsets, so
 /// multi-byte characters are not split.
 ///
-/// Returns `Value::DynStr`. The arena-aware variant
-/// [`native_slice_with_ctx`] returns `Value::KStr`.
-///
-/// Worst-case output length is `end - start`. The same WCMU
-/// attestation guidance as `concat` applies.
+/// Routes through [`slice_impl`] with `arena = None` for the
+/// `Value::DynStr` path; the arena-aware variant
+/// [`native_slice_with_ctx`] uses the arena. Worst-case output
+/// length is `end - start`. The same WCMU attestation guidance as
+/// `concat` applies.
 fn native_slice(args: &[Value]) -> Result<Value, VmError> {
-    if args.len() != 3 {
-        return Err(VmError::NativeError(format!(
-            "slice: expected 3 arguments, got {}",
-            args.len()
-        )));
-    }
-    let s = string_view_no_arena(&args[0])?;
-    let start = match &args[1] {
-        Value::Int(i) => *i,
-        other => {
-            return Err(VmError::TypeError(format!(
-                "slice: start must be i64, got {}",
-                other.type_name()
-            )));
-        }
-    };
-    let end = match &args[2] {
-        Value::Int(i) => *i,
-        other => {
-            return Err(VmError::TypeError(format!(
-                "slice: end must be i64, got {}",
-                other.type_name()
-            )));
-        }
-    };
-    let out = slice_chars(s, start, end)?;
-    Ok(Value::DynStr(out))
+    slice_impl(None, args)
 }
 
-/// Substring slice with arena context.
+/// Substring slice with arena context. See [`native_slice`].
 fn native_slice_with_ctx(ctx: &NativeCtx<'_>, args: &[Value]) -> Result<Value, VmError> {
-    if args.len() != 3 {
-        return Err(VmError::NativeError(format!(
-            "slice: expected 3 arguments, got {}",
-            args.len()
-        )));
-    }
-    let s = string_view_with_arena(ctx.arena, &args[0])?;
-    let start = match &args[1] {
-        Value::Int(i) => *i,
-        other => {
-            return Err(VmError::TypeError(format!(
-                "slice: start must be i64, got {}",
-                other.type_name()
-            )));
-        }
-    };
-    let end = match &args[2] {
-        Value::Int(i) => *i,
-        other => {
-            return Err(VmError::TypeError(format!(
-                "slice: end must be i64, got {}",
-                other.type_name()
-            )));
-        }
-    };
+    slice_impl(Some(ctx.arena), args)
+}
+
+fn slice_impl(arena: Option<&Arena>, args: &[Value]) -> Result<Value, VmError> {
+    check_arity("slice", 3, args)?;
+    let s = read_string_arg(arena, &args[0])?;
+    let start = read_i64_arg("slice", "start", &args[1])?;
+    let end = read_i64_arg("slice", "end", &args[2])?;
     let out = slice_chars(&s, start, end)?;
-    let handle = KString::alloc(ctx.arena, &out).map_err(|_| {
-        VmError::NativeError(String::from(
-            "slice: arena allocation failed (out of memory)",
-        ))
-    })?;
-    Ok(Value::KStr(handle))
-}
-
-/// Helper: read a string Value as a `&str`, rejecting `Value::KStr`
-/// because no arena is available for resolution. Used by the
-/// non-context-aware native variants.
-fn string_view_no_arena(v: &Value) -> Result<&str, VmError> {
-    match v {
-        Value::StaticStr(s) | Value::DynStr(s) => Ok(s.as_str()),
-        Value::KStr(_) => Err(VmError::NativeError(String::from(
-            "expected String argument; arena-backed KStr requires arena context",
-        ))),
-        other => Err(VmError::TypeError(format!(
-            "expected String, got {}",
-            other.type_name()
-        ))),
-    }
-}
-
-/// Helper: read a string Value as an owned `String`, resolving
-/// `Value::KStr` through the supplied arena. Used by the
-/// context-aware native variants.
-fn string_view_with_arena(arena: &Arena, v: &Value) -> Result<String, VmError> {
-    match v {
-        Value::StaticStr(s) | Value::DynStr(s) => Ok(s.clone()),
-        Value::KStr(h) => match h.get(arena) {
-            Ok(s) => Ok(String::from(s)),
-            Err(_) => Err(VmError::NativeError(String::from(
-                "KStr is stale (arena reset since allocation)",
-            ))),
-        },
-        other => Err(VmError::TypeError(format!(
-            "expected String, got {}",
-            other.type_name()
-        ))),
-    }
+    finalize_string_result("slice", arena, out)
 }
 
 /// Helper: extract a substring by character indices. Returns a new
@@ -378,12 +325,7 @@ fn slice_chars(s: &str, start: i64, end: i64) -> Result<String, VmError> {
 /// can override with a closure using `register_native_closure` if output
 /// is desired.
 fn native_println(args: &[Value]) -> Result<Value, VmError> {
-    if args.len() != 1 {
-        return Err(VmError::NativeError(format!(
-            "println: expected 1 argument, got {}",
-            args.len()
-        )));
-    }
+    check_arity("println", 1, args)?;
     // No-op in no_std. The value is consumed but not printed.
     Ok(Value::Unit)
 }

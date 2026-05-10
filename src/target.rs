@@ -161,12 +161,7 @@ impl Target {
                     "target word_bits_log2 = {} exceeds runtime maximum {}",
                     self.word_bits_log2, RUNTIME_WORD_BITS_LOG2
                 ),
-                span: Span {
-                    start: 0,
-                    end: 0,
-                    line: 0,
-                    column: 0,
-                },
+                span: Span::default(),
             });
         }
         if self.addr_bits_log2 > RUNTIME_ADDRESS_BITS_LOG2 {
@@ -175,12 +170,7 @@ impl Target {
                     "target addr_bits_log2 = {} exceeds runtime maximum {}",
                     self.addr_bits_log2, RUNTIME_ADDRESS_BITS_LOG2
                 ),
-                span: Span {
-                    start: 0,
-                    end: 0,
-                    line: 0,
-                    column: 0,
-                },
+                span: Span::default(),
             });
         }
         if self.has_floats && self.float_bits_log2 > RUNTIME_FLOAT_BITS_LOG2 {
@@ -189,12 +179,7 @@ impl Target {
                     "target float_bits_log2 = {} exceeds runtime maximum {}",
                     self.float_bits_log2, RUNTIME_FLOAT_BITS_LOG2
                 ),
-                span: Span {
-                    start: 0,
-                    end: 0,
-                    line: 0,
-                    column: 0,
-                },
+                span: Span::default(),
             });
         }
         Ok(())

@@ -127,30 +127,36 @@ pub const DEFAULT_NATIVE_WCMU_BYTES: u32 = 0;
 /// can override this by calling `Vm::new_with_arena_capacity`.
 pub const DEFAULT_ARENA_CAPACITY: usize = 64 * 1024;
 
-/// Decode every op in every chunk of an aligned bytecode buffer and
-/// return the resulting per-chunk owned op vectors.
+/// Decode every op in every chunk of a bytecode buffer and return
+/// the resulting per-chunk owned op vectors.
 ///
 /// The returned vector is indexed by chunk index. Each inner vector
 /// contains the chunk's ops in instruction order. The hot dispatch
 /// loop reads from these vectors directly through `chunk_op` to
 /// avoid the per-fetch discriminant match against the archived form.
 ///
-/// The aligned buffer's framing is validated through
-/// `Module::access_bytes`. The op decoding uses `op_from_archived`
-/// for each op slot. This is the same conversion that the previous
-/// hot-path fetch performed; pre-decoding amortizes its cost across
-/// VM lifetime instead of paying it per fetch.
-fn decode_all_ops(aligned: &rkyv::util::AlignedVec<8>) -> Result<Vec<Vec<Op>>, VmError> {
-    let archived = crate::bytecode::Module::access_bytes(aligned.as_slice())?;
-    let mut decoded: Vec<Vec<Op>> = Vec::with_capacity(archived.chunks.len());
-    for chunk in archived.chunks.iter() {
-        let mut ops: Vec<Op> = Vec::with_capacity(chunk.ops.len());
-        for op in chunk.ops.iter() {
-            ops.push(crate::bytecode::op_from_archived(op));
-        }
-        decoded.push(ops);
-    }
-    Ok(decoded)
+/// The buffer's framing is validated through `Module::access_bytes`.
+/// The op decoding uses `op_from_archived` for each op slot. This is
+/// the same conversion that the previous hot-path fetch performed;
+/// pre-decoding amortizes its cost across the VM lifetime instead of
+/// paying it per fetch.
+///
+/// Both the owned (`AlignedVec`) and the borrowed (`&[u8]`) paths
+/// route through this helper. The single source of truth for op
+/// pre-decoding lives here.
+fn decode_all_ops(bytes: &[u8]) -> Result<Vec<Vec<Op>>, VmError> {
+    let archived = crate::bytecode::Module::access_bytes(bytes)?;
+    Ok(archived
+        .chunks
+        .iter()
+        .map(|chunk| {
+            chunk
+                .ops
+                .iter()
+                .map(crate::bytecode::op_from_archived)
+                .collect()
+        })
+        .collect())
 }
 
 /// Compute the smallest arena capacity that admits the given module
@@ -521,25 +527,7 @@ impl<'a, 'arena> Vm<'a, 'arena> {
             archived.data_layout.as_ref().map_or(0, |dl| dl.slots.len())
         };
         let data = vec![Value::Unit; data_len];
-        // Pre-decode every chunk's ops for the hot dispatch loop. The
-        // borrowed-bytes constructor cannot reuse `decode_all_ops`'s
-        // aligned-vec entry point because the bytes are borrowed
-        // rather than copied; instead, the archived view is taken
-        // directly through `access_bytes` and the ops decoded inline.
-        let decoded_ops: Vec<Vec<Op>> = {
-            let archived = crate::bytecode::Module::access_bytes(bytes)?;
-            archived
-                .chunks
-                .iter()
-                .map(|chunk| {
-                    chunk
-                        .ops
-                        .iter()
-                        .map(crate::bytecode::op_from_archived)
-                        .collect::<Vec<Op>>()
-                })
-                .collect()
-        };
+        let decoded_ops = decode_all_ops(bytes)?;
         Ok(Self {
             bytecode: BytecodeStore::Borrowed(bytes),
             decoded_ops,
@@ -564,7 +552,7 @@ impl<'a, 'arena> Vm<'a, 'arena> {
         let bytes = module.to_bytes()?;
         let mut aligned = rkyv::util::AlignedVec::<8>::with_capacity(bytes.len());
         aligned.extend_from_slice(&bytes);
-        let decoded_ops = decode_all_ops(&aligned)?;
+        let decoded_ops = decode_all_ops(aligned.as_slice())?;
         Ok(Self {
             bytecode: BytecodeStore::Owned(aligned),
             decoded_ops,
@@ -765,7 +753,7 @@ impl<'a, 'arena> Vm<'a, 'arena> {
         let bytes = new_module.to_bytes()?;
         let mut aligned = rkyv::util::AlignedVec::<8>::with_capacity(bytes.len());
         aligned.extend_from_slice(&bytes);
-        let decoded_ops = decode_all_ops(&aligned)?;
+        let decoded_ops = decode_all_ops(aligned.as_slice())?;
         self.bytecode = BytecodeStore::Owned(aligned);
         self.decoded_ops = decoded_ops;
         self.data = initial_data;
