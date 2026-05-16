@@ -2127,6 +2127,50 @@ mod tests {
     }
 
     #[test]
+    fn monomorphize_generic_enum_with_match_pattern() {
+        // Regression: the monomorphizer renamed the enum
+        // construction site (`Maybe::Just(42)` to `Maybe__i64::Just`)
+        // but match-arm patterns retained the original generic
+        // enum name, producing `enum pattern Maybe::Just does not
+        // match scrutinee type Maybe__i64`. Both sites must
+        // rewrite consistently.
+        let val = run_expect(
+            "enum Maybe<T> { Just(T), Nothing }\n\
+             fn main() -> i64 {\n\
+                let m = Maybe::Just(42);\n\
+                match m {\n\
+                    Maybe::Just(x) => x,\n\
+                    Maybe::Nothing => 0,\n\
+                }\n\
+             }",
+            &[],
+        );
+        assert_eq!(val, Value::Int(42));
+    }
+
+    #[test]
+    fn monomorphize_nested_generic_structs_resolves_field_types() {
+        // Regression: the struct specializer substituted type
+        // parameters in field declarations (`inner: Cell<T>`
+        // became `inner: Cell<i64>`) but did not rewrite the
+        // substituted type to the emitted specialization name
+        // (`Cell__i64`), producing `field Wrap__i64.inner expects
+        // Cell<i64>, got Cell__i64` at type check. The
+        // substitution now resolves nested generic instantiations
+        // to their specialization names.
+        let val = run_expect(
+            "struct Cell<T> { value: T }\n\
+             struct Wrap<T> { inner: Cell<T> }\n\
+             fn main() -> i64 {\n\
+                let w = Wrap { inner: Cell { value: 7 } };\n\
+                w.inner.value\n\
+             }",
+            &[],
+        );
+        assert_eq!(val, Value::Int(7));
+    }
+
+    #[test]
     fn eval_literal() {
         let val = run_expect("fn main() -> i64 { 42 }", &[]);
         assert_eq!(val, Value::Int(42));

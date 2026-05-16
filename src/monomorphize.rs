@@ -315,6 +315,31 @@ impl crate::visitor::MutVisitor for EnumSpecializer<'_> {
         // Recurse into children first so nested EnumVariant
         // constructions are specialized bottom-up.
         self.walk_expr(expr);
+
+        // Handle `Expr::Match`: after the scrutinee has been
+        // specialized through walk_expr, the scrutinee's inferred
+        // type may now reference a specialized enum (e.g.,
+        // `Maybe__i64`). The match arms' patterns retain the
+        // original generic enum name (`Maybe`) and need to be
+        // rewritten so subsequent type checking matches the
+        // monomorphized scrutinee.
+        if let Expr::Match {
+            scrutinee, arms, ..
+        } = expr
+        {
+            if let Some(scrutinee_ty) =
+                infer_arg_type(scrutinee, self.locals, self.fn_returns, None)
+                && let TypeExpr::Named(spec_name, _, _) = &scrutinee_ty
+                && let Some(original) = find_original_for_spec(self.specs, spec_name)
+            {
+                let spec_name = spec_name.clone();
+                for arm in arms.iter_mut() {
+                    rewrite_pattern_enum_name(&mut arm.pattern, &original, &spec_name);
+                }
+            }
+            return;
+        }
+
         // Then check this node for a generic EnumVariant to specialize.
         let Expr::EnumVariant {
             enum_name,
@@ -370,6 +395,56 @@ impl crate::visitor::MutVisitor for EnumSpecializer<'_> {
     }
 }
 
+/// Reverse-lookup the generic enum name that produced a given
+/// specialization. Returns `None` if `spec_name` does not appear in
+/// the specs map (i.e. the type is already monomorphic or is not an
+/// enum specialization).
+fn find_original_for_spec(
+    specs: &BTreeMap<(String, String), String>,
+    spec_name: &str,
+) -> Option<String> {
+    specs
+        .iter()
+        .find(|(_, v)| v.as_str() == spec_name)
+        .map(|((orig, _), _)| orig.clone())
+}
+
+/// Rewrite every `Pattern::Enum(enum_name, ...)` inside `pattern`
+/// whose `enum_name` matches `original_enum_name`, replacing it
+/// with `spec_enum_name`. Recurses into composite patterns
+/// (`Tuple`, `Struct`, and the variant payloads of `Enum` itself)
+/// so nested matches against the same generic enum are also
+/// rewritten.
+fn rewrite_pattern_enum_name(
+    pattern: &mut Pattern,
+    original_enum_name: &str,
+    spec_enum_name: &str,
+) {
+    match pattern {
+        Pattern::Enum(enum_name, _variant, sub_patterns, _span) => {
+            if enum_name == original_enum_name {
+                *enum_name = spec_enum_name.to_string();
+            }
+            for sub in sub_patterns.iter_mut() {
+                rewrite_pattern_enum_name(sub, original_enum_name, spec_enum_name);
+            }
+        }
+        Pattern::Tuple(sub_patterns, _span) => {
+            for sub in sub_patterns.iter_mut() {
+                rewrite_pattern_enum_name(sub, original_enum_name, spec_enum_name);
+            }
+        }
+        Pattern::Struct(_name, field_patterns, _span) => {
+            for fp in field_patterns.iter_mut() {
+                if let Some(p) = fp.pattern.as_mut() {
+                    rewrite_pattern_enum_name(p, original_enum_name, spec_enum_name);
+                }
+            }
+        }
+        Pattern::Literal(_, _) | Pattern::Wildcard(_) | Pattern::Variable(_, _) => {}
+    }
+}
+
 fn specialize_enum(enum_def: &EnumDef, type_args: &[TypeExpr], spec_name: String) -> EnumDef {
     let mut subst: BTreeMap<String, TypeExpr> = BTreeMap::new();
     for (tp, arg) in enum_def.type_params.iter().zip(type_args.iter()) {
@@ -419,6 +494,7 @@ fn specialize_structs(mut program: Program, fn_returns: &BTreeMap<String, TypeEx
         return program;
     }
     let mut struct_specs: BTreeMap<(String, String), String> = BTreeMap::new();
+    let mut reverse_specs: BTreeMap<String, (String, Vec<TypeExpr>)> = BTreeMap::new();
     let mut new_structs: Vec<StructDef> = Vec::new();
     let mut local_types: BTreeMap<String, TypeExpr> = BTreeMap::new();
     for func in &mut program.functions {
@@ -434,6 +510,7 @@ fn specialize_structs(mut program: Program, fn_returns: &BTreeMap<String, TypeEx
             generic_structs: &generic_structs,
             locals: &mut local_types,
             specs: &mut struct_specs,
+            reverse_specs: &mut reverse_specs,
             new_structs: &mut new_structs,
             fn_returns,
         };
@@ -452,6 +529,13 @@ struct StructSpecializer<'a> {
     generic_structs: &'a BTreeMap<String, StructDef>,
     locals: &'a mut BTreeMap<String, TypeExpr>,
     specs: &'a mut BTreeMap<(String, String), String>,
+    /// Reverse lookup mapping each emitted specialization name back
+    /// to its original generic name and the concrete type arguments
+    /// used to produce it. Used by the inference loop to recover
+    /// type arguments when a field's declared type is itself a
+    /// generic instantiation (`inner: Cell<T>` where the init
+    /// produces `Cell__i64`).
+    reverse_specs: &'a mut BTreeMap<String, (String, Vec<TypeExpr>)>,
     new_structs: &'a mut Vec<StructDef>,
     fn_returns: &'a BTreeMap<String, TypeExpr>,
 }
@@ -487,13 +571,45 @@ impl crate::visitor::MutVisitor for StructSpecializer<'_> {
         for tp in &struct_def.type_params {
             let mut inferred: Option<TypeExpr> = None;
             for decl_field in &struct_def.fields {
+                let Some(init) = fields.iter().find(|f| f.name == decl_field.name) else {
+                    continue;
+                };
+                let Some(init_ty) = infer_arg_type(&init.value, self.locals, self.fn_returns, None)
+                else {
+                    continue;
+                };
+                // Case 1: the field's declared type is the type
+                // parameter itself (e.g. `value: T`). The inferred
+                // init type is the bound for `T`.
                 if let TypeExpr::Named(n, _, _) = &decl_field.type_expr
                     && *n == tp.name
-                    && let Some(init) = fields.iter().find(|f| f.name == decl_field.name)
-                    && let Some(t) = infer_arg_type(&init.value, self.locals, self.fn_returns, None)
                 {
-                    inferred = Some(t);
+                    inferred = Some(init_ty);
                     break;
+                }
+                // Case 2: the field's declared type is a generic
+                // instantiation that mentions `tp.name` among its
+                // arguments (e.g. `inner: Cell<T>`). The inferred
+                // init type is a specialization that we can reverse
+                // through `reverse_specs` to recover the bound for
+                // `T`. Single-level only; deeper nesting (e.g.
+                // `Cell<Wrap<T>>`) is not yet handled.
+                if let TypeExpr::Named(outer_decl, decl_args, _) = &decl_field.type_expr
+                    && let TypeExpr::Named(spec_name, _, _) = &init_ty
+                    && let Some((orig, inferred_args)) = self.reverse_specs.get(spec_name)
+                    && orig == outer_decl
+                {
+                    for (decl_arg, inf_arg) in decl_args.iter().zip(inferred_args.iter()) {
+                        if let TypeExpr::Named(arg_n, _, _) = decl_arg
+                            && *arg_n == tp.name
+                        {
+                            inferred = Some(inf_arg.clone());
+                            break;
+                        }
+                    }
+                    if inferred.is_some() {
+                        break;
+                    }
                 }
             }
             match inferred {
@@ -511,8 +627,17 @@ impl crate::visitor::MutVisitor for StructSpecializer<'_> {
             existing.clone()
         } else {
             let spec_name = mangle_struct(name, &type_args);
-            let specialized = specialize_struct(struct_def, &type_args, spec_name.clone());
+            // Pass the in-progress specs so any nested generic
+            // field types (e.g. `inner: Cell<i64>` inside a
+            // freshly specialized `Wrap<i64>`) are rewritten to
+            // their already-emitted specialization names. The
+            // bottom-up walk guarantees inner specializations
+            // exist before the outer is emitted.
+            let specialized =
+                specialize_struct(struct_def, &type_args, spec_name.clone(), self.specs);
             self.specs.insert(cache_key, spec_name.clone());
+            self.reverse_specs
+                .insert(spec_name.clone(), (name.clone(), type_args.clone()));
             self.new_structs.push(specialized);
             spec_name
         };
@@ -535,6 +660,7 @@ fn specialize_struct(
     struct_def: &StructDef,
     type_args: &[TypeExpr],
     spec_name: String,
+    existing_specs: &BTreeMap<(String, String), String>,
 ) -> StructDef {
     let mut subst: BTreeMap<String, TypeExpr> = BTreeMap::new();
     for (tp, arg) in struct_def.type_params.iter().zip(type_args.iter()) {
@@ -543,10 +669,13 @@ fn specialize_struct(
     let fields: Vec<FieldDecl> = struct_def
         .fields
         .iter()
-        .map(|f| FieldDecl {
-            name: f.name.clone(),
-            type_expr: subst_type_expr(&f.type_expr, &subst),
-            span: f.span,
+        .map(|f| {
+            let substituted = subst_type_expr(&f.type_expr, &subst);
+            FieldDecl {
+                name: f.name.clone(),
+                type_expr: resolve_generic_type_to_spec(&substituted, existing_specs),
+                span: f.span,
+            }
         })
         .collect();
     StructDef {
@@ -554,6 +683,54 @@ fn specialize_struct(
         type_params: Vec::new(),
         fields,
         span: struct_def.span,
+    }
+}
+
+/// Walk a `TypeExpr` and rewrite any `Named(outer, [args])` whose
+/// `(outer, canonical_args)` pair is in the specs map to the
+/// emitted specialization name without type arguments. Used after
+/// type-parameter substitution to keep specialized field types in
+/// sync with the specialized struct definitions the monomorphizer
+/// has emitted.
+fn resolve_generic_type_to_spec(
+    t: &TypeExpr,
+    specs: &BTreeMap<(String, String), String>,
+) -> TypeExpr {
+    match t {
+        TypeExpr::Named(name, args, span) if !args.is_empty() => {
+            let resolved_args: Vec<TypeExpr> = args
+                .iter()
+                .map(|a| resolve_generic_type_to_spec(a, specs))
+                .collect();
+            let canonical = resolved_args
+                .iter()
+                .map(type_arg_canonical)
+                .collect::<Vec<_>>()
+                .join(",");
+            if let Some(spec) = specs.get(&(name.clone(), canonical)) {
+                TypeExpr::Named(spec.clone(), Vec::new(), *span)
+            } else {
+                TypeExpr::Named(name.clone(), resolved_args, *span)
+            }
+        }
+        TypeExpr::Named(name, args, span) => TypeExpr::Named(name.clone(), args.clone(), *span),
+        TypeExpr::Tuple(items, span) => TypeExpr::Tuple(
+            items
+                .iter()
+                .map(|i| resolve_generic_type_to_spec(i, specs))
+                .collect(),
+            *span,
+        ),
+        TypeExpr::Array(elem, len, span) => TypeExpr::Array(
+            alloc::boxed::Box::new(resolve_generic_type_to_spec(elem, specs)),
+            *len,
+            *span,
+        ),
+        TypeExpr::Option(inner, span) => TypeExpr::Option(
+            alloc::boxed::Box::new(resolve_generic_type_to_spec(inner, specs)),
+            *span,
+        ),
+        other => other.clone(),
     }
 }
 
