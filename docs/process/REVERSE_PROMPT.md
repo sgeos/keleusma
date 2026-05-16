@@ -8,51 +8,49 @@ AI to Human communication channel.
 
 ## Last Updated
 
-**Date**: 2026-05-10
-**Status**: Two of three crates published to crates.io. `keleusma 0.1.0` is the remaining publication step.
+**Date**: 2026-05-16
+**Status**: V0.2.0 text refactor sequence committed on the `v0.2.0` branch.
 
-## Published
+## Completed in this session
 
-- `keleusma-arena 0.2.0` is live at https://crates.io/crates/keleusma-arena and https://docs.rs/keleusma-arena/0.2.0/. The 0.2.0 release adds the epoch-tagged stale-pointer detection surface (`ArenaHandle<T>`, `Arena::reset` returning `Result<(), EpochSaturated>`, `from_raw_parts`, `Stale`) on top of the preserved 0.1.0 mark/rewind/peak surface.
-- `keleusma-macros 0.1.0` is live at https://crates.io/crates/keleusma-macros and https://docs.rs/keleusma-macros/0.1.0/. Implementation-detail crate; users depend on `keleusma` and consume the derive through `keleusma::KeleusmaType`.
+The V0.2.0 text refactor proceeded through six logical atomic commits on the `v0.2.0` branch.
 
-## Outstanding TODO
+1. `refactor(text): rename surface String type to Text` — surface keyword renamed; AST `PrimType::KString` renamed to `PrimType::Text`; parser, type checker, compiler, monomorphizer, target descriptor, verifier, and VM tests updated; all documentation and the bundled `string_ops` example use the new keyword.
+2. `refactor(text): arena-resident Op::Add and remove Value::DynStr` — `Value::DynStr` variant removed; `Op::Add` text branch routes through `KString::alloc`; bundled `to_string`, `concat`, and `slice` natives now produce `Value::KStr` from the arena's top region; `register_utility_natives` is arena-aware by default; `register_utility_natives_with_ctx` retained as a deprecated alias.
+3. `feat(cost-model): introduce OpCost::{Fixed, Dynamic} enum` — cost-model surface for runtime-dependent opcode cost. `CostModel::heap_alloc_cost` returns `OpCost::Dynamic` for `Op::Add` on text. The fixed-view `heap_alloc_bytes` accessor saturates dynamic costs to zero. Six new tests pin the contract.
+4. `feat(text): add text cargo feature gating surface string support` — new `text` cargo feature, default off. Lexer rejects string literals with a clear feature-disabled message; parser does not recognise `Text`; the bundled string utility natives are still compiled but never reached by script-side code in the off configuration. The `keleusma-cli` crate enables the feature on its runtime dependency. CI gains a `test-no-text` job and the MSRV job covers both feature configurations.
+5. `feat(vm): add Vm::new_with_options and OverflowPolicy knob` — new constructor returning `Result<(Self, Vec<VerifyWarning>), VmError>`. `OverflowPolicy::{Reject (default), Warn, Allow}` decides how the verifier responds to declared WCET or WCMU header fields that saturated to `u32::MAX`. The bare `Vm::new` continues to reject overflow because it wraps `new_with_options(VmOptions::default())`.
+6. `feat(verify): add TextSize lattice for WCMU text-size tracking` — `TextSize::{Known(u32), Unbounded}` lattice with saturating addition, join, and projection. `op_cost_context` lifts a pair of lattice values into the `OpCostContext` consumed by `OpCost::Dynamic`. Integration with `verify::compute_chunk_wcmu` is staged for V0.2.x. Eight tests pin the lattice behaviour, including the doubling-pattern saturation against the FAQ exponential-string-concat example.
 
-**Publish `keleusma 0.1.0` to crates.io.**
-
-The publication-readiness state is the following.
-
-- `cargo publish -p keleusma --dry-run` succeeds against the registry-resolved dependencies. Package is 91 files, 1.3 MiB unpacked, 330.5 KiB compressed. Verification compiles cleanly after Cargo downloads `keleusma-arena 0.2.0` and `keleusma-macros 0.1.0` from crates.io.
-- All `.kel` files referenced through `include_str!` are confirmed in the package: `examples/piano_roll.kel`, `examples/piano_roll_2.kel`, and the eight `examples/scripts/*.kel`.
-- Cargo.toml metadata is complete: description, keywords (5), categories (3), license (`0BSD`), homepage, repository, documentation, readme, rust-version 1.87.
-- `LICENSE` and `CHANGELOG.md` are present at the repository root and are included in the package.
-- Feature-gated `sdl3` dep is correctly marked optional; `[[example]] piano_roll` is gated by `required-features = ["sdl3-example"]`. Workspace builds and tests are SDL3-free.
-- 520 workspace tests pass; clippy, format, rustdoc clean.
-
-The agent does not perform `cargo publish`. The operator runs `cargo publish -p keleusma`. After the index propagates, the V0.1.0 release is complete.
-
-One informational caveat: `cargo publish` for 0.1.0 is permanent. The version can be yanked but not unpublished, and a yanked version cannot be republished with the same number. Any subsequent fix requires a 0.1.1 release. The state of the repository at the most recent commit on `main` is what ships as `keleusma 0.1.0`.
-
-## Verification
-
-The most recent verification matrix (run before this compaction):
+## Verification matrix
 
 ```bash
-cargo test --workspace                                   # 520 pass
-cargo clippy --workspace --all-targets -- -D warnings    # clean
-cargo fmt --check                                        # clean
-cargo doc --no-deps -p keleusma                          # clean
-cargo doc --no-deps -p keleusma-arena                    # clean
-cargo doc --no-deps -p keleusma-macros                   # clean
-cargo build -p keleusma --target thumbv7em-none-eabihf   # clean (no_std + alloc)
-rustup run 1.85 cargo check -p keleusma-arena            # MSRV clean
-cargo publish -p keleusma --dry-run                      # clean
+cargo test --workspace                                                      # 465 + ancillary, all pass
+cargo test -p keleusma --no-default-features                                # 434 pass (31 text-only tests gated)
+cargo clippy --workspace --tests --features text -- -D warnings             # clean
+cargo clippy --workspace --tests --no-default-features -- -D warnings       # clean
+cargo fmt --check                                                            # clean
+cargo run --example string_ops                                              # prints "result: hello..."
+cargo build --workspace --no-default-features                               # clean
 ```
+
+## Outstanding work for V0.2.0 cycle
+
+The four tasks in the V0.2.0 charter are addressed. Two items are explicitly deferred to V0.2.x with the design captured in source:
+
+1. **Static WCMU text-size tracking through `compute_chunk_wcmu`.** The `TextSize` lattice and `OpCost::Dynamic` cost surface are in place. The integration commit will populate an abstract per-slot lattice during the existing `wcmu_region` walk, evaluate `OpCost::Dynamic` against the resulting context, and sum the dynamic heap cost into `McuResult::heap_total`. The work is mostly mechanical; the design hinge is how to surface joins and loop iteration counts cleanly without duplicating `wcmu_region`'s control-flow logic.
+2. **BYTECODE_VERSION bump.** The wire format is unchanged, but the host-visible runtime semantics moved meaningfully. A version bump for V0.2.0 may still be appropriate; deferred because the cost-model and overflow-policy surface may evolve further in V0.2.x and a single bump that captures the V0.2.x deltas in one move is cheaper than two.
+
+## Concerns
+
+- The `register_utility_natives` API is now arena-aware by default. Hosts that pinned `keleusma = "0.1"` and migrate to `keleusma = "0.2"` will see `Value::DynStr` removed and their match arms on the result of bundled natives change from `Value::DynStr(_)` to `Value::KStr(_)`. The CHANGELOG documents the break; the migration is mechanical but unavoidable.
+- The `text` feature default-off changes the surface available to embedding hosts that previously took `keleusma = "0.1"` defaults. Hosts that depended on script-side strings must add `features = ["text"]` to their `Cargo.toml`. The CHANGELOG and the new FAQ entry "Enabling text support" document the migration.
+- The overflow-policy rewrite of the declared header field to `0` under `Warn` and `Allow` is the only way to bypass the load-time u32::MAX check in `Module::access_bytes` without restructuring the loader. The policy preserves the original signal through the warning vector, so hosts still observe the overflow. A future refinement could push the policy into the loader and avoid the rewrite, but the present arrangement is the minimal change.
 
 ## Intended Next Step
 
-Operator runs `cargo publish -p keleusma`. Agent awaits prompt before proceeding to any post-publication work.
+Awaiting operator prompt. Likely directions:
 
-## Recent Session Context
-
-This sprint closed the V0.1.0 publication path. Six tasks (V0.1-M3-T48 through T53) addressed publication-readiness gaps surfaced by `cargo publish --dry-run` and by review of crate-level metadata. The notable architectural decisions were (1) moving `KString` out of `keleusma-arena` into the `keleusma` main crate so the allocator owns the generic `ArenaHandle<T>` mechanism and the runtime owns the `&str`-specific policy, and (2) adding declared WCET and WCMU fields to the framing header at offsets 16 and 20 with `0`-means-auto and `u32::MAX`-means-overflow conventions; the compiler populates them from the verifier. The latter bumps `BYTECODE_VERSION` to 8. Detailed entries live in [TASKLOG.md](./TASKLOG.md) and [the CHANGELOG](../../CHANGELOG.md); this document records only the current handoff state.
+1. Land the WCMU text-size integration in `wcmu_region`, removing the gap noted above and closing the FAQ caveat that text growth is not statically tracked.
+2. Cut a V0.2.0 release candidate against the branch and tag it for crates.io publication.
+3. Continue to address any open reviewer comments not surfaced in the current FAQ entries.
