@@ -8,6 +8,19 @@ This document collects surprises that early adopters have run into. The intent i
 
 **Strings are not the Keleusma value proposition.** The language's value proposition is definitive Worst-Case Execution Time and Worst-Case Memory Usage verification for embedded real-time scripting. For string-heavy standalone work, a dynamic language with a rich standard library is the better tool. Python, Ruby, JavaScript, or any of the many shell-and-text-processing languages will all handle strings more ergonomically and with more built-in utility than Keleusma. Strings in Keleusma exist as a host-boundary type and as a debugging convenience; they are not the surface to optimise for.
 
+### Enabling text support
+
+Surface support for strings is gated behind the `text` cargo feature, which is disabled by default. With the feature off, the lexer rejects string literals (`"..."`) and f-strings (`f"..."`) with `string literals require the text cargo feature, which is disabled in this build`, the parser does not recognise the `Text` primitive type, and the bundled string utility natives are not useful because no script can produce a string argument.
+
+Hosts that want script-side string concatenation, f-strings, and the bundled utility natives (`to_string`, `concat`, `slice`, `length` against text) enable the feature explicitly in their `Cargo.toml`.
+
+````toml
+[dependencies]
+keleusma = { version = "0.2", features = ["text"] }
+````
+
+The `keleusma-cli` crate enables the feature for the CLI runner and the REPL, so users running scripts from the command line do not have to think about the feature. Embedding hosts that target small embedded runtimes and do not need scripts to manipulate text get a smaller compiled artifact by leaving the feature off.
+
 That said, real applications routinely need some string work in context. **The recommended pattern is to register native Rust functions that perform the string work and expose them to the script.** Rust's standard library handles formatting, splitting, regex, encoding conversion, and Unicode operations far better than anything reasonable to build inside the script. The host writes a small Rust function, registers it with one `register_fn` call, and the script gets a single `use` declaration that yields native performance and full Rust ecosystem access.
 
 ````rust

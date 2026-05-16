@@ -2096,6 +2096,7 @@ mod tests {
         assert_eq!(val, Value::Int(0));
     }
 
+    #[cfg(feature = "text")]
     #[test]
     fn eval_string_literal() {
         let val = run_expect("fn main() -> Text { \"hello\" }", &[]);
@@ -2291,6 +2292,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "text")]
     #[test]
     fn eval_multiheaded_literal() {
         let val = run_expect(
@@ -2300,6 +2302,7 @@ mod tests {
         assert_eq!(val, Value::StaticStr(String::from("zero")));
     }
 
+    #[cfg(feature = "text")]
     #[test]
     fn eval_multiheaded_fallthrough() {
         let val = run_expect(
@@ -2318,6 +2321,7 @@ mod tests {
         assert_eq!(val, Value::Int(42));
     }
 
+    #[cfg(feature = "text")]
     #[test]
     fn eval_match_literal() {
         let val = run_expect(
@@ -2327,6 +2331,7 @@ mod tests {
         assert_eq!(val, Value::StaticStr(String::from("one")));
     }
 
+    #[cfg(feature = "text")]
     #[test]
     fn eval_match_wildcard() {
         let val = run_expect(
@@ -2375,6 +2380,7 @@ mod tests {
         assert_eq!(val, Value::Int(8));
     }
 
+    #[cfg(feature = "text")]
     #[test]
     fn eval_string_concat() {
         let src = "fn main() -> Text { \"hello\" + \" world\" }";
@@ -2854,6 +2860,7 @@ mod tests {
 
     // -- Cross-yield prohibition on dynamic strings (R31) --
 
+    #[cfg(feature = "text")]
     #[test]
     fn yield_static_string_succeeds() {
         // Static string literals can be yielded.
@@ -2869,6 +2876,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "text")]
     #[test]
     fn yield_dynamic_string_fails() {
         // to_string returns a KStr. Yielding it must fail at runtime.
@@ -2890,6 +2898,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "text")]
     #[test]
     fn yield_tuple_with_dynamic_string_fails() {
         // Yielding a tuple containing a KStr must fail.

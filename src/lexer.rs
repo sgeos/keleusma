@@ -37,6 +37,7 @@ pub fn tokenize(source: &str) -> Result<Vec<Token>, LexError> {
 
 /// One segment of an f-string. Either a literal text run or a raw
 /// expression source captured between `{` and `}` markers.
+#[cfg(feature = "text")]
 enum FStringPart {
     Literal(String),
     Interp(String),
@@ -49,6 +50,7 @@ enum FStringPart {
 /// location. Interpolated expressions are recursively tokenized via
 /// `tokenize`; the trailing `Eof` token from the recursive lex is
 /// dropped. Lex errors inside an interpolation are propagated.
+#[cfg(feature = "text")]
 fn emit_fstring_desugar(
     parts: Vec<FStringPart>,
     span: Span,
@@ -470,7 +472,15 @@ impl<'a> Lexer<'a> {
             }
 
             // String literal
+            #[cfg(feature = "text")]
             b'"' => self.lex_string(start, start_line, start_col),
+            #[cfg(not(feature = "text"))]
+            b'"' => Err(LexError {
+                message: alloc::string::String::from(
+                    "string literals require the `text` cargo feature, which is disabled in this build",
+                ),
+                span: self.span_from(start, start_line, start_col),
+            }),
 
             // Underscore: standalone is a token, with trailing alnum is a lower ident
             b'_' => {
@@ -491,11 +501,19 @@ impl<'a> Lexer<'a> {
             // `concat`/`to_string` chain. Recognized before the
             // lowercase-ident path so the bare `f` identifier path
             // is unaffected when no `"` follows.
+            #[cfg(feature = "text")]
             b'f' if self.peek() == Some(b'"') => {
                 // Consume the `"` and scan the f-string body.
                 self.advance();
                 self.lex_fstring(start, start_line, start_col)
             }
+            #[cfg(not(feature = "text"))]
+            b'f' if self.peek() == Some(b'"') => Err(LexError {
+                message: alloc::string::String::from(
+                    "f-strings require the `text` cargo feature, which is disabled in this build",
+                ),
+                span: self.span_from(start, start_line, start_col),
+            }),
 
             // Lowercase identifier or keyword
             b'a'..=b'z' => self.lex_lower_ident(start, start_line, start_col),
@@ -695,6 +713,7 @@ impl<'a> Lexer<'a> {
     /// f-strings produce the bare literal. Single-interpolation
     /// f-strings produce `to_string(<expr>)`. Mixed f-strings produce
     /// a left-associative chain of `concat(...)` calls.
+    #[cfg(feature = "text")]
     fn lex_fstring(
         &mut self,
         start: usize,
@@ -831,6 +850,7 @@ impl<'a> Lexer<'a> {
         emit_fstring_desugar(parts, span, &mut self.pending)
     }
 
+    #[cfg(feature = "text")]
     fn lex_string(
         &mut self,
         start: usize,
@@ -1029,6 +1049,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "text")]
     #[test]
     fn string_literals() {
         let result = kinds(r#""hello" "world\n" "tab\there" "quote\"end" "null\0""#);
@@ -1394,6 +1415,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "text")]
     #[test]
     fn error_unterminated_string() {
         let result = tokenize("\"hello");
@@ -1512,6 +1534,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "text")]
     #[test]
     fn fstring_rejects_empty_interpolation() {
         let err = tokenize("f\"hi {}\"").expect_err("expected lex error");
@@ -1522,6 +1545,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "text")]
     #[test]
     fn fstring_rejects_whitespace_only_interpolation() {
         let err = tokenize("f\"hi {   }\"").expect_err("expected lex error");
@@ -1532,6 +1556,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "text")]
     #[test]
     fn fstring_literal_braces_via_backslash_escape() {
         // `\{` and `\}` produce literal braces; the f-string does not

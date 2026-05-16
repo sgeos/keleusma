@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **`OpCost::{Fixed(u32), Dynamic(fn)}` enum.** Cost-model surface for opcodes whose cost depends on runtime data. `CostModel::heap_alloc_cost` returns the new type; `Op::Add` on text operands reports `OpCost::Dynamic` because the resulting `KString` length is the sum of operand lengths. Hosts that need the pre-V0.2.0 fixed view continue to call `CostModel::heap_alloc_bytes`, which saturates dynamic costs to zero. The WCMU text-size tracking pass scheduled for V0.2.x evaluates `OpCost::Dynamic` against an `OpCostContext` populated from the abstract-interpretation lattice.
+- **`text` cargo feature, default off.** Gates the surface use of strings in scripts. With the feature off, the lexer rejects string literals (`"..."`) and f-strings (`f"..."`), and the parser does not recognise the `Text` primitive type. The `keleusma-cli` crate enables the feature on the runtime dependency so the script runner and the REPL continue to handle strings. Hosts that want the V0.1.x default surface enable the feature explicitly: `keleusma = { version = "0.2", features = ["text"] }`. Embedding hosts that target very small runtimes get a smaller compiled artifact by leaving the feature off. See the FAQ entry "Enabling text support" for details.
 
 ## [0.1.1] - 2026-05-10
 

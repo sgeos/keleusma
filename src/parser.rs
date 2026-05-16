@@ -1240,6 +1240,10 @@ impl<'a> Parser<'a> {
 
         // Check for Text (upper ident). Keleusma's surface text type
         // is named `Text` to avoid confusion with Rust's `String`.
+        // Gated on the `text` cargo feature; when disabled `Text`
+        // falls through to the named-type path, where it will be
+        // rejected as an unknown opaque type by the type checker.
+        #[cfg(feature = "text")]
         if self.at_upper("Text") {
             self.pos += 1;
             return Ok(TypeExpr::Prim(PrimType::Text, span));
@@ -1497,6 +1501,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "text")]
     #[test]
     fn parse_string_literal() {
         let expr = parse_expr_str("\"hello\"").unwrap();
