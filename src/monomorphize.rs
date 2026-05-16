@@ -754,6 +754,7 @@ fn mangle(name: &str, type_args: &[TypeExpr]) -> String {
 fn type_arg_canonical(t: &TypeExpr) -> String {
     match t {
         TypeExpr::Prim(p, _) => match p {
+            PrimType::Byte => "Byte".to_string(),
             PrimType::Word => "Word".to_string(),
             PrimType::Float => "Float".to_string(),
             PrimType::Bool => "bool".to_string(),
@@ -967,6 +968,7 @@ fn type_head_for_impl(ty: &TypeExpr) -> String {
     use alloc::string::ToString;
     match ty {
         TypeExpr::Prim(p, _) => match p {
+            PrimType::Byte => "Byte".to_string(),
             PrimType::Word => "Word".to_string(),
             PrimType::Float => "Float".to_string(),
             PrimType::Bool => "bool".to_string(),

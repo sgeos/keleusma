@@ -516,6 +516,10 @@ impl TypeExpr {
 /// commits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PrimType {
+    /// Eight-bit unsigned integer. Range `[0, 255]`. Arithmetic
+    /// uses wrapping `u8` semantics; conversions to and from
+    /// `Word` go through the `as` cast.
+    Byte,
     /// Target word size. Signed two's complement. On the V0.1.x
     /// runtime this is 64-bit; smaller widths are reserved for
     /// future embedded targets (16/32-bit) and are documented in

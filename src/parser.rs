@@ -1233,9 +1233,14 @@ impl<'a> Parser<'a> {
             return Ok(TypeExpr::Prim(PrimType::Bool, span));
         }
 
-        // Canonical V0.2 numeric primitives. `Word` is the target
-        // word size (64-bit signed on the host runtime); `Float` is
-        // the target floating-point width.
+        // Canonical V0.2 numeric primitives. `Byte` is an 8-bit
+        // unsigned integer; `Word` is the target word size (64-bit
+        // signed on the host runtime); `Float` is the target
+        // floating-point width.
+        if self.at_upper("Byte") {
+            self.pos += 1;
+            return Ok(TypeExpr::Prim(PrimType::Byte, span));
+        }
         if self.at_upper("Word") {
             self.pos += 1;
             return Ok(TypeExpr::Prim(PrimType::Word, span));

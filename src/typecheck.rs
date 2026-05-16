@@ -63,6 +63,10 @@ use crate::token::Span;
 /// surface-syntax detail.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Type {
+    /// Eight-bit unsigned integer. Range `[0, 255]`. Arithmetic
+    /// uses wrapping `u8` semantics; conversions to and from
+    /// `Word` go through the `as` cast.
+    Byte,
     /// Target word size (signed). On the V0.1.x runtime this is
     /// 64-bit; narrower widths are reserved for future embedded
     /// targets.
@@ -123,6 +127,7 @@ impl Type {
     ) -> Type {
         match expr {
             TypeExpr::Prim(p, _) => match p {
+                PrimType::Byte => Type::Byte,
                 PrimType::Word => Type::Word,
                 PrimType::Float => Type::Float,
                 PrimType::Bool => Type::Bool,
@@ -167,6 +172,7 @@ impl Type {
     /// Human-readable type name for diagnostics.
     pub fn display(&self) -> String {
         match self {
+            Type::Byte => "Byte".to_string(),
             Type::Word => "Word".to_string(),
             Type::Float => "Float".to_string(),
             Type::Bool => "bool".to_string(),
@@ -302,7 +308,8 @@ pub fn unify(a: &Type, b: &Type, subst: &mut Subst) -> Result<(), UnifyError> {
     let a = a.apply(subst);
     let b = b.apply(subst);
     match (a, b) {
-        (Type::Word, Type::Word)
+        (Type::Byte, Type::Byte)
+        | (Type::Word, Type::Word)
         | (Type::Float, Type::Float)
         | (Type::Bool, Type::Bool)
         | (Type::Unit, Type::Unit)
@@ -393,6 +400,7 @@ enum TypeKind {
 fn type_head_name(t: &Type) -> Option<String> {
     use alloc::string::ToString;
     match t {
+        Type::Byte => Some("Byte".to_string()),
         Type::Word => Some("Word".to_string()),
         Type::Float => Some("Float".to_string()),
         Type::Bool => Some("bool".to_string()),
@@ -769,6 +777,7 @@ pub fn check(program: &Program) -> Result<(), TypeError> {
     }
     for impl_block in &program.impls {
         let head = match Type::from_expr(&impl_block.for_type, &ctx.types) {
+            Type::Byte => "Byte".to_string(),
             Type::Word => "Word".to_string(),
             Type::Float => "Float".to_string(),
             Type::Bool => "bool".to_string(),
@@ -930,6 +939,7 @@ pub fn check(program: &Program) -> Result<(), TypeError> {
     // resolve through the same FnSig that was registered in pass 1d.
     for impl_block in &program.impls {
         let head = match Type::from_expr(&impl_block.for_type, &ctx.types) {
+            Type::Byte => "Byte".to_string(),
             Type::Word => "Word".to_string(),
             Type::Float => "Float".to_string(),
             Type::Bool => "bool".to_string(),
@@ -1472,6 +1482,8 @@ fn type_of_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Type, TypeError> {
                 BinOp::Add => {
                     if matches!(lt, Type::Word) && matches!(rt, Type::Word) {
                         Ok(Type::Word)
+                    } else if matches!(lt, Type::Byte) && matches!(rt, Type::Byte) {
+                        Ok(Type::Byte)
                     } else if matches!(lt, Type::Float) && matches!(rt, Type::Float) {
                         Ok(Type::Float)
                     } else if matches!(lt, Type::Str) && matches!(rt, Type::Str) {
@@ -1490,6 +1502,8 @@ fn type_of_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Type, TypeError> {
                 BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod => {
                     if matches!(lt, Type::Word) && matches!(rt, Type::Word) {
                         Ok(Type::Word)
+                    } else if matches!(lt, Type::Byte) && matches!(rt, Type::Byte) {
+                        Ok(Type::Byte)
                     } else if matches!(lt, Type::Float) && matches!(rt, Type::Float) {
                         Ok(Type::Float)
                     } else if matches!(lt, Type::Unknown | Type::Var(_))
@@ -2051,6 +2065,13 @@ fn type_of_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Type, TypeError> {
             let to_ty = Type::from_expr(target, &ctx.types);
             match (&from_ty, &to_ty) {
                 (Type::Word, Type::Float) | (Type::Float, Type::Word) => Ok(to_ty),
+                // Byte conversions. Word→Byte truncates to the low
+                // eight bits; Byte→Word zero-extends. Both are
+                // explicit casts; implicit narrowing or widening is
+                // not permitted because the boundary at which a
+                // value is reinterpreted should be visible at the
+                // call site.
+                (Type::Word, Type::Byte) | (Type::Byte, Type::Word) => Ok(to_ty),
                 (Type::Unknown, _) | (_, Type::Unknown) => Ok(to_ty),
                 (a, b) if a == b => Ok(to_ty),
                 _ => Err(TypeError::new(

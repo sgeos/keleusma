@@ -1418,6 +1418,9 @@ impl<'a, 'arena> Vm<'a, 'arena> {
                                 crate::bytecode::truncate_int(x.wrapping_add(y), word_bits_log2);
                             sp!(self, Value::Int(r));
                         }
+                        (Value::Byte(x), Value::Byte(y)) => {
+                            sp!(self, Value::Byte(x.wrapping_add(y)));
+                        }
                         (Value::Float(x), Value::Float(y)) => sp!(self, Value::Float(x + y)),
                         (a, b)
                             if matches!(a, Value::StaticStr(_) | Value::KStr(_))
@@ -1467,6 +1470,10 @@ impl<'a, 'arena> Vm<'a, 'arena> {
                                 word_bits_log2
                             ),)
                         ),
+                        (Value::Byte(_), Value::Byte(0)) => return Err(VmError::DivisionByZero),
+                        (Value::Byte(x), Value::Byte(y)) => {
+                            sp!(self, Value::Byte(x.wrapping_div(y)));
+                        }
                         (Value::Float(x), Value::Float(y)) => sp!(self, Value::Float(x / y)),
                         (a, b) => {
                             return Err(VmError::TypeError(format!(
@@ -1490,6 +1497,10 @@ impl<'a, 'arena> Vm<'a, 'arena> {
                                 word_bits_log2
                             ),)
                         ),
+                        (Value::Byte(_), Value::Byte(0)) => return Err(VmError::DivisionByZero),
+                        (Value::Byte(x), Value::Byte(y)) => {
+                            sp!(self, Value::Byte(x.wrapping_rem(y)));
+                        }
                         (Value::Float(x), Value::Float(y)) => sp!(self, Value::Float(x % y)),
                         (a, b) => {
                             return Err(VmError::TypeError(format!(
@@ -1511,6 +1522,7 @@ impl<'a, 'arena> Vm<'a, 'arena> {
                                 word_bits_log2
                             ),)
                         ),
+                        Value::Byte(x) => sp!(self, Value::Byte(x.wrapping_neg())),
                         Value::Float(x) => sp!(self, Value::Float(-x)),
                         v => {
                             return Err(VmError::TypeError(format!(
@@ -2015,6 +2027,30 @@ impl<'a, 'arena> Vm<'a, 'arena> {
                         }
                     }
                 }
+                Op::WordToByte => {
+                    let val = self.pop()?;
+                    match val {
+                        Value::Int(i) => sp!(self, Value::Byte((i & 0xFF) as u8)),
+                        v => {
+                            return Err(VmError::TypeError(format!(
+                                "cannot cast {} to Byte",
+                                v.type_name()
+                            )));
+                        }
+                    }
+                }
+                Op::ByteToWord => {
+                    let val = self.pop()?;
+                    match val {
+                        Value::Byte(b) => sp!(self, Value::Int(b as i64)),
+                        v => {
+                            return Err(VmError::TypeError(format!(
+                                "cannot cast {} to Word",
+                                v.type_name()
+                            )));
+                        }
+                    }
+                }
 
                 Op::Trap(msg_const) => {
                     let msg = self
@@ -2043,6 +2079,16 @@ impl<'a, 'arena> Vm<'a, 'arena> {
                 let result = crate::bytecode::truncate_int(int_op(x, y), word_bits_log2);
                 sp!(self, Value::Int(result));
             }
+            (Value::Byte(x), Value::Byte(y)) => {
+                // Byte arithmetic uses the integer op as if both
+                // operands had been zero-extended to i64, then
+                // truncates the result back to the low eight bits.
+                // This matches wrapping `u8` semantics for Add,
+                // Sub, and Mul. Div and Mod are handled separately
+                // by the caller because they reject zero divisors.
+                let result = int_op(x as i64, y as i64);
+                sp!(self, Value::Byte((result & 0xFF) as u8));
+            }
             (Value::Float(x), Value::Float(y)) => sp!(self, Value::Float(float_op(x, y))),
             (a, b) => {
                 return Err(VmError::TypeError(format!(
@@ -2063,6 +2109,7 @@ impl<'a, 'arena> Vm<'a, 'arena> {
         let a = self.pop()?;
         let ord = match (&a, &b) {
             (Value::Int(x), Value::Int(y)) => x.cmp(y),
+            (Value::Byte(x), Value::Byte(y)) => x.cmp(y),
             (Value::Float(x), Value::Float(y)) => {
                 x.partial_cmp(y).unwrap_or(core::cmp::Ordering::Equal)
             }
@@ -2174,6 +2221,53 @@ mod tests {
     fn eval_literal() {
         let val = run_expect("fn main() -> Word { 42 }", &[]);
         assert_eq!(val, Value::Int(42));
+    }
+
+    #[test]
+    fn byte_cast_truncates_word_to_low_eight_bits() {
+        let val = run_expect("fn main() -> Byte { 300 as Byte }", &[]);
+        assert_eq!(val, Value::Byte(44));
+    }
+
+    #[test]
+    fn byte_cast_round_trip_preserves_low_eight_bits() {
+        let val = run_expect("fn main() -> Word { (200 as Byte) as Word }", &[]);
+        assert_eq!(val, Value::Int(200));
+    }
+
+    #[test]
+    fn byte_addition_wraps_modulo_256() {
+        let val = run_expect("fn main() -> Byte { (200 as Byte) + (100 as Byte) }", &[]);
+        // 200 + 100 = 300 wraps to 44 (300 mod 256).
+        assert_eq!(val, Value::Byte(44));
+    }
+
+    #[test]
+    fn byte_subtraction_wraps_modulo_256() {
+        let val = run_expect("fn main() -> Byte { (10 as Byte) - (20 as Byte) }", &[]);
+        // 10 - 20 = -10 wraps to 246 (256 - 10).
+        assert_eq!(val, Value::Byte(246));
+    }
+
+    #[test]
+    fn byte_multiplication_wraps_modulo_256() {
+        let val = run_expect("fn main() -> Byte { (16 as Byte) * (17 as Byte) }", &[]);
+        // 16 * 17 = 272 wraps to 16.
+        assert_eq!(val, Value::Byte(16));
+    }
+
+    #[test]
+    fn byte_division_and_modulo_use_unsigned_semantics() {
+        let div = run_expect("fn main() -> Byte { (200 as Byte) / (16 as Byte) }", &[]);
+        assert_eq!(div, Value::Byte(12));
+        let rem = run_expect("fn main() -> Byte { (200 as Byte) % (16 as Byte) }", &[]);
+        assert_eq!(rem, Value::Byte(8));
+    }
+
+    #[test]
+    fn byte_comparison_uses_unsigned_ordering() {
+        let val = run_expect("fn main() -> bool { (200 as Byte) > (100 as Byte) }", &[]);
+        assert_eq!(val, Value::Bool(true));
     }
 
     #[test]

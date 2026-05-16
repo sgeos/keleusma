@@ -53,6 +53,22 @@ impl KeleusmaType for i64 {
     }
 }
 
+impl KeleusmaType for u8 {
+    fn from_value(v: &Value) -> Result<Self, VmError> {
+        match v {
+            Value::Byte(b) => Ok(*b),
+            other => Err(VmError::TypeError(format!(
+                "expected Byte, got {}",
+                other.type_name()
+            ))),
+        }
+    }
+
+    fn into_value(self) -> Value {
+        Value::Byte(self)
+    }
+}
+
 impl KeleusmaType for f64 {
     fn from_value(v: &Value) -> Result<Self, VmError> {
         match v {

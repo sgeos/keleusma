@@ -452,6 +452,7 @@ pub fn compile_with_target(
     for impl_block in &program.impls {
         let head = match &impl_block.for_type {
             TypeExpr::Prim(p, _) => match p {
+                PrimType::Byte => String::from("Byte"),
                 PrimType::Word => String::from("Word"),
                 PrimType::Float => String::from("Float"),
                 PrimType::Bool => String::from("bool"),
@@ -660,7 +661,7 @@ fn validate_data_field_type(
 ) -> Result<(), CompileError> {
     match type_expr {
         TypeExpr::Prim(prim, span) => match prim {
-            PrimType::Word | PrimType::Float | PrimType::Bool => Ok(()),
+            PrimType::Byte | PrimType::Word | PrimType::Float | PrimType::Bool => Ok(()),
             PrimType::Text => Err(CompileError {
                 message: String::from(
                     "data field type Text is not admissible: variable-length \
@@ -1014,6 +1015,7 @@ fn infer_expr_type(fc: &FuncCompiler, expr: &Expr) -> Option<TypeExpr> {
             Literal::String(_) => TypeExpr::Prim(PrimType::Text, *span),
             Literal::Unit => TypeExpr::Unit(*span),
         }),
+        Expr::Cast { target, .. } => Some(target.clone()),
         _ => None,
     }
 }
@@ -1025,6 +1027,7 @@ fn type_expr_head(ty: &TypeExpr) -> Option<String> {
     match ty {
         TypeExpr::Prim(p, _) => Some(
             match p {
+                PrimType::Byte => "Byte",
                 PrimType::Word => "Word",
                 PrimType::Float => "Float",
                 PrimType::Bool => "bool",
@@ -2039,13 +2042,28 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
             target,
             ..
         } => {
+            // Choose the cast opcode based on the source type
+            // (inferred from the inner expression) and the target.
+            // The type checker has already validated the cast pair
+            // (Word↔Float, Word↔Byte, or identity); this dispatch
+            // picks the matching opcode.
+            let source = infer_expr_type(fc, inner);
             compile_expr(fc, inner)?;
-            match target {
-                TypeExpr::Prim(PrimType::Float, _) => {
+            match (source.as_ref(), target) {
+                (_, TypeExpr::Prim(PrimType::Float, _)) => {
                     fc.emit(Op::IntToFloat);
                 }
-                TypeExpr::Prim(PrimType::Word, _) => {
+                (Some(TypeExpr::Prim(PrimType::Byte, _)), TypeExpr::Prim(PrimType::Word, _)) => {
+                    fc.emit(Op::ByteToWord);
+                }
+                (_, TypeExpr::Prim(PrimType::Word, _)) => {
+                    // Default for `as Word`: source is `Float`.
+                    // Byte source is caught by the more specific
+                    // arm above.
                     fc.emit(Op::FloatToInt);
+                }
+                (_, TypeExpr::Prim(PrimType::Byte, _)) => {
+                    fc.emit(Op::WordToByte);
                 }
                 _ => {
                     // Other casts are identity at runtime.
