@@ -28,7 +28,25 @@ struct Parser<'a> {
     pos: usize,
     /// Known data block names, populated during parsing.
     data_names: BTreeSet<String>,
+    /// Current depth in the recursive descent. Tracked at the
+    /// entry points of every recursive AST node (expressions,
+    /// type expressions, patterns). Incremented on entry,
+    /// decremented on exit. Exceeding [`MAX_PARSE_DEPTH`] returns
+    /// a [`ParseError`] instead of a stack overflow.
+    depth: u32,
 }
+
+/// Maximum recursive-descent depth before the parser bails with
+/// an error. Each level of expression nesting traverses the
+/// precedence chain (pipeline → logical → comparison → addition
+/// → multiplication → unary → primary), so a single level of
+/// parenthesisation consumes roughly 8-10 stack frames. The limit
+/// is chosen so that a maximally-nested admissible program
+/// consumes well under 2 MiB of stack even in a debug build with
+/// fat frames, fitting comfortably inside the default cargo-test
+/// thread stack and leaving headroom for the type checker,
+/// compiler, and VM passes that follow.
+const MAX_PARSE_DEPTH: u32 = 32;
 
 impl<'a> Parser<'a> {
     fn new(tokens: &'a [Token]) -> Self {
@@ -36,7 +54,31 @@ impl<'a> Parser<'a> {
             tokens,
             pos: 0,
             data_names: BTreeSet::new(),
+            depth: 0,
         }
+    }
+
+    /// Enter a recursive parsing step. Increments the depth and
+    /// returns `Ok(())` while the depth is within the configured
+    /// limit. Recursive parse functions call this on entry and
+    /// [`leave_depth`](Self::leave_depth) on exit; the pair
+    /// brackets every recursive call site.
+    fn enter_depth(&mut self) -> Result<(), ParseError> {
+        if self.depth >= MAX_PARSE_DEPTH {
+            return Err(ParseError {
+                message: format!(
+                    "parser recursion depth {} exceeded; deeply nested expressions are rejected to prevent stack overflow",
+                    MAX_PARSE_DEPTH
+                ),
+                span: self.peek_span(),
+            });
+        }
+        self.depth += 1;
+        Ok(())
+    }
+
+    fn leave_depth(&mut self) {
+        self.depth -= 1;
     }
 
     // --- Lookahead and consumption helpers ---
@@ -638,7 +680,10 @@ impl<'a> Parser<'a> {
     // --- Expression parsing (precedence climbing) ---
 
     fn parse_expr(&mut self) -> Result<Expr, ParseError> {
-        self.parse_pipeline_expr()
+        self.enter_depth()?;
+        let result = self.parse_pipeline_expr();
+        self.leave_depth();
+        result
     }
 
     fn parse_pipeline_expr(&mut self) -> Result<Expr, ParseError> {
@@ -1222,6 +1267,13 @@ impl<'a> Parser<'a> {
     // --- Type expression parsing ---
 
     fn parse_type_expr(&mut self) -> Result<TypeExpr, ParseError> {
+        self.enter_depth()?;
+        let result = self.parse_type_expr_inner();
+        self.leave_depth();
+        result
+    }
+
+    fn parse_type_expr_inner(&mut self) -> Result<TypeExpr, ParseError> {
         let span = self.peek_span();
 
         // Check for the boolean primitive (the only lowercase-named
@@ -1373,6 +1425,13 @@ impl<'a> Parser<'a> {
     // --- Pattern parsing ---
 
     fn parse_pattern(&mut self) -> Result<Pattern, ParseError> {
+        self.enter_depth()?;
+        let result = self.parse_pattern_inner();
+        self.leave_depth();
+        result
+    }
+
+    fn parse_pattern_inner(&mut self) -> Result<Pattern, ParseError> {
         let tok = self.tokens[self.pos].clone();
 
         match tok.kind {
@@ -1522,6 +1581,41 @@ mod tests {
                 message: String::from("no tail expression"),
                 span: body.span,
             })
+    }
+
+    #[test]
+    fn deeply_nested_parens_reject_with_typed_error_not_stack_overflow() {
+        let mut src = alloc::string::String::from("fn main() -> Word { ");
+        for _ in 0..5000 {
+            src.push('(');
+        }
+        src.push('1');
+        for _ in 0..5000 {
+            src.push(')');
+        }
+        src.push_str(" }");
+        let err = parse_str(&src).err().expect("parser should reject");
+        assert!(
+            err.message.contains("recursion depth"),
+            "expected depth error, got: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn modest_nesting_within_limit_parses() {
+        // 16 layers of parens is well within MAX_PARSE_DEPTH=32.
+        let mut src = alloc::string::String::from("fn main() -> Word { ");
+        for _ in 0..16 {
+            src.push('(');
+        }
+        src.push_str("42");
+        for _ in 0..16 {
+            src.push(')');
+        }
+        src.push_str(" }");
+        let prog = parse_str(&src).expect("parser should accept");
+        assert_eq!(prog.functions.len(), 1);
     }
 
     #[test]
