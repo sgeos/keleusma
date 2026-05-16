@@ -131,6 +131,24 @@ pub enum Value {
         /// body resolve to the local that holds the closure itself.
         recursive: bool,
     },
+    /// Opaque host-managed value referenced through a shared
+    /// reference-counted pointer. Produced by host-registered native
+    /// functions that operate on Rust types the script does not
+    /// introspect. The pointee implements the
+    /// [`crate::opaque::HostOpaque`] marker trait; the script-side
+    /// type is the opaque name registered through the type checker.
+    ///
+    /// Lifetime is independent of the arena: opaque values may
+    /// cross the yield boundary in the dialogue type, persist across
+    /// arena resets, and survive hot code swaps. Equality is by
+    /// pointer identity, matching the convention for host-managed
+    /// references.
+    ///
+    /// WCMU contribution is zero from the script side because the
+    /// allocation is host-managed. Hosts that want to bound their
+    /// own opaque heap supply a per-native attestation through
+    /// [`crate::vm::Vm::set_native_bounds`].
+    Opaque(alloc::sync::Arc<dyn crate::opaque::HostOpaque>),
 }
 
 impl PartialEq for Value {
@@ -186,6 +204,11 @@ impl PartialEq for Value {
                     fields: fb,
                 },
             ) => na == nb && va == vb && fa == fb,
+            // Opaque equality is pointer identity. Two Arcs are
+            // equal only if they share the same allocation. This
+            // matches the convention for host-managed references
+            // and avoids requiring `Eq` on the host's opaque type.
+            (Value::Opaque(a), Value::Opaque(b)) => alloc::sync::Arc::ptr_eq(a, b),
             _ => false,
         }
     }
@@ -207,6 +230,23 @@ impl Value {
             Value::Struct { .. } => "Struct",
             Value::Enum { .. } => "Enum",
             Value::None => "None",
+            // Returning a `&'static str` for an opaque value would
+            // require leaking the host-supplied name, so we surface
+            // a generic literal here. Diagnostics that need the
+            // host's specific name read it through
+            // [`Value::opaque_type_name`].
+            Value::Opaque(_) => "Opaque",
+        }
+    }
+
+    /// Return the host-supplied script-side type name for an
+    /// opaque value, or `None` if the value is not opaque. Used by
+    /// the type checker to match runtime opaque values against
+    /// declared `Type::Opaque(name)` annotations.
+    pub fn opaque_type_name(&self) -> Option<&'static str> {
+        match self {
+            Value::Opaque(o) => Some(o.type_name()),
+            _ => None,
         }
     }
 
@@ -1620,6 +1660,7 @@ impl ConstValue {
             Value::Float(f) => Ok(ConstValue::Float(f)),
             Value::StaticStr(s) => Ok(ConstValue::StaticStr(s)),
             Value::KStr(_) => Err("KStr cannot be a compile-time constant"),
+            Value::Opaque(_) => Err("Opaque cannot be a compile-time constant"),
             Value::Func { .. } => Err("Func cannot be a compile-time constant"),
             Value::Tuple(items) => items
                 .into_iter()

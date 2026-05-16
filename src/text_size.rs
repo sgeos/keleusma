@@ -278,18 +278,17 @@ impl TextAnalysis {
                 // text/non-text Add at the surface, so this case
                 // does not arise from valid programs; the
                 // conservative path treats it as text Add.
-                let (result, dynamic_cost) = if matches!(a, TextSize::NotText)
-                    && matches!(b, TextSize::NotText)
-                {
-                    (TextSize::NotText, 0)
-                } else {
-                    let context = op_cost_context(a, b);
-                    let cost = match NOMINAL_COST_MODEL.heap_alloc_cost(op, chunk) {
-                        OpCost::Dynamic(f) => f(&context),
-                        OpCost::Fixed(n) => n,
+                let (result, dynamic_cost) =
+                    if matches!(a, TextSize::NotText) && matches!(b, TextSize::NotText) {
+                        (TextSize::NotText, 0)
+                    } else {
+                        let context = op_cost_context(a, b);
+                        let cost = match NOMINAL_COST_MODEL.heap_alloc_cost(op, chunk) {
+                            OpCost::Dynamic(f) => f(&context),
+                            OpCost::Fixed(n) => n,
+                        };
+                        (a.saturating_add(b), cost)
                     };
-                    (a.saturating_add(b), cost)
-                };
                 self.push(sat(result));
                 dynamic_cost
             }
@@ -376,7 +375,6 @@ impl TextAnalysis {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -387,7 +385,10 @@ mod tests {
             TextSize::Known(3).saturating_add(TextSize::Known(5)),
             TextSize::Known(8)
         );
-        assert_eq!(TextSize::ZERO.saturating_add(TextSize::ZERO), TextSize::ZERO);
+        assert_eq!(
+            TextSize::ZERO.saturating_add(TextSize::ZERO),
+            TextSize::ZERO
+        );
     }
 
     #[test]
@@ -546,11 +547,7 @@ mod tests {
             ops.push(Op::SetLocal(0));
         }
         ops.push(Op::Return);
-        let chunk = make_chunk(
-            ops,
-            vec![ConstValue::StaticStr(StdString::from("a"))],
-            1,
-        );
+        let chunk = make_chunk(ops, vec![ConstValue::StaticStr(StdString::from("a"))], 1);
         assert_eq!(chunk_text_heap_alloc(&chunk), u32::MAX);
     }
 

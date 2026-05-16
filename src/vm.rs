@@ -2541,9 +2541,8 @@ mod tests {
         // abstract interpretation pass saturates the chunk's heap
         // bound; the WCMU resource-bounds check rejects the module
         // because the bound exceeds any feasible arena capacity.
-        let mut src = alloc::string::String::from(
-            "loop main(input: i64) -> Text {\n    let s = \"a\";\n",
-        );
+        let mut src =
+            alloc::string::String::from("loop main(input: i64) -> Text {\n    let s = \"a\";\n");
         for _ in 0..60 {
             src.push_str("    let s = s + s;\n");
         }

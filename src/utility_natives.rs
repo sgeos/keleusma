@@ -75,6 +75,7 @@ fn render_value_to_string(arena: &Arena, val: &Value) -> String {
                 format!("{}::{}({})", type_name, variant, parts.join(", "))
             }
         }
+        Value::Opaque(o) => format!("<opaque {}>", o.type_name()),
     }
 }
 

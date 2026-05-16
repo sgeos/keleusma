@@ -9,6 +9,7 @@ pub mod kstring;
 pub mod lexer;
 pub mod marshall;
 pub mod monomorphize;
+pub mod opaque;
 pub mod parser;
 pub mod target;
 pub mod text_size;
@@ -30,5 +31,6 @@ pub use bytecode::{
 };
 pub use keleusma_macros::KeleusmaType;
 pub use marshall::{IntoFallibleNativeFn, IntoNativeFn, KeleusmaType};
+pub use opaque::{HostOpaque, host_arc};
 pub use text_size::{TextSize, op_cost_context};
 pub use vm::{NativeCtx, OverflowPolicy, VerifyWarning, VmError, VmOptions, WarningKind};
