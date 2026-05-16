@@ -1086,6 +1086,93 @@ pub struct Chunk {
     pub param_count: u8,
     /// Block type classification for structural verification.
     pub block_type: BlockType,
+    /// Parameter type tags, one per parameter. Used by
+    /// `Vm::call` to reject ill-typed arguments before any
+    /// bytecode runs. Composite types (struct, enum, tuple,
+    /// array, option, opaque) record [`TypeTag::Composite`]
+    /// which the runtime accepts without further checking.
+    /// For Stream chunks, the single entry also serves as the
+    /// resume value's type (see [`Vm::resume`]).
+    pub param_types: Vec<TypeTag>,
+}
+
+/// Compact representation of a primitive parameter type for
+/// runtime call validation. Composite types (struct, enum,
+/// tuple, array, option, opaque, function values) collapse to
+/// [`TypeTag::Composite`]; the runtime accepts any non-primitive
+/// `Value` for a `Composite` parameter without further checking.
+///
+/// Fixed-point types record only the canonical tag and not the
+/// fraction-bit count; the type checker has already enforced
+/// fraction-bit compatibility at compile time, so the runtime
+/// only needs to confirm the operand is `Value::Fixed`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Archive, Serialize, Deserialize)]
+pub enum TypeTag {
+    /// Non-primitive type. The runtime does not check shape; any
+    /// `Value` is accepted.
+    Composite,
+    /// Eight-bit unsigned integer. Accepts `Value::Byte`.
+    Byte,
+    /// Target-word signed integer. Accepts `Value::Int`.
+    Word,
+    /// Signed Q-format fixed-point. Accepts `Value::Fixed`.
+    Fixed,
+    /// Target-float. Accepts `Value::Float`.
+    Float,
+    /// Boolean. Accepts `Value::Bool`.
+    Bool,
+    /// Unit `()`. Accepts `Value::Unit`.
+    Unit,
+    /// UTF-8 text. Accepts `Value::StaticStr` or `Value::KStr`.
+    Text,
+}
+
+impl TypeTag {
+    /// Lift an [`ArchivedTypeTag`] into a [`TypeTag`]. The archive
+    /// form is a unit-variant enum with the same discriminant
+    /// layout, so the lift is a one-to-one match.
+    pub fn from_archived(archived: &ArchivedTypeTag) -> Self {
+        match archived {
+            ArchivedTypeTag::Composite => TypeTag::Composite,
+            ArchivedTypeTag::Byte => TypeTag::Byte,
+            ArchivedTypeTag::Word => TypeTag::Word,
+            ArchivedTypeTag::Fixed => TypeTag::Fixed,
+            ArchivedTypeTag::Float => TypeTag::Float,
+            ArchivedTypeTag::Bool => TypeTag::Bool,
+            ArchivedTypeTag::Unit => TypeTag::Unit,
+            ArchivedTypeTag::Text => TypeTag::Text,
+        }
+    }
+
+    /// Returns `true` if `value` is admissible for a parameter
+    /// declared with this tag.
+    pub fn admits(&self, value: &Value) -> bool {
+        match self {
+            TypeTag::Composite => true,
+            TypeTag::Byte => matches!(value, Value::Byte(_)),
+            TypeTag::Word => matches!(value, Value::Int(_)),
+            TypeTag::Fixed => matches!(value, Value::Fixed(_)),
+            TypeTag::Float => matches!(value, Value::Float(_)),
+            TypeTag::Bool => matches!(value, Value::Bool(_)),
+            TypeTag::Unit => matches!(value, Value::Unit),
+            TypeTag::Text => matches!(value, Value::StaticStr(_) | Value::KStr(_)),
+        }
+    }
+
+    /// Human-readable name for the tag, suitable for error
+    /// messages.
+    pub fn name(&self) -> &'static str {
+        match self {
+            TypeTag::Composite => "Composite",
+            TypeTag::Byte => "Byte",
+            TypeTag::Word => "Word",
+            TypeTag::Fixed => "Fixed",
+            TypeTag::Float => "Float",
+            TypeTag::Bool => "Bool",
+            TypeTag::Unit => "Unit",
+            TypeTag::Text => "Text",
+        }
+    }
 }
 
 /// A compiled Keleusma module.
@@ -1152,7 +1239,7 @@ pub const BYTECODE_MAGIC: [u8; 4] = *b"KELE";
 
 /// Wire format version for serialized bytecode. Bytecode produced under a
 /// different version is rejected at load time.
-pub const BYTECODE_VERSION: u16 = 1;
+pub const BYTECODE_VERSION: u16 = 2;
 
 /// Word size in bits assumed by this runtime build, encoded as the
 /// base-2 exponent. Actual width in bits is `1 << RUNTIME_WORD_BITS_LOG2`.
@@ -1943,6 +2030,7 @@ mod cost_model_tests {
             local_count: 0,
             param_count: 0,
             block_type: BlockType::Func,
+            param_types: alloc::vec::Vec::new(),
         };
         let op = Op::NewArray(4);
         let nominal_bytes = nominal.heap_alloc_bytes(&op, &chunk);
@@ -2012,6 +2100,7 @@ mod cost_model_tests {
             local_count: 0,
             param_count: 0,
             block_type: BlockType::Func,
+            param_types: alloc::vec::Vec::new(),
         };
         let cost = NOMINAL_COST_MODEL.heap_alloc_cost(&Op::Add, &chunk);
         assert!(matches!(cost, OpCost::Dynamic(_)));
@@ -2032,6 +2121,7 @@ mod cost_model_tests {
             local_count: 0,
             param_count: 0,
             block_type: BlockType::Func,
+            param_types: alloc::vec::Vec::new(),
         };
         let cost = NOMINAL_COST_MODEL.heap_alloc_cost(&Op::NewArray(3), &chunk);
         assert!(matches!(cost, OpCost::Fixed(_)));
@@ -2053,6 +2143,7 @@ mod cost_model_tests {
             local_count: 0,
             param_count: 0,
             block_type: BlockType::Func,
+            param_types: alloc::vec::Vec::new(),
         };
         assert_eq!(NOMINAL_COST_MODEL.heap_alloc_bytes(&Op::Add, &chunk), 0);
     }

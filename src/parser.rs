@@ -1594,7 +1594,7 @@ mod tests {
             src.push(')');
         }
         src.push_str(" }");
-        let err = parse_str(&src).err().expect("parser should reject");
+        let err = parse_str(&src).expect_err("parser should reject");
         assert!(
             err.message.contains("recursion depth"),
             "expected depth error, got: {}",

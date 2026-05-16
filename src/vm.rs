@@ -1212,13 +1212,41 @@ impl<'a, 'arena> Vm<'a, 'arena> {
             VmError::InvalidBytecode(format!("invalid chunk index: {}", chunk_idx))
         })?;
         let local_count = chunk.local_count.to_native() as usize;
+        let param_count = chunk.param_count as usize;
 
-        if args.len() > local_count {
-            return Err(VmError::InvalidBytecode(format!(
-                "too many arguments: expected at most {}, got {}",
-                local_count,
+        // Validate the argument count up front. Passing too few
+        // arguments would default the missing parameter slots to
+        // `Value::Unit`, which the body then trips over at the
+        // first use site with a confusing TypeError. Failing here
+        // gives the host a clear signal that the call signature
+        // is wrong before any bytecode runs.
+        if args.len() != param_count {
+            return Err(VmError::TypeError(format!(
+                "function `{}` expected {} argument{}, got {}",
+                chunk.name.as_str(),
+                param_count,
+                if param_count == 1 { "" } else { "s" },
                 args.len()
             )));
+        }
+
+        // Validate each argument's runtime type against the
+        // parameter's declared type tag. Composite types
+        // (struct, enum, tuple, array, option, opaque) accept any
+        // `Value`; primitive types accept only their matching
+        // variant. The early rejection produces a clearer error
+        // than the eventual TypeError at the first use site.
+        for (i, (arg, tag)) in args.iter().zip(chunk.param_types.iter()).enumerate() {
+            let tag = crate::bytecode::TypeTag::from_archived(tag);
+            if !tag.admits(arg) {
+                return Err(VmError::TypeError(format!(
+                    "function `{}` parameter {} expected {}, got {}",
+                    chunk.name.as_str(),
+                    i,
+                    tag.name(),
+                    arg.type_name()
+                )));
+            }
         }
 
         let base = self.stack.len();
@@ -1305,6 +1333,25 @@ impl<'a, 'arena> Vm<'a, 'arena> {
             };
             let param_count = chunk.param_count;
             if block_type == BlockType::Stream && param_count > 0 {
+                // Validate the resume value against the loop's
+                // parameter type. The yield expression inside the
+                // loop body has the same static type as the
+                // parameter (resume provides the next iteration's
+                // input); rejecting a wrong-typed value here gives
+                // the host a clear signal at the resume boundary
+                // rather than a confusing TypeError when the body
+                // first uses the resumed value.
+                if let Some(tag) = chunk.param_types.first() {
+                    let tag = crate::bytecode::TypeTag::from_archived(tag);
+                    if !tag.admits(&input) {
+                        return Err(VmError::TypeError(format!(
+                            "loop `{}` resume expected {}, got {}",
+                            chunk.name.as_str(),
+                            tag.name(),
+                            input.type_name()
+                        )));
+                    }
+                }
                 let base = base_frame.base;
                 self.stack[base] = input.clone();
             }
@@ -3666,28 +3713,28 @@ mod tests {
         // BYTECODE_VERSION bump if the change is not backwards
         // compatible.
         //
-        // Source: `fn main() -> i64 { 1 }`
+        // Source: `fn main() -> Word { 1 }`
         //
         // Layout breakdown:
         //   bytes[0..4]    = b"KELE"               magic
-        //   bytes[4..6]    = 0x01 0x00              version 1 (u16 LE)
-        //   bytes[6..10]   = 0xA0 0x00 0x00 0x00    length 160 (u32 LE)
+        //   bytes[4..6]    = 0x02 0x00              version 2 (u16 LE)
+        //   bytes[6..10]   = 0xA8 0x00 0x00 0x00    length 168 (u32 LE)
         //   bytes[10]      = 0x06                   word_bits_log2 = 6 (64-bit)
         //   bytes[11]      = 0x06                   addr_bits_log2 = 6 (64-bit)
         //   bytes[12]      = 0x06                   float_bits_log2 = 6 (f64)
         //   bytes[13..16]  = 0x00 0x00 0x00         reserved
         //   bytes[16..20]  = 0x00 0x00 0x00 0x00    wcet_cycles = 0 (auto)
         //   bytes[20..24]  = 0x00 0x00 0x00 0x00    wcmu_bytes = 0 (auto)
-        //   bytes[24..156] = rkyv body
-        //   bytes[156..160] = CRC-32 (u32 LE)
+        //   bytes[24..164] = rkyv body (includes empty param_types vec)
+        //   bytes[164..168] = CRC-32 (u32 LE)
         let expected: alloc::vec::Vec<u8> = alloc::vec![
-            75, 69, 76, 69, 1, 0, 160, 0, 0, 0, 6, 6, 6, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            75, 69, 76, 69, 2, 0, 168, 0, 0, 0, 6, 6, 6, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
             0, 0, 0, 0, 0, 36, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0,
             0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 109, 97, 105, 110, 255, 255, 255, 255,
             200, 255, 255, 255, 2, 0, 0, 0, 208, 255, 255, 255, 1, 0, 0, 0, 232, 255, 255, 255, 0,
-            0, 0, 0, 0, 0, 0, 0, 220, 255, 255, 255, 1, 0, 0, 0, 248, 255, 255, 255, 0, 0, 0, 0, 1,
-            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 6, 6, 6, 0, 0, 0, 0, 0, 0, 0,
-            0, 0, 70, 19, 193, 146,
+            0, 0, 0, 0, 0, 0, 0, 220, 255, 255, 255, 0, 0, 0, 0, 212, 255, 255, 255, 1, 0, 0, 0,
+            248, 255, 255, 255, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 6, 6, 6, 0, 0, 0, 0, 0, 0, 0, 0, 0, 101, 185, 23, 143,
         ];
         let src = "fn main() -> Word { 1 }";
         let tokens = tokenize(src).expect("lex");
@@ -4090,6 +4137,7 @@ mod tests {
             local_count: 0,
             param_count: 0,
             block_type: BlockType::Stream,
+            param_types: alloc::vec![],
         };
         let module = Module {
             chunks: alloc::vec![chunk],
@@ -4612,5 +4660,74 @@ mod tests {
         let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
         let err = Vm::new(module, &arena).err().expect("expected rejection");
         assert!(matches!(err, VmError::VerifyError(_)));
+    }
+
+    #[test]
+    fn call_with_too_few_args_returns_typed_error() {
+        // Reviewer reproduction: `fn main(a: Word, b: Word) -> Word { a + b }`
+        // called with only one argument used to default `b` to
+        // `Value::Unit`, which then failed at `a + b` with the
+        // misleading message "cannot add Int and Unit". The call
+        // now rejects the wrong arg count before any bytecode runs.
+        let src = "fn main(a: Word, b: Word) -> Word { a + b }";
+        let module = build_module(src);
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let mut vm = Vm::new(module, &arena).expect("verify");
+        let err = vm.call(&[Value::Int(1)]).expect_err("expected rejection");
+        match err {
+            VmError::TypeError(msg) => {
+                assert!(msg.contains("expected 2"), "got: {}", msg);
+                assert!(msg.contains("got 1"), "got: {}", msg);
+            }
+            other => panic!("expected TypeError, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn call_with_wrong_arg_type_returns_typed_error() {
+        // The runtime validates each argument against the
+        // parameter's declared type tag and rejects mismatches
+        // before any bytecode runs.
+        let src = "fn main(a: Word) -> Word { a + 1 }";
+        let module = build_module(src);
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let mut vm = Vm::new(module, &arena).expect("verify");
+        let err = vm
+            .call(&[Value::Float(1.5)])
+            .expect_err("expected rejection");
+        match err {
+            VmError::TypeError(msg) => {
+                assert!(msg.contains("expected Word"), "got: {}", msg);
+                assert!(msg.contains("got Float"), "got: {}", msg);
+            }
+            other => panic!("expected TypeError, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn resume_with_wrong_type_returns_typed_error() {
+        // Reviewer reproduction: a loop with `x: Word` parameter
+        // could be resumed with a Float without complaint. The
+        // wrong type would then trip an arithmetic op at the
+        // first use site. The runtime now validates the resume
+        // value at the boundary.
+        let src = "loop main(x: Word) -> Word { let z = yield x; z }";
+        let module = build_module(src);
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let mut vm = Vm::new(module, &arena).expect("verify");
+        match vm.call(&[Value::Int(11)]).expect("call") {
+            VmState::Yielded(v) => assert_eq!(v, Value::Int(11)),
+            other => panic!("expected yield, got {:?}", other),
+        }
+        let err = vm
+            .resume(Value::Float(1.5))
+            .expect_err("expected rejection");
+        match err {
+            VmError::TypeError(msg) => {
+                assert!(msg.contains("expected Word"), "got: {}", msg);
+                assert!(msg.contains("got Float"), "got: {}", msg);
+            }
+            other => panic!("expected TypeError, got {:?}", other),
+        }
     }
 }

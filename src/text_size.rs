@@ -473,6 +473,7 @@ mod tests {
             local_count: locals,
             param_count: 0,
             block_type: BlockType::Func,
+            param_types: Vec::new(),
         }
     }
 

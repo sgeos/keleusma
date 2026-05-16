@@ -1482,6 +1482,7 @@ mod tests {
             local_count: 0,
             param_count: 0,
             block_type,
+            param_types: Vec::new(),
         }
     }
 

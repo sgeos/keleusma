@@ -184,6 +184,42 @@ For sizing the arena, use `auto_arena_capacity_for` plus a host-side margin, or 
 
 ## Other Surprises
 
+### `Vm::call` rejects wrong arg count or type up front
+
+Hosts that drive Keleusma scripts from Rust pass arguments through `vm.call(&[Value::Int(1), Value::Int(2)])`. The runtime validates the argument count against the entry chunk's `param_count` and each argument's runtime type against the parameter's declared `TypeTag` before any bytecode runs. Too few or too many arguments, or a wrong-typed argument, produces a `VmError::TypeError` at the call boundary rather than a confusing arithmetic error later.
+
+Typical reproduction:
+
+````rust
+// Script: fn main(a: Word, b: Word) -> Word { a + b }
+vm.call(&[Value::Int(1)])
+// -> VmError::TypeError("function `main` expected 2 arguments, got 1")
+
+vm.call(&[Value::Int(1), Value::Float(2.5)])
+// -> VmError::TypeError("function `main` parameter 1 expected Word, got Float")
+````
+
+Hosts that genuinely want to pass an opaque or composite value receive `TypeTag::Composite` validation, which accepts any `Value`. The `param_types` field of each chunk is the source of truth for what the runtime will accept; the compiler populates it from the function's declared parameter types.
+
+### `Vm::resume` validates the resume value's type for Stream blocks
+
+A `loop main(x: T) -> R` script yields a value of type `R` and resumes with the next iteration's value of type `T`. The host calls `vm.resume(value)` to drive the next iteration. The runtime validates `value` against the loop's parameter type before pushing it into the parameter slot.
+
+````rust
+// Script: loop main(x: Word) -> Word { let z = yield x; z }
+vm.call(&[Value::Int(11)])      // Ok(Yielded(Int(11)))
+vm.resume(Value::Float(1.5))    // VmError::TypeError(
+                                //   "loop `main` resume expected Word, got Float")
+````
+
+The yield expression's type and the resume value's type are the same by language design (the parameter type), so a single tag at the chunk level covers both directions of the dialogue.
+
+### Parser rejects deeply nested expressions
+
+The parser is a recursive-descent walker. Deeply nested parens (around a thousand or more) used to overflow the host process's stack. The parser now bails with a typed `ParseError` at `MAX_PARSE_DEPTH = 32` levels of nesting. The limit applies at the three recursive entry points (`parse_expr`, `parse_type_expr`, `parse_pattern`).
+
+Hosts that produce Keleusma source programmatically (templating, code generation) should keep expression nesting well under thirty-two levels. Realistic hand-written source rarely approaches the limit; the bound exists to prevent a malicious or accidental input from killing the host process.
+
 ### Local bindings are immutable
 
 `let` bindings cannot be rebound or mutated. The data segment is the only region of mutable state observable to a script, and it is accessible only from a `loop`-classified entry point. Accumulation across a loop iteration in an atomic-total `fn` is therefore not possible without either (a) a `loop main` script using the data segment, or (b) a host-side fold native. See [WHY_REJECTED.md](./WHY_REJECTED.md) under the recursive-closure entry for examples of both rewrites.

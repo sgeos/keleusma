@@ -81,6 +81,7 @@ impl FuncCompiler {
                 local_count: 0,
                 param_count: 0,
                 block_type,
+                param_types: Vec::new(),
             },
             locals: Vec::new(),
             scope_depth: 0,
@@ -326,6 +327,31 @@ fn element_type_of(t: &TypeExpr) -> Option<TypeExpr> {
 /// full coverage list.
 pub fn compile(program: &Program) -> Result<Module, CompileError> {
     compile_with_target(program, &crate::target::Target::host())
+}
+
+/// Compute a [`crate::bytecode::TypeTag`] for a function parameter
+/// based on its declared type expression. The tag is used by the
+/// runtime to validate calls and resumes before any bytecode runs.
+///
+/// Primitive types map to their corresponding tag. Composite types
+/// (struct, enum, tuple, array, option, opaque named types, unit)
+/// collapse to [`TypeTag::Composite`] which the runtime accepts
+/// without further checking.
+fn type_tag_for_param(param: &Param) -> crate::bytecode::TypeTag {
+    use crate::bytecode::TypeTag;
+    let Some(type_expr) = &param.type_expr else {
+        return TypeTag::Composite;
+    };
+    match type_expr {
+        TypeExpr::Prim(PrimType::Byte, _) => TypeTag::Byte,
+        TypeExpr::Prim(PrimType::Word, _) => TypeTag::Word,
+        TypeExpr::Prim(PrimType::Fixed(_), _) => TypeTag::Fixed,
+        TypeExpr::Prim(PrimType::Float, _) => TypeTag::Float,
+        TypeExpr::Prim(PrimType::Bool, _) => TypeTag::Bool,
+        TypeExpr::Prim(PrimType::Text, _) => TypeTag::Text,
+        TypeExpr::Unit(_) => TypeTag::Unit,
+        _ => TypeTag::Composite,
+    }
 }
 
 /// Compile a program against an explicit target descriptor.
@@ -757,6 +783,7 @@ fn compile_function_group(
         type_info.clone(),
     );
     fc.chunk.param_count = param_count;
+    fc.chunk.param_types = first.params.iter().map(type_tag_for_param).collect();
 
     // Declare parameter slots. For multiheaded functions, use positional names.
     let mut param_slots = Vec::new();
