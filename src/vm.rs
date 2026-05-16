@@ -2531,6 +2531,33 @@ mod tests {
         assert!(matches!(val, Value::KStr(_)));
     }
 
+    #[cfg(feature = "text")]
+    #[test]
+    fn exponential_text_concat_rejected_at_safe_constructor() {
+        // The FAQ exponential-string-concat example expressed as a
+        // Stream block, which is the form subject to the per-iteration
+        // WCMU bound. Sixty doublings of a 1-byte string allocate
+        // more than u32::MAX bytes cumulatively. The text-size
+        // abstract interpretation pass saturates the chunk's heap
+        // bound; the WCMU resource-bounds check rejects the module
+        // because the bound exceeds any feasible arena capacity.
+        let mut src = alloc::string::String::from(
+            "loop main(input: i64) -> Text {\n    let s = \"a\";\n",
+        );
+        for _ in 0..60 {
+            src.push_str("    let s = s + s;\n");
+        }
+        src.push_str("    let _ = yield s;\n    s\n}\n");
+        let tokens = tokenize(&src).expect("lex error");
+        let program = parse(&tokens).expect("parse error");
+        let module = compile(&program).expect("compile error");
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let err = Vm::new(module, &arena)
+            .err()
+            .expect("expected rejection from exponential text growth");
+        assert!(matches!(err, VmError::VerifyError(_)));
+    }
+
     // -- For-in over array expressions --
 
     #[test]

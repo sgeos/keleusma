@@ -139,19 +139,20 @@ fn main() -> Text {
 }
 ````
 
-compiles and is admitted by `Vm::new` even though the value of `s` after sixty doublings would be 2^60 bytes.
+would in V0.1.x have compiled, been admitted by `Vm::new`, and exhausted the host process at runtime. V0.2.0 addresses both the allocator and the static-analysis dimensions.
 
-There are **two independent issues** behind this finding. V0.2.0 addresses the allocator issue; the WCMU tracking is staged for V0.2.x.
+**Issue one: string `+` previously allocated from the global allocator, not the arena.** Resolved in V0.2.0. `Op::Add` on text operands now produces a `Value::KStr` allocated through `KString::alloc` in the arena's top region. Allocation failure surfaces as `VmError::OutOfArena` rather than exhausting the host process. The `Value::DynStr` variant has been removed entirely.
 
-**Issue one: string `+` previously allocated from the global allocator, not the arena.** Resolved in V0.2.0. `Op::Add` on text operands now produces a `Value::KStr` allocated through `KString::alloc` in the arena's top region. Allocation failure surfaces as `VmError::OutOfArena` rather than exhausting the host process. The `Value::DynStr` variant has been removed entirely. A doubling-string program now exhausts the arena and the host sees a typed error.
+**Issue two: the WCMU pass did not previously track text sizes statically.** Resolved in V0.2.0. The verifier now runs a text-size abstract interpretation pass over each chunk that tracks a per-slot `TextSize::{NotText, Known(u32), Unbounded}` lattice through the bytecode, evaluating the `OpCost::Dynamic` cost of `Op::Add` on text against the operand bounds and accumulating the result into the chunk's WCMU heap total. Programs that doubly grow a text value cumulatively saturate the bound to `u32::MAX`, which the safe constructor rejects under the default `OverflowPolicy::Reject`. The doubling-string example above is now rejected at `Vm::new` when expressed as a Stream block.
 
-**Issue two: the WCMU pass does not track string sizes statically.** The verifier's per-op heap-allocation cost does not currently propagate operand sizes through `Op::Add`, `concat`, `to_string`, or `slice`. A doubling-string program still appears constant-cost to the pass even though the arena exhaustion is now graceful. The proper fix is an abstract-interpretation step that tracks a per-slot upper bound on string length and propagates it through these operations, with conservative `u32::MAX` saturation for unknown bounds. Designed; implementation deferred to V0.2.x.
+**Limitations of the V0.2.0 text-size analysis.**
 
-The honest framing for V0.2.0:
+- **Loops widen text values to `Unbounded`.** Text operations inside a `for` or `loop` body produce conservative `u32::MAX` contributions because the pass is linear, not iterative. Programs whose text concatenation happens once per stream iteration are handled precisely; programs that mix loops and text are conservative.
+- **Branches widen text values to `Unbounded`.** Text values written conditionally inside an `if`/`else` lose their precise bound. The pass continues to correctly bound text written outside conditionals.
+- **Native return values are `Unbounded`.** Text returned from a registered native function is tracked as unbounded; any subsequent `Op::Add` against it saturates the contribution. Hosts that need a tighter bound for their natives supply per-native heap attestations through `Vm::set_native_bounds`.
+- **Atomic-total programs (no Stream block) are not subject to the per-iteration WCMU bound.** A `fn main() -> Text { let s = "a"; let s = s + s; ... }` compiles and runs because the resource-bounds check applies only to Stream chunks. The arena exhaustion path through `VmError::OutOfArena` provides the graceful-failure guarantee for these programs.
 
-- **The verifier is sound for what it analyses.** Arithmetic, control flow, calls (with host attestation), array and tuple construction, and the operand-stack peak are tracked. The OOM-safe push paths added in V0.2.0 mean exhaustion of the arena-resident state surfaces as a typed error rather than an abort. Text concatenation also now uses the arena and benefits from the same graceful-failure path.
-- **Text size growth across `+`, `concat`, `slice`, and `to_string` is not yet tracked at verification time.** Programs that exponentially grow text through repeated concatenation are not rejected at verification but exhaust the arena gracefully at runtime.
-- **Recommendation for V0.2.0.** Treat heavy text work as host-attested and out-of-band. Register native Rust functions (see the section above) that perform the work in a bounded way and let scripts consume them. Host-side text helpers can be implemented to fail safely on large input rather than allocate unboundedly.
+**Recommendation for text-heavy work.** Treat heavy text work as host-attested and out-of-band. Register native Rust functions (see the section above) that perform the work in a bounded way and let scripts consume them. Host-side text helpers can be implemented to fail safely on large input rather than allocate unboundedly.
 
 A worked example of the host-attestation pattern for arena-resident allocations lives in [`examples/wcmu_attestation.rs`](../../examples/wcmu_attestation.rs).
 

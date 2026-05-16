@@ -38,8 +38,13 @@ fn main() {
         }
     }
 
-    // Construct an auto-sized arena and a Vm that borrows it.
-    let cap = keleusma::vm::auto_arena_capacity_for(&module, &[]).expect("auto capacity");
+    // Construct an auto-sized arena and a Vm that borrows it. The
+    // verifier returns the per-iteration WCMU; the VM additionally
+    // pre-reserves the operand-stack and call-frame minimums at
+    // construction (V0.2.0 OOM-safe construction), so the host adds
+    // a small margin on top of the WCMU figure.
+    let wcmu = keleusma::vm::auto_arena_capacity_for(&module, &[]).expect("auto capacity");
+    let cap = wcmu.max(4096);
     let arena = keleusma::Arena::with_capacity(cap);
     let mut vm = Vm::new(module, &arena).expect("vm construction");
     println!();

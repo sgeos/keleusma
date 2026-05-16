@@ -976,7 +976,17 @@ fn compute_chunk_wcmu(chunk: &Chunk, resolver: &CallResolver) -> Result<(u32, u3
     let stack_slots = chunk.local_count as u32 + body.peak_above_initial;
     let stack_bytes = stack_slots * crate::bytecode::VALUE_SLOT_SIZE_BYTES;
 
-    Ok((stack_bytes, body.heap_total))
+    // Augment the heap bound with the chunk's text-allocation bound
+    // computed by the text-size abstract interpretation pass. The
+    // pass is conservative: text operations inside loops, behind
+    // calls, or against native-produced values saturate to
+    // `u32::MAX`, which propagates through the saturating add and
+    // signals overflow to the safe constructor under the default
+    // overflow policy.
+    let text_heap = crate::text_size::chunk_text_heap_alloc(chunk);
+    let heap_total = body.heap_total.saturating_add(text_heap);
+
+    Ok((stack_bytes, heap_total))
 }
 
 /// Compute a memory budget for the given Stream chunk.
