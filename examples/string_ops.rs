@@ -7,7 +7,7 @@
 //! the lexer, which queues the synthesized tokens; the parser sees
 //! a regular function-call AST and emits the corresponding bytecode.
 //!
-//! WCET note. String concatenation and slicing produce dynamic
+//! WCET note. Text concatenation and slicing produce dynamic
 //! strings whose worst-case output length is the sum of operand
 //! lengths (concat) or `end - start` (slice). The current verifier
 //! treats native function allocations as the per-native attestation
@@ -30,7 +30,7 @@ fn main() {
         use to_string
         use concat
         use slice
-        fn main() -> String {
+        fn main() -> Text {
             let name = "Keleusma";
             let n: i64 = 42;
             let greeting = f"hello, {name}! n = {n}";

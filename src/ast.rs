@@ -511,7 +511,7 @@ pub enum PrimType {
     I64,
     F64,
     Bool,
-    KString,
+    Text,
 }
 
 /// A pattern for matching.

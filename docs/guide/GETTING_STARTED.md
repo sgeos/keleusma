@@ -80,7 +80,7 @@ defined: double
 > :quit
 ````
 
-The REPL wraps each expression as `fn main() -> T { <expression> }` and tries return types `i64`, `f64`, `bool`, `String`, and `()` in order. The first type that compiles is used. Expressions whose type lies outside this list require an explicit function declaration.
+The REPL wraps each expression as `fn main() -> T { <expression> }` and tries return types `i64`, `f64`, `bool`, `Text`, and `()` in order. The first type that compiles is used. Expressions whose type lies outside this list require an explicit function declaration.
 
 ## Embed in a Rust Host
 

@@ -175,7 +175,7 @@ use text::upper
 use text::trim
 use text::split_first_word
 
-fn greet(name: String) -> String {
+fn greet(name: Text) -> Text {
     let cleaned = trim(name);
     let first = split_first_word(cleaned);
     f"hello, {upper(first)}!"

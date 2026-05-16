@@ -123,7 +123,7 @@ impl Type {
                 PrimType::I64 => Type::I64,
                 PrimType::F64 => Type::F64,
                 PrimType::Bool => Type::Bool,
-                PrimType::KString => Type::Str,
+                PrimType::Text => Type::Str,
             },
             TypeExpr::Unit(_) => Type::Unit,
             TypeExpr::Tuple(ts, _) => Type::Tuple(
@@ -168,7 +168,7 @@ impl Type {
             Type::F64 => "f64".to_string(),
             Type::Bool => "bool".to_string(),
             Type::Unit => "()".to_string(),
-            Type::Str => "String".to_string(),
+            Type::Str => "Text".to_string(),
             Type::Tuple(ts) => {
                 let inner: Vec<String> = ts.iter().map(|t| t.display()).collect();
                 format!("({})", inner.join(", "))
@@ -394,7 +394,7 @@ fn type_head_name(t: &Type) -> Option<String> {
         Type::F64 => Some("f64".to_string()),
         Type::Bool => Some("bool".to_string()),
         Type::Unit => Some("()".to_string()),
-        Type::Str => Some("String".to_string()),
+        Type::Str => Some("Text".to_string()),
         Type::Tuple(_) => Some("tuple".to_string()),
         Type::Array(_, _) => Some("array".to_string()),
         Type::Option(_) => Some("Option".to_string()),
@@ -770,7 +770,7 @@ pub fn check(program: &Program) -> Result<(), TypeError> {
             Type::F64 => "f64".to_string(),
             Type::Bool => "bool".to_string(),
             Type::Unit => "()".to_string(),
-            Type::Str => "String".to_string(),
+            Type::Str => "Text".to_string(),
             Type::Tuple(_) => "tuple".to_string(),
             Type::Array(_, _) => "array".to_string(),
             Type::Option(_) => "Option".to_string(),
@@ -931,7 +931,7 @@ pub fn check(program: &Program) -> Result<(), TypeError> {
             Type::F64 => "f64".to_string(),
             Type::Bool => "bool".to_string(),
             Type::Unit => "()".to_string(),
-            Type::Str => "String".to_string(),
+            Type::Str => "Text".to_string(),
             Type::Tuple(_) => "tuple".to_string(),
             Type::Array(_, _) => "array".to_string(),
             Type::Option(_) => "Option".to_string(),

@@ -19,9 +19,9 @@ All numeric operations use `i64` or `f64`. When host structs contain smaller int
 
 Sizes and alignments above assume the modern 64-bit target. Future work extends the type system with `word`, `byte`, `bit`, and `address` primitives whose sizes and alignments are target-defined. See R33 and B10 for the modern-target assumption and the portability future work.
 
-## String Types
+## Text Types
 
-Keleusma distinguishes two string types with distinct lifetimes and allowed flow paths.
+The Keleusma surface type for textual data is named `Text` to avoid confusion with Rust's `String`. The runtime distinguishes two string variants behind the `Text` surface type with distinct lifetimes and allowed flow paths.
 
 ### Static strings
 
@@ -50,7 +50,7 @@ Dynamic strings reside in the arena heap region. They are produced by native fun
 
 The cross-yield prohibition is the load-bearing safety property of the dynamic string design. A dynamic string is an arena pointer. Allowing one across the yield boundary would either require the host to consume it before the next RESET or accept dangling references after the arena is cleared. Prohibiting it structurally is simpler and preserves the safe-swapping guarantee.
 
-### String surface features
+### Text surface features
 
 The surface language supports string literals only. There is no concatenation operator, no formatting syntax, no slicing or indexing built into the grammar. All variable-cost string operations are host-supplied native functions. This freeze is intentional. Keleusma is not a value-add for string processing. Anything fancier than literal handling and native function delegation is deferred per B5.
 

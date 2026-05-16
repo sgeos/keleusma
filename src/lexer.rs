@@ -1445,7 +1445,7 @@ mod tests {
 
     #[test]
     fn guard_clause() {
-        let result = kinds("fn severity(level: f64) -> String when level >= 0.9 {");
+        let result = kinds("fn severity(level: f64) -> Text when level >= 0.9 {");
         assert!(result.contains(&TokenKind::When));
         assert!(result.contains(&TokenKind::GtEq));
         assert!(result.contains(&TokenKind::FloatLit(0.9)));

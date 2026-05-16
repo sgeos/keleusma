@@ -1238,10 +1238,11 @@ impl<'a> Parser<'a> {
             return Ok(TypeExpr::Prim(PrimType::Bool, span));
         }
 
-        // Check for String (upper ident).
-        if self.at_upper("String") {
+        // Check for Text (upper ident). Keleusma's surface text type
+        // is named `Text` to avoid confusion with Rust's `String`.
+        if self.at_upper("Text") {
             self.pos += 1;
-            return Ok(TypeExpr::Prim(PrimType::KString, span));
+            return Ok(TypeExpr::Prim(PrimType::Text, span));
         }
 
         // Option<T>.

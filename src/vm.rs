@@ -2063,7 +2063,7 @@ mod tests {
 
     #[test]
     fn eval_string_literal() {
-        let val = run_expect("fn main() -> String { \"hello\" }", &[]);
+        let val = run_expect("fn main() -> Text { \"hello\" }", &[]);
         assert_eq!(val, Value::StaticStr(String::from("hello")));
     }
 
@@ -2259,7 +2259,7 @@ mod tests {
     #[test]
     fn eval_multiheaded_literal() {
         let val = run_expect(
-            "fn classify(0) -> String { \"zero\" }\nfn classify(x: i64) -> String { \"other\" }\nfn main() -> String { classify(0) }",
+            "fn classify(0) -> Text { \"zero\" }\nfn classify(x: i64) -> Text { \"other\" }\nfn main() -> Text { classify(0) }",
             &[],
         );
         assert_eq!(val, Value::StaticStr(String::from("zero")));
@@ -2268,7 +2268,7 @@ mod tests {
     #[test]
     fn eval_multiheaded_fallthrough() {
         let val = run_expect(
-            "fn classify(0) -> String { \"zero\" }\nfn classify(x: i64) -> String { \"other\" }\nfn main() -> String { classify(5) }",
+            "fn classify(0) -> Text { \"zero\" }\nfn classify(x: i64) -> Text { \"other\" }\nfn main() -> Text { classify(5) }",
             &[],
         );
         assert_eq!(val, Value::StaticStr(String::from("other")));
@@ -2286,7 +2286,7 @@ mod tests {
     #[test]
     fn eval_match_literal() {
         let val = run_expect(
-            "fn main() -> String { let x = 1; match x { 1 => \"one\", 2 => \"two\", _ => \"other\" } }",
+            "fn main() -> Text { let x = 1; match x { 1 => \"one\", 2 => \"two\", _ => \"other\" } }",
             &[],
         );
         assert_eq!(val, Value::StaticStr(String::from("one")));
@@ -2295,7 +2295,7 @@ mod tests {
     #[test]
     fn eval_match_wildcard() {
         let val = run_expect(
-            "fn main() -> String { let x = 99; match x { 1 => \"one\", _ => \"other\" } }",
+            "fn main() -> Text { let x = 99; match x { 1 => \"one\", _ => \"other\" } }",
             &[],
         );
         assert_eq!(val, Value::StaticStr(String::from("other")));
@@ -2342,7 +2342,7 @@ mod tests {
 
     #[test]
     fn eval_string_concat() {
-        let val = run_expect("fn main() -> String { \"hello\" + \" world\" }", &[]);
+        let val = run_expect("fn main() -> Text { \"hello\" + \" world\" }", &[]);
         assert_eq!(val, Value::DynStr(String::from("hello world")));
     }
 
@@ -2808,7 +2808,7 @@ mod tests {
     #[test]
     fn yield_static_string_succeeds() {
         // Static string literals can be yielded.
-        let src = "loop main(input: i64) -> String { let input = yield \"static\"; \"static\" }";
+        let src = "loop main(input: i64) -> Text { let input = yield \"static\"; \"static\" }";
         let tokens = tokenize(src).expect("lex error");
         let program = parse(&tokens).expect("parse error");
         let module = compile(&program).expect("compile error");
@@ -2824,7 +2824,7 @@ mod tests {
     fn yield_dynamic_string_fails() {
         // to_string returns a DynStr. Yielding it must fail at runtime.
         let src = "use to_string\n\
-                   loop main(input: i64) -> String { \
+                   loop main(input: i64) -> Text { \
                        let input = yield to_string(input); \"done\" }";
         let tokens = tokenize(src).expect("lex error");
         let program = parse(&tokens).expect("parse error");
@@ -2845,7 +2845,7 @@ mod tests {
     fn yield_tuple_with_dynamic_string_fails() {
         // Yielding a tuple containing a DynStr must fail.
         let src = "use to_string\n\
-                   loop main(input: i64) -> (i64, String) { \
+                   loop main(input: i64) -> (i64, Text) { \
                        let input = yield (input, to_string(input)); (0, \"\") }";
         let tokens = tokenize(src).expect("lex error");
         let program = parse(&tokens).expect("parse error");

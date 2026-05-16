@@ -66,9 +66,9 @@ pub struct Target {
     /// operations. When false, the compiler rejects programs that
     /// use float literals, the `f64` type, or float-conversion ops.
     pub has_floats: bool,
-    /// Whether the target supports string types. When false, the
+    /// Whether the target supports text types. When false, the
     /// compiler rejects programs that use string literals or the
-    /// `String` type. Useful for very-small targets where dynamic
+    /// `Text` type. Useful for very-small targets where dynamic
     /// strings are out of budget.
     pub has_strings: bool,
 }
@@ -254,7 +254,7 @@ impl TargetChecker<'_> {
                     span: *span,
                 });
             }
-            TypeExpr::Prim(PrimType::KString, span) if !self.target.has_strings => {
+            TypeExpr::Prim(PrimType::Text, span) if !self.target.has_strings => {
                 self.first_error = Some(CompileError {
                     message: String::from("target does not support string types"),
                     span: *span,
@@ -359,7 +359,7 @@ mod tests {
         try_compile_with_target(
             "fn main() -> i64 {\n\
                  let f: f64 = 1.5;\n\
-                 let s: String = \"hello\";\n\
+                 let s: Text = \"hello\";\n\
                  0\n\
              }",
             &Target::host(),

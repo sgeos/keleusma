@@ -1743,7 +1743,7 @@ mod tests {
             "fn main() -> i64 { if true { 1 } else { 2 } }",
             "fn main() -> i64 { let sum = 0; for i in 0..5 { let x = sum + i; } sum }",
             "fn double(x: i64) -> i64 { x * 2 }\nfn main() -> i64 { double(21) }",
-            "fn main() -> String { let x = 1; match x { 1 => \"one\", _ => \"other\" } }",
+            "fn main() -> Text { let x = 1; match x { 1 => \"one\", _ => \"other\" } }",
             "loop tick(x: i64) -> i64 { let x = yield x * 2; x }",
         ];
 

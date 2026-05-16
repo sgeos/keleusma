@@ -172,11 +172,11 @@ fn read_string_arg(arena: Option<&Arena>, v: &Value) -> Result<String, VmError> 
                 ))),
             },
             None => Err(VmError::NativeError(String::from(
-                "expected String argument; arena-backed KStr requires arena context",
+                "expected Text argument; arena-backed KStr requires arena context",
             ))),
         },
         other => Err(VmError::TypeError(format!(
-            "expected String, got {}",
+            "expected Text, got {}",
             other.type_name()
         ))),
     }
@@ -405,13 +405,13 @@ mod tests {
 
     #[test]
     fn to_string_int() {
-        let val = run_with_utilities("use to_string\nfn main() -> String { to_string(42) }");
+        let val = run_with_utilities("use to_string\nfn main() -> Text { to_string(42) }");
         assert_eq!(val, Value::DynStr(String::from("42")));
     }
 
     #[test]
     fn to_string_float() {
-        let val = run_with_utilities("use to_string\nfn main() -> String { to_string(2.5) }");
+        let val = run_with_utilities("use to_string\nfn main() -> Text { to_string(2.5) }");
         if let Value::DynStr(s) = val {
             assert!(s.starts_with("2.5"));
         } else {
@@ -421,13 +421,13 @@ mod tests {
 
     #[test]
     fn to_string_bool() {
-        let val = run_with_utilities("use to_string\nfn main() -> String { to_string(true) }");
+        let val = run_with_utilities("use to_string\nfn main() -> Text { to_string(true) }");
         assert_eq!(val, Value::DynStr(String::from("true")));
     }
 
     #[test]
     fn to_string_string() {
-        let val = run_with_utilities("use to_string\nfn main() -> String { to_string(\"hello\") }");
+        let val = run_with_utilities("use to_string\nfn main() -> Text { to_string(\"hello\") }");
         assert_eq!(val, Value::DynStr(String::from("hello")));
     }
 
@@ -508,7 +508,7 @@ mod tests {
     fn to_string_with_ctx_int_returns_kstr() {
         let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
         let (val, resolved) = run_with_utilities_with_ctx(
-            "use to_string\nfn main() -> String { to_string(42) }",
+            "use to_string\nfn main() -> Text { to_string(42) }",
             &arena,
         );
         assert!(matches!(val, Value::KStr(_)));
@@ -519,7 +519,7 @@ mod tests {
     fn to_string_with_ctx_string_returns_kstr() {
         let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
         let (val, resolved) = run_with_utilities_with_ctx(
-            "use to_string\nfn main() -> String { to_string(\"hello\") }",
+            "use to_string\nfn main() -> Text { to_string(\"hello\") }",
             &arena,
         );
         assert!(matches!(val, Value::KStr(_)));
@@ -530,14 +530,14 @@ mod tests {
 
     #[test]
     fn fstring_no_interpolation() {
-        let val = run_with_utilities("fn main() -> String { f\"hello\" }");
+        let val = run_with_utilities("fn main() -> Text { f\"hello\" }");
         assert_eq!(val, Value::StaticStr(String::from("hello")));
     }
 
     #[test]
     fn fstring_single_interp() {
         let val =
-            run_with_utilities("use to_string\nfn main() -> String { let n: i64 = 42; f\"{n}\" }");
+            run_with_utilities("use to_string\nfn main() -> Text { let n: i64 = 42; f\"{n}\" }");
         assert_eq!(val, Value::DynStr(String::from("42")));
     }
 
@@ -545,7 +545,7 @@ mod tests {
     fn fstring_mixed_interp() {
         let val = run_with_utilities(
             "use to_string\nuse concat\n\
-             fn main() -> String { let n: i64 = 42; f\"x = {n}!\" }",
+             fn main() -> Text { let n: i64 = 42; f\"x = {n}!\" }",
         );
         assert_eq!(val, Value::DynStr(String::from("x = 42!")));
     }
@@ -554,7 +554,7 @@ mod tests {
     fn fstring_multiple_interps() {
         let val = run_with_utilities(
             "use to_string\nuse concat\n\
-             fn main() -> String {\n\
+             fn main() -> Text {\n\
                 let a: i64 = 1;\n\
                 let b: i64 = 2;\n\
                 f\"({a}, {b})\"\n\
@@ -565,7 +565,7 @@ mod tests {
 
     #[test]
     fn fstring_escaped_braces() {
-        let val = run_with_utilities("fn main() -> String { f\"\\{key\\}\" }");
+        let val = run_with_utilities("fn main() -> Text { f\"\\{key\\}\" }");
         assert_eq!(val, Value::StaticStr(String::from("{key}")));
     }
 
@@ -573,35 +573,34 @@ mod tests {
 
     #[test]
     fn concat_two_static_strings() {
-        let val = run_with_utilities(
-            "use concat\nfn main() -> String { concat(\"hello, \", \"world\") }",
-        );
+        let val =
+            run_with_utilities("use concat\nfn main() -> Text { concat(\"hello, \", \"world\") }");
         assert_eq!(val, Value::DynStr(String::from("hello, world")));
     }
 
     #[test]
     fn concat_static_with_dynamic() {
         let val = run_with_utilities(
-            "use concat\nuse to_string\nfn main() -> String { concat(\"x = \", to_string(42)) }",
+            "use concat\nuse to_string\nfn main() -> Text { concat(\"x = \", to_string(42)) }",
         );
         assert_eq!(val, Value::DynStr(String::from("x = 42")));
     }
 
     #[test]
     fn slice_basic() {
-        let val = run_with_utilities("use slice\nfn main() -> String { slice(\"hello\", 1, 4) }");
+        let val = run_with_utilities("use slice\nfn main() -> Text { slice(\"hello\", 1, 4) }");
         assert_eq!(val, Value::DynStr(String::from("ell")));
     }
 
     #[test]
     fn slice_full_range() {
-        let val = run_with_utilities("use slice\nfn main() -> String { slice(\"hello\", 0, 5) }");
+        let val = run_with_utilities("use slice\nfn main() -> Text { slice(\"hello\", 0, 5) }");
         assert_eq!(val, Value::DynStr(String::from("hello")));
     }
 
     #[test]
     fn slice_empty_range() {
-        let val = run_with_utilities("use slice\nfn main() -> String { slice(\"hello\", 2, 2) }");
+        let val = run_with_utilities("use slice\nfn main() -> Text { slice(\"hello\", 2, 2) }");
         assert_eq!(val, Value::DynStr(String::from("")));
     }
 
@@ -609,7 +608,7 @@ mod tests {
     fn concat_with_ctx_returns_kstr() {
         let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
         let (val, resolved) = run_with_utilities_with_ctx(
-            "use concat\nfn main() -> String { concat(\"foo\", \"bar\") }",
+            "use concat\nfn main() -> Text { concat(\"foo\", \"bar\") }",
             &arena,
         );
         assert!(matches!(val, Value::KStr(_)));
@@ -620,7 +619,7 @@ mod tests {
     fn slice_with_ctx_returns_kstr() {
         let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
         let (val, resolved) = run_with_utilities_with_ctx(
-            "use slice\nfn main() -> String { slice(\"hello world\", 6, 11) }",
+            "use slice\nfn main() -> Text { slice(\"hello world\", 6, 11) }",
             &arena,
         );
         assert!(matches!(val, Value::KStr(_)));

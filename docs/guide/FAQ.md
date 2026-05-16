@@ -41,7 +41,7 @@ vm.register_fn_fallible(
 //     use text::trim
 //     use text::split_first_word
 //
-//     fn greet(name: String) -> String {
+//     fn greet(name: Text) -> Text {
 //         let cleaned = trim(name);
 //         let first = split_first_word(cleaned);
 //         f"hello, {upper(first)}!"
@@ -60,7 +60,7 @@ The f-string syntax `f"text {expr}"` desugars at lex time into a chain of `conca
 use concat
 use to_string
 
-fn greet(name: String) -> String {
+fn greet(name: Text) -> Text {
     f"hello, {name}!"
 }
 ````
@@ -75,7 +75,7 @@ Use backslash escapes inside an f-string.
 use concat
 use to_string
 
-fn main() -> String {
+fn main() -> Text {
     f"open\{brace\}close"
 }
 ````
@@ -115,7 +115,7 @@ For string operations beyond what the bundled `register_utility_natives` provide
 A program like
 
 ````
-fn main() -> String {
+fn main() -> Text {
     let s = "a";
     let s = s + s;
     let s = s + s;

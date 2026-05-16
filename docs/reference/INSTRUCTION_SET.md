@@ -113,7 +113,7 @@ For details on how bytecode is generated from source, see [COMPILATION_PIPELINE.
 | GetIndex | none | 2 | Pop index and array, push element |
 | GetTupleField | u8 index | 2 | Pop tuple, push element at index |
 | GetEnumField | u8 index | 2 | Pop enum variant, push field at index |
-| Len | none | 2 | Pop composite value (Array, String, Tuple), push length as Int |
+| Len | none | 2 | Pop composite value (Array, Text, Tuple), push length as Int |
 
 ## Type Testing
 

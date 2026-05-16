@@ -455,7 +455,7 @@ pub fn compile_with_target(
                 PrimType::I64 => String::from("i64"),
                 PrimType::F64 => String::from("f64"),
                 PrimType::Bool => String::from("bool"),
-                PrimType::KString => String::from("String"),
+                PrimType::Text => String::from("Text"),
             },
             TypeExpr::Unit(_) => String::from("()"),
             TypeExpr::Named(name, _, _) => name.clone(),
@@ -661,9 +661,9 @@ fn validate_data_field_type(
     match type_expr {
         TypeExpr::Prim(prim, span) => match prim {
             PrimType::I64 | PrimType::F64 | PrimType::Bool => Ok(()),
-            PrimType::KString => Err(CompileError {
+            PrimType::Text => Err(CompileError {
                 message: String::from(
-                    "data field type String is not admissible: variable-length \
+                    "data field type Text is not admissible: variable-length \
                      types cannot be inlined into the data segment",
                 ),
                 span: *span,
@@ -1011,7 +1011,7 @@ fn infer_expr_type(fc: &FuncCompiler, expr: &Expr) -> Option<TypeExpr> {
             Literal::Int(_) => TypeExpr::Prim(PrimType::I64, *span),
             Literal::Float(_) => TypeExpr::Prim(PrimType::F64, *span),
             Literal::Bool(_) => TypeExpr::Prim(PrimType::Bool, *span),
-            Literal::String(_) => TypeExpr::Prim(PrimType::KString, *span),
+            Literal::String(_) => TypeExpr::Prim(PrimType::Text, *span),
             Literal::Unit => TypeExpr::Unit(*span),
         }),
         _ => None,
@@ -1028,7 +1028,7 @@ fn type_expr_head(ty: &TypeExpr) -> Option<String> {
                 PrimType::I64 => "i64",
                 PrimType::F64 => "f64",
                 PrimType::Bool => "bool",
-                PrimType::KString => "String",
+                PrimType::Text => "Text",
             }
             .to_string(),
         ),
@@ -2460,7 +2460,7 @@ mod tests {
     #[test]
     fn compile_multiheaded() {
         let module = compile_str(
-            "fn classify(0) -> String { \"zero\" }\nfn classify(x: i64) -> String { \"other\" }",
+            "fn classify(0) -> Text { \"zero\" }\nfn classify(x: i64) -> Text { \"other\" }",
         )
         .unwrap();
         // Two heads compiled into one chunk.
@@ -2695,52 +2695,52 @@ mod tests {
 
     #[test]
     fn data_block_rejects_string() {
-        let src = "data ctx { name: String }\n\
+        let src = "data ctx { name: Text }\n\
                    fn main() -> () { () }";
         let err = compile_str(src).unwrap_err();
-        assert!(err.message.contains("String"));
+        assert!(err.message.contains("Text"));
     }
 
     #[test]
     fn data_block_rejects_string_in_tuple() {
-        let src = "data ctx { pair: (i64, String) }\n\
+        let src = "data ctx { pair: (i64, Text) }\n\
                    fn main() -> () { () }";
         let err = compile_str(src).unwrap_err();
-        assert!(err.message.contains("String"));
+        assert!(err.message.contains("Text"));
     }
 
     #[test]
     fn data_block_rejects_string_in_array() {
-        let src = "data ctx { names: [String; 4] }\n\
+        let src = "data ctx { names: [Text; 4] }\n\
                    fn main() -> () { () }";
         let err = compile_str(src).unwrap_err();
-        assert!(err.message.contains("String"));
+        assert!(err.message.contains("Text"));
     }
 
     #[test]
     fn data_block_rejects_string_in_option() {
-        let src = "data ctx { last: Option<String> }\n\
+        let src = "data ctx { last: Option<Text> }\n\
                    fn main() -> () { () }";
         let err = compile_str(src).unwrap_err();
-        assert!(err.message.contains("String"));
+        assert!(err.message.contains("Text"));
     }
 
     #[test]
     fn data_block_rejects_string_in_struct() {
-        let src = "struct Tag { label: String }\n\
+        let src = "struct Tag { label: Text }\n\
                    data ctx { t: Tag }\n\
                    fn main() -> () { () }";
         let err = compile_str(src).unwrap_err();
-        assert!(err.message.contains("String"));
+        assert!(err.message.contains("Text"));
     }
 
     #[test]
     fn data_block_rejects_string_in_enum() {
-        let src = "enum Tag { Named(String), Unnamed }\n\
+        let src = "enum Tag { Named(Text), Unnamed }\n\
                    data ctx { t: Tag }\n\
                    fn main() -> () { () }";
         let err = compile_str(src).unwrap_err();
-        assert!(err.message.contains("String"));
+        assert!(err.message.contains("Text"));
     }
 
     #[test]

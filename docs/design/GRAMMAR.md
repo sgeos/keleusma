@@ -101,7 +101,7 @@ Both line comments (`//`) and block comments (`/* */`) are supported. Block comm
 Keleusma uses curly braces for block delimitation. This is consistent with the Rust host language.
 
 ````
-fn greet(name: String) -> String {
+fn greet(name: Text) -> Text {
   "Hello, " + name
 }
 ````
@@ -119,7 +119,7 @@ Whitespace (spaces, tabs, newlines) is not significant except as a token separat
 | `i64` | 64-bit signed integer | `i64` |
 | `f64` | 64-bit floating point | `f64` |
 | `bool` | Boolean value | `bool` |
-| `String` | UTF-8 string | `String` |
+| `Text` | UTF-8 string | `String` |
 | `()` | Unit type | `()` |
 
 All numeric operations use `i64` or `f64`. Smaller integer types (`u8`, `u32`) from host structs are widened to `i64` when accessed in Keleusma. Native function bindings handle the narrowing conversion at the boundary.
@@ -162,8 +162,8 @@ let channels: [f64; 8] = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
 **Optionals**: Nullable values using Option.
 
 ````
-let maybe_name: Option<String> = Option::Some("Alice");
-let nothing: Option<String> = Option::None;
+let maybe_name: Option<Text> = Option::Some("Alice");
+let nothing: Option<Text> = Option::None;
 ````
 
 ### Opaque Types
@@ -463,19 +463,19 @@ yield handle(AudioCommand::ConfigureChannel(ch)) -> AudioAction {
 Multiple function definitions with the same name, arity, and category form a single logical function. The runtime dispatches to the first head whose pattern matches the arguments, evaluated top to bottom.
 
 ````
-fn describe(Command::NoteOn(ch, note, vel)) -> String {
+fn describe(Command::NoteOn(ch, note, vel)) -> Text {
   "Play note " + (note as f64 |> to_string()) + " on channel " + (ch as f64 |> to_string())
 }
 
-fn describe(Command::NoteOff(ch)) -> String {
+fn describe(Command::NoteOff(ch)) -> Text {
   "Stop channel " + (ch as f64 |> to_string())
 }
 
-fn describe(Command::SetTempo(bpm)) -> String {
+fn describe(Command::SetTempo(bpm)) -> Text {
   "Tempo: " + (bpm |> to_string())
 }
 
-fn describe(Command::Silence) -> String {
+fn describe(Command::Silence) -> Text {
   "Silence all channels"
 }
 ````
@@ -496,15 +496,15 @@ Multiheaded functions work with all three function categories (`fn`, `yield`, `l
 The `when` keyword adds boolean conditions to function heads. Guards are evaluated after pattern matching succeeds.
 
 ````
-fn severity(level: f64) -> String when level >= 0.9 {
+fn severity(level: f64) -> Text when level >= 0.9 {
   "critical"
 }
 
-fn severity(level: f64) -> String when level >= 0.5 {
+fn severity(level: f64) -> Text when level >= 0.5 {
   "warning"
 }
 
-fn severity(level: f64) -> String {
+fn severity(level: f64) -> Text {
   "normal"
 }
 ````
@@ -697,7 +697,7 @@ data_field_decl = lower_ident ':' type_expr
 
 (* Types *)
 type_expr       = prim_type | named_type | tuple_type | array_type | option_type
-prim_type       = 'i64' | 'f64' | 'bool' | 'String' | '(' ')'
+prim_type       = 'i64' | 'f64' | 'bool' | 'Text' | '(' ')'
 named_type      = upper_ident [ '<' type_expr { ',' type_expr } '>' ]
 tuple_type      = '(' type_expr ',' type_expr { ',' type_expr } ')'
 array_type      = '[' type_expr ';' integer_lit ']'
@@ -858,7 +858,7 @@ enum AudioCommand {
 enum AudioAction {
   PlayNote(i64, i64, f64),
   StopNote(i64),
-  SetChannelParam(i64, String, f64),
+  SetChannelParam(i64, Text, f64),
   NoOp,
 }
 
@@ -897,7 +897,7 @@ yield process(AudioCommand::Tick) -> AudioAction {
   AudioAction::NoOp
 }
 
-fn configure_vco(ch: i64, vco_id: i64, waveform: String, amplitude: f64) -> () {
+fn configure_vco(ch: i64, vco_id: i64, waveform: Text, amplitude: f64) -> () {
   audio::set_vco_waveform(ch, vco_id, waveform);
   audio::set_vco_amplitude(ch, vco_id, amplitude);
 }
@@ -906,7 +906,7 @@ fn configure_adsr(ch: i64, a: f64, d: f64, s: f64, r: f64) -> () {
   audio::set_envelope(ch, "eg2", a, d, s, r);
 }
 
-fn configure_filter(ch: i64, filter_type: String, cutoff: f64, resonance: f64) -> () {
+fn configure_filter(ch: i64, filter_type: Text, cutoff: f64, resonance: f64) -> () {
   audio::set_lpf_cutoff(ch, cutoff);
   audio::set_lpf_resonance(ch, resonance);
 }
@@ -922,18 +922,18 @@ This script receives game events per turn and yields scripted actions.
 use game::*;
 
 enum GameEvent {
-  TurnStart(i64, String),
+  TurnStart(i64, Text),
   DeploymentWarning(i64),
-  CharacterDeath(i64, String),
+  CharacterDeath(i64, Text),
   BombDetonation(i64, i64),
   DateCompleted(i64, i64, f64),
   Idle,
 }
 
 enum ScriptAction {
-  DisplayMessage(String, String),
+  DisplayMessage(Text, Text),
   ModifyRelationship(i64, i64, f64),
-  TriggerEvent(String),
+  TriggerEvent(Text),
   NoAction,
 }
 
