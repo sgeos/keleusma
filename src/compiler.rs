@@ -2281,6 +2281,27 @@ fn compile_pattern_test(
             fail_addrs.push(fc.emit_jump(Op::If(0)));
         }
         Pattern::Enum(enum_name, variant, sub_pats, _) => {
+            // `Option::None` matches `Value::None` directly rather
+            // than going through `IsEnum`, because the compiler
+            // emits `Op::PushNone` for `Option::None` constructions
+            // and host-side natives return `Value::None` for the
+            // None case. The `IsEnum` check would fail against
+            // `Value::None` because it is not a `Value::Enum`.
+            //
+            // `Option::Some(p)` continues to use `IsEnum` because
+            // the compiler emits `Op::NewEnum` for `Option::Some(x)`,
+            // producing a `Value::Enum { type_name: "Option",
+            // variant: "Some", fields: [x] }`. Host-side natives
+            // that produce `Option::Some(v)` must construct the
+            // same `Value::Enum` shape.
+            if enum_name == "Option" && variant == "None" {
+                fc.emit(Op::GetLocal(value_slot));
+                fc.emit(Op::PushNone);
+                fc.emit(Op::CmpEq);
+                fail_addrs.push(fc.emit_jump(Op::If(0)));
+                return Ok(fail_addrs);
+            }
+
             fc.emit(Op::GetLocal(value_slot));
             let e_const = fc.add_string_constant(enum_name);
             let v_const = fc.add_string_constant(variant);

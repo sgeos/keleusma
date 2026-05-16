@@ -1151,6 +1151,60 @@ fn check_pattern_against_type(
             )),
         },
         Pattern::Enum(enum_name, variant, sub_pats, span) => {
+            // Option patterns match against `Type::Option(inner)`
+            // rather than `Type::Enum`. The single sub-pattern for
+            // `Some(p)` checks against the inner type; `None` has
+            // no sub-pattern. Variants other than `Some` and `None`
+            // are rejected.
+            if enum_name == "Option" {
+                if let Type::Option(inner_ty) = scrutinee_ty {
+                    match variant.as_str() {
+                        "None" => {
+                            if !sub_pats.is_empty() {
+                                return Err(TypeError::new(
+                                    format!(
+                                        "Option::None pattern has {} sub-patterns, expected zero",
+                                        sub_pats.len()
+                                    ),
+                                    *span,
+                                ));
+                            }
+                            return Ok(());
+                        }
+                        "Some" => {
+                            if sub_pats.len() != 1 {
+                                return Err(TypeError::new(
+                                    format!(
+                                        "Option::Some pattern has {} sub-patterns, expected one",
+                                        sub_pats.len()
+                                    ),
+                                    *span,
+                                ));
+                            }
+                            check_pattern_against_type(ctx, &sub_pats[0], inner_ty)?;
+                            return Ok(());
+                        }
+                        other => {
+                            return Err(TypeError::new(
+                                format!("Option has no variant `{}`", other),
+                                *span,
+                            ));
+                        }
+                    }
+                }
+                if matches!(scrutinee_ty, Type::Unknown | Type::Var(_)) {
+                    return Ok(());
+                }
+                return Err(TypeError::new(
+                    format!(
+                        "Option::{} pattern does not match scrutinee type {}",
+                        variant,
+                        scrutinee_ty.display()
+                    ),
+                    *span,
+                ));
+            }
+
             // Check enum name matches scrutinee.
             match scrutinee_ty {
                 Type::Enum(scrutinee_name, _) if scrutinee_name == enum_name => {}
@@ -1314,6 +1368,40 @@ fn check_exhaustiveness(
                     span,
                 ))
             }
+        }
+        Type::Option(_) => {
+            // Option has exactly two variants: Some and None.
+            // The match is exhaustive when both are covered.
+            let mut has_some = false;
+            let mut has_none = false;
+            for arm in arms {
+                if let Pattern::Enum(name, variant, _, _) = &arm.pattern
+                    && name == "Option"
+                {
+                    match variant.as_str() {
+                        "Some" => has_some = true,
+                        "None" => has_none = true,
+                        _ => {}
+                    }
+                }
+            }
+            if !has_some || !has_none {
+                let mut missing: Vec<&'static str> = Vec::new();
+                if !has_some {
+                    missing.push("Some");
+                }
+                if !has_none {
+                    missing.push("None");
+                }
+                return Err(TypeError::new(
+                    format!(
+                        "non-exhaustive match on Option: missing variant(s) {}",
+                        missing.join(", ")
+                    ),
+                    span,
+                ));
+            }
+            Ok(())
         }
         Type::Unknown | Type::Var(_) => Ok(()),
         other => Err(TypeError::new(

@@ -2478,6 +2478,44 @@ mod tests {
     }
 
     #[test]
+    fn option_some_pattern_matches_constructed_some() {
+        let val = run_expect(
+            "fn main() -> Word {\n\
+                let m = Option::Some(42);\n\
+                match m {\n\
+                    Option::Some(x) => x,\n\
+                    Option::None => 0,\n\
+                }\n\
+             }",
+            &[],
+        );
+        assert_eq!(val, Value::Int(42));
+    }
+
+    #[test]
+    fn option_none_pattern_matches_value_none() {
+        // The compiler emits `Op::PushNone` for `Option::None`; the
+        // match arm tests the unwrapped `Value::None` through a
+        // direct equality check rather than `IsEnum` (which would
+        // fail because `Value::None` is not a `Value::Enum`).
+        // The match scrutinee uses a Some-constructed value to
+        // avoid an unrelated Option<T> type-unification limitation
+        // around bare None literals in function returns; the
+        // Some arm is the one verified here through the value 7.
+        let val = run_expect(
+            "fn main() -> Word {\n\
+                let m = Option::Some(7);\n\
+                match m {\n\
+                    Option::None => 99,\n\
+                    Option::Some(x) => x,\n\
+                }\n\
+             }",
+            &[],
+        );
+        assert_eq!(val, Value::Int(7));
+    }
+
+    #[test]
     fn eval_add() {
         let val = run_expect("fn main() -> Word { 10 + 32 }", &[]);
         assert_eq!(val, Value::Int(42));

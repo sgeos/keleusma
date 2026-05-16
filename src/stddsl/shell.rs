@@ -9,19 +9,12 @@
 //!
 //! ## Function contracts
 //!
-//! - `shell::getenv(name: Text) -> Text` — returns the value of
-//!   the environment variable, or the empty string when unset.
-//!   The Option-typed shape selected during design discussion
-//!   would have required the compiler's pattern matcher to
-//!   understand the runtime convention that `Some(v)` is `v`
-//!   directly. The pre-existing pattern-match code emits an
-//!   `IsEnum` check that fails against unwrapped values; this
-//!   limitation is tracked separately. The shell-idiomatic
-//!   empty-string convention is the practical alternative.
+//! - `shell::getenv(name: Text) -> Option<Text>` — returns
+//!   `Option::Some(value)` when the variable is set and
+//!   `Option::None` when it is unset.
 //! - `shell::has_env(name: Text) -> bool` — companion to
-//!   `getenv` that reports whether the variable is set,
-//!   distinguishing an unset variable from one set to the empty
-//!   string.
+//!   `getenv` that reports whether the variable is set without
+//!   producing an Option-wrapped value.
 //! - `shell::run(cmd: Text) -> (Word, Text)` — executes `cmd`
 //!   through `sh -c` and returns `(exit_code, stdout)`. A
 //!   non-zero exit code is not an error; the caller decides
@@ -99,8 +92,12 @@ fn getenv_native(args: &[Value]) -> Result<Value, VmError> {
         ))
     })?;
     match std::env::var(name) {
-        Ok(value) => Ok(Value::StaticStr(value)),
-        Err(std::env::VarError::NotPresent) => Ok(Value::StaticStr(std::string::String::new())),
+        Ok(value) => Ok(Value::Enum {
+            type_name: std::string::String::from("Option"),
+            variant: std::string::String::from("Some"),
+            fields: std::vec![Value::StaticStr(value)],
+        }),
+        Err(std::env::VarError::NotPresent) => Ok(Value::None),
         Err(std::env::VarError::NotUnicode(_)) => Err(VmError::NativeError(std::format!(
             "shell::getenv: {} is not valid Unicode",
             name
