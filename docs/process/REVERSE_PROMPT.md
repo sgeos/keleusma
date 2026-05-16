@@ -9,31 +9,38 @@ AI to Human communication channel.
 ## Last Updated
 
 **Date**: 2026-05-16
-**Status**: Four-item sprint (opaque types, Rust String example, monomorphizer bug, canonical numeric types) delivered with one item partially complete on the `v0.2.0` branch.
+**Status**: Eight-item sprint complete on the `v0.2.0` branch. Canonical numeric type set (`Byte`, `Word`, `Fixed`, `Float`) is now landed end to end. Standard DSL library surface and shell integration are in place.
 
 ## Completed in this session round
 
-Five logical atomic commits on the `v0.2.0` branch.
+Five logical atomic commits.
 
-1. `feat(opaque): host-managed opaque values via Arc<dyn HostOpaque>` — new `keleusma::opaque` module introduces the `HostOpaque` marker trait and the `Value::Opaque(Arc<dyn HostOpaque>)` runtime variant. Hosts implement the trait for any Rust type they wish to expose; native functions produce opaque values through the `host_arc` constructor and consume them by extracting a typed reference through `dyn HostOpaque::downcast_ref`. Opaque values are host-managed, cross the yield boundary, and contribute zero to the script-side WCMU. The chosen design trades the propagation of a type parameter through every `Value`/`Vm`/`NativeCtx`/native-function site against the simplicity of a small custom marker trait. The `dyn`-free alternative was considered but the blast radius was disproportionate for V0.2.
-2. `docs(opaque): worked example exposing Rust String as RustString` — new `examples/opaque_rust_string.rs` registers `std::string::String` as the opaque `RustString` type and threads three native operations (`make_string`, `upper_case`, `append_exclamation`) end to end. Demonstrates the recommended host-attested pattern for text-heavy work. EMBEDDING.md gains an "Opaque Host Types" subsection; TYPE_SYSTEM.md documents the runtime representation in a property table.
-3. `fix(monomorphize): rewrite match-arm patterns and resolve nested generic field types to specialization names` — two related bugs in the generic-monomorphizer that surfaced through `examples/generic_match.rs`. Match-arm patterns now rewrite their enum names to the specialized form alongside the construction sites. Struct field types with nested generic instantiations (e.g. `inner: Cell<T>` inside a `Wrap<T>`) now infer the type parameter through a reverse-lookup on the in-progress specs map, and the substituted field type rewrites the inner generic to the emitted specialization name. Single-level only; deeper nesting still needs a full unification pass. Two regression tests pin the fixes against re-introduction.
-4. `feat(verify): WCMU text-size tracking via abstract interpretation` (carried from the prior round) — completes the V0.2 charter.
-5. `refactor(types): rename surface i64 to Word and f64 to Float (Phase 1)` — hard-break rename of the legacy lowercase keywords to the canonical V0.2 capitalised forms. PrimType, Type, parser, type checker, every test script, every example, every `.kel` file, and every doc updated. The rename was delegated to a token-aware subagent that walked Rust string literals (skipping Rust types, comments, char literals, and code outside strings) and a companion docs walker with code-fence awareness. Lexer suffix forms `42i64` / `3.14f64` are still accepted as legacy notation; only the type name is renamed.
+1. `feat(types): canonical numeric types Phase 2 — Byte (u8)`. New `Byte` primitive type, 8-bit unsigned with wrapping `u8` arithmetic. New cast opcodes `Op::WordToByte` and `Op::ByteToWord`. `Value::Byte(u8)` runtime variant, `ConstValue::Byte` compile-time constant, `KeleusmaType for u8` marshalling. Seven integration tests cover cast truncation, wrapping arithmetic, and unsigned comparison.
+2. `feat(types): canonical numeric types Phase 3 — Fixed (Q-format)`. New `Fixed` primitive type, signed Q-format with target-scaled fraction bits (Q31.32 on the host runtime). New opcodes `Op::WordToFixed(u8)`, `Op::FixedToWord(u8)`, `Op::FixedMul(u8)`, `Op::FixedDiv(u8)`, each carrying the fraction-bit count as an immediate. `Value::Fixed(i64)` runtime variant. Eight integration tests cover round-trip casts, Q-format add/sub/mul/div, negation, and signed comparison. `Fixed<N>` parameterisation and target-scaled fraction bits for sub-64-bit targets are deferred follow-on work.
+3. `feat(stddsl): Library trait, four bundled libraries, CLI integration`. New `keleusma::stddsl` module introduces the `Library` trait and four bundled libraries (`Math`, `Audio`, `Text`, `Shell`). `Vm::register_library<L: Library>(lib)` is the new uniform entry point. The `shell` cargo feature gates the Shell library, which requires `std`. `keleusma-cli` enables `["text", "shell"]` and registers all four bundles on every script the runner executes.
 
-## State of the four items in this round
+## State of the four-plus-four-item charter from this round's prompt
 
-- **Opaque type implementation**: complete.
-- **Rust `String` as opaque type, example and docs**: complete.
-- **Resolve the `generic_match` failure**: complete. Both probes pass end to end.
-- **Canonical types Byte/Word/Fixed/Float**: Phase 1 complete (`Word` and `Float` renames are in production). Phases 2 and 3 (introduction of `Byte` and `Fixed` with runtime semantics) are tracked as separate tasks. A surface-only Byte type was prototyped in this round (parser recognition, type-check stubs) but reverted because it would create a misleading partial feature where `Byte` arithmetic silently used `Word` storage without wrapping. A real Byte type requires either new opcodes for byte arithmetic with `u8` wrapping semantics, or a runtime variant `Value::Byte(u8)` threaded through the existing arithmetic dispatch with cast-time masking.
+| Item | Status |
+| --- | --- |
+| Phase 2 (Byte) | Complete. |
+| Phase 3 (Fixed) | Complete for the default target-scaled form. `Fixed<N>` parameterisation deferred. |
+| Math → `stddsl::Math` | Complete. |
+| Audio → `stddsl::Audio` | Complete. |
+| Text → `stddsl::Text` | Complete. |
+| Library trait and `Vm::register_library` | Complete. |
+| Single-file-script docs note | Complete. EMBEDDING.md gains a "Single-file scripts" subsection. |
+| `stddsl::Shell` | Complete with `getenv`, `has_env`, `run`, `run_checked`, `exit`. The originally specified `Option<Text>` shape for `getenv` was infeasible because of a pre-existing limitation in the pattern matcher; the shell-idiomatic empty-string shape is the practical alternative, with `has_env` as the companion presence-check. |
+| CLI registers Math, Audio, Text, Shell | Complete. |
 
 ## Verification matrix
 
 ```bash
-cargo test --workspace --features text                                       # 518 pass
-cargo test -p keleusma --no-default-features                                 # 449 lib + ancillary, all pass
+cargo test --workspace --features text                                       # 496 + ancillary, all pass
+cargo test --workspace --features text,shell                                 # 496 + ancillary, all pass
+cargo test -p keleusma --no-default-features                                 # 464 lib + ancillary, all pass
 cargo clippy --workspace --tests --features text -- -D warnings              # clean
+cargo clippy --workspace --tests --features text,shell -- -D warnings        # clean
 cargo clippy --workspace --tests --no-default-features -- -D warnings        # clean
 cargo fmt --check                                                             # clean
 cargo run --example opaque_rust_string --features text                       # prints "HELLO, KELEUSMA!"
@@ -41,26 +48,25 @@ cargo run --example generic_match --features text                            # b
 cargo run --example string_ops --features text                               # prints "result: hello..."
 cargo run --example wcmu_basic                                               # yields Int(42)
 echo 'fn main() -> Word { 42 }' | keleusma                                   # prints "42"
+echo 'use shell::run_checked\nfn main() -> Text { shell::run_checked("echo hi") }' | keleusma  # prints "hi"
+echo 'use shell::exit\nfn main() -> Word { shell::exit(7); 0 }' | keleusma; echo $?  # exits 7
 ```
 
-## Concerns
+## Concerns and limitations carried forward
 
-- Phase 1 of the canonical numeric types is the surface rename only. The runtime semantics of `Word` are unchanged from V0.1's `i64`. The `Target` descriptor's `word_bits_log2` field already exists for narrower targets, but the compiler and VM do not yet emit width-checked arithmetic for sub-64-bit `Word`. Phase 4 work (target-width arithmetic) is not yet scheduled.
-- The Byte and Fixed types are not yet usable from scripts. Tasks 222 and 223 capture the design and implementation scope.
-- The opaque-types `dyn`-flavoured design is documented in the module source. The `dyn`-free alternative (full type-parameter propagation) was explicitly considered and rejected for blast-radius reasons; the design choice is reversible if a future host needs the stronger type safety.
-- The monomorphizer's nested-generic inference is single-level. `Cell<Wrap<T>>` still fails to infer. A proper Robinson unification pass would close the gap.
+- `KeleusmaType` marshalling does not yet support `String` arguments or tuple return types. The shell natives use the lower-level `register_native` and pattern-match on `Value` directly. Lifting `String` into the marshalling family would let `shell::getenv` and similar register through `register_fn_fallible` with a typed signature visible to the type checker.
+- The compiler's pattern matcher does not understand the runtime convention that `Some(v)` is `v` directly. `Option::Some(x) =>` patterns emit an `IsEnum` check that fails against unwrapped values. This blocks `Option`-typed native return values from being useful in scripts. The fix is local to the pattern compile site and is tracked as a pre-existing limitation.
+- `stddsl::Text` registers all of the legacy `utility_natives::register_utility_natives` bundle which includes the `math::*` natives. `stddsl::Math` registers the same natives. The double-registration is benign (identical bodies) but a future refinement could split the utility_natives bundle into text-only and math-only halves.
+- The compiler emits `Op::FixedMul(32)` and friends with a hard-coded fraction-bit count. Threading the target descriptor through the `FuncCompiler` so sub-64-bit targets get Q15.16 or Q7.8 automatically is a follow-on commit.
+- `Fixed<N>` parameterisation is deferred. The parser does not yet accept numeric generic arguments.
+- The opaque-types `dyn`-flavoured design from the prior round is unchanged. A future tightening to full type-parameter propagation remains possible but the blast-radius cost was judged disproportionate.
 
 ## Intended Next Step
 
 Awaiting operator prompt. Candidates ordered by likely value:
 
-1. **Phase 2 of canonical numeric types: add `Byte` (u8) with wrapping arithmetic**. Adds `Value::Byte(u8)`, extends `Op::Add`/`Sub`/`Mul`/`Div`/`Mod`/`Neg`/`Cmp*` dispatch to handle Byte operands with wrapping semantics, adds cast through `Op::Cast` with masking on Word→Byte narrowing, marshalling through `KeleusmaType for u8`. Scope estimate: one focused session.
-2. **Phase 3 of canonical numeric types: add `Fixed` (Q-format)**. Larger design surface. Needs new opcodes for fixed-point multiply (which requires a post-multiply shift to maintain Q-format), the `Fixed<N>` parameterization at the parser and AST level, and KString-style runtime representation that carries the fraction-bit count. Scope estimate: one or two focused sessions.
-3. **Phase 4 of canonical numeric types: target-width arithmetic for `Word`**. Currently `Word` is 64-bit regardless of target. The `Target` descriptor carries `word_bits_log2` but the VM does not honour it. Threading this through would require width-masked arithmetic opcodes and the corresponding wire-format upgrade.
-4. **Cut a V0.2.0 release candidate** against the branch and tag it for crates.io publication.
-
-## Pre-existing limitations not addressed in this round
-
-- `wcmu_basic` example: the auto-sized arena returns the per-iteration WCMU but the VM additionally pre-reserves operand-stack and call-frame minimums at construction. The example now sizes the arena to `max(wcmu, 4096)` to accommodate the pre-reservation overhead. This is an ergonomic gap in `auto_arena_capacity_for` that should add a host-side margin or expose the minimum reserve.
-- `examples/piano_roll.rs` requires the `sdl3-example` feature and was not exercised in this round.
-- `keleusma-arena`, `keleusma-macros`, and `keleusma-bench` were not modified; their `i64`/`f64` references are genuine Rust types, not Keleusma surface types.
+1. **Lift `String` into the `KeleusmaType` marshalling family** (and tuple return types). Removes the need for the shell natives to use the low-level `register_native` and enables typed signatures visible to the type checker. Probably one focused session.
+2. **Fix the compiler's `Option::Some(x)` pattern matching**. The current `IsEnum` check needs replacement with a "value is not None and bind" path. Once fixed, `shell::getenv` can return `Option<Text>` as originally specified. Probably one focused session.
+3. **Target-scaled fraction bits for `Fixed` on sub-64-bit targets**. Thread `Target` through `FuncCompiler` so 16-bit and 32-bit targets emit `Op::FixedMul(8)` and `Op::FixedMul(16)` respectively. Mechanical.
+4. **`Fixed<N>` parameterisation**. Add the numeric-generic-argument surface to the parser; thread `Option<u8>` through `PrimType::Fixed`. Larger surface change but conceptually clean.
+5. **Cut a V0.2.0 release candidate** against the branch and tag it for crates.io publication.
