@@ -9,10 +9,10 @@ use crate::kstring::KString;
 /// emits into the bytecode's constant pool.
 ///
 /// Strict subset of [`Value`]. Only variants that the rkyv archive can
-/// faithfully serialize and deserialize. The runtime-only variants
-/// [`Value::DynStr`] and [`Value::KStr`] are intentionally absent
-/// because they are produced exclusively by native functions and
-/// runtime string operations, never as compile-time constants.
+/// faithfully serialize and deserialize. The runtime-only variant
+/// [`Value::KStr`] is intentionally absent because it is produced
+/// exclusively by native functions and runtime string operations,
+/// never as a compile-time constant.
 ///
 /// The runtime executes against the archived form
 /// [`ArchivedConstValue`]. Each operand-stack push from a constant
@@ -60,10 +60,9 @@ pub enum ConstValue {
 /// Runtime value in the Keleusma VM.
 ///
 /// Superset of [`ConstValue`] that adds the runtime-only string
-/// variants [`Value::DynStr`] for globally-allocated dynamic strings
-/// and [`Value::KStr`] for arena-allocated strings with epoch-tagged
-/// stale-pointer detection. Neither participates in rkyv
-/// serialization. The constant-pool boundary is the
+/// variant [`Value::KStr`] for arena-allocated strings with
+/// epoch-tagged stale-pointer detection. KStr does not participate
+/// in rkyv serialization. The constant-pool boundary is the
 /// [`Value::from_const_archived`] lift and the
 /// `ConstValue::try_from(&Value)` lower direction is intentionally
 /// absent because runtime values cannot become compile-time
@@ -83,11 +82,6 @@ pub enum Value {
     /// dialogue type B and across hot updates subject to the host attestation
     /// for rodata pointer validity. See R31, R32, R33 and B5.
     StaticStr(String),
-    /// Dynamic string allocated through the global allocator. Produced by
-    /// native functions that do not have arena access and by runtime
-    /// string operations. Subject to the cross-yield prohibition. Cannot
-    /// reside in the data segment.
-    DynStr(String),
     /// Dynamic string allocated in the host-owned arena's top region.
     /// Carries a [`crate::kstring::KString`] handle that becomes
     /// [`keleusma_arena::Stale`] on access if the arena has been reset
@@ -146,13 +140,8 @@ impl PartialEq for Value {
             (Value::Bool(a), Value::Bool(b)) => a == b,
             (Value::Int(a), Value::Int(b)) => a == b,
             (Value::Float(a), Value::Float(b)) => a == b,
-            // Static and dynamic strings compare equal if their contents match.
-            // This relaxation follows the convention that the discipline is
-            // about lifetime and provenance, not about value identity.
-            (Value::StaticStr(a), Value::StaticStr(b))
-            | (Value::DynStr(a), Value::DynStr(b))
-            | (Value::StaticStr(a), Value::DynStr(b))
-            | (Value::DynStr(a), Value::StaticStr(b)) => a == b,
+            // Static strings compare equal if their contents match.
+            (Value::StaticStr(a), Value::StaticStr(b)) => a == b,
             // KStr equality compares the captured handle (pointer and
             // epoch). Two KStr handles are equal only if they point to
             // the same arena allocation under the same epoch. Content
@@ -211,7 +200,6 @@ impl Value {
             Value::Int(_) => "Int",
             Value::Float(_) => "Float",
             Value::StaticStr(_) => "StaticStr",
-            Value::DynStr(_) => "DynStr",
             Value::KStr(_) => "KStr",
             Value::Func { .. } => "Func",
             Value::Tuple(_) => "Tuple",
@@ -222,18 +210,16 @@ impl Value {
         }
     }
 
-    /// Borrow the underlying UTF-8 contents of either non-arena string
-    /// variant.
+    /// Borrow the underlying UTF-8 contents of a static string.
     ///
     /// Returns `None` if the value is not a string or is a [`Value::KStr`].
-    /// Used at sites that read string contents without caring about
-    /// static-versus-dynamic provenance, such as type-name lookups in
-    /// the constant pool and string-consuming natives like `length` and
-    /// `println`. KStr access requires arena context and goes through
+    /// Used at sites that read static-string contents without arena
+    /// context, such as type-name lookups in the constant pool. KStr
+    /// access requires arena context and goes through
     /// [`Value::as_str_with_arena`].
     pub fn as_str(&self) -> Option<&str> {
         match self {
-            Value::StaticStr(s) | Value::DynStr(s) => Some(s.as_str()),
+            Value::StaticStr(s) => Some(s.as_str()),
             _ => Option::None,
         }
     }
@@ -250,18 +236,18 @@ impl Value {
         arena: &'a keleusma_arena::Arena,
     ) -> Result<Option<&'a str>, keleusma_arena::Stale> {
         match self {
-            Value::StaticStr(s) | Value::DynStr(s) => Ok(Some(s.as_str())),
+            Value::StaticStr(s) => Ok(Some(s.as_str())),
             Value::KStr(h) => h.get(arena).map(Some),
             _ => Ok(Option::None),
         }
     }
 
-    /// Returns true if the value is a dynamic string or transitively contains
-    /// a dynamic string. Both `DynStr` and `KStr` count as dynamic for the
-    /// purposes of the cross-yield prohibition (R31).
+    /// Returns true if the value is an arena-resident dynamic string or
+    /// transitively contains one. `KStr` is the only dynamic-string
+    /// variant subject to the cross-yield prohibition (R31).
     pub fn contains_dynstr(&self) -> bool {
         match self {
-            Value::DynStr(_) | Value::KStr(_) => true,
+            Value::KStr(_) => true,
             Value::Tuple(items) | Value::Array(items) => items.iter().any(Value::contains_dynstr),
             Value::Struct { fields, .. } => fields.iter().any(|(_, v)| v.contains_dynstr()),
             Value::Enum { fields, .. } => fields.iter().any(Value::contains_dynstr),
@@ -1525,10 +1511,10 @@ pub fn op_from_archived(archived: &ArchivedOp) -> Op {
 impl ConstValue {
     /// Lower a runtime [`Value`] into a compile-time [`ConstValue`].
     ///
-    /// Returns `Err` for runtime-only variants ([`Value::DynStr`] and
-    /// [`Value::KStr`]) which cannot be embedded in the bytecode's
-    /// constant pool. The compiler is the sole caller and uses this
-    /// at the boundary where it pushes constants to a chunk's pool.
+    /// Returns `Err` for the runtime-only variant [`Value::KStr`]
+    /// which cannot be embedded in the bytecode's constant pool.
+    /// The compiler is the sole caller and uses this at the boundary
+    /// where it pushes constants to a chunk's pool.
     pub fn try_from_value(value: Value) -> Result<Self, &'static str> {
         match value {
             Value::Unit => Ok(ConstValue::Unit),
@@ -1536,7 +1522,6 @@ impl ConstValue {
             Value::Int(i) => Ok(ConstValue::Int(i)),
             Value::Float(f) => Ok(ConstValue::Float(f)),
             Value::StaticStr(s) => Ok(ConstValue::StaticStr(s)),
-            Value::DynStr(_) => Err("DynStr cannot be a compile-time constant"),
             Value::KStr(_) => Err("KStr cannot be a compile-time constant"),
             Value::Func { .. } => Err("Func cannot be a compile-time constant"),
             Value::Tuple(items) => items

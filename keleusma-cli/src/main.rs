@@ -109,17 +109,8 @@ fn run_file(path: &str) -> ExitCode {
     // Detect compiled bytecode by magic. The bytecode loader strips
     // a leading shebang line, so check both at offset 0 and after a
     // `#!...\n` envelope.
-    if looks_like_bytecode(&bytes) {
-        match execute_bytecode(&bytes) {
-            Ok(value) => {
-                print_value(&value);
-                ExitCode::SUCCESS
-            }
-            Err(e) => {
-                eprintln!("error: {}", e);
-                ExitCode::FAILURE
-            }
-        }
+    let result = if looks_like_bytecode(&bytes) {
+        execute_bytecode(&bytes)
     } else {
         let source = match core::str::from_utf8(&bytes) {
             Ok(s) => s,
@@ -131,15 +122,13 @@ fn run_file(path: &str) -> ExitCode {
                 return ExitCode::FAILURE;
             }
         };
-        match execute_source(source) {
-            Ok(value) => {
-                print_value(&value);
-                ExitCode::SUCCESS
-            }
-            Err(e) => {
-                eprintln!("error: {}", e);
-                ExitCode::FAILURE
-            }
+        execute_source(source)
+    };
+    match result {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("error: {}", e);
+            ExitCode::FAILURE
         }
     }
 }
@@ -341,17 +330,15 @@ fn evaluate_repl_input(prefix: &mut String, line: &str) {
             return_type,
             body
         );
-        if let Ok(value) = execute_source(&program) {
-            print_value(&value);
+        if execute_source(&program).is_ok() {
             return;
         }
     }
     // None of the types worked. Run with i64 to surface the actual
     // error message to the user.
     let program = format!("{}\n\nfn main() -> i64 {{ {} }}\n", prefix.trim_end(), line);
-    match execute_source(&program) {
-        Ok(value) => print_value(&value),
-        Err(e) => eprintln!("error: {}", e),
+    if let Err(e) = execute_source(&program) {
+        eprintln!("error: {}", e);
     }
 }
 
@@ -411,23 +398,26 @@ fn compile_source(source: &str) -> Result<keleusma::bytecode::Module, String> {
 /// pre-registers utility and math natives so scripts can use
 /// `to_string`, `length`, `concat`, `slice`, `println`, and the
 /// `math::*` family without explicit registration.
-fn execute_source(source: &str) -> Result<Value, String> {
+fn execute_source(source: &str) -> Result<(), String> {
     let module = compile_source(source)?;
     let arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
     let mut vm = Vm::new(module, &arena).map_err(|e| format!("verify: {:?}", e))?;
-    drive_to_completion(&mut vm)
+    drive_to_completion(&mut vm, &arena)
 }
 
-fn execute_bytecode(bytes: &[u8]) -> Result<Value, String> {
+fn execute_bytecode(bytes: &[u8]) -> Result<(), String> {
     let arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
     let mut vm = Vm::load_bytes(bytes, &arena).map_err(|e| format!("load_bytes: {:?}", e))?;
-    drive_to_completion(&mut vm)
+    drive_to_completion(&mut vm, &arena)
 }
 
-fn drive_to_completion(vm: &mut Vm) -> Result<Value, String> {
+fn drive_to_completion(vm: &mut Vm, arena: &Arena) -> Result<(), String> {
     register_utility_natives(vm);
     match vm.call(&[]).map_err(|e| format!("vm: {:?}", e))? {
-        VmState::Finished(v) => Ok(v),
+        VmState::Finished(v) => {
+            print_value(&v, arena);
+            Ok(())
+        }
         VmState::Yielded(v) => Err(format!(
             "script yielded but the CLI runner does not yet drive resume: {:?}",
             v
@@ -446,12 +436,16 @@ fn format_err(stage: &str, msg: &str, span: keleusma::token::Span) -> String {
     }
 }
 
-fn print_value(v: &Value) {
+fn print_value(v: &Value, arena: &Arena) {
     match v {
         Value::Int(n) => println!("{}", n),
         Value::Float(f) => println!("{}", f),
         Value::Bool(b) => println!("{}", b),
-        Value::StaticStr(s) | Value::DynStr(s) => println!("{}", s),
+        Value::StaticStr(s) => println!("{}", s),
+        Value::KStr(h) => match h.get(arena) {
+            Ok(s) => println!("{}", s),
+            Err(_) => println!("<stale KStr>"),
+        },
         Value::Unit => println!("()"),
         Value::None => println!("None"),
         other => println!("{:?}", other),

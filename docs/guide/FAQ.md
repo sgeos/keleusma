@@ -101,12 +101,14 @@ This produces the literal string `open{brace}close`. Outside f-strings (in plain
 
 All other characters that are not special in source (single quotes, dollar signs, hash marks, ordinary Unicode) appear directly without escaping. Any other backslash sequence is a lex error.
 
-### Where strings work
+### Where text works
 
 - **Static string literals.** Compiled to `Value::StaticStr` and reside in the rodata region of the loaded image. May flow anywhere admissible, including across the yield boundary in the dialogue type.
-- **Dynamic strings.** Produced by native functions that allocate, or by `concat` and `slice`. Reside in the arena's top region or the global allocator. Subject to the cross-yield prohibition: a value whose static type contains a dynamic string cannot appear in a yield expression. See [TYPE_SYSTEM.md](../design/TYPE_SYSTEM.md) for the full two-string-type discipline.
+- **Arena-resident dynamic strings.** Produced by `Op::Add` on text operands and by the bundled `concat`, `slice`, and `to_string` natives. Carried as `Value::KStr` handles that resolve through the host-owned arena and become stale on the next arena reset. Subject to the cross-yield prohibition. See [TYPE_SYSTEM.md](../design/TYPE_SYSTEM.md) for the full text-type discipline.
 
-For string operations beyond what the bundled `register_utility_natives` provides (`to_string`, `length`, `concat`, `slice`), host applications register their own natives.
+The `Value::DynStr` global-heap variant present in V0.1.x was removed in V0.2.0. All dynamic text is now arena-resident.
+
+For text operations beyond what the bundled `register_utility_natives` provides (`to_string`, `length`, `concat`, `slice`), host applications register their own natives.
 
 ## WCMU Coverage
 
@@ -124,19 +126,19 @@ fn main() -> Text {
 }
 ````
 
-compiles and is admitted by `Vm::new` even though the value of `s` after sixty doublings would be 2^60 bytes. At runtime the program will exhaust the global allocator (the operation does not go through the arena).
+compiles and is admitted by `Vm::new` even though the value of `s` after sixty doublings would be 2^60 bytes.
 
-There are **two independent issues** behind this finding, both being addressed across V0.2.x.
+There are **two independent issues** behind this finding. V0.2.0 addresses the allocator issue; the WCMU tracking is staged for V0.2.x.
 
-**Issue one: string `+` allocates from the global allocator, not the arena.** `Op::Add` on string operands produces a `Value::DynStr`, which is a `String` backed by the global Rust allocator. The arena-capacity check has nothing to say about it. Migrating string concatenation results to arena-allocated `KString` (or a new arena-resident dynamic-string variant) would route these allocations through the arena's `BottomHandle`/`TopHandle` and surface failures as `VmError::OutOfArena`. This is a real architectural change that intersects the existing cross-yield prohibition on arena-resident dynamic strings (see [TYPE_SYSTEM.md](../design/TYPE_SYSTEM.md)) and is staged for V0.2.x.
+**Issue one: string `+` previously allocated from the global allocator, not the arena.** Resolved in V0.2.0. `Op::Add` on text operands now produces a `Value::KStr` allocated through `KString::alloc` in the arena's top region. Allocation failure surfaces as `VmError::OutOfArena` rather than exhausting the host process. The `Value::DynStr` variant has been removed entirely. A doubling-string program now exhausts the arena and the host sees a typed error.
 
-**Issue two: the WCMU pass does not track string sizes statically.** Even with arena-resident strings, the verifier's per-op heap-allocation cost does not currently propagate operand sizes through `Op::Add`, `concat`, `to_string`, or `slice`. A doubling-string program would still appear constant-cost to the pass. The proper fix is an abstract-interpretation step that tracks a per-slot upper-bound on string length and propagates it through these operations, with conservative `u32::MAX` saturation for unknown bounds. Designed; implementation deferred to V0.2.x.
+**Issue two: the WCMU pass does not track string sizes statically.** The verifier's per-op heap-allocation cost does not currently propagate operand sizes through `Op::Add`, `concat`, `to_string`, or `slice`. A doubling-string program still appears constant-cost to the pass even though the arena exhaustion is now graceful. The proper fix is an abstract-interpretation step that tracks a per-slot upper bound on string length and propagates it through these operations, with conservative `u32::MAX` saturation for unknown bounds. Designed; implementation deferred to V0.2.x.
 
-The honest framing for V0.1.x and V0.2.0:
+The honest framing for V0.2.0:
 
-- **The verifier is sound for what it analyses.** Arithmetic, control flow, calls (with host attestation), array and tuple construction, and the operand-stack peak are tracked. The OOM-safe push paths added in V0.2.0 mean exhaustion of the *arena-resident* state surfaces as a typed error rather than an abort.
-- **String size growth across `+`, `concat`, `slice`, and `to_string` is not tracked, and string allocations still go through the global allocator.** Programs that exponentially grow a string through repeated concatenation are not currently rejected at verification time and can OOM the host process.
-- **Recommendation for V0.2.0.** Treat heavy string work as host-attested and out-of-band. Register native Rust functions (see the section above) that perform the string work in a bounded way and let scripts consume them. Host-side string helpers can be implemented to fail safely on large input rather than allocate unboundedly.
+- **The verifier is sound for what it analyses.** Arithmetic, control flow, calls (with host attestation), array and tuple construction, and the operand-stack peak are tracked. The OOM-safe push paths added in V0.2.0 mean exhaustion of the arena-resident state surfaces as a typed error rather than an abort. Text concatenation also now uses the arena and benefits from the same graceful-failure path.
+- **Text size growth across `+`, `concat`, `slice`, and `to_string` is not yet tracked at verification time.** Programs that exponentially grow text through repeated concatenation are not rejected at verification but exhaust the arena gracefully at runtime.
+- **Recommendation for V0.2.0.** Treat heavy text work as host-attested and out-of-band. Register native Rust functions (see the section above) that perform the work in a bounded way and let scripts consume them. Host-side text helpers can be implemented to fail safely on large input rather than allocate unboundedly.
 
 A worked example of the host-attestation pattern for arena-resident allocations lives in [`examples/wcmu_attestation.rs`](../../examples/wcmu_attestation.rs).
 

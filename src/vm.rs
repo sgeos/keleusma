@@ -1280,29 +1280,47 @@ impl<'a, 'arena> Vm<'a, 'arena> {
 
                 Op::Add => {
                     let word_bits_log2 = self.word_bits_log2();
-                    self.binary_op(move |a, b| match (a, b) {
-                        (Value::Int(x), Value::Int(y)) => Ok(Value::Int(
-                            crate::bytecode::truncate_int(x.wrapping_add(y), word_bits_log2),
-                        )),
-                        (Value::Float(x), Value::Float(y)) => Ok(Value::Float(x + y)),
-                        (a, b) if a.as_str().is_some() && b.as_str().is_some() => {
-                            let mut s = match a {
-                                Value::StaticStr(s) | Value::DynStr(s) => s,
-                                _ => unreachable!(),
-                            };
-                            let suffix = match b {
-                                Value::StaticStr(s) | Value::DynStr(s) => s,
-                                _ => unreachable!(),
-                            };
-                            s.push_str(&suffix);
-                            Ok(Value::DynStr(s))
+                    let b = self.pop()?;
+                    let a = self.pop()?;
+                    match (a, b) {
+                        (Value::Int(x), Value::Int(y)) => {
+                            let r =
+                                crate::bytecode::truncate_int(x.wrapping_add(y), word_bits_log2);
+                            sp!(self, Value::Int(r));
                         }
-                        (a, b) => Err(VmError::TypeError(format!(
-                            "cannot add {} and {}",
-                            a.type_name(),
-                            b.type_name()
-                        ))),
-                    })?
+                        (Value::Float(x), Value::Float(y)) => sp!(self, Value::Float(x + y)),
+                        (a, b)
+                            if matches!(a, Value::StaticStr(_) | Value::KStr(_))
+                                && matches!(b, Value::StaticStr(_) | Value::KStr(_)) =>
+                        {
+                            let arena = self.arena;
+                            let lhs = a.as_str_with_arena(arena).map_err(|_| {
+                                VmError::TypeError(String::from(
+                                    "KStr is stale (arena reset since allocation)",
+                                ))
+                            })?;
+                            let rhs = b.as_str_with_arena(arena).map_err(|_| {
+                                VmError::TypeError(String::from(
+                                    "KStr is stale (arena reset since allocation)",
+                                ))
+                            })?;
+                            let lhs = lhs.unwrap_or("");
+                            let rhs = rhs.unwrap_or("");
+                            let mut concatenated = String::with_capacity(lhs.len() + rhs.len());
+                            concatenated.push_str(lhs);
+                            concatenated.push_str(rhs);
+                            let handle = crate::kstring::KString::alloc(arena, &concatenated)
+                                .map_err(|_| out_of_arena_push("text", arena.capacity()))?;
+                            sp!(self, Value::KStr(handle));
+                        }
+                        (a, b) => {
+                            return Err(VmError::TypeError(format!(
+                                "cannot add {} and {}",
+                                a.type_name(),
+                                b.type_name()
+                            )));
+                        }
+                    }
                 }
                 Op::Sub => self.binary_arith(|a, b| a.wrapping_sub(b), |a, b| a - b)?,
                 Op::Mul => self.binary_arith(|a, b| a.wrapping_mul(b), |a, b| a * b)?,
@@ -1788,7 +1806,15 @@ impl<'a, 'arena> Vm<'a, 'arena> {
                         Value::Array(arr) => {
                             sp!(self, Value::Int(arr.len() as i64));
                         }
-                        Value::StaticStr(s) | Value::DynStr(s) => {
+                        Value::StaticStr(s) => {
+                            sp!(self, Value::Int(s.chars().count() as i64));
+                        }
+                        Value::KStr(h) => {
+                            let s = h.get(self.arena).map_err(|_| {
+                                VmError::TypeError(String::from(
+                                    "KStr is stale (arena reset since allocation)",
+                                ))
+                            })?;
                             sp!(self, Value::Int(s.chars().count() as i64));
                         }
                         Value::Tuple(t) => {
@@ -1874,17 +1900,6 @@ impl<'a, 'arena> Vm<'a, 'arena> {
         self.stack.pop().ok_or(VmError::StackUnderflow)
     }
 
-    fn binary_op<F>(&mut self, f: F) -> Result<(), VmError>
-    where
-        F: FnOnce(Value, Value) -> Result<Value, VmError>,
-    {
-        let b = self.pop()?;
-        let a = self.pop()?;
-        let result = f(a, b)?;
-        sp!(self, result);
-        Ok(())
-    }
-
     fn binary_arith(
         &mut self,
         int_op: fn(i64, i64) -> i64,
@@ -1921,8 +1936,28 @@ impl<'a, 'arena> Vm<'a, 'arena> {
             (Value::Float(x), Value::Float(y)) => {
                 x.partial_cmp(y).unwrap_or(core::cmp::Ordering::Equal)
             }
-            (Value::StaticStr(x) | Value::DynStr(x), Value::StaticStr(y) | Value::DynStr(y)) => {
-                x.cmp(y)
+            (
+                a @ (Value::StaticStr(_) | Value::KStr(_)),
+                b @ (Value::StaticStr(_) | Value::KStr(_)),
+            ) => {
+                let arena = self.arena;
+                let xs = a
+                    .as_str_with_arena(arena)
+                    .map_err(|_| {
+                        VmError::TypeError(String::from(
+                            "KStr is stale (arena reset since allocation)",
+                        ))
+                    })?
+                    .unwrap_or("");
+                let ys = b
+                    .as_str_with_arena(arena)
+                    .map_err(|_| {
+                        VmError::TypeError(String::from(
+                            "KStr is stale (arena reset since allocation)",
+                        ))
+                    })?
+                    .unwrap_or("");
+                xs.cmp(ys)
             }
             _ => {
                 return Err(VmError::TypeError(format!(
@@ -2342,8 +2377,22 @@ mod tests {
 
     #[test]
     fn eval_string_concat() {
-        let val = run_expect("fn main() -> Text { \"hello\" + \" world\" }", &[]);
-        assert_eq!(val, Value::DynStr(String::from("hello world")));
+        let src = "fn main() -> Text { \"hello\" + \" world\" }";
+        let tokens = tokenize(src).expect("lex error");
+        let program = parse(&tokens).expect("parse error");
+        let module = compile(&program).expect("compile error");
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let mut vm = Vm::new(module, &arena).unwrap();
+        let val = match vm.call(&[]).unwrap() {
+            VmState::Finished(v) => v,
+            other => panic!("unexpected: {:?}", other),
+        };
+        let s = val
+            .as_str_with_arena(&arena)
+            .expect("KStr should resolve against live arena")
+            .expect("Op::Add on Text operands yields a string variant");
+        assert_eq!(s, "hello world");
+        assert!(matches!(val, Value::KStr(_)));
     }
 
     // -- For-in over array expressions --
@@ -2822,7 +2871,7 @@ mod tests {
 
     #[test]
     fn yield_dynamic_string_fails() {
-        // to_string returns a DynStr. Yielding it must fail at runtime.
+        // to_string returns a KStr. Yielding it must fail at runtime.
         let src = "use to_string\n\
                    loop main(input: i64) -> Text { \
                        let input = yield to_string(input); \"done\" }";
@@ -2835,7 +2884,7 @@ mod tests {
         let err = vm.call(&[Value::Int(42)]).unwrap_err();
         match err {
             VmError::TypeError(msg) => {
-                assert!(msg.contains("dynamic string") || msg.contains("DynStr"))
+                assert!(msg.contains("dynamic string") || msg.contains("KStr"))
             }
             other => panic!("expected TypeError, got {:?}", other),
         }
@@ -2843,7 +2892,7 @@ mod tests {
 
     #[test]
     fn yield_tuple_with_dynamic_string_fails() {
-        // Yielding a tuple containing a DynStr must fail.
+        // Yielding a tuple containing a KStr must fail.
         let src = "use to_string\n\
                    loop main(input: i64) -> (i64, Text) { \
                        let input = yield (input, to_string(input)); (0, \"\") }";
@@ -3487,13 +3536,13 @@ mod tests {
 
     #[test]
     fn contains_dynstr_helper() {
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let h = crate::kstring::KString::alloc(&arena, "hi").unwrap();
+        let kstr = Value::KStr(h);
         assert!(!Value::Int(1).contains_dynstr());
         assert!(!Value::StaticStr(String::from("hi")).contains_dynstr());
-        assert!(Value::DynStr(String::from("hi")).contains_dynstr());
-        assert!(
-            Value::Tuple(alloc::vec![Value::Int(1), Value::DynStr(String::from("x"))])
-                .contains_dynstr()
-        );
+        assert!(kstr.contains_dynstr());
+        assert!(Value::Tuple(alloc::vec![Value::Int(1), kstr.clone()]).contains_dynstr());
         assert!(
             !Value::Tuple(alloc::vec![
                 Value::Int(1),
@@ -3504,7 +3553,7 @@ mod tests {
         assert!(
             Value::Struct {
                 type_name: String::from("Foo"),
-                fields: alloc::vec![(String::from("x"), Value::DynStr(String::from("y")))],
+                fields: alloc::vec![(String::from("x"), kstr)],
             }
             .contains_dynstr()
         );

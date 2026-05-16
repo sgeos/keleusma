@@ -45,7 +45,11 @@ fn main() {
     let mut vm = Vm::new(module, &arena).expect("verify");
     register_utility_natives(&mut vm);
     match vm.call(&[]) {
-        Ok(VmState::Finished(Value::DynStr(s))) => {
+        Ok(VmState::Finished(ref val @ Value::KStr(_))) => {
+            let s = val
+                .as_str_with_arena(&arena)
+                .expect("KStr handle should resolve against live arena")
+                .expect("Text result has string contents");
             println!("result: {}", s);
             assert_eq!(s, "hello...");
             println!("string ops executed end to end");

@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Surface text type renamed `String` to `Text`.** The Keleusma surface keyword for textual data is now `Text`. The former name persistently confused readers given Rust's owned `String` type. The runtime representation (`Value::StaticStr`, `Value::KStr`) is unchanged. Existing scripts must rename `String` to `Text` in parameter and return-type annotations.
+- **`Op::Add` on text operands is now arena-resident.** Concatenation through `+` no longer routes through the global allocator; the result is `Value::KStr` allocated through `KString::alloc` in the arena's top region. Allocation failure surfaces as `VmError::OutOfArena`. The bundled `to_string`, `concat`, and `slice` natives likewise produce arena-allocated `KStr` results.
+- **`Value::DynStr` removed.** The global-heap dynamic-string variant present in V0.1.x is gone. All dynamic strings are arena-resident via `Value::KStr`. The cross-yield prohibition continues to apply.
+- **`register_utility_natives` is now arena-aware by default.** The non-context variants of `to_string`, `concat`, and `slice` were removed. `register_utility_natives_with_ctx` is retained as a deprecated alias for compatibility.
+
 ## [0.1.1] - 2026-05-10
 
 ### Fixed

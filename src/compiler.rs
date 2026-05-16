@@ -185,8 +185,8 @@ impl FuncCompiler {
     fn add_constant(&mut self, value: Value) -> u16 {
         // The compiler emits compile-time constants only. The
         // conversion below rejects runtime-only variants by panicking
-        // because reaching this with a `DynStr` or `KStr` would be a
-        // compiler bug rather than user-visible.
+        // because reaching this with a `KStr` would be a compiler
+        // bug rather than user-visible.
         let cv = ConstValue::try_from_value(value).expect("compile-time constant only");
         for (i, c) in self.chunk.constants.iter().enumerate() {
             if *c == cv {

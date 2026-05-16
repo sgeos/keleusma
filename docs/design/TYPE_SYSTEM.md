@@ -144,7 +144,7 @@ All values in the virtual machine are represented as variants of the `Value` enu
 | `Value::Int(i64)` | A 64-bit integer | Signed integer value |
 | `Value::Float(f64)` | A 64-bit float | Floating-point value |
 | `Value::StaticStr(String)` | A UTF-8 static string | Static string referenced from the code image |
-| `Value::DynStr(String)` | A UTF-8 dynamic string | Arena-allocated string produced at runtime |
+| `Value::KStr(KString)` | An arena-resident `KString` handle | Dynamic string allocated in the host-owned arena's top region |
 | `Value::Tuple(Vec<Value>)` | A vector of values | Anonymous product type |
 | `Value::Array(Vec<Value>)` | A vector of values | Homogeneous fixed-size array |
 | `Value::Struct { type_name, fields }` | Name and field map | Named product type instance |
