@@ -11,6 +11,7 @@ pub mod marshall;
 pub mod monomorphize;
 pub mod parser;
 pub mod target;
+pub mod text_size;
 pub mod token;
 pub mod typecheck;
 pub mod utility_natives;
@@ -29,4 +30,5 @@ pub use bytecode::{
 };
 pub use keleusma_macros::KeleusmaType;
 pub use marshall::{IntoFallibleNativeFn, IntoNativeFn, KeleusmaType};
+pub use text_size::{TextSize, op_cost_context};
 pub use vm::{NativeCtx, OverflowPolicy, VerifyWarning, VmError, VmOptions, WarningKind};
