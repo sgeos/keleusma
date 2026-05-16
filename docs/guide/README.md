@@ -11,6 +11,7 @@ Onboarding-oriented documentation for new users and embedders. Where the [archit
 | [GETTING_STARTED.md](./GETTING_STARTED.md) | First-time user | Install the CLI, write a first script, run it, embed it in a twenty-line Rust host |
 | [EMBEDDING.md](./EMBEDDING.md) | Rust host author | Construct a `Vm`, register native functions, size the arena, drive the call and resume loop, recover from errors |
 | [WHY_REJECTED.md](./WHY_REJECTED.md) | Anyone whose program failed verification | Map verifier error messages to the conservative-verification taxonomy and propose rewrites |
+| [FAQ.md](./FAQ.md) | Anyone who hit a surprise | Common rough edges in V0.1.x, including string handling, escape sequences, and the immutable-locals constraint |
 
 ## Companion Material
 

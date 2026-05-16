@@ -253,6 +253,7 @@ See [docs/README.md](docs/README.md) for the full documentation knowledge graph.
 - [Getting Started](docs/guide/GETTING_STARTED.md). Install the CLI, write a first script, embed it in a Rust host.
 - [Embedding](docs/guide/EMBEDDING.md). Native function registration, arena sizing, call and resume protocol, error recovery.
 - [Why Was My Program Rejected](docs/guide/WHY_REJECTED.md). Verifier rejection messages mapped to root causes and rewrites.
+- [FAQ](docs/guide/FAQ.md). Common rough edges in V0.1.x: string handling, escape sequences, the immutable-locals constraint.
 - [Script Examples](examples/scripts/README.md). Standalone `.kel` files demonstrating language features.
 
 **Reference**
