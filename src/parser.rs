@@ -1247,7 +1247,34 @@ impl<'a> Parser<'a> {
         }
         if self.at_upper("Fixed") {
             self.pos += 1;
-            return Ok(TypeExpr::Prim(PrimType::Fixed, span));
+            // Optional `<N>` argument pinning the fraction-bit count.
+            // Without the argument the default form `PrimType::Fixed(None)`
+            // resolves to the target-scaled default at type check.
+            if self.eat(&TokenKind::Lt) {
+                let tok = self.tokens[self.pos].clone();
+                let frac_bits = match tok.kind {
+                    TokenKind::IntLit(n) => {
+                        if !(0..=62).contains(&n) {
+                            return Err(
+                                self.error("Fixed<N> fraction bits must be in the range [0, 62]")
+                            );
+                        }
+                        self.pos += 1;
+                        n as u8
+                    }
+                    _ => {
+                        return Err(
+                            self.error("expected integer literal for Fixed<N> fraction bits")
+                        );
+                    }
+                };
+                let end = self.expect(&TokenKind::Gt)?;
+                return Ok(TypeExpr::Prim(
+                    PrimType::Fixed(Some(frac_bits)),
+                    merge_spans(span, end),
+                ));
+            }
+            return Ok(TypeExpr::Prim(PrimType::Fixed(None), span));
         }
         if self.at_upper("Float") {
             self.pos += 1;

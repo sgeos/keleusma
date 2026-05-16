@@ -2478,6 +2478,32 @@ mod tests {
     }
 
     #[test]
+    fn fixed_parameterised_q15_16_uses_sixteen_fraction_bits() {
+        // `Fixed<16>` is Q15.16: 1 cast to Fixed<16> equals
+        // `1 << 16 = 65_536` in the underlying bits.
+        let val = run_expect("fn main() -> Fixed<16> { 1 as Fixed<16> }", &[]);
+        assert_eq!(val, Value::Fixed(1i64 << 16));
+    }
+
+    #[test]
+    fn fixed_parameterised_q15_16_multiply_maintains_format() {
+        let val = run_expect(
+            "fn main() -> Word { ((4 as Fixed<16>) * (5 as Fixed<16>)) as Word }",
+            &[],
+        );
+        assert_eq!(val, Value::Int(20));
+    }
+
+    #[test]
+    fn fixed_default_form_resolves_to_q31_32() {
+        // The default `Fixed` surface form resolves to Q31.32 on
+        // the host runtime, so `1 as Fixed` equals `1 << 32` in
+        // the underlying bits.
+        let val = run_expect("fn main() -> Fixed { 1 as Fixed }", &[]);
+        assert_eq!(val, Value::Fixed(1i64 << 32));
+    }
+
+    #[test]
     fn option_some_pattern_matches_constructed_some() {
         let val = run_expect(
             "fn main() -> Word {\n\

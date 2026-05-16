@@ -58,6 +58,13 @@ use alloc::vec::Vec;
 use crate::ast::*;
 use crate::token::Span;
 
+/// Default `Fixed` fraction-bit count when the surface form is
+/// `Fixed` without an explicit `<N>` argument. Matches the host
+/// 64-bit runtime's Q31.32 format. Target-scaled resolution for
+/// 16-bit and 32-bit targets is a follow-on once the type
+/// checker carries the target descriptor.
+pub const DEFAULT_FIXED_FRAC_BITS: u8 = 32;
+
 /// A computed type. The internal representation is independent of the
 /// `TypeExpr` AST node so the checker can reason about types without
 /// surface-syntax detail.
@@ -71,8 +78,11 @@ pub enum Type {
     /// 64-bit; narrower widths are reserved for future embedded
     /// targets.
     Word,
-    /// Signed Q-format fixed-point. Target-scaled fraction bits.
-    Fixed,
+    /// Signed Q-format fixed-point with the given fraction-bit
+    /// count. The default `Fixed` surface form resolves to the
+    /// target-scaled value (32 on the host 64-bit runtime);
+    /// `Fixed<N>` resolves to the literal N.
+    Fixed(u8),
     /// Target floating-point width. IEEE 754 binary64 on the host;
     /// narrower widths are reserved for future embedded targets.
     Float,
@@ -131,7 +141,7 @@ impl Type {
             TypeExpr::Prim(p, _) => match p {
                 PrimType::Byte => Type::Byte,
                 PrimType::Word => Type::Word,
-                PrimType::Fixed => Type::Fixed,
+                PrimType::Fixed(maybe_n) => Type::Fixed(maybe_n.unwrap_or(DEFAULT_FIXED_FRAC_BITS)),
                 PrimType::Float => Type::Float,
                 PrimType::Bool => Type::Bool,
                 PrimType::Text => Type::Str,
@@ -177,7 +187,7 @@ impl Type {
         match self {
             Type::Byte => "Byte".to_string(),
             Type::Word => "Word".to_string(),
-            Type::Fixed => "Fixed".to_string(),
+            Type::Fixed(n) => alloc::format!("Fixed<{}>", n),
             Type::Float => "Float".to_string(),
             Type::Bool => "bool".to_string(),
             Type::Unit => "()".to_string(),
@@ -312,9 +322,18 @@ pub fn unify(a: &Type, b: &Type, subst: &mut Subst) -> Result<(), UnifyError> {
     let a = a.apply(subst);
     let b = b.apply(subst);
     match (a, b) {
+        (Type::Fixed(a_n), Type::Fixed(b_n)) => {
+            if a_n == b_n {
+                Ok(())
+            } else {
+                Err(UnifyError::Mismatch {
+                    left: Type::Fixed(a_n),
+                    right: Type::Fixed(b_n),
+                })
+            }
+        }
         (Type::Byte, Type::Byte)
         | (Type::Word, Type::Word)
-        | (Type::Fixed, Type::Fixed)
         | (Type::Float, Type::Float)
         | (Type::Bool, Type::Bool)
         | (Type::Unit, Type::Unit)
@@ -407,7 +426,7 @@ fn type_head_name(t: &Type) -> Option<String> {
     match t {
         Type::Byte => Some("Byte".to_string()),
         Type::Word => Some("Word".to_string()),
-        Type::Fixed => Some("Fixed".to_string()),
+        Type::Fixed(_) => Some("Fixed".to_string()),
         Type::Float => Some("Float".to_string()),
         Type::Bool => Some("bool".to_string()),
         Type::Unit => Some("()".to_string()),
@@ -785,7 +804,7 @@ pub fn check(program: &Program) -> Result<(), TypeError> {
         let head = match Type::from_expr(&impl_block.for_type, &ctx.types) {
             Type::Byte => "Byte".to_string(),
             Type::Word => "Word".to_string(),
-            Type::Fixed => "Fixed".to_string(),
+            Type::Fixed(n) => alloc::format!("Fixed<{}>", n),
             Type::Float => "Float".to_string(),
             Type::Bool => "bool".to_string(),
             Type::Unit => "()".to_string(),
@@ -948,7 +967,7 @@ pub fn check(program: &Program) -> Result<(), TypeError> {
         let head = match Type::from_expr(&impl_block.for_type, &ctx.types) {
             Type::Byte => "Byte".to_string(),
             Type::Word => "Word".to_string(),
-            Type::Fixed => "Fixed".to_string(),
+            Type::Fixed(n) => alloc::format!("Fixed<{}>", n),
             Type::Float => "Float".to_string(),
             Type::Bool => "bool".to_string(),
             Type::Unit => "()".to_string(),
@@ -1580,8 +1599,15 @@ fn type_of_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Type, TypeError> {
                         Ok(Type::Word)
                     } else if matches!(lt, Type::Byte) && matches!(rt, Type::Byte) {
                         Ok(Type::Byte)
-                    } else if matches!(lt, Type::Fixed) && matches!(rt, Type::Fixed) {
-                        Ok(Type::Fixed)
+                    } else if let (Type::Fixed(ln), Type::Fixed(rn)) = (&lt, &rt) {
+                        if ln == rn {
+                            Ok(Type::Fixed(*ln))
+                        } else {
+                            Err(TypeError::new(
+                                format!("cannot add {} and {}", lt.display(), rt.display()),
+                                *span,
+                            ))
+                        }
                     } else if matches!(lt, Type::Float) && matches!(rt, Type::Float) {
                         Ok(Type::Float)
                     } else if matches!(lt, Type::Str) && matches!(rt, Type::Str) {
@@ -1602,8 +1628,19 @@ fn type_of_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Type, TypeError> {
                         Ok(Type::Word)
                     } else if matches!(lt, Type::Byte) && matches!(rt, Type::Byte) {
                         Ok(Type::Byte)
-                    } else if matches!(lt, Type::Fixed) && matches!(rt, Type::Fixed) {
-                        Ok(Type::Fixed)
+                    } else if let (Type::Fixed(ln), Type::Fixed(rn)) = (&lt, &rt) {
+                        if ln == rn {
+                            Ok(Type::Fixed(*ln))
+                        } else {
+                            Err(TypeError::new(
+                                format!(
+                                    "arithmetic on incompatible types {} and {}",
+                                    lt.display(),
+                                    rt.display()
+                                ),
+                                *span,
+                            ))
+                        }
                     } else if matches!(lt, Type::Float) && matches!(rt, Type::Float) {
                         Ok(Type::Float)
                     } else if matches!(lt, Type::Unknown | Type::Var(_))
@@ -1662,7 +1699,7 @@ fn type_of_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Type, TypeError> {
                 UnaryOp::Neg => match ty {
                     Type::Word
                     | Type::Byte
-                    | Type::Fixed
+                    | Type::Fixed(_)
                     | Type::Float
                     | Type::Unknown
                     | Type::Var(_) => Ok(ty),
@@ -2180,7 +2217,7 @@ fn type_of_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Type, TypeError> {
                 // Fixed conversions. Word→Fixed left-shifts by the
                 // target fraction-bit count; Fixed→Word arithmetic-
                 // right-shifts. Both are explicit casts.
-                (Type::Word, Type::Fixed) | (Type::Fixed, Type::Word) => Ok(to_ty),
+                (Type::Word, Type::Fixed(_)) | (Type::Fixed(_), Type::Word) => Ok(to_ty),
                 (Type::Unknown, _) | (_, Type::Unknown) => Ok(to_ty),
                 (a, b) if a == b => Ok(to_ty),
                 _ => Err(TypeError::new(
