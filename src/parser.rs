@@ -1245,6 +1245,10 @@ impl<'a> Parser<'a> {
             self.pos += 1;
             return Ok(TypeExpr::Prim(PrimType::Word, span));
         }
+        if self.at_upper("Fixed") {
+            self.pos += 1;
+            return Ok(TypeExpr::Prim(PrimType::Fixed, span));
+        }
         if self.at_upper("Float") {
             self.pos += 1;
             return Ok(TypeExpr::Prim(PrimType::Float, span));

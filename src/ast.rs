@@ -525,6 +525,14 @@ pub enum PrimType {
     /// future embedded targets (16/32-bit) and are documented in
     /// the Target descriptor.
     Word,
+    /// Signed Q-format fixed-point. The fraction bit count is
+    /// target-scaled: on a 64-bit target the format is Q31.32 (32
+    /// fraction bits), on a 32-bit target Q15.16, on a 16-bit
+    /// target Q7.8. The half-word convention provides equal range
+    /// and fraction precision relative to the target word size.
+    /// V0.2 supports only the default target-scaled form; explicit
+    /// `Fixed<N>` parameterisation is staged for a follow-up.
+    Fixed,
     /// Target floating-point width. IEEE 754 binary64 on the host
     /// runtime; narrower widths are reserved for future embedded
     /// targets.

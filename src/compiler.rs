@@ -454,6 +454,7 @@ pub fn compile_with_target(
             TypeExpr::Prim(p, _) => match p {
                 PrimType::Byte => String::from("Byte"),
                 PrimType::Word => String::from("Word"),
+                PrimType::Fixed => String::from("Fixed"),
                 PrimType::Float => String::from("Float"),
                 PrimType::Bool => String::from("bool"),
                 PrimType::Text => String::from("Text"),
@@ -661,7 +662,11 @@ fn validate_data_field_type(
 ) -> Result<(), CompileError> {
     match type_expr {
         TypeExpr::Prim(prim, span) => match prim {
-            PrimType::Byte | PrimType::Word | PrimType::Float | PrimType::Bool => Ok(()),
+            PrimType::Byte
+            | PrimType::Word
+            | PrimType::Fixed
+            | PrimType::Float
+            | PrimType::Bool => Ok(()),
             PrimType::Text => Err(CompileError {
                 message: String::from(
                     "data field type Text is not admissible: variable-length \
@@ -1016,6 +1021,32 @@ fn infer_expr_type(fc: &FuncCompiler, expr: &Expr) -> Option<TypeExpr> {
             Literal::Unit => TypeExpr::Unit(*span),
         }),
         Expr::Cast { target, .. } => Some(target.clone()),
+        Expr::BinOp {
+            left,
+            right,
+            op,
+            span,
+            ..
+        } => {
+            // Arithmetic operators preserve the operand type. The
+            // type checker rejects mixed-type operands so left's
+            // type equals right's; comparisons produce `bool`.
+            use crate::ast::BinOp;
+            match op {
+                BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod => {
+                    infer_expr_type(fc, left).or_else(|| infer_expr_type(fc, right))
+                }
+                BinOp::Eq
+                | BinOp::NotEq
+                | BinOp::Lt
+                | BinOp::Gt
+                | BinOp::LtEq
+                | BinOp::GtEq
+                | BinOp::And
+                | BinOp::Or => Some(TypeExpr::Prim(PrimType::Bool, *span)),
+            }
+        }
+        Expr::UnaryOp { operand, .. } => infer_expr_type(fc, operand),
         _ => None,
     }
 }
@@ -1029,6 +1060,7 @@ fn type_expr_head(ty: &TypeExpr) -> Option<String> {
             match p {
                 PrimType::Byte => "Byte",
                 PrimType::Word => "Word",
+                PrimType::Fixed => "Fixed",
                 PrimType::Float => "Float",
                 PrimType::Bool => "bool",
                 PrimType::Text => "Text",
@@ -1706,6 +1738,17 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
                 }
                 _ => {}
             }
+            // Infer left's type before compiling so we can pick the
+            // Fixed-specific multiply and divide opcodes when the
+            // operands are `Fixed`. Add and Sub on Fixed use the
+            // generic Op::Add/Sub dispatch, which the VM extends
+            // with a Value::Fixed arm. Multiply and divide require
+            // the fraction-bit count to maintain Q-format.
+            const FIXED_FRAC_BITS: u8 = 32;
+            let left_is_fixed = matches!(
+                infer_expr_type(fc, left),
+                Some(TypeExpr::Prim(PrimType::Fixed, _))
+            );
             compile_expr(fc, left)?;
             compile_expr(fc, right)?;
             match op {
@@ -1716,10 +1759,18 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
                     fc.emit(Op::Sub);
                 }
                 BinOp::Mul => {
-                    fc.emit(Op::Mul);
+                    if left_is_fixed {
+                        fc.emit(Op::FixedMul(FIXED_FRAC_BITS));
+                    } else {
+                        fc.emit(Op::Mul);
+                    }
                 }
                 BinOp::Div => {
-                    fc.emit(Op::Div);
+                    if left_is_fixed {
+                        fc.emit(Op::FixedDiv(FIXED_FRAC_BITS));
+                    } else {
+                        fc.emit(Op::Div);
+                    }
                 }
                 BinOp::Mod => {
                     fc.emit(Op::Mod);
@@ -2045,8 +2096,16 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
             // Choose the cast opcode based on the source type
             // (inferred from the inner expression) and the target.
             // The type checker has already validated the cast pair
-            // (Word↔Float, Word↔Byte, or identity); this dispatch
-            // picks the matching opcode.
+            // (Word↔Float, Word↔Byte, Word↔Fixed, or identity);
+            // this dispatch picks the matching opcode.
+            //
+            // The Fixed fraction-bit count is hard-coded to 32
+            // here, matching the V0.1.x host runtime's Q31.32
+            // format. Target-scaled fraction bits (16-bit and
+            // 32-bit targets) are deferred to a follow-up that
+            // threads the target descriptor into the function
+            // compiler.
+            const FIXED_FRAC_BITS: u8 = 32;
             let source = infer_expr_type(fc, inner);
             compile_expr(fc, inner)?;
             match (source.as_ref(), target) {
@@ -2056,14 +2115,20 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
                 (Some(TypeExpr::Prim(PrimType::Byte, _)), TypeExpr::Prim(PrimType::Word, _)) => {
                     fc.emit(Op::ByteToWord);
                 }
+                (Some(TypeExpr::Prim(PrimType::Fixed, _)), TypeExpr::Prim(PrimType::Word, _)) => {
+                    fc.emit(Op::FixedToWord(FIXED_FRAC_BITS));
+                }
                 (_, TypeExpr::Prim(PrimType::Word, _)) => {
                     // Default for `as Word`: source is `Float`.
-                    // Byte source is caught by the more specific
-                    // arm above.
+                    // Byte and Fixed sources are caught by the more
+                    // specific arms above.
                     fc.emit(Op::FloatToInt);
                 }
                 (_, TypeExpr::Prim(PrimType::Byte, _)) => {
                     fc.emit(Op::WordToByte);
+                }
+                (_, TypeExpr::Prim(PrimType::Fixed, _)) => {
+                    fc.emit(Op::WordToFixed(FIXED_FRAC_BITS));
                 }
                 _ => {
                     // Other casts are identity at runtime.

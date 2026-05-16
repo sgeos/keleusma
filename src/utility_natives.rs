@@ -17,6 +17,7 @@ fn render_value_to_string(arena: &Arena, val: &Value) -> String {
     match val {
         Value::Int(n) => format!("{}", n),
         Value::Byte(b) => format!("{}", b),
+        Value::Fixed(bits) => format!("Fixed({})", bits),
         Value::Float(f) => format!("{}", f),
         Value::Bool(b) => format!("{}", b),
         Value::StaticStr(s) => s.clone(),

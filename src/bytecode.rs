@@ -33,6 +33,11 @@ pub enum ConstValue {
     Int(i64),
     /// Eight-bit unsigned integer. Surface type is `Byte`.
     Byte(u8),
+    /// Signed Q-format fixed-point. The wrapped `i64` holds the
+    /// fixed-point bits; the fraction-bit count is target-scaled
+    /// and is carried by the opcodes that consume the value
+    /// rather than stored alongside.
+    Fixed(i64),
     /// 64-bit floating-point number.
     Float(f64),
     /// Immutable static string referenced from the rodata region.
@@ -81,6 +86,11 @@ pub enum Value {
     /// uses wrapping `u8` semantics; conversions to and from `Word`
     /// go through `Op::WordToByte` and `Op::ByteToWord`.
     Byte(u8),
+    /// Signed Q-format fixed-point. The wrapped `i64` holds the
+    /// fixed-point bits; the fraction-bit count is carried by the
+    /// opcodes that produce or consume the value. On the V0.1.x
+    /// host runtime the format is Q31.32 (32 fraction bits).
+    Fixed(i64),
     /// 64-bit floating-point number.
     Float(f64),
     /// Immutable static string referenced from the rodata region. Source-level
@@ -164,6 +174,7 @@ impl PartialEq for Value {
             (Value::Bool(a), Value::Bool(b)) => a == b,
             (Value::Int(a), Value::Int(b)) => a == b,
             (Value::Byte(a), Value::Byte(b)) => a == b,
+            (Value::Fixed(a), Value::Fixed(b)) => a == b,
             (Value::Float(a), Value::Float(b)) => a == b,
             // Static strings compare equal if their contents match.
             (Value::StaticStr(a), Value::StaticStr(b)) => a == b,
@@ -229,6 +240,7 @@ impl Value {
             Value::Bool(_) => "Bool",
             Value::Int(_) => "Int",
             Value::Byte(_) => "Byte",
+            Value::Fixed(_) => "Fixed",
             Value::Float(_) => "Float",
             Value::StaticStr(_) => "StaticStr",
             Value::KStr(_) => "KStr",
@@ -316,6 +328,7 @@ impl Value {
             ArchivedConstValue::Bool(b) => Value::Bool(*b),
             ArchivedConstValue::Int(i) => Value::Int(i.to_native()),
             ArchivedConstValue::Byte(b) => Value::Byte(*b),
+            ArchivedConstValue::Fixed(i) => Value::Fixed(i.to_native()),
             ArchivedConstValue::Float(f) => Value::Float(f.to_native()),
             ArchivedConstValue::StaticStr(s) => {
                 use alloc::string::ToString;
@@ -530,6 +543,26 @@ pub enum Op {
     /// Cast `Byte` to `Word`. Pops a `Value::Byte`, zero-extends
     /// to `i64`, pushes `Value::Int`.
     ByteToWord,
+    /// Cast `Word` to `Fixed` with the given fraction-bit count.
+    /// Pops a `Value::Int`, left-shifts by `frac_bits`, pushes
+    /// `Value::Fixed`. Overflow saturates at `i64::MAX`/`MIN`.
+    WordToFixed(u8),
+    /// Cast `Fixed` (with the given fraction-bit count) to `Word`.
+    /// Pops a `Value::Fixed`, arithmetic-right-shifts by
+    /// `frac_bits`, pushes `Value::Int`. Truncates toward
+    /// negative infinity per arithmetic shift.
+    FixedToWord(u8),
+    /// Multiply two `Fixed` operands sharing the given fraction-bit
+    /// count. Pops two `Value::Fixed`, computes
+    /// `(a as i128 * b as i128) >> frac_bits`, pushes
+    /// `Value::Fixed`. Saturates at `i64::MAX`/`MIN` on overflow.
+    FixedMul(u8),
+    /// Divide two `Fixed` operands sharing the given fraction-bit
+    /// count. Pops two `Value::Fixed`, computes
+    /// `(a as i128 << frac_bits) / b as i128`, pushes
+    /// `Value::Fixed`. Saturates at `i64::MAX`/`MIN`. Returns
+    /// `VmError::DivisionByZero` for `b == 0`.
+    FixedDiv(u8),
 
     /// Halt execution with a runtime error.
     Trap(u16),
@@ -803,6 +836,10 @@ pub fn nominal_op_cycles(op: &Op) -> u32 {
         | Op::FloatToInt
         | Op::WordToByte
         | Op::ByteToWord
+        | Op::WordToFixed(_)
+        | Op::FixedToWord(_)
+        | Op::FixedMul(_)
+        | Op::FixedDiv(_)
         | Op::Return => 2,
 
         Op::Div | Op::Mod | Op::GetField(_) | Op::IsEnum(_, _) | Op::IsStruct(_) => 3,
@@ -893,7 +930,13 @@ impl Op {
 
             Op::IsEnum(_, _) | Op::IsStruct(_) => 0,
 
-            Op::IntToFloat | Op::FloatToInt | Op::WordToByte | Op::ByteToWord => 0,
+            Op::IntToFloat
+            | Op::FloatToInt
+            | Op::WordToByte
+            | Op::ByteToWord
+            | Op::WordToFixed(_)
+            | Op::FixedToWord(_) => 0,
+            Op::FixedMul(_) | Op::FixedDiv(_) => 0,
 
             Op::Trap(_) => 0,
 
@@ -952,7 +995,13 @@ impl Op {
 
             Op::IsEnum(_, _) | Op::IsStruct(_) => 0,
 
-            Op::IntToFloat | Op::FloatToInt | Op::WordToByte | Op::ByteToWord => 0,
+            Op::IntToFloat
+            | Op::FloatToInt
+            | Op::WordToByte
+            | Op::ByteToWord
+            | Op::WordToFixed(_)
+            | Op::FixedToWord(_) => 0,
+            Op::FixedMul(_) | Op::FixedDiv(_) => 0,
 
             Op::Trap(_) => 0,
 
@@ -1661,6 +1710,10 @@ pub fn op_from_archived(archived: &ArchivedOp) -> Op {
         ArchivedOp::FloatToInt => Op::FloatToInt,
         ArchivedOp::WordToByte => Op::WordToByte,
         ArchivedOp::ByteToWord => Op::ByteToWord,
+        ArchivedOp::WordToFixed(n) => Op::WordToFixed(*n),
+        ArchivedOp::FixedToWord(n) => Op::FixedToWord(*n),
+        ArchivedOp::FixedMul(n) => Op::FixedMul(*n),
+        ArchivedOp::FixedDiv(n) => Op::FixedDiv(*n),
         ArchivedOp::Trap(idx) => Op::Trap(idx.to_native()),
     }
 }
@@ -1678,6 +1731,7 @@ impl ConstValue {
             Value::Bool(b) => Ok(ConstValue::Bool(b)),
             Value::Int(i) => Ok(ConstValue::Int(i)),
             Value::Byte(b) => Ok(ConstValue::Byte(b)),
+            Value::Fixed(i) => Ok(ConstValue::Fixed(i)),
             Value::Float(f) => Ok(ConstValue::Float(f)),
             Value::StaticStr(s) => Ok(ConstValue::StaticStr(s)),
             Value::KStr(_) => Err("KStr cannot be a compile-time constant"),
@@ -1731,6 +1785,7 @@ impl ConstValue {
             ConstValue::Bool(b) => Value::Bool(b),
             ConstValue::Int(i) => Value::Int(i),
             ConstValue::Byte(b) => Value::Byte(b),
+            ConstValue::Fixed(i) => Value::Fixed(i),
             ConstValue::Float(f) => Value::Float(f),
             ConstValue::StaticStr(s) => Value::StaticStr(s),
             ConstValue::Tuple(items) => {
@@ -1767,6 +1822,7 @@ impl PartialEq for ConstValue {
             (ConstValue::Bool(a), ConstValue::Bool(b)) => a == b,
             (ConstValue::Int(a), ConstValue::Int(b)) => a == b,
             (ConstValue::Byte(a), ConstValue::Byte(b)) => a == b,
+            (ConstValue::Fixed(a), ConstValue::Fixed(b)) => a == b,
             (ConstValue::Float(a), ConstValue::Float(b)) => a == b,
             (ConstValue::StaticStr(a), ConstValue::StaticStr(b)) => a == b,
             (ConstValue::Tuple(a), ConstValue::Tuple(b))

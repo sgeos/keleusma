@@ -71,6 +71,8 @@ pub enum Type {
     /// 64-bit; narrower widths are reserved for future embedded
     /// targets.
     Word,
+    /// Signed Q-format fixed-point. Target-scaled fraction bits.
+    Fixed,
     /// Target floating-point width. IEEE 754 binary64 on the host;
     /// narrower widths are reserved for future embedded targets.
     Float,
@@ -129,6 +131,7 @@ impl Type {
             TypeExpr::Prim(p, _) => match p {
                 PrimType::Byte => Type::Byte,
                 PrimType::Word => Type::Word,
+                PrimType::Fixed => Type::Fixed,
                 PrimType::Float => Type::Float,
                 PrimType::Bool => Type::Bool,
                 PrimType::Text => Type::Str,
@@ -174,6 +177,7 @@ impl Type {
         match self {
             Type::Byte => "Byte".to_string(),
             Type::Word => "Word".to_string(),
+            Type::Fixed => "Fixed".to_string(),
             Type::Float => "Float".to_string(),
             Type::Bool => "bool".to_string(),
             Type::Unit => "()".to_string(),
@@ -310,6 +314,7 @@ pub fn unify(a: &Type, b: &Type, subst: &mut Subst) -> Result<(), UnifyError> {
     match (a, b) {
         (Type::Byte, Type::Byte)
         | (Type::Word, Type::Word)
+        | (Type::Fixed, Type::Fixed)
         | (Type::Float, Type::Float)
         | (Type::Bool, Type::Bool)
         | (Type::Unit, Type::Unit)
@@ -402,6 +407,7 @@ fn type_head_name(t: &Type) -> Option<String> {
     match t {
         Type::Byte => Some("Byte".to_string()),
         Type::Word => Some("Word".to_string()),
+        Type::Fixed => Some("Fixed".to_string()),
         Type::Float => Some("Float".to_string()),
         Type::Bool => Some("bool".to_string()),
         Type::Unit => Some("()".to_string()),
@@ -779,6 +785,7 @@ pub fn check(program: &Program) -> Result<(), TypeError> {
         let head = match Type::from_expr(&impl_block.for_type, &ctx.types) {
             Type::Byte => "Byte".to_string(),
             Type::Word => "Word".to_string(),
+            Type::Fixed => "Fixed".to_string(),
             Type::Float => "Float".to_string(),
             Type::Bool => "bool".to_string(),
             Type::Unit => "()".to_string(),
@@ -941,6 +948,7 @@ pub fn check(program: &Program) -> Result<(), TypeError> {
         let head = match Type::from_expr(&impl_block.for_type, &ctx.types) {
             Type::Byte => "Byte".to_string(),
             Type::Word => "Word".to_string(),
+            Type::Fixed => "Fixed".to_string(),
             Type::Float => "Float".to_string(),
             Type::Bool => "bool".to_string(),
             Type::Unit => "()".to_string(),
@@ -1484,6 +1492,8 @@ fn type_of_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Type, TypeError> {
                         Ok(Type::Word)
                     } else if matches!(lt, Type::Byte) && matches!(rt, Type::Byte) {
                         Ok(Type::Byte)
+                    } else if matches!(lt, Type::Fixed) && matches!(rt, Type::Fixed) {
+                        Ok(Type::Fixed)
                     } else if matches!(lt, Type::Float) && matches!(rt, Type::Float) {
                         Ok(Type::Float)
                     } else if matches!(lt, Type::Str) && matches!(rt, Type::Str) {
@@ -1504,6 +1514,8 @@ fn type_of_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Type, TypeError> {
                         Ok(Type::Word)
                     } else if matches!(lt, Type::Byte) && matches!(rt, Type::Byte) {
                         Ok(Type::Byte)
+                    } else if matches!(lt, Type::Fixed) && matches!(rt, Type::Fixed) {
+                        Ok(Type::Fixed)
                     } else if matches!(lt, Type::Float) && matches!(rt, Type::Float) {
                         Ok(Type::Float)
                     } else if matches!(lt, Type::Unknown | Type::Var(_))
@@ -1560,7 +1572,12 @@ fn type_of_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Type, TypeError> {
             let ty = type_of_expr(ctx, operand)?;
             match op {
                 UnaryOp::Neg => match ty {
-                    Type::Word | Type::Float | Type::Unknown | Type::Var(_) => Ok(ty),
+                    Type::Word
+                    | Type::Byte
+                    | Type::Fixed
+                    | Type::Float
+                    | Type::Unknown
+                    | Type::Var(_) => Ok(ty),
                     other => Err(TypeError::new(
                         format!("cannot negate {}", other.display()),
                         *span,
@@ -2072,6 +2089,10 @@ fn type_of_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Type, TypeError> {
                 // value is reinterpreted should be visible at the
                 // call site.
                 (Type::Word, Type::Byte) | (Type::Byte, Type::Word) => Ok(to_ty),
+                // Fixed conversions. Word→Fixed left-shifts by the
+                // target fraction-bit count; Fixed→Word arithmetic-
+                // right-shifts. Both are explicit casts.
+                (Type::Word, Type::Fixed) | (Type::Fixed, Type::Word) => Ok(to_ty),
                 (Type::Unknown, _) | (_, Type::Unknown) => Ok(to_ty),
                 (a, b) if a == b => Ok(to_ty),
                 _ => Err(TypeError::new(

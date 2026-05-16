@@ -756,6 +756,7 @@ fn type_arg_canonical(t: &TypeExpr) -> String {
         TypeExpr::Prim(p, _) => match p {
             PrimType::Byte => "Byte".to_string(),
             PrimType::Word => "Word".to_string(),
+            PrimType::Fixed => "Fixed".to_string(),
             PrimType::Float => "Float".to_string(),
             PrimType::Bool => "bool".to_string(),
             PrimType::Text => "Text".to_string(),
@@ -970,6 +971,7 @@ fn type_head_for_impl(ty: &TypeExpr) -> String {
         TypeExpr::Prim(p, _) => match p {
             PrimType::Byte => "Byte".to_string(),
             PrimType::Word => "Word".to_string(),
+            PrimType::Fixed => "Fixed".to_string(),
             PrimType::Float => "Float".to_string(),
             PrimType::Bool => "bool".to_string(),
             PrimType::Text => "Text".to_string(),

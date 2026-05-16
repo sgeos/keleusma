@@ -1421,6 +1421,13 @@ impl<'a, 'arena> Vm<'a, 'arena> {
                         (Value::Byte(x), Value::Byte(y)) => {
                             sp!(self, Value::Byte(x.wrapping_add(y)));
                         }
+                        (Value::Fixed(x), Value::Fixed(y)) => {
+                            // Fixed Add is integer add of the
+                            // fixed-point bits; the fraction-bit
+                            // count is the same for both operands
+                            // by type-check invariant.
+                            sp!(self, Value::Fixed(x.wrapping_add(y)));
+                        }
                         (Value::Float(x), Value::Float(y)) => sp!(self, Value::Float(x + y)),
                         (a, b)
                             if matches!(a, Value::StaticStr(_) | Value::KStr(_))
@@ -1523,6 +1530,7 @@ impl<'a, 'arena> Vm<'a, 'arena> {
                             ),)
                         ),
                         Value::Byte(x) => sp!(self, Value::Byte(x.wrapping_neg())),
+                        Value::Fixed(x) => sp!(self, Value::Fixed(x.wrapping_neg())),
                         Value::Float(x) => sp!(self, Value::Float(-x)),
                         v => {
                             return Err(VmError::TypeError(format!(
@@ -2051,6 +2059,109 @@ impl<'a, 'arena> Vm<'a, 'arena> {
                         }
                     }
                 }
+                Op::WordToFixed(frac_bits) => {
+                    let val = self.pop()?;
+                    match val {
+                        Value::Int(i) => {
+                            // Left-shift the word into the fixed
+                            // representation. Saturate at
+                            // i64::MAX/MIN on overflow.
+                            let shifted = (i as i128) << (frac_bits as u32);
+                            let bits = if shifted > i64::MAX as i128 {
+                                i64::MAX
+                            } else if shifted < i64::MIN as i128 {
+                                i64::MIN
+                            } else {
+                                shifted as i64
+                            };
+                            sp!(self, Value::Fixed(bits));
+                        }
+                        v => {
+                            return Err(VmError::TypeError(format!(
+                                "cannot cast {} to Fixed",
+                                v.type_name()
+                            )));
+                        }
+                    }
+                }
+                Op::FixedToWord(frac_bits) => {
+                    let val = self.pop()?;
+                    match val {
+                        Value::Fixed(bits) => {
+                            // Arithmetic-right-shift to drop the
+                            // fraction bits. Negative values keep
+                            // their sign through the shift.
+                            sp!(self, Value::Int(bits >> (frac_bits as u32)));
+                        }
+                        v => {
+                            return Err(VmError::TypeError(format!(
+                                "cannot cast {} to Word",
+                                v.type_name()
+                            )));
+                        }
+                    }
+                }
+                Op::FixedMul(frac_bits) => {
+                    let b = self.pop()?;
+                    let a = self.pop()?;
+                    match (a, b) {
+                        (Value::Fixed(x), Value::Fixed(y)) => {
+                            // Q-format multiply: extend to i128 to
+                            // avoid intermediate overflow, multiply,
+                            // shift right by `frac_bits`, saturate
+                            // back to i64.
+                            let product = (x as i128) * (y as i128);
+                            let shifted = product >> (frac_bits as u32);
+                            let bits = if shifted > i64::MAX as i128 {
+                                i64::MAX
+                            } else if shifted < i64::MIN as i128 {
+                                i64::MIN
+                            } else {
+                                shifted as i64
+                            };
+                            sp!(self, Value::Fixed(bits));
+                        }
+                        (a, b) => {
+                            return Err(VmError::TypeError(format!(
+                                "FixedMul requires two Fixed operands, got {} and {}",
+                                a.type_name(),
+                                b.type_name()
+                            )));
+                        }
+                    }
+                }
+                Op::FixedDiv(frac_bits) => {
+                    let b = self.pop()?;
+                    let a = self.pop()?;
+                    match (a, b) {
+                        (Value::Fixed(_), Value::Fixed(0)) => {
+                            return Err(VmError::DivisionByZero);
+                        }
+                        (Value::Fixed(x), Value::Fixed(y)) => {
+                            // Q-format divide: extend the dividend to
+                            // i128 and left-shift by frac_bits before
+                            // dividing, so the result retains the
+                            // Q-format precision.
+                            let dividend = (x as i128) << (frac_bits as u32);
+                            let quotient = dividend / (y as i128);
+                            let bits = if quotient > i64::MAX as i128 {
+                                i64::MAX
+                            } else if quotient < i64::MIN as i128 {
+                                i64::MIN
+                            } else {
+                                quotient as i64
+                            };
+                            sp!(self, Value::Fixed(bits));
+                        }
+                        (a, b) => {
+                            return Err(VmError::TypeError(format!(
+                                "FixedDiv requires two Fixed operands, got {} and {}",
+                                a.type_name(),
+                                b.type_name()
+                            )));
+                        }
+                    }
+                }
 
                 Op::Trap(msg_const) => {
                     let msg = self
@@ -2089,6 +2200,15 @@ impl<'a, 'arena> Vm<'a, 'arena> {
                 let result = int_op(x as i64, y as i64);
                 sp!(self, Value::Byte((result & 0xFF) as u8));
             }
+            (Value::Fixed(x), Value::Fixed(y)) => {
+                // Fixed Sub is integer sub of the fixed-point
+                // bits. Fixed Add is handled directly in `Op::Add`;
+                // Fixed Mul and Div are emitted as dedicated
+                // `Op::FixedMul` and `Op::FixedDiv` opcodes
+                // because they require the fraction-bit count.
+                let result = int_op(x, y);
+                sp!(self, Value::Fixed(result));
+            }
             (Value::Float(x), Value::Float(y)) => sp!(self, Value::Float(float_op(x, y))),
             (a, b) => {
                 return Err(VmError::TypeError(format!(
@@ -2110,6 +2230,7 @@ impl<'a, 'arena> Vm<'a, 'arena> {
         let ord = match (&a, &b) {
             (Value::Int(x), Value::Int(y)) => x.cmp(y),
             (Value::Byte(x), Value::Byte(y)) => x.cmp(y),
+            (Value::Fixed(x), Value::Fixed(y)) => x.cmp(y),
             (Value::Float(x), Value::Float(y)) => {
                 x.partial_cmp(y).unwrap_or(core::cmp::Ordering::Equal)
             }
@@ -2267,6 +2388,72 @@ mod tests {
     #[test]
     fn byte_comparison_uses_unsigned_ordering() {
         let val = run_expect("fn main() -> bool { (200 as Byte) > (100 as Byte) }", &[]);
+        assert_eq!(val, Value::Bool(true));
+    }
+
+    // -- Fixed (Q-format) tests --
+    //
+    // On the host runtime, `Fixed` is Q31.32 (32 fraction bits).
+    // The integer value 1 cast to `Fixed` is stored as
+    // `1 << 32 = 4_294_967_296` in the underlying bits.
+
+    #[test]
+    fn fixed_word_round_trip_preserves_integer_value() {
+        let val = run_expect("fn main() -> Word { (5 as Fixed) as Word }", &[]);
+        assert_eq!(val, Value::Int(5));
+    }
+
+    #[test]
+    fn fixed_cast_from_word_uses_q31_32_format() {
+        let val = run_expect("fn main() -> Fixed { 1 as Fixed }", &[]);
+        assert_eq!(val, Value::Fixed(1i64 << 32));
+    }
+
+    #[test]
+    fn fixed_addition_sums_underlying_bits() {
+        let val = run_expect(
+            "fn main() -> Word { ((2 as Fixed) + (3 as Fixed)) as Word }",
+            &[],
+        );
+        assert_eq!(val, Value::Int(5));
+    }
+
+    #[test]
+    fn fixed_subtraction_subtracts_underlying_bits() {
+        let val = run_expect(
+            "fn main() -> Word { ((10 as Fixed) - (3 as Fixed)) as Word }",
+            &[],
+        );
+        assert_eq!(val, Value::Int(7));
+    }
+
+    #[test]
+    fn fixed_multiply_maintains_q_format() {
+        let val = run_expect(
+            "fn main() -> Word { ((4 as Fixed) * (5 as Fixed)) as Word }",
+            &[],
+        );
+        assert_eq!(val, Value::Int(20));
+    }
+
+    #[test]
+    fn fixed_divide_maintains_q_format() {
+        let val = run_expect(
+            "fn main() -> Word { ((20 as Fixed) / (5 as Fixed)) as Word }",
+            &[],
+        );
+        assert_eq!(val, Value::Int(4));
+    }
+
+    #[test]
+    fn fixed_negate_negates_underlying_bits() {
+        let val = run_expect("fn main() -> Word { (-(5 as Fixed)) as Word }", &[]);
+        assert_eq!(val, Value::Int(-5));
+    }
+
+    #[test]
+    fn fixed_comparison_uses_signed_ordering() {
+        let val = run_expect("fn main() -> bool { (10 as Fixed) > (5 as Fixed) }", &[]);
         assert_eq!(val, Value::Bool(true));
     }
 
