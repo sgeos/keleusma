@@ -108,6 +108,42 @@ All other characters that are not special in source (single quotes, dollar signs
 
 For string operations beyond what the bundled `register_utility_natives` provides (`to_string`, `length`, `concat`, `slice`), host applications register their own natives.
 
+## WCMU Coverage
+
+### Exponential string concatenation bypasses the WCMU bound
+
+A program like
+
+````
+fn main() -> String {
+    let s = "a";
+    let s = s + s;
+    let s = s + s;
+    /* sixty doublings later */
+    s
+}
+````
+
+compiles and is admitted by `Vm::new` even though the value of `s` after sixty doublings would be 2^60 bytes. At runtime the program will exhaust the arena (or the global heap) and produce an allocation failure. The cause is that the WCMU pass does not track string-length information through string-concatenation operations; the operation is modelled as a constant-cost call rather than a doubling of the operand bound.
+
+This is **naive misuse, not a verifier soundness violation against the analysed surface**. The headline guarantee is that the verifier proves a bound for programs that fall within its analysis; string-concatenation length propagation is not yet in that analysis. The honest framing for V0.1.x is:
+
+- **The verifier is sound for what it analyses.** Arithmetic, control flow, calls (with host attestation), array and tuple construction, and the operand stack are tracked.
+- **String size growth across `+` and `concat` is not tracked.** Programs that exponentially grow a string through repeated concatenation are not currently rejected at verification time even if their runtime memory exceeds the arena.
+- **Recommendation.** Treat string operations as untrusted from the verifier's perspective and bound them at the host. Native attestation of `concat` and any host-side string helpers, plus a host-side margin on the arena capacity, addresses the concern in V0.1.x. Future analysis improvements can move string-length tracking into the verifier.
+
+A worked example of the host-attestation pattern lives in [`examples/wcmu_attestation.rs`](../../examples/wcmu_attestation.rs).
+
+### V0.2.0 fail-fast on too-small arenas
+
+The previous releases admitted an `Arena::with_capacity(0)` through `Vm::new` and then aborted the host process via `handle_alloc_error` on the first push. V0.2.0 changes this:
+
+- `Vm::new` and `Vm::new_unchecked` pre-reserve a small minimum operand-stack and call-frame allocation in the arena's bottom region.
+- If the arena cannot hold the minimum, both constructors return the new `VmError::OutOfArena` variant rather than aborting.
+- The minimum is conservative (four stack slots and one call frame); programs that need more still grow at runtime. Larger programs may still abort on a later push when the arena is exhausted; **full OOM-safe push paths for arbitrary workloads is tracked for V0.2.x**.
+
+For now, the recommendation is to size the arena either through `auto_arena_capacity_for` plus a host-side margin, or with the bundled `DEFAULT_ARENA_CAPACITY` of sixty-four kilobytes for typical embedded scripting.
+
 ## Other Surprises
 
 ### Local bindings are immutable

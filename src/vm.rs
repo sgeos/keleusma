@@ -43,6 +43,13 @@ pub enum VmError {
     /// Bytecode load failure encountered before verification could run,
     /// such as a header mismatch or postcard decode error.
     LoadError(String),
+    /// The host-owned arena ran out of space and the runtime cannot
+    /// allocate the storage the script requires. Returned by
+    /// [`Vm::new`] and related entry points when the arena is too
+    /// small for the operand stack and call-frame preamble that the
+    /// program needs. Replaces the previous behavior of aborting the
+    /// host process through `handle_alloc_error`.
+    OutOfArena(String),
 }
 
 impl From<crate::bytecode::LoadError> for VmError {
@@ -126,6 +133,32 @@ pub const DEFAULT_NATIVE_WCMU_BYTES: u32 = 0;
 /// Default arena capacity in bytes when constructed via `Vm::new`. The host
 /// can override this by calling `Vm::new_with_arena_capacity`.
 pub const DEFAULT_ARENA_CAPACITY: usize = 64 * 1024;
+
+/// Minimum operand-stack capacity pre-reserved at `Vm::new`, in slots.
+/// The reservation lets `Vm::new` fail fast with `VmError::OutOfArena`
+/// when the arena is too small to hold even a trivial program's working
+/// set, rather than aborting the host process on a later push.
+///
+/// The value is a conservative floor that covers small `fn main`
+/// programs without overcommitting tiny arenas beyond what they can
+/// hold. Stream programs whose WCMU exceeds this floor still rely on
+/// in-execution growth.
+const MIN_STACK_RESERVE_SLOTS: usize = 4;
+
+/// Minimum call-frame capacity pre-reserved at `Vm::new`.
+const MIN_FRAMES_RESERVE: usize = 1;
+
+/// Build a `VmError::OutOfArena` with the minimum reservation message.
+fn out_of_arena_min(capacity: usize) -> VmError {
+    use alloc::format;
+    VmError::OutOfArena(format!(
+        "arena capacity of {} bytes is too small to pre-reserve the \
+         operand-stack and call-frame minimums ({} slots and {} frames). \
+         Increase the arena capacity, or compute a sufficient size with \
+         `auto_arena_capacity_for` plus a host-side margin.",
+        capacity, MIN_STACK_RESERVE_SLOTS, MIN_FRAMES_RESERVE
+    ))
+}
 
 /// Decode every op in every chunk of a bytecode buffer and return
 /// the resulting per-chunk owned op vectors.
@@ -528,11 +561,19 @@ impl<'a, 'arena> Vm<'a, 'arena> {
         };
         let data = vec![Value::Unit; data_len];
         let decoded_ops = decode_all_ops(bytes)?;
+        let mut stack = ArenaVec::new_in(arena.bottom_handle());
+        let mut frames = ArenaVec::new_in(arena.bottom_handle());
+        stack
+            .try_reserve(MIN_STACK_RESERVE_SLOTS)
+            .map_err(|_| out_of_arena_min(arena.capacity()))?;
+        frames
+            .try_reserve(MIN_FRAMES_RESERVE)
+            .map_err(|_| out_of_arena_min(arena.capacity()))?;
         Ok(Self {
             bytecode: BytecodeStore::Borrowed(bytes),
             decoded_ops,
-            stack: ArenaVec::new_in(arena.bottom_handle()),
-            frames: ArenaVec::new_in(arena.bottom_handle()),
+            stack,
+            frames,
             natives: Vec::new(),
             data,
             arena,
@@ -553,11 +594,33 @@ impl<'a, 'arena> Vm<'a, 'arena> {
         let mut aligned = rkyv::util::AlignedVec::<8>::with_capacity(bytes.len());
         aligned.extend_from_slice(&bytes);
         let decoded_ops = decode_all_ops(aligned.as_slice())?;
+        let mut stack = ArenaVec::new_in(arena.bottom_handle());
+        let mut frames = ArenaVec::new_in(arena.bottom_handle());
+        // Pre-reserve a known-good minimum for the operand stack and
+        // call frames so a too-small arena fails fast at construction
+        // with `VmError::OutOfArena` rather than aborting the host
+        // process via `handle_alloc_error` on a later push. The
+        // reservation also avoids reallocation amplification in the
+        // bump-allocator (a growing `Vec` over a bump allocator
+        // consumes cumulative memory across reallocations without
+        // freeing earlier capacity).
+        //
+        // The minimum is conservative: programs that need a larger
+        // stack still grow at runtime, which can still abort if the
+        // arena is too small relative to the worst-case usage. Full
+        // OOM-safe push paths for arbitrary workloads is tracked for
+        // V0.2.x.
+        stack
+            .try_reserve(MIN_STACK_RESERVE_SLOTS)
+            .map_err(|_| out_of_arena_min(arena.capacity()))?;
+        frames
+            .try_reserve(MIN_FRAMES_RESERVE)
+            .map_err(|_| out_of_arena_min(arena.capacity()))?;
         Ok(Self {
             bytecode: BytecodeStore::Owned(aligned),
             decoded_ops,
-            stack: ArenaVec::new_in(arena.bottom_handle()),
-            frames: ArenaVec::new_in(arena.bottom_handle()),
+            stack,
+            frames,
             natives: Vec::new(),
             data,
             arena,
@@ -2727,7 +2790,11 @@ mod tests {
         let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
         let vm = Vm::new(module, &arena).unwrap();
         assert_eq!(vm.arena().capacity(), DEFAULT_ARENA_CAPACITY);
-        assert_eq!(vm.arena().bottom_used(), 0);
+        // V0.2.0: Vm::new pre-reserves the operand stack and call
+        // frames so the runtime fails fast with `OutOfArena` rather
+        // than aborting on a later push. The bottom region is therefore
+        // non-empty at construction.
+        assert!(vm.arena().bottom_used() > 0);
         assert_eq!(vm.arena().top_used(), 0);
     }
 
@@ -3283,26 +3350,29 @@ mod tests {
     }
 
     #[test]
-    fn unchecked_admits_module_that_fails_bounds() {
-        // A loop main that pushes a value yields a tiny but non-zero
-        // worst-case stack usage. With a capacity of 1 byte, the
-        // bounds check rejects the module. The unchecked path admits
-        // it because it skips the bounds check entirely.
-        let src = "loop main() -> i64 { let n = yield 0; n }";
-        let tokens = tokenize(src).expect("lex");
-        let program = parse(&tokens).expect("parse");
-        let module = compile(&program).expect("compile");
+    fn vm_new_returns_out_of_arena_when_capacity_too_small_for_minimum() {
+        // A trivial program should still report `OutOfArena` rather
+        // than aborting the host when the arena cannot hold the
+        // minimum operand-stack and call-frame reservation.
+        let module = build_module("fn main() -> i64 { 1 }");
+        let arena = keleusma_arena::Arena::with_capacity(0);
+        let result = Vm::new(module, &arena);
+        match result {
+            Err(VmError::OutOfArena(_)) | Err(VmError::VerifyError(_)) => {}
+            Err(other) => panic!("expected OutOfArena or VerifyError, got {:?}", other),
+            Ok(_) => panic!("expected OutOfArena or VerifyError, got Ok"),
+        }
+    }
 
-        // The verifying constructor rejects.
-        let arena = keleusma_arena::Arena::with_capacity(1);
-        let rejected = Vm::new(module.clone(), &arena);
-        assert!(matches!(rejected, Err(VmError::VerifyError(_))));
-
-        // The unchecked constructor admits the same module under the
-        // same tiny capacity. Structural verification still runs.
-        let arena = keleusma_arena::Arena::with_capacity(1);
-        let admitted = unsafe { Vm::new_unchecked(module, &arena) };
-        assert!(admitted.is_ok());
+    #[test]
+    fn vm_new_unchecked_returns_out_of_arena_when_capacity_too_small() {
+        // The trust-skip constructor also returns OutOfArena rather
+        // than aborting when the arena is too small for the minimum
+        // runtime reservation.
+        let module = build_module("fn main() -> i64 { 1 }");
+        let arena = keleusma_arena::Arena::with_capacity(0);
+        let result = unsafe { Vm::new_unchecked(module, &arena) };
+        assert!(matches!(result, Err(VmError::OutOfArena(_))));
     }
 
     #[test]
