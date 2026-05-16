@@ -799,6 +799,18 @@ impl<'a> Lexer<'a> {
                             Some(c) => interp_text.push(c as char),
                         }
                     }
+                    if interp_text.trim().is_empty() {
+                        return Err(self.error(
+                            String::from(
+                                "empty f-string interpolation `{}`; \
+                                 write an expression between the braces, \
+                                 or use `\\{` and `\\}` for literal braces",
+                            ),
+                            interp_start,
+                            interp_start_line,
+                            interp_start_col,
+                        ));
+                    }
                     parts.push(FStringPart::Interp(interp_text));
                 }
                 Some(b'}') => {
@@ -1498,5 +1510,33 @@ mod tests {
                 TokenKind::Eof,
             ]
         );
+    }
+
+    #[test]
+    fn fstring_rejects_empty_interpolation() {
+        let err = tokenize("f\"hi {}\"").expect_err("expected lex error");
+        assert!(
+            err.message.contains("empty f-string interpolation"),
+            "unexpected error message: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn fstring_rejects_whitespace_only_interpolation() {
+        let err = tokenize("f\"hi {   }\"").expect_err("expected lex error");
+        assert!(
+            err.message.contains("empty f-string interpolation"),
+            "unexpected error message: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn fstring_literal_braces_via_backslash_escape() {
+        // `\{` and `\}` produce literal braces; the f-string does not
+        // try to interpret the contents.
+        let result = kinds("f\"open\\{x\\}close\"");
+        assert!(!result.is_empty(), "expected tokens, got empty stream");
     }
 }

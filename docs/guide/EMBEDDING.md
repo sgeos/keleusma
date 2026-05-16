@@ -150,6 +150,40 @@ The runtime ships two convenience modules.
 
 Both register through `register_fn` under the hood. Hosts can register all bundled natives, register a subset, or replace any function with their own implementation.
 
+### Host-Defined String Helpers
+
+Keleusma's bundled string surface is intentionally minimal: `to_string`, `concat`, `slice`, `length`. The language is not the right vehicle for heavy string manipulation, and the runtime does not try to ship a string standard library. **Where an application needs string work in context, register native Rust functions and let the script consume them through `use` declarations.** Rust's standard library handles formatting, splitting, regex, Unicode operations, and encoding conversion far better than anything reasonable to build inside the script.
+
+````rust
+vm.register_fn("text::upper", |s: String| -> String { s.to_uppercase() });
+vm.register_fn("text::trim",  |s: String| -> String { s.trim().to_string() });
+vm.register_fn_fallible(
+    "text::split_first_word",
+    |s: String| -> Result<String, VmError> {
+        s.split_whitespace()
+            .next()
+            .map(|w| w.to_string())
+            .ok_or_else(|| VmError::NativeError("empty input".into()))
+    },
+);
+````
+
+Script side:
+
+````
+use text::upper
+use text::trim
+use text::split_first_word
+
+fn greet(name: String) -> String {
+    let cleaned = trim(name);
+    let first = split_first_word(cleaned);
+    f"hello, {upper(first)}!"
+}
+````
+
+See [FAQ.md](./FAQ.md) for the broader framing on strings.
+
 ### WCET and WCMU Attestation
 
 Native function calls participate in WCET and WCMU analysis. By default, native calls are attested as zero-cost in cycles and zero-bytes in heap. Hosts that need a sound bound declare per-native bounds before VM construction or, for already-constructed VMs, before calling `verify_resources`.

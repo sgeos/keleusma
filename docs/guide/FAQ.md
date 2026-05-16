@@ -6,9 +6,51 @@ This document collects surprises that early adopters have run into. The intent i
 
 ## Strings
 
-**Strings are not the Keleusma value proposition.** The language's value proposition is definitive Worst-Case Execution Time and Worst-Case Memory Usage verification for embedded real-time scripting. For string-heavy work, a dynamic language with a rich standard library is the better tool. Python, Ruby, JavaScript, or any of the many shell-and-text-processing languages will all handle strings more ergonomically and with more built-in utility than Keleusma. Strings in Keleusma exist as a host-boundary type and as a debugging convenience; they are not the surface to optimise for.
+**Strings are not the Keleusma value proposition.** The language's value proposition is definitive Worst-Case Execution Time and Worst-Case Memory Usage verification for embedded real-time scripting. For string-heavy standalone work, a dynamic language with a rich standard library is the better tool. Python, Ruby, JavaScript, or any of the many shell-and-text-processing languages will all handle strings more ergonomically and with more built-in utility than Keleusma. Strings in Keleusma exist as a host-boundary type and as a debugging convenience; they are not the surface to optimise for.
 
-That framing acknowledged, the following items collect the string-related rough edges visible in V0.1.x.
+That said, real applications routinely need some string work in context. **The recommended pattern is to register native Rust functions that perform the string work and expose them to the script.** Rust's standard library handles formatting, splitting, regex, encoding conversion, and Unicode operations far better than anything reasonable to build inside the script. The host writes a small Rust function, registers it with one `register_fn` call, and the script gets a single `use` declaration that yields native performance and full Rust ecosystem access.
+
+````rust
+// Rust host code.
+use keleusma::{Arena, Value, vm::Vm};
+use keleusma::utility_natives::register_utility_natives;
+
+let mut vm = Vm::new(module, &arena)?;
+register_utility_natives(&mut vm);
+
+// Host-defined string helpers using Rust's standard library.
+vm.register_fn("text::upper", |s: String| -> String {
+    s.to_uppercase()
+});
+vm.register_fn("text::trim", |s: String| -> String {
+    s.trim().to_string()
+});
+vm.register_fn_fallible(
+    "text::split_first_word",
+    |s: String| -> Result<String, keleusma::VmError> {
+        s.split_whitespace()
+            .next()
+            .map(|w| w.to_string())
+            .ok_or_else(|| keleusma::VmError::NativeError("empty input".into()))
+    },
+);
+
+// The script imports each native by name.
+//
+//     use text::upper
+//     use text::trim
+//     use text::split_first_word
+//
+//     fn greet(name: String) -> String {
+//         let cleaned = trim(name);
+//         let first = split_first_word(cleaned);
+//         f"hello, {upper(first)}!"
+//     }
+````
+
+The host owns the string-handling vocabulary; the script consumes it through `use` declarations. This is the same registration pattern that exposes the bundled `concat`, `to_string`, `length`, and `slice` helpers, applied to whatever string operations the application actually needs. See [EMBEDDING.md](./EMBEDDING.md) for the full native-registration surface.
+
+The following items collect the string-related rough edges still visible in V0.1.x for callers who do use the bundled string helpers.
 
 ### F-strings require `use concat` and `use to_string`
 
@@ -42,7 +84,7 @@ This produces the literal string `open{brace}close`. Outside f-strings (in plain
 
 ### Empty interpolation `{}`
 
-`f"hi {}"` lexes successfully and emits a `to_string()` call with zero arguments, which produces a runtime error during execution rather than a parse error at compile time. This is a known V0.1.x rough edge; future releases should reject empty interpolation at the lexer.
+`f"hi {}"` is rejected at lex time with `empty f-string interpolation '{}'`. Whitespace-only interpolation such as `f"{   }"` is rejected the same way. Write an expression between the braces, or use `\{` and `\}` for literal braces.
 
 ### Complete escape table
 
