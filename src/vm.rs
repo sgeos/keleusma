@@ -17,6 +17,39 @@ use crate::verify;
 /// memory that the bump allocator returns for subsequent allocations.
 type StackVec<'arena, T> = ArenaVec<T, BottomHandle<'arena>>;
 
+/// Push a value onto the operand stack, returning early with
+/// `VmError::OutOfArena` on allocation failure rather than aborting
+/// the host process via `handle_alloc_error`.
+///
+/// V0.2.0 routes every operand-stack push through this macro so that
+/// arena exhaustion during execution surfaces as a typed error to
+/// the host. The minimum pre-reservation at `Vm::new` covers the
+/// first few pushes; growth beyond the reservation attempts to
+/// extend the arena and may fail.
+macro_rules! sp {
+    ($self:expr, $val:expr) => {
+        match $self.stack.try_reserve(1) {
+            Ok(()) => $self.stack.push($val),
+            Err(_) => {
+                return Err(out_of_arena_push("operand stack", $self.arena.capacity()));
+            }
+        }
+    };
+}
+
+/// Push a call frame, returning early with `VmError::OutOfArena` on
+/// allocation failure. Counterpart to `sp!` for the call-frame stack.
+macro_rules! fp {
+    ($self:expr, $val:expr) => {
+        match $self.frames.try_reserve(1) {
+            Ok(()) => $self.frames.push($val),
+            Err(_) => {
+                return Err(out_of_arena_push("call frame", $self.arena.capacity()));
+            }
+        }
+    };
+}
+
 /// A runtime error from the Keleusma VM.
 #[derive(Debug, Clone)]
 pub enum VmError {
@@ -147,6 +180,18 @@ const MIN_STACK_RESERVE_SLOTS: usize = 4;
 
 /// Minimum call-frame capacity pre-reserved at `Vm::new`.
 const MIN_FRAMES_RESERVE: usize = 1;
+
+/// Build a `VmError::OutOfArena` for an in-execution push that exceeded
+/// the arena's capacity.
+fn out_of_arena_push(region: &str, capacity: usize) -> VmError {
+    use alloc::format;
+    VmError::OutOfArena(format!(
+        "arena exhausted while growing the {} (capacity {} bytes). \
+         Increase the arena, or compute a sufficient size with \
+         `auto_arena_capacity_for` plus a host-side margin.",
+        region, capacity
+    ))
+}
 
 /// Build a `VmError::OutOfArena` with the minimum reservation message.
 fn out_of_arena_min(capacity: usize) -> VmError {
@@ -1029,19 +1074,22 @@ impl<'a, 'arena> Vm<'a, 'arena> {
         let base = self.stack.len();
         // Push arguments as the first local slots.
         for arg in args {
-            self.stack.push(arg.clone());
+            sp!(self, arg.clone());
         }
         // Extend stack for remaining local slots.
         let extra = local_count - args.len();
         for _ in 0..extra {
-            self.stack.push(Value::Unit);
+            sp!(self, Value::Unit);
         }
 
-        self.frames.push(CallFrame {
-            chunk_idx,
-            ip: 0,
-            base,
-        });
+        fp!(
+            self,
+            CallFrame {
+                chunk_idx,
+                ip: 0,
+                base,
+            }
+        );
         self.started = true;
 
         self.run()
@@ -1112,7 +1160,7 @@ impl<'a, 'arena> Vm<'a, 'arena> {
             }
         }
         // Push the input value onto the stack (it becomes the yield expression result).
-        self.stack.push(input);
+        sp!(self, input);
         self.run()
     }
 
@@ -1135,7 +1183,7 @@ impl<'a, 'arena> Vm<'a, 'arena> {
                 if self.frames.is_empty() {
                     return Ok(VmState::Finished(result));
                 }
-                self.stack.push(result);
+                sp!(self, result);
                 continue;
             }
 
@@ -1146,16 +1194,19 @@ impl<'a, 'arena> Vm<'a, 'arena> {
             match op {
                 Op::Const(idx) => {
                     let val = self.chunk_const(chunk_idx, idx as usize);
-                    self.stack.push(val);
+                    sp!(self, val);
                 }
-                Op::PushUnit => self.stack.push(Value::Unit),
-                Op::PushTrue => self.stack.push(Value::Bool(true)),
-                Op::PushFalse => self.stack.push(Value::Bool(false)),
-                Op::PushFunc(idx) => self.stack.push(Value::Func {
-                    chunk_idx: idx,
-                    env: alloc::vec::Vec::new(),
-                    recursive: false,
-                }),
+                Op::PushUnit => sp!(self, Value::Unit),
+                Op::PushTrue => sp!(self, Value::Bool(true)),
+                Op::PushFalse => sp!(self, Value::Bool(false)),
+                Op::PushFunc(idx) => sp!(
+                    self,
+                    Value::Func {
+                        chunk_idx: idx,
+                        env: alloc::vec::Vec::new(),
+                        recursive: false,
+                    }
+                ),
                 Op::MakeClosure(chunk_idx_val, n_captures) => {
                     let n = n_captures as usize;
                     if self.stack.len() < n {
@@ -1163,11 +1214,14 @@ impl<'a, 'arena> Vm<'a, 'arena> {
                     }
                     let env: alloc::vec::Vec<Value> =
                         self.stack.drain(self.stack.len() - n..).collect();
-                    self.stack.push(Value::Func {
-                        chunk_idx: chunk_idx_val,
-                        env,
-                        recursive: false,
-                    });
+                    sp!(
+                        self,
+                        Value::Func {
+                            chunk_idx: chunk_idx_val,
+                            env,
+                            recursive: false,
+                        }
+                    );
                 }
                 Op::MakeRecursiveClosure(chunk_idx_val, n_captures) => {
                     // Identical to MakeClosure except the resulting
@@ -1182,16 +1236,19 @@ impl<'a, 'arena> Vm<'a, 'arena> {
                     }
                     let env: alloc::vec::Vec<Value> =
                         self.stack.drain(self.stack.len() - n..).collect();
-                    self.stack.push(Value::Func {
-                        chunk_idx: chunk_idx_val,
-                        env,
-                        recursive: true,
-                    });
+                    sp!(
+                        self,
+                        Value::Func {
+                            chunk_idx: chunk_idx_val,
+                            env,
+                            recursive: true,
+                        }
+                    );
                 }
 
                 Op::GetLocal(slot) => {
                     let val = self.stack[base + slot as usize].clone();
-                    self.stack.push(val);
+                    sp!(self, val);
                 }
                 Op::SetLocal(slot) => {
                     let val = self.pop()?;
@@ -1207,7 +1264,7 @@ impl<'a, 'arena> Vm<'a, 'arena> {
                         )));
                     }
                     let val = self.data[idx].clone();
-                    self.stack.push(val);
+                    sp!(self, val);
                 }
                 Op::SetData(slot) => {
                     let idx = slot as usize;
@@ -1255,10 +1312,14 @@ impl<'a, 'arena> Vm<'a, 'arena> {
                     let a = self.pop()?;
                     match (a, b) {
                         (Value::Int(_), Value::Int(0)) => return Err(VmError::DivisionByZero),
-                        (Value::Int(x), Value::Int(y)) => self.stack.push(Value::Int(
-                            crate::bytecode::truncate_int(x.wrapping_div(y), word_bits_log2),
-                        )),
-                        (Value::Float(x), Value::Float(y)) => self.stack.push(Value::Float(x / y)),
+                        (Value::Int(x), Value::Int(y)) => sp!(
+                            self,
+                            Value::Int(crate::bytecode::truncate_int(
+                                x.wrapping_div(y),
+                                word_bits_log2
+                            ),)
+                        ),
+                        (Value::Float(x), Value::Float(y)) => sp!(self, Value::Float(x / y)),
                         (a, b) => {
                             return Err(VmError::TypeError(format!(
                                 "cannot divide {} by {}",
@@ -1274,10 +1335,14 @@ impl<'a, 'arena> Vm<'a, 'arena> {
                     let a = self.pop()?;
                     match (a, b) {
                         (Value::Int(_), Value::Int(0)) => return Err(VmError::DivisionByZero),
-                        (Value::Int(x), Value::Int(y)) => self.stack.push(Value::Int(
-                            crate::bytecode::truncate_int(x.wrapping_rem(y), word_bits_log2),
-                        )),
-                        (Value::Float(x), Value::Float(y)) => self.stack.push(Value::Float(x % y)),
+                        (Value::Int(x), Value::Int(y)) => sp!(
+                            self,
+                            Value::Int(crate::bytecode::truncate_int(
+                                x.wrapping_rem(y),
+                                word_bits_log2
+                            ),)
+                        ),
+                        (Value::Float(x), Value::Float(y)) => sp!(self, Value::Float(x % y)),
                         (a, b) => {
                             return Err(VmError::TypeError(format!(
                                 "cannot modulo {} by {}",
@@ -1291,10 +1356,14 @@ impl<'a, 'arena> Vm<'a, 'arena> {
                     let word_bits_log2 = self.word_bits_log2();
                     let val = self.pop()?;
                     match val {
-                        Value::Int(x) => self.stack.push(Value::Int(
-                            crate::bytecode::truncate_int(x.wrapping_neg(), word_bits_log2),
-                        )),
-                        Value::Float(x) => self.stack.push(Value::Float(-x)),
+                        Value::Int(x) => sp!(
+                            self,
+                            Value::Int(crate::bytecode::truncate_int(
+                                x.wrapping_neg(),
+                                word_bits_log2
+                            ),)
+                        ),
+                        Value::Float(x) => sp!(self, Value::Float(-x)),
                         v => {
                             return Err(VmError::TypeError(format!(
                                 "cannot negate {}",
@@ -1307,12 +1376,12 @@ impl<'a, 'arena> Vm<'a, 'arena> {
                 Op::CmpEq => {
                     let b = self.pop()?;
                     let a = self.pop()?;
-                    self.stack.push(Value::Bool(a == b));
+                    sp!(self, Value::Bool(a == b));
                 }
                 Op::CmpNe => {
                     let b = self.pop()?;
                     let a = self.pop()?;
-                    self.stack.push(Value::Bool(a != b));
+                    sp!(self, Value::Bool(a != b));
                 }
                 Op::CmpLt => self.compare_op(|ord| ord.is_lt())?,
                 Op::CmpGt => self.compare_op(|ord| ord.is_gt())?,
@@ -1322,7 +1391,7 @@ impl<'a, 'arena> Vm<'a, 'arena> {
                 Op::Not => {
                     let val = self.pop()?;
                     match val {
-                        Value::Bool(b) => self.stack.push(Value::Bool(!b)),
+                        Value::Bool(b) => sp!(self, Value::Bool(!b)),
                         v => {
                             return Err(VmError::TypeError(format!(
                                 "cannot apply not to {}",
@@ -1436,13 +1505,16 @@ impl<'a, 'arena> Vm<'a, 'arena> {
                     let new_base = self.stack.len() - arg_count as usize;
                     let extra = called_local_count - arg_count as usize;
                     for _ in 0..extra {
-                        self.stack.push(Value::Unit);
+                        sp!(self, Value::Unit);
                     }
-                    self.frames.push(CallFrame {
-                        chunk_idx: idx as usize,
-                        ip: 0,
-                        base: new_base,
-                    });
+                    fp!(
+                        self,
+                        CallFrame {
+                            chunk_idx: idx as usize,
+                            ip: 0,
+                            base: new_base,
+                        }
+                    );
                 }
                 Op::CallNative(idx, arg_count) => {
                     let n = arg_count as usize;
@@ -1465,7 +1537,7 @@ impl<'a, 'arena> Vm<'a, 'arena> {
                         })?;
                     let ctx = NativeCtx { arena: self.arena };
                     let result = (entry.func)(&ctx, &args)?;
-                    self.stack.push(result);
+                    sp!(self, result);
                 }
                 Op::CallIndirect(arg_count) => {
                     // The operand stack holds, from top down, the
@@ -1506,7 +1578,7 @@ impl<'a, 'arena> Vm<'a, 'arena> {
                     }
                     let env_len = env.len();
                     for v in env {
-                        self.stack.push(v);
+                        sp!(self, v);
                     }
                     // For recursive closures, push the closure value
                     // itself between the env values and the explicit
@@ -1516,23 +1588,26 @@ impl<'a, 'arena> Vm<'a, 'arena> {
                     // value through indirect dispatch.
                     let self_count = if recursive { 1 } else { 0 };
                     if recursive {
-                        self.stack.push(func_value);
+                        sp!(self, func_value);
                     }
                     for v in saved_args {
-                        self.stack.push(v);
+                        sp!(self, v);
                     }
                     let total_args = env_len + self_count + n;
                     let called_local_count = self.chunk_local_count(chunk_idx as usize) as usize;
                     let new_base = self.stack.len() - total_args;
                     let extra = called_local_count - total_args;
                     for _ in 0..extra {
-                        self.stack.push(Value::Unit);
+                        sp!(self, Value::Unit);
                     }
-                    self.frames.push(CallFrame {
-                        chunk_idx: chunk_idx as usize,
-                        ip: 0,
-                        base: new_base,
-                    });
+                    fp!(
+                        self,
+                        CallFrame {
+                            chunk_idx: chunk_idx as usize,
+                            ip: 0,
+                            base: new_base,
+                        }
+                    );
                 }
                 Op::Return => {
                     let result = self.pop()?;
@@ -1541,7 +1616,7 @@ impl<'a, 'arena> Vm<'a, 'arena> {
                     if self.frames.is_empty() {
                         return Ok(VmState::Finished(result));
                     }
-                    self.stack.push(result);
+                    sp!(self, result);
                 }
 
                 Op::Yield => {
@@ -1568,7 +1643,7 @@ impl<'a, 'arena> Vm<'a, 'arena> {
                 }
                 Op::Dup => {
                     let val = self.stack.last().ok_or(VmError::StackUnderflow)?.clone();
-                    self.stack.push(val);
+                    sp!(self, val);
                 }
 
                 Op::NewStruct(template_idx) => {
@@ -1581,7 +1656,7 @@ impl<'a, 'arena> Vm<'a, 'arena> {
                     let values: Vec<Value> = self.stack.drain(self.stack.len() - n..).collect();
                     let fields: Vec<(String, Value)> =
                         field_names.into_iter().zip(values).collect();
-                    self.stack.push(Value::Struct { type_name, fields });
+                    sp!(self, Value::Struct { type_name, fields });
                 }
                 Op::NewEnum(enum_const, var_const, arg_count) => {
                     let type_name = self
@@ -1600,28 +1675,31 @@ impl<'a, 'arena> Vm<'a, 'arena> {
                     } else {
                         Vec::new()
                     };
-                    self.stack.push(Value::Enum {
-                        type_name,
-                        variant,
-                        fields,
-                    });
+                    sp!(
+                        self,
+                        Value::Enum {
+                            type_name,
+                            variant,
+                            fields,
+                        }
+                    );
                 }
                 Op::NewArray(count) => {
                     let n = count as usize;
                     let elements: Vec<Value> = self.stack.drain(self.stack.len() - n..).collect();
-                    self.stack.push(Value::Array(elements));
+                    sp!(self, Value::Array(elements));
                 }
                 Op::NewTuple(count) => {
                     let n = count as usize;
                     let elements: Vec<Value> = self.stack.drain(self.stack.len() - n..).collect();
-                    self.stack.push(Value::Tuple(elements));
+                    sp!(self, Value::Tuple(elements));
                 }
                 Op::WrapSome => {
                     // In our representation, Some(v) is just v. None is Value::None.
                     // WrapSome is a no-op for the value itself.
                 }
                 Op::PushNone => {
-                    self.stack.push(Value::None);
+                    sp!(self, Value::None);
                 }
 
                 Op::GetField(name_const) => {
@@ -1638,7 +1716,7 @@ impl<'a, 'arena> Vm<'a, 'arena> {
                                 .find(|(n, _)| n == &field_name)
                                 .map(|(_, v)| v.clone())
                                 .ok_or(VmError::FieldNotFound(type_name, field_name))?;
-                            self.stack.push(val);
+                            sp!(self, val);
                         }
                         v => {
                             return Err(VmError::TypeError(format!(
@@ -1657,7 +1735,7 @@ impl<'a, 'arena> Vm<'a, 'arena> {
                             if i < 0 || i as usize >= len {
                                 return Err(VmError::IndexOutOfBounds(i, len));
                             }
-                            self.stack.push(arr[i as usize].clone());
+                            sp!(self, arr[i as usize].clone());
                         }
                         (c, i) => {
                             return Err(VmError::TypeError(format!(
@@ -1676,7 +1754,7 @@ impl<'a, 'arena> Vm<'a, 'arena> {
                             if i >= elems.len() {
                                 return Err(VmError::IndexOutOfBounds(i as i64, elems.len()));
                             }
-                            self.stack.push(elems[i].clone());
+                            sp!(self, elems[i].clone());
                         }
                         v => {
                             return Err(VmError::TypeError(format!(
@@ -1694,7 +1772,7 @@ impl<'a, 'arena> Vm<'a, 'arena> {
                             if i >= fields.len() {
                                 return Err(VmError::IndexOutOfBounds(i as i64, fields.len()));
                             }
-                            self.stack.push(fields[i].clone());
+                            sp!(self, fields[i].clone());
                         }
                         v => {
                             return Err(VmError::TypeError(format!(
@@ -1708,13 +1786,13 @@ impl<'a, 'arena> Vm<'a, 'arena> {
                     let val = self.pop()?;
                     match val {
                         Value::Array(arr) => {
-                            self.stack.push(Value::Int(arr.len() as i64));
+                            sp!(self, Value::Int(arr.len() as i64));
                         }
                         Value::StaticStr(s) | Value::DynStr(s) => {
-                            self.stack.push(Value::Int(s.chars().count() as i64));
+                            sp!(self, Value::Int(s.chars().count() as i64));
                         }
                         Value::Tuple(t) => {
-                            self.stack.push(Value::Int(t.len() as i64));
+                            sp!(self, Value::Int(t.len() as i64));
                         }
                         v => {
                             return Err(VmError::TypeError(format!(
@@ -1743,7 +1821,7 @@ impl<'a, 'arena> Vm<'a, 'arena> {
                         Value::Enum { type_name, variant, .. }
                             if type_name == &expected_type && variant == &expected_var
                     );
-                    self.stack.push(Value::Bool(matches));
+                    sp!(self, Value::Bool(matches));
                 }
                 Op::IsStruct(type_const) => {
                     let expected = self
@@ -1754,13 +1832,13 @@ impl<'a, 'arena> Vm<'a, 'arena> {
                     let val = self.stack.last().ok_or(VmError::StackUnderflow)?;
                     let matches =
                         matches!(val, Value::Struct { type_name, .. } if type_name == &expected);
-                    self.stack.push(Value::Bool(matches));
+                    sp!(self, Value::Bool(matches));
                 }
 
                 Op::IntToFloat => {
                     let val = self.pop()?;
                     match val {
-                        Value::Int(i) => self.stack.push(Value::Float(i as f64)),
+                        Value::Int(i) => sp!(self, Value::Float(i as f64)),
                         v => {
                             return Err(VmError::TypeError(format!(
                                 "cannot cast {} to f64",
@@ -1772,7 +1850,7 @@ impl<'a, 'arena> Vm<'a, 'arena> {
                 Op::FloatToInt => {
                     let val = self.pop()?;
                     match val {
-                        Value::Float(f) => self.stack.push(Value::Int(f as i64)),
+                        Value::Float(f) => sp!(self, Value::Int(f as i64)),
                         v => {
                             return Err(VmError::TypeError(format!(
                                 "cannot cast {} to i64",
@@ -1803,7 +1881,7 @@ impl<'a, 'arena> Vm<'a, 'arena> {
         let b = self.pop()?;
         let a = self.pop()?;
         let result = f(a, b)?;
-        self.stack.push(result);
+        sp!(self, result);
         Ok(())
     }
 
@@ -1818,9 +1896,9 @@ impl<'a, 'arena> Vm<'a, 'arena> {
         match (a, b) {
             (Value::Int(x), Value::Int(y)) => {
                 let result = crate::bytecode::truncate_int(int_op(x, y), word_bits_log2);
-                self.stack.push(Value::Int(result));
+                sp!(self, Value::Int(result));
             }
-            (Value::Float(x), Value::Float(y)) => self.stack.push(Value::Float(float_op(x, y))),
+            (Value::Float(x), Value::Float(y)) => sp!(self, Value::Float(float_op(x, y))),
             (a, b) => {
                 return Err(VmError::TypeError(format!(
                     "type mismatch: {} and {}",
@@ -1854,7 +1932,7 @@ impl<'a, 'arena> Vm<'a, 'arena> {
                 )));
             }
         };
-        self.stack.push(Value::Bool(pred(ord)));
+        sp!(self, Value::Bool(pred(ord)));
         Ok(())
     }
 }

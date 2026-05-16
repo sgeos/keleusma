@@ -124,25 +124,47 @@ fn main() -> String {
 }
 ````
 
-compiles and is admitted by `Vm::new` even though the value of `s` after sixty doublings would be 2^60 bytes. At runtime the program will exhaust the arena (or the global heap) and produce an allocation failure. The cause is that the WCMU pass does not track string-length information through string-concatenation operations; the operation is modelled as a constant-cost call rather than a doubling of the operand bound.
+compiles and is admitted by `Vm::new` even though the value of `s` after sixty doublings would be 2^60 bytes. At runtime the program will exhaust the global allocator (the operation does not go through the arena).
 
-This is **naive misuse, not a verifier soundness violation against the analysed surface**. The headline guarantee is that the verifier proves a bound for programs that fall within its analysis; string-concatenation length propagation is not yet in that analysis. The honest framing for V0.1.x is:
+There are **two independent issues** behind this finding, both being addressed across V0.2.x.
 
-- **The verifier is sound for what it analyses.** Arithmetic, control flow, calls (with host attestation), array and tuple construction, and the operand stack are tracked.
-- **String size growth across `+` and `concat` is not tracked.** Programs that exponentially grow a string through repeated concatenation are not currently rejected at verification time even if their runtime memory exceeds the arena.
-- **Recommendation.** Treat string operations as untrusted from the verifier's perspective and bound them at the host. Native attestation of `concat` and any host-side string helpers, plus a host-side margin on the arena capacity, addresses the concern in V0.1.x. Future analysis improvements can move string-length tracking into the verifier.
+**Issue one: string `+` allocates from the global allocator, not the arena.** `Op::Add` on string operands produces a `Value::DynStr`, which is a `String` backed by the global Rust allocator. The arena-capacity check has nothing to say about it. Migrating string concatenation results to arena-allocated `KString` (or a new arena-resident dynamic-string variant) would route these allocations through the arena's `BottomHandle`/`TopHandle` and surface failures as `VmError::OutOfArena`. This is a real architectural change that intersects the existing cross-yield prohibition on arena-resident dynamic strings (see [TYPE_SYSTEM.md](../design/TYPE_SYSTEM.md)) and is staged for V0.2.x.
 
-A worked example of the host-attestation pattern lives in [`examples/wcmu_attestation.rs`](../../examples/wcmu_attestation.rs).
+**Issue two: the WCMU pass does not track string sizes statically.** Even with arena-resident strings, the verifier's per-op heap-allocation cost does not currently propagate operand sizes through `Op::Add`, `concat`, `to_string`, or `slice`. A doubling-string program would still appear constant-cost to the pass. The proper fix is an abstract-interpretation step that tracks a per-slot upper-bound on string length and propagates it through these operations, with conservative `u32::MAX` saturation for unknown bounds. Designed; implementation deferred to V0.2.x.
+
+The honest framing for V0.1.x and V0.2.0:
+
+- **The verifier is sound for what it analyses.** Arithmetic, control flow, calls (with host attestation), array and tuple construction, and the operand-stack peak are tracked. The OOM-safe push paths added in V0.2.0 mean exhaustion of the *arena-resident* state surfaces as a typed error rather than an abort.
+- **String size growth across `+`, `concat`, `slice`, and `to_string` is not tracked, and string allocations still go through the global allocator.** Programs that exponentially grow a string through repeated concatenation are not currently rejected at verification time and can OOM the host process.
+- **Recommendation for V0.2.0.** Treat heavy string work as host-attested and out-of-band. Register native Rust functions (see the section above) that perform the string work in a bounded way and let scripts consume them. Host-side string helpers can be implemented to fail safely on large input rather than allocate unboundedly.
+
+A worked example of the host-attestation pattern for arena-resident allocations lives in [`examples/wcmu_attestation.rs`](../../examples/wcmu_attestation.rs).
 
 ### V0.2.0 fail-fast on too-small arenas
 
-The previous releases admitted an `Arena::with_capacity(0)` through `Vm::new` and then aborted the host process via `handle_alloc_error` on the first push. V0.2.0 changes this:
+The previous releases admitted an `Arena::with_capacity(0)` through `Vm::new` and then aborted the host process via `handle_alloc_error` on the first push. V0.2.0 changes this in two layers.
 
-- `Vm::new` and `Vm::new_unchecked` pre-reserve a small minimum operand-stack and call-frame allocation in the arena's bottom region.
-- If the arena cannot hold the minimum, both constructors return the new `VmError::OutOfArena` variant rather than aborting.
-- The minimum is conservative (four stack slots and one call frame); programs that need more still grow at runtime. Larger programs may still abort on a later push when the arena is exhausted; **full OOM-safe push paths for arbitrary workloads is tracked for V0.2.x**.
+**Construct-time minimum reservation.** `Vm::new` and `Vm::new_unchecked` pre-reserve a small minimum operand-stack and call-frame allocation in the arena's bottom region. If the arena cannot hold the minimum, both constructors return the new `VmError::OutOfArena` variant rather than aborting. The minimum is conservative (four stack slots and one call frame); arenas around five hundred bytes or larger pass.
 
-For now, the recommendation is to size the arena either through `auto_arena_capacity_for` plus a host-side margin, or with the bundled `DEFAULT_ARENA_CAPACITY` of sixty-four kilobytes for typical embedded scripting.
+**Run-time push paths return `OutOfArena`.** Every operand-stack and call-frame push in the VM execution loop now routes through internal `sp!` and `fp!` macros that call `Vec::try_reserve` first and return `VmError::OutOfArena` on allocation failure. Programs whose runtime usage exceeds the arena no longer abort the host process; the host gets a typed error and can decide how to handle it (drop the VM, reset state via `Vm::reset_after_error`, retry with a larger arena, or surface the error to the user).
+
+The combination means the arena-resident parts of execution — the operand stack and call frames — are now fully arena-bounded with graceful failure.
+
+```rust
+let arena = Arena::with_capacity(2 * 1024);
+let mut vm = Vm::new(module, &arena)?;
+// ...
+match vm.call(&[]) {
+    Ok(state) => /* handle state */,
+    Err(VmError::OutOfArena(msg)) => {
+        eprintln!("arena exhausted: {}", msg);
+        // recover or reconfigure
+    }
+    Err(other) => /* handle other errors */,
+}
+```
+
+For sizing the arena, use `auto_arena_capacity_for` plus a host-side margin, or the bundled `DEFAULT_ARENA_CAPACITY` of sixty-four kilobytes for typical embedded scripting.
 
 ## Other Surprises
 
