@@ -116,6 +116,24 @@ Opaque types are Rust types registered by the host that scripts can receive from
 
 Opaque types are useful for passing handles, references to host resources, or complex Rust types through scripts without exposing their internal structure to the scripting layer.
 
+### Runtime representation
+
+The runtime value carrying an opaque is `Value::Opaque(Arc<dyn HostOpaque>)`. The host implements the `keleusma::HostOpaque` marker trait for any Rust type it wishes to expose. The trait surface is small: a `type_name` method that returns the script-side name and a sealed-supertrait `TypeId` lookup that the runtime uses for the safe downcast.
+
+| Property | Value |
+|---|---|
+| Lifetime | Host-managed through `Arc`. Independent of the arena. Persists across resets and hot code swaps. |
+| Allowed flow paths | Anywhere admissible. Function arguments, return values, dialogue type B (yields are permitted), local bindings, native function arguments and returns. |
+| Data segment | Forbidden. The fixed-size discipline excludes variable-pointer types from the data segment. |
+| Mutability | Immutable from the script. The host's Rust type can use interior mutability if needed. |
+| Equality | Pointer identity through `Arc::ptr_eq`. Two opaque values are equal only if they share the same allocation. |
+| WCMU contribution | Zero from the script side. The allocation is host-managed; hosts that need a bounded heap supply a per-native attestation through `Vm::set_native_bounds`. |
+| Cross-yield | Permitted. Opaque values may cross the yield boundary because the storage is not arena-resident. |
+
+### Host registration pattern
+
+The host writes an `impl HostOpaque for MyType` block and registers native functions that produce and consume `Value::Opaque` directly. The script declares the type by name in signatures. See [EMBEDDING.md](../guide/EMBEDDING.md#opaque-host-types) for a worked example and [`examples/opaque_rust_string.rs`](../../examples/opaque_rust_string.rs) for a complete walkthrough exposing `std::string::String` to scripts.
+
 ## Type Coercion
 
 Keleusma does not perform implicit type coercion. To convert between numeric types, use the `as` keyword.

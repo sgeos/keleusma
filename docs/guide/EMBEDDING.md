@@ -184,6 +184,59 @@ fn greet(name: Text) -> Text {
 
 See [FAQ.md](./FAQ.md) for the broader framing on strings.
 
+### Opaque Host Types
+
+Hosts that need to expose Rust values to scripts without revealing their internal structure use the `HostOpaque` trait introduced in V0.2.0. The host implements the trait for its concrete Rust type; the script declares the type by name in function signatures, and the type checker resolves the name as `Type::Opaque`. Native functions produce opaque values through `host_arc` and consume them by extracting a typed reference through `dyn HostOpaque::downcast_ref`.
+
+````rust
+use keleusma::{host_arc, HostOpaque, Value};
+
+// Newtype required to avoid violating Rust's orphan rule when
+// `impl`-ing a foreign trait on a foreign type.
+struct RustString(String);
+
+impl HostOpaque for RustString {
+    fn type_name(&self) -> &'static str { "RustString" }
+}
+
+vm.register_native("make_string", |args| {
+    // Construct an opaque from a Rust value.
+    Ok(Value::Opaque(host_arc(RustString(String::from("hello")))))
+});
+
+vm.register_native("upper_case", |args| {
+    // Consume an opaque, return a new opaque.
+    let opaque = match &args[0] {
+        Value::Opaque(o) => o.clone(),
+        other => return Err(VmError::TypeError(format!(
+            "expected RustString, got {}", other.type_name()))),
+    };
+    let s = opaque.as_ref().downcast_ref::<RustString>().ok_or_else(|| {
+        VmError::TypeError(format!(
+            "expected RustString, got opaque {}", opaque.type_name()))
+    })?;
+    Ok(Value::Opaque(host_arc(RustString(s.0.to_uppercase()))))
+});
+````
+
+Script side:
+
+````
+use make_string
+use upper_case
+
+fn main() -> RustString {
+    let s = make_string();
+    upper_case(s)
+}
+````
+
+The opaque value is host-managed through `Arc`, so it has a lifetime independent of the arena. It may cross the yield boundary in the dialogue type and persists across arena resets. Pointer identity is the equality semantics: two opaque values compare equal only if they share the same `Arc` allocation.
+
+Opaque values contribute zero to the script-side WCMU bound because the allocation is host-managed. For heavy work whose memory footprint matters, attach a per-native attestation through `Vm::set_native_bounds` so the verifier sees a bounded host contribution.
+
+See [`examples/opaque_rust_string.rs`](../../examples/opaque_rust_string.rs) for a complete walkthrough that exposes `std::string::String` to scripts.
+
 ### WCET and WCMU Attestation
 
 Native function calls participate in WCET and WCMU analysis. By default, native calls are attested as zero-cost in cycles and zero-bytes in heap. Hosts that need a sound bound declare per-native bounds before VM construction or, for already-constructed VMs, before calling `verify_resources`.

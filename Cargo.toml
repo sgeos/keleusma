@@ -52,3 +52,7 @@ required-features = ["sdl3-example"]
 [[example]]
 name = "string_ops"
 required-features = ["text"]
+
+[[example]]
+name = "opaque_rust_string"
+required-features = ["text"]
