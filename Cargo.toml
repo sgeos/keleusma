@@ -33,6 +33,11 @@ default = []
 # bundled utility natives must enable this feature explicitly.
 text = []
 
+# Enables the `stddsl::Shell` library bundle. Requires `std` for
+# `std::env` and `std::process::Command`. Embedded `no_std` hosts
+# leave this feature off; the Shell library is not compiled.
+shell = []
+
 # Enables the SDL3 audio piano-roll example. Pulls in SDL3 (built
 # from source via CMake) and is therefore opt-in.
 sdl3-example = ["dep:sdl3"]

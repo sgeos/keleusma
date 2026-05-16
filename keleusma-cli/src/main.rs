@@ -21,7 +21,7 @@ use std::process::ExitCode;
 use keleusma::compiler::compile;
 use keleusma::lexer::tokenize;
 use keleusma::parser::parse;
-use keleusma::utility_natives::register_utility_natives;
+use keleusma::stddsl;
 use keleusma::vm::{DEFAULT_ARENA_CAPACITY, Vm, VmState};
 use keleusma::{Arena, Value};
 
@@ -416,7 +416,15 @@ fn execute_bytecode(bytes: &[u8]) -> Result<(), String> {
 }
 
 fn drive_to_completion(vm: &mut Vm, arena: &Arena) -> Result<(), String> {
-    register_utility_natives(vm);
+    // Register the four standard DSL bundles on every CLI-driven
+    // script. Hosts that embed the library directly choose which
+    // libraries to register; the CLI registers all of them so
+    // scripts run from the command line have access to math,
+    // audio, text, and shell utilities by default.
+    vm.register_library(stddsl::Math);
+    vm.register_library(stddsl::Audio);
+    vm.register_library(stddsl::Text);
+    vm.register_library(stddsl::Shell);
     match vm.call(&[]).map_err(|e| format!("vm: {:?}", e))? {
         VmState::Finished(v) => {
             print_value(&v, arena);

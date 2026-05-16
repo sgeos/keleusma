@@ -184,6 +184,45 @@ fn greet(name: Text) -> Text {
 
 See [FAQ.md](./FAQ.md) for the broader framing on strings.
 
+### Standard DSL Libraries
+
+The `keleusma::stddsl` module ships four bundled libraries that hosts register through a single call. Each bundle is a unit struct implementing the `Library` trait. The trait's `register` method installs the bundle's native functions on the VM.
+
+````rust
+use keleusma::stddsl;
+
+let mut vm = Vm::new(module, &arena)?;
+vm.register_library(stddsl::Math);   // math::sqrt, math::floor, ...
+vm.register_library(stddsl::Audio);  // audio::midi_to_freq, ...
+vm.register_library(stddsl::Text);   // to_string, concat, slice, length, println
+vm.register_library(stddsl::Shell);  // shell::getenv, shell::run, shell::exit
+````
+
+`stddsl::Text` requires the `text` cargo feature on the keleusma library. `stddsl::Shell` requires the `shell` feature, which adds a `std` dependency and is therefore incompatible with `no_std` builds. The `keleusma-cli` crate enables both features and registers all four bundles by default.
+
+Hosts that want to ship their own reusable bundles implement the `Library` trait on a host-side type. The trait is the extensibility surface; the bundled libraries are an example of the pattern, not a closed set.
+
+````rust
+use keleusma::stddsl::Library;
+use keleusma::vm::Vm;
+
+pub struct MyDsl;
+
+impl Library for MyDsl {
+    fn register<'a, 'arena>(self, vm: &mut Vm<'a, 'arena>) {
+        vm.register_fn("mydsl::greet", |name: i64| -> i64 { name + 1 });
+        // ... register more natives ...
+    }
+}
+
+// Use site:
+vm.register_library(MyDsl);
+````
+
+#### Single-file scripts
+
+Keleusma scripts are necessarily single-file. There is no `import` or `mod` mechanism inside the language; cross-script reuse is intentionally outside the V0.2 surface. If your application's needs grow to where you find yourself wishing for modularisation, the recommended path is to roll a custom DSL library: implement `Library` on a host-side unit struct that registers the natives your scripts call, and let every script consume the same vocabulary through `use` declarations. The host-side library is the unit of reuse, not the script.
+
 ### Opaque Host Types
 
 Hosts that need to expose Rust values to scripts without revealing their internal structure use the `HostOpaque` trait introduced in V0.2.0. The host implements the trait for its concrete Rust type; the script declares the type by name in function signatures, and the type checker resolves the name as `Type::Opaque`. Native functions produce opaque values through `host_arc` and consume them by extracting a typed reference through `dyn HostOpaque::downcast_ref`.

@@ -1110,6 +1110,26 @@ impl<'a, 'arena> Vm<'a, 'arena> {
         });
     }
 
+    /// Register a [`crate::stddsl::Library`] bundle on the VM.
+    ///
+    /// Delegates to the library's `register` method. The bundle is
+    /// consumed by value, so unit-struct libraries drop after the
+    /// call returns. Hosts use this to install the standard
+    /// libraries:
+    ///
+    /// ```ignore
+    /// use keleusma::stddsl;
+    /// vm.register_library(stddsl::Math);
+    /// vm.register_library(stddsl::Audio);
+    /// vm.register_library(stddsl::Text);
+    /// ```
+    ///
+    /// Third-party crates may implement `Library` on their own
+    /// types to ship reusable bundles of native functions.
+    pub fn register_library<L: crate::stddsl::Library>(&mut self, library: L) {
+        library.register(self);
+    }
+
     /// Re-verify resource bounds with current native attestations.
     ///
     /// Walks the module's call graph, computes per-chunk WCMU including

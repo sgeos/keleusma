@@ -11,6 +11,7 @@ pub mod marshall;
 pub mod monomorphize;
 pub mod opaque;
 pub mod parser;
+pub mod stddsl;
 pub mod target;
 pub mod text_size;
 pub mod token;
