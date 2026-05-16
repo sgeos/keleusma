@@ -8,11 +8,11 @@
 // Run: keleusma run examples/scripts/06_multiheaded.kel
 // Expected output: 11
 
-fn classify(0)            -> i64 { 0 }
-fn classify(1)            -> i64 { 1 }
-fn classify(n: i64)       -> i64 { n + 10 }
+fn classify(0)            -> Word { 0 }
+fn classify(1)            -> Word { 1 }
+fn classify(n: Word)       -> Word { n + 10 }
 
-fn main() -> i64 {
+fn main() -> Word {
     let a = classify(0);    // 0
     let b = classify(1);    // 1
     let c = classify(11);   // 21

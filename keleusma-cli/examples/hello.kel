@@ -1,9 +1,9 @@
 // Example Keleusma script. Run with `keleusma run hello.kel`.
 
-fn double(x: i64) -> i64 {
+fn double(x: Word) -> Word {
     x + x
 }
 
-fn main() -> i64 {
+fn main() -> Word {
     double(21)
 }

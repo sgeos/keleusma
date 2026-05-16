@@ -20,7 +20,7 @@ enum Pitch { C, Cs, D, Ds, E, F, Fs, G, Gs, A, As, B, Rest }
 // ---------------------------------------------------------------
 // Channel 0: melody. Quarter notes outlining each chord triad.
 // ---------------------------------------------------------------
-fn melody_note(i: i64) -> (Pitch, i64, i64) {
+fn melody_note(i: Word) -> (Pitch, Word, Word) {
     match i {
          0 => (Pitch::C,  5, 4),  // C major: C E G E
          1 => (Pitch::E,  5, 4),
@@ -44,7 +44,7 @@ fn melody_note(i: i64) -> (Pitch, i64, i64) {
 // ---------------------------------------------------------------
 // Channel 1: bass. Half notes on the chord roots.
 // ---------------------------------------------------------------
-fn bass_note(i: i64) -> (Pitch, i64, i64) {
+fn bass_note(i: Word) -> (Pitch, Word, Word) {
     match i {
         0 => (Pitch::C, 3, 8),
         1 => (Pitch::C, 3, 8),
@@ -60,7 +60,7 @@ fn bass_note(i: i64) -> (Pitch, i64, i64) {
 // ---------------------------------------------------------------
 // Channel 2: harmony. Quarter notes on chord thirds and fifths.
 // ---------------------------------------------------------------
-fn harmony_note(i: i64) -> (Pitch, i64, i64) {
+fn harmony_note(i: Word) -> (Pitch, Word, Word) {
     match i {
          0 => (Pitch::E,  4, 4),
          1 => (Pitch::G,  4, 4),
@@ -82,14 +82,14 @@ fn harmony_note(i: i64) -> (Pitch, i64, i64) {
 }
 
 // Channel array lengths (number of note events per loop).
-fn melody_len()  -> i64 { 16 }
-fn bass_len()    -> i64 { 8 }
-fn harmony_len() -> i64 { 16 }
+fn melody_len()  -> Word { 16 }
+fn bass_len()    -> Word { 8 }
+fn harmony_len() -> Word { 16 }
 
 // ---------------------------------------------------------------
 // Pitch class to MIDI offset.
 // ---------------------------------------------------------------
-fn pitch_class(p: Pitch) -> i64 {
+fn pitch_class(p: Pitch) -> Word {
     match p {
         Pitch::C    => 0,
         Pitch::Cs   => 1,
@@ -107,7 +107,7 @@ fn pitch_class(p: Pitch) -> i64 {
     }
 }
 
-fn midi_of(p: Pitch, octave: i64) -> i64 {
+fn midi_of(p: Pitch, octave: Word) -> Word {
     let pc = pitch_class(p);
     if pc < 0 {
         -1
@@ -125,15 +125,15 @@ fn midi_of(p: Pitch, octave: i64) -> i64 {
 // advances to the next note.
 // ---------------------------------------------------------------
 data state {
-    idx0: i64, rem0: i64,
-    idx1: i64, rem1: i64,
-    idx2: i64, rem2: i64,
+    idx0: Word, rem0: Word,
+    idx1: Word, rem1: Word,
+    idx2: Word, rem2: Word,
 }
 
 // ---------------------------------------------------------------
 // Tick loop. One iteration of the body == one 16th-note tick.
 // ---------------------------------------------------------------
-loop main(input: i64) -> i64 {
+loop main(input: Word) -> Word {
     // Channel 0: melody.
     if state.rem0 == 0 {
         let n0 = melody_note(state.idx0);

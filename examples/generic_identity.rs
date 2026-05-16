@@ -19,7 +19,7 @@ use keleusma::{Arena, Value};
 fn main() {
     let src = r#"
         fn id<T>(x: T) -> T { x }
-        fn main() -> i64 { id(42) }
+        fn main() -> Word { id(42) }
     "#;
     let tokens = tokenize(src).expect("lex");
     let program = parse(&tokens).expect("parse");

@@ -8,19 +8,19 @@
 // Run: keleusma run examples/scripts/05_pipeline.kel
 // Expected output: 169
 
-fn double(x: i64) -> i64 {
+fn double(x: Word) -> Word {
     x + x
 }
 
-fn add(x: i64, y: i64) -> i64 {
+fn add(x: Word, y: Word) -> Word {
     x + y
 }
 
-fn square(x: i64) -> i64 {
+fn square(x: Word) -> Word {
     x * x
 }
 
-fn main() -> i64 {
+fn main() -> Word {
     6
     |> double()         // 12
     |> add(1)           // 13

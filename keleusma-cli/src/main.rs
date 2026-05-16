@@ -27,7 +27,7 @@ use keleusma::{Arena, Value};
 
 const REPL_BANNER: &str = "Keleusma REPL. Type :help for commands, :quit to exit.";
 
-const REPL_RETURN_TYPES: &[&str] = &["i64", "f64", "bool", "String", "()"];
+const REPL_RETURN_TYPES: &[&str] = &["Word", "Float", "bool", "Text", "()"];
 
 fn main() -> ExitCode {
     let args: Vec<String> = env::args().collect();
@@ -298,7 +298,7 @@ fn evaluate_repl_input(prefix: &mut String, line: &str) {
         let probe = if has_main(&candidate) {
             candidate.clone()
         } else {
-            format!("{}\n\nfn main() -> i64 {{ 0 }}\n", candidate)
+            format!("{}\n\nfn main() -> Word {{ 0 }}\n", candidate)
         };
         match compile_source(&probe) {
             Ok(_) => {
@@ -336,7 +336,11 @@ fn evaluate_repl_input(prefix: &mut String, line: &str) {
     }
     // None of the types worked. Run with i64 to surface the actual
     // error message to the user.
-    let program = format!("{}\n\nfn main() -> i64 {{ {} }}\n", prefix.trim_end(), line);
+    let program = format!(
+        "{}\n\nfn main() -> Word {{ {} }}\n",
+        prefix.trim_end(),
+        line
+    );
     if let Err(e) = execute_source(&program) {
         eprintln!("error: {}", e);
     }

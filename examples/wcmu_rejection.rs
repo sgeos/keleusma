@@ -11,7 +11,7 @@ use keleusma::parser::parse;
 use keleusma::vm::{Vm, VmError};
 
 const SCRIPT: &str = "
-loop main(input: i64) -> i64 {
+loop main(input: Word) -> Word {
     let doubled = input * 2;
     let _ignored = yield doubled;
     doubled

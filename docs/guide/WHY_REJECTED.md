@@ -31,7 +31,7 @@ closures are not admitted by the safe build pipeline.
 **Trigger.** A `let` binding refers to itself by name, producing a closure value that captures its own environment slot.
 
 ````
-let factorial = |n: i64| if n <= 1 { 1 } else { n * factorial(n - 1) };
+let factorial = |n: Word| if n <= 1 { 1 } else { n * factorial(n - 1) };
 ````
 
 **Rewrite.** Locals in Keleusma are immutable; accumulation across a loop requires either the data segment, which is itself accessible only from a `loop`-classified entry point, or a host-supplied native that performs the fold. Two structural rewrites apply.
@@ -39,9 +39,9 @@ let factorial = |n: i64| if n <= 1 { 1 } else { n * factorial(n - 1) };
 The first is to reclassify the entry point as `loop` and accumulate across iterations through a data block.
 
 ````
-data state { result: i64 }
+data state { result: Word }
 
-loop main(input: i64) -> i64 {
+loop main(input: Word) -> Word {
     state.result = state.result * input;
     let _next = yield state.result;
     state.result
@@ -55,7 +55,7 @@ The second is to register a host-side fold native and call it from a `fn`.
 ````
 use math::fold_product
 
-fn main() -> i64 {
+fn main() -> Word {
     math::fold_product([1, 2, 3, 4, 5])
 }
 ````
@@ -76,14 +76,14 @@ direct calls.
 **Trigger.** A `let` binding holds a closure value, and a subsequent expression invokes it.
 
 ````
-let f = |x: i64| x + 1;
+let f = |x: Word| x + 1;
 f(5)
 ````
 
 **Rewrite.** Replace the closure with a top-level function and call it directly.
 
 ````
-fn increment(x: i64) -> i64 { x + 1 }
+fn increment(x: Word) -> Word { x + 1 }
 
 increment(5)
 ````
@@ -103,7 +103,7 @@ pattern
 **Trigger.** A `for` loop iterates over a range whose end is a parameter or a function-call result.
 
 ````
-fn process(n: i64) -> i64 {
+fn process(n: Word) -> Word {
     for i in 0..n { ... }
     0
 }
@@ -112,7 +112,7 @@ fn process(n: i64) -> i64 {
 **Rewrite.** Use a compile-time constant bound, or iterate over an array whose length is known.
 
 ````
-fn process() -> i64 {
+fn process() -> Word {
     for i in 0..10 { ... }
     0
 }
@@ -131,7 +131,7 @@ recursive call detected during WCMU topological sort
 **Trigger.** A `fn` calls itself directly or transitively through another `fn`.
 
 ````
-fn count_down(n: i64) -> i64 {
+fn count_down(n: Word) -> Word {
     if n <= 0 { 0 } else { count_down(n - 1) }
 }
 ````
@@ -141,7 +141,7 @@ fn count_down(n: i64) -> i64 {
 The pure-functional rewrite for a count-down is a no-op when the script does not need the per-step output.
 
 ````
-fn count_down(n: i64) -> i64 {
+fn count_down(n: Word) -> Word {
     for _ in 0..n { let _step = 1; }
     0
 }
@@ -160,7 +160,7 @@ Stream block must contain at least one Yield
 **Trigger.** A `loop` declaration with a body that does not call `yield`.
 
 ````
-loop main(input: i64) -> i64 {
+loop main(input: Word) -> Word {
     input * 2
 }
 ````
@@ -168,7 +168,7 @@ loop main(input: i64) -> i64 {
 **Rewrite.** Add a `yield` expression to the loop body.
 
 ````
-loop main(input: i64) -> i64 {
+loop main(input: Word) -> Word {
     let doubled = input * 2;
     let _next = yield doubled;
     doubled

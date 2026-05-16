@@ -1329,7 +1329,7 @@ mod tests {
 
     #[test]
     fn struct_definition() {
-        let result = kinds("struct Note { channel: i64, pitch: i64 }");
+        let result = kinds("struct Note { channel: Word, pitch: Word }");
         assert_eq!(
             result,
             vec![
@@ -1338,11 +1338,11 @@ mod tests {
                 TokenKind::LBrace,
                 TokenKind::LowerIdent(String::from("channel")),
                 TokenKind::Colon,
-                TokenKind::LowerIdent(String::from("i64")),
+                TokenKind::UpperIdent(String::from("Word")),
                 TokenKind::Comma,
                 TokenKind::LowerIdent(String::from("pitch")),
                 TokenKind::Colon,
-                TokenKind::LowerIdent(String::from("i64")),
+                TokenKind::UpperIdent(String::from("Word")),
                 TokenKind::RBrace,
                 TokenKind::Eof,
             ]
@@ -1467,7 +1467,7 @@ mod tests {
 
     #[test]
     fn guard_clause() {
-        let result = kinds("fn severity(level: f64) -> Text when level >= 0.9 {");
+        let result = kinds("fn severity(level: Float) -> Text when level >= 0.9 {");
         assert!(result.contains(&TokenKind::When));
         assert!(result.contains(&TokenKind::GtEq));
         assert!(result.contains(&TokenKind::FloatLit(0.9)));
@@ -1493,12 +1493,12 @@ mod tests {
 
     #[test]
     fn array_type() {
-        let result = kinds("[f64; 8]");
+        let result = kinds("[Float; 8]");
         assert_eq!(
             result,
             vec![
                 TokenKind::LBracket,
-                TokenKind::LowerIdent(String::from("f64")),
+                TokenKind::UpperIdent(String::from("Float")),
                 TokenKind::Semicolon,
                 TokenKind::IntLit(8),
                 TokenKind::RBracket,

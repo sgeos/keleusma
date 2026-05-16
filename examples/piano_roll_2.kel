@@ -19,7 +19,7 @@ enum Pitch { C, Cs, D, Ds, E, F, Fs, G, Gs, A, As, B, Rest }
 // ---------------------------------------------------------------
 // Channel 0: melody (lead). Sixteen eighth notes per loop.
 // ---------------------------------------------------------------
-fn melody_note(i: i64) -> (Pitch, i64, i64) {
+fn melody_note(i: Word) -> (Pitch, Word, Word) {
     match i {
          0 => (Pitch::C,  5, 2),  // Bar 1: C major arpeggio with leading-tone return.
          1 => (Pitch::E,  5, 2),
@@ -39,13 +39,13 @@ fn melody_note(i: i64) -> (Pitch, i64, i64) {
          _ => (Pitch::B,  5, 2),
     }
 }
-fn melody_len() -> i64 { 16 }
+fn melody_len() -> Word { 16 }
 
 // ---------------------------------------------------------------
 // Channel 1: harmony. Sixteen quarter notes per loop. Two-note
 // alternation per chord, third up to fifth.
 // ---------------------------------------------------------------
-fn harmony_note(i: i64) -> (Pitch, i64, i64) {
+fn harmony_note(i: Word) -> (Pitch, Word, Word) {
     match i {
          0 => (Pitch::E, 4, 4),
          1 => (Pitch::G, 4, 4),
@@ -65,12 +65,12 @@ fn harmony_note(i: i64) -> (Pitch, i64, i64) {
          _ => (Pitch::D, 5, 4),
     }
 }
-fn harmony_len() -> i64 { 16 }
+fn harmony_len() -> Word { 16 }
 
 // ---------------------------------------------------------------
 // Channel 2: rhythm / bass. Eight slots, on-beat staccato pattern.
 // ---------------------------------------------------------------
-fn bass_note(i: i64) -> (Pitch, i64, i64) {
+fn bass_note(i: Word) -> (Pitch, Word, Word) {
     match i {
         0 => (Pitch::C,    3, 4),
         1 => (Pitch::Rest, 0, 4),
@@ -82,12 +82,12 @@ fn bass_note(i: i64) -> (Pitch, i64, i64) {
         _ => (Pitch::Rest, 0, 4),
     }
 }
-fn bass_len() -> i64 { 8 }
+fn bass_len() -> Word { 8 }
 
 // ---------------------------------------------------------------
 // Pitch class to MIDI offset.
 // ---------------------------------------------------------------
-fn pitch_class(p: Pitch) -> i64 {
+fn pitch_class(p: Pitch) -> Word {
     match p {
         Pitch::C    => 0,
         Pitch::Cs   => 1,
@@ -105,7 +105,7 @@ fn pitch_class(p: Pitch) -> i64 {
     }
 }
 
-fn midi_of(p: Pitch, octave: i64) -> i64 {
+fn midi_of(p: Pitch, octave: Word) -> Word {
     let pc = pitch_class(p);
     if pc < 0 {
         -1
@@ -118,16 +118,16 @@ fn midi_of(p: Pitch, octave: i64) -> i64 {
 // Per-channel state. Same six-slot schema as song 1.
 // ---------------------------------------------------------------
 data state {
-    idx0: i64, rem0: i64,
-    idx1: i64, rem1: i64,
-    idx2: i64, rem2: i64,
+    idx0: Word, rem0: Word,
+    idx1: Word, rem1: Word,
+    idx2: Word, rem2: Word,
 }
 
 // ---------------------------------------------------------------
 // Tick loop. Channel 1 plays harmony, channel 2 plays bass.
 // (Song 1 had this routing reversed.)
 // ---------------------------------------------------------------
-loop main(input: i64) -> i64 {
+loop main(input: Word) -> Word {
     // Channel 0: melody.
     if state.rem0 == 0 {
         let n0 = melody_note(state.idx0);

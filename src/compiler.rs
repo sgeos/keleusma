@@ -452,8 +452,8 @@ pub fn compile_with_target(
     for impl_block in &program.impls {
         let head = match &impl_block.for_type {
             TypeExpr::Prim(p, _) => match p {
-                PrimType::I64 => String::from("i64"),
-                PrimType::F64 => String::from("f64"),
+                PrimType::Word => String::from("Word"),
+                PrimType::Float => String::from("Float"),
                 PrimType::Bool => String::from("bool"),
                 PrimType::Text => String::from("Text"),
             },
@@ -660,7 +660,7 @@ fn validate_data_field_type(
 ) -> Result<(), CompileError> {
     match type_expr {
         TypeExpr::Prim(prim, span) => match prim {
-            PrimType::I64 | PrimType::F64 | PrimType::Bool => Ok(()),
+            PrimType::Word | PrimType::Float | PrimType::Bool => Ok(()),
             PrimType::Text => Err(CompileError {
                 message: String::from(
                     "data field type Text is not admissible: variable-length \
@@ -1008,8 +1008,8 @@ fn infer_expr_type(fc: &FuncCompiler, expr: &Expr) -> Option<TypeExpr> {
             infer_expr_type(fc, &first.expr)
         }
         Expr::Literal { value, span } => Some(match value {
-            Literal::Int(_) => TypeExpr::Prim(PrimType::I64, *span),
-            Literal::Float(_) => TypeExpr::Prim(PrimType::F64, *span),
+            Literal::Int(_) => TypeExpr::Prim(PrimType::Word, *span),
+            Literal::Float(_) => TypeExpr::Prim(PrimType::Float, *span),
             Literal::Bool(_) => TypeExpr::Prim(PrimType::Bool, *span),
             Literal::String(_) => TypeExpr::Prim(PrimType::Text, *span),
             Literal::Unit => TypeExpr::Unit(*span),
@@ -1025,8 +1025,8 @@ fn type_expr_head(ty: &TypeExpr) -> Option<String> {
     match ty {
         TypeExpr::Prim(p, _) => Some(
             match p {
-                PrimType::I64 => "i64",
-                PrimType::F64 => "f64",
+                PrimType::Word => "Word",
+                PrimType::Float => "Float",
                 PrimType::Bool => "bool",
                 PrimType::Text => "Text",
             }
@@ -2041,10 +2041,10 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
         } => {
             compile_expr(fc, inner)?;
             match target {
-                TypeExpr::Prim(PrimType::F64, _) => {
+                TypeExpr::Prim(PrimType::Float, _) => {
                     fc.emit(Op::IntToFloat);
                 }
-                TypeExpr::Prim(PrimType::I64, _) => {
+                TypeExpr::Prim(PrimType::Word, _) => {
                     fc.emit(Op::FloatToInt);
                 }
                 _ => {
@@ -2390,7 +2390,7 @@ mod tests {
 
     #[test]
     fn compile_simple_fn() {
-        let module = compile_str("fn add(a: i64, b: i64) -> i64 { a + b }").unwrap();
+        let module = compile_str("fn add(a: Word, b: Word) -> Word { a + b }").unwrap();
         assert_eq!(module.chunks.len(), 1);
         assert_eq!(module.chunks[0].name, "add");
         assert_eq!(module.chunks[0].param_count, 2);
@@ -2398,7 +2398,7 @@ mod tests {
 
     #[test]
     fn compile_literal_fn() {
-        let module = compile_str("fn fortytwo() -> i64 { 42 }").unwrap();
+        let module = compile_str("fn fortytwo() -> Word { 42 }").unwrap();
         assert_eq!(module.chunks.len(), 1);
         // Should have a Const instruction and Return.
         assert!(module.chunks[0].ops.contains(&Op::Return));
@@ -2407,7 +2407,7 @@ mod tests {
     #[test]
     fn compile_if_else() {
         let module =
-            compile_str("fn max(a: i64, b: i64) -> i64 { if a > b { a } else { b } }").unwrap();
+            compile_str("fn max(a: Word, b: Word) -> Word { if a > b { a } else { b } }").unwrap();
         assert_eq!(module.chunks.len(), 1);
         // Should contain If for the condition.
         assert!(
@@ -2420,14 +2420,14 @@ mod tests {
 
     #[test]
     fn compile_let_binding() {
-        let module = compile_str("fn double(x: i64) -> i64 { let y = x * 2; y }").unwrap();
+        let module = compile_str("fn double(x: Word) -> Word { let y = x * 2; y }").unwrap();
         assert_eq!(module.chunks.len(), 1);
     }
 
     #[test]
     fn compile_for_range() {
         let module = compile_str(
-            "fn sum_to(n: i64) -> i64 { let total = 0; for i in 0..n { let x = total + i; } total }"
+            "fn sum_to(n: Word) -> Word { let total = 0; for i in 0..n { let x = total + i; } total }"
         ).unwrap();
         assert_eq!(module.chunks.len(), 1);
         // Should contain Loop/EndLoop for the for-range.
@@ -2448,7 +2448,7 @@ mod tests {
     #[test]
     fn compile_function_call() {
         let module = compile_str(
-            "fn double(x: i64) -> i64 { x * 2 }\nfn quad(x: i64) -> i64 { double(double(x)) }",
+            "fn double(x: Word) -> Word { x * 2 }\nfn quad(x: Word) -> Word { double(double(x)) }",
         )
         .unwrap();
         assert_eq!(module.chunks.len(), 2);
@@ -2461,7 +2461,7 @@ mod tests {
     #[test]
     fn compile_multiheaded() {
         let module = compile_str(
-            "fn classify(0) -> Text { \"zero\" }\nfn classify(x: i64) -> Text { \"other\" }",
+            "fn classify(0) -> Text { \"zero\" }\nfn classify(x: Word) -> Text { \"other\" }",
         )
         .unwrap();
         // Two heads compiled into one chunk.
@@ -2486,7 +2486,7 @@ mod tests {
     #[test]
     fn compile_struct_init() {
         let module = compile_str(
-            "struct Point { x: i64, y: i64 }\nfn make() -> Point { let p = Point { x: 1, y: 2 }; p }",
+            "struct Point { x: Word, y: Word }\nfn make() -> Point { let p = Point { x: 1, y: 2 }; p }",
         )
         .unwrap();
         assert_eq!(module.chunks.len(), 1);
@@ -2500,7 +2500,7 @@ mod tests {
 
     #[test]
     fn compile_yield_function() {
-        let module = compile_str("yield process(input: i64) -> i64 { yield input * 2 }").unwrap();
+        let module = compile_str("yield process(input: Word) -> Word { yield input * 2 }").unwrap();
         assert_eq!(module.chunks.len(), 1);
         assert!(
             module.chunks[0]
@@ -2514,7 +2514,7 @@ mod tests {
     #[test]
     fn compile_loop_function() {
         let module =
-            compile_str("loop main(input: i64) -> i64 { let input = yield input + 1; input }")
+            compile_str("loop main(input: Word) -> Word { let input = yield input + 1; input }")
                 .unwrap();
         assert_eq!(module.chunks.len(), 1);
         assert_eq!(module.chunks[0].block_type, BlockType::Stream);
@@ -2535,14 +2535,14 @@ mod tests {
 
     #[test]
     fn compile_entry_point() {
-        let module = compile_str("fn main(x: i64) -> i64 { x }").unwrap();
+        let module = compile_str("fn main(x: Word) -> Word { x }").unwrap();
         assert!(module.entry_point.is_some());
     }
 
     #[test]
     fn compile_pipeline() {
         let module = compile_str(
-            "fn double(x: i64) -> i64 { x * 2 }\nfn apply(x: i64) -> i64 { x |> double() }",
+            "fn double(x: Word) -> Word { x * 2 }\nfn apply(x: Word) -> Word { x |> double() }",
         )
         .unwrap();
         assert_eq!(module.chunks.len(), 2);
@@ -2550,13 +2550,13 @@ mod tests {
 
     #[test]
     fn error_undefined_variable() {
-        let result = compile_str("fn bad() -> i64 { unknown }");
+        let result = compile_str("fn bad() -> Word { unknown }");
         assert!(result.is_err());
     }
 
     #[test]
     fn error_undefined_function() {
-        let result = compile_str("fn bad() -> i64 { missing(1) }");
+        let result = compile_str("fn bad() -> Word { missing(1) }");
         assert!(result.is_err());
     }
 
@@ -2569,7 +2569,7 @@ mod tests {
     #[test]
     fn compile_for_in_array() {
         let module =
-            compile_str("fn main() -> i64 { let s = 0; for x in [1, 2, 3] { let s = s + x; } s }")
+            compile_str("fn main() -> Word { let s = 0; for x in [1, 2, 3] { let s = s + x; } s }")
                 .unwrap();
         assert_eq!(module.chunks.len(), 1);
         // Should contain Loop/EndLoop for the for-in.
@@ -2595,7 +2595,8 @@ mod tests {
 
     #[test]
     fn compile_tuple_literal() {
-        let module = compile_str("fn main() -> (i64, i64, i64) { let t = (1, 2, 3); t }").unwrap();
+        let module =
+            compile_str("fn main() -> (Word, Word, Word) { let t = (1, 2, 3); t }").unwrap();
         assert_eq!(module.chunks.len(), 1);
         assert!(
             module.chunks[0]
@@ -2608,7 +2609,7 @@ mod tests {
     #[test]
     fn compile_block_structured_control() {
         // Verify no flat jumps are emitted.
-        let module = compile_str("fn main() -> i64 { if true { 1 } else { 2 } }").unwrap();
+        let module = compile_str("fn main() -> Word { if true { 1 } else { 2 } }").unwrap();
         for op in &module.chunks[0].ops {
             assert!(
                 !matches!(
@@ -2642,8 +2643,8 @@ mod tests {
 
     #[test]
     fn data_block_admits_primitives() {
-        let src = "data ctx { score: i64, level: i64, ratio: f64, alive: bool }\n\
-                   fn main() -> i64 { ctx.score }";
+        let src = "data ctx { score: Word, level: Word, ratio: Float, alive: bool }\n\
+                   fn main() -> Word { ctx.score }";
         let module = compile_str(src).unwrap();
         let layout = module.data_layout.expect("expected data layout");
         assert_eq!(layout.slots.len(), 4);
@@ -2659,28 +2660,28 @@ mod tests {
 
     #[test]
     fn data_block_admits_tuple_of_admissible() {
-        let src = "data ctx { pos: (f64, f64) }\n\
-                   fn main() -> (f64, f64) { ctx.pos }";
+        let src = "data ctx { pos: (Float, Float) }\n\
+                   fn main() -> (Float, Float) { ctx.pos }";
         assert!(compile_str(src).is_ok());
     }
 
     #[test]
     fn data_block_admits_array_of_admissible() {
-        let src = "data ctx { samples: [f64; 4] }\n\
+        let src = "data ctx { samples: [Float; 4] }\n\
                    fn main() -> () { () }";
         assert!(compile_str(src).is_ok());
     }
 
     #[test]
     fn data_block_admits_option_of_admissible() {
-        let src = "data ctx { last: Option<i64> }\n\
+        let src = "data ctx { last: Option<Word> }\n\
                    fn main() -> () { () }";
         assert!(compile_str(src).is_ok());
     }
 
     #[test]
     fn data_block_admits_struct_of_admissible() {
-        let src = "struct Point { x: f64, y: f64 }\n\
+        let src = "struct Point { x: Float, y: Float }\n\
                    data ctx { origin: Point }\n\
                    fn main() -> () { () }";
         assert!(compile_str(src).is_ok());
@@ -2688,7 +2689,7 @@ mod tests {
 
     #[test]
     fn data_block_admits_enum_of_admissible() {
-        let src = "enum Status { Idle, Active(i64), Error(i64, i64) }\n\
+        let src = "enum Status { Idle, Active(Word), Error(Word, Word) }\n\
                    data ctx { state: Status }\n\
                    fn main() -> () { () }";
         assert!(compile_str(src).is_ok());
@@ -2704,7 +2705,7 @@ mod tests {
 
     #[test]
     fn data_block_rejects_string_in_tuple() {
-        let src = "data ctx { pair: (i64, Text) }\n\
+        let src = "data ctx { pair: (Word, Text) }\n\
                    fn main() -> () { () }";
         let err = compile_str(src).unwrap_err();
         assert!(err.message.contains("Text"));
@@ -2754,8 +2755,8 @@ mod tests {
 
     #[test]
     fn multiple_data_blocks_rejected() {
-        let src = "data ctx_a { x: i64 }\n\
-                   data ctx_b { y: i64 }\n\
+        let src = "data ctx_a { x: Word }\n\
+                   data ctx_b { y: Word }\n\
                    fn main() -> () { () }";
         let err = compile_str(src).unwrap_err();
         assert!(err.message.contains("R28") || err.message.contains("one data block"));
@@ -2763,7 +2764,7 @@ mod tests {
 
     #[test]
     fn no_data_block_compiles() {
-        let module = compile_str("fn main() -> i64 { 42 }").unwrap();
+        let module = compile_str("fn main() -> Word { 42 }").unwrap();
         assert!(module.data_layout.is_none());
     }
 }

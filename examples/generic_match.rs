@@ -29,7 +29,7 @@ fn main() {
         "pattern match on generic enum",
         r#"
             enum Maybe<T> { Just(T), Nothing }
-            fn main() -> i64 {
+            fn main() -> Word {
                 let m = Maybe::Just(42);
                 match m {
                     Maybe::Just(x) => x,
@@ -45,7 +45,7 @@ fn main() {
         r#"
             struct Cell<T> { value: T }
             struct Wrap<T> { inner: Cell<T> }
-            fn main() -> i64 {
+            fn main() -> Word {
                 let w = Wrap { inner: Cell { value: 7 } };
                 w.inner.value
             }

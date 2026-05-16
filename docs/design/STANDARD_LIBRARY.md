@@ -29,10 +29,10 @@ Audio functions are registered under the `audio::` namespace. They provide stand
 
 | Function | Signature | Description |
 |----------|-----------|-------------|
-| `audio::midi_to_freq` | `(i64) -> f64` | Convert a MIDI note number to a frequency in Hz, using A4 = 440 Hz as the reference pitch |
-| `audio::freq_to_midi` | `(f64) -> i64` | Convert a frequency in Hz to the nearest MIDI note number |
-| `audio::db_to_linear` | `(f64) -> f64` | Convert a decibel value to linear amplitude using the formula 10^(db/20) |
-| `audio::linear_to_db` | `(f64) -> f64` | Convert a linear amplitude to decibels using the formula 20*log10(linear) |
+| `audio::midi_to_freq` | `(Word) -> Float` | Convert a MIDI note number to a frequency in Hz, using A4 = 440 Hz as the reference pitch |
+| `audio::freq_to_midi` | `(Float) -> Word` | Convert a frequency in Hz to the nearest MIDI note number |
+| `audio::db_to_linear` | `(Float) -> Float` | Convert a decibel value to linear amplitude using the formula 10^(db/20) |
+| `audio::linear_to_db` | `(Float) -> Float` | Convert a linear amplitude to decibels using the formula 20*log10(linear) |
 
 ## Math Functions
 
@@ -40,18 +40,18 @@ Math functions are registered under the `math::` namespace. They provide standar
 
 | Function | Signature | Description |
 |----------|-----------|-------------|
-| `math::clamp` | `(f64, f64, f64) -> f64` | Clamp a value to the range [min, max] |
-| `math::lerp` | `(f64, f64, f64) -> f64` | Linear interpolation computed as a + (b - a) * t |
-| `math::sin` | `(f64) -> f64` | Sine of a value in radians |
-| `math::cos` | `(f64) -> f64` | Cosine of a value in radians |
-| `math::pow` | `(f64, f64) -> f64` | Raise a base to an exponent |
-| `math::abs` | `(f64) -> f64` | Absolute value |
-| `math::min` | `(f64, f64) -> f64` | Return the smaller of two values |
-| `math::max` | `(f64, f64) -> f64` | Return the larger of two values |
+| `math::clamp` | `(Float, Float, Float) -> Float` | Clamp a value to the range [min, max] |
+| `math::lerp` | `(Float, Float, Float) -> Float` | Linear interpolation computed as a + (b - a) * t |
+| `math::sin` | `(Float) -> Float` | Sine of a value in radians |
+| `math::cos` | `(Float) -> Float` | Cosine of a value in radians |
+| `math::pow` | `(Float, Float) -> Float` | Raise a base to an exponent |
+| `math::abs` | `(Float) -> Float` | Absolute value |
+| `math::min` | `(Float, Float) -> Float` | Return the smaller of two values |
+| `math::max` | `(Float, Float) -> Float` | Return the larger of two values |
 
 ## Type Flexibility
 
-All math and audio functions accept both `Int` and `Float` arguments. When an integer argument is provided where a floating-point parameter is expected, the native function boundary performs automatic widening from `i64` to `f64`. This allows scripts to call `math::sin(1)` without an explicit cast, reducing boilerplate in common usage patterns.
+All math and audio functions accept both `Int` and `Float` arguments. When an integer argument is provided where a floating-point parameter is expected, the native function boundary performs automatic widening from `Word` to `Float`. This allows scripts to call `math::sin(1)` without an explicit cast, reducing boilerplate in common usage patterns.
 
 This widening behavior is specific to the native function boundary and does not affect the language type system itself, which remains strict about implicit coercion in all other contexts.
 

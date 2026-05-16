@@ -116,13 +116,13 @@ Whitespace (spaces, tabs, newlines) is not significant except as a token separat
 
 | Type | Description | Rust Equivalent |
 |------|-------------|-----------------|
-| `i64` | 64-bit signed integer | `i64` |
-| `f64` | 64-bit floating point | `f64` |
+| `Word` | 64-bit signed integer | `i64` |
+| `Float` | 64-bit floating point | `f64` |
 | `bool` | Boolean value | `bool` |
 | `Text` | UTF-8 string | `String` |
 | `()` | Unit type | `()` |
 
-All numeric operations use `i64` or `f64`. Smaller integer types (`u8`, `u32`) from host structs are widened to `i64` when accessed in Keleusma. Native function bindings handle the narrowing conversion at the boundary.
+All numeric operations use `Word` or `Float`. Smaller integer types (`u8`, `u32`) from host structs are widened to `Word` when accessed in Keleusma. Native function bindings handle the narrowing conversion at the boundary.
 
 ### Composite Types
 
@@ -130,9 +130,9 @@ All numeric operations use `i64` or `f64`. Smaller integer types (`u8`, `u32`) f
 
 ````
 struct Note {
-  channel: i64,
-  pitch: i64,
-  velocity: f64,
+  channel: Word,
+  pitch: Word,
+  velocity: Float,
 }
 ````
 
@@ -140,9 +140,9 @@ struct Note {
 
 ````
 enum Command {
-  NoteOn(i64, i64, f64),
-  NoteOff(i64),
-  SetTempo(f64),
+  NoteOn(Word, Word, Float),
+  NoteOff(Word),
+  SetTempo(Float),
   Silence,
 }
 ````
@@ -150,13 +150,13 @@ enum Command {
 **Tuples**: Anonymous product types.
 
 ````
-let pair: (i64, f64) = (42, 3.14);
+let pair: (Word, Float) = (42, 3.14);
 ````
 
 **Fixed-size arrays**: Homogeneous sequences of known length.
 
 ````
-let channels: [f64; 8] = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+let channels: [Float; 8] = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
 ````
 
 **Optionals**: Nullable values using Option.
@@ -168,26 +168,26 @@ let nothing: Option<Text> = Option::None;
 
 ### Opaque Types
 
-Type-system support is partial in V0.1.x. The type checker tracks an opaque type for every named type that is not declared as a struct or enum, so source code that mentions an opaque type compiles and type-checks. The runtime path is incomplete: there is no `Value::Opaque` variant and the `KeleusmaType` derive does not produce marshalling code for opaque types, so a host cannot pass a domain-specific Rust value through the native boundary as itself today. The intended pattern in V0.1.x is to pass opaque values through a primitive handle (typically `i64`) that the host translates to and from its real type at the native function boundary.
+Type-system support is partial in V0.1.x. The type checker tracks an opaque type for every named type that is not declared as a struct or enum, so source code that mentions an opaque type compiles and type-checks. The runtime path is incomplete: there is no `Value::Opaque` variant and the `KeleusmaType` derive does not produce marshalling code for opaque types, so a host cannot pass a domain-specific Rust value through the native boundary as itself today. The intended pattern in V0.1.x is to pass opaque values through a primitive handle (typically `Word`) that the host translates to and from its real type at the native function boundary.
 
 ````
 // ChannelHandle is documented as opaque at the type-system level.
-// In V0.1.x the host marshals the handle as i64 across the native
+// In V0.1.x the host marshals the handle as Word across the native
 // boundary and translates internally.
-let ch: i64 = audio::get_channel(0);
+let ch: Word = audio::get_channel(0);
 audio::set_frequency(ch, 440.0);
 ````
 
-A future release will add a `Value::Opaque` variant and a marshalling path so opaque host types can flow as themselves rather than as `i64` handles. Tracked in the backlog.
+A future release will add a `Value::Opaque` variant and a marshalling path so opaque host types can flow as themselves rather than as `Word` handles. Tracked in the backlog.
 
 ### Type Coercion
 
 No implicit type coercion exists. Numeric conversion requires the `as` keyword.
 
 ````
-let x: i64 = 42;
-let y: f64 = x as f64;
-let z: i64 = y as i64;    // Truncates toward zero.
+let x: Word = 42;
+let y: Float = x as Float;
+let z: Word = y as Word;    // Truncates toward zero.
 ````
 
 String conversion uses the `to_string` native function.
@@ -202,7 +202,7 @@ Standard arithmetic with operator precedence. Multiplication, division, and modu
 let result = (a + b) * c / d - e % f;
 ````
 
-Integer arithmetic (`i64`) and floating-point arithmetic (`f64`) do not mix without explicit `as` casts.
+Integer arithmetic (`Word`) and floating-point arithmetic (`Float`) do not mix without explicit `as` casts.
 
 ### Comparison and Logical Expressions
 
@@ -306,14 +306,14 @@ Field access works on structs and tuples (using numeric index for tuples: `pair.
 let value = channels[i];
 ````
 
-Array indexing uses `i64` indices. Out-of-bounds access causes the script to yield a runtime error to the host.
+Array indexing uses `Word` indices. Out-of-bounds access causes the script to yield a runtime error to the host.
 
 ## 5. Statements
 
 ### Variable Binding
 
 ````
-let x: i64 = 42;
+let x: Word = 42;
 let name = "Alice";        // Type inferred from right-hand side.
 ````
 
@@ -384,7 +384,7 @@ Keleusma scripts fall into three function categories based on their termination 
 Atomic functions do not yield. They must terminate, assuming all called native functions return. The compiler rejects `yield` expressions within atomic functions.
 
 ````
-fn add(a: i64, b: i64) -> i64 {
+fn add(a: Word, b: Word) -> Word {
   a + b
 }
 ````
@@ -398,7 +398,7 @@ Atomic functions may call other atomic functions. They may not call `loop` or `y
 Non-atomic total functions may yield to the host and must eventually exit, assuming all called native functions return. They are declared with the `yield` keyword instead of `fn`.
 
 ````
-yield configure_channel(ch: i64, cmd: AudioCommand) -> AudioAction {
+yield configure_channel(ch: Word, cmd: AudioCommand) -> AudioAction {
   ch |> configure_vco(1, "sawtooth", 0.8);
   let cmd = yield AudioAction::SetChannelParam(ch, "vco_ready", 1.0);
   ch |> configure_adsr(0.1, 0.2, 0.8, 0.3);
@@ -464,11 +464,11 @@ Multiple function definitions with the same name, arity, and category form a sin
 
 ````
 fn describe(Command::NoteOn(ch, note, vel)) -> Text {
-  "Play note " + (note as f64 |> to_string()) + " on channel " + (ch as f64 |> to_string())
+  "Play note " + (note as Float |> to_string()) + " on channel " + (ch as Float |> to_string())
 }
 
 fn describe(Command::NoteOff(ch)) -> Text {
-  "Stop channel " + (ch as f64 |> to_string())
+  "Stop channel " + (ch as Float |> to_string())
 }
 
 fn describe(Command::SetTempo(bpm)) -> Text {
@@ -496,15 +496,15 @@ Multiheaded functions work with all three function categories (`fn`, `yield`, `l
 The `when` keyword adds boolean conditions to function heads. Guards are evaluated after pattern matching succeeds.
 
 ````
-fn severity(level: f64) -> Text when level >= 0.9 {
+fn severity(level: Float) -> Text when level >= 0.9 {
   "critical"
 }
 
-fn severity(level: f64) -> Text when level >= 0.5 {
+fn severity(level: Float) -> Text when level >= 0.5 {
   "warning"
 }
 
-fn severity(level: f64) -> Text {
+fn severity(level: Float) -> Text {
   "normal"
 }
 ````
@@ -625,14 +625,14 @@ The compiler validates all native function calls against the registered set at c
 
 ### Opaque Types
 
-Opaque type support is partial in V0.1.x. The type checker tracks opaque types correctly and the compiler accepts them in parameter and return positions, but the marshalling layer does not yet have a path for opaque host values to flow across the native boundary as themselves. The recommended pattern for V0.1.x is to pass opaque host values through a primitive handle (typically `i64`) that the host translates to and from its real Rust type at the native function boundary.
+Opaque type support is partial in V0.1.x. The type checker tracks opaque types correctly and the compiler accepts them in parameter and return positions, but the marshalling layer does not yet have a path for opaque host values to flow across the native boundary as themselves. The recommended pattern for V0.1.x is to pass opaque host values through a primitive handle (typically `Word`) that the host translates to and from its real Rust type at the native function boundary.
 
 ````
-let ch: i64 = audio::get_channel(0);
+let ch: Word = audio::get_channel(0);
 audio::set_frequency(ch, 440.0);
 ````
 
-A future release will add a `Value::Opaque` variant and a marshalling path so that opaque host types can flow as themselves rather than as `i64` handles. Tracked in the backlog.
+A future release will add a `Value::Opaque` variant and a marshalling path so that opaque host types can flow as themselves rather than as `Word` handles. Tracked in the backlog.
 
 ## 10. Module System
 
@@ -697,7 +697,7 @@ data_field_decl = lower_ident ':' type_expr
 
 (* Types *)
 type_expr       = prim_type | named_type | tuple_type | array_type | option_type
-prim_type       = 'i64' | 'f64' | 'bool' | 'Text' | '(' ')'
+prim_type       = 'Word' | 'Float' | 'bool' | 'Text' | '(' ')'
 named_type      = upper_ident [ '<' type_expr { ',' type_expr } '>' ]
 tuple_type      = '(' type_expr ',' type_expr { ',' type_expr } ')'
 array_type      = '[' type_expr ';' integer_lit ']'
@@ -816,8 +816,8 @@ field_pattern   = lower_ident [ ':' pattern ]
 (* Lexical *)
 lower_ident     = [a-z_] [a-z0-9_]*
 upper_ident     = [A-Z] [A-Za-z0-9]*
-integer_lit     = ( [0-9]+ [ 'i64' ] ) | '0x' [0-9a-fA-F]+ | '0b' [01]+
-float_lit       = [0-9]+ '.' [0-9]+ [ 'f64' ]
+integer_lit     = ( [0-9]+ [ 'Word' ] ) | '0x' [0-9a-fA-F]+ | '0b' [01]+
+float_lit       = [0-9]+ '.' [0-9]+ [ 'Float' ]
 string_lit      = '"' { string_char } '"'
 string_char     = [^"\\] | '\\' escape_char
 escape_char     = 'n' | 't' | 'r' | '\\' | '"' | '0'
@@ -848,17 +848,17 @@ This script receives audio commands per tick and yields synthesis configuration 
 use audio::*;
 
 enum AudioCommand {
-  NoteOn(i64, i64, f64),
-  NoteOff(i64),
-  SetTempo(f64),
-  ConfigureChannel(i64),
+  NoteOn(Word, Word, Float),
+  NoteOff(Word),
+  SetTempo(Float),
+  ConfigureChannel(Word),
   Tick,
 }
 
 enum AudioAction {
-  PlayNote(i64, i64, f64),
-  StopNote(i64),
-  SetChannelParam(i64, Text, f64),
+  PlayNote(Word, Word, Float),
+  StopNote(Word),
+  SetChannelParam(Word, Text, Float),
   NoOp,
 }
 
@@ -897,16 +897,16 @@ yield process(AudioCommand::Tick) -> AudioAction {
   AudioAction::NoOp
 }
 
-fn configure_vco(ch: i64, vco_id: i64, waveform: Text, amplitude: f64) -> () {
+fn configure_vco(ch: Word, vco_id: Word, waveform: Text, amplitude: Float) -> () {
   audio::set_vco_waveform(ch, vco_id, waveform);
   audio::set_vco_amplitude(ch, vco_id, amplitude);
 }
 
-fn configure_adsr(ch: i64, a: f64, d: f64, s: f64, r: f64) -> () {
+fn configure_adsr(ch: Word, a: Float, d: Float, s: Float, r: Float) -> () {
   audio::set_envelope(ch, "eg2", a, d, s, r);
 }
 
-fn configure_filter(ch: i64, filter_type: Text, cutoff: f64, resonance: f64) -> () {
+fn configure_filter(ch: Word, filter_type: Text, cutoff: Float, resonance: Float) -> () {
   audio::set_lpf_cutoff(ch, cutoff);
   audio::set_lpf_resonance(ch, resonance);
 }
@@ -922,17 +922,17 @@ This script receives game events per turn and yields scripted actions.
 use game::*;
 
 enum GameEvent {
-  TurnStart(i64, Text),
-  DeploymentWarning(i64),
-  CharacterDeath(i64, Text),
-  BombDetonation(i64, i64),
-  DateCompleted(i64, i64, f64),
+  TurnStart(Word, Text),
+  DeploymentWarning(Word),
+  CharacterDeath(Word, Text),
+  BombDetonation(Word, Word),
+  DateCompleted(Word, Word, Float),
   Idle,
 }
 
 enum ScriptAction {
   DisplayMessage(Text, Text),
-  ModifyRelationship(i64, i64, f64),
+  ModifyRelationship(Word, Word, Float),
   TriggerEvent(Text),
   NoAction,
 }
@@ -1131,9 +1131,9 @@ Formal verification of soundness (a machine-checked proof that the verifier corr
 Error propagation through `yield` is supported through the resume-value pattern (B7). The `yield` and `resume` cycle accepts any `Value` as the resumed input, so the script chooses an appropriate dialogue type. The script declares a `Result`-shaped enum (or any other variant union appropriate to the dialogue surface) and pattern-matches on the resumed value. The host signals errors by constructing the `Err` variant when calling `Vm::resume`. The convenience alias `Vm::resume_err` documents host intent without changing the underlying mechanism.
 
 ````
-enum Reply { Ok(i64), Err }
+enum Reply { Ok(Word), Err }
 
-loop main(input: Reply) -> i64 {
+loop main(input: Reply) -> Word {
     let reply = yield 0;
     match reply {
         Reply::Ok(v) => v,
@@ -1183,6 +1183,6 @@ The remaining open questions concern target-application policy and ecosystem rat
 
 2. **AArch64 cost-model calibration.** The `keleusma-bench` calibration tool produces useful measurements on x86 (RDTSC) and degenerate "everything is one cycle" output on AArch64 because the architectural counter `CNTVCT_EL0` runs at the system counter frequency, not the CPU clock. The fix is either reading `CNTFRQ_EL0` and converting through CPU frequency, or using `PMCCNTR_EL0` (which requires kernel-level enable). Tracked in the backlog.
 
-3. **Opaque-type runtime path.** The type checker tracks opaque types but the runtime cannot marshal them across the native boundary as themselves. Adding a `Value::Opaque` variant and a marshalling path is tracked for a future release; in the meantime, hosts pass opaque values as `i64` handles.
+3. **Opaque-type runtime path.** The type checker tracks opaque types but the runtime cannot marshal them across the native boundary as themselves. Adding a `Value::Opaque` variant and a marshalling path is tracked for a future release; in the meantime, hosts pass opaque values as `Word` handles.
 
 4. **Application-domain DSL conventions.** Audio engines, game scripting, embedded control loops, and UAV mission control each have their own register-fn vocabularies. Conventions for these domains will emerge from real adopters rather than from up-front specification.

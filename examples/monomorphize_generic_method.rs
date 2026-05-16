@@ -20,10 +20,10 @@ use keleusma::{Arena, Value};
 
 fn main() {
     let src = r#"
-        trait Doubler { fn double(x: i64) -> i64; }
-        impl Doubler for i64 { fn double(x: i64) -> i64 { x + x } }
-        fn use_doubler<T: Doubler>(x: T) -> i64 { x.double() }
-        fn main() -> i64 { use_doubler(21) }
+        trait Doubler { fn double(x: Word) -> Word; }
+        impl Doubler for Word { fn double(x: Word) -> Word { x + x } }
+        fn use_doubler<T: Doubler>(x: T) -> Word { x.double() }
+        fn main() -> Word { use_doubler(21) }
     "#;
     let tokens = tokenize(src).expect("lex");
     let program = parse(&tokens).expect("parse");

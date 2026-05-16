@@ -155,7 +155,7 @@ fn read_i64_arg(name: &str, arg_label: &str, v: &Value) -> Result<i64, VmError> 
     match v {
         Value::Int(i) => Ok(*i),
         other => Err(VmError::TypeError(format!(
-            "{}: {} must be i64, got {}",
+            "{}: {} must be Word, got {}",
             name,
             arg_label,
             other.type_name()
@@ -365,7 +365,7 @@ mod tests {
     fn length_array() {
         let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
         let (val, _) = run_with_utilities(
-            "use length\nfn main() -> i64 { length([10, 20, 30]) }",
+            "use length\nfn main() -> Word { length([10, 20, 30]) }",
             &arena,
         );
         assert_eq!(val, Value::Int(3));
@@ -375,16 +375,20 @@ mod tests {
     #[test]
     fn length_string() {
         let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
-        let (val, _) =
-            run_with_utilities("use length\nfn main() -> i64 { length(\"hello\") }", &arena);
+        let (val, _) = run_with_utilities(
+            "use length\nfn main() -> Word { length(\"hello\") }",
+            &arena,
+        );
         assert_eq!(val, Value::Int(5));
     }
 
     #[test]
     fn length_tuple() {
         let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
-        let (val, _) =
-            run_with_utilities("use length\nfn main() -> i64 { length((1, 2, 3)) }", &arena);
+        let (val, _) = run_with_utilities(
+            "use length\nfn main() -> Word { length((1, 2, 3)) }",
+            &arena,
+        );
         assert_eq!(val, Value::Int(3));
     }
 
@@ -392,7 +396,7 @@ mod tests {
     fn sqrt_value() {
         let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
         let (val, _) = run_with_utilities(
-            "use math::sqrt\nfn main() -> f64 { math::sqrt(9.0) }",
+            "use math::sqrt\nfn main() -> Float { math::sqrt(9.0) }",
             &arena,
         );
         assert_eq!(val, Value::Float(3.0));
@@ -402,7 +406,7 @@ mod tests {
     fn floor_value() {
         let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
         let (val, _) = run_with_utilities(
-            "use math::floor\nfn main() -> f64 { math::floor(3.7) }",
+            "use math::floor\nfn main() -> Float { math::floor(3.7) }",
             &arena,
         );
         assert_eq!(val, Value::Float(3.0));
@@ -412,7 +416,7 @@ mod tests {
     fn ceil_value() {
         let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
         let (val, _) = run_with_utilities(
-            "use math::ceil\nfn main() -> f64 { math::ceil(3.2) }",
+            "use math::ceil\nfn main() -> Float { math::ceil(3.2) }",
             &arena,
         );
         assert_eq!(val, Value::Float(4.0));
@@ -422,7 +426,7 @@ mod tests {
     fn round_value() {
         let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
         let (val, _) = run_with_utilities(
-            "use math::round\nfn main() -> f64 { math::round(3.5) }",
+            "use math::round\nfn main() -> Float { math::round(3.5) }",
             &arena,
         );
         assert_eq!(val, Value::Float(4.0));
@@ -432,7 +436,7 @@ mod tests {
     fn log2_value() {
         let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
         let (val, _) = run_with_utilities(
-            "use math::log2\nfn main() -> f64 { math::log2(8.0) }",
+            "use math::log2\nfn main() -> Float { math::log2(8.0) }",
             &arena,
         );
         assert_eq!(val, Value::Float(3.0));
@@ -453,7 +457,7 @@ mod tests {
     fn fstring_single_interp() {
         let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
         let (val, resolved) = run_with_utilities(
-            "use to_string\nfn main() -> Text { let n: i64 = 42; f\"{n}\" }",
+            "use to_string\nfn main() -> Text { let n: Word = 42; f\"{n}\" }",
             &arena,
         );
         assert!(matches!(val, Value::KStr(_)));
@@ -466,7 +470,7 @@ mod tests {
         let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
         let (val, resolved) = run_with_utilities(
             "use to_string\nuse concat\n\
-             fn main() -> Text { let n: i64 = 42; f\"x = {n}!\" }",
+             fn main() -> Text { let n: Word = 42; f\"x = {n}!\" }",
             &arena,
         );
         assert!(matches!(val, Value::KStr(_)));
@@ -480,8 +484,8 @@ mod tests {
         let (val, resolved) = run_with_utilities(
             "use to_string\nuse concat\n\
              fn main() -> Text {\n\
-                let a: i64 = 1;\n\
-                let b: i64 = 2;\n\
+                let a: Word = 1;\n\
+                let b: Word = 2;\n\
                 f\"({a}, {b})\"\n\
              }",
             &arena,

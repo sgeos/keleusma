@@ -28,8 +28,8 @@ use keleusma::{Arena, Value};
 
 fn main() {
     let src = r#"
-        enum Reply { Ok(i64), Err }
-        loop main(input: Reply) -> i64 {
+        enum Reply { Ok(Word), Err }
+        loop main(input: Reply) -> Word {
             let reply = yield 0;
             match reply {
                 Reply::Ok(v) => v,

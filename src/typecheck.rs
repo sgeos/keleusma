@@ -63,10 +63,13 @@ use crate::token::Span;
 /// surface-syntax detail.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Type {
-    /// 64-bit signed integer.
-    I64,
-    /// 64-bit floating-point.
-    F64,
+    /// Target word size (signed). On the V0.1.x runtime this is
+    /// 64-bit; narrower widths are reserved for future embedded
+    /// targets.
+    Word,
+    /// Target floating-point width. IEEE 754 binary64 on the host;
+    /// narrower widths are reserved for future embedded targets.
+    Float,
     /// Boolean.
     Bool,
     /// Unit `()`.
@@ -120,8 +123,8 @@ impl Type {
     ) -> Type {
         match expr {
             TypeExpr::Prim(p, _) => match p {
-                PrimType::I64 => Type::I64,
-                PrimType::F64 => Type::F64,
+                PrimType::Word => Type::Word,
+                PrimType::Float => Type::Float,
                 PrimType::Bool => Type::Bool,
                 PrimType::Text => Type::Str,
             },
@@ -164,8 +167,8 @@ impl Type {
     /// Human-readable type name for diagnostics.
     pub fn display(&self) -> String {
         match self {
-            Type::I64 => "i64".to_string(),
-            Type::F64 => "f64".to_string(),
+            Type::Word => "Word".to_string(),
+            Type::Float => "Float".to_string(),
             Type::Bool => "bool".to_string(),
             Type::Unit => "()".to_string(),
             Type::Str => "Text".to_string(),
@@ -299,8 +302,8 @@ pub fn unify(a: &Type, b: &Type, subst: &mut Subst) -> Result<(), UnifyError> {
     let a = a.apply(subst);
     let b = b.apply(subst);
     match (a, b) {
-        (Type::I64, Type::I64)
-        | (Type::F64, Type::F64)
+        (Type::Word, Type::Word)
+        | (Type::Float, Type::Float)
         | (Type::Bool, Type::Bool)
         | (Type::Unit, Type::Unit)
         | (Type::Str, Type::Str) => Ok(()),
@@ -390,8 +393,8 @@ enum TypeKind {
 fn type_head_name(t: &Type) -> Option<String> {
     use alloc::string::ToString;
     match t {
-        Type::I64 => Some("i64".to_string()),
-        Type::F64 => Some("f64".to_string()),
+        Type::Word => Some("Word".to_string()),
+        Type::Float => Some("Float".to_string()),
         Type::Bool => Some("bool".to_string()),
         Type::Unit => Some("()".to_string()),
         Type::Str => Some("Text".to_string()),
@@ -464,7 +467,7 @@ struct Ctx {
     traits: BTreeMap<String, Vec<TraitMethodSig>>,
     /// Map from trait name to the set of types that implement it. Each
     /// implementing type is recorded as the head of its `Type::*`
-    /// representation: `i64` for `Type::I64`, `Pair` for
+    /// representation: `i64` for `Type::Word`, `Pair` for
     /// `Type::Struct("Pair", _)`, and so on.
     impls: BTreeMap<String, BTreeSet<String>>,
     functions: BTreeMap<String, FnSig>,
@@ -766,8 +769,8 @@ pub fn check(program: &Program) -> Result<(), TypeError> {
     }
     for impl_block in &program.impls {
         let head = match Type::from_expr(&impl_block.for_type, &ctx.types) {
-            Type::I64 => "i64".to_string(),
-            Type::F64 => "f64".to_string(),
+            Type::Word => "Word".to_string(),
+            Type::Float => "Float".to_string(),
             Type::Bool => "bool".to_string(),
             Type::Unit => "()".to_string(),
             Type::Str => "Text".to_string(),
@@ -927,8 +930,8 @@ pub fn check(program: &Program) -> Result<(), TypeError> {
     // resolve through the same FnSig that was registered in pass 1d.
     for impl_block in &program.impls {
         let head = match Type::from_expr(&impl_block.for_type, &ctx.types) {
-            Type::I64 => "i64".to_string(),
-            Type::F64 => "f64".to_string(),
+            Type::Word => "Word".to_string(),
+            Type::Float => "Float".to_string(),
             Type::Bool => "bool".to_string(),
             Type::Unit => "()".to_string(),
             Type::Str => "Text".to_string(),
@@ -1084,8 +1087,8 @@ fn check_pattern_against_type(
         Pattern::Wildcard(_) | Pattern::Variable(_, _) => Ok(()),
         Pattern::Literal(lit, span) => {
             let lit_ty = match lit {
-                Literal::Int(_) => Type::I64,
-                Literal::Float(_) => Type::F64,
+                Literal::Int(_) => Type::Word,
+                Literal::Float(_) => Type::Float,
                 Literal::String(_) => Type::Str,
                 Literal::Bool(_) => Type::Bool,
                 Literal::Unit => Type::Unit,
@@ -1360,19 +1363,19 @@ fn check_stmt(ctx: &mut Ctx, stmt: &Stmt) -> Result<(), TypeError> {
                 Iterable::Range(start, end) => {
                     let s = type_of_expr(ctx, start)?;
                     let e = type_of_expr(ctx, end)?;
-                    if !types_compatible(ctx, &s, &Type::I64)
-                        || !types_compatible(ctx, &e, &Type::I64)
+                    if !types_compatible(ctx, &s, &Type::Word)
+                        || !types_compatible(ctx, &e, &Type::Word)
                     {
                         return Err(TypeError::new(
                             format!(
-                                "for-range bounds must be i64, got {} and {}",
+                                "for-range bounds must be Word, got {} and {}",
                                 s.display(),
                                 e.display()
                             ),
                             for_stmt.span,
                         ));
                     }
-                    Type::I64
+                    Type::Word
                 }
                 Iterable::Expr(e) => match type_of_expr(ctx, e)? {
                     Type::Array(inner, _) => *inner,
@@ -1432,8 +1435,8 @@ fn check_stmt(ctx: &mut Ctx, stmt: &Stmt) -> Result<(), TypeError> {
 fn type_of_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Type, TypeError> {
     match expr {
         Expr::Literal { value, .. } => Ok(match value {
-            Literal::Int(_) => Type::I64,
-            Literal::Float(_) => Type::F64,
+            Literal::Int(_) => Type::Word,
+            Literal::Float(_) => Type::Float,
             Literal::String(_) => Type::Str,
             Literal::Bool(_) => Type::Bool,
             Literal::Unit => Type::Unit,
@@ -1467,10 +1470,10 @@ fn type_of_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Type, TypeError> {
             let rt = type_of_expr(ctx, right)?;
             match op {
                 BinOp::Add => {
-                    if matches!(lt, Type::I64) && matches!(rt, Type::I64) {
-                        Ok(Type::I64)
-                    } else if matches!(lt, Type::F64) && matches!(rt, Type::F64) {
-                        Ok(Type::F64)
+                    if matches!(lt, Type::Word) && matches!(rt, Type::Word) {
+                        Ok(Type::Word)
+                    } else if matches!(lt, Type::Float) && matches!(rt, Type::Float) {
+                        Ok(Type::Float)
                     } else if matches!(lt, Type::Str) && matches!(rt, Type::Str) {
                         Ok(Type::Str)
                     } else if matches!(lt, Type::Unknown | Type::Var(_))
@@ -1485,10 +1488,10 @@ fn type_of_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Type, TypeError> {
                     }
                 }
                 BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod => {
-                    if matches!(lt, Type::I64) && matches!(rt, Type::I64) {
-                        Ok(Type::I64)
-                    } else if matches!(lt, Type::F64) && matches!(rt, Type::F64) {
-                        Ok(Type::F64)
+                    if matches!(lt, Type::Word) && matches!(rt, Type::Word) {
+                        Ok(Type::Word)
+                    } else if matches!(lt, Type::Float) && matches!(rt, Type::Float) {
+                        Ok(Type::Float)
                     } else if matches!(lt, Type::Unknown | Type::Var(_))
                         || matches!(rt, Type::Unknown | Type::Var(_))
                     {
@@ -1543,7 +1546,7 @@ fn type_of_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Type, TypeError> {
             let ty = type_of_expr(ctx, operand)?;
             match op {
                 UnaryOp::Neg => match ty {
-                    Type::I64 | Type::F64 | Type::Unknown | Type::Var(_) => Ok(ty),
+                    Type::Word | Type::Float | Type::Unknown | Type::Var(_) => Ok(ty),
                     other => Err(TypeError::new(
                         format!("cannot negate {}", other.display()),
                         *span,
@@ -1875,9 +1878,9 @@ fn type_of_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Type, TypeError> {
         } => {
             let obj_ty = type_of_expr(ctx, object)?;
             let idx_ty = type_of_expr(ctx, index)?;
-            if !types_compatible(ctx, &idx_ty, &Type::I64) {
+            if !types_compatible(ctx, &idx_ty, &Type::Word) {
                 return Err(TypeError::new(
-                    format!("array index must be i64, got {}", idx_ty.display()),
+                    format!("array index must be Word, got {}", idx_ty.display()),
                     *span,
                 ));
             }
@@ -2047,7 +2050,7 @@ fn type_of_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Type, TypeError> {
             let from_ty = type_of_expr(ctx, expr)?;
             let to_ty = Type::from_expr(target, &ctx.types);
             match (&from_ty, &to_ty) {
-                (Type::I64, Type::F64) | (Type::F64, Type::I64) => Ok(to_ty),
+                (Type::Word, Type::Float) | (Type::Float, Type::Word) => Ok(to_ty),
                 (Type::Unknown, _) | (_, Type::Unknown) => Ok(to_ty),
                 (a, b) if a == b => Ok(to_ty),
                 _ => Err(TypeError::new(
@@ -2200,82 +2203,83 @@ mod tests {
 
     #[test]
     fn simple_function_type_checks() {
-        check_src("fn main() -> i64 { 1 + 2 }").unwrap();
+        check_src("fn main() -> Word { 1 + 2 }").unwrap();
     }
 
     #[test]
     fn return_type_mismatch_rejected() {
-        let err = check_src("fn main() -> i64 { true }").unwrap_err();
-        assert!(err.message.contains("returns i64"));
+        let err = check_src("fn main() -> Word { true }").unwrap_err();
+        assert!(err.message.contains("returns Word"));
     }
 
     #[test]
     fn arithmetic_type_mismatch_rejected() {
-        let err = check_src("fn main() -> i64 { 1 + 2.0 }").unwrap_err();
+        let err = check_src("fn main() -> Word { 1 + 2.0 }").unwrap_err();
         assert!(err.message.contains("cannot add"));
     }
 
     #[test]
     fn function_call_arg_count_checked() {
-        let err = check_src("fn add(a: i64, b: i64) -> i64 { a + b }\nfn main() -> i64 { add(1) }")
-            .unwrap_err();
+        let err =
+            check_src("fn add(a: Word, b: Word) -> Word { a + b }\nfn main() -> Word { add(1) }")
+                .unwrap_err();
         assert!(err.message.contains("expects 2"));
     }
 
     #[test]
     fn function_call_arg_type_checked() {
         let err =
-            check_src("fn double(x: i64) -> i64 { x * 2 }\nfn main() -> i64 { double(true) }")
+            check_src("fn double(x: Word) -> Word { x * 2 }\nfn main() -> Word { double(true) }")
                 .unwrap_err();
-        assert!(err.message.contains("expects i64"));
+        assert!(err.message.contains("expects Word"));
     }
 
     #[test]
     fn let_binding_type_mismatch_rejected() {
-        let err = check_src("fn main() -> i64 { let x: i64 = true; 0 }").unwrap_err();
-        assert!(err.message.contains("declared as i64"));
+        let err = check_src("fn main() -> Word { let x: Word = true; 0 }").unwrap_err();
+        assert!(err.message.contains("declared as Word"));
     }
 
     #[test]
     fn let_binding_inferred_from_value() {
-        check_src("fn main() -> i64 { let x = 1; x + 1 }").unwrap();
+        check_src("fn main() -> Word { let x = 1; x + 1 }").unwrap();
     }
 
     #[test]
     fn if_branch_mismatch_rejected() {
-        let err = check_src("fn main() -> i64 { if true { 1 } else { false } }").unwrap_err();
+        let err = check_src("fn main() -> Word { if true { 1 } else { false } }").unwrap_err();
         assert!(err.message.contains("if branches"));
     }
 
     #[test]
     fn struct_field_access_checks() {
         check_src(
-            "struct P { x: i64, y: i64 }\nfn main() -> i64 { let p = P { x: 1, y: 2 }; p.x }",
+            "struct P { x: Word, y: Word }\nfn main() -> Word { let p = P { x: 1, y: 2 }; p.x }",
         )
         .unwrap();
     }
 
     #[test]
     fn struct_unknown_field_rejected() {
-        let err = check_src("struct P { x: i64 }\nfn main() -> i64 { let p = P { x: 1 }; p.y }")
+        let err = check_src("struct P { x: Word }\nfn main() -> Word { let p = P { x: 1 }; p.y }")
             .unwrap_err();
         assert!(err.message.contains("no field"));
     }
 
     #[test]
     fn cast_int_to_float_admissible() {
-        check_src("fn main() -> f64 { let x: i64 = 1; x as f64 }").unwrap();
+        check_src("fn main() -> Float { let x: Word = 1; x as Float }").unwrap();
     }
 
     #[test]
     fn cast_bool_to_int_rejected() {
-        let err = check_src("fn main() -> i64 { true as i64 }").unwrap_err();
+        let err = check_src("fn main() -> Word { true as Word }").unwrap_err();
         assert!(err.message.contains("cannot cast"));
     }
 
     #[test]
     fn undefined_identifier_rejected() {
-        let err = check_src("fn main() -> i64 { x }").unwrap_err();
+        let err = check_src("fn main() -> Word { x }").unwrap_err();
         assert!(err.message.contains("undefined"));
     }
 
@@ -2283,13 +2287,13 @@ mod tests {
 
     #[test]
     fn undefined_function_rejected() {
-        let err = check_src("fn main() -> i64 { foo() }").unwrap_err();
+        let err = check_src("fn main() -> Word { foo() }").unwrap_err();
         assert!(err.message.contains("undefined function `foo`"));
     }
 
     #[test]
     fn used_native_accepted() {
-        check_src("use math::sqrt\nfn main() -> f64 { math::sqrt(9.0) }").unwrap();
+        check_src("use math::sqrt\nfn main() -> Float { math::sqrt(9.0) }").unwrap();
     }
 
     #[test]
@@ -2305,7 +2309,7 @@ mod tests {
     fn enum_pattern_unknown_variant_rejected() {
         let err = check_src(
             "enum Color { Red, Green }\n\
-             fn main() -> i64 { match Color::Red() { Color::Blue() => 1, _ => 0 } }",
+             fn main() -> Word { match Color::Red() { Color::Blue() => 1, _ => 0 } }",
         )
         .unwrap_err();
         assert!(
@@ -2319,8 +2323,8 @@ mod tests {
     #[test]
     fn enum_pattern_wrong_arity_rejected() {
         let err = check_src(
-            "enum Shape { Square(i64), Circle(i64) }\n\
-             fn main() -> i64 { match Shape::Square(1) { Shape::Square(a, b) => 0, _ => 1 } }",
+            "enum Shape { Square(Word), Circle(Word) }\n\
+             fn main() -> Word { match Shape::Square(1) { Shape::Square(a, b) => 0, _ => 1 } }",
         )
         .unwrap_err();
         assert!(
@@ -2333,19 +2337,19 @@ mod tests {
     #[test]
     fn tuple_pattern_wrong_arity_rejected() {
         let err =
-            check_src("fn main() -> i64 { match (1, 2) { (a, b, c) => 0, _ => 1 } }").unwrap_err();
+            check_src("fn main() -> Word { match (1, 2) { (a, b, c) => 0, _ => 1 } }").unwrap_err();
         assert!(err.message.contains("tuple pattern"));
     }
 
     #[test]
     fn tuple_pattern_against_non_tuple_rejected() {
-        let err = check_src("fn main() -> i64 { match 5 { (a, b) => 0, _ => 1 } }").unwrap_err();
+        let err = check_src("fn main() -> Word { match 5 { (a, b) => 0, _ => 1 } }").unwrap_err();
         assert!(err.message.contains("tuple pattern"));
     }
 
     #[test]
     fn literal_pattern_type_mismatch_rejected() {
-        let err = check_src("fn main() -> i64 { match 5 { true => 1, _ => 0 } }").unwrap_err();
+        let err = check_src("fn main() -> Word { match 5 { true => 1, _ => 0 } }").unwrap_err();
         assert!(err.message.contains("literal pattern"));
     }
 
@@ -2355,7 +2359,7 @@ mod tests {
     fn enum_match_missing_variant_rejected() {
         let err = check_src(
             "enum Color { Red, Green, Blue }\n\
-             fn main() -> i64 { match Color::Red() { Color::Red() => 0, Color::Green() => 1 } }",
+             fn main() -> Word { match Color::Red() { Color::Red() => 0, Color::Green() => 1 } }",
         )
         .unwrap_err();
         assert!(err.message.contains("non-exhaustive match"));
@@ -2366,7 +2370,7 @@ mod tests {
     fn enum_match_with_wildcard_accepted() {
         check_src(
             "enum Color { Red, Green, Blue }\n\
-             fn main() -> i64 { match Color::Red() { Color::Red() => 0, _ => 1 } }",
+             fn main() -> Word { match Color::Red() { Color::Red() => 0, _ => 1 } }",
         )
         .unwrap();
     }
@@ -2375,31 +2379,31 @@ mod tests {
     fn enum_match_with_all_variants_accepted() {
         check_src(
             "enum Color { Red, Green }\n\
-             fn main() -> i64 { match Color::Red() { Color::Red() => 0, Color::Green() => 1 } }",
+             fn main() -> Word { match Color::Red() { Color::Red() => 0, Color::Green() => 1 } }",
         )
         .unwrap();
     }
 
     #[test]
     fn bool_match_missing_arm_rejected() {
-        let err = check_src("fn main() -> i64 { match true { true => 1 } }").unwrap_err();
+        let err = check_src("fn main() -> Word { match true { true => 1 } }").unwrap_err();
         assert!(err.message.contains("non-exhaustive match"));
     }
 
     #[test]
     fn bool_match_complete_accepted() {
-        check_src("fn main() -> i64 { match true { true => 1, false => 0 } }").unwrap();
+        check_src("fn main() -> Word { match true { true => 1, false => 0 } }").unwrap();
     }
 
     #[test]
     fn i64_match_without_wildcard_rejected() {
-        let err = check_src("fn main() -> i64 { match 1 { 1 => 1, 2 => 2 } }").unwrap_err();
+        let err = check_src("fn main() -> Word { match 1 { 1 => 1, 2 => 2 } }").unwrap_err();
         assert!(err.message.contains("non-exhaustive match"));
     }
 
     #[test]
     fn i64_match_with_wildcard_accepted() {
-        check_src("fn main() -> i64 { match 1 { 1 => 1, _ => 0 } }").unwrap();
+        check_src("fn main() -> Word { match 1 { 1 => 1, _ => 0 } }").unwrap();
     }
 
     // -- Hindley-Milner foundation primitives --
@@ -2419,7 +2423,7 @@ mod tests {
     #[test]
     fn unify_identical_primitives() {
         let mut s = Subst::new();
-        unify(&Type::I64, &Type::I64, &mut s).unwrap();
+        unify(&Type::Word, &Type::Word, &mut s).unwrap();
         unify(&Type::Bool, &Type::Bool, &mut s).unwrap();
         unify(&Type::Unit, &Type::Unit, &mut s).unwrap();
         unify(&Type::Str, &Type::Str, &mut s).unwrap();
@@ -2429,11 +2433,11 @@ mod tests {
     #[test]
     fn unify_distinct_primitives_fails() {
         let mut s = Subst::new();
-        let err = unify(&Type::I64, &Type::F64, &mut s).unwrap_err();
+        let err = unify(&Type::Word, &Type::Float, &mut s).unwrap_err();
         match err {
             UnifyError::Mismatch { left, right } => {
-                assert_eq!(left, Type::I64);
-                assert_eq!(right, Type::F64);
+                assert_eq!(left, Type::Word);
+                assert_eq!(right, Type::Float);
             }
             other => panic!("expected Mismatch, got {:?}", other),
         }
@@ -2442,15 +2446,15 @@ mod tests {
     #[test]
     fn unify_var_with_concrete_binds() {
         let mut s = Subst::new();
-        unify(&Type::Var(0), &Type::I64, &mut s).unwrap();
-        assert_eq!(s.get(0), Some(&Type::I64));
+        unify(&Type::Var(0), &Type::Word, &mut s).unwrap();
+        assert_eq!(s.get(0), Some(&Type::Word));
     }
 
     #[test]
     fn unify_concrete_with_var_binds() {
         let mut s = Subst::new();
-        unify(&Type::I64, &Type::Var(0), &mut s).unwrap();
-        assert_eq!(s.get(0), Some(&Type::I64));
+        unify(&Type::Word, &Type::Var(0), &mut s).unwrap();
+        assert_eq!(s.get(0), Some(&Type::Word));
     }
 
     #[test]
@@ -2471,17 +2475,17 @@ mod tests {
     fn unify_tuple_pairwise() {
         let mut s = Subst::new();
         let t1 = Type::Tuple(alloc::vec![Type::Var(0), Type::Bool]);
-        let t2 = Type::Tuple(alloc::vec![Type::I64, Type::Var(1)]);
+        let t2 = Type::Tuple(alloc::vec![Type::Word, Type::Var(1)]);
         unify(&t1, &t2, &mut s).unwrap();
-        assert_eq!(s.get(0), Some(&Type::I64));
+        assert_eq!(s.get(0), Some(&Type::Word));
         assert_eq!(s.get(1), Some(&Type::Bool));
     }
 
     #[test]
     fn unify_tuple_arity_mismatch() {
         let mut s = Subst::new();
-        let t1 = Type::Tuple(alloc::vec![Type::I64, Type::Bool]);
-        let t2 = Type::Tuple(alloc::vec![Type::I64]);
+        let t1 = Type::Tuple(alloc::vec![Type::Word, Type::Bool]);
+        let t2 = Type::Tuple(alloc::vec![Type::Word]);
         let err = unify(&t1, &t2, &mut s).unwrap_err();
         match err {
             UnifyError::TupleArityMismatch { left, right } => {
@@ -2495,8 +2499,8 @@ mod tests {
     #[test]
     fn unify_array_length_mismatch() {
         let mut s = Subst::new();
-        let t1 = Type::Array(Box::new(Type::I64), 3);
-        let t2 = Type::Array(Box::new(Type::I64), 4);
+        let t1 = Type::Array(Box::new(Type::Word), 3);
+        let t2 = Type::Array(Box::new(Type::Word), 4);
         let err = unify(&t1, &t2, &mut s).unwrap_err();
         match err {
             UnifyError::ArrayLengthMismatch { left, right } => {
@@ -2511,9 +2515,9 @@ mod tests {
     fn unify_array_element_types_unify() {
         let mut s = Subst::new();
         let t1 = Type::Array(Box::new(Type::Var(0)), 3);
-        let t2 = Type::Array(Box::new(Type::I64), 3);
+        let t2 = Type::Array(Box::new(Type::Word), 3);
         unify(&t1, &t2, &mut s).unwrap();
-        assert_eq!(s.get(0), Some(&Type::I64));
+        assert_eq!(s.get(0), Some(&Type::Word));
     }
 
     #[test]
@@ -2553,7 +2557,7 @@ mod tests {
         let mut s = Subst::new();
         // ?T0 ~ Tuple(?T0, i64) would create an infinite type.
         let t1 = Type::Var(0);
-        let t2 = Type::Tuple(alloc::vec![Type::Var(0), Type::I64]);
+        let t2 = Type::Tuple(alloc::vec![Type::Var(0), Type::Word]);
         let err = unify(&t1, &t2, &mut s).unwrap_err();
         assert!(matches!(err, UnifyError::OccursCheck { .. }));
     }
@@ -2561,10 +2565,10 @@ mod tests {
     #[test]
     fn apply_substitution_resolves_variable() {
         let mut s = Subst::new();
-        s.insert(0, Type::I64);
+        s.insert(0, Type::Word);
         let t = Type::Tuple(alloc::vec![Type::Var(0), Type::Bool]);
         let resolved = t.apply(&s);
-        assert_eq!(resolved, Type::Tuple(alloc::vec![Type::I64, Type::Bool]));
+        assert_eq!(resolved, Type::Tuple(alloc::vec![Type::Word, Type::Bool]));
     }
 
     #[test]
@@ -2581,17 +2585,17 @@ mod tests {
     fn unify_propagates_through_existing_substitution() {
         // After ?T0 ~ i64, unifying ?T0 ~ ?T1 should bind ?T1 to i64.
         let mut s = Subst::new();
-        unify(&Type::Var(0), &Type::I64, &mut s).unwrap();
+        unify(&Type::Var(0), &Type::Word, &mut s).unwrap();
         unify(&Type::Var(0), &Type::Var(1), &mut s).unwrap();
         let resolved = Type::Var(1).apply(&s);
-        assert_eq!(resolved, Type::I64);
+        assert_eq!(resolved, Type::Word);
     }
 
     // -- B2 generic function checks --
 
     #[test]
     fn generic_identity_function_typechecks() {
-        check_src("fn id<T>(x: T) -> T { x }\nfn main() -> i64 { id(42) }").unwrap();
+        check_src("fn id<T>(x: T) -> T { x }\nfn main() -> Word { id(42) }").unwrap();
     }
 
     #[test]
@@ -2601,7 +2605,7 @@ mod tests {
         // both i64 and bool.
         check_src(
             "fn id<T>(x: T) -> T { x }\n\
-             fn main() -> i64 {\n\
+             fn main() -> Word {\n\
                 let a = id(1);\n\
                 let b = id(true);\n\
                 a\n\
@@ -2614,7 +2618,7 @@ mod tests {
     fn generic_function_with_two_type_params() {
         check_src(
             "fn first<T, U>(a: T, b: U) -> T { a }\n\
-             fn main() -> i64 { first(1, true) }",
+             fn main() -> Word { first(1, true) }",
         )
         .unwrap();
     }
@@ -2622,7 +2626,7 @@ mod tests {
     #[test]
     fn generic_function_arity_mismatch_rejected() {
         let err =
-            check_src("fn id<T>(x: T) -> T { x }\nfn main() -> i64 { id(1, 2) }").unwrap_err();
+            check_src("fn id<T>(x: T) -> T { x }\nfn main() -> Word { id(1, 2) }").unwrap_err();
         assert!(err.message.contains("expects 1 arguments"));
     }
 
@@ -2632,7 +2636,7 @@ mod tests {
     fn generic_struct_with_one_param_typechecks() {
         check_src(
             "struct Cell<T> { value: T }\n\
-             fn main() -> i64 {\n\
+             fn main() -> Word {\n\
                 let c = Cell { value: 42 };\n\
                 c.value\n\
              }",
@@ -2644,7 +2648,7 @@ mod tests {
     fn generic_struct_with_two_params_typechecks() {
         check_src(
             "struct Pair<T, U> { a: T, b: U }\n\
-             fn main() -> i64 {\n\
+             fn main() -> Word {\n\
                 let p = Pair { a: 1, b: true };\n\
                 p.a\n\
              }",
@@ -2656,7 +2660,7 @@ mod tests {
     fn generic_struct_field_access_uses_instantiation() {
         check_src(
             "struct Cell<T> { value: T }\n\
-             fn main() -> i64 {\n\
+             fn main() -> Word {\n\
                 let p = Cell { value: 1 };\n\
                 let q = Cell { value: true };\n\
                 let _ = q.value;\n\
@@ -2670,7 +2674,7 @@ mod tests {
     fn generic_enum_construction_typechecks() {
         check_src(
             "enum Maybe<T> { Just(T), Nothing }\n\
-             fn main() -> i64 {\n\
+             fn main() -> Word {\n\
                 let m = Maybe::Just(42);\n\
                 0\n\
              }",
@@ -2686,7 +2690,7 @@ mod tests {
         // function's return type.
         check_src(
             "enum Maybe<T> { Just(T), Nothing }\n\
-             fn main() -> i64 {\n\
+             fn main() -> Word {\n\
                 let m = Maybe::Just(42);\n\
                 match m {\n\
                     Maybe::Just(x) => x,\n\
@@ -2705,7 +2709,7 @@ mod tests {
         check_src(
             "struct Cell<T> { value: T }\n\
              struct Wrap<T> { inner: Cell<T> }\n\
-             fn main() -> i64 {\n\
+             fn main() -> Word {\n\
                 let w = Wrap { inner: Cell { value: 7 } };\n\
                 w.inner.value\n\
              }",
@@ -2718,10 +2722,10 @@ mod tests {
     #[test]
     fn trait_declaration_parses_and_typechecks() {
         check_src(
-            "trait Numeric { fn one() -> i64; }\n\
-             impl Numeric for i64 { fn one() -> i64 { 1 } }\n\
+            "trait Numeric { fn one() -> Word; }\n\
+             impl Numeric for Word { fn one() -> Word { 1 } }\n\
              fn use_it<T: Numeric>(x: T) -> T { x }\n\
-             fn main() -> i64 { use_it(7) }",
+             fn main() -> Word { use_it(7) }",
         )
         .unwrap();
     }
@@ -2731,10 +2735,10 @@ mod tests {
         // When the bound's required impl exists for the call's
         // argument type, the call type-checks.
         check_src(
-            "trait Tag { fn tag() -> i64; }\n\
-             impl Tag for bool { fn tag() -> i64 { 1 } }\n\
-             fn use_tag<T: Tag>(x: T) -> i64 { 0 }\n\
-             fn main() -> i64 { use_tag(true) }",
+            "trait Tag { fn tag() -> Word; }\n\
+             impl Tag for bool { fn tag() -> Word { 1 } }\n\
+             fn use_tag<T: Tag>(x: T) -> Word { 0 }\n\
+             fn main() -> Word { use_tag(true) }",
         )
         .unwrap();
     }
@@ -2745,10 +2749,10 @@ mod tests {
         // argument should fail bound validation because no `Tag`
         // impl exists for `i64`.
         let err = check_src(
-            "trait Tag { fn tag() -> i64; }\n\
-             impl Tag for bool { fn tag() -> i64 { 1 } }\n\
-             fn use_tag<T: Tag>(x: T) -> i64 { 0 }\n\
-             fn main() -> i64 { use_tag(7) }",
+            "trait Tag { fn tag() -> Word; }\n\
+             impl Tag for bool { fn tag() -> Word { 1 } }\n\
+             fn use_tag<T: Tag>(x: T) -> Word { 0 }\n\
+             fn main() -> Word { use_tag(7) }",
         )
         .unwrap_err();
         assert!(
@@ -2763,7 +2767,7 @@ mod tests {
         // Without a trait bound, any concrete argument is accepted.
         check_src(
             "fn id<T>(x: T) -> T { x }\n\
-             fn main() -> i64 { id(42) }",
+             fn main() -> Word { id(42) }",
         )
         .unwrap();
     }
@@ -2771,12 +2775,12 @@ mod tests {
     #[test]
     fn multiple_trait_bounds_on_one_param() {
         check_src(
-            "trait A { fn a() -> i64; }\n\
-             trait B { fn b() -> i64; }\n\
-             impl A for i64 { fn a() -> i64 { 1 } }\n\
-             impl B for i64 { fn b() -> i64 { 2 } }\n\
-             fn use_both<T: A + B>(x: T) -> i64 { 0 }\n\
-             fn main() -> i64 { use_both(7) }",
+            "trait A { fn a() -> Word; }\n\
+             trait B { fn b() -> Word; }\n\
+             impl A for Word { fn a() -> Word { 1 } }\n\
+             impl B for Word { fn b() -> Word { 2 } }\n\
+             fn use_both<T: A + B>(x: T) -> Word { 0 }\n\
+             fn main() -> Word { use_both(7) }",
         )
         .unwrap();
     }
@@ -2785,12 +2789,12 @@ mod tests {
     fn impl_method_with_extra_method_rejected() {
         // The trait does not declare `extra`, so the impl is invalid.
         let err = check_src(
-            "trait T { fn one() -> i64; }\n\
-             impl T for i64 {\n\
-                fn one() -> i64 { 1 }\n\
-                fn extra() -> i64 { 2 }\n\
+            "trait T { fn one() -> Word; }\n\
+             impl T for Word {\n\
+                fn one() -> Word { 1 }\n\
+                fn extra() -> Word { 2 }\n\
              }\n\
-             fn main() -> i64 { 0 }",
+             fn main() -> Word { 0 }",
         )
         .unwrap_err();
         assert!(err.message.contains("not in the trait"));
@@ -2801,9 +2805,9 @@ mod tests {
         // The trait declares `fn one() -> i64` (arity zero); the impl
         // supplies `fn one(x: i64) -> i64` (arity one). Arity mismatch.
         let err = check_src(
-            "trait T { fn one() -> i64; }\n\
-             impl T for i64 { fn one(x: i64) -> i64 { x } }\n\
-             fn main() -> i64 { 0 }",
+            "trait T { fn one() -> Word; }\n\
+             impl T for Word { fn one(x: Word) -> Word { x } }\n\
+             fn main() -> Word { 0 }",
         )
         .unwrap_err();
         assert!(err.message.contains("parameter"));
@@ -2816,10 +2820,10 @@ mod tests {
         // function per concrete call-site type, after which the
         // method call resolves to the impl's mangled function.
         check_src(
-            "trait Doubler { fn double(x: i64) -> i64; }\n\
-             impl Doubler for i64 { fn double(x: i64) -> i64 { x + x } }\n\
-             fn use_doubler<T: Doubler>(x: T) -> i64 { x.double() }\n\
-             fn main() -> i64 { use_doubler(21) }",
+            "trait Doubler { fn double(x: Word) -> Word; }\n\
+             impl Doubler for Word { fn double(x: Word) -> Word { x + x } }\n\
+             fn use_doubler<T: Doubler>(x: T) -> Word { x.double() }\n\
+             fn main() -> Word { use_doubler(21) }",
         )
         .unwrap();
     }
@@ -2827,10 +2831,10 @@ mod tests {
     #[test]
     fn method_call_resolves_to_impl() {
         check_src(
-            "trait Doubler { fn double(x: i64) -> i64; }\n\
-             impl Doubler for i64 { fn double(x: i64) -> i64 { x + x } }\n\
-             fn main() -> i64 {\n\
-                let n: i64 = 21;\n\
+            "trait Doubler { fn double(x: Word) -> Word; }\n\
+             impl Doubler for Word { fn double(x: Word) -> Word { x + x } }\n\
+             fn main() -> Word {\n\
+                let n: Word = 21;\n\
                 n.double()\n\
              }",
         )
@@ -2840,10 +2844,10 @@ mod tests {
     #[test]
     fn method_call_unknown_method_rejected() {
         let err = check_src(
-            "trait Doubler { fn double(x: i64) -> i64; }\n\
-             impl Doubler for i64 { fn double(x: i64) -> i64 { x + x } }\n\
-             fn main() -> i64 {\n\
-                let n: i64 = 21;\n\
+            "trait Doubler { fn double(x: Word) -> Word; }\n\
+             impl Doubler for Word { fn double(x: Word) -> Word { x + x } }\n\
+             fn main() -> Word {\n\
+                let n: Word = 21;\n\
                 n.triple()\n\
              }",
         )
@@ -2856,8 +2860,8 @@ mod tests {
         // The compile pipeline includes hoisting; the type checker
         // accepts the closure expression and the indirect call site.
         check_src(
-            "fn main() -> i64 {\n\
-                let f = |x: i64| x + 1;\n\
+            "fn main() -> Word {\n\
+                let f = |x: Word| x + 1;\n\
                 f(41)\n\
              }",
         )
@@ -2870,9 +2874,9 @@ mod tests {
         // Inference reach now resolves the call's return type and
         // specializes the generic function for the resulting type.
         check_src(
-            "fn make42() -> i64 { 42 }\n\
+            "fn make42() -> Word { 42 }\n\
              fn id<T>(x: T) -> T { x }\n\
-             fn main() -> i64 { id(make42()) }",
+             fn main() -> Word { id(make42()) }",
         )
         .unwrap();
     }
@@ -2887,8 +2891,8 @@ mod tests {
         // unbounded recursion. This is the conservative-verification
         // stance applied at the build step.
         let err = compile_src(
-            "fn main() -> i64 {\n\
-                let fact = |n: i64| if n <= 1 { 1 } else { n * fact(n - 1) };\n\
+            "fn main() -> Word {\n\
+                let fact = |n: Word| if n <= 1 { 1 } else { n * fact(n - 1) };\n\
                 fact(5)\n\
              }",
         )
@@ -2906,9 +2910,9 @@ mod tests {
         // local is rejected for the same reason as the simpler
         // recursive case.
         let err = compile_src(
-            "fn main() -> i64 {\n\
-                let base: i64 = 1000;\n\
-                let fact = |n: i64| if n <= 1 { base } else { n * fact(n - 1) };\n\
+            "fn main() -> Word {\n\
+                let base: Word = 1000;\n\
+                let fact = |n: Word| if n <= 1 { base } else { n * fact(n - 1) };\n\
                 fact(3)\n\
              }",
         )
@@ -2927,11 +2931,11 @@ mod tests {
         // compile pipeline must succeed because the receiver
         // resolves to a concrete type only after monomorphization.
         compile_src(
-            "trait Doubler { fn double(x: i64) -> i64; }\n\
-             impl Doubler for i64 { fn double(x: i64) -> i64 { x + x } }\n\
-             struct Holder { value: i64 }\n\
-             fn use_doubler<T: Doubler>(x: T) -> i64 { x.double() }\n\
-             fn main() -> i64 {\n\
+            "trait Doubler { fn double(x: Word) -> Word; }\n\
+             impl Doubler for Word { fn double(x: Word) -> Word { x + x } }\n\
+             struct Holder { value: Word }\n\
+             fn use_doubler<T: Doubler>(x: T) -> Word { x.double() }\n\
+             fn main() -> Word {\n\
                  let h = Holder { value: 21 };\n\
                  use_doubler(h.value)\n\
              }",
@@ -2946,7 +2950,7 @@ mod tests {
         // specialized EnumDef with the payload type substituted.
         check_src(
             "enum Maybe<T> { Just(T), Nothing }\n\
-             fn main() -> i64 {\n\
+             fn main() -> Word {\n\
                 let m = Maybe::Just(42);\n\
                 match m {\n\
                     Maybe::Just(x) => x,\n\
@@ -2963,10 +2967,10 @@ mod tests {
         // struct specialization gives the field a concrete type so
         // the method call resolves to the impl.
         check_src(
-            "trait Doubler { fn double(x: i64) -> i64; }\n\
-             impl Doubler for i64 { fn double(x: i64) -> i64 { x + x } }\n\
+            "trait Doubler { fn double(x: Word) -> Word; }\n\
+             impl Doubler for Word { fn double(x: Word) -> Word { x + x } }\n\
              struct Cell<T> { value: T }\n\
-             fn main() -> i64 {\n\
+             fn main() -> Word {\n\
                 let c = Cell { value: 21 };\n\
                 c.value.double()\n\
              }",
@@ -2980,9 +2984,9 @@ mod tests {
         // invokes it. The body uses the parameter as a callable
         // through indirect dispatch.
         check_src(
-            "fn apply<F>(f: F, x: i64) -> i64 { f(x) }\n\
-             fn main() -> i64 {\n\
-                let g = |x: i64| x + 1;\n\
+            "fn apply<F>(f: F, x: Word) -> Word { f(x) }\n\
+             fn main() -> Word {\n\
+                let g = |x: Word| x + 1;\n\
                 apply(g, 41)\n\
              }",
         )
@@ -2992,9 +2996,9 @@ mod tests {
     #[test]
     fn closure_captures_outer_local() {
         check_src(
-            "fn main() -> i64 {\n\
-                let n: i64 = 10;\n\
-                let f = |x: i64| x + n;\n\
+            "fn main() -> Word {\n\
+                let n: Word = 10;\n\
+                let f = |x: Word| x + n;\n\
                 f(5)\n\
              }",
         )
@@ -3004,7 +3008,7 @@ mod tests {
     #[test]
     fn closure_no_param_callable() {
         check_src(
-            "fn main() -> i64 {\n\
+            "fn main() -> Word {\n\
                 let f = || 42;\n\
                 f()\n\
              }",
@@ -3018,9 +3022,9 @@ mod tests {
         // type check. The inner closure captures the outer closure's
         // parameter; the hoist pass should lift each separately.
         check_src(
-            "fn main() -> i64 {\n\
-                let outer = |x: i64| {\n\
-                    let inner = |y: i64| x + y;\n\
+            "fn main() -> Word {\n\
+                let outer = |x: Word| {\n\
+                    let inner = |y: Word| x + y;\n\
                     inner(5)\n\
                 };\n\
                 outer(7)\n\
@@ -3036,10 +3040,10 @@ mod tests {
         // which must succeed for the receiver's method dispatch to
         // resolve in the specialized body.
         compile_src(
-            "trait Doubler { fn double(x: i64) -> i64; }\n\
-             impl Doubler for i64 { fn double(x: i64) -> i64 { x + x } }\n\
-             fn use_doubler<T: Doubler>(x: T) -> i64 { x.double() }\n\
-             fn main() -> i64 {\n\
+            "trait Doubler { fn double(x: Word) -> Word; }\n\
+             impl Doubler for Word { fn double(x: Word) -> Word { x + x } }\n\
+             fn use_doubler<T: Doubler>(x: T) -> Word { x.double() }\n\
+             fn main() -> Word {\n\
                  let t = (21, true);\n\
                  use_doubler(t.0)\n\
              }",
@@ -3054,10 +3058,10 @@ mod tests {
         // type, looked up under the `<head>::<method>` key in the
         // function-return map populated from program.impls.
         compile_src(
-            "trait Doubler { fn double(x: i64) -> i64; }\n\
-             impl Doubler for i64 { fn double(x: i64) -> i64 { x + x } }\n\
-             fn use_doubler<T: Doubler>(x: T) -> i64 { x.double() }\n\
-             fn main() -> i64 {\n\
+            "trait Doubler { fn double(x: Word) -> Word; }\n\
+             impl Doubler for Word { fn double(x: Word) -> Word { x + x } }\n\
+             fn use_doubler<T: Doubler>(x: T) -> Word { x.double() }\n\
+             fn main() -> Word {\n\
                  use_doubler((21).double())\n\
              }",
         )
@@ -3069,11 +3073,11 @@ mod tests {
         // The argument is `-n` where `n: i64`. UnaryOp::Neg preserves
         // the operand type.
         compile_src(
-            "trait Doubler { fn double(x: i64) -> i64; }\n\
-             impl Doubler for i64 { fn double(x: i64) -> i64 { x + x } }\n\
-             fn use_doubler<T: Doubler>(x: T) -> i64 { x.double() }\n\
-             fn main() -> i64 {\n\
-                 let n: i64 = 21;\n\
+            "trait Doubler { fn double(x: Word) -> Word; }\n\
+             impl Doubler for Word { fn double(x: Word) -> Word { x + x } }\n\
+             fn use_doubler<T: Doubler>(x: T) -> Word { x.double() }\n\
+             fn main() -> Word {\n\
+                 let n: Word = 21;\n\
                  use_doubler(-n)\n\
              }",
         )
@@ -3085,11 +3089,11 @@ mod tests {
         // The argument is `n + 11`. Arithmetic BinOps preserve operand
         // type, which the analysis takes from the left operand.
         compile_src(
-            "trait Doubler { fn double(x: i64) -> i64; }\n\
-             impl Doubler for i64 { fn double(x: i64) -> i64 { x + x } }\n\
-             fn use_doubler<T: Doubler>(x: T) -> i64 { x.double() }\n\
-             fn main() -> i64 {\n\
-                 let n: i64 = 10;\n\
+            "trait Doubler { fn double(x: Word) -> Word; }\n\
+             impl Doubler for Word { fn double(x: Word) -> Word { x + x } }\n\
+             fn use_doubler<T: Doubler>(x: T) -> Word { x.double() }\n\
+             fn main() -> Word {\n\
+                 let n: Word = 10;\n\
                  use_doubler(n + 11)\n\
              }",
         )
@@ -3102,11 +3106,11 @@ mod tests {
         // pass infers the element type from the array's declared
         // element type. The full compile pipeline must succeed.
         compile_src(
-            "trait Doubler { fn double(x: i64) -> i64; }\n\
-             impl Doubler for i64 { fn double(x: i64) -> i64 { x + x } }\n\
-             fn use_doubler<T: Doubler>(x: T) -> i64 { x.double() }\n\
-             fn main() -> i64 {\n\
-                 let a: [i64; 2] = [21, 42];\n\
+            "trait Doubler { fn double(x: Word) -> Word; }\n\
+             impl Doubler for Word { fn double(x: Word) -> Word { x + x } }\n\
+             fn use_doubler<T: Doubler>(x: T) -> Word { x.double() }\n\
+             fn main() -> Word {\n\
+                 let a: [Word; 2] = [21, 42];\n\
                  use_doubler(a[0])\n\
              }",
         )
@@ -3119,10 +3123,10 @@ mod tests {
         // enclosing function and the outer closure's parameter. Both
         // captures must be threaded through the hoist pass.
         check_src(
-            "fn main() -> i64 {\n\
-                let base: i64 = 100;\n\
-                let outer = |x: i64| {\n\
-                    let inner = |y: i64| base + x + y;\n\
+            "fn main() -> Word {\n\
+                let base: Word = 100;\n\
+                let outer = |x: Word| {\n\
+                    let inner = |y: Word| base + x + y;\n\
                     inner(3)\n\
                 };\n\
                 outer(7)\n\
@@ -3137,9 +3141,9 @@ mod tests {
         // supplies `fn double(x: bool) -> i64`. Parameter type
         // mismatch must be rejected.
         let err = check_src(
-            "trait Doubler { fn double(x: i64) -> i64; }\n\
-             impl Doubler for i64 { fn double(x: bool) -> i64 { 0 } }\n\
-             fn main() -> i64 { 0 }",
+            "trait Doubler { fn double(x: Word) -> Word; }\n\
+             impl Doubler for Word { fn double(x: bool) -> Word { 0 } }\n\
+             fn main() -> Word { 0 }",
         )
         .unwrap_err();
         assert!(
@@ -3154,9 +3158,9 @@ mod tests {
         // Trait declares `fn double(x: i64) -> i64` but the impl
         // returns `bool`. Return type mismatch must be rejected.
         let err = check_src(
-            "trait Doubler { fn double(x: i64) -> i64; }\n\
-             impl Doubler for i64 { fn double(x: i64) -> bool { true } }\n\
-             fn main() -> i64 { 0 }",
+            "trait Doubler { fn double(x: Word) -> Word; }\n\
+             impl Doubler for Word { fn double(x: Word) -> bool { true } }\n\
+             fn main() -> Word { 0 }",
         )
         .unwrap_err();
         assert!(err.message.contains("returns"));
@@ -3165,8 +3169,8 @@ mod tests {
     #[test]
     fn impl_for_unknown_trait_rejected() {
         let err = check_src(
-            "impl Nonexistent for i64 { fn x() -> i64 { 0 } }\n\
-             fn main() -> i64 { 0 }",
+            "impl Nonexistent for Word { fn x() -> Word { 0 } }\n\
+             fn main() -> Word { 0 }",
         )
         .unwrap_err();
         assert!(err.message.contains("unknown trait"));
@@ -3177,11 +3181,11 @@ mod tests {
         // i64 implements A but not B, so a call requiring T: A + B
         // with i64 must fail.
         let err = check_src(
-            "trait A { fn a() -> i64; }\n\
-             trait B { fn b() -> i64; }\n\
-             impl A for i64 { fn a() -> i64 { 1 } }\n\
-             fn use_both<T: A + B>(x: T) -> i64 { 0 }\n\
-             fn main() -> i64 { use_both(7) }",
+            "trait A { fn a() -> Word; }\n\
+             trait B { fn b() -> Word; }\n\
+             impl A for Word { fn a() -> Word { 1 } }\n\
+             fn use_both<T: A + B>(x: T) -> Word { 0 }\n\
+             fn main() -> Word { use_both(7) }",
         )
         .unwrap_err();
         assert!(err.message.contains("does not implement"));
@@ -3194,7 +3198,7 @@ mod tests {
         // against incompatible values and surfaces a type error.
         let err = check_src(
             "struct SamePair<T> { a: T, b: T }\n\
-             fn main() -> i64 {\n\
+             fn main() -> Word {\n\
                 let p = SamePair { a: 1, b: true };\n\
                 0\n\
              }",

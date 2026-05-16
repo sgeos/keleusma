@@ -99,7 +99,7 @@ mod tests {
     #[test]
     fn midi_to_freq_a4() {
         let val = run_with_natives(
-            "use audio::midi_to_freq\nfn main() -> f64 { audio::midi_to_freq(69) }",
+            "use audio::midi_to_freq\nfn main() -> Float { audio::midi_to_freq(69) }",
         );
         match val {
             Value::Float(f) => assert!((f - 440.0).abs() < 0.01),
@@ -110,7 +110,7 @@ mod tests {
     #[test]
     fn midi_to_freq_c4() {
         let val = run_with_natives(
-            "use audio::midi_to_freq\nfn main() -> f64 { audio::midi_to_freq(60) }",
+            "use audio::midi_to_freq\nfn main() -> Float { audio::midi_to_freq(60) }",
         );
         match val {
             Value::Float(f) => assert!((f - 261.63).abs() < 0.01),
@@ -121,7 +121,7 @@ mod tests {
     #[test]
     fn freq_to_midi_440() {
         let val = run_with_natives(
-            "use audio::freq_to_midi\nfn main() -> i64 { audio::freq_to_midi(440.0) }",
+            "use audio::freq_to_midi\nfn main() -> Word { audio::freq_to_midi(440.0) }",
         );
         assert_eq!(val, Value::Int(69));
     }
@@ -129,7 +129,7 @@ mod tests {
     #[test]
     fn db_to_linear_zero() {
         let val = run_with_natives(
-            "use audio::db_to_linear\nfn main() -> f64 { audio::db_to_linear(0.0) }",
+            "use audio::db_to_linear\nfn main() -> Float { audio::db_to_linear(0.0) }",
         );
         match val {
             Value::Float(f) => assert!((f - 1.0).abs() < 0.001),
@@ -140,7 +140,7 @@ mod tests {
     #[test]
     fn db_to_linear_minus6() {
         let val = run_with_natives(
-            "use audio::db_to_linear\nfn main() -> f64 { audio::db_to_linear(-6.0) }",
+            "use audio::db_to_linear\nfn main() -> Float { audio::db_to_linear(-6.0) }",
         );
         match val {
             Value::Float(f) => assert!((f - 0.501).abs() < 0.01),
@@ -151,7 +151,7 @@ mod tests {
     #[test]
     fn linear_to_db_one() {
         let val = run_with_natives(
-            "use audio::linear_to_db\nfn main() -> f64 { audio::linear_to_db(1.0) }",
+            "use audio::linear_to_db\nfn main() -> Float { audio::linear_to_db(1.0) }",
         );
         match val {
             Value::Float(f) => assert!(f.abs() < 0.001),
@@ -162,7 +162,7 @@ mod tests {
     #[test]
     fn clamp_within_range() {
         let val =
-            run_with_natives("use math::clamp\nfn main() -> f64 { math::clamp(0.5, 0.0, 1.0) }");
+            run_with_natives("use math::clamp\nfn main() -> Float { math::clamp(0.5, 0.0, 1.0) }");
         match val {
             Value::Float(f) => assert!((f - 0.5).abs() < 0.001),
             other => panic!("expected Float, got {:?}", other),
@@ -172,7 +172,7 @@ mod tests {
     #[test]
     fn clamp_below_min() {
         let val =
-            run_with_natives("use math::clamp\nfn main() -> f64 { math::clamp(-1.0, 0.0, 1.0) }");
+            run_with_natives("use math::clamp\nfn main() -> Float { math::clamp(-1.0, 0.0, 1.0) }");
         match val {
             Value::Float(f) => assert!(f.abs() < 0.001),
             other => panic!("expected Float, got {:?}", other),
@@ -182,7 +182,7 @@ mod tests {
     #[test]
     fn clamp_above_max() {
         let val =
-            run_with_natives("use math::clamp\nfn main() -> f64 { math::clamp(5.0, 0.0, 1.0) }");
+            run_with_natives("use math::clamp\nfn main() -> Float { math::clamp(5.0, 0.0, 1.0) }");
         match val {
             Value::Float(f) => assert!((f - 1.0).abs() < 0.001),
             other => panic!("expected Float, got {:?}", other),
@@ -192,7 +192,7 @@ mod tests {
     #[test]
     fn lerp_midpoint() {
         let val =
-            run_with_natives("use math::lerp\nfn main() -> f64 { math::lerp(0.0, 100.0, 0.5) }");
+            run_with_natives("use math::lerp\nfn main() -> Float { math::lerp(0.0, 100.0, 0.5) }");
         match val {
             Value::Float(f) => assert!((f - 50.0).abs() < 0.001),
             other => panic!("expected Float, got {:?}", other),
@@ -201,7 +201,7 @@ mod tests {
 
     #[test]
     fn sin_zero() {
-        let val = run_with_natives("use math::sin\nfn main() -> f64 { math::sin(0.0) }");
+        let val = run_with_natives("use math::sin\nfn main() -> Float { math::sin(0.0) }");
         match val {
             Value::Float(f) => assert!(f.abs() < 0.001),
             other => panic!("expected Float, got {:?}", other),
@@ -210,7 +210,7 @@ mod tests {
 
     #[test]
     fn pow_two_cubed() {
-        let val = run_with_natives("use math::pow\nfn main() -> f64 { math::pow(2.0, 3.0) }");
+        let val = run_with_natives("use math::pow\nfn main() -> Float { math::pow(2.0, 3.0) }");
         match val {
             Value::Float(f) => assert!((f - 8.0).abs() < 0.001),
             other => panic!("expected Float, got {:?}", other),
@@ -219,7 +219,7 @@ mod tests {
 
     #[test]
     fn abs_negative() {
-        let val = run_with_natives("use math::abs\nfn main() -> f64 { math::abs(-42.5) }");
+        let val = run_with_natives("use math::abs\nfn main() -> Float { math::abs(-42.5) }");
         match val {
             Value::Float(f) => assert!((f - 42.5).abs() < 0.001),
             other => panic!("expected Float, got {:?}", other),
@@ -229,7 +229,7 @@ mod tests {
     #[test]
     fn min_max() {
         let val = run_with_natives(
-            "use math::min\nuse math::max\nfn main() -> f64 { math::min(10.0, math::max(3.0, 5.0)) }",
+            "use math::min\nuse math::max\nfn main() -> Float { math::min(10.0, math::max(3.0, 5.0)) }",
         );
         match val {
             Value::Float(f) => assert!((f - 5.0).abs() < 0.001),

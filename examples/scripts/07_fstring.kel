@@ -11,13 +11,13 @@
 use to_string
 use concat
 
-fn add(a: i64, b: i64) -> i64 {
+fn add(a: Word, b: Word) -> Word {
     a + b
 }
 
 fn main() -> Text {
     let name = "Keleusma";
-    let a: i64 = 7;
-    let b: i64 = 2;
+    let a: Word = 7;
+    let b: Word = 2;
     f"hello, {name}! {a} plus {b} is {add(a, b)}"
 }

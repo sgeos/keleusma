@@ -23,14 +23,14 @@ use keleusma::{Arena, Value};
 
 fn main() {
     let int_only = r#"
-        fn main() -> i64 {
-            let x: i64 = 7;
+        fn main() -> Word {
+            let x: Word = 7;
             x * 6
         }
     "#;
     let with_float = r#"
-        fn main() -> f64 {
-            let f: f64 = 1.5;
+        fn main() -> Float {
+            let f: Float = 1.5;
             f
         }
     "#;
@@ -62,7 +62,7 @@ fn main() {
     println!("=== embedded_8 target (8-bit, no floats, no strings) ===");
     compile_with_target_show_widths(int_only, &Target::embedded_8());
     compile_and_run(int_only, &Target::embedded_8());
-    let with_string = "fn main() -> i64 { let s = \"hi\"; 0 }";
+    let with_string = "fn main() -> Word { let s = \"hi\"; 0 }";
     let result = compile_with_target(
         &parse(&tokenize(with_string).expect("lex")).expect("parse"),
         &Target::embedded_8(),

@@ -23,8 +23,8 @@ Coverage in place.
 - Arithmetic and comparison operations have type-compatible operands.
 - Field access references defined fields on the operand type.
 - Struct construction provides defined fields with the right types.
-- Tuple index in range and array index of i64.
-- Cast operations are between admissible types (i64 to f64 and back).
+- Tuple index in range and array index of Word.
+- Cast operations are between admissible types (Word to Float and back).
 - Identifier references resolve to known locals or function names.
 - If-else branch type agreement.
 - For-range bound types and for-in element type extraction.
@@ -56,8 +56,8 @@ For-in over array expressions is supported when the source expression's static a
 - Data segment field source. `for x in ctx.items` where `items` is declared `[T; N]`. Length from data block declaration.
 - Let-bound array literal. `let arr = [1, 2, 3]; for x in arr`. Length traced through the local alias chain to the originating `NewArray`.
 - Struct field access from a local. `let b = Box { items: [..] }; for x in b.items`. The compiler tracks local variable types via let annotations and inference (struct construction, function call, field access, identifier, array literal, literal). The local's type is consulted to resolve the field access to a typed array.
-- Local of typed array. `let arr: [i64; 4] = make(); for x in arr`. The local's annotated type carries through.
-- Function parameter typed array. `fn sum(arr: [i64; N]) -> i64 { for x in arr ... }`. Parameter types are recorded on the locals at function entry.
+- Local of typed array. `let arr: [Word; 4] = make(); for x in arr`. The local's annotated type carries through.
+- Function parameter typed array. `fn sum(arr: [Word; N]) -> Word { for x in arr ... }`. Parameter types are recorded on the locals at function entry.
 
 Nine tests cover the resolved paths. `for_in_over_function_return_passes_strict_verify`, `for_in_over_data_segment_field_passes_strict_verify`, `for_in_over_array_literal_runs`, `for_in_over_struct_field_from_local_passes_strict_verify`, `for_in_over_param_array_passes_strict_verify`, `for_in_over_nested_array_index_passes_strict_verify`, and `for_in_over_match_array_result_passes_strict_verify`.
 
@@ -154,13 +154,13 @@ The zero-copy path borrows the buffer's lifetime through `Vm<'a>`. A program loa
 
 Future work that interacts with P10 but is outside its scope:
 
-- B10 target portability. The wire format is endian-stable through rkyv. Float widths are still hardcoded to f64.
+- B10 target portability. The wire format is endian-stable through rkyv. Float widths are still hardcoded to Float.
 - B9 hot update of yielded static strings. Under zero-copy execution from a swappable buffer, `Value::StaticStr` materialized from the buffer must be valid for as long as the host retains it.
 - Optimization. The per-op `op_from_archived` call costs a discriminant match per fetch. A future iteration may cache the chunk's archived ops slice or use a JIT for hot paths.
 
 Phase 2 step 2 also interacts with two backlog items.
 
-B10 (target portability) interacts because the rkyv encoding is endian-stable but float and integer width assumptions still affect runtime semantics. The recent log2 encoding work covers integer widths through masking. Float widths are still hardcoded to f64.
+B10 (target portability) interacts because the rkyv encoding is endian-stable but float and integer width assumptions still affect runtime semantics. The recent log2 encoding work covers integer widths through masking. Float widths are still hardcoded to Float.
 
 B9 (hot update of yielded static strings) interacts because yielded `Value::StaticStr` under step 2 would be an `ArchivedString` that points into a specific bytecode buffer. A hot update that swaps the buffer invalidates outstanding archived references the host has retained. The resolution paths in B9 (host-responsibility consumption or eager materialization at yield) must be in place before step 2 fully replaces the owned execution path.
 

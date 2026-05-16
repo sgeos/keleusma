@@ -18,10 +18,10 @@ use keleusma::{Arena, Value};
 
 fn main() {
     let src = r#"
-        trait Doubler { fn double(x: i64) -> i64; }
-        impl Doubler for i64 { fn double(x: i64) -> i64 { x + x } }
+        trait Doubler { fn double(x: Word) -> Word; }
+        impl Doubler for Word { fn double(x: Word) -> Word { x + x } }
         struct Cell<T> { value: T }
-        fn main() -> i64 {
+        fn main() -> Word {
             let c = Cell { value: 21 };
             c.value.double()
         }

@@ -32,7 +32,7 @@ fn main() {
         use slice
         fn main() -> Text {
             let name = "Keleusma";
-            let n: i64 = 42;
+            let n: Word = 42;
             let greeting = f"hello, {name}! n = {n}";
             let head = slice(greeting, 0, 5);
             concat(head, "...")

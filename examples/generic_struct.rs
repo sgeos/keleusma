@@ -17,7 +17,7 @@ use keleusma::{Arena, Value};
 fn main() {
     let src = r#"
         struct Cell<T> { value: T }
-        fn main() -> i64 {
+        fn main() -> Word {
             let c = Cell { value: 42 };
             c.value
         }

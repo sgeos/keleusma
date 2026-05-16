@@ -19,10 +19,10 @@ use keleusma::{Arena, Value};
 
 fn main() {
     let src = r#"
-        trait Doubler { fn double(x: i64) -> i64; }
-        impl Doubler for i64 { fn double(x: i64) -> i64 { x + x } }
-        fn main() -> i64 {
-            let n: i64 = 21;
+        trait Doubler { fn double(x: Word) -> Word; }
+        impl Doubler for Word { fn double(x: Word) -> Word { x + x } }
+        fn main() -> Word {
+            let n: Word = 21;
             n.double()
         }
     "#;

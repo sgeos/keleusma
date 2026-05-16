@@ -10,7 +10,7 @@
 // Run: keleusma run examples/scripts/04_for_in.kel
 // Expected output: 40
 
-fn main() -> i64 {
+fn main() -> Word {
     let xs = [10, 20, 30, 40];
 
     for x in xs {

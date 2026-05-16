@@ -506,11 +506,28 @@ impl TypeExpr {
 }
 
 /// Primitive type.
+///
+/// Keleusma's V0.2 canonical numeric type set is `Byte`, `Word`,
+/// `Fixed`, `Float`. The surface keyword convention is uppercase
+/// initial letter; the legacy `i64`/`f64` lowercase forms are
+/// rejected at parse time. `Byte` and `Fixed` are introduced
+/// alongside the rename; this enum currently carries `Word` and
+/// `Float` only, with `Byte` and `Fixed` to follow in subsequent
+/// commits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PrimType {
-    I64,
-    F64,
+    /// Target word size. Signed two's complement. On the V0.1.x
+    /// runtime this is 64-bit; smaller widths are reserved for
+    /// future embedded targets (16/32-bit) and are documented in
+    /// the Target descriptor.
+    Word,
+    /// Target floating-point width. IEEE 754 binary64 on the host
+    /// runtime; narrower widths are reserved for future embedded
+    /// targets.
+    Float,
+    /// Boolean.
     Bool,
+    /// UTF-8 text.
     Text,
 }
 

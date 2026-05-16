@@ -4,15 +4,15 @@
 // Expected output: 7
 
 struct Point {
-    x: i64,
-    y: i64,
+    x: Word,
+    y: Word,
 }
 
-fn manhattan_norm(p: Point) -> i64 {
+fn manhattan_norm(p: Point) -> Word {
     p.x + p.y
 }
 
-fn main() -> i64 {
+fn main() -> Word {
     let origin_offset = Point { x: 3, y: 4 };
     manhattan_norm(origin_offset)
 }

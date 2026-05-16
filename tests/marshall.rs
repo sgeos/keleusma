@@ -148,7 +148,7 @@ fn build_vm<'arena>(src: &str, arena: &'arena Arena) -> Vm<'static, 'arena> {
 fn register_fn_arity_zero() {
     let arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
     let mut vm = build_vm(
-        "use host::magic_number\nfn main() -> f64 { host::magic_number() }",
+        "use host::magic_number\nfn main() -> Float { host::magic_number() }",
         &arena,
     );
     vm.register_fn("host::magic_number", || -> f64 { 42.5 });
@@ -165,7 +165,7 @@ fn register_fn_arity_zero() {
 fn register_fn_arity_one() {
     let arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
     let mut vm = build_vm(
-        "use host::double\nfn main() -> i64 { host::double(21) }",
+        "use host::double\nfn main() -> Word { host::double(21) }",
         &arena,
     );
     vm.register_fn("host::double", |x: i64| -> i64 { x * 2 });
@@ -179,7 +179,7 @@ fn register_fn_arity_one() {
 fn register_fn_arity_two() {
     let arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
     let mut vm = build_vm(
-        "use host::add\nfn main() -> i64 { host::add(3, 4) }",
+        "use host::add\nfn main() -> Word { host::add(3, 4) }",
         &arena,
     );
     vm.register_fn("host::add", |a: i64, b: i64| -> i64 { a + b });
@@ -193,7 +193,7 @@ fn register_fn_arity_two() {
 fn register_fn_arity_four() {
     let arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
     let mut vm = build_vm(
-        "use host::sum4\nfn main() -> i64 { host::sum4(1, 2, 3, 4) }",
+        "use host::sum4\nfn main() -> Word { host::sum4(1, 2, 3, 4) }",
         &arena,
     );
     vm.register_fn("host::sum4", |a: i64, b: i64, c: i64, d: i64| -> i64 {
@@ -209,7 +209,7 @@ fn register_fn_arity_four() {
 fn register_fn_fallible_propagates_error() {
     let arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
     let mut vm = build_vm(
-        "use host::div\nfn main() -> i64 { host::div(100, 0) }",
+        "use host::div\nfn main() -> Word { host::div(100, 0) }",
         &arena,
     );
     vm.register_fn_fallible("host::div", |a: i64, b: i64| -> Result<i64, VmError> {
@@ -231,8 +231,8 @@ fn register_fn_with_derived_struct_arg() {
     let arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
     let mut vm = build_vm(
         "use host::magnitude\n\
-         struct Point { x: f64, y: f64 }\n\
-         fn main() -> f64 { host::magnitude(Point { x: 3.0, y: 4.0 }) }",
+         struct Point { x: Float, y: Float }\n\
+         fn main() -> Float { host::magnitude(Point { x: 3.0, y: 4.0 }) }",
         &arena,
     );
     vm.register_fn("host::magnitude", |p: Point| -> f64 {
@@ -252,8 +252,8 @@ fn register_fn_with_derived_struct_return() {
     let arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
     let mut vm = build_vm(
         "use host::origin\n\
-         struct Point { x: f64, y: f64 }\n\
-         fn main() -> f64 { host::origin().x }",
+         struct Point { x: Float, y: Float }\n\
+         fn main() -> Float { host::origin().x }",
         &arena,
     );
     vm.register_fn("host::origin", || -> Point { Point { x: 0.0, y: 0.0 } });
@@ -270,13 +270,13 @@ fn register_fn_with_derived_struct_return() {
 fn register_fn_argument_type_mismatch() {
     let arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
     let mut vm = build_vm(
-        "use host::need_int\nfn main() -> i64 { host::need_int(true) }",
+        "use host::need_int\nfn main() -> Word { host::need_int(true) }",
         &arena,
     );
     vm.register_fn("host::need_int", |x: i64| -> i64 { x * 2 });
     let err = vm.call(&[]).unwrap_err();
     match err {
-        VmError::TypeError(msg) => assert!(msg.contains("i64")),
+        VmError::TypeError(msg) => assert!(msg.contains("Word")),
         other => panic!("expected TypeError, got {:?}", other),
     }
 }

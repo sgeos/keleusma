@@ -1997,7 +1997,7 @@ impl<'a, 'arena> Vm<'a, 'arena> {
                         Value::Int(i) => sp!(self, Value::Float(i as f64)),
                         v => {
                             return Err(VmError::TypeError(format!(
-                                "cannot cast {} to f64",
+                                "cannot cast {} to Float",
                                 v.type_name()
                             )));
                         }
@@ -2009,7 +2009,7 @@ impl<'a, 'arena> Vm<'a, 'arena> {
                         Value::Float(f) => sp!(self, Value::Int(f as i64)),
                         v => {
                             return Err(VmError::TypeError(format!(
-                                "cannot cast {} to i64",
+                                "cannot cast {} to Word",
                                 v.type_name()
                             )));
                         }
@@ -2129,14 +2129,14 @@ mod tests {
     #[test]
     fn monomorphize_generic_enum_with_match_pattern() {
         // Regression: the monomorphizer renamed the enum
-        // construction site (`Maybe::Just(42)` to `Maybe__i64::Just`)
+        // construction site (`Maybe::Just(42)` to `Maybe__Word::Just`)
         // but match-arm patterns retained the original generic
         // enum name, producing `enum pattern Maybe::Just does not
-        // match scrutinee type Maybe__i64`. Both sites must
+        // match scrutinee type Maybe__Word`. Both sites must
         // rewrite consistently.
         let val = run_expect(
             "enum Maybe<T> { Just(T), Nothing }\n\
-             fn main() -> i64 {\n\
+             fn main() -> Word {\n\
                 let m = Maybe::Just(42);\n\
                 match m {\n\
                     Maybe::Just(x) => x,\n\
@@ -2152,16 +2152,16 @@ mod tests {
     fn monomorphize_nested_generic_structs_resolves_field_types() {
         // Regression: the struct specializer substituted type
         // parameters in field declarations (`inner: Cell<T>`
-        // became `inner: Cell<i64>`) but did not rewrite the
+        // became `inner: Cell<Word>`) but did not rewrite the
         // substituted type to the emitted specialization name
-        // (`Cell__i64`), producing `field Wrap__i64.inner expects
-        // Cell<i64>, got Cell__i64` at type check. The
+        // (`Cell__Word`), producing `field Wrap__Word.inner expects
+        // Cell<Word>, got Cell__Word` at type check. The
         // substitution now resolves nested generic instantiations
         // to their specialization names.
         let val = run_expect(
             "struct Cell<T> { value: T }\n\
              struct Wrap<T> { inner: Cell<T> }\n\
-             fn main() -> i64 {\n\
+             fn main() -> Word {\n\
                 let w = Wrap { inner: Cell { value: 7 } };\n\
                 w.inner.value\n\
              }",
@@ -2172,19 +2172,19 @@ mod tests {
 
     #[test]
     fn eval_literal() {
-        let val = run_expect("fn main() -> i64 { 42 }", &[]);
+        let val = run_expect("fn main() -> Word { 42 }", &[]);
         assert_eq!(val, Value::Int(42));
     }
 
     #[test]
     fn eval_add() {
-        let val = run_expect("fn main() -> i64 { 10 + 32 }", &[]);
+        let val = run_expect("fn main() -> Word { 10 + 32 }", &[]);
         assert_eq!(val, Value::Int(42));
     }
 
     #[test]
     fn eval_arithmetic() {
-        let val = run_expect("fn main() -> i64 { (2 + 3) * 4 - 1 }", &[]);
+        let val = run_expect("fn main() -> Word { (2 + 3) * 4 - 1 }", &[]);
         assert_eq!(val, Value::Int(19));
     }
 
@@ -2208,7 +2208,7 @@ mod tests {
 
     #[test]
     fn eval_negation() {
-        let val = run_expect("fn main() -> i64 { -42 }", &[]);
+        let val = run_expect("fn main() -> Word { -42 }", &[]);
         assert_eq!(val, Value::Int(-42));
     }
 
@@ -2220,26 +2220,26 @@ mod tests {
 
     #[test]
     fn eval_if_true() {
-        let val = run_expect("fn main() -> i64 { if true { 1 } else { 2 } }", &[]);
+        let val = run_expect("fn main() -> Word { if true { 1 } else { 2 } }", &[]);
         assert_eq!(val, Value::Int(1));
     }
 
     #[test]
     fn eval_if_false() {
-        let val = run_expect("fn main() -> i64 { if false { 1 } else { 2 } }", &[]);
+        let val = run_expect("fn main() -> Word { if false { 1 } else { 2 } }", &[]);
         assert_eq!(val, Value::Int(2));
     }
 
     #[test]
     fn eval_let_binding() {
-        let val = run_expect("fn main() -> i64 { let x = 10; let y = 32; x + y }", &[]);
+        let val = run_expect("fn main() -> Word { let x = 10; let y = 32; x + y }", &[]);
         assert_eq!(val, Value::Int(42));
     }
 
     #[test]
     fn eval_function_call() {
         let val = run_expect(
-            "fn double(x: i64) -> i64 { x * 2 }\nfn main() -> i64 { double(21) }",
+            "fn double(x: Word) -> Word { x * 2 }\nfn main() -> Word { double(21) }",
             &[],
         );
         assert_eq!(val, Value::Int(42));
@@ -2248,7 +2248,7 @@ mod tests {
     #[test]
     fn eval_nested_calls() {
         let val = run_expect(
-            "fn double(x: i64) -> i64 { x * 2 }\nfn main() -> i64 { double(double(10)) + 2 }",
+            "fn double(x: Word) -> Word { x * 2 }\nfn main() -> Word { double(double(10)) + 2 }",
             &[],
         );
         assert_eq!(val, Value::Int(42));
@@ -2256,14 +2256,14 @@ mod tests {
 
     #[test]
     fn eval_with_args() {
-        let val = run_expect("fn main(x: i64) -> i64 { x + 1 }", &[Value::Int(41)]);
+        let val = run_expect("fn main(x: Word) -> Word { x + 1 }", &[Value::Int(41)]);
         assert_eq!(val, Value::Int(42));
     }
 
     #[test]
     fn eval_for_range() {
         let val = run_expect(
-            "fn main() -> i64 { let sum = 0; for i in 0..5 { let x = sum + i; } sum }",
+            "fn main() -> Word { let sum = 0; for i in 0..5 { let x = sum + i; } sum }",
             &[],
         );
         // Lexical scoping: inner `let x` shadows but does not mutate outer `sum`.
@@ -2279,26 +2279,26 @@ mod tests {
 
     #[test]
     fn eval_float_arithmetic() {
-        let val = run_expect("fn main() -> f64 { 1.5 + 2.5 }", &[]);
+        let val = run_expect("fn main() -> Float { 1.5 + 2.5 }", &[]);
         assert_eq!(val, Value::Float(4.0));
     }
 
     #[test]
     fn eval_cast_int_to_float() {
-        let val = run_expect("fn main() -> f64 { 42 as f64 }", &[]);
+        let val = run_expect("fn main() -> Float { 42 as Float }", &[]);
         assert_eq!(val, Value::Float(42.0));
     }
 
     #[test]
     fn eval_cast_float_to_int() {
-        let val = run_expect("fn main() -> i64 { 3.7 as i64 }", &[]);
+        let val = run_expect("fn main() -> Word { 3.7 as Word }", &[]);
         assert_eq!(val, Value::Int(3));
     }
 
     #[test]
     fn eval_struct_init_and_field() {
         let val = run_expect(
-            "struct Point { x: i64, y: i64 }\nfn main() -> i64 { let p = Point { x: 10, y: 32 }; p.x + p.y }",
+            "struct Point { x: Word, y: Word }\nfn main() -> Word { let p = Point { x: 10, y: 32 }; p.x + p.y }",
             &[],
         );
         assert_eq!(val, Value::Int(42));
@@ -2307,7 +2307,7 @@ mod tests {
     #[test]
     fn eval_enum_variant() {
         let val = run_expect(
-            "enum Color { Red, Green, Blue }\nfn main() -> i64 { let c = Color::Red(); 42 }",
+            "enum Color { Red, Green, Blue }\nfn main() -> Word { let c = Color::Red(); 42 }",
             &[],
         );
         assert_eq!(val, Value::Int(42));
@@ -2315,13 +2315,13 @@ mod tests {
 
     #[test]
     fn eval_array_literal_and_index() {
-        let val = run_expect("fn main() -> i64 { let arr = [10, 20, 30]; arr[1] }", &[]);
+        let val = run_expect("fn main() -> Word { let arr = [10, 20, 30]; arr[1] }", &[]);
         assert_eq!(val, Value::Int(20));
     }
 
     #[test]
     fn eval_yield_and_resume() {
-        let src = "loop main(input: i64) -> i64 { let input = yield input * 2; input }";
+        let src = "loop main(input: Word) -> Word { let input = yield input * 2; input }";
         let tokens = tokenize(src).expect("lex error");
         let program = parse(&tokens).expect("parse error");
         let module = compile(&program).expect("compile error");
@@ -2368,8 +2368,8 @@ mod tests {
         // resume mechanism; `resume_err` is a documentation alias
         // that signals intent.
         let src = "\
-            enum Reply { Ok(i64), Err }\n\
-            loop main(input: Reply) -> i64 {\n\
+            enum Reply { Ok(Word), Err }\n\
+            loop main(input: Reply) -> Word {\n\
                 let reply = yield 0;\n\
                 match reply {\n\
                     Reply::Ok(v) => v,\n\
@@ -2430,8 +2430,8 @@ mod tests {
         // `Value::None` to signal the absence of input. The script's
         // dispatch logic handles the None case explicitly.
         let src = "\
-            enum Reply { Ok(i64), Err }\n\
-            loop main(input: Reply) -> i64 {\n\
+            enum Reply { Ok(Word), Err }\n\
+            loop main(input: Reply) -> Word {\n\
                 let reply = yield 0;\n\
                 match reply {\n\
                     Reply::Ok(v) => v,\n\
@@ -2470,7 +2470,7 @@ mod tests {
     #[test]
     fn eval_multiheaded_literal() {
         let val = run_expect(
-            "fn classify(0) -> Text { \"zero\" }\nfn classify(x: i64) -> Text { \"other\" }\nfn main() -> Text { classify(0) }",
+            "fn classify(0) -> Text { \"zero\" }\nfn classify(x: Word) -> Text { \"other\" }\nfn main() -> Text { classify(0) }",
             &[],
         );
         assert_eq!(val, Value::StaticStr(String::from("zero")));
@@ -2480,7 +2480,7 @@ mod tests {
     #[test]
     fn eval_multiheaded_fallthrough() {
         let val = run_expect(
-            "fn classify(0) -> Text { \"zero\" }\nfn classify(x: i64) -> Text { \"other\" }\nfn main() -> Text { classify(5) }",
+            "fn classify(0) -> Text { \"zero\" }\nfn classify(x: Word) -> Text { \"other\" }\nfn main() -> Text { classify(5) }",
             &[],
         );
         assert_eq!(val, Value::StaticStr(String::from("other")));
@@ -2489,7 +2489,7 @@ mod tests {
     #[test]
     fn eval_pipeline() {
         let val = run_expect(
-            "fn double(x: i64) -> i64 { x * 2 }\nfn main() -> i64 { 21 |> double() }",
+            "fn double(x: Word) -> Word { x * 2 }\nfn main() -> Word { 21 |> double() }",
             &[],
         );
         assert_eq!(val, Value::Int(42));
@@ -2517,19 +2517,19 @@ mod tests {
 
     #[test]
     fn eval_division_by_zero() {
-        let result = run_program("fn main() -> i64 { 1 / 0 }", &[]);
+        let result = run_program("fn main() -> Word { 1 / 0 }", &[]);
         assert!(matches!(result, Err(VmError::DivisionByZero)));
     }
 
     #[test]
     fn eval_index_out_of_bounds() {
-        let result = run_program("fn main() -> i64 { let a = [1, 2]; a[5] }", &[]);
+        let result = run_program("fn main() -> Word { let a = [1, 2]; a[5] }", &[]);
         assert!(matches!(result, Err(VmError::IndexOutOfBounds(5, 2))));
     }
 
     #[test]
     fn eval_native_function() {
-        let src = "use math::add_one\nfn main(x: i64) -> i64 { math::add_one(x) }";
+        let src = "use math::add_one\nfn main(x: Word) -> Word { math::add_one(x) }";
         let tokens = tokenize(src).expect("lex error");
         let program = parse(&tokens).expect("parse error");
         let module = compile(&program).expect("compile error");
@@ -2548,7 +2548,7 @@ mod tests {
     #[test]
     fn eval_guard_clause() {
         let val = run_expect(
-            "fn abs(x: i64) -> i64 when x < 0 { -x }\nfn abs(x: i64) -> i64 { x }\nfn main() -> i64 { abs(-5) + abs(3) }",
+            "fn abs(x: Word) -> Word when x < 0 { -x }\nfn abs(x: Word) -> Word { x }\nfn main() -> Word { abs(-5) + abs(3) }",
             &[],
         );
         assert_eq!(val, Value::Int(8));
@@ -2586,7 +2586,7 @@ mod tests {
         // bound; the WCMU resource-bounds check rejects the module
         // because the bound exceeds any feasible arena capacity.
         let mut src =
-            alloc::string::String::from("loop main(input: i64) -> Text {\n    let s = \"a\";\n");
+            alloc::string::String::from("loop main(input: Word) -> Text {\n    let s = \"a\";\n");
         for _ in 0..60 {
             src.push_str("    let s = s + s;\n");
         }
@@ -2606,7 +2606,7 @@ mod tests {
     #[test]
     fn eval_for_in_array_literal() {
         let val = run_expect(
-            "fn main() -> i64 { let sum = 0; for x in [10, 20, 30] { let sum = sum + x; } sum }",
+            "fn main() -> Word { let sum = 0; for x in [10, 20, 30] { let sum = sum + x; } sum }",
             &[],
         );
         // Lexical scoping: inner `let sum` shadows but does not mutate outer `sum`.
@@ -2617,7 +2617,7 @@ mod tests {
     fn eval_for_in_array_accumulate() {
         // Use a mutable-style accumulation pattern via function calls.
         let val = run_expect(
-            "fn main() -> i64 {\n\
+            "fn main() -> Word {\n\
              let arr = [1, 2, 3, 4, 5];\n\
              let result = 0;\n\
              for x in arr {\n\
@@ -2634,7 +2634,7 @@ mod tests {
     #[test]
     fn eval_for_in_empty_array() {
         let val = run_expect(
-            "fn main() -> i64 { let count = 42; for x in [] { let count = 0; } count }",
+            "fn main() -> Word { let count = 42; for x in [] { let count = 0; } count }",
             &[],
         );
         // Body never executes for empty array.
@@ -2644,7 +2644,7 @@ mod tests {
     #[test]
     fn eval_for_in_single_element() {
         let val = run_expect(
-            "fn main() -> i64 { let last = 0; for x in [99] { let last = x; } last }",
+            "fn main() -> Word { let last = 0; for x in [99] { let last = x; } last }",
             &[],
         );
         assert_eq!(val, Value::Int(0));
@@ -2653,8 +2653,8 @@ mod tests {
     #[test]
     fn eval_for_in_array_with_function() {
         let val = run_expect(
-            "fn double(x: i64) -> i64 { x * 2 }\n\
-             fn main() -> i64 {\n\
+            "fn double(x: Word) -> Word { x * 2 }\n\
+             fn main() -> Word {\n\
                let result = 0;\n\
                for x in [1, 2, 3] {\n\
                  let result = result + double(x);\n\
@@ -2670,25 +2670,25 @@ mod tests {
 
     #[test]
     fn eval_tuple_literal() {
-        let val = run_expect("fn main() -> i64 { let t = (1, 2, 3); t.0 }", &[]);
+        let val = run_expect("fn main() -> Word { let t = (1, 2, 3); t.0 }", &[]);
         assert_eq!(val, Value::Int(1));
     }
 
     #[test]
     fn eval_tuple_field_access() {
-        let val = run_expect("fn main() -> i64 { let t = (10, 20, 30); t.1 }", &[]);
+        let val = run_expect("fn main() -> Word { let t = (10, 20, 30); t.1 }", &[]);
         assert_eq!(val, Value::Int(20));
     }
 
     #[test]
     fn eval_tuple_let_destructure() {
-        let val = run_expect("fn main() -> i64 { let (a, b) = (10, 32); a + b }", &[]);
+        let val = run_expect("fn main() -> Word { let (a, b) = (10, 32); a + b }", &[]);
         assert_eq!(val, Value::Int(42));
     }
 
     #[test]
     fn eval_tuple_mixed_types() {
-        let val = run_expect("fn main() -> f64 { let t = (42, 2.5, true); t.1 }", &[]);
+        let val = run_expect("fn main() -> Float { let t = (42, 2.5, true); t.1 }", &[]);
         assert_eq!(val, Value::Float(2.5));
     }
 
@@ -2698,7 +2698,7 @@ mod tests {
     fn eval_len_via_for_in() {
         // Len is used internally by for-in. Verify via a known array size.
         let val = run_expect(
-            "fn main() -> i64 { let n = 0; for x in [1, 1, 1, 1] { let n = n + 1; } n }",
+            "fn main() -> Word { let n = 0; for x in [1, 1, 1, 1] { let n = n + 1; } n }",
             &[],
         );
         assert_eq!(val, Value::Int(0));
@@ -2709,7 +2709,7 @@ mod tests {
     #[test]
     fn eval_data_read() {
         // Read a host-initialized data slot from script.
-        let src = "data ctx {\n    score: i64,\n}\nfn main() -> i64 { ctx.score }";
+        let src = "data ctx {\n    score: Word,\n}\nfn main() -> Word { ctx.score }";
         let tokens = tokenize(src).expect("lex error");
         let program = parse(&tokens).expect("parse error");
         let module = compile(&program).expect("compile error");
@@ -2727,9 +2727,9 @@ mod tests {
         // Write to a data slot and read it back.
         let src = "\
             data ctx {\n\
-                score: i64,\n\
+                score: Word,\n\
             }\n\
-            fn main() -> i64 {\n\
+            fn main() -> Word {\n\
                 ctx.score = 100;\n\
                 ctx.score\n\
             }";
@@ -2749,9 +2749,9 @@ mod tests {
         // Write to data before reset, verify it persists after.
         let src = "\
             data ctx {\n\
-                counter: i64,\n\
+                counter: Word,\n\
             }\n\
-            loop main(input: i64) -> i64 {\n\
+            loop main(input: Word) -> Word {\n\
                 ctx.counter = ctx.counter + 1;\n\
                 let input = yield ctx.counter;\n\
                 input\n\
@@ -2800,9 +2800,9 @@ mod tests {
         // Write to data, yield, resume, verify data persists across yield.
         let src = "\
             data ctx {\n\
-                value: i64,\n\
+                value: Word,\n\
             }\n\
-            loop main(input: i64) -> i64 {\n\
+            loop main(input: Word) -> Word {\n\
                 ctx.value = 99;\n\
                 let input = yield ctx.value;\n\
                 let input = yield ctx.value + 1;\n\
@@ -2832,11 +2832,11 @@ mod tests {
         // Multiple named data slots with independent values.
         let src = "\
             data ctx {\n\
-                a: i64,\n\
-                b: i64,\n\
-                c: i64,\n\
+                a: Word,\n\
+                b: Word,\n\
+                c: Word,\n\
             }\n\
-            fn main() -> i64 {\n\
+            fn main() -> Word {\n\
                 ctx.a = 10;\n\
                 ctx.b = 20;\n\
                 ctx.c = 30;\n\
@@ -2858,10 +2858,10 @@ mod tests {
         // Host initializes data, script reads it.
         let src = "\
             data ctx {\n\
-                x: i64,\n\
-                y: i64,\n\
+                x: Word,\n\
+                y: Word,\n\
             }\n\
-            fn main() -> i64 { ctx.x + ctx.y }";
+            fn main() -> Word { ctx.x + ctx.y }";
         let tokens = tokenize(src).expect("lex error");
         let program = parse(&tokens).expect("parse error");
         let module = compile(&program).expect("compile error");
@@ -2886,9 +2886,9 @@ mod tests {
     #[test]
     fn hot_swap_same_schema_preserved() {
         // Module A: ctx { score: i64 }, returns ctx.score + 10.
-        let src_a = "data ctx { score: i64 }\nfn main() -> i64 { ctx.score + 10 }";
+        let src_a = "data ctx { score: Word }\nfn main() -> Word { ctx.score + 10 }";
         // Module B: ctx { score: i64 }, returns ctx.score * 2.
-        let src_b = "data ctx { score: i64 }\nfn main() -> i64 { ctx.score * 2 }";
+        let src_b = "data ctx { score: Word }\nfn main() -> Word { ctx.score * 2 }";
 
         let mod_a = build_module(src_a);
         let mod_b = build_module(src_b);
@@ -2914,10 +2914,10 @@ mod tests {
     #[test]
     fn hot_swap_new_schema_replaced() {
         // Module A: ctx { score: i64 }, returns ctx.score.
-        let src_a = "data ctx { score: i64 }\nfn main() -> i64 { ctx.score }";
+        let src_a = "data ctx { score: Word }\nfn main() -> Word { ctx.score }";
         // Module B: ctx { x: i64, y: i64, z: i64 }, returns x + y + z.
         let src_b =
-            "data ctx { x: i64, y: i64, z: i64 }\nfn main() -> i64 { ctx.x + ctx.y + ctx.z }";
+            "data ctx { x: Word, y: Word, z: Word }\nfn main() -> Word { ctx.x + ctx.y + ctx.z }";
 
         let mod_a = build_module(src_a);
         let mod_b = build_module(src_b);
@@ -2942,8 +2942,8 @@ mod tests {
 
     #[test]
     fn hot_swap_size_mismatch_rejected() {
-        let src_a = "data ctx { x: i64 }\nfn main() -> i64 { ctx.x }";
-        let src_b = "data ctx { x: i64, y: i64 }\nfn main() -> i64 { ctx.x + ctx.y }";
+        let src_a = "data ctx { x: Word }\nfn main() -> Word { ctx.x }";
+        let src_b = "data ctx { x: Word, y: Word }\nfn main() -> Word { ctx.x + ctx.y }";
 
         let mod_a = build_module(src_a);
         let mod_b = build_module(src_b);
@@ -2962,8 +2962,8 @@ mod tests {
 
     #[test]
     fn hot_swap_no_data_module_accepts_empty_vec() {
-        let src_a = "data ctx { x: i64 }\nfn main() -> i64 { ctx.x }";
-        let src_b = "fn main() -> i64 { 42 }";
+        let src_a = "data ctx { x: Word }\nfn main() -> Word { ctx.x }";
+        let src_b = "fn main() -> Word { 42 }";
 
         let mod_a = build_module(src_a);
         let mod_b = build_module(src_b);
@@ -2981,14 +2981,14 @@ mod tests {
     #[test]
     fn hot_swap_at_reset_starts_new_module() {
         // Module A: streaming counter. Module B: streaming doubler.
-        let src_a = "data ctx { n: i64 }\n\
-                     loop main(input: i64) -> i64 {\n\
+        let src_a = "data ctx { n: Word }\n\
+                     loop main(input: Word) -> Word {\n\
                          ctx.n = ctx.n + 1;\n\
                          let input = yield ctx.n;\n\
                          input\n\
                      }";
-        let src_b = "data ctx { n: i64 }\n\
-                     loop main(input: i64) -> i64 {\n\
+        let src_b = "data ctx { n: Word }\n\
+                     loop main(input: Word) -> Word {\n\
                          let input = yield ctx.n * 10;\n\
                          input\n\
                      }";
@@ -3026,8 +3026,8 @@ mod tests {
     #[test]
     fn hot_swap_rollback_to_prior_version() {
         // Demonstrate rollback by treating the older module as the swap target.
-        let src_v1 = "data ctx { n: i64 }\nfn main() -> i64 { ctx.n + 1 }";
-        let src_v2 = "data ctx { n: i64 }\nfn main() -> i64 { ctx.n + 100 }";
+        let src_v1 = "data ctx { n: Word }\nfn main() -> Word { ctx.n + 1 }";
+        let src_v2 = "data ctx { n: Word }\nfn main() -> Word { ctx.n + 100 }";
 
         let mod_v1 = build_module(src_v1);
         let mod_v2 = build_module(src_v2);
@@ -3064,7 +3064,7 @@ mod tests {
     #[test]
     fn yield_static_string_succeeds() {
         // Static string literals can be yielded.
-        let src = "loop main(input: i64) -> Text { let input = yield \"static\"; \"static\" }";
+        let src = "loop main(input: Word) -> Text { let input = yield \"static\"; \"static\" }";
         let tokens = tokenize(src).expect("lex error");
         let program = parse(&tokens).expect("parse error");
         let module = compile(&program).expect("compile error");
@@ -3081,7 +3081,7 @@ mod tests {
     fn yield_dynamic_string_fails() {
         // to_string returns a KStr. Yielding it must fail at runtime.
         let src = "use to_string\n\
-                   loop main(input: i64) -> Text { \
+                   loop main(input: Word) -> Text { \
                        let input = yield to_string(input); \"done\" }";
         let tokens = tokenize(src).expect("lex error");
         let program = parse(&tokens).expect("parse error");
@@ -3103,7 +3103,7 @@ mod tests {
     fn yield_tuple_with_dynamic_string_fails() {
         // Yielding a tuple containing a KStr must fail.
         let src = "use to_string\n\
-                   loop main(input: i64) -> (i64, Text) { \
+                   loop main(input: Word) -> (Word, Text) { \
                        let input = yield (input, to_string(input)); (0, \"\") }";
         let tokens = tokenize(src).expect("lex error");
         let program = parse(&tokens).expect("parse error");
@@ -3122,7 +3122,7 @@ mod tests {
 
     #[test]
     fn vm_has_arena_with_default_capacity() {
-        let module = build_module("fn main() -> i64 { 42 }");
+        let module = build_module("fn main() -> Word { 42 }");
         let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
         let vm = Vm::new(module, &arena).unwrap();
         assert_eq!(vm.arena().capacity(), DEFAULT_ARENA_CAPACITY);
@@ -3136,7 +3136,7 @@ mod tests {
 
     #[test]
     fn vm_arena_capacity_configurable() {
-        let module = build_module("fn main() -> i64 { 42 }");
+        let module = build_module("fn main() -> Word { 42 }");
         let arena = keleusma_arena::Arena::with_capacity(4096);
         let vm = Vm::new(module, &arena).unwrap();
         assert_eq!(vm.arena().capacity(), 4096);
@@ -3152,7 +3152,7 @@ mod tests {
         // carry state across the reset.
         use crate::kstring::KString;
 
-        let src = "loop main(input: i64) -> i64 { let input = yield input; input }";
+        let src = "loop main(input: Word) -> Word { let input = yield input; input }";
         let module = build_module(src);
         let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
         let mut vm = Vm::new(module, &arena).unwrap();
@@ -3187,7 +3187,7 @@ mod tests {
 
     #[test]
     fn bytecode_roundtrip() {
-        let src = "fn double(x: i64) -> i64 { x * 2 }\nfn main() -> i64 { double(21) }";
+        let src = "fn double(x: Word) -> Word { x * 2 }\nfn main() -> Word { double(21) }";
         let tokens = tokenize(src).expect("lex");
         let program = parse(&tokens).expect("parse");
         let module = compile(&program).expect("compile");
@@ -3210,7 +3210,7 @@ mod tests {
 
     #[test]
     fn bytecode_load_bytes_end_to_end() {
-        let src = "fn main() -> i64 { 7 + 35 }";
+        let src = "fn main() -> Word { 7 + 35 }";
         let tokens = tokenize(src).expect("lex");
         let program = parse(&tokens).expect("parse");
         let module = compile(&program).expect("compile");
@@ -3324,7 +3324,7 @@ mod tests {
             0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 6, 6, 6, 0, 0, 0, 0, 0, 0, 0,
             0, 0, 70, 19, 193, 146,
         ];
-        let src = "fn main() -> i64 { 1 }";
+        let src = "fn main() -> Word { 1 }";
         let tokens = tokenize(src).expect("lex");
         let program = parse(&tokens).expect("parse");
         let module = compile(&program).expect("compile");
@@ -3349,7 +3349,7 @@ mod tests {
         // aligned slice. view_bytes validates in place via
         // Module::access_bytes and deserializes without the AlignedVec
         // copy that load_bytes performs internally.
-        let src = "fn main() -> i64 { 7 + 35 }";
+        let src = "fn main() -> Word { 7 + 35 }";
         let tokens = tokenize(src).expect("lex");
         let program = parse(&tokens).expect("parse");
         let module = compile(&program).expect("compile");
@@ -3369,7 +3369,7 @@ mod tests {
         // A plain Vec<u8> is not guaranteed to be 8-byte aligned. The
         // view path fails with an alignment-specific Codec message
         // rather than silently succeeding under undefined behavior.
-        let src = "fn main() -> i64 { 1 }";
+        let src = "fn main() -> Word { 1 }";
         let tokens = tokenize(src).expect("lex");
         let program = parse(&tokens).expect("parse");
         let module = compile(&program).expect("compile");
@@ -3401,7 +3401,7 @@ mod tests {
         // the bytes directly. The execution loop reads the entire
         // module through `&ArchivedModule` with no owned `Module`
         // materialized.
-        let src = "fn double(x: i64) -> i64 { x * 2 }\nfn main() -> i64 { double(21) }";
+        let src = "fn double(x: Word) -> Word { x * 2 }\nfn main() -> Word { double(21) }";
         let tokens = tokenize(src).expect("lex");
         let program = parse(&tokens).expect("parse");
         let module = compile(&program).expect("compile");
@@ -3427,7 +3427,7 @@ mod tests {
         // foundation for the future zero-copy execution loop, which
         // will fetch ArchivedOp and convert per step.
         use crate::bytecode::{ArchivedModule, op_from_archived};
-        let src = "fn main() -> i64 { 1 + 2 }";
+        let src = "fn main() -> Word { 1 + 2 }";
         let tokens = tokenize(src).expect("lex");
         let program = parse(&tokens).expect("parse");
         let module = compile(&program).expect("compile");
@@ -3452,7 +3452,7 @@ mod tests {
         // value_from_archived materializes an owned Value from an
         // archived Value. Verify constants survive the round trip.
         use crate::bytecode::{ArchivedModule, value_from_archived};
-        let src = "fn main() -> i64 { 42 }";
+        let src = "fn main() -> Word { 42 }";
         let tokens = tokenize(src).expect("lex");
         let program = parse(&tokens).expect("parse");
         let module = compile(&program).expect("compile");
@@ -3478,7 +3478,7 @@ mod tests {
         // form preserves the chunk count, the entry point, and the word
         // and address sizes, exposed through native conversions.
         use crate::bytecode::ArchivedModule;
-        let src = "fn double(x: i64) -> i64 { x * 2 }\nfn main() -> i64 { double(21) }";
+        let src = "fn double(x: Word) -> Word { x * 2 }\nfn main() -> Word { double(21) }";
         let tokens = tokenize(src).expect("lex");
         let program = parse(&tokens).expect("parse");
         let module = compile(&program).expect("compile");
@@ -3502,7 +3502,7 @@ mod tests {
         // The recorded length is authoritative. Trailing bytes after
         // the recorded length are ignored, so bytecode embedded in a
         // larger buffer is accepted.
-        let src = "fn main() -> i64 { 1 }";
+        let src = "fn main() -> Word { 1 }";
         let tokens = tokenize(src).expect("lex");
         let program = parse(&tokens).expect("parse");
         let module = compile(&program).expect("compile");
@@ -3523,7 +3523,7 @@ mod tests {
         // unsupported value, then recompute the CRC trailer so the
         // residue check still passes. This isolates the version
         // rejection path from the checksum rejection path.
-        let src = "fn main() -> i64 { 1 }";
+        let src = "fn main() -> Word { 1 }";
         let tokens = tokenize(src).expect("lex");
         let program = parse(&tokens).expect("parse");
         let module = compile(&program).expect("compile");
@@ -3548,7 +3548,7 @@ mod tests {
         // so the CRC residue check fails. The flipped byte must lie
         // beyond the length field (offsets 6..10) so it does not change
         // the recorded length and trip the truncation check first.
-        let src = "fn main() -> i64 { 1 }";
+        let src = "fn main() -> Word { 1 }";
         let tokens = tokenize(src).expect("lex");
         let program = parse(&tokens).expect("parse");
         let module = compile(&program).expect("compile");
@@ -3569,7 +3569,7 @@ mod tests {
         // CRC trailer so the residue check passes. The version and
         // length fields are intact so only the word size mismatch
         // surfaces.
-        let src = "fn main() -> i64 { 1 }";
+        let src = "fn main() -> Word { 1 }";
         let tokens = tokenize(src).expect("lex");
         let program = parse(&tokens).expect("parse");
         let module = compile(&program).expect("compile");
@@ -3589,7 +3589,7 @@ mod tests {
 
     #[test]
     fn bytecode_rejects_address_size_mismatch() {
-        let src = "fn main() -> i64 { 1 }";
+        let src = "fn main() -> Word { 1 }";
         let tokens = tokenize(src).expect("lex");
         let program = parse(&tokens).expect("parse");
         let module = compile(&program).expect("compile");
@@ -3614,7 +3614,7 @@ mod tests {
         // accepts narrower-than-runtime bytecode under the relaxed
         // policy. The masking pass in the VM keeps arithmetic within
         // the declared narrower width.
-        let src = "fn main() -> i64 { 1 }";
+        let src = "fn main() -> Word { 1 }";
         let tokens = tokenize(src).expect("lex");
         let program = parse(&tokens).expect("parse");
         let module = compile(&program).expect("compile");
@@ -3639,7 +3639,7 @@ mod tests {
         // 32 bits. Verify that the runtime applies sign-extending
         // truncation. The expression `2147483647 + 1` produces
         // 2147483648 at 64 bits but i32::MIN = -2147483648 at 32 bits.
-        let src = "fn main() -> i64 { 2147483647 + 1 }";
+        let src = "fn main() -> Word { 2147483647 + 1 }";
         let tokens = tokenize(src).expect("lex");
         let program = parse(&tokens).expect("parse");
         let mut module = compile(&program).expect("compile");
@@ -3690,7 +3690,7 @@ mod tests {
         // A trivial program should still report `OutOfArena` rather
         // than aborting the host when the arena cannot hold the
         // minimum operand-stack and call-frame reservation.
-        let module = build_module("fn main() -> i64 { 1 }");
+        let module = build_module("fn main() -> Word { 1 }");
         let arena = keleusma_arena::Arena::with_capacity(0);
         let result = Vm::new(module, &arena);
         match result {
@@ -3705,7 +3705,7 @@ mod tests {
         // The trust-skip constructor also returns OutOfArena rather
         // than aborting when the arena is too small for the minimum
         // runtime reservation.
-        let module = build_module("fn main() -> i64 { 1 }");
+        let module = build_module("fn main() -> Word { 1 }");
         let arena = keleusma_arena::Arena::with_capacity(0);
         let result = unsafe { Vm::new_unchecked(module, &arena) };
         assert!(matches!(result, Err(VmError::OutOfArena(_))));
@@ -3775,8 +3775,8 @@ mod tests {
         // After a runtime error the data segment persists. The host
         // can call reset_after_error and retry without losing
         // accumulated state.
-        let src = "data ctx { count: i64 }\n\
-                   loop main(input: i64) -> i64 {\n\
+        let src = "data ctx { count: Word }\n\
+                   loop main(input: Word) -> Word {\n\
                        ctx.count = ctx.count + 1;\n\
                        let next = yield ctx.count;\n\
                        next\n\
@@ -3817,7 +3817,7 @@ mod tests {
     fn reset_after_trap_clears_volatile_state() {
         // A program that traps. The host catches the error, calls
         // reset_after_error, then runs the program again successfully.
-        let trap_src = "fn main() -> i64 { let x = 0; if x == 0 { 1 / x } else { 0 } }";
+        let trap_src = "fn main() -> Word { let x = 0; if x == 0 { 1 / x } else { 0 } }";
         match run_program(trap_src, &[]) {
             Err(VmError::DivisionByZero) => {}
             other => panic!("expected DivisionByZero precheck, got {:?}", other),
@@ -3852,7 +3852,7 @@ mod tests {
     #[test]
     fn reset_after_error_idempotent() {
         // Calling reset_after_error multiple times is harmless.
-        let src = "fn main() -> i64 { 1 }";
+        let src = "fn main() -> Word { 1 }";
         let tokens = tokenize(src).expect("lex");
         let program = parse(&tokens).expect("parse");
         let module = compile(&program).expect("compile");
@@ -3876,8 +3876,8 @@ mod tests {
         // accepts the loop because the end bound is a Const(3).
         // Without static type info the same source would be rejected
         // by strict-mode WCMU.
-        let src = "fn make() -> [i64; 3] { [1, 2, 3] }\n\
-                   fn main() -> i64 {\n\
+        let src = "fn make() -> [Word; 3] { [1, 2, 3] }\n\
+                   fn main() -> Word {\n\
                        let last = 0;\n\
                        for x in make() { let last = x; }\n\
                        last\n\
@@ -3897,8 +3897,8 @@ mod tests {
         // For-in over a data segment field whose declared type is
         // [i64; N] is admissible because the field type provides the
         // static iteration bound.
-        let src = "data ctx { items: [i64; 4] }\n\
-                   fn main() -> i64 {\n\
+        let src = "data ctx { items: [Word; 4] }\n\
+                   fn main() -> Word {\n\
                        let last = 0;\n\
                        for x in ctx.items { let last = x; }\n\
                        last\n\
@@ -3917,8 +3917,8 @@ mod tests {
         // inferred type and resolves `b.items` to `[i64; 3]` from
         // the struct definition. The verifier accepts the
         // resulting Const(3) end bound.
-        let src = "struct Box { items: [i64; 3] }\n\
-                   fn main() -> i64 {\n\
+        let src = "struct Box { items: [Word; 3] }\n\
+                   fn main() -> Word {\n\
                        let b = Box { items: [1, 2, 3] };\n\
                        let last = 0;\n\
                        for x in b.items { let last = x; }\n\
@@ -3936,12 +3936,12 @@ mod tests {
         // For-in over an array parameter typed `[T; N]`. The
         // compiler records the parameter's declared type on the
         // local and the for-in source resolves to a typed array.
-        let src = "fn sum_n(arr: [i64; 4]) -> i64 {\n\
+        let src = "fn sum_n(arr: [Word; 4]) -> Word {\n\
                        let s = 0;\n\
                        for x in arr { let s = s + x; }\n\
                        s\n\
                    }\n\
-                   fn main() -> i64 { sum_n([1, 2, 3, 4]) }";
+                   fn main() -> Word { sum_n([1, 2, 3, 4]) }";
         let tokens = tokenize(src).expect("lex");
         let program = parse(&tokens).expect("parse");
         let module = compile(&program).expect("compile");
@@ -3954,8 +3954,8 @@ mod tests {
         // For-in over the result of indexing a nested array. The
         // compiler infers `m[0]` to have the matrix's element type
         // `[i64; 3]` and emits `Const(3)` for the iteration bound.
-        let src = "fn main() -> i64 {\n\
-                       let m: [[i64; 3]; 2] = [[1, 2, 3], [4, 5, 6]];\n\
+        let src = "fn main() -> Word {\n\
+                       let m: [[Word; 3]; 2] = [[1, 2, 3], [4, 5, 6]];\n\
                        let last = 0;\n\
                        for x in m[0] { let last = x; }\n\
                        last\n\
@@ -3972,7 +3972,7 @@ mod tests {
         // For-in over a match expression that returns an array. The
         // compiler infers the match result type from the first arm's
         // expression and uses it for the iteration bound.
-        let src = "fn main() -> i64 {\n\
+        let src = "fn main() -> Word {\n\
                        let cond = 1;\n\
                        let last = 0;\n\
                        for x in match cond { 0 => [1, 2, 3], _ => [4, 5, 6] } {\n\
@@ -3994,8 +3994,8 @@ mod tests {
         // type. The outer loop reads the matrix's outer length.
         // Each subsequent loop reads the element type's length from
         // the iteration variable's type recorded by the compiler.
-        let src = "fn main() -> i64 {\n\
-                       let map: [[[i64; 2]; 2]; 2] = [\n\
+        let src = "fn main() -> Word {\n\
+                       let map: [[[Word; 2]; 2]; 2] = [\n\
                            [[1, 2], [3, 4]],\n\
                            [[5, 6], [7, 8]],\n\
                        ];\n\
@@ -4023,9 +4023,9 @@ mod tests {
         // and the result accumulates into a data segment field. The
         // value 1 contributes 100; every other value contributes 1.
         // The matrix has values 1..=8 so the total is 100 + 7 = 107.
-        let src = "data ctx { sum: i64 }\n\
-                   fn main() -> i64 {\n\
-                       let map: [[[i64; 2]; 2]; 2] = [\n\
+        let src = "data ctx { sum: Word }\n\
+                   fn main() -> Word {\n\
+                       let map: [[[Word; 2]; 2]; 2] = [\n\
                            [[1, 2], [3, 4]],\n\
                            [[5, 6], [7, 8]],\n\
                        ];\n\
@@ -4061,11 +4061,11 @@ mod tests {
         // contributes 100; every other coordinate contributes 1.
         // The 2x2x2 coordinate space has 8 cells so the total is
         // 100 + 7 = 107.
-        let src = "data ctx { hits: i64 }\n\
-                   fn main() -> i64 {\n\
-                       let xs: [i64; 2] = [0, 1];\n\
-                       let ys: [i64; 2] = [0, 1];\n\
-                       let zs: [i64; 2] = [0, 1];\n\
+        let src = "data ctx { hits: Word }\n\
+                   fn main() -> Word {\n\
+                       let xs: [Word; 2] = [0, 1];\n\
+                       let ys: [Word; 2] = [0, 1];\n\
+                       let zs: [Word; 2] = [0, 1];\n\
                        for z in zs {\n\
                            for y in ys {\n\
                                for x in xs {\n\
@@ -4097,9 +4097,9 @@ mod tests {
         // through a native function call. The native sums all
         // visited values. The data segment carries the running total
         // because let bindings shadow rather than mutate.
-        let src = "data ctx { total: i64 }\n\
-                   fn main() -> i64 {\n\
-                       let map: [[[i64; 2]; 2]; 2] = [\n\
+        let src = "data ctx { total: Word }\n\
+                   fn main() -> Word {\n\
+                       let map: [[[Word; 2]; 2]; 2] = [\n\
                            [[1, 2], [3, 4]],\n\
                            [[5, 6], [7, 8]],\n\
                        ];\n\
@@ -4130,7 +4130,7 @@ mod tests {
     #[test]
     fn for_in_over_array_literal_runs() {
         let val = run_expect(
-            "fn main() -> i64 {\n\
+            "fn main() -> Word {\n\
                  let last = 0;\n\
                  for x in [10, 20, 30] { let last = x; }\n\
                  last\n\
@@ -4147,7 +4147,7 @@ mod tests {
     fn build_module_with_overflow(wcet: u32, wcmu: u32) -> Module {
         // Build a trivial module then mutate the declared header
         // fields to simulate a compile-time saturation.
-        let mut module = build_module("fn main() -> i64 { 0 }");
+        let mut module = build_module("fn main() -> Word { 0 }");
         module.wcet_cycles = wcet;
         module.wcmu_bytes = wcmu;
         module

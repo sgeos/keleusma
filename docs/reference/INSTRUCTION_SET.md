@@ -126,8 +126,8 @@ For details on how bytecode is generated from source, see [COMPILATION_PIPELINE.
 
 | Instruction | Operands | Cost | Description |
 |-------------|----------|------|-------------|
-| IntToFloat | none | 2 | Pop i64, push as f64 |
-| FloatToInt | none | 2 | Pop f64, push as i64. Truncates toward zero |
+| IntToFloat | none | 2 | Pop Word, push as Float |
+| FloatToInt | none | 2 | Pop Float, push as Word. Truncates toward zero |
 
 ## Error
 

@@ -16,7 +16,7 @@ use keleusma::vm::{Vm, VmState};
 
 const SCRIPT: &str = "
 use host::compute_value
-loop main(input: i64) -> i64 {
+loop main(input: Word) -> Word {
     let v = host::compute_value(input);
     let _ignored = yield v;
     v

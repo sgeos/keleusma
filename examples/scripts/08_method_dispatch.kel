@@ -15,16 +15,16 @@
 // to extend its inference reach.
 
 trait Doubler {
-    fn double(x: i64) -> i64;
+    fn double(x: Word) -> Word;
 }
 
-impl Doubler for i64 {
-    fn double(x: i64) -> i64 {
+impl Doubler for Word {
+    fn double(x: Word) -> Word {
         x + x
     }
 }
 
-fn main() -> i64 {
-    let n: i64 = 42;
+fn main() -> Word {
+    let n: Word = 42;
     n.double()
 }

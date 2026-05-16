@@ -42,7 +42,7 @@ impl KeleusmaType for i64 {
         match v {
             Value::Int(n) => Ok(*n),
             other => Err(VmError::TypeError(format!(
-                "expected i64, got {}",
+                "expected Word, got {}",
                 other.type_name()
             ))),
         }
@@ -59,7 +59,7 @@ impl KeleusmaType for f64 {
             Value::Float(f) => Ok(*f),
             Value::Int(n) => Ok(*n as f64),
             other => Err(VmError::TypeError(format!(
-                "expected f64, got {}",
+                "expected Float, got {}",
                 other.type_name()
             ))),
         }
@@ -321,7 +321,7 @@ mod tests {
     fn type_mismatch_errors() {
         let err = i64::from_value(&Value::Bool(true)).unwrap_err();
         match err {
-            VmError::TypeError(msg) => assert!(msg.contains("expected i64")),
+            VmError::TypeError(msg) => assert!(msg.contains("expected Word")),
             other => panic!("expected TypeError, got {:?}", other),
         }
     }

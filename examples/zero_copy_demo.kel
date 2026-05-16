@@ -9,10 +9,10 @@
 // The output is a self-describing serialized Module conforming to
 // `BYTECODE_VERSION` in `src/bytecode.rs`.
 
-fn double(x: i64) -> i64 {
+fn double(x: Word) -> Word {
     x * 2
 }
 
-fn main() -> i64 {
+fn main() -> Word {
     double(21)
 }

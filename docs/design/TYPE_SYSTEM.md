@@ -10,12 +10,12 @@ Keleusma uses a static nominal type system with Rust syntax. There is no implici
 
 | Type | Description | Size (bytes) | Alignment (bytes) |
 |------|-------------|---|---|
-| `i64` | 64-bit signed integer | 8 | 8 |
-| `f64` | 64-bit floating-point number | 8 | 8 |
+| `Word` | 64-bit signed integer | 8 | 8 |
+| `Float` | 64-bit floating-point number | 8 | 8 |
 | `bool` | Boolean value | 1 | 1 |
 | `()` | Unit type | 0 | 1 |
 
-All numeric operations use `i64` or `f64`. When host structs contain smaller integer types such as `i32` or `u16`, those values are widened to `i64` at the boundary between the host and the script.
+All numeric operations use `Word` or `Float`. When host structs contain smaller integer types such as `i32` or `u16`, those values are widened to `Word` at the boundary between the host and the script.
 
 Sizes and alignments above assume the modern 64-bit target. Future work extends the type system with `word`, `byte`, `bit`, and `address` primitives whose sizes and alignments are target-defined. See R33 and B10 for the modern-target assumption and the portability future work.
 
@@ -62,8 +62,8 @@ Structs are named product types with named fields. All fields must be provided a
 
 ```
 struct Point {
-    x: f64,
-    y: f64,
+    x: Float,
+    y: Float,
 }
 
 let p = Point { x: 1.0, y: 2.0 };
@@ -76,8 +76,8 @@ Enums are named sum types with variants. Each variant may carry data fields or m
 
 ```
 enum Shape {
-    Circle { radius: f64 },
-    Rectangle { width: f64, height: f64 },
+    Circle { radius: Float },
+    Rectangle { width: Float, height: Float },
     Empty,
 }
 ```
@@ -94,10 +94,10 @@ let second = pair.1;
 
 ### Fixed-Size Arrays
 
-Fixed-size arrays are homogeneous sequences with a known length. The syntax is `[T; N]` where `T` is the element type and `N` is the length. Element access uses index notation with an `i64` index.
+Fixed-size arrays are homogeneous sequences with a known length. The syntax is `[T; N]` where `T` is the element type and `N` is the length. Element access uses index notation with a `Word` index.
 
 ```
-let values: [f64; 4] = [1.0, 2.0, 3.0, 4.0];
+let values: [Float; 4] = [1.0, 2.0, 3.0, 4.0];
 let first = values[0];
 ```
 
@@ -106,8 +106,8 @@ let first = values[0];
 Option represents nullable values. It uses two variants: `Option::Some(value)` for present values and `Option::None` for absent values.
 
 ```
-let found: Option<i64> = Option::Some(42);
-let missing: Option<i64> = Option::None;
+let found: Option<Word> = Option::Some(42);
+let missing: Option<Word> = Option::None;
 ```
 
 ## Opaque Types
@@ -138,15 +138,15 @@ The host writes an `impl HostOpaque for MyType` block and registers native funct
 
 Keleusma does not perform implicit type coercion. To convert between numeric types, use the `as` keyword.
 
-- `i64` to `f64`: Widens the integer to a floating-point value.
-- `f64` to `i64`: Truncates toward zero, discarding the fractional part.
+- `Word` to `Float`: Widens the integer to a floating-point value.
+- `Float` to `Word`: Truncates toward zero, discarding the fractional part.
 
 ```
-let x: i64 = 42;
-let y: f64 = x as f64;
+let x: Word = 42;
+let y: Float = x as Float;
 
-let a: f64 = 3.9;
-let b: i64 = a as i64;  // b is 3
+let a: Float = 3.9;
+let b: Word = a as Word;  // b is 3
 ```
 
 No other type conversions are available through the `as` keyword. Conversions between non-numeric types require explicit function calls.
@@ -159,8 +159,8 @@ All values in the virtual machine are represented as variants of the `Value` enu
 |---------|----------|-------------|
 | `Value::Unit` | None | The unit value `()` |
 | `Value::Bool(bool)` | A boolean | True or false |
-| `Value::Int(i64)` | A 64-bit integer | Signed integer value |
-| `Value::Float(f64)` | A 64-bit float | Floating-point value |
+| `Value::Int(Word)` | A 64-bit integer | Signed integer value |
+| `Value::Float(Float)` | A 64-bit float | Floating-point value |
 | `Value::StaticStr(String)` | A UTF-8 static string | Static string referenced from the code image |
 | `Value::KStr(KString)` | An arena-resident `KString` handle | Dynamic string allocated in the host-owned arena's top region |
 | `Value::Tuple(Vec<Value>)` | A vector of values | Anonymous product type |
@@ -179,7 +179,7 @@ The following type expressions are admissible as data segment field types.
 
 | Type form | Admissible | Rationale |
 |---|---|---|
-| `i64`, `f64`, `bool` | Yes | Fixed-size primitives. |
+| `Word`, `Float`, `bool` | Yes | Fixed-size primitives. |
 | `()` | Yes | Zero-size unit. |
 | Fixed-arity tuple of admissible types | Yes | Compositional. |
 | Fixed-length array `[T; N]` of admissible elements | Yes | Size is element size times length. |

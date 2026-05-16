@@ -1224,18 +1224,25 @@ impl<'a> Parser<'a> {
     fn parse_type_expr(&mut self) -> Result<TypeExpr, ParseError> {
         let span = self.peek_span();
 
-        // Check for primitive types (lower ident).
-        if self.at_lower("i64") {
-            self.pos += 1;
-            return Ok(TypeExpr::Prim(PrimType::I64, span));
-        }
-        if self.at_lower("f64") {
-            self.pos += 1;
-            return Ok(TypeExpr::Prim(PrimType::F64, span));
-        }
+        // Check for the boolean primitive (the only lowercase-named
+        // primitive type in V0.2). Numeric and text primitives are
+        // uppercase (Byte/Word/Fixed/Float/Text) and are matched
+        // below through `at_upper`.
         if self.at_lower("bool") {
             self.pos += 1;
             return Ok(TypeExpr::Prim(PrimType::Bool, span));
+        }
+
+        // Canonical V0.2 numeric primitives. `Word` is the target
+        // word size (64-bit signed on the host runtime); `Float` is
+        // the target floating-point width.
+        if self.at_upper("Word") {
+            self.pos += 1;
+            return Ok(TypeExpr::Prim(PrimType::Word, span));
+        }
+        if self.at_upper("Float") {
+            self.pos += 1;
+            return Ok(TypeExpr::Prim(PrimType::Float, span));
         }
 
         // Check for Text (upper ident). Keleusma's surface text type
@@ -1468,7 +1475,7 @@ mod tests {
 
     fn parse_expr_str(src: &str) -> Result<Expr, ParseError> {
         // Wrap in a function to parse a single expression.
-        let wrapped = alloc::format!("fn test() -> i64 {{ {} }}", src);
+        let wrapped = alloc::format!("fn test() -> Word {{ {} }}", src);
         let program = parse_str(&wrapped)?;
         let body = &program.functions[0].body;
         body.tail_expr
@@ -1701,10 +1708,10 @@ mod tests {
 
     #[test]
     fn parse_cast() {
-        let expr = parse_expr_str("x as f64").unwrap();
+        let expr = parse_expr_str("x as Float").unwrap();
         match expr {
             Expr::Cast { ref target, .. } => {
-                assert!(matches!(target, TypeExpr::Prim(PrimType::F64, _)));
+                assert!(matches!(target, TypeExpr::Prim(PrimType::Float, _)));
             }
             _ => panic!("expected Cast, got {:?}", expr),
         }
@@ -1723,7 +1730,7 @@ mod tests {
 
     #[test]
     fn parse_if_else() {
-        let src = "fn test() -> i64 { if x > 0 { 1 } else { 0 } }";
+        let src = "fn test() -> Word { if x > 0 { 1 } else { 0 } }";
         let program = parse_str(src).unwrap();
         let tail = program.functions[0].body.tail_expr.as_ref().unwrap();
         assert!(matches!(**tail, Expr::If { ref else_block, .. } if else_block.is_some()));
@@ -1732,7 +1739,7 @@ mod tests {
     #[test]
     fn parse_match_expr() {
         let src = r#"
-            fn test() -> i64 {
+            fn test() -> Word {
                 match x {
                     0 => 1,
                     _ => 2,
@@ -1749,7 +1756,7 @@ mod tests {
 
     #[test]
     fn parse_let_statement() {
-        let src = "fn test() -> i64 { let x: i64 = 42; x }";
+        let src = "fn test() -> Word { let x: Word = 42; x }";
         let program = parse_str(src).unwrap();
         assert_eq!(program.functions[0].body.stmts.len(), 1);
         assert!(matches!(&program.functions[0].body.stmts[0], Stmt::Let(_)));
@@ -1757,7 +1764,7 @@ mod tests {
 
     #[test]
     fn parse_for_range() {
-        let src = "fn test() -> i64 { for i in 0..8 { foo(i); } 0 }";
+        let src = "fn test() -> Word { for i in 0..8 { foo(i); } 0 }";
         let program = parse_str(src).unwrap();
         match &program.functions[0].body.stmts[0] {
             Stmt::For(f) => {
@@ -1770,7 +1777,7 @@ mod tests {
 
     #[test]
     fn parse_for_expr_iterable() {
-        let src = "fn test() -> i64 { for n in notes { play(n); } 0 }";
+        let src = "fn test() -> Word { for n in notes { play(n); } 0 }";
         let program = parse_str(src).unwrap();
         match &program.functions[0].body.stmts[0] {
             Stmt::For(f) => {
@@ -1782,7 +1789,7 @@ mod tests {
 
     #[test]
     fn parse_break_statement() {
-        let src = "fn test() -> i64 { for i in 0..8 { break; } 0 }";
+        let src = "fn test() -> Word { for i in 0..8 { break; } 0 }";
         let program = parse_str(src).unwrap();
         let for_stmt = match &program.functions[0].body.stmts[0] {
             Stmt::For(f) => f,
@@ -1793,7 +1800,7 @@ mod tests {
 
     #[test]
     fn parse_fn_definition() {
-        let src = "fn add(a: i64, b: i64) -> i64 { a + b }";
+        let src = "fn add(a: Word, b: Word) -> Word { a + b }";
         let program = parse_str(src).unwrap();
         let f = &program.functions[0];
         assert_eq!(f.category, FunctionCategory::Fn);
@@ -1834,7 +1841,7 @@ mod tests {
     fn parse_closure_no_params_no_body() {
         // `|| 42` parses as a nullary closure whose tail expression
         // is a literal.
-        let src = "fn main() -> i64 { let f = || 42; 0 }";
+        let src = "fn main() -> Word { let f = || 42; 0 }";
         let program = parse_str(src).unwrap();
         let body = &program.functions[0].body;
         match &body.stmts[0] {
@@ -1848,7 +1855,7 @@ mod tests {
 
     #[test]
     fn parse_closure_with_one_param() {
-        let src = "fn main() -> i64 { let f = |x: i64| x + 1; 0 }";
+        let src = "fn main() -> Word { let f = |x: Word| x + 1; 0 }";
         let program = parse_str(src).unwrap();
         let body = &program.functions[0].body;
         match &body.stmts[0] {
@@ -1862,7 +1869,7 @@ mod tests {
 
     #[test]
     fn parse_closure_with_block_body() {
-        let src = "fn main() -> i64 { let f = |x: i64| -> i64 { x * 2 }; 0 }";
+        let src = "fn main() -> Word { let f = |x: Word| -> Word { x * 2 }; 0 }";
         let program = parse_str(src).unwrap();
         let body = &program.functions[0].body;
         match &body.stmts[0] {
@@ -1883,7 +1890,7 @@ mod tests {
     fn parse_fn_empty_type_params_accepted() {
         // `fn name<>(...)` is admitted as the trivial empty-list case.
         // Conventional callers elide the brackets.
-        let src = "fn nogen<>(x: i64) -> i64 { x }";
+        let src = "fn nogen<>(x: Word) -> Word { x }";
         let program = parse_str(src).unwrap();
         assert_eq!(program.functions[0].type_params.len(), 0);
     }
@@ -1913,7 +1920,7 @@ mod tests {
     #[test]
     fn parse_guard_clause() {
         let src = r#"
-            fn severity(level: f64) -> i64 when level >= 0.9 {
+            fn severity(level: Float) -> Word when level >= 0.9 {
                 1
             }
         "#;
@@ -1924,10 +1931,10 @@ mod tests {
     #[test]
     fn parse_multiheaded_function() {
         let src = r#"
-            fn describe(Command::NoteOn(ch, note, vel)) -> i64 {
+            fn describe(Command::NoteOn(ch, note, vel)) -> Word {
                 1
             }
-            fn describe(Command::Silence) -> i64 {
+            fn describe(Command::Silence) -> Word {
                 0
             }
         "#;
@@ -1939,7 +1946,7 @@ mod tests {
 
     #[test]
     fn parse_use_decl() {
-        let src = "use audio::set_frequency fn test() -> i64 { 0 }";
+        let src = "use audio::set_frequency fn test() -> Word { 0 }";
         let program = parse_str(src).unwrap();
         assert_eq!(program.uses.len(), 1);
         assert_eq!(program.uses[0].path, vec!["audio"]);
@@ -1951,7 +1958,7 @@ mod tests {
 
     #[test]
     fn parse_use_wildcard() {
-        let src = "use audio::* fn test() -> i64 { 0 }";
+        let src = "use audio::* fn test() -> Word { 0 }";
         let program = parse_str(src).unwrap();
         assert_eq!(program.uses[0].import, ImportItem::Wildcard);
     }
@@ -1960,11 +1967,11 @@ mod tests {
     fn parse_struct_def() {
         let src = r#"
             struct Note {
-                channel: i64,
-                pitch: i64,
-                velocity: f64,
+                channel: Word,
+                pitch: Word,
+                velocity: Float,
             }
-            fn test() -> i64 { 0 }
+            fn test() -> Word { 0 }
         "#;
         let program = parse_str(src).unwrap();
         assert_eq!(program.types.len(), 1);
@@ -1981,11 +1988,11 @@ mod tests {
     fn parse_enum_def() {
         let src = r#"
             enum Command {
-                NoteOn(i64, i64, f64),
-                NoteOff(i64),
+                NoteOn(Word, Word, Float),
+                NoteOff(Word),
                 Silence,
             }
-            fn test() -> i64 { 0 }
+            fn test() -> Word { 0 }
         "#;
         let program = parse_str(src).unwrap();
         match &program.types[0] {
@@ -2030,7 +2037,7 @@ mod tests {
 
     #[test]
     fn parse_option_type() {
-        let src = "fn test(x: Option<i64>) -> i64 { 0 }";
+        let src = "fn test(x: Option<Word>) -> Word { 0 }";
         let program = parse_str(src).unwrap();
         let param_type = program.functions[0].params[0].type_expr.as_ref().unwrap();
         assert!(matches!(param_type, TypeExpr::Option(_, _)));
@@ -2038,7 +2045,7 @@ mod tests {
 
     #[test]
     fn parse_array_type() {
-        let src = "fn test(x: [f64; 8]) -> i64 { 0 }";
+        let src = "fn test(x: [Float; 8]) -> Word { 0 }";
         let program = parse_str(src).unwrap();
         let param_type = program.functions[0].params[0].type_expr.as_ref().unwrap();
         match param_type {
@@ -2050,7 +2057,7 @@ mod tests {
     #[test]
     fn parse_yield_expression() {
         let src = r#"
-            loop main(cmd: i64) -> i64 {
+            loop main(cmd: Word) -> Word {
                 let cmd = yield cmd;
             }
         "#;
@@ -2069,14 +2076,14 @@ mod tests {
             use audio::*
 
             enum AudioCommand {
-                NoteOn(i64, i64, f64),
-                NoteOff(i64),
+                NoteOn(Word, Word, Float),
+                NoteOff(Word),
                 Tick,
             }
 
             enum AudioAction {
-                PlayNote(i64, i64, f64),
-                StopNote(i64),
+                PlayNote(Word, Word, Float),
+                StopNote(Word),
                 NoOp,
             }
 
@@ -2104,14 +2111,14 @@ mod tests {
 
     #[test]
     fn error_missing_semicolon() {
-        let src = "fn test() -> i64 { let x = 1 x }";
+        let src = "fn test() -> Word { let x = 1 x }";
         let result = parse_str(src);
         assert!(result.is_err());
     }
 
     #[test]
     fn error_unexpected_token() {
-        let src = "fn test() -> i64 { + }";
+        let src = "fn test() -> Word { + }";
         let result = parse_str(src);
         assert!(result.is_err());
     }
@@ -2120,10 +2127,10 @@ mod tests {
     fn parse_data_decl() {
         let src = "\
             data ctx {\n\
-                score: i64,\n\
-                health: f64,\n\
+                score: Word,\n\
+                health: Float,\n\
             }\n\
-            fn main() -> i64 { ctx.score }";
+            fn main() -> Word { ctx.score }";
         let program = parse_str(src).unwrap();
         assert_eq!(program.data_decls.len(), 1);
         assert_eq!(program.data_decls[0].name, "ctx");
@@ -2136,9 +2143,9 @@ mod tests {
     fn parse_data_field_assign() {
         let src = "\
             data ctx {\n\
-                value: i64,\n\
+                value: Word,\n\
             }\n\
-            fn main() -> i64 {\n\
+            fn main() -> Word {\n\
                 ctx.value = 42;\n\
                 ctx.value\n\
             }";

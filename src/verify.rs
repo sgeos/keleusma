@@ -1750,12 +1750,12 @@ mod tests {
         use crate::parser::parse;
 
         let programs = [
-            "fn main() -> i64 { 42 }",
-            "fn main() -> i64 { if true { 1 } else { 2 } }",
-            "fn main() -> i64 { let sum = 0; for i in 0..5 { let x = sum + i; } sum }",
-            "fn double(x: i64) -> i64 { x * 2 }\nfn main() -> i64 { double(21) }",
+            "fn main() -> Word { 42 }",
+            "fn main() -> Word { if true { 1 } else { 2 } }",
+            "fn main() -> Word { let sum = 0; for i in 0..5 { let x = sum + i; } sum }",
+            "fn double(x: Word) -> Word { x * 2 }\nfn main() -> Word { double(21) }",
             "fn main() -> Text { let x = 1; match x { 1 => \"one\", _ => \"other\" } }",
-            "loop tick(x: i64) -> i64 { let x = yield x * 2; x }",
+            "loop tick(x: Word) -> Word { let x = yield x * 2; x }",
         ];
 
         for src in &programs {
@@ -1944,7 +1944,7 @@ mod tests {
         use crate::lexer::tokenize;
         use crate::parser::parse;
 
-        let src = "loop tick(x: i64) -> i64 { let x = yield x * 2; x }";
+        let src = "loop tick(x: Word) -> Word { let x = yield x * 2; x }";
         let tokens = tokenize(src).expect("lex error");
         let program = parse(&tokens).expect("parse error");
         let module = compile(&program).expect("compile error");
@@ -2044,7 +2044,7 @@ mod tests {
         use crate::lexer::tokenize;
         use crate::parser::parse;
 
-        let src = "loop tick(x: i64) -> i64 { let x = yield x * 2; x }";
+        let src = "loop tick(x: Word) -> Word { let x = yield x * 2; x }";
         let tokens = tokenize(src).expect("lex error");
         let program = parse(&tokens).expect("parse error");
         let module = compile(&program).expect("compile error");
@@ -2520,7 +2520,7 @@ mod tests {
         use crate::lexer::tokenize;
         use crate::parser::parse;
 
-        let src = "loop main(input: i64) -> i64 { \
+        let src = "loop main(input: Word) -> Word { \
             for i in 0..5 { \
                 let _arr = [1, 2, 3, 4]; \
             } \
@@ -2550,7 +2550,7 @@ mod tests {
         use crate::lexer::tokenize;
         use crate::parser::parse;
 
-        let src = "loop main(input: i64) -> i64 { \
+        let src = "loop main(input: Word) -> Word { \
             for i in 0..3 { \
                 let _x = i + 1; \
             } \
@@ -2568,7 +2568,7 @@ mod tests {
         let cost_with_loop = wcet_stream_iteration(stream_chunk).unwrap();
 
         // A simpler version without the loop should cost less.
-        let src_no_loop = "loop main(input: i64) -> i64 { \
+        let src_no_loop = "loop main(input: Word) -> Word { \
             let _x = input + 1; \
             let _ignored = yield input; \
             input \

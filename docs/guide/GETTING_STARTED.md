@@ -27,11 +27,11 @@ If the command is not found, ensure Cargo's bin directory is on the shell `PATH`
 Create a file called `hello.kel` with the following contents.
 
 ````
-fn double(x: i64) -> i64 {
+fn double(x: Word) -> Word {
     x + x
 }
 
-fn main() -> i64 {
+fn main() -> Word {
     double(21)
 }
 ````
@@ -73,14 +73,14 @@ The REPL accumulates declarations into a session prefix and evaluates expression
 ````
 > 1 + 2
 3
-> fn double(x: i64) -> i64 { x + x }
+> fn double(x: Word) -> Word { x + x }
 defined: double
 > double(21)
 42
 > :quit
 ````
 
-The REPL wraps each expression as `fn main() -> T { <expression> }` and tries return types `i64`, `f64`, `bool`, `Text`, and `()` in order. The first type that compiles is used. Expressions whose type lies outside this list require an explicit function declaration.
+The REPL wraps each expression as `fn main() -> T { <expression> }` and tries return types `Word`, `Float`, `bool`, `Text`, and `()` in order. The first type that compiles is used. Expressions whose type lies outside this list require an explicit function declaration.
 
 ## Embed in a Rust Host
 
@@ -109,8 +109,8 @@ use keleusma::vm::{DEFAULT_ARENA_CAPACITY, Vm, VmState};
 use keleusma::{Arena, Value};
 
 const SCRIPT: &str = "
-    fn double(x: i64) -> i64 { x + x }
-    fn main() -> i64 { double(21) }
+    fn double(x: Word) -> Word { x + x }
+    fn main() -> Word { double(21) }
 ";
 
 fn main() {

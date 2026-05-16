@@ -248,7 +248,7 @@ impl TargetChecker<'_> {
             return;
         }
         match ty {
-            TypeExpr::Prim(PrimType::F64, span) if !self.target.has_floats => {
+            TypeExpr::Prim(PrimType::Float, span) if !self.target.has_floats => {
                 self.first_error = Some(CompileError {
                     message: String::from("target does not support floating-point types"),
                     span: *span,
@@ -351,15 +351,15 @@ mod tests {
 
     #[test]
     fn host_target_admits_full_program() {
-        try_compile_with_target("fn main() -> i64 { 1 + 2 }", &Target::host()).unwrap();
+        try_compile_with_target("fn main() -> Word { 1 + 2 }", &Target::host()).unwrap();
     }
 
     #[cfg(feature = "text")]
     #[test]
     fn host_target_admits_floats_and_strings() {
         try_compile_with_target(
-            "fn main() -> i64 {\n\
-                 let f: f64 = 1.5;\n\
+            "fn main() -> Word {\n\
+                 let f: Float = 1.5;\n\
                  let s: Text = \"hello\";\n\
                  0\n\
              }",
@@ -370,7 +370,7 @@ mod tests {
 
     #[test]
     fn embedded_16_rejects_float_literal() {
-        let err = try_compile_with_target("fn main() -> f64 { 1.5 }", &Target::embedded_16())
+        let err = try_compile_with_target("fn main() -> Float { 1.5 }", &Target::embedded_16())
             .unwrap_err();
         assert!(
             err.contains("does not support floating-point"),
@@ -382,7 +382,7 @@ mod tests {
     #[test]
     fn embedded_16_rejects_float_type_in_param() {
         let err = try_compile_with_target(
-            "fn add(x: f64) -> f64 { x }\nfn main() -> i64 { 0 }",
+            "fn add(x: Float) -> Float { x }\nfn main() -> Word { 0 }",
             &Target::embedded_16(),
         )
         .unwrap_err();
@@ -397,7 +397,7 @@ mod tests {
     #[test]
     fn embedded_8_rejects_string_literal() {
         let err = try_compile_with_target(
-            "fn main() -> i64 { let s = \"hello\"; 0 }",
+            "fn main() -> Word { let s = \"hello\"; 0 }",
             &Target::embedded_8(),
         )
         .unwrap_err();
@@ -411,7 +411,7 @@ mod tests {
     #[test]
     fn embedded_8_admits_int_only_program() {
         try_compile_with_target(
-            "fn main() -> i64 { let x: i64 = 7; x + 3 }",
+            "fn main() -> Word { let x: Word = 7; x + 3 }",
             &Target::embedded_8(),
         )
         .unwrap();
@@ -419,7 +419,7 @@ mod tests {
 
     #[test]
     fn target_widths_propagate_to_module() {
-        let tokens = tokenize("fn main() -> i64 { 0 }").expect("lex");
+        let tokens = tokenize("fn main() -> Word { 0 }").expect("lex");
         let program = parse(&tokens).expect("parse");
         let module = compile_with_target(&program, &Target::embedded_16()).unwrap();
         assert_eq!(module.word_bits_log2, 4);
@@ -428,7 +428,7 @@ mod tests {
 
     #[test]
     fn host_widths_match_runtime_constants() {
-        let tokens = tokenize("fn main() -> i64 { 0 }").expect("lex");
+        let tokens = tokenize("fn main() -> Word { 0 }").expect("lex");
         let program = parse(&tokens).expect("parse");
         let module = compile_with_target(&program, &Target::host()).unwrap();
         assert_eq!(module.word_bits_log2, RUNTIME_WORD_BITS_LOG2);

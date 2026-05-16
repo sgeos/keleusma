@@ -319,7 +319,7 @@ impl crate::visitor::MutVisitor for EnumSpecializer<'_> {
         // Handle `Expr::Match`: after the scrutinee has been
         // specialized through walk_expr, the scrutinee's inferred
         // type may now reference a specialized enum (e.g.,
-        // `Maybe__i64`). The match arms' patterns retain the
+        // `Maybe__Word`). The match arms' patterns retain the
         // original generic enum name (`Maybe`) and need to be
         // rewritten so subsequent type checking matches the
         // monomorphized scrutinee.
@@ -534,7 +534,7 @@ struct StructSpecializer<'a> {
     /// used to produce it. Used by the inference loop to recover
     /// type arguments when a field's declared type is itself a
     /// generic instantiation (`inner: Cell<T>` where the init
-    /// produces `Cell__i64`).
+    /// produces `Cell__Word`).
     reverse_specs: &'a mut BTreeMap<String, (String, Vec<TypeExpr>)>,
     new_structs: &'a mut Vec<StructDef>,
     fn_returns: &'a BTreeMap<String, TypeExpr>,
@@ -754,8 +754,8 @@ fn mangle(name: &str, type_args: &[TypeExpr]) -> String {
 fn type_arg_canonical(t: &TypeExpr) -> String {
     match t {
         TypeExpr::Prim(p, _) => match p {
-            PrimType::I64 => "i64".to_string(),
-            PrimType::F64 => "f64".to_string(),
+            PrimType::Word => "Word".to_string(),
+            PrimType::Float => "Float".to_string(),
             PrimType::Bool => "bool".to_string(),
             PrimType::Text => "Text".to_string(),
         },
@@ -797,8 +797,8 @@ fn infer_arg_type(
 ) -> Option<TypeExpr> {
     match expr {
         Expr::Literal { value, span } => Some(match value {
-            Literal::Int(_) => TypeExpr::Prim(PrimType::I64, *span),
-            Literal::Float(_) => TypeExpr::Prim(PrimType::F64, *span),
+            Literal::Int(_) => TypeExpr::Prim(PrimType::Word, *span),
+            Literal::Float(_) => TypeExpr::Prim(PrimType::Float, *span),
             Literal::Bool(_) => TypeExpr::Prim(PrimType::Bool, *span),
             Literal::String(_) => TypeExpr::Prim(PrimType::Text, *span),
             Literal::Unit => TypeExpr::Unit(*span),
@@ -967,8 +967,8 @@ fn type_head_for_impl(ty: &TypeExpr) -> String {
     use alloc::string::ToString;
     match ty {
         TypeExpr::Prim(p, _) => match p {
-            PrimType::I64 => "i64".to_string(),
-            PrimType::F64 => "f64".to_string(),
+            PrimType::Word => "Word".to_string(),
+            PrimType::Float => "Float".to_string(),
             PrimType::Bool => "bool".to_string(),
             PrimType::Text => "Text".to_string(),
         },
