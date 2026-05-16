@@ -490,6 +490,68 @@ pub enum Op {
 /// under B10 may parameterize this by target through a [`CostModel`].
 pub const VALUE_SLOT_SIZE_BYTES: u32 = 32;
 
+/// Context passed to an [`OpCost::Dynamic`] cost evaluator.
+///
+/// Carries the abstract-interpretation results that bear on the
+/// opcode's cost. The WCMU text-size tracking pass populates the
+/// `lhs_text_len` and `rhs_text_len` fields when evaluating the
+/// heap-allocation cost of text-producing opcodes (`Op::Add` on
+/// text, the bundled `concat` and `slice` natives). Fields that
+/// the analysis cannot bound are reported as `u32::MAX` (the
+/// saturation value for the length lattice), which conservatively
+/// propagates an "unbounded" verdict to the surrounding analysis.
+///
+/// Forward-looking. Populated stubbed-out in V0.2.0; the WCMU
+/// text-size tracking pass in V0.2.x is the first consumer.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct OpCostContext {
+    /// Upper-bound length in bytes of the left text operand for
+    /// text-producing opcodes. `u32::MAX` denotes unbounded.
+    pub lhs_text_len: u32,
+    /// Upper-bound length in bytes of the right text operand for
+    /// text-producing opcodes. `u32::MAX` denotes unbounded.
+    pub rhs_text_len: u32,
+}
+
+/// Cost of an opcode under a [`CostModel`].
+///
+/// `Fixed(n)` is the existing case where the cost is a compile-time
+/// constant per opcode. For example, `Op::Add` on `i64` operands
+/// always costs two pipelined cycles regardless of operand values.
+///
+/// `Dynamic(f)` is for operations whose cost depends on runtime
+/// data. The concrete motivating case is the heap byte allocation
+/// of `Op::Add` on text operands, where the resulting `KString`
+/// length is the sum of the operand lengths. The WCMU pass
+/// invokes the dynamic variant with an [`OpCostContext`] populated
+/// from the abstract-interpretation results; the WCET pass
+/// currently treats `Dynamic` as a sentinel forwarding to the
+/// abstract-interpretation pass.
+///
+/// Hosts that supply a custom cost model may choose `Fixed` for
+/// all opcodes if they prefer a simpler accounting model. The
+/// abstract-interpretation pass falls back to a conservative
+/// upper bound when a dynamic cost cannot be evaluated.
+#[derive(Clone, Copy)]
+pub enum OpCost {
+    /// Cost is a compile-time constant per opcode.
+    Fixed(u32),
+    /// Cost depends on runtime data carried in [`OpCostContext`].
+    Dynamic(fn(&OpCostContext) -> u32),
+}
+
+impl OpCost {
+    /// Evaluate the cost against a context. `Fixed` returns the
+    /// inner value directly; `Dynamic` invokes the function pointer
+    /// against the supplied context.
+    pub fn evaluate(&self, ctx: &OpCostContext) -> u32 {
+        match self {
+            OpCost::Fixed(n) => *n,
+            OpCost::Dynamic(f) => f(ctx),
+        }
+    }
+}
+
 /// Per-target cost model used by the WCET and WCMU analyses.
 ///
 /// Units. WCMU is reported in **bytes**. WCET is reported in
@@ -559,7 +621,29 @@ impl CostModel {
     /// Compute the heap byte allocation for the opcode under this
     /// cost model. For composite-construction opcodes, multiplies
     /// the field count by the cost model's `value_slot_bytes`.
+    /// Text-producing opcodes (`Op::Add` on text) are reported via
+    /// [`Self::heap_alloc_cost`] as [`OpCost::Dynamic`]; the
+    /// fixed-cost view returned here saturates such cases to zero
+    /// because the heap cost is not knowable without abstract
+    /// interpretation. The WCMU pass that tracks text sizes must
+    /// use [`Self::heap_alloc_cost`] instead.
     pub fn heap_alloc_bytes(&self, op: &Op, chunk: &Chunk) -> u32 {
+        match self.heap_alloc_cost(op, chunk) {
+            OpCost::Fixed(n) => n,
+            OpCost::Dynamic(_) => 0,
+        }
+    }
+
+    /// Compute the heap allocation cost for the opcode under this
+    /// cost model as an [`OpCost`].
+    ///
+    /// Composite-construction opcodes (struct, enum, array, tuple)
+    /// report `OpCost::Fixed` because their size is known at the
+    /// opcode site. `Op::Add` on text operands reports
+    /// `OpCost::Dynamic` because the allocated `KString` length is
+    /// the sum of the operand lengths, which the verifier learns
+    /// only through the abstract-interpretation text-size pass.
+    pub fn heap_alloc_cost(&self, op: &Op, chunk: &Chunk) -> OpCost {
         match op {
             Op::NewStruct(template_idx) => {
                 let idx = *template_idx as usize;
@@ -567,14 +651,27 @@ impl CostModel {
                     .struct_templates
                     .get(idx)
                     .map_or(0, |t| t.field_names.len() as u32);
-                self.slots_to_bytes(field_count)
+                OpCost::Fixed(self.slots_to_bytes(field_count))
             }
-            Op::NewEnum(_, _, n) => self.slots_to_bytes(*n as u32),
-            Op::NewArray(n) => self.slots_to_bytes(*n as u32),
-            Op::NewTuple(n) => self.slots_to_bytes(*n as u32),
-            _ => 0,
+            Op::NewEnum(_, _, n) => OpCost::Fixed(self.slots_to_bytes(*n as u32)),
+            Op::NewArray(n) => OpCost::Fixed(self.slots_to_bytes(*n as u32)),
+            Op::NewTuple(n) => OpCost::Fixed(self.slots_to_bytes(*n as u32)),
+            Op::Add => OpCost::Dynamic(add_text_heap_alloc_bytes),
+            _ => OpCost::Fixed(0),
         }
     }
+}
+
+/// Dynamic heap-allocation cost for `Op::Add` on text operands.
+///
+/// Returns the sum of the operand lengths saturated at `u32::MAX`.
+/// The WCMU pass evaluates this against an [`OpCostContext`]
+/// populated from the per-slot text-size lattice. When either
+/// operand length is `u32::MAX` (unbounded), the result saturates
+/// to `u32::MAX` so the outer analysis propagates an unbounded
+/// verdict.
+fn add_text_heap_alloc_bytes(ctx: &OpCostContext) -> u32 {
+    ctx.lhs_text_len.saturating_add(ctx.rhs_text_len)
 }
 
 /// Default cost model for the bundled runtime. WCMU value-slot size
@@ -1750,5 +1847,93 @@ mod cost_model_tests {
         assert_eq!(custom.cycles(&Op::Add), 100);
         assert_eq!(custom.cycles(&Op::PushUnit), 100);
         assert_eq!(custom.cycles(&Op::Call(0, 0)), 100);
+    }
+
+    #[test]
+    fn op_cost_fixed_evaluates_to_inner_value() {
+        let ctx = OpCostContext::default();
+        assert_eq!(OpCost::Fixed(42).evaluate(&ctx), 42);
+        assert_eq!(OpCost::Fixed(0).evaluate(&ctx), 0);
+    }
+
+    #[test]
+    fn op_cost_dynamic_invokes_function_with_context() {
+        fn sum_lengths(ctx: &OpCostContext) -> u32 {
+            ctx.lhs_text_len.saturating_add(ctx.rhs_text_len)
+        }
+        let cost = OpCost::Dynamic(sum_lengths);
+        let ctx = OpCostContext {
+            lhs_text_len: 100,
+            rhs_text_len: 200,
+        };
+        assert_eq!(cost.evaluate(&ctx), 300);
+    }
+
+    #[test]
+    fn op_cost_dynamic_saturates_at_u32_max_for_unbounded_operand() {
+        fn sum_lengths(ctx: &OpCostContext) -> u32 {
+            ctx.lhs_text_len.saturating_add(ctx.rhs_text_len)
+        }
+        let cost = OpCost::Dynamic(sum_lengths);
+        let ctx = OpCostContext {
+            lhs_text_len: u32::MAX,
+            rhs_text_len: 100,
+        };
+        assert_eq!(cost.evaluate(&ctx), u32::MAX);
+    }
+
+    #[test]
+    fn heap_alloc_cost_text_add_is_dynamic() {
+        let chunk = Chunk {
+            name: alloc::string::String::from("test"),
+            ops: alloc::vec::Vec::new(),
+            constants: alloc::vec::Vec::new(),
+            struct_templates: alloc::vec::Vec::new(),
+            local_count: 0,
+            param_count: 0,
+            block_type: BlockType::Func,
+        };
+        let cost = NOMINAL_COST_MODEL.heap_alloc_cost(&Op::Add, &chunk);
+        assert!(matches!(cost, OpCost::Dynamic(_)));
+        let ctx = OpCostContext {
+            lhs_text_len: 5,
+            rhs_text_len: 6,
+        };
+        assert_eq!(cost.evaluate(&ctx), 11);
+    }
+
+    #[test]
+    fn heap_alloc_cost_composite_is_fixed() {
+        let chunk = Chunk {
+            name: alloc::string::String::from("test"),
+            ops: alloc::vec::Vec::new(),
+            constants: alloc::vec::Vec::new(),
+            struct_templates: alloc::vec::Vec::new(),
+            local_count: 0,
+            param_count: 0,
+            block_type: BlockType::Func,
+        };
+        let cost = NOMINAL_COST_MODEL.heap_alloc_cost(&Op::NewArray(3), &chunk);
+        assert!(matches!(cost, OpCost::Fixed(_)));
+        assert_eq!(
+            cost.evaluate(&OpCostContext::default()),
+            3 * VALUE_SLOT_SIZE_BYTES
+        );
+    }
+
+    #[test]
+    fn heap_alloc_bytes_text_add_reports_zero_in_fixed_view() {
+        // The Fixed-view accessor saturates dynamic costs to zero
+        // because they require abstract-interpretation context.
+        let chunk = Chunk {
+            name: alloc::string::String::from("test"),
+            ops: alloc::vec::Vec::new(),
+            constants: alloc::vec::Vec::new(),
+            struct_templates: alloc::vec::Vec::new(),
+            local_count: 0,
+            param_count: 0,
+            block_type: BlockType::Func,
+        };
+        assert_eq!(NOMINAL_COST_MODEL.heap_alloc_bytes(&Op::Add, &chunk), 0);
     }
 }

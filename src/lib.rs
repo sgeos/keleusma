@@ -24,7 +24,8 @@ pub use keleusma_arena::{
 pub use kstring::KString;
 
 pub use bytecode::{
-    CostModel, Module, NOMINAL_COST_MODEL, VALUE_SLOT_SIZE_BYTES, Value, nominal_op_cycles,
+    CostModel, Module, NOMINAL_COST_MODEL, OpCost, OpCostContext, VALUE_SLOT_SIZE_BYTES, Value,
+    nominal_op_cycles,
 };
 pub use keleusma_macros::KeleusmaType;
 pub use marshall::{IntoFallibleNativeFn, IntoNativeFn, KeleusmaType};

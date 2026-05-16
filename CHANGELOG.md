@@ -14,6 +14,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`Value::DynStr` removed.** The global-heap dynamic-string variant present in V0.1.x is gone. All dynamic strings are arena-resident via `Value::KStr`. The cross-yield prohibition continues to apply.
 - **`register_utility_natives` is now arena-aware by default.** The non-context variants of `to_string`, `concat`, and `slice` were removed. `register_utility_natives_with_ctx` is retained as a deprecated alias for compatibility.
 
+### Added
+
+- **`OpCost::{Fixed(u32), Dynamic(fn)}` enum.** Cost-model surface for opcodes whose cost depends on runtime data. `CostModel::heap_alloc_cost` returns the new type; `Op::Add` on text operands reports `OpCost::Dynamic` because the resulting `KString` length is the sum of operand lengths. Hosts that need the pre-V0.2.0 fixed view continue to call `CostModel::heap_alloc_bytes`, which saturates dynamic costs to zero. The WCMU text-size tracking pass scheduled for V0.2.x evaluates `OpCost::Dynamic` against an `OpCostContext` populated from the abstract-interpretation lattice.
+
 ## [0.1.1] - 2026-05-10
 
 ### Fixed
