@@ -102,6 +102,65 @@ pub enum VmState {
     Reset,
 }
 
+/// Policy for handling WCET and WCMU bound overflow at verification.
+///
+/// The compiler saturates the declared WCET and WCMU header fields to
+/// `u32::MAX` when the static analysis cannot bound the value. Under
+/// the default [`OverflowPolicy::Reject`] policy, `Vm::new_with_options`
+/// rejects such modules as a `VmError::VerifyError`. Hosts that wish to
+/// accept the module despite the overflow may downgrade the policy to
+/// [`OverflowPolicy::Warn`] (returns the module with a `VerifyWarning`
+/// describing the overflow) or [`OverflowPolicy::Allow`] (admits the
+/// module silently).
+///
+/// The policy applies to the declared header fields only. Resource
+/// bounds against the arena capacity continue to be enforced because
+/// they are a load-time admissibility check rather than a static
+/// analysis overflow.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum OverflowPolicy {
+    /// Overflow is a verification error. Default.
+    #[default]
+    Reject,
+    /// Overflow produces a [`VerifyWarning`] entry and admits the module.
+    Warn,
+    /// Overflow admits the module silently.
+    Allow,
+}
+
+/// Construction-time options for [`Vm::new_with_options`].
+///
+/// The default options apply the strict overflow policy
+/// ([`OverflowPolicy::Reject`]) and otherwise match the behaviour of
+/// the bare [`Vm::new`] constructor.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct VmOptions {
+    /// Policy for handling WCET and WCMU bound overflow at the
+    /// declared header level. See [`OverflowPolicy`].
+    pub overflow_policy: OverflowPolicy,
+}
+
+/// Non-fatal finding produced by [`Vm::new_with_options`] when an
+/// overflow condition is downgraded under the chosen
+/// [`OverflowPolicy`].
+#[derive(Debug, Clone)]
+pub struct VerifyWarning {
+    /// Human-readable description of the warning.
+    pub message: String,
+    /// The category of warning. Hosts may switch on this to route
+    /// warnings to telemetry or to apply per-kind handling.
+    pub kind: WarningKind,
+}
+
+/// Category of [`VerifyWarning`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WarningKind {
+    /// The declared WCET cycles field saturated to `u32::MAX`.
+    WcetOverflow,
+    /// The declared WCMU bytes field saturated to `u32::MAX`.
+    WcmuOverflow,
+}
+
 /// A call frame on the VM call stack.
 #[derive(Debug, Clone, Copy)]
 struct CallFrame {
@@ -442,6 +501,76 @@ impl<'a, 'arena> Vm<'a, 'arena> {
     /// verification against the arena's capacity. Returns an error if
     /// either check fails.
     pub fn new(module: Module, arena: &'arena keleusma_arena::Arena) -> Result<Self, VmError> {
+        let (vm, _warnings) = Self::new_with_options(module, arena, VmOptions::default())?;
+        Ok(vm)
+    }
+
+    /// Create a new VM with explicit construction-time options.
+    ///
+    /// Same admissibility checks as [`Vm::new`] (structural
+    /// verification followed by the resource-bounds check against the
+    /// arena capacity), plus a configurable overflow policy that
+    /// decides what to do when the module's declared WCET or WCMU
+    /// header fields saturated to `u32::MAX` during compilation. The
+    /// default policy ([`OverflowPolicy::Reject`]) treats overflow as
+    /// a `VerifyError`, matching the historic behaviour of `Vm::new`.
+    /// Hosts that wish to admit overflow-saturated modules can supply
+    /// [`OverflowPolicy::Warn`] to receive a [`VerifyWarning`] for
+    /// each overflowing field, or [`OverflowPolicy::Allow`] to admit
+    /// the module silently.
+    ///
+    /// Returns the constructed VM together with a vector of warnings.
+    /// Under the default policy the vector is always empty because
+    /// the function returns `Err` before reaching the construction
+    /// step on overflow.
+    pub fn new_with_options(
+        module: Module,
+        arena: &'arena keleusma_arena::Arena,
+        options: VmOptions,
+    ) -> Result<(Self, Vec<VerifyWarning>), VmError> {
+        let mut module = module;
+        let mut warnings: Vec<VerifyWarning> = Vec::new();
+        if module.wcet_cycles == u32::MAX {
+            let message = String::from(
+                "module declared WCET (cycles) overflowed to u32::MAX during compilation; the static analysis could not bound the cost",
+            );
+            match options.overflow_policy {
+                OverflowPolicy::Reject => return Err(VmError::VerifyError(message)),
+                OverflowPolicy::Warn => {
+                    warnings.push(VerifyWarning {
+                        message,
+                        kind: WarningKind::WcetOverflow,
+                    });
+                    // Rewrite the declared field to the auto-compute
+                    // sentinel so the downstream serializer and the
+                    // load-time overflow check in `Module::access_bytes`
+                    // do not re-reject the module. The warning preserves
+                    // the original overflow signal for the host.
+                    module.wcet_cycles = 0;
+                }
+                OverflowPolicy::Allow => {
+                    module.wcet_cycles = 0;
+                }
+            }
+        }
+        if module.wcmu_bytes == u32::MAX {
+            let message = String::from(
+                "module declared WCMU (bytes) overflowed to u32::MAX during compilation; the static analysis could not bound the cost",
+            );
+            match options.overflow_policy {
+                OverflowPolicy::Reject => return Err(VmError::VerifyError(message)),
+                OverflowPolicy::Warn => {
+                    warnings.push(VerifyWarning {
+                        message,
+                        kind: WarningKind::WcmuOverflow,
+                    });
+                    module.wcmu_bytes = 0;
+                }
+                OverflowPolicy::Allow => {
+                    module.wcmu_bytes = 0;
+                }
+            }
+        }
         verify::verify(&module)
             .map_err(|e| VmError::VerifyError(format!("{}: {}", e.chunk_name, e.message)))?;
         // R31. Verify worst-case memory usage fits within the arena. The
@@ -450,7 +579,8 @@ impl<'a, 'arena> Vm<'a, 'arena> {
         // current limitations.
         verify::verify_resource_bounds(&module, arena.capacity())
             .map_err(|e| VmError::VerifyError(format!("{}: {}", e.chunk_name, e.message)))?;
-        Self::construct(module, arena)
+        let vm = Self::construct(module, arena)?;
+        Ok((vm, warnings))
     }
 
     /// Create a VM that runs structural verification but skips WCET and
@@ -3940,5 +4070,112 @@ mod tests {
         // The body's `let last = x;` shadows in the inner scope.
         // Outer `last` remains 0.
         assert_eq!(val, Value::Int(0));
+    }
+
+    // -- Overflow policy knob --
+
+    fn build_module_with_overflow(wcet: u32, wcmu: u32) -> Module {
+        // Build a trivial module then mutate the declared header
+        // fields to simulate a compile-time saturation.
+        let mut module = build_module("fn main() -> i64 { 0 }");
+        module.wcet_cycles = wcet;
+        module.wcmu_bytes = wcmu;
+        module
+    }
+
+    #[test]
+    fn new_with_options_default_rejects_wcet_overflow() {
+        let module = build_module_with_overflow(u32::MAX, 0);
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let err = Vm::new_with_options(module, &arena, VmOptions::default())
+            .err()
+            .expect("expected overflow rejection");
+        match err {
+            VmError::VerifyError(msg) => assert!(msg.contains("WCET")),
+            other => panic!("expected VerifyError, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn new_with_options_default_rejects_wcmu_overflow() {
+        let module = build_module_with_overflow(0, u32::MAX);
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let err = Vm::new_with_options(module, &arena, VmOptions::default())
+            .err()
+            .expect("expected overflow rejection");
+        match err {
+            VmError::VerifyError(msg) => assert!(msg.contains("WCMU")),
+            other => panic!("expected VerifyError, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn new_with_options_warn_admits_and_returns_warning() {
+        let module = build_module_with_overflow(u32::MAX, 0);
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let options = VmOptions {
+            overflow_policy: OverflowPolicy::Warn,
+        };
+        let warnings = match Vm::new_with_options(module, &arena, options) {
+            Ok((_vm, w)) => w,
+            Err(e) => panic!("expected Ok, got {:?}", e),
+        };
+        assert_eq!(warnings.len(), 1);
+        assert_eq!(warnings[0].kind, WarningKind::WcetOverflow);
+    }
+
+    #[test]
+    fn new_with_options_warn_returns_both_warnings_for_both_overflows() {
+        let module = build_module_with_overflow(u32::MAX, u32::MAX);
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let options = VmOptions {
+            overflow_policy: OverflowPolicy::Warn,
+        };
+        let warnings = match Vm::new_with_options(module, &arena, options) {
+            Ok((_vm, w)) => w,
+            Err(e) => panic!("expected Ok, got {:?}", e),
+        };
+        assert_eq!(warnings.len(), 2);
+        let kinds: Vec<WarningKind> = warnings.iter().map(|w| w.kind).collect();
+        assert!(kinds.contains(&WarningKind::WcetOverflow));
+        assert!(kinds.contains(&WarningKind::WcmuOverflow));
+    }
+
+    #[test]
+    fn new_with_options_allow_admits_silently() {
+        let module = build_module_with_overflow(u32::MAX, u32::MAX);
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let options = VmOptions {
+            overflow_policy: OverflowPolicy::Allow,
+        };
+        let warnings = match Vm::new_with_options(module, &arena, options) {
+            Ok((_vm, w)) => w,
+            Err(e) => panic!("expected Ok, got {:?}", e),
+        };
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn new_with_options_no_overflow_returns_empty_warnings() {
+        let module = build_module_with_overflow(100, 1000);
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let options = VmOptions {
+            overflow_policy: OverflowPolicy::Warn,
+        };
+        let warnings = match Vm::new_with_options(module, &arena, options) {
+            Ok((_vm, w)) => w,
+            Err(e) => panic!("expected Ok, got {:?}", e),
+        };
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn vm_new_remains_strict_under_overflow() {
+        // `Vm::new` is a thin wrapper around `new_with_options` with
+        // the default (Reject) policy, so it must reject overflow.
+        let module = build_module_with_overflow(u32::MAX, 0);
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let err = Vm::new(module, &arena).err().expect("expected rejection");
+        assert!(matches!(err, VmError::VerifyError(_)));
     }
 }

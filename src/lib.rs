@@ -29,4 +29,4 @@ pub use bytecode::{
 };
 pub use keleusma_macros::KeleusmaType;
 pub use marshall::{IntoFallibleNativeFn, IntoNativeFn, KeleusmaType};
-pub use vm::{NativeCtx, VmError};
+pub use vm::{NativeCtx, OverflowPolicy, VerifyWarning, VmError, VmOptions, WarningKind};
