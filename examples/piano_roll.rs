@@ -559,6 +559,35 @@ const SONG_SOURCES: &[&str] = &[
 ];
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Application chrome lives here. A real host might parse
+    // command-line arguments, set up logging, choose which
+    // song roster to load, configure an arena size, or route
+    // stdin and stdout differently. The current example takes
+    // no arguments, so `main` only delegates.
+    //
+    // To embed an adapted piano-roll loop into a larger
+    // application (a game's audio subsystem, a music editor,
+    // a livecoding shell), copy `run` and the helpers it
+    // depends on into your host code and call it from wherever
+    // your main loop wants to drive the Keleusma VM. The
+    // boundary between `main` and `run` is the boundary
+    // between application chrome and the embeddable host
+    // loop.
+    run()
+}
+
+/// Run the piano-roll host loop. Builds the song roster,
+/// constructs the VM and the SDL3 audio device, registers the
+/// host natives, and drives the tick-and-yield loop until the
+/// stdin watcher requests quit.
+///
+/// Returns `Ok(())` on a graceful quit and an error otherwise.
+/// Callers that embed this into a larger application can
+/// either copy the body wholesale into their own host loop or
+/// parameterise this function (additional arguments for the
+/// song roster, BPM, arena capacity, native registrations) as
+/// their host requires.
+fn run() -> Result<(), Box<dyn std::error::Error>> {
     let modules: Vec<Module> = SONG_SOURCES
         .iter()
         .map(|src| build_module(src))
