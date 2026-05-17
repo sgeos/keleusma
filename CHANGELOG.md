@@ -9,18 +9,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Wire-format note
 
-V0.2.0 adds three new bytecode opcodes (`Op::GetDataIndexed`,
-`Op::SetDataIndexed`, `Op::BoundsCheck`) to support the new
+V0.2.0 adds three new bytecode opcodes to support the
 indexed-array data-segment feature described under **Added**.
-The wire-format `version` field is intentionally not bumped
-from 2. V0.1.1 runtimes will fail to deserialise bytecode that
-uses any of the three new opcodes (the rkyv `bytecheck`
-validator rejects the unknown enum discriminant rather than
-silently corrupting), so the failure mode is a clean
-`LoadError` rather than undefined behaviour. The rationale for
-not bumping the wire version is that V0.1.1 has narrow
-adoption; the wire-version bump policy reasserts at the next
-release that ships into a broader ecosystem.
+The new variants are declared in `bytecode::Op` in this order
+and at the same position as the other data-segment ops, that
+is between `Op::SetData` and `Op::Add`:
+
+- `Op::GetDataIndexed(base: u16, len: u16)`
+- `Op::SetDataIndexed(base: u16, len: u16)`
+- `Op::BoundsCheck(bound: u16)`
+
+The wire-format `version` field in the framing header is
+intentionally not bumped from 2. Two consequences follow.
+
+First, V0.1.1 runtimes cannot deserialise V0.2.0 bytecode that
+uses any of the three new opcodes; the rkyv `bytecheck`
+validator rejects the unknown enum discriminant during
+deserialisation and the failure surfaces as a clean
+`VmError::LoadError`. The bytecode body never reaches the
+execution path, so the failure mode is a load-time rejection
+rather than undefined behaviour.
+
+Second, the rkyv discriminant assignment for every `Op`
+variant declared after `Op::SetData` in the enum has shifted
+by three positions to make room for the new variants. A
+runtime built against an intermediate snapshot of V0.2.0
+without this feature would therefore misinterpret `Op::Add`
+and every later opcode in bytecode produced by the post-
+feature codebase. The failure mode in that case is not a
+clean rejection because the shifted byte still names a valid
+variant in the older runtime's enum; it is silent
+misexecution. The risk is bounded to pre-release V0.2.0
+snapshots of the codebase; no shipped runtime is affected.
+
+The rationale for not bumping the wire version is that V0.1.1
+has narrow adoption. The wire-version bump policy reasserts
+at the next release that ships into a broader ecosystem.
+Hosts that pin bytecode artefacts against a specific runtime
+build should treat the V0.2.0 release commit as the
+authoritative wire-format reference for this version label.
 
 ### Changed
 

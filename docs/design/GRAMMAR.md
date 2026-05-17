@@ -304,9 +304,14 @@ Field access works on structs and tuples (using numeric index for tuples: `pair.
 
 ````
 let value = channels[i];
+let from_data = state.idx[ch];
+state.idx[ch] = 0;
+let cell = state.grid[row][col];
 ````
 
 Array indexing uses `Word` indices. Out-of-bounds access causes the script to yield a runtime error to the host.
+
+Indexed access on a data-segment field declared as an array type behaves identically at the surface but is lowered to direct indexed slot reads and writes against the data segment rather than to stack-resident array operations. The same syntax handles single-dimensional access (`state.idx[ch]`) and multi-dimensional access (`state.grid[row][col]`). Indexed assignment `state.field[i][j]... = expr;` is a distinct statement form (see the EBNF entry `data_field_index_assign`) because the language reserves data-segment assignment to a small set of LHS shapes.
 
 ## 5. Statements
 
@@ -724,13 +729,17 @@ comparison_op   = '==' | '!=' | '<' | '>' | '<=' | '>='
 
 (* Blocks and Statements *)
 block           = { statement } [ expression ]
-statement       = let_stmt | for_stmt | break_stmt | data_field_assign | expr_stmt
+statement       = let_stmt | for_stmt | break_stmt
+                | data_field_assign | data_field_index_assign
+                | expr_stmt
 let_stmt        = 'let' pattern [ ':' type_expr ] '=' expression ';'
 for_stmt        = 'for' lower_ident 'in' iterable '{' block '}'
 iterable        = expression
                 | expression '..' expression
 break_stmt      = 'break' ';'
-data_field_assign = lower_ident '.' lower_ident '=' expression ';'
+data_field_assign       = lower_ident '.' lower_ident '=' expression ';'
+data_field_index_assign = lower_ident '.' lower_ident '[' expression ']'
+                          { '[' expression ']' } '=' expression ';'
 expr_stmt       = expression ';'
 
 (* Expressions *)
