@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Wire-format note
+
+V0.2.0 adds three new bytecode opcodes (`Op::GetDataIndexed`,
+`Op::SetDataIndexed`, `Op::BoundsCheck`) to support the new
+indexed-array data-segment feature described under **Added**.
+The wire-format `version` field is intentionally not bumped
+from 2. V0.1.1 runtimes will fail to deserialise bytecode that
+uses any of the three new opcodes (the rkyv `bytecheck`
+validator rejects the unknown enum discriminant rather than
+silently corrupting), so the failure mode is a clean
+`LoadError` rather than undefined behaviour. The rationale for
+not bumping the wire version is that V0.1.1 has narrow
+adoption; the wire-version bump policy reasserts at the next
+release that ships into a broader ecosystem.
+
 ### Changed
 
 - **Surface text type renamed `String` to `Text`.** The Keleusma surface keyword for textual data is now `Text`. The former name persistently confused readers given Rust's owned `String` type. The runtime representation (`Value::StaticStr`, `Value::KStr`) is unchanged. Existing scripts must rename `String` to `Text` in parameter and return-type annotations.
@@ -16,6 +31,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Indexed access for data-segment array fields.** Data-segment fields declared as `[T; N]` now occupy N consecutive slots and admit indexed read and write through `state.field[i]` and `state.field[i] = value`. Nested array types flatten to a single contiguous slab and the script descends with `state.field[i][j]`. Three new opcodes carry the access at the bytecode level: `Op::GetDataIndexed(base, len)` and `Op::SetDataIndexed(base, len)` perform the indexed slot read and write with a built-in bounds check against the field's total length, and `Op::BoundsCheck(bound)` is emitted by the compiler between levels of a multi-dimensional access so an out-of-range inner index traps rather than silently addressing a different sub-array. `for x in state.field { ... }` over a scalar-element data array lowers to a numeric loop issuing `Op::GetDataIndexed` per element rather than materialising the array as a `Value::Array` on the operand stack. Naked field access against an array field (a bare `state.field` reference outside an indexed or for-in context) is rejected with a diagnostic pointing at the indexed-access form. The data layout for non-array fields is unchanged; scalar and other composite fields continue to occupy a single slot whose `Value` representation carries the structure internally.
 - **`OpCost::{Fixed(u32), Dynamic(fn)}` enum.** Cost-model surface for opcodes whose cost depends on runtime data. `CostModel::heap_alloc_cost` returns the new type; `Op::Add` on text operands reports `OpCost::Dynamic` because the resulting `KString` length is the sum of operand lengths. Hosts that need the pre-V0.2.0 fixed view continue to call `CostModel::heap_alloc_bytes`, which saturates dynamic costs to zero. The WCMU text-size tracking pass scheduled for V0.2.x evaluates `OpCost::Dynamic` against an `OpCostContext` populated from the abstract-interpretation lattice.
 - **`text` cargo feature, default off.** Gates the surface use of strings in scripts. With the feature off, the lexer rejects string literals (`"..."`) and f-strings (`f"..."`), and the parser does not recognise the `Text` primitive type. The `keleusma-cli` crate enables the feature on the runtime dependency so the script runner and the REPL continue to handle strings. Hosts that want the V0.1.x default surface enable the feature explicitly: `keleusma = { version = "0.2", features = ["text"] }`. Embedding hosts that target very small runtimes get a smaller compiled artifact by leaving the feature off. See the FAQ entry "Enabling text support" for details.
 - **`Vm::new_with_options` and overflow policy knob.** New constructor accepting a `VmOptions` value with an `overflow_policy` field. The policy decides what happens when a module's declared WCET or WCMU header field saturated to `u32::MAX` during compilation. `OverflowPolicy::Reject` (default) treats overflow as a `VmError::VerifyError`, preserving the historic strict admissibility. `OverflowPolicy::Warn` admits the module and returns a `Vec<VerifyWarning>` describing the overflow. `OverflowPolicy::Allow` admits the module silently. The bare `Vm::new` is now a thin wrapper around `new_with_options(VmOptions::default())` and continues to reject overflow.

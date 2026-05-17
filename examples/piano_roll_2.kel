@@ -33,6 +33,14 @@
 //   CH 4: Voice 5 soprano      - Pulse 25%, 10% L / 90% R
 //
 // Channels 5, 6, 7 stay disabled (host default).
+//
+// Implementation notes. Per-channel decay state lives in the
+// `state.idx` array (indices 0..4). The per-tick decay update
+// and volume calculation run inside a `for ch in 0..5` loop
+// that addresses the data segment through the language's
+// indexed-array syntax. The five-voice arpeggio dispatch and
+// the chord-pitch lookup are pure helper functions returning
+// scalar values.
 
 use host::play
 use host::silence
@@ -75,19 +83,26 @@ fn chord_at(idx: Word) -> Word {
     }
 }
 
+// Per-channel base panning as a (left, right) q1000 pair. The
+// loop multiplies each component by the channel's current
+// decay step over four before writing the per-speaker volume.
+fn pan_for_channel(ch: Word) -> (Word, Word) {
+    match ch {
+        0 => (800, 200),
+        1 => (600, 400),
+        2 => (500, 500),
+        3 => (300, 700),
+        _ => (100, 900),
+    }
+}
+
 data state {
     init: Word,
     loop_count: Word,
     section: Word,
     user0: Word, user1: Word, user2: Word, user3: Word,
-    idx0: Word, rem0: Word,
-    idx1: Word, rem1: Word,
-    idx2: Word, rem2: Word,
-    idx3: Word, rem3: Word,
-    idx4: Word, rem4: Word,
-    idx5: Word, rem5: Word,
-    idx6: Word, rem6: Word,
-    idx7: Word, rem7: Word,
+    idx: [Word; 8],
+    rem: [Word; 8],
 }
 
 loop main(input: Word) -> Word {
@@ -125,11 +140,9 @@ loop main(input: Word) -> Word {
         // Per-channel decay counters start at 4 (fully decayed,
         // silent). The first firing tick sets the relevant
         // counter to zero and the channel sings.
-        state.idx0 = 4;
-        state.idx1 = 4;
-        state.idx2 = 4;
-        state.idx3 = 4;
-        state.idx4 = 4;
+        for ch in 0..5 {
+            state.idx[ch] = 4;
+        }
 
         state.init = 1;
     };
@@ -151,54 +164,21 @@ loop main(input: Word) -> Word {
     // provides the perceived dynamics.
     host::play(fired, midi);
 
-    // Advance per-channel decay counters. The fired channel
-    // resets to zero. Every other channel increments toward
-    // its silent state. The counter saturates at 4.
-    if fired == 0 {
-        state.idx0 = 0;
-    } else {
-        let next0 = state.idx0 + 1;
-        if next0 > 4 { state.idx0 = 4; } else { state.idx0 = next0; };
-    };
-    if fired == 1 {
-        state.idx1 = 0;
-    } else {
-        let next1 = state.idx1 + 1;
-        if next1 > 4 { state.idx1 = 4; } else { state.idx1 = next1; };
-    };
-    if fired == 2 {
-        state.idx2 = 0;
-    } else {
-        let next2 = state.idx2 + 1;
-        if next2 > 4 { state.idx2 = 4; } else { state.idx2 = next2; };
-    };
-    if fired == 3 {
-        state.idx3 = 0;
-    } else {
-        let next3 = state.idx3 + 1;
-        if next3 > 4 { state.idx3 = 4; } else { state.idx3 = next3; };
-    };
-    if fired == 4 {
-        state.idx4 = 0;
-    } else {
-        let next4 = state.idx4 + 1;
-        if next4 > 4 { state.idx4 = 4; } else { state.idx4 = next4; };
-    };
-
-    // Apply decay-scaled per-speaker volume to every active
-    // channel. Steps go 4 (full), 3 (75 percent), 2 (50
-    // percent), 1 (25 percent), 0 (silent). Base pan values
-    // come from the spec.
-    let steps0 = 4 - state.idx0;
-    host::set_volume(0, 800 * steps0 / 4, 200 * steps0 / 4);
-    let steps1 = 4 - state.idx1;
-    host::set_volume(1, 600 * steps1 / 4, 400 * steps1 / 4);
-    let steps2 = 4 - state.idx2;
-    host::set_volume(2, 500 * steps2 / 4, 500 * steps2 / 4);
-    let steps3 = 4 - state.idx3;
-    host::set_volume(3, 300 * steps3 / 4, 700 * steps3 / 4);
-    let steps4 = 4 - state.idx4;
-    host::set_volume(4, 100 * steps4 / 4, 900 * steps4 / 4);
+    // Per-channel decay update and volume application. The
+    // fired channel resets to zero. Every other channel
+    // saturates at four. The per-tick volume is the channel's
+    // base pan multiplied by `(4 - idx) / 4`.
+    for ch in 0..5 {
+        if ch == fired {
+            state.idx[ch] = 0;
+        } else {
+            let next = state.idx[ch] + 1;
+            if next > 4 { state.idx[ch] = 4; } else { state.idx[ch] = next; };
+        };
+        let steps = 4 - state.idx[ch];
+        let pan = pan_for_channel(ch);
+        host::set_volume(ch, pan.0 * steps / 4, pan.1 * steps / 4);
+    }
 
     let _ = yield 0;
     0
