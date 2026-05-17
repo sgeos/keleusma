@@ -3,6 +3,11 @@
 // per-channel position state in the data segment and emits
 // `host::play(channel, midi)` at each note boundary.
 //
+// See `docs/guide/PIANO_ROLL.md` for the long-form manual. The
+// "Composing songs" section explains the mental model, the
+// data-segment conventions, and the per-tick body shape this
+// file follows.
+//
 // Notes use the tuple format (Pitch, octave, duration_in_16ths).
 // Octaves follow MIDI convention: middle C is C4 = MIDI 60.
 // Duration units: 1 = sixteenth, 2 = eighth, 4 = quarter,

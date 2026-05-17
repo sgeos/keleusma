@@ -1,15 +1,21 @@
 // Three-channel piano roll, second song. Hot-swap target for the
-// piano_roll example. Same data-segment schema as piano_roll.kel
-// so swap is value-preserving.
+// piano_roll example. Same twenty-three-slot data segment schema
+// as piano_roll_0.kel so the swap is structurally compatible.
 //
-// Channel routing differs from song 1: channel 1 carries harmony
-// (triangle waveform) and channel 2 carries bass (square waveform).
-// The waveform-to-channel mapping in the host is fixed, so the
-// swap also produces a timbral change: bass moves from a triangle
-// voice to a square voice, and harmony moves the other direction.
+// See `docs/guide/PIANO_ROLL.md` for the long-form manual. The
+// "Composing songs" section explains the mental model, the
+// data-segment conventions, and the per-tick body shape this
+// file follows.
 //
-// The progression matches song 1 (C - Am - F - G), but with eighth
-// notes on the melody for a busier line and a sparser staccato bass.
+// Channel routing differs from piano_roll_0: channel 1 carries
+// harmony on a triangle voice, channel 2 carries bass on a
+// square voice. Song 0 routes those parts the other way around.
+// Each song configures the per-channel waveform in its init
+// block through `host::set_waveform`.
+//
+// The progression matches piano_roll_0 (C - Am - F - G), with
+// eighth notes on the melody for a busier line and a sparser
+// staccato bass.
 
 use host::play
 use host::silence

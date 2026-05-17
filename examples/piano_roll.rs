@@ -1,6 +1,17 @@
 //! Eight-channel SDL3 audio piano roll driven by a Keleusma tick
 //! control loop, with hot code reload between two songs.
 //!
+//! The long-form companion manual is
+//! `docs/guide/PIANO_ROLL.md`. The manual narrates the example
+//! for three reader populations (song authors, host developers
+//! lifting the example into another application, and host
+//! developers studying the example as an architectural reference
+//! for other control-loop domains). This module-level docstring
+//! is the authoritative catalog of host native functions,
+//! parameter ranges, defaults, waveform codes, and data-segment
+//! slot layout. Where the manual narrates around the surface, the
+//! comment below lists the surface itself.
+//!
 //! # Architecture
 //!
 //! A roster of Keleusma scripts named `piano_roll_<N>.kel`
