@@ -46,6 +46,9 @@
 //!   on; triggers an envelope attack.
 //! - `host::silence(ch)`                   — gate off; triggers
 //!   an envelope release.
+//! - `host::set_bpm(bpm)`                  — change the tick
+//!   rate. Applies on the next tick boundary, so mid-playback
+//!   tempo changes are sample-accurate to one 16th.
 //!
 //! Waveform codes:
 //!
@@ -78,6 +81,7 @@
 //! Press `s` then Enter to swap songs. Press Enter alone to quit.
 
 use std::io::{self, BufRead};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, TryRecvError};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -96,8 +100,14 @@ use sdl3::audio::{AudioCallback, AudioFormat, AudioSpec, AudioStream};
 // ---------------------------------------------------------------
 
 const SAMPLE_RATE: u32 = 48_000;
-const TICK_MS: u64 = 125; // 16th note at 120 BPM
+const DEFAULT_BPM: u32 = 120;
 const NUM_VOICES: usize = 8;
+
+/// Microseconds per 16th-note tick at the given BPM. Four
+/// sixteenths per beat; sixty seconds per minute.
+const fn tick_us_for_bpm(bpm: u32) -> u64 {
+    60_000_000u64 / (bpm as u64 * 4)
+}
 
 // Data-segment layout. The first slot is the `init` flag the
 // script uses to gate the one-time channel-setup block. The
@@ -412,7 +422,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let voices: SharedVoices = Arc::new(Mutex::new(default_voices()));
 
-    register_natives(&mut vm, &voices);
+    // Tick interval shared between main thread and `host::set_bpm`.
+    // The script reads the current BPM by calling the native;
+    // mid-playback changes apply on the next tick boundary.
+    let tick_us: Arc<AtomicU64> = Arc::new(AtomicU64::new(tick_us_for_bpm(DEFAULT_BPM)));
+
+    register_natives(&mut vm, &voices, &tick_us);
 
     let sdl_context = sdl3::init()?;
     let audio_subsystem = sdl_context.audio()?;
@@ -467,8 +482,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         s => return Err(format!("script did not yield on first call: {:?}", s).into()),
     }
 
-    let interval = Duration::from_millis(TICK_MS);
-    let mut next_tick = Instant::now() + interval;
+    let mut next_tick = Instant::now() + Duration::from_micros(tick_us.load(Ordering::Relaxed));
     let mut tick: i64 = 1;
     let mut active_is_a = true;
     let mut swap_pending = false;
@@ -487,7 +501,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         if now < next_tick {
             thread::sleep(next_tick - now);
         }
-        next_tick += interval;
+        // Reload the interval each tick so `host::set_bpm` calls
+        // from the script take effect on the very next tick.
+        next_tick += Duration::from_micros(tick_us.load(Ordering::Relaxed));
 
         loop {
             let state = vm
@@ -564,7 +580,24 @@ fn reset_voices(voices: &SharedVoices) {
     *v = default_voices();
 }
 
-fn register_natives(vm: &mut Vm, voices: &SharedVoices) {
+fn register_natives(vm: &mut Vm, voices: &SharedVoices, tick_us: &Arc<AtomicU64>) {
+    let tick_us_for_bpm = tick_us.clone();
+    vm.register_native_closure(
+        "host::set_bpm",
+        Box::new(move |args: &[Value]| -> Result<Value, VmError> {
+            let bpm = as_i64(&args[0])?;
+            if bpm <= 0 {
+                return Err(VmError::NativeError(format!(
+                    "host::set_bpm expected positive BPM, got {}",
+                    bpm
+                )));
+            }
+            let new_us = 60_000_000u64 / (bpm as u64 * 4);
+            tick_us_for_bpm.store(new_us, Ordering::Relaxed);
+            Ok(Value::Unit)
+        }),
+    );
+
     let voices_play = voices.clone();
     vm.register_native_closure(
         "host::play",
