@@ -83,6 +83,12 @@ pub enum VmError {
     /// program needs. Replaces the previous behavior of aborting the
     /// host process through `handle_alloc_error`.
     OutOfArena(String),
+    /// [`Vm::resume`] or [`Vm::resume_err`] was called on a VM that is
+    /// not in the suspended state. The host must call [`Vm::call`]
+    /// first to enter a coroutine and reach the first `yield` before
+    /// resuming. Distinguished from [`VmError::InvalidBytecode`] to
+    /// keep API misuse separate from corrupt or malformed bytecode.
+    NotSuspended,
 }
 
 impl From<crate::bytecode::LoadError> for VmError {
@@ -530,6 +536,17 @@ impl<'a, 'arena> Vm<'a, 'arena> {
     ) -> Result<(Self, Vec<VerifyWarning>), VmError> {
         let mut module = module;
         let mut warnings: Vec<VerifyWarning> = Vec::new();
+        // R1. The module must declare an entry point. The compiler sets
+        // `entry_point` from the `main` function. Detecting absence
+        // here gives a clear `VerifyError` at the API boundary instead
+        // of deferring the failure to the first `Vm::call`, which
+        // would otherwise surface as `InvalidBytecode("no entry
+        // point")` at the first use site.
+        if module.entry_point.is_none() {
+            return Err(VmError::VerifyError(String::from(
+                "module has no entry point: declare a `fn main`, `yield main`, or `loop main`",
+            )));
+        }
         if module.wcet_cycles == u32::MAX {
             let message = String::from(
                 "module declared WCET (cycles) overflowed to u32::MAX during compilation; the static analysis could not bound the cost",
@@ -613,6 +630,11 @@ impl<'a, 'arena> Vm<'a, 'arena> {
         module: Module,
         arena: &'arena keleusma_arena::Arena,
     ) -> Result<Self, VmError> {
+        if module.entry_point.is_none() {
+            return Err(VmError::VerifyError(String::from(
+                "module has no entry point: declare a `fn main`, `yield main`, or `loop main`",
+            )));
+        }
         verify::verify(&module)
             .map_err(|e| VmError::VerifyError(format!("{}: {}", e.chunk_name, e.message)))?;
         Self::construct(module, arena)
@@ -1317,9 +1339,7 @@ impl<'a, 'arena> Vm<'a, 'arena> {
     /// Resume execution after a yield or reset, providing the input value.
     pub fn resume(&mut self, input: Value) -> Result<VmState, VmError> {
         if !self.started || self.frames.is_empty() {
-            return Err(VmError::InvalidBytecode(String::from(
-                "cannot resume: VM not suspended",
-            )));
+            return Err(VmError::NotSuspended);
         }
         // For stream functions, update the parameter slot with the new input.
         // This ensures the next iteration sees the latest input.
@@ -4567,6 +4587,34 @@ mod tests {
     }
 
     #[test]
+    fn new_rejects_module_without_entry_point() {
+        // Compile a module that has functions but no `main`. The
+        // entry-point absence should surface as a clear VerifyError
+        // at the boundary, not as InvalidBytecode at the first
+        // Vm::call use site.
+        let src = "fn helper(x: Word) -> Word { x + 1 }";
+        let tokens = tokenize(src).expect("lex");
+        let program = parse(&tokens).expect("parse");
+        let module = compile(&program).expect("compile");
+        assert!(
+            module.entry_point.is_none(),
+            "test precondition: module has no entry point"
+        );
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        match Vm::new(module, &arena) {
+            Err(VmError::VerifyError(msg)) => {
+                assert!(
+                    msg.contains("no entry point"),
+                    "expected entry-point diagnostic, got {:?}",
+                    msg
+                );
+            }
+            Ok(_) => panic!("expected VerifyError for missing entry point"),
+            Err(other) => panic!("expected VerifyError, got {:?}", other),
+        }
+    }
+
+    #[test]
     fn new_with_options_default_rejects_wcet_overflow() {
         let module = build_module_with_overflow(u32::MAX, 0);
         let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
@@ -4728,6 +4776,44 @@ mod tests {
                 assert!(msg.contains("got Float"), "got: {}", msg);
             }
             other => panic!("expected TypeError, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn premature_resume_returns_not_suspended() {
+        // Reviewer reproduction: calling `resume` before `call`
+        // previously surfaced as `InvalidBytecode("cannot resume:
+        // VM not suspended")`, which conflated API misuse with
+        // corrupt bytecode. The runtime now returns the dedicated
+        // `VmError::NotSuspended` variant.
+        let src = "loop main(x: Word) -> Word { let z = yield x; z }";
+        let module = build_module(src);
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let mut vm = Vm::new(module, &arena).expect("verify");
+        let err = vm.resume(Value::Int(0)).expect_err("expected NotSuspended");
+        match err {
+            VmError::NotSuspended => {}
+            other => panic!("expected NotSuspended, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn resume_after_finished_returns_not_suspended() {
+        // After a Stream block reaches Finished (or any non-yielded
+        // terminal state), the VM is no longer suspended and resume
+        // must surface NotSuspended rather than InvalidBytecode.
+        let src = "fn main() -> Word { 7 }";
+        let module = build_module(src);
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let mut vm = Vm::new(module, &arena).expect("verify");
+        match vm.call(&[]).expect("call") {
+            VmState::Finished(Value::Int(v)) => assert_eq!(v, 7),
+            other => panic!("expected Finished, got {:?}", other),
+        }
+        let err = vm.resume(Value::Int(0)).expect_err("expected NotSuspended");
+        match err {
+            VmError::NotSuspended => {}
+            other => panic!("expected NotSuspended, got {:?}", other),
         }
     }
 }

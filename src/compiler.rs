@@ -599,9 +599,29 @@ pub fn compile_with_target(
     // legitimate when never reached from a Stream chunk's call graph.
     // See LANGUAGE_DESIGN.md Conservative Verification for the
     // design statement.
+    // Build a name -> span lookup from the original function defs so
+    // structural-verification and unbounded-construct rejections can
+    // point at the offending declaration in source. Multi-headed
+    // functions reuse the span of the first head, which matches the
+    // single chunk produced for the group. Synthetic impl-method
+    // chunks fall back to the impl block's span.
+    let mut chunk_spans: BTreeMap<String, crate::token::Span> = BTreeMap::new();
+    for func in &program.functions {
+        chunk_spans.entry(func.name.clone()).or_insert(func.span);
+    }
+    for func in &synth_impl_methods {
+        chunk_spans.entry(func.name.clone()).or_insert(func.span);
+    }
+    let span_for = |name: &str| -> crate::token::Span {
+        chunk_spans
+            .get(name)
+            .copied()
+            .unwrap_or_else(crate::token::Span::default)
+    };
+
     crate::verify::verify(&module).map_err(|e| CompileError {
         message: format!("structural verification: {}: {}", e.chunk_name, e.message),
-        span: crate::token::Span::default(),
+        span: span_for(&e.chunk_name),
     })?;
     for chunk in &module.chunks {
         for op in &chunk.ops {
@@ -612,7 +632,7 @@ pub fn compile_with_target(
                             "WCET verification: {}: CallIndirect resolves its target chunk at runtime and cannot be statically bounded for WCET/WCMU analysis. First-class function dispatch is not admitted by the safe build pipeline. Restrict the program to direct calls.",
                             chunk.name
                         ),
-                        span: crate::token::Span::default(),
+                        span: span_for(&chunk.name),
                     });
                 }
                 crate::bytecode::Op::MakeRecursiveClosure(target, _) => {
@@ -621,7 +641,7 @@ pub fn compile_with_target(
                             "WCET verification: {}: MakeRecursiveClosure(chunk={}) introduces unbounded recursion that cannot be statically bounded for WCET/WCMU analysis. Recursive closures are not admitted by the safe build pipeline.",
                             chunk.name, target
                         ),
-                        span: crate::token::Span::default(),
+                        span: span_for(&chunk.name),
                     });
                 }
                 _ => {}
@@ -757,6 +777,54 @@ fn validate_data_field_type(
     }
 }
 
+/// Returns `true` when two patterns dispatch on the same shape.
+///
+/// Two patterns share a shape when a value that matches one would
+/// also match the other for dispatch purposes. `Variable` and
+/// `Wildcard` both catch any value; two `Literal` patterns share
+/// a shape only when their literals are equal. Composite patterns
+/// (tuples, structs, enums) compare structurally on the same
+/// rule. The function ignores `Span` fields so that two heads
+/// declared at different source positions compare correctly.
+fn pattern_shape_eq(a: &Pattern, b: &Pattern) -> bool {
+    match (a, b) {
+        (
+            Pattern::Wildcard(_) | Pattern::Variable(_, _),
+            Pattern::Wildcard(_) | Pattern::Variable(_, _),
+        ) => true,
+        (Pattern::Literal(la, _), Pattern::Literal(lb, _)) => la == lb,
+        (Pattern::Tuple(pa, _), Pattern::Tuple(pb, _)) => {
+            pa.len() == pb.len()
+                && pa
+                    .iter()
+                    .zip(pb.iter())
+                    .all(|(a, b)| pattern_shape_eq(a, b))
+        }
+        (Pattern::Enum(ea, va, sa, _), Pattern::Enum(eb, vb, sb, _)) => {
+            ea == eb
+                && va == vb
+                && sa.len() == sb.len()
+                && sa
+                    .iter()
+                    .zip(sb.iter())
+                    .all(|(a, b)| pattern_shape_eq(a, b))
+        }
+        (Pattern::Struct(na, fa, _), Pattern::Struct(nb, fb, _)) => {
+            na == nb
+                && fa.len() == fb.len()
+                && fa.iter().zip(fb.iter()).all(|(a, b)| {
+                    a.name == b.name
+                        && match (&a.pattern, &b.pattern) {
+                            (Some(pa), Some(pb)) => pattern_shape_eq(pa, pb),
+                            (None, None) => true,
+                            _ => false,
+                        }
+                })
+        }
+        _ => false,
+    }
+}
+
 /// Compile a group of function definitions with the same name into one chunk.
 fn compile_function_group(
     name: &str,
@@ -766,6 +834,34 @@ fn compile_function_group(
     data_fields: &BTreeMap<String, Vec<(String, u16)>>,
     type_info: &TypeInfo,
 ) -> Result<Chunk, CompileError> {
+    // Within a group, every head after the first must dispatch on
+    // a pattern shape distinct from every earlier head; otherwise
+    // the later head is unreachable. Single-head groups skip this
+    // loop. The check rejects both literal-pattern duplicates
+    // (`fn classify(0)` declared twice) and signature duplicates
+    // (`fn main()` declared twice).
+    for (i, later) in defs.iter().enumerate().skip(1) {
+        for earlier in &defs[..i] {
+            if later.params.len() != earlier.params.len() {
+                continue;
+            }
+            let shape_match = later
+                .params
+                .iter()
+                .zip(earlier.params.iter())
+                .all(|(l, e)| pattern_shape_eq(&l.pattern, &e.pattern));
+            if shape_match && earlier.guard.is_none() && later.guard.is_none() {
+                return Err(CompileError {
+                    message: alloc::format!(
+                        "function head `{}` is dead code: an earlier head with the same pattern shape and no guard already matches every value reaching it",
+                        name
+                    ),
+                    span: later.span,
+                });
+            }
+        }
+    }
+
     let first = defs[0];
     let block_type = match first.category {
         FunctionCategory::Fn => BlockType::Func,
@@ -2910,5 +3006,33 @@ mod tests {
     fn no_data_block_compiles() {
         let module = compile_str("fn main() -> Word { 42 }").unwrap();
         assert!(module.data_layout.is_none());
+    }
+
+    #[test]
+    fn recursive_closure_compile_error_carries_source_span() {
+        // The compile-pipeline rejection for a recursive closure
+        // used to emit `Span::default()`, hiding the offending
+        // source position. The compiler now attaches the synthetic
+        // closure's hoisted span (which originates at the closure
+        // expression site), so callers and IDEs can highlight the
+        // construct that caused the rejection.
+        let src = "fn main() -> Word {\n\
+                       let fact = |n: Word| if n <= 1 { 1 } else { n * fact(n - 1) };\n\
+                       fact(5)\n\
+                   }";
+        let err = compile_str(src).expect_err("expected rejection");
+        // The rejection should be the recursive-closure check.
+        assert!(
+            err.message.contains("MakeRecursiveClosure") || err.message.contains("CallIndirect"),
+            "unexpected error: {}",
+            err.message
+        );
+        // The span must point at a real source position, not the
+        // default-constructed zero span.
+        assert_ne!(
+            err.span,
+            crate::token::Span::default(),
+            "expected source span on structural-verification error",
+        );
     }
 }

@@ -624,7 +624,10 @@ impl<'a> Lexer<'a> {
             }
             let text = core::str::from_utf8(&self.source[start..self.pos]).unwrap_or("0");
             let text = text.trim_end_matches("f64");
-            let value: f64 = text.parse().unwrap_or(0.0);
+            let value: f64 = text.parse().map_err(|_| LexError {
+                message: alloc::format!("float literal `{}` is not parseable as f64", text),
+                span: self.span_from(start, start_line, start_col),
+            })?;
             return Ok(Token {
                 kind: TokenKind::FloatLit(value),
                 span: self.span_from(start, start_line, start_col),
@@ -643,7 +646,14 @@ impl<'a> Lexer<'a> {
 
         let text = core::str::from_utf8(&self.source[start..self.pos]).unwrap_or("0");
         let text = text.trim_end_matches("i64");
-        let value: i64 = text.parse().unwrap_or(0);
+        // A decimal integer literal must fit in i64. Silently
+        // truncating an oversize literal to zero would let a typo
+        // or generated-source bug compile and run with the wrong
+        // value; reject at lex time instead.
+        let value: i64 = text.parse().map_err(|_| LexError {
+            message: alloc::format!("integer literal `{}` does not fit in i64", text),
+            span: self.span_from(start, start_line, start_col),
+        })?;
         Ok(Token {
             kind: TokenKind::IntLit(value),
             span: self.span_from(start, start_line, start_col),
@@ -669,7 +679,10 @@ impl<'a> Lexer<'a> {
             ));
         }
         let hex_text = core::str::from_utf8(&self.source[digit_start..self.pos]).unwrap_or("0");
-        let value = i64::from_str_radix(hex_text, 16).unwrap_or(0);
+        let value = i64::from_str_radix(hex_text, 16).map_err(|_| LexError {
+            message: alloc::format!("hex literal `0x{}` does not fit in i64", hex_text),
+            span: self.span_from(start, start_line, start_col),
+        })?;
         Ok(Token {
             kind: TokenKind::IntLit(value),
             span: self.span_from(start, start_line, start_col),
@@ -695,7 +708,10 @@ impl<'a> Lexer<'a> {
             ));
         }
         let bin_text = core::str::from_utf8(&self.source[digit_start..self.pos]).unwrap_or("0");
-        let value = i64::from_str_radix(bin_text, 2).unwrap_or(0);
+        let value = i64::from_str_radix(bin_text, 2).map_err(|_| LexError {
+            message: alloc::format!("binary literal `0b{}` does not fit in i64", bin_text),
+            span: self.span_from(start, start_line, start_col),
+        })?;
         Ok(Token {
             kind: TokenKind::IntLit(value),
             span: self.span_from(start, start_line, start_col),

@@ -249,6 +249,62 @@ state.rem1 = state.rem1 - 1;
 
 The type checker tracks opaque types correctly, but the marshalling layer in V0.1.x has no path for opaque host values to flow across the native function boundary as themselves. The recommended pattern is to pass opaque values through a primitive handle (typically `Word`) that the host translates to and from its real Rust type at the boundary. See [GRAMMAR.md §3](../design/GRAMMAR.md) and §9.
 
+### Integer arithmetic wraps to the target word width
+
+Keleusma's `Word` is a fixed-width signed integer whose width is declared by the target descriptor. Arithmetic operations mask the result to that width using a sign-extending shift on every step. Overflow does not produce a typed error; the result silently wraps in the modular sense the declared width permits.
+
+````
+fn main() -> Word {
+    let max = 9223372036854775807;
+    max + 1
+}
+// On a sixty-four bit target this returns -9223372036854775808.
+````
+
+This choice is intentional. The Worst-Case Execution Time and Worst-Case Memory Usage bounds the language guarantees depend on every arithmetic operation having a fixed step count. A trapping-overflow semantics would either inflate the worst-case cost of every operation or introduce a control-flow edge that the static analysis would have to enumerate. The wrapping semantics gives a predictable step count and a closed result domain that the analysis can reason about uniformly.
+
+Hosts that need overflow detection register a native that performs the checked operation against a wider Rust integer and surfaces an error through `VmError::NativeError`. The host owns the checked-arithmetic vocabulary; the script consumes it through `use` declarations.
+
+### Loop-calls-loop is rejected by lexical productivity
+
+The productivity rule that admits `loop` blocks is enforced by a purely lexical structural check. The verifier walks the syntactic body of each `loop` and requires that every control-flow path through one iteration contains at least one `yield`. A `loop` block whose body's only `yield` is inside a function it calls is rejected because the structural pass does not chase the call.
+
+````
+yield helper() -> Word { yield 1 }
+
+loop main() -> Word {
+    let v = helper();   // <-- structural pass does not see the yield
+    v
+}
+````
+
+This program is rejected with `loop body has no yield on at least one path`. The rule errs conservative on purpose. A semantic check that chased calls would be unsound for parameter-dependent dispatch or trait method resolution and would also have to handle mutually recursive call graphs. The lexical check is sound, fast, and easy to explain at the cost of forcing the `yield` to appear at the top level of the `loop` body.
+
+The recommended pattern is to keep `yield` at the top of the `loop` body and call helpers around it.
+
+````
+yield helper() -> Word { yield 1 }
+
+loop main() -> Word {
+    let v = yield helper();   // direct yield satisfies the rule
+    v
+}
+````
+
+The same constraint applies to `if`/`else` and `match` branches inside the `loop` body. Every fall-through path must contain a `yield`, or the branch must `break` out.
+
+### V0.2.0 boundary diagnostics
+
+The construction and call surfaces were tightened in V0.2.0 so that several previously silent or misleading cases now produce typed diagnostics at the appropriate boundary.
+
+- **Integer literals that overflow `i64` are now `LexError`.** The previous behaviour silently produced `Value::Int(0)` for literals such as `99999999999999999999999999999`. The lexer now reports `integer literal does not fit in i64` with the source span of the literal.
+- **Untyped parameters are now `ParseError`.** Writing `fn main(x) -> i64 { x }` previously parsed and inferred `x` as `Unit`, then tripped a type error later. The parser now reports `parameter requires an explicit type annotation` at the parameter span. The asymmetric behaviour where missing return types were rejected but missing parameter types were not is gone.
+- **Duplicate `fn main` definitions are now `CompileError`.** Two function definitions that share the same name and whose parameter signatures cannot be disambiguated as multi-headed pattern matching previously kept the first and silently discarded the rest. The compiler now reports `function head is dead code` at the second definition.
+- **Two pattern heads with the same literal pattern are now `CompileError`.** A multi-headed function whose second head has the same literal pattern as an earlier head used to compile with the second head as dead code. The compiler now reports the same `function head is dead code` rejection.
+- **Modules without an entry point are now `VmError::VerifyError`.** A module compiled from source that omits `fn main`, `yield main`, or `loop main` previously surfaced as `VmError::InvalidBytecode("no entry point")` at the first `Vm::call`. The constructor `Vm::new` (and `Vm::new_unchecked`) now rejects the module with `module has no entry point` at the API boundary.
+- **Premature `Vm::resume` is now `VmError::NotSuspended`.** Calling `vm.resume(value)` before `vm.call(args)` previously surfaced as `VmError::InvalidBytecode("cannot resume: VM not suspended")`, which conflated API misuse with corrupt bytecode. The runtime now returns the dedicated `VmError::NotSuspended` variant.
+- **Structural-verification rejections now carry source spans.** Compile-pipeline rejections for `CallIndirect` and `MakeRecursiveClosure` used to attach `Span::default()`, which hid the offending source position. Each rejection now points at the originating function or closure declaration so editors can underline the construct.
+
 ### Bytecode 0.1.0 was yanked
 
 `keleusma 0.1.0` was yanked from crates.io within hours of publication because its declared MSRV of 1.87 conflicted with let-chain syntax in the source that requires Rust 1.88. `keleusma 0.1.1` is the corrected initial release; `Cargo.lock` files referencing 0.1.0 continue to resolve but new `cargo add keleusma` invocations pick 0.1.1.
