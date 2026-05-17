@@ -73,6 +73,20 @@
 //!   `host::play` retriggers the envelope from Attack even if
 //!   the gate is already open. Cleared by default for legato
 //!   behaviour.
+//! - `host::set_detune(ch, cents)` — static pitch offset in
+//!   cents. Combines multiplicatively with vibrato so the
+//!   script can detune a voice for a chorused effect or
+//!   pitch-bend it by automating this parameter directly. Zero
+//!   is the default and is a no-op.
+//! - `host::set_velocity(ch, q1000)` — per-voice loudness
+//!   scalar applied after the envelope. `1000` is unity gain
+//!   (the default); lower values attenuate the voice's mixed
+//!   signal.
+//! - `host::set_master_volume(q1000)` — global output gain
+//!   applied before the soft-clip stage. `1000` is unity (the
+//!   default). The mix passes through `tanh` before the
+//!   stream output so peaks round off smoothly rather than
+//!   hard-clipping.
 //!
 //! Waveform codes:
 //!
@@ -112,10 +126,78 @@
 //! SDL3 builds from source through the `build-from-source-static`
 //! feature on first build. CMake is required.
 //!
-//! Press `s` then Enter to swap songs. Press Enter alone to quit.
+//! Input commands (line-buffered through stdin):
+//!
+//! - `s` — cycle to the next song.
+//! - `r` — restart the current song from its beginning.
+//! - `<N>` — jump directly to song `N` (e.g. `0` or `1`).
+//! - Enter alone — quit.
+//!
+//! # Possible enhancements left as an exercise for the reader
+//!
+//! The current example demonstrates the breadth of a tracker-
+//! shaped host. Several features were considered and deliberately
+//! left out so the code stays an example rather than a
+//! product. Rough Rust-side LOC estimates are given where
+//! useful.
+//!
+//! - Tremolo (amplitude LFO, the symmetric counterpart to
+//!   vibrato). ~35 LOC.
+//! - Filter envelope (a second ADSR driving the LPF cutoff,
+//!   not just the amplitude). ~80 LOC.
+//! - Delay line (per-voice or master, with feedback). ~50
+//!   LOC.
+//! - Reverb (Schroeder or Freeverb topology). ~150 LOC for a
+//!   credible implementation.
+//! - Arpeggio (rapid cycling through a tuple of pitch
+//!   offsets at the sample rate). ~20 LOC.
+//! - Polyphonic voice allocation (auto-stealing pool with
+//!   per-note voice assignment). ~150 LOC.
+//! - Sample playback (PCM table plus per-voice cursor with
+//!   rate scaling for pitch). ~150 LOC plus a sample-loader
+//!   entry point.
+//! - FM synthesis (two-operator with carrier and modulator).
+//!   ~80 LOC.
+//! - Wavetable synthesis (lerp between adjacent table
+//!   entries). ~80 LOC.
+//! - Real-time visualiser (oscilloscope or spectrum display
+//!   through a second SDL3 window). ~250 LOC.
+//! - MIDI file import or live MIDI input.
+//!
+//! # Code-style notes for the reader
+//!
+//! Several places in this file are deliberately verbose for
+//! the sake of a first-time reader; a production codebase
+//! would tighten them at the cost of immediate readability.
+//! Each is its own potential exercise.
+//!
+//! - The native registration block contains many almost-
+//!   identical `let voices_X = voices.clone(); vm.
+//!   register_native_closure(...)` patterns. A small macro
+//!   would compress them but trade explicit per-native bodies
+//!   for a layer of indirection.
+//! - `run` is roughly two hundred lines. A reader follows it
+//!   linearly. Production code would factor out helpers (SDL3
+//!   audio setup, the stdin watcher thread, the tick loop)
+//!   so each function has a single responsibility. Stay
+//!   linear here so the data-flow stays visible on one
+//!   scroll.
+//! - The voice state is a single `Mutex<[Voice; 8]>` snapshot
+//!   per audio callback. At eight voices times forty-eight
+//!   kilohertz, contention is invisible. A production engine
+//!   reaching hundreds of voices would switch to per-voice
+//!   atomics or a lock-free ring buffer; the lock pattern is
+//!   chosen here so the data-flow is immediately obvious.
+//! - All numeric parameter ranges go through a `q1000`
+//!   convention (centi-percent of the unit interval) so the
+//!   Keleusma side only deals in `Word`. A real host might
+//!   expose floating-point natives directly once Keleusma's
+//!   marshalling layer covers the relevant width.
+//!
+//! Press `s`, `r`, or a digit then Enter; or Enter alone to quit.
 
 use std::io::{self, BufRead};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::mpsc::{self, TryRecvError};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -221,6 +303,18 @@ struct Voice {
     /// audio thread snapshots `last_trigger_seq` per voice and
     /// resets the envelope on observed change.
     trigger_seq: u32,
+    /// Static pitch offset in cents (one hundredth of a semitone)
+    /// applied on top of the MIDI pitch. Combines multiplicatively
+    /// with the vibrato LFO, so the script can detune a voice for
+    /// a chorused effect or pitch-bend it by automating this
+    /// parameter directly. Zero is the default and is a no-op.
+    detune_cents: f32,
+    /// Per-note loudness scalar applied to the mixed signal after
+    /// the envelope. `host::set_velocity` writes this; `host::play`
+    /// reads it implicitly through the audio path. The convention
+    /// is `0.0` to `1.0` where `1.0` is the default unattenuated
+    /// loudness.
+    velocity: f32,
 }
 
 impl Voice {
@@ -242,6 +336,8 @@ impl Voice {
             lpf_cutoff_hz: 0.0,
             retrigger: false,
             trigger_seq: 0,
+            detune_cents: 0.0,
+            velocity: 1.0,
         }
     }
 }
@@ -333,6 +429,10 @@ struct Mixer {
     noise_state: u32,
     sample_rate: f32,
     buffer: Vec<f32>,
+    /// Master output gain, `q1000` in `[0, 1000]` mapping to
+    /// `[0.0, 1.0]`. Read by the audio thread on every callback.
+    /// Updated by `host::set_master_volume`.
+    master_volume: Arc<AtomicU32>,
 }
 
 impl AudioCallback<f32> for Mixer {
@@ -390,12 +490,21 @@ impl AudioCallback<f32> for Mixer {
                 // collapses to 1.0 when depth is zero, which the
                 // fast path below skips.
                 self.vibrato_phases[ch] = (self.vibrato_phases[ch] + v.vibrato_rate_hz * dt) % 1.0;
-                let pitch_mul = if v.vibrato_depth_cents > 0.0 && v.vibrato_rate_hz > 0.0 {
+                let vibrato_mul = if v.vibrato_depth_cents > 0.0 && v.vibrato_rate_hz > 0.0 {
                     let lfo = libm::sinf(self.vibrato_phases[ch] * core::f32::consts::TAU);
                     libm::powf(2.0, (v.vibrato_depth_cents / 1200.0) * lfo)
                 } else {
                     1.0
                 };
+
+                // Static detune. Fast-path zero cents to avoid the
+                // powf call when the voice has no detune set.
+                let detune_mul = if v.detune_cents != 0.0 {
+                    libm::powf(2.0, v.detune_cents / 1200.0)
+                } else {
+                    1.0
+                };
+                let pitch_mul = vibrato_mul * detune_mul;
 
                 let phase_inc = (v.freq * pitch_mul) / self.sample_rate;
                 self.phases[ch] = (self.phases[ch] + phase_inc) % 1.0;
@@ -417,12 +526,17 @@ impl AudioCallback<f32> for Mixer {
                     raw_sample
                 };
 
-                let weighted = env.level * filtered;
+                let weighted = env.level * v.velocity * filtered;
                 acc_l += v.volume_left * weighted;
                 acc_r += v.volume_right * weighted;
             }
-            frame[0] = acc_l;
-            frame[1] = acc_r;
+            // Master volume and soft clip. The `tanh` curve is a
+            // smooth saturation around +/-1.0 so peaks that
+            // exceed the linear range round off rather than
+            // clipping into hard edges.
+            let master = (self.master_volume.load(Ordering::Relaxed) as f32) / 1000.0;
+            frame[0] = libm::tanhf(acc_l * master);
+            frame[1] = libm::tanhf(acc_r * master);
         }
 
         stream.put_data_f32(&self.buffer).unwrap();
@@ -539,7 +653,14 @@ fn midi_to_freq_hz(midi: i64) -> f32 {
 // ---------------------------------------------------------------
 
 enum Command {
+    /// Cycle forward to the next song in `SONG_SOURCES`.
     Swap,
+    /// Reload the current song from the start.
+    Restart,
+    /// Jump directly to a specific song by index. Out-of-range
+    /// indices are reported and ignored.
+    SelectSong(usize),
+    /// Stop the host loop.
     Quit,
 }
 
@@ -607,7 +728,12 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     // mid-playback changes apply on the next tick boundary.
     let tick_us: Arc<AtomicU64> = Arc::new(AtomicU64::new(tick_us_for_bpm(DEFAULT_BPM)));
 
-    register_natives(&mut vm, &voices, &tick_us);
+    // Master output gain shared between the script (via
+    // `host::set_master_volume`) and the audio thread's Mixer.
+    // The default of `1000` corresponds to unity gain.
+    let master_volume: Arc<AtomicU32> = Arc::new(AtomicU32::new(1000));
+
+    register_natives(&mut vm, &voices, &tick_us, &master_volume);
 
     let sdl_context = sdl3::init()?;
     let audio_subsystem = sdl_context.audio()?;
@@ -627,6 +753,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             noise_state: 0x9E37_79B9,
             sample_rate: SAMPLE_RATE as f32,
             buffer: Vec::new(),
+            master_volume: master_volume.clone(),
         },
     )?;
     device.resume()?;
@@ -642,12 +769,20 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 return;
             }
             let line = buf.trim();
-            if line.eq_ignore_ascii_case("s") {
-                if cmd_tx.send(Command::Swap).is_err() {
-                    return;
-                }
+            let cmd = if line.eq_ignore_ascii_case("s") {
+                Command::Swap
+            } else if line.eq_ignore_ascii_case("r") {
+                Command::Restart
+            } else if let Ok(n) = line.parse::<usize>() {
+                Command::SelectSong(n)
             } else {
-                let _ = cmd_tx.send(Command::Quit);
+                Command::Quit
+            };
+            let is_quit = matches!(cmd, Command::Quit);
+            if cmd_tx.send(cmd).is_err() {
+                return;
+            }
+            if is_quit {
                 return;
             }
         }
@@ -657,7 +792,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         "Keleusma piano roll. 120 BPM, eight voices, three active. {} song(s) loaded.",
         modules.len()
     );
-    println!("[ Press 's' + Enter to swap song. Press Enter alone to quit. ]");
+    println!("[ Commands: s=next, r=restart, <N>=select song N, Enter=quit ]");
     println!("[ now playing song 0 ]");
 
     match vm
@@ -670,13 +805,30 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut next_tick = Instant::now() + Duration::from_micros(tick_us.load(Ordering::Relaxed));
     let mut tick: i64 = 1;
-    let mut swap_pending = false;
+    // Pending song change resolved at the next Reset boundary.
+    // `Some(target)` means "load song `target` on the next
+    // Reset"; `target == active_song` means restart in place.
+    let mut pending_song_change: Option<usize> = None;
 
     loop {
         match cmd_rx.try_recv() {
             Ok(Command::Quit) => break,
             Ok(Command::Swap) => {
-                swap_pending = true;
+                pending_song_change = Some((active_song + 1) % modules.len());
+            }
+            Ok(Command::Restart) => {
+                pending_song_change = Some(active_song);
+            }
+            Ok(Command::SelectSong(n)) => {
+                if n < modules.len() {
+                    pending_song_change = Some(n);
+                } else {
+                    println!(
+                        "[ song {} is out of range; roster has {} song(s) ]",
+                        n,
+                        modules.len()
+                    );
+                }
             }
             Err(TryRecvError::Empty) => {}
             Err(TryRecvError::Disconnected) => break,
@@ -697,23 +849,28 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             match state {
                 VmState::Yielded(_) => break,
                 VmState::Reset => {
-                    if swap_pending {
-                        active_song = (active_song + 1) % modules.len();
+                    if let Some(target) = pending_song_change.take() {
+                        let restart_in_place = target == active_song;
+                        active_song = target;
                         // Reset host-side voice state BEFORE loading
                         // the next module. The new song's init block
                         // is responsible only for the parameters it
                         // cares about; every other field (vibrato,
                         // LPF, retrigger, ADSR, waveform, duty, per-
-                        // speaker volume) is restored to the off /
-                        // default value by `reset_voices`. Scripts
-                        // therefore never need to defensively turn
-                        // features off "in case" a previous song
-                        // turned them on.
+                        // speaker volume, detune, velocity) is
+                        // restored to the off / default value by
+                        // `reset_voices`. Scripts therefore never
+                        // need to defensively turn features off "in
+                        // case" a previous song turned them on.
                         reset_voices(&voices);
                         vm.replace_module(modules[active_song].clone(), fresh_data())
                             .map_err(|e| format!("replace_module: {:?}", e))?;
-                        swap_pending = false;
-                        println!("[ swapped to song {} ]", active_song);
+                        let label = if restart_in_place {
+                            "restarted"
+                        } else {
+                            "swapped to"
+                        };
+                        println!("[ {} song {} ]", label, active_song);
                         match vm
                             .call(&[Value::Int(tick)])
                             .map_err(|e| format!("vm call after swap: {:?}", e))?
@@ -765,7 +922,12 @@ fn reset_voices(voices: &SharedVoices) {
     *v = default_voices();
 }
 
-fn register_natives(vm: &mut Vm, voices: &SharedVoices, tick_us: &Arc<AtomicU64>) {
+fn register_natives(
+    vm: &mut Vm,
+    voices: &SharedVoices,
+    tick_us: &Arc<AtomicU64>,
+    master_volume: &Arc<AtomicU32>,
+) {
     let tick_us_for_bpm = tick_us.clone();
     vm.register_native_closure(
         "host::set_bpm",
@@ -940,6 +1102,42 @@ fn register_natives(vm: &mut Vm, voices: &SharedVoices, tick_us: &Arc<AtomicU64>
             if ch < NUM_VOICES {
                 voices_retrigger.lock().unwrap()[ch].retrigger = on;
             }
+            Ok(Value::Unit)
+        }),
+    );
+
+    let voices_detune = voices.clone();
+    vm.register_native_closure(
+        "host::set_detune",
+        Box::new(move |args: &[Value]| -> Result<Value, VmError> {
+            let ch = as_i64(&args[0])? as usize;
+            let cents = as_i64(&args[1])? as f32;
+            if ch < NUM_VOICES {
+                voices_detune.lock().unwrap()[ch].detune_cents = cents;
+            }
+            Ok(Value::Unit)
+        }),
+    );
+
+    let voices_velocity = voices.clone();
+    vm.register_native_closure(
+        "host::set_velocity",
+        Box::new(move |args: &[Value]| -> Result<Value, VmError> {
+            let ch = as_i64(&args[0])? as usize;
+            let q1000 = as_i64(&args[1])?.clamp(0, 1000) as f32;
+            if ch < NUM_VOICES {
+                voices_velocity.lock().unwrap()[ch].velocity = q1000 / 1000.0;
+            }
+            Ok(Value::Unit)
+        }),
+    );
+
+    let master = master_volume.clone();
+    vm.register_native_closure(
+        "host::set_master_volume",
+        Box::new(move |args: &[Value]| -> Result<Value, VmError> {
+            let q1000 = as_i64(&args[0])?.clamp(0, 1000) as u32;
+            master.store(q1000, Ordering::Relaxed);
             Ok(Value::Unit)
         }),
     );
