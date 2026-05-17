@@ -49,6 +49,21 @@
 //! - `host::set_bpm(bpm)`                  — change the tick
 //!   rate. Applies on the next tick boundary, so mid-playback
 //!   tempo changes are sample-accurate to one 16th.
+//! - `host::set_volume(ch, l_q1000, r_q1000)` — per-speaker
+//!   volume. Equal values produce a centred stereo image;
+//!   unequal values position the voice in the stereo field.
+//! - `host::set_vibrato(ch, rate_centihz, depth_cents)` —
+//!   pitch LFO. `rate_centihz` is `100 * Hz` (so 500 means
+//!   5 Hz); `depth_cents` is one hundredth of a semitone.
+//!   Either parameter at zero disables the LFO with no CPU
+//!   cost.
+//! - `host::set_lpf(ch, cutoff_hz)` — one-pole low-pass
+//!   filter. `cutoff_hz` of zero (or at or above the Nyquist
+//!   limit) bypasses the filter at no CPU cost.
+//! - `host::set_retrigger(ch, on)` — when set, every
+//!   `host::play` retriggers the envelope from Attack even if
+//!   the gate is already open. Cleared by default for legato
+//!   behaviour.
 //!
 //! Waveform codes:
 //!
@@ -154,39 +169,84 @@ struct Voice {
     freq: f32,
     waveform: Waveform,
     duty: f32,
-    volume: f32,
+    /// Per-speaker volume. The stereo output sums each voice's
+    /// signal weighted by `volume_left` into the left channel and
+    /// by `volume_right` into the right channel. A voice positioned
+    /// dead-centre uses equal values; hard-panned voices use the
+    /// other extreme set to zero.
+    volume_left: f32,
+    volume_right: f32,
     attack_secs: f32,
     decay_secs: f32,
     sustain_level: f32,
     release_secs: f32,
+    /// Vibrato rate in Hertz. Zero disables vibrato (the audio
+    /// thread fast-paths and skips the LFO advance and the pitch
+    /// multiplier).
+    vibrato_rate_hz: f32,
+    /// Vibrato depth in cents (one hundredth of a semitone). The
+    /// per-sample pitch multiplier is
+    /// `2^((depth / 1200) * sin(2π * rate * t))`. Zero disables.
+    vibrato_depth_cents: f32,
+    /// One-pole low-pass cutoff in Hertz. Zero bypasses the filter
+    /// (the audio thread fast-paths and passes the raw waveform
+    /// through). Frequencies at or above the Nyquist limit also
+    /// effectively bypass.
+    lpf_cutoff_hz: f32,
+    /// When set, every `host::play` call retriggers the envelope
+    /// from the Attack stage even if the gate is already open.
+    /// When clear, consecutive `host::play` calls sustain the
+    /// envelope (legato).
+    retrigger: bool,
+    /// Increments on every retriggering `host::play` call. The
+    /// audio thread snapshots `last_trigger_seq` per voice and
+    /// resets the envelope on observed change.
+    trigger_seq: u32,
 }
 
 impl Voice {
-    const fn silent_default(volume: f32) -> Self {
+    const fn silent_default(volume_left: f32, volume_right: f32) -> Self {
         Self {
             enabled: false,
             gate: false,
             freq: 0.0,
             waveform: Waveform::Square,
             duty: 0.5,
-            volume,
+            volume_left,
+            volume_right,
             attack_secs: 0.005,
             decay_secs: 0.080,
             sustain_level: 0.70,
             release_secs: 0.150,
+            vibrato_rate_hz: 0.0,
+            vibrato_depth_cents: 0.0,
+            lpf_cutoff_hz: 0.0,
+            retrigger: false,
+            trigger_seq: 0,
         }
     }
 }
 
-// Per-channel default volume preserves the V0.1 three-voice mix
-// for the active voices and uses a conservative value for the
-// remaining (disabled) voices.
-const DEFAULT_VOLUMES: [f32; NUM_VOICES] = [0.22, 0.18, 0.18, 0.15, 0.15, 0.15, 0.15, 0.15];
+// Per-channel default per-speaker volume. The first three entries
+// preserve the V0.1 three-voice mix as a centred stereo image
+// (equal L/R). The remaining entries hold conservative defaults
+// for voices that default to disabled.
+const DEFAULT_VOLUMES: [(f32, f32); NUM_VOICES] = [
+    (0.22, 0.22),
+    (0.18, 0.18),
+    (0.18, 0.18),
+    (0.15, 0.15),
+    (0.15, 0.15),
+    (0.15, 0.15),
+    (0.15, 0.15),
+    (0.15, 0.15),
+];
 
 fn default_voices() -> [Voice; NUM_VOICES] {
-    let mut voices = [Voice::silent_default(0.0); NUM_VOICES];
+    let mut voices = [Voice::silent_default(0.0, 0.0); NUM_VOICES];
     for (i, slot) in voices.iter_mut().enumerate() {
-        *slot = Voice::silent_default(DEFAULT_VOLUMES[i]);
+        let (l, r) = DEFAULT_VOLUMES[i];
+        *slot = Voice::silent_default(l, r);
     }
     voices
 }
@@ -213,6 +273,10 @@ struct EnvState {
     time_in_stage: f32,
     last_gate: bool,
     release_start_level: f32,
+    /// Last `trigger_seq` value observed for this voice. The
+    /// audio thread compares the live `voice.trigger_seq` against
+    /// this snapshot and forces an Attack on observed change.
+    last_trigger_seq: u32,
 }
 
 impl EnvState {
@@ -223,6 +287,7 @@ impl EnvState {
             time_in_stage: 0.0,
             last_gate: false,
             release_start_level: 0.0,
+            last_trigger_seq: 0,
         }
     }
 }
@@ -237,6 +302,14 @@ impl EnvState {
 struct Mixer {
     voices: SharedVoices,
     phases: [f32; NUM_VOICES],
+    /// Vibrato LFO phase per voice. Advances at `vibrato_rate_hz`
+    /// regardless of whether `vibrato_depth_cents` is zero, so
+    /// turning vibrato on does not cause an audible phase pop.
+    vibrato_phases: [f32; NUM_VOICES],
+    /// One-pole low-pass filter state per voice. Holds the last
+    /// output sample so the filter recurrence
+    /// `y = y + alpha * (x - y)` continues across callbacks.
+    lpf_states: [f32; NUM_VOICES],
     envs: [EnvState; NUM_VOICES],
     noise_state: u32,
     sample_rate: f32,
@@ -248,15 +321,31 @@ impl AudioCallback<f32> for Mixer {
         self.buffer.resize(requested as usize, 0.0);
         let snapshot = *self.voices.lock().unwrap();
         let dt = 1.0 / self.sample_rate;
+        let nyquist = self.sample_rate * 0.5;
 
-        for sample in self.buffer.iter_mut() {
-            let mut acc = 0.0f32;
+        // The output stream is two-channel interleaved L/R. Each
+        // frame is a `(left, right)` pair so the buffer is iterated
+        // in chunks of two slots per frame.
+        for frame in self.buffer.chunks_exact_mut(2) {
+            let mut acc_l = 0.0f32;
+            let mut acc_r = 0.0f32;
             for (ch, &v) in snapshot.iter().enumerate() {
                 let env = &mut self.envs[ch];
 
                 if !v.enabled {
                     *env = EnvState::idle();
+                    self.lpf_states[ch] = 0.0;
                     continue;
+                }
+
+                // Retrigger: force a fresh Attack on every
+                // observed `trigger_seq` change. Suppresses the
+                // gate-on edge that would otherwise also fire.
+                if v.trigger_seq != env.last_trigger_seq {
+                    env.stage = EnvStage::Attack;
+                    env.time_in_stage = 0.0;
+                    env.last_trigger_seq = v.trigger_seq;
+                    env.last_gate = v.gate;
                 }
 
                 // Edge detection on gate, then advance the
@@ -277,13 +366,44 @@ impl AudioCallback<f32> for Mixer {
                     continue;
                 }
 
-                let phase_inc = v.freq / self.sample_rate;
+                // Vibrato. Always advance the LFO phase so toggling
+                // vibrato on does not jump. The pitch multiplier
+                // collapses to 1.0 when depth is zero, which the
+                // fast path below skips.
+                self.vibrato_phases[ch] = (self.vibrato_phases[ch] + v.vibrato_rate_hz * dt) % 1.0;
+                let pitch_mul = if v.vibrato_depth_cents > 0.0 && v.vibrato_rate_hz > 0.0 {
+                    let lfo = libm::sinf(self.vibrato_phases[ch] * core::f32::consts::TAU);
+                    libm::powf(2.0, (v.vibrato_depth_cents / 1200.0) * lfo)
+                } else {
+                    1.0
+                };
+
+                let phase_inc = (v.freq * pitch_mul) / self.sample_rate;
                 self.phases[ch] = (self.phases[ch] + phase_inc) % 1.0;
-                let sample_val =
+                let raw_sample =
                     waveform_sample(v.waveform, self.phases[ch], v.duty, &mut self.noise_state);
-                acc += v.volume * env.level * sample_val;
+
+                // One-pole low-pass filter. Bypass when cutoff is
+                // zero or at/above Nyquist; otherwise advance the
+                // filter state in place.
+                let filtered = if v.lpf_cutoff_hz > 0.0 && v.lpf_cutoff_hz < nyquist {
+                    let alpha = 1.0
+                        - libm::expf(-core::f32::consts::TAU * v.lpf_cutoff_hz / self.sample_rate);
+                    self.lpf_states[ch] += alpha * (raw_sample - self.lpf_states[ch]);
+                    self.lpf_states[ch]
+                } else {
+                    // Reset state when bypassed so re-engaging the
+                    // filter does not pop from a stale value.
+                    self.lpf_states[ch] = 0.0;
+                    raw_sample
+                };
+
+                let weighted = env.level * filtered;
+                acc_l += v.volume_left * weighted;
+                acc_r += v.volume_right * weighted;
             }
-            *sample = acc;
+            frame[0] = acc_l;
+            frame[1] = acc_r;
         }
 
         stream.put_data_f32(&self.buffer).unwrap();
@@ -433,7 +553,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let audio_subsystem = sdl_context.audio()?;
     let desired_spec = AudioSpec {
         freq: Some(SAMPLE_RATE as i32),
-        channels: Some(1),
+        channels: Some(2),
         format: Some(AudioFormat::f32_sys()),
     };
     let device = audio_subsystem.open_playback_stream(
@@ -441,6 +561,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Mixer {
             voices: voices.clone(),
             phases: [0.0; NUM_VOICES],
+            vibrato_phases: [0.0; NUM_VOICES],
+            lpf_states: [0.0; NUM_VOICES],
             envs: [EnvState::idle(); NUM_VOICES],
             noise_state: 0x9E37_79B9,
             sample_rate: SAMPLE_RATE as f32,
@@ -608,6 +730,13 @@ fn register_natives(vm: &mut Vm, voices: &SharedVoices, tick_us: &Arc<AtomicU64>
                 let mut v = voices_play.lock().unwrap();
                 v[ch].freq = midi_to_freq_hz(midi);
                 v[ch].gate = midi >= 0;
+                // When the script has opted into retrigger for
+                // this voice, bump the trigger sequence so the
+                // audio thread restarts the envelope at Attack
+                // even if the gate was already open.
+                if v[ch].retrigger && midi >= 0 {
+                    v[ch].trigger_seq = v[ch].trigger_seq.wrapping_add(1);
+                }
             }
             Ok(Value::Unit)
         }),
@@ -686,6 +815,67 @@ fn register_natives(vm: &mut Vm, voices: &SharedVoices, tick_us: &Arc<AtomicU64>
                 v[ch].decay_secs = d_ms / 1000.0;
                 v[ch].sustain_level = s_q1000 / 1000.0;
                 v[ch].release_secs = r_ms / 1000.0;
+            }
+            Ok(Value::Unit)
+        }),
+    );
+
+    let voices_volume = voices.clone();
+    vm.register_native_closure(
+        "host::set_volume",
+        Box::new(move |args: &[Value]| -> Result<Value, VmError> {
+            let ch = as_i64(&args[0])? as usize;
+            let left = as_i64(&args[1])?.clamp(0, 1000) as f32 / 1000.0;
+            let right = as_i64(&args[2])?.clamp(0, 1000) as f32 / 1000.0;
+            if ch < NUM_VOICES {
+                let mut v = voices_volume.lock().unwrap();
+                v[ch].volume_left = left;
+                v[ch].volume_right = right;
+            }
+            Ok(Value::Unit)
+        }),
+    );
+
+    let voices_vibrato = voices.clone();
+    vm.register_native_closure(
+        "host::set_vibrato",
+        Box::new(move |args: &[Value]| -> Result<Value, VmError> {
+            // Rate is in centi-Hertz (1 = 0.01 Hz). Five cycles per
+            // second is therefore 500. Depth is in cents directly
+            // (0..1200 typical, where 1200 cents = one octave).
+            let ch = as_i64(&args[0])? as usize;
+            let rate_centihz = as_i64(&args[1])?.max(0) as f32;
+            let depth_cents = as_i64(&args[2])?.max(0) as f32;
+            if ch < NUM_VOICES {
+                let mut v = voices_vibrato.lock().unwrap();
+                v[ch].vibrato_rate_hz = rate_centihz / 100.0;
+                v[ch].vibrato_depth_cents = depth_cents;
+            }
+            Ok(Value::Unit)
+        }),
+    );
+
+    let voices_lpf = voices.clone();
+    vm.register_native_closure(
+        "host::set_lpf",
+        Box::new(move |args: &[Value]| -> Result<Value, VmError> {
+            let ch = as_i64(&args[0])? as usize;
+            let cutoff_hz = as_i64(&args[1])?.max(0) as f32;
+            if ch < NUM_VOICES {
+                voices_lpf.lock().unwrap()[ch].lpf_cutoff_hz = cutoff_hz;
+            }
+            Ok(Value::Unit)
+        }),
+    );
+
+    let voices_retrigger = voices.clone();
+    vm.register_native_closure(
+        "host::set_retrigger",
+        Box::new(move |args: &[Value]| -> Result<Value, VmError> {
+            let ch = as_i64(&args[0])? as usize;
+            let on = as_i64(&args[1])? != 0;
+            if ch < NUM_VOICES {
+                voices_retrigger.lock().unwrap()[ch].retrigger = on;
             }
             Ok(Value::Unit)
         }),
