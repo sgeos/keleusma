@@ -10,6 +10,7 @@ Onboarding-oriented documentation for new users and embedders. Where the [archit
 |----------|----------|---------|
 | [GETTING_STARTED.md](./GETTING_STARTED.md) | First-time user | Install the CLI, write a first script, run it, embed it in a twenty-line Rust host |
 | [EMBEDDING.md](./EMBEDDING.md) | Rust host author | Construct a `Vm`, register native functions, size the arena, drive the call and resume loop, recover from errors |
+| [PIANO_ROLL.md](./PIANO_ROLL.md) | Song author, host lifter, or host architect | Long-form companion to the `piano_roll` example. Covers writing songs, lifting the host loop into another application, and using the example as a pattern reference for embedding Keleusma in other control-loop domains |
 | [WHY_REJECTED.md](./WHY_REJECTED.md) | Anyone whose program failed verification | Map verifier error messages to the conservative-verification taxonomy and propose rewrites |
 | [FAQ.md](./FAQ.md) | Anyone who hit a surprise | Common rough edges in V0.1.x, including string handling, escape sequences, and the immutable-locals constraint |
 
@@ -19,7 +20,7 @@ Onboarding-oriented documentation for new users and embedders. Where the [archit
 |------|---------|
 | [`examples/scripts/`](../../examples/scripts) | Standalone `.kel` files demonstrating language features. Run any of them with `keleusma run examples/scripts/<file>.kel` |
 | [`examples/`](../../examples) | Rust embedding examples. Run with `cargo run --example <name>` |
-| [`examples/piano_roll.rs`](../../examples/piano_roll.rs) | End-to-end SDL3 audio host with hot code swap between two songs. Feature-gated. Run with `cargo run --release --example piano_roll --features sdl3-example` |
+| [`examples/piano_roll.rs`](../../examples/piano_roll.rs) | End-to-end SDL3 audio host with hot code swap across a song roster. Feature-gated. Run with `cargo run --release --example piano_roll --features sdl3-example,text`. See [PIANO_ROLL.md](./PIANO_ROLL.md) for the manual |
 | [`keleusma-cli/`](../../keleusma-cli) | The standalone command-line frontend |
 
 ## Reference Cross-Links

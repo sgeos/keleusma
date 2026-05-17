@@ -39,6 +39,7 @@ This documentation is structured as a **knowledge graph** encoded in the file sy
 | Standalone scripts to run | [`examples/scripts/`](../examples/scripts) |
 | Rust embedding examples | [`examples/`](../examples) |
 | End-to-end SDL3 audio demo with hot swap | [`examples/piano_roll.rs`](../examples/piano_roll.rs) |
+| Manual for the piano-roll example | [guide/PIANO_ROLL.md](./guide/PIANO_ROLL.md) |
 
 ## Meta
 
