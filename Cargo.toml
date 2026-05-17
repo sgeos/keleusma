@@ -52,7 +52,7 @@ sdl3 = { version = "0.18", features = ["build-from-source-static"], optional = t
 
 [[example]]
 name = "piano_roll"
-required-features = ["sdl3-example"]
+required-features = ["sdl3-example", "text"]
 
 [[example]]
 name = "string_ops"

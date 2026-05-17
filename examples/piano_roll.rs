@@ -87,6 +87,11 @@
 //!   default). The mix passes through `tanh` before the
 //!   stream output so peaks round off smoothly rather than
 //!   hard-clipping.
+//! - `host::song_name(name)` — announce the song's name to
+//!   stdout. The host dedupes by tracking the last name seen,
+//!   so a script that calls this every tick still prints only
+//!   once per distinct name. The dedup state resets on every
+//!   song swap.
 //!
 //! Waveform codes:
 //!
@@ -120,8 +125,11 @@
 //! # Run
 //!
 //! ```text
-//! cargo run --release --example piano_roll --features sdl3-example
+//! cargo run --release --example piano_roll --features sdl3-example,text
 //! ```
+//!
+//! The `text` cargo feature is required because the bundled
+//! songs pass string literals (song names) to host natives.
 //!
 //! SDL3 builds from source through the `build-from-source-static`
 //! feature on first build. CMake is required.
@@ -758,7 +766,14 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     // The default of `1000` corresponds to unity gain.
     let master_volume: Arc<AtomicU32> = Arc::new(AtomicU32::new(1000));
 
-    register_natives(&mut vm, &voices, &tick_us, &master_volume);
+    // Last song name announced through `host::song_name`. The
+    // native dedupes by comparing against this value so a
+    // script that calls the native every tick still prints
+    // only once per distinct name. Reset to `None` on song
+    // swap so the next song's first call prints unconditionally.
+    let last_song_name: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+
+    register_natives(&mut vm, &voices, &tick_us, &master_volume, &last_song_name);
 
     let sdl_context = sdl3::init()?;
     let audio_subsystem = sdl_context.audio()?;
@@ -886,8 +901,12 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                         // restored to the off / default value by
                         // `reset_voices`. Scripts therefore never
                         // need to defensively turn features off "in
-                        // case" a previous song turned them on.
+                        // case" a previous song turned them on. The
+                        // last-printed song name is also cleared so
+                        // the incoming song's `host::song_name` call
+                        // (if any) announces unconditionally.
                         reset_voices(&voices);
+                        *last_song_name.lock().unwrap() = None;
                         vm.replace_module(modules[active_song].clone(), fresh_data())
                             .map_err(|e| format!("replace_module: {:?}", e))?;
                         let label = if restart_in_place {
@@ -952,6 +971,7 @@ fn register_natives(
     voices: &SharedVoices,
     tick_us: &Arc<AtomicU64>,
     master_volume: &Arc<AtomicU32>,
+    last_song_name: &Arc<Mutex<Option<String>>>,
 ) {
     let tick_us_for_bpm = tick_us.clone();
     vm.register_native_closure(
@@ -1163,6 +1183,29 @@ fn register_natives(
         Box::new(move |args: &[Value]| -> Result<Value, VmError> {
             let q1000 = as_i64(&args[0])?.clamp(0, 1000) as u32;
             master.store(q1000, Ordering::Relaxed);
+            Ok(Value::Unit)
+        }),
+    );
+
+    // Print the song's name to stdout, but only when the
+    // argument differs from the last name printed. The host
+    // clears the tracked name on every song swap, so the next
+    // song's first call always prints. Calls that pass the
+    // same name (typically because the script reuses the name
+    // literal in code that runs every tick) are silently
+    // skipped.
+    let name_state = last_song_name.clone();
+    vm.register_native_closure(
+        "host::song_name",
+        Box::new(move |args: &[Value]| -> Result<Value, VmError> {
+            let name = args[0].as_str().ok_or_else(|| {
+                VmError::TypeError(format!("host::song_name expected Text, got {:?}", args[0]))
+            })?;
+            let mut last = name_state.lock().unwrap();
+            if last.as_deref() != Some(name) {
+                println!("[ song name: {} ]", name);
+                *last = Some(name.to_string());
+            }
             Ok(Value::Unit)
         }),
     );

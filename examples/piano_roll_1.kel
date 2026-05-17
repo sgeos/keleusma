@@ -16,6 +16,7 @@ use host::silence
 use host::set_enable
 use host::set_waveform
 use host::set_adsr
+use host::song_name
 
 enum Pitch { C, Cs, D, Ds, E, F, Fs, G, Gs, A, As, B, Rest }
 
@@ -155,6 +156,7 @@ loop main(input: Word) -> Word {
     // that point. Channels 3..7 stay disabled by default and are
     // not touched here.
     if state.init == 0 {
+        host::song_name("C major progression, eighth-note arpeggio variant");
         // Channel 0: melody, Square wave.
         host::set_waveform(0, 0);
         host::set_adsr(0, 5, 80, 700, 150);
