@@ -1096,6 +1096,19 @@ fn subst_in_stmt(stmt: &Stmt, subst: &BTreeMap<String, TypeExpr>) -> Stmt {
             value: subst_in_expr(value, subst),
             span: *span,
         },
+        Stmt::DataFieldIndexAssign {
+            data_name,
+            field,
+            indices,
+            value,
+            span,
+        } => Stmt::DataFieldIndexAssign {
+            data_name: data_name.clone(),
+            field: field.clone(),
+            indices: indices.iter().map(|e| subst_in_expr(e, subst)).collect(),
+            value: subst_in_expr(value, subst),
+            span: *span,
+        },
         Stmt::Expr(e) => Stmt::Expr(subst_in_expr(e, subst)),
     }
 }

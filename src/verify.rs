@@ -1316,6 +1316,40 @@ pub fn verify(module: &Module) -> Result<(), VerifyError> {
                         });
                     }
                 }
+                Op::GetDataIndexed(base, len) | Op::SetDataIndexed(base, len) => {
+                    let data_len = module.data_layout.as_ref().map_or(0, |dl| dl.slots.len());
+                    let op_name = if matches!(op, Op::GetDataIndexed(_, _)) {
+                        "GetDataIndexed"
+                    } else {
+                        "SetDataIndexed"
+                    };
+                    if data_len == 0 {
+                        return Err(VerifyError {
+                            chunk_name: name.clone(),
+                            message: alloc::format!(
+                                "{} at {} but module has no data layout declared",
+                                op_name,
+                                ip
+                            ),
+                        });
+                    }
+                    let base_usize = *base as usize;
+                    let len_usize = *len as usize;
+                    let end = base_usize.saturating_add(len_usize);
+                    if end > data_len {
+                        return Err(VerifyError {
+                            chunk_name: name.clone(),
+                            message: alloc::format!(
+                                "{} at {} references slot range [{}, {}) but data layout has {} slot(s)",
+                                op_name,
+                                ip,
+                                base_usize,
+                                end,
+                                data_len
+                            ),
+                        });
+                    }
+                }
                 _ => {}
             }
         }

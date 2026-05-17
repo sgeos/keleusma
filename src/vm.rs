@@ -1494,6 +1494,70 @@ impl<'a, 'arena> Vm<'a, 'arena> {
                     let val = self.pop()?;
                     self.data[idx] = val;
                 }
+                Op::GetDataIndexed(base, len) => {
+                    let index = match self.pop()? {
+                        Value::Int(n) => n,
+                        other => {
+                            return Err(VmError::TypeError(format!(
+                                "GetDataIndexed expected Int index, got {}",
+                                other.type_name()
+                            )));
+                        }
+                    };
+                    if index < 0 || index >= len as i64 {
+                        return Err(VmError::IndexOutOfBounds(index, len as usize));
+                    }
+                    let slot = base as usize + index as usize;
+                    if slot >= self.data.len() {
+                        return Err(VmError::InvalidBytecode(format!(
+                            "GetDataIndexed slot {} out of bounds",
+                            slot
+                        )));
+                    }
+                    let val = self.data[slot].clone();
+                    sp!(self, val);
+                }
+                Op::SetDataIndexed(base, len) => {
+                    let index = match self.pop()? {
+                        Value::Int(n) => n,
+                        other => {
+                            return Err(VmError::TypeError(format!(
+                                "SetDataIndexed expected Int index, got {}",
+                                other.type_name()
+                            )));
+                        }
+                    };
+                    if index < 0 || index >= len as i64 {
+                        return Err(VmError::IndexOutOfBounds(index, len as usize));
+                    }
+                    let val = self.pop()?;
+                    let slot = base as usize + index as usize;
+                    if slot >= self.data.len() {
+                        return Err(VmError::InvalidBytecode(format!(
+                            "SetDataIndexed slot {} out of bounds",
+                            slot
+                        )));
+                    }
+                    self.data[slot] = val;
+                }
+                Op::BoundsCheck(bound) => {
+                    // Peek the top of the stack; trap if it is not a
+                    // non-negative `Int` strictly less than `bound`.
+                    // The stack is not modified.
+                    let top = self.stack.last().ok_or(VmError::StackUnderflow)?;
+                    let value = match top {
+                        Value::Int(n) => *n,
+                        other => {
+                            return Err(VmError::TypeError(format!(
+                                "BoundsCheck expected Int, got {}",
+                                other.type_name()
+                            )));
+                        }
+                    };
+                    if value < 0 || value >= bound as i64 {
+                        return Err(VmError::IndexOutOfBounds(value, bound as usize));
+                    }
+                }
 
                 Op::Add => {
                     let word_bits_log2 = self.word_bits_log2();
@@ -3749,12 +3813,12 @@ mod tests {
         //   bytes[164..168] = CRC-32 (u32 LE)
         let expected: alloc::vec::Vec<u8> = alloc::vec![
             75, 69, 76, 69, 2, 0, 168, 0, 0, 0, 6, 6, 6, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-            0, 0, 0, 0, 0, 36, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 39, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0,
             0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 109, 97, 105, 110, 255, 255, 255, 255,
             200, 255, 255, 255, 2, 0, 0, 0, 208, 255, 255, 255, 1, 0, 0, 0, 232, 255, 255, 255, 0,
             0, 0, 0, 0, 0, 0, 0, 220, 255, 255, 255, 0, 0, 0, 0, 212, 255, 255, 255, 1, 0, 0, 0,
             248, 255, 255, 255, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-            0, 0, 6, 6, 6, 0, 0, 0, 0, 0, 0, 0, 0, 0, 101, 185, 23, 143,
+            0, 0, 6, 6, 6, 0, 0, 0, 0, 0, 0, 0, 0, 0, 85, 55, 184, 8,
         ];
         let src = "fn main() -> Word { 1 }";
         let tokens = tokenize(src).expect("lex");
@@ -4862,6 +4926,120 @@ mod tests {
         match vm.call(&[Value::Int(7)]).expect("call") {
             VmState::Yielded(Value::Int(v)) => assert_eq!(v, 7),
             other => panic!("expected Yielded(7), got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn data_segment_indexed_array_round_trip() {
+        // A `data state { idx: [Word; 4] }` block compiles to four
+        // consecutive slots. The script writes through indexed
+        // assignment and reads through indexed access; the loop
+        // accumulates a sum across the array.
+        let src = "data state { items: [Word; 4] }\n\
+                   fn main() -> Word {\n\
+                       state.items[0] = 10;\n\
+                       state.items[1] = 20;\n\
+                       state.items[2] = 30;\n\
+                       state.items[3] = 40;\n\
+                       state.items[0] + state.items[3]\n\
+                   }";
+        let module = build_module(src);
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let mut vm = Vm::new(module, &arena).expect("verify");
+        for slot in 0..4 {
+            vm.set_data(slot, Value::Int(0)).expect("init slot");
+        }
+        match vm.call(&[]).expect("call") {
+            VmState::Finished(Value::Int(v)) => assert_eq!(v, 50),
+            other => panic!("unexpected state: {:?}", other),
+        }
+        // The slots were written through `Op::SetDataIndexed` and
+        // must persist after the call returns.
+        assert_eq!(vm.get_data(0).unwrap(), &Value::Int(10));
+        assert_eq!(vm.get_data(1).unwrap(), &Value::Int(20));
+        assert_eq!(vm.get_data(2).unwrap(), &Value::Int(30));
+        assert_eq!(vm.get_data(3).unwrap(), &Value::Int(40));
+    }
+
+    #[test]
+    fn data_segment_indexed_out_of_bounds_traps() {
+        // An index past the declared length triggers a typed
+        // `VmError::IndexOutOfBounds`. The compiler's single-level
+        // path elides the explicit `BoundsCheck` and relies on
+        // `Op::GetDataIndexed` to perform the check.
+        let src = "data state { items: [Word; 3] }\n\
+                   fn main() -> Word { state.items[5] }";
+        let module = build_module(src);
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let mut vm = Vm::new(module, &arena).expect("verify");
+        for slot in 0..3 {
+            vm.set_data(slot, Value::Int(0)).expect("init slot");
+        }
+        let err = vm.call(&[]).expect_err("expected out-of-bounds trap");
+        match err {
+            VmError::IndexOutOfBounds(i, len) => {
+                assert_eq!(i, 5);
+                assert_eq!(len, 3);
+            }
+            other => panic!("expected IndexOutOfBounds, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn data_segment_indexed_multidim_round_trip() {
+        // Nested arrays flatten to a single contiguous slab. The
+        // compiler emits per-level `Op::BoundsCheck` followed by
+        // stride arithmetic and a final `Op::GetDataIndexed` /
+        // `Op::SetDataIndexed`. Both writes and reads round-trip.
+        let src = "data state { grid: [[Word; 3]; 2] }\n\
+                   fn main() -> Word {\n\
+                       state.grid[0][0] = 1;\n\
+                       state.grid[0][1] = 2;\n\
+                       state.grid[0][2] = 3;\n\
+                       state.grid[1][0] = 4;\n\
+                       state.grid[1][1] = 5;\n\
+                       state.grid[1][2] = 6;\n\
+                       state.grid[1][2] - state.grid[0][0]\n\
+                   }";
+        let module = build_module(src);
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let mut vm = Vm::new(module, &arena).expect("verify");
+        for slot in 0..6 {
+            vm.set_data(slot, Value::Int(0)).expect("init slot");
+        }
+        match vm.call(&[]).expect("call") {
+            VmState::Finished(Value::Int(v)) => assert_eq!(v, 5),
+            other => panic!("unexpected state: {:?}", other),
+        }
+        // Slot layout walks the inner dimension first: grid[0][0],
+        // grid[0][1], grid[0][2], grid[1][0], grid[1][1], grid[1][2].
+        assert_eq!(vm.get_data(0).unwrap(), &Value::Int(1));
+        assert_eq!(vm.get_data(3).unwrap(), &Value::Int(4));
+        assert_eq!(vm.get_data(5).unwrap(), &Value::Int(6));
+    }
+
+    #[test]
+    fn data_segment_multidim_inner_bounds_check_traps() {
+        // A multi-dimensional access whose inner index exceeds the
+        // inner dimension length must trap even when the
+        // mathematically computed flat offset stays inside the
+        // total slab. Without a per-level `BoundsCheck` the access
+        // would silently land on a different "row".
+        let src = "data state { grid: [[Word; 3]; 2] }\n\
+                   fn main() -> Word { state.grid[0][5] }";
+        let module = build_module(src);
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let mut vm = Vm::new(module, &arena).expect("verify");
+        for slot in 0..6 {
+            vm.set_data(slot, Value::Int(0)).expect("init slot");
+        }
+        let err = vm.call(&[]).expect_err("expected inner-bound trap");
+        match err {
+            VmError::IndexOutOfBounds(i, len) => {
+                assert_eq!(i, 5);
+                assert_eq!(len, 3);
+            }
+            other => panic!("expected IndexOutOfBounds, got {:?}", other),
         }
     }
 }

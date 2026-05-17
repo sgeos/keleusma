@@ -455,10 +455,35 @@ pub fn compile_with_target(
             let mut visiting: BTreeSet<String> = BTreeSet::new();
             validate_data_field_type(&field.type_expr, &program.types, &mut visiting)?;
             fields.push((field.name.clone(), data_slot_idx));
-            data_layout_slots.push(DataSlot {
-                name: format!("{}.{}", decl.name, field.name),
-            });
-            data_slot_idx += 1;
+            // Array-typed fields expand into consecutive slots, one
+            // per scalar element. Scalar and other composite types
+            // continue to occupy a single slot whose `Value`
+            // representation carries the structure. Multi-
+            // dimensional arrays (nested `Array` types) flatten into
+            // a single contiguous slab; the runtime indexes through
+            // the flat region after the compiler emits the per-level
+            // stride arithmetic.
+            let n_slots = slots_for_data_type(&field.type_expr);
+            if n_slots == 1 {
+                data_layout_slots.push(DataSlot {
+                    name: format!("{}.{}", decl.name, field.name),
+                });
+            } else {
+                for k in 0..n_slots {
+                    data_layout_slots.push(DataSlot {
+                        name: format!("{}.{}[{}]", decl.name, field.name, k),
+                    });
+                }
+            }
+            data_slot_idx = data_slot_idx
+                .checked_add(n_slots)
+                .ok_or_else(|| CompileError {
+                    message: format!(
+                        "data segment field `{}.{}` overflows the 16-bit slot index space",
+                        decl.name, field.name
+                    ),
+                    span: field.span,
+                })?;
         }
         data_fields.insert(decl.name.clone(), fields);
     }
@@ -702,6 +727,217 @@ pub fn compile_with_target(
 /// admissible, named structs of admissible fields, named enums whose variants
 /// all have admissible payloads. Rejected: String, opaque named types,
 /// recursive types.
+/// Total number of data-segment slots a field of the given type
+/// occupies. Array fields flatten into the product of their lengths
+/// multiplied by the underlying scalar slot count of the leaf type.
+/// Every other field type (scalar, tuple, option, struct, enum)
+/// uses a single slot whose `Value` representation carries the
+/// internal structure.
+fn slots_for_data_type(type_expr: &TypeExpr) -> u16 {
+    match type_expr {
+        TypeExpr::Array(elem, len, _) => {
+            let elem_slots = slots_for_data_type(elem) as u32;
+            let total = elem_slots.saturating_mul(*len as u32);
+            total.min(u16::MAX as u32) as u16
+        }
+        _ => 1,
+    }
+}
+
+/// A resolved indexed access into a data-segment array field.
+/// `data_name` and `field` identify the slot region, `indices`
+/// are the source-order indices (outermost-to-innermost), and
+/// `field_type` is the field's declared type expression.
+struct DataIndexedChain<'a> {
+    data_name: &'a str,
+    field: &'a str,
+    indices: Vec<&'a Expr>,
+}
+
+/// If the given `(object, index)` expression pair forms a
+/// well-shaped indexed access against a data-segment field,
+/// return the chain. The function walks the `object` back
+/// through any number of nested `Expr::ArrayIndex` layers until
+/// it reaches a `FieldAccess` whose receiver is a bare data-
+/// block name. The returned indices are in source order, that
+/// is the outermost (leftmost) index first.
+fn data_indexed_chain<'a>(object: &'a Expr, last_index: &'a Expr) -> Option<DataIndexedChain<'a>> {
+    let mut indices: Vec<&'a Expr> = Vec::new();
+    indices.push(last_index);
+    let mut current = object;
+    loop {
+        match current {
+            Expr::ArrayIndex { object, index, .. } => {
+                indices.push(index);
+                current = object.as_ref();
+            }
+            Expr::FieldAccess { object, field, .. } => {
+                if let Expr::Ident { name, .. } = object.as_ref() {
+                    indices.reverse();
+                    return Some(DataIndexedChain {
+                        data_name: name.as_str(),
+                        field: field.as_str(),
+                        indices,
+                    });
+                }
+                return None;
+            }
+            _ => return None,
+        }
+    }
+}
+
+/// Emit per-level bounds checks and stride arithmetic for an
+/// indexed data-segment access, leaving the flat offset on the
+/// operand stack. Returns the total slot count of the field
+/// and an error if the indexing depth does not match the
+/// field's type structure or if the field is not an array.
+fn emit_indexed_offset(
+    fc: &mut FuncCompiler,
+    field_type: &TypeExpr,
+    indices: &[&Expr],
+    span: Span,
+) -> Result<u16, CompileError> {
+    let single_level = indices.len() == 1;
+    let mut current_type = field_type.clone();
+    let mut emitted_first = false;
+    for idx_expr in indices {
+        let (elem_type, len) = match current_type {
+            TypeExpr::Array(elem, len, _) => (*elem, len),
+            _ => {
+                return Err(CompileError {
+                    message: String::from(
+                        "indexed access on a non-array data field; only `[T; N]` data fields admit `field[i]`",
+                    ),
+                    span,
+                });
+            }
+        };
+        if len < 0 {
+            return Err(CompileError {
+                message: format!("data array length must be non-negative, got {}", len),
+                span,
+            });
+        }
+        if len > u16::MAX as i64 {
+            return Err(CompileError {
+                message: format!(
+                    "data array length {} exceeds the 16-bit bound the bytecode supports",
+                    len
+                ),
+                span,
+            });
+        }
+        let len_u16 = len as u16;
+        let stride = slots_for_data_type(&elem_type);
+
+        compile_expr(fc, idx_expr)?;
+        // Skip the explicit `BoundsCheck` when there is exactly
+        // one index. The trailing `Op::GetDataIndexed` or
+        // `Op::SetDataIndexed` will perform the same check
+        // against the field's total length, which equals this
+        // level's length for a single-level access.
+        if !single_level {
+            fc.emit(Op::BoundsCheck(len_u16));
+        }
+        if stride != 1 {
+            let stride_const = fc.add_constant(Value::Int(stride as i64));
+            fc.emit(Op::Const(stride_const));
+            fc.emit(Op::Mul);
+        }
+        if emitted_first {
+            fc.emit(Op::Add);
+        } else {
+            emitted_first = true;
+        }
+        current_type = elem_type;
+    }
+    if matches!(current_type, TypeExpr::Array(_, _, _)) {
+        return Err(CompileError {
+            message: String::from(
+                "indexed access does not descend to a scalar; provide one index per array level",
+            ),
+            span,
+        });
+    }
+    Ok(slots_for_data_type(field_type))
+}
+
+/// Emit a `state.field[i][j]...` read by computing the flat
+/// offset on the stack and issuing `Op::GetDataIndexed`.
+fn emit_data_indexed_read(
+    fc: &mut FuncCompiler,
+    chain: DataIndexedChain<'_>,
+    span: Span,
+) -> Result<(), CompileError> {
+    if !fc.is_data_block(chain.data_name) {
+        return Err(CompileError {
+            message: format!("unknown data block: {}", chain.data_name),
+            span,
+        });
+    }
+    let base = fc
+        .resolve_data_field(chain.data_name, chain.field)
+        .ok_or_else(|| CompileError {
+            message: format!("unknown data field: {}.{}", chain.data_name, chain.field),
+            span,
+        })?;
+    let field_type = fc
+        .type_info
+        .data_field_types
+        .get(chain.data_name)
+        .and_then(|fields| fields.get(chain.field))
+        .cloned()
+        .ok_or_else(|| CompileError {
+            message: format!(
+                "data field {}.{} has no recorded type",
+                chain.data_name, chain.field
+            ),
+            span,
+        })?;
+    let total = emit_indexed_offset(fc, &field_type, &chain.indices, span)?;
+    fc.emit(Op::GetDataIndexed(base, total));
+    Ok(())
+}
+
+/// Emit a `state.field[i][j]... = value` write. The value is
+/// already on the stack from the caller; the helper appends the
+/// offset arithmetic and `Op::SetDataIndexed`.
+fn emit_data_indexed_write(
+    fc: &mut FuncCompiler,
+    chain: DataIndexedChain<'_>,
+    span: Span,
+) -> Result<(), CompileError> {
+    if !fc.is_data_block(chain.data_name) {
+        return Err(CompileError {
+            message: format!("unknown data block: {}", chain.data_name),
+            span,
+        });
+    }
+    let base = fc
+        .resolve_data_field(chain.data_name, chain.field)
+        .ok_or_else(|| CompileError {
+            message: format!("unknown data field: {}.{}", chain.data_name, chain.field),
+            span,
+        })?;
+    let field_type = fc
+        .type_info
+        .data_field_types
+        .get(chain.data_name)
+        .and_then(|fields| fields.get(chain.field))
+        .cloned()
+        .ok_or_else(|| CompileError {
+            message: format!(
+                "data field {}.{} has no recorded type",
+                chain.data_name, chain.field
+            ),
+            span,
+        })?;
+    let total = emit_indexed_offset(fc, &field_type, &chain.indices, span)?;
+    fc.emit(Op::SetDataIndexed(base, total));
+    Ok(())
+}
+
 fn validate_data_field_type(
     type_expr: &TypeExpr,
     types: &[TypeDef],
@@ -1106,6 +1342,29 @@ fn compile_stmt(fc: &mut FuncCompiler, stmt: &Stmt) -> Result<(), CompileError> 
         } => {
             compile_data_field_assign(fc, data_name, field, value, *span)?;
         }
+        Stmt::DataFieldIndexAssign {
+            data_name,
+            field,
+            indices,
+            value,
+            span,
+        } => {
+            // Evaluate the value first so it lands beneath the
+            // computed offset on the operand stack. The trailing
+            // `Op::SetDataIndexed` then pops the offset and pops
+            // the value.
+            compile_expr(fc, value)?;
+            let index_refs: Vec<&Expr> = indices.iter().collect();
+            emit_data_indexed_write(
+                fc,
+                DataIndexedChain {
+                    data_name: data_name.as_str(),
+                    field: field.as_str(),
+                    indices: index_refs,
+                },
+                *span,
+            )?;
+        }
         Stmt::Expr(expr) => {
             compile_expr(fc, expr)?;
             fc.emit(Op::Pop);
@@ -1267,6 +1526,101 @@ fn compile_let_pattern_typed(
 }
 
 /// Compile a for loop.
+/// Compile `for x in ctx.field { body }` against a data-segment
+/// array field. The lowered loop iterates over the array's slot
+/// region through `Op::GetDataIndexed`, avoiding the need to
+/// materialise the field as a `Value::Array` on the operand stack.
+fn compile_for_in_data_array(
+    fc: &mut FuncCompiler,
+    for_stmt: &ForStmt,
+    data_name: &str,
+    field: &str,
+    elem_type: &TypeExpr,
+    len: i64,
+) -> Result<(), CompileError> {
+    if matches!(elem_type, TypeExpr::Array(_, _, _)) {
+        return Err(CompileError {
+            message: format!(
+                "for-in iteration over multi-dimensional data-segment array `{}.{}` is not supported; iterate the outer dimension by index and the inner explicitly",
+                data_name, field
+            ),
+            span: for_stmt.span,
+        });
+    }
+    if !(0..=u16::MAX as i64).contains(&len) {
+        return Err(CompileError {
+            message: format!(
+                "data array length {} is outside the supported 16-bit bound",
+                len
+            ),
+            span: for_stmt.span,
+        });
+    }
+    let base = fc
+        .resolve_data_field(data_name, field)
+        .ok_or_else(|| CompileError {
+            message: format!("unknown data field: {}.{}", data_name, field),
+            span: for_stmt.span,
+        })?;
+    let total_slots = (len as u16).saturating_mul(slots_for_data_type(elem_type));
+
+    // `_idx = 0`
+    let zero_const = fc.add_constant(Value::Int(0));
+    fc.emit(Op::Const(zero_const));
+    let idx_slot = fc.declare_local("__for_data_idx");
+    fc.emit(Op::SetLocal(idx_slot));
+
+    // `_end = len`
+    let end_const = fc.add_constant(Value::Int(len));
+    fc.emit(Op::Const(end_const));
+    let end_slot = fc.declare_local("__for_data_end");
+    fc.emit(Op::SetLocal(end_slot));
+
+    let loop_addr = fc.emit(Op::Loop(0));
+    fc.enter_loop();
+
+    // Break-if when `idx >= end`.
+    fc.emit(Op::GetLocal(idx_slot));
+    fc.emit(Op::GetLocal(end_slot));
+    fc.emit(Op::CmpGe);
+    let break_addr = fc.emit(Op::BreakIf(0));
+
+    // Bind the iteration variable to the indexed element.
+    fc.emit(Op::GetLocal(idx_slot));
+    fc.emit(Op::GetDataIndexed(base, total_slots));
+    let var_slot = fc.declare_local_typed(&for_stmt.var, Some(elem_type.clone()));
+    fc.emit(Op::SetLocal(var_slot));
+
+    // Body.
+    fc.begin_scope();
+    compile_block(fc, &for_stmt.body)?;
+    fc.emit(Op::Pop);
+    fc.end_scope();
+
+    // `idx = idx + 1`
+    fc.emit(Op::GetLocal(idx_slot));
+    let one_const = fc.add_constant(Value::Int(1));
+    fc.emit(Op::Const(one_const));
+    fc.emit(Op::Add);
+    fc.emit(Op::SetLocal(idx_slot));
+
+    let endloop_addr = fc.emit(Op::EndLoop(0));
+    let after_endloop = fc.chunk.ops.len() as u32;
+    if let Op::Loop(a) = &mut fc.chunk.ops[loop_addr] {
+        *a = after_endloop;
+    }
+    if let Op::BreakIf(a) = &mut fc.chunk.ops[break_addr] {
+        *a = after_endloop;
+    }
+    let after_loop = (loop_addr + 1) as u32;
+    if let Op::EndLoop(a) = &mut fc.chunk.ops[endloop_addr] {
+        *a = after_loop;
+    }
+    fc.exit_loop();
+
+    Ok(())
+}
+
 fn compile_for(fc: &mut FuncCompiler, for_stmt: &ForStmt) -> Result<(), CompileError> {
     match &for_stmt.iterable {
         Iterable::Range(start, end) => {
@@ -1320,6 +1674,28 @@ fn compile_for(fc: &mut FuncCompiler, for_stmt: &ForStmt) -> Result<(), CompileE
             fc.exit_loop(); // Patches Break addresses to after_endloop.
         }
         Iterable::Expr(expr) => {
+            // Data-segment array fields are stored as multiple
+            // consecutive slots rather than as a single
+            // `Value::Array` slot. Naked field access against the
+            // data segment is rejected for array fields, so the
+            // for-in here must walk the slot region directly through
+            // indexed reads. The lowered iteration is a numeric loop
+            // from zero to the array length emitting
+            // `Op::GetDataIndexed` per element.
+            if let Expr::FieldAccess { object, field, .. } = expr
+                && let Expr::Ident { name, .. } = object.as_ref()
+                && fc.is_data_block(name)
+            {
+                let field_type = fc
+                    .type_info
+                    .data_field_types
+                    .get(name)
+                    .and_then(|f| f.get(field))
+                    .cloned();
+                if let Some(TypeExpr::Array(elem, len, _)) = field_type {
+                    return compile_for_in_data_array(fc, for_stmt, name, field, &elem, len);
+                }
+            }
             // Determine the static array length if the source's type is
             // statically known. Used to emit a `Const(N)` end bound that
             // the strict-mode WCMU verifier accepts. Falls back to
@@ -2186,6 +2562,22 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
                         message: format!("unknown data field: {}.{}", name, field),
                         span: *span,
                     })?;
+                let field_type = fc
+                    .type_info
+                    .data_field_types
+                    .get(name)
+                    .and_then(|fields| fields.get(field));
+                if let Some(t) = field_type
+                    && matches!(t, TypeExpr::Array(_, _, _))
+                {
+                    return Err(CompileError {
+                        message: format!(
+                            "data field `{}.{}` is an array; index it through `{}.{}[i]`",
+                            name, field, name, field
+                        ),
+                        span: *span,
+                    });
+                }
                 fc.emit(Op::GetData(slot));
                 return Ok(());
             }
@@ -2199,7 +2591,19 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
             fc.emit(Op::GetTupleField(*index as u8));
         }
 
-        Expr::ArrayIndex { object, index, .. } => {
+        Expr::ArrayIndex {
+            object,
+            index,
+            span,
+        } => {
+            // Detect indexed access against a data-segment field and
+            // emit `Op::GetDataIndexed` plus the per-level
+            // `Op::BoundsCheck` / stride arithmetic. Stack-resident
+            // arrays continue to use `Op::GetIndex`.
+            if let Some(chain) = data_indexed_chain(object, index) {
+                emit_data_indexed_read(fc, chain, *span)?;
+                return Ok(());
+            }
             compile_expr(fc, object)?;
             compile_expr(fc, index)?;
             fc.emit(Op::GetIndex);

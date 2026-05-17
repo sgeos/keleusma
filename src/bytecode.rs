@@ -400,6 +400,30 @@ pub enum Op {
     /// Pop value and store into data segment slot.
     SetData(u16),
 
+    /// Indexed read from a data-segment array. The first immediate is
+    /// the array's base slot, the second is the array's total slot
+    /// count. The opcode pops a `Value::Int` index from the operand
+    /// stack, checks `0 <= index < total`, traps if the index is out
+    /// of range, and pushes `data[base + index]`. Used by the compiler
+    /// for `state.field[i]` reads when `state.field` is an array-typed
+    /// data field.
+    GetDataIndexed(u16, u16),
+    /// Indexed write to a data-segment array. The first immediate is
+    /// the array's base slot, the second is the array's total slot
+    /// count. The opcode pops the `Value::Int` index, then pops the
+    /// new value, checks `0 <= index < total`, traps if out of range,
+    /// and stores `data[base + index] = value`.
+    SetDataIndexed(u16, u16),
+    /// Bounds check against the value on top of the operand stack
+    /// without modifying the stack. The immediate is the exclusive
+    /// upper bound. Traps when the top is not a `Value::Int`, when
+    /// the value is negative, or when the value is greater than or
+    /// equal to the bound. Used by the compiler to validate each
+    /// level of a multi-dimensional `state.field[i][j]...` access
+    /// before the per-level stride arithmetic computes the flat
+    /// offset.
+    BoundsCheck(u16),
+
     /// Binary addition.
     Add,
     /// Binary subtraction.
@@ -840,7 +864,10 @@ pub fn nominal_op_cycles(op: &Op) -> u32 {
         | Op::FixedToWord(_)
         | Op::FixedMul(_)
         | Op::FixedDiv(_)
-        | Op::Return => 2,
+        | Op::Return
+        | Op::GetDataIndexed(_, _)
+        | Op::SetDataIndexed(_, _)
+        | Op::BoundsCheck(_) => 2,
 
         Op::Div | Op::Mod | Op::GetField(_) | Op::IsEnum(_, _) | Op::IsStruct(_) => 3,
 
@@ -911,6 +938,13 @@ impl Op {
 
             Op::SetLocal(_) | Op::SetData(_) | Op::Pop => 0,
 
+            // GetDataIndexed pops one index, pushes one value.
+            Op::GetDataIndexed(_, _) => 1,
+            // SetDataIndexed pops index and value.
+            Op::SetDataIndexed(_, _) => 0,
+            // BoundsCheck does not change the stack.
+            Op::BoundsCheck(_) => 0,
+
             Op::If(_) | Op::BreakIf(_) => 0,
             Op::Else(_) | Op::EndIf | Op::Loop(_) | Op::EndLoop(_) | Op::Break(_) => 0,
             Op::Stream | Op::Reset => 0,
@@ -974,6 +1008,12 @@ impl Op {
             | Op::CmpGe => 1,
 
             Op::SetLocal(_) | Op::SetData(_) | Op::Pop => 1,
+
+            // GetDataIndexed pops the index, SetDataIndexed pops the
+            // index then the value, BoundsCheck does not pop.
+            Op::GetDataIndexed(_, _) => 1,
+            Op::SetDataIndexed(_, _) => 2,
+            Op::BoundsCheck(_) => 0,
 
             Op::If(_) | Op::BreakIf(_) => 1,
             Op::Else(_) | Op::EndIf | Op::Loop(_) | Op::EndLoop(_) | Op::Break(_) => 0,
@@ -1748,6 +1788,13 @@ pub fn op_from_archived(archived: &ArchivedOp) -> Op {
         ArchivedOp::SetLocal(idx) => Op::SetLocal(idx.to_native()),
         ArchivedOp::GetData(idx) => Op::GetData(idx.to_native()),
         ArchivedOp::SetData(idx) => Op::SetData(idx.to_native()),
+        ArchivedOp::GetDataIndexed(base, len) => {
+            Op::GetDataIndexed(base.to_native(), len.to_native())
+        }
+        ArchivedOp::SetDataIndexed(base, len) => {
+            Op::SetDataIndexed(base.to_native(), len.to_native())
+        }
+        ArchivedOp::BoundsCheck(b) => Op::BoundsCheck(b.to_native()),
         ArchivedOp::Add => Op::Add,
         ArchivedOp::Sub => Op::Sub,
         ArchivedOp::Mul => Op::Mul,

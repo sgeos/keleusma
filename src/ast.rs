@@ -226,6 +226,16 @@ pub enum Stmt {
         value: Expr,
         span: Span,
     },
+    /// Indexed assignment into a data-segment array field:
+    /// `data_name.field[i][j]... = expr;`. The indices are stored
+    /// in source order (outermost first).
+    DataFieldIndexAssign {
+        data_name: String,
+        field: String,
+        indices: Vec<Expr>,
+        value: Expr,
+        span: Span,
+    },
     Expr(Expr),
 }
 

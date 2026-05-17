@@ -16,6 +16,42 @@ pub struct ParseError {
     pub span: Span,
 }
 
+/// If `expr` is a chain of `ArrayIndex` nodes rooted at a
+/// `FieldAccess` whose receiver is a bare identifier in
+/// `data_names`, return the `(data_name, field_name, indices,
+/// span)` tuple where indices are in source order
+/// (outermost-to-innermost). Otherwise return `None`.
+///
+/// Used by the parser to detect indexed assignment targets such
+/// as `state.idx[i][j]` on the left-hand side of `=`.
+fn data_indexed_lhs(
+    expr: &Expr,
+    data_names: &BTreeSet<String>,
+) -> Option<(String, String, Vec<Expr>, Span)> {
+    let mut indices: Vec<Expr> = Vec::new();
+    let mut current = expr;
+    let lhs_span = expr.span();
+    loop {
+        match current {
+            Expr::ArrayIndex { object, index, .. } => {
+                indices.push((**index).clone());
+                current = object.as_ref();
+            }
+            Expr::FieldAccess { object, field, .. } => {
+                if let Expr::Ident { name, .. } = object.as_ref()
+                    && data_names.contains(name)
+                    && !indices.is_empty()
+                {
+                    indices.reverse();
+                    return Some((name.clone(), field.clone(), indices, lhs_span));
+                }
+                return None;
+            }
+            _ => return None,
+        }
+    }
+}
+
 /// Parse a token stream into a Keleusma AST.
 pub fn parse(tokens: &[Token]) -> Result<Program, ParseError> {
     let mut parser = Parser::new(tokens);
@@ -608,6 +644,22 @@ impl<'a> Parser<'a> {
                                 field: field.clone(),
                                 value,
                                 span: merge_spans(*fa_span, end),
+                            });
+                            continue;
+                        }
+                        // Indexed data field assignment:
+                        // `data_name.field[i]... = expr;`.
+                        if let Some((data_name, field_name, indices, lhs_span)) =
+                            data_indexed_lhs(&expr, &self.data_names)
+                        {
+                            let value = self.parse_expr()?;
+                            let end = self.expect(&TokenKind::Semicolon)?;
+                            stmts.push(Stmt::DataFieldIndexAssign {
+                                data_name,
+                                field: field_name,
+                                indices,
+                                value,
+                                span: merge_spans(lhs_span, end),
                             });
                             continue;
                         }

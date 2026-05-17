@@ -60,6 +60,12 @@ pub trait MutVisitor {
             }
             Stmt::Break(_) => {}
             Stmt::DataFieldAssign { value, .. } => self.visit_expr(value),
+            Stmt::DataFieldIndexAssign { indices, value, .. } => {
+                for idx in indices.iter_mut() {
+                    self.visit_expr(idx);
+                }
+                self.visit_expr(value);
+            }
             Stmt::Expr(e) => self.visit_expr(e),
         }
     }
@@ -199,6 +205,12 @@ pub trait Visitor {
             }
             Stmt::Break(_) => {}
             Stmt::DataFieldAssign { value, .. } => self.visit_expr(value),
+            Stmt::DataFieldIndexAssign { indices, value, .. } => {
+                for idx in indices.iter() {
+                    self.visit_expr(idx);
+                }
+                self.visit_expr(value);
+            }
             Stmt::Expr(e) => self.visit_expr(e),
         }
     }

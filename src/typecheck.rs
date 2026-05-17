@@ -1594,6 +1594,76 @@ fn check_stmt(ctx: &mut Ctx, stmt: &Stmt) -> Result<(), TypeError> {
             }
             Ok(())
         }
+        Stmt::DataFieldIndexAssign {
+            data_name,
+            field,
+            indices,
+            value,
+            span,
+        } => {
+            let data_fields = ctx.data.get(data_name).ok_or_else(|| {
+                TypeError::new(format!("unknown data block `{}`", data_name), *span)
+            })?;
+            let declared = data_fields
+                .get(field)
+                .ok_or_else(|| {
+                    TypeError::new(
+                        format!("unknown field `{}` on data block `{}`", field, data_name),
+                        *span,
+                    )
+                })?
+                .clone();
+            // Peel one Array layer per index, validating each index
+            // as a Word and ensuring the final type is a scalar.
+            let mut current = declared;
+            for idx in indices.iter() {
+                let idx_ty = type_of_expr(ctx, idx)?;
+                if !types_compatible(ctx, &idx_ty, &Type::Word) {
+                    return Err(TypeError::new(
+                        format!("data array index must be Word, got {}", idx_ty.display()),
+                        *span,
+                    ));
+                }
+                current = match current {
+                    Type::Array(elem, _) => *elem,
+                    other => {
+                        return Err(TypeError::new(
+                            format!(
+                                "indexed access on non-array data field `{}.{}` (type {})",
+                                data_name,
+                                field,
+                                other.display()
+                            ),
+                            *span,
+                        ));
+                    }
+                };
+            }
+            if let Type::Array(_, _) = current {
+                return Err(TypeError::new(
+                    format!(
+                        "indexed assignment to `{}.{}` does not descend to a scalar; \
+                         provide one index per array level",
+                        data_name, field
+                    ),
+                    *span,
+                ));
+            }
+            let value_ty = type_of_expr(ctx, value)?;
+            if !types_compatible(ctx, &current, &value_ty) {
+                return Err(TypeError::new(
+                    format!(
+                        "indexed assignment to `{}.{}` expects {}, got {}",
+                        data_name,
+                        field,
+                        current.display(),
+                        value_ty.display()
+                    ),
+                    *span,
+                ));
+            }
+            Ok(())
+        }
         Stmt::Expr(e) => {
             let _ = type_of_expr(ctx, e)?;
             Ok(())
