@@ -13,6 +13,9 @@
 
 use host::play
 use host::silence
+use host::set_enable
+use host::set_waveform
+use host::set_adsr
 
 enum Pitch { C, Cs, D, Ds, E, F, Fs, G, Gs, A, As, B, Rest }
 
@@ -118,6 +121,7 @@ fn midi_of(p: Pitch, octave: Word) -> Word {
 // Per-channel state. Same six-slot schema as song 1.
 // ---------------------------------------------------------------
 data state {
+    init: Word,
     idx0: Word, rem0: Word,
     idx1: Word, rem1: Word,
     idx2: Word, rem2: Word,
@@ -128,6 +132,26 @@ data state {
 // (Song 1 had this routing reversed.)
 // ---------------------------------------------------------------
 loop main(input: Word) -> Word {
+    // One-time channel setup. The init block re-runs on every
+    // hot swap because the data segment is zero-initialised at
+    // that point. Channels 3..7 stay disabled by default and are
+    // not touched here.
+    if state.init == 0 {
+        // Channel 0: melody, Square wave.
+        host::set_waveform(0, 0);
+        host::set_adsr(0, 5, 80, 700, 150);
+        host::set_enable(0, 1);
+        // Channel 1: harmony, Triangle wave.
+        host::set_waveform(1, 1);
+        host::set_adsr(1, 10, 120, 600, 200);
+        host::set_enable(1, 1);
+        // Channel 2: bass, Square wave.
+        host::set_waveform(2, 0);
+        host::set_adsr(2, 10, 120, 800, 200);
+        host::set_enable(2, 1);
+        state.init = 1;
+    };
+
     // Channel 0: melody.
     if state.rem0 == 0 {
         let n0 = melody_note(state.idx0);

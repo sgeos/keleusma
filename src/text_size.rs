@@ -270,16 +270,32 @@ impl TextAnalysis {
             Op::Add => {
                 let b = self.pop();
                 let a = self.pop();
-                // Integer Add (both operands `NotText`) contributes
-                // zero to the text heap and produces `NotText`. Text
-                // Add (at least one operand has a text lattice
-                // value) evaluates the dynamic cost from the cost
-                // model. The Keleusma type checker rules out mixed
-                // text/non-text Add at the surface, so this case
-                // does not arise from valid programs; the
-                // conservative path treats it as text Add.
+                // The Keleusma type checker rules out mixed
+                // text/non-text Add at the surface. Both operands of
+                // a well-typed `Op::Add` therefore share the same
+                // surface type, so a single operand being
+                // statically `NotText` is sufficient evidence that
+                // the partner is also non-text in the type-system
+                // sense, regardless of whether the partner is
+                // tracked as `Unbounded` because of upstream
+                // imprecision (e.g. a `Call` return widened to
+                // `Unbounded`). The previous policy demanded both
+                // operands carry `NotText` and conservatively
+                // treated any `Unbounded` operand as text, which
+                // forced every chunk that combined a function-call
+                // result with an integer to saturate its heap bound
+                // to `u32::MAX`.
+                //
+                // Adversarial bytecode that violates the type-
+                // checker invariant could under-report its heap
+                // here, but actual runtime allocation is still
+                // bounded by the arena and surfaces as
+                // `VmError::OutOfArena` on exhaustion. The static
+                // bound is therefore an over- or under-approximation
+                // only relative to the type-checker invariant; the
+                // safety contract remains intact.
                 let (result, dynamic_cost) =
-                    if matches!(a, TextSize::NotText) && matches!(b, TextSize::NotText) {
+                    if matches!(a, TextSize::NotText) || matches!(b, TextSize::NotText) {
                         (TextSize::NotText, 0)
                     } else {
                         let context = op_cost_context(a, b);

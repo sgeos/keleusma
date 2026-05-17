@@ -14,6 +14,9 @@
 
 use host::play
 use host::silence
+use host::set_enable
+use host::set_waveform
+use host::set_adsr
 
 enum Pitch { C, Cs, D, Ds, E, F, Fs, G, Gs, A, As, B, Rest }
 
@@ -119,12 +122,19 @@ fn midi_of(p: Pitch, octave: Word) -> Word {
 // ---------------------------------------------------------------
 // Per-channel state in the data segment.
 //
-// idx_n is the index of the current note in channel n's array.
-// rem_n is the number of ticks remaining before the next note
-// boundary on channel n. When rem_n hits zero, the channel
-// advances to the next note.
+// init   is a one-shot flag set after the channel setup runs.
+// idx_n  is the index of the current note in channel n's array.
+// rem_n  is the number of ticks remaining before the next note
+//        boundary on channel n. When rem_n hits zero, the
+//        channel advances to the next note.
+//
+// Waveform codes for host::set_waveform:
+//   0 = Square (50% duty), 1 = Triangle, 2 = Sawtooth,
+//   3 = Sine, 4 = Pulse (with host::set_duty), 5 = Noise.
+// ADSR units for host::set_adsr: ms, ms, q1000 (0..1000), ms.
 // ---------------------------------------------------------------
 data state {
+    init: Word,
     idx0: Word, rem0: Word,
     idx1: Word, rem1: Word,
     idx2: Word, rem2: Word,
@@ -134,6 +144,26 @@ data state {
 // Tick loop. One iteration of the body == one 16th-note tick.
 // ---------------------------------------------------------------
 loop main(input: Word) -> Word {
+    // One-time channel setup. The data segment is zero-initialised
+    // at startup and on every hot swap, so the init block re-runs
+    // for the incoming song. Channels 3..7 stay disabled by
+    // default and are not touched here.
+    if state.init == 0 {
+        // Channel 0: melody, Square wave.
+        host::set_waveform(0, 0);
+        host::set_adsr(0, 5, 80, 700, 150);
+        host::set_enable(0, 1);
+        // Channel 1: bass, Triangle wave.
+        host::set_waveform(1, 1);
+        host::set_adsr(1, 10, 120, 800, 200);
+        host::set_enable(1, 1);
+        // Channel 2: harmony, Square wave.
+        host::set_waveform(2, 0);
+        host::set_adsr(2, 5, 80, 600, 150);
+        host::set_enable(2, 1);
+        state.init = 1;
+    };
+
     // Channel 0: melody.
     if state.rem0 == 0 {
         let n0 = melody_note(state.idx0);

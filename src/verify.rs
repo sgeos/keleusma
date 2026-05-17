@@ -463,7 +463,7 @@ fn wcmu_region(
                 let growth = op.stack_growth() as i32;
                 let during_peak = (current_offset + growth).max(0) as u32;
                 peak = peak.max(during_peak);
-                heap += op.heap_alloc(chunk);
+                heap = heap.saturating_add(op.heap_alloc(chunk));
                 current_offset += growth - shrink;
                 break_results.push(McuResult {
                     peak_above_initial: peak,
@@ -481,7 +481,7 @@ fn wcmu_region(
                 let growth = op.stack_growth() as i32;
                 let during_peak = (current_offset + growth).max(0) as u32;
                 peak = peak.max(during_peak);
-                heap += op.heap_alloc(chunk);
+                heap = heap.saturating_add(op.heap_alloc(chunk));
                 current_offset += growth - shrink;
                 let _ = current_offset;
                 let _ = peak;
@@ -493,7 +493,7 @@ fn wcmu_region(
                 let growth = op.stack_growth() as i32;
                 let during_peak = (current_offset + growth).max(0) as u32;
                 peak = peak.max(during_peak);
-                heap += op.heap_alloc(chunk);
+                heap = heap.saturating_add(op.heap_alloc(chunk));
                 current_offset += growth - shrink;
                 break_results.push(McuResult {
                     peak_above_initial: peak,
@@ -508,7 +508,7 @@ fn wcmu_region(
                 let growth = op.stack_growth() as i32;
                 let during_peak = (current_offset + growth).max(0) as u32;
                 peak = peak.max(during_peak);
-                heap += op.heap_alloc(chunk);
+                heap = heap.saturating_add(op.heap_alloc(chunk));
                 current_offset += growth - shrink;
 
                 let target = *target as usize;
@@ -537,19 +537,19 @@ fn wcmu_region(
                     match (then_branch, else_branch) {
                         (Some(a), Some(b)) => {
                             peak = peak.max(a.peak_above_initial).max(b.peak_above_initial);
-                            heap += a.heap_total.max(b.heap_total);
+                            heap = heap.saturating_add(a.heap_total.max(b.heap_total));
                             // Branches should end at the same offset, but if
                             // not, take the maximum to remain conservative.
                             current_offset = a.delta.max(b.delta);
                         }
                         (Some(a), None) => {
                             peak = peak.max(a.peak_above_initial);
-                            heap += a.heap_total;
+                            heap = heap.saturating_add(a.heap_total);
                             current_offset = a.delta;
                         }
                         (None, Some(b)) => {
                             peak = peak.max(b.peak_above_initial);
-                            heap += b.heap_total;
+                            heap = heap.saturating_add(b.heap_total);
                             current_offset = b.delta;
                         }
                         (None, None) => {
@@ -568,7 +568,7 @@ fn wcmu_region(
                     )?;
                     if let Some(a) = then_branch {
                         peak = peak.max(a.peak_above_initial);
-                        heap += a.heap_total;
+                        heap = heap.saturating_add(a.heap_total);
                         // The false path skips with zero contribution.
                         // Conservative final offset is the maximum.
                         current_offset = current_offset.max(a.delta);
@@ -581,7 +581,7 @@ fn wcmu_region(
                 let growth = op.stack_growth() as i32;
                 let during_peak = (current_offset + growth).max(0) as u32;
                 peak = peak.max(during_peak);
-                heap += op.heap_alloc(chunk);
+                heap = heap.saturating_add(op.heap_alloc(chunk));
                 current_offset += growth - shrink;
 
                 let loop_exit_target = *target as usize;
@@ -632,7 +632,7 @@ fn wcmu_region(
                     .unwrap_or(0);
                 let break_heap = loop_breaks.iter().map(|r| r.heap_total).max().unwrap_or(0);
                 peak = peak.max(body_peak).max(break_peak);
-                heap += body_heap.max(break_heap);
+                heap = heap.saturating_add(body_heap.max(break_heap));
                 if loop_breaks.is_empty() && body.is_none() {
                     return Ok(None);
                 }
@@ -652,7 +652,7 @@ fn wcmu_region(
                     .max(current_offset + 1)
                     .max(0) as u32;
                 peak = peak.max(during_peak);
-                heap += callee_heap_bytes;
+                heap = heap.saturating_add(callee_heap_bytes);
                 // Net stack effect: pop n args, push 1 return value.
                 current_offset += 1 - n;
                 ip += 1;
@@ -665,7 +665,7 @@ fn wcmu_region(
                 let n = *n_args as i32;
                 let during_peak = (current_offset + 1).max(0) as u32;
                 peak = peak.max(during_peak);
-                heap += native_heap;
+                heap = heap.saturating_add(native_heap);
                 current_offset += 1 - n;
                 ip += 1;
             }
@@ -677,7 +677,7 @@ fn wcmu_region(
                 let growth = op.stack_growth() as i32;
                 let during_peak = (current_offset + growth).max(0) as u32;
                 peak = peak.max(during_peak);
-                heap += op.heap_alloc(chunk);
+                heap = heap.saturating_add(op.heap_alloc(chunk));
                 current_offset += growth - shrink;
                 ip += 1;
             }
