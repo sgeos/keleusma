@@ -10,17 +10,20 @@
 // (V1, V2, V3, V4, V5, V3, V4, V5).
 //
 // Acoustic shaping. The host's ADSR envelope and per-channel
-// velocity carry the loudness contour. Each voice attacks
-// quickly, decays to a 0.30 sustain plateau, and rests there
-// until the next host::play call updates the frequency. The
-// modest sustain level matters because five voices mix
-// simultaneously, and a per-channel sustain that sums above
-// 1.0 across the stereo bus would force the master soft-clip
-// to compress the signal into noise. Because retrigger is off
-// (the default), pitch changes flow continuously through the
-// sustain plateau without restarting the envelope, which
-// gives the piece its piano-with-sustain-pedal character.
-// The script does not call host::silence on any channel.
+// velocity carry the loudness contour. Every channel runs
+// with retrigger enabled so each host::play call restarts the
+// envelope. Each voice attacks quickly, decays to a 0.30
+// sustain plateau, and rests there until the next play call
+// retriggers it. The modest sustain level matters because
+// five voices mix simultaneously, and a per-channel sustain
+// that sums above 1.0 across the stereo bus would force the
+// master soft-clip to compress the signal into noise. The
+// per-tick attack transients are inaudible against each other
+// because the schedule fires exactly one channel per tick, so
+// only one voice is in its short attack-decay window at a
+// time. The script does not call host::silence on any
+// channel; the steady-state mix sits at the sustain plateau
+// between retriggers.
 //
 // Stereo field. Bass voices sit on the left, upper voices on
 // the right, with the tenor centered. Per-channel velocity
@@ -46,6 +49,7 @@ use host::set_duty
 use host::set_adsr
 use host::set_volume
 use host::set_velocity
+use host::set_retrigger
 use host::set_bpm
 use host::song_name
 
@@ -99,6 +103,7 @@ loop main(input: Word) -> Word {
         host::set_adsr(0, 5, 50, 300, 350);
         host::set_volume(0, 800, 200);
         host::set_velocity(0, 1000);
+        host::set_retrigger(0, 1);
         host::set_enable(0, 1);
 
         // Channel 1: Voice 2 middle bass, Triangle, left.
@@ -106,6 +111,7 @@ loop main(input: Word) -> Word {
         host::set_adsr(1, 5, 50, 300, 350);
         host::set_volume(1, 600, 400);
         host::set_velocity(1, 900);
+        host::set_retrigger(1, 1);
         host::set_enable(1, 1);
 
         // Channel 2: Voice 3 tenor anchor, Square, centre.
@@ -113,6 +119,7 @@ loop main(input: Word) -> Word {
         host::set_adsr(2, 5, 50, 300, 350);
         host::set_volume(2, 500, 500);
         host::set_velocity(2, 850);
+        host::set_retrigger(2, 1);
         host::set_enable(2, 1);
 
         // Channel 3: Voice 4 alto, 25 percent pulse, right.
@@ -121,6 +128,7 @@ loop main(input: Word) -> Word {
         host::set_adsr(3, 5, 50, 300, 350);
         host::set_volume(3, 300, 700);
         host::set_velocity(3, 800);
+        host::set_retrigger(3, 1);
         host::set_enable(3, 1);
 
         // Channel 4: Voice 5 soprano, 25 percent pulse, far right.
@@ -129,6 +137,7 @@ loop main(input: Word) -> Word {
         host::set_adsr(4, 5, 50, 300, 350);
         host::set_volume(4, 100, 900);
         host::set_velocity(4, 750);
+        host::set_retrigger(4, 1);
         host::set_enable(4, 1);
 
         state.init = 1;
