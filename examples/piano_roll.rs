@@ -3,15 +3,24 @@
 //!
 //! # Architecture
 //!
-//! Two Keleusma scripts (`piano_roll.kel` and `piano_roll_2.kel`)
-//! are precompiled at startup. The currently-active script runs on
-//! the main thread at one yield per 16th-note tick (125 ms at
-//! 120 BPM). At each tick the script emits per-voice setup natives
-//! (waveform, duty cycle, ADSR, enable) on the first iteration and
-//! `host::play(channel, midi)` / `host::silence(channel)` natives
-//! on note boundaries. These natives update voice state shared
-//! with the SDL3 audio callback, which renders samples on the
-//! audio thread.
+//! A roster of Keleusma scripts named `piano_roll_<N>.kel`
+//! (currently `piano_roll_0.kel` and `piano_roll_1.kel`) is
+//! precompiled at startup and registered in the `SONG_SOURCES`
+//! slice in this file. The currently-active script runs on the
+//! main thread at one yield per 16th-note tick (125 ms at 120
+//! BPM by default; the script can call `host::set_bpm` to
+//! change the tempo mid-playback). At each tick the script
+//! emits per-voice setup natives (waveform, duty cycle, ADSR,
+//! enable, etc.) on the first iteration and
+//! `host::play(channel, midi)` / `host::silence(channel)`
+//! natives on note boundaries. These natives update voice state
+//! shared with the SDL3 audio callback, which renders samples
+//! on the audio thread.
+//!
+//! Adding a new song is just dropping a `piano_roll_<N>.kel`
+//! file next to this one and appending a matching `include_str!`
+//! line to `SONG_SOURCES`. The swap action cycles through the
+//! slice in order.
 //!
 //! - **Audio thread (SDL3 callback)**: receives a sample buffer
 //!   to fill at sample rate (48 kHz), reads the current voice
@@ -78,11 +87,21 @@
 //!
 //! # Hot code swap
 //!
-//! Pressing `s` followed by Enter swaps the currently-running
-//! script for the other one at the next reset boundary. Both
-//! scripts share the same data-segment schema; the swap
-//! reinitialises all slots to zero so the new song's `init`
-//! block runs again and reconfigures the channels.
+//! Pressing `s` followed by Enter cycles to the next song in
+//! `SONG_SOURCES` at the next reset boundary. All scripts share
+//! the same data-segment schema; the swap reinitialises all
+//! data slots to zero so the new song's `init` block runs
+//! again and reconfigures the channels.
+//!
+//! Before loading the next module the host calls
+//! `reset_voices` to restore every per-voice parameter
+//! (waveform, duty, ADSR, vibrato, LPF, retrigger, per-speaker
+//! volume, enable) to its default-disabled value. Scripts
+//! therefore only need to set the parameters they care about;
+//! they do not need to defensively turn features off in case a
+//! previous song left them on. The same reset happens
+//! implicitly at startup because the shared voice state is
+//! initialised through `default_voices`.
 //!
 //! # Run
 //!
@@ -528,15 +547,27 @@ enum Command {
 // Entry point.
 // ---------------------------------------------------------------
 
-const SCRIPT_A: &str = include_str!("piano_roll.kel");
-const SCRIPT_B: &str = include_str!("piano_roll_2.kel");
+// The song roster. Each entry is the source text of one
+// `piano_roll_<song>.kel` file. To add song N: drop a new
+// `piano_roll_<N>.kel` next to this file and append the
+// matching `include_str!` here. The swap action cycles through
+// songs in this order, so the song-number indexing in the on-
+// screen log matches the index into this slice.
+const SONG_SOURCES: &[&str] = &[
+    include_str!("piano_roll_0.kel"),
+    include_str!("piano_roll_1.kel"),
+];
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let module_a = build_module(SCRIPT_A)?;
-    let module_b = build_module(SCRIPT_B)?;
+    let modules: Vec<Module> = SONG_SOURCES
+        .iter()
+        .map(|src| build_module(src))
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut active_song: usize = 0;
 
     let arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
-    let mut vm = Vm::new(module_a.clone(), &arena).map_err(|e| format!("verify: {:?}", e))?;
+    let mut vm =
+        Vm::new(modules[active_song].clone(), &arena).map_err(|e| format!("verify: {:?}", e))?;
 
     init_data(&mut vm)?;
 
@@ -593,8 +624,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
-    println!("Keleusma piano roll. 120 BPM, eight voices, three active.");
+    println!(
+        "Keleusma piano roll. 120 BPM, eight voices, three active. {} song(s) loaded.",
+        modules.len()
+    );
     println!("[ Press 's' + Enter to swap song. Press Enter alone to quit. ]");
+    println!("[ now playing song 0 ]");
 
     match vm
         .call(&[Value::Int(0)])
@@ -606,7 +641,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut next_tick = Instant::now() + Duration::from_micros(tick_us.load(Ordering::Relaxed));
     let mut tick: i64 = 1;
-    let mut active_is_a = true;
     let mut swap_pending = false;
 
     loop {
@@ -635,22 +669,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 VmState::Yielded(_) => break,
                 VmState::Reset => {
                     if swap_pending {
-                        let next_module = if active_is_a {
-                            module_b.clone()
-                        } else {
-                            module_a.clone()
-                        };
-                        vm.replace_module(next_module, fresh_data())
-                            .map_err(|e| format!("replace_module: {:?}", e))?;
-                        active_is_a = !active_is_a;
-                        swap_pending = false;
-                        let song_index = if active_is_a { 1 } else { 2 };
-                        println!("[ swapped to song {} ]", song_index);
-                        // Reset voice state to default-disabled so
-                        // the new song's init block decides which
-                        // channels to enable and with what
-                        // parameters.
+                        active_song = (active_song + 1) % modules.len();
+                        // Reset host-side voice state BEFORE loading
+                        // the next module. The new song's init block
+                        // is responsible only for the parameters it
+                        // cares about; every other field (vibrato,
+                        // LPF, retrigger, ADSR, waveform, duty, per-
+                        // speaker volume) is restored to the off /
+                        // default value by `reset_voices`. Scripts
+                        // therefore never need to defensively turn
+                        // features off "in case" a previous song
+                        // turned them on.
                         reset_voices(&voices);
+                        vm.replace_module(modules[active_song].clone(), fresh_data())
+                            .map_err(|e| format!("replace_module: {:?}", e))?;
+                        swap_pending = false;
+                        println!("[ swapped to song {} ]", active_song);
                         match vm
                             .call(&[Value::Int(tick)])
                             .map_err(|e| format!("vm call after swap: {:?}", e))?
