@@ -374,7 +374,8 @@ pub fn compile_with_target(
 ) -> Result<Module, CompileError> {
     target.validate_against_runtime()?;
     crate::target::validate_program_for_target(program, target)?;
-    crate::typecheck::check(program).map_err(|e| CompileError {
+    let mut owned = program.clone();
+    crate::typecheck::check(&mut owned).map_err(|e| CompileError {
         message: format!("type error: {}", e.message),
         span: e.span,
     })?;
@@ -385,10 +386,10 @@ pub fn compile_with_target(
     // reference the specialized name. Generic functions for which
     // no concrete instantiation could be inferred remain unchanged
     // and rely on runtime polymorphism through the Value tag.
-    let owned = crate::monomorphize::monomorphize(program.clone());
+    let mut owned = crate::monomorphize::monomorphize(owned);
     // Re-typecheck the monomorphized program so specialized bodies
     // benefit from concrete-type method resolution.
-    crate::typecheck::check(&owned).map_err(|e| CompileError {
+    crate::typecheck::check(&mut owned).map_err(|e| CompileError {
         message: format!("type error after monomorphization: {}", e.message),
         span: e.span,
     })?;
@@ -911,19 +912,24 @@ fn compile_function_group(
         }
     } else {
         // Multiheaded or pattern-matched parameters: dispatch.
-        if block_type == BlockType::Stream {
-            return Err(CompileError {
-                message: String::from("multiheaded stream (loop) functions are not supported"),
-                span: first.params.first().map_or(
-                    Span {
-                        start: 0,
-                        end: 0,
-                        line: 0,
-                        column: 0,
-                    },
-                    |p| p.span,
-                ),
-            });
+        //
+        // For Func and Reentrant chunks, each head's body ends with
+        // `Op::Return` and the dispatch falls through to a `Trap` on
+        // no-match. For Stream chunks, the Stream...Reset envelope
+        // is mandatory and exactly one of each must appear. The
+        // dispatch is wrapped in `Op::Loop`/`Op::EndLoop` so each
+        // matched head's body can `Op::Pop` its tail value and
+        // `Op::Break` out of the loop, falling through to the
+        // shared `Op::Reset` epilogue. The `Op::EndLoop` back-edge
+        // is structurally required for verifier nesting balance but
+        // is dead code because every reachable path either breaks
+        // out (matched head) or traps (no head matched).
+        let stream_dispatch = block_type == BlockType::Stream;
+        let mut loop_marker: Option<usize> = None;
+        let mut stream_break_addrs: Vec<usize> = Vec::new();
+        if stream_dispatch {
+            fc.emit(Op::Stream);
+            loop_marker = Some(fc.emit_jump(Op::Loop(0)));
         }
 
         let mut fail_jumps: Vec<usize> = Vec::new();
@@ -964,7 +970,13 @@ fn compile_function_group(
             }
 
             compile_block(&mut fc, &def.body)?;
-            fc.emit(Op::Return);
+            if stream_dispatch {
+                fc.emit(Op::Pop);
+                let break_addr = fc.emit_jump(Op::Break(0));
+                stream_break_addrs.push(break_addr);
+            } else {
+                fc.emit(Op::Return);
+            }
 
             fc.end_scope();
         }
@@ -978,6 +990,20 @@ fn compile_function_group(
         // No head matched: emit trap.
         let msg = fc.add_string_constant(&format!("no matching head for {}", name));
         fc.emit(Op::Trap(msg));
+
+        if stream_dispatch {
+            // Emit EndLoop with its back-edge target = loop_ip + 1.
+            // The Op::Loop target and each Op::Break(0) target are
+            // patched to the position after EndLoop, which is where
+            // the Op::Reset epilogue lives.
+            let loop_ip = loop_marker.expect("Stream dispatch sets loop_marker");
+            fc.emit(Op::EndLoop((loop_ip + 1) as u32));
+            fc.patch_jump(loop_ip);
+            for addr in &stream_break_addrs {
+                fc.patch_jump(*addr);
+            }
+            fc.emit(Op::Reset);
+        }
     }
 
     Ok(fc.finish())
@@ -3006,6 +3032,127 @@ mod tests {
     fn no_data_block_compiles() {
         let module = compile_str("fn main() -> Word { 42 }").unwrap();
         assert!(module.data_layout.is_none());
+    }
+
+    #[test]
+    fn untyped_param_is_inferred_from_return_type() {
+        // `fn main(x) -> Word { x }`: the parameter has no
+        // annotation but is returned at the body's tail, so
+        // inference must resolve `x` to `Word`. The compiler reads
+        // the resolved type back from the typechecker's
+        // write-back pass and surfaces it through the chunk's
+        // `param_types` so `Vm::call` rejects wrong-typed args.
+        let module = compile_str("fn main(x) -> Word { x }").expect("compile");
+        assert_eq!(module.chunks.len(), 1);
+        assert_eq!(module.chunks[0].param_count, 1);
+        assert_eq!(
+            module.chunks[0].param_types,
+            alloc::vec![crate::bytecode::TypeTag::Word],
+        );
+    }
+
+    #[test]
+    fn multiheaded_fn_main_dispatches() {
+        let src = "fn main(0) -> Word { 100 }\n\
+                   fn main(x: Word) -> Word { x }";
+        let module = compile_str(src).expect("compile");
+        assert_eq!(module.chunks.len(), 1);
+        assert_eq!(module.chunks[0].block_type, BlockType::Func);
+        assert!(module.entry_point.is_some());
+    }
+
+    #[test]
+    fn multiheaded_yield_main_dispatches() {
+        let src = "yield main(0) -> Word { yield 100 }\n\
+                   yield main(x: Word) -> Word { yield x }";
+        let module = compile_str(src).expect("compile");
+        assert_eq!(module.chunks.len(), 1);
+        assert_eq!(module.chunks[0].block_type, BlockType::Reentrant);
+        assert!(module.entry_point.is_some());
+    }
+
+    #[test]
+    fn multiheaded_loop_main_dispatches() {
+        // Multi-headed Stream dispatch is wrapped in Loop/EndLoop
+        // so each matched head can Break out to the shared Reset
+        // epilogue while the Stream block retains the single
+        // Stream and single Reset that the verifier requires.
+        let src = "loop main(0) -> Word { yield 100 }\n\
+                   loop main(x: Word) -> Word { let z = yield x; z }";
+        let module = compile_str(src).expect("compile");
+        assert_eq!(module.chunks.len(), 1);
+        assert_eq!(module.chunks[0].block_type, BlockType::Stream);
+        assert!(module.entry_point.is_some());
+        // Exactly one Stream, exactly one Reset (verifier invariant).
+        let stream_count = module.chunks[0]
+            .ops
+            .iter()
+            .filter(|op| matches!(op, Op::Stream))
+            .count();
+        let reset_count = module.chunks[0]
+            .ops
+            .iter()
+            .filter(|op| matches!(op, Op::Reset))
+            .count();
+        assert_eq!(stream_count, 1);
+        assert_eq!(reset_count, 1);
+    }
+
+    #[test]
+    fn duplicate_fn_main_is_rejected() {
+        let err = compile_str(
+            "fn main() -> Word { 1 }\n\
+             fn main() -> Word { 2 }",
+        )
+        .expect_err("expected duplicate-head rejection");
+        assert!(
+            err.message.contains("dead code"),
+            "unexpected error: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn duplicate_yield_main_is_rejected() {
+        let err = compile_str(
+            "yield main(x: Word) -> Word { yield x }\n\
+             yield main(x: Word) -> Word { yield x + 1 }",
+        )
+        .expect_err("expected duplicate-head rejection");
+        assert!(
+            err.message.contains("dead code"),
+            "unexpected error: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn duplicate_loop_main_is_rejected() {
+        let err = compile_str(
+            "loop main(x: Word) -> Word { let z = yield x; z }\n\
+             loop main(x: Word) -> Word { let z = yield x; z }",
+        )
+        .expect_err("expected duplicate-head rejection");
+        assert!(
+            err.message.contains("dead code"),
+            "unexpected error: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn duplicate_non_entry_function_is_rejected() {
+        let err = compile_str(
+            "fn helper(x: Word) -> Word { x }\n\
+             fn helper(x: Word) -> Word { x + 1 }\n\
+             fn main() -> Word { helper(0) }",
+        )
+        .expect_err("expected duplicate-head rejection");
+        assert!(
+            err.message.contains("dead code"),
+            "unexpected error: {}",
+            err.message
+        );
     }
 
     #[test]

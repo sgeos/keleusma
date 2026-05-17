@@ -4816,4 +4816,52 @@ mod tests {
             other => panic!("expected NotSuspended, got {:?}", other),
         }
     }
+
+    #[test]
+    fn untyped_param_inferred_rejects_wrong_type_at_call() {
+        // `fn main(x) -> Word { x }` infers `x: Word`. The chunk's
+        // param_types must carry that inferred tag so Vm::call
+        // rejects a Float argument with a typed error rather than
+        // silently accepting and tripping arithmetic later.
+        let src = "fn main(x) -> Word { x }";
+        let module = build_module(src);
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let mut vm = Vm::new(module, &arena).expect("verify");
+        match vm.call(&[Value::Int(7)]).expect("call") {
+            VmState::Finished(Value::Int(v)) => assert_eq!(v, 7),
+            other => panic!("expected Finished, got {:?}", other),
+        }
+        let err = vm.call(&[Value::Float(1.5)]).expect_err("expected reject");
+        match err {
+            VmError::TypeError(msg) => {
+                assert!(msg.contains("expected Word"), "got: {}", msg);
+                assert!(msg.contains("got Float"), "got: {}", msg);
+            }
+            other => panic!("expected TypeError, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn multiheaded_loop_main_executes() {
+        // Two heads: the literal `0` head yields a constant; the
+        // `x: Word` head yields the input. The runtime dispatches
+        // per iteration and resumes correctly across the
+        // Stream...Reset boundary.
+        let src = "loop main(0) -> Word { yield 100 }\n\
+                   loop main(x: Word) -> Word { let z = yield x; z }";
+        let module = build_module(src);
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let mut vm = Vm::new(module, &arena).expect("verify");
+        match vm.call(&[Value::Int(0)]).expect("call") {
+            VmState::Yielded(Value::Int(v)) => assert_eq!(v, 100),
+            other => panic!("expected Yielded(100), got {:?}", other),
+        }
+        // Resume to reach the Reset epilogue for the matched head.
+        let _ = vm.resume(Value::Int(0));
+        // Second iteration: input 7 takes the second head.
+        match vm.call(&[Value::Int(7)]).expect("call") {
+            VmState::Yielded(Value::Int(v)) => assert_eq!(v, 7),
+            other => panic!("expected Yielded(7), got {:?}", other),
+        }
+    }
 }

@@ -650,7 +650,32 @@ fn types_compatible(ctx: &mut Ctx, a: &Type, b: &Type) -> bool {
 /// definitions, struct and enum field signatures, data block field
 /// types, and function signatures. The second pass checks each
 /// function body against its declared signature.
-pub fn check(program: &Program) -> Result<(), TypeError> {
+/// Convert a resolved [`Type`] into a [`TypeExpr`] using the given span.
+///
+/// Used by [`check`] to fill in parameter type annotations that the
+/// programmer omitted but the type checker has inferred. Returns
+/// `None` for types that cannot be expressed in the surface syntax
+/// (inference variables, abstract type-parameter slots, opaque
+/// names that the parser would not accept here, and types that the
+/// compiler does not need precise tag information for). The
+/// compiler treats a missing `type_expr` as `TypeTag::Composite`,
+/// so leaving unconvertible types as `None` preserves the existing
+/// permissive behaviour for runtime argument validation while
+/// primitive inferences are written back precisely.
+fn type_to_expr(ty: &Type, span: crate::token::Span) -> Option<TypeExpr> {
+    match ty {
+        Type::Byte => Some(TypeExpr::Prim(PrimType::Byte, span)),
+        Type::Word => Some(TypeExpr::Prim(PrimType::Word, span)),
+        Type::Fixed(n) => Some(TypeExpr::Prim(PrimType::Fixed(Some(*n)), span)),
+        Type::Float => Some(TypeExpr::Prim(PrimType::Float, span)),
+        Type::Bool => Some(TypeExpr::Prim(PrimType::Bool, span)),
+        Type::Unit => Some(TypeExpr::Unit(span)),
+        Type::Str => Some(TypeExpr::Prim(PrimType::Text, span)),
+        _ => None,
+    }
+}
+
+pub fn check(program: &mut Program) -> Result<(), TypeError> {
     let mut ctx = Ctx::new();
 
     // Pass 1a. Collect type kinds (struct vs enum) so name resolution
@@ -956,9 +981,28 @@ pub fn check(program: &Program) -> Result<(), TypeError> {
         }
     }
 
-    // Pass 2. Check each function body.
-    for func in &program.functions {
+    // Pass 2. Check each function body. After each body is checked,
+    // any parameter type that the programmer omitted but inference
+    // resolved to a concrete primitive is written back into the AST
+    // so downstream passes (monomorphizer, compiler, runtime call
+    // validator) see the inferred type without having to consult the
+    // typecheck context.
+    for func in &mut program.functions {
         check_function(&mut ctx, func)?;
+        if let Some(sig) = ctx.functions.get(&func.name) {
+            let resolved: Vec<Type> = sig.params.clone();
+            for (param, ty) in func.params.iter_mut().zip(resolved.iter()) {
+                if param.type_expr.is_none()
+                    && matches!(
+                        param.pattern,
+                        Pattern::Variable(_, _) | Pattern::Wildcard(_)
+                    )
+                    && let Some(expr) = type_to_expr(ty, param.span)
+                {
+                    param.type_expr = Some(expr);
+                }
+            }
+        }
     }
     // Also check impl method bodies. The bodies are checked under
     // their mangled names so the parameter and return type lookups
@@ -2351,8 +2395,8 @@ mod tests {
 
     fn check_src(src: &str) -> Result<(), TypeError> {
         let tokens = tokenize(src).expect("lex");
-        let program = parse(&tokens).expect("parse");
-        check(&program)
+        let mut program = parse(&tokens).expect("parse");
+        check(&mut program)
     }
 
     /// End-to-end compile helper. Some tests need to validate that

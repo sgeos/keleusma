@@ -557,19 +557,6 @@ impl<'a> Parser<'a> {
         } else {
             None
         };
-        // Variable and wildcard parameters must carry an explicit
-        // type annotation. The missing-return-type case is already
-        // rejected, so this branch keeps the parameter rule
-        // symmetric. Literal and composite patterns supply their
-        // type through the pattern itself (`fn classify(0)` infers
-        // the parameter type from the literal `0`).
-        if type_expr.is_none() && matches!(pattern, Pattern::Variable(_, _) | Pattern::Wildcard(_))
-        {
-            return Err(ParseError {
-                message: String::from("parameter requires an explicit type annotation"),
-                span: start,
-            });
-        }
         let end = type_expr.as_ref().map_or(start, |t| t.span());
         Ok(Param {
             pattern,
