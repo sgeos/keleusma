@@ -120,13 +120,18 @@ fn midi_of(p: Pitch, octave: Word) -> Word {
 }
 
 // ---------------------------------------------------------------
-// Per-channel state in the data segment.
+// Sequencer state in the data segment. The host zeroes every
+// slot at startup and at every hot swap, so the script's
+// `init` block always sees a clean slate.
 //
-// init   is a one-shot flag set after the channel setup runs.
-// idx_n  is the index of the current note in channel n's array.
-// rem_n  is the number of ticks remaining before the next note
-//        boundary on channel n. When rem_n hits zero, the
-//        channel advances to the next note.
+// init        one-shot flag set after the channel setup runs.
+// loop_count  the script bumps this when its progression wraps.
+// section     song-section pointer (intro = 0, verse = 1, ...).
+// user0..3    song-defined general-purpose slots.
+// idx_n       index of the current note in channel n's array.
+// rem_n       ticks remaining before the next note boundary on
+//             channel n. When rem_n hits zero, the channel
+//             advances to the next note.
 //
 // Waveform codes for host::set_waveform:
 //   0 = Square (50% duty), 1 = Triangle, 2 = Sawtooth,
@@ -135,9 +140,17 @@ fn midi_of(p: Pitch, octave: Word) -> Word {
 // ---------------------------------------------------------------
 data state {
     init: Word,
+    loop_count: Word,
+    section: Word,
+    user0: Word, user1: Word, user2: Word, user3: Word,
     idx0: Word, rem0: Word,
     idx1: Word, rem1: Word,
     idx2: Word, rem2: Word,
+    idx3: Word, rem3: Word,
+    idx4: Word, rem4: Word,
+    idx5: Word, rem5: Word,
+    idx6: Word, rem6: Word,
+    idx7: Word, rem7: Word,
 }
 
 // ---------------------------------------------------------------

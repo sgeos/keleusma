@@ -225,11 +225,36 @@ const fn tick_us_for_bpm(bpm: u32) -> u64 {
     60_000_000u64 / (bpm as u64 * 4)
 }
 
-// Data-segment layout. The first slot is the `init` flag the
-// script uses to gate the one-time channel-setup block. The
-// remaining six slots are the (idx, rem) pair for each of the
-// three currently-used channels.
-const NUM_DATA_SLOTS: usize = 7;
+// Data-segment layout. The host treats the data segment
+// opaquely; the semantics are owned by the script. The layout
+// below documents the convention every bundled song follows so
+// that the slot count, ordering, and reset behaviour are
+// consistent across the roster.
+//
+//   slot 0      `init`          one-shot setup gate
+//   slot 1      `loop_count`    bumped by the script when its
+//                               progression wraps; lets a song
+//                               distinguish first-loop intro
+//                               material from subsequent loops,
+//                               schedule fade-outs, or transpose
+//                               on each repeat
+//   slot 2      `section`       current-section pointer
+//                               (intro = 0, verse = 1, ...);
+//                               subsumes the intro-flag use case
+//   slots 3..6  `user0..3`      song-defined general-purpose
+//                               slots (transposition offset,
+//                               random seed, mute mask, fill
+//                               pattern selector, ...)
+//   slots 7..22 `idx0..7` /
+//               `rem0..7`       per-channel position and
+//                               remaining-ticks counters for the
+//                               full eight-voice channel count
+//
+// `fresh_data` zeros every slot before each `replace_module`
+// and `init_data` does the same at startup, so the new song's
+// `init` block always sees a clean slate and unused fields stay
+// at zero.
+const NUM_DATA_SLOTS: usize = 23;
 
 // ---------------------------------------------------------------
 // Waveform types.

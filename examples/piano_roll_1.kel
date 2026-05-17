@@ -118,13 +118,31 @@ fn midi_of(p: Pitch, octave: Word) -> Word {
 }
 
 // ---------------------------------------------------------------
-// Per-channel state. Same six-slot schema as song 1.
+// Sequencer state. Same twenty-three-slot schema as song 0.
+//
+// init        one-shot flag set after the channel setup runs.
+// loop_count  bumped by the script when its progression wraps.
+// section     song-section pointer (intro = 0, verse = 1, ...).
+// user0..3    song-defined general-purpose slots.
+// idx_n /
+// rem_n       per-channel position and remaining-ticks counters
+//             for the full eight-voice channel count. Channels
+//             3..7 stay disabled in this song; their idx/rem
+//             slots remain at zero.
 // ---------------------------------------------------------------
 data state {
     init: Word,
+    loop_count: Word,
+    section: Word,
+    user0: Word, user1: Word, user2: Word, user3: Word,
     idx0: Word, rem0: Word,
     idx1: Word, rem1: Word,
     idx2: Word, rem2: Word,
+    idx3: Word, rem3: Word,
+    idx4: Word, rem4: Word,
+    idx5: Word, rem5: Word,
+    idx6: Word, rem6: Word,
+    idx7: Word, rem7: Word,
 }
 
 // ---------------------------------------------------------------
