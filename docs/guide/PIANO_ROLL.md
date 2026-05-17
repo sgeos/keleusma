@@ -52,7 +52,7 @@ Slot two, `section`, is a song-section pointer. A song with a multi-part structu
 
 Slots three through six, `user0` through `user3`, are general-purpose slots for state the host has no opinion about. Suitable uses include a random seed, a transposition offset, a per-channel mute mask, a fill-pattern selector, or anything else the song needs to track.
 
-Slots seven through twenty-two are the per-channel position and remaining-ticks counters for eight voices. The script consults these to decide when to advance to the next note on each channel.
+Slots seven through fourteen carry `idx: [Word; 8]`, the per-channel position counters for the full eight-voice channel count. Slots fifteen through twenty-two carry `rem: [Word; 8]`, the matching per-channel remaining-ticks counters. The script addresses each counter through the indexed-array form `state.idx[ch]` or `state.rem[ch]` where `ch` is a `Word` in `[0, 8)`. The compiler emits a bounds-checked indexed read or write against the underlying flat slot region; out-of-range indices trap rather than silently addressing a different counter. A script that needs to walk every channel can use `for ch in 0..8 { ... state.idx[ch] ... }` and the compiler lowers the iteration to direct indexed slot reads without materialising a `Value::Array`.
 
 The data segment is host-owned at the schema level and script-owned at the semantic level. The host reserves the slots and zeroes them. The script decides what each slot means. The conventions above are followed by every bundled song so that the schema stays consistent across the roster.
 

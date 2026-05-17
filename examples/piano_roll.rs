@@ -264,10 +264,16 @@ const fn tick_us_for_bpm(bpm: u32) -> u64 {
 //                               slots (transposition offset,
 //                               random seed, mute mask, fill
 //                               pattern selector, ...)
-//   slots 7..22 `idx0..7` /
-//               `rem0..7`       per-channel position and
-//                               remaining-ticks counters for the
-//                               full eight-voice channel count
+//   slots 7..14 `idx: [Word; 8]` per-channel position counters
+//                                for the full eight-voice
+//                                channel count, addressable
+//                                from the script through
+//                                `state.idx[ch]`
+//   slots 15..22 `rem: [Word; 8]` per-channel remaining-ticks
+//                                counters paired with the
+//                                position counters above,
+//                                addressable through
+//                                `state.rem[ch]`
 //
 // `fresh_data` zeros every slot before each `replace_module`
 // and `init_data` does the same at startup, so the new song's

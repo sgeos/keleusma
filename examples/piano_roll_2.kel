@@ -1,54 +1,48 @@
 // Bach Prelude in C Major, BWV 846, abridged to the opening
 // four measures. Demonstrates a five-channel chord arpeggio
-// pattern with script-side acoustic-decay emulation through
-// per-tick volume scaling. See `docs/guide/PIANO_ROLL.md` for
-// the long-form manual.
+// where each per-tick body does exactly one host::play call.
+// All loudness shaping is offloaded to host-side features.
+// See `docs/guide/PIANO_ROLL.md` for the long-form manual.
 //
 // Pattern. Each measure is sixteen 16th-note ticks. Each
 // measure plays a five-note chord through a fixed arpeggio
 // pattern repeated twice per measure
-// (V1, V2, V3, V4, V5, V3, V4, V5). Voices V1 and V2 fire
-// twice per measure on the bass channels. Voices V3, V4, V5
-// fire four times per measure on the inner and upper
-// channels.
+// (V1, V2, V3, V4, V5, V3, V4, V5).
 //
-// Acoustic decay. The host's ADSR envelope is configured with
-// full sustain (no natural decay). The script emulates piano
-// sustain through per-tick volume scaling. When a channel
-// fires, the script resets its decay counter to zero, then
-// ramps volume down by 25 percent each subsequent tick until
-// the channel either fires again or reaches silence at the
-// fourth decay step.
+// Acoustic shaping. The host's ADSR envelope and per-channel
+// velocity carry the loudness contour. Each voice attacks
+// quickly, decays to a 0.7 sustain plateau, and rests there
+// until the next host::play call updates the frequency.
+// Because retrigger is off (the default), pitch changes flow
+// continuously through the sustain plateau without restarting
+// the envelope, which gives the piece its piano-with-sustain-
+// pedal character. The script does not call host::silence on
+// any channel.
 //
-// Stereo field. Bass voices (CH 0, 1) sit on the left side
-// and upper voices (CH 3, 4) sit on the right side, with the
-// tenor (CH 2) centered. The host's per-speaker volume native
-// carries the panning.
+// Stereo field. Bass voices sit on the left, upper voices on
+// the right, with the tenor centered. Per-channel velocity
+// gives the bass a heavier weight than the upper voices.
 //
 // Channel-voice mapping:
-//   CH 0: Voice 1 root bass    - Triangle,  80% L / 20% R
-//   CH 1: Voice 2 middle bass  - Triangle,  60% L / 40% R
-//   CH 2: Voice 3 tenor anchor - Square,    50% L / 50% R
-//   CH 3: Voice 4 alto         - Pulse 25%, 30% L / 70% R
-//   CH 4: Voice 5 soprano      - Pulse 25%, 10% L / 90% R
+//   CH 0: Voice 1 root bass    - Triangle,  80% L / 20% R, vel 1000
+//   CH 1: Voice 2 middle bass  - Triangle,  60% L / 40% R, vel 900
+//   CH 2: Voice 3 tenor anchor - Square,    50% L / 50% R, vel 850
+//   CH 3: Voice 4 alto         - Pulse 25%, 30% L / 70% R, vel 800
+//   CH 4: Voice 5 soprano      - Pulse 25%, 10% L / 90% R, vel 750
 //
 // Channels 5, 6, 7 stay disabled (host default).
 //
-// Implementation notes. Per-channel decay state lives in the
-// `state.idx` array (indices 0..4). The per-tick decay update
-// and volume calculation run inside a `for ch in 0..5` loop
-// that addresses the data segment through the language's
-// indexed-array syntax. The five-voice arpeggio dispatch and
-// the chord-pitch lookup are pure helper functions returning
-// scalar values.
+// Implementation note. The per-tick body is three lines plus a
+// yield. The compactness is the demonstration. Setup happens
+// once; the loop just dispatches.
 
 use host::play
-use host::silence
 use host::set_enable
 use host::set_waveform
 use host::set_duty
 use host::set_adsr
 use host::set_volume
+use host::set_velocity
 use host::set_bpm
 use host::song_name
 
@@ -83,19 +77,6 @@ fn chord_at(idx: Word) -> Word {
     }
 }
 
-// Per-channel base panning as a (left, right) q1000 pair. The
-// loop multiplies each component by the channel's current
-// decay step over four before writing the per-speaker volume.
-fn pan_for_channel(ch: Word) -> (Word, Word) {
-    match ch {
-        0 => (800, 200),
-        1 => (600, 400),
-        2 => (500, 500),
-        3 => (300, 700),
-        _ => (100, 900),
-    }
-}
-
 data state {
     init: Word,
     loop_count: Word,
@@ -112,37 +93,40 @@ loop main(input: Word) -> Word {
 
         // Channel 0: Voice 1 root bass, Triangle, far left.
         host::set_waveform(0, 1);
-        host::set_adsr(0, 5, 50, 1000, 80);
+        host::set_adsr(0, 5, 50, 700, 350);
+        host::set_volume(0, 800, 200);
+        host::set_velocity(0, 1000);
         host::set_enable(0, 1);
 
         // Channel 1: Voice 2 middle bass, Triangle, left.
         host::set_waveform(1, 1);
-        host::set_adsr(1, 5, 50, 1000, 80);
+        host::set_adsr(1, 5, 50, 700, 350);
+        host::set_volume(1, 600, 400);
+        host::set_velocity(1, 900);
         host::set_enable(1, 1);
 
         // Channel 2: Voice 3 tenor anchor, Square, centre.
         host::set_waveform(2, 0);
-        host::set_adsr(2, 5, 50, 1000, 80);
+        host::set_adsr(2, 5, 50, 700, 350);
+        host::set_volume(2, 500, 500);
+        host::set_velocity(2, 850);
         host::set_enable(2, 1);
 
         // Channel 3: Voice 4 alto, 25 percent pulse, right.
         host::set_waveform(3, 4);
         host::set_duty(3, 250);
-        host::set_adsr(3, 5, 50, 1000, 80);
+        host::set_adsr(3, 5, 50, 700, 350);
+        host::set_volume(3, 300, 700);
+        host::set_velocity(3, 800);
         host::set_enable(3, 1);
 
         // Channel 4: Voice 5 soprano, 25 percent pulse, far right.
         host::set_waveform(4, 4);
         host::set_duty(4, 250);
-        host::set_adsr(4, 5, 50, 1000, 80);
+        host::set_adsr(4, 5, 50, 700, 350);
+        host::set_volume(4, 100, 900);
+        host::set_velocity(4, 750);
         host::set_enable(4, 1);
-
-        // Per-channel decay counters start at 4 (fully decayed,
-        // silent). The first firing tick sets the relevant
-        // counter to zero and the channel sings.
-        for ch in 0..5 {
-            state.idx[ch] = 4;
-        }
 
         state.init = 1;
     };
@@ -150,35 +134,15 @@ loop main(input: Word) -> Word {
     // Position within the four-measure loop.
     let cycle_pos = input % 64;
     let measure = cycle_pos / 16;
-    let tick_in_meas = cycle_pos % 16;
-    let tick_in_8 = tick_in_meas % 8;
+    let tick_in_8 = (cycle_pos % 16) % 8;
 
-    // Which channel fires this tick and at what pitch.
+    // Compute the firing channel and the pitch it carries on
+    // this tick, then actuate the host. Loudness contour and
+    // panning are already configured per channel; nothing else
+    // happens per tick.
     let fired = voice_for_tick(tick_in_8);
     let midi = chord_at(measure * 5 + fired);
-
-    // Fire the note on the active channel. Subsequent calls
-    // on the same channel during sustain do not retrigger the
-    // ADSR envelope (retrigger flag is off by default); the
-    // freq is updated and the script's volume manipulation
-    // provides the perceived dynamics.
     host::play(fired, midi);
-
-    // Per-channel decay update and volume application. The
-    // fired channel resets to zero. Every other channel
-    // saturates at four. The per-tick volume is the channel's
-    // base pan multiplied by `(4 - idx) / 4`.
-    for ch in 0..5 {
-        if ch == fired {
-            state.idx[ch] = 0;
-        } else {
-            let next = state.idx[ch] + 1;
-            if next > 4 { state.idx[ch] = 4; } else { state.idx[ch] = next; };
-        };
-        let steps = 4 - state.idx[ch];
-        let pan = pan_for_channel(ch);
-        host::set_volume(ch, pan.0 * steps / 4, pan.1 * steps / 4);
-    }
 
     let _ = yield 0;
     0
