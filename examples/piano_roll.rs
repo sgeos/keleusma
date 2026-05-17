@@ -15,9 +15,9 @@
 //! # Architecture
 //!
 //! A roster of Keleusma scripts named `piano_roll_<N>.kel`
-//! (currently `piano_roll_0.kel` and `piano_roll_1.kel`) is
-//! precompiled at startup and registered in the `SONG_SOURCES`
-//! slice in this file. The currently-active script runs on the
+//! (currently `piano_roll_0.kel`, `piano_roll_1.kel`, and
+//! `piano_roll_2.kel`) is precompiled at startup and
+//! registered in the `SONG_SOURCES` slice in this file. The currently-active script runs on the
 //! main thread at one yield per 16th-note tick (125 ms at 120
 //! BPM by default; the script can call `host::set_bpm` to
 //! change the tempo mid-playback). At each tick the script
@@ -721,6 +721,7 @@ enum Command {
 const SONG_SOURCES: &[&str] = &[
     include_str!("piano_roll_0.kel"),
     include_str!("piano_roll_1.kel"),
+    include_str!("piano_roll_2.kel"),
 ];
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {

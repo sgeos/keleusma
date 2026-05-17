@@ -1,0 +1,205 @@
+// Bach Prelude in C Major, BWV 846, abridged to the opening
+// four measures. Demonstrates a five-channel chord arpeggio
+// pattern with script-side acoustic-decay emulation through
+// per-tick volume scaling. See `docs/guide/PIANO_ROLL.md` for
+// the long-form manual.
+//
+// Pattern. Each measure is sixteen 16th-note ticks. Each
+// measure plays a five-note chord through a fixed arpeggio
+// pattern repeated twice per measure
+// (V1, V2, V3, V4, V5, V3, V4, V5). Voices V1 and V2 fire
+// twice per measure on the bass channels. Voices V3, V4, V5
+// fire four times per measure on the inner and upper
+// channels.
+//
+// Acoustic decay. The host's ADSR envelope is configured with
+// full sustain (no natural decay). The script emulates piano
+// sustain through per-tick volume scaling. When a channel
+// fires, the script resets its decay counter to zero, then
+// ramps volume down by 25 percent each subsequent tick until
+// the channel either fires again or reaches silence at the
+// fourth decay step.
+//
+// Stereo field. Bass voices (CH 0, 1) sit on the left side
+// and upper voices (CH 3, 4) sit on the right side, with the
+// tenor (CH 2) centered. The host's per-speaker volume native
+// carries the panning.
+//
+// Channel-voice mapping:
+//   CH 0: Voice 1 root bass    - Triangle,  80% L / 20% R
+//   CH 1: Voice 2 middle bass  - Triangle,  60% L / 40% R
+//   CH 2: Voice 3 tenor anchor - Square,    50% L / 50% R
+//   CH 3: Voice 4 alto         - Pulse 25%, 30% L / 70% R
+//   CH 4: Voice 5 soprano      - Pulse 25%, 10% L / 90% R
+//
+// Channels 5, 6, 7 stay disabled (host default).
+
+use host::play
+use host::silence
+use host::set_enable
+use host::set_waveform
+use host::set_duty
+use host::set_adsr
+use host::set_volume
+use host::set_bpm
+use host::song_name
+
+// Voice index (0..4) that fires at the given position within
+// the 8-tick sub-pattern. Each 16-tick measure runs the
+// 8-tick sub-pattern twice.
+fn voice_for_tick(t: Word) -> Word {
+    match t {
+        0 => 0,
+        1 => 1,
+        2 => 2,
+        3 => 3,
+        4 => 4,
+        5 => 2,
+        6 => 3,
+        _ => 4,
+    }
+}
+
+// MIDI note for the given combined (measure * 5 + voice) index.
+// Twenty entries cover four measures times five voices.
+fn chord_at(idx: Word) -> Word {
+    match idx {
+        // Measure 0: C major.
+         0 => 48,  1 => 52,  2 => 55,  3 => 60,  4 => 64,
+        // Measure 1: D minor 7 over C.
+         5 => 48,  6 => 50,  7 => 57,  8 => 62,  9 => 65,
+        // Measure 2: G 7 over B.
+        10 => 47, 11 => 50, 12 => 55, 13 => 62, 14 => 65,
+        // Measure 3: C major.
+        15 => 48, 16 => 52, 17 => 55, 18 => 60,  _ => 64,
+    }
+}
+
+data state {
+    init: Word,
+    loop_count: Word,
+    section: Word,
+    user0: Word, user1: Word, user2: Word, user3: Word,
+    idx0: Word, rem0: Word,
+    idx1: Word, rem1: Word,
+    idx2: Word, rem2: Word,
+    idx3: Word, rem3: Word,
+    idx4: Word, rem4: Word,
+    idx5: Word, rem5: Word,
+    idx6: Word, rem6: Word,
+    idx7: Word, rem7: Word,
+}
+
+loop main(input: Word) -> Word {
+    if state.init == 0 {
+        host::song_name("Bach: Prelude in C Major (first four measures)");
+        host::set_bpm(80);
+
+        // Channel 0: Voice 1 root bass, Triangle, far left.
+        host::set_waveform(0, 1);
+        host::set_adsr(0, 5, 50, 1000, 80);
+        host::set_enable(0, 1);
+
+        // Channel 1: Voice 2 middle bass, Triangle, left.
+        host::set_waveform(1, 1);
+        host::set_adsr(1, 5, 50, 1000, 80);
+        host::set_enable(1, 1);
+
+        // Channel 2: Voice 3 tenor anchor, Square, centre.
+        host::set_waveform(2, 0);
+        host::set_adsr(2, 5, 50, 1000, 80);
+        host::set_enable(2, 1);
+
+        // Channel 3: Voice 4 alto, 25 percent pulse, right.
+        host::set_waveform(3, 4);
+        host::set_duty(3, 250);
+        host::set_adsr(3, 5, 50, 1000, 80);
+        host::set_enable(3, 1);
+
+        // Channel 4: Voice 5 soprano, 25 percent pulse, far right.
+        host::set_waveform(4, 4);
+        host::set_duty(4, 250);
+        host::set_adsr(4, 5, 50, 1000, 80);
+        host::set_enable(4, 1);
+
+        // Per-channel decay counters start at 4 (fully decayed,
+        // silent). The first firing tick sets the relevant
+        // counter to zero and the channel sings.
+        state.idx0 = 4;
+        state.idx1 = 4;
+        state.idx2 = 4;
+        state.idx3 = 4;
+        state.idx4 = 4;
+
+        state.init = 1;
+    };
+
+    // Position within the four-measure loop.
+    let cycle_pos = input % 64;
+    let measure = cycle_pos / 16;
+    let tick_in_meas = cycle_pos % 16;
+    let tick_in_8 = tick_in_meas % 8;
+
+    // Which channel fires this tick and at what pitch.
+    let fired = voice_for_tick(tick_in_8);
+    let midi = chord_at(measure * 5 + fired);
+
+    // Fire the note on the active channel. Subsequent calls
+    // on the same channel during sustain do not retrigger the
+    // ADSR envelope (retrigger flag is off by default); the
+    // freq is updated and the script's volume manipulation
+    // provides the perceived dynamics.
+    host::play(fired, midi);
+
+    // Advance per-channel decay counters. The fired channel
+    // resets to zero. Every other channel increments toward
+    // its silent state. The counter saturates at 4.
+    if fired == 0 {
+        state.idx0 = 0;
+    } else {
+        let next0 = state.idx0 + 1;
+        if next0 > 4 { state.idx0 = 4; } else { state.idx0 = next0; };
+    };
+    if fired == 1 {
+        state.idx1 = 0;
+    } else {
+        let next1 = state.idx1 + 1;
+        if next1 > 4 { state.idx1 = 4; } else { state.idx1 = next1; };
+    };
+    if fired == 2 {
+        state.idx2 = 0;
+    } else {
+        let next2 = state.idx2 + 1;
+        if next2 > 4 { state.idx2 = 4; } else { state.idx2 = next2; };
+    };
+    if fired == 3 {
+        state.idx3 = 0;
+    } else {
+        let next3 = state.idx3 + 1;
+        if next3 > 4 { state.idx3 = 4; } else { state.idx3 = next3; };
+    };
+    if fired == 4 {
+        state.idx4 = 0;
+    } else {
+        let next4 = state.idx4 + 1;
+        if next4 > 4 { state.idx4 = 4; } else { state.idx4 = next4; };
+    };
+
+    // Apply decay-scaled per-speaker volume to every active
+    // channel. Steps go 4 (full), 3 (75 percent), 2 (50
+    // percent), 1 (25 percent), 0 (silent). Base pan values
+    // come from the spec.
+    let steps0 = 4 - state.idx0;
+    host::set_volume(0, 800 * steps0 / 4, 200 * steps0 / 4);
+    let steps1 = 4 - state.idx1;
+    host::set_volume(1, 600 * steps1 / 4, 400 * steps1 / 4);
+    let steps2 = 4 - state.idx2;
+    host::set_volume(2, 500 * steps2 / 4, 500 * steps2 / 4);
+    let steps3 = 4 - state.idx3;
+    host::set_volume(3, 300 * steps3 / 4, 700 * steps3 / 4);
+    let steps4 = 4 - state.idx4;
+    host::set_volume(4, 100 * steps4 / 4, 900 * steps4 / 4);
+
+    let _ = yield 0;
+    0
+}
