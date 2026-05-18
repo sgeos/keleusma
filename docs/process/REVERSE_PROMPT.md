@@ -9,33 +9,35 @@ AI to Human communication channel.
 ## Last Updated
 
 **Date**: 2026-05-17
-**Status**: Two operator directives applied to the rogue example. Monster corpses now drop with bestiary-defined frequency and effects, and the loop-main reset semantics behind game-over replay are documented in the player-facing manual.
+**Status**: Connectivity refactor applied to the rogue example's dungeon generator. The rigid `R[i] -> R[i+1]` chain is replaced by a spanning-tree growth loop driven by per-room connectivity flags. The change addresses the operator-reported "small disconnected room" artifact observed under magic mapping.
 
 ## Completed in this session round
 
 | Directive | Resolution |
 |-----------|------------|
-| Corpse drops with bestiary-defined effects | New `ItemKind::Corpse` variant indexed at 6. `MonsterKind` gains three shape-derived methods: `corpse_drop_chance`, `corpse_satiation`, `corpse_hp_delta`. Skeletons, ghosts, and slimes drop nothing. Larger creatures yield more meat. Serpents, insects, and mages are poisonous. The boss corpse is restorative. `combat::player_attacks` rolls against `corpse_drop_chance` on each kill and pushes a `Corpse` item onto the slain cell with `subtype = monster_kind_idx`. The autopickup driver gains a `Corpse` arm that reads the bestiary entry, applies the satiation and hit-point delta, and emits a flavoured message based on the delta's sign. The pickup decision script accepts kind 6 in the always-consume branch. The tile atlas gains a corpse silhouette. Bottleneck-luring strategy: kill poisonous monsters in open rooms so the corpse can be stepped around; corridor kills force the player to either eat the corpse or stop using that corridor. |
-| Document loop-main reset semantics | New subsection `### Restarting a loop main script after game-over` added to `docs/guide/ROGUE.md`. Explains that data-segment zeroing alone is sufficient because (a) body locals do not persist past a yield, (b) the loop body re-reads world state through natives on every iteration, and (c) the Reset boundary that already separates one turn from the next handles the wrap from the body's tail back to the top. The reset is implemented by `AiPool::reset_loop_main_data` which walks the three loop-main archetypes (Boss, Tracker, Hunter) and writes zero across each data slot. No virtual-machine rebuild is required. Combined with a fresh `World` and a regenerated dungeon, the next dispatch produces a clean replay equivalent to the first run. |
+| Corpse drops with bestiary-defined effects | Implemented in commit `f39e7c4`. See prior reverse prompt entry. |
+| Document loop-main reset semantics | Implemented in commit `f39e7c4`. See prior reverse prompt entry. |
+| Spanning-tree corridors with connectivity flags | The dungeon generator script gains a `connected: [Word; 8]` array plus two scratch slots in the data segment. Three helper functions, `count_with_flag`, `pick_with_flag`, and `random_with_flag`, walk the flag array. The `fn main` body resets all flags to zero, flags room zero, and then runs seven iterations of the spanning-tree growth loop. Each iteration draws a corridor from a uniformly chosen connected source to a uniformly chosen unconnected target and flags the target. After seven iterations every room is reachable from room zero. The change ships as a script-only refactor; the host natives are unchanged. The `dungen_runs_floor_1` and `dungen_runs_floor_100_places_exit` integration tests both pass against the new shape. |
 
 ## Verification matrix
 
 ```bash
 cargo test                                                                    # 564 tests, all pass
+cargo test --features text --test rogue_scripts                               # 45 rogue script tests, all pass
 cargo clippy --workspace --tests --features sdl3-example,text -- -D warnings  # clean
 cargo build --example rogue --features sdl3-example,text                      # clean
 ```
 
 ## Notes
 
-- The pickup script's per-kind ID legend in the file header was updated to include corpses. The kind table in `ROGUE.md#item-kind-identifiers` was extended.
-- Corpse subtype carries the monster kind index so the consumption arm can look up `bestiary::kind(subtype)` directly. This keeps all per-kind tuning in the bestiary and out of the autopickup driver.
-- The corpse-drop branch in `combat::player_attacks` rolls a fresh number against the drop chance; the slain monster is removed first so the world borrow does not overlap with the item push.
+- The diagnosis of the operator-reported disconnected-room artifact is that random room placement allows overlap. When a later room is laid down, its perimeter wall can carve a wall line through an earlier room's floor, subdividing the earlier room into a connected island around the new stored centre and a separated pocket. The chain corridor breaches the new wall at exactly one cell (the stored centre), so the pocket can remain unreachable from the player. The spanning-tree refactor does not eliminate the underlying overlap; it spreads breaches across a random topology so the probability of any single pocket being isolated is reduced. A complete fix would also reject overlapping placements at room-generation time or run a connectivity check at end of generation and dig extra corridors to reach unflagged regions. Both options are tractable follow-ups if the artifact persists in practice.
+- The `connected` flag is stored in the data segment. Because the dungeon generator is `fn main` and the data segment persists across calls, the flags must be explicitly reset at the top of every call. The script does this in the room-placement loop so the cost is hidden in an existing pass.
+- The `random_with_flag(0)` and `random_with_flag(1)` helpers use the same scratch slots `state.scratch_idx` and `state.scratch_pick`. They are not reentrant. The current call shape is sequential, so this is safe; a future refactor that interleaves the helpers must allocate distinct scratch slots.
 
 ## Intended Next Step
 
-Awaiting operator prompt. The rogue example now ships with a starvation safety valve and an explicit explanation of the replay path. Candidate next directions:
+Awaiting operator prompt. Candidate next directions:
 
-1. **Add bestiary-driven flavour to the corpse message.** Today the message reads "You eat the rat corpse." A second message tier keyed on the shape (insect, serpent, dragon) could replace "eat" with shape-appropriate verbs. Pure host-side; no script changes.
-2. **Hand corpse-effect computation to a Keleusma script.** Currently the host queries the bestiary directly. Moving the lookup into `rogue_item_corpse.kel` would mirror the potion and scroll pattern and tighten the thin-client architecture.
-3. **Surface the corpse-restorative outlier in the manual's exercises.** The boss corpse currently grants +8 HP because shape Boss has a positive `corpse_hp_delta`. This is a deliberate but undocumented reward for the final kill; an exercise to add a victory message reinforces the design choice.
+1. **Add a connectivity post-pass to the dungeon generator.** Flood-fill from room zero's centre at the end of generation. For any unreached floor region, dig a straight corridor from a reached cell to the region. This is a defensive measure against rare overlap configurations that the spanning-tree shape still permits.
+2. **Reject overlapping room placements.** Augment `place_room` with a rejection sampler that retries up to N times before accepting. Requires no host-side changes. Eliminates the donut-pocket artifact entirely at the cost of slightly less variable layouts.
+3. **Surface corpse messaging variety.** The current "You eat the rat corpse" message reads the same for every kind. A second message tier keyed on the bestiary shape could replace "eat" with shape-appropriate verbs ("gnaw on the insect", "tear off a chunk of the dragon", "swallow the slime essence").

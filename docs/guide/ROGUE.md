@@ -233,11 +233,13 @@ The high-level shape.
 
 1. Call `host::clear_floor` to reset the map and entity lists.
 2. Place eight rectangular rooms at random positions. Room dimensions are between four and nine tiles per axis.
-3. Connect consecutive rooms in placement order with an L-shaped corridor between their centres.
+3. Build a spanning tree of corridors. Each room carries a connectivity flag in the data segment. Room zero is flagged at the start. Each of the seven subsequent iterations picks a uniformly chosen connected room as the source and a uniformly chosen unconnected room as the target, digs an L-shaped corridor between their centres, and flags the target. After seven iterations every room is reachable from room zero.
 4. Place the player at room zero's centre.
 5. Place stairs down at room seven's centre. On floor one hundred, place the exit tile instead.
 6. Spawn monsters per the floor distribution. Half are the floor's favourite kind; the other half draw from the previous-floor pool.
 7. Spawn items. Three to five food, two to four potions, two to four scrolls, zero to one weapon and armor upgrade, four to seven gold piles.
+
+The spanning-tree shape is a deliberate refinement over a strict `R[i] -> R[i+1]` chain. A chain is fragile when random room placement causes two rooms to overlap. The later room's perimeter wall can carve a wall line through the earlier room's floor, subdividing it. The chain corridor enters the earlier room at its stored centre with a single one-tile breach, but on the wrong side of the new wall line a pocket of floor can remain functionally unreachable. The spanning-tree growth loop draws corridors in a random topology and tends to spread breaches more evenly, which reduces the frequency of these donut-pocket artifacts.
 
 The verifier-driven idiom. Every loop in the script uses a fixed upper bound and a conditional body so the structural verifier accepts the iteration bound. Where the script wants a dynamic count, the loop runs to the maximum possible count and the body is guarded by `if i < count`. Room storage uses fixed-size arrays declared in the data segment because the verifier rejects dynamic growth.
 
