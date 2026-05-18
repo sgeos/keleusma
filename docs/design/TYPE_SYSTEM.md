@@ -82,6 +82,22 @@ enum Shape {
 }
 ```
 
+#### Variant discriminants
+
+Each variant carries a numeric discriminant. The discriminant defaults to zero for the first variant and increments by one for each subsequent variant unless an explicit `= N` clause appears after the variant. Explicit clauses set the value directly and reset the auto-increment counter; subsequent implicit variants resume from one past the most recent explicit value.
+
+```
+enum StatusErrorCode {
+    OutOfRange = 1,
+    NotConfigured = 2,
+    Busy = 3,
+}
+```
+
+Variants identified by name are the script-side mechanism for pattern matching; discriminants are the host-side mechanism for stable numeric mapping. The runtime currently identifies variants by name on the wire, so two scripts that agree on variant names but disagree on discriminant values still interoperate. Discriminants matter when scripts cast variants to a numeric type, when host code constructs variants by numeric index, or when an external system (logging, telemetry, certification audit) wants stable numeric error codes.
+
+Restrictions: discriminants must be non-negative integer literals. Expressions, named constants, and unary minus are not currently admissible in the discriminant clause. Duplicate discriminant values within a single enum are rejected at parse time.
+
 ### Tuples
 
 Tuples are anonymous product types. Field access uses numeric index notation.

@@ -460,6 +460,8 @@ fn specialize_enum(enum_def: &EnumDef, type_args: &[TypeExpr], spec_name: String
                 .iter()
                 .map(|t| subst_type_expr(t, &subst))
                 .collect(),
+            explicit_discriminant: v.explicit_discriminant,
+            discriminant_value: v.discriminant_value,
             span: v.span,
         })
         .collect();

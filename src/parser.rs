@@ -452,6 +452,12 @@ impl<'a> Parser<'a> {
         self.expect(&TokenKind::LBrace)?;
 
         let mut variants = Vec::new();
+        // Auto-assignment runs from a counter that increments
+        // after each variant. The first variant defaults to 0
+        // (matching Rust's enum-without-discriminant convention).
+        // An explicit `= N` clause resets the counter to N+1
+        // for the next implicit variant.
+        let mut next_implicit: i64 = 0;
         while !self.at(&TokenKind::RBrace) {
             let (vname, vspan) = self.expect_upper_ident()?;
             let mut fields = Vec::new();
@@ -468,12 +474,62 @@ impl<'a> Parser<'a> {
                 }
                 end = self.expect(&TokenKind::RParen)?;
             }
+            // Optional `= N` clause. Integer literal only; the
+            // parser does not currently admit constant
+            // expressions in discriminant position.
+            let (explicit_discriminant, discriminant_value) = if self.eat(&TokenKind::Eq) {
+                let tok = self.tokens[self.pos].clone();
+                match tok.kind {
+                    TokenKind::IntLit(n) => {
+                        self.pos += 1;
+                        end = merge_spans(end, tok.span);
+                        (Some(n), n)
+                    }
+                    other => {
+                        return Err(ParseError {
+                            message: format!(
+                                "expected integer literal after `=` in enum variant, got {:?}",
+                                other
+                            ),
+                            span: tok.span,
+                        });
+                    }
+                }
+            } else {
+                (None, next_implicit)
+            };
+            next_implicit = discriminant_value.wrapping_add(1);
             variants.push(VariantDecl {
                 name: vname,
                 fields,
+                explicit_discriminant,
+                discriminant_value,
                 span: merge_spans(vspan, end),
             });
             self.eat(&TokenKind::Comma);
+        }
+
+        // Reject duplicate discriminant values within a single
+        // enum. Implicit values can collide with explicit ones
+        // (e.g., `A = 1, B` — A and B both want 1), and explicit
+        // values can collide with each other (`A = 1, B = 1`).
+        // The check is quadratic in the variant count; for
+        // realistic enum sizes the cost is negligible.
+        for i in 0..variants.len() {
+            for j in (i + 1)..variants.len() {
+                if variants[i].discriminant_value == variants[j].discriminant_value {
+                    return Err(ParseError {
+                        message: format!(
+                            "enum `{}`: variant `{}` discriminant {} duplicates variant `{}`",
+                            name,
+                            variants[j].name,
+                            variants[j].discriminant_value,
+                            variants[i].name
+                        ),
+                        span: variants[j].span,
+                    });
+                }
+            }
         }
 
         let end = self.expect(&TokenKind::RBrace)?;
@@ -2183,9 +2239,122 @@ mod tests {
                 assert_eq!(e.variants.len(), 3);
                 assert_eq!(e.variants[0].fields.len(), 3);
                 assert!(e.variants[2].fields.is_empty());
+                // Without explicit discriminants, values auto-assign
+                // from zero in declaration order.
+                assert_eq!(e.variants[0].discriminant_value, 0);
+                assert_eq!(e.variants[1].discriminant_value, 1);
+                assert_eq!(e.variants[2].discriminant_value, 2);
+                assert!(e.variants[0].explicit_discriminant.is_none());
             }
             _ => panic!("expected enum"),
         }
+    }
+
+    #[test]
+    fn parse_enum_with_explicit_discriminants() {
+        let src = r#"
+            enum ErrorCode {
+                OutOfRange = 1,
+                NotConfigured = 2,
+                Busy = 3,
+                Timeout = 4,
+                HardwareFault = 5,
+                Unsupported = 6,
+            }
+            fn test() -> Word { 0 }
+        "#;
+        let program = parse_str(src).unwrap();
+        match &program.types[0] {
+            TypeDef::Enum(e) => {
+                assert_eq!(e.variants.len(), 6);
+                for (i, v) in e.variants.iter().enumerate() {
+                    assert_eq!(v.explicit_discriminant, Some((i + 1) as i64));
+                    assert_eq!(v.discriminant_value, (i + 1) as i64);
+                }
+            }
+            _ => panic!("expected enum"),
+        }
+    }
+
+    #[test]
+    fn parse_enum_with_mixed_discriminants() {
+        // Some variants have explicit values; the others auto-fill
+        // from one past the preceding variant.
+        let src = r#"
+            enum Mixed {
+                A,
+                B = 10,
+                C,
+                D = 20,
+                E,
+            }
+            fn test() -> Word { 0 }
+        "#;
+        let program = parse_str(src).unwrap();
+        match &program.types[0] {
+            TypeDef::Enum(e) => {
+                let values: Vec<i64> = e.variants.iter().map(|v| v.discriminant_value).collect();
+                assert_eq!(values, vec![0, 10, 11, 20, 21]);
+                let explicit: Vec<Option<i64>> =
+                    e.variants.iter().map(|v| v.explicit_discriminant).collect();
+                assert_eq!(explicit, vec![None, Some(10), None, Some(20), None]);
+            }
+            _ => panic!("expected enum"),
+        }
+    }
+
+    #[test]
+    fn parse_enum_rejects_duplicate_explicit_discriminants() {
+        let src = r#"
+            enum Bad {
+                A = 1,
+                B = 1,
+            }
+            fn test() -> Word { 0 }
+        "#;
+        let err = parse_str(src).unwrap_err();
+        assert!(
+            err.message.contains("duplicate") || err.message.contains("duplicates"),
+            "expected duplicate-discriminant error, got: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn parse_enum_rejects_implicit_and_explicit_collision() {
+        // A defaults to 0, B explicitly takes 1, C implicitly
+        // wants 2, D explicitly takes 1 — collides with B.
+        let src = r#"
+            enum Bad {
+                A,
+                B = 1,
+                C,
+                D = 1,
+            }
+            fn test() -> Word { 0 }
+        "#;
+        let err = parse_str(src).unwrap_err();
+        assert!(
+            err.message.contains("duplicate") || err.message.contains("duplicates"),
+            "expected duplicate-discriminant error, got: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn parse_enum_rejects_negative_discriminant_currently() {
+        // Negative discriminants would require parsing a unary
+        // minus inside the discriminant clause. The current
+        // grammar only accepts integer literals (non-negative).
+        // Document the limitation with a test that confirms the
+        // rejection; lift this restriction when needed.
+        let src = r#"
+            enum Bad {
+                A = -1,
+            }
+            fn test() -> Word { 0 }
+        "#;
+        assert!(parse_str(src).is_err());
     }
 
     #[test]

@@ -148,10 +148,27 @@ pub struct EnumDef {
 }
 
 /// A variant in an enum definition.
+///
+/// The optional `discriminant` carries the explicit integer value
+/// from the source if the variant was declared as `Name = N`.
+/// Variants without an explicit value receive an implicit
+/// discriminant during parsing: zero for the first variant of an
+/// enum, one more than the preceding variant otherwise. The
+/// distinction between explicit and implicit is preserved so
+/// downstream consumers (linters, doc generators, FFI bridges)
+/// can tell the source-level intent apart from auto-assignment.
 #[derive(Debug, Clone, PartialEq)]
 pub struct VariantDecl {
     pub name: String,
     pub fields: Vec<TypeExpr>,
+    /// Explicit `= N` clause from the source. `None` means the
+    /// parser auto-filled `discriminant_value` from the preceding
+    /// variant; `Some(n)` means the source author specified `n`.
+    pub explicit_discriminant: Option<i64>,
+    /// Resolved discriminant value, always present after parsing.
+    /// Equals `explicit_discriminant` when that is `Some`, else
+    /// the auto-assigned value.
+    pub discriminant_value: i64,
     pub span: Span,
 }
 

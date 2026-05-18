@@ -136,7 +136,7 @@ struct Note {
 }
 ````
 
-**Enums**: Named sum types with variants. Variants may carry data.
+**Enums**: Named sum types with variants. Variants may carry data and may carry an explicit numeric discriminant.
 
 ````
 enum Command {
@@ -144,6 +144,42 @@ enum Command {
   NoteOff(Word),
   SetTempo(Float),
   Silence,
+}
+````
+
+Variants without an explicit `= N` clause receive an implicit discriminant. The first variant defaults to zero; each subsequent implicit variant takes one more than the preceding variant's discriminant. Variants with an explicit clause take the literal value.
+
+````
+enum StatusErrorCode {
+  // Discriminant 0 is reserved as the unused / default-initialised
+  // sentinel; the `Status::Ok` variant carries the no-error case.
+  OutOfRange = 1,
+  NotConfigured = 2,
+  Busy = 3,
+  Timeout = 4,
+  HardwareFault = 5,
+  Unsupported = 6,
+}
+````
+
+Explicit and implicit forms may be mixed; implicit values continue from the most recent explicit one.
+
+````
+enum Mixed {
+  A,       // discriminant 0
+  B = 10,  // discriminant 10
+  C,       // discriminant 11
+  D = 20,  // discriminant 20
+  E,       // discriminant 21
+}
+````
+
+The discriminant clause accepts non-negative integer literals only; expressions and unary minus are not currently admissible. Duplicate discriminant values within a single enum are rejected by the parser with an error pointing at the second occurrence.
+
+````
+enum Bad {
+  A = 1,
+  B = 1,  // ERROR: variant `B` discriminant 1 duplicates variant `A`
 }
 ````
 
