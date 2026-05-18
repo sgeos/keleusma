@@ -118,23 +118,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut canvas = window.into_canvas();
     let texture_creator = canvas.texture_creator();
+
+    // Load the bestiary by running `rogue_bestiary.kel` once
+    // per monster id and reading the data segment. The
+    // resolved table is installed in the global `OnceLock`
+    // behind `bestiary::install` and read through
+    // `bestiary::kind` thereafter. Run before `TileAtlas::build`
+    // because the atlas iterates the bestiary to render
+    // per-monster sprites.
+    load_bestiary()?;
+    // Load weapon and armor stats from `rogue_gear.kel`. The
+    // script holds two tables sharing the same data-segment
+    // shape; the host iterates each table by tier index.
+    load_gear()?;
+
     let mut atlas = TileAtlas::build(&mut canvas, &texture_creator)?;
 
     // Shared world state. The dungeon generator, artificial-
     // intelligence pool, and turn dispatcher all mutate this
     // through Arc<Mutex<_>>.
     let world: natives::WorldHandle = Arc::new(Mutex::new(World::new()));
-
-    // Load the bestiary by running `rogue_bestiary.kel` once
-    // per monster id and reading the data segment. The
-    // resolved table is installed in the global `OnceLock`
-    // behind `bestiary::install` and read through
-    // `bestiary::kind` thereafter.
-    load_bestiary()?;
-    // Load weapon and armor stats from `rogue_gear.kel`. The
-    // script holds two tables sharing the same data-segment
-    // shape; the host iterates each table by tier index.
-    load_gear()?;
 
     // Build the dungeon-generation virtual machine.
     let dungen_arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
