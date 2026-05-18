@@ -235,6 +235,18 @@ let y: Float = x as Float;
 let z: Word = y as Word;    // Truncates toward zero.
 ````
 
+Enum values cast to `Word` produce the variant's discriminant.
+
+````
+enum Code { Ok = 0, Busy = 3, Timeout = 4 }
+
+fn classify(c: Code) -> Word {
+    c as Word
+}
+````
+
+The cast respects both implicit and explicit discriminants. The reverse direction (a `Word` cast back to an enum) is not currently admissible; construct enum values with the variant syntax.
+
 String conversion uses the `to_string` native function.
 
 ## 4. Expressions

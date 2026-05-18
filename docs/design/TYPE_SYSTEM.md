@@ -98,6 +98,21 @@ Variants identified by name are the script-side mechanism for pattern matching; 
 
 Restrictions: discriminants must be integer literals, optionally preceded by a unary minus for negative values. Expressions, named constants, and casts are not admissible in the discriminant clause itself. Duplicate discriminant values within a single enum are rejected at parse time.
 
+#### Casting an enum value to `Word`
+
+An enum-typed value can be cast to `Word` to extract its variant's discriminant.
+
+```
+enum Status { Ok = 0, Busy = 3, Timeout = 4 }
+
+fn main() -> Word {
+    let s = Status::Busy();
+    s as Word  // evaluates to 3
+}
+```
+
+The cast compiles to a chain of variant tests; on a match it pushes the variant's discriminant as a `Word`. Implicit and explicit discriminants both round-trip correctly. Casts on enum values whose variant is not declared in the source (constructed by host code outside the declaration) trap at runtime; this is an enforced invariant of the type system rather than a fall-through return.
+
 ### Tuples
 
 Tuples are anonymous product types. Field access uses numeric index notation.

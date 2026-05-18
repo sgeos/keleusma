@@ -2332,6 +2332,11 @@ fn type_of_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Type, TypeError> {
                 // target fraction-bit count; Fixed→Word arithmetic-
                 // right-shifts. Both are explicit casts.
                 (Type::Word, Type::Fixed(_)) | (Type::Fixed(_), Type::Word) => Ok(to_ty),
+                // Enum-to-Word produces the variant's discriminant
+                // value. The compiler emits a chain of IsEnum
+                // tests; the runtime selects the matching
+                // discriminant.
+                (Type::Enum(_, _), Type::Word) => Ok(to_ty),
                 (Type::Unknown, _) | (_, Type::Unknown) => Ok(to_ty),
                 (a, b) if a == b => Ok(to_ty),
                 _ => Err(TypeError::new(

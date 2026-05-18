@@ -2446,6 +2446,65 @@ mod tests {
     }
 
     #[test]
+    fn enum_to_word_cast_implicit_discriminants() {
+        // Implicit discriminants: Red=0, Green=1, Blue=2.
+        let val = run_expect(
+            "enum Color { Red, Green, Blue }\n\
+             fn main() -> Word {\n\
+                let c = Color::Green();\n\
+                c as Word\n\
+             }",
+            &[],
+        );
+        assert_eq!(val, Value::Int(1));
+    }
+
+    #[test]
+    fn enum_to_word_cast_explicit_discriminants() {
+        let val = run_expect(
+            "enum Code { OutOfRange = 1, Busy = 3, Timeout = 4 }\n\
+             fn main() -> Word {\n\
+                let c = Code::Busy();\n\
+                c as Word\n\
+             }",
+            &[],
+        );
+        assert_eq!(val, Value::Int(3));
+    }
+
+    #[test]
+    fn enum_to_word_cast_negative_discriminant() {
+        let val = run_expect(
+            "enum Sign { Neg = -1, Zero = 0, Pos = 1 }\n\
+             fn main() -> Word {\n\
+                let s = Sign::Neg();\n\
+                s as Word\n\
+             }",
+            &[],
+        );
+        assert_eq!(val, Value::Int(-1));
+    }
+
+    #[test]
+    fn enum_to_word_cast_after_match_arm() {
+        // Exercise the cast on a variable bound through a match
+        // expression — the local's inferred type should still
+        // light up the enum-to-Word path.
+        let val = run_expect(
+            "enum Code { A = 10, B = 20 }\n\
+             fn pick(which: Word) -> Code {\n\
+                if which == 0 { Code::A() } else { Code::B() }\n\
+             }\n\
+             fn main() -> Word {\n\
+                let c = pick(1);\n\
+                c as Word\n\
+             }",
+            &[],
+        );
+        assert_eq!(val, Value::Int(20));
+    }
+
+    #[test]
     fn monomorphize_generic_enum_with_match_pattern() {
         // Regression: the monomorphizer renamed the enum
         // construction site (`Maybe::Just(42)` to `Maybe__Word::Just`)

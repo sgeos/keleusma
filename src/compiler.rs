@@ -38,6 +38,10 @@ struct TypeInfo {
     structs: BTreeMap<String, BTreeMap<String, TypeExpr>>,
     /// Enum name to (variant name to payload field types).
     enums: BTreeMap<String, BTreeMap<String, Vec<TypeExpr>>>,
+    /// Enum name to ordered (variant name, discriminant) list.
+    /// Used by the enum-to-Word cast and any other site that
+    /// needs to walk the variants in declaration order.
+    enum_variant_order: BTreeMap<String, Vec<(String, i64)>>,
     /// Function name to declared return type.
     function_returns: BTreeMap<String, TypeExpr>,
     /// Data block name to (field name to declared field type).
@@ -550,10 +554,13 @@ pub fn compile_with_target(
             }
             TypeDef::Enum(e) => {
                 let mut variants = BTreeMap::new();
+                let mut ordered: Vec<(String, i64)> = Vec::new();
                 for v in &e.variants {
                     variants.insert(v.name.clone(), v.fields.clone());
+                    ordered.push((v.name.clone(), v.discriminant_value));
                 }
                 type_info.enums.insert(e.name.clone(), variants);
+                type_info.enum_variant_order.insert(e.name.clone(), ordered);
             }
         }
     }
@@ -1393,6 +1400,9 @@ fn infer_expr_type(fc: &FuncCompiler, expr: &Expr) -> Option<TypeExpr> {
         Expr::StructInit { name, span, .. } => {
             Some(TypeExpr::Named(name.clone(), Vec::new(), *span))
         }
+        Expr::EnumVariant {
+            enum_name, span, ..
+        } => Some(TypeExpr::Named(enum_name.clone(), Vec::new(), *span)),
         Expr::Call { name, .. } => fc.type_info.function_returns.get(name).cloned(),
         Expr::Ident { name, .. } => fc.local_type(name).cloned(),
         Expr::FieldAccess { object, field, .. } => {
@@ -2174,6 +2184,84 @@ impl ClosureHoister<'_> {
     }
 }
 
+/// Compile an `enum_value as Word` cast into a chain of
+/// variant tests. Each variant produces an `IsEnum` check
+/// guarded by an `If`; on a match the corresponding
+/// discriminant constant is pushed and the chain breaks out of
+/// a wrapping virtual loop. The shape mirrors `compile_expr`'s
+/// match-expression compilation so the structural verifier
+/// accepts the resulting nesting unchanged.
+fn compile_enum_to_word(
+    fc: &mut FuncCompiler,
+    inner: &Expr,
+    enum_name: &str,
+) -> Result<(), CompileError> {
+    // Evaluate the enum value and stash it in a local so each
+    // variant test can re-read it without re-evaluating the
+    // expression (which may have side effects).
+    compile_expr(fc, inner)?;
+    let temp = fc.declare_local("__enum_cast");
+    fc.emit(Op::SetLocal(temp));
+
+    // Snapshot the variant table; the borrow against
+    // `fc.type_info` is released before the loop body runs and
+    // emits ops back into `fc`.
+    let variants: Vec<(String, i64)> = fc
+        .type_info
+        .enum_variant_order
+        .get(enum_name)
+        .cloned()
+        .unwrap_or_default();
+
+    // Wrap the dispatch in a virtual loop so each successful
+    // arm can break out with its discriminant on the stack.
+    let loop_addr = fc.emit(Op::Loop(0));
+    fc.enter_loop();
+
+    let e_const = fc.add_string_constant(enum_name);
+    for (variant_name, discriminant) in &variants {
+        fc.begin_scope();
+        let v_const = fc.add_string_constant(variant_name);
+        fc.emit(Op::GetLocal(temp));
+        fc.emit(Op::IsEnum(e_const, v_const));
+        let fail_addr = fc.emit_jump(Op::If(0));
+        fc.emit(Op::Pop); // Discard the peeked enum value.
+        let disc_const = fc.add_constant(Value::Int(*discriminant));
+        fc.emit(Op::Const(disc_const));
+        let break_addr = fc.emit(Op::Break(0));
+        if let Some(breaks) = fc.loop_breaks.last_mut() {
+            breaks.push(break_addr);
+        }
+        fc.patch_jump(fail_addr);
+        fc.emit(Op::EndIf);
+        fc.end_scope();
+    }
+
+    // Defensive trap. The type checker has confirmed the source
+    // is an enum of the named type, and the loop covers every
+    // declared variant, so the fall-through is unreachable
+    // unless host-constructed Value::Enum carries a variant
+    // name outside the declaration. The trap message documents
+    // the contract.
+    let msg = fc.add_string_constant("enum-to-Word cast: variant not in declaration");
+    fc.emit(Op::Trap(msg));
+
+    // Close the virtual loop. Pattern copied from
+    // `compile_expr`'s `Match` arm.
+    let endloop_addr = fc.emit(Op::EndLoop(0));
+    let after_loop = (loop_addr + 1) as u32;
+    if let Op::EndLoop(a) = &mut fc.chunk.ops[endloop_addr] {
+        *a = after_loop;
+    }
+    let after_endloop = fc.chunk.ops.len() as u32;
+    if let Op::Loop(a) = &mut fc.chunk.ops[loop_addr] {
+        *a = after_endloop;
+    }
+    fc.exit_loop();
+
+    Ok(())
+}
+
 /// Compile an expression, leaving the result on the stack.
 fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> {
     match expr {
@@ -2654,8 +2742,8 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
             // Choose the cast opcode based on the source type
             // (inferred from the inner expression) and the target.
             // The type checker has already validated the cast pair
-            // (Word↔Float, Word↔Byte, Word↔Fixed, or identity);
-            // this dispatch picks the matching opcode.
+            // (Word↔Float, Word↔Byte, Word↔Fixed, Enum↔Word, or
+            // identity); this dispatch picks the matching opcode.
             //
             // The Fixed fraction-bit count is hard-coded to 32
             // The `Fixed<N>` parameterised form pins the count
@@ -2666,6 +2754,18 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
             // threads the target descriptor into the function
             // compiler.
             let source = infer_expr_type(fc, inner);
+            // Enum-to-Word special case. The source must be an
+            // enum type the compiler knows about; the cast emits
+            // a chain of `IsEnum` tests, one per variant, that
+            // each push the variant's discriminant on a match.
+            if matches!(target, TypeExpr::Prim(PrimType::Word, _))
+                && let Some(TypeExpr::Named(enum_name, _, _)) = source.as_ref()
+                && fc.type_info.enum_variant_order.contains_key(enum_name)
+            {
+                let enum_name = enum_name.clone();
+                compile_enum_to_word(fc, inner, &enum_name)?;
+                return Ok(());
+            }
             compile_expr(fc, inner)?;
             match (source.as_ref(), target) {
                 (_, TypeExpr::Prim(PrimType::Float, _)) => {
@@ -3151,6 +3251,79 @@ mod tests {
                 .iter()
                 .any(|op| matches!(op, Op::NewEnum(_, _, 0)))
         );
+    }
+
+    #[test]
+    fn compile_enum_to_word_cast_implicit() {
+        // Implicit discriminants 0, 1, 2.
+        let module = compile_str(
+            "enum Color { Red, Green, Blue }\n\
+             fn pick() -> Word { let c = Color::Green(); c as Word }",
+        )
+        .unwrap();
+        assert_eq!(module.chunks.len(), 1);
+        // The cast should emit IsEnum and Loop opcodes for the
+        // dispatch. The specific Const indices vary with the
+        // constant pool layout; we only verify the dispatch
+        // shape is present.
+        let ops = &module.chunks[0].ops;
+        let isenum_count = ops
+            .iter()
+            .filter(|op| matches!(op, Op::IsEnum(_, _)))
+            .count();
+        assert!(
+            isenum_count >= 3,
+            "expected at least one IsEnum per variant, got {}",
+            isenum_count
+        );
+        assert!(ops.iter().any(|op| matches!(op, Op::Loop(_))));
+        assert!(ops.iter().any(|op| matches!(op, Op::EndLoop(_))));
+    }
+
+    #[test]
+    fn compile_enum_to_word_cast_explicit_discriminants() {
+        // Explicit discriminants 10, 20, 30.
+        let module = compile_str(
+            "enum Code { A = 10, B = 20, C = 30 }\n\
+             fn pick() -> Word { let c = Code::B(); c as Word }",
+        )
+        .unwrap();
+        // The constant pool must contain the explicit discriminants.
+        let consts = &module.chunks[0].constants;
+        let int_consts: Vec<i64> = consts
+            .iter()
+            .filter_map(|c| match c {
+                ConstValue::Int(n) => Some(*n),
+                _ => None,
+            })
+            .collect();
+        for expected in &[10, 20, 30] {
+            assert!(
+                int_consts.contains(expected),
+                "expected discriminant {} in constant pool, got {:?}",
+                expected,
+                int_consts
+            );
+        }
+    }
+
+    #[test]
+    fn compile_enum_to_word_cast_negative_discriminant() {
+        let module = compile_str(
+            "enum Sign { Neg = -1, Zero = 0, Pos = 1 }\n\
+             fn pick() -> Word { let s = Sign::Neg(); s as Word }",
+        )
+        .unwrap();
+        let consts = &module.chunks[0].constants;
+        let int_consts: Vec<i64> = consts
+            .iter()
+            .filter_map(|c| match c {
+                ConstValue::Int(n) => Some(*n),
+                _ => None,
+            })
+            .collect();
+        assert!(int_consts.contains(&-1));
+        assert!(int_consts.contains(&1));
     }
 
     #[test]
