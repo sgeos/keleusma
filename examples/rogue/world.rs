@@ -176,6 +176,13 @@ impl World {
     /// at a sentinel position, no monsters or items exist. The
     /// dungeon-generation script is expected to populate the
     /// world on the first turn.
+    ///
+    /// The random number generator is seeded from the current
+    /// system time so each run produces a different dungeon and
+    /// a different potion or scroll appearance shuffle. The
+    /// seed is mixed with a golden-ratio constant to keep the
+    /// xorshift state nonzero even when the time component is
+    /// small.
     pub fn new() -> Self {
         let total = (MAP_W * MAP_H) as usize;
         let mut world = Self {
@@ -189,7 +196,7 @@ impl World {
             explored: vec![false; total],
             potion_appearance: identity_appearance(items::POTION_EFFECTS.len()),
             scroll_appearance: identity_appearance(items::SCROLL_EFFECTS.len()),
-            rng_state: 0x9E37_79B9,
+            rng_state: seed_from_time(),
         };
         world.shuffle_appearances();
         world
@@ -240,7 +247,7 @@ impl World {
             explored: vec![false; total],
             potion_appearance: identity_appearance(items::POTION_EFFECTS.len()),
             scroll_appearance: identity_appearance(items::SCROLL_EFFECTS.len()),
-            rng_state: 0x9E37_79B9,
+            rng_state: seed_from_time(),
         };
         world.shuffle_appearances();
 
@@ -373,4 +380,28 @@ fn identity_appearance(n: usize) -> [u8; items::POTION_EFFECTS.len()] {
         out[i] = i as u8;
     }
     out
+}
+
+/// Build an xorshift seed from the current system time. The
+/// seed combines the nanosecond and second components of the
+/// Unix epoch through an exclusive-or and mixes in a
+/// golden-ratio constant to keep the resulting state nonzero
+/// even when one component is small. Falls back to the
+/// golden-ratio constant on the unlikely error path so the
+/// generator never starts at zero.
+fn seed_from_time() -> u32 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    const GOLDEN: u32 = 0x9E37_79B9;
+    match SystemTime::now().duration_since(UNIX_EPOCH) {
+        Ok(d) => {
+            let nanos = d.subsec_nanos();
+            let secs = d.as_secs() as u32;
+            let mut s = nanos ^ secs.rotate_left(13) ^ GOLDEN;
+            if s == 0 {
+                s = GOLDEN;
+            }
+            s
+        }
+        Err(_) => GOLDEN,
+    }
 }
