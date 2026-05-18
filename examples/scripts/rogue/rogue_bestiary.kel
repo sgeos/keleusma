@@ -20,10 +20,12 @@
 //   first_floor  Lowest floor the kind appears on as favourite.
 //   score        Score award on kill.
 //
-// Names are not exposed through the data segment because
-// Keleusma's data segment does not currently support inline
-// strings. The host owns a `MONSTER_NAMES` constant array
-// indexed by `id`.
+// Names are returned through `fn main`'s return value rather
+// than the data segment. The data segment carries the numeric
+// fields; the script ends with `name(i)` so the call's
+// `Finished(StaticStr(...))` payload carries the name. The
+// host leaks the returned string once at startup to obtain a
+// `&'static str` for caching.
 
 data state {
     id: Word,
@@ -45,12 +47,12 @@ data state {
 // Total entries in the bestiary table.
 // Mirror this number with `MONSTER_COUNT` on the host side.
 
-fn main(n: Word) -> Word {
+fn main(n: Word) -> Text {
     let count = 100;
     let i = if n < 0 { count + n } else { n };
     fill(i);
     corpse_fill(state.shape);
-    0
+    name(i)
 }
 
 // Corpse stats per shape. Keyed on the Shape enum ordinal.
@@ -270,3 +272,107 @@ fn fill(98) -> Word { state.id = 98; state.shape = 11; state.primary_r = 80; sta
 fn fill(99) -> Word { state.id = 99; state.shape = 11; state.primary_r = 60; state.primary_g = 20; state.primary_b = 20; state.accent_r = 240; state.accent_g = 80; state.accent_b = 20; state.max_hp = 480; state.skill = 30; state.evasion = 3; state.damage = 50; state.armor = 13; state.ai = 7; state.first_floor = 100; state.score = 500; 0 }
 
 fn fill(_n: Word) -> Word { 0 }
+
+// Per-entry monster name. Returned by `fn main` so the
+// host receives the name as the call's payload.
+fn name(0) -> Text { "Sewer Rat" }
+fn name(1) -> Text { "Giant Centipede" }
+fn name(2) -> Text { "Cave Bat" }
+fn name(3) -> Text { "Spotted Newt" }
+fn name(4) -> Text { "Cave Spider" }
+fn name(5) -> Text { "Mongrel Cur" }
+fn name(6) -> Text { "Brown Snake" }
+fn name(7) -> Text { "Gnoll Pup" }
+fn name(8) -> Text { "Restless Skeleton" }
+fn name(9) -> Text { "Kobold Sneak" }
+fn name(10) -> Text { "Goblin Sneak" }
+fn name(11) -> Text { "Giant Ant" }
+fn name(12) -> Text { "Giant Beetle" }
+fn name(13) -> Text { "Stirge" }
+fn name(14) -> Text { "Acolyte Zombie" }
+fn name(15) -> Text { "Hobbit Thug" }
+fn name(16) -> Text { "Hyena" }
+fn name(17) -> Text { "Gnome Sapper" }
+fn name(18) -> Text { "Pixie Stinger" }
+fn name(19) -> Text { "Giant Frog" }
+fn name(20) -> Text { "Goblin Warrior" }
+fn name(21) -> Text { "Orc Whelp" }
+fn name(22) -> Text { "Imp" }
+fn name(23) -> Text { "Wraithling" }
+fn name(24) -> Text { "Dire Wolf" }
+fn name(25) -> Text { "Werecat" }
+fn name(26) -> Text { "Giant Scorpion" }
+fn name(27) -> Text { "Hobgoblin Captain" }
+fn name(28) -> Text { "Ogre Whelp" }
+fn name(29) -> Text { "Carrion Crawler" }
+fn name(30) -> Text { "Gnoll Warlord" }
+fn name(31) -> Text { "Orc Captain" }
+fn name(32) -> Text { "Bugbear" }
+fn name(33) -> Text { "Werewolf" }
+fn name(34) -> Text { "Brown Mold" }
+fn name(35) -> Text { "Yellow Mold" }
+fn name(36) -> Text { "Black Pudding" }
+fn name(37) -> Text { "Gelatinous Cube" }
+fn name(38) -> Text { "Ogre" }
+fn name(39) -> Text { "Cave Bear" }
+fn name(40) -> Text { "Troll" }
+fn name(41) -> Text { "Young Hydra" }
+fn name(42) -> Text { "Iron Statue" }
+fn name(43) -> Text { "Salamander" }
+fn name(44) -> Text { "Cyclops" }
+fn name(45) -> Text { "Manticore" }
+fn name(46) -> Text { "Wyvern" }
+fn name(47) -> Text { "Lich Apprentice" }
+fn name(48) -> Text { "Wraith" }
+fn name(49) -> Text { "Specter" }
+fn name(50) -> Text { "Vampire Spawn" }
+fn name(51) -> Text { "Dire Bear" }
+fn name(52) -> Text { "Greater Imp" }
+fn name(53) -> Text { "Pit Fiend Whelp" }
+fn name(54) -> Text { "Stone Giant" }
+fn name(55) -> Text { "Cloud Giant Adept" }
+fn name(56) -> Text { "Frost Salamander" }
+fn name(57) -> Text { "Fire Drake" }
+fn name(58) -> Text { "Black Drake" }
+fn name(59) -> Text { "Green Drake" }
+fn name(60) -> Text { "White Drake" }
+fn name(61) -> Text { "Red Drake" }
+fn name(62) -> Text { "Iron Golem" }
+fn name(63) -> Text { "Lesser Demon Lord" }
+fn name(64) -> Text { "Death Knight" }
+fn name(65) -> Text { "Lich" }
+fn name(66) -> Text { "Storm Giant" }
+fn name(67) -> Text { "Beholder" }
+fn name(68) -> Text { "Fire Giant" }
+fn name(69) -> Text { "Frost Giant" }
+fn name(70) -> Text { "Young White Dragon" }
+fn name(71) -> Text { "Young Black Dragon" }
+fn name(72) -> Text { "Young Green Dragon" }
+fn name(73) -> Text { "Young Blue Dragon" }
+fn name(74) -> Text { "Young Red Dragon" }
+fn name(75) -> Text { "Bone Devil" }
+fn name(76) -> Text { "Mind Flayer" }
+fn name(77) -> Text { "Adult Black Dragon" }
+fn name(78) -> Text { "Adult Green Dragon" }
+fn name(79) -> Text { "Adult Blue Dragon" }
+fn name(80) -> Text { "Adult Red Dragon" }
+fn name(81) -> Text { "Adult White Dragon" }
+fn name(82) -> Text { "Ancient White Dragon" }
+fn name(83) -> Text { "Demon Lord" }
+fn name(84) -> Text { "Pit Fiend" }
+fn name(85) -> Text { "Beholder Tyrant" }
+fn name(86) -> Text { "Ancient Black Dragon" }
+fn name(87) -> Text { "Ancient Green Dragon" }
+fn name(88) -> Text { "Ancient Blue Dragon" }
+fn name(89) -> Text { "Ancient Red Dragon" }
+fn name(90) -> Text { "Tarrasque" }
+fn name(91) -> Text { "Empyrean" }
+fn name(92) -> Text { "Solar" }
+fn name(93) -> Text { "Lich King" }
+fn name(94) -> Text { "Ancient Wyrm" }
+fn name(95) -> Text { "Avatar of Destruction" }
+fn name(96) -> Text { "World Devourer" }
+fn name(97) -> Text { "Cosmic Horror" }
+fn name(98) -> Text { "Elder God Spawn" }
+fn name(99) -> Text { "Balrog Lord" }
+fn name(_n: Word) -> Text { "" }

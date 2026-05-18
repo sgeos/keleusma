@@ -339,20 +339,35 @@ fn load_bestiary() -> Result<(), Box<dyn std::error::Error>> {
     let count = last_id + 1;
     assert_eq!(
         count,
-        bestiary::MONSTER_NAMES.len(),
-        "bestiary script reports {} entries but MONSTER_NAMES has {}",
+        bestiary::MONSTER_COUNT,
+        "bestiary script reports {} entries but MONSTER_COUNT is {}",
         count,
-        bestiary::MONSTER_NAMES.len()
+        bestiary::MONSTER_COUNT
     );
-    // Fill the runtime table.
+    // Fill the runtime table. The script's `fn main` returns
+    // the entry's name as a `Text`; the host extracts it from
+    // the call's `Finished` payload and leaks it for the
+    // program's lifetime.
     let mut table = Vec::with_capacity(count);
     for i in 0..count {
-        vm.call(&[Value::Int(i as i64)])
+        let state = vm
+            .call(&[Value::Int(i as i64)])
             .map_err(|e| format!("bestiary entry {}: {:?}", i, e))?;
-        table.push(read_bestiary_entry(&vm, i)?);
+        let name = leak_finished_static_str(state, i)?;
+        table.push(read_bestiary_entry(&vm, name)?);
     }
     bestiary::install(table);
     Ok(())
+}
+
+fn leak_finished_static_str(
+    state: VmState,
+    id: usize,
+) -> Result<&'static str, Box<dyn std::error::Error>> {
+    match state {
+        VmState::Finished(Value::StaticStr(s)) => Ok(Box::leak(s.into_boxed_str())),
+        other => Err(format!("bestiary entry {} returned non-string: {:?}", id, other).into()),
+    }
 }
 
 fn read_data_int(vm: &Vm, slot: usize) -> Result<i64, Box<dyn std::error::Error>> {
@@ -367,14 +382,16 @@ fn read_data_int(vm: &Vm, slot: usize) -> Result<i64, Box<dyn std::error::Error>
 
 fn read_bestiary_entry(
     vm: &Vm,
-    id: usize,
+    name: &'static str,
 ) -> Result<bestiary::MonsterKind, Box<dyn std::error::Error>> {
     // Slot order mirrors the data-segment declaration in
     // `rogue_bestiary.kel`. The host reads each slot, decodes
-    // enums by ordinal, and copies the rest as integers.
+    // enums by ordinal, and copies the rest as integers. The
+    // `name` argument is the script's return value for this
+    // entry, leaked to `&'static str` by the caller.
     let r = |s| read_data_int(vm, s);
     Ok(bestiary::MonsterKind {
-        name: bestiary::MONSTER_NAMES[id],
+        name,
         shape: bestiary::Shape::from_ord(r(1)?),
         primary: (r(2)? as u8, r(3)? as u8, r(4)? as u8),
         accent: (r(5)? as u8, r(6)? as u8, r(7)? as u8),

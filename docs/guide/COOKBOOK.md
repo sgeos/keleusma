@@ -2,7 +2,7 @@
 
 > **Navigation**: [Guide](./README.md) | [Documentation Root](../README.md)
 
-Recipes are working patterns for embedding Keleusma in larger systems. Each recipe states the problem it solves, the constraint it respects, and a minimal working example. The shipped rogue and piano-roll examples are referenced where they instantiate the pattern at production scale.
+Recipes are working patterns for embedding Keleusma in larger systems. Each recipe states the problem it solves, the constraint it respects, and a minimal working example. Recipes link to the bundled examples where they instantiate the pattern at production scale; the linked sections are the place to read deeper.
 
 ## Index
 
@@ -30,7 +30,7 @@ Encode the table as a Keleusma script with three pieces.
 
 The host runs the script once per entry at startup, reads the data segment after each call, and caches the result in a regular Rust container (`Vec<T>`, `HashMap<K, T>`, or similar). After the cache is warm, runtime reads go through the Rust cache; the script is touched again only when the host wants to reload.
 
-The pattern admits runtime hot reload because the table is in script form. A host that re-compiles the script, re-runs the loader, and atomically replaces the cache can swap data without restarting. The rogue example caches once at startup and does not currently reload the bestiary, but the pattern itself does not preclude reload.
+The pattern admits runtime hot reload because the table is in script form. A host that re-compiles the script, re-runs the loader, and atomically replaces the cache can swap data without restarting. A host that caches once at startup still benefits because the table moves out of Rust source and into a file that designers can edit.
 
 ### Three component techniques
 
@@ -47,7 +47,7 @@ The pattern composes three techniques that are individually known but compose we
 A table of three colours, each with red, green, blue channels.
 
 ```keleusma
-// rogue_colours.kel
+// colours.kel
 data state {
     id: Word,
     r: Word, g: Word, b: Word,
@@ -106,7 +106,7 @@ fn read_int(vm: &Vm, slot: usize) -> Result<i64, Box<dyn std::error::Error>> {
 
 ### Variations
 
-**Multiple tables in one script.** If two tables share the same data-segment shape, dispatch on a leading `table` argument. The rogue example's `rogue_gear.kel` does this: `fn main(table, tier)` dispatches `weapon(tier)` or `armor(tier)` based on `table`. Each table is independently discoverable via `-1`.
+**Multiple tables in one script.** If two tables share the same data-segment shape, dispatch on a leading `table` argument. `fn main(table, tier)` dispatches to one of two per-table inner functions based on `table`. Each table is independently discoverable via `-1`.
 
 ```keleusma
 fn main(table: Word, tier: Word) -> Word {
@@ -121,7 +121,7 @@ fn weapon(0) -> Word { ... }
 fn armor(0) -> Word { ... }
 ```
 
-**Chained dispatchers.** When some output fields are derived from others, chain two dispatchers in the loader. The rogue bestiary script does this: `fn main(n)` calls `fill(i)` to set base stats including a `shape` field, then chains `corpse_fill(state.shape)` to derive three additional fields from the shape. The host receives a fully populated entry from a single call.
+**Chained dispatchers.** When some output fields are derived from others, chain two dispatchers in the loader. The first dispatcher sets the keying field; the second reads it from the data segment and sets the derived fields. The host receives a fully populated entry from a single call.
 
 ```keleusma
 fn main(n: Word) -> Word {
@@ -133,7 +133,7 @@ fn main(n: Word) -> Word {
 }
 ```
 
-**Names outside the script.** Strings in Keleusma data segments are not currently supported. When entries have a name field, keep the names in a parallel host-side `const NAMES: [&str; N]` array and assert during loading that `count == NAMES.len()`. The rogue bestiary and gear scripts both do this.
+**Names through the return value.** Keleusma's data segment does not currently accept string fields in source. When entries have a name, encode it as a third multi-headed dispatcher returning `Text` and call it as the last expression in `fn main`. The host receives the string as the return value while the data segment carries the numeric fields. The host can leak the returned static string once at startup to obtain a `&'static str`.
 
 ### When to use
 
@@ -150,9 +150,6 @@ The pattern fits when all of the following hold.
 - The data has lifecycle hooks (constructors, drop). Keleusma cannot carry those. Keep them in Rust.
 - The data is keyed on a type that the script cannot represent. Strings, floats with specific precision requirements, or compound keys all push the pattern out of fit.
 
-### Production examples in this repository
+### Examples in this repository
 
-- `examples/scripts/rogue/rogue_bestiary.kel` is the largest worked instance. One hundred monster entries plus a twelve-entry corpse-shape sub-table. The host caches in `examples/rogue/bestiary.rs::BESTIARY: OnceLock<Vec<MonsterKind>>`. See [ROGUE.md, *Reading the bestiary script*](./ROGUE.md#reading-the-bestiary-script).
-- `examples/scripts/rogue/rogue_gear.kel` is the two-tables-in-one-script variant. Twenty weapons and twenty armors with one numeric value per entry. The host caches in `examples/rogue/items.rs::WEAPONS` and `ARMORS` (both `OnceLock<Vec<_>>`).
-
-Both scripts include their dispatcher tables inline (one line per entry); editing a damage value or a monster's hit points is a one-line change in the script. Modders can retune without rebuilding the host. The example does not yet wire the bestiary or gear scripts into the F5 hot reload path, but the pattern admits it; an exercise for a future iteration is to lift those scripts into the reload chain alongside the artificial-intelligence and item-effect scripts.
+The rogue example uses this pattern for its bestiary and equipment tables; see [ROGUE.md, *Reading the bestiary script*](./ROGUE.md#reading-the-bestiary-script).

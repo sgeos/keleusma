@@ -475,9 +475,9 @@ fn corpse_fill(0) -> Word {
 fn corpse_fill(_n: Word) -> Word { 0 }
 ```
 
-Monster names stay on the host side in a parallel `MONSTER_NAMES: [&str; 100]` constant array because Keleusma's data segment does not currently support inline strings. The host's `MONSTER_COUNT` constant mirrors the script's `count` literal; the startup assertion catches any drift between the two.
+Monster names live in the script too. A third multi-headed dispatcher, `fn name(N) -> Text`, returns each entry's name as a static string. The bestiary script's `fn main` returns `name(i)` as its last expression, so the host receives the name as the call's `Finished(StaticStr(...))` payload while the data segment carries the numeric fields. The host leaks the returned string once at startup to obtain a `&'static str` for caching. Keleusma's data segment does not currently accept string fields in source, but a function return is a clean alternative and admits the no-host-side-name-table outcome. The host's `MONSTER_COUNT` constant mirrors the script's `count` literal; the startup assertion catches any drift between the two.
 
-The shipped script weighs in at two hundred and seventy lines for one hundred monster entries plus twelve corpse shapes. The prior Rust `MonsterKind` struct-literal form took fourteen lines per entry plus three twelve-arm methods for corpse stats. The bestiary migration deletes roughly thirteen hundred host lines for two hundred and seventy script lines, a net thousand-line reduction concentrated where the per-entry density mattered most.
+The shipped script weighs in at roughly three hundred and eighty lines for the three dispatchers combined (one hundred `fill` heads, twelve `corpse_fill` heads, one hundred `name` heads). The prior Rust `MonsterKind` struct-literal form took fourteen lines per entry plus a parallel hundred-line name array plus three twelve-arm corpse methods. The bestiary migration is a clear net reduction concentrated where the per-entry density mattered most.
 
 ## Reading the consume and descend scripts
 
@@ -550,7 +550,7 @@ Each effect is a few lines on the host side. Reuse the existing status code valu
 
 **Exercise 4.2.** What is the worst-case execution time of the dungeon generator on a single floor? The structural verifier accepts the script, but a measured profile would identify the dominant cost. Reading the script's per-loop body and counting host-native calls is a fair starting point. The arena-bounded text-size analysis already proves the worst-case memory usage is bounded; this exercise asks for the time companion.
 
-**Exercise 4.3.** The bestiary numeric data already moved into `rogue_bestiary.kel`; see the *Reading the bestiary script* section above. The deferred question is the names. Could the one hundred monster names also move into a script? Keleusma's data segment does not currently hold inline strings. A clean migration would need either a constant string-pool feature in Keleusma or a native that returns a static-string handle by index. Sketch the language change required and weigh it against the alternative of keeping `MONSTER_NAMES: [&str; 100]` as a parallel host table.
+**Exercise 4.3.** The bestiary now lives entirely in `rogue_bestiary.kel`, including the monster names; see the *Reading the bestiary script* section above. The names flow through the script's return value rather than the data segment. The remaining open question is the weapon and armor names in `rogue_gear.kel`. Apply the same return-value-as-name pattern to the gear script and remove `WEAPON_NAMES` and `ARMOR_NAMES` from `examples/rogue/items.rs`. The migration is mechanical given the bestiary precedent.
 
 **Exercise 4.4.** What is the right division of responsibility between the host and the scripts in a Keleusma example? The piano-roll example puts almost everything in scripts; the roguelike example splits roughly in half by line count. Write a short essay arguing for one extreme or the other across both examples.
 
