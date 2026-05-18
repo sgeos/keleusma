@@ -200,18 +200,25 @@ impl AiPool {
             Value::Int(my as i64),
             Value::Int(cmd),
         ];
-        let result = self
+        let r = self
             .player
             .call(&args)
             .map_err(|e| format!("player vm: {:?}", e))?;
-        match result {
-            VmState::Finished(Value::Tuple(t)) if t.len() == 3 => {
-                let a = expect_int(&t[0])?;
-                let x = expect_int(&t[1])?;
-                let y = expect_int(&t[2])?;
-                Ok(decode_action(a, x, y))
+        let t = unpack_finished_ints(r, "player", 3)?;
+        Ok(decode_action(t[0], t[1], t[2]))
+    }
+
+    /// Zero the data segments of every `loop main` archetype's
+    /// virtual machine. Used by restart so memory the boss,
+    /// tracker, or hunter scripts kept across the previous run
+    /// does not bleed into the new run. Each virtual machine's
+    /// position is unchanged; the next resume re-enters the
+    /// loop body and reads the zeroed state.
+    pub fn reset_loop_main_data(&mut self) {
+        for vm in [&mut self.boss, &mut self.tracker, &mut self.hunter] {
+            for slot in 0..vm.data_len() {
+                let _ = vm.set_data(slot, Value::Int(0));
             }
-            other => Err(format!("player vm returned unexpected shape: {:?}", other).into()),
         }
     }
 
@@ -231,23 +238,17 @@ impl AiPool {
             Value::Int(max_hp),
             Value::Int(hunger),
         ];
-        let result = self
+        let r = self
             .book_keeping
             .call(&args)
             .map_err(|e| format!("book vm: {:?}", e))?;
-        match result {
-            VmState::Finished(Value::Tuple(t)) if t.len() == 2 => {
-                Ok((expect_int(&t[0])?, expect_int(&t[1])?))
-            }
-            other => Err(format!("book vm returned unexpected shape: {:?}", other).into()),
-        }
+        let t = unpack_finished_ints(r, "book", 2)?;
+        Ok((t[0], t[1]))
     }
 
     /// Invoke the pickup-decision virtual machine. Returns the
-    /// pickup action code:
-    ///   0 = leave on ground
-    ///   1 = consume / equip / slot
-    ///   2 = scrap (non-upgrade gear)
+    /// pickup action code: 0 = leave, 1 = consume / equip / slot,
+    /// 2 = scrap (non-upgrade gear).
     pub fn dispatch_pickup(
         &mut self,
         item_kind: i64,
@@ -261,35 +262,26 @@ impl AiPool {
             Value::Int(current_value),
             Value::Int(slot_full),
         ];
-        let result = self
+        let r = self
             .pickup
             .call(&args)
             .map_err(|e| format!("pickup vm: {:?}", e))?;
-        match result {
-            VmState::Finished(Value::Int(action)) => Ok(action),
-            other => Err(format!("pickup vm returned unexpected shape: {:?}", other).into()),
-        }
+        unpack_finished_int(r, "pickup")
     }
 
-    /// Invoke the move-resolution virtual machine. Returns one
-    /// of:
-    ///   0 = blocked (wall / closed door)
-    ///   1 = walk into the target cell
-    ///   2 = attack the monster occupying the target cell
+    /// Invoke the move-resolution virtual machine. Returns
+    /// 0 = blocked, 1 = step, 2 = attack.
     pub fn dispatch_move_resolve(
         &mut self,
         tile: i64,
         monster_at_target: i64,
     ) -> Result<i64, Box<dyn std::error::Error>> {
         let args = [Value::Int(tile), Value::Int(monster_at_target)];
-        let result = self
+        let r = self
             .move_resolve
             .call(&args)
             .map_err(|e| format!("move vm: {:?}", e))?;
-        match result {
-            VmState::Finished(Value::Int(action)) => Ok(action),
-            other => Err(format!("move vm returned unexpected shape: {:?}", other).into()),
-        }
+        unpack_finished_int(r, "move")
     }
 
     /// Invoke the combat virtual machine. Returns `(hit_kind,
@@ -309,16 +301,12 @@ impl AiPool {
             Value::Int(defender_armor),
             Value::Int(roll),
         ];
-        let result = self
+        let r = self
             .combat
             .call(&args)
             .map_err(|e| format!("combat vm: {:?}", e))?;
-        match result {
-            VmState::Finished(Value::Tuple(t)) if t.len() == 2 => {
-                Ok((expect_int(&t[0])?, expect_int(&t[1])?))
-            }
-            other => Err(format!("combat vm returned unexpected shape: {:?}", other).into()),
-        }
+        let t = unpack_finished_ints(r, "combat", 2)?;
+        Ok((t[0], t[1]))
     }
 
     /// Invoke the potion-effect virtual machine. Returns the
@@ -478,6 +466,29 @@ fn expect_int(v: &Value) -> Result<i64, Box<dyn std::error::Error>> {
     match v {
         Value::Int(n) => Ok(*n),
         other => Err(format!("expected Word, got {:?}", other).into()),
+    }
+}
+
+/// Unpack a `Finished` virtual-machine state whose value is a
+/// tuple of `n` integers. Used by the pure-function dispatch
+/// helpers to share the result-decoding boilerplate.
+fn unpack_finished_ints(
+    result: VmState,
+    name: &str,
+    n: usize,
+) -> Result<Vec<i64>, Box<dyn std::error::Error>> {
+    match result {
+        VmState::Finished(Value::Tuple(t)) if t.len() == n => t.iter().map(expect_int).collect(),
+        other => Err(format!("{} vm returned unexpected shape: {:?}", name, other).into()),
+    }
+}
+
+/// Unpack a `Finished` virtual-machine state whose value is a
+/// single integer.
+fn unpack_finished_int(result: VmState, name: &str) -> Result<i64, Box<dyn std::error::Error>> {
+    match result {
+        VmState::Finished(Value::Int(n)) => Ok(n),
+        other => Err(format!("{} vm returned unexpected shape: {:?}", name, other).into()),
     }
 }
 

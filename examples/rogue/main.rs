@@ -201,12 +201,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     if game_over.is_some() {
                         match keycode {
                             sdl3::keyboard::Keycode::R => {
-                                restart_run(
-                                    &world,
-                                    &mut dungen_vm,
-                                    &mut game_vm,
-                                    &mut game_started,
-                                )?;
+                                restart_run(&world, &mut dungen_vm, &ai_pool)?;
                                 game_over = None;
                             }
                             sdl3::keyboard::Keycode::Q | sdl3::keyboard::Keycode::Escape => {
@@ -319,19 +314,19 @@ fn run_game_tick(
 }
 
 /// Reset the world to a fresh run starting on floor one. The
-/// game-tick virtual machine's started flag is cleared so the
-/// next resume hits the initial call path rather than continuing
-/// from a stale yield. The game-over flag is cleared by the
-/// caller.
-fn restart_run<'a1, 'b1, 'a2, 'b2>(
+/// game-tick virtual machine is left at its current yield point
+/// because the loop body re-reads world state through natives
+/// every iteration, so the next user input resumes against the
+/// fresh world correctly. The per-archetype loop-main data
+/// segments are zeroed so monster memory from the previous run
+/// does not bleed into the new run.
+fn restart_run<'a1, 'b1>(
     world: &natives::WorldHandle,
     dungen_vm: &mut Vm<'a1, 'b1>,
-    game_vm: &mut Vm<'a2, 'b2>,
-    game_started: &mut bool,
+    ai_pool: &ai::AiPoolHandle,
 ) -> Result<(), Box<dyn std::error::Error>>
 where
     'b1: 'a1,
-    'b2: 'a2,
 {
     {
         let mut w = world.lock().unwrap();
@@ -343,15 +338,7 @@ where
         let mut w = world.lock().unwrap();
         w.recompute_fov();
     }
-    // Reset the game-tick virtual machine's started flag so the
-    // next resume reinitialises the loop body. The data segment
-    // is incidentally zero already because no script writes to
-    // it; if a future revision adds persistent game-tick state,
-    // that segment would need explicit reset here too.
-    *game_started = false;
-    // Re-call the script so the data segment runs through the
-    // initial path before the next user command resumes it.
-    let _ = game_vm.call(&[Value::Int(0)]);
+    ai_pool.lock().unwrap().reset_loop_main_data();
     Ok(())
 }
 
