@@ -26,4 +26,4 @@ The Rust embedding examples ship their own Keleusma script rosters in subdirecto
 | Directory | Companion host | Description |
 |-----------|---------------|-------------|
 | [`piano_roll/`](./piano_roll/) | [`examples/piano_roll.rs`](../piano_roll.rs) | Ten songs (`piano_roll_0.kel` through `piano_roll_9.kel`) for the SDL3 audio piano-roll example. See [`docs/guide/PIANO_ROLL.md`](../../docs/guide/PIANO_ROLL.md). |
-| [`rogue/`](./rogue/) | [`examples/rogue/main.rs`](../rogue/main.rs) | Fourteen scripts driving the SDL3 roguelike. One game-tick loop, one dungeon generator, one player artificial-intelligence script, eight monster artificial-intelligence archetypes, one combat-math script, two item-effect scripts. See [`docs/guide/ROGUE.md`](../../docs/guide/ROGUE.md). |
+| [`rogue/`](./rogue/) | [`examples/rogue/main.rs`](../rogue/main.rs) | Fifteen scripts driving the SDL3 roguelike. One game-tick loop, one dungeon generator, one player artificial-intelligence script, nine monster artificial-intelligence archetypes including two `loop main` archetypes, one combat-math script, two item-effect scripts. See [`docs/guide/ROGUE.md`](../../docs/guide/ROGUE.md). |

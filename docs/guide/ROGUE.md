@@ -23,7 +23,7 @@
 
 ## How this document relates to the source
 
-The roguelike example splits its source across two directories. The Rust host code lives under `examples/rogue/`. The fourteen Keleusma scripts live under `examples/scripts/rogue/`. The `include_str!` lines in `examples/rogue/main.rs` reference the script directory through a relative path, and the `SCRIPT_DIR` constant in the same file points there for the hot-reload path. This manual is the long-form companion to the example. It describes the rules of the game, the architecture of the host, the responsibilities of each script, and a graded set of exercises a reader can attempt to deepen familiarity with the embedding pattern.
+The roguelike example splits its source across two directories. The Rust host code lives under `examples/rogue/`. The fifteen Keleusma scripts live under `examples/scripts/rogue/`. The `include_str!` lines in `examples/rogue/main.rs` reference the script directory through a relative path, and the `SCRIPT_DIR` constant in the same file points there for the hot-reload path. This manual is the long-form companion to the example. It describes the rules of the game, the architecture of the host, the responsibilities of each script, and a graded set of exercises a reader can attempt to deepen familiarity with the embedding pattern.
 
 The bestiary, item, and stat tables are defined inline in the host source rather than reprinted in this manual. The numbers cited in the gameplay section are stable design defaults, but the source is authoritative if they ever drift.
 
@@ -74,7 +74,9 @@ The host opens an eighty-by-twenty-four tile grid window. A head-up display row 
 
 There is no inventory management surface. Food eats on contact. Gold piles add to the score on contact. Weapons and armor auto-equip when an upgrade is stepped over; non-upgrade weapons and armor are destroyed on contact rather than left blocking the cell. Potions and scrolls auto-pickup when the corresponding slot is empty. If the slot is full, a message describes the ground item by its disguised name and the held item by its disguised name.
 
-The head-up display shows hit points as red pips on the left, hunger as amber pips on the right, current floor depth as cyan ticks at the centre, and an icon plus tier pip strip for the equipped weapon and armor between the hit points and the floor ticks. When the player holds a potion or a scroll, the corresponding icon appears right of the floor ticks tinted by the per-run appearance colour. The tier pip strip fills one pip per gear level on a zero through nine scale.
+The head-up display shows hit points as red pips on the left, hunger as amber pips on the right, current floor depth as cyan ticks at the centre, an icon plus tier pip strip for the equipped weapon and armor between the hit points and the floor ticks, and a text readout to the right of the floor ticks giving the current floor number and the player's gold-as-score counter. When the player holds a potion or a scroll, the corresponding icon appears right of the gold readout tinted by the per-run appearance colour. The tier pip strip fills one pip per gear level on a zero through nine scale. Bitmap-font text rendering is local to the example through `examples/rogue/text.rs`.
+
+On death or victory the game blocks gameplay input and overlays a centred panel showing the outcome title plus final floor, gold, and turn count. Any keypress while the panel is shown exits the example.
 
 ## Gameplay rules
 
@@ -128,7 +130,7 @@ The host owns all mutable game state. The map, the player, the monster table, th
         | per-virtual-machine `register_native_closure` and `vm.call(...)`
         v
 +------------------------------------------+
-|  Fourteen Keleusma virtual machines      |
+|  Fifteen Keleusma virtual machines       |
 |  - rogue_game.kel         (loop main)    |
 |  - rogue_dungen.kel       (one-shot)     |
 |  - rogue_player_ai.kel    (pure fn)      |
@@ -141,6 +143,7 @@ The host owns all mutable game state. The map, the player, the monster table, th
 |  - rogue_ai_fast.kel      (pure fn)      |
 |  - rogue_ai_smart.kel     (pure fn)      |
 |  - rogue_ai_boss.kel      (loop main)    |
+|  - rogue_ai_tracker.kel   (loop main)    |
 |  - rogue_item_potion.kel  (pure fn)      |
 |  - rogue_item_scroll.kel  (pure fn)      |
 +------------------------------------------+
@@ -328,6 +331,7 @@ The eight archetypes shipped with the example.
 | `rogue_ai_fast.kel` | Behaves like the chaser. The host double-invokes the script per turn. |
 | `rogue_ai_smart.kel` | Heuristic step on the dominant axis when the player is visible. |
 | `rogue_ai_boss.kel` | Four-turn attack pattern alternating ranged and chase. Implemented as `loop main` with a turn counter in the data segment so the phase persists across calls. Currently bound only to the Balrog Lord on floor one hundred. See [The boss loop main shape](#the-boss-loop-main-shape). |
+| `rogue_ai_tracker.kel` | Remembers the player's last seen position in the data segment. Chases directly when the player is visible; moves toward the remembered cell when out of sight. Implemented as `loop main` with a three-slot data segment. Bound to wraiths, specters, vampire spawns, mind flayers, and the bone devil. |
 
 The wander script uses `host::rng_range` for the random direction. Every other archetype except the boss is a pure function of its inputs.
 
@@ -424,9 +428,22 @@ Each exercise lists what to change, where to change it, and a verification sugge
 
 **Exercise 3.5.** Add ranged attacks for the player. The current rules give the player melee only. Adding ranged means a wand or bow item type, an aimed-attack keybind, line-of-sight resolution from the player to the target cell, and a damage formula that accounts for distance. The host work is in `examples/rogue/natives.rs` to recognise the new action code and route it through the resolver; the script work is in `examples/scripts/rogue/rogue_player_ai.kel` to emit the ranged action and in `examples/scripts/rogue/rogue_combat.kel` to apply the distance falloff. Hypothesis. The bestiary's ranged-archetype monsters become disproportionately easy if the player can return fire from outside their attack envelope, so the damage formula may need a distance falloff to keep balance.
 
+**Exercise 3.6.** Replace the symmetric monster line-of-sight rule with a per-monster shadowcast. The current implementation in `examples/rogue/natives.rs::monster_sees_player` treats the player's field-of-view bitmap as the ground truth: if the player can see the monster, the monster can see the player. This is symmetric by construction but ties monster perception to the player's vantage. An independent per-monster cast originating at the monster's cell with the same eight-tile radius would produce different results in pillar-like wall configurations. Implement the cast and compare. Hypothesis. The independent cast feels more "fair" but is more expensive; at the current scale the cost is negligible.
+
+**Exercise 3.7.** Implement the placeholder potion and scroll effects. The status-code dispatch infrastructure is already in place. The pieces that remain.
+
+- Potion of Speed (effect 7). Grant the player extra turns. Add an `extra_turns` counter to the player state. Each tick, if positive, decrement and run the player turn before yielding. Hypothesis. The player effectively moves twice; cost is balanced because the potion is consumed.
+- Potion of Levitation (effect 8). Add a `levitating` timer to the player state. While positive, ignore traps (when traps land in a future revision) and treat the cell as walkable for the chamber-of-pits use case. Currently no traps exist, so the effect is a no-op against current content but reads correctly in messages.
+- Potion of See Invisible (effect 9). Add an `invisible` flag to monster kinds and to instances. While See Invisible is active, the renderer shows invisible monsters as if they were visible. Requires the bestiary to gain an invisible flag and a tier of monsters that uses it.
+- Scroll of Sleep (effect 8 status code). Add a `sleeping_turns` field to each monster. While positive, the host's per-monster dispatch returns Wait immediately and decrements the counter without invoking the archetype's virtual machine. Effective range two on read.
+- Scroll of Confusion (effect 9 status code). Add a `confused_turns` field to each monster. While positive, the host scrambles the artificial-intelligence-returned action: with probability fifty per cent the action is rerolled as a random adjacent step.
+- Scroll of Remove Curse (status code 10). Add a curse flag to weapons and armor. Some weapons spawn cursed; cursed gear cannot be unequipped. Remove Curse lifts the flag.
+
+Each effect is a few lines on the host side. Reuse the existing status code values so the script side does not need to change.
+
 ### Tier four: research-flavoured questions
 
-**Exercise 4.1.** What is the smallest set of artificial-intelligence archetype scripts that still produces a recognisable rogue feel across the one-hundred-floor descent? The current set is eight. Try removing one at a time and assess whether the gameplay degrades noticeably. Inference. The boss archetype is the most replaceable because it is bound to a single monster.
+**Exercise 4.1.** What is the smallest set of artificial-intelligence archetype scripts that still produces a recognisable rogue feel across the one-hundred-floor descent? The current set is nine. Try removing one at a time and assess whether the gameplay degrades noticeably. Inference. The boss archetype is the most replaceable because it is bound to a single monster.
 
 **Exercise 4.2.** What is the worst-case execution time of the dungeon generator on a single floor? The structural verifier accepts the script, but a measured profile would identify the dominant cost. Reading the script's per-loop body and counting host-native calls is a fair starting point. The arena-bounded text-size analysis already proves the worst-case memory usage is bounded; this exercise asks for the time companion.
 

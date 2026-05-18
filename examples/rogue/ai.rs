@@ -81,6 +81,7 @@ pub struct AiPool {
     pub fast: Vm<'static, 'static>,
     pub smart: Vm<'static, 'static>,
     pub boss: Vm<'static, 'static>,
+    pub tracker: Vm<'static, 'static>,
     pub potion: Vm<'static, 'static>,
     pub scroll: Vm<'static, 'static>,
     pub player: Vm<'static, 'static>,
@@ -89,6 +90,8 @@ pub struct AiPool {
     /// uses `vm.call` on the first turn and `vm.resume` on every
     /// subsequent turn. Reset on hot reload.
     boss_started: bool,
+    /// Same flag for the Tracker `loop main` archetype.
+    tracker_started: bool,
 }
 
 impl AiPool {
@@ -109,6 +112,7 @@ impl AiPool {
         let fast = build_vm(modules.fast, leak_arena(), world, false)?;
         let smart = build_vm(modules.smart, leak_arena(), world, false)?;
         let boss = build_vm(modules.boss, leak_arena(), world, false)?;
+        let tracker = build_vm(modules.tracker, leak_arena(), world, false)?;
         let potion = build_vm(modules.potion, leak_arena(), world, false)?;
         let scroll = build_vm(modules.scroll, leak_arena(), world, false)?;
         let player = build_vm(modules.player, leak_arena(), world, false)?;
@@ -122,11 +126,13 @@ impl AiPool {
             fast,
             smart,
             boss,
+            tracker,
             potion,
             scroll,
             player,
             combat,
             boss_started: false,
+            tracker_started: false,
         })
     }
 
@@ -149,11 +155,13 @@ impl AiPool {
         self.fast = build_vm(modules.fast, leak_arena(), world, false)?;
         self.smart = build_vm(modules.smart, leak_arena(), world, false)?;
         self.boss = build_vm(modules.boss, leak_arena(), world, false)?;
+        self.tracker = build_vm(modules.tracker, leak_arena(), world, false)?;
         self.potion = build_vm(modules.potion, leak_arena(), world, false)?;
         self.scroll = build_vm(modules.scroll, leak_arena(), world, false)?;
         self.player = build_vm(modules.player, leak_arena(), world, false)?;
         self.combat = build_vm(modules.combat, leak_arena(), world, false)?;
         self.boss_started = false;
+        self.tracker_started = false;
         Ok(())
     }
 
@@ -256,6 +264,7 @@ impl AiPool {
             AiKind::Fast => &mut self.fast,
             AiKind::Smart => &mut self.smart,
             AiKind::Boss => &mut self.boss,
+            AiKind::Tracker => &mut self.tracker,
         }
     }
 
@@ -272,7 +281,10 @@ impl AiPool {
         sees: bool,
     ) -> Result<AiAction, Box<dyn std::error::Error>> {
         if matches!(ai, AiKind::Boss) {
-            return self.dispatch_boss(mx, my, px, py, sees);
+            return self.dispatch_loop_main(LoopMainKind::Boss, mx, my, px, py, sees);
+        }
+        if matches!(ai, AiKind::Tracker) {
+            return self.dispatch_loop_main(LoopMainKind::Tracker, mx, my, px, py, sees);
         }
         let vm = self.vm_for(ai);
         let args = [
@@ -294,13 +306,14 @@ impl AiPool {
         }
     }
 
-    /// Dispatch the boss archetype. See the historical
-    /// implementation in `dispatch_boss` for details. The script
-    /// is `loop main`; the host calls on the first turn and
-    /// resumes thereafter, walking past `Reset` to the next
-    /// `Yielded`.
-    fn dispatch_boss(
+    /// Dispatch a `loop main` archetype. The first turn uses
+    /// `vm.call`; every subsequent turn uses `vm.resume`. Because
+    /// Keleusma emits `Reset` when the loop body wraps from end
+    /// to top, the host loops past `Reset` until the next
+    /// `Yielded` to retrieve one action per logical turn.
+    fn dispatch_loop_main(
         &mut self,
+        kind: LoopMainKind,
         mx: i32,
         my: i32,
         px: i32,
@@ -314,13 +327,17 @@ impl AiPool {
             Value::Int(py as i64),
             Value::Int(if sees { 1 } else { 0 }),
         ]);
-        let mut state = if self.boss_started {
-            self.boss.resume(input.clone())
+        let (vm, started_flag): (&mut Vm<'static, 'static>, &mut bool) = match kind {
+            LoopMainKind::Boss => (&mut self.boss, &mut self.boss_started),
+            LoopMainKind::Tracker => (&mut self.tracker, &mut self.tracker_started),
+        };
+        let mut state = if *started_flag {
+            vm.resume(input.clone())
         } else {
-            self.boss_started = true;
-            self.boss.call(std::slice::from_ref(&input))
+            *started_flag = true;
+            vm.call(std::slice::from_ref(&input))
         }
-        .map_err(|e| format!("boss vm: {:?}", e))?;
+        .map_err(|e| format!("loop main vm: {:?}", e))?;
         for _ in 0..16 {
             match state {
                 VmState::Yielded(Value::Tuple(t)) if t.len() == 3 => {
@@ -330,19 +347,28 @@ impl AiPool {
                     return Ok(decode_action(a, x, y));
                 }
                 VmState::Reset => {
-                    state = self
-                        .boss
+                    state = vm
                         .resume(input.clone())
-                        .map_err(|e| format!("boss vm: {:?}", e))?;
+                        .map_err(|e| format!("loop main vm: {:?}", e))?;
                 }
-                VmState::Finished(_) => return Err("boss vm finished unexpectedly".into()),
+                VmState::Finished(_) => return Err("loop main vm finished unexpectedly".into()),
                 other => {
-                    return Err(format!("boss vm returned unexpected shape: {:?}", other).into());
+                    return Err(
+                        format!("loop main vm returned unexpected shape: {:?}", other).into(),
+                    );
                 }
             }
         }
-        Err("boss vm exhausted Reset budget without yielding".into())
+        Err("loop main vm exhausted Reset budget without yielding".into())
     }
+}
+
+/// Discriminator for [`AiPool::dispatch_loop_main`]. Each
+/// variant selects the matching virtual machine and started
+/// flag.
+enum LoopMainKind {
+    Boss,
+    Tracker,
 }
 
 fn expect_int(v: &Value) -> Result<i64, Box<dyn std::error::Error>> {
@@ -384,6 +410,7 @@ pub struct AiModules {
     pub fast: Module,
     pub smart: Module,
     pub boss: Module,
+    pub tracker: Module,
     pub potion: Module,
     pub scroll: Module,
     pub player: Module,

@@ -11,6 +11,7 @@ use sdl3::render::Canvas;
 use sdl3::video::Window;
 
 use crate::items::ItemKind;
+use crate::text;
 use crate::tiles::{Sprite, TileAtlas};
 use crate::world::World;
 use crate::{HUD_PX, MAP_H, MAP_W, MSG_PX, TILE_PX};
@@ -47,6 +48,14 @@ const SCROLL_COLORS: [(u8, u8, u8); 10] = [
     (240, 180, 140),
 ];
 
+/// Outcome of a finished run. Passed to the game-over overlay
+/// so the panel can show the appropriate title and stats.
+#[derive(Clone, Copy, Debug)]
+pub enum GameOver {
+    Died,
+    Won,
+}
+
 /// Renderer state. Empty for now. Later phases cache message-log
 /// scroll position here.
 pub struct Renderer;
@@ -54,6 +63,70 @@ pub struct Renderer;
 impl Renderer {
     pub fn new() -> Self {
         Self
+    }
+
+    /// Render the game-over overlay on top of the existing
+    /// frame. The panel is centred and shows the outcome title,
+    /// the final floor reached, the gold collected, and the
+    /// turn counter.
+    pub fn draw_game_over(
+        &mut self,
+        canvas: &mut Canvas<Window>,
+        world: &World,
+        outcome: GameOver,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let win_w = (MAP_W * TILE_PX) as i32;
+        let win_h = (HUD_PX + MAP_H * TILE_PX + MSG_PX) as i32;
+        let panel_w = 480_i32;
+        let panel_h = 240_i32;
+        let panel_x = (win_w - panel_w) / 2;
+        let panel_y = (win_h - panel_h) / 2;
+
+        // Backdrop.
+        canvas.set_draw_color(Color::RGB(8, 8, 16));
+        let _ = canvas.fill_rect(Rect::new(panel_x, panel_y, panel_w as u32, panel_h as u32));
+        canvas.set_draw_color(Color::RGB(180, 180, 200));
+        let _ = canvas.fill_rect(Rect::new(panel_x, panel_y, panel_w as u32, 2));
+        let _ = canvas.fill_rect(Rect::new(panel_x, panel_y + panel_h - 2, panel_w as u32, 2));
+        let _ = canvas.fill_rect(Rect::new(panel_x, panel_y, 2, panel_h as u32));
+        let _ = canvas.fill_rect(Rect::new(panel_x + panel_w - 2, panel_y, 2, panel_h as u32));
+
+        // Title.
+        let (title, title_color) = match outcome {
+            GameOver::Died => ("YOU DIED", Color::RGB(220, 60, 60)),
+            GameOver::Won => ("VICTORY", Color::RGB(220, 200, 60)),
+        };
+        let title_scale = 6;
+        let title_w = text::text_width(title, title_scale);
+        text::draw_text(
+            canvas,
+            panel_x + (panel_w - title_w) / 2,
+            panel_y + 24,
+            title,
+            title_color,
+            title_scale,
+        );
+
+        // Stats.
+        let stats_scale = 3;
+        let stat_y0 = panel_y + 120;
+        let stats = [
+            format!("FLOOR  {}", world.floor),
+            format!("GOLD   {}", world.player.gold),
+            format!("TURNS  {}", world.player.turn),
+        ];
+        for (i, line) in stats.iter().enumerate() {
+            let line_w = text::text_width(line, stats_scale);
+            text::draw_text(
+                canvas,
+                panel_x + (panel_w - line_w) / 2,
+                stat_y0 + i as i32 * 32,
+                line,
+                Color::RGB(220, 220, 230),
+                stats_scale,
+            );
+        }
+        Ok(())
     }
 
     pub fn draw(
@@ -156,11 +229,33 @@ impl Renderer {
             Color::RGB(140, 180, 220),
         )?;
 
+        // Floor and gold text just right of the floor ticks.
+        let stats_x = (MAP_W as i32 * TILE_PX as i32) / 2 + f_ticks * 4 + 12;
+        let stats_y = 6_i32;
+        let floor_text = format!("F{:02}", world.floor);
+        text::draw_text(
+            canvas,
+            stats_x,
+            stats_y,
+            &floor_text,
+            Color::RGB(120, 180, 220),
+            2,
+        );
+        let gold_text = format!("G{}", world.player.gold);
+        text::draw_text(
+            canvas,
+            stats_x + text::text_width("F00", 2) + 8,
+            stats_y,
+            &gold_text,
+            Color::RGB(220, 180, 60),
+            2,
+        );
+
         // Held potion and scroll icons. Each is the regular item
         // sprite tinted by the per-run appearance colour. If the
         // slot is empty the icon is skipped entirely.
         let consumable_y = 0_i32;
-        let potion_x = (MAP_W as i32 * TILE_PX as i32) / 2 + 80;
+        let potion_x = (MAP_W as i32 * TILE_PX as i32) / 2 + 220;
         if let Some(effect_idx) = world.player.potion_slot {
             let appearance = world.potion_appearance[effect_idx as usize] as usize;
             let color = POTION_COLORS[appearance % POTION_COLORS.len()];
@@ -319,17 +414,9 @@ impl Renderer {
         let _ = canvas.fill_rect(Rect::new(0, y0, MAP_W * TILE_PX, MSG_PX));
         canvas.set_draw_color(Color::RGB(80, 80, 96));
         let _ = canvas.fill_rect(Rect::new(0, y0, MAP_W * TILE_PX, 1));
-
-        // Placeholder for the message text. A bitmap-font draw
-        // lands in a later phase. For now, render the latest
-        // message as a coloured bar whose length scales with the
-        // message length, so the host can confirm message flow at
-        // a glance.
         if let Some(msg) = world.latest_message() {
-            let n = msg.len() as i32;
-            let bar_w = (n.min(80) * (TILE_PX as i32 / 4)) as u32;
-            canvas.set_draw_color(Color::RGB(180, 200, 220));
-            let _ = canvas.fill_rect(Rect::new(6, y0 + 6, bar_w, MSG_PX - 12));
+            let upper = msg.to_uppercase();
+            text::draw_text(canvas, 8, y0 + 5, &upper, Color::RGB(220, 220, 230), 2);
         }
         Ok(())
     }

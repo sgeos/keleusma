@@ -25,6 +25,7 @@ const SRC_AI_RANGED: &str = include_str!("../examples/scripts/rogue/rogue_ai_ran
 const SRC_AI_FAST: &str = include_str!("../examples/scripts/rogue/rogue_ai_fast.kel");
 const SRC_AI_SMART: &str = include_str!("../examples/scripts/rogue/rogue_ai_smart.kel");
 const SRC_AI_BOSS: &str = include_str!("../examples/scripts/rogue/rogue_ai_boss.kel");
+const SRC_AI_TRACKER: &str = include_str!("../examples/scripts/rogue/rogue_ai_tracker.kel");
 const SRC_ITEM_POTION: &str = include_str!("../examples/scripts/rogue/rogue_item_potion.kel");
 const SRC_ITEM_SCROLL: &str = include_str!("../examples/scripts/rogue/rogue_item_scroll.kel");
 const SRC_GAME: &str = include_str!("../examples/scripts/rogue/rogue_game.kel");
@@ -209,6 +210,88 @@ fn game_tick_compiles() {
 #[test]
 fn player_ai_compiles() {
     let _ = build(SRC_PLAYER_AI);
+}
+
+#[test]
+fn ai_tracker_compiles() {
+    let _ = build(SRC_AI_TRACKER);
+}
+
+#[test]
+fn ai_tracker_chases_when_seen() {
+    let module = build(SRC_AI_TRACKER);
+    let arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+    let mut vm = Vm::new(module, &arena).expect("vm new");
+    for slot in 0..vm.data_len() {
+        vm.set_data(slot, Value::Int(0)).expect("set_data");
+    }
+    let input = Value::Tuple(vec![
+        Value::Int(5),
+        Value::Int(5),
+        Value::Int(10),
+        Value::Int(10),
+        Value::Int(1),
+    ]);
+    let result = vm.call(&[input]).expect("vm call");
+    match result {
+        VmState::Yielded(Value::Tuple(t)) if t.len() == 3 => match (&t[0], &t[1], &t[2]) {
+            (Value::Int(action), Value::Int(tx), Value::Int(ty)) => {
+                assert_eq!(*action, 1);
+                assert_eq!((*tx, *ty), (6, 6));
+            }
+            _ => panic!("non-int tuple"),
+        },
+        other => panic!("expected Yielded triple, got {:?}", other),
+    }
+}
+
+#[test]
+fn ai_tracker_pursues_last_known_when_unseen() {
+    let module = build(SRC_AI_TRACKER);
+    let arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+    let mut vm = Vm::new(module, &arena).expect("vm new");
+    for slot in 0..vm.data_len() {
+        vm.set_data(slot, Value::Int(0)).expect("set_data");
+    }
+    // First turn: player visible at (10, 10). Tracker chases and
+    // records the last known position.
+    let visible_input = Value::Tuple(vec![
+        Value::Int(5),
+        Value::Int(5),
+        Value::Int(10),
+        Value::Int(10),
+        Value::Int(1),
+    ]);
+    vm.call(&[visible_input]).expect("vm call");
+    // Loop main wraps; the host walks past Reset to the next
+    // Yielded with a fresh input. Second turn: player not
+    // visible. Tracker should move toward the stored last
+    // position.
+    let unseen_input = Value::Tuple(vec![
+        Value::Int(6),
+        Value::Int(6),
+        Value::Int(0),
+        Value::Int(0),
+        Value::Int(0),
+    ]);
+    let mut state = vm.resume(unseen_input.clone()).expect("vm resume");
+    for _ in 0..16 {
+        match state {
+            VmState::Yielded(Value::Tuple(t)) if t.len() == 3 => match (&t[0], &t[1], &t[2]) {
+                (Value::Int(action), Value::Int(tx), Value::Int(ty)) => {
+                    assert_eq!(*action, 1, "should chase last known");
+                    assert_eq!((*tx, *ty), (7, 7), "step toward (10, 10)");
+                    return;
+                }
+                _ => panic!("non-int tuple"),
+            },
+            VmState::Reset => {
+                state = vm.resume(unseen_input.clone()).expect("vm resume");
+            }
+            other => panic!("expected Yielded or Reset, got {:?}", other),
+        }
+    }
+    panic!("tracker did not yield within sixteen resumes");
 }
 
 #[test]

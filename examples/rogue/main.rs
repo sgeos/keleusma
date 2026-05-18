@@ -33,6 +33,7 @@ mod input;
 mod items;
 mod natives;
 mod render;
+mod text;
 mod tiles;
 mod world;
 
@@ -50,7 +51,7 @@ use keleusma::{Arena, Module, Value};
 
 use crate::ai::{AiModules, AiPool, AiPoolHandle};
 use crate::input::Command;
-use crate::render::Renderer;
+use crate::render::{GameOver, Renderer};
 use crate::tiles::TileAtlas;
 use crate::world::World;
 
@@ -84,6 +85,7 @@ const SRC_AI_RANGED: &str = include_str!("../scripts/rogue/rogue_ai_ranged.kel")
 const SRC_AI_FAST: &str = include_str!("../scripts/rogue/rogue_ai_fast.kel");
 const SRC_AI_SMART: &str = include_str!("../scripts/rogue/rogue_ai_smart.kel");
 const SRC_AI_BOSS: &str = include_str!("../scripts/rogue/rogue_ai_boss.kel");
+const SRC_AI_TRACKER: &str = include_str!("../scripts/rogue/rogue_ai_tracker.kel");
 const SRC_ITEM_POTION: &str = include_str!("../scripts/rogue/rogue_item_potion.kel");
 const SRC_ITEM_SCROLL: &str = include_str!("../scripts/rogue/rogue_item_scroll.kel");
 const SRC_GAME: &str = include_str!("../scripts/rogue/rogue_game.kel");
@@ -136,6 +138,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         fast: build_module(SRC_AI_FAST)?,
         smart: build_module(SRC_AI_SMART)?,
         boss: build_module(SRC_AI_BOSS)?,
+        tracker: build_module(SRC_AI_TRACKER)?,
         potion: build_module(SRC_ITEM_POTION)?,
         scroll: build_module(SRC_ITEM_SCROLL)?,
         player: build_module(SRC_PLAYER_AI)?,
@@ -168,7 +171,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut renderer = Renderer::new();
     let mut event_pump = sdl_context.event_pump()?;
-    let mut game_over = false;
+    let mut game_over: Option<GameOver> = None;
     'running: loop {
         for event in event_pump.poll_iter() {
             match event {
@@ -177,7 +180,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     keycode: Some(keycode),
                     ..
                 } => {
-                    if game_over {
+                    if game_over.is_some() {
                         break 'running;
                     }
                     if let Some(cmd) = input::translate(keycode) {
@@ -200,10 +203,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         w.push_message(String::from(
                                             "You step into the light. You win!",
                                         ));
-                                        game_over = true;
+                                        game_over = Some(GameOver::Won);
                                     }
                                     _ => {
-                                        game_over = true;
+                                        game_over = Some(GameOver::Died);
                                     }
                                 }
                             }
@@ -219,6 +222,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         {
             let w = world.lock().unwrap();
             renderer.draw(&mut canvas, &mut atlas, &w)?;
+            if let Some(outcome) = game_over {
+                renderer.draw_game_over(&mut canvas, &w, outcome)?;
+            }
         }
         canvas.present();
 
@@ -331,6 +337,7 @@ fn reload_scripts<'a, 'd>(
         "rogue_ai_fast.kel",
         "rogue_ai_smart.kel",
         "rogue_ai_boss.kel",
+        "rogue_ai_tracker.kel",
         "rogue_item_potion.kel",
         "rogue_item_scroll.kel",
         "rogue_player_ai.kel",
@@ -373,6 +380,7 @@ fn reload_scripts<'a, 'd>(
         fast: drain.next().unwrap(),
         smart: drain.next().unwrap(),
         boss: drain.next().unwrap(),
+        tracker: drain.next().unwrap(),
         potion: drain.next().unwrap(),
         scroll: drain.next().unwrap(),
         player: drain.next().unwrap(),

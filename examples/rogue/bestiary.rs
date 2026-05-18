@@ -41,6 +41,7 @@ pub enum AiKind {
     Ranged,
     Fast,
     Boss,
+    Tracker,
 }
 
 /// A single bestiary entry. Stats are read-only. Per-monster
@@ -762,7 +763,7 @@ pub const BESTIARY: [MonsterKind; 100] = [
         evasion: 5,
         damage: 14,
         armor: 2,
-        ai: AiKind::Smart,
+        ai: AiKind::Tracker,
         first_floor: 49,
         score: 44,
     },
@@ -776,7 +777,7 @@ pub const BESTIARY: [MonsterKind; 100] = [
         evasion: 5,
         damage: 14,
         armor: 2,
-        ai: AiKind::Smart,
+        ai: AiKind::Tracker,
         first_floor: 50,
         score: 46,
     },
@@ -1143,7 +1144,7 @@ pub const BESTIARY: [MonsterKind; 100] = [
         evasion: 4,
         damage: 25,
         armor: 6,
-        ai: AiKind::Smart,
+        ai: AiKind::Tracker,
         first_floor: 76,
         score: 116,
     },

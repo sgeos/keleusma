@@ -182,6 +182,12 @@ fn handle_move_into_cell(world: &WorldHandle, ai_pool: &AiPoolHandle, tx: i32, t
             w.player.x = nx;
             w.player.y = ny;
             autopickup(&mut w);
+            // Recompute the field of view immediately so the
+            // monster turns this same tick can use the updated
+            // visibility bitmap for the symmetric line-of-sight
+            // rule. Without this, monsters react to the player's
+            // pre-move position.
+            w.recompute_fov();
         }
         MoveAction::Blocked => {}
     }
@@ -587,34 +593,21 @@ fn autopickup(w: &mut World) {
     }
 }
 
-fn monster_sees_player(w: &World, mx: i32, my: i32, px: i32, py: i32) -> bool {
-    let dx = px - mx;
-    let dy = py - my;
-    let dist_sq = dx * dx + dy * dy;
-    if dist_sq > 64 {
-        return false;
-    }
-    let steps = dx.abs().max(dy.abs());
-    if steps == 0 {
-        return true;
-    }
-    let mut x = mx as f64;
-    let mut y = my as f64;
-    let sx = dx as f64 / steps as f64;
-    let sy = dy as f64 / steps as f64;
-    for _ in 0..steps {
-        x += sx;
-        y += sy;
-        let cx = x.round() as i32;
-        let cy = y.round() as i32;
-        if cx == px && cy == py {
-            return true;
-        }
-        if !w.map.is_transparent(cx, cy) {
-            return false;
-        }
-    }
-    true
+/// Symmetric monster line-of-sight. The host treats the player's
+/// field of view as the ground truth: if the player can see the
+/// monster, the monster can see the player. This is the simplest
+/// symmetric rule because the player's field of view is already
+/// computed through recursive shadowcasting which is itself
+/// symmetric on a grid with thick walls.
+///
+/// Exercise for the reader. Replace this with a per-monster
+/// shadowcast originating at the monster's cell. The bound is
+/// the same eight-tile radius the player uses. Compare the two
+/// behaviours on dungeons with pillar-like wall configurations
+/// where the symmetric-by-construction rule above can disagree
+/// with an independent per-monster cast.
+fn monster_sees_player(w: &World, mx: i32, my: i32, _px: i32, _py: i32) -> bool {
+    w.visible_at(mx, my)
 }
 
 /// Bound on the `MAX_MONSTER_COUNT`. Exposed for tests and the
@@ -789,6 +782,21 @@ fn register_entities(vm: &mut Vm, world: &WorldHandle) {
                 )));
             }
             let mut world = w.lock().unwrap();
+            // Reject monster spawns on non-walkable tiles, on
+            // the player's cell, and on cells already occupied
+            // by another monster. Room overlap in the dungeon
+            // generator can produce coordinates that fall in a
+            // wall band; rather than push the constraint into
+            // the script, the host silently drops the spawn.
+            if !world.map.is_walkable(x, y) {
+                return Ok(Value::Unit);
+            }
+            if x == world.player.x && y == world.player.y {
+                return Ok(Value::Unit);
+            }
+            if world.monsters.iter().any(|m| m.x == x && m.y == y) {
+                return Ok(Value::Unit);
+            }
             world.spawn_monster(kind, x, y);
             Ok(Value::Unit)
         }),
@@ -807,6 +815,27 @@ fn register_entities(vm: &mut Vm, world: &WorldHandle) {
                 VmError::NativeError(format!("host::spawn_item: invalid kind id {}", kind_id))
             })?;
             let mut world = w.lock().unwrap();
+            // Reject placements that would hide the stairs or
+            // exit, that fall in a wall band produced by room
+            // overlap in the dungeon generator, that land on
+            // the player's starting cell, or that collide with
+            // a cell already holding an item.
+            let tile = world.map.get(x, y);
+            if matches!(
+                tile,
+                crate::world::Tile::Wall
+                    | crate::world::Tile::DoorClosed
+                    | crate::world::Tile::StairsDown
+                    | crate::world::Tile::Exit
+            ) {
+                return Ok(Value::Unit);
+            }
+            if x == world.player.x && y == world.player.y {
+                return Ok(Value::Unit);
+            }
+            if world.items.iter().any(|it| it.x == x && it.y == y) {
+                return Ok(Value::Unit);
+            }
             world.items.push(crate::world::Item {
                 kind,
                 subtype,
