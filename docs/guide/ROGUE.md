@@ -57,7 +57,7 @@ cargo run --release --example rogue --features sdl3-example,text
 
 The example requires both the `sdl3-example` and `text` Cargo features. The first pulls in the Simple DirectMedia Layer 3 dependency that powers the window and event loop. The second enables the script-side string surface that the item-message system relies on.
 
-The host opens an eighty-by-twenty-four tile grid window. A head-up display row sits above the grid and a message row sits below. Each tile is twenty-four pixels square so the window is one thousand nine hundred twenty by six hundred seventy-two pixels.
+The host opens an eighty-by-twenty-four tile grid window. A head-up display row sits above the grid and a message row sits below. Each display tile is sixteen pixels square so the window is one thousand two hundred eighty by four hundred thirty-two pixels, which fits comfortably on standard laptop displays. The procedural sprite art is authored at twenty-four pixels and downscaled to sixteen at copy time so the larger authoring size preserves the original sprite detail.
 
 ## Controls
 

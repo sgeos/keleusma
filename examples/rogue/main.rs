@@ -60,14 +60,23 @@ use crate::world::World;
 pub const MAP_W: u32 = 80;
 pub const MAP_H: u32 = 24;
 
-/// Tile size in pixels. The window's grid region is therefore
-/// twenty-four pixels times the map dimensions.
-pub const TILE_PX: u32 = 24;
+/// Display tile size in pixels. Each cell on the map renders
+/// into this many pixels. Sixteen is chosen so the window fits
+/// a twelve-eighty-pixel-wide display comfortably.
+pub const TILE_PX: u32 = 16;
 
-/// Pixel height of the HUD line drawn above the map and the
-/// message line drawn below. Each is one tile tall.
-pub const HUD_PX: u32 = TILE_PX;
-pub const MSG_PX: u32 = TILE_PX;
+/// Native authoring size for procedural sprite art. The sprite
+/// generators in `tiles.rs` draw at this resolution, and SDL3
+/// downscales to `TILE_PX` on copy. Keeping the authoring size
+/// larger than the display size preserves the original sprite
+/// detail without forcing every primitive draw to rescale.
+pub const SPRITE_PX: u32 = 24;
+
+/// Pixel height of the HUD bar drawn above the map and the
+/// message bar drawn below. These are independent of the tile
+/// size so the bars remain readable even at small tile sizes.
+pub const HUD_PX: u32 = 24;
+pub const MSG_PX: u32 = 24;
 
 /// Total window dimensions derived from the map dimensions plus
 /// the HUD row above and the message row below.

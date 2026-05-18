@@ -9,7 +9,7 @@ use sdl3::rect::Rect;
 use sdl3::render::{Canvas, Texture, TextureCreator};
 use sdl3::video::{Window, WindowContext};
 
-use crate::TILE_PX;
+use crate::SPRITE_PX as TILE_PX;
 use crate::bestiary::{self, Shape};
 use crate::items::{self, ItemKind};
 use crate::world::Tile;
