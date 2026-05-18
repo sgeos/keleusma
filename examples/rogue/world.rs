@@ -164,11 +164,11 @@ impl Actor {
     }
 
     pub fn weapon_damage(&self) -> i32 {
-        items::WEAPONS[self.weapon as usize].damage
+        items::weapons()[self.weapon as usize].damage
     }
 
     pub fn armor_value(&self) -> i32 {
-        items::ARMORS[self.armor as usize].defense
+        items::armors()[self.armor as usize].defense
     }
 }
 

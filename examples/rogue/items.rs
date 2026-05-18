@@ -1,8 +1,12 @@
-//! Item tables. Host-owned read-only definitions for the weapons,
-//! armor, potions, and scrolls that drop on dungeon floors. Each
-//! table is indexed by subtype identifier. The per-run shuffled
-//! display names for potions and scrolls live on `World` because
-//! they depend on the run seed.
+//! Item tables. Weapon and armor stats load from
+//! `rogue_gear.kel` at startup; names stay here as constant
+//! parallel arrays. Potions and scrolls are static because
+//! their effects are dispatched in `rogue_item_*.kel` scripts
+//! and the host only carries identification metadata. The
+//! per-run shuffled display names for potions and scrolls
+//! live on `World` because they depend on the run seed.
+
+use std::sync::OnceLock;
 
 /// Top-level item category. Stored as `u8` on items in the world
 /// to keep the item record narrow.
@@ -38,58 +42,65 @@ pub struct Weapon {
     pub damage: i32,
 }
 
-pub const WEAPONS: &[Weapon] = &[
-    Weapon { name: "fists", damage: 2 },
-    Weapon { name: "rusty dagger", damage: 4 },
-    Weapon { name: "short sword", damage: 7 },
-    Weapon { name: "battle axe", damage: 10 },
-    Weapon { name: "war hammer", damage: 14 },
-    Weapon { name: "claymore", damage: 18 },
-    Weapon { name: "halberd", damage: 22 },
-    Weapon { name: "flamberge", damage: 26 },
-    Weapon { name: "rune sword", damage: 30 },
-    Weapon { name: "vorpal blade", damage: 36 },
-    Weapon { name: "moonblade", damage: 42 },
-    Weapon { name: "dragonbone spear", damage: 48 },
-    Weapon { name: "starforged axe", damage: 55 },
-    Weapon { name: "adamant flail", damage: 62 },
-    Weapon { name: "voidshard", damage: 70 },
-    Weapon { name: "demonbane", damage: 78 },
-    Weapon { name: "soulrender", damage: 86 },
-    Weapon { name: "god-piercer", damage: 95 },
-    Weapon { name: "world-ender", damage: 105 },
-    Weapon { name: "last word", damage: 118 },
-];
-
-// -- Armor -----------------------------------------------------------
-
 pub struct Armor {
     pub name: &'static str,
     pub defense: i32,
 }
 
-pub const ARMORS: &[Armor] = &[
-    Armor { name: "rags", defense: 0 },
-    Armor { name: "padded jacket", defense: 1 },
-    Armor { name: "leather armor", defense: 2 },
-    Armor { name: "studded leather", defense: 3 },
-    Armor { name: "ring mail", defense: 4 },
-    Armor { name: "chain mail", defense: 5 },
-    Armor { name: "scale mail", defense: 6 },
-    Armor { name: "splint mail", defense: 7 },
-    Armor { name: "plate mail", defense: 8 },
-    Armor { name: "rune plate", defense: 10 },
-    Armor { name: "mithril mail", defense: 12 },
-    Armor { name: "elven cuirass", defense: 14 },
-    Armor { name: "dragonscale", defense: 16 },
-    Armor { name: "dwarven plate", defense: 18 },
-    Armor { name: "celestial mail", defense: 20 },
-    Armor { name: "bulwark of ages", defense: 23 },
-    Armor { name: "adamantine plate", defense: 26 },
-    Armor { name: "aegis of the host", defense: 30 },
-    Armor { name: "starshield", defense: 35 },
-    Armor { name: "last guard", defense: 40 },
+/// Weapon names indexed by tier. The matching damage values
+/// load from `rogue_gear.kel` at startup. Adding a tier needs
+/// a name here and a `fn weapon(N)` head in the script.
+pub const WEAPON_NAMES: [&str; 20] = [
+    "fists", "rusty dagger", "short sword", "battle axe", "war hammer",
+    "claymore", "halberd", "flamberge", "rune sword", "vorpal blade",
+    "moonblade", "dragonbone spear", "starforged axe", "adamant flail",
+    "voidshard", "demonbane", "soulrender", "god-piercer", "world-ender",
+    "last word",
 ];
+
+/// Armor names indexed by tier.
+pub const ARMOR_NAMES: [&str; 20] = [
+    "rags", "padded jacket", "leather armor", "studded leather", "ring mail",
+    "chain mail", "scale mail", "splint mail", "plate mail", "rune plate",
+    "mithril mail", "elven cuirass", "dragonscale", "dwarven plate",
+    "celestial mail", "bulwark of ages", "adamantine plate",
+    "aegis of the host", "starshield", "last guard",
+];
+
+static WEAPONS: OnceLock<Vec<Weapon>> = OnceLock::new();
+static ARMORS: OnceLock<Vec<Armor>> = OnceLock::new();
+
+pub fn install_weapons(damages: &[i32]) {
+    let vec: Vec<Weapon> = WEAPON_NAMES
+        .iter()
+        .zip(damages.iter())
+        .map(|(n, d)| Weapon {
+            name: n,
+            damage: *d,
+        })
+        .collect();
+    let _ = WEAPONS.set(vec);
+}
+
+pub fn install_armors(defenses: &[i32]) {
+    let vec: Vec<Armor> = ARMOR_NAMES
+        .iter()
+        .zip(defenses.iter())
+        .map(|(n, d)| Armor {
+            name: n,
+            defense: *d,
+        })
+        .collect();
+    let _ = ARMORS.set(vec);
+}
+
+pub fn weapons() -> &'static [Weapon] {
+    WEAPONS.get().expect("weapons not loaded; call load_gear at startup")
+}
+
+pub fn armors() -> &'static [Armor] {
+    ARMORS.get().expect("armors not loaded; call load_gear at startup")
+}
 
 // -- Potions ---------------------------------------------------------
 

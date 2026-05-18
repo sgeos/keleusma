@@ -416,7 +416,9 @@ The status-action mechanism itself runs in a second script. `rogue_scroll_apply.
 
 ### The data-loader pattern
 
-The bestiary script is a worked example of an idiom that the example demonstrates for Keleusma. The pattern composes three techniques. Each is individually known. The combination fits Keleusma's specific constraints (no module-scope constants, fixed-size data segment, bounded execution) particularly well, and the composition is what makes it idiomatic here.
+The bestiary script is a worked example of an idiom that this example demonstrates for Keleusma. The pattern is documented in detail in the [Keleusma Cookbook's data-loader recipe](./COOKBOOK.md#the-data-loader-pattern). A short summary follows; the cookbook covers minimal examples, variations, and when to reach for the pattern.
+
+The pattern composes three techniques. Each is individually known. The combination fits Keleusma's specific constraints (no module-scope constants, fixed-size data segment, bounded execution) particularly well, and the composition is what makes it idiomatic here.
 
 First, **multi-headed function dispatch encodes the constant table**. Keleusma has no module-scope `const` for arrays of records, but the verifier accepts multi-headed function definitions with integer patterns. One head per entry, each body assigning the entry's fields, is functionally equivalent to a constant array. The encoding is verifier-friendly because every body is straight-line code; the dispatch itself compiles to a jump table when the integer keys are dense.
 

@@ -23,6 +23,7 @@ This documentation is structured as a **knowledge graph** encoded in the file sy
 |----------------|------------|
 | First-time setup and a working example | [guide/GETTING_STARTED.md](./guide/GETTING_STARTED.md) |
 | Embedding Keleusma in a Rust host | [guide/EMBEDDING.md](./guide/EMBEDDING.md) |
+| Recipes for common embedding patterns | [guide/COOKBOOK.md](./guide/COOKBOOK.md) |
 | A program rejected by the verifier | [guide/WHY_REJECTED.md](./guide/WHY_REJECTED.md) |
 | Surprises and rough edges in V0.1.x | [guide/FAQ.md](./guide/FAQ.md) |
 | Language overview | [architecture/LANGUAGE_DESIGN.md](./architecture/LANGUAGE_DESIGN.md) |

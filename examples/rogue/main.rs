@@ -131,6 +131,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // behind `bestiary::install` and read through
     // `bestiary::kind` thereafter.
     load_bestiary()?;
+    // Load weapon and armor stats from `rogue_gear.kel`. The
+    // script holds two tables sharing the same data-segment
+    // shape; the host iterates each table by tier index.
+    load_gear()?;
 
     // Build the dungeon-generation virtual machine.
     let dungen_arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
@@ -386,6 +390,40 @@ fn read_bestiary_entry(
         corpse_satiation: r(17)? as i32,
         corpse_hp_delta: r(18)? as i32,
     })
+}
+
+/// Load weapon damages and armor defenses from `rogue_gear.kel`.
+/// Two tables share one script; the host calls each with
+/// `(table, tier)` and reads the `value` slot. Names live in
+/// `items::WEAPON_NAMES` and `items::ARMOR_NAMES`.
+fn load_gear() -> Result<(), Box<dyn std::error::Error>> {
+    let arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+    let module = compile_embedded("rogue_gear.kel")?;
+    let mut vm = Vm::new(module, &arena).map_err(|e| format!("gear vm new: {:?}", e))?;
+    zero_data_slots(&mut vm);
+    let weapon_count = load_gear_table(&mut vm, 0)?;
+    let mut damages = Vec::with_capacity(weapon_count);
+    for i in 0..weapon_count {
+        vm.call(&[Value::Int(0), Value::Int(i as i64)])
+            .map_err(|e| format!("gear weapon {}: {:?}", i, e))?;
+        damages.push(read_data_int(&vm, 1)? as i32);
+    }
+    items::install_weapons(&damages);
+    let armor_count = load_gear_table(&mut vm, 1)?;
+    let mut defenses = Vec::with_capacity(armor_count);
+    for i in 0..armor_count {
+        vm.call(&[Value::Int(1), Value::Int(i as i64)])
+            .map_err(|e| format!("gear armor {}: {:?}", i, e))?;
+        defenses.push(read_data_int(&vm, 1)? as i32);
+    }
+    items::install_armors(&defenses);
+    Ok(())
+}
+
+fn load_gear_table(vm: &mut Vm, table: i64) -> Result<usize, Box<dyn std::error::Error>> {
+    vm.call(&[Value::Int(table), Value::Int(-1)])
+        .map_err(|e| format!("gear discovery table {}: {:?}", table, e))?;
+    Ok(read_data_int(vm, 0)? as usize + 1)
 }
 
 fn run_dungen(vm: &mut Vm, floor: i64) -> Result<(), Box<dyn std::error::Error>> {

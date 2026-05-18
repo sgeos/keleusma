@@ -14,6 +14,7 @@ Onboarding-oriented documentation for new users and embedders. Where the [archit
 | [ROGUE.md](./ROGUE.md) | Game author or host architect | Long-form companion to the `rogue` example. Covers gameplay rules, the host and twelve-script architecture, the dungeon generator, the eight artificial-intelligence archetypes, and the item-effect scripts |
 | [WHY_REJECTED.md](./WHY_REJECTED.md) | Anyone whose program failed verification | Map verifier error messages to the conservative-verification taxonomy and propose rewrites |
 | [FAQ.md](./FAQ.md) | Anyone who hit a surprise | Common rough edges in V0.1.x, including string handling, escape sequences, and the immutable-locals constraint |
+| [COOKBOOK.md](./COOKBOOK.md) | Embedder reaching for a known-good pattern | Working recipes for embedding patterns. Starts with the data-loader pattern for shipping designer-editable configuration tables in script form |
 
 ## Companion Material
 

@@ -591,14 +591,14 @@ fn autopickup(world: &WorldHandle, ai_pool: &AiPoolHandle) {
         let item = w.items[idx];
         let (new_value, current_value) = match item.kind {
             ItemKind::Weapon => {
-                let nv = items::WEAPONS
+                let nv = items::weapons()
                     .get(item.subtype as usize)
                     .map(|w| w.damage)
                     .unwrap_or(0);
                 (nv as i64, w.player.weapon_damage() as i64)
             }
             ItemKind::Armor => {
-                let nv = items::ARMORS
+                let nv = items::armors()
                     .get(item.subtype as usize)
                     .map(|a| a.defense)
                     .unwrap_or(0);
@@ -656,14 +656,14 @@ fn autopickup(world: &WorldHandle, ai_pool: &AiPoolHandle) {
     if action == 2 {
         match item.kind {
             ItemKind::Weapon => {
-                let name = items::WEAPONS
+                let name = items::weapons()
                     .get(item.subtype as usize)
                     .map(|w| w.name)
                     .unwrap_or("weapon");
                 w.push_message(format!("You scrap the {}.", name));
             }
             ItemKind::Armor => {
-                let name = items::ARMORS
+                let name = items::armors()
                     .get(item.subtype as usize)
                     .map(|a| a.name)
                     .unwrap_or("armor");
@@ -1070,8 +1070,8 @@ fn take_gold(w: &mut World, amount: i64) {
 
 fn equip_weapon(w: &mut World, tier: i64) {
     let idx = tier as usize;
-    if idx < items::WEAPONS.len() {
-        let name = items::WEAPONS[idx].name;
+    if idx < items::weapons().len() {
+        let name = items::weapons()[idx].name;
         w.player.weapon = tier as u8;
         w.push_message(format!("You take up the {}.", name));
     }
@@ -1079,8 +1079,8 @@ fn equip_weapon(w: &mut World, tier: i64) {
 
 fn equip_armor(w: &mut World, tier: i64) {
     let idx = tier as usize;
-    if idx < items::ARMORS.len() {
-        let name = items::ARMORS[idx].name;
+    if idx < items::armors().len() {
+        let name = items::armors()[idx].name;
         w.player.armor = tier as u8;
         w.push_message(format!("You don the {}.", name));
     }
@@ -1187,16 +1187,16 @@ fn identify_all_potions(w: &mut World) {
 }
 
 fn change_weapon_tier(w: &mut World, delta: i64) {
-    let new_tier = (w.player.weapon as i64 + delta).clamp(0, (items::WEAPONS.len() as i64) - 1) as u8;
+    let new_tier = (w.player.weapon as i64 + delta).clamp(0, (items::weapons().len() as i64) - 1) as u8;
     w.player.weapon = new_tier;
-    let name = items::WEAPONS[new_tier as usize].name;
+    let name = items::weapons()[new_tier as usize].name;
     w.push_message(format!("Your weapon shimmers. You hold the {}.", name));
 }
 
 fn change_armor_tier(w: &mut World, delta: i64) {
-    let new_tier = (w.player.armor as i64 + delta).clamp(0, (items::ARMORS.len() as i64) - 1) as u8;
+    let new_tier = (w.player.armor as i64 + delta).clamp(0, (items::armors().len() as i64) - 1) as u8;
     w.player.armor = new_tier;
-    let name = items::ARMORS[new_tier as usize].name;
+    let name = items::armors()[new_tier as usize].name;
     w.push_message(format!("Your armor hums. You wear the {}.", name));
 }
 

@@ -17,6 +17,7 @@ use keleusma::vm::{DEFAULT_ARENA_CAPACITY, Vm, VmError, VmState};
 use keleusma::{Arena, Module};
 
 const SRC_BESTIARY: &str = include_str!("../examples/scripts/rogue/rogue_bestiary.kel");
+const SRC_GEAR: &str = include_str!("../examples/scripts/rogue/rogue_gear.kel");
 const SRC_DUNGEN: &str = include_str!("../examples/scripts/rogue/rogue_dungen.kel");
 const SRC_AI_IDLE: &str = include_str!("../examples/scripts/rogue/rogue_ai_idle.kel");
 const SRC_AI_CHASER: &str = include_str!("../examples/scripts/rogue/rogue_ai_chaser.kel");
@@ -538,6 +539,48 @@ fn bestiary_entry_zero_is_sewer_rat_stats() {
     assert_eq!(read(13), 2, "ai Chaser");
     assert_eq!(read(14), 1, "first_floor");
     assert_eq!(read(15), 1, "score");
+}
+
+#[test]
+fn gear_compiles() {
+    let _ = build(SRC_GEAR);
+}
+
+#[test]
+fn gear_weapon_zero_is_fists_damage_two() {
+    let module = build(SRC_GEAR);
+    let arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+    let mut vm = Vm::new(module, &arena).expect("vm new");
+    for slot in 0..vm.data_len() {
+        vm.set_data(slot, Value::Int(0)).expect("set_data");
+    }
+    // table 0 = weapons, tier 0 = fists, damage 2.
+    vm.call(&[Value::Int(0), Value::Int(0)]).expect("call");
+    let value = match vm.get_data(1).expect("get_data") {
+        Value::Int(n) => *n,
+        _ => panic!(),
+    };
+    assert_eq!(value, 2, "fists damage");
+}
+
+#[test]
+fn gear_armor_negative_one_is_last_guard_defense_forty() {
+    let module = build(SRC_GEAR);
+    let arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+    let mut vm = Vm::new(module, &arena).expect("vm new");
+    for slot in 0..vm.data_len() {
+        vm.set_data(slot, Value::Int(0)).expect("set_data");
+    }
+    // table 1 = armors, tier -1 = last guard, defense 40.
+    vm.call(&[Value::Int(1), Value::Int(-1)]).expect("call");
+    let read = |slot: usize| -> i64 {
+        match vm.get_data(slot).expect("get_data") {
+            Value::Int(n) => *n,
+            _ => panic!(),
+        }
+    };
+    assert_eq!(read(0), 19, "last guard id");
+    assert_eq!(read(1), 40, "last guard defense");
 }
 
 #[test]

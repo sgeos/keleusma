@@ -55,6 +55,7 @@ pub const EMBEDDED: &[(&str, &str)] = &[
     ("rogue_consume.kel", include_str!("../scripts/rogue/rogue_consume.kel")),
     ("rogue_scroll_apply.kel", include_str!("../scripts/rogue/rogue_scroll_apply.kel")),
     ("rogue_bestiary.kel", include_str!("../scripts/rogue/rogue_bestiary.kel")),
+    ("rogue_gear.kel", include_str!("../scripts/rogue/rogue_gear.kel")),
 ];
 
 /// Directory containing the Keleusma script sources on disk.

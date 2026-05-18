@@ -1,0 +1,83 @@
+// Gear stats loader. Two tables in one script. Both tables
+// share the same data-segment shape: one numeric value per
+// entry (weapon damage, or armor defense). The host passes
+// `table` as 0 for weapons or 1 for armors, plus the `tier`
+// index.
+//
+// Negative tier indices follow the bestiary convention: `-1`
+// is the last entry, which lets the host discover the table
+// size with a single call.
+//
+// Names stay on the host side in `WEAPON_NAMES` and
+// `ARMOR_NAMES` constant arrays because Keleusma's data
+// segment does not currently support inline strings.
+//
+// Outputs (via data segment).
+//   id     Resolved tier index.
+//   value  Weapon damage or armor defense.
+
+data state {
+    id: Word,
+    value: Word,
+}
+
+fn main(table: Word, tier: Word) -> Word {
+    let count = 20;
+    let i = if tier < 0 { count + tier } else { tier };
+    if table == 0 {
+        weapon(i);
+    } else {
+        if table == 1 {
+            armor(i);
+        };
+    };
+    0
+}
+
+// Weapon damages. Tier zero is bare fists; tier nineteen is
+// the legendary "last word".
+fn weapon(0) -> Word { state.id = 0; state.value = 2; 0 }    // fists
+fn weapon(1) -> Word { state.id = 1; state.value = 4; 0 }    // rusty dagger
+fn weapon(2) -> Word { state.id = 2; state.value = 7; 0 }    // short sword
+fn weapon(3) -> Word { state.id = 3; state.value = 10; 0 }   // battle axe
+fn weapon(4) -> Word { state.id = 4; state.value = 14; 0 }   // war hammer
+fn weapon(5) -> Word { state.id = 5; state.value = 18; 0 }   // claymore
+fn weapon(6) -> Word { state.id = 6; state.value = 22; 0 }   // halberd
+fn weapon(7) -> Word { state.id = 7; state.value = 26; 0 }   // flamberge
+fn weapon(8) -> Word { state.id = 8; state.value = 30; 0 }   // rune sword
+fn weapon(9) -> Word { state.id = 9; state.value = 36; 0 }   // vorpal blade
+fn weapon(10) -> Word { state.id = 10; state.value = 42; 0 } // moonblade
+fn weapon(11) -> Word { state.id = 11; state.value = 48; 0 } // dragonbone spear
+fn weapon(12) -> Word { state.id = 12; state.value = 55; 0 } // starforged axe
+fn weapon(13) -> Word { state.id = 13; state.value = 62; 0 } // adamant flail
+fn weapon(14) -> Word { state.id = 14; state.value = 70; 0 } // voidshard
+fn weapon(15) -> Word { state.id = 15; state.value = 78; 0 } // demonbane
+fn weapon(16) -> Word { state.id = 16; state.value = 86; 0 } // soulrender
+fn weapon(17) -> Word { state.id = 17; state.value = 95; 0 } // god-piercer
+fn weapon(18) -> Word { state.id = 18; state.value = 105; 0 } // world-ender
+fn weapon(19) -> Word { state.id = 19; state.value = 118; 0 } // last word
+fn weapon(_n: Word) -> Word { 0 }
+
+// Armor defenses. Tier zero is rags; tier nineteen is the
+// final "last guard".
+fn armor(0) -> Word { state.id = 0; state.value = 0; 0 }    // rags
+fn armor(1) -> Word { state.id = 1; state.value = 1; 0 }    // padded jacket
+fn armor(2) -> Word { state.id = 2; state.value = 2; 0 }    // leather armor
+fn armor(3) -> Word { state.id = 3; state.value = 3; 0 }    // studded leather
+fn armor(4) -> Word { state.id = 4; state.value = 4; 0 }    // ring mail
+fn armor(5) -> Word { state.id = 5; state.value = 5; 0 }    // chain mail
+fn armor(6) -> Word { state.id = 6; state.value = 6; 0 }    // scale mail
+fn armor(7) -> Word { state.id = 7; state.value = 7; 0 }    // splint mail
+fn armor(8) -> Word { state.id = 8; state.value = 8; 0 }    // plate mail
+fn armor(9) -> Word { state.id = 9; state.value = 10; 0 }   // rune plate
+fn armor(10) -> Word { state.id = 10; state.value = 12; 0 } // mithril mail
+fn armor(11) -> Word { state.id = 11; state.value = 14; 0 } // elven cuirass
+fn armor(12) -> Word { state.id = 12; state.value = 16; 0 } // dragonscale
+fn armor(13) -> Word { state.id = 13; state.value = 18; 0 } // dwarven plate
+fn armor(14) -> Word { state.id = 14; state.value = 20; 0 } // celestial mail
+fn armor(15) -> Word { state.id = 15; state.value = 23; 0 } // bulwark of ages
+fn armor(16) -> Word { state.id = 16; state.value = 26; 0 } // adamantine plate
+fn armor(17) -> Word { state.id = 17; state.value = 30; 0 } // aegis of the host
+fn armor(18) -> Word { state.id = 18; state.value = 35; 0 } // starshield
+fn armor(19) -> Word { state.id = 19; state.value = 40; 0 } // last guard
+fn armor(_n: Word) -> Word { 0 }
