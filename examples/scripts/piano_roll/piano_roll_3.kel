@@ -1,0 +1,1453 @@
+// Song 3. A long-form 16-bit-style boss theme in D minor with a
+// dual-peak structure, six active scales (D natural minor,
+// D harmonic minor, D Phrygian dominant, F major, D whole-tone,
+// cycle-of-fifths cadential arc), and dynamic exercise of every
+// host native registered by the piano-roll example.
+//
+// Structure (ten sections, 1290 first-iteration ticks, 1162-tick
+// loop body):
+//
+//   1. Intro Accelerando      ticks 0..128    90 BPM -> 150 BPM
+//   2. Loop Verse A           ticks 128..384  150 BPM (D minor)
+//   3. Limit Break Ramp A     ticks 384..510  150 -> 250 BPM
+//   4. Chaos Phase A          ticks 510..574  250 BPM
+//   5. Pre-Snap Whole-Tone    ticks 574..586  250 BPM then snap
+//   6. Breakdown              ticks 586..714  150 BPM
+//   7. Loop Verse B           ticks 714..970  150 BPM (F major)
+//   8. Limit Break Ramp B     ticks 970..1098 150 -> 250 BPM
+//   9. Chaos Phase B          ticks 1098..1162 250 BPM
+//  10. Crash-Down and Taper   ticks 1162..1290 250 -> 150 BPM
+//
+// Loop boundary at tick 1290 maps to loop-tick 0 (Verse A onset).
+// The Intro plays once on first iteration only.
+//
+// Eight channels active across the composition:
+//   CH 0: Bass machine (sawtooth gallop, sine sub-drone mode)
+//   CH 1: Neoclassical lead (sawtooth legato; Square laser trill)
+//   CH 2: Arpeggiator (pulse with continuous PWM, filter envelope)
+//   CH 3: Mid-harmony (triangle guide-tones, pulse pad in Verse B)
+//   CH 4: Power-chord roots + detuned-doubling bass octave-down
+//   CH 5: Percussion engine (noise, hi-hat / snare / kick via ADSR)
+//   CH 6: Stereo unison twin (left), parallel-third in Verse B
+//   CH 7: Stereo unison twin (right), parallel-sixth in Verse B
+//
+// Three doubling techniques exercised:
+//   Stereo unison with detune (CH 6 + CH 7 in Verse A and Chaos A)
+//   Detuned doubling (CH 0 + CH 4 bass stack at octave with -10 cents)
+//   Parallel-interval harmonization (CH 6 + CH 7 in Verse B,
+//     scale-aware diatonic thirds and sixths in F major)
+//
+// See tmp/song_3_spec.md for the full musical specification.
+
+use host::play
+use host::silence
+use host::set_enable
+use host::set_waveform
+use host::set_duty
+use host::set_adsr
+use host::set_volume
+use host::set_vibrato
+use host::set_lpf
+use host::set_retrigger
+use host::set_detune
+use host::set_velocity
+use host::set_master_volume
+use host::set_bpm
+use host::song_name
+
+// ---------------------------------------------------------------
+// Data segment. Twenty-three slots per the shared piano-roll
+// schema. Song-specific usage:
+//   init         one-shot setup gate.
+//   loop_count   bumped at the loop boundary. Used for
+//                iteration variation (texture thinning at 1,
+//                percussion overdrive at 2, reset at >= 3).
+//   section      current section pointer (0 through 9).
+//   user0        last-section pointer, used for one-shot
+//                section-onset reconfiguration.
+//   user1..3     reserved (currently unused).
+//   idx, rem     standard per-channel position counters
+//                (unused by this script's input-driven dispatch).
+// ---------------------------------------------------------------
+data state {
+    init: Word,
+    loop_count: Word,
+    section: Word,
+    user0: Word, user1: Word, user2: Word, user3: Word,
+    idx: [Word; 8],
+    rem: [Word; 8],
+}
+
+// ---------------------------------------------------------------
+// Section boundaries (loop-tick offsets within the 1162-tick loop
+// body). The intro is tick 0..128 in absolute input; the loop
+// body starts at input 128. loop_tick = (input - 128) mod 1162.
+// ---------------------------------------------------------------
+fn section_for_loop_tick(t: Word) -> Word {
+    if t < 256 {
+        2  // Verse A (16 bars)
+    } else {
+        if t < 382 {
+            3  // Limit Break Ramp A (126 ticks)
+        } else {
+            if t < 446 {
+                4  // Chaos Phase A (64 ticks)
+            } else {
+                if t < 458 {
+                    5  // Pre-Snap Whole-Tone (12 ticks)
+                } else {
+                    if t < 586 {
+                        6  // Breakdown (128 ticks)
+                    } else {
+                        if t < 842 {
+                            7  // Verse B (256 ticks)
+                        } else {
+                            if t < 970 {
+                                8  // Limit Break Ramp B (128 ticks)
+                            } else {
+                                if t < 1034 {
+                                    9  // Chaos Phase B (64 ticks)
+                                } else {
+                                    10  // Crash-Down (128 ticks)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------
+// Arpeggio interval-pattern vectors. Indexed by chord type then
+// step (0..7). See spec, "Chord-type encoding".
+//   Type 0/1: minor triad         [0, 3, 7, 12, 15, 12, 7, 3]
+//   Type 2:   major triad         [0, 4, 7, 12, 16, 12, 7, 4]
+//   Type 3:   dominant 7 / Phrygian-dominant
+//                                  [0, 4, 7, 10, 13, 10, 7, 4]
+//   Type 4:   diminished / whole-tone
+//                                  [0, 3, 6, 9, 12, 9, 6, 3]
+// ---------------------------------------------------------------
+fn arp_offset(chord_type: Word, step: Word) -> Word {
+    if chord_type == 0 {
+        arp_minor(step)
+    } else {
+        if chord_type == 1 {
+            arp_minor(step)
+        } else {
+            if chord_type == 2 {
+                arp_major(step)
+            } else {
+                if chord_type == 3 {
+                    arp_dom7(step)
+                } else {
+                    arp_dim(step)
+                }
+            }
+        }
+    }
+}
+
+fn arp_minor(step: Word) -> Word {
+    match step {
+        0 => 0,
+        1 => 3,
+        2 => 7,
+        3 => 12,
+        4 => 15,
+        5 => 12,
+        6 => 7,
+        _ => 3,
+    }
+}
+
+fn arp_major(step: Word) -> Word {
+    match step {
+        0 => 0,
+        1 => 4,
+        2 => 7,
+        3 => 12,
+        4 => 16,
+        5 => 12,
+        6 => 7,
+        _ => 4,
+    }
+}
+
+fn arp_dom7(step: Word) -> Word {
+    match step {
+        0 => 0,
+        1 => 4,
+        2 => 7,
+        3 => 10,
+        4 => 13,
+        5 => 10,
+        6 => 7,
+        _ => 4,
+    }
+}
+
+fn arp_dim(step: Word) -> Word {
+    match step {
+        0 => 0,
+        1 => 3,
+        2 => 6,
+        3 => 9,
+        4 => 12,
+        5 => 9,
+        6 => 6,
+        _ => 3,
+    }
+}
+
+// ---------------------------------------------------------------
+// Verse A chord matrix. Roots per bar (0..15) and arp types.
+// Bars 1-4:   Dm, Dm, B-flat, A      [0, 0, 2, 1]
+// Bars 5-8:   Dm, Dm(harmonic), B-flat, A7
+//                                    [0, 1, 2, 3]
+// Bars 9-12:  Gm, C, F, B-flat       [0, 2, 2, 2]
+// Bars 13-16: A7-flat-9, A, Dm, Dm   [4, 1, 0, 0]
+// ---------------------------------------------------------------
+fn verse_a_root(bar: Word) -> Word {
+    match bar {
+        0 => 38, 1 => 38, 2 => 34, 3 => 33,
+        4 => 38, 5 => 38, 6 => 34, 7 => 33,
+        8 => 31, 9 => 36, 10 => 29, 11 => 34,
+        12 => 33, 13 => 33, 14 => 38, _ => 38,
+    }
+}
+
+fn verse_a_arp_type(bar: Word) -> Word {
+    match bar {
+        0 => 0, 1 => 0, 2 => 2, 3 => 1,
+        4 => 0, 5 => 1, 6 => 2, 7 => 3,
+        8 => 0, 9 => 2, 10 => 2, 11 => 2,
+        12 => 4, 13 => 1, 14 => 0, _ => 0,
+    }
+}
+
+// Verse A lead melody. 4 notes per bar (quarter notes).
+// Bars 1-4:  [62, 65, 64, 62, 69, 67, 65, 64, 65, 69, 67, 65, 64, 67, 65, 64]
+// Bars 5-7:  Same as bars 1-3.
+// Bar 8 (transition to bar 9): [61, 64, 67, 69] (C-sharp leading tone).
+// Bars 9-16 derive chord tones from the chord matrix.
+fn verse_a_lead(idx: Word) -> Word {
+    match idx {
+        // Bars 1-4 (indices 0-15)
+        0 => 62, 1 => 65, 2 => 64, 3 => 62,
+        4 => 69, 5 => 67, 6 => 65, 7 => 64,
+        8 => 65, 9 => 69, 10 => 67, 11 => 65,
+        12 => 64, 13 => 67, 14 => 65, 15 => 64,
+        // Bars 5-7 (indices 16-27, identical to bars 1-3)
+        16 => 62, 17 => 65, 18 => 64, 19 => 62,
+        20 => 69, 21 => 67, 22 => 65, 23 => 64,
+        24 => 65, 25 => 69, 26 => 67, 27 => 65,
+        // Bar 8 (indices 28-31, harmonic-minor pivot)
+        28 => 61, 29 => 64, 30 => 67, 31 => 69,
+        // Bars 9-12 (derived chord tones: Gm, C, F, B-flat)
+        32 => 67, 33 => 70, 34 => 74, 35 => 70,
+        36 => 72, 37 => 76, 38 => 79, 39 => 76,
+        40 => 65, 41 => 69, 42 => 72, 43 => 69,
+        44 => 70, 45 => 74, 46 => 77, 47 => 74,
+        // Bars 13-16 (A7-flat-9, A, Dm, Dm with deceptive cadence)
+        48 => 69, 49 => 72, 50 => 70, 51 => 67,
+        52 => 69, 53 => 73, 54 => 76, 55 => 73,
+        56 => 74, 57 => 77, 58 => 81, 59 => 77,
+        // Bar 16 final beats: ascending scalar run into deceptive cadence
+        60 => 69, 61 => 71, 62 => 73, _ => 74,
+    }
+}
+
+// Intro lead melody. One note per bar (sustained over 16 ticks).
+fn intro_lead(bar: Word) -> Word {
+    match bar {
+        0 => 62, 1 => 65, 2 => 69, 3 => 70,
+        4 => 74, 5 => 77, 6 => 81, _ => 80,
+    }
+}
+
+// Intro bassline. One note per bar.
+fn intro_bass(bar: Word) -> Word {
+    match bar {
+        0 => 26, 1 => 26, 2 => 26, 3 => 26,
+        4 => 26, 5 => 26, 6 => 22, _ => 21,
+    }
+}
+
+// ---------------------------------------------------------------
+// Limit Break Ramp A chord matrix. 8 bars total.
+//   Bar 1 is 7/8 (14 ticks); bars 2-8 are 4/4 (16 ticks each).
+// Roots: [38, 31, 29, 36, 34, 36, 33, 33]
+// Arp types: [0, 0, 2, 2, 2, 2, 1, 1]
+// ---------------------------------------------------------------
+fn lbr_a_root(bar: Word) -> Word {
+    match bar {
+        0 => 38, 1 => 31, 2 => 29, 3 => 36,
+        4 => 34, 5 => 36, 6 => 33, _ => 33,
+    }
+}
+
+fn lbr_a_arp_type(bar: Word) -> Word {
+    match bar {
+        0 => 0, 1 => 0, 2 => 2, 3 => 2,
+        4 => 2, 5 => 2, 6 => 1, _ => 1,
+    }
+}
+
+// Limit Break Ramp A lead. Bars 5-8: ascending sixteenth-note scale.
+// 16 notes for bars 5-8, indexed 0..15. Bars 1-4 derive chord tones.
+fn lbr_a_lead_late(t: Word) -> Word {
+    match t {
+        0 => 69, 1 => 71, 2 => 72, 3 => 74,
+        4 => 76, 5 => 77, 6 => 79, 7 => 81,
+        8 => 83, 9 => 85, 10 => 86, 11 => 88,
+        12 => 89, 13 => 91, 14 => 93, _ => 95,
+    }
+}
+
+// ---------------------------------------------------------------
+// Chaos Phase A. Per-bar register ascent.
+//   Bar 25: lead D5/E-flat-5 (74, 75). Arp root D (50).
+//   Bar 26: lead G5/A-flat-5 (79, 80). Arp root G (55).
+//   Bar 27: lead B-flat-5/B5 (82, 83). Arp root B-flat (58).
+//   Bar 28: lead E-flat-6/E6 (86, 87). Arp root A (57).
+// ---------------------------------------------------------------
+fn chaos_a_arp_root(bar: Word) -> Word {
+    match bar {
+        0 => 50, 1 => 55, 2 => 58, _ => 57,
+    }
+}
+
+fn chaos_a_lead_low(bar: Word) -> Word {
+    match bar {
+        0 => 74, 1 => 79, 2 => 82, _ => 86,
+    }
+}
+
+fn chaos_a_lead_high(bar: Word) -> Word {
+    match bar {
+        0 => 75, 1 => 80, 2 => 83, _ => 87,
+    }
+}
+
+fn chaos_a_bass(bar: Word) -> Word {
+    match bar {
+        0 => 26, 1 => 27, 2 => 26, _ => 27,
+    }
+}
+
+// ---------------------------------------------------------------
+// Pre-Snap Whole-Tone cascade. 12 notes descending from D6 to E4.
+// ---------------------------------------------------------------
+fn presnap_lead(tick: Word) -> Word {
+    match tick {
+        0 => 86, 1 => 84, 2 => 82, 3 => 80,
+        4 => 78, 5 => 76, 6 => 74, 7 => 72,
+        8 => 70, 9 => 68, 10 => 66, _ => 64,
+    }
+}
+
+// ---------------------------------------------------------------
+// Breakdown lead. Bars 29-32 silent. Bars 33-36 melodic entry.
+// 4 notes per bar over the four entry bars, 16 total.
+// ---------------------------------------------------------------
+fn breakdown_lead(idx: Word) -> Word {
+    match idx {
+        0 => 65, 1 => 69, 2 => 72, 3 => 77,
+        4 => 76, 5 => 74, 6 => 72, 7 => 69,
+        8 => 70, 9 => 74, 10 => 77, 11 => 81,
+        12 => 79, 13 => 77, 14 => 76, _ => 72,
+    }
+}
+
+// ---------------------------------------------------------------
+// Verse B chord matrix. 16 bars in F major.
+// Chord matrix: F, F, C, C, Dm, Dm, B-flat, C, F, F, Am, Am, B-flat, C, Dm, C.
+// Roots: [29, 29, 36, 36, 38, 38, 34, 36, 29, 29, 33, 33, 34, 36, 38, 36]
+// ---------------------------------------------------------------
+fn verse_b_root(bar: Word) -> Word {
+    match bar {
+        0 => 29, 1 => 29, 2 => 36, 3 => 36,
+        4 => 38, 5 => 38, 6 => 34, 7 => 36,
+        8 => 29, 9 => 29, 10 => 33, 11 => 33,
+        12 => 34, 13 => 36, 14 => 38, _ => 36,
+    }
+}
+
+fn verse_b_arp_type(bar: Word) -> Word {
+    match bar {
+        0 => 2, 1 => 2, 2 => 2, 3 => 2,
+        4 => 0, 5 => 0, 6 => 2, 7 => 2,
+        8 => 2, 9 => 2, 10 => 0, 11 => 0,
+        12 => 2, 13 => 2, 14 => 0, _ => 2,
+    }
+}
+
+// Verse B lead melody. Eighth notes (8 per bar) for bars 1-8,
+// quarter notes (4 per bar) for bars 9-16.
+fn verse_b_lead(idx: Word) -> Word {
+    match idx {
+        // Bars 1-2 (F major core): 8 notes each, 16 total
+        0 => 77, 1 => 76, 2 => 74, 3 => 77, 4 => 81, 5 => 84, 6 => 82, 7 => 81,
+        8 => 79, 9 => 81, 10 => 82, 11 => 79, 12 => 76, 13 => 74, 14 => 72, 15 => 74,
+        // Bars 3-4 (C major core)
+        16 => 76, 17 => 74, 18 => 72, 19 => 76, 20 => 79, 21 => 82, 22 => 81, 23 => 79,
+        24 => 77, 25 => 79, 26 => 81, 27 => 77, 28 => 74, 29 => 72, 30 => 69, 31 => 72,
+        // Bars 5-6 (Dm to B-flat)
+        32 => 74, 33 => 77, 34 => 81, 35 => 79, 36 => 77, 37 => 81, 38 => 86, 39 => 84,
+        40 => 82, 41 => 81, 42 => 79, 43 => 77, 44 => 76, 45 => 74, 46 => 76, 47 => 77,
+        // Bars 7-8 (Am core)
+        48 => 76, 49 => 79, 50 => 82, 51 => 81, 52 => 79, 53 => 82, 54 => 88, 55 => 86,
+        56 => 84, 57 => 83, 58 => 81, 59 => 79, 60 => 77, 61 => 76, 62 => 77, _ => 79,
+    }
+}
+
+// Verse B lead late (bars 9-16): quarter notes.
+fn verse_b_lead_late(idx: Word) -> Word {
+    match idx {
+        // Bars 9-12 (cycle descent): 4 notes per bar
+        0 => 81, 1 => 77, 2 => 74, 3 => 77,
+        4 => 79, 5 => 76, 6 => 72, 7 => 76,
+        8 => 77, 9 => 74, 10 => 70, 11 => 74,
+        12 => 76, 13 => 72, 14 => 69, 15 => 72,
+        // Bars 13-16 (cadence to ramp, ascending run)
+        16 => 74, 17 => 76, 18 => 77, 19 => 79,
+        20 => 81, 21 => 82, 22 => 84, 23 => 86,
+        24 => 88, 25 => 89, 26 => 91, 27 => 93,
+        28 => 95, 29 => 96, 30 => 98, _ => 100,
+    }
+}
+
+// ---------------------------------------------------------------
+// Limit Break Ramp B chord matrix. 8 bars in D harmonic minor.
+// Roots: [38, 31, 33, 38, 34, 31, 33, 33]
+// ---------------------------------------------------------------
+fn lbr_b_root(bar: Word) -> Word {
+    match bar {
+        0 => 38, 1 => 31, 2 => 33, 3 => 38,
+        4 => 34, 5 => 31, 6 => 33, _ => 33,
+    }
+}
+
+fn lbr_b_arp_type(bar: Word) -> Word {
+    match bar {
+        0 => 0, 1 => 0, 2 => 2, 3 => 0,
+        4 => 2, 5 => 0, 6 => 3, _ => 3,
+    }
+}
+
+// ---------------------------------------------------------------
+// Crash-Down cycle of fifths. 8 bars.
+// Roots: [33, 38, 31, 36, 29, 34, 28, 33]
+// ---------------------------------------------------------------
+fn crash_root(bar: Word) -> Word {
+    match bar {
+        0 => 33, 1 => 38, 2 => 31, 3 => 36,
+        4 => 29, 5 => 34, 6 => 28, _ => 33,
+    }
+}
+
+fn crash_arp_type(bar: Word) -> Word {
+    match bar {
+        0 => 1, 1 => 0, 2 => 0, 3 => 2,
+        4 => 2, 5 => 2, 6 => 4, _ => 1,
+    }
+}
+
+// ---------------------------------------------------------------
+// Percussion mask. Channel 5 fires hi-hat/snare/kick variants
+// based on the 16-tick mask.
+//   0 = silence
+//   1 = kick (K)
+//   2 = snare (S)
+//   3 = hi-hat (H)
+// Standard mask: [K . H . S . H . K H S . H K S H]
+// ---------------------------------------------------------------
+fn perc_standard(tick: Word) -> Word {
+    match tick {
+        0 => 1, 1 => 0, 2 => 3, 3 => 0,
+        4 => 2, 5 => 0, 6 => 3, 7 => 0,
+        8 => 1, 9 => 3, 10 => 2, 11 => 0,
+        12 => 3, 13 => 1, 14 => 2, _ => 3,
+    }
+}
+
+// Chaos blast beat: [K H S H K H S H K H S H K H S H]
+fn perc_chaos(tick: Word) -> Word {
+    match tick {
+        0 => 1, 1 => 3, 2 => 2, 3 => 3,
+        4 => 1, 5 => 3, 6 => 2, 7 => 3,
+        8 => 1, 9 => 3, 10 => 2, 11 => 3,
+        12 => 1, 13 => 3, 14 => 2, _ => 3,
+    }
+}
+
+// ---------------------------------------------------------------
+// Helpers.
+// ---------------------------------------------------------------
+
+// Bassline note for the galloping octave ostinato. Alternates
+// between root and root+12 on a fixed 16-tick pattern. Even ticks
+// land on the low octave; odd ticks land on the high octave.
+fn gallop_pitch(root: Word, tick: Word) -> Word {
+    if tick % 2 == 0 {
+        root - 12
+    } else {
+        root
+    }
+}
+
+// Inverted (displaced) bassline for Verse B. High octave on the
+// downbeat, low octave on the off-beat. Inverted version of the
+// gallop.
+fn displaced_pitch(root: Word, tick: Word) -> Word {
+    if tick % 2 == 0 {
+        root
+    } else {
+        root - 12
+    }
+}
+
+// Diatonic parallel-third offset in F major scale. The interval
+// depends on the lead's scale degree.
+//   F (1) -> +4 (major third A)
+//   G (2) -> +3 (minor third B-flat)
+//   A (3) -> +3 (minor third C)
+//   B-flat (4) -> +4 (major third D)
+//   C (5) -> +4 (major third E)
+//   D (6) -> +3 (minor third F)
+//   E (7) -> +3 (minor third G)
+fn parallel_third_f_major(midi: Word) -> Word {
+    let pc = midi % 12;
+    if pc == 5 {
+        midi + 4
+    } else {
+        if pc == 7 {
+            midi + 3
+        } else {
+            if pc == 9 {
+                midi + 3
+            } else {
+                if pc == 10 {
+                    midi + 4
+                } else {
+                    if pc == 0 {
+                        midi + 4
+                    } else {
+                        if pc == 2 {
+                            midi + 3
+                        } else {
+                            midi + 3
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// Diatonic parallel-sixth offset in F major.
+//   F (1) -> +9 (major sixth D)
+//   G (2) -> +9 (major sixth E)
+//   A (3) -> +8 (minor sixth F)
+//   B-flat (4) -> +9 (major sixth G)
+//   C (5) -> +9 (major sixth A)
+//   D (6) -> +8 (minor sixth B-flat)
+//   E (7) -> +8 (minor sixth C)
+fn parallel_sixth_f_major(midi: Word) -> Word {
+    let pc = midi % 12;
+    if pc == 5 {
+        midi + 9
+    } else {
+        if pc == 7 {
+            midi + 9
+        } else {
+            if pc == 9 {
+                midi + 8
+            } else {
+                if pc == 10 {
+                    midi + 9
+                } else {
+                    if pc == 0 {
+                        midi + 9
+                    } else {
+                        if pc == 2 {
+                            midi + 8
+                        } else {
+                            midi + 8
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------
+// Main loop. Per-tick body.
+// ---------------------------------------------------------------
+loop main(input: Word) -> Word {
+    // One-shot setup. Configures all eight channels and the
+    // master volume. The host zeroes the data segment at every
+    // hot swap, so this re-runs cleanly on each song load.
+    if state.init == 0 {
+        host::song_name("Keleusma Project: Cyberforge Suite (0BSD)");
+        host::set_bpm(90);
+        host::set_master_volume(700);
+
+        // Channel 0: Bass machine. Sawtooth, retrigger off, ADSR
+        // tight on the gallop. Centred mix.
+        host::set_waveform(0, 2);
+        host::set_adsr(0, 5, 40, 800, 100);
+        host::set_volume(0, 500, 500);
+        host::set_velocity(0, 1000);
+        host::set_retrigger(0, 1);
+        host::set_vibrato(0, 0, 0);
+        host::set_lpf(0, 0);
+        host::set_detune(0, 0);
+        host::set_enable(0, 1);
+
+        // Channel 1: Neoclassical lead. Sawtooth, retrigger off
+        // for legato, generous ADSR. Centred mix.
+        host::set_waveform(1, 2);
+        host::set_adsr(1, 10, 120, 800, 200);
+        host::set_volume(1, 500, 500);
+        host::set_velocity(1, 1000);
+        host::set_retrigger(1, 0);
+        host::set_vibrato(1, 0, 0);
+        host::set_lpf(1, 0);
+        host::set_detune(1, 0);
+        host::set_enable(1, 1);
+
+        // Channel 2: Arpeggiator. Pulse with retrigger on for
+        // sharp transients. Initial duty at 50 percent.
+        host::set_waveform(2, 4);
+        host::set_duty(2, 500);
+        host::set_adsr(2, 2, 60, 400, 80);
+        host::set_volume(2, 400, 600);
+        host::set_velocity(2, 800);
+        host::set_retrigger(2, 1);
+        host::set_lpf(2, 3500);
+        host::set_enable(2, 1);
+
+        // Channel 3: Mid-harmony pad. Triangle, retrigger off.
+        host::set_waveform(3, 1);
+        host::set_adsr(3, 30, 200, 700, 300);
+        host::set_volume(3, 600, 400);
+        host::set_velocity(3, 700);
+        host::set_retrigger(3, 0);
+        host::set_enable(3, 1);
+
+        // Channel 4: Power-chord roots and detuned-doubling
+        // partner. Pulse 25% with LPF, -10 cents detune relative
+        // to channel 0. Centred mix.
+        host::set_waveform(4, 4);
+        host::set_duty(4, 250);
+        host::set_adsr(4, 5, 50, 700, 150);
+        host::set_volume(4, 500, 500);
+        host::set_velocity(4, 750);
+        host::set_retrigger(4, 1);
+        host::set_lpf(4, 1500);
+        host::set_detune(4, -10);
+        host::set_enable(4, 1);
+
+        // Channel 5: Percussion. Noise waveform; ADSR swapped
+        // per tick between hi-hat, snare, and kick profiles.
+        host::set_waveform(5, 5);
+        host::set_volume(5, 500, 500);
+        host::set_velocity(5, 800);
+        host::set_retrigger(5, 1);
+        host::set_enable(5, 1);
+
+        // Channel 6: Stereo unison left twin. Sawtooth mirroring
+        // channel 1, +12 cents detune, hard-panned left.
+        host::set_waveform(6, 2);
+        host::set_adsr(6, 10, 120, 700, 200);
+        host::set_volume(6, 1000, 0);
+        host::set_velocity(6, 700);
+        host::set_retrigger(6, 0);
+        host::set_detune(6, 12);
+        host::set_vibrato(6, 600, 25);
+        host::set_enable(6, 0);
+
+        // Channel 7: Stereo unison right twin. Sawtooth, -12 cents
+        // detune, hard-panned right. Vibrato rate offset from
+        // channel 6 for ensemble shimmer.
+        host::set_waveform(7, 2);
+        host::set_adsr(7, 10, 120, 700, 200);
+        host::set_volume(7, 0, 1000);
+        host::set_velocity(7, 700);
+        host::set_retrigger(7, 0);
+        host::set_detune(7, -12);
+        host::set_vibrato(7, 400, 25);
+        host::set_enable(7, 0);
+
+        state.init = 1;
+        state.section = 1;  // 1 = Intro on first iteration
+    };
+
+    // Compute loop position. The intro plays once per song load;
+    // subsequent loop iterations enter directly at Verse A.
+    let in_intro = input < 128;
+    let loop_tick = if in_intro {
+        0  // unused while in_intro is true
+    } else {
+        (input - 128) % 1162
+    };
+
+    let section = if in_intro {
+        1
+    } else {
+        section_for_loop_tick(loop_tick)
+    };
+
+    let section_changed = section != state.section;
+    state.section = section;
+
+    // -----------------------------------------------------------
+    // Per-tick BPM updates during ramp sections. The "NES strategy
+    // of updating registers every tick" requires intermediate
+    // tempo values, not step functions.
+    // -----------------------------------------------------------
+    if in_intro {
+        // Intro Accelerando: 90 BPM -> 150 BPM across 128 ticks.
+        host::set_bpm(90 + input * 60 / 128);
+        // Master volume swells from 700 to 1000 across the intro.
+        host::set_master_volume(700 + input * 300 / 128);
+    } else {
+        if section == 3 {
+            // Limit Break Ramp A: 150 -> 250 across 126 ticks
+            // (loop-ticks 256..382).
+            let progress = loop_tick - 256;
+            host::set_bpm(150 + progress * 100 / 126);
+            // Filter sweep on channel 2 (arpeggio) and channel 0
+            // (bass) for the buildup.
+            host::set_lpf(2, 800 + progress * 3200 / 126);
+            host::set_lpf(0, 200 + progress * 1800 / 126);
+            // Vibrato depth ramps on the lead.
+            host::set_vibrato(1, 500 + progress * 700 / 126, 30 + progress * 70 / 126);
+        } else {
+            if section == 8 {
+                // Limit Break Ramp B: 150 -> 250 across 128 ticks.
+                let progress = loop_tick - 842;
+                host::set_bpm(150 + progress * 100 / 128);
+                host::set_lpf(2, 800 + progress * 3200 / 128);
+                host::set_lpf(0, 200 + progress * 1800 / 128);
+            } else {
+                if section == 5 {
+                    // Pre-Snap stays at 250.
+                    host::set_bpm(250);
+                } else {
+                    if section == 10 {
+                        // Crash-Down: 250 -> 150 across 128 ticks.
+                        let progress = loop_tick - 1034;
+                        host::set_bpm(250 - progress * 100 / 128);
+                        // Master volume fades.
+                        host::set_master_volume(1000 - progress * 700 / 128);
+                    } else {
+                        // Other sections lock at their nominal tempo.
+                        if section == 2 {
+                            host::set_bpm(150);
+                            host::set_master_volume(1000);
+                        } else {
+                            if section == 4 {
+                                host::set_bpm(250);
+                            } else {
+                                if section == 6 {
+                                    host::set_bpm(150);
+                                } else {
+                                    if section == 7 {
+                                        host::set_bpm(150);
+                                    } else {
+                                        if section == 9 {
+                                            host::set_bpm(250);
+                                        } else {
+                                            host::set_bpm(150);
+                                        };
+                                    };
+                                };
+                            };
+                        };
+                    };
+                };
+            };
+        };
+    };
+
+    // -----------------------------------------------------------
+    // Section-boundary reconfiguration. One-shot setup on the
+    // first tick of each section.
+    // -----------------------------------------------------------
+    if section_changed {
+        if section == 2 {
+            // Verse A entry: enable stereo unison pair; lead on
+            // Sawtooth legato.
+            host::set_waveform(1, 2);
+            host::set_retrigger(1, 0);
+            host::set_adsr(1, 10, 120, 800, 200);
+            host::set_detune(1, 0);
+            host::set_lpf(1, 0);
+            host::set_vibrato(1, 500, 30);
+            host::set_enable(6, 1);
+            host::set_enable(7, 1);
+            host::set_detune(6, 12);
+            host::set_detune(7, -12);
+            host::set_enable(0, 1);
+            host::set_enable(4, 1);
+            host::set_enable(5, 1);
+        } else {
+            if section == 4 {
+                // Chaos A entry: Channel 1 morphs to Square laser
+                // trill with retrigger on and collapsed sustain.
+                host::set_waveform(1, 0);
+                host::set_retrigger(1, 1);
+                host::set_adsr(1, 1, 40, 0, 30);
+                host::set_vibrato(1, 0, 0);
+                // Channel 0 morphs to sine sub-bass drone.
+                host::set_waveform(0, 3);
+                host::set_lpf(0, 120);
+            } else {
+                if section == 6 {
+                    // Breakdown entry: lead carries distorted
+                    // Square with detune (dive-bomb recovery
+                    // begins at -600 cents, recovers to 0 over
+                    // the first 16 ticks).
+                    host::set_waveform(1, 0);
+                    host::set_retrigger(1, 1);
+                    host::set_adsr(1, 5, 100, 500, 150);
+                    host::set_detune(1, -600);
+                    // Channel 5 percussion silenced for first 4
+                    // bars; channel 2 low-passed for murmur.
+                    host::set_lpf(2, 400);
+                    host::set_enable(5, 0);
+                    host::set_enable(6, 0);
+                    host::set_enable(7, 0);
+                } else {
+                    if section == 7 {
+                        // Verse B entry: F major, parallel-interval
+                        // harmonization. Channel 1 returns to
+                        // Sawtooth (clean) with retrigger off.
+                        host::set_waveform(1, 2);
+                        host::set_retrigger(1, 0);
+                        host::set_adsr(1, 10, 120, 800, 200);
+                        host::set_detune(1, 0);
+                        // Channels 6 and 7 re-enable for parallel
+                        // harmonization; detune resets to zero.
+                        host::set_enable(6, 1);
+                        host::set_enable(7, 1);
+                        host::set_detune(6, 0);
+                        host::set_detune(7, 0);
+                        // Channel 3 pad switches to Pulse with
+                        // vibrato for the heroic-ensemble texture.
+                        host::set_waveform(3, 4);
+                        host::set_duty(3, 400);
+                        host::set_vibrato(3, 500, 40);
+                        // Channel 0 returns to sawtooth gallop
+                        // shape (now playing displaced ostinato).
+                        host::set_waveform(0, 2);
+                        host::set_lpf(0, 0);
+                        // Channel 5 re-enables.
+                        host::set_enable(5, 1);
+                        // Channel 2 filter envelope resets.
+                        host::set_lpf(2, 3500);
+                    } else {
+                        if section == 8 {
+                            // Limit Break Ramp B entry. Vibrato re-
+                            // engages on lead.
+                            host::set_vibrato(1, 500, 30);
+                        } else {
+                            if section == 9 {
+                                // Chaos B entry: mirror Chaos A
+                                // morph for channel 1.
+                                host::set_waveform(1, 0);
+                                host::set_retrigger(1, 1);
+                                host::set_adsr(1, 1, 40, 0, 30);
+                                host::set_vibrato(1, 0, 0);
+                            } else {
+                                if section == 10 {
+                                    // Crash entry: silence high
+                                    // channels for the descent.
+                                    host::set_enable(6, 0);
+                                    host::set_enable(7, 0);
+                                    // Channel 3 switches to detune
+                                    // oscillation drone.
+                                    host::set_waveform(3, 4);
+                                    host::set_duty(3, 250);
+                                };
+                            };
+                        };
+                    };
+                };
+            };
+        };
+    };
+
+    // -----------------------------------------------------------
+    // Per-section voice firing. The per-tick body dispatches
+    // pitch events on the active channels using the lookup tables
+    // and the gallop / displaced / chaos bass patterns.
+    // -----------------------------------------------------------
+    let tick_in_bar = if in_intro {
+        input % 16
+    } else {
+        loop_tick % 16
+    };
+
+    let bar_abs = if in_intro {
+        input / 16
+    } else {
+        loop_tick / 16
+    };
+
+    // ----- Section 1: Intro -----
+    if in_intro {
+        // Bass: pedal D1 (or stepping to B-flat-0 / A0) sustained
+        // across the bar. Hit on tick 0.
+        if tick_in_bar == 0 {
+            let bass = intro_bass(bar_abs);
+            host::play(0, bass);
+            host::play(4, bass + 12);
+        };
+        // Lead: sustained note per bar.
+        if tick_in_bar == 0 {
+            host::play(1, intro_lead(bar_abs));
+        };
+        // Arpeggio: minor triad on D, advancing per tick.
+        let step = tick_in_bar % 8;
+        host::play(2, 62 + arp_minor(step));
+        // Per-tick PWM modulation on channel 2 (continuous sweep).
+        host::set_duty(2, 400 + (input * 7) % 400);
+    };
+
+    // ----- Section 2: Verse A -----
+    if section == 2 {
+        let bar = (loop_tick - 0) / 16;
+        let bar_tick = loop_tick % 16;
+        let root = verse_a_root(bar);
+        let arp_t = verse_a_arp_type(bar);
+
+        // Galloping octave bass on channel 0 and detuned-doubling
+        // partner on channel 4 (octave above with -10 cents).
+        host::play(0, gallop_pitch(root, bar_tick));
+        host::play(4, gallop_pitch(root, bar_tick) + 12);
+
+        // Lead: quarter notes (1 note every 4 ticks).
+        if bar_tick % 4 == 0 {
+            let note_idx = bar * 4 + bar_tick / 4;
+            let lead = verse_a_lead(note_idx);
+            host::play(1, lead);
+            // Stereo unison twins mirror the lead pitch.
+            host::play(6, lead);
+            host::play(7, lead);
+        };
+
+        // Arpeggio: one step per tick.
+        let step = bar_tick % 8;
+        host::play(2, root + 12 + arp_offset(arp_t, step));
+
+        // PWM modulation on arpeggio (continuous).
+        host::set_duty(2, 400 + (input * 7) % 400);
+
+        // Filter envelope on channel 2: open on bar onset, decay.
+        if bar_tick == 0 {
+            host::set_lpf(2, 3500);
+        } else {
+            host::set_lpf(2, 3500 - bar_tick * 180);
+        };
+
+        // Mid-harmony: alternate between low and high voice every
+        // 8 ticks. Use simple voicing on root + minor third.
+        if bar_tick == 0 {
+            host::play(3, root - 5);
+        } else {
+            if bar_tick == 8 {
+                host::play(3, root - 2);
+            };
+        };
+
+        // Percussion: standard mask.
+        let perc = perc_standard(bar_tick);
+        if perc == 1 {
+            host::set_adsr(5, 2, 45, 0, 10);
+            host::set_velocity(5, 900);
+            host::set_lpf(5, 400);
+            host::play(5, 45);
+        } else {
+            if perc == 2 {
+                host::set_adsr(5, 1, 110, 0, 30);
+                host::set_velocity(5, 980);
+                host::set_lpf(5, 0);
+                host::play(5, 60);
+            } else {
+                if perc == 3 {
+                    host::set_adsr(5, 1, 15, 0, 5);
+                    host::set_velocity(5, 650);
+                    host::set_lpf(5, 0);
+                    host::play(5, 80);
+                };
+            };
+        };
+
+        // Velocity accent on bass downbeats (tick 0 and 8 of bar).
+        if bar_tick == 0 {
+            host::set_velocity(0, 1000);
+        } else {
+            if bar_tick == 8 {
+                host::set_velocity(0, 950);
+            } else {
+                host::set_velocity(0, 850);
+            };
+        };
+    };
+
+    // ----- Section 3: Limit Break Ramp A -----
+    if section == 3 {
+        // Approximate bar within 126-tick section. Bar 0 is 7/8
+        // (14 ticks); bars 1-7 are 16 ticks each.
+        let in_section = loop_tick - 256;
+        let bar = if in_section < 14 {
+            0
+        } else {
+            1 + (in_section - 14) / 16
+        };
+        let bar_tick = if in_section < 14 {
+            in_section
+        } else {
+            (in_section - 14) % 16
+        };
+        let root = lbr_a_root(bar);
+        let arp_t = lbr_a_arp_type(bar);
+
+        // Bass continues gallop.
+        host::play(0, gallop_pitch(root, bar_tick));
+        host::play(4, gallop_pitch(root, bar_tick) + 12);
+
+        // Lead: bars 5-8 fire the ascending scale run; earlier
+        // bars hold chord tones.
+        if bar >= 4 {
+            let note_idx = (bar - 4) * 4 + bar_tick / 4;
+            if bar_tick % 4 == 0 {
+                host::play(1, lbr_a_lead_late(note_idx));
+            };
+        } else {
+            if bar_tick % 8 == 0 {
+                host::play(1, root + 24);
+            };
+        };
+
+        // Arpeggio: step per tick.
+        let step = bar_tick % 8;
+        host::play(2, root + 12 + arp_offset(arp_t, step));
+        host::set_duty(2, 400 + (input * 7) % 400);
+
+        // Percussion: standard mask except final bar (pre-snap
+        // snare roll on every even tick).
+        let in_final_bar = bar == 7;
+        if in_final_bar {
+            if bar_tick % 2 == 0 {
+                host::set_adsr(5, 1, 110, 0, 30);
+                host::set_velocity(5, 500 + bar_tick * 35);
+                host::set_lpf(5, 0);
+                host::play(5, 60);
+            };
+        } else {
+            let perc = perc_standard(bar_tick);
+            if perc == 1 {
+                host::set_adsr(5, 2, 45, 0, 10);
+                host::set_velocity(5, 900);
+                host::play(5, 45);
+            } else {
+                if perc == 2 {
+                    host::set_adsr(5, 1, 110, 0, 30);
+                    host::set_velocity(5, 980);
+                    host::play(5, 60);
+                } else {
+                    if perc == 3 {
+                        host::set_adsr(5, 1, 15, 0, 5);
+                        host::set_velocity(5, 650);
+                        host::play(5, 80);
+                    };
+                };
+            };
+        };
+    };
+
+    // ----- Section 4: Chaos Phase A -----
+    if section == 4 {
+        let in_section = loop_tick - 382;
+        let bar = in_section / 16;
+        let bar_tick = in_section % 16;
+
+        // Bass: relentless sixteenth-note pedal alternating D / E-flat.
+        host::play(0, chaos_a_bass(bar));
+        host::play(4, chaos_a_bass(bar) + 12);
+
+        // Lead: trills alternating low / high pitches.
+        if bar_tick % 2 == 0 {
+            host::play(1, chaos_a_lead_low(bar));
+        } else {
+            host::play(1, chaos_a_lead_high(bar));
+        };
+
+        // Arpeggio: triplet polyrhythm. Approximate by stepping
+        // every 2/3 of a tick. Use (in_section * 3 / 2) % 8 to
+        // index the step.
+        let trip_step = (in_section * 3 / 2) % 8;
+        host::play(2, chaos_a_arp_root(bar) + 12 + arp_dom7(trip_step));
+
+        // Mid-harmony staccato chops on off-beats.
+        if bar_tick == 2 {
+            host::play(3, 50);
+        } else {
+            if bar_tick == 6 {
+                host::play(3, 51);
+            } else {
+                if bar_tick == 10 {
+                    host::play(3, 50);
+                } else {
+                    if bar_tick == 14 {
+                        host::play(3, 51);
+                    };
+                };
+            };
+        };
+
+        // Chaos blast beat percussion.
+        let perc = perc_chaos(bar_tick);
+        if perc == 1 {
+            host::set_adsr(5, 2, 45, 0, 10);
+            host::set_velocity(5, 950);
+            host::play(5, 45);
+        } else {
+            if perc == 2 {
+                host::set_adsr(5, 1, 110, 0, 30);
+                host::set_velocity(5, 1000);
+                host::play(5, 60);
+            } else {
+                if perc == 3 {
+                    host::set_adsr(5, 1, 15, 0, 5);
+                    host::set_velocity(5, 700);
+                    host::play(5, 80);
+                };
+            };
+        };
+
+        // Velocity overdrive on all channels approaching the snap.
+        if bar == 3 {
+            host::set_velocity(0, 1000);
+            host::set_velocity(1, 1000);
+            host::set_velocity(2, 1000);
+        };
+    };
+
+    // ----- Section 5: Pre-Snap Whole-Tone -----
+    if section == 5 {
+        let in_section = loop_tick - 446;
+        // Channel 1 descends through the whole-tone cascade.
+        host::play(1, presnap_lead(in_section));
+        // Bass tracks the cascade an octave below.
+        host::play(0, presnap_lead(in_section) - 24);
+
+        // Apply dive-bomb pitch-bend on the final tick: instant
+        // -600 cents on channel 1.
+        if in_section == 11 {
+            host::set_detune(1, -600);
+        };
+    };
+
+    // ----- Section 6: Breakdown -----
+    if section == 6 {
+        let in_section = loop_tick - 458;
+        let bar = in_section / 16;
+        let bar_tick = in_section % 16;
+
+        // Bars 1-4 (in_section 0..63): ominous D pedal.
+        if bar < 4 {
+            if bar_tick == 0 {
+                host::play(0, 38);
+                host::play(4, 50);
+                // Channel 3 ominous A2 drone.
+                host::play(3, 45);
+                // Channel 2 low-passed D minor triad murmur.
+                host::play(2, 50 + arp_minor(bar % 8));
+            };
+            // Dive-bomb recovery: ramp detune from -600 to 0 over
+            // the first 16 ticks.
+            if in_section < 16 {
+                host::set_detune(1, -600 + in_section * 600 / 16);
+            } else {
+                host::set_detune(1, 0);
+            };
+        } else {
+            // Bars 5-8: lead enters with the melodic-entry phrase.
+            if bar_tick % 4 == 0 {
+                let idx = (bar - 4) * 4 + bar_tick / 4;
+                host::play(1, breakdown_lead(idx));
+            };
+
+            // Bass starts to step toward F major. Hold D pedal
+            // through bar 5, step to A through bar 6, then F by
+            // bar 8.
+            if bar_tick == 0 {
+                let bass = if bar == 4 {
+                    38
+                } else {
+                    if bar == 5 {
+                        38
+                    } else {
+                        if bar == 6 {
+                            33
+                        } else {
+                            29
+                        }
+                    }
+                };
+                host::play(0, bass);
+                host::play(4, bass + 12);
+            };
+
+            // Percussion re-enters with hi-hat clicks only at bar 5.
+            if bar == 4 {
+                host::set_enable(5, 1);
+            };
+            if bar >= 4 {
+                if bar_tick % 4 == 2 {
+                    host::set_adsr(5, 1, 15, 0, 5);
+                    host::set_velocity(5, 600);
+                    host::play(5, 80);
+                };
+            };
+        };
+    };
+
+    // ----- Section 7: Verse B -----
+    if section == 7 {
+        let in_section = loop_tick - 586;
+        let bar = in_section / 16;
+        let bar_tick = in_section % 16;
+        let root = verse_b_root(bar);
+        let arp_t = verse_b_arp_type(bar);
+
+        // Bass: displaced octave gallop (inverted from Verse A).
+        host::play(0, displaced_pitch(root, bar_tick));
+        host::play(4, displaced_pitch(root, bar_tick) + 12);
+
+        // Lead: bars 1-8 eighth notes (8 per bar = 1 per 2 ticks).
+        //       bars 9-16 quarter notes (4 per bar = 1 per 4 ticks).
+        if bar < 8 {
+            if bar_tick % 2 == 0 {
+                let idx = bar * 8 + bar_tick / 2;
+                let lead = verse_b_lead(idx);
+                host::play(1, lead);
+                // Parallel-interval harmonization in F major.
+                host::play(6, parallel_third_f_major(lead));
+                host::play(7, parallel_sixth_f_major(lead));
+            };
+        } else {
+            if bar_tick % 4 == 0 {
+                let idx = (bar - 8) * 4 + bar_tick / 4;
+                let lead = verse_b_lead_late(idx);
+                host::play(1, lead);
+                host::play(6, parallel_third_f_major(lead));
+                host::play(7, parallel_sixth_f_major(lead));
+            };
+        };
+
+        // Arpeggio.
+        let step = bar_tick % 8;
+        host::play(2, root + 12 + arp_offset(arp_t, step));
+        host::set_duty(2, 400 + (input * 11) % 400);
+
+        // Mid-harmony lush pad (alternates two voices per bar).
+        if bar_tick == 0 {
+            host::play(3, root - 5);
+        } else {
+            if bar_tick == 8 {
+                host::play(3, root - 2);
+            };
+        };
+
+        // Percussion: standard mask continues.
+        let perc = perc_standard(bar_tick);
+        if perc == 1 {
+            host::set_adsr(5, 2, 45, 0, 10);
+            host::set_velocity(5, 900);
+            host::play(5, 45);
+        } else {
+            if perc == 2 {
+                host::set_adsr(5, 1, 110, 0, 30);
+                host::set_velocity(5, 980);
+                host::play(5, 60);
+            } else {
+                if perc == 3 {
+                    host::set_adsr(5, 1, 15, 0, 5);
+                    host::set_velocity(5, 650);
+                    host::play(5, 80);
+                };
+            };
+        };
+    };
+
+    // ----- Section 8: Limit Break Ramp B -----
+    if section == 8 {
+        let in_section = loop_tick - 842;
+        let bar = in_section / 16;
+        let bar_tick = in_section % 16;
+        let root = lbr_b_root(bar);
+        let arp_t = lbr_b_arp_type(bar);
+
+        host::play(0, gallop_pitch(root, bar_tick));
+        host::play(4, gallop_pitch(root, bar_tick) + 12);
+
+        // Lead: ascending scale runs (chord-derived).
+        if bar_tick % 4 == 0 {
+            host::play(1, root + 24 + (bar_tick / 4) * 2);
+        };
+
+        let step = bar_tick % 8;
+        host::play(2, root + 12 + arp_offset(arp_t, step));
+
+        // Drum fill on final bar.
+        if bar == 7 {
+            if bar_tick % 2 == 0 {
+                host::set_adsr(5, 1, 110, 0, 30);
+                host::set_velocity(5, 500 + bar_tick * 35);
+                host::play(5, 60);
+            };
+        } else {
+            let perc = perc_standard(bar_tick);
+            if perc == 1 {
+                host::set_adsr(5, 2, 45, 0, 10);
+                host::set_velocity(5, 900);
+                host::play(5, 45);
+            } else {
+                if perc == 2 {
+                    host::set_adsr(5, 1, 110, 0, 30);
+                    host::set_velocity(5, 980);
+                    host::play(5, 60);
+                } else {
+                    if perc == 3 {
+                        host::set_adsr(5, 1, 15, 0, 5);
+                        host::set_velocity(5, 650);
+                        host::play(5, 80);
+                    };
+                };
+            };
+        };
+    };
+
+    // ----- Section 9: Chaos Phase B -----
+    if section == 9 {
+        let in_section = loop_tick - 970;
+        let bar = in_section / 16;
+        let bar_tick = in_section % 16;
+
+        host::play(0, chaos_a_bass(bar));
+        host::play(4, chaos_a_bass(bar) + 12);
+
+        // Lead: descending sweep instead of trills.
+        if bar_tick % 2 == 0 {
+            host::play(1, 90 - in_section / 2);
+        };
+
+        let trip_step = (in_section * 3 / 2) % 8;
+        host::play(2, chaos_a_arp_root(bar) + 12 + arp_dom7(trip_step));
+
+        // Chaos blast beat.
+        let perc = perc_chaos(bar_tick);
+        if perc == 1 {
+            host::set_adsr(5, 2, 45, 0, 10);
+            host::set_velocity(5, 950);
+            host::play(5, 45);
+        } else {
+            if perc == 2 {
+                host::set_adsr(5, 1, 110, 0, 30);
+                host::set_velocity(5, 1000);
+                host::play(5, 60);
+            } else {
+                if perc == 3 {
+                    host::set_adsr(5, 1, 15, 0, 5);
+                    host::set_velocity(5, 700);
+                    host::play(5, 80);
+                };
+            };
+        };
+    };
+
+    // ----- Section 10: Crash-Down and Taper -----
+    if section == 10 {
+        let in_section = loop_tick - 1034;
+        let bar = in_section / 16;
+        let bar_tick = in_section % 16;
+        let root = crash_root(bar);
+        let arp_t = crash_arp_type(bar);
+
+        // Bass: held root per bar.
+        if bar_tick == 0 {
+            host::play(0, root - 12);
+            host::play(4, root);
+        };
+
+        // Channel 3 detune oscillation drone during Crash.
+        host::set_detune(3, 25 - (in_section * 7) % 50);
+
+        // Mid-harmony plays root with the detune oscillation.
+        if bar_tick == 0 {
+            host::play(3, root);
+        };
+
+        // Arpeggio: still active but progressively quieter.
+        let step = bar_tick % 8;
+        host::play(2, root + 12 + arp_offset(arp_t, step));
+        // Channel 2 velocity scales down toward end of crash.
+        host::set_velocity(2, 800 - bar * 80);
+
+        // Channel 1 plays diminishing melodic fragments.
+        if bar_tick == 0 {
+            if bar < 6 {
+                host::play(1, root + 12);
+            } else {
+                host::silence(1);
+            };
+        };
+
+        // Percussion fades.
+        let perc = perc_standard(bar_tick);
+        let perc_vel = 800 - bar * 100;
+        if perc_vel > 0 {
+            if perc == 1 {
+                host::set_adsr(5, 2, 45, 0, 10);
+                host::set_velocity(5, perc_vel);
+                host::play(5, 45);
+            } else {
+                if perc == 2 {
+                    host::set_adsr(5, 1, 110, 0, 30);
+                    host::set_velocity(5, perc_vel);
+                    host::play(5, 60);
+                };
+            };
+        };
+    };
+
+    // -----------------------------------------------------------
+    // Loop-iteration variation through state.loop_count. Derived
+    // directly from input so the value is correct independent of
+    // when the song was loaded. The host resets the script-visible
+    // tick at every hot-swap, so input == 0 at the first call of
+    // each load; the formula below is then well-defined.
+    //
+    //   input < 128         : intro, loop_count = 0
+    //   (input - 128) / 1162: zero-based loop iteration count
+    //   mod 3               : wraps at three for deterministic
+    //                         long-term stability
+    // -----------------------------------------------------------
+    state.loop_count = if in_intro {
+        0
+    } else {
+        ((input - 128) / 1162) % 3
+    };
+
+    let _ = yield 0;
+    0
+}

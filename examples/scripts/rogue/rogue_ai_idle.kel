@@ -1,0 +1,30 @@
+// Idle artificial-intelligence archetype.
+//
+// The monster does nothing. Used for stationary fungi, statues,
+// guardians that strike only when attacked, and the like. The
+// host still passes the monster's full state, so the same call
+// convention works across every archetype.
+//
+// Call convention. The host invokes `fn main` per monster per
+// turn with the parameters described below and reads the
+// returned action tuple to commit movement, melee attacks, or
+// ranged attacks.
+//
+// Inputs.
+//   mx, my       Monster cell coordinates.
+//   px, py       Player cell coordinates.
+//   sees_player  1 if the monster can see the player this turn,
+//                else 0. Computed by the host via line of sight.
+//
+// Output tuple `(action, tx, ty)`. Stable across all artificial-
+// intelligence scripts.
+//   action = 0  Wait. (tx, ty) ignored.
+//   action = 1  Move or attack into cell (tx, ty). Adjacent only.
+//               If the cell is the player's, the host resolves
+//               the move as a melee attack.
+//   action = 2  Ranged attack at cell (tx, ty). Cell may be any
+//               distance away. Currently used by `ai_ranged`.
+
+fn main(mx: Word, my: Word, px: Word, py: Word, sees_player: Word) -> (Word, Word, Word) {
+    (0, mx, my)
+}

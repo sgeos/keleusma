@@ -12,11 +12,21 @@
 //! slot layout. Where the manual narrates around the surface, the
 //! comment below lists the surface itself.
 //!
+//! # Script location
+//!
+//! The Keleusma scripts for this example live in
+//! `examples/scripts/piano_roll/`. The `include_str!` lines in
+//! `SONG_SOURCES` reference that directory through a relative
+//! path. Edit a `.kel` file there and rebuild this binary to
+//! pick up the change.
+//!
 //! # Architecture
 //!
 //! A roster of Keleusma scripts named `piano_roll_<N>.kel`
-//! (currently `piano_roll_0.kel`, `piano_roll_1.kel`, and
-//! `piano_roll_2.kel`) is precompiled at startup and
+//! (currently `piano_roll_0.kel`, `piano_roll_1.kel`,
+//! `piano_roll_2.kel`, `piano_roll_3.kel`, `piano_roll_4.kel`,
+//! `piano_roll_5.kel`, `piano_roll_6.kel`, `piano_roll_7.kel`,
+//! `piano_roll_8.kel`, and `piano_roll_9.kel`) is precompiled at startup and
 //! registered in the `SONG_SOURCES` slice in this file. The currently-active script runs on the
 //! main thread at one yield per 16th-note tick (125 ms at 120
 //! BPM by default; the script can call `host::set_bpm` to
@@ -29,9 +39,9 @@
 //! on the audio thread.
 //!
 //! Adding a new song is just dropping a `piano_roll_<N>.kel`
-//! file next to this one and appending a matching `include_str!`
-//! line to `SONG_SOURCES`. The swap action cycles through the
-//! slice in order.
+//! file into `examples/scripts/piano_roll/` and appending a
+//! matching `include_str!` line to `SONG_SOURCES`. The swap
+//! action cycles through the slice in order.
 //!
 //! - **Audio thread (SDL3 callback)**: receives a sample buffer
 //!   to fill at sample rate (48 kHz), reads the current voice
@@ -46,7 +56,9 @@
 //!   boundary for `Vm::replace_module`.
 //! - **Stdin thread**: blocks on `read_line` and forwards user
 //!   commands to the main thread through an `mpsc` channel. The
-//!   string `"s"` requests a song swap; any other input quits.
+//!   string `"s"` requests a song swap; `"p"` toggles pause/
+//!   resume; `"r"` restarts the current song; a numeric line
+//!   jumps directly to that song index; any other input quits.
 //!
 //! # Per-channel instrument control
 //!
@@ -149,6 +161,11 @@
 //!
 //! - `s` — cycle to the next song.
 //! - `r` — restart the current song from its beginning.
+//! - `p` — toggle pause/resume. While paused the SDL3 audio
+//!   stream is paused and the script-visible tick does not
+//!   advance. A subsequent `p` resumes both. Song-change
+//!   commands received while paused queue and take effect on
+//!   resume.
 //! - `<N>` — jump directly to song `N` (e.g. `0` or `1`).
 //! - Enter alone — quit.
 //!
@@ -710,6 +727,12 @@ enum Command {
     /// Jump directly to a specific song by index. Out-of-range
     /// indices are reported and ignored.
     SelectSong(usize),
+    /// Toggle the paused state. When paused, the SDL3 audio
+    /// device is paused (silencing playback) and the VM tick
+    /// loop suspends. The script-visible tick does not advance
+    /// during pause. A subsequent pause toggle resumes both the
+    /// audio device and the tick loop from where they left off.
+    PauseToggle,
     /// Stop the host loop.
     Quit,
 }
@@ -720,14 +743,22 @@ enum Command {
 
 // The song roster. Each entry is the source text of one
 // `piano_roll_<song>.kel` file. To add song N: drop a new
-// `piano_roll_<N>.kel` next to this file and append the
-// matching `include_str!` here. The swap action cycles through
+// `piano_roll_<N>.kel` into `examples/scripts/piano_roll/` and
+// append the matching `include_str!` here. The swap action
+// cycles through
 // songs in this order, so the song-number indexing in the on-
 // screen log matches the index into this slice.
 const SONG_SOURCES: &[&str] = &[
-    include_str!("piano_roll_0.kel"),
-    include_str!("piano_roll_1.kel"),
-    include_str!("piano_roll_2.kel"),
+    include_str!("scripts/piano_roll/piano_roll_0.kel"),
+    include_str!("scripts/piano_roll/piano_roll_1.kel"),
+    include_str!("scripts/piano_roll/piano_roll_2.kel"),
+    include_str!("scripts/piano_roll/piano_roll_3.kel"),
+    include_str!("scripts/piano_roll/piano_roll_4.kel"),
+    include_str!("scripts/piano_roll/piano_roll_5.kel"),
+    include_str!("scripts/piano_roll/piano_roll_6.kel"),
+    include_str!("scripts/piano_roll/piano_roll_7.kel"),
+    include_str!("scripts/piano_roll/piano_roll_8.kel"),
+    include_str!("scripts/piano_roll/piano_roll_9.kel"),
 ];
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -831,6 +862,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 Command::Swap
             } else if line.eq_ignore_ascii_case("r") {
                 Command::Restart
+            } else if line.eq_ignore_ascii_case("p") {
+                Command::PauseToggle
             } else if let Ok(n) = line.parse::<usize>() {
                 Command::SelectSong(n)
             } else {
@@ -846,11 +879,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
-    println!(
-        "Keleusma piano roll. 120 BPM, eight voices, three active. {} song(s) loaded.",
-        modules.len()
-    );
-    println!("[ Commands: s=next, r=restart, <N>=select song N, Enter=quit ]");
+    println!("Keleusma piano roll. {} song(s) loaded.", modules.len());
+    println!("[ Commands: s=next, r=restart, p=pause/resume, <N>=select song N, Enter=quit ]");
     println!("[ now playing song 0 ]");
 
     match vm
@@ -867,29 +897,72 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     // `Some(target)` means "load song `target` on the next
     // Reset"; `target == active_song` means restart in place.
     let mut pending_song_change: Option<usize> = None;
+    // Paused state. When `paused == true`, the SDL3 audio device
+    // is paused (silencing playback) and the tick loop blocks
+    // waiting for the next command rather than advancing time.
+    // A pause-toggle command flips the state. Song-change
+    // commands received while paused are queued and take effect
+    // on resume through the standard pending_song_change path.
+    let mut paused = false;
 
     loop {
-        match cmd_rx.try_recv() {
-            Ok(Command::Quit) => break,
-            Ok(Command::Swap) => {
-                pending_song_change = Some((active_song + 1) % modules.len());
+        // Pull the next command. When paused we block waiting
+        // for input; when running we poll non-blocking so the
+        // tick loop continues uninterrupted between commands.
+        let cmd: Option<Command> = if paused {
+            match cmd_rx.recv() {
+                Ok(c) => Some(c),
+                Err(_) => break,
             }
-            Ok(Command::Restart) => {
-                pending_song_change = Some(active_song);
+        } else {
+            match cmd_rx.try_recv() {
+                Ok(c) => Some(c),
+                Err(TryRecvError::Empty) => None,
+                Err(TryRecvError::Disconnected) => break,
             }
-            Ok(Command::SelectSong(n)) => {
-                if n < modules.len() {
-                    pending_song_change = Some(n);
-                } else {
-                    println!(
-                        "[ song {} is out of range; roster has {} song(s) ]",
-                        n,
-                        modules.len()
-                    );
+        };
+
+        if let Some(c) = cmd {
+            match c {
+                Command::Quit => break,
+                Command::PauseToggle => {
+                    paused = !paused;
+                    if paused {
+                        device.pause()?;
+                        println!("[ paused ]");
+                    } else {
+                        device.resume()?;
+                        // Reset the tick deadline so the loop
+                        // does not fire a burst of accumulated
+                        // ticks immediately on resume.
+                        next_tick =
+                            Instant::now() + Duration::from_micros(tick_us.load(Ordering::Relaxed));
+                        println!("[ resumed ]");
+                    }
+                    continue;
+                }
+                Command::Swap => {
+                    pending_song_change = Some((active_song + 1) % modules.len());
+                }
+                Command::Restart => {
+                    pending_song_change = Some(active_song);
+                }
+                Command::SelectSong(n) => {
+                    if n < modules.len() {
+                        pending_song_change = Some(n);
+                    } else {
+                        println!(
+                            "[ song {} is out of range; roster has {} song(s) ]",
+                            n,
+                            modules.len()
+                        );
+                    }
                 }
             }
-            Err(TryRecvError::Empty) => {}
-            Err(TryRecvError::Disconnected) => break,
+        }
+
+        if paused {
+            continue;
         }
 
         let now = Instant::now();
@@ -933,6 +1006,22 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                             "swapped to"
                         };
                         println!("[ {} song {} ]", label, active_song);
+                        // Reset the script-visible tick to zero so
+                        // the incoming song sees `input = 0` on its
+                        // first call, matching fresh-startup
+                        // behaviour. Without this reset the
+                        // monotonically increasing tick from the
+                        // outgoing song would flow into the new
+                        // script, breaking any intro section that
+                        // gates on `input < N` and producing a
+                        // mid-section entry for any song that
+                        // dispatches on absolute tick. The line
+                        // below resets to zero; the `tick = tick
+                        // .wrapping_add(1)` at the bottom of the
+                        // outer loop will advance it to one for the
+                        // next `resume`, matching the startup
+                        // sequence at lines 856..865.
+                        tick = 0;
                         match vm
                             .call(&[Value::Int(tick)])
                             .map_err(|e| format!("vm call after swap: {:?}", e))?

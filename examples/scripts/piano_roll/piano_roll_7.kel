@@ -1,0 +1,238 @@
+// Song 7. Harmonic Garden. A meditative just-intonation drone
+// piece. Eight voices play the harmonic-series partials 1, 2, 3,
+// 5, 7, 9, 11, 13 of an A2 fundamental. Each voice is assigned a
+// specific just-intonation pitch realised through a 12-TET MIDI
+// value plus an integer cents-of-detune offset. The piece builds
+// the eight-voice harmonic stack across eight 256-tick sections.
+// At the loop boundary all non-fundamental voices disable
+// simultaneously and the cycle restarts. The fundamental drone
+// continues unbroken.
+//
+// See docs/extras/SONG_7_SPEC.md for the full specification.
+//
+// Just-intonation pitch table (tonic A2, MIDI 45, 110 Hz):
+//   CH 0: 1/1  fundamental A2  (45,   0 cents)
+//   CH 1: 2/1  octave      A3  (57,   0 cents)
+//   CH 2: 3/2  fifth       E3  (52,  +2 cents)
+//   CH 3: 5/4  major 3rd   C#3 (49, -14 cents)
+//   CH 4: 7/4  harmonic 7  G3  (55, -31 cents)
+//   CH 5: 9/8  major 2nd   B2  (47,  +4 cents)
+//   CH 6: 11/8 11th harmnc D3  (50, +51 cents)
+//   CH 7: 13/8 13th harmnc F3  (53, +41 cents)
+//
+// Section structure (2048-tick loop body, 60 BPM):
+//   Section 0 (0..256):     fundamental alone
+//   Section 1 (256..512):   + octave
+//   Section 2 (512..768):   + perfect fifth (pure major arpeggio root)
+//   Section 3 (768..1024):  + major third (pure major triad)
+//   Section 4 (1024..1280): + harmonic seventh (harmonic 7 chord)
+//   Section 5 (1280..1536): + major second (9-limit chord)
+//   Section 6 (1536..1792): + 11th harmonic (11-limit chord)
+//   Section 7 (1792..2048): + 13th harmonic (full 13-limit stack)
+//
+// At tick 2048 the loop wraps. Channels 1 through 7 disable and
+// the piece returns to section 0. Channel 0 plays unbroken.
+//
+// Aesthetic: contemplative drone music in the spectral and
+// microtonal traditions of the late twentieth century. The slow
+// tempo and long envelopes give the listener time to hear each
+// just-intonation interval as a clean, beat-free sonority.
+
+use host::play
+use host::silence
+use host::set_enable
+use host::set_waveform
+use host::set_duty
+use host::set_adsr
+use host::set_volume
+use host::set_vibrato
+use host::set_lpf
+use host::set_retrigger
+use host::set_detune
+use host::set_velocity
+use host::set_master_volume
+use host::set_bpm
+use host::song_name
+
+data state {
+    init: Word,
+    loop_count: Word,
+    section: Word,
+    user0: Word, user1: Word, user2: Word, user3: Word,
+    idx: [Word; 8],
+    rem: [Word; 8],
+}
+
+// ---------------------------------------------------------------
+// Main loop. The per-tick body is intentionally minimal: a
+// constant-tempo update, eight section-onset triggers, and the
+// loop-boundary reset. Most ticks fire no voice events at all.
+// ---------------------------------------------------------------
+loop main(input: Word) -> Word {
+    if state.init == 0 {
+        host::song_name("Keleusma Project: Harmonic Garden (0BSD)");
+        host::set_bpm(60);
+        host::set_master_volume(750);
+
+        // Channel 0: fundamental A2 (1/1). Sine, centre.
+        host::set_waveform(0, 3);
+        host::set_adsr(0, 500, 500, 800, 1000);
+        host::set_volume(0, 500, 500);
+        host::set_velocity(0, 700);
+        host::set_retrigger(0, 0);
+        host::set_vibrato(0, 0, 0);
+        host::set_lpf(0, 0);
+        host::set_detune(0, 0);
+        host::set_enable(0, 1);
+
+        // Channel 1: octave A3 (2/1). Sine, near centre.
+        host::set_waveform(1, 3);
+        host::set_adsr(1, 500, 500, 800, 1000);
+        host::set_volume(1, 550, 450);
+        host::set_velocity(1, 650);
+        host::set_retrigger(1, 0);
+        host::set_vibrato(1, 0, 0);
+        host::set_lpf(1, 0);
+        host::set_detune(1, 0);
+        host::set_enable(1, 0);
+
+        // Channel 2: just perfect fifth E3 (3/2, +2 cents). Triangle, left.
+        host::set_waveform(2, 1);
+        host::set_adsr(2, 800, 600, 750, 1200);
+        host::set_volume(2, 700, 300);
+        host::set_velocity(2, 600);
+        host::set_retrigger(2, 0);
+        host::set_vibrato(2, 0, 0);
+        host::set_lpf(2, 0);
+        host::set_detune(2, 2);
+        host::set_enable(2, 0);
+
+        // Channel 3: just major third C#3 (5/4, -14 cents). Triangle, right.
+        host::set_waveform(3, 1);
+        host::set_adsr(3, 800, 600, 750, 1200);
+        host::set_volume(3, 300, 700);
+        host::set_velocity(3, 600);
+        host::set_retrigger(3, 0);
+        host::set_vibrato(3, 0, 0);
+        host::set_lpf(3, 0);
+        host::set_detune(3, -14);
+        host::set_enable(3, 0);
+
+        // Channel 4: harmonic seventh G3 (7/4, -31 cents). Sawtooth, left of centre.
+        host::set_waveform(4, 2);
+        host::set_adsr(4, 1000, 700, 700, 1500);
+        host::set_volume(4, 650, 350);
+        host::set_velocity(4, 550);
+        host::set_retrigger(4, 0);
+        host::set_vibrato(4, 0, 0);
+        host::set_lpf(4, 2000);
+        host::set_detune(4, -31);
+        host::set_enable(4, 0);
+
+        // Channel 5: just ninth B2 (9/8, +4 cents). Sawtooth, right of centre.
+        host::set_waveform(5, 2);
+        host::set_adsr(5, 1000, 700, 700, 1500);
+        host::set_volume(5, 350, 650);
+        host::set_velocity(5, 550);
+        host::set_retrigger(5, 0);
+        host::set_vibrato(5, 0, 0);
+        host::set_lpf(5, 2000);
+        host::set_detune(5, 4);
+        host::set_enable(5, 0);
+
+        // Channel 6: 11th harmonic D3 (11/8, +51 cents). Pulse 250, far left.
+        host::set_waveform(6, 4);
+        host::set_duty(6, 250);
+        host::set_adsr(6, 1200, 800, 650, 1800);
+        host::set_volume(6, 850, 150);
+        host::set_velocity(6, 500);
+        host::set_retrigger(6, 0);
+        host::set_vibrato(6, 0, 0);
+        host::set_lpf(6, 2500);
+        host::set_detune(6, 51);
+        host::set_enable(6, 0);
+
+        // Channel 7: 13th harmonic F3 (13/8, +41 cents). Pulse 750, far right.
+        host::set_waveform(7, 4);
+        host::set_duty(7, 750);
+        host::set_adsr(7, 1200, 800, 650, 1800);
+        host::set_volume(7, 150, 850);
+        host::set_velocity(7, 500);
+        host::set_retrigger(7, 0);
+        host::set_vibrato(7, 0, 0);
+        host::set_lpf(7, 2500);
+        host::set_detune(7, 41);
+        host::set_enable(7, 0);
+
+        // Fire the fundamental drone. Channel 0 sustains for the
+        // entire piece including across loop boundaries.
+        host::play(0, 45);
+
+        state.init = 1;
+    };
+
+    // Constant tempo. Per-tick call for consistency with prior
+    // songs even though the value never changes.
+    host::set_bpm(60);
+
+    let loop_tick = input % 2048;
+
+    // ----- Section-onset triggers -----
+    // Each section enables one additional voice and fires its
+    // play call. The fade-in is shaped by the channel's long
+    // attack envelope.
+
+    if loop_tick == 256 {
+        host::set_enable(1, 1);
+        host::play(1, 57);
+    };
+
+    if loop_tick == 512 {
+        host::set_enable(2, 1);
+        host::play(2, 52);
+    };
+
+    if loop_tick == 768 {
+        host::set_enable(3, 1);
+        host::play(3, 49);
+    };
+
+    if loop_tick == 1024 {
+        host::set_enable(4, 1);
+        host::play(4, 55);
+    };
+
+    if loop_tick == 1280 {
+        host::set_enable(5, 1);
+        host::play(5, 47);
+    };
+
+    if loop_tick == 1536 {
+        host::set_enable(6, 1);
+        host::play(6, 50);
+    };
+
+    if loop_tick == 1792 {
+        host::set_enable(7, 1);
+        host::play(7, 53);
+    };
+
+    // ----- Loop-boundary reset -----
+    // At the loop boundary (tick 2048, 4096, ...) disable all
+    // non-fundamental voices. The condition `input > 0` excludes
+    // the initial tick where loop_tick is also zero but no reset
+    // is wanted.
+
+    if loop_tick == 0 and input > 0 {
+        host::set_enable(1, 0);
+        host::set_enable(2, 0);
+        host::set_enable(3, 0);
+        host::set_enable(4, 0);
+        host::set_enable(5, 0);
+        host::set_enable(6, 0);
+        host::set_enable(7, 0);
+    };
+
+    let _ = yield 0;
+    0
+}

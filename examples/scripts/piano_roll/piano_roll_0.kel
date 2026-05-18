@@ -1,0 +1,235 @@
+// Three-channel piano roll. The host runs this script once per
+// 16th-note tick at 120 BPM (125 ms per tick). The script holds
+// per-channel position state in the data segment and emits
+// `host::play(channel, midi)` at each note boundary.
+//
+// Song 0 and song 1 share the same per-tick logic. Both scripts
+// run an identical for-loop over channels 0, 1, and 2, calling
+// shared `channel_note` and `channel_length` helpers. The songs
+// differ only in their piano-roll content (the contents of those
+// helpers) and their per-channel instrument assignments (the init
+// block's waveform and ADSR choices). The shared structure makes
+// the songs easy to read against each other for new authors.
+//
+// See `docs/guide/PIANO_ROLL.md` for the long-form manual. The
+// "Composing songs" section explains the mental model, the
+// data-segment conventions, and the per-tick body shape this
+// file follows.
+//
+// Notes use the tuple format (Pitch, octave, duration_in_16ths).
+// Octaves follow MIDI convention: middle C is C4 = MIDI 60.
+// Duration units: 1 = sixteenth, 2 = eighth, 4 = quarter,
+//                 8 = half, 16 = whole.
+// Pitch::Rest produces silence for `duration` ticks.
+//
+// The progression is C major - A minor - F major - G major,
+// four bars total, looping forever.
+
+use host::play
+use host::silence
+use host::set_enable
+use host::set_waveform
+use host::set_adsr
+use host::song_name
+
+enum Pitch { C, Cs, D, Ds, E, F, Fs, G, Gs, A, As, B, Rest }
+
+// ---------------------------------------------------------------
+// Per-channel note lookup. The `channel` argument selects the
+// channel's role; the `idx` argument selects the note position
+// within that channel's pattern. The function returns a
+// (Pitch, octave, duration_in_16ths) tuple. Songs 0 and 1 share
+// this function's signature; their bodies differ in pitches and
+// durations.
+//
+// Channel routing for song 0:
+//   CH 0: melody  (quarter notes, 16 entries)
+//   CH 1: bass    (half notes, 8 entries)
+//   CH 2: harmony (quarter notes, 16 entries)
+// ---------------------------------------------------------------
+fn channel_note(channel: Word, idx: Word) -> (Pitch, Word, Word) {
+    if channel == 0 {
+        // Melody: quarter notes outlining each chord triad.
+        match idx {
+             0 => (Pitch::C,  5, 4),  // C major: C E G E
+             1 => (Pitch::E,  5, 4),
+             2 => (Pitch::G,  5, 4),
+             3 => (Pitch::E,  5, 4),
+             4 => (Pitch::A,  4, 4),  // A minor: A C E C
+             5 => (Pitch::C,  5, 4),
+             6 => (Pitch::E,  5, 4),
+             7 => (Pitch::C,  5, 4),
+             8 => (Pitch::F,  4, 4),  // F major: F A C A
+             9 => (Pitch::A,  4, 4),
+            10 => (Pitch::C,  5, 4),
+            11 => (Pitch::A,  4, 4),
+            12 => (Pitch::G,  4, 4),  // G major: G B D B
+            13 => (Pitch::B,  4, 4),
+            14 => (Pitch::D,  5, 4),
+             _ => (Pitch::B,  4, 4),
+        }
+    } else {
+        if channel == 1 {
+            // Bass: half notes on the chord roots.
+            match idx {
+                0 => (Pitch::C, 3, 8),
+                1 => (Pitch::C, 3, 8),
+                2 => (Pitch::A, 2, 8),
+                3 => (Pitch::A, 2, 8),
+                4 => (Pitch::F, 2, 8),
+                5 => (Pitch::F, 2, 8),
+                6 => (Pitch::G, 2, 8),
+                _ => (Pitch::G, 2, 8),
+            }
+        } else {
+            // Channel 2: harmony quarter notes on chord thirds and fifths.
+            match idx {
+                 0 => (Pitch::E,  4, 4),
+                 1 => (Pitch::G,  4, 4),
+                 2 => (Pitch::E,  4, 4),
+                 3 => (Pitch::G,  4, 4),
+                 4 => (Pitch::C,  4, 4),
+                 5 => (Pitch::E,  4, 4),
+                 6 => (Pitch::C,  4, 4),
+                 7 => (Pitch::E,  4, 4),
+                 8 => (Pitch::A,  3, 4),
+                 9 => (Pitch::C,  4, 4),
+                10 => (Pitch::A,  3, 4),
+                11 => (Pitch::C,  4, 4),
+                12 => (Pitch::B,  3, 4),
+                13 => (Pitch::D,  4, 4),
+                14 => (Pitch::B,  3, 4),
+                 _ => (Pitch::D,  4, 4),
+            }
+        }
+    }
+}
+
+// Per-channel pattern length (number of note events per loop).
+fn channel_length(channel: Word) -> Word {
+    match channel {
+        0 => 16,
+        1 => 8,
+        _ => 16,
+    }
+}
+
+// ---------------------------------------------------------------
+// Pitch class to MIDI offset.
+// ---------------------------------------------------------------
+fn pitch_class(p: Pitch) -> Word {
+    match p {
+        Pitch::C    => 0,
+        Pitch::Cs   => 1,
+        Pitch::D    => 2,
+        Pitch::Ds   => 3,
+        Pitch::E    => 4,
+        Pitch::F    => 5,
+        Pitch::Fs   => 6,
+        Pitch::G    => 7,
+        Pitch::Gs   => 8,
+        Pitch::A    => 9,
+        Pitch::As   => 10,
+        Pitch::B    => 11,
+        Pitch::Rest => -1,
+    }
+}
+
+fn midi_of(p: Pitch, octave: Word) -> Word {
+    let pc = pitch_class(p);
+    if pc < 0 {
+        -1
+    } else {
+        (octave + 1) * 12 + pc
+    }
+}
+
+// ---------------------------------------------------------------
+// Sequencer state in the data segment. The host zeroes every
+// slot at startup and at every hot swap, so the script's
+// `init` block always sees a clean slate.
+//
+// init        one-shot flag set after the channel setup runs.
+// loop_count  the script bumps this when its progression wraps.
+// section     song-section pointer (intro = 0, verse = 1, ...).
+// user0..3    song-defined general-purpose slots.
+// idx[n]      index of the current note in channel n's array.
+// rem[n]      ticks remaining before the next note boundary on
+//             channel n. When rem[n] hits zero, the channel
+//             advances to the next note.
+//
+// Waveform codes for host::set_waveform:
+//   0 = Square (50% duty), 1 = Triangle, 2 = Sawtooth,
+//   3 = Sine, 4 = Pulse (with host::set_duty), 5 = Noise.
+// ADSR units for host::set_adsr: ms, ms, q1000 (0..1000), ms.
+// ---------------------------------------------------------------
+data state {
+    init: Word,
+    loop_count: Word,
+    section: Word,
+    user0: Word, user1: Word, user2: Word, user3: Word,
+    idx: [Word; 8],
+    rem: [Word; 8],
+}
+
+// ---------------------------------------------------------------
+// Tick loop. One iteration of the body == one 16th-note tick.
+// The per-channel sequencer body is shared across channels 0, 1,
+// and 2 through a fixed-bound for loop. The same loop structure
+// is used in song 1 with different `channel_note` content.
+// ---------------------------------------------------------------
+loop main(input: Word) -> Word {
+    // One-time channel setup. The data segment is zero-initialised
+    // at startup and on every hot swap, so the init block re-runs
+    // for the incoming song. Channels 3..7 stay disabled by
+    // default and are not touched here. The per-channel
+    // instrument assignments (waveform plus ADSR) are the only
+    // configuration difference between song 0 and song 1.
+    if state.init == 0 {
+        host::song_name("C major progression, four-bar loop");
+        // Channel 0: melody, Square wave.
+        host::set_waveform(0, 0);
+        host::set_adsr(0, 5, 80, 700, 150);
+        host::set_enable(0, 1);
+        // Channel 1: bass, Triangle wave.
+        host::set_waveform(1, 1);
+        host::set_adsr(1, 10, 120, 800, 200);
+        host::set_enable(1, 1);
+        // Channel 2: harmony, Square wave.
+        host::set_waveform(2, 0);
+        host::set_adsr(2, 5, 80, 600, 150);
+        host::set_enable(2, 1);
+        state.init = 1;
+    };
+
+    // Per-channel sequencer. The loop body is identical across
+    // channels; only the data returned by `channel_note` and
+    // `channel_length` differs. When the channel's remaining-
+    // ticks counter reaches zero, fire the next note, set the
+    // remaining counter to that note's duration, and advance the
+    // position counter (wrapping at the channel's pattern
+    // length). Otherwise decrement the remaining counter.
+    for ch in 0..3 {
+        if state.rem[ch] == 0 {
+            let n = channel_note(ch, state.idx[ch]);
+            let m = midi_of(n.0, n.1);
+            if m >= 0 {
+                host::play(ch, m);
+            } else {
+                host::silence(ch);
+            };
+            state.rem[ch] = n.2 - 1;
+            let next = state.idx[ch] + 1;
+            if next >= channel_length(ch) {
+                state.idx[ch] = 0;
+            } else {
+                state.idx[ch] = next;
+            };
+        } else {
+            state.rem[ch] = state.rem[ch] - 1;
+        };
+    }
+
+    let _ = yield 0;
+    0
+}

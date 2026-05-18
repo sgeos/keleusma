@@ -15,6 +15,7 @@ This documentation is structured as a **knowledge graph** encoded in the file sy
 | Process | [process/](./process/README.md) | Development workflow and task tracking |
 | Reference | [reference/](./reference/README.md) | Glossary, instruction set |
 | Roadmap | [roadmap/](./roadmap/README.md) | Development phases |
+| Extras | [extras/](./extras/README.md) | Supplementary references for specific examples |
 
 ## Quick Reference
 

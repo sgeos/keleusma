@@ -1,0 +1,278 @@
+// Song 5. Phase Garden. Eight channels play the same twelve-note
+// diatonic pattern in D natural minor. Channel 0 is the reference
+// and never drifts. Channels 1 through 7 each carry a different
+// drift rate. The slow accumulating displacement between channels
+// produces an evolving texture across timescales from minutes to
+// hours.
+//
+// See docs/extras/SONG_5_SPEC.md for the full specification
+// including the pattern definition, drift-rate hierarchy, channel
+// allocation, and sheet-music feasibility appendix.
+//
+// Pattern (D natural minor):
+//   D4 E4 F4 G4 A4 G4 F4 E4 D4 E4 F4 E4
+//   62 64 65 67 69 67 65 64 62 64 65 64
+//
+// Each pattern step is two ticks long. One complete pattern cycle
+// is twenty-four ticks, which is one-and-a-half bars at sixteen
+// ticks per bar. The non-alignment with the bar grid produces a
+// cross-rhythm against the standard bar structure before phase
+// drift begins.
+//
+// Drift periods (ticks per extra pattern-step advance):
+//   CH 0: 0    (reference, no drift)
+//   CH 1: 7200 (slowest, ~3 hours per full phase cycle)
+//   CH 2: 3600
+//   CH 3: 1800
+//   CH 4: 1200
+//   CH 5: 900
+//   CH 6: 600
+//   CH 7: 480  (fastest, ~12 minutes per full phase cycle)
+//
+// Aesthetic: minimalist process music. The piece is most
+// authentically experienced as continuous ambient-foreground
+// listening over a half hour or longer. The slow drift produces
+// canonical relationships between channels that emerge and
+// dissolve without explicit signalling.
+
+use host::play
+use host::silence
+use host::set_enable
+use host::set_waveform
+use host::set_duty
+use host::set_adsr
+use host::set_volume
+use host::set_vibrato
+use host::set_lpf
+use host::set_retrigger
+use host::set_detune
+use host::set_velocity
+use host::set_master_volume
+use host::set_bpm
+use host::song_name
+
+data state {
+    init: Word,
+    loop_count: Word,
+    section: Word,
+    user0: Word, user1: Word, user2: Word, user3: Word,
+    idx: [Word; 8],
+    rem: [Word; 8],
+}
+
+// ---------------------------------------------------------------
+// Pattern lookup. Twelve-note diatonic figure in D natural minor.
+// Indexed by pattern position (0..11).
+// ---------------------------------------------------------------
+fn pattern_pitch(position: Word) -> Word {
+    match position {
+        0 => 62,
+        1 => 64,
+        2 => 65,
+        3 => 67,
+        4 => 69,
+        5 => 67,
+        6 => 65,
+        7 => 64,
+        8 => 62,
+        9 => 64,
+        10 => 65,
+        _ => 64,
+    }
+}
+
+// ---------------------------------------------------------------
+// Register-offset lookup. Each channel transposes the pattern to
+// its target register through octave shifts.
+//   CH 0, 1: two octaves down  (bass register)
+//   CH 2, 3: one octave down   (mid-low register)
+//   CH 4, 5: base register     (mid register)
+//   CH 6, 7: one octave up     (high register)
+// ---------------------------------------------------------------
+fn register_offset(channel: Word) -> Word {
+    match channel {
+        0 => -24,
+        1 => -24,
+        2 => -12,
+        3 => -12,
+        4 => 0,
+        5 => 0,
+        6 => 12,
+        _ => 12,
+    }
+}
+
+// ---------------------------------------------------------------
+// Drift-period lookup. Channel 0 has zero drift. Other channels
+// have positive drift periods producing progressively faster
+// phase cycles.
+// ---------------------------------------------------------------
+fn drift_period(channel: Word) -> Word {
+    match channel {
+        0 => 0,
+        1 => 7200,
+        2 => 3600,
+        3 => 1800,
+        4 => 1200,
+        5 => 900,
+        6 => 600,
+        _ => 480,
+    }
+}
+
+// ---------------------------------------------------------------
+// Per-channel pattern-position computation.
+//   base_position  = input / 2 (one step per two ticks)
+//   extra_position = input / drift_period when drift_period > 0
+//   total_position = (base + extra) mod 12
+// ---------------------------------------------------------------
+fn pattern_position(channel: Word, input: Word) -> Word {
+    let base = input / 2;
+    let dp = drift_period(channel);
+    let extra = if dp > 0 {
+        input / dp
+    } else {
+        0
+    };
+    (base + extra) % 12
+}
+
+// ---------------------------------------------------------------
+// Main loop. Per-tick body.
+// ---------------------------------------------------------------
+loop main(input: Word) -> Word {
+    if state.init == 0 {
+        host::song_name("Keleusma Project: Phase Garden (0BSD)");
+        host::set_bpm(120);
+        host::set_master_volume(800);
+
+        // Channel 0: reference bass, sawtooth, centred.
+        host::set_waveform(0, 2);
+        host::set_adsr(0, 20, 300, 600, 400);
+        host::set_volume(0, 500, 500);
+        host::set_velocity(0, 800);
+        host::set_retrigger(0, 0);
+        host::set_vibrato(0, 0, 0);
+        host::set_lpf(0, 1500);
+        host::set_detune(0, 0);
+        host::set_enable(0, 1);
+
+        // Channel 1: slowest phaser, sine, slight left.
+        host::set_waveform(1, 3);
+        host::set_adsr(1, 30, 300, 600, 400);
+        host::set_volume(1, 600, 400);
+        host::set_velocity(1, 700);
+        host::set_retrigger(1, 0);
+        host::set_vibrato(1, 0, 0);
+        host::set_lpf(1, 0);
+        host::set_detune(1, 0);
+        host::set_enable(1, 1);
+
+        // Channel 2: slow phaser, triangle, left.
+        host::set_waveform(2, 1);
+        host::set_adsr(2, 20, 250, 700, 350);
+        host::set_volume(2, 700, 300);
+        host::set_velocity(2, 700);
+        host::set_retrigger(2, 0);
+        host::set_vibrato(2, 0, 0);
+        host::set_lpf(2, 0);
+        host::set_detune(2, 0);
+        host::set_enable(2, 1);
+
+        // Channel 3: mid-slow phaser, triangle, right.
+        host::set_waveform(3, 1);
+        host::set_adsr(3, 20, 250, 700, 350);
+        host::set_volume(3, 300, 700);
+        host::set_velocity(3, 700);
+        host::set_retrigger(3, 0);
+        host::set_vibrato(3, 0, 0);
+        host::set_lpf(3, 0);
+        host::set_detune(3, 0);
+        host::set_enable(3, 1);
+
+        // Channel 4: mid phaser, sawtooth, more-left.
+        host::set_waveform(4, 2);
+        host::set_adsr(4, 10, 200, 700, 300);
+        host::set_volume(4, 800, 200);
+        host::set_velocity(4, 700);
+        host::set_retrigger(4, 0);
+        host::set_vibrato(4, 0, 0);
+        host::set_lpf(4, 2500);
+        host::set_detune(4, 0);
+        host::set_enable(4, 1);
+
+        // Channel 5: mid-fast phaser, sawtooth, more-right.
+        host::set_waveform(5, 2);
+        host::set_adsr(5, 10, 200, 700, 300);
+        host::set_volume(5, 200, 800);
+        host::set_velocity(5, 700);
+        host::set_retrigger(5, 0);
+        host::set_vibrato(5, 0, 0);
+        host::set_lpf(5, 2500);
+        host::set_detune(5, 0);
+        host::set_enable(5, 1);
+
+        // Channel 6: fast phaser, pulse 250, hard left.
+        host::set_waveform(6, 4);
+        host::set_duty(6, 250);
+        host::set_adsr(6, 5, 150, 600, 200);
+        host::set_volume(6, 1000, 0);
+        host::set_velocity(6, 600);
+        host::set_retrigger(6, 0);
+        host::set_vibrato(6, 0, 0);
+        host::set_lpf(6, 0);
+        host::set_detune(6, 0);
+        host::set_enable(6, 1);
+
+        // Channel 7: fastest phaser, pulse 750, hard right.
+        host::set_waveform(7, 4);
+        host::set_duty(7, 750);
+        host::set_adsr(7, 5, 150, 600, 200);
+        host::set_volume(7, 0, 1000);
+        host::set_velocity(7, 600);
+        host::set_retrigger(7, 0);
+        host::set_vibrato(7, 0, 0);
+        host::set_lpf(7, 0);
+        host::set_detune(7, 0);
+        host::set_enable(7, 1);
+
+        state.init = 1;
+    };
+
+    // Constant tempo. Per-tick call for consistency with prior
+    // songs even though the value never changes.
+    host::set_bpm(120);
+
+    // Pattern advance fires on even ticks. Each channel computes
+    // its own pattern position from the absolute input tick and
+    // its drift period. Channel 0 is the reference. The others
+    // drift at progressively faster rates.
+    if input % 2 == 0 {
+        let pos0 = pattern_position(0, input);
+        host::play(0, pattern_pitch(pos0) + register_offset(0));
+
+        let pos1 = pattern_position(1, input);
+        host::play(1, pattern_pitch(pos1) + register_offset(1));
+
+        let pos2 = pattern_position(2, input);
+        host::play(2, pattern_pitch(pos2) + register_offset(2));
+
+        let pos3 = pattern_position(3, input);
+        host::play(3, pattern_pitch(pos3) + register_offset(3));
+
+        let pos4 = pattern_position(4, input);
+        host::play(4, pattern_pitch(pos4) + register_offset(4));
+
+        let pos5 = pattern_position(5, input);
+        host::play(5, pattern_pitch(pos5) + register_offset(5));
+
+        let pos6 = pattern_position(6, input);
+        host::play(6, pattern_pitch(pos6) + register_offset(6));
+
+        let pos7 = pattern_position(7, input);
+        host::play(7, pattern_pitch(pos7) + register_offset(7));
+    };
+
+    let _ = yield 0;
+    0
+}

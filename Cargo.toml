@@ -61,3 +61,8 @@ required-features = ["text"]
 [[example]]
 name = "opaque_rust_string"
 required-features = ["text"]
+
+[[example]]
+name = "rogue"
+path = "examples/rogue/main.rs"
+required-features = ["sdl3-example", "text"]

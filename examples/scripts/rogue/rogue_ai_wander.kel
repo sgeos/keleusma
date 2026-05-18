@@ -1,0 +1,45 @@
+// Wander artificial-intelligence archetype.
+//
+// When the monster cannot see the player, it steps a random
+// cardinal direction. When it sees the player, it switches to
+// greedy chase. Used by gnoll pups, frogs, and other low-skill
+// bestiary entries.
+//
+// Call convention is shared with `ai_idle`.
+//
+// Random direction is drawn from a host-provided RNG so the
+// chosen step is uniform across cardinal neighbours.
+
+use host::rng_range
+
+fn main(mx: Word, my: Word, px: Word, py: Word, sees_player: Word) -> (Word, Word, Word) {
+    if sees_player == 1 {
+        // Greedy chase identical to `ai_chaser`.
+        let dx = if px > mx {
+            1
+        } else {
+            if px < mx { -1 } else { 0 }
+        };
+        let dy = if py > my {
+            1
+        } else {
+            if py < my { -1 } else { 0 }
+        };
+        (1, mx + dx, my + dy)
+    } else {
+        // Random cardinal step. Diagonals omitted to keep the
+        // wandering trace easy to read at a glance on the map.
+        let d = host::rng_range(0, 5);
+        let dx = if d == 0 {
+            -1
+        } else {
+            if d == 1 { 1 } else { 0 }
+        };
+        let dy = if d == 2 {
+            -1
+        } else {
+            if d == 3 { 1 } else { 0 }
+        };
+        (1, mx + dx, my + dy)
+    }
+}

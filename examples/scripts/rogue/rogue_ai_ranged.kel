@@ -1,0 +1,42 @@
+// Ranged artificial-intelligence archetype.
+//
+// The monster keeps its distance and attacks at range when in
+// sight. If the player is adjacent, the monster steps away. If
+// the player is in sight and not adjacent, the monster fires a
+// ranged attack at the player's cell. If the player is out of
+// sight, the monster waits.
+//
+// Used by pixies, salamanders, manticores, lich apprentices,
+// liches, beholders, mind flayers, solars, cosmic horrors, and
+// the beholder tyrant.
+//
+// Call convention is shared with `ai_idle`. Action code 2
+// indicates a ranged attack at the supplied target cell.
+
+fn main(mx: Word, my: Word, px: Word, py: Word, sees_player: Word) -> (Word, Word, Word) {
+    if sees_player == 0 {
+        (0, mx, my)
+    } else {
+        let adx = if px > mx { px - mx } else { mx - px };
+        let ady = if py > my { py - my } else { my - py };
+        let cheby = if adx > ady { adx } else { ady };
+        if cheby <= 1 {
+            // Adjacent. Step directly away from the player to
+            // open ranged distance again.
+            let dx = if px > mx {
+                -1
+            } else {
+                if px < mx { 1 } else { 0 }
+            };
+            let dy = if py > my {
+                -1
+            } else {
+                if py < my { 1 } else { 0 }
+            };
+            (1, mx + dx, my + dy)
+        } else {
+            // In sight and out of melee. Ranged attack.
+            (2, px, py)
+        }
+    }
+}

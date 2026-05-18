@@ -1,0 +1,331 @@
+// Song 6. Quadrameter Canon. Four-voice polymetric canon in G
+// Dorian. Each canonic voice advances through the same four-note
+// subject at its own stride: voice 1 every 4 ticks (4/4), voice
+// 2 every 3 ticks (3/4), voice 3 every 5 ticks (5/4), voice 4
+// every 7 ticks (7/4). The voices proceed at genuinely different
+// tempos relative to one another and produce continuous canonic
+// motion at the polymetric level.
+//
+// See docs/extras/SONG_6_SPEC.md for the full specification.
+//
+// Subject (G Dorian tetrachord):
+//   position 0: G4  (67)
+//   position 1: A4  (69)
+//   position 2: B-flat-4 (70)
+//   position 3: C5  (72)
+//
+// Per-voice stride and entry:
+//   CH 0 (4/4): stride 4, entry tick 0
+//   CH 1 (3/4): stride 3, entry tick 16 (first iteration only)
+//   CH 2 (5/4): stride 5, entry tick 32 (first iteration only)
+//   CH 3 (7/4): stride 7, entry tick 48 (first iteration only)
+//
+// In subsequent iterations all four voices enter at loop_tick 0.
+//
+// Loop superperiod: 1680 ticks. LCM of (16, 12, 20, 28) = 1680.
+// At the superperiod boundary all four voices simultaneously
+// return to subject position 0 (G) and the canon repeats.
+//
+// Support layers on channels 4-7:
+//   CH 4: Sub-bass pedal alternating G2 (43) and D2 (38)
+//   CH 5: Light percussion on every 4 ticks (global beat ref)
+//   CH 6: G drone pad (sustained G4)
+//   CH 7: D drone pad (sustained D5)
+
+use host::play
+use host::silence
+use host::set_enable
+use host::set_waveform
+use host::set_duty
+use host::set_adsr
+use host::set_volume
+use host::set_vibrato
+use host::set_lpf
+use host::set_retrigger
+use host::set_detune
+use host::set_velocity
+use host::set_master_volume
+use host::set_bpm
+use host::song_name
+
+data state {
+    init: Word,
+    loop_count: Word,
+    section: Word,
+    user0: Word, user1: Word, user2: Word, user3: Word,
+    idx: [Word; 8],
+    rem: [Word; 8],
+}
+
+// ---------------------------------------------------------------
+// Subject lookup. Four-note tetrachord in G Dorian.
+// ---------------------------------------------------------------
+fn subject_pitch(position: Word) -> Word {
+    match position {
+        0 => 67,  // G4
+        1 => 69,  // A4
+        2 => 70,  // B-flat-4
+        _ => 72,  // C5
+    }
+}
+
+// ---------------------------------------------------------------
+// Per-voice metric stride. Ticks per subject-position advance.
+//   Voice 0 (4/4): 4 ticks per position
+//   Voice 1 (3/4): 3 ticks per position
+//   Voice 2 (5/4): 5 ticks per position
+//   Voice 3 (7/4): 7 ticks per position
+// The least common multiple of (16, 12, 20, 28) is 1680, which
+// is the canonic superperiod and the loop body length.
+// ---------------------------------------------------------------
+fn voice_stride(voice: Word) -> Word {
+    match voice {
+        0 => 4,
+        1 => 3,
+        2 => 5,
+        _ => 7,
+    }
+}
+
+// ---------------------------------------------------------------
+// First-iteration entry tick per voice. Voices enter staggered
+// at one bar (in voice 0's frame) apart. On subsequent loop
+// iterations all voices have effective entry zero.
+// ---------------------------------------------------------------
+fn voice_entry(voice: Word) -> Word {
+    match voice {
+        0 => 0,
+        1 => 16,
+        2 => 32,
+        _ => 48,
+    }
+}
+
+// ---------------------------------------------------------------
+// Per-voice register transposition relative to the subject's base
+// register. Voices 0, 2 in base register; voice 1 one octave
+// down; voice 3 one octave up. The transposition spreads the
+// canonic texture across approximately two octaves.
+// ---------------------------------------------------------------
+fn voice_register(voice: Word) -> Word {
+    match voice {
+        0 => 0,
+        1 => -12,
+        2 => 0,
+        _ => 12,
+    }
+}
+
+// ---------------------------------------------------------------
+// Accent velocity per voice (firing-count mod meter == 0).
+// Voices 0 and 1 accent at 950; voices 2 and 3 at 900 for the
+// less prominent inner-voice character.
+// ---------------------------------------------------------------
+fn voice_accent(voice: Word) -> Word {
+    if voice < 2 {
+        950
+    } else {
+        900
+    }
+}
+
+// Normal (non-accent) velocity per voice.
+fn voice_normal_velocity(voice: Word) -> Word {
+    if voice < 2 {
+        750
+    } else {
+        700
+    }
+}
+
+// ---------------------------------------------------------------
+// Main loop. Per-tick body.
+// ---------------------------------------------------------------
+loop main(input: Word) -> Word {
+    if state.init == 0 {
+        host::song_name("Keleusma Project: Quadrameter Canon (0BSD)");
+        host::set_bpm(120);
+        host::set_master_volume(800);
+
+        // Channel 0: Voice 1 canon, 4/4. Sawtooth, hard left.
+        host::set_waveform(0, 2);
+        host::set_adsr(0, 10, 150, 700, 250);
+        host::set_volume(0, 1000, 0);
+        host::set_velocity(0, 800);
+        host::set_retrigger(0, 0);
+        host::set_vibrato(0, 0, 0);
+        host::set_lpf(0, 0);
+        host::set_detune(0, 0);
+        host::set_enable(0, 1);
+
+        // Channel 1: Voice 2 canon, 3/4. Triangle, slight left.
+        host::set_waveform(1, 1);
+        host::set_adsr(1, 15, 200, 700, 300);
+        host::set_volume(1, 700, 300);
+        host::set_velocity(1, 800);
+        host::set_retrigger(1, 0);
+        host::set_vibrato(1, 0, 0);
+        host::set_lpf(1, 0);
+        host::set_detune(1, 0);
+        host::set_enable(1, 1);
+
+        // Channel 2: Voice 3 canon, 5/4. Pulse 250, slight right.
+        host::set_waveform(2, 4);
+        host::set_duty(2, 250);
+        host::set_adsr(2, 5, 150, 700, 200);
+        host::set_volume(2, 300, 700);
+        host::set_velocity(2, 750);
+        host::set_retrigger(2, 0);
+        host::set_vibrato(2, 0, 0);
+        host::set_lpf(2, 0);
+        host::set_detune(2, 0);
+        host::set_enable(2, 1);
+
+        // Channel 3: Voice 4 canon, 7/4. Pulse 750, hard right.
+        host::set_waveform(3, 4);
+        host::set_duty(3, 750);
+        host::set_adsr(3, 5, 150, 700, 200);
+        host::set_volume(3, 0, 1000);
+        host::set_velocity(3, 750);
+        host::set_retrigger(3, 0);
+        host::set_vibrato(3, 0, 0);
+        host::set_lpf(3, 0);
+        host::set_detune(3, 0);
+        host::set_enable(3, 1);
+
+        // Channel 4: Sub-bass pedal. Sine, centre.
+        host::set_waveform(4, 3);
+        host::set_adsr(4, 30, 300, 800, 400);
+        host::set_volume(4, 500, 500);
+        host::set_velocity(4, 700);
+        host::set_retrigger(4, 0);
+        host::set_vibrato(4, 0, 0);
+        host::set_lpf(4, 800);
+        host::set_detune(4, 0);
+        host::set_enable(4, 1);
+
+        // Channel 5: Percussion. Noise, centre.
+        host::set_waveform(5, 5);
+        host::set_volume(5, 500, 500);
+        host::set_velocity(5, 500);
+        host::set_retrigger(5, 1);
+        host::set_enable(5, 1);
+
+        // Channel 6: G drone pad, slight left.
+        host::set_waveform(6, 1);
+        host::set_adsr(6, 100, 300, 800, 500);
+        host::set_volume(6, 600, 400);
+        host::set_velocity(6, 400);
+        host::set_retrigger(6, 0);
+        host::set_vibrato(6, 300, 25);
+        host::set_lpf(6, 0);
+        host::set_enable(6, 1);
+
+        // Channel 7: D drone pad, slight right.
+        host::set_waveform(7, 1);
+        host::set_adsr(7, 100, 300, 800, 500);
+        host::set_volume(7, 400, 600);
+        host::set_velocity(7, 400);
+        host::set_retrigger(7, 0);
+        host::set_vibrato(7, 350, 25);
+        host::set_lpf(7, 0);
+        host::set_enable(7, 1);
+
+        state.init = 1;
+    };
+
+    // Constant tempo. Per-tick call for consistency with prior
+    // songs even though the value never changes.
+    host::set_bpm(120);
+
+    let loop_tick = input % 1680;
+    let in_first = input < 1680;
+
+    // ----- Voice 0: 4/4 stride. Always active. -----
+    let s0 = voice_stride(0);
+    if loop_tick % s0 == 0 {
+        let f0 = loop_tick / s0;
+        let vel0 = if f0 % s0 == 0 {
+            voice_accent(0)
+        } else {
+            voice_normal_velocity(0)
+        };
+        host::set_velocity(0, vel0);
+        host::play(0, subject_pitch(f0 % 4) + voice_register(0));
+    };
+
+    // ----- Voice 1: 3/4 stride. -----
+    let s1 = voice_stride(1);
+    let e1 = if in_first { voice_entry(1) } else { 0 };
+    if loop_tick >= e1 and (loop_tick - e1) % s1 == 0 {
+        let f1 = (loop_tick - e1) / s1;
+        let vel1 = if f1 % s1 == 0 {
+            voice_accent(1)
+        } else {
+            voice_normal_velocity(1)
+        };
+        host::set_velocity(1, vel1);
+        host::play(1, subject_pitch(f1 % 4) + voice_register(1));
+    };
+
+    // ----- Voice 2: 5/4 stride. -----
+    let s2 = voice_stride(2);
+    let e2 = if in_first { voice_entry(2) } else { 0 };
+    if loop_tick >= e2 and (loop_tick - e2) % s2 == 0 {
+        let f2 = (loop_tick - e2) / s2;
+        let vel2 = if f2 % s2 == 0 {
+            voice_accent(2)
+        } else {
+            voice_normal_velocity(2)
+        };
+        host::set_velocity(2, vel2);
+        host::play(2, subject_pitch(f2 % 4) + voice_register(2));
+    };
+
+    // ----- Voice 3: 7/4 stride. -----
+    let s3 = voice_stride(3);
+    let e3 = if in_first { voice_entry(3) } else { 0 };
+    if loop_tick >= e3 and (loop_tick - e3) % s3 == 0 {
+        let f3 = (loop_tick - e3) / s3;
+        let vel3 = if f3 % s3 == 0 {
+            voice_accent(3)
+        } else {
+            voice_normal_velocity(3)
+        };
+        host::set_velocity(3, vel3);
+        host::play(3, subject_pitch(f3 % 4) + voice_register(3));
+    };
+
+    // ----- Sub-bass pedal: alternates G2 and D2 every 32 ticks. -----
+    if loop_tick % 32 == 0 {
+        let pedal_pitch = if (loop_tick / 32) % 2 == 0 {
+            43
+        } else {
+            38
+        };
+        host::play(4, pedal_pitch);
+    };
+
+    // ----- Drone pads: G and D held across the loop. -----
+    if loop_tick == 0 {
+        host::play(6, 67);
+        host::play(7, 74);
+    };
+
+    // ----- Percussion: light hi-hat on every beat (4 ticks). -----
+    if loop_tick % 4 == 0 {
+        let beat = (loop_tick / 4) % 4;
+        if beat == 0 {
+            host::set_adsr(5, 1, 25, 0, 10);
+            host::set_velocity(5, 700);
+            host::play(5, 70);
+        } else {
+            host::set_adsr(5, 1, 15, 0, 5);
+            host::set_velocity(5, 500);
+            host::play(5, 80);
+        };
+    };
+
+    let _ = yield 0;
+    0
+}

@@ -17,4 +17,13 @@ keleusma run examples/scripts/<file>.kel
 | [`07_fstring.kel`](./07_fstring.kel) | String interpolation | `f"text {expr}"` desugaring |
 | [`08_method_dispatch.kel`](./08_method_dispatch.kel) | Traits and impls | Receiver-style method calls |
 
-All scripts are atomic-total (`fn main`), so they run end to end through the CLI. For yield-driven and stream-driven examples, see the Rust embedding examples under [`examples/`](../).
+All scripts in this directory's top level are atomic-total (`fn main`), so they run end to end through the CLI. For yield-driven and stream-driven examples, see the Rust embedding examples under [`examples/`](../).
+
+## Example-specific scripts
+
+The Rust embedding examples ship their own Keleusma script rosters in subdirectories of this folder. These scripts are not meant to be run standalone through `keleusma run`; they are loaded by their respective host through `include_str!` or hot reloaded from disk.
+
+| Directory | Companion host | Description |
+|-----------|---------------|-------------|
+| [`piano_roll/`](./piano_roll/) | [`examples/piano_roll.rs`](../piano_roll.rs) | Ten songs (`piano_roll_0.kel` through `piano_roll_9.kel`) for the SDL3 audio piano-roll example. See [`docs/guide/PIANO_ROLL.md`](../../docs/guide/PIANO_ROLL.md). |
+| [`rogue/`](./rogue/) | [`examples/rogue/main.rs`](../rogue/main.rs) | Fourteen scripts driving the SDL3 roguelike. One game-tick loop, one dungeon generator, one player artificial-intelligence script, eight monster artificial-intelligence archetypes, one combat-math script, two item-effect scripts. See [`docs/guide/ROGUE.md`](../../docs/guide/ROGUE.md). |

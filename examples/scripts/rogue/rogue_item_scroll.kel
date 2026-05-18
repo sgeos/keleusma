@@ -1,0 +1,47 @@
+// Scroll-effect script. One-shot. The host invokes
+// `fn main(effect: Word)` when the player reads the held scroll.
+// The script returns the same five-tuple shape as the potion
+// script for uniform host dispatch.
+//
+// Return shape `(hp_delta, max_hp_delta, skill_delta,
+// status_code, status_arg)`.
+//
+// `status_code` values reserved for scrolls:
+//   0 = no status action
+//   1 = magic mapping; reveal the floor as explored
+//   2 = teleport; warp the player to a random walkable cell
+//   3 = identify; identify the currently held potion
+//   4 = enchant weapon; advance weapon tier by `status_arg`
+//   5 = enchant armor; advance armor tier by `status_arg`
+//   6 = light; reveal the current room
+//   7 = detect monsters; reveal monster positions for one turn
+//   8 = sleep; no-op placeholder
+//   9 = confusion; no-op placeholder
+//  10 = remove curse; no-op placeholder
+//
+// Effect identifiers map to the host's `ScrollEffect` enum:
+//   0 = identify
+//   1 = magic mapping
+//   2 = teleport
+//   3 = enchant weapon
+//   4 = enchant armor
+//   5 = remove curse
+//   6 = light
+//   7 = detect monsters
+//   8 = sleep
+//   9 = confusion
+
+fn main(effect: Word) -> (Word, Word, Word, Word, Word) {
+    match effect {
+        0 => (0, 0, 0, 3, 0),
+        1 => (0, 0, 0, 1, 0),
+        2 => (0, 0, 0, 2, 0),
+        3 => (0, 0, 0, 4, 1),
+        4 => (0, 0, 0, 5, 1),
+        5 => (0, 0, 0, 10, 0),
+        6 => (0, 0, 0, 6, 0),
+        7 => (0, 0, 0, 7, 0),
+        8 => (0, 0, 0, 8, 0),
+        _ => (0, 0, 0, 9, 0),
+    }
+}

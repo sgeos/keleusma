@@ -260,21 +260,19 @@ fn native_println(args: &[Value]) -> Result<Value, VmError> {
 /// characters. `concat` and `slice` produce arena-allocated
 /// `Value::KStr` results from their `StaticStr` or `KStr` inputs.
 ///
-/// Registers: `to_string`, `length`, `concat`, `slice`, `println`,
-/// `math::sqrt`, `math::floor`, `math::ceil`, `math::round`,
-/// `math::log2`.
+/// Registers: `to_string`, `length`, `concat`, `slice`, `println`.
+///
+/// Math routines that previously rode along with this bundle
+/// have been consolidated under [`crate::stddsl::Math`]. Hosts
+/// that need `math::sqrt`, `math::floor`, `math::ceil`,
+/// `math::round`, or `math::log2` alongside the text utilities
+/// should also register `stddsl::Math`.
 pub fn register_utility_natives<'a, 'arena>(vm: &mut Vm<'a, 'arena>) {
     vm.register_native_with_ctx("to_string", native_to_string_with_ctx);
     vm.register_native_with_ctx("length", native_length_with_ctx);
     vm.register_native_with_ctx("concat", native_concat_with_ctx);
     vm.register_native_with_ctx("slice", native_slice_with_ctx);
     vm.register_native("println", native_println);
-
-    vm.register_fn("math::sqrt", |x: f64| -> f64 { libm::sqrt(x) });
-    vm.register_fn("math::floor", |x: f64| -> f64 { libm::floor(x) });
-    vm.register_fn("math::ceil", |x: f64| -> f64 { libm::ceil(x) });
-    vm.register_fn("math::round", |x: f64| -> f64 { libm::round(x) });
-    vm.register_fn("math::log2", |x: f64| -> f64 { libm::log2(x) });
 }
 
 /// Deprecated alias for [`register_utility_natives`]. Retained for
@@ -301,12 +299,18 @@ mod tests {
     /// registered and return the result together with a string
     /// rendering resolved eagerly through the arena so callers can
     /// assert on string contents after the arena outlives the call.
+    ///
+    /// The Math bundle is also registered so that tests covering
+    /// f-string interpolation against numeric values, and any
+    /// historical tests that exercised `math::*` routines, can
+    /// resolve their `use math::*` declarations.
     fn run_with_utilities(src: &str, arena: &keleusma_arena::Arena) -> (Value, Option<String>) {
         let tokens = tokenize(src).expect("lex error");
         let program = parse(&tokens).expect("parse error");
         let module = compile(&program).expect("compile error");
         let mut vm = Vm::new(module, arena).unwrap();
         register_utility_natives(&mut vm);
+        vm.register_library(crate::stddsl::Math);
         let result = match vm.call(&[]).unwrap() {
             VmState::Finished(v) => v,
             VmState::Yielded(v) => panic!("unexpected yield: {:?}", v),

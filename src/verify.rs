@@ -883,6 +883,13 @@ pub fn module_wcmu(module: &Module, native_wcmu: &[u32]) -> Result<Vec<(u32, u32
     }
     let n = module.chunks.len();
     let mut chunk_wcmu: Vec<Option<(u32, u32)>> = alloc::vec![None; n];
+    // Per-chunk text-returning flag. Populated in topological order
+    // as each chunk is analysed, so when a caller is processed all
+    // of its callees already have entries. Used by the text-size
+    // pass to push `NotText` for `Op::Call` returns from non-text
+    // callees, restoring the type-checker's "either operand NotText
+    // implies result NotText" invariant under Op::Add.
+    let mut chunk_returns_text: Vec<bool> = alloc::vec![false; n];
     let order = topological_call_order(module)?;
     for chunk_idx in order {
         let chunk = &module.chunks[chunk_idx];
@@ -890,8 +897,10 @@ pub fn module_wcmu(module: &Module, native_wcmu: &[u32]) -> Result<Vec<(u32, u32
             chunk_wcmu: &chunk_wcmu,
             native_wcmu,
         };
-        let result = compute_chunk_wcmu(chunk, &resolver)?;
-        chunk_wcmu[chunk_idx] = Some(result);
+        let (wcmu_result, returns_text) =
+            compute_chunk_wcmu(chunk, &resolver, &chunk_returns_text)?;
+        chunk_wcmu[chunk_idx] = Some(wcmu_result);
+        chunk_returns_text[chunk_idx] = returns_text;
     }
     Ok(chunk_wcmu
         .into_iter()
@@ -945,8 +954,14 @@ fn topo_visit(
 }
 
 /// Compute the WCMU of a single chunk given a resolver populated for
-/// any chunks it calls.
-fn compute_chunk_wcmu(chunk: &Chunk, resolver: &CallResolver) -> Result<(u32, u32), VerifyError> {
+/// any chunks it calls. Also reports whether the chunk may return a
+/// text-typed value, used by the module-level pass to populate
+/// `chunk_returns_text` for subsequent callers in topological order.
+fn compute_chunk_wcmu(
+    chunk: &Chunk,
+    resolver: &CallResolver,
+    chunk_returns_text: &[bool],
+) -> Result<((u32, u32), bool), VerifyError> {
     let (start, end) = match chunk.block_type {
         BlockType::Stream => {
             let stream_pos = chunk
@@ -978,15 +993,17 @@ fn compute_chunk_wcmu(chunk: &Chunk, resolver: &CallResolver) -> Result<(u32, u3
 
     // Augment the heap bound with the chunk's text-allocation bound
     // computed by the text-size abstract interpretation pass. The
-    // pass is conservative: text operations inside loops, behind
-    // calls, or against native-produced values saturate to
-    // `u32::MAX`, which propagates through the saturating add and
-    // signals overflow to the safe constructor under the default
-    // overflow policy.
-    let text_heap = crate::text_size::chunk_text_heap_alloc(chunk);
-    let heap_total = body.heap_total.saturating_add(text_heap);
+    // pass tracks per-callee text-ness through `chunk_returns_text`,
+    // so calls to non-text-returning chunks contribute `NotText`
+    // rather than `Unbounded` to the abstract operand stack. This
+    // preserves the type-checker's "either operand NotText implies
+    // result NotText" invariant under Op::Add and admits programs
+    // whose helper-function chains the previous policy rejected
+    // (see backlog item B12).
+    let text_analysis = crate::text_size::analyze_chunk_text(chunk, chunk_returns_text);
+    let heap_total = body.heap_total.saturating_add(text_analysis.heap_alloc);
 
-    Ok((stack_bytes, heap_total))
+    Ok(((stack_bytes, heap_total), text_analysis.returns_text))
 }
 
 /// Compute a memory budget for the given Stream chunk.

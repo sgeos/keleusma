@@ -1,0 +1,105 @@
+// Player artificial-intelligence archetype.
+//
+// Symmetric with the monster archetypes. The host dispatches
+// this script once per turn, gathers the player's current
+// position and the latest keypress, and applies the returned
+// action through the same resolver that handles monster
+// actions. Players and monsters are conceptually the same kind
+// of actor; the only difference is the source of intent.
+// Monster intent comes from per-archetype logic. Player intent
+// comes from the keyboard, encoded as a small integer.
+//
+// Inputs.
+//   mx, my   The actor's current cell coordinates.
+//   cmd      The latest keypress command code. Encoding shared
+//            with rogue_game.kel:
+//              0 = wait
+//              1 = move north         5 = move north-west
+//              2 = move south         6 = move north-east
+//              3 = move west          7 = move south-west
+//              4 = move east          8 = move south-east
+//              9 = descend stairs or step on exit
+//             10 = quaff held potion
+//             11 = read held scroll
+//
+// Output tuple `(action, tx, ty)`. Stable across every
+// artificial-intelligence script in the example.
+//   action = 0  Wait. (tx, ty) ignored.
+//   action = 1  Move or melee into cell (tx, ty). The host
+//               resolves the move against the map, monsters,
+//               and any item on the destination tile.
+//   action = 3  Descend stairs. (tx, ty) unused.
+//   action = 4  Quaff held potion. (tx, ty) unused.
+//   action = 5  Read held scroll. (tx, ty) unused.
+//
+// Action codes 0 and 1 overlap with the monster archetypes so
+// the host's action resolver can treat the player as an actor.
+// Codes 3, 4, and 5 are player-only. Action 2 (ranged attack)
+// is reserved for monster archetypes and is not emitted by this
+// script.
+
+fn main(mx: Word, my: Word, cmd: Word) -> (Word, Word, Word) {
+    if cmd == 0 {
+        (0, mx, my)
+    } else {
+        if cmd <= 8 {
+            let dx = if cmd == 1 {
+                0
+            } else {
+                if cmd == 2 {
+                    0
+                } else {
+                    if cmd == 3 {
+                        -1
+                    } else {
+                        if cmd == 4 {
+                            1
+                        } else {
+                            if cmd == 5 {
+                                -1
+                            } else {
+                                if cmd == 6 {
+                                    1
+                                } else {
+                                    if cmd == 7 { -1 } else { 1 }
+                                }
+                            }
+                        }
+                    }
+                }
+            };
+            let dy = if cmd == 1 {
+                -1
+            } else {
+                if cmd == 2 {
+                    1
+                } else {
+                    if cmd == 3 {
+                        0
+                    } else {
+                        if cmd == 4 {
+                            0
+                        } else {
+                            if cmd == 5 {
+                                -1
+                            } else {
+                                if cmd == 6 {
+                                    -1
+                                } else {
+                                    if cmd == 7 { 1 } else { 1 }
+                                }
+                            }
+                        }
+                    }
+                }
+            };
+            (1, mx + dx, my + dy)
+        } else {
+            if cmd == 9 {
+                (3, mx, my)
+            } else {
+                if cmd == 10 { (4, mx, my) } else { (5, mx, my) }
+            }
+        }
+    }
+}

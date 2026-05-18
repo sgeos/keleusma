@@ -1,0 +1,54 @@
+// Game-tick script. A loop main that the host resumes once per
+// player input. Each iteration applies the player's turn, then
+// every monster's turn, then end-of-turn book keeping. The
+// player turn and the monster turns dispatch through the same
+// per-actor pattern; players and monsters are conceptually the
+// same kind of actor.
+//
+// Call convention. The host yields the player command into the
+// loop's resume value. The script reads the command, treats the
+// player as an actor by dispatching the player artificial-
+// intelligence script through `host::run_player_turn`, then
+// runs every monster, then ticks book keeping. The outcome
+// yielded back to the host is one of the outcome codes below.
+//
+// Command codes:
+//
+//   0 = wait in place        9 = descend stairs or step on exit
+//   1 = move north          10 = quaff held potion
+//   2 = move south          11 = read held scroll
+//   3 = move west
+//   4 = move east
+//   5 = move north-west
+//   6 = move north-east
+//   7 = move south-west
+//   8 = move south-east
+//
+// Outcome codes:
+//
+//   0 = continue, no state change for the host
+//   1 = descended, host regenerates the next floor
+//   2 = won, host enters game-over state with victory
+//   3 = died, host enters game-over state with loss
+
+use host::run_player_turn
+use host::monster_count
+use host::run_monster_ai
+use host::tick_book_keeping
+
+loop main(cmd: Word) -> Word {
+    let player_outcome = host::run_player_turn(cmd);
+    let outcome = if player_outcome == 0 {
+        let count = host::monster_count();
+        for i in 0..24 {
+            if i < count {
+                host::run_monster_ai(i);
+            };
+        }
+        host::tick_book_keeping()
+    } else {
+        player_outcome
+    };
+    let _ = yield outcome;
+    0
+}

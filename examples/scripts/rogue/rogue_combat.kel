@@ -1,0 +1,58 @@
+// Combat resolution. Pure function that takes attacker and
+// defender stats plus a d20 roll, returns the hit outcome and
+// the damage to apply.
+//
+// The host samples the roll from its random number generator
+// before dispatching this script. The script's body is pure
+// arithmetic and pattern matching so the script-side logic is
+// trivial to read and trivial to modify. A reader wanting to
+// rebalance combat changes a single file.
+//
+// Inputs.
+//   attacker_skill    Bonus added to the d20 roll.
+//   attacker_damage   Base damage if the attack lands.
+//   defender_evasion  Added to the target number (10).
+//   defender_armor    Subtracted from damage, floored at one.
+//   roll              The pre-rolled d20 value, in 1..=20.
+//
+// Output tuple `(hit, damage)`.
+//   hit = 0   Miss. damage is zero.
+//   hit = 1   Ordinary hit. damage is the post-armor value.
+//   hit = 2   Critical hit. damage is the doubled value.
+//
+// Rules.
+//   Natural 1 always misses regardless of skill or evasion.
+//   Natural 20 always hits as a critical regardless of armor.
+//   Otherwise the attack hits when roll + attacker_skill is
+//   greater than or equal to 10 + defender_evasion.
+//   Damage is max(1, attacker_damage - defender_armor) on an
+//   ordinary hit, max(1, 2*attacker_damage - defender_armor)
+//   on a critical hit.
+
+fn main(
+    attacker_skill: Word,
+    attacker_damage: Word,
+    defender_evasion: Word,
+    defender_armor: Word,
+    roll: Word,
+) -> (Word, Word) {
+    if roll == 1 {
+        (0, 0)
+    } else {
+        let target = 10 + defender_evasion;
+        let critical = roll == 20;
+        let lands = critical or (roll + attacker_skill >= target);
+        if lands {
+            let dmg_input = if critical {
+                attacker_damage * 2
+            } else {
+                attacker_damage
+            };
+            let raw = dmg_input - defender_armor;
+            let dmg = if raw < 1 { 1 } else { raw };
+            if critical { (2, dmg) } else { (1, dmg) }
+        } else {
+            (0, 0)
+        }
+    }
+}

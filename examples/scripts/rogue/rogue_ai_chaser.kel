@@ -1,0 +1,33 @@
+// Chaser artificial-intelligence archetype.
+//
+// Greedy one-step chase. The monster steps the cell that
+// reduces the Chebyshev distance to the player by one in each
+// axis. If the monster cannot see the player, it waits. If the
+// step lands on the player's cell, the host resolves the move
+// as a melee attack.
+//
+// Used by the bulk of the bestiary's straight-line combatants:
+// rats, centipedes, mongrels, kobolds, ants, beetles, zombies,
+// hobbits, hyenas, dire wolves, scorpions, ogres, troll, bear,
+// young dragons.
+//
+// Call convention is shared with `ai_idle`. See that file for
+// the input and output tuple specification.
+
+fn main(mx: Word, my: Word, px: Word, py: Word, sees_player: Word) -> (Word, Word, Word) {
+    if sees_player == 0 {
+        (0, mx, my)
+    } else {
+        let dx = if px > mx {
+            1
+        } else {
+            if px < mx { -1 } else { 0 }
+        };
+        let dy = if py > my {
+            1
+        } else {
+            if py < my { -1 } else { 0 }
+        };
+        (1, mx + dx, my + dy)
+    }
+}

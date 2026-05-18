@@ -1,0 +1,38 @@
+// Potion-effect script. One-shot. The host invokes
+// `fn main(effect: Word, hp: Word, max_hp: Word)` when the
+// player quaffs the held potion. The script returns a tuple
+// describing the deltas and the status action.
+//
+// Return shape `(hp_delta, max_hp_delta, skill_delta,
+// status_code, status_arg)`.
+//
+// `status_code` values that the potion script may use:
+//   0 = no status action
+//  11 = restoration; the host heals the player to full
+//
+// All other status codes are reserved for the scroll script.
+//
+// Effect identifiers map to the host's `PotionEffect` enum:
+//   0 = healing          (+5 HP)
+//   1 = greater healing  (+15 HP)
+//   2 = restoration      (full heal)
+//   3 = poison           (-3 HP)
+//   4 = acid             (-5 HP)
+//   5 = strength         (+2 max HP, +2 HP)
+//   6 = skill            (+1 skill)
+//   7 = speed            (no-op placeholder)
+//   8 = levitation       (no-op placeholder)
+//   9 = see invisible    (no-op placeholder)
+
+fn main(effect: Word, hp: Word, max_hp: Word) -> (Word, Word, Word, Word, Word) {
+    match effect {
+        0 => (5, 0, 0, 0, 0),
+        1 => (15, 0, 0, 0, 0),
+        2 => (0, 0, 0, 11, 0),
+        3 => (-3, 0, 0, 0, 0),
+        4 => (-5, 0, 0, 0, 0),
+        5 => (2, 2, 0, 0, 0),
+        6 => (0, 0, 1, 0, 0),
+        _ => (0, 0, 0, 0, 0),
+    }
+}

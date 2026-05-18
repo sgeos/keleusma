@@ -1,0 +1,289 @@
+// Dungeon generator. One-shot script invoked per floor descent.
+// The host calls `fn main(floor: Word) -> Word` once with the
+// current floor number. The script lays out rooms and corridors
+// through host natives, places the player at the first room's
+// centre, places stairs down (or the exit on floor 100), and
+// spawns monsters and items per the host's spec.
+//
+// Algorithm. A simple rooms-and-corridors generator. Pick a
+// fixed number of rectangular rooms whose centres become
+// connection nodes. Lay the rooms first. For each consecutive
+// pair of rooms in scatter order, dig an L-shaped corridor
+// between their centres. Tiles are written through `host::map_set`
+// using the stable tile-identifier encoding.
+//
+// Tile identifiers:
+//   0 = floor, 1 = wall, 2 = door closed, 3 = door open,
+//   4 = stairs down, 5 = exit.
+//
+// Item kind identifiers:
+//   0 = food, 1 = gold, 2 = weapon, 3 = armor,
+//   4 = potion, 5 = scroll.
+//
+// Map dimensions are hard-coded to eighty by twenty-four. The
+// values must match the Rust-side constants in
+// `examples/rogue/main.rs`. Room count is eight; the data
+// segment preallocates one slot per possible room.
+
+use host::rng_range
+use host::map_set
+use host::map_get
+use host::map_w
+use host::map_h
+use host::clear_floor
+use host::place_player
+use host::place_stairs
+use host::place_exit
+use host::spawn_monster
+use host::spawn_item
+use host::floor
+
+// Room storage. The verifier requires fixed-size arrays for the
+// data segment.
+data state {
+    num_rooms: Word,
+    rooms_x0: [Word; 8],
+    rooms_y0: [Word; 8],
+    rooms_x1: [Word; 8],
+    rooms_y1: [Word; 8],
+}
+
+// ---------------------------------------------------------------
+// Helpers.
+// ---------------------------------------------------------------
+
+// Fill a rectangular region with the given tile. Inclusive on
+// both ends. The outer loop is bounded by the map height and the
+// inner by the map width, so the verifier accepts the fixed
+// bound regardless of the per-call rectangle dimensions.
+fn fill_rect(x0: Word, y0: Word, x1: Word, y1: Word, tile: Word) -> Word {
+    for y in 0..24 {
+        for x in 0..80 {
+            if x >= x0 and x <= x1 and y >= y0 and y <= y1 {
+                host::map_set(x, y, tile);
+            };
+        }
+    }
+    0
+}
+
+// Carve a room. The interior is floor; the border is wall.
+fn carve_room(x0: Word, y0: Word, x1: Word, y1: Word) -> Word {
+    fill_rect(x0, y0, x1, y1, 1);
+    fill_rect(x0 + 1, y0 + 1, x1 - 1, y1 - 1, 0);
+    0
+}
+
+// Carve a horizontal corridor at row `y` between x-columns `xa`
+// and `xb` inclusive.
+fn carve_h_corridor(xa: Word, xb: Word, y: Word) -> Word {
+    let lo = if xa < xb { xa } else { xb };
+    let hi = if xa < xb { xb } else { xa };
+    for x in 0..80 {
+        if x >= lo and x <= hi {
+            host::map_set(x, y, 0);
+        };
+    }
+    0
+}
+
+// Carve a vertical corridor at column `x` between rows `ya` and
+// `yb` inclusive.
+fn carve_v_corridor(ya: Word, yb: Word, x: Word) -> Word {
+    let lo = if ya < yb { ya } else { yb };
+    let hi = if ya < yb { yb } else { ya };
+    for y in 0..24 {
+        if y >= lo and y <= hi {
+            host::map_set(x, y, 0);
+        };
+    }
+    0
+}
+
+// Connect two room centres with an L-shaped corridor. The bend
+// goes horizontally first then vertically.
+fn connect(x1: Word, y1: Word, x2: Word, y2: Word) -> Word {
+    carve_h_corridor(x1, x2, y1);
+    carve_v_corridor(y1, y2, x2);
+    0
+}
+
+// Place a random room within the available area. Stored into
+// state at slot index `i`. Rooms never touch the map borders so
+// corridors have somewhere to enter from.
+fn place_room(i: Word) -> Word {
+    let w = host::rng_range(4, 10);
+    let h = host::rng_range(4, 10);
+    let x0 = host::rng_range(1, 80 - w - 1);
+    let y0 = host::rng_range(1, 24 - h - 1);
+    state.rooms_x0[i] = x0;
+    state.rooms_y0[i] = y0;
+    state.rooms_x1[i] = x0 + w;
+    state.rooms_y1[i] = y0 + h;
+    carve_room(x0, y0, x0 + w, y0 + h);
+    0
+}
+
+// Centre of the room stored at slot `i`.
+fn room_cx(i: Word) -> Word {
+    (state.rooms_x0[i] + state.rooms_x1[i]) / 2
+}
+
+fn room_cy(i: Word) -> Word {
+    (state.rooms_y0[i] + state.rooms_y1[i]) / 2
+}
+
+// ---------------------------------------------------------------
+// Spawn distribution. Floor number scales monster count and item
+// count. The host-side bestiary table holds stats, so the script
+// just decides what kind to spawn and where.
+// ---------------------------------------------------------------
+
+// Number of monsters to spawn on this floor. Scales with depth,
+// capped at twelve.
+fn monster_count_for_floor(f: Word) -> Word {
+    let base = f + 4;
+    if base > 12 { 12 } else { base }
+}
+
+// The floor's favourite monster kind. Floors 1 through 100 map
+// directly to bestiary entries 0 through 99 by depth.
+fn favourite_for_floor(f: Word) -> Word {
+    if f >= 1 and f <= 100 {
+        f - 1
+    } else {
+        0
+    }
+}
+
+// Random monster kind drawn from the pool of all kinds the
+// player has seen so far. Caller substitutes the favourite when
+// the floor is one and the pool is empty.
+fn random_previous(f: Word) -> Word {
+    host::rng_range(0, f - 1)
+}
+
+// Pick a random walkable cell inside the room at slot `i`.
+fn random_in_room(i: Word) -> (Word, Word) {
+    let x0 = state.rooms_x0[i] + 1;
+    let x1 = state.rooms_x1[i] - 1;
+    let y0 = state.rooms_y0[i] + 1;
+    let y1 = state.rooms_y1[i] - 1;
+    let x = host::rng_range(x0, x1 + 1);
+    let y = host::rng_range(y0, y1 + 1);
+    (x, y)
+}
+
+// Spawn helpers use fixed-bound loops with conditional bodies so
+// the verifier can prove iteration bounds statically. The fixed
+// bound is the maximum possible count for the category; the
+// body skips iterations beyond the per-call dynamic count.
+fn spawn_monsters(f: Word) -> Word {
+    let count = monster_count_for_floor(f);
+    let fav = favourite_for_floor(f);
+    for i in 0..12 {
+        if i < count {
+            let kind = if f == 1 or i % 2 == 0 {
+                fav
+            } else {
+                random_previous(f)
+            };
+            let r = host::rng_range(1, state.num_rooms);
+            let p = random_in_room(r);
+            host::spawn_monster(kind, p.0, p.1);
+        };
+    }
+    0
+}
+
+fn spawn_items(f: Word) -> Word {
+    let food = host::rng_range(3, 6);
+    let potions = host::rng_range(2, 5);
+    let scrolls = host::rng_range(2, 5);
+    let weapons = host::rng_range(0, 2);
+    let armors = host::rng_range(0, 2);
+    let gold_piles = host::rng_range(4, 8);
+
+    for i in 0..8 {
+        if i < food {
+            let r = host::rng_range(0, state.num_rooms);
+            let p = random_in_room(r);
+            host::spawn_item(0, 0, p.0, p.1);
+        };
+    }
+    for i in 0..6 {
+        if i < potions {
+            let r = host::rng_range(0, state.num_rooms);
+            let p = random_in_room(r);
+            let subtype = host::rng_range(0, 10);
+            host::spawn_item(4, subtype, p.0, p.1);
+        };
+    }
+    for i in 0..6 {
+        if i < scrolls {
+            let r = host::rng_range(0, state.num_rooms);
+            let p = random_in_room(r);
+            let subtype = host::rng_range(0, 10);
+            host::spawn_item(5, subtype, p.0, p.1);
+        };
+    }
+    for i in 0..3 {
+        if i < weapons {
+            let r = host::rng_range(0, state.num_rooms);
+            let p = random_in_room(r);
+            let max_tier = (f / 10) + 2;
+            let tier = if max_tier > 9 { 9 } else { max_tier };
+            let subtype = host::rng_range(1, tier + 1);
+            host::spawn_item(2, subtype, p.0, p.1);
+        };
+    }
+    for i in 0..3 {
+        if i < armors {
+            let r = host::rng_range(0, state.num_rooms);
+            let p = random_in_room(r);
+            let max_tier = (f / 10) + 2;
+            let tier = if max_tier > 9 { 9 } else { max_tier };
+            host::spawn_item(3, tier, p.0, p.1);
+        };
+    }
+    for i in 0..10 {
+        if i < gold_piles {
+            let r = host::rng_range(0, state.num_rooms);
+            let p = random_in_room(r);
+            let value = host::rng_range(f, f * 4 + 4);
+            host::spawn_item(1, value, p.0, p.1);
+        };
+    }
+    0
+}
+
+// ---------------------------------------------------------------
+// Entry point. Called once per floor descent.
+// ---------------------------------------------------------------
+
+fn main(floor: Word) -> Word {
+    host::clear_floor();
+    state.num_rooms = 8;
+
+    for i in 0..8 {
+        place_room(i);
+    }
+
+    for i in 0..7 {
+        connect(room_cx(i), room_cy(i), room_cx(i + 1), room_cy(i + 1));
+    }
+
+    host::place_player(room_cx(0), room_cy(0));
+
+    let last = 7;
+    if floor >= 100 {
+        host::place_exit(room_cx(last), room_cy(last));
+    } else {
+        host::place_stairs(room_cx(last), room_cy(last));
+    };
+
+    spawn_monsters(floor);
+    spawn_items(floor);
+
+    0
+}

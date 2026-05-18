@@ -4,6 +4,21 @@
 // All loudness shaping is offloaded to host-side features.
 // See `docs/guide/PIANO_ROLL.md` for the long-form manual.
 //
+// Contrast with songs 0 and 1. Songs 0 and 1 follow the
+// general "rem-and-idx counter per channel" sequencer pattern
+// in which the script tracks a remaining-ticks countdown for
+// each channel and a position counter within that channel's
+// note table. Song 2 uses a different, optimised dispatch:
+// every tick fires exactly one channel computed by a function
+// of the global tick position, and the per-channel state
+// counters are unused. The optimisation works for this song
+// because the underlying composition is an arpeggio that
+// touches one voice per sixteenth note in a fixed pattern.
+// The optimisation does not generalise to every song; the
+// generic counter-based dispatch in songs 0 and 1 is the
+// correct default for note-event-driven music with
+// per-channel rhythmic independence.
+//
 // Pattern. Each measure is sixteen 16th-note ticks. Each
 // measure plays a five-note chord through a fixed arpeggio
 // pattern repeated twice per measure
@@ -40,7 +55,7 @@
 //
 // Implementation note. The per-tick body is three lines plus a
 // yield. The compactness is the demonstration. Setup happens
-// once; the loop just dispatches.
+// once in init; the loop just dispatches one note per tick.
 
 use host::play
 use host::set_enable
@@ -143,15 +158,18 @@ loop main(input: Word) -> Word {
         state.init = 1;
     };
 
-    // Position within the four-measure loop.
+    // Position within the four-measure loop. The optimisation
+    // is here: a single computation maps the global tick onto
+    // (firing channel, pitch), and one host::play actuates the
+    // chosen voice. The state.rem and state.idx arrays in the
+    // data segment are unused. Songs 0 and 1 use per-channel
+    // counters for note-event-driven rhythm with independent
+    // channels; song 2 collapses to one-fire-per-tick because
+    // its underlying composition is a single arpeggio.
     let cycle_pos = input % 64;
     let measure = cycle_pos / 16;
     let tick_in_8 = (cycle_pos % 16) % 8;
 
-    // Compute the firing channel and the pitch it carries on
-    // this tick, then actuate the host. Loudness contour and
-    // panning are already configured per channel; nothing else
-    // happens per tick.
     let fired = voice_for_tick(tick_in_8);
     let midi = chord_at(measure * 5 + fired);
     host::play(fired, midi);

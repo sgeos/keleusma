@@ -137,14 +137,65 @@ pub fn op_cost_context(lhs: TextSize, rhs: TextSize) -> OpCostContext {
     }
 }
 
+/// Result of the per-chunk text-allocation analysis.
+///
+/// `heap_alloc` is the upper bound on bytes allocated to the arena's
+/// top region by text-producing opcodes in the chunk. `returns_text`
+/// is `true` if any execution path through the chunk leaves a value
+/// of text type (Known or Unbounded) on top of the abstract stack at
+/// a `Return` op or at the end of the chunk's ops.
+///
+/// The `returns_text` flag is used by callers of this analysis to
+/// propagate accurate per-callee text-ness through the module-level
+/// WCMU pass. A chunk that returns a non-text scalar (Word, Bool,
+/// fixed) does not contribute text to its caller through the call's
+/// return value. The previous policy treated every `Op::Call` return
+/// as `Unbounded`, which forced any later `Op::Add` between two
+/// such return values to saturate the heap cost to `u32::MAX`. With
+/// per-callee text-ness information, calls returning non-text scalars
+/// push `NotText`, restoring the type-checker's "either operand
+/// NotText implies result NotText" invariant.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ChunkTextAnalysis {
+    /// Upper bound on text heap allocation for the chunk.
+    pub heap_alloc: u32,
+    /// Whether the chunk may return a text-typed value.
+    pub returns_text: bool,
+}
+
 /// Conservative upper bound on the bytes allocated to the arena's
 /// top region by text-producing opcodes in `chunk`.
+///
+/// See [`analyze_chunk_text`] for the underlying analysis. This
+/// function preserves the original API by calling
+/// `analyze_chunk_text(chunk, &[])`, which uses the conservative
+/// default that every callee may return text.
+pub fn chunk_text_heap_alloc(chunk: &Chunk) -> u32 {
+    analyze_chunk_text(chunk, &[]).heap_alloc
+}
+
+/// Per-chunk text-allocation analysis with optional per-callee
+/// text-ness information.
 ///
 /// Walks the chunk's ops linearly, maintaining a per-slot
 /// [`TextSize`] lattice over an abstract operand stack and local
 /// variables. For each text-producing opcode, evaluates the dynamic
 /// [`OpCost`] from [`NOMINAL_COST_MODEL`] against the operand lattice
-/// values and accumulates the cost into the returned total.
+/// values and accumulates the cost into the returned heap total.
+///
+/// At each `Op::Call(callee_idx, _)`, the analysis pushes
+/// `TextSize::Unbounded` if `callee_returns_text` reports the callee
+/// as text-returning, or `TextSize::NotText` otherwise. An out-of-
+/// range `callee_idx` defaults to the conservative `Unbounded`. An
+/// empty `callee_returns_text` slice (the default when no callgraph
+/// information is available) collapses to the original conservative
+/// policy.
+///
+/// At each `Op::Return`, the analysis peeks the top of the abstract
+/// stack. If the peeked value is not `NotText`, the chunk's
+/// `returns_text` flag is set. At end of ops, the same check is
+/// applied to handle chunks with implicit return through fall-
+/// through.
 ///
 /// ## Soundness
 ///
@@ -153,19 +204,18 @@ pub fn op_cost_context(lhs: TextSize, rhs: TextSize) -> OpCostContext {
 /// handled conservatively: text values written inside a loop body or
 /// inside an If/Else branch saturate to [`TextSize::Unbounded`],
 /// causing any subsequent `Op::Add` against them to report the
-/// dynamic cost as `u32::MAX`. Call boundaries also produce
-/// `Unbounded` return values because the analysis does not propagate
-/// per-slot information across calls.
+/// dynamic cost as `u32::MAX`.
 ///
-/// The accumulated total saturates at `u32::MAX`. A returned value of
-/// `u32::MAX` signals that the analysis could not bound the text
-/// allocation and the caller should treat the chunk's text heap as
-/// unbounded.
-pub fn chunk_text_heap_alloc(chunk: &Chunk) -> u32 {
+/// The accumulated heap total saturates at `u32::MAX`. A returned
+/// `heap_alloc` of `u32::MAX` signals that the analysis could not
+/// bound the text allocation and the caller should treat the chunk's
+/// text heap as unbounded.
+pub fn analyze_chunk_text(chunk: &Chunk, callee_returns_text: &[bool]) -> ChunkTextAnalysis {
     let mut state = TextAnalysis::new(chunk.local_count as usize);
     let mut total: u32 = 0;
     let mut loop_depth: u32 = 0;
     let mut branch_depth: u32 = 0;
+    let mut returns_text = false;
 
     for op in &chunk.ops {
         // Track structural depth so writes inside any conditional or
@@ -178,10 +228,22 @@ pub fn chunk_text_heap_alloc(chunk: &Chunk) -> u32 {
             _ => {}
         }
         let conservative = loop_depth > 0 || branch_depth > 0;
-        let contribution = state.apply_op(op, chunk, conservative);
+
+        // Peek the return value before apply_op pops it.
+        if matches!(op, Op::Return) {
+            let returned = state.peek();
+            if !matches!(returned, TextSize::NotText) {
+                returns_text = true;
+            }
+        }
+
+        let contribution = state.apply_op(op, chunk, conservative, callee_returns_text);
         total = total.saturating_add(contribution);
         if total == u32::MAX {
-            return u32::MAX;
+            return ChunkTextAnalysis {
+                heap_alloc: u32::MAX,
+                returns_text,
+            };
         }
         match op {
             Op::EndLoop(_) => loop_depth = loop_depth.saturating_sub(1),
@@ -189,7 +251,17 @@ pub fn chunk_text_heap_alloc(chunk: &Chunk) -> u32 {
             _ => {}
         }
     }
-    total
+
+    // Implicit return through end of ops: peek the final stack top.
+    let final_top = state.peek();
+    if !matches!(final_top, TextSize::NotText) {
+        returns_text = true;
+    }
+
+    ChunkTextAnalysis {
+        heap_alloc: total,
+        returns_text,
+    }
 }
 
 /// Internal abstract state for [`chunk_text_heap_alloc`].
@@ -239,7 +311,17 @@ impl TextAnalysis {
     /// abstract stack or to a local is saturated to
     /// [`TextSize::Unbounded`]. Used inside loops and conditional
     /// branches where the pass cannot reliably narrow the value.
-    fn apply_op(&mut self, op: &Op, chunk: &Chunk, conservative: bool) -> u32 {
+    ///
+    /// `callee_returns_text` is the per-chunk text-ness array used
+    /// for `Op::Call`. An empty slice or an out-of-range index
+    /// defaults to `true` (conservative).
+    fn apply_op(
+        &mut self,
+        op: &Op,
+        chunk: &Chunk,
+        conservative: bool,
+        callee_returns_text: &[bool],
+    ) -> u32 {
         // `sat` widens a tracked text bound to `Unbounded` when the
         // op runs inside a loop or branch. `NotText` is preserved
         // because non-text values do not change category under
@@ -333,18 +415,30 @@ impl TextAnalysis {
                 self.push(top);
                 0
             }
-            Op::Call(_, n_args) => {
+            Op::Call(callee_idx, n_args) => {
                 for _ in 0..*n_args {
                     self.pop();
                 }
-                // The callee's text heap contribution is summed
-                // separately at the module level. The abstract
-                // return value is `Unbounded` because the pass does
-                // not propagate per-slot information across calls.
-                // This is safe but coarse: a subsequent text Add
-                // against the return value will saturate the cost
-                // contribution to `u32::MAX`.
-                self.push(TextSize::Unbounded);
+                // Look up the callee's text-ness. The module-level
+                // analysis builds this array in topological order
+                // before each caller runs. If the callee is known to
+                // return a non-text value (Word, Bool, fixed), we
+                // push `NotText` so the type-checker's invariant
+                // ("either operand NotText implies result NotText"
+                // in Op::Add) restores correctly. If the callee
+                // returns text, or if the array does not yet carry
+                // the callee's entry, we push `Unbounded` as the
+                // conservative default.
+                let returns_text = callee_returns_text
+                    .get(*callee_idx as usize)
+                    .copied()
+                    .unwrap_or(true);
+                let pushed = if returns_text {
+                    TextSize::Unbounded
+                } else {
+                    TextSize::NotText
+                };
+                self.push(sat(pushed));
                 0
             }
             Op::CallNative(_, n_args) => {

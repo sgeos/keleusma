@@ -1,0 +1,31 @@
+// Sleeper artificial-intelligence archetype.
+//
+// The monster waits while the player is out of sight. When the
+// player enters its line of sight, the monster switches to
+// greedy chase identical to `ai_chaser` for the rest of its
+// existence. Used by cave spiders, brown snakes, and carrion
+// crawlers.
+//
+// Call convention is shared with `ai_idle`. Note that this
+// archetype does not retain memory across turns, so each turn's
+// decision is purely a function of the inputs. The simplicity
+// is acceptable because once the monster is aroused, its
+// behaviour matches `ai_chaser` regardless of any past state.
+
+fn main(mx: Word, my: Word, px: Word, py: Word, sees_player: Word) -> (Word, Word, Word) {
+    if sees_player == 0 {
+        (0, mx, my)
+    } else {
+        let dx = if px > mx {
+            1
+        } else {
+            if px < mx { -1 } else { 0 }
+        };
+        let dy = if py > my {
+            1
+        } else {
+            if py < my { -1 } else { 0 }
+        };
+        (1, mx + dx, my + dy)
+    }
+}

@@ -1,20 +1,28 @@
-//! Built-in audio and math native functions.
+//! Built-in audio native functions for digital signal processing.
 //!
 //! All functions are registered through the ergonomic `register_fn`
 //! marshalling layer documented in `marshall.rs`. Argument and return
 //! types are ordinary Rust primitives. Fallible functions return
 //! `Result<R, VmError>` and are registered with `register_fn_fallible`.
+//!
+//! All entries live under the `audio::` namespace. The bundle does
+//! not register entries under the `math::` namespace; hosts that
+//! need math helpers alongside audio helpers should register
+//! [`crate::stddsl::Math`] in addition to [`crate::stddsl::Audio`].
 
 extern crate alloc;
 use alloc::string::String;
+use core::f64::consts;
 
 use crate::vm::{Vm, VmError};
 
-/// Register all audio utility native functions on a VM instance.
+/// Register all audio native functions on a VM instance.
 ///
 /// These are pure functions that do not require engine access.
-/// They are available under the `audio` and `math` namespaces.
+/// They are available under the `audio::` namespace.
 pub fn register_audio_natives<'a, 'arena>(vm: &mut Vm<'a, 'arena>) {
+    // -- Pitch conversion --
+
     // MIDI note to frequency. Standard formula 440 * 2^((note - 69) / 12).
     vm.register_fn("audio::midi_to_freq", |note: i64| -> f64 {
         440.0 * libm::pow(2.0, (note - 69) as f64 / 12.0)
@@ -24,53 +32,175 @@ pub fn register_audio_natives<'a, 'arena>(vm: &mut Vm<'a, 'arena>) {
     vm.register_fn_fallible("audio::freq_to_midi", |freq: f64| -> Result<i64, VmError> {
         if freq <= 0.0 {
             return Err(VmError::NativeError(String::from(
-                "freq_to_midi: frequency must be positive",
+                "audio::freq_to_midi: frequency must be positive",
             )));
         }
         let note = 69.0 + 12.0 * libm::log2(freq / 440.0);
         Ok(libm::round(note) as i64)
     });
 
+    // Cents to frequency ratio: 2^(cents / 1200).
+    vm.register_fn("audio::cents_to_ratio", |cents: f64| -> f64 {
+        libm::pow(2.0, cents / 1200.0)
+    });
+
+    // Frequency ratio to cents. Fallible because the ratio must be
+    // strictly positive for the logarithm.
+    vm.register_fn_fallible(
+        "audio::ratio_to_cents",
+        |ratio: f64| -> Result<f64, VmError> {
+            if ratio <= 0.0 {
+                return Err(VmError::NativeError(String::from(
+                    "audio::ratio_to_cents: ratio must be strictly positive",
+                )));
+            }
+            Ok(1200.0 * libm::log2(ratio))
+        },
+    );
+
+    // Semitones to frequency ratio: 2^(semitones / 12).
+    vm.register_fn("audio::semitones_to_ratio", |semitones: f64| -> f64 {
+        libm::pow(2.0, semitones / 12.0)
+    });
+
+    // Frequency ratio to semitones. Fallible because the ratio
+    // must be strictly positive for the logarithm.
+    vm.register_fn_fallible(
+        "audio::ratio_to_semitones",
+        |ratio: f64| -> Result<f64, VmError> {
+            if ratio <= 0.0 {
+                return Err(VmError::NativeError(String::from(
+                    "audio::ratio_to_semitones: ratio must be strictly positive",
+                )));
+            }
+            Ok(12.0 * libm::log2(ratio))
+        },
+    );
+
+    // -- Amplitude conversion --
+
     // Decibels to linear amplitude. 10^(db / 20).
     vm.register_fn("audio::db_to_linear", |db: f64| -> f64 {
         libm::pow(10.0, db / 20.0)
     });
 
-    // Linear amplitude to decibels. Fallible because amplitude must be positive.
+    // Linear amplitude to decibels. Fallible because amplitude
+    // must be positive.
     vm.register_fn_fallible(
         "audio::linear_to_db",
         |linear: f64| -> Result<f64, VmError> {
             if linear <= 0.0 {
                 return Err(VmError::NativeError(String::from(
-                    "linear_to_db: amplitude must be positive",
+                    "audio::linear_to_db: amplitude must be positive",
                 )));
             }
             Ok(20.0 * libm::log10(linear))
         },
     );
 
-    vm.register_fn("math::clamp", |val: f64, min: f64, max: f64| -> f64 {
-        if val < min {
-            min
-        } else if val > max {
-            max
-        } else {
-            val
-        }
-    });
+    // -- Time conversion --
 
-    vm.register_fn("math::lerp", |a: f64, b: f64, t: f64| -> f64 {
-        a + (b - a) * t
-    });
+    // Milliseconds to samples at the given sample rate. Fallible
+    // because the sample rate must be strictly positive.
+    vm.register_fn_fallible(
+        "audio::ms_to_samples",
+        |ms: f64, sample_rate: f64| -> Result<f64, VmError> {
+            if sample_rate <= 0.0 {
+                return Err(VmError::NativeError(String::from(
+                    "audio::ms_to_samples: sample_rate must be strictly positive",
+                )));
+            }
+            Ok(ms * sample_rate / 1000.0)
+        },
+    );
 
-    vm.register_fn("math::sin", |x: f64| -> f64 { libm::sin(x) });
-    vm.register_fn("math::cos", |x: f64| -> f64 { libm::cos(x) });
-    vm.register_fn("math::pow", |base: f64, exp: f64| -> f64 {
-        libm::pow(base, exp)
+    // Samples at the given sample rate to milliseconds. Fallible
+    // because the sample rate must be strictly positive.
+    vm.register_fn_fallible(
+        "audio::samples_to_ms",
+        |samples: f64, sample_rate: f64| -> Result<f64, VmError> {
+            if sample_rate <= 0.0 {
+                return Err(VmError::NativeError(String::from(
+                    "audio::samples_to_ms: sample_rate must be strictly positive",
+                )));
+            }
+            Ok(samples * 1000.0 / sample_rate)
+        },
+    );
+
+    // -- Filter coefficient helpers --
+
+    // One-pole low-pass filter coefficient.
+    //
+    // Returns `alpha` in the difference equation
+    //   y[n] = y[n-1] + alpha * (x[n] - y[n-1])
+    // such that the filter has a -3 dB point at `cutoff_hz`.
+    // Derived from the standard RC analogy
+    //   alpha = 1 - exp(-2*pi*cutoff / sample_rate).
+    //
+    // The script side multiplies the previous output by
+    // `(1 - alpha)` and the current input by `alpha`. Fallible
+    // because the sample rate must be strictly positive and the
+    // cutoff must be non-negative.
+    vm.register_fn_fallible(
+        "audio::onepole_lpf_alpha",
+        |cutoff_hz: f64, sample_rate: f64| -> Result<f64, VmError> {
+            if sample_rate <= 0.0 {
+                return Err(VmError::NativeError(String::from(
+                    "audio::onepole_lpf_alpha: sample_rate must be strictly positive",
+                )));
+            }
+            if cutoff_hz < 0.0 {
+                return Err(VmError::NativeError(String::from(
+                    "audio::onepole_lpf_alpha: cutoff_hz must be non-negative",
+                )));
+            }
+            Ok(1.0 - libm::exp(-2.0 * consts::PI * cutoff_hz / sample_rate))
+        },
+    );
+
+    // One-pole high-pass filter coefficient.
+    //
+    // Returns `alpha` for the complement-style high-pass
+    //   lp[n] = lp[n-1] + (1 - alpha) * (x[n] - lp[n-1])
+    //   hp[n] = x[n] - lp[n]
+    // where `alpha = exp(-2*pi*cutoff / sample_rate)` is the
+    // decay coefficient of the underlying one-pole. Fallible on
+    // the same grounds as the LPF helper.
+    vm.register_fn_fallible(
+        "audio::onepole_hpf_alpha",
+        |cutoff_hz: f64, sample_rate: f64| -> Result<f64, VmError> {
+            if sample_rate <= 0.0 {
+                return Err(VmError::NativeError(String::from(
+                    "audio::onepole_hpf_alpha: sample_rate must be strictly positive",
+                )));
+            }
+            if cutoff_hz < 0.0 {
+                return Err(VmError::NativeError(String::from(
+                    "audio::onepole_hpf_alpha: cutoff_hz must be non-negative",
+                )));
+            }
+            Ok(libm::exp(-2.0 * consts::PI * cutoff_hz / sample_rate))
+        },
+    );
+
+    // -- Spatial helper --
+
+    // Equal-power pan law.
+    //
+    // Position is in [-1.0, 1.0] where -1.0 is full left, 0.0 is
+    // centre, and +1.0 is full right. Values outside the range
+    // are clamped. Returns a (left, right) gain pair drawn from
+    //   theta = (pos + 1) * pi / 4
+    //   left  = cos(theta)
+    //   right = sin(theta)
+    // Sum-of-squares of the returned gains is unity, giving the
+    // textbook constant-power pan.
+    vm.register_fn("audio::pan_law", |pos: f64| -> (f64, f64) {
+        let clamped = pos.clamp(-1.0, 1.0);
+        let theta = (clamped + 1.0) * consts::FRAC_PI_4;
+        (libm::cos(theta), libm::sin(theta))
     });
-    vm.register_fn("math::abs", |x: f64| -> f64 { libm::fabs(x) });
-    vm.register_fn("math::min", |a: f64, b: f64| -> f64 { libm::fmin(a, b) });
-    vm.register_fn("math::max", |a: f64, b: f64| -> f64 { libm::fmax(a, b) });
 }
 
 #[cfg(test)]
@@ -80,9 +210,13 @@ mod tests {
     use crate::compiler::compile;
     use crate::lexer::tokenize;
     use crate::parser::parse;
-    use crate::vm::DEFAULT_ARENA_CAPACITY;
+    use crate::vm::{DEFAULT_ARENA_CAPACITY, VmState};
 
-    fn run_with_natives(src: &str) -> Value {
+    /// Run a Keleusma program with the Audio bundle registered
+    /// and return the result. Tests that need math helpers should
+    /// register the Math bundle alongside; the Audio bundle no
+    /// longer pulls math into the namespace.
+    fn run_with_audio(src: &str) -> Value {
         let tokens = tokenize(src).expect("lex error");
         let program = parse(&tokens).expect("parse error");
         let module = compile(&program).expect("compile error");
@@ -90,150 +224,345 @@ mod tests {
         let mut vm = Vm::new(module, &arena).unwrap();
         register_audio_natives(&mut vm);
         match vm.call(&[]).unwrap() {
-            crate::vm::VmState::Finished(v) => v,
-            crate::vm::VmState::Yielded(v) => panic!("unexpected yield: {:?}", v),
-            crate::vm::VmState::Reset => panic!("unexpected reset"),
+            VmState::Finished(v) => v,
+            VmState::Yielded(v) => panic!("unexpected yield: {:?}", v),
+            VmState::Reset => panic!("unexpected reset"),
         }
     }
 
-    #[test]
-    fn midi_to_freq_a4() {
-        let val = run_with_natives(
-            "use audio::midi_to_freq\nfn main() -> Float { audio::midi_to_freq(69) }",
-        );
+    fn assert_close(val: Value, expected: f64, tol: f64) {
         match val {
-            Value::Float(f) => assert!((f - 440.0).abs() < 0.01),
+            Value::Float(f) => assert!(
+                (f - expected).abs() < tol,
+                "expected ~{}, got {}",
+                expected,
+                f
+            ),
             other => panic!("expected Float, got {:?}", other),
         }
+    }
+
+    // -- Pitch conversion --
+
+    #[test]
+    fn midi_to_freq_a4() {
+        assert_close(
+            run_with_audio(
+                "use audio::midi_to_freq\nfn main() -> Float { audio::midi_to_freq(69) }",
+            ),
+            440.0,
+            0.01,
+        );
     }
 
     #[test]
     fn midi_to_freq_c4() {
-        let val = run_with_natives(
-            "use audio::midi_to_freq\nfn main() -> Float { audio::midi_to_freq(60) }",
+        assert_close(
+            run_with_audio(
+                "use audio::midi_to_freq\nfn main() -> Float { audio::midi_to_freq(60) }",
+            ),
+            261.6256,
+            0.01,
         );
-        match val {
-            Value::Float(f) => assert!((f - 261.63).abs() < 0.01),
-            other => panic!("expected Float, got {:?}", other),
-        }
     }
 
     #[test]
     fn freq_to_midi_440() {
-        let val = run_with_natives(
+        let val = run_with_audio(
             "use audio::freq_to_midi\nfn main() -> Word { audio::freq_to_midi(440.0) }",
         );
         assert_eq!(val, Value::Int(69));
     }
 
     #[test]
-    fn db_to_linear_zero() {
-        let val = run_with_natives(
-            "use audio::db_to_linear\nfn main() -> Float { audio::db_to_linear(0.0) }",
+    fn cents_to_ratio_one_octave() {
+        assert_close(
+            run_with_audio(
+                "use audio::cents_to_ratio\nfn main() -> Float { audio::cents_to_ratio(1200.0) }",
+            ),
+            2.0,
+            1e-9,
         );
-        match val {
-            Value::Float(f) => assert!((f - 1.0).abs() < 0.001),
-            other => panic!("expected Float, got {:?}", other),
-        }
+    }
+
+    #[test]
+    fn ratio_to_cents_octave() {
+        assert_close(
+            run_with_audio(
+                "use audio::ratio_to_cents\nfn main() -> Float { audio::ratio_to_cents(2.0) }",
+            ),
+            1200.0,
+            1e-9,
+        );
+    }
+
+    #[test]
+    fn semitones_to_ratio_octave() {
+        assert_close(
+            run_with_audio(
+                "use audio::semitones_to_ratio\nfn main() -> Float { audio::semitones_to_ratio(12.0) }",
+            ),
+            2.0,
+            1e-9,
+        );
+    }
+
+    #[test]
+    fn ratio_to_semitones_octave() {
+        assert_close(
+            run_with_audio(
+                "use audio::ratio_to_semitones\nfn main() -> Float { audio::ratio_to_semitones(2.0) }",
+            ),
+            12.0,
+            1e-9,
+        );
+    }
+
+    // -- Amplitude conversion --
+
+    #[test]
+    fn db_to_linear_zero() {
+        assert_close(
+            run_with_audio(
+                "use audio::db_to_linear\nfn main() -> Float { audio::db_to_linear(0.0) }",
+            ),
+            1.0,
+            1e-9,
+        );
     }
 
     #[test]
     fn db_to_linear_minus6() {
-        let val = run_with_natives(
-            "use audio::db_to_linear\nfn main() -> Float { audio::db_to_linear(-6.0) }",
+        assert_close(
+            run_with_audio(
+                "use audio::db_to_linear\nfn main() -> Float { audio::db_to_linear(-6.0) }",
+            ),
+            0.501187,
+            1e-4,
         );
-        match val {
-            Value::Float(f) => assert!((f - 0.501).abs() < 0.01),
-            other => panic!("expected Float, got {:?}", other),
-        }
     }
 
     #[test]
     fn linear_to_db_one() {
-        let val = run_with_natives(
-            "use audio::linear_to_db\nfn main() -> Float { audio::linear_to_db(1.0) }",
+        assert_close(
+            run_with_audio(
+                "use audio::linear_to_db\nfn main() -> Float { audio::linear_to_db(1.0) }",
+            ),
+            0.0,
+            1e-9,
+        );
+    }
+
+    // -- Time conversion --
+
+    #[test]
+    fn ms_to_samples_round_trip() {
+        // 1000 ms at 48000 Hz is 48000 samples.
+        assert_close(
+            run_with_audio(
+                "use audio::ms_to_samples\nfn main() -> Float { audio::ms_to_samples(1000.0, 48000.0) }",
+            ),
+            48000.0,
+            1e-9,
+        );
+    }
+
+    #[test]
+    fn samples_to_ms_round_trip() {
+        // 48000 samples at 48000 Hz is 1000 ms.
+        assert_close(
+            run_with_audio(
+                "use audio::samples_to_ms\nfn main() -> Float { audio::samples_to_ms(48000.0, 48000.0) }",
+            ),
+            1000.0,
+            1e-9,
+        );
+    }
+
+    // -- Filter coefficient helpers --
+
+    #[test]
+    fn onepole_lpf_alpha_at_nyquist_approaches_one() {
+        // Sanity check: at cutoff equal to a substantial fraction
+        // of sample rate, alpha approaches 1 (pass-through).
+        let val = run_with_audio(
+            "use audio::onepole_lpf_alpha\nfn main() -> Float { audio::onepole_lpf_alpha(10000.0, 48000.0) }",
         );
         match val {
-            Value::Float(f) => assert!(f.abs() < 0.001),
+            Value::Float(f) => {
+                assert!(f > 0.0 && f < 1.0, "alpha out of range: {}", f);
+            }
             other => panic!("expected Float, got {:?}", other),
         }
     }
 
     #[test]
-    fn clamp_within_range() {
-        let val =
-            run_with_natives("use math::clamp\nfn main() -> Float { math::clamp(0.5, 0.0, 1.0) }");
-        match val {
-            Value::Float(f) => assert!((f - 0.5).abs() < 0.001),
-            other => panic!("expected Float, got {:?}", other),
-        }
+    fn onepole_lpf_alpha_zero_cutoff_is_zero() {
+        // alpha = 1 - exp(0) = 0.
+        assert_close(
+            run_with_audio(
+                "use audio::onepole_lpf_alpha\nfn main() -> Float { audio::onepole_lpf_alpha(0.0, 48000.0) }",
+            ),
+            0.0,
+            1e-12,
+        );
     }
 
     #[test]
-    fn clamp_below_min() {
-        let val =
-            run_with_natives("use math::clamp\nfn main() -> Float { math::clamp(-1.0, 0.0, 1.0) }");
-        match val {
-            Value::Float(f) => assert!(f.abs() < 0.001),
-            other => panic!("expected Float, got {:?}", other),
-        }
+    fn onepole_hpf_alpha_zero_cutoff_is_one() {
+        // alpha = exp(0) = 1.
+        assert_close(
+            run_with_audio(
+                "use audio::onepole_hpf_alpha\nfn main() -> Float { audio::onepole_hpf_alpha(0.0, 48000.0) }",
+            ),
+            1.0,
+            1e-12,
+        );
     }
 
-    #[test]
-    fn clamp_above_max() {
-        let val =
-            run_with_natives("use math::clamp\nfn main() -> Float { math::clamp(5.0, 0.0, 1.0) }");
-        match val {
-            Value::Float(f) => assert!((f - 1.0).abs() < 0.001),
-            other => panic!("expected Float, got {:?}", other),
-        }
-    }
+    // -- Spatial helper --
 
     #[test]
-    fn lerp_midpoint() {
-        let val =
-            run_with_natives("use math::lerp\nfn main() -> Float { math::lerp(0.0, 100.0, 0.5) }");
-        match val {
-            Value::Float(f) => assert!((f - 50.0).abs() < 0.001),
-            other => panic!("expected Float, got {:?}", other),
-        }
-    }
-
-    #[test]
-    fn sin_zero() {
-        let val = run_with_natives("use math::sin\nfn main() -> Float { math::sin(0.0) }");
-        match val {
-            Value::Float(f) => assert!(f.abs() < 0.001),
-            other => panic!("expected Float, got {:?}", other),
-        }
-    }
-
-    #[test]
-    fn pow_two_cubed() {
-        let val = run_with_natives("use math::pow\nfn main() -> Float { math::pow(2.0, 3.0) }");
-        match val {
-            Value::Float(f) => assert!((f - 8.0).abs() < 0.001),
-            other => panic!("expected Float, got {:?}", other),
-        }
-    }
-
-    #[test]
-    fn abs_negative() {
-        let val = run_with_natives("use math::abs\nfn main() -> Float { math::abs(-42.5) }");
-        match val {
-            Value::Float(f) => assert!((f - 42.5).abs() < 0.001),
-            other => panic!("expected Float, got {:?}", other),
-        }
-    }
-
-    #[test]
-    fn min_max() {
-        let val = run_with_natives(
-            "use math::min\nuse math::max\nfn main() -> Float { math::min(10.0, math::max(3.0, 5.0)) }",
+    fn pan_law_centre() {
+        let val = run_with_audio(
+            "use audio::pan_law\nfn main() -> (Float, Float) { audio::pan_law(0.0) }",
         );
         match val {
-            Value::Float(f) => assert!((f - 5.0).abs() < 0.001),
-            other => panic!("expected Float, got {:?}", other),
+            Value::Tuple(elems) => {
+                assert_eq!(elems.len(), 2);
+                let l = match elems[0] {
+                    Value::Float(f) => f,
+                    _ => panic!("expected Float"),
+                };
+                let r = match elems[1] {
+                    Value::Float(f) => f,
+                    _ => panic!("expected Float"),
+                };
+                let target = core::f64::consts::FRAC_1_SQRT_2;
+                assert!(
+                    (l - target).abs() < 1e-9,
+                    "left expected ~{}, got {}",
+                    target,
+                    l
+                );
+                assert!(
+                    (r - target).abs() < 1e-9,
+                    "right expected ~{}, got {}",
+                    target,
+                    r
+                );
+            }
+            other => panic!("expected tuple, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn pan_law_full_left() {
+        let val = run_with_audio(
+            "use audio::pan_law\nfn main() -> (Float, Float) { audio::pan_law(-1.0) }",
+        );
+        match val {
+            Value::Tuple(elems) => {
+                let l = match elems[0] {
+                    Value::Float(f) => f,
+                    _ => panic!("expected Float"),
+                };
+                let r = match elems[1] {
+                    Value::Float(f) => f,
+                    _ => panic!("expected Float"),
+                };
+                assert!((l - 1.0).abs() < 1e-9, "left expected 1.0, got {}", l);
+                assert!(r.abs() < 1e-9, "right expected 0.0, got {}", r);
+            }
+            other => panic!("expected tuple, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn pan_law_full_right() {
+        let val = run_with_audio(
+            "use audio::pan_law\nfn main() -> (Float, Float) { audio::pan_law(1.0) }",
+        );
+        match val {
+            Value::Tuple(elems) => {
+                let l = match elems[0] {
+                    Value::Float(f) => f,
+                    _ => panic!("expected Float"),
+                };
+                let r = match elems[1] {
+                    Value::Float(f) => f,
+                    _ => panic!("expected Float"),
+                };
+                assert!(l.abs() < 1e-9, "left expected 0.0, got {}", l);
+                assert!((r - 1.0).abs() < 1e-9, "right expected 1.0, got {}", r);
+            }
+            other => panic!("expected tuple, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn pan_law_clamps_out_of_range() {
+        // pos = 2.0 clamps to 1.0, equivalent to full right.
+        let val = run_with_audio(
+            "use audio::pan_law\nfn main() -> (Float, Float) { audio::pan_law(2.0) }",
+        );
+        match val {
+            Value::Tuple(elems) => {
+                let l = match elems[0] {
+                    Value::Float(f) => f,
+                    _ => panic!("expected Float"),
+                };
+                let r = match elems[1] {
+                    Value::Float(f) => f,
+                    _ => panic!("expected Float"),
+                };
+                assert!(l.abs() < 1e-9, "left expected 0.0, got {}", l);
+                assert!((r - 1.0).abs() < 1e-9, "right expected 1.0, got {}", r);
+            }
+            other => panic!("expected tuple, got {:?}", other),
+        }
+    }
+
+    // -- Error paths --
+
+    #[test]
+    fn freq_to_midi_nonpositive_error() {
+        let tokens =
+            tokenize("use audio::freq_to_midi\nfn main() -> Word { audio::freq_to_midi(0.0) }")
+                .unwrap();
+        let program = parse(&tokens).unwrap();
+        let module = compile(&program).unwrap();
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let mut vm = Vm::new(module, &arena).unwrap();
+        register_audio_natives(&mut vm);
+        assert!(vm.call(&[]).is_err());
+    }
+
+    #[test]
+    fn ms_to_samples_bad_sample_rate_error() {
+        let tokens = tokenize(
+            "use audio::ms_to_samples\nfn main() -> Float { audio::ms_to_samples(10.0, 0.0) }",
+        )
+        .unwrap();
+        let program = parse(&tokens).unwrap();
+        let module = compile(&program).unwrap();
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let mut vm = Vm::new(module, &arena).unwrap();
+        register_audio_natives(&mut vm);
+        assert!(vm.call(&[]).is_err());
+    }
+
+    #[test]
+    fn onepole_lpf_alpha_negative_cutoff_error() {
+        let tokens = tokenize(
+            "use audio::onepole_lpf_alpha\nfn main() -> Float { audio::onepole_lpf_alpha(-1.0, 48000.0) }",
+        )
+        .unwrap();
+        let program = parse(&tokens).unwrap();
+        let module = compile(&program).unwrap();
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let mut vm = Vm::new(module, &arena).unwrap();
+        register_audio_natives(&mut vm);
+        assert!(vm.call(&[]).is_err());
     }
 }
