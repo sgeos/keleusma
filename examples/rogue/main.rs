@@ -55,10 +55,11 @@ use crate::render::{GameOver, Renderer};
 use crate::tiles::TileAtlas;
 use crate::world::World;
 
-/// Map dimensions in tiles. Eighty by twenty-four is the classic
-/// rogue grid size.
-pub const MAP_W: u32 = 80;
-pub const MAP_H: u32 = 24;
+/// Map dimensions in tiles. Sixty-four by forty matches a
+/// sixteen-by-ten aspect ratio for the map area at sixteen-
+/// pixel display tile size.
+pub const MAP_W: u32 = 64;
+pub const MAP_H: u32 = 40;
 
 /// Display tile size in pixels. Each cell on the map renders
 /// into this many pixels. Sixteen is chosen so the window fits

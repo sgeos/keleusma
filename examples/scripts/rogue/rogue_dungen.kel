@@ -20,7 +20,7 @@
 //   0 = food, 1 = gold, 2 = weapon, 3 = armor,
 //   4 = potion, 5 = scroll.
 //
-// Map dimensions are hard-coded to eighty by twenty-four. The
+// Map dimensions are hard-coded to sixty-four by forty. The
 // values must match the Rust-side constants in
 // `examples/rogue/main.rs`. Room count is eight; the data
 // segment preallocates one slot per possible room.
@@ -57,8 +57,8 @@ data state {
 // inner by the map width, so the verifier accepts the fixed
 // bound regardless of the per-call rectangle dimensions.
 fn fill_rect(x0: Word, y0: Word, x1: Word, y1: Word, tile: Word) -> Word {
-    for y in 0..24 {
-        for x in 0..80 {
+    for y in 0..40 {
+        for x in 0..64 {
             if x >= x0 and x <= x1 and y >= y0 and y <= y1 {
                 host::map_set(x, y, tile);
             };
@@ -79,7 +79,7 @@ fn carve_room(x0: Word, y0: Word, x1: Word, y1: Word) -> Word {
 fn carve_h_corridor(xa: Word, xb: Word, y: Word) -> Word {
     let lo = if xa < xb { xa } else { xb };
     let hi = if xa < xb { xb } else { xa };
-    for x in 0..80 {
+    for x in 0..64 {
         if x >= lo and x <= hi {
             host::map_set(x, y, 0);
         };
@@ -92,7 +92,7 @@ fn carve_h_corridor(xa: Word, xb: Word, y: Word) -> Word {
 fn carve_v_corridor(ya: Word, yb: Word, x: Word) -> Word {
     let lo = if ya < yb { ya } else { yb };
     let hi = if ya < yb { yb } else { ya };
-    for y in 0..24 {
+    for y in 0..40 {
         if y >= lo and y <= hi {
             host::map_set(x, y, 0);
         };
@@ -114,8 +114,8 @@ fn connect(x1: Word, y1: Word, x2: Word, y2: Word) -> Word {
 fn place_room(i: Word) -> Word {
     let w = host::rng_range(4, 10);
     let h = host::rng_range(4, 10);
-    let x0 = host::rng_range(1, 80 - w - 1);
-    let y0 = host::rng_range(1, 24 - h - 1);
+    let x0 = host::rng_range(1, 64 - w - 1);
+    let y0 = host::rng_range(1, 40 - h - 1);
     state.rooms_x0[i] = x0;
     state.rooms_y0[i] = y0;
     state.rooms_x1[i] = x0 + w;

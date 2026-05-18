@@ -57,7 +57,7 @@ cargo run --release --example rogue --features sdl3-example,text
 
 The example requires both the `sdl3-example` and `text` Cargo features. The first pulls in the Simple DirectMedia Layer 3 dependency that powers the window and event loop. The second enables the script-side string surface that the item-message system relies on.
 
-The host opens an eighty-by-twenty-four tile grid window. A head-up display row sits above the grid and a message row sits below. Each display tile is sixteen pixels square so the window is one thousand two hundred eighty by four hundred thirty-two pixels, which fits comfortably on standard laptop displays. The procedural sprite art is authored at twenty-four pixels and downscaled to sixteen at copy time so the larger authoring size preserves the original sprite detail.
+The host opens a sixty-four-by-forty tile grid window. A head-up display row sits above the grid and a message row sits below. Each display tile is sixteen pixels square so the window is one thousand twenty-four by six hundred eighty-eight pixels, which matches a sixteen-by-ten aspect ratio for the map area and fits comfortably on standard laptop displays. The procedural sprite art is authored at twenty-four pixels and downscaled to sixteen at copy time so the larger authoring size preserves the original sprite detail.
 
 ## Controls
 
@@ -503,8 +503,8 @@ See [Reading the item-effect scripts](#reading-the-item-effect-scripts) above fo
 
 | Parameter | Default |
 |---|---|
-| Map size | Eighty by twenty-four tiles |
-| Tile size | Twenty-four by twenty-four pixels |
+| Map size | Sixty-four by forty tiles |
+| Display tile size | Sixteen by sixteen pixels. Sprite art is authored at twenty-four pixels and downscaled to sixteen on copy. |
 | Field-of-view radius | Eight tiles |
 | Starting hit points | Twelve |
 | Starting hunger | One hundred |
