@@ -702,6 +702,35 @@ fn autopickup(world: &WorldHandle, ai_pool: &AiPoolHandle) {
             let name = scroll_display_name(&w, item.subtype);
             w.push_message(format!("You pocket the {}.", name));
         }
+        ItemKind::Corpse => {
+            let kind = bestiary::kind(item.subtype as usize);
+            let satiation = kind.corpse_satiation();
+            let hp_delta = kind.corpse_hp_delta();
+            let name = kind.name;
+            if satiation > 0 {
+                let hunger = w.player.hunger + satiation;
+                w.player.hunger = hunger.min(w.player.max_hunger);
+            }
+            if hp_delta != 0 {
+                w.player.hp += hp_delta;
+                if w.player.hp > w.player.max_hp {
+                    w.player.hp = w.player.max_hp;
+                }
+            }
+            if hp_delta < 0 {
+                w.push_message(format!(
+                    "You force down the {} corpse. It sickens you.",
+                    name
+                ));
+            } else if hp_delta > 0 {
+                w.push_message(format!(
+                    "The {} corpse restores you somehow.",
+                    name
+                ));
+            } else {
+                w.push_message(format!("You eat the {} corpse.", name));
+            }
+        }
     }
 }
 

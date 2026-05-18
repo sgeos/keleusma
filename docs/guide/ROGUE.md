@@ -109,6 +109,7 @@ On death or victory the game blocks gameplay input and overlays a centred panel 
 - The held potion slot and the held scroll slot each carry one item. Quaffing or reading the held item resolves the effect and empties the slot.
 - Item-effect scripts decide the effect. The host applies the script's returned deltas and status action.
 - Each potion and scroll has a stable per-run hidden identity. The bottle colour or the scroll's mock title shows in messages until the player first uses an item of that type. After first use, all future messages refer to the type by its true name.
+- Slain monsters have a chance of leaving a corpse on the cell where they fell. The drop chance and the corpse's effect on hunger and hit points come from the bestiary entry's shape. Larger creatures yield more meat. Serpents, insects, and the mage shapes are poisonous and inflict a small hit-point penalty when eaten. Skeletons, ghosts, and slimes leave nothing behind. Stepping onto a corpse autopickups and eats it in the same turn. Players who wish to avoid a poisonous corpse should kill the offending creature in an open room rather than a corridor so they can step around the body.
 
 ### Victory and death
 
@@ -368,6 +369,14 @@ The data segment persists across calls so `state.turn` increments monotonically.
 
 Future archetypes with multi-turn behaviour follow the same pattern. A guardian that patrols between waypoints, a necromancer that periodically spawns minions, or a hydra that grows new heads as it takes damage all fit naturally into `loop main` with state.
 
+### Restarting a loop main script after game-over
+
+The same Reset semantics that drive the per-turn cadence also give the example a clean replay path on game-over. The host does not rebuild the boss, tracker, or hunter virtual machines when the player presses R to start a new run. It zeroes their data segments and leaves the virtual machines parked at their current yield point. On the next dispatch the body resumes, observes the freshly reset state, and produces the first action of a new run identical in shape to the first action of the original run. The wrap from the trailing tuple back to the top of the body happens through the existing Reset boundary that already separates one turn from the next.
+
+The data-segment reset is the only step required because the body re-reads the world through natives on every iteration. Persistent state lives in two places only. The bestiary entry is host-owned and identical between runs. The data segment is per-virtual-machine and is what the reset clears. The body's local variables do not persist past a yield because the stack frame is the activation record for a single body execution rather than the script as a whole. Combined with a fresh `World` and a new dungeon, the next call against a reset virtual machine therefore produces a clean replay equivalent to the first run.
+
+The implementation is `AiPool::reset_loop_main_data` in the example's `ai.rs`. It walks the three slot-zeroing pointers into the boss, tracker, and hunter data segments and writes zero across each one. No equivalent reset is needed for the per-monster `fn main` archetypes because they carry no data segment.
+
 ## Reading the item-effect scripts
 
 `rogue_item_potion.kel` and `rogue_item_scroll.kel` are one-shot `fn main` scripts the host invokes when the player quaffs or reads the held item. The scripts dispatch on the effect identifier and return a five-element tuple `(hp_delta, max_hp_delta, skill_delta, status_code, status_arg)`. The host applies the deltas to the player and executes the status action.
@@ -491,6 +500,7 @@ These projects each take several days of focused work. They synthesise multiple 
 | 3 | Armor |
 | 4 | Potion |
 | 5 | Scroll |
+| 6 | Corpse |
 
 ### Artificial-intelligence action codes
 

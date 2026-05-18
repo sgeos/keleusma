@@ -7,7 +7,7 @@
 //
 // Inputs.
 //   item_kind        0 = food, 1 = gold, 2 = weapon, 3 = armor,
-//                    4 = potion, 5 = scroll.
+//                    4 = potion, 5 = scroll, 6 = corpse.
 //   new_value        For weapons: weapon damage. For armor:
 //                    armor defense. For other kinds: unused, the
 //                    caller may pass zero.
@@ -26,10 +26,10 @@
 //   2 = scrap the item (non-upgrade weapon or armor; the host
 //       destroys it on contact without equipping).
 //
-// Rules. Food and gold always consume. Weapons and armor
-// consume on upgrade, scrap otherwise. Potions and scrolls
-// consume into the matching slot when the slot is free, else
-// stay on the ground.
+// Rules. Food, gold, and corpses always consume. Weapons and
+// armor consume on upgrade, scrap otherwise. Potions and
+// scrolls consume into the matching slot when the slot is
+// free, else stay on the ground.
 
 fn main(
     item_kind: Word,
@@ -37,7 +37,7 @@ fn main(
     current_value: Word,
     slot_full: Word,
 ) -> Word {
-    if item_kind == 0 or item_kind == 1 {
+    if item_kind == 0 or item_kind == 1 or item_kind == 6 {
         1
     } else {
         if item_kind == 2 or item_kind == 3 {

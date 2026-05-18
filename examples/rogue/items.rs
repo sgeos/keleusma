@@ -14,6 +14,7 @@ pub enum ItemKind {
     Armor,
     Potion,
     Scroll,
+    Corpse,
 }
 
 impl ItemKind {
@@ -25,6 +26,7 @@ impl ItemKind {
             ItemKind::Armor => 3,
             ItemKind::Potion => 4,
             ItemKind::Scroll => 5,
+            ItemKind::Corpse => 6,
         }
     }
 }

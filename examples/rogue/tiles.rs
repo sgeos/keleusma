@@ -75,8 +75,8 @@ impl<'tex> TileAtlas<'tex> {
             )?;
             monsters.push(texture);
         }
-        let mut items = Vec::with_capacity(6);
-        for kind_idx in 0..6 {
+        let mut items = Vec::with_capacity(7);
+        for kind_idx in 0..7 {
             let kind = item_kind_from_index(kind_idx);
             let texture = render_item(canvas, texture_creator, kind)?;
             items.push(texture);
@@ -122,6 +122,7 @@ fn item_kind_from_index(i: usize) -> ItemKind {
         3 => ItemKind::Armor,
         4 => ItemKind::Potion,
         5 => ItemKind::Scroll,
+        6 => ItemKind::Corpse,
         _ => unreachable!("ItemKind index out of range"),
     }
 }
@@ -193,6 +194,7 @@ fn render_item<'tex>(
             ItemKind::Armor => draw_armor(c),
             ItemKind::Potion => draw_potion(c),
             ItemKind::Scroll => draw_scroll(c),
+            ItemKind::Corpse => draw_corpse(c),
         }
     })?;
     Ok(texture)
@@ -473,6 +475,19 @@ fn draw_potion(c: &mut Canvas<Window>) {
     let _ = c.fill_rect(Rect::new(cx - 2, cy - 7, 4, 3));
     c.set_draw_color(Color::RGB(40, 180, 220));
     let _ = c.fill_rect(Rect::new(cx - 4, cy - 4, 8, 9));
+}
+
+fn draw_corpse(c: &mut Canvas<Window>) {
+    let cx = (TILE_PX / 2) as i32;
+    let cy = (TILE_PX / 2) as i32;
+    // Slumped silhouette with a dark crimson body and a paler
+    // bone-shape accent suggesting a carcass on the floor.
+    c.set_draw_color(Color::RGB(140, 40, 40));
+    let _ = c.fill_rect(Rect::new(cx - 6, cy + 1, 12, 5));
+    let _ = c.fill_rect(Rect::new(cx - 4, cy - 2, 8, 3));
+    c.set_draw_color(Color::RGB(220, 200, 180));
+    let _ = c.fill_rect(Rect::new(cx - 3, cy + 3, 6, 1));
+    let _ = c.fill_rect(Rect::new(cx + 4, cy, 2, 2));
 }
 
 fn draw_scroll(c: &mut Canvas<Window>) {

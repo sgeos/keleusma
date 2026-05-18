@@ -1494,3 +1494,59 @@ pub const BESTIARY: [MonsterKind; 100] = [
 pub fn kind(kind: usize) -> &'static MonsterKind {
     &BESTIARY[kind]
 }
+
+impl MonsterKind {
+    /// Percent chance the monster drops a corpse when slain.
+    /// Skeletons, ghosts, and slimes never leave a corpse.
+    /// Dragons and bosses almost always do.
+    pub fn corpse_drop_chance(&self) -> u8 {
+        match self.shape {
+            Shape::Tiny => 50,
+            Shape::Small => 60,
+            Shape::Humanoid => 55,
+            Shape::Brute => 70,
+            Shape::Serpent => 55,
+            Shape::Insect => 45,
+            Shape::Skeleton => 0,
+            Shape::Mage => 40,
+            Shape::Ghost => 0,
+            Shape::Slime => 0,
+            Shape::Dragon => 90,
+            Shape::Boss => 100,
+        }
+    }
+
+    /// Hunger restored when the player eats this corpse. Larger
+    /// monsters carry more meat.
+    pub fn corpse_satiation(&self) -> i32 {
+        match self.shape {
+            Shape::Tiny => 8,
+            Shape::Small => 15,
+            Shape::Humanoid => 25,
+            Shape::Brute => 40,
+            Shape::Serpent => 12,
+            Shape::Insect => 6,
+            Shape::Skeleton => 0,
+            Shape::Mage => 20,
+            Shape::Ghost => 0,
+            Shape::Slime => 0,
+            Shape::Dragon => 60,
+            Shape::Boss => 80,
+        }
+    }
+
+    /// Hit-point delta from eating this corpse. Negative values
+    /// indicate the corpse is poisonous or rotten; the player
+    /// can still eat it for the satiation, taking the damage as
+    /// the cost. Cautious players lure such monsters away from
+    /// chokepoints. Desperate players take the hit anyway.
+    pub fn corpse_hp_delta(&self) -> i32 {
+        match self.shape {
+            Shape::Serpent => -4,
+            Shape::Insect => -3,
+            Shape::Mage => -1,
+            Shape::Boss => 8,
+            _ => 0,
+        }
+    }
+}

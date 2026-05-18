@@ -6,7 +6,8 @@
 
 use crate::ai::AiPool;
 use crate::bestiary;
-use crate::world::World;
+use crate::items::ItemKind;
+use crate::world::{Item, World};
 
 /// Result of an attack. Used by the message-log formatter and
 /// by post-attack book keeping.
@@ -48,9 +49,23 @@ pub fn player_attacks(world: &mut World, ai: &mut AiPool, monster_idx: usize) ->
     let score = kind.score;
     let new_hp = world.monsters[monster_idx].hp - damage;
     if new_hp <= 0 {
+        let mx = world.monsters[monster_idx].x;
+        let my = world.monsters[monster_idx].y;
+        let drop_chance = kind.corpse_drop_chance();
         world.monsters.swap_remove(monster_idx);
         world.player.gold += score;
         world.push_message(format!("You slay the {}.", kind_name));
+        if drop_chance > 0 {
+            let roll = (world.rng_next() % 100) as u8;
+            if roll < drop_chance {
+                world.items.push(Item {
+                    kind: ItemKind::Corpse,
+                    subtype: monster_kind_idx as u8,
+                    x: mx,
+                    y: my,
+                });
+            }
+        }
     } else {
         world.monsters[monster_idx].hp = new_hp;
         let label = if critical { "critical hit" } else { "hit" };
