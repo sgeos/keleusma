@@ -22,7 +22,7 @@ Onboarding-oriented documentation for new users and embedders. Where the [archit
 | [`examples/scripts/`](../../examples/scripts) | Standalone `.kel` files demonstrating language features. Run any of them with `keleusma run examples/scripts/<file>.kel` |
 | [`examples/`](../../examples) | Rust embedding examples. Run with `cargo run --example <name>` |
 | [`examples/piano_roll.rs`](../../examples/piano_roll.rs) | End-to-end SDL3 audio host with hot code swap across a song roster. Feature-gated. Run with `cargo run --release --example piano_roll --features sdl3-example,text`. See [PIANO_ROLL.md](./PIANO_ROLL.md) for the manual |
-| [`examples/rogue/`](../../examples/rogue) | End-to-end SDL3 video host driving a roguelike. Fifteen Keleusma scripts for dungeon generation, player and monster artificial intelligence, combat resolution, and item effects. Feature-gated. Run with `cargo run --release --example rogue --features sdl3-example,text`. See [ROGUE.md](./ROGUE.md) for the manual |
+| [`examples/rogue/`](../../examples/rogue) | End-to-end SDL3 video host driving a roguelike. Nineteen Keleusma scripts for dungeon generation, player and monster artificial intelligence, combat resolution, and item effects. Feature-gated. Run with `cargo run --release --example rogue --features sdl3-example,text`. See [ROGUE.md](./ROGUE.md) for the manual |
 | [`keleusma-cli/`](../../keleusma-cli) | The standalone command-line frontend |
 
 ## Reference Cross-Links

@@ -1,0 +1,30 @@
+// Movement resolution. Pure function. Given a destination
+// tile's identifier and a flag for whether a monster occupies
+// the destination, decide what kind of action should fire.
+//
+// Inputs.
+//   tile     The destination tile identifier. Shared with the
+//            dungeon-generator and field-of-view modules.
+//              0 = floor, 1 = wall, 2 = closed door,
+//              3 = open door, 4 = stairs down, 5 = exit.
+//   monster  1 if a monster occupies the destination cell, else
+//            0.
+//
+// Output action code.
+//   0 = blocked: the player does not move and the turn does not
+//       advance.
+//   1 = step: the player moves into the destination cell.
+//   2 = attack: the player attacks the monster occupying the
+//       destination cell.
+
+fn main(tile: Word, monster: Word) -> Word {
+    if monster == 1 {
+        2
+    } else {
+        if tile == 0 or tile == 3 or tile == 4 or tile == 5 {
+            1
+        } else {
+            0
+        }
+    }
+}

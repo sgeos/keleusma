@@ -82,16 +82,22 @@ pub struct AiPool {
     pub smart: Vm<'static, 'static>,
     pub boss: Vm<'static, 'static>,
     pub tracker: Vm<'static, 'static>,
+    pub hunter: Vm<'static, 'static>,
     pub potion: Vm<'static, 'static>,
     pub scroll: Vm<'static, 'static>,
     pub player: Vm<'static, 'static>,
     pub combat: Vm<'static, 'static>,
+    pub book_keeping: Vm<'static, 'static>,
+    pub pickup: Vm<'static, 'static>,
+    pub move_resolve: Vm<'static, 'static>,
     /// Has the boss's `loop main` been started yet? The host
     /// uses `vm.call` on the first turn and `vm.resume` on every
     /// subsequent turn. Reset on hot reload.
     boss_started: bool,
     /// Same flag for the Tracker `loop main` archetype.
     tracker_started: bool,
+    /// Same flag for the Hunter `loop main` archetype.
+    hunter_started: bool,
 }
 
 impl AiPool {
@@ -113,10 +119,14 @@ impl AiPool {
         let smart = build_vm(modules.smart, leak_arena(), world, false)?;
         let boss = build_vm(modules.boss, leak_arena(), world, false)?;
         let tracker = build_vm(modules.tracker, leak_arena(), world, false)?;
+        let hunter = build_vm(modules.hunter, leak_arena(), world, false)?;
         let potion = build_vm(modules.potion, leak_arena(), world, false)?;
         let scroll = build_vm(modules.scroll, leak_arena(), world, false)?;
         let player = build_vm(modules.player, leak_arena(), world, false)?;
         let combat = build_vm(modules.combat, leak_arena(), world, false)?;
+        let book_keeping = build_vm(modules.book_keeping, leak_arena(), world, false)?;
+        let pickup = build_vm(modules.pickup, leak_arena(), world, false)?;
+        let move_resolve = build_vm(modules.move_resolve, leak_arena(), world, false)?;
         Ok(Self {
             idle,
             chaser,
@@ -127,12 +137,17 @@ impl AiPool {
             smart,
             boss,
             tracker,
+            hunter,
             potion,
             scroll,
             player,
             combat,
+            book_keeping,
+            pickup,
+            move_resolve,
             boss_started: false,
             tracker_started: false,
+            hunter_started: false,
         })
     }
 
@@ -156,12 +171,17 @@ impl AiPool {
         self.smart = build_vm(modules.smart, leak_arena(), world, false)?;
         self.boss = build_vm(modules.boss, leak_arena(), world, false)?;
         self.tracker = build_vm(modules.tracker, leak_arena(), world, false)?;
+        self.hunter = build_vm(modules.hunter, leak_arena(), world, false)?;
         self.potion = build_vm(modules.potion, leak_arena(), world, false)?;
         self.scroll = build_vm(modules.scroll, leak_arena(), world, false)?;
         self.player = build_vm(modules.player, leak_arena(), world, false)?;
         self.combat = build_vm(modules.combat, leak_arena(), world, false)?;
+        self.book_keeping = build_vm(modules.book_keeping, leak_arena(), world, false)?;
+        self.pickup = build_vm(modules.pickup, leak_arena(), world, false)?;
+        self.move_resolve = build_vm(modules.move_resolve, leak_arena(), world, false)?;
         self.boss_started = false;
         self.tracker_started = false;
+        self.hunter_started = false;
         Ok(())
     }
 
@@ -192,6 +212,83 @@ impl AiPool {
                 Ok(decode_action(a, x, y))
             }
             other => Err(format!("player vm returned unexpected shape: {:?}", other).into()),
+        }
+    }
+
+    /// Invoke the book-keeping virtual machine. Returns the
+    /// post-tick `(hp, hunger)` pair given the new turn number
+    /// and the pre-tick state.
+    pub fn dispatch_book_keeping(
+        &mut self,
+        turn: i64,
+        hp: i64,
+        max_hp: i64,
+        hunger: i64,
+    ) -> Result<(i64, i64), Box<dyn std::error::Error>> {
+        let args = [
+            Value::Int(turn),
+            Value::Int(hp),
+            Value::Int(max_hp),
+            Value::Int(hunger),
+        ];
+        let result = self
+            .book_keeping
+            .call(&args)
+            .map_err(|e| format!("book vm: {:?}", e))?;
+        match result {
+            VmState::Finished(Value::Tuple(t)) if t.len() == 2 => {
+                Ok((expect_int(&t[0])?, expect_int(&t[1])?))
+            }
+            other => Err(format!("book vm returned unexpected shape: {:?}", other).into()),
+        }
+    }
+
+    /// Invoke the pickup-decision virtual machine. Returns the
+    /// pickup action code:
+    ///   0 = leave on ground
+    ///   1 = consume / equip / slot
+    ///   2 = scrap (non-upgrade gear)
+    pub fn dispatch_pickup(
+        &mut self,
+        item_kind: i64,
+        new_value: i64,
+        current_value: i64,
+        slot_full: i64,
+    ) -> Result<i64, Box<dyn std::error::Error>> {
+        let args = [
+            Value::Int(item_kind),
+            Value::Int(new_value),
+            Value::Int(current_value),
+            Value::Int(slot_full),
+        ];
+        let result = self
+            .pickup
+            .call(&args)
+            .map_err(|e| format!("pickup vm: {:?}", e))?;
+        match result {
+            VmState::Finished(Value::Int(action)) => Ok(action),
+            other => Err(format!("pickup vm returned unexpected shape: {:?}", other).into()),
+        }
+    }
+
+    /// Invoke the move-resolution virtual machine. Returns one
+    /// of:
+    ///   0 = blocked (wall / closed door)
+    ///   1 = walk into the target cell
+    ///   2 = attack the monster occupying the target cell
+    pub fn dispatch_move_resolve(
+        &mut self,
+        tile: i64,
+        monster_at_target: i64,
+    ) -> Result<i64, Box<dyn std::error::Error>> {
+        let args = [Value::Int(tile), Value::Int(monster_at_target)];
+        let result = self
+            .move_resolve
+            .call(&args)
+            .map_err(|e| format!("move vm: {:?}", e))?;
+        match result {
+            VmState::Finished(Value::Int(action)) => Ok(action),
+            other => Err(format!("move vm returned unexpected shape: {:?}", other).into()),
         }
     }
 
@@ -265,6 +362,7 @@ impl AiPool {
             AiKind::Smart => &mut self.smart,
             AiKind::Boss => &mut self.boss,
             AiKind::Tracker => &mut self.tracker,
+            AiKind::Hunter => &mut self.hunter,
         }
     }
 
@@ -285,6 +383,9 @@ impl AiPool {
         }
         if matches!(ai, AiKind::Tracker) {
             return self.dispatch_loop_main(LoopMainKind::Tracker, mx, my, px, py, sees);
+        }
+        if matches!(ai, AiKind::Hunter) {
+            return self.dispatch_loop_main(LoopMainKind::Hunter, mx, my, px, py, sees);
         }
         let vm = self.vm_for(ai);
         let args = [
@@ -330,6 +431,7 @@ impl AiPool {
         let (vm, started_flag): (&mut Vm<'static, 'static>, &mut bool) = match kind {
             LoopMainKind::Boss => (&mut self.boss, &mut self.boss_started),
             LoopMainKind::Tracker => (&mut self.tracker, &mut self.tracker_started),
+            LoopMainKind::Hunter => (&mut self.hunter, &mut self.hunter_started),
         };
         let mut state = if *started_flag {
             vm.resume(input.clone())
@@ -369,6 +471,7 @@ impl AiPool {
 enum LoopMainKind {
     Boss,
     Tracker,
+    Hunter,
 }
 
 fn expect_int(v: &Value) -> Result<i64, Box<dyn std::error::Error>> {
@@ -411,10 +514,14 @@ pub struct AiModules {
     pub smart: Module,
     pub boss: Module,
     pub tracker: Module,
+    pub hunter: Module,
     pub potion: Module,
     pub scroll: Module,
     pub player: Module,
     pub combat: Module,
+    pub book_keeping: Module,
+    pub pickup: Module,
+    pub move_resolve: Module,
 }
 
 fn build_vm(

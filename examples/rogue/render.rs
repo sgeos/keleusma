@@ -126,6 +126,19 @@ impl Renderer {
                 stats_scale,
             );
         }
+
+        // Prompt.
+        let prompt = "R RESTART  Q QUIT";
+        let prompt_scale = 2;
+        let prompt_w = text::text_width(prompt, prompt_scale);
+        text::draw_text(
+            canvas,
+            panel_x + (panel_w - prompt_w) / 2,
+            panel_y + panel_h - 28,
+            prompt,
+            Color::RGB(160, 200, 240),
+            prompt_scale,
+        );
         Ok(())
     }
 

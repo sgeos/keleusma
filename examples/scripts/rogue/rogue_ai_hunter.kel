@@ -1,0 +1,92 @@
+// Hunter artificial-intelligence archetype.
+//
+// Third `loop main` script in the example, after the boss and
+// the tracker. The hunter pursues the player aggressively while
+// in line of sight and remembers the player's last seen
+// position for up to ten turns. Unlike the tracker, which never
+// gives up, the hunter forgets the player after ten turns
+// without contact and returns to waiting in place. The
+// distinction is small but produces visibly different gameplay:
+// trackers hound the player forever, hunters give the player a
+// chance to lose them.
+//
+// Used by hyenas, hobgoblin captains, werewolves, and gnoll
+// warlords. These are pursuit predators that benefit from a
+// persistent-but-finite memory.
+//
+// Call convention. Same five-tuple input as every other
+// archetype. Output is the same (action, tx, ty) tuple.
+//
+// Data segment.
+//   has_seen           1 if the player has been in sight, else 0.
+//   turns_since_seen   Counter that increments each turn while
+//                      the player is out of sight. Resets on
+//                      each sighting. When this exceeds ten,
+//                      `has_seen` is cleared.
+//   last_x, last_y     Player's most recently observed cell.
+
+data state {
+    has_seen: Word,
+    turns_since_seen: Word,
+    last_x: Word,
+    last_y: Word,
+}
+
+loop main(input: (Word, Word, Word, Word, Word)) -> (Word, Word, Word) {
+    let mx = input.0;
+    let my = input.1;
+    let px = input.2;
+    let py = input.3;
+    let sees = input.4;
+
+    if sees == 1 {
+        state.has_seen = 1;
+        state.turns_since_seen = 0;
+        state.last_x = px;
+        state.last_y = py;
+    } else {
+        state.turns_since_seen = state.turns_since_seen + 1;
+        if state.turns_since_seen > 10 {
+            state.has_seen = 0;
+        };
+    };
+
+    let action = if sees == 1 {
+        let dx = if px > mx {
+            1
+        } else {
+            if px < mx { -1 } else { 0 }
+        };
+        let dy = if py > my {
+            1
+        } else {
+            if py < my { -1 } else { 0 }
+        };
+        (1, mx + dx, my + dy)
+    } else {
+        if state.has_seen == 1 {
+            let tx = state.last_x;
+            let ty = state.last_y;
+            if tx == mx and ty == my {
+                (0, mx, my)
+            } else {
+                let dx = if tx > mx {
+                    1
+                } else {
+                    if tx < mx { -1 } else { 0 }
+                };
+                let dy = if ty > my {
+                    1
+                } else {
+                    if ty < my { -1 } else { 0 }
+                };
+                (1, mx + dx, my + dy)
+            }
+        } else {
+            (0, mx, my)
+        }
+    };
+
+    let _ = yield action;
+    (0, 0, 0)
+}

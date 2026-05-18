@@ -96,11 +96,15 @@ const SRC_AI_FAST: &str = include_str!("../scripts/rogue/rogue_ai_fast.kel");
 const SRC_AI_SMART: &str = include_str!("../scripts/rogue/rogue_ai_smart.kel");
 const SRC_AI_BOSS: &str = include_str!("../scripts/rogue/rogue_ai_boss.kel");
 const SRC_AI_TRACKER: &str = include_str!("../scripts/rogue/rogue_ai_tracker.kel");
+const SRC_AI_HUNTER: &str = include_str!("../scripts/rogue/rogue_ai_hunter.kel");
 const SRC_ITEM_POTION: &str = include_str!("../scripts/rogue/rogue_item_potion.kel");
 const SRC_ITEM_SCROLL: &str = include_str!("../scripts/rogue/rogue_item_scroll.kel");
 const SRC_GAME: &str = include_str!("../scripts/rogue/rogue_game.kel");
 const SRC_PLAYER_AI: &str = include_str!("../scripts/rogue/rogue_player_ai.kel");
 const SRC_COMBAT: &str = include_str!("../scripts/rogue/rogue_combat.kel");
+const SRC_BOOK_KEEPING: &str = include_str!("../scripts/rogue/rogue_book_keeping.kel");
+const SRC_PICKUP: &str = include_str!("../scripts/rogue/rogue_pickup.kel");
+const SRC_MOVE_RESOLVE: &str = include_str!("../scripts/rogue/rogue_move_resolve.kel");
 
 /// Directory containing the Keleusma script sources on disk.
 /// The initial load uses the `include_str!` constants above so
@@ -149,10 +153,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         smart: build_module(SRC_AI_SMART)?,
         boss: build_module(SRC_AI_BOSS)?,
         tracker: build_module(SRC_AI_TRACKER)?,
+        hunter: build_module(SRC_AI_HUNTER)?,
         potion: build_module(SRC_ITEM_POTION)?,
         scroll: build_module(SRC_ITEM_SCROLL)?,
         player: build_module(SRC_PLAYER_AI)?,
         combat: build_module(SRC_COMBAT)?,
+        book_keeping: build_module(SRC_BOOK_KEEPING)?,
+        pickup: build_module(SRC_PICKUP)?,
+        move_resolve: build_module(SRC_MOVE_RESOLVE)?,
     };
     // The pool wraps non-Send virtual machines, but the example
     // is single-threaded so the `Arc<Mutex<_>>` is safe in
@@ -191,7 +199,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     ..
                 } => {
                     if game_over.is_some() {
-                        break 'running;
+                        match keycode {
+                            sdl3::keyboard::Keycode::R => {
+                                restart_run(
+                                    &world,
+                                    &mut dungen_vm,
+                                    &mut game_vm,
+                                    &mut game_started,
+                                )?;
+                                game_over = None;
+                            }
+                            sdl3::keyboard::Keycode::Q | sdl3::keyboard::Keycode::Escape => {
+                                break 'running;
+                            }
+                            _ => {}
+                        }
+                        continue;
                     }
                     if let Some(cmd) = input::translate(keycode) {
                         match cmd {
@@ -295,6 +318,43 @@ fn run_game_tick(
     Err("game vm exhausted Reset budget without yielding".into())
 }
 
+/// Reset the world to a fresh run starting on floor one. The
+/// game-tick virtual machine's started flag is cleared so the
+/// next resume hits the initial call path rather than continuing
+/// from a stale yield. The game-over flag is cleared by the
+/// caller.
+fn restart_run<'a1, 'b1, 'a2, 'b2>(
+    world: &natives::WorldHandle,
+    dungen_vm: &mut Vm<'a1, 'b1>,
+    game_vm: &mut Vm<'a2, 'b2>,
+    game_started: &mut bool,
+) -> Result<(), Box<dyn std::error::Error>>
+where
+    'b1: 'a1,
+    'b2: 'a2,
+{
+    {
+        let mut w = world.lock().unwrap();
+        *w = World::new();
+        w.push_message(String::from("A new dungeon spreads before you."));
+    }
+    run_dungen(dungen_vm, 1)?;
+    {
+        let mut w = world.lock().unwrap();
+        w.recompute_fov();
+    }
+    // Reset the game-tick virtual machine's started flag so the
+    // next resume reinitialises the loop body. The data segment
+    // is incidentally zero already because no script writes to
+    // it; if a future revision adds persistent game-tick state,
+    // that segment would need explicit reset here too.
+    *game_started = false;
+    // Re-call the script so the data segment runs through the
+    // initial path before the next user command resumes it.
+    let _ = game_vm.call(&[Value::Int(0)]);
+    Ok(())
+}
+
 fn init_data_slots(vm: &mut Vm) {
     for slot in 0..vm.data_len() {
         let _ = vm.set_data(slot, Value::Int(0));
@@ -348,10 +408,14 @@ fn reload_scripts<'a, 'd>(
         "rogue_ai_smart.kel",
         "rogue_ai_boss.kel",
         "rogue_ai_tracker.kel",
+        "rogue_ai_hunter.kel",
         "rogue_item_potion.kel",
         "rogue_item_scroll.kel",
         "rogue_player_ai.kel",
         "rogue_combat.kel",
+        "rogue_book_keeping.kel",
+        "rogue_pickup.kel",
+        "rogue_move_resolve.kel",
     ];
     let mut sources = Vec::with_capacity(names.len());
     for name in names {
@@ -391,10 +455,14 @@ fn reload_scripts<'a, 'd>(
         smart: drain.next().unwrap(),
         boss: drain.next().unwrap(),
         tracker: drain.next().unwrap(),
+        hunter: drain.next().unwrap(),
         potion: drain.next().unwrap(),
         scroll: drain.next().unwrap(),
         player: drain.next().unwrap(),
         combat: drain.next().unwrap(),
+        book_keeping: drain.next().unwrap(),
+        pickup: drain.next().unwrap(),
+        move_resolve: drain.next().unwrap(),
     };
 
     // Swap the dungen virtual machine. The new module replaces

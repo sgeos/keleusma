@@ -42,6 +42,7 @@ pub enum AiKind {
     Fast,
     Boss,
     Tracker,
+    Hunter,
 }
 
 /// A single bestiary entry. Stats are read-only. Per-monster
@@ -312,7 +313,7 @@ pub const BESTIARY: [MonsterKind; 100] = [
         evasion: 3,
         damage: 4,
         armor: 1,
-        ai: AiKind::Chaser,
+        ai: AiKind::Hunter,
         first_floor: 17,
         score: 9,
     },
@@ -467,7 +468,7 @@ pub const BESTIARY: [MonsterKind; 100] = [
         evasion: 3,
         damage: 8,
         armor: 3,
-        ai: AiKind::Smart,
+        ai: AiKind::Hunter,
         first_floor: 28,
         score: 18,
     },
@@ -510,7 +511,7 @@ pub const BESTIARY: [MonsterKind; 100] = [
         evasion: 3,
         damage: 9,
         armor: 3,
-        ai: AiKind::Smart,
+        ai: AiKind::Hunter,
         first_floor: 31,
         score: 22,
     },

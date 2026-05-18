@@ -43,7 +43,7 @@ pub fn register_game_natives(vm: &mut Vm, world: &WorldHandle, ai_pool: &AiPoolH
     register_run_player_turn(vm, world, ai_pool);
     register_monster_count(vm, world);
     register_run_monster_ai(vm, world, ai_pool);
-    register_tick_book_keeping(vm, world);
+    register_tick_book_keeping(vm, world, ai_pool);
 }
 
 // -- Game-tick natives ---------------------------------------------
@@ -93,13 +93,14 @@ fn register_run_monster_ai(vm: &mut Vm, world: &WorldHandle, ai_pool: &AiPoolHan
     );
 }
 
-fn register_tick_book_keeping(vm: &mut Vm, world: &WorldHandle) {
+fn register_tick_book_keeping(vm: &mut Vm, world: &WorldHandle, ai_pool: &AiPoolHandle) {
     let w = world.clone();
+    let p = ai_pool.clone();
     vm.register_native_closure(
         "host::tick_book_keeping",
         Box::new(move |args: &[Value]| -> Result<Value, VmError> {
             check_arity("tick_book_keeping", 0, args)?;
-            Ok(Value::Int(tick_book_keeping(&w)))
+            Ok(Value::Int(tick_book_keeping(&w, &p)))
         }),
     );
 }
@@ -161,15 +162,30 @@ fn handle_move_into_cell(world: &WorldHandle, ai_pool: &AiPoolHandle, tx: i32, t
         Step(i32, i32),
         Blocked,
     }
-    let decision = {
+    // Pre-fetch the target cell information without holding the
+    // world lock across script dispatch.
+    let (tile_id, monster_idx) = {
         let w = world.lock().unwrap();
-        if let Some(idx) = w.monsters.iter().position(|m| m.x == tx && m.y == ty) {
-            MoveAction::Attack(idx)
-        } else if w.map.is_walkable(tx, ty) {
-            MoveAction::Step(tx, ty)
-        } else {
-            MoveAction::Blocked
-        }
+        let tile = match w.map.get(tx, ty) {
+            Tile::Floor => 0,
+            Tile::Wall => 1,
+            Tile::DoorClosed => 2,
+            Tile::DoorOpen => 3,
+            Tile::StairsDown => 4,
+            Tile::Exit => 5,
+        };
+        let monster = w.monsters.iter().position(|m| m.x == tx && m.y == ty);
+        (tile, monster)
+    };
+    let action_code = {
+        let mut pool = ai_pool.lock().unwrap();
+        pool.dispatch_move_resolve(tile_id, if monster_idx.is_some() { 1 } else { 0 })
+            .unwrap_or(0)
+    };
+    let decision = match action_code {
+        2 => MoveAction::Attack(monster_idx.unwrap_or(0)),
+        1 => MoveAction::Step(tx, ty),
+        _ => MoveAction::Blocked,
     };
     match decision {
         MoveAction::Attack(idx) => {
@@ -178,21 +194,22 @@ fn handle_move_into_cell(world: &WorldHandle, ai_pool: &AiPoolHandle, tx: i32, t
             combat::player_attacks(&mut w, &mut pool, idx);
         }
         MoveAction::Step(nx, ny) => {
+            {
+                let mut w = world.lock().unwrap();
+                w.player.x = nx;
+                w.player.y = ny;
+            }
+            // The autopickup driver acquires its own locks
+            // because it dispatches the pickup-decision script.
+            autopickup(world, ai_pool);
             let mut w = world.lock().unwrap();
-            w.player.x = nx;
-            w.player.y = ny;
-            autopickup(&mut w);
             // Recompute the field of view immediately so the
             // monster turns this same tick can use the updated
             // visibility bitmap for the symmetric line-of-sight
-            // rule. Without this, monsters react to the player's
-            // pre-move position.
+            // rule.
             w.recompute_fov();
             // Auto-descend when the player steps onto stairs or
-            // the floor-one-hundred exit tile. The manual
-            // greater-than keybind still works for cases that
-            // bypass this path, for example teleporting directly
-            // onto stairs.
+            // the floor-one-hundred exit tile.
             match w.map.get(nx, ny) {
                 crate::world::Tile::StairsDown => return outcome::DESCENDED,
                 crate::world::Tile::Exit => return outcome::WON,
@@ -364,21 +381,30 @@ fn run_one_monster_turn(world: &WorldHandle, ai_pool: &AiPoolHandle, idx: usize)
     }
 }
 
-fn tick_book_keeping(world: &WorldHandle) -> i64 {
+fn tick_book_keeping(world: &WorldHandle, ai_pool: &AiPoolHandle) -> i64 {
+    let snapshot = {
+        let mut w = world.lock().unwrap();
+        w.player.turn += 1;
+        (
+            w.player.turn as i64,
+            w.player.hp as i64,
+            w.player.max_hp as i64,
+            w.player.hunger as i64,
+        )
+    };
+    let result = {
+        let mut pool = ai_pool.lock().unwrap();
+        pool.dispatch_book_keeping(snapshot.0, snapshot.1, snapshot.2, snapshot.3)
+    };
+    let Ok((new_hp, new_hunger)) = result else {
+        return outcome::CONTINUE;
+    };
     let mut w = world.lock().unwrap();
-    w.player.turn += 1;
-    if w.player.hunger > 0 {
-        w.player.hunger -= 1;
-    } else {
-        w.player.hp -= STARVATION_DAMAGE_PER_TURN;
-        if w.player.turn.is_multiple_of(5) {
-            w.push_message(String::from("You are starving."));
-        }
-    }
-    let positive_hunger = w.player.hunger > 0;
-    let turn_for_regen = w.player.turn.is_multiple_of(REGEN_PERIOD);
-    if w.player.hp < w.player.max_hp && positive_hunger && turn_for_regen {
-        w.player.hp += 1;
+    let was_hungry = w.player.hunger == 0;
+    w.player.hp = new_hp as i32;
+    w.player.hunger = new_hunger as i32;
+    if was_hungry && w.player.turn.is_multiple_of(5) {
+        w.push_message(String::from("You are starving."));
     }
     w.recompute_fov();
     if w.player.hp <= 0 {
@@ -424,6 +450,20 @@ fn apply_scroll_status(w: &mut World, status_code: i64, status_arg: i64) {
                     w.player.x = rx;
                     w.player.y = ry;
                     w.push_message(String::from("The world dissolves and reforms."));
+                    // Note the landing tile so the player knows
+                    // when they have arrived on stairs without
+                    // moving. The auto-descend path requires a
+                    // movement step; teleport bypasses that, so
+                    // an explicit message closes the gap.
+                    match w.map.get(rx, ry) {
+                        crate::world::Tile::StairsDown => {
+                            w.push_message(String::from("You stand on the stairs down."));
+                        }
+                        crate::world::Tile::Exit => {
+                            w.push_message(String::from("You stand on the exit."));
+                        }
+                        _ => {}
+                    }
                     return;
                 }
             }
@@ -523,88 +563,144 @@ fn apply_monster_action(w: &mut World, pool: &mut AiPool, idx: usize, action: Ai
     }
 }
 
-fn autopickup(w: &mut World) {
-    let px = w.player.x;
-    let py = w.player.y;
-    let Some(idx) = w.items.iter().position(|it| it.x == px && it.y == py) else {
+/// Autopickup driver. The host fetches the tile item record,
+/// gathers the inputs the pickup script needs, dispatches the
+/// script for the decision, and then applies the appropriate
+/// world mutation.
+fn autopickup(world: &WorldHandle, ai_pool: &AiPoolHandle) {
+    // Pre-fetch the item, current weapon damage, current armor
+    // defense, and slot occupancy. Drop the world lock before
+    // dispatching the pickup script.
+    let snapshot = {
+        let w = world.lock().unwrap();
+        let px = w.player.x;
+        let py = w.player.y;
+        let idx = match w.items.iter().position(|it| it.x == px && it.y == py) {
+            Some(i) => i,
+            None => return,
+        };
+        let item = w.items[idx];
+        let (new_value, current_value) = match item.kind {
+            ItemKind::Weapon => {
+                let nv = items::WEAPONS
+                    .get(item.subtype as usize)
+                    .map(|w| w.damage)
+                    .unwrap_or(0);
+                (nv as i64, w.player.weapon_damage() as i64)
+            }
+            ItemKind::Armor => {
+                let nv = items::ARMORS
+                    .get(item.subtype as usize)
+                    .map(|a| a.defense)
+                    .unwrap_or(0);
+                (nv as i64, w.player.armor_value() as i64)
+            }
+            _ => (0, 0),
+        };
+        let slot_full = match item.kind {
+            ItemKind::Potion => w.player.potion_slot.is_some(),
+            ItemKind::Scroll => w.player.scroll_slot.is_some(),
+            _ => false,
+        };
+        Some((idx, item, new_value, current_value, slot_full))
+    };
+    let Some((idx, item, new_value, current_value, slot_full)) = snapshot else {
         return;
     };
-    let item = w.items[idx];
+    let action = {
+        let mut pool = ai_pool.lock().unwrap();
+        pool.dispatch_pickup(
+            item.kind.as_u8() as i64,
+            new_value,
+            current_value,
+            if slot_full { 1 } else { 0 },
+        )
+        .unwrap_or(0)
+    };
+    let mut w = world.lock().unwrap();
+    if action == 0 {
+        // Leave the ground item; describe what is there if it is
+        // a potion or a scroll the player cannot pocket.
+        match item.kind {
+            ItemKind::Potion => {
+                let ground_name = potion_display_name(&w, item.subtype);
+                let held_name = potion_display_name(&w, w.player.potion_slot.unwrap_or(0));
+                w.push_message(format!(
+                    "A {} lies here, but you already hold the {}.",
+                    ground_name, held_name
+                ));
+            }
+            ItemKind::Scroll => {
+                let ground_name = scroll_display_name(&w, item.subtype);
+                let held_name = scroll_display_name(&w, w.player.scroll_slot.unwrap_or(0));
+                w.push_message(format!(
+                    "A {} lies here, but you already hold the {}.",
+                    ground_name, held_name
+                ));
+            }
+            _ => {}
+        }
+        return;
+    }
+    // action == 1 (consume) or action == 2 (scrap)
+    w.items.swap_remove(idx);
+    if action == 2 {
+        match item.kind {
+            ItemKind::Weapon => {
+                let name = items::WEAPONS
+                    .get(item.subtype as usize)
+                    .map(|w| w.name)
+                    .unwrap_or("weapon");
+                w.push_message(format!("You scrap the {}.", name));
+            }
+            ItemKind::Armor => {
+                let name = items::ARMORS
+                    .get(item.subtype as usize)
+                    .map(|a| a.name)
+                    .unwrap_or("armor");
+                w.push_message(format!("You discard the {}.", name));
+            }
+            _ => {}
+        }
+        return;
+    }
+    // action == 1: apply per-kind consumption.
     match item.kind {
         ItemKind::Food => {
-            w.items.swap_remove(idx);
-            let restored = 40;
-            let hunger = w.player.hunger + restored;
-            w.player.hunger = if hunger > w.player.max_hunger {
-                w.player.max_hunger
-            } else {
-                hunger
-            };
+            let hunger = w.player.hunger + 40;
+            w.player.hunger = hunger.min(w.player.max_hunger);
             w.push_message(String::from("You devour the ration. Your hunger ebbs."));
         }
         ItemKind::Gold => {
-            w.items.swap_remove(idx);
             let value = item.subtype as u32;
             w.player.gold += value;
             w.push_message(format!("You scoop up {} gold pieces.", value));
         }
         ItemKind::Weapon => {
             let new_idx = item.subtype as usize;
-            if new_idx >= items::WEAPONS.len() {
-                w.items.swap_remove(idx);
-            } else if items::WEAPONS[new_idx].damage > w.player.weapon_damage() {
-                w.items.swap_remove(idx);
-                let new_name = items::WEAPONS[new_idx].name;
+            if new_idx < items::WEAPONS.len() {
+                let name = items::WEAPONS[new_idx].name;
                 w.player.weapon = item.subtype;
-                w.push_message(format!("You take up the {}.", new_name));
-            } else {
-                w.items.swap_remove(idx);
-                let scrap_name = items::WEAPONS[new_idx].name;
-                w.push_message(format!("You scrap the {}.", scrap_name));
+                w.push_message(format!("You take up the {}.", name));
             }
         }
         ItemKind::Armor => {
             let new_idx = item.subtype as usize;
-            if new_idx >= items::ARMORS.len() {
-                w.items.swap_remove(idx);
-            } else if items::ARMORS[new_idx].defense > w.player.armor_value() {
-                w.items.swap_remove(idx);
-                let new_name = items::ARMORS[new_idx].name;
+            if new_idx < items::ARMORS.len() {
+                let name = items::ARMORS[new_idx].name;
                 w.player.armor = item.subtype;
-                w.push_message(format!("You don the {}.", new_name));
-            } else {
-                w.items.swap_remove(idx);
-                let scrap_name = items::ARMORS[new_idx].name;
-                w.push_message(format!("You discard the {}.", scrap_name));
+                w.push_message(format!("You don the {}.", name));
             }
         }
         ItemKind::Potion => {
-            let ground_name = potion_display_name(w, item.subtype);
-            if w.player.potion_slot.is_none() {
-                w.items.swap_remove(idx);
-                w.player.potion_slot = Some(item.subtype);
-                w.push_message(format!("You pocket the {}.", ground_name));
-            } else {
-                let held_name = potion_display_name(w, w.player.potion_slot.unwrap());
-                w.push_message(format!(
-                    "A {} lies here, but you already hold the {}.",
-                    ground_name, held_name
-                ));
-            }
+            w.player.potion_slot = Some(item.subtype);
+            let name = potion_display_name(&w, item.subtype);
+            w.push_message(format!("You pocket the {}.", name));
         }
         ItemKind::Scroll => {
-            let ground_name = scroll_display_name(w, item.subtype);
-            if w.player.scroll_slot.is_none() {
-                w.items.swap_remove(idx);
-                w.player.scroll_slot = Some(item.subtype);
-                w.push_message(format!("You pocket the {}.", ground_name));
-            } else {
-                let held_name = scroll_display_name(w, w.player.scroll_slot.unwrap());
-                w.push_message(format!(
-                    "A {} lies here, but you already hold the {}.",
-                    ground_name, held_name
-                ));
-            }
+            w.player.scroll_slot = Some(item.subtype);
+            let name = scroll_display_name(&w, item.subtype);
+            w.push_message(format!("You pocket the {}.", name));
         }
     }
 }

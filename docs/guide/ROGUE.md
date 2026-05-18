@@ -23,7 +23,7 @@
 
 ## How this document relates to the source
 
-The roguelike example splits its source across two directories. The Rust host code lives under `examples/rogue/`. The fifteen Keleusma scripts live under `examples/scripts/rogue/`. The `include_str!` lines in `examples/rogue/main.rs` reference the script directory through a relative path, and the `SCRIPT_DIR` constant in the same file points there for the hot-reload path. This manual is the long-form companion to the example. It describes the rules of the game, the architecture of the host, the responsibilities of each script, and a graded set of exercises a reader can attempt to deepen familiarity with the embedding pattern.
+The roguelike example splits its source across two directories. The Rust host code lives under `examples/rogue/`. The nineteen Keleusma scripts live under `examples/scripts/rogue/`. The `include_str!` lines in `examples/rogue/main.rs` reference the script directory through a relative path, and the `SCRIPT_DIR` constant in the same file points there for the hot-reload path. This manual is the long-form companion to the example. It describes the rules of the game, the architecture of the host, the responsibilities of each script, and a graded set of exercises a reader can attempt to deepen familiarity with the embedding pattern.
 
 The bestiary, item, and stat tables are defined inline in the host source rather than reprinted in this manual. The numbers cited in the gameplay section are stable design defaults, but the source is authoritative if they ever drift.
 
@@ -131,22 +131,26 @@ The host owns all mutable game state. The map, the player, the monster table, th
         | per-virtual-machine `register_native_closure` and `vm.call(...)`
         v
 +------------------------------------------+
-|  Fifteen Keleusma virtual machines       |
-|  - rogue_game.kel         (loop main)    |
-|  - rogue_dungen.kel       (one-shot)     |
-|  - rogue_player_ai.kel    (pure fn)      |
-|  - rogue_combat.kel       (pure fn)      |
-|  - rogue_ai_idle.kel      (pure fn)      |
-|  - rogue_ai_chaser.kel    (pure fn)      |
-|  - rogue_ai_wander.kel    (uses rng)     |
-|  - rogue_ai_sleeper.kel   (pure fn)      |
-|  - rogue_ai_ranged.kel    (pure fn)      |
-|  - rogue_ai_fast.kel      (pure fn)      |
-|  - rogue_ai_smart.kel     (pure fn)      |
-|  - rogue_ai_boss.kel      (loop main)    |
-|  - rogue_ai_tracker.kel   (loop main)    |
-|  - rogue_item_potion.kel  (pure fn)      |
-|  - rogue_item_scroll.kel  (pure fn)      |
+|  Nineteen Keleusma virtual machines      |
+|  - rogue_game.kel          (loop main)   |
+|  - rogue_dungen.kel        (one-shot)    |
+|  - rogue_player_ai.kel     (pure fn)     |
+|  - rogue_combat.kel        (pure fn)     |
+|  - rogue_book_keeping.kel  (pure fn)     |
+|  - rogue_pickup.kel        (pure fn)     |
+|  - rogue_move_resolve.kel  (pure fn)     |
+|  - rogue_ai_idle.kel       (pure fn)     |
+|  - rogue_ai_chaser.kel     (pure fn)     |
+|  - rogue_ai_wander.kel     (uses rng)    |
+|  - rogue_ai_sleeper.kel    (pure fn)     |
+|  - rogue_ai_ranged.kel     (pure fn)     |
+|  - rogue_ai_fast.kel       (pure fn)     |
+|  - rogue_ai_smart.kel      (pure fn)     |
+|  - rogue_ai_boss.kel       (loop main)   |
+|  - rogue_ai_tracker.kel    (loop main)   |
+|  - rogue_ai_hunter.kel     (loop main)   |
+|  - rogue_item_potion.kel   (pure fn)     |
+|  - rogue_item_scroll.kel   (pure fn)     |
 +------------------------------------------+
 ```
 

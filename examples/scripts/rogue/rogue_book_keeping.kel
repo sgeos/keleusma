@@ -1,0 +1,32 @@
+// End-of-turn book keeping. Pure function. The host snapshots
+// the player's current hit points, maximum hit points, hunger,
+// and the upcoming turn number, then invokes this script. The
+// script returns the post-tick hit points and hunger. The host
+// applies the returns and decides any message-log entries.
+//
+// Rules.
+//   Hunger decrements by one per turn until it hits zero.
+//   While hunger is zero, the player takes one point of
+//   starvation damage per turn.
+//   While hunger is positive and the player is below maximum
+//   hit points, every tenth turn restores one hit point.
+//
+// Inputs.
+//   turn       The turn number after the host increments it.
+//   hp         Current hit points before the tick.
+//   max_hp     Maximum hit points.
+//   hunger     Current hunger before the tick.
+//
+// Output tuple `(new_hp, new_hunger)`.
+
+fn main(turn: Word, hp: Word, max_hp: Word, hunger: Word) -> (Word, Word) {
+    let new_hunger = if hunger > 0 { hunger - 1 } else { 0 };
+    let starve = if hunger == 0 { 1 } else { 0 };
+    let regen = if hp < max_hp and hunger > 0 and turn % 10 == 0 {
+        1
+    } else {
+        0
+    };
+    let new_hp = hp - starve + regen;
+    (new_hp, new_hunger)
+}

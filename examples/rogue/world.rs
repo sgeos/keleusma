@@ -70,15 +70,30 @@ impl Map {
     }
 }
 
-/// Player state. Host-owned. Subsequent phases extend the slot
-/// inventory and identification masks as item handling lands.
-pub struct Player {
+/// Sentinel kind value indicating the player rather than a
+/// bestiary monster kind.
+pub const PLAYER_KIND: i32 = -1;
+
+/// Unified actor record. Player and monster share this struct.
+/// Fields that only matter for one role are zero or defaulted
+/// for the other. Memory overhead per monster is roughly eighty
+/// bytes; the example caps active monsters at twenty-four, so
+/// the waste is negligible. The conceptual win is symmetry:
+/// player and monsters travel through the same code paths with
+/// the same field names.
+#[derive(Clone)]
+pub struct Actor {
+    /// `PLAYER_KIND` for the player, otherwise an index into
+    /// `bestiary::BESTIARY`.
+    pub kind: i32,
     pub x: i32,
     pub y: i32,
     pub hp: i32,
     pub max_hp: i32,
     pub skill: i32,
+    /// Equipped weapon tier. Unused for monsters.
     pub weapon: u8,
+    /// Equipped armor tier. Unused for monsters.
     pub armor: u8,
     pub level: u32,
     pub hunger: i32,
@@ -87,15 +102,20 @@ pub struct Player {
     pub potion_slot: Option<u8>,
     pub scroll_slot: Option<u8>,
     pub turn: u64,
-    /// One bit per potion effect index. Set when the effect has
-    /// been identified during this run.
+    /// One bit per potion effect index, set when the effect has
+    /// been identified. Player-only.
     pub identified_potions: u32,
     pub identified_scrolls: u32,
+    /// Artificial-intelligence-archetype state slot for
+    /// monsters. Unused for the player; the player's intent
+    /// comes from the keyboard.
+    pub state: u32,
 }
 
-impl Player {
-    pub fn new(x: i32, y: i32) -> Self {
+impl Actor {
+    pub fn new_player(x: i32, y: i32) -> Self {
         Self {
+            kind: PLAYER_KIND,
             x,
             y,
             hp: 12,
@@ -112,7 +132,35 @@ impl Player {
             turn: 0,
             identified_potions: 0,
             identified_scrolls: 0,
+            state: 0,
         }
+    }
+
+    pub fn new_monster(kind: u8, x: i32, y: i32, max_hp: i32) -> Self {
+        Self {
+            kind: kind as i32,
+            x,
+            y,
+            hp: max_hp,
+            max_hp,
+            skill: 0,
+            weapon: 0,
+            armor: 0,
+            level: 0,
+            hunger: 0,
+            max_hunger: 0,
+            gold: 0,
+            potion_slot: None,
+            scroll_slot: None,
+            turn: 0,
+            identified_potions: 0,
+            identified_scrolls: 0,
+            state: 0,
+        }
+    }
+
+    pub fn is_player(&self) -> bool {
+        self.kind == PLAYER_KIND
     }
 
     pub fn weapon_damage(&self) -> i32 {
@@ -124,16 +172,11 @@ impl Player {
     }
 }
 
-/// Per-monster mutable state. The kind index points into the
-/// bestiary table for the immutable stats. The `state` field
-/// carries any artificial-intelligence-archetype-specific data.
-pub struct Monster {
-    pub kind: u8,
-    pub x: i32,
-    pub y: i32,
-    pub hp: i32,
-    pub state: u32,
-}
+/// Type alias kept so historical call sites that reference
+/// `Player` and `Monster` read naturally. The underlying record
+/// is the same.
+pub type Player = Actor;
+pub type Monster = Actor;
 
 /// Per-item world record. Subtype indexes into the table that
 /// matches `kind`. Gold uses `subtype` as the pile value.
@@ -187,7 +230,7 @@ impl World {
         let total = (MAP_W * MAP_H) as usize;
         let mut world = Self {
             map: Map::new(),
-            player: Player::new(1, 1),
+            player: Actor::new_player(1, 1),
             monsters: Vec::new(),
             items: Vec::new(),
             floor: 1,
@@ -238,7 +281,7 @@ impl World {
 
         let mut world = Self {
             map,
-            player: Player::new(room_x0 + 2, room_y0 + 2),
+            player: Actor::new_player(room_x0 + 2, room_y0 + 2),
             monsters: Vec::new(),
             items: Vec::new(),
             floor: 1,
@@ -331,13 +374,8 @@ impl World {
 
     pub fn spawn_monster(&mut self, kind: u8, x: i32, y: i32) {
         let entry = bestiary::kind(kind as usize);
-        self.monsters.push(Monster {
-            kind,
-            x,
-            y,
-            hp: entry.max_hp,
-            state: 0,
-        });
+        self.monsters
+            .push(Actor::new_monster(kind, x, y, entry.max_hp));
     }
 
     pub fn push_message<S: Into<String>>(&mut self, s: S) {

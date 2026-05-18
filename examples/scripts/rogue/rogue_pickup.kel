@@ -1,0 +1,49 @@
+// Autopickup decision. Pure function. The host pre-fetches the
+// item's kind and value plus the player's current value (for
+// gear) or slot-occupied flag (for potion or scroll), then
+// invokes this script. The script returns one of three action
+// codes which the host translates into the appropriate world
+// mutation.
+//
+// Inputs.
+//   item_kind        0 = food, 1 = gold, 2 = weapon, 3 = armor,
+//                    4 = potion, 5 = scroll.
+//   new_value        For weapons: weapon damage. For armor:
+//                    armor defense. For other kinds: unused, the
+//                    caller may pass zero.
+//   current_value    For weapons: current weapon damage. For
+//                    armor: current armor defense. For other
+//                    kinds: unused.
+//   slot_full        For potions and scrolls: 1 if the held slot
+//                    is occupied, else 0. For other kinds:
+//                    unused.
+//
+// Output action code.
+//   0 = leave the item on the ground (potion or scroll with the
+//       slot already full).
+//   1 = consume the item (food, gold, slotted potion or scroll,
+//       upgrade weapon, upgrade armor).
+//   2 = scrap the item (non-upgrade weapon or armor; the host
+//       destroys it on contact without equipping).
+//
+// Rules. Food and gold always consume. Weapons and armor
+// consume on upgrade, scrap otherwise. Potions and scrolls
+// consume into the matching slot when the slot is free, else
+// stay on the ground.
+
+fn main(
+    item_kind: Word,
+    new_value: Word,
+    current_value: Word,
+    slot_full: Word,
+) -> Word {
+    if item_kind == 0 or item_kind == 1 {
+        1
+    } else {
+        if item_kind == 2 or item_kind == 3 {
+            if new_value > current_value { 1 } else { 2 }
+        } else {
+            if slot_full == 0 { 1 } else { 0 }
+        }
+    }
+}
