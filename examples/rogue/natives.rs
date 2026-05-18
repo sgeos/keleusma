@@ -24,6 +24,13 @@ use crate::world::{Tile, World};
 
 pub type WorldHandle = Arc<Mutex<World>>;
 
+/// Convenience: lock the world and push a single message line.
+/// Used by host code that wants to log without holding the lock
+/// across other work.
+pub fn push_msg(world: &WorldHandle, msg: impl Into<String>) {
+    world.lock().unwrap().push_message(msg);
+}
+
 /// Register the natives the dungeon-generation script needs. This
 /// is also the set every other script can call when the host runs
 /// them, so installing it once per virtual machine is sufficient.

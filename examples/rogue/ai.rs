@@ -17,10 +17,80 @@ use std::sync::{Arc, Mutex};
 extern crate alloc;
 
 use keleusma::bytecode::Value;
+use keleusma::compiler::compile;
+use keleusma::lexer::tokenize;
+use keleusma::parser::parse;
 use keleusma::vm::{DEFAULT_ARENA_CAPACITY, Vm, VmError, VmState};
 use keleusma::{Arena, Module};
 
 use crate::bestiary::AiKind;
+
+/// Embedded script sources, keyed by filename. The startup path
+/// looks scripts up here; the hot-reload path reads the same
+/// filenames from disk. Adding a new script means adding one
+/// row to this table and one field to [`AiModules`] (or
+/// referencing it directly for the standalone dungen and game
+/// scripts).
+pub const EMBEDDED: &[(&str, &str)] = &[
+    ("rogue_dungen.kel", include_str!("../scripts/rogue/rogue_dungen.kel")),
+    ("rogue_ai_idle.kel", include_str!("../scripts/rogue/rogue_ai_idle.kel")),
+    ("rogue_ai_chaser.kel", include_str!("../scripts/rogue/rogue_ai_chaser.kel")),
+    ("rogue_ai_wander.kel", include_str!("../scripts/rogue/rogue_ai_wander.kel")),
+    ("rogue_ai_sleeper.kel", include_str!("../scripts/rogue/rogue_ai_sleeper.kel")),
+    ("rogue_ai_ranged.kel", include_str!("../scripts/rogue/rogue_ai_ranged.kel")),
+    ("rogue_ai_fast.kel", include_str!("../scripts/rogue/rogue_ai_fast.kel")),
+    ("rogue_ai_smart.kel", include_str!("../scripts/rogue/rogue_ai_smart.kel")),
+    ("rogue_ai_boss.kel", include_str!("../scripts/rogue/rogue_ai_boss.kel")),
+    ("rogue_ai_tracker.kel", include_str!("../scripts/rogue/rogue_ai_tracker.kel")),
+    ("rogue_ai_hunter.kel", include_str!("../scripts/rogue/rogue_ai_hunter.kel")),
+    ("rogue_item_potion.kel", include_str!("../scripts/rogue/rogue_item_potion.kel")),
+    ("rogue_item_scroll.kel", include_str!("../scripts/rogue/rogue_item_scroll.kel")),
+    ("rogue_game.kel", include_str!("../scripts/rogue/rogue_game.kel")),
+    ("rogue_player_ai.kel", include_str!("../scripts/rogue/rogue_player_ai.kel")),
+    ("rogue_combat.kel", include_str!("../scripts/rogue/rogue_combat.kel")),
+    ("rogue_book_keeping.kel", include_str!("../scripts/rogue/rogue_book_keeping.kel")),
+    ("rogue_pickup.kel", include_str!("../scripts/rogue/rogue_pickup.kel")),
+    ("rogue_move_resolve.kel", include_str!("../scripts/rogue/rogue_move_resolve.kel")),
+];
+
+/// Directory containing the Keleusma script sources on disk.
+/// The initial load uses the embedded constants above so the
+/// example runs even without filesystem access. The hot-reload
+/// path reads from this directory at run time.
+pub const SCRIPT_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/examples/scripts/rogue");
+
+/// Compile a single Keleusma source string to a [`Module`].
+pub fn build_module(src: &str) -> Result<Module, Box<dyn std::error::Error>> {
+    let tokens = tokenize(src).map_err(|e| format!("lex error: {:?}", e))?;
+    let program = parse(&tokens).map_err(|e| format!("parse error: {:?}", e))?;
+    compile(&program).map_err(|e| format!("compile error: {:?}", e).into())
+}
+
+/// Compile a script by name from the embedded table.
+pub fn compile_embedded(name: &str) -> Result<Module, Box<dyn std::error::Error>> {
+    let src = EMBEDDED
+        .iter()
+        .find(|(n, _)| *n == name)
+        .map(|(_, s)| *s)
+        .ok_or_else(|| format!("unknown embedded script: {}", name))?;
+    build_module(src)
+}
+
+/// Compile a script by name from disk under [`SCRIPT_DIR`].
+pub fn compile_disk(name: &str) -> Result<Module, Box<dyn std::error::Error>> {
+    let path = format!("{}/{}", SCRIPT_DIR, name);
+    let src = std::fs::read_to_string(&path).map_err(|e| format!("read {}: {}", name, e))?;
+    build_module(&src)
+}
+
+/// Zero every slot in a virtual machine's data segment. Used at
+/// startup to ensure a deterministic initial state and on
+/// restart to drop archetype memory carried from the prior run.
+pub fn zero_data_slots<'a, 'b>(vm: &mut Vm<'a, 'b>) {
+    for slot in 0..vm.data_len() {
+        let _ = vm.set_data(slot, Value::Int(0));
+    }
+}
 
 /// Five-element tuple returned by item-effect scripts: hp delta,
 /// max-hp delta, skill delta, status code, status argument.
@@ -207,9 +277,7 @@ impl AiPool {
     /// loop body and reads the zeroed state.
     pub fn reset_loop_main_data(&mut self) {
         for vm in [&mut self.boss, &mut self.tracker, &mut self.hunter] {
-            for slot in 0..vm.data_len() {
-                let _ = vm.set_data(slot, Value::Int(0));
-            }
+            zero_data_slots(vm);
         }
     }
 
@@ -573,9 +641,7 @@ fn build_vm(
     needs_rng: bool,
 ) -> Result<Vm<'static, 'static>, Box<dyn std::error::Error>> {
     let mut vm = Vm::new(module, arena).map_err(|e| format!("vm new: {:?}", e))?;
-    for slot in 0..vm.data_len() {
-        let _ = vm.set_data(slot, Value::Int(0));
-    }
+    zero_data_slots(&mut vm);
     if needs_rng {
         register_rng(&mut vm, world);
     }

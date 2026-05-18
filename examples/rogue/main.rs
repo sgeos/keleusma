@@ -43,14 +43,14 @@ use std::time::Duration;
 use sdl3::event::Event;
 use sdl3::pixels::Color;
 
-use keleusma::compiler::compile;
-use keleusma::lexer::tokenize;
-use keleusma::parser::parse;
 use keleusma::vm::{DEFAULT_ARENA_CAPACITY, Vm, VmState};
-use keleusma::{Arena, Module, Value};
+use keleusma::{Arena, Value};
 
-use crate::ai::{AiModules, AiPool, AiPoolHandle};
+use crate::ai::{
+    AiModules, AiPool, AiPoolHandle, compile_disk, compile_embedded, zero_data_slots,
+};
 use crate::input::Command;
+use crate::natives::push_msg;
 use crate::render::{GameOver, Renderer};
 use crate::tiles::TileAtlas;
 use crate::world::World;
@@ -73,10 +73,19 @@ pub const TILE_PX: u32 = 16;
 /// detail without forcing every primitive draw to rescale.
 pub const SPRITE_PX: u32 = 24;
 
-/// Pixel height of the HUD bar drawn above the map and the
-/// message bar drawn below. These are independent of the tile
-/// size so the bars remain readable even at small tile sizes.
-pub const HUD_PX: u32 = 24;
+/// Pixel heights of the head-up display rows and the message
+/// bar drawn below the map. The head-up display is split across
+/// two rows. The top row is the hit-point bar by itself; the
+/// player's hit-point cap grows with depth and at high floors
+/// the pip strip stretches across the full window width. The
+/// second row carries the gear icons, the floor ticks, the
+/// floor and gold readouts, the held potion and scroll icons,
+/// and the hunger gauge. The two-row split keeps each readout
+/// at a fixed location regardless of how long the hit-point
+/// bar runs.
+pub const HP_BAR_PX: u32 = 24;
+pub const INFO_BAR_PX: u32 = 24;
+pub const HUD_PX: u32 = HP_BAR_PX + INFO_BAR_PX;
 pub const MSG_PX: u32 = 24;
 
 /// Total window dimensions derived from the map dimensions plus
@@ -84,62 +93,10 @@ pub const MSG_PX: u32 = 24;
 pub const WINDOW_W: u32 = MAP_W * TILE_PX;
 pub const WINDOW_H: u32 = HUD_PX + MAP_H * TILE_PX + MSG_PX;
 
-/// Embedded script sources, keyed by filename. The startup path
-/// looks scripts up here; the hot-reload path reads the same
-/// filenames from disk. Adding a new script means adding one
-/// row to this table and one field to [`AiModules`] (or
-/// referencing it directly for the standalone dungen and game
-/// scripts).
-const EMBEDDED: &[(&str, &str)] = &[
-    ("rogue_dungen.kel", include_str!("../scripts/rogue/rogue_dungen.kel")),
-    ("rogue_ai_idle.kel", include_str!("../scripts/rogue/rogue_ai_idle.kel")),
-    ("rogue_ai_chaser.kel", include_str!("../scripts/rogue/rogue_ai_chaser.kel")),
-    ("rogue_ai_wander.kel", include_str!("../scripts/rogue/rogue_ai_wander.kel")),
-    ("rogue_ai_sleeper.kel", include_str!("../scripts/rogue/rogue_ai_sleeper.kel")),
-    ("rogue_ai_ranged.kel", include_str!("../scripts/rogue/rogue_ai_ranged.kel")),
-    ("rogue_ai_fast.kel", include_str!("../scripts/rogue/rogue_ai_fast.kel")),
-    ("rogue_ai_smart.kel", include_str!("../scripts/rogue/rogue_ai_smart.kel")),
-    ("rogue_ai_boss.kel", include_str!("../scripts/rogue/rogue_ai_boss.kel")),
-    ("rogue_ai_tracker.kel", include_str!("../scripts/rogue/rogue_ai_tracker.kel")),
-    ("rogue_ai_hunter.kel", include_str!("../scripts/rogue/rogue_ai_hunter.kel")),
-    ("rogue_item_potion.kel", include_str!("../scripts/rogue/rogue_item_potion.kel")),
-    ("rogue_item_scroll.kel", include_str!("../scripts/rogue/rogue_item_scroll.kel")),
-    ("rogue_game.kel", include_str!("../scripts/rogue/rogue_game.kel")),
-    ("rogue_player_ai.kel", include_str!("../scripts/rogue/rogue_player_ai.kel")),
-    ("rogue_combat.kel", include_str!("../scripts/rogue/rogue_combat.kel")),
-    ("rogue_book_keeping.kel", include_str!("../scripts/rogue/rogue_book_keeping.kel")),
-    ("rogue_pickup.kel", include_str!("../scripts/rogue/rogue_pickup.kel")),
-    ("rogue_move_resolve.kel", include_str!("../scripts/rogue/rogue_move_resolve.kel")),
-];
-
-fn embedded_source(name: &str) -> Result<&'static str, Box<dyn std::error::Error>> {
-    EMBEDDED
-        .iter()
-        .find(|(n, _)| *n == name)
-        .map(|(_, s)| *s)
-        .ok_or_else(|| format!("unknown embedded script: {}", name).into())
-}
-
-fn disk_source(name: &str) -> Result<String, Box<dyn std::error::Error>> {
-    let path = format!("{}/{}", SCRIPT_DIR, name);
-    std::fs::read_to_string(&path).map_err(|e| format!("read {}: {}", name, e).into())
-}
-
-fn compile_embedded(name: &str) -> Result<Module, Box<dyn std::error::Error>> {
-    build_module(embedded_source(name)?)
-}
-
-fn compile_disk(name: &str) -> Result<Module, Box<dyn std::error::Error>> {
-    build_module(&disk_source(name)?)
-}
-
-/// Directory containing the Keleusma script sources on disk.
-/// The initial load uses the `include_str!` constants above so
-/// the example runs even without filesystem access. The hot
-/// reload path reads from this directory at run time, allowing
-/// scripts edited in another window to take effect on `F5`
-/// without rebuilding the host binary.
-const SCRIPT_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/examples/scripts/rogue");
+// Script loading and the `EMBEDDED` table live in `ai.rs` so the
+// script-list source of truth sits next to the [`AiModules`]
+// constructor. The host pulls `compile_embedded`, `compile_disk`,
+// and `zero_data_slots` from there.
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let sdl_context = sdl3::init()?;
@@ -164,7 +121,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let dungen_module = compile_embedded("rogue_dungen.kel")?;
     let mut dungen_vm =
         Vm::new(dungen_module, &dungen_arena).map_err(|e| format!("vm new: {:?}", e))?;
-    init_data_slots(&mut dungen_vm);
+    zero_data_slots(&mut dungen_vm);
     natives::register_natives(&mut dungen_vm, &world);
 
     // Build the artificial-intelligence virtual-machine pool.
@@ -184,17 +141,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let game_arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
     let game_module = compile_embedded("rogue_game.kel")?;
     let mut game_vm = Vm::new(game_module, &game_arena).map_err(|e| format!("vm new: {:?}", e))?;
-    init_data_slots(&mut game_vm);
+    zero_data_slots(&mut game_vm);
     natives::register_game_natives(&mut game_vm, &world, &ai_pool);
     let mut game_started = false;
 
     // Generate the first floor.
     run_dungen(&mut dungen_vm, 1)?;
-    {
-        let mut w = world.lock().unwrap();
-        w.push_message(String::from("Welcome, brave adventurer."));
-        w.recompute_fov();
-    }
+    push_msg(&world, "Welcome, brave adventurer.");
+    world.lock().unwrap().recompute_fov();
 
     let mut renderer = Renderer::new();
     let mut event_pump = sdl_context.event_pump()?;
@@ -236,10 +190,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         descend_floor(&world, &mut dungen_vm)?;
                                     }
                                     2 => {
-                                        let mut w = world.lock().unwrap();
-                                        w.push_message(String::from(
-                                            "You step into the light. You win!",
-                                        ));
+                                        push_msg(&world, "You step into the light. You win!");
                                         game_over = Some(GameOver::Won);
                                     }
                                     _ => {
@@ -337,31 +288,12 @@ fn restart_run<'a1, 'b1>(
 where
     'b1: 'a1,
 {
-    {
-        let mut w = world.lock().unwrap();
-        *w = World::new();
-        w.push_message(String::from("A new dungeon spreads before you."));
-    }
+    *world.lock().unwrap() = World::new();
+    push_msg(world, "A new dungeon spreads before you.");
     run_dungen(dungen_vm, 1)?;
-    {
-        let mut w = world.lock().unwrap();
-        w.recompute_fov();
-    }
+    world.lock().unwrap().recompute_fov();
     ai_pool.lock().unwrap().reset_loop_main_data();
     Ok(())
-}
-
-fn init_data_slots(vm: &mut Vm) {
-    for slot in 0..vm.data_len() {
-        let _ = vm.set_data(slot, Value::Int(0));
-    }
-}
-
-fn build_module(src: &str) -> Result<Module, Box<dyn std::error::Error>> {
-    let tokens = tokenize(src).map_err(|e| format!("lex error: {:?}", e))?;
-    let program = parse(&tokens).map_err(|e| format!("parse error: {:?}", e))?;
-    let module = compile(&program).map_err(|e| format!("compile error: {:?}", e))?;
-    Ok(module)
 }
 
 fn run_dungen(vm: &mut Vm, floor: i64) -> Result<(), Box<dyn std::error::Error>> {
@@ -395,56 +327,27 @@ fn reload_scripts<'a, 'd>(
 {
     let dungen_module = match compile_disk("rogue_dungen.kel") {
         Ok(m) => m,
-        Err(e) => {
-            world
-                .lock()
-                .unwrap()
-                .push_message(format!("Reload failed: {}", e));
-            return;
-        }
+        Err(e) => return push_msg(world, format!("Reload failed: {}", e)),
     };
     let ai_modules = match AiModules::build(compile_disk) {
         Ok(m) => m,
-        Err(e) => {
-            world
-                .lock()
-                .unwrap()
-                .push_message(format!("Reload failed: {}", e));
-            return;
-        }
+        Err(e) => return push_msg(world, format!("Reload failed: {}", e)),
     };
-
     // Swap the dungen virtual machine. The new module replaces
     // the old one in the same arena. Re-registering the natives
     // captures fresh world handles into the new closures.
-    let new_dungen = match Vm::new(dungen_module, dungen_arena) {
+    *dungen_vm = match Vm::new(dungen_module, dungen_arena) {
         Ok(vm) => vm,
-        Err(e) => {
-            world
-                .lock()
-                .unwrap()
-                .push_message(format!("Reload failed: dungen verify error. {:?}", e));
-            return;
-        }
+        Err(e) => return push_msg(world, format!("Reload failed: dungen verify error. {:?}", e)),
     };
-    *dungen_vm = new_dungen;
-    init_data_slots(dungen_vm);
+    zero_data_slots(dungen_vm);
     natives::register_natives(dungen_vm, world);
-
     // Swap every artificial-intelligence and item virtual
     // machine.
     if let Err(e) = ai_pool.lock().unwrap().reload(ai_modules, world) {
-        world
-            .lock()
-            .unwrap()
-            .push_message(format!("Reload partial: {}", e));
-        return;
+        return push_msg(world, format!("Reload partial: {}", e));
     }
-
-    world
-        .lock()
-        .unwrap()
-        .push_message(String::from("Scripts reloaded from disk."));
+    push_msg(world, "Scripts reloaded from disk.");
 }
 
 /// Advance the player to the next floor. Level up first, then
@@ -454,7 +357,7 @@ fn descend_floor(
     world: &Arc<Mutex<World>>,
     dungen_vm: &mut Vm,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    {
+    let next_floor = {
         let mut w = world.lock().unwrap();
         // Level-up. Damage persists. The max-HP delta is added
         // to current HP so the newly added slots come in full
@@ -466,17 +369,13 @@ fn descend_floor(
         w.player.hp += hp_gain;
         w.player.skill += skill_gain;
         w.floor += 1;
-        let next_floor = w.floor;
-        w.push_message(format!(
-            "You descend to floor {}. You feel stronger.",
-            next_floor
-        ));
-    }
-    let next_floor = world.lock().unwrap().floor as i64;
-    run_dungen(dungen_vm, next_floor)?;
-    {
-        let mut w = world.lock().unwrap();
-        w.recompute_fov();
-    }
+        w.floor
+    };
+    push_msg(
+        world,
+        format!("You descend to floor {}. You feel stronger.", next_floor),
+    );
+    run_dungen(dungen_vm, next_floor as i64)?;
+    world.lock().unwrap().recompute_fov();
     Ok(())
 }
