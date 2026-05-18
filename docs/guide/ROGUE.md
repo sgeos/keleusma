@@ -25,7 +25,7 @@
 
 ## How this document relates to the source
 
-The roguelike example splits its source across two directories. The Rust host code lives under `examples/rogue/`. The nineteen Keleusma scripts live under `examples/scripts/rogue/`. The `include_str!` lines in `examples/rogue/main.rs` reference the script directory through a relative path, and the `SCRIPT_DIR` constant in the same file points there for the hot-reload path. This manual is the long-form companion to the example. It describes the rules of the game, the architecture of the host, the responsibilities of each script, and a graded set of exercises a reader can attempt to deepen familiarity with the embedding pattern.
+The roguelike example splits its source across two directories. The Rust host code lives under `examples/rogue/`. The twenty-four Keleusma scripts live under `examples/scripts/rogue/`. The `include_str!` lines in `examples/rogue/main.rs` reference the script directory through a relative path, and the `SCRIPT_DIR` constant in the same file points there for the hot-reload path. This manual is the long-form companion to the example. It describes the rules of the game, the architecture of the host, the responsibilities of each script, and a graded set of exercises a reader can attempt to deepen familiarity with the embedding pattern.
 
 The bestiary, item, and stat tables are defined inline in the host source rather than reprinted in this manual. The numbers cited in the gameplay section are stable design defaults, but the source is authoritative if they ever drift.
 
@@ -50,6 +50,18 @@ Sixth, hot reload. The `F5` keybind re-reads every script from disk, recompiles,
 Seventh, the player as an actor. `rogue_player_ai.kel` is shaped like every other artificial-intelligence script. The host dispatches it through the same per-actor path it uses for monsters. The player's distinction is the source of intent, not the dispatch shape. Combat math also lives in script through `rogue_combat.kel`. See [Reading the player AI script](#reading-the-player-ai-script) and [Reading the combat script](#reading-the-combat-script).
 
 The example also demonstrates the conservative-verification discipline. Every loop in every script has a statically extractable iteration bound. Dynamic upper limits are written as fixed-bound loops with conditional bodies. Recursion is absent. The verifier accepts every shipped script.
+
+### Known deferred items
+
+These behaviours are intentionally left as exercises rather than shipped features. Each is documented in the [Exercises for the reader](#exercises-for-the-reader) section with the relevant entry number.
+
+- **Sleep, Confusion, and Remove Curse scrolls** emit placeholder messages. The script-side dispatch produces the correct status codes; the host-side application is deferred. See Exercise 3.7.
+- **Starvation tuning overshot.** The combination of halved hunger cadence plus corpse drops makes starvation effectively impossible. See Exercise 5.1.
+- **The bestiary and gear scripts are not on the F5 hot-reload path.** Both load once at startup; modders editing those scripts must restart. The pattern admits reload but the wiring is not yet in place.
+- **Weapon and armor names live in `WEAPON_NAMES` and `ARMOR_NAMES` host-side constants.** Monster names already moved into the bestiary script; the equivalent migration for the gear script is mechanical and is filed as Exercise 4.3.
+- **The placeholder potion effects (Speed, Levitation, See Invisible) have script-side handlers but no host-side response.** The status codes propagate; the host treats them as no-ops with a generic message.
+
+None of these block normal play. The game is reachable from floor one to the floor one hundred exit with the shipped configuration.
 
 ## Building and running
 
@@ -134,7 +146,7 @@ The host owns all mutable game state. The map, the player, the monster table, th
         | per-virtual-machine `register_native_closure` and `vm.call(...)`
         v
 +------------------------------------------+
-|  Twenty-three Keleusma virtual machines  |
+|  Twenty-four Keleusma virtual machines   |
 |  - rogue_game.kel          (loop main)   |
 |  - rogue_dungen.kel        (one-shot)    |
 |  - rogue_player_ai.kel     (pure fn)     |
@@ -158,6 +170,7 @@ The host owns all mutable game state. The map, the player, the monster table, th
 |  - rogue_consume.kel       (uses natives)|
 |  - rogue_scroll_apply.kel  (uses natives)|
 |  - rogue_bestiary.kel      (startup load)|
+|  - rogue_gear.kel          (startup load)|
 +------------------------------------------+
 ```
 

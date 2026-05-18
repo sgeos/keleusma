@@ -136,7 +136,9 @@ pub fn kind(kind: usize) -> &'static MonsterKind {
 /// Read-only handle to the full table. Used by call sites that
 /// previously walked the static `BESTIARY` array.
 pub fn table() -> &'static Vec<MonsterKind> {
-    BESTIARY.get().expect("bestiary not loaded; call install() at startup")
+    BESTIARY
+        .get()
+        .expect("bestiary not loaded; call install() at startup")
 }
 
 /// Total number of monster kinds in the table. Mirrors

@@ -46,9 +46,7 @@ use sdl3::pixels::Color;
 use keleusma::vm::{DEFAULT_ARENA_CAPACITY, Vm, VmState};
 use keleusma::{Arena, Value};
 
-use crate::ai::{
-    AiModules, AiPool, AiPoolHandle, compile_disk, compile_embedded, zero_data_slots,
-};
+use crate::ai::{AiModules, AiPool, AiPoolHandle, compile_disk, compile_embedded, zero_data_slots};
 use crate::input::Command;
 use crate::natives::push_msg;
 use crate::render::{GameOver, Renderer};
@@ -488,7 +486,12 @@ fn reload_scripts<'a, 'd>(
     // captures fresh world handles into the new closures.
     *dungen_vm = match Vm::new(dungen_module, dungen_arena) {
         Ok(vm) => vm,
-        Err(e) => return push_msg(world, format!("Reload failed: dungen verify error. {:?}", e)),
+        Err(e) => {
+            return push_msg(
+                world,
+                format!("Reload failed: dungen verify error. {:?}", e),
+            );
+        }
     };
     zero_data_slots(dungen_vm);
     natives::register_natives(dungen_vm, world);

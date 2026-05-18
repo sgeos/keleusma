@@ -32,30 +32,102 @@ use crate::bestiary::AiKind;
 /// referencing it directly for the standalone dungen and game
 /// scripts).
 pub const EMBEDDED: &[(&str, &str)] = &[
-    ("rogue_dungen.kel", include_str!("../scripts/rogue/rogue_dungen.kel")),
-    ("rogue_ai_idle.kel", include_str!("../scripts/rogue/rogue_ai_idle.kel")),
-    ("rogue_ai_chaser.kel", include_str!("../scripts/rogue/rogue_ai_chaser.kel")),
-    ("rogue_ai_wander.kel", include_str!("../scripts/rogue/rogue_ai_wander.kel")),
-    ("rogue_ai_sleeper.kel", include_str!("../scripts/rogue/rogue_ai_sleeper.kel")),
-    ("rogue_ai_ranged.kel", include_str!("../scripts/rogue/rogue_ai_ranged.kel")),
-    ("rogue_ai_fast.kel", include_str!("../scripts/rogue/rogue_ai_fast.kel")),
-    ("rogue_ai_smart.kel", include_str!("../scripts/rogue/rogue_ai_smart.kel")),
-    ("rogue_ai_boss.kel", include_str!("../scripts/rogue/rogue_ai_boss.kel")),
-    ("rogue_ai_tracker.kel", include_str!("../scripts/rogue/rogue_ai_tracker.kel")),
-    ("rogue_ai_hunter.kel", include_str!("../scripts/rogue/rogue_ai_hunter.kel")),
-    ("rogue_item_potion.kel", include_str!("../scripts/rogue/rogue_item_potion.kel")),
-    ("rogue_item_scroll.kel", include_str!("../scripts/rogue/rogue_item_scroll.kel")),
-    ("rogue_game.kel", include_str!("../scripts/rogue/rogue_game.kel")),
-    ("rogue_player_ai.kel", include_str!("../scripts/rogue/rogue_player_ai.kel")),
-    ("rogue_combat.kel", include_str!("../scripts/rogue/rogue_combat.kel")),
-    ("rogue_book_keeping.kel", include_str!("../scripts/rogue/rogue_book_keeping.kel")),
-    ("rogue_pickup.kel", include_str!("../scripts/rogue/rogue_pickup.kel")),
-    ("rogue_move_resolve.kel", include_str!("../scripts/rogue/rogue_move_resolve.kel")),
-    ("rogue_descend.kel", include_str!("../scripts/rogue/rogue_descend.kel")),
-    ("rogue_consume.kel", include_str!("../scripts/rogue/rogue_consume.kel")),
-    ("rogue_scroll_apply.kel", include_str!("../scripts/rogue/rogue_scroll_apply.kel")),
-    ("rogue_bestiary.kel", include_str!("../scripts/rogue/rogue_bestiary.kel")),
-    ("rogue_gear.kel", include_str!("../scripts/rogue/rogue_gear.kel")),
+    (
+        "rogue_dungen.kel",
+        include_str!("../scripts/rogue/rogue_dungen.kel"),
+    ),
+    (
+        "rogue_ai_idle.kel",
+        include_str!("../scripts/rogue/rogue_ai_idle.kel"),
+    ),
+    (
+        "rogue_ai_chaser.kel",
+        include_str!("../scripts/rogue/rogue_ai_chaser.kel"),
+    ),
+    (
+        "rogue_ai_wander.kel",
+        include_str!("../scripts/rogue/rogue_ai_wander.kel"),
+    ),
+    (
+        "rogue_ai_sleeper.kel",
+        include_str!("../scripts/rogue/rogue_ai_sleeper.kel"),
+    ),
+    (
+        "rogue_ai_ranged.kel",
+        include_str!("../scripts/rogue/rogue_ai_ranged.kel"),
+    ),
+    (
+        "rogue_ai_fast.kel",
+        include_str!("../scripts/rogue/rogue_ai_fast.kel"),
+    ),
+    (
+        "rogue_ai_smart.kel",
+        include_str!("../scripts/rogue/rogue_ai_smart.kel"),
+    ),
+    (
+        "rogue_ai_boss.kel",
+        include_str!("../scripts/rogue/rogue_ai_boss.kel"),
+    ),
+    (
+        "rogue_ai_tracker.kel",
+        include_str!("../scripts/rogue/rogue_ai_tracker.kel"),
+    ),
+    (
+        "rogue_ai_hunter.kel",
+        include_str!("../scripts/rogue/rogue_ai_hunter.kel"),
+    ),
+    (
+        "rogue_item_potion.kel",
+        include_str!("../scripts/rogue/rogue_item_potion.kel"),
+    ),
+    (
+        "rogue_item_scroll.kel",
+        include_str!("../scripts/rogue/rogue_item_scroll.kel"),
+    ),
+    (
+        "rogue_game.kel",
+        include_str!("../scripts/rogue/rogue_game.kel"),
+    ),
+    (
+        "rogue_player_ai.kel",
+        include_str!("../scripts/rogue/rogue_player_ai.kel"),
+    ),
+    (
+        "rogue_combat.kel",
+        include_str!("../scripts/rogue/rogue_combat.kel"),
+    ),
+    (
+        "rogue_book_keeping.kel",
+        include_str!("../scripts/rogue/rogue_book_keeping.kel"),
+    ),
+    (
+        "rogue_pickup.kel",
+        include_str!("../scripts/rogue/rogue_pickup.kel"),
+    ),
+    (
+        "rogue_move_resolve.kel",
+        include_str!("../scripts/rogue/rogue_move_resolve.kel"),
+    ),
+    (
+        "rogue_descend.kel",
+        include_str!("../scripts/rogue/rogue_descend.kel"),
+    ),
+    (
+        "rogue_consume.kel",
+        include_str!("../scripts/rogue/rogue_consume.kel"),
+    ),
+    (
+        "rogue_scroll_apply.kel",
+        include_str!("../scripts/rogue/rogue_scroll_apply.kel"),
+    ),
+    (
+        "rogue_bestiary.kel",
+        include_str!("../scripts/rogue/rogue_bestiary.kel"),
+    ),
+    (
+        "rogue_gear.kel",
+        include_str!("../scripts/rogue/rogue_gear.kel"),
+    ),
 ];
 
 /// Directory containing the Keleusma script sources on disk.
@@ -314,7 +386,12 @@ impl AiPool {
         max_hp: i64,
         hunger: i64,
     ) -> Result<(i64, i64, i64), Box<dyn std::error::Error>> {
-        let t = call_pure_ints(&mut self.book_keeping, "book", &[turn, hp, max_hp, hunger], 3)?;
+        let t = call_pure_ints(
+            &mut self.book_keeping,
+            "book",
+            &[turn, hp, max_hp, hunger],
+            3,
+        )?;
         Ok((t[0], t[1], t[2]))
     }
 

@@ -71,12 +71,7 @@ pub fn register_consume_natives(vm: &mut Vm, world: &WorldHandle) {
 /// emits the matching message.
 pub fn register_scroll_apply_natives(vm: &mut Vm, world: &WorldHandle) {
     register_unit_native(vm, world, "host::set_explored_all", set_explored_all);
-    register_int_native(
-        vm,
-        world,
-        "host::set_explored_radius",
-        set_explored_radius,
-    );
+    register_int_native(vm, world, "host::set_explored_radius", set_explored_radius);
     register_unit_native(
         vm,
         world,
@@ -95,12 +90,7 @@ pub fn register_scroll_apply_natives(vm: &mut Vm, world: &WorldHandle) {
     register_unit_native(vm, world, "host::scroll_placeholder", scroll_placeholder);
 }
 
-fn register_unit_native(
-    vm: &mut Vm,
-    world: &WorldHandle,
-    name: &'static str,
-    op: fn(&mut World),
-) {
+fn register_unit_native(vm: &mut Vm, world: &WorldHandle, name: &'static str, op: fn(&mut World)) {
     let w = world.clone();
     vm.register_native_closure(
         name,
@@ -1187,14 +1177,16 @@ fn identify_all_potions(w: &mut World) {
 }
 
 fn change_weapon_tier(w: &mut World, delta: i64) {
-    let new_tier = (w.player.weapon as i64 + delta).clamp(0, (items::weapons().len() as i64) - 1) as u8;
+    let new_tier =
+        (w.player.weapon as i64 + delta).clamp(0, (items::weapons().len() as i64) - 1) as u8;
     w.player.weapon = new_tier;
     let name = items::weapons()[new_tier as usize].name;
     w.push_message(format!("Your weapon shimmers. You hold the {}.", name));
 }
 
 fn change_armor_tier(w: &mut World, delta: i64) {
-    let new_tier = (w.player.armor as i64 + delta).clamp(0, (items::armors().len() as i64) - 1) as u8;
+    let new_tier =
+        (w.player.armor as i64 + delta).clamp(0, (items::armors().len() as i64) - 1) as u8;
     w.player.armor = new_tier;
     let name = items::armors()[new_tier as usize].name;
     w.push_message(format!("Your armor hums. You wear the {}.", name));

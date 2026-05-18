@@ -51,20 +51,50 @@ pub struct Armor {
 /// load from `rogue_gear.kel` at startup. Adding a tier needs
 /// a name here and a `fn weapon(N)` head in the script.
 pub const WEAPON_NAMES: [&str; 20] = [
-    "fists", "rusty dagger", "short sword", "battle axe", "war hammer",
-    "claymore", "halberd", "flamberge", "rune sword", "vorpal blade",
-    "moonblade", "dragonbone spear", "starforged axe", "adamant flail",
-    "voidshard", "demonbane", "soulrender", "god-piercer", "world-ender",
+    "fists",
+    "rusty dagger",
+    "short sword",
+    "battle axe",
+    "war hammer",
+    "claymore",
+    "halberd",
+    "flamberge",
+    "rune sword",
+    "vorpal blade",
+    "moonblade",
+    "dragonbone spear",
+    "starforged axe",
+    "adamant flail",
+    "voidshard",
+    "demonbane",
+    "soulrender",
+    "god-piercer",
+    "world-ender",
     "last word",
 ];
 
 /// Armor names indexed by tier.
 pub const ARMOR_NAMES: [&str; 20] = [
-    "rags", "padded jacket", "leather armor", "studded leather", "ring mail",
-    "chain mail", "scale mail", "splint mail", "plate mail", "rune plate",
-    "mithril mail", "elven cuirass", "dragonscale", "dwarven plate",
-    "celestial mail", "bulwark of ages", "adamantine plate",
-    "aegis of the host", "starshield", "last guard",
+    "rags",
+    "padded jacket",
+    "leather armor",
+    "studded leather",
+    "ring mail",
+    "chain mail",
+    "scale mail",
+    "splint mail",
+    "plate mail",
+    "rune plate",
+    "mithril mail",
+    "elven cuirass",
+    "dragonscale",
+    "dwarven plate",
+    "celestial mail",
+    "bulwark of ages",
+    "adamantine plate",
+    "aegis of the host",
+    "starshield",
+    "last guard",
 ];
 
 static WEAPONS: OnceLock<Vec<Weapon>> = OnceLock::new();
@@ -95,11 +125,15 @@ pub fn install_armors(defenses: &[i32]) {
 }
 
 pub fn weapons() -> &'static [Weapon] {
-    WEAPONS.get().expect("weapons not loaded; call load_gear at startup")
+    WEAPONS
+        .get()
+        .expect("weapons not loaded; call load_gear at startup")
 }
 
 pub fn armors() -> &'static [Armor] {
-    ARMORS.get().expect("armors not loaded; call load_gear at startup")
+    ARMORS
+        .get()
+        .expect("armors not loaded; call load_gear at startup")
 }
 
 // -- Potions ---------------------------------------------------------
