@@ -7,17 +7,13 @@
 //
 // Algorithm. A simple rooms-and-corridors generator. Pick a
 // fixed number of rectangular rooms whose centres become
-// connection nodes. Lay the rooms first. Each room carries a
-// connectivity flag; room zero is flagged at the start, and
-// every subsequent iteration picks one unconnected room as the
-// target and one already-connected room as the source, digs an
-// L-shaped corridor between their centres, and flags the
-// target. Seven iterations against eight rooms therefore build
-// a spanning tree. The flag-based loop is more robust than a
-// rigid `R[i] -> R[i+1]` chain because room overlap from random
-// placement no longer produces a fixed disconnection pattern.
-// Tiles are written through `host::map_set` using the stable
-// tile-identifier encoding.
+// connection nodes. Lay the rooms first. For each consecutive
+// pair of rooms in placement order, dig an L-shaped corridor
+// between their centres. Tiles are written through
+// `host::map_set` using the stable tile-identifier encoding.
+// The chain shape is correct because `carve_room` only writes
+// floor; overlapping rooms merge their interiors into one
+// connected region rather than subdividing each other.
 //
 // Tile identifiers:
 //   0 = floor, 1 = wall, 2 = door closed, 3 = door open,
@@ -47,21 +43,12 @@ use host::floor
 
 // Room storage. The verifier requires fixed-size arrays for the
 // data segment.
-//
-// The `connected` array carries one flag per room; zero means
-// the room is not yet wired into the spanning tree, one means
-// it is. The scratch slots support the random-pick helpers
-// that walk the flag array and return a uniformly chosen
-// index among rooms with a given flag value.
 data state {
     num_rooms: Word,
     rooms_x0: [Word; 8],
     rooms_y0: [Word; 8],
     rooms_x1: [Word; 8],
     rooms_y1: [Word; 8],
-    connected: [Word; 8],
-    scratch_pick: Word,
-    scratch_idx: Word,
 }
 
 // ---------------------------------------------------------------
@@ -284,54 +271,6 @@ fn spawn_items(f: Word) -> Word {
 }
 
 // ---------------------------------------------------------------
-// Connectivity helpers. The spanning-tree growth loop calls
-// `random_with_flag(0)` to pick an unconnected target and
-// `random_with_flag(1)` to pick a connected source on each
-// iteration.
-// ---------------------------------------------------------------
-
-// Count rooms whose connectivity flag equals `value`.
-fn count_with_flag(value: Word) -> Word {
-    state.scratch_idx = 0;
-    for i in 0..8 {
-        if state.connected[i] == value {
-            state.scratch_idx = state.scratch_idx + 1;
-        };
-    }
-    state.scratch_idx
-}
-
-// Return the `k`-th room (zero-indexed) whose flag equals
-// `value`. Caller ensures `k` is less than the count.
-fn pick_with_flag(value: Word, k: Word) -> Word {
-    state.scratch_pick = 0;
-    state.scratch_idx = 0;
-    for i in 0..8 {
-        if state.connected[i] == value {
-            if state.scratch_idx == k {
-                state.scratch_pick = i;
-            };
-            state.scratch_idx = state.scratch_idx + 1;
-        };
-    }
-    state.scratch_pick
-}
-
-// Return a uniformly chosen room whose flag equals `value`.
-// Returns room zero if no room matches; the caller's loop
-// structure ensures this fallback is never observable in a
-// well-formed run.
-fn random_with_flag(value: Word) -> Word {
-    let n = count_with_flag(value);
-    if n == 0 {
-        0
-    } else {
-        let k = host::rng_range(0, n);
-        pick_with_flag(value, k)
-    }
-}
-
-// ---------------------------------------------------------------
 // Entry point. Called once per floor descent.
 // ---------------------------------------------------------------
 
@@ -339,26 +278,12 @@ fn main(floor: Word) -> Word {
     host::clear_floor();
     state.num_rooms = 8;
 
-    // Place rooms and reset the connectivity flags for this
-    // floor. The data segment persists across `fn main` calls,
-    // so a stale flag pattern from the previous floor would
-    // otherwise short-circuit the spanning-tree loop.
     for i in 0..8 {
         place_room(i);
-        state.connected[i] = 0;
     }
-    state.connected[0] = 1;
 
-    // Grow the spanning tree. Each iteration draws one corridor
-    // from a randomly chosen connected room to a randomly
-    // chosen unconnected room and flags the target. Seven
-    // iterations connect the remaining seven rooms to room
-    // zero through the tree.
     for i in 0..7 {
-        let target = random_with_flag(0);
-        let source = random_with_flag(1);
-        connect(room_cx(source), room_cy(source), room_cx(target), room_cy(target));
-        state.connected[target] = 1;
+        connect(room_cx(i), room_cy(i), room_cx(i + 1), room_cy(i + 1));
     }
 
     host::place_player(room_cx(0), room_cy(0));

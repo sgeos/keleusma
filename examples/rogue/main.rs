@@ -84,27 +84,54 @@ pub const MSG_PX: u32 = 24;
 pub const WINDOW_W: u32 = MAP_W * TILE_PX;
 pub const WINDOW_H: u32 = HUD_PX + MAP_H * TILE_PX + MSG_PX;
 
-/// Script sources embedded at compile time so the example does
-/// not depend on the current working directory.
-const SRC_DUNGEN: &str = include_str!("../scripts/rogue/rogue_dungen.kel");
-const SRC_AI_IDLE: &str = include_str!("../scripts/rogue/rogue_ai_idle.kel");
-const SRC_AI_CHASER: &str = include_str!("../scripts/rogue/rogue_ai_chaser.kel");
-const SRC_AI_WANDER: &str = include_str!("../scripts/rogue/rogue_ai_wander.kel");
-const SRC_AI_SLEEPER: &str = include_str!("../scripts/rogue/rogue_ai_sleeper.kel");
-const SRC_AI_RANGED: &str = include_str!("../scripts/rogue/rogue_ai_ranged.kel");
-const SRC_AI_FAST: &str = include_str!("../scripts/rogue/rogue_ai_fast.kel");
-const SRC_AI_SMART: &str = include_str!("../scripts/rogue/rogue_ai_smart.kel");
-const SRC_AI_BOSS: &str = include_str!("../scripts/rogue/rogue_ai_boss.kel");
-const SRC_AI_TRACKER: &str = include_str!("../scripts/rogue/rogue_ai_tracker.kel");
-const SRC_AI_HUNTER: &str = include_str!("../scripts/rogue/rogue_ai_hunter.kel");
-const SRC_ITEM_POTION: &str = include_str!("../scripts/rogue/rogue_item_potion.kel");
-const SRC_ITEM_SCROLL: &str = include_str!("../scripts/rogue/rogue_item_scroll.kel");
-const SRC_GAME: &str = include_str!("../scripts/rogue/rogue_game.kel");
-const SRC_PLAYER_AI: &str = include_str!("../scripts/rogue/rogue_player_ai.kel");
-const SRC_COMBAT: &str = include_str!("../scripts/rogue/rogue_combat.kel");
-const SRC_BOOK_KEEPING: &str = include_str!("../scripts/rogue/rogue_book_keeping.kel");
-const SRC_PICKUP: &str = include_str!("../scripts/rogue/rogue_pickup.kel");
-const SRC_MOVE_RESOLVE: &str = include_str!("../scripts/rogue/rogue_move_resolve.kel");
+/// Embedded script sources, keyed by filename. The startup path
+/// looks scripts up here; the hot-reload path reads the same
+/// filenames from disk. Adding a new script means adding one
+/// row to this table and one field to [`AiModules`] (or
+/// referencing it directly for the standalone dungen and game
+/// scripts).
+const EMBEDDED: &[(&str, &str)] = &[
+    ("rogue_dungen.kel", include_str!("../scripts/rogue/rogue_dungen.kel")),
+    ("rogue_ai_idle.kel", include_str!("../scripts/rogue/rogue_ai_idle.kel")),
+    ("rogue_ai_chaser.kel", include_str!("../scripts/rogue/rogue_ai_chaser.kel")),
+    ("rogue_ai_wander.kel", include_str!("../scripts/rogue/rogue_ai_wander.kel")),
+    ("rogue_ai_sleeper.kel", include_str!("../scripts/rogue/rogue_ai_sleeper.kel")),
+    ("rogue_ai_ranged.kel", include_str!("../scripts/rogue/rogue_ai_ranged.kel")),
+    ("rogue_ai_fast.kel", include_str!("../scripts/rogue/rogue_ai_fast.kel")),
+    ("rogue_ai_smart.kel", include_str!("../scripts/rogue/rogue_ai_smart.kel")),
+    ("rogue_ai_boss.kel", include_str!("../scripts/rogue/rogue_ai_boss.kel")),
+    ("rogue_ai_tracker.kel", include_str!("../scripts/rogue/rogue_ai_tracker.kel")),
+    ("rogue_ai_hunter.kel", include_str!("../scripts/rogue/rogue_ai_hunter.kel")),
+    ("rogue_item_potion.kel", include_str!("../scripts/rogue/rogue_item_potion.kel")),
+    ("rogue_item_scroll.kel", include_str!("../scripts/rogue/rogue_item_scroll.kel")),
+    ("rogue_game.kel", include_str!("../scripts/rogue/rogue_game.kel")),
+    ("rogue_player_ai.kel", include_str!("../scripts/rogue/rogue_player_ai.kel")),
+    ("rogue_combat.kel", include_str!("../scripts/rogue/rogue_combat.kel")),
+    ("rogue_book_keeping.kel", include_str!("../scripts/rogue/rogue_book_keeping.kel")),
+    ("rogue_pickup.kel", include_str!("../scripts/rogue/rogue_pickup.kel")),
+    ("rogue_move_resolve.kel", include_str!("../scripts/rogue/rogue_move_resolve.kel")),
+];
+
+fn embedded_source(name: &str) -> Result<&'static str, Box<dyn std::error::Error>> {
+    EMBEDDED
+        .iter()
+        .find(|(n, _)| *n == name)
+        .map(|(_, s)| *s)
+        .ok_or_else(|| format!("unknown embedded script: {}", name).into())
+}
+
+fn disk_source(name: &str) -> Result<String, Box<dyn std::error::Error>> {
+    let path = format!("{}/{}", SCRIPT_DIR, name);
+    std::fs::read_to_string(&path).map_err(|e| format!("read {}: {}", name, e).into())
+}
+
+fn compile_embedded(name: &str) -> Result<Module, Box<dyn std::error::Error>> {
+    build_module(embedded_source(name)?)
+}
+
+fn compile_disk(name: &str) -> Result<Module, Box<dyn std::error::Error>> {
+    build_module(&disk_source(name)?)
+}
 
 /// Directory containing the Keleusma script sources on disk.
 /// The initial load uses the `include_str!` constants above so
@@ -134,7 +161,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Build the dungeon-generation virtual machine.
     let dungen_arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
-    let dungen_module = build_module(SRC_DUNGEN)?;
+    let dungen_module = compile_embedded("rogue_dungen.kel")?;
     let mut dungen_vm =
         Vm::new(dungen_module, &dungen_arena).map_err(|e| format!("vm new: {:?}", e))?;
     init_data_slots(&mut dungen_vm);
@@ -143,25 +170,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Build the artificial-intelligence virtual-machine pool.
     // The pool owns its arenas through `Box::leak` so it can be
     // wrapped in `Arc<Mutex<_>>` and shared with native closures.
-    let ai_modules = AiModules {
-        idle: build_module(SRC_AI_IDLE)?,
-        chaser: build_module(SRC_AI_CHASER)?,
-        wander: build_module(SRC_AI_WANDER)?,
-        sleeper: build_module(SRC_AI_SLEEPER)?,
-        ranged: build_module(SRC_AI_RANGED)?,
-        fast: build_module(SRC_AI_FAST)?,
-        smart: build_module(SRC_AI_SMART)?,
-        boss: build_module(SRC_AI_BOSS)?,
-        tracker: build_module(SRC_AI_TRACKER)?,
-        hunter: build_module(SRC_AI_HUNTER)?,
-        potion: build_module(SRC_ITEM_POTION)?,
-        scroll: build_module(SRC_ITEM_SCROLL)?,
-        player: build_module(SRC_PLAYER_AI)?,
-        combat: build_module(SRC_COMBAT)?,
-        book_keeping: build_module(SRC_BOOK_KEEPING)?,
-        pickup: build_module(SRC_PICKUP)?,
-        move_resolve: build_module(SRC_MOVE_RESOLVE)?,
-    };
+    let ai_modules = AiModules::build(compile_embedded)?;
     // The pool wraps non-Send virtual machines, but the example
     // is single-threaded so the `Arc<Mutex<_>>` is safe in
     // practice. The lint is acknowledged with an `allow`.
@@ -173,7 +182,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Its natives drive per-monster artificial-intelligence
     // dispatch through the shared `AiPool` handle.
     let game_arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
-    let game_module = build_module(SRC_GAME)?;
+    let game_module = compile_embedded("rogue_game.kel")?;
     let mut game_vm = Vm::new(game_module, &game_arena).map_err(|e| format!("vm new: {:?}", e))?;
     init_data_slots(&mut game_vm);
     natives::register_game_natives(&mut game_vm, &world, &ai_pool);
@@ -384,72 +393,25 @@ fn reload_scripts<'a, 'd>(
 ) where
     'd: 'a,
 {
-    let names = [
-        "rogue_dungen.kel",
-        "rogue_ai_idle.kel",
-        "rogue_ai_chaser.kel",
-        "rogue_ai_wander.kel",
-        "rogue_ai_sleeper.kel",
-        "rogue_ai_ranged.kel",
-        "rogue_ai_fast.kel",
-        "rogue_ai_smart.kel",
-        "rogue_ai_boss.kel",
-        "rogue_ai_tracker.kel",
-        "rogue_ai_hunter.kel",
-        "rogue_item_potion.kel",
-        "rogue_item_scroll.kel",
-        "rogue_player_ai.kel",
-        "rogue_combat.kel",
-        "rogue_book_keeping.kel",
-        "rogue_pickup.kel",
-        "rogue_move_resolve.kel",
-    ];
-    let mut sources = Vec::with_capacity(names.len());
-    for name in names {
-        let path = format!("{}/{}", SCRIPT_DIR, name);
-        match std::fs::read_to_string(&path) {
-            Ok(s) => sources.push(s),
-            Err(e) => {
-                let mut w = world.lock().unwrap();
-                w.push_message(format!("Reload failed: cannot read {}. {}", name, e));
-                return;
-            }
+    let dungen_module = match compile_disk("rogue_dungen.kel") {
+        Ok(m) => m,
+        Err(e) => {
+            world
+                .lock()
+                .unwrap()
+                .push_message(format!("Reload failed: {}", e));
+            return;
         }
-    }
-    let mut modules = Vec::with_capacity(names.len());
-    for (i, src) in sources.iter().enumerate() {
-        match build_module(src) {
-            Ok(m) => modules.push(m),
-            Err(e) => {
-                let mut w = world.lock().unwrap();
-                w.push_message(format!(
-                    "Reload failed: {} did not compile. {}",
-                    names[i], e
-                ));
-                return;
-            }
+    };
+    let ai_modules = match AiModules::build(compile_disk) {
+        Ok(m) => m,
+        Err(e) => {
+            world
+                .lock()
+                .unwrap()
+                .push_message(format!("Reload failed: {}", e));
+            return;
         }
-    }
-    let mut drain = modules.into_iter();
-    let dungen_module = drain.next().unwrap();
-    let ai_modules = AiModules {
-        idle: drain.next().unwrap(),
-        chaser: drain.next().unwrap(),
-        wander: drain.next().unwrap(),
-        sleeper: drain.next().unwrap(),
-        ranged: drain.next().unwrap(),
-        fast: drain.next().unwrap(),
-        smart: drain.next().unwrap(),
-        boss: drain.next().unwrap(),
-        tracker: drain.next().unwrap(),
-        hunter: drain.next().unwrap(),
-        potion: drain.next().unwrap(),
-        scroll: drain.next().unwrap(),
-        player: drain.next().unwrap(),
-        combat: drain.next().unwrap(),
-        book_keeping: drain.next().unwrap(),
-        pickup: drain.next().unwrap(),
-        move_resolve: drain.next().unwrap(),
     };
 
     // Swap the dungen virtual machine. The new module replaces
@@ -458,8 +420,10 @@ fn reload_scripts<'a, 'd>(
     let new_dungen = match Vm::new(dungen_module, dungen_arena) {
         Ok(vm) => vm,
         Err(e) => {
-            let mut w = world.lock().unwrap();
-            w.push_message(format!("Reload failed: dungen verify error. {:?}", e));
+            world
+                .lock()
+                .unwrap()
+                .push_message(format!("Reload failed: dungen verify error. {:?}", e));
             return;
         }
     };
@@ -469,17 +433,18 @@ fn reload_scripts<'a, 'd>(
 
     // Swap every artificial-intelligence and item virtual
     // machine.
-    {
-        let mut pool = ai_pool.lock().unwrap();
-        if let Err(e) = pool.reload(ai_modules, world) {
-            let mut w = world.lock().unwrap();
-            w.push_message(format!("Reload partial: {}", e));
-            return;
-        }
+    if let Err(e) = ai_pool.lock().unwrap().reload(ai_modules, world) {
+        world
+            .lock()
+            .unwrap()
+            .push_message(format!("Reload partial: {}", e));
+        return;
     }
 
-    let mut w = world.lock().unwrap();
-    w.push_message(String::from("Scripts reloaded from disk."));
+    world
+        .lock()
+        .unwrap()
+        .push_message(String::from("Scripts reloaded from disk."));
 }
 
 /// Advance the player to the next floor. Level up first, then

@@ -195,16 +195,7 @@ impl AiPool {
         my: i32,
         cmd: i64,
     ) -> Result<AiAction, Box<dyn std::error::Error>> {
-        let args = [
-            Value::Int(mx as i64),
-            Value::Int(my as i64),
-            Value::Int(cmd),
-        ];
-        let r = self
-            .player
-            .call(&args)
-            .map_err(|e| format!("player vm: {:?}", e))?;
-        let t = unpack_finished_ints(r, "player", 3)?;
+        let t = call_pure_ints(&mut self.player, "player", &[mx as i64, my as i64, cmd], 3)?;
         Ok(decode_action(t[0], t[1], t[2]))
     }
 
@@ -232,17 +223,7 @@ impl AiPool {
         max_hp: i64,
         hunger: i64,
     ) -> Result<(i64, i64), Box<dyn std::error::Error>> {
-        let args = [
-            Value::Int(turn),
-            Value::Int(hp),
-            Value::Int(max_hp),
-            Value::Int(hunger),
-        ];
-        let r = self
-            .book_keeping
-            .call(&args)
-            .map_err(|e| format!("book vm: {:?}", e))?;
-        let t = unpack_finished_ints(r, "book", 2)?;
+        let t = call_pure_ints(&mut self.book_keeping, "book", &[turn, hp, max_hp, hunger], 2)?;
         Ok((t[0], t[1]))
     }
 
@@ -256,17 +237,11 @@ impl AiPool {
         current_value: i64,
         slot_full: i64,
     ) -> Result<i64, Box<dyn std::error::Error>> {
-        let args = [
-            Value::Int(item_kind),
-            Value::Int(new_value),
-            Value::Int(current_value),
-            Value::Int(slot_full),
-        ];
-        let r = self
-            .pickup
-            .call(&args)
-            .map_err(|e| format!("pickup vm: {:?}", e))?;
-        unpack_finished_int(r, "pickup")
+        call_pure_int(
+            &mut self.pickup,
+            "pickup",
+            &[item_kind, new_value, current_value, slot_full],
+        )
     }
 
     /// Invoke the move-resolution virtual machine. Returns
@@ -276,12 +251,7 @@ impl AiPool {
         tile: i64,
         monster_at_target: i64,
     ) -> Result<i64, Box<dyn std::error::Error>> {
-        let args = [Value::Int(tile), Value::Int(monster_at_target)];
-        let r = self
-            .move_resolve
-            .call(&args)
-            .map_err(|e| format!("move vm: {:?}", e))?;
-        unpack_finished_int(r, "move")
+        call_pure_int(&mut self.move_resolve, "move", &[tile, monster_at_target])
     }
 
     /// Invoke the combat virtual machine. Returns `(hit_kind,
@@ -294,18 +264,18 @@ impl AiPool {
         defender_armor: i64,
         roll: i64,
     ) -> Result<(i64, i64), Box<dyn std::error::Error>> {
-        let args = [
-            Value::Int(attacker_skill),
-            Value::Int(attacker_damage),
-            Value::Int(defender_evasion),
-            Value::Int(defender_armor),
-            Value::Int(roll),
-        ];
-        let r = self
-            .combat
-            .call(&args)
-            .map_err(|e| format!("combat vm: {:?}", e))?;
-        let t = unpack_finished_ints(r, "combat", 2)?;
+        let t = call_pure_ints(
+            &mut self.combat,
+            "combat",
+            &[
+                attacker_skill,
+                attacker_damage,
+                defender_evasion,
+                defender_armor,
+                roll,
+            ],
+            2,
+        )?;
         Ok((t[0], t[1]))
     }
 
@@ -318,12 +288,7 @@ impl AiPool {
         hp: i64,
         max_hp: i64,
     ) -> Result<EffectTuple, Box<dyn std::error::Error>> {
-        let args = [Value::Int(effect), Value::Int(hp), Value::Int(max_hp)];
-        let result = self
-            .potion
-            .call(&args)
-            .map_err(|e| format!("potion vm: {:?}", e))?;
-        unpack_5_tuple(result)
+        call_pure_5(&mut self.potion, "potion", &[effect, hp, max_hp])
     }
 
     /// Invoke the scroll-effect virtual machine.
@@ -331,12 +296,7 @@ impl AiPool {
         &mut self,
         effect: i64,
     ) -> Result<EffectTuple, Box<dyn std::error::Error>> {
-        let args = [Value::Int(effect)];
-        let result = self
-            .scroll
-            .call(&args)
-            .map_err(|e| format!("scroll vm: {:?}", e))?;
-        unpack_5_tuple(result)
+        call_pure_5(&mut self.scroll, "scroll", &[effect])
     }
 
     pub fn vm_for(&mut self, ai: AiKind) -> &mut Vm<'static, 'static> {
@@ -505,6 +465,44 @@ fn unpack_5_tuple(result: VmState) -> Result<EffectTuple, Box<dyn std::error::Er
     }
 }
 
+/// Call a pure-function virtual machine with integer arguments
+/// and return its raw `VmState`. Used by the typed wrappers
+/// below to share the value-wrap, call, and error-format step.
+fn call_pure(
+    vm: &mut Vm<'static, 'static>,
+    name: &str,
+    args: &[i64],
+) -> Result<VmState, Box<dyn std::error::Error>> {
+    let values: Vec<Value> = args.iter().map(|n| Value::Int(*n)).collect();
+    vm.call(&values)
+        .map_err(|e| format!("{} vm: {:?}", name, e).into())
+}
+
+fn call_pure_int(
+    vm: &mut Vm<'static, 'static>,
+    name: &str,
+    args: &[i64],
+) -> Result<i64, Box<dyn std::error::Error>> {
+    unpack_finished_int(call_pure(vm, name, args)?, name)
+}
+
+fn call_pure_ints(
+    vm: &mut Vm<'static, 'static>,
+    name: &str,
+    args: &[i64],
+    n: usize,
+) -> Result<Vec<i64>, Box<dyn std::error::Error>> {
+    unpack_finished_ints(call_pure(vm, name, args)?, name, n)
+}
+
+fn call_pure_5(
+    vm: &mut Vm<'static, 'static>,
+    name: &str,
+    args: &[i64],
+) -> Result<EffectTuple, Box<dyn std::error::Error>> {
+    unpack_5_tuple(call_pure(vm, name, args)?)
+}
+
 /// Leak a fresh arena so the host can reference it for the
 /// remaining lifetime of the program. The host needs `'static`
 /// references because the pool is wrapped in `Arc<Mutex<>>` and
@@ -533,6 +531,39 @@ pub struct AiModules {
     pub book_keeping: Module,
     pub pickup: Module,
     pub move_resolve: Module,
+}
+
+impl AiModules {
+    /// Build the full set of artificial-intelligence and item
+    /// modules using a caller-supplied compilation step. The
+    /// closure receives a script filename and returns the
+    /// compiled `Module` or an error. The same constructor
+    /// drives both startup (compiling embedded `include_str!`
+    /// sources) and hot reload (reading sources from disk).
+    pub fn build<F>(mut compile: F) -> Result<Self, Box<dyn std::error::Error>>
+    where
+        F: FnMut(&str) -> Result<Module, Box<dyn std::error::Error>>,
+    {
+        Ok(Self {
+            idle: compile("rogue_ai_idle.kel")?,
+            chaser: compile("rogue_ai_chaser.kel")?,
+            wander: compile("rogue_ai_wander.kel")?,
+            sleeper: compile("rogue_ai_sleeper.kel")?,
+            ranged: compile("rogue_ai_ranged.kel")?,
+            fast: compile("rogue_ai_fast.kel")?,
+            smart: compile("rogue_ai_smart.kel")?,
+            boss: compile("rogue_ai_boss.kel")?,
+            tracker: compile("rogue_ai_tracker.kel")?,
+            hunter: compile("rogue_ai_hunter.kel")?,
+            potion: compile("rogue_item_potion.kel")?,
+            scroll: compile("rogue_item_scroll.kel")?,
+            player: compile("rogue_player_ai.kel")?,
+            combat: compile("rogue_combat.kel")?,
+            book_keeping: compile("rogue_book_keeping.kel")?,
+            pickup: compile("rogue_pickup.kel")?,
+            move_resolve: compile("rogue_move_resolve.kel")?,
+        })
+    }
 }
 
 fn build_vm(

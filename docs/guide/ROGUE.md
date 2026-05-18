@@ -233,13 +233,13 @@ The high-level shape.
 
 1. Call `host::clear_floor` to reset the map and entity lists.
 2. Place eight rectangular rooms at random positions. Room dimensions are between four and nine tiles per axis.
-3. Build a spanning tree of corridors. Each room carries a connectivity flag in the data segment. Room zero is flagged at the start. Each of the seven subsequent iterations picks a uniformly chosen connected room as the source and a uniformly chosen unconnected room as the target, digs an L-shaped corridor between their centres, and flags the target. After seven iterations every room is reachable from room zero.
+3. Connect consecutive rooms in placement order with an L-shaped corridor between their centres. After seven corridors every room is reachable from room zero.
 4. Place the player at room zero's centre.
 5. Place stairs down at room seven's centre. On floor one hundred, place the exit tile instead.
 6. Spawn monsters per the floor distribution. Half are the floor's favourite kind; the other half draw from the previous-floor pool.
 7. Spawn items. Three to five food, two to four potions, two to four scrolls, zero to one weapon and armor upgrade, four to seven gold piles.
 
-The spanning-tree shape is a deliberate refinement over a strict `R[i] -> R[i+1]` chain. The chain was fragile under random room placement because the room-carving step used to write walls over the new room's entire rectangle before carving the interior. When a later rectangle overlapped an earlier room, the destructive wall-fill subdivided the earlier room's floor and the chain corridor could only breach the new wall at one cell, leaving floor pockets unreachable. The current `carve_room` only writes the interior as floor; it relies on the solid wall left by `host::clear_floor` for the room's outline. Two overlapping rooms now merge their floors into one connected region rather than fighting over the overlap cells. The spanning-tree corridor pass complements this by spreading breaches across a random topology rather than concentrating them on a single sequential chain.
+The chain is correctness-safe because `carve_room` only writes the interior as floor and relies on the solid wall left by `host::clear_floor` for the room's outline. Two overlapping rooms merge their floors into one connected region rather than fighting over the overlap cells. An earlier version of the carver wrote walls over the entire room rectangle before carving the interior, which would subdivide overlapping rooms and produce small unreachable pockets the chain corridor could not breach. Removing that destructive wall-fill restored connectivity at the cost of one line of code.
 
 The verifier-driven idiom. Every loop in the script uses a fixed upper bound and a conditional body so the structural verifier accepts the iteration bound. Where the script wants a dynamic count, the loop runs to the maximum possible count and the body is guarded by `if i < count`. Room storage uses fixed-size arrays declared in the data segment because the verifier rejects dynamic growth.
 
