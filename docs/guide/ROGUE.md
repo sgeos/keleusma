@@ -91,7 +91,7 @@ On death or victory the game blocks gameplay input and overlays a centred panel 
 ### Hit points, hunger, and regeneration
 
 - The player begins at twelve out of twelve hit points.
-- Hunger starts at one hundred and ticks down by one per turn. Food restores forty hunger. At hunger zero, the player loses one hit point per turn from starvation.
+- Hunger starts at one hundred and ticks down by one every two turns. Food restores forty hunger. At hunger zero, the player loses one hit point per turn from starvation.
 - The player regenerates one hit point every ten turns when hunger is positive and current hit points are below maximum.
 
 ### Levelling
@@ -211,7 +211,7 @@ The four natives the script consumes.
 | `host::run_player_turn(cmd)` | Dispatch the player artificial-intelligence script with the player's current position and the supplied keypress, then route the returned action through the same per-actor resolver that handles monster actions. Returns 0 to continue the turn, 1 if stairs were descended, 2 if the exit on floor one hundred was reached, 3 if the player died. |
 | `host::monster_count()` | Number of monsters currently on the floor. |
 | `host::run_monster_ai(idx)` | Dispatch the artificial-intelligence for monster `idx` and apply the returned action. Internally handles the Fast archetype's two-action turn. |
-| `host::tick_book_keeping()` | Advance hunger by one, apply starvation damage if hungry, regenerate one hit point if conditions allow, and recompute the field of view. Returns 0 if alive, 3 if the player died from starvation. |
+| `host::tick_book_keeping()` | Advance hunger by one on every second turn, apply starvation damage if hungry, regenerate one hit point if conditions allow, and recompute the field of view. Returns 0 if alive, 3 if the player died from starvation. |
 
 The command codes the script and the host agree on.
 
@@ -412,7 +412,7 @@ Each exercise lists what to change, where to change it, and a verification sugge
 
 **Exercise 1.1.** Raise the player's starting hit points from twelve to twenty. Locate the change site in `examples/rogue/world.rs` and start a fresh run to confirm the head-up display draws twenty pips. Hypothesis to verify. The hit-point gauge layout still fits because the head-up display row spans the full window width.
 
-**Exercise 1.2.** Make hunger ticks half as fast. Hunger should fall by one every two turns instead of one per turn. Find the tick site in `examples/rogue/natives.rs::tick_book_keeping`. Inference about the gameplay effect. Players will need food less often, so the food spawn rate in the dungeon generator could be reduced for balance. The exercise is to make the hunger change first and then judge whether food density needs adjustment.
+**Exercise 1.2.** Tune the hunger cadence. The shipped configuration ticks hunger down by one every two turns. Find the tick site in `examples/scripts/rogue/rogue_book_keeping.kel` and try faster (every turn) or slower (every three turns) cadences. Observe the run-length effect at floor counts of ten, twenty, and fifty. Hypothesis. Faster cadence forces aggressive monster killing for corpses; slower cadence makes hunger irrelevant. Pick the cadence that produces the most interesting decisions about when to fight, when to flee, and when to eat a poisonous corpse.
 
 **Exercise 1.3.** Add a ninth weapon tier called "soulrender" with damage forty-two. The weapons table lives in `examples/rogue/items.rs`. Confirm that the dungeon generator's tier-clamp expression still places it correctly on the deepest floors.
 
@@ -525,7 +525,7 @@ See [Reading the item-effect scripts](#reading-the-item-effect-scripts) above fo
 | Field-of-view radius | Eight tiles |
 | Starting hit points | Twelve |
 | Starting hunger | One hundred |
-| Hunger tick | Minus one per turn |
+| Hunger tick | Minus one every two turns |
 | Food restoration | Forty hunger |
 | Hit-point regeneration | One per ten turns when hunger is positive |
 | Starvation damage | One per turn at hunger zero |

@@ -11,7 +11,7 @@ use sdl3::video::{Window, WindowContext};
 
 use crate::SPRITE_PX as TILE_PX;
 use crate::bestiary::{self, Shape};
-use crate::items::{self, ItemKind};
+use crate::items::ItemKind;
 use crate::world::Tile;
 
 /// Static-tile sprite kinds. The map renderer indexes this set.
@@ -499,11 +499,4 @@ fn draw_scroll(c: &mut Canvas<Window>) {
     let _ = c.fill_rect(Rect::new(cx - 5, cy - 2, 10, 1));
     let _ = c.fill_rect(Rect::new(cx - 5, cy, 8, 1));
     let _ = c.fill_rect(Rect::new(cx - 5, cy + 2, 10, 1));
-}
-
-// Suppress an unused-import warning when items::POTION_EFFECTS and
-// related constants are referenced indirectly via the renderer.
-#[allow(dead_code)]
-fn _items_referenced() -> usize {
-    items::WEAPONS.len() + items::ARMORS.len()
 }
