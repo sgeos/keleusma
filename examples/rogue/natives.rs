@@ -526,24 +526,32 @@ fn autopickup(w: &mut World) {
         }
         ItemKind::Weapon => {
             let new_idx = item.subtype as usize;
-            if new_idx < items::WEAPONS.len()
-                && items::WEAPONS[new_idx].damage > w.player.weapon_damage()
-            {
+            if new_idx >= items::WEAPONS.len() {
+                w.items.swap_remove(idx);
+            } else if items::WEAPONS[new_idx].damage > w.player.weapon_damage() {
                 w.items.swap_remove(idx);
                 let new_name = items::WEAPONS[new_idx].name;
                 w.player.weapon = item.subtype;
                 w.push_message(format!("You take up the {}.", new_name));
+            } else {
+                w.items.swap_remove(idx);
+                let scrap_name = items::WEAPONS[new_idx].name;
+                w.push_message(format!("You scrap the {}.", scrap_name));
             }
         }
         ItemKind::Armor => {
             let new_idx = item.subtype as usize;
-            if new_idx < items::ARMORS.len()
-                && items::ARMORS[new_idx].defense > w.player.armor_value()
-            {
+            if new_idx >= items::ARMORS.len() {
+                w.items.swap_remove(idx);
+            } else if items::ARMORS[new_idx].defense > w.player.armor_value() {
                 w.items.swap_remove(idx);
                 let new_name = items::ARMORS[new_idx].name;
                 w.player.armor = item.subtype;
                 w.push_message(format!("You don the {}.", new_name));
+            } else {
+                w.items.swap_remove(idx);
+                let scrap_name = items::ARMORS[new_idx].name;
+                w.push_message(format!("You discard the {}.", scrap_name));
             }
         }
         ItemKind::Potion => {

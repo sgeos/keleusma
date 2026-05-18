@@ -72,7 +72,9 @@ The host opens an eighty-by-twenty-four tile grid window. A head-up display row 
 | `F5` | Hot reload every Keleusma script from disk. See [Hot reload](#hot-reload). |
 | Escape | Quit the example. |
 
-There is no inventory management surface. Food eats on contact. Gold piles add to the score on contact. Weapons and armor auto-equip when an upgrade is stepped over. Potions and scrolls auto-pickup when the corresponding slot is empty. If the slot is full, a message describes the ground item by its disguised name and the held item by its disguised name.
+There is no inventory management surface. Food eats on contact. Gold piles add to the score on contact. Weapons and armor auto-equip when an upgrade is stepped over; non-upgrade weapons and armor are destroyed on contact rather than left blocking the cell. Potions and scrolls auto-pickup when the corresponding slot is empty. If the slot is full, a message describes the ground item by its disguised name and the held item by its disguised name.
+
+The head-up display shows hit points as red pips on the left, hunger as amber pips on the right, current floor depth as cyan ticks at the centre, and an icon plus tier pip strip for the equipped weapon and armor between the hit points and the floor ticks. When the player holds a potion or a scroll, the corresponding icon appears right of the floor ticks tinted by the per-run appearance colour. The tier pip strip fills one pip per gear level on a zero through nine scale.
 
 ## Gameplay rules
 

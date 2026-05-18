@@ -10,9 +10,42 @@ use sdl3::rect::Rect;
 use sdl3::render::Canvas;
 use sdl3::video::Window;
 
+use crate::items::ItemKind;
 use crate::tiles::{Sprite, TileAtlas};
 use crate::world::World;
 use crate::{HUD_PX, MAP_H, MAP_W, MSG_PX, TILE_PX};
+
+/// RGB tint applied to the potion icon in the head-up display
+/// when the player holds a potion. Indexed by the per-run
+/// `potion_appearance` shuffled mapping so the same colour
+/// always represents the same disguised identity within a run.
+const POTION_COLORS: [(u8, u8, u8); 10] = [
+    (60, 120, 220),  // blue
+    (220, 60, 60),   // red
+    (60, 200, 80),   // green
+    (220, 180, 60),  // amber
+    (180, 80, 220),  // violet
+    (220, 220, 220), // milky
+    (140, 240, 220), // fizzy
+    (110, 110, 110), // smoky
+    (180, 200, 220), // cloudy
+    (220, 60, 120),  // ruby
+];
+
+/// RGB tint applied to the scroll icon when the player holds a
+/// scroll. Indexed by the per-run `scroll_appearance` shuffle.
+const SCROLL_COLORS: [(u8, u8, u8); 10] = [
+    (240, 200, 140),
+    (240, 160, 140),
+    (240, 140, 200),
+    (220, 140, 240),
+    (160, 160, 240),
+    (140, 200, 240),
+    (140, 240, 200),
+    (160, 240, 140),
+    (240, 240, 140),
+    (240, 180, 140),
+];
 
 /// Renderer state. Empty for now. Later phases cache message-log
 /// scroll position here.
@@ -29,7 +62,7 @@ impl Renderer {
         atlas: &mut TileAtlas,
         world: &World,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        self.draw_hud(canvas, world)?;
+        self.draw_hud(canvas, atlas, world)?;
         self.draw_map(canvas, atlas, world)?;
         self.draw_items(canvas, atlas, world)?;
         self.draw_monsters(canvas, atlas, world)?;
@@ -41,6 +74,7 @@ impl Renderer {
     fn draw_hud(
         &self,
         canvas: &mut Canvas<Window>,
+        atlas: &mut TileAtlas,
         world: &World,
     ) -> Result<(), Box<dyn std::error::Error>> {
         canvas.set_draw_color(Color::RGB(16, 16, 24));
@@ -95,6 +129,96 @@ impl Renderer {
         canvas.set_draw_color(Color::RGB(120, 180, 220));
         for i in 0..f_ticks {
             let _ = canvas.fill_rect(Rect::new(f_x0 + i * 4, 4, 2, pip_h));
+        }
+
+        // Weapon and armor tier indicators. Each is a small
+        // icon followed by a thin vertical pip strip showing the
+        // current tier on a zero through nine scale.
+        let gear_y = 0_i32;
+        let weapon_icon_x = 220_i32;
+        self.draw_gear_indicator(
+            canvas,
+            atlas,
+            ItemKind::Weapon,
+            weapon_icon_x,
+            gear_y,
+            world.player.weapon as i32,
+            Color::RGB(220, 80, 60),
+        )?;
+        let armor_icon_x = weapon_icon_x + 24 + 36;
+        self.draw_gear_indicator(
+            canvas,
+            atlas,
+            ItemKind::Armor,
+            armor_icon_x,
+            gear_y,
+            world.player.armor as i32,
+            Color::RGB(140, 180, 220),
+        )?;
+
+        // Held potion and scroll icons. Each is the regular item
+        // sprite tinted by the per-run appearance colour. If the
+        // slot is empty the icon is skipped entirely.
+        let consumable_y = 0_i32;
+        let potion_x = (MAP_W as i32 * TILE_PX as i32) / 2 + 80;
+        if let Some(effect_idx) = world.player.potion_slot {
+            let appearance = world.potion_appearance[effect_idx as usize] as usize;
+            let color = POTION_COLORS[appearance % POTION_COLORS.len()];
+            let dst = Rect::new(potion_x, consumable_y, 24, 24);
+            let tex = atlas.item(ItemKind::Potion);
+            tex.set_color_mod(color.0, color.1, color.2);
+            canvas
+                .copy(tex, None, Some(dst.into()))
+                .map_err(|e| Box::<dyn std::error::Error>::from(e.to_string()))?;
+        }
+        let scroll_x = potion_x + 28;
+        if let Some(effect_idx) = world.player.scroll_slot {
+            let appearance = world.scroll_appearance[effect_idx as usize] as usize;
+            let color = SCROLL_COLORS[appearance % SCROLL_COLORS.len()];
+            let dst = Rect::new(scroll_x, consumable_y, 24, 24);
+            let tex = atlas.item(ItemKind::Scroll);
+            tex.set_color_mod(color.0, color.1, color.2);
+            canvas
+                .copy(tex, None, Some(dst.into()))
+                .map_err(|e| Box::<dyn std::error::Error>::from(e.to_string()))?;
+        }
+        Ok(())
+    }
+
+    /// Draw a gear icon and its tier pip strip. `tier` is the
+    /// zero-based subtype index. The pip strip shows ten thin
+    /// vertical lines, filled up to and including `tier`.
+    #[allow(clippy::too_many_arguments)]
+    fn draw_gear_indicator(
+        &self,
+        canvas: &mut Canvas<Window>,
+        atlas: &mut TileAtlas,
+        kind: ItemKind,
+        icon_x: i32,
+        icon_y: i32,
+        tier: i32,
+        fill_color: Color,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let dst = Rect::new(icon_x, icon_y, 24, 24);
+        let tex = atlas.item(kind);
+        tex.set_color_mod(255, 255, 255);
+        canvas
+            .copy(tex, None, Some(dst.into()))
+            .map_err(|e| Box::<dyn std::error::Error>::from(e.to_string()))?;
+        // Tier pips. Ten vertical bars, two pixels wide with one
+        // pixel gap. The bar is filled solid when its index is
+        // less than or equal to `tier`, dim otherwise.
+        let pip_x0 = icon_x + 26;
+        let pip_top = icon_y + 3;
+        let pip_h = (HUD_PX as i32 - 6) as u32;
+        for i in 0..10i32 {
+            let filled = i <= tier;
+            canvas.set_draw_color(if filled {
+                fill_color
+            } else {
+                Color::RGB(40, 40, 50)
+            });
+            let _ = canvas.fill_rect(Rect::new(pip_x0 + i * 3, pip_top, 2, pip_h));
         }
         Ok(())
     }
