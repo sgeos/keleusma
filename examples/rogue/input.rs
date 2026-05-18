@@ -17,9 +17,11 @@ pub enum Command {
 
 /// Translate a key event into a game command, or return `None`
 /// if the key is not bound. Arrow keys and the vi-style movement
-/// keys both work for movement. Greater-than triggers stairs
-/// descent. `Q` quaffs the held potion; `R` reads the held
-/// scroll. Escape quits.
+/// keys both work for movement. `Q` quaffs the held potion; `R`
+/// reads the held scroll. Escape quits. Stairs descent happens
+/// automatically when the player steps onto a stairs tile; the
+/// `Command::Descend` variant remains in the enum for scripts
+/// that emit action code three, but no keybind produces it.
 pub fn translate(keycode: Keycode) -> Option<Command> {
     match keycode {
         Keycode::Escape => Some(Command::Quit),
@@ -39,8 +41,7 @@ pub fn translate(keycode: Keycode) -> Option<Command> {
         // Wait in place.
         Keycode::Period | Keycode::Space => Some(Command::Move(0, 0)),
 
-        // Stairs descent and item use.
-        Keycode::Greater => Some(Command::Descend),
+        // Item use. Stairs descent is automatic on step.
         Keycode::Q => Some(Command::Quaff),
         Keycode::R => Some(Command::Read),
 
