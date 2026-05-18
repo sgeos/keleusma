@@ -83,9 +83,19 @@ fn fill_rect(x0: Word, y0: Word, x1: Word, y1: Word, tile: Word) -> Word {
     0
 }
 
-// Carve a room. The interior is floor; the border is wall.
+// Carve a room. The interior is floor. The border is whatever
+// the map already holds; for non-overlapping rooms that is the
+// solid wall left by `host::clear_floor`. Skipping the wall
+// fill is the key correctness property of the generator. The
+// previous implementation wrote walls over the entire room
+// rectangle before carving the interior, which destructively
+// overwrote any floor that an earlier room had placed inside
+// the new rectangle. That produced subdivided rooms whose
+// pockets the chain corridor could not reach. Under the
+// current shape, two overlapping rooms merge their floors into
+// a single connected region instead of fighting over the
+// overlap cells.
 fn carve_room(x0: Word, y0: Word, x1: Word, y1: Word) -> Word {
-    fill_rect(x0, y0, x1, y1, 1);
     fill_rect(x0 + 1, y0 + 1, x1 - 1, y1 - 1, 0);
     0
 }

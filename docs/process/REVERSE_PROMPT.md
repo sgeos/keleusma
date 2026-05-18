@@ -9,15 +9,16 @@ AI to Human communication channel.
 ## Last Updated
 
 **Date**: 2026-05-17
-**Status**: Connectivity refactor applied to the rogue example's dungeon generator. The rigid `R[i] -> R[i+1]` chain is replaced by a spanning-tree growth loop driven by per-room connectivity flags. The change addresses the operator-reported "small disconnected room" artifact observed under magic mapping.
+**Status**: Root cause of the disconnected-room artifact fixed. `carve_room` no longer writes walls over the new room's rectangle before carving the interior. Overlapping rooms now merge their floors into one connected region instead of subdividing each other.
 
 ## Completed in this session round
 
 | Directive | Resolution |
 |-----------|------------|
-| Corpse drops with bestiary-defined effects | Implemented in commit `f39e7c4`. See prior reverse prompt entry. |
-| Document loop-main reset semantics | Implemented in commit `f39e7c4`. See prior reverse prompt entry. |
-| Spanning-tree corridors with connectivity flags | The dungeon generator script gains a `connected: [Word; 8]` array plus two scratch slots in the data segment. Three helper functions, `count_with_flag`, `pick_with_flag`, and `random_with_flag`, walk the flag array. The `fn main` body resets all flags to zero, flags room zero, and then runs seven iterations of the spanning-tree growth loop. Each iteration draws a corridor from a uniformly chosen connected source to a uniformly chosen unconnected target and flags the target. After seven iterations every room is reachable from room zero. The change ships as a script-only refactor; the host natives are unchanged. The `dungen_runs_floor_1` and `dungen_runs_floor_100_places_exit` integration tests both pass against the new shape. |
+| Corpse drops with bestiary-defined effects | Commit `f39e7c4`. |
+| Document loop-main reset semantics | Commit `f39e7c4`. |
+| Spanning-tree corridors with connectivity flags | Commit `8450abc`. Reduces but does not eliminate the donut-pocket failure mode. |
+| Carve floor only, no destructive wall-fill | Current commit. The first line of the prior `carve_room`, `fill_rect(x0, y0, x1, y1, 1)`, is removed. Rooms now rely on the solid wall left by `host::clear_floor` for their outlines. Two overlapping rooms merge their interiors into one connected floor region. The chain-corridor failure mode that this fix targets, in which a later room's wall fill subdivides an earlier room's floor, is no longer possible because the wall fill no longer happens. |
 
 ## Verification matrix
 
@@ -30,14 +31,14 @@ cargo build --example rogue --features sdl3-example,text                      # 
 
 ## Notes
 
-- The diagnosis of the operator-reported disconnected-room artifact is that random room placement allows overlap. When a later room is laid down, its perimeter wall can carve a wall line through an earlier room's floor, subdividing the earlier room into a connected island around the new stored centre and a separated pocket. The chain corridor breaches the new wall at exactly one cell (the stored centre), so the pocket can remain unreachable from the player. The spanning-tree refactor does not eliminate the underlying overlap; it spreads breaches across a random topology so the probability of any single pocket being isolated is reduced. A complete fix would also reject overlapping placements at room-generation time or run a connectivity check at end of generation and dig extra corridors to reach unflagged regions. Both options are tractable follow-ups if the artifact persists in practice.
-- The `connected` flag is stored in the data segment. Because the dungeon generator is `fn main` and the data segment persists across calls, the flags must be explicitly reset at the top of every call. The script does this in the room-placement loop so the cost is hidden in an existing pass.
-- The `random_with_flag(0)` and `random_with_flag(1)` helpers use the same scratch slots `state.scratch_idx` and `state.scratch_pick`. They are not reentrant. The current call shape is sequential, so this is safe; a future refactor that interleaves the helpers must allocate distinct scratch slots.
+- The fix is a one-line deletion in the dungeon generator script. The host natives are unchanged.
+- The spanning-tree corridor pass from commit `8450abc` is retained. It is no longer strictly necessary for connectivity but it improves visual variety and makes the generator robust to future changes that might reintroduce destructive carving.
+- The integration tests pass on the new shape. The `dungen_runs_floor_1` test exercises `map_set` more than one hundred times, which still holds because the corridor pass writes floor along the L-shapes regardless of whether the rooms wrote walls first.
 
 ## Intended Next Step
 
-Awaiting operator prompt. Candidate next directions:
+Awaiting operator prompt. With the root cause fixed, the remaining backlog around the dungeon generator is purely aesthetic or efficiency-oriented:
 
-1. **Add a connectivity post-pass to the dungeon generator.** Flood-fill from room zero's centre at the end of generation. For any unreached floor region, dig a straight corridor from a reached cell to the region. This is a defensive measure against rare overlap configurations that the spanning-tree shape still permits.
-2. **Reject overlapping room placements.** Augment `place_room` with a rejection sampler that retries up to N times before accepting. Requires no host-side changes. Eliminates the donut-pocket artifact entirely at the cost of slightly less variable layouts.
-3. **Surface corpse messaging variety.** The current "You eat the rat corpse" message reads the same for every kind. A second message tier keyed on the bestiary shape could replace "eat" with shape-appropriate verbs ("gnaw on the insect", "tear off a chunk of the dragon", "swallow the slime essence").
+1. **Optional. Remove the spanning-tree pass.** The chain `R[i] -> R[i+1]` is now correct because overlapping rooms no longer subdivide each other. The spanning-tree pass is a defence-in-depth measure with a small data-segment cost. Keeping it gives more varied corridor topology; removing it simplifies the script back to roughly its prior shape.
+2. **Optional. Smarter corridor routing.** Bend the L-shape's horizontal-or-vertical-first choice randomly so the L direction varies. Cheap; one extra `rng_range` call per corridor.
+3. **Optional. Door tile placement at corridor-room boundaries.** Identify where a corridor enters a room and place a `DoorClosed` tile at that cell. Adds visual interest and gives the player something to interact with.
