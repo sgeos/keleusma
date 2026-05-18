@@ -901,7 +901,7 @@ fn register_entities(vm: &mut Vm, world: &WorldHandle) {
             let kind = as_i64(&args[0])? as u8;
             let x = as_i64(&args[1])? as i32;
             let y = as_i64(&args[2])? as i32;
-            if (kind as usize) >= crate::bestiary::BESTIARY.len() {
+            if (kind as usize) >= crate::bestiary::MONSTER_COUNT {
                 return Err(VmError::NativeError(format!(
                     "host::spawn_monster: kind {} out of range",
                     kind

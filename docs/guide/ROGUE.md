@@ -17,10 +17,11 @@
 11. [Reading the combat script](#reading-the-combat-script)
 12. [Reading the artificial-intelligence archetypes](#reading-the-artificial-intelligence-archetypes)
 13. [Reading the item-effect scripts](#reading-the-item-effect-scripts)
-14. [Reading the consume and descend scripts](#reading-the-consume-and-descend-scripts)
-15. [Exercises for the reader](#exercises-for-the-reader)
-16. [Capstone projects](#capstone-projects)
-17. [Reference tables](#reference-tables)
+14. [Reading the bestiary script](#reading-the-bestiary-script)
+15. [Reading the consume and descend scripts](#reading-the-consume-and-descend-scripts)
+16. [Exercises for the reader](#exercises-for-the-reader)
+17. [Capstone projects](#capstone-projects)
+18. [Reference tables](#reference-tables)
 
 ## How this document relates to the source
 
@@ -133,7 +134,7 @@ The host owns all mutable game state. The map, the player, the monster table, th
         | per-virtual-machine `register_native_closure` and `vm.call(...)`
         v
 +------------------------------------------+
-|  Twenty-two Keleusma virtual machines    |
+|  Twenty-three Keleusma virtual machines  |
 |  - rogue_game.kel          (loop main)   |
 |  - rogue_dungen.kel        (one-shot)    |
 |  - rogue_player_ai.kel     (pure fn)     |
@@ -156,6 +157,7 @@ The host owns all mutable game state. The map, the player, the monster table, th
 |  - rogue_descend.kel       (pure fn)     |
 |  - rogue_consume.kel       (uses natives)|
 |  - rogue_scroll_apply.kel  (uses natives)|
+|  - rogue_bestiary.kel      (startup load)|
 +------------------------------------------+
 ```
 
@@ -407,6 +409,47 @@ Status codes.
 The split between effect logic in script and status action in host is deliberate. Scripts describe what the effect produces. The host applies the engine-specific changes. Effects with delta-only behaviour stay in script. Effects that touch the field-of-view buffers, the random-number generator, or the equipment tables route through the status-action mechanism.
 
 The status-action mechanism itself runs in a second script. `rogue_scroll_apply.kel` takes the `(status_code, status_arg)` pair and dispatches to one of eight fine-grained natives: `host::set_explored_all`, `host::set_explored_radius`, `host::teleport_player_random`, `host::identify_all_potions`, `host::change_weapon_tier`, `host::change_armor_tier`, `host::sense_monsters`, and `host::scroll_placeholder`. Each native applies its world mutation and pushes its message. The split means modders can change which status code triggers which native, add new status codes, or compose multiple natives per status code, all by editing the script. The host's natives stay small and orthogonal.
+
+## Reading the bestiary script
+
+`rogue_bestiary.kel` is the data half of the monster system. The host runs this script once per monster id at startup and reads the resolved values from the script's data segment. The result is cached behind a `OnceLock` in `examples/rogue/bestiary.rs` so that runtime accesses through `bestiary::kind(idx)` are plain reads against a `Vec<MonsterKind>`.
+
+The script demonstrates the "loader function plus large constant table" pattern for Keleusma. The data segment declares one field per output column (id, shape, three primary colour channels, three accent colour channels, five combat stats, ai archetype, first floor, and score). One hundred multi-headed `fill(N)` functions write the constants for entry `N` directly into the data segment. The `fn main(n)` entry point resolves negative indices to `MONSTER_COUNT + n` and dispatches to the matching `fill` head.
+
+The negative-index convention lets the host discover the table size with a single call. Calling `fn main(-1)` writes the last entry into the data segment; reading the `id` slot yields `MONSTER_COUNT - 1`. The host asserts that the recovered count matches the parallel `MONSTER_NAMES` array.
+
+```keleusma
+data state {
+    id: Word,
+    shape: Word,
+    primary_r: Word, primary_g: Word, primary_b: Word,
+    accent_r: Word, accent_g: Word, accent_b: Word,
+    max_hp: Word, skill: Word, evasion: Word, damage: Word, armor: Word,
+    ai: Word,
+    first_floor: Word,
+    score: Word,
+}
+
+fn main(n: Word) -> Word {
+    let count = 100;
+    let i = if n < 0 { count + n } else { n };
+    fill(i);
+    0
+}
+
+fn fill(0) -> Word {
+    state.id = 0; state.shape = 0;
+    state.primary_r = 120; state.primary_g = 90; state.primary_b = 60;
+    ...
+    0
+}
+// ninety-nine more heads
+fn fill(_n: Word) -> Word { 0 }
+```
+
+Monster names stay on the host side in a parallel `MONSTER_NAMES: [&str; 100]` constant array because Keleusma's data segment does not currently support inline strings. The host's `MONSTER_COUNT` constant mirrors the script's `count` literal; the startup assertion catches any drift between the two.
+
+The shipped script weighs in at two hundred and fifty lines for one hundred entries because each entry compresses to one Keleusma line. The prior Rust `MonsterKind` struct-literal form took fourteen lines per entry. The migration deletes roughly twelve hundred host lines and adds two hundred and fifty script lines plus the hundred-entry name array. Net delta on this round of work is a nine-hundred-line reduction.
 
 ## Reading the consume and descend scripts
 

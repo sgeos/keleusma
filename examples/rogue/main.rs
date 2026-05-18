@@ -125,6 +125,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // through Arc<Mutex<_>>.
     let world: natives::WorldHandle = Arc::new(Mutex::new(World::new()));
 
+    // Load the bestiary by running `rogue_bestiary.kel` once
+    // per monster id and reading the data segment. The
+    // resolved table is installed in the global `OnceLock`
+    // behind `bestiary::install` and read through
+    // `bestiary::kind` thereafter.
+    load_bestiary()?;
+
     // Build the dungeon-generation virtual machine.
     let dungen_arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
     let dungen_module = compile_embedded("rogue_dungen.kel")?;
@@ -303,6 +310,79 @@ where
     world.lock().unwrap().recompute_fov();
     ai_pool.lock().unwrap().reset_loop_main_data();
     Ok(())
+}
+
+/// Load the bestiary from the Keleusma script. The script
+/// owns the per-kind numeric data; the host owns the parallel
+/// name table. Loading is a single startup pass that calls the
+/// script once per monster id and reads the data segment.
+///
+/// The discovery step calls the script with `-1` first to read
+/// the last entry's `id` field, which equals
+/// `MONSTER_COUNT - 1`. This demonstrates the negative-index
+/// convention even though `bestiary::MONSTER_NAMES.len()`
+/// happens to mirror the value on the host side; an assertion
+/// catches drift between the script and the name table.
+fn load_bestiary() -> Result<(), Box<dyn std::error::Error>> {
+    let arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+    let module = compile_embedded("rogue_bestiary.kel")?;
+    let mut vm = Vm::new(module, &arena).map_err(|e| format!("bestiary vm new: {:?}", e))?;
+    zero_data_slots(&mut vm);
+    // Discovery: ask the script for the last entry.
+    vm.call(&[Value::Int(-1)])
+        .map_err(|e| format!("bestiary discovery: {:?}", e))?;
+    let last_id = read_data_int(&vm, 0)? as usize;
+    let count = last_id + 1;
+    assert_eq!(
+        count,
+        bestiary::MONSTER_NAMES.len(),
+        "bestiary script reports {} entries but MONSTER_NAMES has {}",
+        count,
+        bestiary::MONSTER_NAMES.len()
+    );
+    // Fill the runtime table.
+    let mut table = Vec::with_capacity(count);
+    for i in 0..count {
+        vm.call(&[Value::Int(i as i64)])
+            .map_err(|e| format!("bestiary entry {}: {:?}", i, e))?;
+        table.push(read_bestiary_entry(&vm, i)?);
+    }
+    bestiary::install(table);
+    Ok(())
+}
+
+fn read_data_int(vm: &Vm, slot: usize) -> Result<i64, Box<dyn std::error::Error>> {
+    match vm
+        .get_data(slot)
+        .map_err(|e| format!("get_data({}): {:?}", slot, e))?
+    {
+        Value::Int(n) => Ok(*n),
+        other => Err(format!("expected Int at slot {}, got {:?}", slot, other).into()),
+    }
+}
+
+fn read_bestiary_entry(
+    vm: &Vm,
+    id: usize,
+) -> Result<bestiary::MonsterKind, Box<dyn std::error::Error>> {
+    // Slot order mirrors the data-segment declaration in
+    // `rogue_bestiary.kel`. The host reads each slot, decodes
+    // enums by ordinal, and copies the rest as integers.
+    let r = |s| read_data_int(vm, s);
+    Ok(bestiary::MonsterKind {
+        name: bestiary::MONSTER_NAMES[id],
+        shape: bestiary::Shape::from_ord(r(1)?),
+        primary: (r(2)? as u8, r(3)? as u8, r(4)? as u8),
+        accent: (r(5)? as u8, r(6)? as u8, r(7)? as u8),
+        max_hp: r(8)? as i32,
+        skill: r(9)? as i32,
+        evasion: r(10)? as i32,
+        damage: r(11)? as i32,
+        armor: r(12)? as i32,
+        ai: bestiary::AiKind::from_ord(r(13)?),
+        first_floor: r(14)? as u32,
+        score: r(15)? as u32,
+    })
 }
 
 fn run_dungen(vm: &mut Vm, floor: i64) -> Result<(), Box<dyn std::error::Error>> {

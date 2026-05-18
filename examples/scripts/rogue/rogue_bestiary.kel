@@ -1,0 +1,250 @@
+// Bestiary loader. Pure function. The host calls this script
+// once per monster kind at startup to fill the runtime monster
+// table. Each call writes one entry into the script's data
+// segment; the host reads the segment after the call.
+//
+// Inputs.
+//   n  Monster index in `0..MONSTER_COUNT`. Negative values
+//      index from the end: `-1` is the last entry, `-2` is the
+//      second to last, and so on. The `-1` form combined with
+//      the `id` output field lets the host read the table size
+//      with a single call.
+//
+// Outputs (via data segment).
+//   id           Resolved monster index in `0..MONSTER_COUNT`.
+//   shape        Shape enum ordinal (Tiny=0, ..., Boss=11).
+//   primary_r, primary_g, primary_b   Primary sprite colour.
+//   accent_r, accent_g, accent_b      Accent sprite colour.
+//   max_hp, skill, evasion, damage, armor   Combat stats.
+//   ai           AiKind enum ordinal (Idle=0, ..., Hunter=9).
+//   first_floor  Lowest floor the kind appears on as favourite.
+//   score        Score award on kill.
+//
+// Names are not exposed through the data segment because
+// Keleusma's data segment does not currently support inline
+// strings. The host owns a `MONSTER_NAMES` constant array
+// indexed by `id`.
+
+data state {
+    id: Word,
+    shape: Word,
+    primary_r: Word, primary_g: Word, primary_b: Word,
+    accent_r: Word, accent_g: Word, accent_b: Word,
+    max_hp: Word, skill: Word, evasion: Word, damage: Word, armor: Word,
+    ai: Word,
+    first_floor: Word,
+    score: Word,
+}
+
+// Total entries in the bestiary table.
+// Mirror this number with `MONSTER_COUNT` on the host side.
+
+fn main(n: Word) -> Word {
+    let count = 100;
+    let i = if n < 0 { count + n } else { n };
+    fill(i);
+    0
+}
+
+//   0: Sewer Rat
+fn fill(0) -> Word { state.id = 0; state.shape = 0; state.primary_r = 120; state.primary_g = 90; state.primary_b = 60; state.accent_r = 60; state.accent_g = 40; state.accent_b = 30; state.max_hp = 3; state.skill = 0; state.evasion = 1; state.damage = 1; state.armor = 0; state.ai = 2; state.first_floor = 1; state.score = 1; 0 }
+//   1: Giant Centipede
+fn fill(1) -> Word { state.id = 1; state.shape = 5; state.primary_r = 140; state.primary_g = 60; state.primary_b = 60; state.accent_r = 60; state.accent_g = 20; state.accent_b = 20; state.max_hp = 4; state.skill = 1; state.evasion = 1; state.damage = 2; state.armor = 0; state.ai = 2; state.first_floor = 2; state.score = 2; 0 }
+//   2: Cave Bat
+fn fill(2) -> Word { state.id = 2; state.shape = 0; state.primary_r = 60; state.primary_g = 60; state.primary_b = 80; state.accent_r = 30; state.accent_g = 30; state.accent_b = 40; state.max_hp = 4; state.skill = 1; state.evasion = 4; state.damage = 1; state.armor = 0; state.ai = 6; state.first_floor = 3; state.score = 2; 0 }
+//   3: Spotted Newt
+fn fill(3) -> Word { state.id = 3; state.shape = 0; state.primary_r = 60; state.primary_g = 140; state.primary_b = 80; state.accent_r = 220; state.accent_g = 200; state.accent_b = 60; state.max_hp = 5; state.skill = 1; state.evasion = 1; state.damage = 1; state.armor = 0; state.ai = 0; state.first_floor = 4; state.score = 2; 0 }
+//   4: Cave Spider
+fn fill(4) -> Word { state.id = 4; state.shape = 5; state.primary_r = 40; state.primary_g = 30; state.primary_b = 30; state.accent_r = 180; state.accent_g = 40; state.accent_b = 40; state.max_hp = 6; state.skill = 2; state.evasion = 2; state.damage = 2; state.armor = 0; state.ai = 4; state.first_floor = 5; state.score = 3; 0 }
+//   5: Mongrel Cur
+fn fill(5) -> Word { state.id = 5; state.shape = 1; state.primary_r = 100; state.primary_g = 80; state.primary_b = 60; state.accent_r = 60; state.accent_g = 50; state.accent_b = 40; state.max_hp = 8; state.skill = 2; state.evasion = 2; state.damage = 2; state.armor = 0; state.ai = 2; state.first_floor = 6; state.score = 3; 0 }
+//   6: Brown Snake
+fn fill(6) -> Word { state.id = 6; state.shape = 4; state.primary_r = 120; state.primary_g = 100; state.primary_b = 60; state.accent_r = 60; state.accent_g = 50; state.accent_b = 30; state.max_hp = 7; state.skill = 2; state.evasion = 2; state.damage = 3; state.armor = 0; state.ai = 4; state.first_floor = 7; state.score = 3; 0 }
+//   7: Gnoll Pup
+fn fill(7) -> Word { state.id = 7; state.shape = 2; state.primary_r = 140; state.primary_g = 100; state.primary_b = 60; state.accent_r = 60; state.accent_g = 40; state.accent_b = 20; state.max_hp = 9; state.skill = 3; state.evasion = 2; state.damage = 2; state.armor = 0; state.ai = 1; state.first_floor = 8; state.score = 4; 0 }
+//   8: Restless Skeleton
+fn fill(8) -> Word { state.id = 8; state.shape = 6; state.primary_r = 220; state.primary_g = 220; state.primary_b = 200; state.accent_r = 80; state.accent_g = 80; state.accent_b = 80; state.max_hp = 10; state.skill = 3; state.evasion = 1; state.damage = 3; state.armor = 1; state.ai = 2; state.first_floor = 9; state.score = 5; 0 }
+//   9: Kobold Sneak
+fn fill(9) -> Word { state.id = 9; state.shape = 2; state.primary_r = 140; state.primary_g = 60; state.primary_b = 40; state.accent_r = 40; state.accent_g = 20; state.accent_b = 20; state.max_hp = 11; state.skill = 3; state.evasion = 3; state.damage = 3; state.armor = 0; state.ai = 2; state.first_floor = 10; state.score = 5; 0 }
+//  10: Goblin Sneak
+fn fill(10) -> Word { state.id = 10; state.shape = 2; state.primary_r = 80; state.primary_g = 140; state.primary_b = 60; state.accent_r = 40; state.accent_g = 60; state.accent_b = 30; state.max_hp = 12; state.skill = 4; state.evasion = 3; state.damage = 3; state.armor = 1; state.ai = 2; state.first_floor = 11; state.score = 6; 0 }
+//  11: Giant Ant
+fn fill(11) -> Word { state.id = 11; state.shape = 5; state.primary_r = 140; state.primary_g = 40; state.primary_b = 40; state.accent_r = 60; state.accent_g = 20; state.accent_b = 20; state.max_hp = 13; state.skill = 4; state.evasion = 2; state.damage = 3; state.armor = 1; state.ai = 2; state.first_floor = 12; state.score = 6; 0 }
+//  12: Giant Beetle
+fn fill(12) -> Word { state.id = 12; state.shape = 5; state.primary_r = 40; state.primary_g = 140; state.primary_b = 60; state.accent_r = 20; state.accent_g = 60; state.accent_b = 30; state.max_hp = 15; state.skill = 4; state.evasion = 1; state.damage = 3; state.armor = 2; state.ai = 2; state.first_floor = 13; state.score = 7; 0 }
+//  13: Stirge
+fn fill(13) -> Word { state.id = 13; state.shape = 0; state.primary_r = 140; state.primary_g = 80; state.primary_b = 100; state.accent_r = 60; state.accent_g = 30; state.accent_b = 40; state.max_hp = 10; state.skill = 5; state.evasion = 4; state.damage = 4; state.armor = 0; state.ai = 6; state.first_floor = 14; state.score = 7; 0 }
+//  14: Acolyte Zombie
+fn fill(14) -> Word { state.id = 14; state.shape = 2; state.primary_r = 100; state.primary_g = 140; state.primary_b = 80; state.accent_r = 40; state.accent_g = 60; state.accent_b = 30; state.max_hp = 16; state.skill = 4; state.evasion = 1; state.damage = 4; state.armor = 1; state.ai = 2; state.first_floor = 15; state.score = 8; 0 }
+//  15: Hobbit Thug
+fn fill(15) -> Word { state.id = 15; state.shape = 1; state.primary_r = 140; state.primary_g = 100; state.primary_b = 80; state.accent_r = 60; state.accent_g = 40; state.accent_b = 30; state.max_hp = 14; state.skill = 5; state.evasion = 3; state.damage = 4; state.armor = 1; state.ai = 2; state.first_floor = 16; state.score = 8; 0 }
+//  16: Hyena
+fn fill(16) -> Word { state.id = 16; state.shape = 1; state.primary_r = 160; state.primary_g = 140; state.primary_b = 80; state.accent_r = 80; state.accent_g = 60; state.accent_b = 30; state.max_hp = 16; state.skill = 5; state.evasion = 3; state.damage = 4; state.armor = 1; state.ai = 9; state.first_floor = 17; state.score = 9; 0 }
+//  17: Gnome Sapper
+fn fill(17) -> Word { state.id = 17; state.shape = 2; state.primary_r = 100; state.primary_g = 100; state.primary_b = 160; state.accent_r = 220; state.accent_g = 200; state.accent_b = 60; state.max_hp = 14; state.skill = 6; state.evasion = 4; state.damage = 5; state.armor = 1; state.ai = 3; state.first_floor = 18; state.score = 10; 0 }
+//  18: Pixie Stinger
+fn fill(18) -> Word { state.id = 18; state.shape = 0; state.primary_r = 220; state.primary_g = 180; state.primary_b = 220; state.accent_r = 100; state.accent_g = 60; state.accent_b = 140; state.max_hp = 12; state.skill = 7; state.evasion = 6; state.damage = 4; state.armor = 0; state.ai = 5; state.first_floor = 19; state.score = 10; 0 }
+//  19: Giant Frog
+fn fill(19) -> Word { state.id = 19; state.shape = 1; state.primary_r = 80; state.primary_g = 160; state.primary_b = 60; state.accent_r = 40; state.accent_g = 80; state.accent_b = 30; state.max_hp = 18; state.skill = 5; state.evasion = 2; state.damage = 5; state.armor = 1; state.ai = 1; state.first_floor = 20; state.score = 10; 0 }
+//  20: Goblin Warrior
+fn fill(20) -> Word { state.id = 20; state.shape = 2; state.primary_r = 60; state.primary_g = 140; state.primary_b = 40; state.accent_r = 120; state.accent_g = 60; state.accent_b = 40; state.max_hp = 20; state.skill = 6; state.evasion = 3; state.damage = 5; state.armor = 2; state.ai = 3; state.first_floor = 21; state.score = 12; 0 }
+//  21: Orc Whelp
+fn fill(21) -> Word { state.id = 21; state.shape = 2; state.primary_r = 100; state.primary_g = 120; state.primary_b = 80; state.accent_r = 60; state.accent_g = 40; state.accent_b = 30; state.max_hp = 22; state.skill = 6; state.evasion = 2; state.damage = 6; state.armor = 2; state.ai = 2; state.first_floor = 22; state.score = 12; 0 }
+//  22: Imp
+fn fill(22) -> Word { state.id = 22; state.shape = 0; state.primary_r = 200; state.primary_g = 60; state.primary_b = 60; state.accent_r = 60; state.accent_g = 30; state.accent_b = 30; state.max_hp = 18; state.skill = 7; state.evasion = 5; state.damage = 6; state.armor = 1; state.ai = 6; state.first_floor = 23; state.score = 14; 0 }
+//  23: Wraithling
+fn fill(23) -> Word { state.id = 23; state.shape = 8; state.primary_r = 120; state.primary_g = 120; state.primary_b = 180; state.accent_r = 60; state.accent_g = 60; state.accent_b = 100; state.max_hp = 20; state.skill = 7; state.evasion = 5; state.damage = 6; state.armor = 0; state.ai = 2; state.first_floor = 24; state.score = 14; 0 }
+//  24: Dire Wolf
+fn fill(24) -> Word { state.id = 24; state.shape = 3; state.primary_r = 80; state.primary_g = 80; state.primary_b = 100; state.accent_r = 40; state.accent_g = 40; state.accent_b = 60; state.max_hp = 26; state.skill = 7; state.evasion = 4; state.damage = 7; state.armor = 1; state.ai = 2; state.first_floor = 25; state.score = 15; 0 }
+//  25: Werecat
+fn fill(25) -> Word { state.id = 25; state.shape = 2; state.primary_r = 140; state.primary_g = 80; state.primary_b = 60; state.accent_r = 220; state.accent_g = 200; state.accent_b = 60; state.max_hp = 24; state.skill = 8; state.evasion = 5; state.damage = 7; state.armor = 1; state.ai = 6; state.first_floor = 26; state.score = 16; 0 }
+//  26: Giant Scorpion
+fn fill(26) -> Word { state.id = 26; state.shape = 5; state.primary_r = 140; state.primary_g = 100; state.primary_b = 60; state.accent_r = 60; state.accent_g = 40; state.accent_b = 30; state.max_hp = 28; state.skill = 8; state.evasion = 3; state.damage = 7; state.armor = 3; state.ai = 2; state.first_floor = 27; state.score = 17; 0 }
+//  27: Hobgoblin Captain
+fn fill(27) -> Word { state.id = 27; state.shape = 2; state.primary_r = 180; state.primary_g = 60; state.primary_b = 40; state.accent_r = 60; state.accent_g = 60; state.accent_b = 60; state.max_hp = 30; state.skill = 9; state.evasion = 3; state.damage = 8; state.armor = 3; state.ai = 9; state.first_floor = 28; state.score = 18; 0 }
+//  28: Ogre Whelp
+fn fill(28) -> Word { state.id = 28; state.shape = 3; state.primary_r = 120; state.primary_g = 100; state.primary_b = 80; state.accent_r = 60; state.accent_g = 40; state.accent_b = 30; state.max_hp = 36; state.skill = 8; state.evasion = 1; state.damage = 9; state.armor = 2; state.ai = 2; state.first_floor = 29; state.score = 20; 0 }
+//  29: Carrion Crawler
+fn fill(29) -> Word { state.id = 29; state.shape = 4; state.primary_r = 140; state.primary_g = 140; state.primary_b = 80; state.accent_r = 60; state.accent_g = 60; state.accent_b = 30; state.max_hp = 30; state.skill = 9; state.evasion = 3; state.damage = 8; state.armor = 2; state.ai = 4; state.first_floor = 30; state.score = 18; 0 }
+//  30: Gnoll Warlord
+fn fill(30) -> Word { state.id = 30; state.shape = 2; state.primary_r = 160; state.primary_g = 100; state.primary_b = 40; state.accent_r = 40; state.accent_g = 20; state.accent_b = 20; state.max_hp = 34; state.skill = 10; state.evasion = 3; state.damage = 9; state.armor = 3; state.ai = 9; state.first_floor = 31; state.score = 22; 0 }
+//  31: Orc Captain
+fn fill(31) -> Word { state.id = 31; state.shape = 2; state.primary_r = 80; state.primary_g = 140; state.primary_b = 60; state.accent_r = 140; state.accent_g = 40; state.accent_b = 40; state.max_hp = 38; state.skill = 10; state.evasion = 3; state.damage = 9; state.armor = 3; state.ai = 3; state.first_floor = 32; state.score = 23; 0 }
+//  32: Bugbear
+fn fill(32) -> Word { state.id = 32; state.shape = 3; state.primary_r = 120; state.primary_g = 80; state.primary_b = 60; state.accent_r = 60; state.accent_g = 40; state.accent_b = 30; state.max_hp = 40; state.skill = 10; state.evasion = 2; state.damage = 10; state.armor = 3; state.ai = 2; state.first_floor = 33; state.score = 24; 0 }
+//  33: Werewolf
+fn fill(33) -> Word { state.id = 33; state.shape = 3; state.primary_r = 100; state.primary_g = 80; state.primary_b = 60; state.accent_r = 180; state.accent_g = 180; state.accent_b = 180; state.max_hp = 42; state.skill = 11; state.evasion = 4; state.damage = 10; state.armor = 2; state.ai = 6; state.first_floor = 34; state.score = 26; 0 }
+//  34: Brown Mold
+fn fill(34) -> Word { state.id = 34; state.shape = 9; state.primary_r = 120; state.primary_g = 80; state.primary_b = 40; state.accent_r = 60; state.accent_g = 40; state.accent_b = 20; state.max_hp = 36; state.skill = 9; state.evasion = 0; state.damage = 10; state.armor = 4; state.ai = 0; state.first_floor = 35; state.score = 22; 0 }
+//  35: Yellow Mold
+fn fill(35) -> Word { state.id = 35; state.shape = 9; state.primary_r = 180; state.primary_g = 160; state.primary_b = 60; state.accent_r = 80; state.accent_g = 60; state.accent_b = 20; state.max_hp = 36; state.skill = 9; state.evasion = 0; state.damage = 11; state.armor = 4; state.ai = 0; state.first_floor = 36; state.score = 22; 0 }
+//  36: Black Pudding
+fn fill(36) -> Word { state.id = 36; state.shape = 9; state.primary_r = 40; state.primary_g = 40; state.primary_b = 40; state.accent_r = 20; state.accent_g = 20; state.accent_b = 20; state.max_hp = 44; state.skill = 9; state.evasion = 1; state.damage = 11; state.armor = 3; state.ai = 1; state.first_floor = 37; state.score = 26; 0 }
+//  37: Gelatinous Cube
+fn fill(37) -> Word { state.id = 37; state.shape = 9; state.primary_r = 180; state.primary_g = 200; state.primary_b = 220; state.accent_r = 80; state.accent_g = 100; state.accent_b = 120; state.max_hp = 50; state.skill = 8; state.evasion = 0; state.damage = 10; state.armor = 4; state.ai = 1; state.first_floor = 38; state.score = 28; 0 }
+//  38: Ogre
+fn fill(38) -> Word { state.id = 38; state.shape = 3; state.primary_r = 140; state.primary_g = 120; state.primary_b = 80; state.accent_r = 80; state.accent_g = 60; state.accent_b = 40; state.max_hp = 50; state.skill = 11; state.evasion = 1; state.damage = 12; state.armor = 3; state.ai = 2; state.first_floor = 39; state.score = 30; 0 }
+//  39: Cave Bear
+fn fill(39) -> Word { state.id = 39; state.shape = 3; state.primary_r = 120; state.primary_g = 80; state.primary_b = 60; state.accent_r = 60; state.accent_g = 40; state.accent_b = 30; state.max_hp = 52; state.skill = 11; state.evasion = 2; state.damage = 12; state.armor = 3; state.ai = 2; state.first_floor = 40; state.score = 30; 0 }
+//  40: Troll
+fn fill(40) -> Word { state.id = 40; state.shape = 3; state.primary_r = 80; state.primary_g = 140; state.primary_b = 80; state.accent_r = 40; state.accent_g = 60; state.accent_b = 40; state.max_hp = 60; state.skill = 12; state.evasion = 2; state.damage = 13; state.armor = 3; state.ai = 2; state.first_floor = 41; state.score = 36; 0 }
+//  41: Young Hydra
+fn fill(41) -> Word { state.id = 41; state.shape = 4; state.primary_r = 80; state.primary_g = 100; state.primary_b = 140; state.accent_r = 40; state.accent_g = 60; state.accent_b = 80; state.max_hp = 64; state.skill = 12; state.evasion = 2; state.damage = 14; state.armor = 3; state.ai = 2; state.first_floor = 42; state.score = 38; 0 }
+//  42: Iron Statue
+fn fill(42) -> Word { state.id = 42; state.shape = 2; state.primary_r = 140; state.primary_g = 140; state.primary_b = 160; state.accent_r = 80; state.accent_g = 80; state.accent_b = 100; state.max_hp = 58; state.skill = 10; state.evasion = 0; state.damage = 12; state.armor = 6; state.ai = 0; state.first_floor = 43; state.score = 32; 0 }
+//  43: Salamander
+fn fill(43) -> Word { state.id = 43; state.shape = 4; state.primary_r = 220; state.primary_g = 100; state.primary_b = 60; state.accent_r = 120; state.accent_g = 40; state.accent_b = 20; state.max_hp = 60; state.skill = 13; state.evasion = 3; state.damage = 14; state.armor = 3; state.ai = 5; state.first_floor = 44; state.score = 38; 0 }
+//  44: Cyclops
+fn fill(44) -> Word { state.id = 44; state.shape = 3; state.primary_r = 160; state.primary_g = 120; state.primary_b = 80; state.accent_r = 220; state.accent_g = 60; state.accent_b = 60; state.max_hp = 70; state.skill = 13; state.evasion = 1; state.damage = 16; state.armor = 4; state.ai = 2; state.first_floor = 45; state.score = 42; 0 }
+//  45: Manticore
+fn fill(45) -> Word { state.id = 45; state.shape = 10; state.primary_r = 140; state.primary_g = 80; state.primary_b = 40; state.accent_r = 60; state.accent_g = 40; state.accent_b = 20; state.max_hp = 70; state.skill = 13; state.evasion = 3; state.damage = 15; state.armor = 4; state.ai = 5; state.first_floor = 46; state.score = 42; 0 }
+//  46: Wyvern
+fn fill(46) -> Word { state.id = 46; state.shape = 10; state.primary_r = 120; state.primary_g = 60; state.primary_b = 80; state.accent_r = 60; state.accent_g = 30; state.accent_b = 40; state.max_hp = 72; state.skill = 14; state.evasion = 4; state.damage = 15; state.armor = 4; state.ai = 6; state.first_floor = 47; state.score = 44; 0 }
+//  47: Lich Apprentice
+fn fill(47) -> Word { state.id = 47; state.shape = 7; state.primary_r = 100; state.primary_g = 60; state.primary_b = 180; state.accent_r = 60; state.accent_g = 30; state.accent_b = 100; state.max_hp = 64; state.skill = 14; state.evasion = 3; state.damage = 14; state.armor = 3; state.ai = 5; state.first_floor = 48; state.score = 44; 0 }
+//  48: Wraith
+fn fill(48) -> Word { state.id = 48; state.shape = 8; state.primary_r = 60; state.primary_g = 60; state.primary_b = 140; state.accent_r = 30; state.accent_g = 30; state.accent_b = 80; state.max_hp = 60; state.skill = 14; state.evasion = 5; state.damage = 14; state.armor = 2; state.ai = 8; state.first_floor = 49; state.score = 44; 0 }
+//  49: Specter
+fn fill(49) -> Word { state.id = 49; state.shape = 8; state.primary_r = 140; state.primary_g = 140; state.primary_b = 200; state.accent_r = 60; state.accent_g = 60; state.accent_b = 120; state.max_hp = 64; state.skill = 14; state.evasion = 5; state.damage = 14; state.armor = 2; state.ai = 8; state.first_floor = 50; state.score = 46; 0 }
+//  50: Vampire Spawn
+fn fill(50) -> Word { state.id = 50; state.shape = 2; state.primary_r = 140; state.primary_g = 60; state.primary_b = 60; state.accent_r = 60; state.accent_g = 30; state.accent_b = 30; state.max_hp = 70; state.skill = 15; state.evasion = 4; state.damage = 15; state.armor = 3; state.ai = 6; state.first_floor = 51; state.score = 50; 0 }
+//  51: Dire Bear
+fn fill(51) -> Word { state.id = 51; state.shape = 3; state.primary_r = 100; state.primary_g = 60; state.primary_b = 40; state.accent_r = 60; state.accent_g = 40; state.accent_b = 20; state.max_hp = 80; state.skill = 14; state.evasion = 2; state.damage = 16; state.armor = 4; state.ai = 2; state.first_floor = 52; state.score = 50; 0 }
+//  52: Greater Imp
+fn fill(52) -> Word { state.id = 52; state.shape = 1; state.primary_r = 220; state.primary_g = 60; state.primary_b = 60; state.accent_r = 100; state.accent_g = 30; state.accent_b = 30; state.max_hp = 64; state.skill = 16; state.evasion = 6; state.damage = 15; state.armor = 3; state.ai = 6; state.first_floor = 53; state.score = 50; 0 }
+//  53: Pit Fiend Whelp
+fn fill(53) -> Word { state.id = 53; state.shape = 2; state.primary_r = 180; state.primary_g = 40; state.primary_b = 40; state.accent_r = 60; state.accent_g = 20; state.accent_b = 20; state.max_hp = 86; state.skill = 16; state.evasion = 3; state.damage = 17; state.armor = 5; state.ai = 3; state.first_floor = 54; state.score = 56; 0 }
+//  54: Stone Giant
+fn fill(54) -> Word { state.id = 54; state.shape = 3; state.primary_r = 140; state.primary_g = 140; state.primary_b = 140; state.accent_r = 80; state.accent_g = 80; state.accent_b = 80; state.max_hp = 100; state.skill = 14; state.evasion = 1; state.damage = 18; state.armor = 6; state.ai = 2; state.first_floor = 55; state.score = 60; 0 }
+//  55: Cloud Giant Adept
+fn fill(55) -> Word { state.id = 55; state.shape = 3; state.primary_r = 200; state.primary_g = 200; state.primary_b = 220; state.accent_r = 100; state.accent_g = 100; state.accent_b = 140; state.max_hp = 96; state.skill = 15; state.evasion = 2; state.damage = 18; state.armor = 5; state.ai = 3; state.first_floor = 56; state.score = 60; 0 }
+//  56: Frost Salamander
+fn fill(56) -> Word { state.id = 56; state.shape = 4; state.primary_r = 140; state.primary_g = 220; state.primary_b = 220; state.accent_r = 60; state.accent_g = 100; state.accent_b = 140; state.max_hp = 80; state.skill = 16; state.evasion = 3; state.damage = 17; state.armor = 4; state.ai = 5; state.first_floor = 57; state.score = 60; 0 }
+//  57: Fire Drake
+fn fill(57) -> Word { state.id = 57; state.shape = 10; state.primary_r = 220; state.primary_g = 100; state.primary_b = 40; state.accent_r = 120; state.accent_g = 40; state.accent_b = 20; state.max_hp = 90; state.skill = 16; state.evasion = 3; state.damage = 18; state.armor = 5; state.ai = 6; state.first_floor = 58; state.score = 64; 0 }
+//  58: Black Drake
+fn fill(58) -> Word { state.id = 58; state.shape = 10; state.primary_r = 40; state.primary_g = 40; state.primary_b = 40; state.accent_r = 140; state.accent_g = 140; state.accent_b = 60; state.max_hp = 92; state.skill = 16; state.evasion = 3; state.damage = 18; state.armor = 5; state.ai = 6; state.first_floor = 59; state.score = 64; 0 }
+//  59: Green Drake
+fn fill(59) -> Word { state.id = 59; state.shape = 10; state.primary_r = 40; state.primary_g = 140; state.primary_b = 40; state.accent_r = 120; state.accent_g = 220; state.accent_b = 40; state.max_hp = 94; state.skill = 17; state.evasion = 3; state.damage = 18; state.armor = 5; state.ai = 6; state.first_floor = 60; state.score = 66; 0 }
+//  60: White Drake
+fn fill(60) -> Word { state.id = 60; state.shape = 10; state.primary_r = 220; state.primary_g = 220; state.primary_b = 220; state.accent_r = 140; state.accent_g = 200; state.accent_b = 220; state.max_hp = 96; state.skill = 17; state.evasion = 3; state.damage = 19; state.armor = 5; state.ai = 6; state.first_floor = 61; state.score = 70; 0 }
+//  61: Red Drake
+fn fill(61) -> Word { state.id = 61; state.shape = 10; state.primary_r = 220; state.primary_g = 60; state.primary_b = 40; state.accent_r = 120; state.accent_g = 40; state.accent_b = 20; state.max_hp = 100; state.skill = 17; state.evasion = 3; state.damage = 20; state.armor = 5; state.ai = 6; state.first_floor = 62; state.score = 72; 0 }
+//  62: Iron Golem
+fn fill(62) -> Word { state.id = 62; state.shape = 3; state.primary_r = 160; state.primary_g = 160; state.primary_b = 180; state.accent_r = 80; state.accent_g = 80; state.accent_b = 100; state.max_hp = 120; state.skill = 14; state.evasion = 0; state.damage = 20; state.armor = 9; state.ai = 0; state.first_floor = 63; state.score = 70; 0 }
+//  63: Lesser Demon Lord
+fn fill(63) -> Word { state.id = 63; state.shape = 3; state.primary_r = 180; state.primary_g = 40; state.primary_b = 40; state.accent_r = 220; state.accent_g = 200; state.accent_b = 40; state.max_hp = 110; state.skill = 18; state.evasion = 3; state.damage = 21; state.armor = 6; state.ai = 3; state.first_floor = 64; state.score = 80; 0 }
+//  64: Death Knight
+fn fill(64) -> Word { state.id = 64; state.shape = 2; state.primary_r = 40; state.primary_g = 40; state.primary_b = 60; state.accent_r = 200; state.accent_g = 40; state.accent_b = 40; state.max_hp = 110; state.skill = 19; state.evasion = 3; state.damage = 21; state.armor = 7; state.ai = 3; state.first_floor = 65; state.score = 84; 0 }
+//  65: Lich
+fn fill(65) -> Word { state.id = 65; state.shape = 7; state.primary_r = 120; state.primary_g = 60; state.primary_b = 180; state.accent_r = 60; state.accent_g = 220; state.accent_b = 200; state.max_hp = 100; state.skill = 20; state.evasion = 4; state.damage = 22; state.armor = 5; state.ai = 5; state.first_floor = 66; state.score = 90; 0 }
+//  66: Storm Giant
+fn fill(66) -> Word { state.id = 66; state.shape = 3; state.primary_r = 120; state.primary_g = 140; state.primary_b = 220; state.accent_r = 220; state.accent_g = 220; state.accent_b = 60; state.max_hp = 130; state.skill = 17; state.evasion = 2; state.damage = 22; state.armor = 6; state.ai = 3; state.first_floor = 67; state.score = 90; 0 }
+//  67: Beholder
+fn fill(67) -> Word { state.id = 67; state.shape = 11; state.primary_r = 140; state.primary_g = 80; state.primary_b = 80; state.accent_r = 220; state.accent_g = 220; state.accent_b = 220; state.max_hp = 120; state.skill = 19; state.evasion = 4; state.damage = 22; state.armor = 6; state.ai = 5; state.first_floor = 68; state.score = 90; 0 }
+//  68: Fire Giant
+fn fill(68) -> Word { state.id = 68; state.shape = 3; state.primary_r = 220; state.primary_g = 80; state.primary_b = 40; state.accent_r = 60; state.accent_g = 60; state.accent_b = 60; state.max_hp = 130; state.skill = 18; state.evasion = 2; state.damage = 24; state.armor = 7; state.ai = 2; state.first_floor = 69; state.score = 96; 0 }
+//  69: Frost Giant
+fn fill(69) -> Word { state.id = 69; state.shape = 3; state.primary_r = 200; state.primary_g = 220; state.primary_b = 240; state.accent_r = 60; state.accent_g = 60; state.accent_b = 120; state.max_hp = 130; state.skill = 18; state.evasion = 2; state.damage = 24; state.armor = 7; state.ai = 2; state.first_floor = 70; state.score = 96; 0 }
+//  70: Young White Dragon
+fn fill(70) -> Word { state.id = 70; state.shape = 10; state.primary_r = 220; state.primary_g = 220; state.primary_b = 240; state.accent_r = 120; state.accent_g = 180; state.accent_b = 220; state.max_hp = 140; state.skill = 19; state.evasion = 4; state.damage = 24; state.armor = 7; state.ai = 6; state.first_floor = 71; state.score = 110; 0 }
+//  71: Young Black Dragon
+fn fill(71) -> Word { state.id = 71; state.shape = 10; state.primary_r = 40; state.primary_g = 40; state.primary_b = 40; state.accent_r = 180; state.accent_g = 180; state.accent_b = 60; state.max_hp = 150; state.skill = 19; state.evasion = 4; state.damage = 25; state.armor = 7; state.ai = 6; state.first_floor = 72; state.score = 112; 0 }
+//  72: Young Green Dragon
+fn fill(72) -> Word { state.id = 72; state.shape = 10; state.primary_r = 40; state.primary_g = 160; state.primary_b = 40; state.accent_r = 220; state.accent_g = 220; state.accent_b = 40; state.max_hp = 150; state.skill = 19; state.evasion = 4; state.damage = 25; state.armor = 7; state.ai = 6; state.first_floor = 73; state.score = 112; 0 }
+//  73: Young Blue Dragon
+fn fill(73) -> Word { state.id = 73; state.shape = 10; state.primary_r = 40; state.primary_g = 80; state.primary_b = 220; state.accent_r = 220; state.accent_g = 220; state.accent_b = 60; state.max_hp = 150; state.skill = 19; state.evasion = 4; state.damage = 26; state.armor = 7; state.ai = 6; state.first_floor = 74; state.score = 116; 0 }
+//  74: Young Red Dragon
+fn fill(74) -> Word { state.id = 74; state.shape = 10; state.primary_r = 220; state.primary_g = 40; state.primary_b = 40; state.accent_r = 220; state.accent_g = 180; state.accent_b = 40; state.max_hp = 160; state.skill = 20; state.evasion = 4; state.damage = 26; state.armor = 7; state.ai = 6; state.first_floor = 75; state.score = 118; 0 }
+//  75: Bone Devil
+fn fill(75) -> Word { state.id = 75; state.shape = 6; state.primary_r = 220; state.primary_g = 220; state.primary_b = 200; state.accent_r = 180; state.accent_g = 40; state.accent_b = 40; state.max_hp = 140; state.skill = 20; state.evasion = 4; state.damage = 25; state.armor = 6; state.ai = 8; state.first_floor = 76; state.score = 116; 0 }
+//  76: Mind Flayer
+fn fill(76) -> Word { state.id = 76; state.shape = 7; state.primary_r = 100; state.primary_g = 100; state.primary_b = 200; state.accent_r = 220; state.accent_g = 60; state.accent_b = 140; state.max_hp = 130; state.skill = 21; state.evasion = 5; state.damage = 26; state.armor = 5; state.ai = 5; state.first_floor = 77; state.score = 124; 0 }
+//  77: Adult Black Dragon
+fn fill(77) -> Word { state.id = 77; state.shape = 10; state.primary_r = 30; state.primary_g = 30; state.primary_b = 30; state.accent_r = 160; state.accent_g = 160; state.accent_b = 60; state.max_hp = 180; state.skill = 21; state.evasion = 4; state.damage = 28; state.armor = 8; state.ai = 3; state.first_floor = 78; state.score = 140; 0 }
+//  78: Adult Green Dragon
+fn fill(78) -> Word { state.id = 78; state.shape = 10; state.primary_r = 30; state.primary_g = 140; state.primary_b = 30; state.accent_r = 200; state.accent_g = 200; state.accent_b = 30; state.max_hp = 180; state.skill = 21; state.evasion = 4; state.damage = 28; state.armor = 8; state.ai = 3; state.first_floor = 79; state.score = 140; 0 }
+//  79: Adult Blue Dragon
+fn fill(79) -> Word { state.id = 79; state.shape = 10; state.primary_r = 30; state.primary_g = 80; state.primary_b = 200; state.accent_r = 220; state.accent_g = 220; state.accent_b = 60; state.max_hp = 180; state.skill = 21; state.evasion = 4; state.damage = 28; state.armor = 8; state.ai = 3; state.first_floor = 80; state.score = 142; 0 }
+//  80: Adult Red Dragon
+fn fill(80) -> Word { state.id = 80; state.shape = 10; state.primary_r = 200; state.primary_g = 30; state.primary_b = 30; state.accent_r = 220; state.accent_g = 180; state.accent_b = 30; state.max_hp = 200; state.skill = 22; state.evasion = 4; state.damage = 30; state.armor = 8; state.ai = 3; state.first_floor = 81; state.score = 150; 0 }
+//  81: Adult White Dragon
+fn fill(81) -> Word { state.id = 81; state.shape = 10; state.primary_r = 240; state.primary_g = 240; state.primary_b = 250; state.accent_r = 100; state.accent_g = 160; state.accent_b = 220; state.max_hp = 200; state.skill = 22; state.evasion = 4; state.damage = 30; state.armor = 8; state.ai = 3; state.first_floor = 82; state.score = 150; 0 }
+//  82: Ancient White Dragon
+fn fill(82) -> Word { state.id = 82; state.shape = 10; state.primary_r = 240; state.primary_g = 240; state.primary_b = 250; state.accent_r = 60; state.accent_g = 120; state.accent_b = 200; state.max_hp = 220; state.skill = 23; state.evasion = 4; state.damage = 32; state.armor = 9; state.ai = 3; state.first_floor = 83; state.score = 170; 0 }
+//  83: Demon Lord
+fn fill(83) -> Word { state.id = 83; state.shape = 3; state.primary_r = 180; state.primary_g = 40; state.primary_b = 60; state.accent_r = 40; state.accent_g = 40; state.accent_b = 60; state.max_hp = 220; state.skill = 23; state.evasion = 3; state.damage = 32; state.armor = 9; state.ai = 3; state.first_floor = 84; state.score = 170; 0 }
+//  84: Pit Fiend
+fn fill(84) -> Word { state.id = 84; state.shape = 3; state.primary_r = 160; state.primary_g = 30; state.primary_b = 30; state.accent_r = 220; state.accent_g = 200; state.accent_b = 40; state.max_hp = 240; state.skill = 23; state.evasion = 3; state.damage = 33; state.armor = 9; state.ai = 3; state.first_floor = 85; state.score = 180; 0 }
+//  85: Beholder Tyrant
+fn fill(85) -> Word { state.id = 85; state.shape = 11; state.primary_r = 160; state.primary_g = 60; state.primary_b = 60; state.accent_r = 220; state.accent_g = 220; state.accent_b = 220; state.max_hp = 220; state.skill = 22; state.evasion = 5; state.damage = 32; state.armor = 8; state.ai = 5; state.first_floor = 86; state.score = 180; 0 }
+//  86: Ancient Black Dragon
+fn fill(86) -> Word { state.id = 86; state.shape = 10; state.primary_r = 20; state.primary_g = 20; state.primary_b = 20; state.accent_r = 160; state.accent_g = 160; state.accent_b = 60; state.max_hp = 240; state.skill = 23; state.evasion = 4; state.damage = 34; state.armor = 9; state.ai = 3; state.first_floor = 87; state.score = 190; 0 }
+//  87: Ancient Green Dragon
+fn fill(87) -> Word { state.id = 87; state.shape = 10; state.primary_r = 20; state.primary_g = 120; state.primary_b = 20; state.accent_r = 200; state.accent_g = 200; state.accent_b = 30; state.max_hp = 240; state.skill = 23; state.evasion = 4; state.damage = 34; state.armor = 9; state.ai = 3; state.first_floor = 88; state.score = 190; 0 }
+//  88: Ancient Blue Dragon
+fn fill(88) -> Word { state.id = 88; state.shape = 10; state.primary_r = 20; state.primary_g = 60; state.primary_b = 180; state.accent_r = 220; state.accent_g = 220; state.accent_b = 60; state.max_hp = 240; state.skill = 23; state.evasion = 4; state.damage = 34; state.armor = 9; state.ai = 3; state.first_floor = 89; state.score = 190; 0 }
+//  89: Ancient Red Dragon
+fn fill(89) -> Word { state.id = 89; state.shape = 10; state.primary_r = 180; state.primary_g = 20; state.primary_b = 20; state.accent_r = 220; state.accent_g = 180; state.accent_b = 30; state.max_hp = 260; state.skill = 24; state.evasion = 4; state.damage = 36; state.armor = 10; state.ai = 3; state.first_floor = 90; state.score = 200; 0 }
+//  90: Tarrasque
+fn fill(90) -> Word { state.id = 90; state.shape = 11; state.primary_r = 140; state.primary_g = 80; state.primary_b = 40; state.accent_r = 220; state.accent_g = 60; state.accent_b = 60; state.max_hp = 320; state.skill = 24; state.evasion = 1; state.damage = 40; state.armor = 12; state.ai = 2; state.first_floor = 91; state.score = 240; 0 }
+//  91: Empyrean
+fn fill(91) -> Word { state.id = 91; state.shape = 2; state.primary_r = 240; state.primary_g = 220; state.primary_b = 140; state.accent_r = 220; state.accent_g = 200; state.accent_b = 40; state.max_hp = 280; state.skill = 25; state.evasion = 4; state.damage = 36; state.armor = 10; state.ai = 3; state.first_floor = 92; state.score = 240; 0 }
+//  92: Solar
+fn fill(92) -> Word { state.id = 92; state.shape = 7; state.primary_r = 240; state.primary_g = 220; state.primary_b = 80; state.accent_r = 240; state.accent_g = 240; state.accent_b = 240; state.max_hp = 280; state.skill = 26; state.evasion = 5; state.damage = 36; state.armor = 9; state.ai = 5; state.first_floor = 93; state.score = 240; 0 }
+//  93: Lich King
+fn fill(93) -> Word { state.id = 93; state.shape = 7; state.primary_r = 80; state.primary_g = 60; state.primary_b = 200; state.accent_r = 40; state.accent_g = 240; state.accent_b = 220; state.max_hp = 280; state.skill = 26; state.evasion = 4; state.damage = 38; state.armor = 9; state.ai = 3; state.first_floor = 94; state.score = 260; 0 }
+//  94: Ancient Wyrm
+fn fill(94) -> Word { state.id = 94; state.shape = 10; state.primary_r = 220; state.primary_g = 180; state.primary_b = 60; state.accent_r = 220; state.accent_g = 80; state.accent_b = 40; state.max_hp = 320; state.skill = 26; state.evasion = 4; state.damage = 40; state.armor = 10; state.ai = 3; state.first_floor = 95; state.score = 280; 0 }
+//  95: Avatar of Destruction
+fn fill(95) -> Word { state.id = 95; state.shape = 11; state.primary_r = 220; state.primary_g = 40; state.primary_b = 40; state.accent_r = 40; state.accent_g = 40; state.accent_b = 40; state.max_hp = 320; state.skill = 27; state.evasion = 3; state.damage = 42; state.armor = 11; state.ai = 3; state.first_floor = 96; state.score = 300; 0 }
+//  96: World Devourer
+fn fill(96) -> Word { state.id = 96; state.shape = 11; state.primary_r = 60; state.primary_g = 40; state.primary_b = 40; state.accent_r = 200; state.accent_g = 60; state.accent_b = 200; state.max_hp = 360; state.skill = 27; state.evasion = 2; state.damage = 44; state.armor = 12; state.ai = 2; state.first_floor = 97; state.score = 320; 0 }
+//  97: Cosmic Horror
+fn fill(97) -> Word { state.id = 97; state.shape = 11; state.primary_r = 40; state.primary_g = 40; state.primary_b = 80; state.accent_r = 160; state.accent_g = 60; state.accent_b = 220; state.max_hp = 360; state.skill = 28; state.evasion = 4; state.damage = 44; state.armor = 11; state.ai = 5; state.first_floor = 98; state.score = 320; 0 }
+//  98: Elder God Spawn
+fn fill(98) -> Word { state.id = 98; state.shape = 11; state.primary_r = 80; state.primary_g = 60; state.primary_b = 100; state.accent_r = 220; state.accent_g = 220; state.accent_b = 80; state.max_hp = 400; state.skill = 29; state.evasion = 3; state.damage = 46; state.armor = 12; state.ai = 3; state.first_floor = 99; state.score = 360; 0 }
+//  99: Balrog Lord
+fn fill(99) -> Word { state.id = 99; state.shape = 11; state.primary_r = 60; state.primary_g = 20; state.primary_b = 20; state.accent_r = 240; state.accent_g = 80; state.accent_b = 20; state.max_hp = 480; state.skill = 30; state.evasion = 3; state.damage = 50; state.armor = 13; state.ai = 7; state.first_floor = 100; state.score = 500; 0 }
+
+fn fill(_n: Word) -> Word { 0 }

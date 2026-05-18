@@ -64,8 +64,9 @@ impl<'tex> TileAtlas<'tex> {
             let texture = render_static(canvas, texture_creator, kind)?;
             static_tiles.push(texture);
         }
-        let mut monsters = Vec::with_capacity(bestiary::BESTIARY.len());
-        for entry in bestiary::BESTIARY.iter() {
+        let table = bestiary::table();
+        let mut monsters = Vec::with_capacity(table.len());
+        for entry in table.iter() {
             let texture = render_monster(
                 canvas,
                 texture_creator,

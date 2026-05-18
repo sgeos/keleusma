@@ -84,7 +84,7 @@ pub const PLAYER_KIND: i32 = -1;
 #[derive(Clone)]
 pub struct Actor {
     /// `PLAYER_KIND` for the player, otherwise an index into
-    /// `bestiary::BESTIARY`.
+    /// the runtime bestiary table.
     pub kind: i32,
     pub x: i32,
     pub y: i32,

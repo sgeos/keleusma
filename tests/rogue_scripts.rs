@@ -16,6 +16,7 @@ use keleusma::parser::parse;
 use keleusma::vm::{DEFAULT_ARENA_CAPACITY, Vm, VmError, VmState};
 use keleusma::{Arena, Module};
 
+const SRC_BESTIARY: &str = include_str!("../examples/scripts/rogue/rogue_bestiary.kel");
 const SRC_DUNGEN: &str = include_str!("../examples/scripts/rogue/rogue_dungen.kel");
 const SRC_AI_IDLE: &str = include_str!("../examples/scripts/rogue/rogue_ai_idle.kel");
 const SRC_AI_CHASER: &str = include_str!("../examples/scripts/rogue/rogue_ai_chaser.kel");
@@ -469,6 +470,52 @@ fn game_tick_runs_with_stubbed_natives() {
         1,
         "tick_book_keeping should fire once per turn"
     );
+}
+
+#[test]
+fn bestiary_compiles() {
+    let _ = build(SRC_BESTIARY);
+}
+
+#[test]
+fn bestiary_negative_one_returns_last_entry() {
+    let module = build(SRC_BESTIARY);
+    let arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+    let mut vm = Vm::new(module, &arena).expect("vm new");
+    for slot in 0..vm.data_len() {
+        vm.set_data(slot, Value::Int(0)).expect("set_data");
+    }
+    vm.call(&[Value::Int(-1)]).expect("call -1");
+    let last_id = match vm.get_data(0).expect("get_data id") {
+        Value::Int(n) => *n,
+        other => panic!("expected Int, got {:?}", other),
+    };
+    assert_eq!(last_id, 99, "the bestiary ships with one hundred entries");
+}
+
+#[test]
+fn bestiary_entry_zero_is_sewer_rat_stats() {
+    let module = build(SRC_BESTIARY);
+    let arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+    let mut vm = Vm::new(module, &arena).expect("vm new");
+    for slot in 0..vm.data_len() {
+        vm.set_data(slot, Value::Int(0)).expect("set_data");
+    }
+    vm.call(&[Value::Int(0)]).expect("call 0");
+    // Sewer Rat: shape Tiny=0, max_hp=3, ai Chaser=2,
+    // first_floor=1, score=1. See rogue_bestiary.kel entry 0.
+    let read = |slot: usize| -> i64 {
+        match vm.get_data(slot).expect("get_data") {
+            Value::Int(n) => *n,
+            _ => panic!(),
+        }
+    };
+    assert_eq!(read(0), 0, "id");
+    assert_eq!(read(1), 0, "shape Tiny");
+    assert_eq!(read(8), 3, "max_hp");
+    assert_eq!(read(13), 2, "ai Chaser");
+    assert_eq!(read(14), 1, "first_floor");
+    assert_eq!(read(15), 1, "score");
 }
 
 #[test]
