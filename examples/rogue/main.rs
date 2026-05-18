@@ -382,6 +382,9 @@ fn read_bestiary_entry(
         ai: bestiary::AiKind::from_ord(r(13)?),
         first_floor: r(14)? as u32,
         score: r(15)? as u32,
+        corpse_drop_chance: r(16)? as u8,
+        corpse_satiation: r(17)? as i32,
+        corpse_hp_delta: r(18)? as i32,
     })
 }
 

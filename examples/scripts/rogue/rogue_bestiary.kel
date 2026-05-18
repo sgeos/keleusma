@@ -34,6 +34,12 @@ data state {
     ai: Word,
     first_floor: Word,
     score: Word,
+    // Corpse stats derived from `shape` via the `corpse_fill`
+    // dispatcher. `fill(N)` sets shape and then `fn main` calls
+    // `corpse_fill(state.shape)` to fill these three slots.
+    corpse_drop_chance: Word,
+    corpse_satiation: Word,
+    corpse_hp_delta: Word,
 }
 
 // Total entries in the bestiary table.
@@ -43,8 +49,24 @@ fn main(n: Word) -> Word {
     let count = 100;
     let i = if n < 0 { count + n } else { n };
     fill(i);
+    corpse_fill(state.shape);
     0
 }
+
+// Corpse stats per shape. Keyed on the Shape enum ordinal.
+fn corpse_fill(0) -> Word { state.corpse_drop_chance = 50; state.corpse_satiation = 8; state.corpse_hp_delta = 0; 0 }  // Tiny
+fn corpse_fill(1) -> Word { state.corpse_drop_chance = 60; state.corpse_satiation = 15; state.corpse_hp_delta = 0; 0 }  // Small
+fn corpse_fill(2) -> Word { state.corpse_drop_chance = 55; state.corpse_satiation = 25; state.corpse_hp_delta = 0; 0 }  // Humanoid
+fn corpse_fill(3) -> Word { state.corpse_drop_chance = 70; state.corpse_satiation = 40; state.corpse_hp_delta = 0; 0 }  // Brute
+fn corpse_fill(4) -> Word { state.corpse_drop_chance = 55; state.corpse_satiation = 12; state.corpse_hp_delta = -4; 0 }  // Serpent
+fn corpse_fill(5) -> Word { state.corpse_drop_chance = 45; state.corpse_satiation = 6; state.corpse_hp_delta = -3; 0 }  // Insect
+fn corpse_fill(6) -> Word { state.corpse_drop_chance = 0; state.corpse_satiation = 0; state.corpse_hp_delta = 0; 0 }  // Skeleton
+fn corpse_fill(7) -> Word { state.corpse_drop_chance = 40; state.corpse_satiation = 20; state.corpse_hp_delta = -1; 0 }  // Mage
+fn corpse_fill(8) -> Word { state.corpse_drop_chance = 0; state.corpse_satiation = 0; state.corpse_hp_delta = 0; 0 }  // Ghost
+fn corpse_fill(9) -> Word { state.corpse_drop_chance = 0; state.corpse_satiation = 0; state.corpse_hp_delta = 0; 0 }  // Slime
+fn corpse_fill(10) -> Word { state.corpse_drop_chance = 90; state.corpse_satiation = 60; state.corpse_hp_delta = 0; 0 }  // Dragon
+fn corpse_fill(11) -> Word { state.corpse_drop_chance = 100; state.corpse_satiation = 80; state.corpse_hp_delta = 8; 0 }  // Boss
+fn corpse_fill(_n: Word) -> Word { 0 }
 
 //   0: Sewer Rat
 fn fill(0) -> Word { state.id = 0; state.shape = 0; state.primary_r = 120; state.primary_g = 90; state.primary_b = 60; state.accent_r = 60; state.accent_g = 40; state.accent_b = 30; state.max_hp = 3; state.skill = 0; state.evasion = 1; state.damage = 1; state.armor = 0; state.ai = 2; state.first_floor = 1; state.score = 1; 0 }

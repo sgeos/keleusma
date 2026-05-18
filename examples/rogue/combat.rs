@@ -51,7 +51,7 @@ pub fn player_attacks(world: &mut World, ai: &mut AiPool, monster_idx: usize) ->
     if new_hp <= 0 {
         let mx = world.monsters[monster_idx].x;
         let my = world.monsters[monster_idx].y;
-        let drop_chance = kind.corpse_drop_chance();
+        let drop_chance = kind.corpse_drop_chance;
         world.monsters.swap_remove(monster_idx);
         world.player.gold += score;
         world.push_message(format!("You slay the {}.", kind_name));

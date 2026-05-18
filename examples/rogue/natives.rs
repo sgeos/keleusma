@@ -1102,8 +1102,8 @@ fn stash_scroll(w: &mut World, subtype: i64) {
 
 fn eat_corpse(w: &mut World, monster_kind: i64) {
     let kind = bestiary::kind(monster_kind as usize);
-    let satiation = kind.corpse_satiation();
-    let hp_delta = kind.corpse_hp_delta();
+    let satiation = kind.corpse_satiation;
+    let hp_delta = kind.corpse_hp_delta;
     let name = kind.name;
     if satiation > 0 {
         let hunger = w.player.hunger + satiation;

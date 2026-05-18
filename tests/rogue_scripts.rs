@@ -494,6 +494,28 @@ fn bestiary_negative_one_returns_last_entry() {
 }
 
 #[test]
+fn bestiary_corpse_data_derived_from_shape() {
+    // Entry 0 is the Sewer Rat (shape Tiny=0). Tiny corpse:
+    // drop_chance=50, satiation=8, hp_delta=0.
+    let module = build(SRC_BESTIARY);
+    let arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+    let mut vm = Vm::new(module, &arena).expect("vm new");
+    for slot in 0..vm.data_len() {
+        vm.set_data(slot, Value::Int(0)).expect("set_data");
+    }
+    vm.call(&[Value::Int(0)]).expect("call 0");
+    let read = |slot: usize| -> i64 {
+        match vm.get_data(slot).expect("get_data") {
+            Value::Int(n) => *n,
+            _ => panic!(),
+        }
+    };
+    assert_eq!(read(16), 50, "Tiny corpse drop chance");
+    assert_eq!(read(17), 8, "Tiny corpse satiation");
+    assert_eq!(read(18), 0, "Tiny corpse hp delta");
+}
+
+#[test]
 fn bestiary_entry_zero_is_sewer_rat_stats() {
     let module = build(SRC_BESTIARY);
     let arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);

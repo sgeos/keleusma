@@ -414,9 +414,21 @@ The status-action mechanism itself runs in a second script. `rogue_scroll_apply.
 
 `rogue_bestiary.kel` is the data half of the monster system. The host runs this script once per monster id at startup and reads the resolved values from the script's data segment. The result is cached behind a `OnceLock` in `examples/rogue/bestiary.rs` so that runtime accesses through `bestiary::kind(idx)` are plain reads against a `Vec<MonsterKind>`.
 
-The script demonstrates the "loader function plus large constant table" pattern for Keleusma. The data segment declares one field per output column (id, shape, three primary colour channels, three accent colour channels, five combat stats, ai archetype, first floor, and score). One hundred multi-headed `fill(N)` functions write the constants for entry `N` directly into the data segment. The `fn main(n)` entry point resolves negative indices to `MONSTER_COUNT + n` and dispatches to the matching `fill` head.
+### The data-loader pattern
 
-The negative-index convention lets the host discover the table size with a single call. Calling `fn main(-1)` writes the last entry into the data segment; reading the `id` slot yields `MONSTER_COUNT - 1`. The host asserts that the recovered count matches the parallel `MONSTER_NAMES` array.
+The bestiary script is a worked example of an idiom that the example demonstrates for Keleusma. The pattern composes three techniques. Each is individually known. The combination fits Keleusma's specific constraints (no module-scope constants, fixed-size data segment, bounded execution) particularly well, and the composition is what makes it idiomatic here.
+
+First, **multi-headed function dispatch encodes the constant table**. Keleusma has no module-scope `const` for arrays of records, but the verifier accepts multi-headed function definitions with integer patterns. One head per entry, each body assigning the entry's fields, is functionally equivalent to a constant array. The encoding is verifier-friendly because every body is straight-line code; the dispatch itself compiles to a jump table when the integer keys are dense.
+
+Second, **the data segment serves as the host-script I/O struct**. The data segment is normally used for state that the script preserves across `loop main` resumes. Here it carries the output fields of a one-shot pure function. The host writes the input (the entry index) through `vm.call`'s argument and reads the outputs (the entry's fields) through `vm.get_data` after the call returns. No language change is required because `get_data`/`set_data` are already part of the host boundary; the repurposing is on the script side.
+
+Third, **the negative-index convention discovers the table size**. Calling `fn main(-1)` resolves the index to `MONSTER_COUNT - 1` inside the script, writes the last entry's fields into the data segment, and returns. The host reads the `id` slot to learn the table size with one call. The host can therefore size its cache from the script rather than from a parallel host-side constant, with an assertion catching any drift.
+
+The pattern is well-suited to other tables that share the shape "small fixed-size struct of integers, indexed by ordinal". The bestiary's per-shape corpse stats also use this pattern: the `fn corpse_fill(N)` dispatcher inside the same script reads the shape ordinal from a slot the `fn fill(N)` step has already written, then fills three more slots from a twelve-entry table.
+
+### Worked example
+
+The data segment declares one field per output column. The fields the `fill(N)` heads set directly (id, shape, three primary colour channels, three accent colour channels, five combat stats, ai archetype, first floor, score). The fields the `corpse_fill(shape)` step sets indirectly (drop chance, satiation, hit-point delta). One hundred multi-headed `fill(N)` functions write the per-entry constants. Twelve multi-headed `corpse_fill(N)` functions write the per-shape corpse stats. The `fn main(n)` entry point resolves negative indices to `MONSTER_COUNT + n`, calls `fill(i)`, then chains into `corpse_fill(state.shape)`.
 
 ```keleusma
 data state {
@@ -428,28 +440,42 @@ data state {
     ai: Word,
     first_floor: Word,
     score: Word,
+    corpse_drop_chance: Word,
+    corpse_satiation: Word,
+    corpse_hp_delta: Word,
 }
 
 fn main(n: Word) -> Word {
     let count = 100;
     let i = if n < 0 { count + n } else { n };
     fill(i);
+    corpse_fill(state.shape);
     0
 }
 
 fn fill(0) -> Word {
     state.id = 0; state.shape = 0;
     state.primary_r = 120; state.primary_g = 90; state.primary_b = 60;
-    ...
+    state.accent_r = 60; state.accent_g = 40; state.accent_b = 30;
+    state.max_hp = 3; state.skill = 0; state.evasion = 1;
+    state.damage = 1; state.armor = 0;
+    state.ai = 2; state.first_floor = 1; state.score = 1;
     0
 }
-// ninety-nine more heads
+// ninety-nine more fill heads
 fn fill(_n: Word) -> Word { 0 }
+
+fn corpse_fill(0) -> Word {
+    state.corpse_drop_chance = 50; state.corpse_satiation = 8; state.corpse_hp_delta = 0;
+    0
+}  // Tiny
+// eleven more corpse_fill heads
+fn corpse_fill(_n: Word) -> Word { 0 }
 ```
 
 Monster names stay on the host side in a parallel `MONSTER_NAMES: [&str; 100]` constant array because Keleusma's data segment does not currently support inline strings. The host's `MONSTER_COUNT` constant mirrors the script's `count` literal; the startup assertion catches any drift between the two.
 
-The shipped script weighs in at two hundred and fifty lines for one hundred entries because each entry compresses to one Keleusma line. The prior Rust `MonsterKind` struct-literal form took fourteen lines per entry. The migration deletes roughly twelve hundred host lines and adds two hundred and fifty script lines plus the hundred-entry name array. Net delta on this round of work is a nine-hundred-line reduction.
+The shipped script weighs in at two hundred and seventy lines for one hundred monster entries plus twelve corpse shapes. The prior Rust `MonsterKind` struct-literal form took fourteen lines per entry plus three twelve-arm methods for corpse stats. The bestiary migration deletes roughly thirteen hundred host lines for two hundred and seventy script lines, a net thousand-line reduction concentrated where the per-entry density mattered most.
 
 ## Reading the consume and descend scripts
 
@@ -522,7 +548,7 @@ Each effect is a few lines on the host side. Reuse the existing status code valu
 
 **Exercise 4.2.** What is the worst-case execution time of the dungeon generator on a single floor? The structural verifier accepts the script, but a measured profile would identify the dominant cost. Reading the script's per-loop body and counting host-native calls is a fair starting point. The arena-bounded text-size analysis already proves the worst-case memory usage is bounded; this exercise asks for the time companion.
 
-**Exercise 4.3.** Could the bestiary entries be moved into a Keleusma script instead of the Rust source? The current organisation keeps the table in Rust because it is read-only data, but a `bestiary.kel` script returning a structured response would be reachable. Identify what would need to change on the host side. Unaddressed concern. The verifier would need to accept a script whose primary product is a one-hundred-element constant table.
+**Exercise 4.3.** The bestiary numeric data already moved into `rogue_bestiary.kel`; see the *Reading the bestiary script* section above. The deferred question is the names. Could the one hundred monster names also move into a script? Keleusma's data segment does not currently hold inline strings. A clean migration would need either a constant string-pool feature in Keleusma or a native that returns a static-string handle by index. Sketch the language change required and weigh it against the alternative of keeping `MONSTER_NAMES: [&str; 100]` as a parallel host table.
 
 **Exercise 4.4.** What is the right division of responsibility between the host and the scripts in a Keleusma example? The piano-roll example puts almost everything in scripts; the roguelike example splits roughly in half by line count. Write a short essay arguing for one extreme or the other across both examples.
 

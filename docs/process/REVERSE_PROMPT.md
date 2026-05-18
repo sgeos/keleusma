@@ -9,50 +9,49 @@ AI to Human communication channel.
 ## Last Updated
 
 **Date**: 2026-05-18
-**Status**: Bestiary migrated from host-side Rust constant to a Keleusma script. The host runs the script once per monster id at startup and reads the data segment. Resolved entries cache in a `OnceLock`-backed `Vec<MonsterKind>` so runtime accesses remain plain reads.
+**Status**: Corpse stats moved into the bestiary script as a second multi-headed dispatcher keyed on shape. The manual gains a section on the data-loader pattern that the bestiary script demonstrates.
 
 ## Completed in this session round
 
 | Directive | Resolution |
 |-----------|------------|
-| Move the bestiary into a Keleusma script | New `rogue_bestiary.kel`. The script declares a sixteen-slot data segment matching the `MonsterKind` numeric fields and one hundred multi-headed `fill(N)` functions that write the constants for entry `N` into the data segment. The `fn main(n)` entry point resolves negative indices to `MONSTER_COUNT + n` and dispatches to the matching head. |
-| Negative-index discovery convention | Calling `fn main(-1)` writes the last entry; reading slot zero (the resolved `id`) yields `MONSTER_COUNT - 1`. The host uses this on first call to learn the table size and asserts it matches the host-side `MONSTER_NAMES` array length. |
-| Loader function fills a `.data` struct | The script's data segment is the `.data` struct. The host writes input via the function argument (Keleusma's `fn main` already accepts integer arguments) and reads outputs via `vm.get_data(slot)`. No language change was required because the data segment is already accessible to the host through the existing `get_data`/`set_data` boundary. |
-| Host-side refactor | `bestiary.rs` shrinks from 1552 lines to 299. The `BESTIARY: [MonsterKind; 100]` static is replaced by a `OnceLock<Vec<MonsterKind>>`. The `kind(idx)` accessor stays. Two new helpers, `Shape::from_ord` and `AiKind::from_ord`, decode ordinals. A parallel `MONSTER_NAMES: [&str; 100]` constant holds names because Keleusma's data segment does not currently support inline strings. |
-| Bestiary loading at startup | `main.rs::load_bestiary` runs the script once with `-1` for discovery, asserts the count matches `MONSTER_NAMES.len()`, then runs it once per id and calls `bestiary::install(table)`. |
+| Discuss whether the data-loader pattern is novel | Partial agreement, noted in the user-facing reply. The three component techniques (multi-headed dispatch encoding a constant table, data segment as host-script I/O struct, negative-index size discovery) are individually known. The composition is well-suited to Keleusma's constraints and worth documenting as a Keleusma idiom; whether it is "novel" in the wider sense is hard to judge without a literature review. |
+| Document the data-loader pattern in the manual | New subsection *The data-loader pattern* under *Reading the bestiary script*. Names the three techniques, explains why each fits Keleusma, and points at the corpse-data migration as a second worked instance of the pattern. |
+| Migrate any other data that can move | Corpse stats per shape now live in `rogue_bestiary.kel` as a twelve-head `corpse_fill(N)` dispatcher. The bestiary's `fn main(n)` calls `fill(i)` to set base stats including shape, then `corpse_fill(state.shape)` to derive the corpse fields. `MonsterKind` gains three direct fields (`corpse_drop_chance: u8`, `corpse_satiation: i32`, `corpse_hp_delta: i32`) and loses the three methods that previously matched on shape. Callers in `combat.rs` and `natives.rs` swap from method calls to field access. |
+| Decline other migrations | The weapons and armors tables in `items.rs` are already as dense as their Keleusma equivalent would be (one line per entry). Migrating them is LOC-negative without architectural gain; I left them alone. The reverse prompt records this decision. |
+
+## Why corpse data was a good migration
+
+Before: three methods on `MonsterKind`, each matching on `Shape` with twelve arms returning a constant. Around fifty lines of host code for three twelve-entry tables.
+
+After: one twelve-head `corpse_fill(N)` dispatcher in the bestiary script. The script-side encoding is denser, and the corpse data sits next to the bestiary entries it describes. Modders edit the corpse table in the same file as the monster table.
+
+The migration also strengthens the data-loader pattern's documentation: the bestiary script now contains two dispatchers keyed on different axes (one hundred entries by monster id, twelve entries by shape), chained inside `fn main`.
 
 ## Line-count delta
 
 | Category | Before | After | Delta |
 |----------|-------:|------:|------:|
-| Host (Rust) | 5932 | 4761 | -1171 |
-| Scripts (Keleusma) | 1383 | 1633 | +250 |
-| **Total** | **7315** | **6394** | **-921** |
-| Script share | 18.9% | 25.5% | +6.6pp |
+| Host (Rust) | 4761 | 4724 | -37 |
+| Scripts (Keleusma) | 1633 | 1655 | +22 |
+| **Total** | **6394** | **6379** | **-15** |
 
-The migration deletes nine hundred and twenty-one net lines. The single biggest source of savings is the per-entry density: the prior Rust struct literal cost fourteen lines per entry; the Keleusma `fill(N)` form fits on one line per entry. With one hundred entries the savings are immediate.
+Modest LOC reduction. The migration was about architectural placement rather than line count. The bestiary script grew by twenty-two lines (twelve corpse-fill heads plus three new data slots plus the dispatcher call in `fn main`). `bestiary.rs` shrank by about fifty lines (three methods × roughly fifteen lines each) plus the three new struct fields. Callers updated from method calls to field access.
 
 ## Verification matrix
 
 ```bash
-cargo test                                                                    # 567 tests, all pass (added 3 bestiary tests)
-cargo test --features text --test rogue_scripts                               # 48 rogue script tests, all pass
+cargo test                                                                    # 568 tests, all pass (added 1 corpse-data test)
+cargo test --features text --test rogue_scripts                               # 49 rogue script tests, all pass
 cargo clippy --workspace --tests --features sdl3-example,text -- -D warnings  # clean
 cargo build --example rogue --features sdl3-example,text                      # clean
 ```
 
-## Three new tests
-
-- `bestiary_compiles` confirms the script passes the verifier.
-- `bestiary_negative_one_returns_last_entry` verifies the discovery convention.
-- `bestiary_entry_zero_is_sewer_rat_stats` cross-checks one entry's numeric fields against the prior table.
-
 ## Notes
 
-- No language change was required. The user anticipated one (`fn main` accepting a `.data` struct); in practice Keleusma's data segment is already accessible to the host via `get_data`/`set_data`, so the script's data segment serves as the I/O struct directly. The argument to `fn main` carries the monster index; the data-segment slots carry the output fields.
-- Names stay in Rust as a constant array because there is no clean way to ship one hundred static string literals out of a script's data segment today. Exercise 4.3 in the manual notes this as a deferred research question.
-- The bestiary is loaded once at startup and not hot-reloadable. The `OnceLock` cannot be re-set. A future change could swap the cache for a `RwLock<Vec<MonsterKind>>` to support F5 reload of the bestiary, but that is not required for the demonstration.
+- The data-loader pattern subsection in the manual is the principal artifact of this round. The corpse-data migration is the second worked example that the section references; it strengthens the pattern's documentation without being load-bearing on its own.
+- Exercise 4.3 in the manual is reframed. The original asked whether the bestiary could be moved to a script; that question is now answered. The remaining open question is whether monster names could move too, which would require a Keleusma string-pool feature or a static-string-handle native.
 
 ## Intended Next Step
 
-Awaiting operator prompt. Candidate next moves: pick up one of the placeholder scroll handlers (Exercise 3.7), tune starvation (Exercise 5.1), pick up the background-music exercise (Exercise 2.6), or invest in support for shipping static string tables out of a Keleusma script so names could move too.
+Awaiting operator prompt. Candidate next moves: pick up one of the placeholder scroll handlers (Exercise 3.7), tune starvation (Exercise 5.1), pick up the background-music exercise (Exercise 2.6), or invest in the string-pool feature that would let monster names move into the bestiary script.
