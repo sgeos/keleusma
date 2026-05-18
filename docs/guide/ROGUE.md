@@ -17,9 +17,10 @@
 11. [Reading the combat script](#reading-the-combat-script)
 12. [Reading the artificial-intelligence archetypes](#reading-the-artificial-intelligence-archetypes)
 13. [Reading the item-effect scripts](#reading-the-item-effect-scripts)
-14. [Exercises for the reader](#exercises-for-the-reader)
-15. [Capstone projects](#capstone-projects)
-16. [Reference tables](#reference-tables)
+14. [Reading the consume and descend scripts](#reading-the-consume-and-descend-scripts)
+15. [Exercises for the reader](#exercises-for-the-reader)
+16. [Capstone projects](#capstone-projects)
+17. [Reference tables](#reference-tables)
 
 ## How this document relates to the source
 
@@ -73,7 +74,7 @@ The host opens a sixty-four-by-forty tile grid window. A two-row head-up display
 
 There is no inventory management surface. Food eats on contact. Gold piles add to the score on contact. Weapons and armor auto-equip when an upgrade is stepped over; non-upgrade weapons and armor are destroyed on contact rather than left blocking the cell. Potions and scrolls auto-pickup when the corresponding slot is empty. If the slot is full, a message describes the ground item by its disguised name and the held item by its disguised name.
 
-The head-up display is split across two rows. The top row is the hit-point pip strip by itself. The player's hit-point cap grows by three on every stairs descent, so at deep floors the strip can run across most of the window; giving it the whole row removes the layout collisions the prior single-row design produced at high floor counts. The second row carries, from left to right, an icon plus tier pip strip for the equipped weapon, an icon plus tier pip strip for the equipped armor, cyan depth ticks at the centre, a text readout giving the current floor number and the player's gold-as-score counter, the held potion and held scroll icons tinted by the per-run appearance colour, and amber hunger pips on the right. The tier pip strip fills one pip per gear level on a zero through nine scale. Bitmap-font text rendering is local to the example through `examples/rogue/text.rs`.
+The head-up display is split across two rows. The top row is the hit-point pip strip by itself. The player's hit-point cap grows by three on every stairs descent, so at deep floors the strip can run across most of the window; giving it the whole row removes the layout collisions the prior single-row design produced at high floor counts. The second row carries, from left to right, an icon plus tier pip strip for the equipped weapon, an icon plus tier pip strip for the equipped armor, cyan depth ticks at the centre, a text readout giving the current floor number and the player's gold-as-score counter, the held potion and held scroll icons tinted by the per-run appearance colour, and amber hunger pips on the right. The tier pip strip fills one pip per gear level on a zero through nineteen scale. Bitmap-font text rendering is local to the example through `examples/rogue/text.rs`.
 
 On death or victory the game blocks gameplay input and overlays a centred panel showing the outcome title plus final floor, gold, and turn count. Any keypress while the panel is shown exits the example.
 
@@ -132,7 +133,7 @@ The host owns all mutable game state. The map, the player, the monster table, th
         | per-virtual-machine `register_native_closure` and `vm.call(...)`
         v
 +------------------------------------------+
-|  Nineteen Keleusma virtual machines      |
+|  Twenty-two Keleusma virtual machines    |
 |  - rogue_game.kel          (loop main)   |
 |  - rogue_dungen.kel        (one-shot)    |
 |  - rogue_player_ai.kel     (pure fn)     |
@@ -152,6 +153,9 @@ The host owns all mutable game state. The map, the player, the monster table, th
 |  - rogue_ai_hunter.kel     (loop main)   |
 |  - rogue_item_potion.kel   (pure fn)     |
 |  - rogue_item_scroll.kel   (pure fn)     |
+|  - rogue_descend.kel       (pure fn)     |
+|  - rogue_consume.kel       (uses natives)|
+|  - rogue_scroll_apply.kel  (uses natives)|
 +------------------------------------------+
 ```
 
@@ -402,6 +406,16 @@ Status codes.
 
 The split between effect logic in script and status action in host is deliberate. Scripts describe what the effect produces. The host applies the engine-specific changes. Effects with delta-only behaviour stay in script. Effects that touch the field-of-view buffers, the random-number generator, or the equipment tables route through the status-action mechanism.
 
+The status-action mechanism itself runs in a second script. `rogue_scroll_apply.kel` takes the `(status_code, status_arg)` pair and dispatches to one of eight fine-grained natives: `host::set_explored_all`, `host::set_explored_radius`, `host::teleport_player_random`, `host::identify_all_potions`, `host::change_weapon_tier`, `host::change_armor_tier`, `host::sense_monsters`, and `host::scroll_placeholder`. Each native applies its world mutation and pushes its message. The split means modders can change which status code triggers which native, add new status codes, or compose multiple natives per status code, all by editing the script. The host's natives stay small and orthogonal.
+
+## Reading the consume and descend scripts
+
+Two short scripts wrap recurring world mutations so the host's autopickup driver and stairs-descent path can stay narrow.
+
+`rogue_consume.kel` is the per-kind consumption table. After `rogue_pickup.kel` returns `consume`, the host invokes `rogue_consume.kel` with the item kind and subtype. The script dispatches to one of seven fine-grained natives: `host::consume_food`, `host::take_gold`, `host::equip_weapon`, `host::equip_armor`, `host::stash_potion`, `host::stash_scroll`, and `host::eat_corpse`. Each native applies the matching world mutation and pushes the matching message. Adding a new item kind takes one new native plus one new arm in the script.
+
+`rogue_descend.kel` is the per-floor level-up calculator. The host snapshots the player's current level, hit-point cap, hit points, and skill plus the current floor; the script returns the post-descent five-tuple. The shipped script adds three to the hit-point cap and three to current hit points, adds one to skill, and increments level by one. Modders can change the progression curve or split the increment across stats without touching the host.
+
 ## Exercises for the reader
 
 The exercises below are graded by depth. Tier one exercises change values in existing scripts or tables. Tier two exercises introduce new content that fits the existing dispatch shape. Tier three exercises change the dispatch shape itself.
@@ -477,7 +491,7 @@ Each effect is a few lines on the host side. Reuse the existing status code valu
 
 **Exercise 5.3.** Audit the loot distribution. Count how many of each item kind the player encounters in a five-floor run. The shipped configuration tends to produce more gold piles than potions and scrolls combined. Gold is purely a score counter in the current rules, so a flood of gold drops feels meaningless. The exercise is to retune `spawn_items` in the dungeon generator so the player encounters roughly equal counts of food, potions, scrolls, and gold piles. Hypothesis. Equal counts make every pickup feel deliberate; lopsided counts make rare drops feel disproportionately exciting. Pick the configuration that fits the desired play feel.
 
-**Exercise 5.4.** Combat damage scaling. The shipped weapon table goes from two damage at tier zero to thirty-six damage at tier nine, and the armor table goes from zero to ten defense. The bestiary's monster hit points range from two for vermin to two hundred for the boss. The exercise is to play a run and identify the floor at which the player's current weapon stops being satisfying. Adjust either the weapon damage progression or the monster hit-point scaling so that floors thirty to fifty feel as decisive as floors one to ten. Hypothesis. The decisive feeling comes from kills per attack rather than absolute damage; a weapon that one-shots half the bestiary on its floor produces a different rhythm than one that requires three swings per kill.
+**Exercise 5.4.** Combat damage scaling. The shipped weapon table goes from two damage at tier zero to one hundred and eighteen damage at tier nineteen, and the armor table goes from zero to forty defense. The bestiary's monster hit points range from two for vermin to two hundred for the boss. The exercise is to play a run and identify the floor at which the player's current weapon stops being satisfying. Adjust either the weapon damage progression or the monster hit-point scaling so that floors thirty to fifty feel as decisive as floors one to ten. Hypothesis. The decisive feeling comes from kills per attack rather than absolute damage; a weapon that one-shots half the bestiary on its floor produces a different rhythm than one that requires three swings per kill.
 
 ## Capstone projects
 

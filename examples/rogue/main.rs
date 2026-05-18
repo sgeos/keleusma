@@ -196,7 +196,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 match outcome {
                                     0 => {}
                                     1 => {
-                                        descend_floor(&world, &mut dungen_vm)?;
+                                        descend_floor(&world, &mut dungen_vm, &ai_pool)?;
                                     }
                                     2 => {
                                         push_msg(&world, "You step into the light. You win!");
@@ -362,29 +362,39 @@ fn reload_scripts<'a, 'd>(
 /// Advance the player to the next floor. Level up first, then
 /// invoke the dungeon generator. The exit on floor 100 is
 /// handled by the turn dispatcher and never reaches this path.
+/// The level-up arithmetic lives in `rogue_descend.kel`.
 fn descend_floor(
     world: &Arc<Mutex<World>>,
     dungen_vm: &mut Vm,
+    ai_pool: &AiPoolHandle,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let next_floor = {
-        let mut w = world.lock().unwrap();
-        // Level-up. Damage persists. The max-HP delta is added
-        // to current HP so the newly added slots come in full
-        // but pre-existing damage remains.
-        let hp_gain = 3;
-        let skill_gain = 1;
-        w.player.level += 1;
-        w.player.max_hp += hp_gain;
-        w.player.hp += hp_gain;
-        w.player.skill += skill_gain;
-        w.floor += 1;
-        w.floor
+    let snapshot = {
+        let w = world.lock().unwrap();
+        (
+            w.player.level as i64,
+            w.player.max_hp as i64,
+            w.player.hp as i64,
+            w.player.skill as i64,
+            w.floor as i64,
+        )
     };
+    let (level, max_hp, hp, skill, floor) = ai_pool
+        .lock()
+        .unwrap()
+        .dispatch_descend(snapshot.0, snapshot.1, snapshot.2, snapshot.3, snapshot.4)?;
+    {
+        let mut w = world.lock().unwrap();
+        w.player.level = level as u32;
+        w.player.max_hp = max_hp as i32;
+        w.player.hp = hp as i32;
+        w.player.skill = skill as i32;
+        w.floor = floor as u32;
+    }
     push_msg(
         world,
-        format!("You descend to floor {}. You feel stronger.", next_floor),
+        format!("You descend to floor {}. You feel stronger.", floor),
     );
-    run_dungen(dungen_vm, next_floor as i64)?;
+    run_dungen(dungen_vm, floor)?;
     world.lock().unwrap().recompute_fov();
     Ok(())
 }

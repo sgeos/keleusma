@@ -1,0 +1,26 @@
+// Per-floor level-up. Pure function. The host snapshots the
+// player's current level, hit-point cap, hit points, and skill
+// plus the current floor and calls this script when the player
+// steps onto stairs. The script returns the post-descent
+// values which the host applies.
+//
+// Rules. Stepping onto stairs adds three to the hit-point cap
+// and three to current hit points (so the newly added slots
+// come in full but pre-existing damage persists), adds one
+// skill, and increments level by one. The floor counter
+// increments by one.
+//
+// Inputs and outputs are five-tuples in the same field order:
+// (level, max_hp, hp, skill, floor).
+
+fn main(
+    level: Word,
+    max_hp: Word,
+    hp: Word,
+    skill: Word,
+    floor: Word,
+) -> (Word, Word, Word, Word, Word) {
+    let hp_gain = 3;
+    let skill_gain = 1;
+    (level + 1, max_hp + hp_gain, hp + hp_gain, skill + skill_gain, floor + 1)
+}

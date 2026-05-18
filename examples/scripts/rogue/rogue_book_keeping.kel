@@ -20,9 +20,12 @@
 //   max_hp     Maximum hit points.
 //   hunger     Current hunger before the tick.
 //
-// Output tuple `(new_hp, new_hunger)`.
+// Output tuple `(new_hp, new_hunger, starving_msg)`. The third
+// field is one when the host should push "You are starving"
+// this tick, zero otherwise. The cadence is one message every
+// five turns while hunger is at zero.
 
-fn main(turn: Word, hp: Word, max_hp: Word, hunger: Word) -> (Word, Word) {
+fn main(turn: Word, hp: Word, max_hp: Word, hunger: Word) -> (Word, Word, Word) {
     let new_hunger = if hunger > 0 and turn % 2 == 0 {
         hunger - 1
     } else {
@@ -35,5 +38,6 @@ fn main(turn: Word, hp: Word, max_hp: Word, hunger: Word) -> (Word, Word) {
         0
     };
     let new_hp = hp - starve + regen;
-    (new_hp, new_hunger)
+    let starving_msg = if hunger == 0 and turn % 5 == 0 { 1 } else { 0 };
+    (new_hp, new_hunger, starving_msg)
 }

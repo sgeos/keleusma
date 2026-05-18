@@ -51,6 +51,9 @@ pub const EMBEDDED: &[(&str, &str)] = &[
     ("rogue_book_keeping.kel", include_str!("../scripts/rogue/rogue_book_keeping.kel")),
     ("rogue_pickup.kel", include_str!("../scripts/rogue/rogue_pickup.kel")),
     ("rogue_move_resolve.kel", include_str!("../scripts/rogue/rogue_move_resolve.kel")),
+    ("rogue_descend.kel", include_str!("../scripts/rogue/rogue_descend.kel")),
+    ("rogue_consume.kel", include_str!("../scripts/rogue/rogue_consume.kel")),
+    ("rogue_scroll_apply.kel", include_str!("../scripts/rogue/rogue_scroll_apply.kel")),
 ];
 
 /// Directory containing the Keleusma script sources on disk.
@@ -160,6 +163,9 @@ pub struct AiPool {
     pub book_keeping: Vm<'static, 'static>,
     pub pickup: Vm<'static, 'static>,
     pub move_resolve: Vm<'static, 'static>,
+    pub descend: Vm<'static, 'static>,
+    pub consume: Vm<'static, 'static>,
+    pub scroll_apply: Vm<'static, 'static>,
     /// Has the boss's `loop main` been started yet? The host
     /// uses `vm.call` on the first turn and `vm.resume` on every
     /// subsequent turn. Reset on hot reload.
@@ -197,6 +203,11 @@ impl AiPool {
         let book_keeping = build_vm(modules.book_keeping, leak_arena(), world, false)?;
         let pickup = build_vm(modules.pickup, leak_arena(), world, false)?;
         let move_resolve = build_vm(modules.move_resolve, leak_arena(), world, false)?;
+        let descend = build_vm(modules.descend, leak_arena(), world, false)?;
+        let mut consume = build_vm(modules.consume, leak_arena(), world, false)?;
+        let mut scroll_apply = build_vm(modules.scroll_apply, leak_arena(), world, false)?;
+        crate::natives::register_consume_natives(&mut consume, world);
+        crate::natives::register_scroll_apply_natives(&mut scroll_apply, world);
         Ok(Self {
             idle,
             chaser,
@@ -215,6 +226,9 @@ impl AiPool {
             book_keeping,
             pickup,
             move_resolve,
+            descend,
+            consume,
+            scroll_apply,
             boss_started: false,
             tracker_started: false,
             hunter_started: false,
@@ -249,6 +263,13 @@ impl AiPool {
         self.book_keeping = build_vm(modules.book_keeping, leak_arena(), world, false)?;
         self.pickup = build_vm(modules.pickup, leak_arena(), world, false)?;
         self.move_resolve = build_vm(modules.move_resolve, leak_arena(), world, false)?;
+        self.descend = build_vm(modules.descend, leak_arena(), world, false)?;
+        let mut consume = build_vm(modules.consume, leak_arena(), world, false)?;
+        let mut scroll_apply = build_vm(modules.scroll_apply, leak_arena(), world, false)?;
+        crate::natives::register_consume_natives(&mut consume, world);
+        crate::natives::register_scroll_apply_natives(&mut scroll_apply, world);
+        self.consume = consume;
+        self.scroll_apply = scroll_apply;
         self.boss_started = false;
         self.tracker_started = false;
         self.hunter_started = false;
@@ -290,9 +311,9 @@ impl AiPool {
         hp: i64,
         max_hp: i64,
         hunger: i64,
-    ) -> Result<(i64, i64), Box<dyn std::error::Error>> {
-        let t = call_pure_ints(&mut self.book_keeping, "book", &[turn, hp, max_hp, hunger], 2)?;
-        Ok((t[0], t[1]))
+    ) -> Result<(i64, i64, i64), Box<dyn std::error::Error>> {
+        let t = call_pure_ints(&mut self.book_keeping, "book", &[turn, hp, max_hp, hunger], 3)?;
+        Ok((t[0], t[1], t[2]))
     }
 
     /// Invoke the pickup-decision virtual machine. Returns the
@@ -365,6 +386,47 @@ impl AiPool {
         effect: i64,
     ) -> Result<EffectTuple, Box<dyn std::error::Error>> {
         call_pure_5(&mut self.scroll, "scroll", &[effect])
+    }
+
+    /// Invoke the descend script. Returns the post-descent
+    /// `(level, max_hp, hp, skill, floor)`.
+    pub fn dispatch_descend(
+        &mut self,
+        level: i64,
+        max_hp: i64,
+        hp: i64,
+        skill: i64,
+        floor: i64,
+    ) -> Result<(i64, i64, i64, i64, i64), Box<dyn std::error::Error>> {
+        let t = call_pure_ints(
+            &mut self.descend,
+            "descend",
+            &[level, max_hp, hp, skill, floor],
+            5,
+        )?;
+        Ok((t[0], t[1], t[2], t[3], t[4]))
+    }
+
+    /// Invoke the consume script. Returns nothing meaningful;
+    /// the script's effect is the series of fine-grained native
+    /// calls that mutate the world and push messages.
+    pub fn dispatch_consume(
+        &mut self,
+        kind: i64,
+        subtype: i64,
+    ) -> Result<i64, Box<dyn std::error::Error>> {
+        call_pure_int(&mut self.consume, "consume", &[kind, subtype])
+    }
+
+    /// Invoke the scroll-apply script. Same shape as
+    /// `dispatch_consume`. Side effects flow through the
+    /// fine-grained scroll-apply natives.
+    pub fn dispatch_scroll_apply(
+        &mut self,
+        code: i64,
+        arg: i64,
+    ) -> Result<i64, Box<dyn std::error::Error>> {
+        call_pure_int(&mut self.scroll_apply, "scroll_apply", &[code, arg])
     }
 
     pub fn vm_for(&mut self, ai: AiKind) -> &mut Vm<'static, 'static> {
@@ -599,6 +661,9 @@ pub struct AiModules {
     pub book_keeping: Module,
     pub pickup: Module,
     pub move_resolve: Module,
+    pub descend: Module,
+    pub consume: Module,
+    pub scroll_apply: Module,
 }
 
 impl AiModules {
@@ -630,6 +695,9 @@ impl AiModules {
             book_keeping: compile("rogue_book_keeping.kel")?,
             pickup: compile("rogue_pickup.kel")?,
             move_resolve: compile("rogue_move_resolve.kel")?,
+            descend: compile("rogue_descend.kel")?,
+            consume: compile("rogue_consume.kel")?,
+            scroll_apply: compile("rogue_scroll_apply.kel")?,
         })
     }
 }

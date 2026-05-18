@@ -1,0 +1,53 @@
+// Item consumption dispatcher. The host calls this script after
+// the pickup-decision script has returned `consume`. The script
+// reads the item kind and per-kind subtype and emits the right
+// fine-grained natives so the host's autopickup driver itself
+// carries no per-kind switch. Each native applies the matching
+// world mutation and emits the matching message.
+//
+// Inputs.
+//   kind     0 = food, 1 = gold, 2 = weapon, 3 = armor,
+//            4 = potion, 5 = scroll, 6 = corpse.
+//   subtype  For food: unused. For gold: pile value.
+//            For weapon and armor: tier index.
+//            For potion and scroll: per-run shuffled subtype.
+//            For corpse: monster kind index.
+
+use host::consume_food
+use host::take_gold
+use host::equip_weapon
+use host::equip_armor
+use host::stash_potion
+use host::stash_scroll
+use host::eat_corpse
+
+fn main(kind: Word, subtype: Word) -> Word {
+    if kind == 0 {
+        host::consume_food();
+    } else {
+        if kind == 1 {
+            host::take_gold(subtype);
+        } else {
+            if kind == 2 {
+                host::equip_weapon(subtype);
+            } else {
+                if kind == 3 {
+                    host::equip_armor(subtype);
+                } else {
+                    if kind == 4 {
+                        host::stash_potion(subtype);
+                    } else {
+                        if kind == 5 {
+                            host::stash_scroll(subtype);
+                        } else {
+                            if kind == 6 {
+                                host::eat_corpse(subtype);
+                            };
+                        };
+                    };
+                };
+            };
+        };
+    };
+    0
+}

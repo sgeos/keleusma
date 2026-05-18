@@ -1,0 +1,62 @@
+// Scroll-effect application. The host calls this script after
+// the scroll-effect script has produced a status code and
+// status argument. The script dispatches to the matching
+// fine-grained natives so the host's `handle_read` itself
+// carries no per-status switch. Each native applies the
+// matching world mutation and emits the matching message.
+//
+// Status codes (matched against the item-effect status table
+// in the manual). Codes 8, 9, 10 are placeholders; the
+// `scroll_placeholder` native emits a generic message until
+// the host gains real handlers for Sleep, Confusion, and
+// Remove Curse.
+//
+// Inputs.
+//   code     1 magic mapping, 2 teleport, 3 identify potions,
+//            4 enchant weapon, 5 enchant armor, 6 light,
+//            7 detect monsters, 8 sleep, 9 confusion,
+//            10 remove curse.
+//   arg      Per-code argument. Currently used by 4 and 5
+//            (enchantment delta).
+
+use host::set_explored_all
+use host::set_explored_radius
+use host::teleport_player_random
+use host::identify_all_potions
+use host::change_weapon_tier
+use host::change_armor_tier
+use host::sense_monsters
+use host::scroll_placeholder
+
+fn main(code: Word, arg: Word) -> Word {
+    if code == 1 {
+        host::set_explored_all();
+    } else {
+        if code == 2 {
+            host::teleport_player_random();
+        } else {
+            if code == 3 {
+                host::identify_all_potions();
+            } else {
+                if code == 4 {
+                    host::change_weapon_tier(arg);
+                } else {
+                    if code == 5 {
+                        host::change_armor_tier(arg);
+                    } else {
+                        if code == 6 {
+                            host::set_explored_radius(6);
+                        } else {
+                            if code == 7 {
+                                host::sense_monsters();
+                            } else {
+                                host::scroll_placeholder();
+                            };
+                        };
+                    };
+                };
+            };
+        };
+    };
+    0
+}

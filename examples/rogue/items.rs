@@ -39,46 +39,26 @@ pub struct Weapon {
 }
 
 pub const WEAPONS: &[Weapon] = &[
-    Weapon {
-        name: "fists",
-        damage: 2,
-    },
-    Weapon {
-        name: "rusty dagger",
-        damage: 4,
-    },
-    Weapon {
-        name: "short sword",
-        damage: 7,
-    },
-    Weapon {
-        name: "battle axe",
-        damage: 10,
-    },
-    Weapon {
-        name: "war hammer",
-        damage: 14,
-    },
-    Weapon {
-        name: "claymore",
-        damage: 18,
-    },
-    Weapon {
-        name: "halberd",
-        damage: 22,
-    },
-    Weapon {
-        name: "flamberge",
-        damage: 26,
-    },
-    Weapon {
-        name: "rune sword",
-        damage: 30,
-    },
-    Weapon {
-        name: "vorpal blade",
-        damage: 36,
-    },
+    Weapon { name: "fists", damage: 2 },
+    Weapon { name: "rusty dagger", damage: 4 },
+    Weapon { name: "short sword", damage: 7 },
+    Weapon { name: "battle axe", damage: 10 },
+    Weapon { name: "war hammer", damage: 14 },
+    Weapon { name: "claymore", damage: 18 },
+    Weapon { name: "halberd", damage: 22 },
+    Weapon { name: "flamberge", damage: 26 },
+    Weapon { name: "rune sword", damage: 30 },
+    Weapon { name: "vorpal blade", damage: 36 },
+    Weapon { name: "moonblade", damage: 42 },
+    Weapon { name: "dragonbone spear", damage: 48 },
+    Weapon { name: "starforged axe", damage: 55 },
+    Weapon { name: "adamant flail", damage: 62 },
+    Weapon { name: "voidshard", damage: 70 },
+    Weapon { name: "demonbane", damage: 78 },
+    Weapon { name: "soulrender", damage: 86 },
+    Weapon { name: "god-piercer", damage: 95 },
+    Weapon { name: "world-ender", damage: 105 },
+    Weapon { name: "last word", damage: 118 },
 ];
 
 // -- Armor -----------------------------------------------------------
@@ -89,46 +69,26 @@ pub struct Armor {
 }
 
 pub const ARMORS: &[Armor] = &[
-    Armor {
-        name: "rags",
-        defense: 0,
-    },
-    Armor {
-        name: "padded jacket",
-        defense: 1,
-    },
-    Armor {
-        name: "leather armor",
-        defense: 2,
-    },
-    Armor {
-        name: "studded leather",
-        defense: 3,
-    },
-    Armor {
-        name: "ring mail",
-        defense: 4,
-    },
-    Armor {
-        name: "chain mail",
-        defense: 5,
-    },
-    Armor {
-        name: "scale mail",
-        defense: 6,
-    },
-    Armor {
-        name: "splint mail",
-        defense: 7,
-    },
-    Armor {
-        name: "plate mail",
-        defense: 8,
-    },
-    Armor {
-        name: "rune plate",
-        defense: 10,
-    },
+    Armor { name: "rags", defense: 0 },
+    Armor { name: "padded jacket", defense: 1 },
+    Armor { name: "leather armor", defense: 2 },
+    Armor { name: "studded leather", defense: 3 },
+    Armor { name: "ring mail", defense: 4 },
+    Armor { name: "chain mail", defense: 5 },
+    Armor { name: "scale mail", defense: 6 },
+    Armor { name: "splint mail", defense: 7 },
+    Armor { name: "plate mail", defense: 8 },
+    Armor { name: "rune plate", defense: 10 },
+    Armor { name: "mithril mail", defense: 12 },
+    Armor { name: "elven cuirass", defense: 14 },
+    Armor { name: "dragonscale", defense: 16 },
+    Armor { name: "dwarven plate", defense: 18 },
+    Armor { name: "celestial mail", defense: 20 },
+    Armor { name: "bulwark of ages", defense: 23 },
+    Armor { name: "adamantine plate", defense: 26 },
+    Armor { name: "aegis of the host", defense: 30 },
+    Armor { name: "starshield", defense: 35 },
+    Armor { name: "last guard", defense: 40 },
 ];
 
 // -- Potions ---------------------------------------------------------

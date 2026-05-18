@@ -241,7 +241,8 @@ impl Renderer {
             let _ = canvas.fill_rect(Rect::new(f_x0 + i * 4, row_y + 4, 2, pip_h));
         }
 
-        // Weapon and armor tier indicators.
+        // Weapon and armor tier indicators. Each strip is twenty
+        // pips wide so the deepest-floor gear reads at a glance.
         let weapon_icon_x = 8_i32;
         self.draw_gear_indicator(
             canvas,
@@ -252,7 +253,7 @@ impl Renderer {
             world.player.weapon as i32,
             Color::RGB(220, 80, 60),
         )?;
-        let armor_icon_x = weapon_icon_x + 24 + 36;
+        let armor_icon_x = weapon_icon_x + 24 + 66;
         self.draw_gear_indicator(
             canvas,
             atlas,
@@ -320,13 +321,13 @@ impl Renderer {
         let tex = atlas.item(kind);
         tex.set_color_mod(255, 255, 255);
         blit_tex(canvas, tex, icon_x, icon_y, 24, 24)?;
-        // Tier pips. Ten vertical bars, two pixels wide with one
-        // pixel gap. The bar is filled solid when its index is
-        // less than or equal to `tier`, dim otherwise.
+        // Tier pips. Twenty vertical bars, two pixels wide with
+        // one pixel gap. The bar is filled solid when its index
+        // is less than or equal to `tier`, dim otherwise.
         let pip_x0 = icon_x + 26;
         let pip_top = icon_y + 3;
         let pip_h = (INFO_BAR_PX as i32 - 6) as u32;
-        for i in 0..10i32 {
+        for i in 0..20i32 {
             canvas.set_draw_color(if i <= tier {
                 fill_color
             } else {

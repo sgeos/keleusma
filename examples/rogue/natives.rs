@@ -53,6 +53,83 @@ pub fn register_game_natives(vm: &mut Vm, world: &WorldHandle, ai_pool: &AiPoolH
     register_tick_book_keeping(vm, world, ai_pool);
 }
 
+/// Register the natives the autopickup script needs. Each
+/// native is a fine-grained world mutation for one item kind
+/// plus the matching message push.
+pub fn register_consume_natives(vm: &mut Vm, world: &WorldHandle) {
+    register_unit_native(vm, world, "host::consume_food", consume_food);
+    register_int_native(vm, world, "host::take_gold", take_gold);
+    register_int_native(vm, world, "host::equip_weapon", equip_weapon);
+    register_int_native(vm, world, "host::equip_armor", equip_armor);
+    register_int_native(vm, world, "host::stash_potion", stash_potion);
+    register_int_native(vm, world, "host::stash_scroll", stash_scroll);
+    register_int_native(vm, world, "host::eat_corpse", eat_corpse);
+}
+
+/// Register the natives the scroll-apply script needs. Each
+/// native applies one scroll status code's world mutation and
+/// emits the matching message.
+pub fn register_scroll_apply_natives(vm: &mut Vm, world: &WorldHandle) {
+    register_unit_native(vm, world, "host::set_explored_all", set_explored_all);
+    register_int_native(
+        vm,
+        world,
+        "host::set_explored_radius",
+        set_explored_radius,
+    );
+    register_unit_native(
+        vm,
+        world,
+        "host::teleport_player_random",
+        teleport_player_random,
+    );
+    register_unit_native(
+        vm,
+        world,
+        "host::identify_all_potions",
+        identify_all_potions,
+    );
+    register_int_native(vm, world, "host::change_weapon_tier", change_weapon_tier);
+    register_int_native(vm, world, "host::change_armor_tier", change_armor_tier);
+    register_unit_native(vm, world, "host::sense_monsters", sense_monsters);
+    register_unit_native(vm, world, "host::scroll_placeholder", scroll_placeholder);
+}
+
+fn register_unit_native(
+    vm: &mut Vm,
+    world: &WorldHandle,
+    name: &'static str,
+    op: fn(&mut World),
+) {
+    let w = world.clone();
+    vm.register_native_closure(
+        name,
+        Box::new(move |args: &[Value]| -> Result<Value, VmError> {
+            check_arity(name, 0, args)?;
+            op(&mut w.lock().unwrap());
+            Ok(Value::Unit)
+        }),
+    );
+}
+
+fn register_int_native(
+    vm: &mut Vm,
+    world: &WorldHandle,
+    name: &'static str,
+    op: fn(&mut World, i64),
+) {
+    let w = world.clone();
+    vm.register_native_closure(
+        name,
+        Box::new(move |args: &[Value]| -> Result<Value, VmError> {
+            check_arity(name, 1, args)?;
+            let arg = as_i64(&args[0])?;
+            op(&mut w.lock().unwrap(), arg);
+            Ok(Value::Unit)
+        }),
+    );
+}
+
 // -- Game-tick natives ---------------------------------------------
 
 /// `host::run_player_turn(cmd)` dispatches the player
@@ -303,19 +380,31 @@ fn handle_read(world: &WorldHandle, ai_pool: &AiPoolHandle) -> i64 {
         return outcome::CONTINUE;
     };
 
+    let (was_identified, true_name) = {
+        let mut w = world.lock().unwrap();
+        let bit = 1u32 << effect_idx;
+        let was_identified = (w.player.identified_scrolls & bit) != 0;
+        w.player.identified_scrolls |= bit;
+        w.player.scroll_slot = None;
+        apply_player_deltas(
+            &mut w,
+            hp_delta as i32,
+            max_hp_delta as i32,
+            skill_delta as i32,
+        );
+        (
+            was_identified,
+            items::scroll_true_name(items::SCROLL_EFFECTS[effect_idx as usize]),
+        )
+    };
+    // The status code is applied by `rogue_scroll_apply.kel`,
+    // which dispatches to fine-grained natives that mutate the
+    // world and push their own messages.
+    let _ = ai_pool
+        .lock()
+        .unwrap()
+        .dispatch_scroll_apply(status_code, status_arg);
     let mut w = world.lock().unwrap();
-    let bit = 1u32 << effect_idx;
-    let was_identified = (w.player.identified_scrolls & bit) != 0;
-    w.player.identified_scrolls |= bit;
-    w.player.scroll_slot = None;
-    apply_player_deltas(
-        &mut w,
-        hp_delta as i32,
-        max_hp_delta as i32,
-        skill_delta as i32,
-    );
-    apply_scroll_status(&mut w, status_code, status_arg);
-    let true_name = items::scroll_true_name(items::SCROLL_EFFECTS[effect_idx as usize]);
     if was_identified {
         w.push_message(format!("You read the scroll of {}.", true_name));
     } else {
@@ -403,14 +492,13 @@ fn tick_book_keeping(world: &WorldHandle, ai_pool: &AiPoolHandle) -> i64 {
         let mut pool = ai_pool.lock().unwrap();
         pool.dispatch_book_keeping(snapshot.0, snapshot.1, snapshot.2, snapshot.3)
     };
-    let Ok((new_hp, new_hunger)) = result else {
+    let Ok((new_hp, new_hunger, starving_msg)) = result else {
         return outcome::CONTINUE;
     };
     let mut w = world.lock().unwrap();
-    let was_hungry = w.player.hunger == 0;
     w.player.hp = new_hp as i32;
     w.player.hunger = new_hunger as i32;
-    if was_hungry && w.player.turn.is_multiple_of(5) {
+    if starving_msg != 0 {
         w.push_message(String::from("You are starving."));
     }
     w.recompute_fov();
@@ -438,92 +526,6 @@ fn apply_potion_status(w: &mut World, status_code: i64) {
     if status_code == 11 {
         w.player.hp = w.player.max_hp;
         w.push_message(String::from("Vigor floods through you."));
-    }
-}
-
-fn apply_scroll_status(w: &mut World, status_code: i64, status_arg: i64) {
-    match status_code {
-        1 => {
-            for e in w.explored.iter_mut() {
-                *e = true;
-            }
-            w.push_message(String::from("The dungeon's layout fills your mind."));
-        }
-        2 => {
-            for _ in 0..256 {
-                let rx = (w.rng_next() % crate::MAP_W) as i32;
-                let ry = (w.rng_next() % crate::MAP_H) as i32;
-                if w.map.is_walkable(rx, ry) && !w.monsters.iter().any(|m| m.x == rx && m.y == ry) {
-                    w.player.x = rx;
-                    w.player.y = ry;
-                    w.push_message(String::from("The world dissolves and reforms."));
-                    // Note the landing tile so the player knows
-                    // when they have arrived on stairs without
-                    // moving. The auto-descend path requires a
-                    // movement step; teleport bypasses that, so
-                    // an explicit message closes the gap.
-                    match w.map.get(rx, ry) {
-                        crate::world::Tile::StairsDown => {
-                            w.push_message(String::from("You stand on the stairs down."));
-                        }
-                        crate::world::Tile::Exit => {
-                            w.push_message(String::from("You stand on the exit."));
-                        }
-                        _ => {}
-                    }
-                    return;
-                }
-            }
-            w.push_message(String::from("The teleport fizzles."));
-        }
-        3 => {
-            w.player.identified_potions = u32::MAX;
-            w.push_message(String::from("All your potions reveal their natures."));
-        }
-        4 => {
-            let new_tier = (w.player.weapon as i64 + status_arg)
-                .clamp(0, (items::WEAPONS.len() as i64) - 1) as u8;
-            w.player.weapon = new_tier;
-            let name = items::WEAPONS[new_tier as usize].name;
-            w.push_message(format!("Your weapon shimmers. You hold the {}.", name));
-        }
-        5 => {
-            let new_tier = (w.player.armor as i64 + status_arg)
-                .clamp(0, (items::ARMORS.len() as i64) - 1) as u8;
-            w.player.armor = new_tier;
-            let name = items::ARMORS[new_tier as usize].name;
-            w.push_message(format!("Your armor hums. You wear the {}.", name));
-        }
-        6 => {
-            let cx = w.player.x;
-            let cy = w.player.y;
-            for dy in -6..=6 {
-                for dx in -6..=6 {
-                    let x = cx + dx;
-                    let y = cy + dy;
-                    if x >= 0 && y >= 0 && (x as u32) < crate::MAP_W && (y as u32) < crate::MAP_H {
-                        let idx = (y as u32 * crate::MAP_W + x as u32) as usize;
-                        w.explored[idx] = true;
-                    }
-                }
-            }
-            w.push_message(String::from("A bright light flares around you."));
-        }
-        7 => {
-            let n = w.monsters.len();
-            w.push_message(format!("You sense {} creatures on this floor.", n));
-        }
-        _ => {
-            // Status codes 8 (Sleep), 9 (Confusion), and 10
-            // (Remove Curse) emitted by `rogue_item_scroll.kel`
-            // fall through here. The scripts produce the codes
-            // correctly; implementing the host-side effects is
-            // Exercise 3.7 in the manual. The placeholder
-            // message is intentionally vague so a future
-            // implementation can replace it without script
-            // changes.
-            w.push_message(String::from("The scroll's magic dissipates harmlessly."));
-        }
     }
 }
 
@@ -671,74 +673,16 @@ fn autopickup(world: &WorldHandle, ai_pool: &AiPoolHandle) {
         }
         return;
     }
-    // action == 1: apply per-kind consumption.
-    match item.kind {
-        ItemKind::Food => {
-            let hunger = w.player.hunger + 40;
-            w.player.hunger = hunger.min(w.player.max_hunger);
-            w.push_message(String::from("You devour the ration. Your hunger ebbs."));
-        }
-        ItemKind::Gold => {
-            let value = item.subtype as u32;
-            w.player.gold += value;
-            w.push_message(format!("You scoop up {} gold pieces.", value));
-        }
-        ItemKind::Weapon => {
-            let new_idx = item.subtype as usize;
-            if new_idx < items::WEAPONS.len() {
-                let name = items::WEAPONS[new_idx].name;
-                w.player.weapon = item.subtype;
-                w.push_message(format!("You take up the {}.", name));
-            }
-        }
-        ItemKind::Armor => {
-            let new_idx = item.subtype as usize;
-            if new_idx < items::ARMORS.len() {
-                let name = items::ARMORS[new_idx].name;
-                w.player.armor = item.subtype;
-                w.push_message(format!("You don the {}.", name));
-            }
-        }
-        ItemKind::Potion => {
-            w.player.potion_slot = Some(item.subtype);
-            let name = potion_display_name(&w, item.subtype);
-            w.push_message(format!("You pocket the {}.", name));
-        }
-        ItemKind::Scroll => {
-            w.player.scroll_slot = Some(item.subtype);
-            let name = scroll_display_name(&w, item.subtype);
-            w.push_message(format!("You pocket the {}.", name));
-        }
-        ItemKind::Corpse => {
-            let kind = bestiary::kind(item.subtype as usize);
-            let satiation = kind.corpse_satiation();
-            let hp_delta = kind.corpse_hp_delta();
-            let name = kind.name;
-            if satiation > 0 {
-                let hunger = w.player.hunger + satiation;
-                w.player.hunger = hunger.min(w.player.max_hunger);
-            }
-            if hp_delta != 0 {
-                w.player.hp += hp_delta;
-                if w.player.hp > w.player.max_hp {
-                    w.player.hp = w.player.max_hp;
-                }
-            }
-            if hp_delta < 0 {
-                w.push_message(format!(
-                    "You force down the {} corpse. It sickens you.",
-                    name
-                ));
-            } else if hp_delta > 0 {
-                w.push_message(format!(
-                    "The {} corpse restores you somehow.",
-                    name
-                ));
-            } else {
-                w.push_message(format!("You eat the {} corpse.", name));
-            }
-        }
-    }
+    // action == 1: hand off per-kind consumption to the
+    // `rogue_consume.kel` script. The script dispatches on the
+    // item kind and calls fine-grained natives that mutate the
+    // world and push the matching message. Drop the world lock
+    // before the script call so its natives can re-acquire.
+    drop(w);
+    let _ = ai_pool
+        .lock()
+        .unwrap()
+        .dispatch_consume(item.kind.as_u8() as i64, item.subtype as i64);
 }
 
 /// Compose a display name for a potion. Returns the true
@@ -1103,4 +1047,164 @@ fn check_arity(name: &str, expected: usize, args: &[Value]) -> Result<(), VmErro
         )));
     }
     Ok(())
+}
+
+// -- Consume natives ------------------------------------------------
+//
+// Each function below is one arm of the autopickup consumption
+// table. The Keleusma `rogue_consume.kel` script dispatches on
+// item kind and calls the matching native; the native applies
+// the world mutation and emits the message.
+
+fn consume_food(w: &mut World) {
+    let hunger = w.player.hunger + 40;
+    w.player.hunger = hunger.min(w.player.max_hunger);
+    w.push_message(String::from("You devour the ration. Your hunger ebbs."));
+}
+
+fn take_gold(w: &mut World, amount: i64) {
+    let value = amount as u32;
+    w.player.gold += value;
+    w.push_message(format!("You scoop up {} gold pieces.", value));
+}
+
+fn equip_weapon(w: &mut World, tier: i64) {
+    let idx = tier as usize;
+    if idx < items::WEAPONS.len() {
+        let name = items::WEAPONS[idx].name;
+        w.player.weapon = tier as u8;
+        w.push_message(format!("You take up the {}.", name));
+    }
+}
+
+fn equip_armor(w: &mut World, tier: i64) {
+    let idx = tier as usize;
+    if idx < items::ARMORS.len() {
+        let name = items::ARMORS[idx].name;
+        w.player.armor = tier as u8;
+        w.push_message(format!("You don the {}.", name));
+    }
+}
+
+fn stash_potion(w: &mut World, subtype: i64) {
+    let idx = subtype as u8;
+    w.player.potion_slot = Some(idx);
+    let name = potion_display_name(w, idx);
+    w.push_message(format!("You pocket the {}.", name));
+}
+
+fn stash_scroll(w: &mut World, subtype: i64) {
+    let idx = subtype as u8;
+    w.player.scroll_slot = Some(idx);
+    let name = scroll_display_name(w, idx);
+    w.push_message(format!("You pocket the {}.", name));
+}
+
+fn eat_corpse(w: &mut World, monster_kind: i64) {
+    let kind = bestiary::kind(monster_kind as usize);
+    let satiation = kind.corpse_satiation();
+    let hp_delta = kind.corpse_hp_delta();
+    let name = kind.name;
+    if satiation > 0 {
+        let hunger = w.player.hunger + satiation;
+        w.player.hunger = hunger.min(w.player.max_hunger);
+    }
+    if hp_delta != 0 {
+        w.player.hp += hp_delta;
+        if w.player.hp > w.player.max_hp {
+            w.player.hp = w.player.max_hp;
+        }
+    }
+    if hp_delta < 0 {
+        w.push_message(format!(
+            "You force down the {} corpse. It sickens you.",
+            name
+        ));
+    } else if hp_delta > 0 {
+        w.push_message(format!("The {} corpse restores you somehow.", name));
+    } else {
+        w.push_message(format!("You eat the {} corpse.", name));
+    }
+}
+
+// -- Scroll-apply natives -------------------------------------------
+//
+// Each function applies one scroll status code's world mutation
+// and emits the matching message. The Keleusma
+// `rogue_scroll_apply.kel` script dispatches on the status code
+// and calls the matching native.
+
+fn set_explored_all(w: &mut World) {
+    for e in w.explored.iter_mut() {
+        *e = true;
+    }
+    w.push_message(String::from("The dungeon's layout fills your mind."));
+}
+
+fn set_explored_radius(w: &mut World, radius: i64) {
+    let cx = w.player.x;
+    let cy = w.player.y;
+    let r = radius as i32;
+    for dy in -r..=r {
+        for dx in -r..=r {
+            let x = cx + dx;
+            let y = cy + dy;
+            if x >= 0 && y >= 0 && (x as u32) < crate::MAP_W && (y as u32) < crate::MAP_H {
+                let idx = (y as u32 * crate::MAP_W + x as u32) as usize;
+                w.explored[idx] = true;
+            }
+        }
+    }
+    w.push_message(String::from("A bright light flares around you."));
+}
+
+fn teleport_player_random(w: &mut World) {
+    for _ in 0..256 {
+        let rx = (w.rng_next() % crate::MAP_W) as i32;
+        let ry = (w.rng_next() % crate::MAP_H) as i32;
+        if w.map.is_walkable(rx, ry) && !w.monsters.iter().any(|m| m.x == rx && m.y == ry) {
+            w.player.x = rx;
+            w.player.y = ry;
+            w.push_message(String::from("The world dissolves and reforms."));
+            match w.map.get(rx, ry) {
+                Tile::StairsDown => {
+                    w.push_message(String::from("You stand on the stairs down."));
+                }
+                Tile::Exit => {
+                    w.push_message(String::from("You stand on the exit."));
+                }
+                _ => {}
+            }
+            return;
+        }
+    }
+    w.push_message(String::from("The teleport fizzles."));
+}
+
+fn identify_all_potions(w: &mut World) {
+    w.player.identified_potions = u32::MAX;
+    w.push_message(String::from("All your potions reveal their natures."));
+}
+
+fn change_weapon_tier(w: &mut World, delta: i64) {
+    let new_tier = (w.player.weapon as i64 + delta).clamp(0, (items::WEAPONS.len() as i64) - 1) as u8;
+    w.player.weapon = new_tier;
+    let name = items::WEAPONS[new_tier as usize].name;
+    w.push_message(format!("Your weapon shimmers. You hold the {}.", name));
+}
+
+fn change_armor_tier(w: &mut World, delta: i64) {
+    let new_tier = (w.player.armor as i64 + delta).clamp(0, (items::ARMORS.len() as i64) - 1) as u8;
+    w.player.armor = new_tier;
+    let name = items::ARMORS[new_tier as usize].name;
+    w.push_message(format!("Your armor hums. You wear the {}.", name));
+}
+
+fn sense_monsters(w: &mut World) {
+    let n = w.monsters.len();
+    w.push_message(format!("You sense {} creatures on this floor.", n));
+}
+
+fn scroll_placeholder(w: &mut World) {
+    w.push_message(String::from("The scroll's magic dissipates harmlessly."));
 }
