@@ -8,7 +8,120 @@ Recipes are working patterns for embedding Keleusma in larger systems. Each reci
 
 | Recipe | Use it when |
 |--------|-------------|
+| [Working with `Text`](#working-with-text) | The host or scripts need to handle strings. |
+| [Auto-sizing the arena from the module](#auto-sizing-the-arena-from-the-module) | The host wants exact `WCMU`-bounded arena sizing instead of a hardcoded capacity. |
 | [The data-loader pattern](#the-data-loader-pattern) | The host needs read-only configuration data that benefits from script-side editing. |
+
+---
+
+## Working with `Text`
+
+### Problem
+
+The host or a script needs to handle strings. Names, log messages, error reports, configuration values, identifiers from the outside world. Keleusma is not a value-add for string processing, but real applications routinely need some string work at the boundary.
+
+### Solution
+
+Three rules.
+
+**One. Enable the `text` cargo feature.** String literals and the `Text` primitive type are gated behind this feature. With it off, the lexer rejects `"..."` and `f"..."` with an explicit error, and the parser does not recognise the `Text` type. Hosts that want script-side string support enable the feature in their `Cargo.toml`.
+
+```toml
+[dependencies]
+keleusma = { version = "0.2", features = ["text"] }
+```
+
+**Two. Static and dynamic strings flow on different paths.** Keleusma distinguishes two string variants behind the surface `Text` type. *Static* strings reside in the bytecode's read-only data section; source-level string literals compile to static strings; they are immutable, fixed-size handles, and admissible in function arguments, return values, and `yield` payloads. *Dynamic* strings reside in the arena heap; they are produced by native function calls; they are admissible on the stack and in local bindings but cannot cross a `yield` boundary. Treating the two cases uniformly through `Text` is the script's view; the runtime keeps the distinction load-bearing for safety.
+
+**Three. Register Rust functions for everything beyond literals and the bundled helpers.** The surface language supports string literals and the bundled utility natives (`to_string`, `concat`, `slice`, `length` against text). Anything fancier — formatting, splitting, regular expressions, Unicode operations, encoding conversion — belongs in a Rust function the host registers and the script imports.
+
+```rust
+vm.register_fn("text::upper", |s: String| -> String { s.to_uppercase() });
+vm.register_fn("text::trim",  |s: String| -> String { s.trim().to_string() });
+```
+
+```keleusma
+use text::upper
+use text::trim
+
+fn greet(name: Text) -> Text {
+    f"hello, {upper(trim(name))}!"
+}
+```
+
+### F-strings need explicit imports
+
+The `f"..."` syntax desugars at lex time into a chain of `concat` and `to_string` calls. The script must import both functions or compilation fails. Brace escapes inside an f-string use a leading backslash (`\{`, `\}`).
+
+```keleusma
+use concat
+use to_string
+
+fn main() -> Text {
+    f"hello, {name}!"
+}
+```
+
+### Why this works for an RTOS or embedded target
+
+Static strings live in the read-only data section and cost no allocation. A script that returns names or log labels through static strings consumes zero arena. Dynamic strings cost arena heap that counts against the script's WCMU, which the verifier bounds. There is no path by which string work can grow unbounded; either it goes through a fixed-size static-string handle, or it counts against a verifier-bounded heap allocation, or it never compiles.
+
+### Cross-references
+
+- [FAQ.md, Strings](./FAQ.md#strings) covers the surface caveats, the f-string import requirement, brace escaping, and identifier reuse rules in more detail.
+- [TYPE_SYSTEM.md, Text Types](../design/TYPE_SYSTEM.md#text-types) is the type-system specification.
+- The rogue example's bestiary script returns monster names through this pattern.
+
+---
+
+## Auto-sizing the arena from the module
+
+### Problem
+
+Every Keleusma `Vm` needs an arena. The host picks the capacity. Pick too small and the verifier rejects the module at `Vm::new` with `VerifyError`; pick too large and the host wastes memory it does not need. Embedded targets in particular want exact sizing because they may not have a heap at all (the arena runs from a static `[u8; N]` buffer in `.bss`).
+
+### Solution
+
+Use `keleusma::vm::auto_arena_capacity_for(&module, native_wcmu)` to compute the minimum-required capacity from the compiled module before constructing the VM. The function walks the module's Stream chunks, sums each chunk's stack and heap WCMU, and returns the largest total. The result is the smallest capacity that admits the module under the supplied native attestations.
+
+```rust
+use keleusma::vm::{auto_arena_capacity_for, Vm};
+use keleusma::Arena;
+
+let cap = auto_arena_capacity_for(&module, &[])?;
+let arena = Arena::with_capacity(cap);
+let vm = Vm::new(module, &arena)?;
+```
+
+The second argument is a slice of per-native heap-allocation attestations. Pass an empty slice when no native allocates from the arena. Pass the appropriate `u32` values when the host has registered heap-allocating natives like the bundled `concat` and `to_string`.
+
+```rust
+// Script that uses `concat` and `to_string`. The bundled utility
+// natives have attested heap WCMU values; pass them through.
+let native_wcmu = &[concat_wcmu, to_string_wcmu];
+let cap = auto_arena_capacity_for(&module, native_wcmu)?;
+```
+
+### When to use which arena-sizing option
+
+The library offers three patterns.
+
+| Option | Use it when |
+|--------|-------------|
+| `Arena::with_capacity(DEFAULT_ARENA_CAPACITY)` | Hosted development and quick prototyping; a generous default capacity is acceptable. |
+| `auto_arena_capacity_for` | Production hosts that want the smallest correct capacity, especially when running many VMs or when host memory is tight. |
+| `Arena::from_static_buffer` | Bare-metal targets with no heap. The host owns a fixed-size buffer in `.bss` and hands its pointer to the arena. |
+
+The auto-sizing option composes with the static-buffer option. Compute the capacity at compile time (if the module is `const`-loadable through `include_bytes!`) or at build time (running the host once to print the value), then declare the static buffer at that size.
+
+### Failure mode
+
+If the chosen capacity is below the module's WCMU, `Vm::new` returns `VmError::VerifyError` before any code runs. This is detected at construction time, not at execution time, so the failure is observable up front rather than in the middle of a run.
+
+### Cross-references
+
+- [EMBEDDING.md, Arena Sizing](./EMBEDDING.md#arena-sizing) is the embedding-guide reference.
+- The bundled `examples/wcmu_basic.rs` shows the full auto-sizing pattern end to end.
 
 ---
 
