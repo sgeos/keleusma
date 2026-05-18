@@ -188,6 +188,16 @@ fn handle_move_into_cell(world: &WorldHandle, ai_pool: &AiPoolHandle, tx: i32, t
             // rule. Without this, monsters react to the player's
             // pre-move position.
             w.recompute_fov();
+            // Auto-descend when the player steps onto stairs or
+            // the floor-one-hundred exit tile. The manual
+            // greater-than keybind still works for cases that
+            // bypass this path, for example teleporting directly
+            // onto stairs.
+            match w.map.get(nx, ny) {
+                crate::world::Tile::StairsDown => return outcome::DESCENDED,
+                crate::world::Tile::Exit => return outcome::WON,
+                _ => {}
+            }
         }
         MoveAction::Blocked => {}
     }
@@ -457,6 +467,14 @@ fn apply_scroll_status(w: &mut World, status_code: i64, status_arg: i64) {
             w.push_message(format!("You sense {} creatures on this floor.", n));
         }
         _ => {
+            // Status codes 8 (Sleep), 9 (Confusion), and 10
+            // (Remove Curse) emitted by `rogue_item_scroll.kel`
+            // fall through here. The scripts produce the codes
+            // correctly; implementing the host-side effects is
+            // Exercise 3.7 in the manual. The placeholder
+            // message is intentionally vague so a future
+            // implementation can replace it without script
+            // changes.
             w.push_message(String::from("The scroll's magic dissipates harmlessly."));
         }
     }

@@ -15,9 +15,9 @@
 //   5 = enchant armor; advance armor tier by `status_arg`
 //   6 = light; reveal the current room
 //   7 = detect monsters; reveal monster positions for one turn
-//   8 = sleep; no-op placeholder
-//   9 = confusion; no-op placeholder
-//  10 = remove curse; no-op placeholder
+//   8 = sleep; exercise 3.7 in ROGUE.md
+//   9 = confusion; exercise 3.7 in ROGUE.md
+//  10 = remove curse; exercise 3.7 in ROGUE.md
 //
 // Effect identifiers map to the host's `ScrollEffect` enum:
 //   0 = identify

@@ -20,9 +20,9 @@
 //   4 = acid             (-5 HP)
 //   5 = strength         (+2 max HP, +2 HP)
 //   6 = skill            (+1 skill)
-//   7 = speed            (no-op placeholder)
-//   8 = levitation       (no-op placeholder)
-//   9 = see invisible    (no-op placeholder)
+//   7 = speed            (exercise 3.7 in ROGUE.md)
+//   8 = levitation       (exercise 3.7 in ROGUE.md)
+//   9 = see invisible    (exercise 3.7 in ROGUE.md)
 
 fn main(effect: Word, hp: Word, max_hp: Word) -> (Word, Word, Word, Word, Word) {
     match effect {

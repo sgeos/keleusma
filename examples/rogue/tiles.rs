@@ -241,16 +241,23 @@ fn draw_door(c: &mut Canvas<Window>, open: bool) {
 
 fn draw_stairs_down(c: &mut Canvas<Window>) {
     draw_floor(c);
-    c.set_draw_color(Color::RGB(40, 80, 160));
-    let step = (TILE_PX / 6) as i32;
-    for i in 0..5 {
-        let y = step * (i + 1);
-        let w = TILE_PX - 2 * (i as u32 + 1) * step as u32;
-        let x = (i + 1) * step;
-        if w > 0 {
-            let _ = c.fill_rect(Rect::new(x, y, w, step as u32));
-        }
-    }
+    let cx = (TILE_PX / 2) as i32;
+    // Three stepped bars decreasing in width, drawn top to
+    // bottom. The visual reads as descending stairs viewed from
+    // above with the player moving deeper into the dungeon.
+    c.set_draw_color(Color::RGB(40, 80, 180));
+    let _ = c.fill_rect(Rect::new(cx - 9, 4, 18, 5));
+    let _ = c.fill_rect(Rect::new(cx - 6, 10, 12, 5));
+    let _ = c.fill_rect(Rect::new(cx - 3, 16, 6, 5));
+    // Bright highlights along the top edge of each step give the
+    // sprite a sense of depth.
+    c.set_draw_color(Color::RGB(140, 200, 240));
+    let _ = c.fill_rect(Rect::new(cx - 9, 4, 18, 1));
+    let _ = c.fill_rect(Rect::new(cx - 6, 10, 12, 1));
+    let _ = c.fill_rect(Rect::new(cx - 3, 16, 6, 1));
+    // Downward arrow tail below the smallest step.
+    c.set_draw_color(Color::RGB(240, 240, 240));
+    let _ = c.fill_rect(Rect::new(cx - 1, 22, 2, 1));
 }
 
 fn draw_exit(c: &mut Canvas<Window>) {

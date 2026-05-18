@@ -66,7 +66,7 @@ The host opens an eighty-by-twenty-four tile grid window. A head-up display row 
 | Arrow keys, `h`, `j`, `k`, `l` | Cardinal movement, one tile per press. |
 | `y`, `u`, `b`, `n` | Diagonal movement. |
 | Period, Space | Wait one turn in place. |
-| `>` | Descend stairs. Floor one hundred uses the same key for the exit tile that ends the game in victory. |
+| `>` | Descend stairs manually. The host also descends automatically when the player steps onto a stairs-down tile, so this key is normally redundant. The manual key remains useful when the player arrives on stairs through teleportation rather than movement. Floor one hundred uses the same key for the exit tile that ends the game in victory. |
 | `Q` | Quaff the held potion. The potion's effect resolves immediately and the slot empties. |
 | `R` | Read the held scroll. The scroll's effect resolves immediately and the slot empties. |
 | `F5` | Hot reload every Keleusma script from disk. See [Hot reload](#hot-reload). |
