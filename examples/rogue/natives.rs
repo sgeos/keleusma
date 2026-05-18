@@ -579,35 +579,67 @@ fn autopickup(w: &mut World) {
             }
         }
         ItemKind::Potion => {
+            let ground_name = potion_display_name(w, item.subtype);
             if w.player.potion_slot.is_none() {
                 w.items.swap_remove(idx);
                 w.player.potion_slot = Some(item.subtype);
-                w.push_message(String::from("You pocket the potion."));
+                w.push_message(format!("You pocket the {}.", ground_name));
             } else {
-                let held = w.player.potion_slot.unwrap() as usize;
-                let appearance = w.potion_appearance[held] as usize;
-                let bottle = items::POTION_COLORS[appearance];
+                let held_name = potion_display_name(w, w.player.potion_slot.unwrap());
                 w.push_message(format!(
-                    "A potion lies here, but you already hold the {} potion.",
-                    bottle
+                    "A {} lies here, but you already hold the {}.",
+                    ground_name, held_name
                 ));
             }
         }
         ItemKind::Scroll => {
+            let ground_name = scroll_display_name(w, item.subtype);
             if w.player.scroll_slot.is_none() {
                 w.items.swap_remove(idx);
                 w.player.scroll_slot = Some(item.subtype);
-                w.push_message(String::from("You pocket the scroll."));
+                w.push_message(format!("You pocket the {}.", ground_name));
             } else {
-                let held = w.player.scroll_slot.unwrap() as usize;
-                let appearance = w.scroll_appearance[held] as usize;
-                let label = items::SCROLL_NAMES[appearance];
+                let held_name = scroll_display_name(w, w.player.scroll_slot.unwrap());
                 w.push_message(format!(
-                    "A scroll lies here, but you already hold the scroll titled {}.",
-                    label
+                    "A {} lies here, but you already hold the {}.",
+                    ground_name, held_name
                 ));
             }
         }
+    }
+}
+
+/// Compose a display name for a potion. Returns the true
+/// name if the player has identified this effect, else the
+/// per-run disguised colour name.
+fn potion_display_name(w: &World, effect_idx: u8) -> String {
+    let idx = effect_idx as usize;
+    let bit = 1u32 << effect_idx;
+    let identified = (w.player.identified_potions & bit) != 0;
+    if identified {
+        let effect = items::POTION_EFFECTS[idx];
+        format!("potion of {}", items::potion_true_name(effect))
+    } else {
+        let appearance = w.potion_appearance[idx] as usize;
+        let bottle = items::POTION_COLORS[appearance];
+        format!("{} potion", bottle)
+    }
+}
+
+/// Compose a display name for a scroll. Returns the true name
+/// if the player has identified this effect, else the per-run
+/// disguised mock-title.
+fn scroll_display_name(w: &World, effect_idx: u8) -> String {
+    let idx = effect_idx as usize;
+    let bit = 1u32 << effect_idx;
+    let identified = (w.player.identified_scrolls & bit) != 0;
+    if identified {
+        let effect = items::SCROLL_EFFECTS[idx];
+        format!("scroll of {}", items::scroll_true_name(effect))
+    } else {
+        let appearance = w.scroll_appearance[idx] as usize;
+        let label = items::SCROLL_NAMES[appearance];
+        format!("scroll titled {}", label)
     }
 }
 
