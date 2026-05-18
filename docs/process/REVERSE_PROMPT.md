@@ -9,47 +9,45 @@ AI to Human communication channel.
 ## Last Updated
 
 **Date**: 2026-05-18
-**Status**: Five surveyed refactors all applied. Head-up display split into two rows so the hit-point bar gets the full window width and the rest of the readouts stay at fixed positions.
+**Status**: Background-music hook documented in the source and surfaced as a manual exercise. No surveyed refactoring or deferred work outstanding beyond what is already framed as manual exercises.
 
 ## Completed in this session round
 
 | Directive | Resolution |
 |-----------|------------|
-| Refactor 1: data-slot zeroing | `zero_data_slots` is now a `pub fn` in `ai.rs`. The three call sites (startup of dungen and game virtual machines in `main.rs`, plus `AiPool::build_vm` and `AiPool::reset_loop_main_data` in `ai.rs`) all delegate to it. The `init_data_slots` free function in `main.rs` is removed. |
-| Refactor 2: push-message shorthand | `push_msg(world, msg)` in `natives.rs` wraps the lock plus push pattern. Five call sites in `main.rs` (welcome message, victory message, descend message, four reload-error paths, and the reload success message) drop from two-or-three lines each to one line each. |
-| Refactor 3: location of `EMBEDDED` | The `EMBEDDED` table, `SCRIPT_DIR`, `build_module`, `compile_embedded`, and `compile_disk` all moved to `ai.rs`. `main.rs` now imports the four helpers it needs. The script-list source of truth lives next to `AiModules::build` where adding a new script naturally touches both. |
-| Refactor 4: collapse `embedded_source` and `disk_source` | The two intermediate functions are gone. `compile_embedded` and `compile_disk` each contain the table lookup or file read inline. Net loss of about ten lines for the same behaviour. |
-| Refactor 5: render-method family | A `Renderer::blit_at(canvas, tex, tx, ty)` method and a free `blit_tex(canvas, tex, x, y, w, h)` function absorb the destination-rect plus copy plus error-format pattern. `draw_map`, `draw_items`, `draw_monsters`, `draw_player`, `draw_gear_indicator`, and the two held-consumable arms all use one or the other. |
-| Head-up display layout: hit-point bar on the top row | New `HP_BAR_PX` and `INFO_BAR_PX` constants in `main.rs` each twenty-four pixels tall. `HUD_PX` is now their sum. Top row holds the hit-point pip strip across the full window width; second row holds gear icons, depth ticks, floor and gold text, held consumable icons, and the hunger gauge. The pip strip is clipped at the window width as a defensive measure for the floor one hundred run where the cap would otherwise exceed one thousand twenty-four pixels. The map and the message row shift down by twenty-four pixels; the window is correspondingly taller. |
+| Add `add audio processing here` comment | A ten-line block comment lands in `fn main` right after the SDL3 video subsystem init in `examples/rogue/main.rs`. The comment names the piano-roll example as the reference pattern, lists the four pieces of work (audio device open, voice-array `Arc<Mutex<_>>`, audio callback, music script driving triggers), and cross-references Exercise 2.6 in the manual. |
+| Add an exercise for piano-roll-style background music | New Exercise 2.6 in the Tier two section of `docs/guide/ROGUE.md`. Spells out the piano roll's audio pipeline, the script-side work (a new `rogue_music.kel` `loop main` script), the host-side work (audio device open, audio thread, per-tick or per-floor resume), and the concurrency concerns. References the source-code hook in `main.rs`. |
+| Note the source-code comment in the manual | Exercise 2.6 names the `add audio processing here` comment explicitly so a reader following the manual can grep the source to find the landing site. |
+
+## Survey of remaining deferred work
+
+All intentional. None block gameplay.
+
+- **Exercise 3.7.** Sleep, Confusion, and Remove Curse scroll-effect handlers in `examples/rogue/natives.rs::apply_scroll_status` are placeholder messages. The script side produces correct status codes; the host side is the exercise.
+- **Exercise 3.6.** `monster_sees_player` uses the player's field-of-view bitmap rather than a per-monster shadowcast.
+- **Tier 2 exercises generally.** Coward archetype, agility potion, doors at corridor-room boundaries, reveal-all-monsters scroll, vault generator, background music.
+- **Tier 3 and 4 exercises.** Ray-casting field-of-view, save and load, script-driven turn loop, sprite-sheet renderer, ranged player attacks, per-monster shadowcast, placeholder statuses, smallest-archetype-set research question, dungen worst-case execution time, bestiary-in-script, host versus script responsibility essay.
+- **Tier 5 exercises.** Starvation tuning, difficulty curve calibration, loot distribution audit, combat damage scaling.
+
+## Survey of remaining refactoring opportunities
+
+I do not see any obvious patterns worth folding at this point. The last sweep collapsed every duplicate pattern I had surveyed. Concrete remaining candidates would need to come from a new feature pulling on the example. Examples that might surface candidates.
+
+- **Audio integration (Exercise 2.6) would add an audio thread, a voice array, and a music-script lifecycle.** That work would likely refactor `fn main` to extract setup into a helper, which is a natural shape change rather than a deduplication. Not work to do until the feature lands.
+- **Save and load (Exercise 3.2) would add serialisation paths through `World`.** Serialisation often surfaces field-grouping opportunities. Same point: wait for the feature.
+- **Script-driven turn loop (Exercise 3.3) would invert the host-script dispatch direction.** A large refactor in itself; no pre-work helps.
+
+The example reads cleanly across its host modules and its scripts. I would not recommend speculative refactoring at this point.
 
 ## Verification matrix
 
 ```bash
 cargo test                                                                    # 564 tests, all pass
 cargo test --features text --test rogue_scripts                               # 45 rogue script tests, all pass
-cargo clippy --workspace --tests --features sdl3-example,text -- -D warnings  # clean
+cargo clippy --workspace --features sdl3-example,text -- -D warnings          # clean
 cargo build --example rogue --features sdl3-example,text                      # clean
 ```
 
-## Line-count delta
-
-```
- docs/guide/ROGUE.md       |   4 +-
- examples/rogue/ai.rs      |  78 +++++++++++++++++--
- examples/rogue/main.rs    | 193 +++++++++++-----------------------------------
- examples/rogue/natives.rs |   7 ++
- examples/rogue/render.rs  | 167 ++++++++++++++++++++++-----------------
- 5 files changed, 222 insertions(+), 227 deletions(-)
-```
-
-Net five lines deleted. The headline number is smaller than the previous refactor round because the head-up display split added back layout code that the refactors would otherwise have removed. The structural improvements are still real: every duplicate pattern surveyed is now folded.
-
-## Notes
-
-- The hit-point pip strip in the top row is capped to the window width with `pips.min(max_pip_idx)`. The cap activates only past roughly two hundred fifty hit points, which corresponds to depth eighty or so. The capping is silent; the player loses the visual signal of having extra hit points beyond the window edge but the actual count is unaffected.
-- The game-over panel still positions itself relative to `WINDOW_W` and `WINDOW_H`, both of which automatically follow the new `HUD_PX`. No manual adjustment needed there.
-- The `blit_at` method on `Renderer` takes a `&Texture` rather than `&mut Texture` because the SDL3 `Canvas::copy` signature accepts an immutable reference. Color-mod calls before the blit still need the mutable borrow but the borrow is released before the blit.
-
 ## Intended Next Step
 
-Awaiting operator prompt. No remaining surveyed refactors and no open bugs that I can identify. The example reads cleanly across its host modules and its scripts.
+Awaiting operator prompt. The natural next moves are picking up one of the placeholder scroll handlers (Exercise 3.7 sub-items), tuning starvation (Exercise 5.1), or picking up the background-music exercise (Exercise 2.6).

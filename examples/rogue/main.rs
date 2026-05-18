@@ -102,6 +102,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let sdl_context = sdl3::init()?;
     let video_subsystem = sdl_context.video()?;
 
+    // Add audio processing here. The `examples/piano_roll.rs`
+    // example demonstrates the full SDL3 audio pipeline against
+    // a Keleusma `loop main` score sequencer. The same pattern
+    // would carry background music for the rogue example: open
+    // the audio device, share a voice array under an
+    // `Arc<Mutex<_>>` with an SDL3 audio callback, and drive
+    // note triggers from a `rogue_music.kel` script per turn or
+    // per floor. See Exercise 2.6 in `docs/guide/ROGUE.md`.
+
     let window = video_subsystem
         .window("Keleusma Roguelike (work in progress)", WINDOW_W, WINDOW_H)
         .position_centered()
