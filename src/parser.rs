@@ -474,16 +474,31 @@ impl<'a> Parser<'a> {
                 }
                 end = self.expect(&TokenKind::RParen)?;
             }
-            // Optional `= N` clause. Integer literal only; the
-            // parser does not currently admit constant
-            // expressions in discriminant position.
+            // Optional `= N` clause. Integer literal with an
+            // optional leading unary minus. Expression-position
+            // arithmetic is still not admissible.
             let (explicit_discriminant, discriminant_value) = if self.eat(&TokenKind::Eq) {
+                let neg_span = if self.at(&TokenKind::Minus) {
+                    Some(self.bump())
+                } else {
+                    None
+                };
                 let tok = self.tokens[self.pos].clone();
                 match tok.kind {
                     TokenKind::IntLit(n) => {
                         self.pos += 1;
-                        end = merge_spans(end, tok.span);
-                        (Some(n), n)
+                        // `wrapping_neg` keeps `i64::MIN` stable;
+                        // a literal `-9223372036854775808` round-
+                        // trips correctly even though the
+                        // positive form does not lex.
+                        let value = if neg_span.is_some() {
+                            n.wrapping_neg()
+                        } else {
+                            n
+                        };
+                        let span_start = neg_span.unwrap_or(tok.span);
+                        end = merge_spans(end, merge_spans(span_start, tok.span));
+                        (Some(value), value)
                     }
                     other => {
                         return Err(ParseError {
@@ -2342,19 +2357,52 @@ mod tests {
     }
 
     #[test]
-    fn parse_enum_rejects_negative_discriminant_currently() {
-        // Negative discriminants would require parsing a unary
-        // minus inside the discriminant clause. The current
-        // grammar only accepts integer literals (non-negative).
-        // Document the limitation with a test that confirms the
-        // rejection; lift this restriction when needed.
+    fn parse_enum_accepts_negative_discriminants() {
+        // Negative discriminants are useful for signed error
+        // codes or for marking "no value yet" sentinels at the
+        // low end of the range.
         let src = r#"
-            enum Bad {
-                A = -1,
+            enum Signed {
+                Below = -2,
+                Just = -1,
+                Zero = 0,
+                Above = 1,
             }
             fn test() -> Word { 0 }
         "#;
-        assert!(parse_str(src).is_err());
+        let program = parse_str(src).unwrap();
+        match &program.types[0] {
+            TypeDef::Enum(e) => {
+                let values: Vec<i64> = e.variants.iter().map(|v| v.discriminant_value).collect();
+                assert_eq!(values, vec![-2, -1, 0, 1]);
+                let explicit: Vec<Option<i64>> =
+                    e.variants.iter().map(|v| v.explicit_discriminant).collect();
+                assert_eq!(explicit, vec![Some(-2), Some(-1), Some(0), Some(1)]);
+            }
+            _ => panic!("expected enum"),
+        }
+    }
+
+    #[test]
+    fn parse_enum_negative_then_implicit_continues_correctly() {
+        // After an explicit `= -5`, the implicit counter resumes
+        // at -4.
+        let src = r#"
+            enum Run {
+                A = -5,
+                B,
+                C,
+            }
+            fn test() -> Word { 0 }
+        "#;
+        let program = parse_str(src).unwrap();
+        match &program.types[0] {
+            TypeDef::Enum(e) => {
+                let values: Vec<i64> = e.variants.iter().map(|v| v.discriminant_value).collect();
+                assert_eq!(values, vec![-5, -4, -3]);
+            }
+            _ => panic!("expected enum"),
+        }
     }
 
     #[test]

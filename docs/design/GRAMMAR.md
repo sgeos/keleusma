@@ -174,7 +174,16 @@ enum Mixed {
 }
 ````
 
-The discriminant clause accepts non-negative integer literals only; expressions and unary minus are not currently admissible. Duplicate discriminant values within a single enum are rejected by the parser with an error pointing at the second occurrence.
+The discriminant clause accepts an integer literal, optionally preceded by a unary minus. Expression-position arithmetic, named constants, and casts are not admissible in the discriminant clause itself. Duplicate discriminant values within a single enum are rejected by the parser with an error pointing at the second occurrence.
+
+```
+enum Signed {
+  Below = -2,
+  Just  = -1,
+  Zero  = 0,
+  Above = 1,
+}
+```
 
 ````
 enum Bad {
