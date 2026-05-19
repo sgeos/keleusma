@@ -1,0 +1,15 @@
+# Cargo configuration for the keleusma-rtos crate.
+#
+# No `[build] target = ...` is set: the std demonstrator
+# (`three-task-std`) builds for the host triple by default, and
+# embedded builds explicitly pass `--target thumbv8m.main-none-eabihf`.
+# The runner setting below is scoped to the embedded target so
+# `cargo run --target thumbv8m... --bin three-task-n6` invokes
+# probe-rs while host-side `cargo run --bin three-task-std`
+# uses the default exec.
+
+[target.thumbv8m.main-none-eabihf]
+runner = "probe-rs run --chip STM32N657"
+
+[env]
+DEFMT_LOG = "info"

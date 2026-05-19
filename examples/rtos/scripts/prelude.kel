@@ -1,0 +1,55 @@
+// Shared prelude prepended to every RTOS task script before
+// compilation. Defines the Status and StatusErrorCode enums that
+// the host's DSL natives return.
+//
+// The prelude is kept here as a single source of truth.
+// `setup::build_module` reads the file through `include_str!` and
+// prepends the text to each task source. Line numbers in compile
+// errors for task scripts are offset by the prelude line count.
+//
+// The `use` declarations cover the unqualified natives that the
+// f-string desugaring emits at compile time. Qualified host
+// natives (anything `host::xxx`) do not need a `use` line.
+
+use concat
+use to_string
+
+use host::clock_now
+use host::log
+use host::gpio_set
+use host::gpio_pin_count
+use host::sensor_read
+use host::sensor_channel_count
+use host::uart_count
+use host::spi_count
+use host::i2c_count
+use host::timer_count
+use host::usart_write
+use host::usart_read
+use host::spi_write
+use host::spi_read
+use host::i2c_write
+use host::i2c_read
+use host::adc_read
+
+enum Status {
+    // Successful completion.
+    Ok = 0,
+    // Failure. The payload is a StatusErrorCode discriminant.
+    Err(Word) = 1,
+}
+
+enum StatusErrorCode {
+    // Discriminant 0 is reserved. A `Status` cast to `Word`
+    // yields 0 for `Status::Ok`, so an error code of 0 would be
+    // ambiguous against success. StatusErrorCode discriminants
+    // therefore start at 1; the variant set never uses 0.
+    InvalidPin = 1,
+    InvalidChannel = 2,
+    InvalidController = 3,
+    InvalidAddress = 4,
+    NotSupported = 5,
+    Busy = 6,
+    Timeout = 7,
+    BadArgument = 8,
+}

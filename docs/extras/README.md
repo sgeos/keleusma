@@ -8,6 +8,16 @@ design, decisions, or process sections. Each document is a
 companion reference for a particular example, song, or
 extended demonstration in the repository.
 
+For the cooperative-scheduling RTOS microkernel example, the
+companion documents live alongside the example crate itself in
+[`examples/rtos/`](../../examples/rtos/) because they include
+operational detail (build commands, hardware setup, defmt log
+interpretation) that benefits from sitting next to the source.
+
+- [`examples/rtos/README.md`](../../examples/rtos/README.md) — overview, quick start, file table.
+- [`examples/rtos/MANUAL.md`](../../examples/rtos/MANUAL.md) — operator manual: hardware setup, build matrix, platform protocol, Status protocol, porting guide, troubleshooting.
+- [`examples/rtos/SPEC.md`](../../examples/rtos/SPEC.md) — architectural rationale, three-layer split, and roadmap.
+
 ## Contents
 
 | Document | Companion to | Description |

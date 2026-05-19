@@ -1,0 +1,9 @@
+# Pin the toolchain to a stable Rust release with both the
+# host target (for the std demonstrator) and the M55 target
+# (for cross-compile validation toward the eventual N6 port).
+# Matches the embassy-hello-n6 scaffold's choice for
+# predictability across the two crates.
+[toolchain]
+channel = "1.92"
+components = ["rust-src", "rustfmt", "llvm-tools"]
+targets = ["thumbv8m.main-none-eabihf"]

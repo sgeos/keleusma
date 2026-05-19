@@ -44,6 +44,20 @@ keleusma/
 │   ├── Cargo.toml
 │   ├── README.md
 │   └── src/lib.rs             # Arena, BottomHandle, TopHandle, Budget, marks
+├── examples/
+│   ├── rogue/                 # Roguelike example (workspace [[example]])
+│   ├── piano_roll.rs          # SDL3 audio + hot-swap (workspace [[example]])
+│   ├── rtos/                  # Cooperative RTOS microkernel (standalone crate, not a workspace member)
+│   │   ├── Cargo.toml         # Detached [workspace]; embassy git deps under stm32n6570dk-platform feature
+│   │   ├── README.md          # Overview, quick-start commands, file table
+│   │   ├── MANUAL.md          # Operator manual: hardware setup, build matrix, troubleshooting
+│   │   ├── SPEC.md            # Architectural rationale and roadmap
+│   │   ├── memory.x           # AXISRAM2 layout for the STM32N6570-DK bin
+│   │   ├── build.rs           # Target-conditional link args (no_std target only)
+│   │   ├── .cargo/config.toml # probe-rs runner for thumbv8m.main-none-eabihf
+│   │   ├── scripts/           # Keleusma scripts (prelude, led, sensor, heartbeat)
+│   │   └── src/               # Kernel core, platform impls, natives, bins
+│   └── …                      # Other Rust embedding examples and standalone .kel scripts
 └── docs/                      # Documentation knowledge graph
     ├── README.md              # Documentation root
     ├── DOCUMENTATION_STRATEGY.md
@@ -145,5 +159,6 @@ All public API functions return `Result` types with error structs that include s
 - **allocator-api2 0.4** (stable polyfill of the unstable allocator API, used by `keleusma-arena`)
 - **syn 2, quote 1, proc-macro2 1** (compile-time only, used by `keleusma-macros`)
 - **rkyv 0.8** (zero-copy archived bytecode format)
-- Cargo workspace with three members: `keleusma` (runtime), `keleusma-macros` (proc-macro), and `keleusma-arena` (standalone arena allocator on crates.io v0.1.0)
-- Approximately 508 tests across the workspace covering lexer, parser, type checker, monomorphizer, compiler, VM, verifier, marshall, arena, audio natives, utility natives, target descriptor, visitor pattern, and integration tests
+- Cargo workspace with members: `keleusma` (runtime), `keleusma-macros` (proc-macro), `keleusma-arena` (standalone arena allocator), `keleusma-bench` (cost-model calibration), and `keleusma-cli` (CLI frontend).
+- Approximately 508 tests across the workspace covering lexer, parser, type checker, monomorphizer, compiler, VM, verifier, marshall, arena, audio natives, utility natives, target descriptor, visitor pattern, and integration tests.
+- The `examples/rtos/` directory carries a standalone crate (not a workspace member) implementing a cooperative RTOS microkernel; it depends on the parent `keleusma` runtime by path and ships its own toolchain pin, build.rs, memory.x, and probe-rs runner. Run with `cd examples/rtos && cargo run --release --bin three-task-std` (host) or `cd examples/rtos && cargo run --release --bin three-task-n6 --target thumbv8m.main-none-eabihf --no-default-features --features stm32n6570dk-platform` (STM32N6570-DK). See `examples/rtos/MANUAL.md`.

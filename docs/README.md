@@ -42,6 +42,9 @@ This documentation is structured as a **knowledge graph** encoded in the file sy
 | Rust embedding examples | [`examples/`](../examples) |
 | End-to-end SDL3 audio demo with hot swap | [`examples/piano_roll.rs`](../examples/piano_roll.rs) |
 | Manual for the piano-roll example | [guide/PIANO_ROLL.md](./guide/PIANO_ROLL.md) |
+| Cooperative RTOS microkernel running on STM32N6570-DK | [`examples/rtos/`](../examples/rtos/README.md) |
+| Operator manual for the RTOS example | [`examples/rtos/MANUAL.md`](../examples/rtos/MANUAL.md) |
+| Architectural rationale for the RTOS microkernel | [`examples/rtos/SPEC.md`](../examples/rtos/SPEC.md) |
 
 ## Meta
 

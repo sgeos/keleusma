@@ -1,0 +1,28 @@
+// Sensor poller. Reads channel zero every one hundred
+// milliseconds and emits an alarm log when the reading crosses
+// a threshold.
+//
+// On the std platform the channel produces a triangular wave
+// that crosses the threshold periodically; the alarm path fires
+// several times per second.
+//
+// On the N6 platform `sensor_read` is currently stubbed to `0`
+// pending ADC wiring (see `MANUAL.md` § 10). The poll runs but
+// the alarm path never fires.
+//
+// `Status` and `StatusErrorCode` are declared in the prelude
+// (`scripts/prelude.kel`), prepended at compile time by
+// `setup::build_module`. This script uses the legacy
+// `host::sensor_read` which returns a bare Word for backwards
+// compatibility with the original demonstrator; new scripts
+// should prefer `host::adc_read` which returns `(Status, Word)`.
+
+loop main(_reason: Word) -> (Word, Word) {
+    let value = host::sensor_read(0);
+    if value > 1000 {
+        host::log("sensor ch0 ABOVE threshold");
+    } else {};
+    let next = host::clock_now() + 100;
+    let _ = yield (0, next);
+    (0, 0)
+}

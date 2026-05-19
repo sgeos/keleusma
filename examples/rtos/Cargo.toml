@@ -1,0 +1,123 @@
+# Detach from the parent Keleusma workspace. This crate carries
+# heavy bare-metal git dependencies (embassy, cortex-m-rt, defmt)
+# and its own toolchain pin; pulling it into the parent workspace
+# would force every parent build to resolve those deps. Keeping it
+# detached lets the parent's `cargo build` stay light while
+# allowing the example to be flashed and run with a single
+# `cd examples/rtos && cargo run …`.
+[workspace]
+
+[package]
+name = "keleusma-rtos"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+publish = false
+description = """
+Draft Keleusma RTOS microkernel with cooperative scheduling.
+See SPEC.md and MANUAL.md alongside this Cargo.toml.
+"""
+build = "build.rs"
+
+[dependencies]
+# The Keleusma runtime. Path dependency against the parent
+# crate during development; this would become a versioned crates.io
+# dependency once the example is decoupled from the parent.
+keleusma = { path = "../..", default-features = false, features = ["text"] }
+
+# --- N6 platform dependencies. All optional, all gated on the
+# `stm32n6570dk-platform` feature. ---
+
+# Embassy crates pinned to the same revision as the
+# `embassy_hello_n6` scaffold so the two crates stay in lock-step
+# on toolchain and API expectations. The N6 family support is
+# upstream-main only at this revision; bumping the pin requires
+# revalidating that nothing in the chip support breaks.
+embassy-stm32 = { git = "https://github.com/embassy-rs/embassy", rev = "be30937ac9054dcbc2e618e0466467545c0f5edb", optional = true, features = [
+    "defmt",
+    "stm32n657x0",
+    "time-driver-any",
+    "exti",
+    "unstable-pac",
+] }
+embassy-executor = { git = "https://github.com/embassy-rs/embassy", rev = "be30937ac9054dcbc2e618e0466467545c0f5edb", optional = true, features = [
+    "platform-cortex-m",
+    "executor-thread",
+    "defmt",
+] }
+embassy-time = { git = "https://github.com/embassy-rs/embassy", rev = "be30937ac9054dcbc2e618e0466467545c0f5edb", optional = true, features = [
+    "defmt",
+    "defmt-timestamp-uptime",
+    "tick-hz-32_768",
+] }
+embassy-sync = { git = "https://github.com/embassy-rs/embassy", rev = "be30937ac9054dcbc2e618e0466467545c0f5edb", optional = true, features = [
+    "defmt",
+] }
+
+# Cortex-M55 runtime support.
+cortex-m = { version = "0.7", optional = true, features = [
+    "inline-asm",
+    "critical-section-single-core",
+] }
+cortex-m-rt = { version = "0.7", optional = true }
+
+# defmt logging over RTT.
+defmt = { version = "1.0", optional = true }
+defmt-rtt = { version = "1.0", optional = true }
+panic-probe = { version = "1.0", optional = true, features = ["print-defmt"] }
+
+# Required by some embassy traits and used by the platform impl
+# for safe interior-mutable storage of peripheral handles.
+critical-section = { version = "1.1", optional = true }
+
+# Heap allocator for the bare-metal target. The kernel core uses
+# `alloc` (Vec, String, format!, Box::leak for the arenas), so a
+# global allocator must be installed on no_std targets.
+embedded-alloc = { version = "0.6", optional = true }
+
+[features]
+default = ["std-platform"]
+# The std-backed platform implementation and the demonstrator
+# binary. Disable this feature for bare-metal builds where the
+# host code chooses a different platform (e.g. embassy on the N6).
+std-platform = []
+# The STM32N6570-DK platform implementation. Pulls in the embassy
+# stack, defmt, cortex-m runtime, and a heap allocator. Enabling
+# this feature on its own builds the no_std library against the
+# real embassy backend; combine with `--target thumbv8m.main-none-eabihf`
+# and the bin target `three-task-n6` to produce a flashable image.
+stm32n6570dk-platform = [
+    "dep:embassy-stm32",
+    "dep:embassy-executor",
+    "dep:embassy-time",
+    "dep:embassy-sync",
+    "dep:cortex-m",
+    "dep:cortex-m-rt",
+    "dep:defmt",
+    "dep:defmt-rtt",
+    "dep:panic-probe",
+    "dep:critical-section",
+    "dep:embedded-alloc",
+]
+
+[[bin]]
+name = "three-task-std"
+path = "src/bin/three_task_std.rs"
+required-features = ["std-platform"]
+
+[[bin]]
+name = "three-task-n6"
+path = "src/bin/three_task_n6.rs"
+required-features = ["stm32n6570dk-platform"]
+
+[profile.dev]
+opt-level = 0
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+# Keep DWARF in the release ELF so probe-rs and defmt can resolve
+# panic frames back to source locations. The flashed image is
+# RAM-resident on the N6 (no on-chip flash); debug info increases
+# the ELF size but does not enlarge the loaded section count.
+debug = 2

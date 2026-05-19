@@ -244,6 +244,25 @@ Controls:
 - Press `s` then Enter to swap songs.
 - Press Enter alone to quit.
 
+### RTOS microkernel ([`examples/rtos/`](examples/rtos))
+
+A draft cooperative-scheduling microkernel where every task is a Keleusma `loop main` script. The kernel core is `no_std + alloc`; the same kernel runs on a host through a `StdPlatform` for development and on the STM32N6570-DK through an embassy-backed `Stm32N6570DkPlatform` for hardware. Three tasks (LED blinker, sensor poller, heartbeat) are dispatched cooperatively. Verified on hardware on 2026-05-18.
+
+The RTOS example is a standalone Rust crate (its own `Cargo.toml`, toolchain pin, `build.rs`, `memory.x`, and `.cargo/config.toml`) intentionally detached from the parent workspace because its bare-metal dependencies (embassy git pins, defmt, cortex-m-rt, an embedded heap allocator) are heavy and orthogonal to the parent crate's normal build. Run from inside `examples/rtos/`:
+
+```sh
+cd examples/rtos
+# Host demonstrator
+cargo run --release --bin three-task-std
+
+# STM32N6570-DK demonstrator (BOOT0 in dev position, ST-LINK V3-EC attached)
+cargo run --release --bin three-task-n6 \
+    --target thumbv8m.main-none-eabihf \
+    --no-default-features --features stm32n6570dk-platform
+```
+
+See the example's [`README.md`](examples/rtos/README.md), [`MANUAL.md`](examples/rtos/MANUAL.md) (operator manual), and [`SPEC.md`](examples/rtos/SPEC.md) (architectural rationale) for the full story.
+
 ## Documentation
 
 See [docs/README.md](docs/README.md) for the full documentation knowledge graph.
