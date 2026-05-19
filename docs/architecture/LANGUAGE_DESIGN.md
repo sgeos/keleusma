@@ -136,7 +136,7 @@ ephemeral loop main(...) -> ...
 
 The compile pipeline rejects the module if the assertion fails, with a diagnostic naming the reason (private data declared, or signature carries `Text`).
 
-Sufficient verifier rule. The module is ephemeral when `private_data_bytes == 0` AND no `Text`-typed parameter of the entry function is referenced in the body AND the entry function's return type carries no `Text`. Stronger rules (per-yield arena dataflow) are documented as future work; the current rule rejects no script that the spec definition admits except corner cases that have never appeared in practice.
+Sufficient verifier rule. The module is ephemeral when `private_data_bytes == 0` AND no `Text`-typed parameter of the entry function is referenced in the body AND the entry chunk does not leave a text-typed value on top of the abstract operand stack at any boundary-crossing op. The second clause is the parameter-usage refinement from Phase 7. The third clause is the per-yield arena dataflow refinement from Phase 8 and is realised by extending the existing text-size abstract interpretation pass to also peek the abstract stack at `Op::Yield` and `Op::Return`. The pass walks the call graph in topological order so per-callee text-ness is resolved by the time each caller is analysed. The text-size lattice widens to `Unbounded` inside loops and conditional branches, which preserves soundness without losing per-callee precision through the topological scan. The dataflow is sound but conservative on control flow that the lattice cannot narrow; programs that pass the previous signature-only rule continue to pass the refinement.
 
 ## Hot Code Swapping
 

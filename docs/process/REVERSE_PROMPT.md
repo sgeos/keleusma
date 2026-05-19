@@ -9,73 +9,38 @@ AI to Human communication channel.
 ## Last Updated
 
 **Date**: 2026-05-19
-**Status**: Two new cargo features land on the parent keleusma crate, both default on. The `compile` feature gates the source-to-bytecode pipeline. The `verify` feature gates the load-time verifier. The RTOS microkernel example gains matching `keleusma-compile` and `keleusma-verify` pass-through features plus build.rs precompilation when source compilation is excluded from the runtime image. Verified on hardware in three feature combinations.
+**Status**: V0.2 Phase 8 complete. Three deferred items closed in a single pass. Struct and enum literal initializers for `const data` fields are accepted at parse, compile, and runtime. Per-yield arena dataflow refinement tightens the ephemerality rule by consulting the existing text-size abstract interpretation pass at boundary-crossing ops. `keleusma-arena 0.3.0` publish dry-run is clean against the registry-resolved dependencies. 611 lib tests pass workspace-wide.
 
 ## Completed in this session round
 
 | Directive | Resolution |
 |-----------|------------|
-| Add a feature gate on keleusma for source-to-bytecode conversion so the lexer, parser, type checker, monomorphizer, and compiler can be stripped from the runtime image. | New `compile` cargo feature in the parent crate, default on. The eight compile-pipeline modules (`ast`, `compiler`, `lexer`, `monomorphize`, `parser`, `target`, `token`, `typecheck`, `visitor`) are gated behind it. With the feature off, the runtime accepts only precompiled bytecode through `Module::from_bytes` and `Vm::view_bytes_zero_copy`. |
-| Add a feature gate on keleusma for load-time verification so the structural verifier and the WCET and WCMU analyses can be stripped. | New `verify` cargo feature in the parent crate, default on. The `verify` and `text_size` modules and the verifier calls inside `Vm::new`, `Vm::new_with_options`, `Vm::new_unchecked`, and `Vm::replace_module` are gated behind it. `Vm::verify_resources`, `Vm::auto_arena_capacity`, and `auto_arena_capacity_for` are gated entirely. When the feature is off, `Vm::new` skips verification and behaves equivalently to `Vm::new_unchecked` from the caller's perspective. The compiler still invokes the verifier at end of `compile_with_target` when both features are on and populates the WCET and WCMU header fields exactly as before; with `verify` off the compiler leaves those fields at 0 (auto). |
-| Match the parent's feature gates on the microkernel and produce a smaller binary when source compilation is disabled. | The microkernel grew `keleusma-compile` and `keleusma-verify` pass-through features (both default on, both forwarding to the parent's namesake features). The microkernel's `build.rs` invokes the parent's compile pipeline at host build time when `keleusma-compile` is off, emitting one `OUT_DIR/<name>.kel.bin` per task script through a `[build-dependencies]` entry. `setup.rs` routes between `include_str!` plus compile-at-boot and `include_bytes!` plus `Module::from_bytes`. The bare-metal binary's `.text` size drops from 614 KB (full pipeline) to 192 KB (precompile under trust), a 69% reduction. |
-| Provide reasonable defaults. | Both features are in default for backward compatibility. Existing consumers see no change. |
+| Add struct and enum literal initializers for `const data` fields. | `ConstInitializer` AST extended with `Struct { name, fields: Vec<(String, ConstInitializer)> }` and `Enum { enum_name, variant, args: Vec<ConstInitializer> }` variants. Parser recognises `Name { field: init, ... }` and `Enum::Variant` or `Enum::Variant(arg, ...)` shapes inside const initializer position by looking for a leading `UpperIdent`. Compiler validates the type name against the declared field type (`TypeExpr::Named`) and rejects mismatches with a diagnostic naming both names. Nested composite initializers are admitted through a permissive inner recursion (`const_value_any`) that falls back to type-agnostic literal-to-ConstValue conversion when the precise inner type cannot be determined from the surface context. Three new tests in `vm.rs` cover struct, unit-variant enum, and tuple-variant enum cases. |
+| Per-yield arena dataflow analysis for stronger ephemeral inference. | The existing text-size abstract interpretation pass (`src/text_size.rs`) already tracks per-stack-slot `TextSize` lattice values through compiled bytecode in topological call order for WCMU heap-allocation bounding. Phase 8 extends the analysis: `ChunkTextAnalysis` gains a `yields_text` field, computed by peeking the abstract operand stack before `Op::Yield` pops it (mirroring the existing `Op::Return` peek). A new public helper `verify::module_chunk_text_analyses(&Module) -> Result<Vec<ChunkTextAnalysis>, VerifyError>` exposes the per-chunk analysis result. The compiler's ephemerality check consults the entry chunk's analysis: declared `Text` return is now only disqualifying when the entry chunk's compiled body actually leaves a text value on top of the abstract stack at a boundary-crossing op. A negative regression test confirms `fn main() -> Text { "hello" }` is still correctly rejected from ephemerality. A direct unit test of `module_chunk_text_analyses` exercises both flags on a hand-crafted two-chunk module since the source-level positive case for the refinement is blocked by an unrelated type-unification limitation around bare `Option::None` literals in function returns. |
+| `keleusma-arena 0.3.0` publish-readiness verification. | `cargo publish -p keleusma-arena --dry-run` is clean. 13 files, 24.1 KiB compressed. The crate is ready for operator-driven `cargo publish -p keleusma-arena`. |
 
 ## Verification matrix
 
 ```bash
-cargo build --release                                                           # parent, default features
-cargo build --release --no-default-features                                     # parent, no features
-cargo build --release --no-default-features --features compile                  # parent, compile only
-cargo build --release --no-default-features --features verify                   # parent, verify only
-cargo test --release --features text                                            # 575 lib tests + 17+17+3+53 integration; all pass
-cargo test --release --no-default-features                                      # 0 tests, no failures
-cargo test --release --no-default-features --features compile                   # 266 lib tests pass
-cargo test --release --no-default-features --features verify                    # 45 lib tests pass
-cargo clippy --workspace --tests --features text -- -D warnings                 # clean
-
-(cd examples/rtos && cargo build --release --bin three-task-std)                # std default
-(cd examples/rtos && cargo build --release --bin three-task-std \
-    --no-default-features --features std-platform)                              # std smallest
-(cd examples/rtos && cargo build --target thumbv8m.main-none-eabihf \
-    --release --bin three-task-n6 \
-    --no-default-features --features stm32n6570dk-platform)                     # n6 smallest
-(cd examples/rtos && cargo build --target thumbv8m.main-none-eabihf \
-    --release --bin three-task-n6 \
-    --no-default-features --features stm32n6570dk-platform,keleusma-verify)     # n6 precompile + verify
-(cd examples/rtos && cargo build --target thumbv8m.main-none-eabihf \
-    --release --bin three-task-n6 \
-    --no-default-features --features stm32n6570dk-platform,keleusma-compile,keleusma-verify)  # n6 full
+cargo test --workspace --features text                          # 611 lib + 17+17+3+53+37+6+7 integration tests pass
+cargo clippy --workspace --tests --features text -- -D warnings # clean
+cargo fmt --all                                                 # idempotent
+cargo publish -p keleusma-arena --dry-run                       # clean
 ```
 
-Bare-metal binary text sizes:
-
-| Feature combination | `.text` |
-|---------------------|--------:|
-| Full pipeline (default minus `std-platform`) | 614 KB |
-| Precompile and verify (`keleusma-verify`) | 211 KB |
-| Precompile under trust (no `keleusma-*` features) | 192 KB |
-
-Hardware verification on the STM32N6570-DK 2026-05-19. All three modes flashed, scheduler entered, four heartbeat ticks captured.
-
-```
-mode=trust            scheduler entry t=39 ms     four heartbeats at 41/5042/10043/15043 ms
-mode=precompile+verify scheduler entry t=43 ms     four heartbeats at 46/5047/10048/15048 ms
-mode=full              scheduler entry t=216 ms    four heartbeats at 218/5219/10220/15221 ms
-```
+The 611 figure is the runtime crate's lib-test count after Phase 8: prior 606 from V0.2 Phase 7, +3 const-initializer tests (struct, unit-variant enum, tuple-variant enum), +1 negative regression test for declared-text-return ephemerality, +1 direct unit test of `module_chunk_text_analyses`.
 
 ## Notes
 
-- The parent's example list in `Cargo.toml` gained explicit `required-features = ["compile", "verify"]` entries on every example that drives the compile pipeline. The lone exception is `zero_copy_include_bytes`, which loads precompiled bytecode and now builds under any feature combination.
-- The parent's three integration tests `marshall`, `opaque`, and `rogue_scripts` are gated through `#![cfg(all(feature = "compile", feature = "verify"))]` at the file head. Test modules inside always-on modules (`vm`, `utility_natives`, `audio_natives`, `stddsl`) gained matching cfg gates so a no-default-features build does not try to compile them.
-- The microkernel's `[workspace] resolver = "2"` declaration is now load-bearing. Without it, build-dependency features would unify with runtime-dependency features and pull the compile pipeline into the runtime image even when `keleusma-compile` is off.
-- The microkernel's `[build-dependencies] keleusma` entry moved to the end of the dependency block in `Cargo.toml`. Cargo treats every key after a `[build-dependencies]` header as part of that section until a new `[xxx]` header appears, so misplacing the block in the middle of the runtime dependencies silently reassigned the optional embassy and cortex-m deps to the build graph.
+- The source-level positive test for the per-yield dataflow refinement is blocked by an unrelated type-unification limitation around bare `Option::None` literals in function returns. The type checker rejects `fn main() -> Option<Text> { Option::None }` with "function `main` returns Option<Text> but body produces Option<<unknown>>". A future tightening of the type checker's inference rules would unblock the positive test; in the meantime, the direct unit test of `module_chunk_text_analyses` keeps the dataflow path under automated coverage.
+- The compile pipeline's ephemerality check now performs a topological-order walk through `module_chunk_text_analyses` on every compile with `verify` enabled. The cost is proportional to the total opcode count across all chunks. For programs that do not declare a `Text` return type the result is computed but the conservative fallback never fires.
+- The `const_value_any` helper is intentionally infallible. It accepts any well-formed `ConstInitializer` and returns a corresponding `ConstValue`. The fallible helper `const_value_from_literal_for_field` continues to validate the initializer's shape against the declared field type and emits CompileError on mismatch. The pair models the distinction between "the surface code is well-formed" and "the surface code matches the declared type."
 
 ## Intended Next Step
 
-Awaiting operator prompt. The two feature gates open up substantial follow-on work, none blocking.
+Awaiting operator prompt. Phase 8 closes the deferred-items list from Phase 7. Several follow-on items remain, none blocking.
 
-1. **Decide on a default for the microkernel.** Defaults currently mirror the parent (compile and verify both on). For a production-shipped image the better default is `keleusma-verify` only with precompiled bytecode. Switching the default is a one-line Cargo.toml change.
-2. **Document the feature matrix in the parent's top-level `README.md`.** The CHANGELOG entry covers it; the README still mentions only `text`, `shell`, and `sdl3-example`.
-3. **Move other examples to the precompiled-bytecode pattern** where they would benefit (binary-size or boot-time gains).
-4. **Slim further by trimming embassy features** to the minimum surface the kernel touches. Independent of the work above.
-5. **WCET banner at boot.** With `verify` on, the runtime can read `Module::wcet_cycles` and report it as certification evidence. Was previously deferred; the new feature gates make the banner straightforward to wire only when verify is enabled.
+1. **Operator action: publish `keleusma-arena 0.3.0` to crates.io.** Dry-run is clean. The agent does not perform `cargo publish`; the operator runs `cargo publish -p keleusma-arena` to complete the release. Once 0.3.0 is live, the parent `keleusma` crate's dependency requirement bumps from the current Cargo.toml pin to `"0.3"`.
+2. **Unblock the source-level positive test for the dataflow refinement.** The type checker's bare-`None`-in-function-return limitation is the immediate blocker. Resolving it would also unblock idiomatic `Option<T>` returns in user scripts.
+3. **Document the per-yield dataflow refinement in `docs/architecture/LANGUAGE_DESIGN.md`.** The Memory Model section's Ephemeral Modules subsection currently describes the conservative signature-only rule. The refinement should be added as a tightening note that names the abstract interpretation pass and the boundary-crossing peek mechanism.
+4. **Decide on V0.2 release tag timing.** With Phase 8 closed, the V0.2 surface is feature-complete relative to the original Phase 0 spec. Pending items in the backlog (additional examples, further binary-size reductions) belong in V0.2.x point releases.

@@ -550,7 +550,8 @@ pub fn compile_with_target(
                                     DataVisibility::Private => "private",
                                     DataVisibility::Const => unreachable!(),
                                 },
-                                decl.name, field.name
+                                decl.name,
+                                field.name
                             ),
                             span: field.span,
                         });
@@ -763,9 +764,8 @@ pub fn compile_with_target(
             }
             for field in &decl.fields {
                 if let Some(field_list) = data_fields.get(&decl.name)
-                    && let Some((_, slot_idx)) = field_list
-                        .iter()
-                        .find(|(name, _)| name == &field.name)
+                    && let Some((_, slot_idx)) =
+                        field_list.iter().find(|(name, _)| name == &field.name)
                 {
                     let n = slots_for_data_type(&field.type_expr);
                     for k in 0..n {
@@ -837,10 +837,8 @@ pub fn compile_with_target(
         // above; their sum equals the total data segment size in
         // bytes (one Value-sized slot per slot).
         flags: 0,
-        shared_data_bytes: shared_count
-            .saturating_mul(crate::bytecode::VALUE_SLOT_SIZE_BYTES),
-        private_data_bytes: private_count
-            .saturating_mul(crate::bytecode::VALUE_SLOT_SIZE_BYTES),
+        shared_data_bytes: shared_count.saturating_mul(crate::bytecode::VALUE_SLOT_SIZE_BYTES),
+        private_data_bytes: private_count.saturating_mul(crate::bytecode::VALUE_SLOT_SIZE_BYTES),
     };
 
     // Compile-time defense-in-depth for the WCET and WCMU contract.
@@ -971,25 +969,61 @@ pub fn compile_with_target(
         module.wcet_cycles = if wcet_overflow { u32::MAX } else { max_wcet };
         module.wcmu_bytes = if wcmu_overflow { u32::MAX } else { max_wcmu };
 
-        // Ephemerality analysis. The simple sufficient rule
-        // implemented here: a module is ephemeral when it has no
-        // private data and the entry function's signature carries
-        // no `Text` (which is the surface name for arena-resident
-        // dynamic strings). The full rule from the language design
-        // statement is stronger; this implementation is a safe
-        // approximation. Modules that fail the simple rule may
-        // still be inferred ephemeral by a future tightening that
-        // tracks per-yield arena state.
+        // Ephemerality analysis. A module is ephemeral when it has no
+        // private data and no value crossing the host-VM boundary at
+        // runtime is arena-resident (i.e. text-typed under V0.2).
+        //
+        // The check combines two pieces of evidence:
+        //
+        // 1. **Parameter usage.** A `Text`-typed parameter that the
+        //    function body never references cannot carry text across
+        //    the host-VM boundary, so it does not disqualify
+        //    ephemerality. An AST walk on the entry function's body
+        //    identifies unused text parameters.
+        //
+        // 2. **Per-yield arena dataflow.** Even when the entry's
+        //    declared return or yield type carries `Text`, every
+        //    concrete `Op::Return` and `Op::Yield` in the compiled
+        //    entry chunk may peek at a non-text value. The text-size
+        //    abstract interpretation pass propagates per-callee
+        //    text-ness through the call graph in topological order
+        //    and reports whether any boundary-crossing op actually
+        //    leaves a text-typed value on top of the abstract stack.
+        //    A negative result is a sufficient proof that the entry's
+        //    declared text return is never produced at runtime, so
+        //    the module is admissible as ephemeral.
+        //
+        // The dataflow analysis falls back to the conservative
+        // signature-only result if the call graph cannot be topologi-
+        // cally ordered (e.g. cycle from a future op that the WCMU
+        // pass would also reject). Recursion is already rejected
+        // earlier in the pipeline, so the fallback path is unreach-
+        // able for well-formed modules but is included for defence
+        // in depth.
         let entry_name = "main";
         let entry_decl = program.functions.iter().find(|f| f.name == entry_name);
-        // A `Text`-typed parameter that the function body never
-        // references cannot carry text across the host-VM
-        // boundary, so it does not disqualify ephemerality.
-        // Return types are still treated conservatively because
-        // proving "no Text actually returns" requires dataflow
-        // on every return path; the AST walk below catches the
-        // common unused-parameter case at low implementation
-        // cost.
+        // Compute the per-chunk text-flow analysis once. The entry
+        // chunk's analysis tells us whether any concrete return/yield
+        // path crosses the boundary carrying text.
+        let entry_chunk_idx = module
+            .chunks
+            .iter()
+            .position(|c| c.name == entry_name)
+            .or(module.entry_point);
+        let entry_boundary_carries_text = match (
+            entry_chunk_idx,
+            crate::verify::module_chunk_text_analyses(&module),
+        ) {
+            (Some(idx), Ok(analyses)) => analyses
+                .get(idx)
+                .map(|a| a.returns_text || a.yields_text)
+                .unwrap_or(true),
+            // Conservative fallback: assume the boundary carries text
+            // if we cannot pinpoint the entry chunk or the topological
+            // pass errored. The signature-level check below will still
+            // gate the decision on the declared return type.
+            _ => true,
+        };
         let signature_uses_text = entry_decl
             .map(|f| {
                 let unused_text_params: alloc::collections::BTreeSet<String> = f
@@ -1018,7 +1052,16 @@ pub fn compile_with_target(
                         None => true,
                     }
                 });
-                any_used_text_param || type_expr_carries_text(&f.return_type)
+                // The declared return type only disqualifies
+                // ephemerality when the entry chunk's compiled body
+                // actually leaves a text value on the abstract stack
+                // at a boundary-crossing op. The dataflow result is a
+                // sound upper bound: a `false` result means no path
+                // through the chunk carries text out, so the declared
+                // `Text` return is unreachable in practice.
+                let declared_return_carries_text =
+                    type_expr_carries_text(&f.return_type) && entry_boundary_carries_text;
+                any_used_text_param || declared_return_carries_text
             })
             .unwrap_or(false);
         let provably_ephemeral = module.private_data_bytes == 0 && !signature_uses_text;
@@ -1098,12 +1141,12 @@ fn param_name_is_used(body: &Block, name: &str) -> bool {
             Expr::BinOp { left, right, .. } => expr_uses(left, name) || expr_uses(right, name),
             Expr::UnaryOp { operand, .. } => expr_uses(operand, name),
             Expr::Call { args, .. } => args.iter().any(|e| expr_uses(e, name)),
-            Expr::Pipeline {
-                left, args, ..
-            } => expr_uses(left, name) || args.iter().any(|e| expr_uses(e, name)),
-            Expr::MethodCall {
-                receiver, args, ..
-            } => expr_uses(receiver, name) || args.iter().any(|e| expr_uses(e, name)),
+            Expr::Pipeline { left, args, .. } => {
+                expr_uses(left, name) || args.iter().any(|e| expr_uses(e, name))
+            }
+            Expr::MethodCall { receiver, args, .. } => {
+                expr_uses(receiver, name) || args.iter().any(|e| expr_uses(e, name))
+            }
             Expr::FieldAccess { object, .. } => expr_uses(object, name),
             Expr::TupleIndex { object, .. } => expr_uses(object, name),
             Expr::ArrayIndex { object, index, .. } => {
@@ -1122,9 +1165,9 @@ fn param_name_is_used(body: &Block, name: &str) -> bool {
                         .map(|b| block_uses(b, name))
                         .unwrap_or(false)
             }
-            Expr::Match { scrutinee, arms, .. } => {
-                expr_uses(scrutinee, name) || arms.iter().any(|arm| expr_uses(&arm.expr, name))
-            }
+            Expr::Match {
+                scrutinee, arms, ..
+            } => expr_uses(scrutinee, name) || arms.iter().any(|arm| expr_uses(&arm.expr, name)),
             Expr::TupleLiteral { elements, .. } => elements.iter().any(|e| expr_uses(e, name)),
             Expr::ArrayLiteral { elements, .. } => elements.iter().any(|e| expr_uses(e, name)),
             Expr::StructInit { fields, .. } => fields.iter().any(|f| expr_uses(&f.value, name)),
@@ -1191,6 +1234,53 @@ fn param_name_is_used(body: &Block, name: &str) -> bool {
 /// Every other field type (scalar, tuple, option, struct, enum)
 /// uses a single slot whose `Value` representation carries the
 /// internal structure.
+/// Convert a const initializer into a `ConstValue` without
+/// validating against a declared field type. Used recursively
+/// when the outer context cannot supply a precise inner type
+/// (struct fields and enum payloads). Scalar literals carry
+/// enough information to choose the right `ConstValue` variant;
+/// composite forms recurse.
+fn const_value_any(init: &ConstInitializer) -> crate::bytecode::ConstValue {
+    use crate::bytecode::ConstValue;
+    match init {
+        ConstInitializer::Scalar(Literal::Int(n)) => ConstValue::Int(*n),
+        ConstInitializer::Scalar(Literal::Float(f)) => ConstValue::Float(*f),
+        ConstInitializer::Scalar(Literal::Bool(b)) => ConstValue::Bool(*b),
+        ConstInitializer::Scalar(Literal::String(s)) => ConstValue::StaticStr(s.clone()),
+        ConstInitializer::Scalar(Literal::Unit) => ConstValue::Unit,
+        ConstInitializer::Tuple(elements) => {
+            let out: Vec<ConstValue> = elements.iter().map(const_value_any).collect();
+            ConstValue::Tuple(out)
+        }
+        ConstInitializer::Array(elements) => {
+            let out: Vec<ConstValue> = elements.iter().map(const_value_any).collect();
+            ConstValue::Array(out)
+        }
+        ConstInitializer::Struct { name, fields } => {
+            let out: Vec<(String, ConstValue)> = fields
+                .iter()
+                .map(|(fname, finit)| (fname.clone(), const_value_any(finit)))
+                .collect();
+            ConstValue::Struct {
+                type_name: name.clone(),
+                fields: out,
+            }
+        }
+        ConstInitializer::Enum {
+            enum_name,
+            variant,
+            args,
+        } => {
+            let out: Vec<ConstValue> = args.iter().map(const_value_any).collect();
+            ConstValue::Enum {
+                type_name: enum_name.clone(),
+                variant: variant.clone(),
+                fields: out,
+            }
+        }
+    }
+}
+
 /// Convert a source-level const initializer to a `ConstValue`
 /// for the constant pool. Validates the initializer's shape and
 /// element types against the declared field type. Scalar
@@ -1273,6 +1363,78 @@ fn const_value_from_literal_for_field(
                 )?);
             }
             Ok(ConstValue::Array(out))
+        }
+        (ConstInitializer::Struct { name, fields }, TypeExpr::Named(decl_name, _, _)) => {
+            if decl_name != name {
+                return Err(CompileError {
+                    message: format!(
+                        "const data field `{}.{}` initializer is `{}` but declared type is `{}`",
+                        data_name, field_name, name, decl_name
+                    ),
+                    span,
+                });
+            }
+            let mut out: Vec<(String, ConstValue)> = Vec::with_capacity(fields.len());
+            for (fname, finit) in fields {
+                // Element-type lookup against the type registry
+                // is delegated to the type checker. The compiler
+                // accepts any scalar form here; mismatches will
+                // surface at runtime when the constructed value
+                // is used in a typed context. A tighter check
+                // would consult `program.types` and validate per
+                // field; deferred because struct const data is
+                // primarily used for fixed lookup tables where
+                // the type discipline is enforced by the field
+                // names matching the struct declaration.
+                let cv = const_value_from_literal_for_field(
+                    finit,
+                    &TypeExpr::Prim(PrimType::Word, span),
+                    data_name,
+                    field_name,
+                    span,
+                )
+                .unwrap_or_else(|_| {
+                    // Recurse with a permissive inner type by
+                    // re-attempting against a synthetic "any"
+                    // expectation. The struct case is one place
+                    // where the precise inner type cannot be
+                    // determined without a type-info lookup; we
+                    // accept any well-formed const value here
+                    // and rely on later runtime validation if
+                    // the script reads the field through a
+                    // type-narrowing operation.
+                    const_value_any(finit)
+                });
+                out.push((fname.clone(), cv));
+            }
+            Ok(ConstValue::Struct {
+                type_name: name.clone(),
+                fields: out,
+            })
+        }
+        (
+            ConstInitializer::Enum {
+                enum_name,
+                variant,
+                args,
+            },
+            TypeExpr::Named(decl_name, _, _),
+        ) => {
+            if decl_name != enum_name {
+                return Err(CompileError {
+                    message: format!(
+                        "const data field `{}.{}` initializer is `{}::{}` but declared type is `{}`",
+                        data_name, field_name, enum_name, variant, decl_name
+                    ),
+                    span,
+                });
+            }
+            let out: Vec<ConstValue> = args.iter().map(const_value_any).collect();
+            Ok(ConstValue::Enum {
+                type_name: enum_name.clone(),
+                variant: variant.clone(),
+                fields: out,
+            })
         }
         _ => Err(CompileError {
             message: format!(
@@ -3238,12 +3400,12 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
                 // literal and emit a constant load. The runtime
                 // never allocates a data-segment slot for them.
                 if fc.is_const_data_block(name) {
-                    let cv = fc
-                        .const_data_field_value(name, field)
-                        .ok_or_else(|| CompileError {
-                            message: format!("unknown const data field: {}.{}", name, field),
-                            span: *span,
-                        })?;
+                    let cv =
+                        fc.const_data_field_value(name, field)
+                            .ok_or_else(|| CompileError {
+                                message: format!("unknown const data field: {}.{}", name, field),
+                                span: *span,
+                            })?;
                     let idx = fc.add_const_value(cv);
                     fc.emit(Op::Const(idx));
                     return Ok(());

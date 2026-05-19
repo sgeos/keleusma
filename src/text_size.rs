@@ -143,7 +143,9 @@ pub fn op_cost_context(lhs: TextSize, rhs: TextSize) -> OpCostContext {
 /// top region by text-producing opcodes in the chunk. `returns_text`
 /// is `true` if any execution path through the chunk leaves a value
 /// of text type (Known or Unbounded) on top of the abstract stack at
-/// a `Return` op or at the end of the chunk's ops.
+/// a `Return` op or at the end of the chunk's ops. `yields_text` is
+/// `true` if any execution path leaves a text value on top of the
+/// abstract stack at an `Op::Yield`.
 ///
 /// The `returns_text` flag is used by callers of this analysis to
 /// propagate accurate per-callee text-ness through the module-level
@@ -155,12 +157,21 @@ pub fn op_cost_context(lhs: TextSize, rhs: TextSize) -> OpCostContext {
 /// per-callee text-ness information, calls returning non-text scalars
 /// push `NotText`, restoring the type-checker's "either operand
 /// NotText implies result NotText" invariant.
+///
+/// The `yields_text` flag is used by the ephemerality refinement.
+/// A Stream chunk that never yields a text-typed value across the
+/// host-VM boundary may be admitted as ephemeral even when the
+/// surface signature declares a `Text` yield type but every concrete
+/// yield path produces a non-text value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ChunkTextAnalysis {
     /// Upper bound on text heap allocation for the chunk.
     pub heap_alloc: u32,
     /// Whether the chunk may return a text-typed value.
     pub returns_text: bool,
+    /// Whether the chunk may yield a text-typed value across the
+    /// host-VM boundary at any `Op::Yield`.
+    pub yields_text: bool,
 }
 
 /// Conservative upper bound on the bytes allocated to the arena's
@@ -216,6 +227,7 @@ pub fn analyze_chunk_text(chunk: &Chunk, callee_returns_text: &[bool]) -> ChunkT
     let mut loop_depth: u32 = 0;
     let mut branch_depth: u32 = 0;
     let mut returns_text = false;
+    let mut yields_text = false;
 
     for op in &chunk.ops {
         // Track structural depth so writes inside any conditional or
@@ -229,12 +241,25 @@ pub fn analyze_chunk_text(chunk: &Chunk, callee_returns_text: &[bool]) -> ChunkT
         }
         let conservative = loop_depth > 0 || branch_depth > 0;
 
-        // Peek the return value before apply_op pops it.
-        if matches!(op, Op::Return) {
-            let returned = state.peek();
-            if !matches!(returned, TextSize::NotText) {
-                returns_text = true;
+        // Peek the boundary-crossing value before apply_op pops it.
+        // `Op::Return` crosses out of a function back to its caller
+        // (or out of the entry chunk back to the host). `Op::Yield`
+        // crosses out of a Stream iteration back to the host. Both
+        // are arena-boundary events for the ephemerality refinement.
+        match op {
+            Op::Return => {
+                let top = state.peek();
+                if !matches!(top, TextSize::NotText) {
+                    returns_text = true;
+                }
             }
+            Op::Yield => {
+                let top = state.peek();
+                if !matches!(top, TextSize::NotText) {
+                    yields_text = true;
+                }
+            }
+            _ => {}
         }
 
         let contribution = state.apply_op(op, chunk, conservative, callee_returns_text);
@@ -243,6 +268,7 @@ pub fn analyze_chunk_text(chunk: &Chunk, callee_returns_text: &[bool]) -> ChunkT
             return ChunkTextAnalysis {
                 heap_alloc: u32::MAX,
                 returns_text,
+                yields_text,
             };
         }
         match op {
@@ -261,6 +287,7 @@ pub fn analyze_chunk_text(chunk: &Chunk, callee_returns_text: &[bool]) -> ChunkT
     ChunkTextAnalysis {
         heap_alloc: total,
         returns_text,
+        yields_text,
     }
 }
 

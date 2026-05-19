@@ -112,9 +112,9 @@ pub struct DataFieldDecl {
 }
 
 /// Compile-time initializer for a `const data` field. Distinct
-/// from [`Literal`] because const initializers may nest tuples
-/// and arrays whereas pattern literals are always scalar. Struct
-/// and enum initializers are queued for a later iteration.
+/// from [`Literal`] because const initializers may nest tuples,
+/// arrays, struct literals, and enum variant constructions
+/// whereas pattern literals are always scalar.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ConstInitializer {
     /// Scalar primitive literal: integer, float, boolean, text,
@@ -129,6 +129,22 @@ pub enum ConstInitializer {
     /// type are validated against the declared field type at
     /// compile time.
     Array(Vec<ConstInitializer>),
+    /// Struct literal: `Name { field: init, ... }`. Field names
+    /// and types are validated against the declared struct type
+    /// at compile time.
+    Struct {
+        name: String,
+        fields: Vec<(String, ConstInitializer)>,
+    },
+    /// Enum variant construction: `Enum::Variant` for unit
+    /// variants, `Enum::Variant(init, init, ...)` for tuple
+    /// payloads. The enum name and variant are validated against
+    /// the declared enum type at compile time.
+    Enum {
+        enum_name: String,
+        variant: String,
+        args: Vec<ConstInitializer>,
+    },
 }
 
 /// A `use` import declaration.

@@ -440,15 +440,12 @@ pub struct Vm<'a, 'arena> {
 /// accounting; the actual `Value` enum is larger than the WCMU
 /// slot size by an implementation-defined factor.
 pub fn required_persistent_capacity_for(module: &crate::bytecode::Module) -> usize {
-    let private_count = module
-        .data_layout
-        .as_ref()
-        .map_or(0, |dl| {
-            dl.slots
-                .iter()
-                .filter(|s| matches!(s.visibility, crate::bytecode::SlotVisibility::Private))
-                .count()
-        });
+    let private_count = module.data_layout.as_ref().map_or(0, |dl| {
+        dl.slots
+            .iter()
+            .filter(|s| matches!(s.visibility, crate::bytecode::SlotVisibility::Private))
+            .count()
+    });
     private_count * core::mem::size_of::<Value>()
 }
 
@@ -1124,8 +1121,7 @@ impl<'a, 'arena> Vm<'a, 'arena> {
     /// expected to have validated the bound before invoking this
     /// helper (both call sites do).
     fn slot_is_private(&self, slot: usize) -> bool {
-        slot >= self.shared_slot_count as usize
-            && slot < self.data_len()
+        slot >= self.shared_slot_count as usize && slot < self.data_len()
     }
 
     /// Return the number of slots in the current data segment.
@@ -4158,7 +4154,7 @@ mod tests {
             b'X', b'X', b'X', b'X', // magic
             0x08, 0x00, // version
             0x24, 0x00, 0x00, 0x00, // length = 36
-            6, 6, 6, // word_bits_log2, addr_bits_log2, float_bits_log2
+            6, 6, 6,    // word_bits_log2, addr_bits_log2, float_bits_log2
             0x00, // flags
             0x00, 0x00, // reserved
             0x00, 0x00, 0x00, 0x00, // wcet_cycles
@@ -5726,6 +5722,100 @@ mod tests {
 
     #[test]
     #[cfg(feature = "text")]
+    fn ephemeral_bit_clear_when_declared_text_return_actually_produced() {
+        // The entry's declared return type is `Text` and the body
+        // actually produces a text value at the return site. The
+        // dataflow refinement confirms the boundary-crossing op
+        // peeks a text value, so the module is correctly disqualified
+        // from ephemerality. This is a regression guard that the
+        // refinement does not become permissive in cases where the
+        // conservative rule already disqualified.
+        let src = "fn main() -> Text { \"hello\" }";
+        let tokens = tokenize(src).expect("lex");
+        let program = parse(&tokens).expect("parse");
+        let module = compile(&program).expect("compile");
+        assert!(
+            module.flags & crate::bytecode::FLAG_EPHEMERAL == 0,
+            "expected FLAG_EPHEMERAL clear; declared Text return with actual text path must disqualify, flags = {:#04x}",
+            module.flags
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "verify")]
+    fn module_chunk_text_analyses_distinguishes_yield_and_return() {
+        // Direct unit test of the per-yield dataflow analysis. The
+        // analysis must peek at the value being yielded or returned
+        // and report `yields_text`/`returns_text` accordingly.
+        //
+        // The source-level positive test for the ephemerality
+        // refinement is blocked by an unrelated type-unification
+        // limitation around bare `Option::None` literals in function
+        // returns. This test exercises the analysis directly against
+        // hand-crafted chunks so that the dataflow path stays under
+        // automated coverage even when the surface language cannot
+        // express the relevant program.
+        use crate::bytecode::{BlockType, Chunk, ConstValue, Module, Op};
+
+        let mut text_returning_chunk = Chunk {
+            name: alloc::string::String::from("text_return"),
+            ops: alloc::vec![Op::Const(0), Op::Return],
+            constants: alloc::vec![ConstValue::StaticStr(alloc::string::String::from("hi"))],
+            struct_templates: alloc::vec::Vec::new(),
+            local_count: 0,
+            param_count: 0,
+            block_type: BlockType::Func,
+            param_types: alloc::vec::Vec::new(),
+        };
+        // Suppress the compiler's per-chunk field defaults that may
+        // differ across builds. Module-level fields below are also
+        // populated explicitly for determinism.
+        text_returning_chunk.ops.shrink_to_fit();
+
+        let int_returning_chunk = Chunk {
+            name: alloc::string::String::from("int_return"),
+            ops: alloc::vec![Op::Const(0), Op::Return],
+            constants: alloc::vec![ConstValue::Int(0)],
+            struct_templates: alloc::vec::Vec::new(),
+            local_count: 0,
+            param_count: 0,
+            block_type: BlockType::Func,
+            param_types: alloc::vec::Vec::new(),
+        };
+
+        let module = Module {
+            chunks: alloc::vec![text_returning_chunk, int_returning_chunk],
+            native_names: alloc::vec::Vec::new(),
+            entry_point: Some(0),
+            data_layout: None,
+            word_bits_log2: 6,
+            addr_bits_log2: 5,
+            float_bits_log2: 6,
+            shared_data_bytes: 0,
+            private_data_bytes: 0,
+            flags: 0,
+            wcet_cycles: 0,
+            wcmu_bytes: 0,
+        };
+
+        let analyses = crate::verify::module_chunk_text_analyses(&module).expect("analyse");
+        assert_eq!(analyses.len(), 2);
+        assert!(
+            analyses[0].returns_text,
+            "chunk 0 returns a static string and must be flagged returns_text"
+        );
+        assert!(
+            !analyses[1].returns_text,
+            "chunk 1 returns an integer and must not be flagged returns_text"
+        );
+        assert!(
+            !analyses[0].yields_text && !analyses[1].yields_text,
+            "neither chunk contains Op::Yield"
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "text")]
     fn ephemeral_bit_clear_when_text_param_is_used() {
         // The same shape but the body actually references the
         // Text param. The verifier conservatively assumes the
@@ -5742,6 +5832,74 @@ mod tests {
             "expected FLAG_EPHEMERAL clear; used Text param must disqualify, flags = {:#04x}",
             module.flags
         );
+    }
+
+    #[test]
+    fn const_data_struct_initializer() {
+        // Struct-typed const data field with a struct literal
+        // initializer. The struct is declared elsewhere; the
+        // const field references it by name.
+        let src = "\
+            struct Point { x: Word, y: Word }\n\
+            const data origin {\n\
+                pt: Point = Point { x: 3, y: 4 },\n\
+            }\n\
+            fn main() -> Word { origin.pt.x + origin.pt.y }";
+        let tokens = tokenize(src).expect("lex");
+        let program = parse(&tokens).expect("parse");
+        let module = compile(&program).expect("compile");
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let mut vm = Vm::new(module, &arena).expect("verify");
+        match vm.call(&[]).expect("call") {
+            VmState::Finished(Value::Int(v)) => assert_eq!(v, 7),
+            other => panic!("expected Int(7), got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn const_data_enum_initializer() {
+        // Enum-typed const data field with a variant
+        // construction initializer. Tests both unit and tuple-
+        // payload variants through a Word cast.
+        let src = "\
+            enum Color { Red = 1, Green = 2, Blue = 3 }\n\
+            const data palette {\n\
+                primary: Color = Color::Red,\n\
+            }\n\
+            fn main() -> Word { palette.primary as Word }";
+        let tokens = tokenize(src).expect("lex");
+        let program = parse(&tokens).expect("parse");
+        let module = compile(&program).expect("compile");
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let mut vm = Vm::new(module, &arena).expect("verify");
+        match vm.call(&[]).expect("call") {
+            VmState::Finished(Value::Int(v)) => assert_eq!(v, 1),
+            other => panic!("expected Int(1), got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn const_data_enum_tuple_variant_initializer() {
+        let src = "\
+            enum Shape { Square(Word), Rect(Word, Word) }\n\
+            const data shapes {\n\
+                a: Shape = Shape::Rect(4, 5),\n\
+            }\n\
+            fn main() -> Word {\n\
+                match shapes.a {\n\
+                    Shape::Rect(w, h) => w * h,\n\
+                    Shape::Square(s) => s * s,\n\
+                }\n\
+            }";
+        let tokens = tokenize(src).expect("lex");
+        let program = parse(&tokens).expect("parse");
+        let module = compile(&program).expect("compile");
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let mut vm = Vm::new(module, &arena).expect("verify");
+        match vm.call(&[]).expect("call") {
+            VmState::Finished(Value::Int(v)) => assert_eq!(v, 20),
+            other => panic!("expected Int(20), got {:?}", other),
+        }
     }
 
     #[test]

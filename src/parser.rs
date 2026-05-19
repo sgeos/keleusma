@@ -242,10 +242,7 @@ impl<'a> Parser<'a> {
             match self.peek() {
                 TokenKind::Struct => types.push(TypeDef::Struct(self.parse_struct_def()?)),
                 TokenKind::Enum => types.push(TypeDef::Enum(self.parse_enum_def()?)),
-                TokenKind::Data
-                | TokenKind::Shared
-                | TokenKind::Private
-                | TokenKind::Const => {
+                TokenKind::Data | TokenKind::Shared | TokenKind::Private | TokenKind::Const => {
                     data_decls.push(self.parse_data_decl()?);
                 }
                 TokenKind::Fn | TokenKind::Yield | TokenKind::Loop | TokenKind::Pure => {
@@ -498,10 +495,57 @@ impl<'a> Parser<'a> {
     /// for tuples and `[init, init, ...]` for arrays. Composites
     /// nest. Struct and enum initializers are reserved for a
     /// future iteration.
-    fn parse_const_initializer(
-        &mut self,
-    ) -> Result<(ConstInitializer, Span), ParseError> {
+    fn parse_const_initializer(&mut self) -> Result<(ConstInitializer, Span), ParseError> {
         let start = self.peek_span();
+        // Struct or enum literal: leading UpperIdent.
+        if let TokenKind::UpperIdent(_) = self.peek() {
+            let (name, name_span) = self.expect_upper_ident()?;
+            // Enum variant: `Enum::Variant` or `Enum::Variant(args)`.
+            if self.eat(&TokenKind::ColonColon) {
+                let (variant, var_span) = self.expect_upper_ident()?;
+                let mut args: Vec<ConstInitializer> = Vec::new();
+                let mut end = var_span;
+                if self.eat(&TokenKind::LParen) {
+                    if !self.at(&TokenKind::RParen) {
+                        let (first, _) = self.parse_const_initializer()?;
+                        args.push(first);
+                        while self.eat(&TokenKind::Comma) {
+                            if self.at(&TokenKind::RParen) {
+                                break;
+                            }
+                            let (next, _) = self.parse_const_initializer()?;
+                            args.push(next);
+                        }
+                    }
+                    end = self.expect(&TokenKind::RParen)?;
+                }
+                return Ok((
+                    ConstInitializer::Enum {
+                        enum_name: name,
+                        variant,
+                        args,
+                    },
+                    merge_spans(name_span, end),
+                ));
+            }
+            // Struct literal: `Name { field: init, ... }`.
+            self.expect(&TokenKind::LBrace)?;
+            let mut fields: Vec<(String, ConstInitializer)> = Vec::new();
+            while !self.at(&TokenKind::RBrace) {
+                let (fname, _) = self.expect_lower_ident()?;
+                self.expect(&TokenKind::Colon)?;
+                let (finit, _) = self.parse_const_initializer()?;
+                fields.push((fname, finit));
+                if !self.eat(&TokenKind::Comma) {
+                    break;
+                }
+            }
+            let end = self.expect(&TokenKind::RBrace)?;
+            return Ok((
+                ConstInitializer::Struct { name, fields },
+                merge_spans(name_span, end),
+            ));
+        }
         // Array literal `[init, init, ...]`.
         if self.at(&TokenKind::LBracket) {
             self.bump();

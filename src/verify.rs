@@ -908,6 +908,46 @@ pub fn module_wcmu(module: &Module, native_wcmu: &[u32]) -> Result<Vec<(u32, u32
         .collect())
 }
 
+/// Per-chunk text-flow analysis for the whole module, computed in
+/// topological call order so each caller sees its callees' resolved
+/// text-returning bits. The returned vector is indexed by chunk index
+/// and mirrors `module.chunks`.
+///
+/// The compiler uses this to refine the ephemerality decision: a
+/// module that declares a `Text` return or yield type on its entry
+/// point but whose entry chunk's `Op::Return`/`Op::Yield` peeks all
+/// resolve to `TextSize::NotText` does not actually carry text across
+/// the host-VM boundary at runtime, and is therefore admissible as
+/// ephemeral.
+///
+/// Returns an error if the call graph contains a cycle. Direct
+/// callers in the compiler should treat any error as "fall back to
+/// the conservative signature-only ephemerality check" rather than
+/// propagating, because recursion or cycles cannot occur in modules
+/// that already passed type-check and the broader verifier.
+pub fn module_chunk_text_analyses(
+    module: &Module,
+) -> Result<Vec<crate::text_size::ChunkTextAnalysis>, VerifyError> {
+    let n = module.chunks.len();
+    let mut chunk_returns_text: Vec<bool> = alloc::vec![false; n];
+    let mut analyses: Vec<crate::text_size::ChunkTextAnalysis> = alloc::vec![
+        crate::text_size::ChunkTextAnalysis {
+            heap_alloc: 0,
+            returns_text: false,
+            yields_text: false,
+        };
+        n
+    ];
+    let order = topological_call_order(module)?;
+    for chunk_idx in order {
+        let chunk = &module.chunks[chunk_idx];
+        let analysis = crate::text_size::analyze_chunk_text(chunk, &chunk_returns_text);
+        chunk_returns_text[chunk_idx] = analysis.returns_text;
+        analyses[chunk_idx] = analysis;
+    }
+    Ok(analyses)
+}
+
 /// Topological order of the call graph. Leaves come first, roots last.
 fn topological_call_order(module: &Module) -> Result<Vec<usize>, VerifyError> {
     let n = module.chunks.len();
@@ -2180,11 +2220,11 @@ mod tests {
                 slots: vec![
                     DataSlot {
                         name: String::from("ctx.a"),
-                    visibility: crate::bytecode::SlotVisibility::Shared,
+                        visibility: crate::bytecode::SlotVisibility::Shared,
                     },
                     DataSlot {
                         name: String::from("ctx.b"),
-                    visibility: crate::bytecode::SlotVisibility::Shared,
+                        visibility: crate::bytecode::SlotVisibility::Shared,
                     },
                 ],
             }),
