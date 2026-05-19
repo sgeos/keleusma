@@ -58,7 +58,7 @@ fn precompile_scripts() {
         .unwrap_or_else(|e| panic!("read prelude {:?}: {}", prelude_path, e));
     println!("cargo:rerun-if-changed={}", prelude_path.display());
 
-    for name in ["led", "sensor", "heartbeat"] {
+    for name in ["led", "sensor", "heartbeat", "event_listener", "faulty"] {
         let src_path = scripts_dir.join(format!("{}.kel", name));
         println!("cargo:rerun-if-changed={}", src_path.display());
 

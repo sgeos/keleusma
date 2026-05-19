@@ -1,0 +1,42 @@
+// Faulty task. Deliberately triggers `VmError::DivisionByZero`
+// every fifth iteration so the kernel's supervised-restart
+// policy can be observed end to end.
+//
+// On the first four iterations the task increments a counter
+// and yields normally. On the fifth iteration it emits a
+// trigger log event, then evaluates `100 / 0`, which the VM
+// reports as `VmError::DivisionByZero` (category SoftScript).
+// The kernel logs the error and (because this task is
+// constructed with `max_restarts > 0`) calls
+// `Vm::reset_after_error`, resets the task's started flag, and
+// dispatches it again from the top of `loop main`.
+//
+// The data segment survives `reset_after_error` by design, so
+// `state.counter` continues to climb across restarts. The host
+// observes the EV_KERNEL_VM_ERROR and EV_KERNEL_TASK_RESTARTED
+// events in pairs.
+
+data state {
+    counter: Word,
+}
+
+const data cfg {
+    period_ms: Word = 1500,
+    fault_modulus: Word = 5,
+    ev_trigger: Word = 201,
+}
+
+loop main(_reason: Word) -> (Word, Word) {
+    state.counter = state.counter + 1;
+    if state.counter % cfg.fault_modulus == 0 {
+        host::log_event(cfg.ev_trigger, state.counter);
+        // Deliberate fault. The VM reports
+        // `VmError::DivisionByZero` (category SoftScript).
+        // The kernel's supervised-restart policy catches this
+        // and re-dispatches us from the top of `loop main`.
+        let _trip = 100 / 0;
+    } else {};
+    let next = host::clock_now() + cfg.period_ms;
+    let _ = yield (0, next);
+    (0, 0)
+}

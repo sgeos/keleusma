@@ -116,6 +116,24 @@ impl Platform for StdPlatform {
                     t
                 );
             }
+            crate::natives::EV_KERNEL_TASK_RESTARTED => {
+                println!(
+                    "[t={:>6}ms] kernel: task restarted (count={})",
+                    t, data
+                );
+            }
+            crate::natives::EV_EVENT_LISTENER_WAKE => {
+                println!(
+                    "[t={:>6}ms] event_listener: woke (wake_count={})",
+                    t, data
+                );
+            }
+            crate::natives::EV_FAULTY_TRIGGER => {
+                println!(
+                    "[t={:>6}ms] faulty: deliberate fault at iteration {}",
+                    t, data
+                );
+            }
             _ => {
                 println!(
                     "[t={:>6}ms] unknown log_event(code={}, data={})",

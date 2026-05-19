@@ -1,0 +1,34 @@
+// Event listener task. Waits on event id 1 and logs each wake.
+//
+// Demonstrates the ISR-to-task wake-up pattern: the script
+// yields with reason 2 and a payload event id, which the
+// kernel maps to `TaskState::WaitingFor(1)`. An external
+// poster (host-side timer task, GPIO interrupt handler, or
+// other coordinator) calls `Kernel::post_event(1)`; the
+// scheduler then promotes this task to `Ready(Event)` and
+// resumes it.
+//
+// The wake reason value the kernel passes back is 2
+// (`WakeReason::Event`); the script logs it through the
+// shared event-listener discriminant defined in
+// `src/natives.rs`.
+
+data state {
+    wake_count: Word,
+}
+
+const data cfg {
+    event_id: Word = 1,
+    ev_wake: Word = 200,
+}
+
+loop main(_reason: Word) -> (Word, Word) {
+    state.wake_count = state.wake_count + 1;
+    host::log_event(cfg.ev_wake, state.wake_count);
+    // Yield with reason 2 (WaitForEvent) carrying the event
+    // id we want to wait on. The kernel marks us
+    // `WaitingFor(cfg.event_id)`; an external `post_event`
+    // call wakes us through `WakeReason::Event`.
+    let _ = yield (2, cfg.event_id);
+    (0, 0)
+}

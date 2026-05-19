@@ -64,6 +64,17 @@ pub const EV_KERNEL_TASK_FINISHED: u32 = 102;
 /// Kernel-emitted: a task returned an unrecognised `VmState`
 /// variant. Data word is unused (zero).
 pub const EV_KERNEL_UNEXPECTED_STATE: u32 = 103;
+/// Kernel-emitted: a task that hit `VmError::Halt` was reset
+/// under its supervised-restart policy. Data word carries the
+/// new `restart_count` value.
+pub const EV_KERNEL_TASK_RESTARTED: u32 = 104;
+/// Event-listener emitted: woke from `wait_for_event` and is
+/// running its handler. Data word carries the event id.
+pub const EV_EVENT_LISTENER_WAKE: u32 = 200;
+/// Faulty-task emitted: about to deliberately divide by zero
+/// to exercise the supervised-restart path. Data word is the
+/// iteration counter at the moment of the fault.
+pub const EV_FAULTY_TRIGGER: u32 = 201;
 
 /// Discriminants for the script-side `StatusErrorCode` enum.
 /// Kept in lock-step with `scripts/prelude.kel`. The values
@@ -120,6 +131,16 @@ pub fn register_task_natives<P: Platform>(vm: &mut Vm) {
     register_spi::<P>(vm);
     register_i2c::<P>(vm);
     register_adc::<P>(vm);
+
+    // The event-bus surface (waiting on an event id) is provided
+    // not as a native but through the script-level
+    // `yield (2, event_id)` form. The kernel's dispatch loop
+    // maps yield reason 2 to `TaskState::WaitingFor(id)`. Events
+    // are posted into the kernel through
+    // `kernel::Kernel::post_event`, called from outside the VM
+    // (typically a host-side timer task, an interrupt handler,
+    // or another scheduler thread that holds the kernel through
+    // a mutex or channel).
 }
 
 fn register_clock_now<P: Platform>(vm: &mut Vm) {

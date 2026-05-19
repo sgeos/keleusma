@@ -127,6 +127,21 @@ pub trait Platform: 'static {
     /// string literals from the flash image.
     fn log_event(_code: u32, _data: i64) {}
 
+    /// Pet the hardware watchdog. Called by the kernel at the
+    /// top of each scheduler iteration. The default body is a
+    /// no-op so platforms without a watchdog continue to
+    /// satisfy the trait; platforms that arm a hardware
+    /// watchdog override this method to reset the timer.
+    ///
+    /// The pet cadence is "once per scheduler iteration" rather
+    /// than per-dispatch because each task's slice has a
+    /// verified WCET bound. The scheduler iteration is the
+    /// outer liveness signal that the cooperative kernel is
+    /// still making progress; a hang at the kernel level (a
+    /// driver, an interrupt storm, a hardware fault) prevents
+    /// the iteration from completing and the watchdog fires.
+    fn feed_watchdog() {}
+
     /// Set a GPIO-like output. The `pin` index must satisfy
     /// `pin < RESOURCES.gpio_pin_count`; the natives layer
     /// validates this before calling, so implementations may

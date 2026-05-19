@@ -62,6 +62,21 @@ pub struct Task {
     pub vm: Vm<'static, 'static>,
     pub state: TaskState,
     pub started: bool,
+    /// Maximum declared WCET in pipelined cycles per yield slice
+    /// that this task is admitted under. The kernel rejects a hot
+    /// swap whose new module declares a WCET above this budget.
+    /// `None` disables the check (legacy behaviour). The value is
+    /// installed at task construction and not changed by the
+    /// scheduler.
+    pub wcet_budget_cycles: Option<u32>,
+    /// Restart policy on `VmError::Halt`. The kernel tracks
+    /// per-task restart counts; on Halt the kernel attempts a
+    /// VM reset and re-dispatches the task as long as the count
+    /// is below `max_restarts`. `max_restarts == 0` disables the
+    /// recovery path and matches the legacy behaviour of marking
+    /// the task `Finished` on the first halt error.
+    pub max_restarts: u32,
+    pub restart_count: u32,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -74,19 +89,69 @@ pub enum TaskState {
 
 pub struct Kernel<P: Platform> {
     tasks: Vec<Task>,
+    /// Pending events queued for delivery to tasks that
+    /// `WaitingFor(event_id)`. The scheduler drains this list at
+    /// the top of each dispatch iteration; events that no task is
+    /// currently waiting for are dropped. Order is preserved but
+    /// not relied on by the scheduler (event arrival is treated
+    /// as a level-triggered notification, not edge-counted).
+    pending_events: Vec<u8>,
+    /// Optional internal event ticker. When set, the scheduler
+    /// posts `event_id` every `period_ms` milliseconds of
+    /// monotonic time. The demonstrator uses this to simulate
+    /// an interrupt source without external coordination; real
+    /// deployments wire `post_event` from an ISR or a co-spawned
+    /// task that owns the kernel through a mutex or channel.
+    event_tick: Option<EventTick>,
     _phantom: PhantomData<P>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct EventTick {
+    event_id: u8,
+    period_ms: u32,
+    next_due_ms: u64,
 }
 
 impl<P: Platform> Kernel<P> {
     pub fn new() -> Self {
         Self {
             tasks: Vec::new(),
+            pending_events: Vec::new(),
+            event_tick: None,
             _phantom: PhantomData,
         }
     }
 
+    /// Enable the kernel's internal event ticker. The scheduler
+    /// then posts `event_id` every `period_ms` milliseconds. The
+    /// demonstrator uses this to wake the `event_listener` task
+    /// without requiring an external poster; real deployments
+    /// disable the ticker and wire `post_event` from a host-side
+    /// driver or interrupt handler.
+    pub fn enable_event_tick(&mut self, event_id: u8, period_ms: u32) {
+        self.event_tick = Some(EventTick {
+            event_id,
+            period_ms,
+            next_due_ms: 0,
+        });
+    }
+
     pub fn add_task(&mut self, task: Task) {
         self.tasks.push(task);
+    }
+
+    /// Queue an event for delivery to any task currently in the
+    /// `WaitingFor(event_id)` state. The kernel drains the queue
+    /// at the top of each scheduler iteration; an event posted
+    /// while no task is waiting is dropped. Hosts post events from
+    /// any context that can borrow the kernel mutably; on `std`
+    /// this is typically a thread that holds `Arc<Mutex<Kernel>>`
+    /// or interleaves dispatch with event production through the
+    /// async executor's polling, on embassy this is a co-spawned
+    /// task that holds the kernel through a channel.
+    pub fn post_event(&mut self, event_id: u8) {
+        self.pending_events.push(event_id);
     }
 
     /// Dispatch loop. Runs forever unless every task finishes,
@@ -99,6 +164,43 @@ impl<P: Platform> Kernel<P> {
     pub async fn run(&mut self) {
         loop {
             let now = P::now_ms();
+            // Feed the platform watchdog at the top of every
+            // scheduler iteration. The default `Platform::feed_watchdog`
+            // implementation is a no-op; platforms that arm a
+            // hardware watchdog override it to pet the timer.
+            // The pet point is the scheduler iteration boundary
+            // rather than per-dispatch because each task's slice
+            // has a verified WCET bound; the scheduler is the
+            // outer liveness signal.
+            P::feed_watchdog();
+            // Fire the internal event ticker if its deadline has
+            // passed. The ticker is the demonstrator's stand-in
+            // for an interrupt source; the post itself is
+            // structurally identical to a call from an ISR
+            // handler.
+            if let Some(tick) = &mut self.event_tick
+                && now >= tick.next_due_ms
+            {
+                let id = tick.event_id;
+                tick.next_due_ms = now + tick.period_ms as u64;
+                self.pending_events.push(id);
+            }
+            // Drain pending events. For each event id, find every
+            // task currently `WaitingFor(id)` and promote it to
+            // ready with `WakeReason::Event`. Events that no task
+            // is waiting for are dropped.
+            if !self.pending_events.is_empty() {
+                let events: alloc::vec::Vec<u8> = self.pending_events.drain(..).collect();
+                for event_id in events {
+                    for t in &mut self.tasks {
+                        if let TaskState::WaitingFor(waiting_for) = t.state
+                            && waiting_for == event_id
+                        {
+                            t.state = TaskState::Ready(WakeReason::Event);
+                        }
+                    }
+                }
+            }
             // Promote sleeping tasks whose deadline has passed.
             for t in &mut self.tasks {
                 if let TaskState::SleepingUntil(at) = t.state
@@ -181,25 +283,55 @@ impl<P: Platform> Kernel<P> {
                 // a code and a data word; the substantial flash
                 // cost of Debug-formatting an arbitrary VmError
                 // (~15 KB on this target) is avoided.
-                let category_code = match e.category() {
+                let category = e.category();
+                let category_code = match category {
                     keleusma::vm::VmErrorCategory::Halt => 0,
                     keleusma::vm::VmErrorCategory::SoftScript => 1,
                     keleusma::vm::VmErrorCategory::SoftHost => 2,
                 };
                 P::log_event(crate::natives::EV_KERNEL_VM_ERROR, category_code);
-                self.tasks[i].state = TaskState::Finished;
+                // Supervised restart. If the task carries a
+                // non-zero `max_restarts` budget and has not
+                // exhausted it, the kernel resets the VM's
+                // transient state (operand stack, call frames,
+                // arena) through `Vm::reset_after_error` and
+                // marks the task ready for a first-run dispatch.
+                // The data segment survives the reset by design,
+                // so accumulated state persists across the
+                // recovery boundary. Tasks that exhaust their
+                // budget or that did not opt in are marked
+                // `Finished` as before.
+                if self.tasks[i].restart_count < self.tasks[i].max_restarts {
+                    self.tasks[i].restart_count += 1;
+                    self.tasks[i].vm.reset_after_error();
+                    self.tasks[i].started = false;
+                    self.tasks[i].state = TaskState::Ready(WakeReason::FirstRun);
+                    P::log_event(
+                        crate::natives::EV_KERNEL_TASK_RESTARTED,
+                        self.tasks[i].restart_count as i64,
+                    );
+                } else {
+                    self.tasks[i].state = TaskState::Finished;
+                }
             }
         }
     }
 
     fn earliest_wakeup(&self) -> Option<u64> {
-        self.tasks
+        let task_deadline = self
+            .tasks
             .iter()
             .filter_map(|t| match t.state {
                 TaskState::SleepingUntil(at) => Some(at),
                 _ => None,
             })
-            .min()
+            .min();
+        let tick_deadline = self.event_tick.map(|tick| tick.next_due_ms);
+        match (task_deadline, tick_deadline) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (Some(a), None) | (None, Some(a)) => Some(a),
+            (None, None) => None,
+        }
     }
 }
 

@@ -147,6 +147,15 @@ impl Platform for Stm32N6570DkPlatform {
             crate::natives::EV_KERNEL_UNEXPECTED_STATE => {
                 defmt::info!("kernel: task returned unexpected vm state");
             }
+            crate::natives::EV_KERNEL_TASK_RESTARTED => {
+                defmt::info!("kernel: task restarted (count={})", data);
+            }
+            crate::natives::EV_EVENT_LISTENER_WAKE => {
+                defmt::info!("event_listener: woke (wake_count={})", data);
+            }
+            crate::natives::EV_FAULTY_TRIGGER => {
+                defmt::info!("faulty: deliberate fault at iteration {}", data);
+            }
             _ => {
                 defmt::info!("unknown log_event(code={}, data={})", code, data);
             }

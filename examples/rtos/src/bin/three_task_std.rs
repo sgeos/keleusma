@@ -19,14 +19,17 @@ use keleusma_rtos::{Platform, StdPlatform};
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut kernel = three_task_kernel::<StdPlatform>()?;
 
-    println!("=== Keleusma RTOS three-task demonstrator ===");
+    println!("=== Keleusma RTOS demonstrator ===");
     println!(
         "Platform: {} (gpio_pin_count={}, sensor_channel_count={})",
         StdPlatform::NAME,
         StdPlatform::RESOURCES.gpio_pin_count,
         StdPlatform::RESOURCES.sensor_channel_count,
     );
-    println!("Tasks: led (500ms), sensor (100ms), heartbeat (5000ms)");
+    println!(
+        "Tasks: led (500ms), sensor (100ms), heartbeat (5000ms), event_listener (on event 1), faulty (1500ms; faults every 5th iteration)"
+    );
+    println!("Kernel posts event 1 every 2500ms. Faulty task restarts under supervised policy.");
     println!("Press Ctrl-C to stop.");
     println!();
 

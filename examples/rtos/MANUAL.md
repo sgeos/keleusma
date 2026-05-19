@@ -70,9 +70,11 @@ Measured `.text` size on the bare-metal binary for each useful combination on th
 
 | Combination | `.text` | Notes |
 |-------------|--------:|-------|
-| `keleusma-compile` + `keleusma-verify` (default) | 621 KB | Source compiled at boot, verified at load. Boot to scheduler around 215 milliseconds. |
-| `keleusma-verify` only | 157 KB | Precompiled bytecode, verified at load. Boot to scheduler around 43 milliseconds. |
-| Neither | 137 KB | Precompiled bytecode, trust-loaded. Boot to scheduler around 39 milliseconds. Smallest image. |
+| `keleusma-compile` + `keleusma-verify` (default) | 622 KB | Source compiled at boot, verified at load. Boot to scheduler around 215 milliseconds. |
+| `keleusma-verify` only | 160 KB | Precompiled bytecode, verified at load. Boot to scheduler around 43 milliseconds. |
+| Neither | 140 KB | Precompiled bytecode, trust-loaded. Boot to scheduler around 39 milliseconds. Smallest image. |
+
+The table grew slightly from the prior pass when two new demonstrator tasks were added: `event_listener` (waits on event id 1, exercises the ISR-to-task wake-up pattern) and `faulty` (triggers `DivisionByZero` every fifth iteration to exercise the supervised-restart policy). The added compiled chunks plus the kernel's pending-event queue, the per-task WCET budget and restart counter fields, and the platform watchdog hook together account for roughly 3 KB.
 
 Several savings landed across the V0.2 closing pass. The `text` and `floats` surface features are both disabled on the runtime keleusma dependency; task scripts use only integer and fixed-point arithmetic. Diagnostic logging routes through the `host::log_event(code, data)` native rather than `host::log(text)`, including kernel-emitted events that previously went through `format!("{:?}", vmerror)` and pulled in the full float formatter chain (`flt2dec`, `CACHED_POW10`, `__divdf3`, `__adddf3`, char `escape_debug_ext`). Each kernel event has its own numeric discriminant declared in `src/natives.rs` and a matching format-string arm in each platform's `log_event` implementation. With `floats` off the `Value::Float` and `ConstValue::Float` variants are compiled out, the `Op::IntToFloat` and `Op::FloatToInt` arms degrade to `VmError::InvalidBytecode` (the variants stay defined to preserve wire-format stability), the VM's binary-arith float branch is conditionally compiled out, and the soft-float `compiler_builtins` routines drop entirely. The release profile sets `panic = "abort"` to drop unwinding tables. Two embassy-stm32 features (`exti`, `unstable-pac`) are dropped because the kernel does not exercise them.
 
@@ -81,8 +83,8 @@ Cumulative reduction against the pre-pass baseline:
 | Combination | Baseline | Current | Delta |
 |-------------|---------:|--------:|------:|
 | `keleusma-compile` + `keleusma-verify` | 614 KB | 621 KB | +7 KB |
-| `keleusma-verify` only | 211 KB | 157 KB | **-54 KB** |
-| Neither | 192 KB | 137 KB | **-55 KB** |
+| `keleusma-verify` only | 211 KB | 160 KB | **-51 KB** |
+| Neither | 192 KB | 140 KB | **-52 KB** |
 
 The full-pipeline mode is essentially unchanged because the source compiler (lexer, parser, type checker, monomorphizer) dominates that image; the savings concentrate in the embedded production modes.
 
@@ -322,7 +324,7 @@ The bundled `memory.x` allocates the AXISRAM2 region (1024 KB at `0x34100000`):
 
 | Region | Origin | Length | Purpose |
 |--------|--------|-------:|---------|
-| FLASH  | `0x34100000` | 640 KB | The Keleusma runtime image (lexer, parser, type checker, monomorphizer, compiler, VM, verifier) plus the kernel core, platform impl, embassy stack, defmt, and the entry binary. Current usage is ~621 KB under the full-pipeline default; precompiled bytecode modes use 137-157 KB, leaving 483-503 KB free for user code and NPU weights. |
+| FLASH  | `0x34100000` | 640 KB | The Keleusma runtime image (lexer, parser, type checker, monomorphizer, compiler, VM, verifier) plus the kernel core, platform impl, embassy stack, defmt, and the entry binary. Current usage is ~622 KB under the full-pipeline default; precompiled bytecode modes use 140-160 KB, leaving 480-500 KB free for user code and NPU weights. |
 | RAM    | `0x341A0000` | 384 KB | The global heap (320 KB), other `.bss` (transient), stack, and embassy executor state. The three per-task arenas are leaked into the heap. |
 
 The N6 has no on-chip flash. The boot ROM enables AXISRAM2 regardless of BOOT0 position, and probe-rs loads the application into it directly. The map fills AXISRAM2 entirely; future iterations may slim the FLASH image by shipping precompiled bytecode and stripping the compile-time pipeline.

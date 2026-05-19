@@ -70,6 +70,13 @@ pub const SRC_SENSOR: &str = include_str!("../scripts/sensor.kel");
 /// Heartbeat task source.
 #[cfg(feature = "keleusma-compile")]
 pub const SRC_HEARTBEAT: &str = include_str!("../scripts/heartbeat.kel");
+/// Event listener task source. Waits on event id 1.
+#[cfg(feature = "keleusma-compile")]
+pub const SRC_EVENT_LISTENER: &str = include_str!("../scripts/event_listener.kel");
+/// Faulty task source. Triggers a `DivisionByZero` every fifth
+/// iteration to exercise the supervised-restart policy.
+#[cfg(feature = "keleusma-compile")]
+pub const SRC_FAULTY: &str = include_str!("../scripts/faulty.kel");
 
 // --- Precompiled-bytecode constants. Present only when the
 // compile pipeline is absent and `build.rs` has produced
@@ -84,67 +91,112 @@ pub const BIN_SENSOR: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/sensor.k
 /// Heartbeat task bytecode.
 #[cfg(not(feature = "keleusma-compile"))]
 pub const BIN_HEARTBEAT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/heartbeat.kel.bin"));
+/// Event listener task bytecode.
+#[cfg(not(feature = "keleusma-compile"))]
+pub const BIN_EVENT_LISTENER: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/event_listener.kel.bin"));
+/// Faulty task bytecode.
+#[cfg(not(feature = "keleusma-compile"))]
+pub const BIN_FAULTY: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/faulty.kel.bin"));
 
-/// Construct the three-task demonstrator kernel for the given
-/// platform. Returns a kernel with three cooperative tasks
-/// loaded and ready to run. Uses
-/// [`keleusma::vm::DEFAULT_ARENA_CAPACITY`] for each task; pass
-/// a smaller value to [`three_task_kernel_with_arena_capacity`]
-/// for embedded targets where heap budget is tight.
+/// Construct the demonstrator kernel for the given platform.
+/// Returns a kernel with five cooperative tasks loaded and ready
+/// to run. Uses [`keleusma::vm::DEFAULT_ARENA_CAPACITY`] for each
+/// task; pass a smaller value to
+/// [`three_task_kernel_with_arena_capacity`] for embedded targets
+/// where heap budget is tight.
 ///
-/// The function leaks one arena per task; the kernel holds
-/// each VM through a `'static` reference. The leak is a
-/// one-time bounded allocation; the long-run behaviour is
-/// constant in memory.
+/// Tasks: `led` (toggles GPIO 13), `sensor` (polls channel 0),
+/// `heartbeat` (logs every five seconds), `event_listener`
+/// (waits on event id 1, exercises the ISR-to-task wake-up
+/// pattern), and `faulty` (triggers `DivisionByZero` every fifth
+/// iteration to exercise the supervised-restart policy).
+///
+/// The function leaks one arena per task; the kernel holds each
+/// VM through a `'static` reference. The leak is a one-time
+/// bounded allocation; the long-run behaviour is constant in
+/// memory.
+///
+/// The function name retains the historical `three_task_kernel`
+/// prefix for source compatibility; the surface now constructs
+/// five tasks.
 pub fn three_task_kernel<P: Platform>() -> Result<Kernel<P>, String> {
     three_task_kernel_with_arena_capacity::<P>(DEFAULT_ARENA_CAPACITY)
 }
 
 /// Same as [`three_task_kernel`] but with an explicit per-task
-/// arena capacity. Embedded targets use this to fit three tasks
-/// within a constrained global heap; the std demonstrator
+/// arena capacity. Embedded targets use this to fit the task
+/// set within a constrained global heap; the std demonstrator
 /// continues through the no-argument wrapper above. See
 /// [`build_task_with_arena_capacity`] for the per-task path.
 pub fn three_task_kernel_with_arena_capacity<P: Platform>(
     arena_capacity: usize,
 ) -> Result<Kernel<P>, String> {
     let mut kernel = Kernel::<P>::new();
+    // Existing tasks: no WCET budget (the demonstrator does not
+    // bound them) and no restart on Halt.
     #[cfg(feature = "keleusma-compile")]
-    {
-        kernel.add_task(build_task_with_arena_capacity::<P>(
-            "led",
-            SRC_LED,
-            arena_capacity,
-        )?);
-        kernel.add_task(build_task_with_arena_capacity::<P>(
-            "sensor",
-            SRC_SENSOR,
-            arena_capacity,
-        )?);
-        kernel.add_task(build_task_with_arena_capacity::<P>(
-            "heartbeat",
-            SRC_HEARTBEAT,
-            arena_capacity,
-        )?);
-    }
+    let (led_src, sensor_src, heartbeat_src, event_listener_src, faulty_src) = (
+        SRC_LED,
+        SRC_SENSOR,
+        SRC_HEARTBEAT,
+        SRC_EVENT_LISTENER,
+        SRC_FAULTY,
+    );
     #[cfg(not(feature = "keleusma-compile"))]
-    {
-        kernel.add_task(build_task_with_arena_capacity::<P>(
-            "led",
-            BIN_LED,
-            arena_capacity,
-        )?);
-        kernel.add_task(build_task_with_arena_capacity::<P>(
-            "sensor",
-            BIN_SENSOR,
-            arena_capacity,
-        )?);
-        kernel.add_task(build_task_with_arena_capacity::<P>(
-            "heartbeat",
-            BIN_HEARTBEAT,
-            arena_capacity,
-        )?);
-    }
+    let (led_src, sensor_src, heartbeat_src, event_listener_src, faulty_src) = (
+        BIN_LED,
+        BIN_SENSOR,
+        BIN_HEARTBEAT,
+        BIN_EVENT_LISTENER,
+        BIN_FAULTY,
+    );
+
+    // Production-style admission control. The three legacy tasks
+    // declare no WCET budget; their slices are small. The
+    // event-listener and faulty tasks demonstrate the per-task
+    // budget mechanism: pass `Some(budget)` to reject hot swaps
+    // whose declared WCET exceeds the budget.
+    kernel.add_task(build_task_full::<P>("led", led_src, arena_capacity, None, 0)?);
+    kernel.add_task(build_task_full::<P>(
+        "sensor",
+        sensor_src,
+        arena_capacity,
+        None,
+        0,
+    )?);
+    kernel.add_task(build_task_full::<P>(
+        "heartbeat",
+        heartbeat_src,
+        arena_capacity,
+        None,
+        0,
+    )?);
+    kernel.add_task(build_task_full::<P>(
+        "event_listener",
+        event_listener_src,
+        arena_capacity,
+        None,
+        0,
+    )?);
+    // Faulty task carries a non-zero `max_restarts` so the
+    // kernel's supervised-restart policy can be observed. The
+    // value caps the recovery budget; once exhausted, subsequent
+    // Halt errors mark the task `Finished`.
+    kernel.add_task(build_task_full::<P>(
+        "faulty",
+        faulty_src,
+        arena_capacity,
+        None,
+        16,
+    )?);
+    // Enable the internal event ticker. The kernel posts event
+    // id 1 every 2500 ms, waking the `event_listener` task. This
+    // is the demonstrator's stand-in for an interrupt source; a
+    // real deployment disables the ticker and routes
+    // `Kernel::post_event` from an ISR or a co-spawned host
+    // task.
+    kernel.enable_event_tick(1, 2500);
     Ok(kernel)
 }
 
@@ -186,8 +238,7 @@ pub fn build_task_with_arena_capacity<P: Platform>(
     src: &str,
     arena_capacity: usize,
 ) -> Result<Task, String> {
-    let module = build_module(src).map_err(|e| format!("build_module for {}: {}", name, e))?;
-    finish_build_task::<P>(name, module, arena_capacity)
+    build_task_full::<P>(name, src, arena_capacity, None, 0)
 }
 
 #[cfg(not(feature = "keleusma-compile"))]
@@ -196,26 +247,76 @@ pub fn build_task_with_arena_capacity<P: Platform>(
     bytes: &[u8],
     arena_capacity: usize,
 ) -> Result<Task, String> {
-    let module = Module::from_bytes(bytes)
-        .map_err(|e| format!("load_module for {}: {:?}", name, e))?;
-    finish_build_task::<P>(name, module, arena_capacity)
+    build_task_full::<P>(name, bytes, arena_capacity, None, 0)
 }
 
-/// Shared tail of [`build_task_with_arena_capacity`]. Leaks an
-/// arena of the requested capacity, constructs the VM, zeros
-/// the data segment, and registers the utility and task native
-/// surfaces. Called from both the source and precompiled
-/// variants.
+/// Build a task with the full set of admission and recovery
+/// knobs: arena capacity, WCET budget (`None` accepts any
+/// declared WCET), and the supervised-restart budget. The
+/// shorter-signature variants above delegate here with default
+/// values that match the legacy behaviour (unbounded WCET, no
+/// restart on Halt).
+#[cfg(feature = "keleusma-compile")]
+pub fn build_task_full<P: Platform>(
+    name: &'static str,
+    src: &str,
+    arena_capacity: usize,
+    wcet_budget_cycles: Option<u32>,
+    max_restarts: u32,
+) -> Result<Task, String> {
+    let module = build_module(src).map_err(|e| format!("build_module for {}: {}", name, e))?;
+    finish_build_task::<P>(name, module, arena_capacity, wcet_budget_cycles, max_restarts)
+}
+
+#[cfg(not(feature = "keleusma-compile"))]
+pub fn build_task_full<P: Platform>(
+    name: &'static str,
+    bytes: &[u8],
+    arena_capacity: usize,
+    wcet_budget_cycles: Option<u32>,
+    max_restarts: u32,
+) -> Result<Task, String> {
+    let module = Module::from_bytes(bytes)
+        .map_err(|e| format!("load_module for {}: {:?}", name, e))?;
+    finish_build_task::<P>(name, module, arena_capacity, wcet_budget_cycles, max_restarts)
+}
+
+/// Shared tail of [`build_task_with_arena_capacity`]. Validates
+/// the loaded module's declared WCET against the supplied budget,
+/// leaks an arena of the requested capacity, constructs the VM,
+/// zeros the data segment, and registers the task native surface.
+/// Called from both the source and precompiled variants.
 ///
 /// `Vm::new` is called unconditionally. The keleusma crate's
 /// `verify` feature, surfaced through this crate's
 /// `keleusma-verify`, decides whether structural and
 /// resource-bound verification runs inside `Vm::new`.
+///
+/// The WCET budget check rejects scripts whose declared
+/// `module.wcet_cycles` exceeds the host-supplied budget before
+/// any arena is allocated or any VM is constructed. The check is
+/// the load-time half of the admission control story; the
+/// matching swap-time half lives in `Kernel::replace_task`.
+/// `None` disables the check (the loaded value is accepted
+/// regardless). The same value is stored on the resulting `Task`
+/// so subsequent hot swaps reuse it as the budget cap.
 fn finish_build_task<P: Platform>(
     name: &'static str,
     module: Module,
     arena_capacity: usize,
+    wcet_budget_cycles: Option<u32>,
+    max_restarts: u32,
 ) -> Result<Task, String> {
+    if let Some(budget) = wcet_budget_cycles
+        && module.wcet_cycles > budget
+    {
+        return Err(alloc::format!(
+            "task `{}`: declared WCET {} cycles exceeds budget {} cycles",
+            name,
+            module.wcet_cycles,
+            budget
+        ));
+    }
     let arena: &'static Arena = Box::leak(Box::new(Arena::with_capacity(arena_capacity)));
     let mut vm: Vm<'static, 'static> =
         Vm::new(module, arena).map_err(|e| format!("vm new for {}: {:?}", name, e))?;
@@ -235,6 +336,9 @@ fn finish_build_task<P: Platform>(
         vm,
         state: TaskState::Ready(WakeReason::FirstRun),
         started: false,
+        wcet_budget_cycles,
+        max_restarts,
+        restart_count: 0,
     })
 }
 
