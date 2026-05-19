@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-05-19
+
+Adds a persistent (`.data`) region inside the arena that is preserved across every form of reset. The dual-headed (bottom plus top) layout is unchanged; the persistent region occupies a configurable prefix of the buffer. The 0.2.0 surface is preserved unchanged when `persistent_capacity == 0`; this release is purely additive at the API level for arenas that opt into the new region.
+
+### Added
+
+- `Arena::persistent_capacity` getter. Returns the size in bytes of the persistent region. Default is zero.
+- `Arena::dual_headed_capacity` getter. Returns `capacity - persistent_capacity`.
+- `Arena::resize_persistent(new_size) -> Result<(), ResizeError>`. Assigns the persistent region size, fully resets the dual-headed region, and advances the epoch. The shape of the API supports the pooling use case where one oversized arena is reassigned to a different script before each use.
+- `Arena::persistent_ptr() -> NonNull<u8>`. Returns a stable non-null pointer to the start of the persistent region. The caller manages access discipline; the arena type is not `Sync`.
+- `Arena::zero_persistent`. Overwrites the persistent region with zeros. Does not touch the dual-headed region, the bump pointers, or the epoch.
+- `Arena::zero_dual_headed -> Result<(), EpochSaturated>`. Overwrites the dual-headed region with zeros and fully resets it. Advances the epoch.
+- `Arena::zero_all -> Result<(), EpochSaturated>`. Overwrites the entire backing buffer with zeros, resets the bump pointers, and advances the epoch. Leaves the persistent capacity unchanged.
+- `ResizeError` enum with `ExceedsCapacity` and `EpochSaturated` variants, returned by `resize_persistent`.
+
+### Changed
+
+- The bottom region now starts at offset `persistent_capacity` rather than offset zero. With `persistent_capacity == 0`, the layout is identical to 0.2.0 and existing callers see no behavioural change.
+- `Arena::reset`, `Arena::reset_unchecked`, `Arena::reset_bottom`, and `Arena::force_reset_epoch` now rewind the bottom pointer to `persistent_capacity` rather than to zero. The persistent region is preserved across all of them. With `persistent_capacity == 0` the behaviour is identical to 0.2.0.
+- `Arena::bottom_used` and `Arena::bottom_peak` now report values relative to the start of the bottom region (offset `persistent_capacity`) rather than absolute offsets from the buffer base. With `persistent_capacity == 0` the values are identical to 0.2.0.
+
+### Tested
+
+- Nine new tests covering the persistent surface: default capacity, resize-and-shift, oversize rejection, reset preserves contents, `zero_persistent` scope, `zero_dual_headed` scope, `zero_all` scope, epoch advance on resize, and the pooling pattern.
+- The existing 0.2.0 tests continue to pass unchanged.
+
+### Notes
+
+- This release is consumed by the parent `keleusma` crate as part of the `compile` and `verify` feature-gating work and the new `private` data declaration surface. Downstream applications that depend on `keleusma-arena` directly and never set a non-zero persistent capacity see no behavioural change.
+
 ## [0.2.0] - 2026-05-10
 
 Adds the epoch system for stale-pointer detection on safe arena handles. The 0.1.0 surface is preserved unchanged; this release is purely additive at the API level.

@@ -195,14 +195,24 @@ pub struct Arena {
     buffer: NonNull<u8>,
     /// Total capacity of the buffer in bytes.
     capacity: usize,
+    /// Bytes reserved at the start of the buffer for the persistent
+    /// (`.data`) region. The persistent region occupies the byte range
+    /// `[0, persistent_capacity)` and is preserved across every form
+    /// of reset on the arena. Callers configure it through
+    /// [`Arena::resize_persistent`] when assigning a pooled arena to a
+    /// specific module. The default is zero, matching the dual-headed
+    /// behaviour of earlier versions of this crate.
+    persistent_capacity: Cell<usize>,
     /// Current bottom pointer. Allocations from the bottom end consume
-    /// the range `[0, bottom_top)`.
+    /// the range `[persistent_capacity, bottom_top)`. The bottom
+    /// region never grows below `persistent_capacity`.
     bottom_top: Cell<usize>,
     /// Current top pointer. Allocations from the top end consume the
     /// range `[top_top, capacity)`.
     top_top: Cell<usize>,
     /// Peak observed value of `bottom_top`. Watermark for sizing
-    /// analysis.
+    /// analysis. Stored as an absolute offset from the buffer base,
+    /// not relative to `persistent_capacity`.
     bottom_peak: Cell<usize>,
     /// Lowest observed value of `top_top`. Combined with `capacity`
     /// gives the peak top usage.
@@ -232,6 +242,20 @@ pub struct EpochSaturated;
 /// reset since the handle was issued.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Stale;
+
+/// Error returned by [`Arena::resize_persistent`] when the requested
+/// persistent size cannot be applied.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResizeError {
+    /// Requested persistent size exceeds the arena's total capacity.
+    /// The caller should size the pool entry larger before assignment
+    /// or pick a smaller module.
+    ExceedsCapacity,
+    /// Epoch counter saturated. The arena's stale-detection
+    /// machinery cannot advance further. Recover through
+    /// [`Arena::force_reset_epoch`].
+    EpochSaturated,
+}
 
 // SAFETY: The arena uses `Cell` for interior mutability of the bump
 // pointers and peaks. `Cell` is `Send` but not `Sync`. The arena itself
@@ -289,6 +313,7 @@ impl Arena {
         Self {
             buffer,
             capacity,
+            persistent_capacity: Cell::new(0),
             bottom_top: Cell::new(0),
             top_top: Cell::new(capacity),
             bottom_peak: Cell::new(0),
@@ -312,6 +337,7 @@ impl Arena {
         Self {
             buffer: ptr,
             capacity,
+            persistent_capacity: Cell::new(0),
             bottom_top: Cell::new(0),
             top_top: Cell::new(capacity),
             bottom_peak: Cell::new(0),
@@ -350,6 +376,7 @@ impl Arena {
         Self {
             buffer,
             capacity,
+            persistent_capacity: Cell::new(0),
             bottom_top: Cell::new(0),
             top_top: Cell::new(capacity),
             bottom_peak: Cell::new(0),
@@ -359,36 +386,174 @@ impl Arena {
         }
     }
 
-    /// Total capacity of the arena in bytes.
+    /// Total capacity of the arena in bytes. Equal to the sum of the
+    /// persistent capacity (returned by
+    /// [`Arena::persistent_capacity`]) and the dual-headed capacity
+    /// (returned by [`Arena::dual_headed_capacity`]).
     pub fn capacity(&self) -> usize {
         self.capacity
     }
 
-    /// Bytes currently allocated from the bottom end.
-    pub fn bottom_used(&self) -> usize {
-        self.bottom_top.get()
+    /// Size in bytes of the persistent (`.data`) region. The region
+    /// occupies offsets `[0, persistent_capacity())` in the backing
+    /// buffer and is preserved across every form of reset on the
+    /// arena. Default is zero. Hosts adjust the size via
+    /// [`Arena::resize_persistent`].
+    pub fn persistent_capacity(&self) -> usize {
+        self.persistent_capacity.get()
     }
 
-    /// Bytes currently allocated from the top end.
+    /// Bytes available to the dual-headed (bottom and top) regions.
+    /// Equals `capacity - persistent_capacity`.
+    pub fn dual_headed_capacity(&self) -> usize {
+        self.capacity - self.persistent_capacity.get()
+    }
+
+    /// Bytes currently allocated from the bottom region. Measured
+    /// relative to the start of the bottom region, which begins at
+    /// offset `persistent_capacity`. With `persistent_capacity == 0`
+    /// the result matches the dual-headed behaviour of earlier
+    /// versions of this crate.
+    pub fn bottom_used(&self) -> usize {
+        self.bottom_top.get() - self.persistent_capacity.get()
+    }
+
+    /// Bytes currently allocated from the top region.
     pub fn top_used(&self) -> usize {
         self.capacity - self.top_top.get()
     }
 
-    /// Bytes available for either end to consume.
+    /// Bytes available for either end of the dual-headed region to
+    /// consume.
     pub fn free(&self) -> usize {
         self.top_top.get().saturating_sub(self.bottom_top.get())
     }
 
     /// Highest observed bottom usage in bytes since arena creation or
-    /// the most recent [`Arena::clear_peaks`] call.
+    /// the most recent [`Arena::clear_peaks`] call. Measured relative
+    /// to the start of the bottom region.
     pub fn bottom_peak(&self) -> usize {
-        self.bottom_peak.get()
+        self.bottom_peak.get() - self.persistent_capacity.get()
     }
 
     /// Highest observed top usage in bytes since arena creation or the
     /// most recent [`Arena::clear_peaks`] call.
     pub fn top_peak(&self) -> usize {
         self.capacity - self.top_peak_low.get()
+    }
+
+    /// Pointer to the start of the persistent (`.data`) region.
+    ///
+    /// Returns a non-null pointer to a contiguous region of length
+    /// [`Arena::persistent_capacity`]. Reads and writes through the
+    /// pointer must stay within that range. The returned pointer is
+    /// stable for the arena's lifetime.
+    ///
+    /// # Safety
+    ///
+    /// The caller is responsible for synchronising access. The arena
+    /// type itself is not `Sync`. Returning a raw pointer rather than
+    /// a slice reference is deliberate so the caller can manage
+    /// borrow scoping in cases where the persistent region holds
+    /// values that the bytecode VM addresses directly.
+    pub fn persistent_ptr(&self) -> NonNull<u8> {
+        self.buffer
+    }
+
+    /// Resize the persistent (`.data`) region.
+    ///
+    /// Fully resets the dual-headed region and advances the epoch so
+    /// every outstanding [`ArenaHandle`] becomes stale. Use when
+    /// assigning an oversized pool entry to a specific module that
+    /// declares a particular persistent footprint.
+    ///
+    /// The new size must satisfy `new_size <= capacity`. Larger sizes
+    /// return [`ResizeError::ExceedsCapacity`]. A saturated epoch
+    /// counter returns [`ResizeError::EpochSaturated`]; recovery is
+    /// via [`Arena::force_reset_epoch`].
+    ///
+    /// Takes `&mut self` so the borrow checker prevents calling
+    /// resize while any handle borrows the arena. This guarantees no
+    /// live allocations through `Allocator` trait users at the
+    /// moment of resize.
+    pub fn resize_persistent(&mut self, new_size: usize) -> Result<(), ResizeError> {
+        if new_size > self.capacity {
+            return Err(ResizeError::ExceedsCapacity);
+        }
+        let next = self
+            .epoch
+            .get()
+            .checked_add(1)
+            .ok_or(ResizeError::EpochSaturated)?;
+        self.persistent_capacity.set(new_size);
+        self.bottom_top.set(new_size);
+        self.top_top.set(self.capacity);
+        self.bottom_peak.set(new_size);
+        self.top_peak_low.set(self.capacity);
+        self.epoch.set(next);
+        Ok(())
+    }
+
+    /// Overwrite the persistent region with zeros. Does not touch the
+    /// dual-headed region, the bump pointers, or the epoch.
+    ///
+    /// Useful for secret hygiene before assigning a pooled arena to a
+    /// new module, and for defense-in-depth where the persistent
+    /// region is read-back without intervening writes.
+    pub fn zero_persistent(&mut self) {
+        let len = self.persistent_capacity.get();
+        if len > 0 {
+            // SAFETY: `buffer` is valid for writes of `capacity`
+            // bytes, and `len <= capacity` is invariant on
+            // `persistent_capacity`.
+            unsafe {
+                core::ptr::write_bytes(self.buffer.as_ptr(), 0, len);
+            }
+        }
+    }
+
+    /// Overwrite the dual-headed region with zeros and fully reset
+    /// it. Advances the epoch.
+    ///
+    /// Equivalent to a full reset followed by zeroing the bytes
+    /// outside the persistent region. The persistent region is
+    /// untouched.
+    pub fn zero_dual_headed(&mut self) -> Result<(), EpochSaturated> {
+        let start = self.persistent_capacity.get();
+        let len = self.capacity - start;
+        if len > 0 {
+            // SAFETY: The range `[start, start + len)` lies within
+            // `[0, capacity)` and is exclusively owned by the arena.
+            unsafe {
+                core::ptr::write_bytes(self.buffer.as_ptr().add(start), 0, len);
+            }
+        }
+        let next = self.epoch.get().checked_add(1).ok_or(EpochSaturated)?;
+        self.bottom_top.set(start);
+        self.top_top.set(self.capacity);
+        self.bottom_peak.set(start);
+        self.top_peak_low.set(self.capacity);
+        self.epoch.set(next);
+        Ok(())
+    }
+
+    /// Overwrite the entire backing buffer with zeros, including the
+    /// persistent region. Resets the bump pointers and advances the
+    /// epoch. Leaves the persistent capacity unchanged.
+    pub fn zero_all(&mut self) -> Result<(), EpochSaturated> {
+        // SAFETY: The full range `[0, capacity)` lies within the
+        // arena's buffer and is exclusively owned.
+        unsafe {
+            core::ptr::write_bytes(self.buffer.as_ptr(), 0, self.capacity);
+        }
+        let next = self.epoch.get().checked_add(1).ok_or(EpochSaturated)?;
+        let start = self.persistent_capacity.get();
+        self.bottom_top.set(start);
+        self.top_top.set(self.capacity);
+        self.bottom_peak.set(start);
+        self.top_peak_low.set(self.capacity);
+        self.epoch.set(next);
+        Ok(())
     }
 
     /// Return a snapshot of the bottom-end bump pointer for later use
@@ -420,7 +585,7 @@ impl Arena {
     /// reset.
     pub fn reset(&mut self) -> Result<(), EpochSaturated> {
         let next = self.epoch.get().checked_add(1).ok_or(EpochSaturated)?;
-        self.bottom_top.set(0);
+        self.bottom_top.set(self.persistent_capacity.get());
         self.top_top.set(self.capacity);
         self.epoch.set(next);
         Ok(())
@@ -447,7 +612,7 @@ impl Arena {
     /// `u64::MAX`. Recovery is via [`Arena::force_reset_epoch`].
     pub unsafe fn reset_unchecked(&self) -> Result<(), EpochSaturated> {
         let next = self.epoch.get().checked_add(1).ok_or(EpochSaturated)?;
-        self.bottom_top.set(0);
+        self.bottom_top.set(self.persistent_capacity.get());
         self.top_top.set(self.capacity);
         self.epoch.set(next);
         Ok(())
@@ -516,7 +681,7 @@ impl Arena {
     /// the arena, drains every cache that holds an [`ArenaHandle`],
     /// and only then invokes this method.
     pub unsafe fn force_reset_epoch(&mut self) {
-        self.bottom_top.set(0);
+        self.bottom_top.set(self.persistent_capacity.get());
         self.top_top.set(self.capacity);
         self.epoch.set(0);
     }
@@ -566,7 +731,7 @@ impl Arena {
     /// exist. Equivalent to [`Arena::rewind_bottom`] with a mark of
     /// zero, with the same safety contract.
     pub unsafe fn reset_bottom(&self) {
-        self.bottom_top.set(0);
+        self.bottom_top.set(self.persistent_capacity.get());
     }
 
     /// Clear the top end without checking for live references.
@@ -1318,5 +1483,167 @@ mod tests {
         // Zero-size byte allocation is admissible and consumes nothing.
         let _a = arena.alloc_bottom_bytes(0).unwrap();
         assert_eq!(arena.bottom_used(), 0);
+    }
+
+    // --- Persistent region tests (added in v0.3.0). ---
+
+    #[cfg(feature = "alloc")]
+    #[test]
+    fn persistent_default_is_zero() {
+        let arena = Arena::with_capacity(64);
+        assert_eq!(arena.persistent_capacity(), 0);
+        assert_eq!(arena.dual_headed_capacity(), 64);
+        assert_eq!(arena.capacity(), 64);
+    }
+
+    #[cfg(feature = "alloc")]
+    #[test]
+    fn resize_persistent_shifts_bottom_origin() {
+        let mut arena = Arena::with_capacity(64);
+        arena.resize_persistent(16).unwrap();
+        assert_eq!(arena.persistent_capacity(), 16);
+        assert_eq!(arena.dual_headed_capacity(), 48);
+        // Bottom usage measured relative to the bottom region's start.
+        assert_eq!(arena.bottom_used(), 0);
+        // Free space equals dual_headed_capacity initially.
+        assert_eq!(arena.free(), 48);
+        let _a = arena.alloc_bottom_bytes(8).unwrap();
+        assert_eq!(arena.bottom_used(), 8);
+    }
+
+    #[cfg(feature = "alloc")]
+    #[test]
+    fn resize_persistent_rejects_oversize() {
+        let mut arena = Arena::with_capacity(64);
+        assert!(matches!(
+            arena.resize_persistent(65),
+            Err(ResizeError::ExceedsCapacity)
+        ));
+        // State unchanged on rejection.
+        assert_eq!(arena.persistent_capacity(), 0);
+    }
+
+    #[cfg(feature = "alloc")]
+    #[test]
+    fn reset_preserves_persistent_region_contents() {
+        let mut arena = Arena::with_capacity(64);
+        arena.resize_persistent(16).unwrap();
+        // Write a pattern into the persistent region.
+        let ptr = arena.persistent_ptr();
+        unsafe {
+            for i in 0..16 {
+                core::ptr::write(ptr.as_ptr().add(i), 0xA0 + i as u8);
+            }
+        }
+        // Allocate from the dual-headed region.
+        let _a = arena.alloc_bottom_bytes(8).unwrap();
+        // Reset; the persistent contents must survive.
+        arena.reset().unwrap();
+        assert_eq!(arena.bottom_used(), 0);
+        unsafe {
+            for i in 0..16 {
+                assert_eq!(
+                    core::ptr::read(ptr.as_ptr().add(i)),
+                    0xA0 + i as u8,
+                    "byte {} clobbered by reset",
+                    i
+                );
+            }
+        }
+    }
+
+    #[cfg(feature = "alloc")]
+    #[test]
+    fn zero_persistent_clears_only_persistent_bytes() {
+        let mut arena = Arena::with_capacity(64);
+        arena.resize_persistent(16).unwrap();
+        let ptr = arena.persistent_ptr();
+        unsafe {
+            core::ptr::write_bytes(ptr.as_ptr(), 0xFF, 16);
+        }
+        // Allocate from bottom and write through the pointer.
+        let allocated = arena
+            .bottom_handle()
+            .allocate(Layout::from_size_align(4, 1).unwrap())
+            .unwrap();
+        unsafe {
+            core::ptr::write_bytes(allocated.as_ptr() as *mut u8, 0xAB, 4);
+        }
+        arena.zero_persistent();
+        // Persistent region zero.
+        unsafe {
+            for i in 0..16 {
+                assert_eq!(core::ptr::read(ptr.as_ptr().add(i)), 0);
+            }
+        }
+        // Dual-headed bytes still 0xAB at the allocation address.
+        unsafe {
+            assert_eq!(core::ptr::read(allocated.as_ptr() as *const u8), 0xAB);
+        }
+    }
+
+    #[cfg(feature = "alloc")]
+    #[test]
+    fn zero_dual_headed_clears_dual_headed_resets_pointers() {
+        let mut arena = Arena::with_capacity(64);
+        arena.resize_persistent(16).unwrap();
+        let ptr = arena.persistent_ptr();
+        unsafe {
+            core::ptr::write_bytes(ptr.as_ptr(), 0xCD, 16);
+        }
+        let _a = arena.alloc_bottom_bytes(8).unwrap();
+        assert_eq!(arena.bottom_used(), 8);
+        arena.zero_dual_headed().unwrap();
+        assert_eq!(arena.bottom_used(), 0);
+        // Persistent untouched.
+        unsafe {
+            assert_eq!(core::ptr::read(ptr.as_ptr()), 0xCD);
+        }
+    }
+
+    #[cfg(feature = "alloc")]
+    #[test]
+    fn zero_all_clears_persistent_and_dual_headed() {
+        let mut arena = Arena::with_capacity(64);
+        arena.resize_persistent(16).unwrap();
+        let ptr = arena.persistent_ptr();
+        unsafe {
+            core::ptr::write_bytes(ptr.as_ptr(), 0xCD, 16);
+        }
+        arena.zero_all().unwrap();
+        assert_eq!(arena.bottom_used(), 0);
+        unsafe {
+            for i in 0..16 {
+                assert_eq!(core::ptr::read(ptr.as_ptr().add(i)), 0);
+            }
+        }
+    }
+
+    #[cfg(feature = "alloc")]
+    #[test]
+    fn resize_persistent_bumps_epoch() {
+        let mut arena = Arena::with_capacity(64);
+        let e0 = arena.epoch();
+        arena.resize_persistent(16).unwrap();
+        let e1 = arena.epoch();
+        assert!(e1 > e0);
+    }
+
+    #[cfg(feature = "alloc")]
+    #[test]
+    fn pooling_pattern() {
+        // Demonstrates the pool use case: one oversized arena is
+        // resized for each script in turn. Successive resizes work
+        // and the dual-headed region is reset each time.
+        let mut arena = Arena::with_capacity(256);
+        // Script A: 32 bytes persistent.
+        arena.resize_persistent(32).unwrap();
+        let _a = arena.alloc_bottom_bytes(16).unwrap();
+        assert_eq!(arena.bottom_used(), 16);
+        // Script B: 64 bytes persistent.
+        arena.resize_persistent(64).unwrap();
+        assert_eq!(arena.persistent_capacity(), 64);
+        assert_eq!(arena.bottom_used(), 0);
+        assert_eq!(arena.dual_headed_capacity(), 192);
     }
 }
