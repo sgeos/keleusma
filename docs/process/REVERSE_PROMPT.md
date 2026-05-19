@@ -9,22 +9,24 @@ AI to Human communication channel.
 ## Last Updated
 
 **Date**: 2026-05-19
-**Status**: V0.2 agent-driven deferred-items pass complete. Five items closed across the parent crate, the RTOS microkernel, and the documentation. Target-scaled `Fixed` defaults are threaded through the compile pipeline. The microkernel disables the `text` feature and routes script logging through a numeric `host::log_event` native. Two embassy-stm32 features are dropped. The top-level README gains a feature-matrix table. 613 lib tests pass workspace-wide.
+**Status**: V0.2 design-decision pass items 3, 4, 6, 7 plus flash savings B, C, I complete. Item 5 (CallIndirect flow analysis) stays deferred. Item 8 (per-op decode cache or JIT) closed as superseded by B11. The microkernel's STM32N6570-DK bare-metal `.text` drops to 149 KB trust-load (was 192) and 169 KB precompile-plus-verify (was 211), leaving 471-491 KB of FLASH headroom for user code and NPU weights. 622 lib tests pass workspace-wide.
 
 ## Completed in this session round
 
 | Directive | Resolution |
 |-----------|------------|
-| Reduce microkernel flash size; disable `text`; log through registered natives. | The microkernel runtime keleusma dependency drops `text`. A new `host::log_event(code: Word, data: Word)` native replaces `host::log(text)` and forwards to a new `Platform::log_event(code: u32, data: i64)` method with platform-side per-event format strings (std `println!`, N6 `defmt::info!`). The script and host agree on numeric discriminants through `EV_HEARTBEAT_OK`, `EV_LED_GPIO_FAIL`, and `EV_SENSOR_ABOVE` constants in `src/natives.rs`. `register_utility_natives` is no longer called. Two embassy-stm32 features (`exti`, `unstable-pac`) are dropped because the kernel does not use them. Bare-metal `.text`: 180 KB trust-load (was 192, -12 KB), 199 KB precompile-plus-verify (was 211, -12 KB). |
-| Target-scaled `Fixed` defaults for sub-64-bit targets. | New `Target::fixed_default_frac_bits()` helper returns the lower half of the target's word width (Q31.32 on the 64-bit host, Q15.16 on a 32-bit target, Q7.8 on a 16-bit target, Q3.4 on an 8-bit target). New `check_with_target` entry point on the type checker threads the value through `Ctx::fixed_default_frac_bits` and the unified resolver `Ctx::resolve_type`/`Ctx::resolve_type_with_params`. New `normalize_fixed_defaults` AST pass in the compiler rewrites every `PrimType::Fixed(None)` to `PrimType::Fixed(Some(target_frac))` before the type checker observes the program, so the compiler downstream reads the resolved immediate at the `Op::WordToFixed`, `Op::FixedToWord`, `Op::FixedMul`, and `Op::FixedDiv` emission sites without falling back to the host default. Two new tests cover the lattice (`fixed_default_frac_bits_scales_with_target_word_width`) and the end-to-end opcode-immediate change under cross-compilation (`fixed_default_changes_when_targeting_embedded_16`). |
-| Top-level README feature matrix. | The `Features` section gained a `### Cargo features` subsection with a three-row table covering `compile`, `verify`, and `text`. Each row names what the feature adds and when a host typically drops it to save flash. The subsection references the microkernel's flash-size table as a concrete data point. |
-| Microkernel documentation sync (MANUAL.md, SPEC.md, README.md). | MANUAL.md's flash-size table is regenerated with the new numbers. The idiomatic-script-usage and tuple-returning-natives examples in section 4 are rewritten to use `host::log_event(code, data)` with per-script `const data ev { ... }` discriminant tables. SPEC.md's native-surface table replaces `host::log(message: Text)` with `host::log_event(code: Word, data: Word)`. README.md's diagram updates the natives list. |
-| Phase 8 follow-on documentation: per-yield dataflow refinement note. | The Memory Model section of `LANGUAGE_DESIGN.md` was updated in the previous session with the refinement description; no further edits were required in this pass. |
+| Item 3. Bare `Option::None` typecheck. | The `EnumVariant` site for `Option::None` previously returned `Option<Unknown>`, which could not unify through `Option`'s recursive arm because the unifier does not narrow `Unknown`. The fix splits `Some` and `None`: `Some(t)` uses the payload's inferred type; `None` uses a fresh type variable. Programs of the form `fn f() -> Option<T> { Option::None }` are now admitted. The previously-blocked positive test for the per-yield arena dataflow refinement is re-enabled. |
+| Item 7. `VmError::category`. | New `VmErrorCategory` enum (`Halt`, `SoftScript`, `SoftHost`). Method returns the coarse retry-or-halt policy without storing per-error bytes. The split lets hosts make a single policy decision; concrete variant matching remains available for finer policy. |
+| Item 6. Schema hash for hot swap. | New `Module::schema_hash: u32` field (CRC-32 of `(slot_name, visibility)` per slot in declaration order). `Vm::replace_module` now rejects schema-mismatched swaps strictly; new `Vm::replace_module_unchecked` keeps the legacy permissive behaviour for hosts that intend cross-layout swaps. Bytecode body grew by 4 bytes; golden test regenerated, `examples/zero_copy_demo.kel.bin` regenerated, `BYTECODE_LEN` updated in `zero_copy_include_bytes.rs`. |
+| Item 4. Native function signature declarations. | New surface form `use host::name(T1, T2, ...) -> R` declares parameter and return types at the type-checker level. `ast::NativeSignature`, `UseDecl::signature: Option<NativeSignature>`, parser extension in `parse_use_decl`, `Ctx::native_signatures` populated during pass 1c0, `check_native_call_with_signature` helper. Bare `use host::name` form remains permissive. Microkernel `scripts/prelude.kel` declares signatures for all 17 host natives, catching arity and type errors at compile time. (Removing `Type::Unknown` entirely remains a backlog item; the foundation it requires is now in place.) |
+| Flash savings B + C + I (~43 KB). | Microkernel kernel-error path was rewritten: `format!("{:?}", vmerror)` replaced with `Platform::log_event(category_code, data)` where the category code comes from `VmError::category`. This removed every transitive Debug-fmt reference, killing the float-formatter chain (`flt2dec::dragon`, `flt2dec::grisu`, `CACHED_POW10`, `__divdf3`, `__adddf3`, char `escape_debug_ext`) which was ~32 KB on its own. Release profile gained `panic = "abort"` (~1-2 KB from unwinding tables). New kernel event discriminants (`EV_KERNEL_VM_ERROR`, `EV_KERNEL_UNKNOWN_YIELD`, `EV_KERNEL_TASK_FINISHED`, `EV_KERNEL_UNEXPECTED_STATE`) with per-platform format-string arms preserve diagnostic visibility. |
+
+Item 5 stays deferred to V0.3 backlog as recommended. Item 8 (per-op decode cache or JIT) is closed as superseded by B11 which already shipped the cache.
 
 ## Verification matrix
 
 ```bash
-cargo test --workspace --features text                                         # 613 lib + 17+17+3+53+37+6+7 integration tests pass
+cargo test --workspace --features text                                         # 622 lib + 17+17+3+53+37+6+7 integration tests pass
 cargo clippy --workspace --tests --features text -- -D warnings                # clean
 cargo fmt --all                                                                # idempotent
 
@@ -34,33 +36,26 @@ cargo fmt --all                                                                #
 # Microkernel bare-metal flash size (STM32N6570-DK).
 (cd examples/rtos && cargo build --target thumbv8m.main-none-eabihf \
     --release --bin three-task-n6 \
-    --no-default-features --features stm32n6570dk-platform)                    # 180 KB .text
+    --no-default-features --features stm32n6570dk-platform)                    # 149 KB .text (was 180)
 (cd examples/rtos && cargo build --target thumbv8m.main-none-eabihf \
     --release --bin three-task-n6 \
-    --no-default-features --features stm32n6570dk-platform,keleusma-verify)    # 199 KB .text
+    --no-default-features --features stm32n6570dk-platform,keleusma-verify)    # 169 KB .text (was 199)
 (cd examples/rtos && cargo build --target thumbv8m.main-none-eabihf \
     --release --bin three-task-n6 \
-    --no-default-features --features stm32n6570dk-platform,keleusma-compile,keleusma-verify)  # 622 KB .text
+    --no-default-features --features stm32n6570dk-platform,keleusma-compile,keleusma-verify)  # 621 KB .text
 ```
 
 ## Notes
 
-- The 613 lib-test figure is the runtime crate's lib test count: prior 611 from Phase 8, +2 new tests for target-scaled `Fixed` defaults (lattice plus end-to-end opcode emission). All workspace tests pass, including microkernel kernel-side tests.
-- The `Platform::log_event` default body is a no-op, so platforms that do not surface script logging continue to satisfy the trait without further implementation. The std and N6 platforms both implement the method.
-- The `normalize_fixed_defaults` pass walks every place a `TypeExpr` can appear in the Program: function parameter and return types, struct field types, enum variant arguments, data field types, let-binding annotations, cast targets, closure parameter and return types, and impl-method signatures. Composite type expressions (`Tuple`, `Array`, `Option`, `Named<…>`) recurse into their components.
-- The kernel-side `Platform::log(&str)` method is retained for host-emitted diagnostics (`kernel.rs` uses it for task scheduling errors and VM error reports through `format!`). The split between `log` and `log_event` keeps the script-side surface free of arbitrary strings while preserving the host's ability to emit rich diagnostic text from Rust.
-- Source-level hardware verification is not part of this pass; the std demonstrator runs correctly and produces the expected heartbeat, GPIO, and sensor-above event lines. The N6 binary has been size-measured but not flash-tested in this session.
+- The 622 lib-test figure is the runtime crate's lib test count: prior 614 from the V0.2 deferred-items pass, +1 for the re-enabled `ephemeral_bit_set_when_declared_text_return_never_produced` (Item 3), +1 for `vm_error_category_three_way_split` (Item 7), +5 for native-signature tests (Item 4), +2 for the new strict-hot-swap tests (Item 6), with 3 prior hot-swap tests rewritten in place under the new strict policy.
+- The flash savings are concentrated in the embedded production modes (trust-load and precompile-plus-verify). The full-pipeline mode at 621 KB is essentially unchanged (was 614 KB) because the source compiler (lexer, parser, type checker, monomorphizer) dominates that image; pulling the lower-level dead-code wins in compose with that compile pipeline takes a larger refactor.
+- The strict schema check on hot swap is a behaviour change for V0.2. Hosts that explicitly want incompatible-schema swaps now need to call `Vm::replace_module_unchecked`. The migration is mechanical and the new method name documents the safety opt-out.
+- Native signatures use `-> ()` for unit return (the surface unit literal). `-> Unit` would parse as `TypeExpr::Named("Unit", ...)` rather than `TypeExpr::Unit(_)`, which produces `Type::Opaque("Unit")` rather than `Type::Unit` and would fail to unify against `()` arms in `match` expressions.
 
 ## Intended Next Step
 
-Awaiting operator prompt. The remaining deferred items are operator-only or warrant a design discussion before implementation.
+Awaiting operator prompt. The agent-driven design-decision pass is complete except for Item 5 (deferred by user agreement) and Item 8 (closed as superseded).
 
-1. **Hardware verification on STM32N6570-DK.** The N6 binary builds in all three modes and is size-measured; an operator-driven probe-rs flash run would confirm that the `log_event`-based scripts produce the same RTT timeline as the previous `host::log` form. Last verified configuration on hardware was 2026-05-18 (under the prior `text`-enabled scripts).
-2. **Operator action: Phase 8 release tag.** With these deferred items closed, V0.2 is feature-complete relative to the original Phase 0 spec. Operator decides whether to cut `v0.2.0` now or batch with further point-release work.
-3. **Open follow-ons** that require discussion before implementation:
-   - Bare `Option::None` in function returns (type inference tightening).
-   - Native function signature declarations (removing `Type::Unknown` sentinel; B1).
-   - `Op::CallIndirect` flow analysis to admit non-recursive closures (B3).
-   - Schema hash or structural checking for hot swap (P6 follow-on).
-   - Halt vs soft error category field on `VmError` (P3 follow-on).
-   - Per-op decode cache or JIT for hot paths (P10 follow-on).
+1. **Operator action**: hardware verification on STM32N6570-DK. The N6 binary builds in all three feature modes; a probe-rs flash run would confirm that the new event codes (`EV_KERNEL_VM_ERROR` and siblings) print correctly through defmt RTT alongside the existing heartbeat / GPIO / sensor events.
+2. **Operator action**: V0.2 release tag. With items 3, 4, 6, 7 closed and flash items B, C, I delivered, V0.2 is in releasable shape. Operator decides timing.
+3. **Backlog**: Item 5 (CallIndirect flow analysis), B1 follow-up (remove `Type::Unknown` entirely now that native signatures are in place), and the remaining items previously deferred (target-scaled `Fixed` for sub-64-bit, smaller embassy feature trimming).

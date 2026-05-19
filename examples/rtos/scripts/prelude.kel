@@ -7,32 +7,34 @@
 // prepends the text to each task source. Line numbers in compile
 // errors for task scripts are offset by the prelude line count.
 //
-// The `use` declarations cover only the qualified host natives
-// that every task script may call. Unqualified text utilities
-// (`to_string`, `concat`) are no longer needed because the task
-// scripts compile without the `text` feature and therefore do
-// not desugar f-strings. Diagnostic logging is performed through
-// `host::log_event(code, data)` which carries a numeric event
-// discriminant and a single data word; the per-event format
-// string lives on the host side.
+// The `use` declarations cover the qualified host natives that
+// every task script may call. Each declaration carries a typed
+// signature so the type checker can validate argument types and
+// assign the declared return type at every call site. Unqualified
+// text utilities (`to_string`, `concat`) are no longer needed
+// because the task scripts compile without the `text` feature and
+// therefore do not desugar f-strings. Diagnostic logging is
+// performed through `host::log_event(code, data)` which carries a
+// numeric event discriminant and a single data word; the per-event
+// format string lives on the host side.
 
-use host::clock_now
-use host::log_event
-use host::gpio_set
-use host::gpio_pin_count
-use host::sensor_read
-use host::sensor_channel_count
-use host::uart_count
-use host::spi_count
-use host::i2c_count
-use host::timer_count
-use host::usart_write
-use host::usart_read
-use host::spi_write
-use host::spi_read
-use host::i2c_write
-use host::i2c_read
-use host::adc_read
+use host::clock_now() -> Word
+use host::log_event(Word, Word) -> ()
+use host::gpio_set(Word, Word) -> Status
+use host::gpio_pin_count() -> Word
+use host::sensor_read(Word) -> Word
+use host::sensor_channel_count() -> Word
+use host::uart_count() -> Word
+use host::spi_count() -> Word
+use host::i2c_count() -> Word
+use host::timer_count() -> Word
+use host::usart_write(Word, Word) -> Status
+use host::usart_read(Word) -> (Status, Word)
+use host::spi_write(Word, Word) -> Status
+use host::spi_read(Word) -> (Status, Word)
+use host::i2c_write(Word, Word, Word) -> Status
+use host::i2c_read(Word, Word) -> (Status, Word)
+use host::adc_read(Word) -> (Status, Word)
 
 enum Status {
     // Successful completion.

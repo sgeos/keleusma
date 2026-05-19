@@ -86,6 +86,36 @@ impl Platform for StdPlatform {
                     t, data
                 );
             }
+            crate::natives::EV_KERNEL_VM_ERROR => {
+                let category = match data {
+                    0 => "halt",
+                    1 => "soft-script",
+                    2 => "soft-host",
+                    _ => "unknown",
+                };
+                println!(
+                    "[t={:>6}ms] kernel: task vm error (category={})",
+                    t, category
+                );
+            }
+            crate::natives::EV_KERNEL_UNKNOWN_YIELD => {
+                println!(
+                    "[t={:>6}ms] kernel: task yielded unknown reason {}",
+                    t, data
+                );
+            }
+            crate::natives::EV_KERNEL_TASK_FINISHED => {
+                println!(
+                    "[t={:>6}ms] kernel: task finished (unexpected for loop main)",
+                    t
+                );
+            }
+            crate::natives::EV_KERNEL_UNEXPECTED_STATE => {
+                println!(
+                    "[t={:>6}ms] kernel: task returned unexpected vm state",
+                    t
+                );
+            }
             _ => {
                 println!(
                     "[t={:>6}ms] unknown log_event(code={}, data={})",

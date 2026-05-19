@@ -168,6 +168,7 @@ required-features = ["stm32n6570dk-platform"]
 
 [profile.dev]
 opt-level = 0
+panic = "abort"
 
 [profile.release]
 opt-level = 3
@@ -177,3 +178,10 @@ lto = "fat"
 # RAM-resident on the N6 (no on-chip flash); debug info increases
 # the ELF size but does not enlarge the loaded section count.
 debug = 2
+# Abort on panic rather than unwinding. Unwinding pulls in a
+# significant amount of metadata on bare-metal targets; an
+# embedded kernel that panics is in an unrecoverable state
+# regardless of unwinding support. `panic-probe` is configured
+# to halt and report through defmt RTT before the abort, so the
+# operator still sees the panic location.
+panic = "abort"

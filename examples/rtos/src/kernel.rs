@@ -18,7 +18,6 @@
 //! timestamp for `SleepUntil`, or a reason-specific value for
 //! the others.
 
-use alloc::format;
 use alloc::vec::Vec;
 use core::marker::PhantomData;
 
@@ -151,10 +150,10 @@ impl<P: Platform> Kernel<P> {
                     1 => TaskState::Ready(WakeReason::Timer),
                     2 => TaskState::WaitingFor(payload as u8),
                     _ => {
-                        P::log(&format!(
-                            "task {}: unknown yield reason {}",
-                            self.tasks[i].name, r
-                        ));
+                        P::log_event(
+                            crate::natives::EV_KERNEL_UNKNOWN_YIELD,
+                            r,
+                        );
                         TaskState::Finished
                     }
                 };
@@ -166,21 +165,28 @@ impl<P: Platform> Kernel<P> {
                 self.tasks[i].state = TaskState::Ready(WakeReason::Timer);
             }
             Ok(VmState::Finished(_)) => {
-                P::log(&format!(
-                    "task {}: finished (unexpected for loop main)",
-                    self.tasks[i].name
-                ));
+                P::log_event(crate::natives::EV_KERNEL_TASK_FINISHED, 0);
                 self.tasks[i].state = TaskState::Finished;
             }
-            Ok(other) => {
-                P::log(&format!(
-                    "task {}: unexpected vm state {:?}",
-                    self.tasks[i].name, other
-                ));
+            Ok(_other) => {
+                P::log_event(crate::natives::EV_KERNEL_UNEXPECTED_STATE, 0);
                 self.tasks[i].state = TaskState::Finished;
             }
             Err(e) => {
-                P::log(&format!("task {}: vm error: {:?}", self.tasks[i].name, e));
+                // Map the VmError to a numeric code via the
+                // three-way `VmError::category` policy. Concrete
+                // error detail (string payloads in `TypeError`,
+                // `NativeError`, etc.) is intentionally not
+                // surfaced through `log_event`, which carries only
+                // a code and a data word; the substantial flash
+                // cost of Debug-formatting an arbitrary VmError
+                // (~15 KB on this target) is avoided.
+                let category_code = match e.category() {
+                    keleusma::vm::VmErrorCategory::Halt => 0,
+                    keleusma::vm::VmErrorCategory::SoftScript => 1,
+                    keleusma::vm::VmErrorCategory::SoftHost => 2,
+                };
+                P::log_event(crate::natives::EV_KERNEL_VM_ERROR, category_code);
                 self.tasks[i].state = TaskState::Finished;
             }
         }

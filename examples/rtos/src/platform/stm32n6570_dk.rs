@@ -129,6 +129,24 @@ impl Platform for Stm32N6570DkPlatform {
             crate::natives::EV_SENSOR_ABOVE => {
                 defmt::info!("sensor ch0 ABOVE threshold (value={})", data);
             }
+            crate::natives::EV_KERNEL_VM_ERROR => {
+                let category: &'static str = match data {
+                    0 => "halt",
+                    1 => "soft-script",
+                    2 => "soft-host",
+                    _ => "unknown",
+                };
+                defmt::info!("kernel: task vm error (category={=str})", category);
+            }
+            crate::natives::EV_KERNEL_UNKNOWN_YIELD => {
+                defmt::info!("kernel: task yielded unknown reason {}", data);
+            }
+            crate::natives::EV_KERNEL_TASK_FINISHED => {
+                defmt::info!("kernel: task finished (unexpected for loop main)");
+            }
+            crate::natives::EV_KERNEL_UNEXPECTED_STATE => {
+                defmt::info!("kernel: task returned unexpected vm state");
+            }
             _ => {
                 defmt::info!("unknown log_event(code={}, data={})", code, data);
             }

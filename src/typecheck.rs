@@ -535,9 +535,20 @@ struct Ctx {
     impls: BTreeMap<String, BTreeSet<String>>,
     functions: BTreeMap<String, FnSig>,
     /// Native function names imported via `use` declarations. Calls
-    /// to these names are accepted with any argument types because
-    /// native signatures are not declared at compile time.
+    /// to these names are accepted with any argument types when the
+    /// `use` declaration does not carry a signature; declarations
+    /// that do carry a signature also populate [`Self::native_signatures`]
+    /// and are checked accordingly.
     natives: BTreeSet<String>,
+    /// Declared native signatures, keyed by the fully qualified
+    /// native name as it would appear in [`Self::natives`]. Populated
+    /// at signature-collection time from `use path::name(T, ...) -> R`
+    /// declarations. Call sites that find a match enforce the
+    /// declared parameter arity, parameter types, and return type.
+    /// Native calls without a declared signature continue to fall
+    /// through the permissive path that accepts any argument types
+    /// and assigns a fresh type variable to the result.
+    native_signatures: BTreeMap<String, FnSig>,
     /// Data block field types, keyed by data name then field name.
     data: BTreeMap<String, BTreeMap<String, Type>>,
     /// Stack of local variable scopes. Inner scopes shadow outer.
@@ -569,6 +580,7 @@ impl Ctx {
             impls: BTreeMap::new(),
             functions: BTreeMap::new(),
             natives: BTreeSet::new(),
+            native_signatures: BTreeMap::new(),
             data: BTreeMap::new(),
             locals: Vec::new(),
             current_return: None,
@@ -760,6 +772,50 @@ pub fn check_with_target(
     run_check(program, ctx)
 }
 
+/// Type-check a call to a native function whose declared signature
+/// is in scope. Validates parameter count and per-parameter types
+/// against `sig.params`, then returns `sig.return_type`.
+///
+/// Used at native call sites where the `use` declaration carries a
+/// parenthesised signature: `use host::name(T1, T2, ...) -> R`.
+/// Native calls without a declared signature take the permissive
+/// path inline.
+fn check_native_call_with_signature(
+    ctx: &mut Ctx,
+    name: &str,
+    args: &[Expr],
+    span: &crate::token::Span,
+    sig: &FnSig,
+) -> Result<Type, TypeError> {
+    if args.len() != sig.params.len() {
+        return Err(TypeError::new(
+            alloc::format!(
+                "native `{}` expects {} argument(s), got {}",
+                name,
+                sig.params.len(),
+                args.len()
+            ),
+            *span,
+        ));
+    }
+    for (i, (arg, expected)) in args.iter().zip(sig.params.iter()).enumerate() {
+        let arg_ty = type_of_expr(ctx, arg)?;
+        if !types_compatible(ctx, &arg_ty, expected) {
+            return Err(TypeError::new(
+                alloc::format!(
+                    "native `{}` argument {} expects {}, got {}",
+                    name,
+                    i,
+                    expected.display(),
+                    arg_ty.display()
+                ),
+                arg.span(),
+            ));
+        }
+    }
+    Ok(sig.return_type.clone())
+}
+
 pub fn check(program: &mut Program) -> Result<(), TypeError> {
     let ctx = Ctx::new();
     run_check(program, ctx)
@@ -841,7 +897,9 @@ fn run_check(program: &mut Program, mut ctx: Ctx) -> Result<(), TypeError> {
     // Pass 1c0. Collect native names from `use` declarations.
     // Names take the form `path::name` or just `name` for use without
     // path. Wildcard imports cannot be resolved at compile time and
-    // are treated leniently elsewhere.
+    // are treated leniently elsewhere. Declarations carrying a
+    // parenthesised signature (`use host::name(T1, T2, ...) -> R`)
+    // also populate `ctx.native_signatures` for call-site validation.
     for use_decl in &program.uses {
         if let ImportItem::Name(name) = &use_decl.import {
             let full = if use_decl.path.is_empty() {
@@ -858,6 +916,20 @@ fn run_check(program: &mut Program, mut ctx: Ctx) -> Result<(), TypeError> {
                 full.push_str(name);
                 full
             };
+            if let Some(sig) = &use_decl.signature {
+                let params: Vec<Type> = sig.params.iter().map(|t| ctx.resolve_type(t)).collect();
+                let return_type = ctx.resolve_type(&sig.return_type);
+                ctx.native_signatures.insert(
+                    full.clone(),
+                    FnSig {
+                        type_params: Vec::new(),
+                        type_param_vars: Vec::new(),
+                        type_param_bounds: Vec::new(),
+                        params,
+                        return_type,
+                    },
+                );
+            }
             ctx.natives.insert(full);
         }
     }
@@ -1946,14 +2018,21 @@ fn type_of_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Type, TypeError> {
                 }
                 return Ok(ctx.fresh());
             }
-            // Native functions are registered at runtime and have no
-            // compile-time signature. Names declared in `use` or
-            // qualified with `::` are treated as natives and accept
-            // any argument types. Other unknown names are rejected
-            // as undefined.
+            // Native functions are registered at runtime. Names
+            // declared in `use` or qualified with `::` are treated as
+            // natives. If the `use` declaration carries a signature
+            // (`use host::name(T1, T2, ...) -> R`), the call site
+            // enforces the declared parameter arity, parameter types,
+            // and assigns the declared return type. Native names
+            // without a declared signature continue to be accepted
+            // with any argument types and a fresh return-type
+            // variable; this is the legacy permissive path.
             let sig = match ctx.functions.get(name).cloned() {
                 Some(s) => s,
                 None => {
+                    if let Some(nsig) = ctx.native_signatures.get(name).cloned() {
+                        return check_native_call_with_signature(ctx, name, args, span, &nsig);
+                    }
                     if ctx.natives.contains(name) || name.contains("::") {
                         // Type-check arguments for syntax errors but
                         // do not enforce signatures.
@@ -2619,6 +2698,82 @@ mod tests {
         let tokens = tokenize(src).expect("lex");
         let mut program = parse(&tokens).expect("parse");
         check(&mut program)
+    }
+
+    #[test]
+    fn native_signature_accepts_well_typed_call() {
+        // The `use host::log_event(Word, Word) -> ()` declaration
+        // pins the parameter and return types at the type-checker
+        // level. A call with two `Word` arguments and a discarded
+        // unit result type-checks without error.
+        check_src(
+            "use host::log_event(Word, Word) -> ()\n\
+             fn main() -> Word { host::log_event(1, 2); 0 }",
+        )
+        .expect("well-typed native call should pass");
+    }
+
+    #[test]
+    fn native_signature_rejects_wrong_argument_count() {
+        // Declared as 2-argument; call site supplies 1.
+        let err = check_src(
+            "use host::log_event(Word, Word) -> ()\n\
+             fn main() -> Word { host::log_event(1); 0 }",
+        )
+        .unwrap_err();
+        assert!(
+            err.message.contains("expects 2 argument(s), got 1"),
+            "unexpected error: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn native_signature_rejects_wrong_argument_type() {
+        // Declared as `(Word) -> Word`; call passes `Bool`.
+        let err = check_src(
+            "use host::increment(Word) -> Word\n\
+             fn main() -> Word { host::increment(true) }",
+        )
+        .unwrap_err();
+        assert!(
+            err.message.contains("argument 0 expects Word, got bool"),
+            "unexpected error: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn native_without_signature_remains_permissive() {
+        // No signature on the `use` declaration; the call site
+        // accepts any argument types (legacy behaviour).
+        check_src(
+            "use host::log_event\n\
+             fn main() -> Word { host::log_event(1, true); 0 }",
+        )
+        .expect("permissive path should admit native without signature");
+    }
+
+    #[test]
+    fn native_signature_assigns_declared_return_type() {
+        // The declared return type drives the surrounding binding's
+        // inferred type. With `-> Word`, the let binding is Word.
+        check_src(
+            "use host::clock_now() -> Word\n\
+             fn main() -> Word { let t: Word = host::clock_now(); t }",
+        )
+        .expect("declared return type should unify with annotated binding");
+        // A mismatch on the same call site is rejected.
+        let err = check_src(
+            "use host::clock_now() -> Word\n\
+             fn main() -> Bool { host::clock_now() }",
+        )
+        .unwrap_err();
+        assert!(
+            err.message.contains("returns Bool but body produces Word"),
+            "unexpected error: {}",
+            err.message
+        );
     }
 
     /// End-to-end compile helper. Some tests need to validate that

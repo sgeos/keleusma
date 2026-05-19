@@ -352,6 +352,7 @@ impl<'a> Parser<'a> {
                 return Ok(UseDecl {
                     path,
                     import: ImportItem::Wildcard,
+                    signature: None,
                     span: merge_spans(start, end),
                 });
             }
@@ -361,10 +362,40 @@ impl<'a> Parser<'a> {
 
         // The last segment is the imported name.
         let import_name = path.pop().unwrap_or_default();
+
+        // Optional signature: `(T1, T2, ...) -> R`. When the next
+        // token is `(`, parse the parenthesised parameter type list
+        // followed by `->` and the return type. The signature is
+        // attached to the `UseDecl` so the type checker can validate
+        // call-site argument types and assign the declared return
+        // type to native calls.
+        let signature = if self.at(&TokenKind::LParen) {
+            let sig_start = self.expect(&TokenKind::LParen)?;
+            let mut params: Vec<TypeExpr> = Vec::new();
+            while !self.at(&TokenKind::RParen) {
+                params.push(self.parse_type_expr()?);
+                if !self.eat(&TokenKind::Comma) {
+                    break;
+                }
+            }
+            self.expect(&TokenKind::RParen)?;
+            self.expect(&TokenKind::Arrow)?;
+            let return_type = self.parse_type_expr()?;
+            let sig_end = return_type.span();
+            Some(crate::ast::NativeSignature {
+                params,
+                return_type,
+                span: merge_spans(sig_start, sig_end),
+            })
+        } else {
+            None
+        };
+
         let end = self.prev_span();
         Ok(UseDecl {
             path,
             import: ImportItem::Name(import_name),
+            signature,
             span: merge_spans(start, end),
         })
     }

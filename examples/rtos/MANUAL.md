@@ -70,11 +70,21 @@ Measured `.text` size on the bare-metal binary for each useful combination on th
 
 | Combination | `.text` | Notes |
 |-------------|--------:|-------|
-| `keleusma-compile` + `keleusma-verify` (default) | 622 KB | Source compiled at boot, verified at load. Boot to scheduler around 215 milliseconds. |
-| `keleusma-verify` only | 199 KB | Precompiled bytecode, verified at load. Boot to scheduler around 43 milliseconds. |
-| Neither | 180 KB | Precompiled bytecode, trust-loaded. Boot to scheduler around 39 milliseconds. Smallest image. |
+| `keleusma-compile` + `keleusma-verify` (default) | 621 KB | Source compiled at boot, verified at load. Boot to scheduler around 215 milliseconds. |
+| `keleusma-verify` only | 169 KB | Precompiled bytecode, verified at load. Boot to scheduler around 43 milliseconds. |
+| Neither | 149 KB | Precompiled bytecode, trust-loaded. Boot to scheduler around 39 milliseconds. Smallest image. |
 
-The `text` surface feature is disabled on the runtime keleusma dependency. Task scripts use only numeric arguments, and diagnostic logging routes through the `host::log_event(code, data)` native rather than `host::log(text)`. The `text` removal saves roughly 11 KB of `.text` in the precompiled-bytecode modes; the source-compile mode is dominated by the parser, type checker, and monomorphizer, so the saving is less visible there. Two further embassy-stm32 features (`exti` and `unstable-pac`) are dropped because the kernel does not exercise them.
+Several savings landed across the V0.2 closing pass. The `text` surface feature is disabled on the runtime keleusma dependency; task scripts use only numeric arguments. Diagnostic logging routes through the `host::log_event(code, data)` native rather than `host::log(text)`, including kernel-emitted events that previously went through `format!("{:?}", vmerror)` and pulled in the full float formatter chain (`flt2dec`, `CACHED_POW10`, `__divdf3`, `__adddf3`, char `escape_debug_ext`). Each kernel event has its own numeric discriminant declared in `src/natives.rs` and a matching format-string arm in each platform's `log_event` implementation. The release profile sets `panic = "abort"` to drop unwinding tables. Two embassy-stm32 features (`exti`, `unstable-pac`) are dropped because the kernel does not exercise them.
+
+Cumulative reduction against the pre-pass baseline:
+
+| Combination | Baseline | Current | Delta |
+|-------------|---------:|--------:|------:|
+| `keleusma-compile` + `keleusma-verify` | 614 KB | 621 KB | +7 KB |
+| `keleusma-verify` only | 211 KB | 169 KB | -42 KB |
+| Neither | 192 KB | 149 KB | -43 KB |
+
+The full-pipeline mode is essentially unchanged because the source compiler (lexer, parser, type checker, monomorphizer) dominates that image; the savings concentrate in the embedded production modes.
 
 The combination `keleusma-compile` without `keleusma-verify` is technically allowed but rarely useful, because the compiler-emitted bytecode then carries 0 in the WCET and WCMU header fields and the runtime has no analysis to populate them either.
 
@@ -312,7 +322,7 @@ The bundled `memory.x` allocates the AXISRAM2 region (1024 KB at `0x34100000`):
 
 | Region | Origin | Length | Purpose |
 |--------|--------|-------:|---------|
-| FLASH  | `0x34100000` | 640 KB | The Keleusma runtime image (lexer, parser, type checker, monomorphizer, compiler, VM, verifier) plus the kernel core, platform impl, embassy stack, defmt, and the entry binary. Current usage is ~622 KB under the full-pipeline default; precompiled bytecode modes use 180–199 KB. |
+| FLASH  | `0x34100000` | 640 KB | The Keleusma runtime image (lexer, parser, type checker, monomorphizer, compiler, VM, verifier) plus the kernel core, platform impl, embassy stack, defmt, and the entry binary. Current usage is ~621 KB under the full-pipeline default; precompiled bytecode modes use 149-169 KB, leaving 471-491 KB free for user code and NPU weights. |
 | RAM    | `0x341A0000` | 384 KB | The global heap (320 KB), other `.bss` (transient), stack, and embassy executor state. The three per-task arenas are leaked into the heap. |
 
 The N6 has no on-chip flash. The boot ROM enables AXISRAM2 regardless of BOOT0 position, and probe-rs loads the application into it directly. The map fills AXISRAM2 entirely; future iterations may slim the FLASH image by shipping precompiled bytecode and stripping the compile-time pipeline.

@@ -51,6 +51,19 @@ use crate::platform::Platform;
 pub const EV_HEARTBEAT_OK: u32 = 1;
 pub const EV_LED_GPIO_FAIL: u32 = 2;
 pub const EV_SENSOR_ABOVE: u32 = 3;
+/// Kernel-emitted: VM returned an error. Data word carries the
+/// `VmErrorCategory` discriminant (`0` halt, `1` soft script,
+/// `2` soft host).
+pub const EV_KERNEL_VM_ERROR: u32 = 100;
+/// Kernel-emitted: a task yielded a tuple whose first slot is
+/// not a recognised reason. Data word carries the raw reason.
+pub const EV_KERNEL_UNKNOWN_YIELD: u32 = 101;
+/// Kernel-emitted: a `loop main` task returned `Finished` rather
+/// than continuing to yield. Data word is unused (zero).
+pub const EV_KERNEL_TASK_FINISHED: u32 = 102;
+/// Kernel-emitted: a task returned an unrecognised `VmState`
+/// variant. Data word is unused (zero).
+pub const EV_KERNEL_UNEXPECTED_STATE: u32 = 103;
 
 /// Discriminants for the script-side `StatusErrorCode` enum.
 /// Kept in lock-step with `scripts/prelude.kel`. The values

@@ -152,6 +152,15 @@ pub enum ConstInitializer {
 pub struct UseDecl {
     pub path: Vec<String>,
     pub import: ImportItem,
+    /// Optional declared signature for the imported native. When the
+    /// surface form is `use host::name(T1, T2, ...) -> R`, the parser
+    /// records the parameter types and return type here so the type
+    /// checker can enforce them at every call site. When the surface
+    /// form is the bare `use host::name`, the signature is `None` and
+    /// the type checker falls back to the permissive mode that
+    /// accepts any argument types and assigns a fresh type variable
+    /// to the result.
+    pub signature: Option<NativeSignature>,
     pub span: Span,
 }
 
@@ -162,6 +171,23 @@ pub enum ImportItem {
     Name(String),
     /// A wildcard: `use audio::*`.
     Wildcard,
+}
+
+/// Declared signature for an imported native function.
+///
+/// Carries the parameter and return type expressions in surface
+/// (`TypeExpr`) form. The type checker resolves both to internal
+/// [`crate::typecheck::Type`] values through the same path as user-
+/// defined functions, so the resulting type information is fully
+/// integrated with Hindley-Milner inference at call sites.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NativeSignature {
+    /// Parameter types in declaration order.
+    pub params: Vec<TypeExpr>,
+    /// Return type.
+    pub return_type: TypeExpr,
+    /// Span of the parenthesised signature in the source.
+    pub span: Span,
 }
 
 /// A type definition (struct or enum).
