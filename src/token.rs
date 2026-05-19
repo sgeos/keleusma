@@ -57,6 +57,12 @@ pub enum TokenKind {
     /// in the arena's persistent region and is not exposed through
     /// the host API. Persists across resets.
     Private,
+    /// `const` modifier on a `data` declaration. Const data is
+    /// immutable; field reads compile to constant loads; field
+    /// writes are compile errors. Each field has a compile-time
+    /// literal initializer in the form `field: Type = literal`.
+    /// Const data does not consume runtime data-segment slots.
+    Const,
     /// `ephemeral` modifier on an entry-point function declaration.
     /// Asserts the module is provably ephemeral as defined in the
     /// verifier rule. The compile pipeline errors when the assertion
@@ -152,6 +158,7 @@ impl TokenKind {
             "data" => Some(TokenKind::Data),
             "shared" => Some(TokenKind::Shared),
             "private" => Some(TokenKind::Private),
+            "const" => Some(TokenKind::Const),
             "ephemeral" => Some(TokenKind::Ephemeral),
             "trait" => Some(TokenKind::Trait),
             "impl" => Some(TokenKind::Impl),

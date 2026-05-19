@@ -91,6 +91,11 @@ pub enum DataVisibility {
     /// Private to the script. Lives in the arena's persistent region.
     /// No host API. Persists across resets.
     Private,
+    /// Compile-time constant. Field reads compile to constant
+    /// loads; writes are compile errors. No runtime data-segment
+    /// slot is allocated. Each field carries a literal
+    /// initializer in the source.
+    Const,
 }
 
 /// A field in a data block declaration.
@@ -98,6 +103,11 @@ pub enum DataVisibility {
 pub struct DataFieldDecl {
     pub name: String,
     pub type_expr: TypeExpr,
+    /// Compile-time literal initializer. Required for fields of
+    /// `const data` declarations; rejected on `shared` and
+    /// `private` data declarations where the host or the script
+    /// supplies values at runtime.
+    pub initializer: Option<Literal>,
     pub span: Span,
 }
 

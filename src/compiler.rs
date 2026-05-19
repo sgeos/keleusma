@@ -61,7 +61,16 @@ struct FuncCompiler {
     /// Map from native function name to native registry index.
     native_map: BTreeMap<String, u16>,
     /// Map from data block name to a list of (field_name, slot_index) pairs.
+    /// Holds entries for shared and private data only. Const data
+    /// fields do not consume runtime slots and are tracked through
+    /// `const_fields` instead.
     data_fields: BTreeMap<String, Vec<(String, u16)>>,
+    /// Map from data block name to a map from field name to the
+    /// compile-time `ConstValue` for `const data` fields. Field
+    /// reads resolve through this map first and compile to
+    /// `Op::Const`. Field writes against any entry here are
+    /// compile errors.
+    const_fields: BTreeMap<String, BTreeMap<String, crate::bytecode::ConstValue>>,
     /// Static type information used by the for-in iteration bound
     /// inference and similar narrow optimizations.
     type_info: TypeInfo,
@@ -74,6 +83,7 @@ impl FuncCompiler {
         function_map: BTreeMap<String, u16>,
         native_map: BTreeMap<String, u16>,
         data_fields: BTreeMap<String, Vec<(String, u16)>>,
+        const_fields: BTreeMap<String, BTreeMap<String, crate::bytecode::ConstValue>>,
         type_info: TypeInfo,
     ) -> Self {
         Self {
@@ -94,6 +104,7 @@ impl FuncCompiler {
             function_map,
             native_map,
             data_fields,
+            const_fields,
             type_info,
         }
     }
@@ -151,7 +162,7 @@ impl FuncCompiler {
     fn struct_name_of(&self, expr: &Expr) -> Option<String> {
         match expr {
             Expr::Ident { name, .. } => {
-                if self.data_fields.contains_key(name) {
+                if self.data_fields.contains_key(name) || self.const_fields.contains_key(name) {
                     return Some(name.clone());
                 }
                 let ty = self.local_type(name)?;
@@ -193,6 +204,15 @@ impl FuncCompiler {
         // because reaching this with a `KStr` would be a compiler
         // bug rather than user-visible.
         let cv = ConstValue::try_from_value(value).expect("compile-time constant only");
+        self.add_const_value(cv)
+    }
+
+    /// Append a [`ConstValue`] to the per-chunk constant pool
+    /// with structural deduplication. Returns the index for
+    /// `Op::Const`. Used by the const-data field-access path
+    /// where the compiler already has the typed `ConstValue`
+    /// rather than a runtime `Value`.
+    fn add_const_value(&mut self, cv: ConstValue) -> u16 {
         for (i, c) in self.chunk.constants.iter().enumerate() {
             if *c == cv {
                 return i as u16;
@@ -225,9 +245,27 @@ impl FuncCompiler {
         Option::None
     }
 
-    /// Check if a name refers to a data block.
+    /// Check if a name refers to a data block. Returns true for
+    /// shared, private, and const data blocks.
     fn is_data_block(&self, name: &str) -> bool {
-        self.data_fields.contains_key(name)
+        self.data_fields.contains_key(name) || self.const_fields.contains_key(name)
+    }
+
+    /// Check if a name refers to a const data block.
+    fn is_const_data_block(&self, name: &str) -> bool {
+        self.const_fields.contains_key(name)
+    }
+
+    /// Look up a const data field's compile-time value.
+    fn const_data_field_value(
+        &self,
+        data_name: &str,
+        field_name: &str,
+    ) -> Option<crate::bytecode::ConstValue> {
+        self.const_fields
+            .get(data_name)
+            .and_then(|m| m.get(field_name))
+            .cloned()
     }
 
     /// Resolve a data block field to its slot index.
@@ -439,15 +477,17 @@ pub fn compile_with_target(
 
     // R28: at most one data block per visibility class. The
     // original rule said "at most one data block per program";
-    // with shared and private visibility introduced in V0.2.x a
-    // program may declare one shared block and one private
-    // block. Two blocks of the same visibility remain rejected.
+    // with shared, private, and const visibility introduced in
+    // V0.2.x a program may declare one of each. Two blocks of
+    // the same visibility remain rejected.
     let mut seen_shared_span: Option<crate::token::Span> = None;
     let mut seen_private_span: Option<crate::token::Span> = None;
+    let mut seen_const_span: Option<crate::token::Span> = None;
     for decl in &program.data_decls {
         let dup_slot = match decl.visibility {
             DataVisibility::Shared => &mut seen_shared_span,
             DataVisibility::Private => &mut seen_private_span,
+            DataVisibility::Const => &mut seen_const_span,
         };
         if dup_slot.is_some() {
             return Err(CompileError {
@@ -456,6 +496,7 @@ pub fn compile_with_target(
                     match decl.visibility {
                         DataVisibility::Shared => "shared",
                         DataVisibility::Private => "private",
+                        DataVisibility::Const => "const",
                     },
                     decl.name
                 ),
@@ -463,6 +504,60 @@ pub fn compile_with_target(
             });
         }
         *dup_slot = Some(decl.span);
+    }
+
+    // Const data validation. Every const data field must carry a
+    // literal initializer; shared and private data fields must
+    // not. The literal's type must match the declared field type.
+    // Const data fields are baked into a nested lookup table:
+    // data block name -> field name -> compile-time value. The
+    // field-access codegen consults this table; field reads
+    // compile to Op::Const loads from the per-chunk constant
+    // pool. Writes are rejected at codegen time.
+    let mut const_fields: BTreeMap<String, BTreeMap<String, crate::bytecode::ConstValue>> =
+        BTreeMap::new();
+    for decl in &program.data_decls {
+        match decl.visibility {
+            DataVisibility::Const => {
+                let mut block: BTreeMap<String, crate::bytecode::ConstValue> = BTreeMap::new();
+                for field in &decl.fields {
+                    let lit = field.initializer.as_ref().ok_or_else(|| CompileError {
+                        message: format!(
+                            "const data field `{}.{}` is missing an initializer; const data fields require `= literal` initializers",
+                            decl.name, field.name
+                        ),
+                        span: field.span,
+                    })?;
+                    let cv = const_value_from_literal_for_field(
+                        lit,
+                        &field.type_expr,
+                        decl.name.as_str(),
+                        field.name.as_str(),
+                        field.span,
+                    )?;
+                    block.insert(field.name.clone(), cv);
+                }
+                const_fields.insert(decl.name.clone(), block);
+            }
+            DataVisibility::Shared | DataVisibility::Private => {
+                for field in &decl.fields {
+                    if field.initializer.is_some() {
+                        return Err(CompileError {
+                            message: format!(
+                                "{} data field `{}.{}` has an initializer; only `const data` fields admit initializers",
+                                match decl.visibility {
+                                    DataVisibility::Shared => "shared",
+                                    DataVisibility::Private => "private",
+                                    DataVisibility::Const => unreachable!(),
+                                },
+                                decl.name, field.name
+                            ),
+                            span: field.span,
+                        });
+                    }
+                }
+            }
+        }
     }
 
     // Build data layout from data declarations. Validate that each field
@@ -504,10 +599,14 @@ pub fn compile_with_target(
                 let visibility = match decl.visibility {
                     DataVisibility::Shared => crate::bytecode::SlotVisibility::Shared,
                     DataVisibility::Private => crate::bytecode::SlotVisibility::Private,
+                    DataVisibility::Const => unreachable!(
+                        "const data does not produce runtime slots; const fields handled separately"
+                    ),
                 };
                 let target = match pass_visibility {
                     DataVisibility::Shared => &mut shared_slots,
                     DataVisibility::Private => &mut private_slots,
+                    DataVisibility::Const => unreachable!(),
                 };
                 if n_slots == 1 {
                     target.push(DataSlot {
@@ -637,6 +736,7 @@ pub fn compile_with_target(
             &function_map,
             &native_map,
             &data_fields,
+            &const_fields,
             &type_info,
         )?;
         chunks.push(chunk);
@@ -648,6 +748,77 @@ pub fn compile_with_target(
     // populates the WCET and WCMU header fields. Suppress the
     // unused-mut warning when the verify feature is off so the
     // single declaration covers both feature combinations.
+    // Reject private data blocks where no slot is ever written.
+    // An unmutated private slot is wasted memory: the verifier's
+    // ephemerality rule rules it out of contributing to the
+    // module's behaviour, and the programmer almost certainly
+    // meant `const data` instead. The diagnostic recommends the
+    // rewrite. Const data blocks are exempt because their values
+    // are compile-time and never written.
+    if shared_count + private_count > 0 {
+        let mut private_slot_indices: Vec<u16> = Vec::new();
+        for decl in &program.data_decls {
+            if decl.visibility != DataVisibility::Private {
+                continue;
+            }
+            for field in &decl.fields {
+                if let Some(field_list) = data_fields.get(&decl.name)
+                    && let Some((_, slot_idx)) = field_list
+                        .iter()
+                        .find(|(name, _)| name == &field.name)
+                {
+                    let n = slots_for_data_type(&field.type_expr);
+                    for k in 0..n {
+                        private_slot_indices.push(slot_idx.saturating_add(k));
+                    }
+                }
+            }
+        }
+        if !private_slot_indices.is_empty() {
+            let mut written: alloc::collections::BTreeSet<u16> =
+                alloc::collections::BTreeSet::new();
+            for chunk in &chunks {
+                for op in &chunk.ops {
+                    match op {
+                        crate::bytecode::Op::SetData(slot) => {
+                            written.insert(*slot);
+                        }
+                        crate::bytecode::Op::SetDataIndexed(base, len) => {
+                            for k in 0..*len {
+                                written.insert(base.saturating_add(k));
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            let all_unmutated = private_slot_indices
+                .iter()
+                .all(|slot| !written.contains(slot));
+            if all_unmutated {
+                let private_block_name = program
+                    .data_decls
+                    .iter()
+                    .find(|d| d.visibility == DataVisibility::Private)
+                    .map(|d| d.name.clone())
+                    .unwrap_or_else(|| String::from("<unknown>"));
+                let private_span = program
+                    .data_decls
+                    .iter()
+                    .find(|d| d.visibility == DataVisibility::Private)
+                    .map(|d| d.span)
+                    .unwrap_or_else(crate::token::Span::default);
+                return Err(CompileError {
+                    message: format!(
+                        "private data block `{}` is never mutated; declare it as `const data` with literal initializers instead (private data carries runtime cost that immutable fields do not need)",
+                        private_block_name
+                    ),
+                    span: private_span,
+                });
+            }
+        }
+    }
+
     #[cfg_attr(not(feature = "verify"), allow(unused_mut))]
     let mut module = Module {
         chunks,
@@ -882,6 +1053,55 @@ fn type_expr_carries_text(t: &TypeExpr) -> bool {
 /// Every other field type (scalar, tuple, option, struct, enum)
 /// uses a single slot whose `Value` representation carries the
 /// internal structure.
+/// Convert a source-level literal initializer to a `ConstValue`
+/// for the constant pool. Validates that the literal's type is
+/// compatible with the declared field type. Const data fields
+/// support scalar primitives in V0.2; tuples, arrays, and
+/// composite literals are queued for a later iteration.
+fn const_value_from_literal_for_field(
+    lit: &Literal,
+    field_type: &TypeExpr,
+    data_name: &str,
+    field_name: &str,
+    span: crate::token::Span,
+) -> Result<crate::bytecode::ConstValue, CompileError> {
+    use crate::bytecode::ConstValue;
+    let prim = match field_type {
+        TypeExpr::Prim(p, _) => Some(p),
+        _ => None,
+    };
+    match (lit, prim) {
+        (Literal::Int(n), Some(PrimType::Word)) => Ok(ConstValue::Int(*n)),
+        (Literal::Int(n), Some(PrimType::Byte)) => {
+            if !(0..=0xFF).contains(n) {
+                return Err(CompileError {
+                    message: format!(
+                        "const data field `{}.{}` initializer {} does not fit in `Byte` (range 0..=255)",
+                        data_name, field_name, n
+                    ),
+                    span,
+                });
+            }
+            Ok(ConstValue::Byte(*n as u8))
+        }
+        (Literal::Float(f), Some(PrimType::Float)) => Ok(ConstValue::Float(*f)),
+        (Literal::Bool(b), Some(PrimType::Bool)) => Ok(ConstValue::Bool(*b)),
+        (Literal::String(s), Some(PrimType::Text)) => Ok(ConstValue::StaticStr(s.clone())),
+        (Literal::Unit, _)
+            if matches!(field_type, TypeExpr::Unit(_)) =>
+        {
+            Ok(ConstValue::Unit)
+        }
+        _ => Err(CompileError {
+            message: format!(
+                "const data field `{}.{}` initializer is incompatible with the declared field type",
+                data_name, field_name
+            ),
+            span,
+        }),
+    }
+}
+
 fn slots_for_data_type(type_expr: &TypeExpr) -> u16 {
     match type_expr {
         TypeExpr::Array(elem, len, _) => {
@@ -1025,6 +1245,15 @@ fn emit_data_indexed_read(
             span,
         });
     }
+    if fc.is_const_data_block(chain.data_name) {
+        return Err(CompileError {
+            message: format!(
+                "const data fields do not support indexed access; declare `{}.{}` as `shared data` or `private data` for indexable arrays",
+                chain.data_name, chain.field
+            ),
+            span,
+        });
+    }
     let base = fc
         .resolve_data_field(chain.data_name, chain.field)
         .ok_or_else(|| CompileError {
@@ -1060,6 +1289,15 @@ fn emit_data_indexed_write(
     if !fc.is_data_block(chain.data_name) {
         return Err(CompileError {
             message: format!("unknown data block: {}", chain.data_name),
+            span,
+        });
+    }
+    if fc.is_const_data_block(chain.data_name) {
+        return Err(CompileError {
+            message: format!(
+                "cannot assign to `{}.{}` because `{}` is declared `const data`; const data is immutable",
+                chain.data_name, chain.field, chain.data_name
+            ),
             span,
         });
     }
@@ -1218,6 +1456,7 @@ fn compile_function_group(
     function_map: &BTreeMap<String, u16>,
     native_map: &BTreeMap<String, u16>,
     data_fields: &BTreeMap<String, Vec<(String, u16)>>,
+    const_fields: &BTreeMap<String, BTreeMap<String, crate::bytecode::ConstValue>>,
     type_info: &TypeInfo,
 ) -> Result<Chunk, CompileError> {
     // Within a group, every head after the first must dispatch on
@@ -1262,6 +1501,7 @@ fn compile_function_group(
         function_map.clone(),
         native_map.clone(),
         data_fields.clone(),
+        const_fields.clone(),
         type_info.clone(),
     );
     fc.chunk.param_count = param_count;
@@ -1442,6 +1682,15 @@ fn compile_data_field_assign(
     value: &Expr,
     span: Span,
 ) -> Result<(), CompileError> {
+    if fc.is_const_data_block(data_name) {
+        return Err(CompileError {
+            message: format!(
+                "cannot assign to `{}.{}` because `{}` is declared `const data`; const data is immutable",
+                data_name, field, data_name
+            ),
+            span,
+        });
+    }
     let slot = fc
         .resolve_data_field(data_name, field)
         .ok_or_else(|| CompileError {
@@ -2788,6 +3037,20 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
             if let Expr::Ident { name, .. } = object.as_ref()
                 && fc.is_data_block(name)
             {
+                // Const data fields resolve to a compile-time
+                // literal and emit a constant load. The runtime
+                // never allocates a data-segment slot for them.
+                if fc.is_const_data_block(name) {
+                    let cv = fc
+                        .const_data_field_value(name, field)
+                        .ok_or_else(|| CompileError {
+                            message: format!("unknown const data field: {}.{}", name, field),
+                            span: *span,
+                        })?;
+                    let idx = fc.add_const_value(cv);
+                    fc.emit(Op::Const(idx));
+                    return Ok(());
+                }
                 let slot = fc
                     .resolve_data_field(name, field)
                     .ok_or_else(|| CompileError {

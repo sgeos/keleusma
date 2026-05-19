@@ -70,6 +70,10 @@ For details on how bytecode is generated from source, see [COMPILATION_PIPELINE.
 |-------------|----------|------|-------------|
 | Call | u16 index, u8 argc | 10 | Call function chunk with arguments |
 | CallNative | u16 index, u8 argc | 10 | Call native function with arguments |
+| CallIndirect | u8 argc | 10 | Pop `Value::Func` and `argc` arguments; invoke the referenced chunk with captured env plus args. Rejected by the safe verifier; admissible only under `Vm::new_unchecked` or downstream tooling that has its own proof. |
+| PushFunc | u16 chunk_idx | 1 | Push a `Value::Func` referencing the given chunk with empty captured env. |
+| MakeClosure | u16 chunk_idx, u8 n_captures | 5 | Pop `n_captures` values from the stack and bundle them as the captured env of a `Value::Func` for the given chunk. Rejected by the safe verifier. |
+| MakeRecursiveClosure | u16 chunk_idx, u8 n_captures | 5 | As `MakeClosure` but the produced closure receives itself as an implicit self argument on each `CallIndirect`. Rejected by the safe verifier. |
 
 ## Return, Yield, and Streaming
 
@@ -100,10 +104,16 @@ For details on how bytecode is generated from source, see [COMPILATION_PIPELINE.
 
 ## Data Segment
 
+The unified slot index space partitions into shared slots
+`[0, shared_count)` and private slots `[shared_count, shared_count + private_count)`. Shared slots are host-accessible through `Vm::set_data`/`Vm::get_data` and live in the Vm's owned vector. Private slots are script-only and live in the arena's persistent region. The opcodes below admit both partitions; the runtime dispatches by comparing the slot index against the cached `shared_slot_count`. Const data fields do not consume a slot; field reads compile to `Op::Const` and writes are compile errors.
+
 | Instruction | Operands | Cost | Description |
 |-------------|----------|------|-------------|
 | GetData | u16 slot | 1 | Push data segment slot value onto stack |
 | SetData | u16 slot | 1 | Pop value and store into data segment slot |
+| GetDataIndexed | u16 base, u16 len | 2 | Pop array index, bounds-check against `len`, push the value at `base + index`. Used for indexed access on data-segment array fields. |
+| SetDataIndexed | u16 base, u16 len | 2 | Pop array index then pop value, bounds-check against `len`, store into the slot at `base + index`. Used for indexed write on data-segment array fields. |
+| BoundsCheck | u16 bound | 1 | Peek the top of the stack as an `Int`, trap if outside `[0, bound)`. Emitted by the compiler between levels of a multi-dimensional indexed access so an out-of-range inner index traps rather than addressing a different sub-array. |
 
 ## Field Access
 
@@ -128,6 +138,12 @@ For details on how bytecode is generated from source, see [COMPILATION_PIPELINE.
 |-------------|----------|------|-------------|
 | IntToFloat | none | 2 | Pop Word, push as Float |
 | FloatToInt | none | 2 | Pop Float, push as Word. Truncates toward zero |
+| WordToByte | none | 2 | Pop Word, push the low 8 bits as a Byte. |
+| ByteToWord | none | 2 | Pop Byte, zero-extend to Word. |
+| WordToFixed | u8 frac_bits | 2 | Pop Word, push the corresponding Q-format Fixed value with the given fraction-bit count. |
+| FixedToWord | u8 frac_bits | 2 | Pop Fixed, push the integer portion as a Word; saturating. |
+| FixedMul | u8 frac_bits | 3 | Pop two Q-format Fixed values, push their product. Shifts the `i128` product right by the fraction-bit count and saturates. |
+| FixedDiv | u8 frac_bits | 3 | Pop two Q-format Fixed values, push their quotient. Left-shifts the dividend by the fraction-bit count before dividing and saturates. |
 
 ## Error
 
@@ -141,11 +157,13 @@ Costs are relative weights used by `wcet_stream_iteration()` for worst-case exec
 
 | Cost | Instructions |
 |------|-------------|
-| 1 | Const, PushUnit, PushTrue, PushFalse, GetLocal, SetLocal, GetData, SetData, Pop, Dup, PushNone, WrapSome, Not, If, Else, EndIf, Loop, EndLoop, Break, BreakIf, Stream, Reset, Yield, Trap |
-| 2 | Add, Sub, Mul, Neg, CmpEq, CmpNe, CmpLt, CmpGt, CmpLe, CmpGe, GetIndex, GetTupleField, GetEnumField, Len, IntToFloat, FloatToInt, Return |
-| 3 | Div, Mod, GetField, IsEnum, IsStruct |
-| 5 | NewStruct, NewEnum, NewArray, NewTuple |
-| 10 | Call, CallNative |
+| 1 | Const, PushUnit, PushTrue, PushFalse, GetLocal, SetLocal, GetData, SetData, BoundsCheck, Pop, Dup, PushNone, WrapSome, Not, If, Else, EndIf, Loop, EndLoop, Break, BreakIf, Stream, Reset, Yield, Trap, PushFunc |
+| 2 | Add, Sub, Mul, Neg, CmpEq, CmpNe, CmpLt, CmpGt, CmpLe, CmpGe, GetIndex, GetTupleField, GetEnumField, Len, IntToFloat, FloatToInt, WordToByte, ByteToWord, WordToFixed, FixedToWord, GetDataIndexed, SetDataIndexed, Return |
+| 3 | Div, Mod, GetField, IsEnum, IsStruct, FixedMul, FixedDiv |
+| 5 | NewStruct, NewEnum, NewArray, NewTuple, MakeClosure, MakeRecursiveClosure |
+| 10 | Call, CallNative, CallIndirect |
+
+The closure-related opcodes (`CallIndirect`, `MakeClosure`, `MakeRecursiveClosure`) are rejected by the safe verifier under the conservative-verification stance because their target chunks resolve at runtime and cannot be statically bounded for WCET and WCMU analysis. They appear in this table for completeness and to support downstream tooling that uses `Vm::new_unchecked`.
 
 ## WCMU Cost Tables
 

@@ -5502,9 +5502,11 @@ mod tests {
 
     #[test]
     fn private_data_byte_count_in_header() {
+        // Private data must be mutated to satisfy the unmutated-
+        // private rejection rule introduced in phase 6.
         let src = "\
             private data state { counter: Word }\n\
-            fn main() -> Word { state.counter }";
+            fn main() -> Word { state.counter = 1; state.counter }";
         let tokens = tokenize(src).expect("lex");
         let program = parse(&tokens).expect("parse");
         let module = compile(&program).expect("compile");
@@ -5517,7 +5519,7 @@ mod tests {
         let src = "\
             data shared_ctx { x: Word }\n\
             private data priv_ctx { y: Word, z: Word }\n\
-            fn main() -> Word { shared_ctx.x + priv_ctx.y + priv_ctx.z }";
+            fn main() -> Word { priv_ctx.y = 1; priv_ctx.z = 2; shared_ctx.x + priv_ctx.y + priv_ctx.z }";
         let tokens = tokenize(src).expect("lex");
         let program = parse(&tokens).expect("parse");
         let module = compile(&program).expect("compile");
@@ -5530,7 +5532,7 @@ mod tests {
         let src = "\
             data shared_ctx { x: Word }\n\
             private data priv_ctx { y: Word }\n\
-            fn main() -> Word { shared_ctx.x + priv_ctx.y }";
+            fn main() -> Word { priv_ctx.y = 1; shared_ctx.x + priv_ctx.y }";
         let tokens = tokenize(src).expect("lex");
         let program = parse(&tokens).expect("parse");
         let module = compile(&program).expect("compile");
@@ -5562,7 +5564,7 @@ mod tests {
         let src = "\
             data shared_ctx { x: Word }\n\
             private data priv_ctx { y: Word }\n\
-            fn main() -> Word { shared_ctx.x + priv_ctx.y }";
+            fn main() -> Word { priv_ctx.y = 1; shared_ctx.x + priv_ctx.y }";
         let tokens = tokenize(src).expect("lex");
         let program = parse(&tokens).expect("parse");
         let module = compile(&program).expect("compile");
@@ -5598,7 +5600,7 @@ mod tests {
     fn ephemeral_bit_clear_when_private_data_present() {
         let src = "\
             private data state { counter: Word }\n\
-            fn main() -> Word { state.counter }";
+            fn main() -> Word { state.counter = state.counter + 1; state.counter }";
         let tokens = tokenize(src).expect("lex");
         let program = parse(&tokens).expect("parse");
         let module = compile(&program).expect("compile");
@@ -5652,7 +5654,7 @@ mod tests {
         // helpful message.
         let src = "\
             private data state { x: Word }\n\
-            fn main() -> Word { state.x }";
+            fn main() -> Word { state.x = 1; state.x }";
         let tokens = tokenize(src).expect("lex");
         let program = parse(&tokens).expect("parse");
         let module = compile(&program).expect("compile");
@@ -5687,7 +5689,7 @@ mod tests {
         // the implicit assertion.
         let src = "\
             private data state { a: Word, b: Word, c: Word }\n\
-            fn main() -> Word { 0 }";
+            fn main() -> Word { state.a = 1; state.b = 2; state.c = 3; 0 }";
         let tokens = tokenize(src).expect("lex");
         let program = parse(&tokens).expect("parse");
         let module = compile(&program).expect("compile");
@@ -5704,10 +5706,112 @@ mod tests {
     }
 
     #[test]
+    fn const_data_field_compiles_to_constant_load() {
+        // `const data` fields bake their initializer into the
+        // per-chunk constant pool. The runtime reads them through
+        // `Op::Const`; no data-segment slot is allocated.
+        let src = "\
+            const data palette {\n\
+                red: Byte = 255,\n\
+                green: Byte = 128,\n\
+            }\n\
+            fn main() -> Byte { palette.red }";
+        let tokens = tokenize(src).expect("lex");
+        let program = parse(&tokens).expect("parse");
+        let module = compile(&program).expect("compile");
+        // No runtime slots for const data; byte counts stay zero.
+        assert_eq!(module.shared_data_bytes, 0);
+        assert_eq!(module.private_data_bytes, 0);
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let mut vm = Vm::new(module, &arena).expect("verify");
+        match vm.call(&[]).expect("call") {
+            VmState::Finished(Value::Byte(b)) => assert_eq!(b, 255),
+            other => panic!("expected Byte(255), got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn const_data_field_write_rejected() {
+        let src = "\
+            const data k { v: Word = 7 }\n\
+            fn main() -> Word { k.v = 9; k.v }";
+        let tokens = tokenize(src).expect("lex");
+        let program = parse(&tokens).expect("parse");
+        let err = compile(&program).expect_err("compile should reject");
+        assert!(
+            err.message.contains("const data") && err.message.contains("immutable"),
+            "unexpected error: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn const_data_missing_initializer_rejected() {
+        let src = "\
+            const data k { v: Word }\n\
+            fn main() -> Word { k.v }";
+        let tokens = tokenize(src).expect("lex");
+        let program = parse(&tokens).expect("parse");
+        let err = compile(&program).expect_err("compile should reject");
+        assert!(
+            err.message.contains("initializer"),
+            "unexpected error: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn shared_data_initializer_rejected() {
+        let src = "\
+            data ctx { x: Word = 5 }\n\
+            fn main() -> Word { ctx.x }";
+        let tokens = tokenize(src).expect("lex");
+        let program = parse(&tokens).expect("parse");
+        let err = compile(&program).expect_err("compile should reject");
+        assert!(
+            err.message.contains("initializer") && err.message.contains("const data"),
+            "unexpected error: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn three_data_blocks_one_each_visibility_accepted() {
+        let src = "\
+            data shared_ctx { a: Word }\n\
+            private data priv_ctx { b: Word }\n\
+            const data const_ctx { c: Word = 42 }\n\
+            fn main() -> Word { priv_ctx.b = 1; shared_ctx.a + priv_ctx.b + const_ctx.c }";
+        let tokens = tokenize(src).expect("lex");
+        let program = parse(&tokens).expect("parse");
+        let module = compile(&program).expect("compile");
+        assert_eq!(module.shared_data_bytes, 32);
+        assert_eq!(module.private_data_bytes, 32);
+    }
+
+    #[test]
+    fn private_data_never_mutated_rejected() {
+        // The verifier rejects a private data block whose
+        // slots are never written. The diagnostic suggests
+        // `const data` as the rewrite.
+        let src = "\
+            private data state { x: Word }\n\
+            fn main() -> Word { state.x }";
+        let tokens = tokenize(src).expect("lex");
+        let program = parse(&tokens).expect("parse");
+        let err = compile(&program).expect_err("compile should reject");
+        assert!(
+            err.message.contains("never mutated") && err.message.contains("const data"),
+            "unexpected error: {}",
+            err.message
+        );
+    }
+
+    #[test]
     fn explicit_ephemeral_modifier_rejected_when_private_data_present() {
         let src = "\
             private data state { x: Word }\n\
-            ephemeral fn main() -> Word { state.x }";
+            ephemeral fn main() -> Word { state.x = 1; state.x }";
         let tokens = tokenize(src).expect("lex");
         let program = parse(&tokens).expect("parse");
         let err = compile(&program).expect_err("compile should reject");

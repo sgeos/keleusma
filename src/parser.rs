@@ -242,7 +242,10 @@ impl<'a> Parser<'a> {
             match self.peek() {
                 TokenKind::Struct => types.push(TypeDef::Struct(self.parse_struct_def()?)),
                 TokenKind::Enum => types.push(TypeDef::Enum(self.parse_enum_def()?)),
-                TokenKind::Data | TokenKind::Shared | TokenKind::Private => {
+                TokenKind::Data
+                | TokenKind::Shared
+                | TokenKind::Private
+                | TokenKind::Const => {
                     data_decls.push(self.parse_data_decl()?);
                 }
                 TokenKind::Fn | TokenKind::Yield | TokenKind::Loop | TokenKind::Pure => {
@@ -423,7 +426,9 @@ impl<'a> Parser<'a> {
     fn parse_data_decl(&mut self) -> Result<DataDecl, ParseError> {
         // Optional visibility modifier. `shared data ...` and `data ...`
         // are equivalent; `private data ...` marks the block as
-        // host-invisible and arena-resident.
+        // host-invisible and arena-resident; `const data ...`
+        // declares compile-time constants whose fields carry
+        // literal initializers in the source.
         let (visibility, start) = match self.peek() {
             TokenKind::Shared => {
                 let s = self.bump();
@@ -434,6 +439,11 @@ impl<'a> Parser<'a> {
                 let s = self.bump();
                 self.expect(&TokenKind::Data)?;
                 (DataVisibility::Private, s)
+            }
+            TokenKind::Const => {
+                let s = self.bump();
+                self.expect(&TokenKind::Data)?;
+                (DataVisibility::Const, s)
             }
             _ => {
                 let s = self.expect(&TokenKind::Data)?;
@@ -449,10 +459,24 @@ impl<'a> Parser<'a> {
             let (fname, fspan) = self.expect_lower_ident()?;
             self.expect(&TokenKind::Colon)?;
             let ftype = self.parse_type_expr()?;
-            let end = ftype.span();
+            // Optional initializer: `= literal`. Required on
+            // `const data` fields; rejected at the type-check
+            // stage on `shared`/`private` data fields, but the
+            // parser accepts the syntactic form uniformly and
+            // defers the rule to the next pass for a better
+            // error message.
+            let mut end = ftype.span();
+            let initializer = if self.eat(&TokenKind::Eq) {
+                let lit = self.parse_data_initializer_literal()?;
+                end = merge_spans(end, lit.1);
+                Some(lit.0)
+            } else {
+                None
+            };
             fields.push(DataFieldDecl {
                 name: fname,
                 type_expr: ftype,
+                initializer,
                 span: merge_spans(fspan, end),
             });
             self.eat(&TokenKind::Comma);
@@ -465,6 +489,62 @@ impl<'a> Parser<'a> {
             visibility,
             span: merge_spans(start, end),
         })
+    }
+
+    /// Parse a compile-time literal initializer following `=` in a
+    /// `const data` field. Accepts integer, float, boolean, string,
+    /// and unit literals plus the unary minus prefix on numeric
+    /// literals. Complex initializers (tuples, arrays, struct
+    /// literals) are deferred; the current grammar restricts
+    /// const-data fields to scalar primitives.
+    fn parse_data_initializer_literal(&mut self) -> Result<(Literal, Span), ParseError> {
+        let start = self.peek_span();
+        // Optional leading `-` on numeric literals.
+        let negate = self.at(&TokenKind::Minus);
+        if negate {
+            self.bump();
+        }
+        let tok = self.tokens[self.pos].clone();
+        let lit = match tok.kind {
+            TokenKind::IntLit(n) => {
+                self.pos += 1;
+                let value = if negate { n.wrapping_neg() } else { n };
+                Literal::Int(value)
+            }
+            TokenKind::FloatLit(f) => {
+                self.pos += 1;
+                let value = if negate { -f } else { f };
+                Literal::Float(value)
+            }
+            TokenKind::True if !negate => {
+                self.pos += 1;
+                Literal::Bool(true)
+            }
+            TokenKind::False if !negate => {
+                self.pos += 1;
+                Literal::Bool(false)
+            }
+            TokenKind::StringLit(s) if !negate => {
+                self.pos += 1;
+                Literal::String(s)
+            }
+            TokenKind::LParen if !negate => {
+                // Unit literal `()`.
+                self.bump();
+                let end = self.expect(&TokenKind::RParen)?;
+                return Ok((Literal::Unit, merge_spans(start, end)));
+            }
+            _ => {
+                return Err(ParseError {
+                    message: alloc::format!(
+                        "expected literal initializer (integer, float, true, false, string, or `()`), got {:?}",
+                        tok.kind
+                    ),
+                    span: tok.span,
+                });
+            }
+        };
+        Ok((lit, merge_spans(start, tok.span)))
     }
 
     fn parse_enum_def(&mut self) -> Result<EnumDef, ParseError> {
