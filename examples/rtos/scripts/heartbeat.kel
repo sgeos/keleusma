@@ -1,12 +1,20 @@
 // Heartbeat task. Logs a status line every five seconds so the
 // observer can see that the kernel is alive even when nothing
-// else is happening. The data segment carries a counter that
-// rises monotonically; future iterations can include it in the
-// log line.
+// else is happening.
 //
-// On the N6 hardware this is the primary evidence-of-life
-// signal in the defmt RTT stream because GPIO toggles do not
-// log; see `MANUAL.md` § 7 for the expected timeline.
+// Data partition demonstration:
+//
+// - `data state` (shared with the host) carries a monotonically
+//   rising counter the host could read through `Vm::set_data`
+//   and `Vm::get_data` for telemetry.
+// - `const data cfg` (compile-time constant) holds the heartbeat
+//   period in milliseconds. Reads compile to constant loads; the
+//   period cannot be changed without rebuilding the bytecode.
+//
+// On the N6 hardware the heartbeat is the primary
+// evidence-of-life signal in the defmt RTT stream because GPIO
+// toggles do not log; see `MANUAL.md` § 7 for the expected
+// timeline.
 //
 // `Status` and `StatusErrorCode` are declared in the prelude
 // (`scripts/prelude.kel`), prepended at compile time by
@@ -16,10 +24,14 @@ data state {
     count: Word,
 }
 
+const data cfg {
+    period_ms: Word = 5000,
+}
+
 loop main(_reason: Word) -> (Word, Word) {
     state.count = state.count + 1;
     host::log("heartbeat: system OK");
-    let next = host::clock_now() + 5000;
+    let next = host::clock_now() + cfg.period_ms;
     let _ = yield (0, next);
     (0, 0)
 }

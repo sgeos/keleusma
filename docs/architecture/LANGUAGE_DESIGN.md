@@ -108,6 +108,36 @@ Surface-language semantics. Script-defined values are conceptually immutable. Lo
 
 Runtime layout. Memory is organized into four regions analogous to the System V ABI sections `.text`, `.rodata`, `.data`, and `.bss`, with the `.bss` region implemented as a dual-end bump-allocated arena. See [EXECUTION_MODEL.md](./EXECUTION_MODEL.md) for the canonical region table, the source-level implementation mapping, and memory bookkeeping. See [RELATED_WORK.md](../reference/RELATED_WORK.md) Section 8 for the academic and engineering precedents and citations [H1, H2, H3, SC1] for the persistent-state and mode-automaton lineage.
 
+### Data Segment Partition
+
+V0.2 partitions the data segment into three visibility classes that each have different storage and lifecycle. The surface syntax is a modifier on the `data` declaration.
+
+| Class | Surface form | Storage | Host API | Lifecycle |
+|-------|--------------|---------|----------|-----------|
+| Shared | `shared data ctx { ... }` or `data ctx { ... }` | Vm-owned vector | `Vm::set_data`/`Vm::get_data` | Persists across RESET |
+| Private | `private data state { ... }` | Arena's persistent region | Not exposed | Persists across RESET |
+| Const | `const data cfg { field: T = literal, ... }` | Per-chunk constant pool | Not applicable (immutable) | Identical to bytecode lifetime |
+
+The compiler partitions slot indices so shared slots occupy the low range and private slots the high range. The arena's persistent region holds private slots as raw `Value` structs; hosts call `vm::required_persistent_capacity_for(&module)` and `arena.resize_persistent(needed)` before constructing the VM. Const data fields compile to `Op::Const` reads from the per-chunk constant pool and do not consume runtime data slots. Programs that declare a private data block whose slots are never mutated are rejected at compile time with a diagnostic recommending the `const data` rewrite.
+
+The framing header carries `shared_data_bytes` and `private_data_bytes` (both `u32`) in `VALUE_SLOT_SIZE_BYTES`-sized logical units. Const data does not contribute to either field.
+
+### Ephemeral Modules
+
+A module is **ephemeral** when no value loaded from arena memory allocated prior to a resume or entry is read by any subsequent code, and no arena-owned value flows through any yield or return that crosses the host-VM boundary. Ephemerality licenses the host to fully reset the arena between successive invocations without changing observed behaviour. The `FLAG_EPHEMERAL` bit in the framing header signals the property.
+
+The compiler emits the flag automatically when the verifier proves the property. Programmers may opt in to a build-time assertion by declaring the entry point with the `ephemeral` modifier:
+
+```text
+ephemeral fn main(...) -> ...
+ephemeral yield main(...) -> ...
+ephemeral loop main(...) -> ...
+```
+
+The compile pipeline rejects the module if the assertion fails, with a diagnostic naming the reason (private data declared, or signature carries `Text`).
+
+Sufficient verifier rule. The module is ephemeral when `private_data_bytes == 0` AND no `Text`-typed parameter of the entry function is referenced in the body AND the entry function's return type carries no `Text`. Stronger rules (per-yield arena dataflow) are documented as future work; the current rule rejects no script that the spec definition admits except corner cases that have never appeared in practice.
+
 ## Hot Code Swapping
 
 Keleusma supports hot code swapping at the RESET boundary of a productive divergent function iteration. Only the dialogue type, namely the yield contract from A to B, must remain invariant across swaps. Text, rodata, and the data segment schema may all change across a swap, and each routine's WCET and reset-to-reset bound is certified independently. Cross-swap data handling follows Replace semantics, with the host atomically supplying the data instance appropriate for the new code version. The model parallels the Erlang and Open Telecom Platform multi-version code coexistence pattern [H1, H2], with the simplification that the migration callback resides in the host rather than in the script. See [EXECUTION_MODEL.md](./EXECUTION_MODEL.md) for the full specification including atomicity, rollback, and stale-slot behavior.

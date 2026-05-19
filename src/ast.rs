@@ -103,12 +103,32 @@ pub enum DataVisibility {
 pub struct DataFieldDecl {
     pub name: String,
     pub type_expr: TypeExpr,
-    /// Compile-time literal initializer. Required for fields of
+    /// Compile-time initializer. Required for fields of
     /// `const data` declarations; rejected on `shared` and
     /// `private` data declarations where the host or the script
     /// supplies values at runtime.
-    pub initializer: Option<Literal>,
+    pub initializer: Option<ConstInitializer>,
     pub span: Span,
+}
+
+/// Compile-time initializer for a `const data` field. Distinct
+/// from [`Literal`] because const initializers may nest tuples
+/// and arrays whereas pattern literals are always scalar. Struct
+/// and enum initializers are queued for a later iteration.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ConstInitializer {
+    /// Scalar primitive literal: integer, float, boolean, text,
+    /// or unit. Negation is folded into the literal value at
+    /// parse time.
+    Scalar(Literal),
+    /// Tuple literal: `(init, init, ...)`. Element count and
+    /// element types are validated against the declared field
+    /// type at compile time.
+    Tuple(Vec<ConstInitializer>),
+    /// Array literal: `[init, init, ...]`. Length and element
+    /// type are validated against the declared field type at
+    /// compile time.
+    Array(Vec<ConstInitializer>),
 }
 
 /// A `use` import declaration.

@@ -982,14 +982,43 @@ pub fn compile_with_target(
         // tracks per-yield arena state.
         let entry_name = "main";
         let entry_decl = program.functions.iter().find(|f| f.name == entry_name);
+        // A `Text`-typed parameter that the function body never
+        // references cannot carry text across the host-VM
+        // boundary, so it does not disqualify ephemerality.
+        // Return types are still treated conservatively because
+        // proving "no Text actually returns" requires dataflow
+        // on every return path; the AST walk below catches the
+        // common unused-parameter case at low implementation
+        // cost.
         let signature_uses_text = entry_decl
             .map(|f| {
-                f.params.iter().any(|p| {
-                    p.type_expr
+                let unused_text_params: alloc::collections::BTreeSet<String> = f
+                    .params
+                    .iter()
+                    .filter(|p| {
+                        p.type_expr
+                            .as_ref()
+                            .map(type_expr_carries_text)
+                            .unwrap_or(false)
+                    })
+                    .filter_map(|p| param_binding_name(&p.pattern))
+                    .filter(|name| !param_name_is_used(&f.body, name))
+                    .collect();
+                let any_used_text_param = f.params.iter().any(|p| {
+                    let text = p
+                        .type_expr
                         .as_ref()
                         .map(type_expr_carries_text)
-                        .unwrap_or(false)
-                }) || type_expr_carries_text(&f.return_type)
+                        .unwrap_or(false);
+                    if !text {
+                        return false;
+                    }
+                    match param_binding_name(&p.pattern) {
+                        Some(name) => !unused_text_params.contains(&name),
+                        None => true,
+                    }
+                });
+                any_used_text_param || type_expr_carries_text(&f.return_type)
             })
             .unwrap_or(false);
         let provably_ephemeral = module.private_data_bytes == 0 && !signature_uses_text;
@@ -1041,6 +1070,115 @@ fn type_expr_carries_text(t: &TypeExpr) -> bool {
     }
 }
 
+/// Extract the binding name from a parameter pattern when it
+/// is a simple identifier. Used by the ephemerality refinement
+/// to look up the parameter in the body and decide whether it
+/// is referenced. Patterns with destructuring return `None`
+/// (the analysis falls back to "used" in that case for
+/// soundness).
+#[cfg(feature = "verify")]
+fn param_binding_name(pattern: &Pattern) -> Option<String> {
+    match pattern {
+        Pattern::Variable(name, _) => Some(name.clone()),
+        _ => None,
+    }
+}
+
+/// True when an identifier of the given name appears in the
+/// expression tree, recursing through nested expressions,
+/// blocks, statements, match arms, and closures. Used by the
+/// ephemerality refinement to detect parameters that the body
+/// never references.
+#[cfg(feature = "verify")]
+fn param_name_is_used(body: &Block, name: &str) -> bool {
+    fn expr_uses(expr: &Expr, name: &str) -> bool {
+        match expr {
+            Expr::Ident { name: n, .. } => n == name,
+            Expr::Literal { .. } | Expr::Placeholder { .. } => false,
+            Expr::BinOp { left, right, .. } => expr_uses(left, name) || expr_uses(right, name),
+            Expr::UnaryOp { operand, .. } => expr_uses(operand, name),
+            Expr::Call { args, .. } => args.iter().any(|e| expr_uses(e, name)),
+            Expr::Pipeline {
+                left, args, ..
+            } => expr_uses(left, name) || args.iter().any(|e| expr_uses(e, name)),
+            Expr::MethodCall {
+                receiver, args, ..
+            } => expr_uses(receiver, name) || args.iter().any(|e| expr_uses(e, name)),
+            Expr::FieldAccess { object, .. } => expr_uses(object, name),
+            Expr::TupleIndex { object, .. } => expr_uses(object, name),
+            Expr::ArrayIndex { object, index, .. } => {
+                expr_uses(object, name) || expr_uses(index, name)
+            }
+            Expr::If {
+                condition,
+                then_block,
+                else_block,
+                ..
+            } => {
+                expr_uses(condition, name)
+                    || block_uses(then_block, name)
+                    || else_block
+                        .as_ref()
+                        .map(|b| block_uses(b, name))
+                        .unwrap_or(false)
+            }
+            Expr::Match { scrutinee, arms, .. } => {
+                expr_uses(scrutinee, name) || arms.iter().any(|arm| expr_uses(&arm.expr, name))
+            }
+            Expr::TupleLiteral { elements, .. } => elements.iter().any(|e| expr_uses(e, name)),
+            Expr::ArrayLiteral { elements, .. } => elements.iter().any(|e| expr_uses(e, name)),
+            Expr::StructInit { fields, .. } => fields.iter().any(|f| expr_uses(&f.value, name)),
+            Expr::EnumVariant { args, .. } => args.iter().any(|e| expr_uses(e, name)),
+            Expr::Yield { value, .. } => expr_uses(value, name),
+            Expr::Cast { expr: inner, .. } => expr_uses(inner, name),
+            Expr::Loop { body, .. } => block_uses(body, name),
+            Expr::Closure { body, .. } => block_uses(body, name),
+            Expr::ClosureRef { captures, .. } => captures.iter().any(|c| c == name),
+        }
+    }
+    fn block_uses(block: &Block, name: &str) -> bool {
+        for stmt in &block.stmts {
+            match stmt {
+                Stmt::Let(l) => {
+                    if expr_uses(&l.value, name) {
+                        return true;
+                    }
+                }
+                Stmt::For(f) => {
+                    let iter_uses = match &f.iterable {
+                        Iterable::Expr(e) => expr_uses(e, name),
+                        Iterable::Range(lo, hi) => expr_uses(lo, name) || expr_uses(hi, name),
+                    };
+                    if iter_uses || block_uses(&f.body, name) {
+                        return true;
+                    }
+                }
+                Stmt::Break(_) => {}
+                Stmt::DataFieldAssign { value, .. } => {
+                    if expr_uses(value, name) {
+                        return true;
+                    }
+                }
+                Stmt::DataFieldIndexAssign { indices, value, .. } => {
+                    if indices.iter().any(|e| expr_uses(e, name)) || expr_uses(value, name) {
+                        return true;
+                    }
+                }
+                Stmt::Expr(e) => {
+                    if expr_uses(e, name) {
+                        return true;
+                    }
+                }
+            }
+        }
+        if let Some(tail) = &block.tail_expr {
+            return expr_uses(tail, name);
+        }
+        false
+    }
+    block_uses(body, name)
+}
+
 /// Validate that a data segment field type has a statically known fixed size.
 ///
 /// Admissible: i64, f64, bool, (), tuples, fixed-length arrays, Option of
@@ -1053,44 +1191,88 @@ fn type_expr_carries_text(t: &TypeExpr) -> bool {
 /// Every other field type (scalar, tuple, option, struct, enum)
 /// uses a single slot whose `Value` representation carries the
 /// internal structure.
-/// Convert a source-level literal initializer to a `ConstValue`
-/// for the constant pool. Validates that the literal's type is
-/// compatible with the declared field type. Const data fields
-/// support scalar primitives in V0.2; tuples, arrays, and
-/// composite literals are queued for a later iteration.
+/// Convert a source-level const initializer to a `ConstValue`
+/// for the constant pool. Validates the initializer's shape and
+/// element types against the declared field type. Scalar
+/// initializers match primitive types; tuple initializers match
+/// tuple types element-wise; array initializers match array
+/// types with a length check.
 fn const_value_from_literal_for_field(
-    lit: &Literal,
+    init: &ConstInitializer,
     field_type: &TypeExpr,
     data_name: &str,
     field_name: &str,
     span: crate::token::Span,
 ) -> Result<crate::bytecode::ConstValue, CompileError> {
     use crate::bytecode::ConstValue;
-    let prim = match field_type {
-        TypeExpr::Prim(p, _) => Some(p),
-        _ => None,
-    };
-    match (lit, prim) {
-        (Literal::Int(n), Some(PrimType::Word)) => Ok(ConstValue::Int(*n)),
-        (Literal::Int(n), Some(PrimType::Byte)) => {
-            if !(0..=0xFF).contains(n) {
+    match (init, field_type) {
+        (ConstInitializer::Scalar(lit), TypeExpr::Prim(p, _)) => match (lit, p) {
+            (Literal::Int(n), PrimType::Word) => Ok(ConstValue::Int(*n)),
+            (Literal::Int(n), PrimType::Byte) => {
+                if !(0..=0xFF).contains(n) {
+                    return Err(CompileError {
+                        message: format!(
+                            "const data field `{}.{}` initializer {} does not fit in `Byte` (range 0..=255)",
+                            data_name, field_name, n
+                        ),
+                        span,
+                    });
+                }
+                Ok(ConstValue::Byte(*n as u8))
+            }
+            (Literal::Float(f), PrimType::Float) => Ok(ConstValue::Float(*f)),
+            (Literal::Bool(b), PrimType::Bool) => Ok(ConstValue::Bool(*b)),
+            (Literal::String(s), PrimType::Text) => Ok(ConstValue::StaticStr(s.clone())),
+            _ => Err(CompileError {
+                message: format!(
+                    "const data field `{}.{}` initializer is incompatible with the declared field type",
+                    data_name, field_name
+                ),
+                span,
+            }),
+        },
+        (ConstInitializer::Scalar(Literal::Unit), TypeExpr::Unit(_)) => Ok(ConstValue::Unit),
+        (ConstInitializer::Tuple(elements), TypeExpr::Tuple(elem_types, _)) => {
+            if elements.len() != elem_types.len() {
                 return Err(CompileError {
                     message: format!(
-                        "const data field `{}.{}` initializer {} does not fit in `Byte` (range 0..=255)",
-                        data_name, field_name, n
+                        "const data field `{}.{}` tuple initializer has {} element(s), expected {}",
+                        data_name,
+                        field_name,
+                        elements.len(),
+                        elem_types.len()
                     ),
                     span,
                 });
             }
-            Ok(ConstValue::Byte(*n as u8))
+            let mut out: Vec<ConstValue> = Vec::with_capacity(elements.len());
+            for (e, t) in elements.iter().zip(elem_types.iter()) {
+                out.push(const_value_from_literal_for_field(
+                    e, t, data_name, field_name, span,
+                )?);
+            }
+            Ok(ConstValue::Tuple(out))
         }
-        (Literal::Float(f), Some(PrimType::Float)) => Ok(ConstValue::Float(*f)),
-        (Literal::Bool(b), Some(PrimType::Bool)) => Ok(ConstValue::Bool(*b)),
-        (Literal::String(s), Some(PrimType::Text)) => Ok(ConstValue::StaticStr(s.clone())),
-        (Literal::Unit, _)
-            if matches!(field_type, TypeExpr::Unit(_)) =>
-        {
-            Ok(ConstValue::Unit)
+        (ConstInitializer::Array(elements), TypeExpr::Array(elem_type, len, _)) => {
+            if elements.len() != *len as usize {
+                return Err(CompileError {
+                    message: format!(
+                        "const data field `{}.{}` array initializer has {} element(s), expected {}",
+                        data_name,
+                        field_name,
+                        elements.len(),
+                        len
+                    ),
+                    span,
+                });
+            }
+            let mut out: Vec<ConstValue> = Vec::with_capacity(elements.len());
+            for e in elements {
+                out.push(const_value_from_literal_for_field(
+                    e, elem_type, data_name, field_name, span,
+                )?);
+            }
+            Ok(ConstValue::Array(out))
         }
         _ => Err(CompileError {
             message: format!(
@@ -1245,14 +1427,29 @@ fn emit_data_indexed_read(
             span,
         });
     }
+    // Indexed read on a const data field. The literal value
+    // lives in the constant pool; emit a constant load followed
+    // by per-level `Op::GetIndex` for each index expression. The
+    // runtime's `Op::GetIndex` pops index and array, pushes the
+    // element. For multi-dimensional access, the per-level reads
+    // chain naturally.
     if fc.is_const_data_block(chain.data_name) {
-        return Err(CompileError {
-            message: format!(
-                "const data fields do not support indexed access; declare `{}.{}` as `shared data` or `private data` for indexable arrays",
-                chain.data_name, chain.field
-            ),
-            span,
-        });
+        let cv = fc
+            .const_data_field_value(chain.data_name, chain.field)
+            .ok_or_else(|| CompileError {
+                message: format!(
+                    "unknown const data field: {}.{}",
+                    chain.data_name, chain.field
+                ),
+                span,
+            })?;
+        let idx = fc.add_const_value(cv);
+        fc.emit(Op::Const(idx));
+        for index_expr in chain.indices {
+            compile_expr(fc, index_expr)?;
+            fc.emit(Op::GetIndex);
+        }
+        return Ok(());
     }
     let base = fc
         .resolve_data_field(chain.data_name, chain.field)

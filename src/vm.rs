@@ -5706,6 +5706,100 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "text")]
+    fn ephemeral_bit_set_when_text_param_is_unused() {
+        // A `Text` parameter that the body never references
+        // cannot carry arena-resident data across the
+        // host-VM boundary. The verifier admits the module as
+        // ephemeral. This is the parameter-usage refinement of
+        // the dialogue-type rule.
+        let src = "fn main(unused_name: Text) -> Word { 42 }";
+        let tokens = tokenize(src).expect("lex");
+        let program = parse(&tokens).expect("parse");
+        let module = compile(&program).expect("compile");
+        assert!(
+            module.flags & crate::bytecode::FLAG_EPHEMERAL != 0,
+            "expected FLAG_EPHEMERAL set; unused Text param should not disqualify, flags = {:#04x}",
+            module.flags
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "text")]
+    fn ephemeral_bit_clear_when_text_param_is_used() {
+        // The same shape but the body actually references the
+        // Text param. The verifier conservatively assumes the
+        // param could flow back to the host through a yield or
+        // return and disqualifies the module from ephemerality.
+        // The body returns 0 unconditionally; the only purpose
+        // of referencing `name` is to mark it as used.
+        let src = "fn main(name: Text) -> Word { let _ignored = name; 0 }";
+        let tokens = tokenize(src).expect("lex");
+        let program = parse(&tokens).expect("parse");
+        let module = compile(&program).expect("compile");
+        assert!(
+            module.flags & crate::bytecode::FLAG_EPHEMERAL == 0,
+            "expected FLAG_EPHEMERAL clear; used Text param must disqualify, flags = {:#04x}",
+            module.flags
+        );
+    }
+
+    #[test]
+    fn const_data_tuple_initializer() {
+        // Tuple-typed const data field with a tuple initializer.
+        let src = "\
+            const data pt {\n\
+                origin: (Word, Word) = (3, 4),\n\
+            }\n\
+            fn main() -> Word { pt.origin.0 + pt.origin.1 }";
+        let tokens = tokenize(src).expect("lex");
+        let program = parse(&tokens).expect("parse");
+        let module = compile(&program).expect("compile");
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let mut vm = Vm::new(module, &arena).expect("verify");
+        match vm.call(&[]).expect("call") {
+            VmState::Finished(Value::Int(v)) => assert_eq!(v, 7),
+            other => panic!("expected Int(7), got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn const_data_array_initializer() {
+        // Array-typed const data field with an array initializer.
+        let src = "\
+            const data lut {\n\
+                table: [Word; 3] = [10, 20, 30],\n\
+            }\n\
+            fn main() -> Word { lut.table[0] + lut.table[1] + lut.table[2] }";
+        let tokens = tokenize(src).expect("lex");
+        let program = parse(&tokens).expect("parse");
+        let module = compile(&program).expect("compile");
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let mut vm = Vm::new(module, &arena).expect("verify");
+        match vm.call(&[]).expect("call") {
+            VmState::Finished(Value::Int(v)) => assert_eq!(v, 60),
+            other => panic!("expected Int(60), got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn const_data_array_length_mismatch_rejected() {
+        let src = "\
+            const data lut {\n\
+                table: [Word; 5] = [1, 2, 3],\n\
+            }\n\
+            fn main() -> Word { lut.table[0] }";
+        let tokens = tokenize(src).expect("lex");
+        let program = parse(&tokens).expect("parse");
+        let err = compile(&program).expect_err("compile should reject");
+        assert!(
+            err.message.contains("3 element") && err.message.contains("expected 5"),
+            "unexpected error: {}",
+            err.message
+        );
+    }
+
+    #[test]
     fn const_data_field_compiles_to_constant_load() {
         // `const data` fields bake their initializer into the
         // per-chunk constant pool. The runtime reads them through

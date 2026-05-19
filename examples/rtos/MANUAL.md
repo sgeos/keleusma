@@ -10,12 +10,13 @@ This manual covers hardware setup, the build matrix, the platform abstraction, t
 2. [Build matrix](#2-build-matrix)
 3. [The platform trait](#3-the-platform-trait)
 4. [The Status protocol](#4-the-status-protocol)
-5. [Porting to a new board](#5-porting-to-a-new-board)
-6. [Memory budget](#6-memory-budget)
-7. [Defmt log interpretation](#7-defmt-log-interpretation)
-8. [Troubleshooting](#8-troubleshooting)
-9. [Verified behaviour](#9-verified-behaviour)
-10. [Roadmap](#10-roadmap)
+5. [Data partitioning: shared, private, and const](#5-data-partitioning-shared-private-and-const)
+6. [Porting to a new board](#6-porting-to-a-new-board)
+7. [Memory budget](#7-memory-budget)
+8. [Defmt log interpretation](#8-defmt-log-interpretation)
+9. [Troubleshooting](#9-troubleshooting)
+10. [Verified behaviour](#10-verified-behaviour)
+11. [Roadmap](#11-roadmap)
 
 ## 1. Hardware requirements
 
@@ -221,7 +222,58 @@ match status {
 };
 ```
 
-## 5. Porting to a new board
+## 5. Data partitioning: shared, private, and const
+
+Keleusma V0.2 partitions a script's persistent data into three classes. Each class has a different host visibility, a different storage location, and a different lifecycle. The microkernel's heartbeat task demonstrates all three.
+
+### Shared data
+
+```keleusma
+data state {
+    count: Word,
+}
+```
+
+Equivalent to bare `data` in earlier versions. Shared data is host-visible through `Vm::set_data(slot, value)` and `Vm::get_data(slot)`. Storage is owned by the Vm. Survives RESET. The host populates initial values before `Vm::call`; the script reads and writes the same slots through `state.field` syntax.
+
+### Private data
+
+```keleusma
+private data state {
+    counter: Word,
+}
+```
+
+Private data lives in the arena's persistent region. The host has no API access; `Vm::set_data` and `Vm::get_data` reject private slot indices. The script reads and writes through `state.field` exactly like shared data. Survives RESET. The host must size the arena's persistent capacity before constructing the VM:
+
+```rust
+arena.resize_persistent(vm::required_persistent_capacity_for(&module))?;
+let vm = Vm::new(module, &arena)?;
+```
+
+The compiler rejects modules whose private data is never written; the diagnostic recommends `const data` as the rewrite.
+
+### Const data
+
+```keleusma
+const data cfg {
+    period_ms: Word = 5000,
+}
+```
+
+Compile-time constants. Field reads compile to constant loads in the per-chunk constant pool; field writes are compile errors. No runtime data-segment slot is allocated. Supports scalar primitives (`Word`, `Byte`, `Float`, `Bool`, `Text`, unit) and composite tuple and array literals. The heartbeat task uses `const data cfg { period_ms: Word = 5000 }` so the period is baked into the bytecode rather than supplied by the host.
+
+### Choosing the right class
+
+| Need | Class |
+|------|-------|
+| Host wants to read or write the value at runtime | shared |
+| Script wants persistent storage hidden from the host | private |
+| Value is fixed at compile time and never changes | const |
+
+The compiler enforces these rules. Mixing classes is permitted (one block of each visibility per module under R28).
+
+## 6. Porting to a new board
 
 The three-layer split (kernel core, platform impl, entry binary) makes the port mechanical. The kernel core does not change.
 
@@ -239,7 +291,7 @@ The three-layer split (kernel core, platform impl, entry binary) makes the port 
 
 `gpio_set(pin: u8, high: bool)` takes a pin index but the platform decides which underlying handle to drive. The N6 impl maps pin 13 to PG10 and warns on any other index. A more elaborate impl can map a range of indices to a table of `Output<'static>` handles installed via `install`. The natives layer only validates `pin < RESOURCES.gpio_pin_count`; the platform's pin-to-handle resolution is its own responsibility.
 
-## 6. Memory budget
+## 7. Memory budget
 
 ### N6 layout
 
@@ -278,7 +330,7 @@ If you migrate scripts that build large temporary arrays, raise `TASK_ARENA_CAPA
 
 The N6 binary therefore wraps `LlffHeap` in a `ZeroSizeOk` adapter that intercepts zero-byte allocations on every `GlobalAlloc` entry point (`alloc`, `alloc_zeroed`, `realloc`, `dealloc`) and returns `layout.align() as *mut u8` rather than reaching the underlying allocator. The wrapper is a few dozen lines and adds no measurable runtime cost.
 
-## 7. Defmt log interpretation
+## 8. Defmt log interpretation
 
 A clean run on the N6 looks like this:
 
@@ -307,7 +359,7 @@ What is **not** logged:
 
 To capture more, add `defmt::info!` calls inside `Stm32N6570DkPlatform::gpio_set` or extend the LED script to call `host::log` on each toggle.
 
-## 8. Troubleshooting
+## 9. Troubleshooting
 
 ### `SwdApWdataError` warnings during flash
 
@@ -344,7 +396,7 @@ panicked at 'When the HSE is used as cpu/system bus clock or clock source for an
 
 The bare-metal binary tried to reconfigure a clock source that's still in use. The default `embassy_stm32::init(Default::default())` configuration should not trip this; the panic implies a custom `Config` that disables a clock in use. Revert to `Default::default()` and add custom clock setup only after the demonstrator runs end-to-end.
 
-## 9. Verified behaviour
+## 10. Verified behaviour
 
 Verified on 2026-05-18 against an STM32N6570-DK.
 
@@ -360,7 +412,7 @@ Verified on 2026-05-18 against an STM32N6570-DK.
 
 The LED on the board is presumed to be toggling at 2 Hz; verification of the physical edge requires visual inspection at the bench.
 
-## 10. Roadmap
+## 11. Roadmap
 
 Items left for follow-up work. None are blockers for the current state of the demonstrator.
 

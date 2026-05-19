@@ -41,7 +41,7 @@ Structural verification at the bytecode level is implemented. See [TARGET_ISA.md
 ````
 fn  yield  loop  break  let  for  in  if  else  match
 use  struct  enum  trait  impl  data  true  false  as  when
-not  and  or  pure
+not  and  or  pure  shared  private  const  ephemeral
 ````
 
 All keywords are reserved and cannot be used as identifiers.
@@ -754,8 +754,18 @@ impl_method     = 'fn' lower_ident '(' [ param_list ] ')' '->' type_expr
                   '{' block '}'
 
 (* Data Declarations *)
-data_decl       = 'data' lower_ident '{' { data_field_decl } '}'
-data_field_decl = lower_ident ':' type_expr
+data_decl          = [ visibility_mod ] 'data' lower_ident
+                     '{' { data_field_decl } '}'
+visibility_mod     = 'shared' | 'private' | 'const'
+data_field_decl    = lower_ident ':' type_expr [ '=' const_initializer ]
+const_initializer  = scalar_literal
+                   | '(' const_initializer { ',' const_initializer } ')'
+                   | '[' [ const_initializer { ',' const_initializer } ] ']'
+scalar_literal     = [ '-' ] integer_lit
+                   | [ '-' ] float_lit
+                   | 'true' | 'false'
+                   | string_lit
+                   | '(' ')'
 
 (* Types *)
 type_expr       = prim_type | named_type | tuple_type | array_type | option_type
@@ -766,7 +776,8 @@ array_type      = '[' type_expr ';' integer_lit ']'
 option_type     = 'Option' '<' type_expr '>'
 
 (* Functions *)
-function_def    = fn_def | yield_def | loop_def
+(* The `ephemeral` modifier is permitted only on the entry point. *)
+function_def    = [ 'ephemeral' ] (fn_def | yield_def | loop_def)
 fn_def          = 'fn' lower_ident [ type_params ] '(' [ param_list ] ')' '->' type_expr
                   [ 'when' guard_expr ] '{' block '}'
 yield_def       = 'yield' lower_ident [ type_params ] '(' [ param_list ] ')' '->' type_expr

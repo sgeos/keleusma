@@ -467,9 +467,9 @@ impl<'a> Parser<'a> {
             // error message.
             let mut end = ftype.span();
             let initializer = if self.eat(&TokenKind::Eq) {
-                let lit = self.parse_data_initializer_literal()?;
-                end = merge_spans(end, lit.1);
-                Some(lit.0)
+                let init = self.parse_const_initializer()?;
+                end = merge_spans(end, init.1);
+                Some(init.0)
             } else {
                 None
             };
@@ -491,13 +491,91 @@ impl<'a> Parser<'a> {
         })
     }
 
-    /// Parse a compile-time literal initializer following `=` in a
-    /// `const data` field. Accepts integer, float, boolean, string,
-    /// and unit literals plus the unary minus prefix on numeric
-    /// literals. Complex initializers (tuples, arrays, struct
-    /// literals) are deferred; the current grammar restricts
-    /// const-data fields to scalar primitives.
-    fn parse_data_initializer_literal(&mut self) -> Result<(Literal, Span), ParseError> {
+    /// Parse a compile-time initializer following `=` in a
+    /// `const data` field. Accepts scalar literals (integer,
+    /// float, boolean, string, unit, plus optional leading
+    /// minus on numerics) and composite forms `(init, init, ...)`
+    /// for tuples and `[init, init, ...]` for arrays. Composites
+    /// nest. Struct and enum initializers are reserved for a
+    /// future iteration.
+    fn parse_const_initializer(
+        &mut self,
+    ) -> Result<(ConstInitializer, Span), ParseError> {
+        let start = self.peek_span();
+        // Array literal `[init, init, ...]`.
+        if self.at(&TokenKind::LBracket) {
+            self.bump();
+            let mut elements: Vec<ConstInitializer> = Vec::new();
+            if !self.at(&TokenKind::RBracket) {
+                let (first, _) = self.parse_const_initializer()?;
+                elements.push(first);
+                while self.eat(&TokenKind::Comma) {
+                    if self.at(&TokenKind::RBracket) {
+                        break;
+                    }
+                    let (next, _) = self.parse_const_initializer()?;
+                    elements.push(next);
+                }
+            }
+            let end = self.expect(&TokenKind::RBracket)?;
+            return Ok((ConstInitializer::Array(elements), merge_spans(start, end)));
+        }
+        // Tuple literal `(init, init, ...)` or unit literal `()`.
+        // The scalar fast-path also accepts `()`; detect tuple by
+        // peeking for a comma inside.
+        if self.at(&TokenKind::LParen) {
+            // Lookahead: distinguish unit `()` from a tuple. Save
+            // the position and try to parse a tuple form; if we
+            // see RParen immediately, treat as unit literal.
+            let lparen_span = self.peek_span();
+            self.bump();
+            if self.at(&TokenKind::RParen) {
+                let end = self.expect(&TokenKind::RParen)?;
+                return Ok((
+                    ConstInitializer::Scalar(Literal::Unit),
+                    merge_spans(lparen_span, end),
+                ));
+            }
+            let mut elements: Vec<ConstInitializer> = Vec::new();
+            let (first, _) = self.parse_const_initializer()?;
+            elements.push(first);
+            // A single element followed by `)` is a parenthesised
+            // scalar; conventionally treat as Scalar. With a
+            // trailing comma the user signalled a tuple.
+            let saw_comma = self.eat(&TokenKind::Comma);
+            if saw_comma {
+                while !self.at(&TokenKind::RParen) {
+                    let (next, _) = self.parse_const_initializer()?;
+                    elements.push(next);
+                    if !self.eat(&TokenKind::Comma) {
+                        break;
+                    }
+                }
+            }
+            let end = self.expect(&TokenKind::RParen)?;
+            if !saw_comma {
+                // Single parenthesised initializer is its inner
+                // form, not a 1-tuple. Matches Rust's `(x)`
+                // semantics.
+                return Ok((
+                    elements.into_iter().next().expect("single element present"),
+                    merge_spans(lparen_span, end),
+                ));
+            }
+            return Ok((
+                ConstInitializer::Tuple(elements),
+                merge_spans(lparen_span, end),
+            ));
+        }
+        // Scalar literal.
+        let (lit, span) = self.parse_scalar_literal()?;
+        Ok((ConstInitializer::Scalar(lit), span))
+    }
+
+    /// Parse a scalar literal value usable as a const initializer.
+    /// Accepts integer, float, boolean, string, and unit literals
+    /// plus a leading unary minus on numeric literals.
+    fn parse_scalar_literal(&mut self) -> Result<(Literal, Span), ParseError> {
         let start = self.peek_span();
         // Optional leading `-` on numeric literals.
         let negate = self.at(&TokenKind::Minus);
