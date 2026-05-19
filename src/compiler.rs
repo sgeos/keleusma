@@ -2101,6 +2101,7 @@ impl ClosureHoister<'_> {
             return_type: return_type.clone().unwrap_or(TypeExpr::Unit(span)),
             guard: None,
             body: body_owned,
+            ephemeral: false,
             span,
         };
         self.out.push(synth);
@@ -2196,6 +2197,7 @@ impl ClosureHoister<'_> {
             return_type: return_type.clone().unwrap_or(TypeExpr::Unit(span)),
             guard: None,
             body: body_owned,
+            ephemeral: false,
             span,
         };
         self.out.push(synth);

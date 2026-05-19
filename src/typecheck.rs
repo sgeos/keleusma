@@ -1033,6 +1033,20 @@ pub fn check(program: &mut Program) -> Result<(), TypeError> {
 }
 
 fn check_function(ctx: &mut Ctx, func: &FunctionDef) -> Result<(), TypeError> {
+    // The `ephemeral` modifier is only meaningful on the entry
+    // point. The verifier's ephemerality proof is a whole-module
+    // property; attaching the modifier to a helper function is a
+    // category error. Reject here so the compile pipeline surfaces
+    // the mistake at the source span.
+    if func.ephemeral && func.name != "main" {
+        return Err(TypeError::new(
+            alloc::format!(
+                "`ephemeral` modifier only permitted on the entry point `main`; remove it from `{}`",
+                func.name
+            ),
+            func.span,
+        ));
+    }
     // Snapshot the substitution at function entry so the per-function
     // resolution does not pollute later functions with this function's
     // local type variables. The vargen counter continues monotonically
@@ -3497,5 +3511,30 @@ mod tests {
             "unexpected error message: {}",
             err.message,
         );
+    }
+
+    #[test]
+    fn ephemeral_modifier_on_non_entry_function_rejected() {
+        // The `ephemeral` modifier is a whole-module property and
+        // belongs on the entry point only. Attaching it to a helper
+        // function is a category error.
+        let err = check_src(
+            "ephemeral fn helper() -> Word { 0 }\n\
+             fn main() -> Word { helper() }",
+        )
+        .unwrap_err();
+        assert!(
+            err.message.contains("ephemeral") && err.message.contains("main"),
+            "unexpected error message: {}",
+            err.message,
+        );
+    }
+
+    #[test]
+    fn ephemeral_modifier_on_main_accepted() {
+        // The entry point may carry the modifier. The type checker
+        // accepts; the verifier (in a later phase) will check the
+        // ephemerality proof.
+        check_src("ephemeral fn main() -> Word { 0 }").expect("typecheck accepts ephemeral main");
     }
 }

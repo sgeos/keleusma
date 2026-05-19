@@ -47,6 +47,21 @@ pub enum TokenKind {
     Or,
     Pure,
     Data,
+    /// `shared` modifier on a `data` declaration. Shared data is
+    /// host-visible through `Vm::set_data`/`Vm::get_data` and persists
+    /// across resets. Equivalent to today's bare `data` declaration;
+    /// the modifier is permitted explicitly for symmetry with
+    /// `private` and for self-documenting code.
+    Shared,
+    /// `private` modifier on a `data` declaration. Private data lives
+    /// in the arena's persistent region and is not exposed through
+    /// the host API. Persists across resets.
+    Private,
+    /// `ephemeral` modifier on an entry-point function declaration.
+    /// Asserts the module is provably ephemeral as defined in the
+    /// verifier rule. The compile pipeline errors when the assertion
+    /// does not hold.
+    Ephemeral,
     Trait,
     Impl,
 
@@ -135,6 +150,9 @@ impl TokenKind {
             "or" => Some(TokenKind::Or),
             "pure" => Some(TokenKind::Pure),
             "data" => Some(TokenKind::Data),
+            "shared" => Some(TokenKind::Shared),
+            "private" => Some(TokenKind::Private),
+            "ephemeral" => Some(TokenKind::Ephemeral),
             "trait" => Some(TokenKind::Trait),
             "impl" => Some(TokenKind::Impl),
             _ => None,

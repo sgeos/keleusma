@@ -74,7 +74,23 @@ pub struct ImplBlock {
 pub struct DataDecl {
     pub name: String,
     pub fields: Vec<DataFieldDecl>,
+    /// Visibility of the data block to the host. `Shared` is the
+    /// default and matches today's behaviour. `Private` data lives in
+    /// the arena's persistent region and is not exposed through the
+    /// host API.
+    pub visibility: DataVisibility,
     pub span: Span,
+}
+
+/// Visibility of a [`DataDecl`] to the host.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DataVisibility {
+    /// Shared with the host. Default when no modifier is present.
+    /// Host reads and writes through `Vm::set_data` and `Vm::get_data`.
+    Shared,
+    /// Private to the script. Lives in the arena's persistent region.
+    /// No host API. Persists across resets.
+    Private,
 }
 
 /// A field in a data block declaration.
@@ -197,6 +213,16 @@ pub struct FunctionDef {
     pub return_type: TypeExpr,
     pub guard: Option<Box<Expr>>,
     pub body: Block,
+    /// True when the source declared the function with the
+    /// `ephemeral` modifier. The modifier is permitted only on the
+    /// entry point (`fn main`, `yield main`, `loop main`). The
+    /// compile pipeline rejects the function if the verifier cannot
+    /// prove ephemerality, and the verifier sets
+    /// [`crate::bytecode::FLAG_EPHEMERAL`] on the resulting module.
+    /// For non-entry functions or when the modifier is absent, the
+    /// field is `false`; the verifier may still infer ephemerality
+    /// for the module and set the header bit anyway.
+    pub ephemeral: bool,
     pub span: Span,
 }
 

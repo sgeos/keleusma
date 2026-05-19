@@ -242,10 +242,13 @@ impl<'a> Parser<'a> {
             match self.peek() {
                 TokenKind::Struct => types.push(TypeDef::Struct(self.parse_struct_def()?)),
                 TokenKind::Enum => types.push(TypeDef::Enum(self.parse_enum_def()?)),
-                TokenKind::Data => data_decls.push(self.parse_data_decl()?),
+                TokenKind::Data | TokenKind::Shared | TokenKind::Private => {
+                    data_decls.push(self.parse_data_decl()?);
+                }
                 TokenKind::Fn | TokenKind::Yield | TokenKind::Loop | TokenKind::Pure => {
                     functions.push(self.parse_function_def()?);
                 }
+                TokenKind::Ephemeral => functions.push(self.parse_function_def()?),
                 TokenKind::Trait => traits.push(self.parse_trait_def()?),
                 TokenKind::Impl => impls.push(self.parse_impl_block()?),
                 _ => {
@@ -418,7 +421,25 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_data_decl(&mut self) -> Result<DataDecl, ParseError> {
-        let start = self.expect(&TokenKind::Data)?;
+        // Optional visibility modifier. `shared data ...` and `data ...`
+        // are equivalent; `private data ...` marks the block as
+        // host-invisible and arena-resident.
+        let (visibility, start) = match self.peek() {
+            TokenKind::Shared => {
+                let s = self.bump();
+                self.expect(&TokenKind::Data)?;
+                (DataVisibility::Shared, s)
+            }
+            TokenKind::Private => {
+                let s = self.bump();
+                self.expect(&TokenKind::Data)?;
+                (DataVisibility::Private, s)
+            }
+            _ => {
+                let s = self.expect(&TokenKind::Data)?;
+                (DataVisibility::Shared, s)
+            }
+        };
         let (name, _) = self.expect_lower_ident()?;
         self.data_names.insert(name.clone());
         self.expect(&TokenKind::LBrace)?;
@@ -441,6 +462,7 @@ impl<'a> Parser<'a> {
         Ok(DataDecl {
             name,
             fields,
+            visibility,
             span: merge_spans(start, end),
         })
     }
@@ -561,6 +583,14 @@ impl<'a> Parser<'a> {
     fn parse_function_def(&mut self) -> Result<FunctionDef, ParseError> {
         let start = self.peek_span();
 
+        // Optional `ephemeral` modifier. Asserts that the function is
+        // the entry point and that the verifier can prove the module
+        // ephemeral. Permitted on `fn main`, `yield main`, and
+        // `loop main`. The type checker rejects the modifier on any
+        // non-entry function; the verifier rejects the program if the
+        // proof fails.
+        let ephemeral = self.eat(&TokenKind::Ephemeral);
+
         // Optional `pure` annotation.
         let _pure = self.eat(&TokenKind::Pure);
 
@@ -577,7 +607,13 @@ impl<'a> Parser<'a> {
                 self.bump();
                 FunctionCategory::Loop
             }
-            _ => return Err(self.error("expected 'fn', 'yield', or 'loop'")),
+            _ => {
+                return Err(self.error(if ephemeral {
+                    "expected 'fn', 'yield', or 'loop' after 'ephemeral'"
+                } else {
+                    "expected 'fn', 'yield', or 'loop'"
+                }));
+            }
         };
 
         let (name, _) = self.expect_lower_ident()?;
@@ -635,6 +671,7 @@ impl<'a> Parser<'a> {
             return_type,
             guard,
             body,
+            ephemeral,
             span: merge_spans(start, end),
         })
     }
@@ -2533,9 +2570,62 @@ mod tests {
         let program = parse_str(src).unwrap();
         assert_eq!(program.data_decls.len(), 1);
         assert_eq!(program.data_decls[0].name, "ctx");
+        assert_eq!(program.data_decls[0].visibility, DataVisibility::Shared);
         assert_eq!(program.data_decls[0].fields.len(), 2);
         assert_eq!(program.data_decls[0].fields[0].name, "score");
         assert_eq!(program.data_decls[0].fields[1].name, "health");
+    }
+
+    #[test]
+    fn parse_shared_data_decl_explicit() {
+        let src = "\
+            shared data ctx {\n\
+                score: Word,\n\
+            }\n\
+            fn main() -> Word { ctx.score }";
+        let program = parse_str(src).unwrap();
+        assert_eq!(program.data_decls[0].visibility, DataVisibility::Shared);
+        assert_eq!(program.data_decls[0].name, "ctx");
+    }
+
+    #[test]
+    fn parse_private_data_decl() {
+        let src = "\
+            private data state {\n\
+                counter: Word,\n\
+            }\n\
+            fn main() -> Word { state.counter }";
+        let program = parse_str(src).unwrap();
+        assert_eq!(program.data_decls.len(), 1);
+        assert_eq!(program.data_decls[0].name, "state");
+        assert_eq!(program.data_decls[0].visibility, DataVisibility::Private);
+        assert_eq!(program.data_decls[0].fields.len(), 1);
+    }
+
+    #[test]
+    fn parse_ephemeral_fn_main() {
+        let src = "\
+            ephemeral fn main() -> Word { 0 }";
+        let program = parse_str(src).unwrap();
+        assert_eq!(program.functions.len(), 1);
+        assert!(program.functions[0].ephemeral);
+        assert_eq!(program.functions[0].category, FunctionCategory::Fn);
+    }
+
+    #[test]
+    fn parse_ephemeral_loop_main() {
+        let src = "\
+            ephemeral loop main(_r: Word) -> (Word, Word) { yield (0, 0); (0, 0) }";
+        let program = parse_str(src).unwrap();
+        assert!(program.functions[0].ephemeral);
+        assert_eq!(program.functions[0].category, FunctionCategory::Loop);
+    }
+
+    #[test]
+    fn parse_non_ephemeral_function_defaults_to_false() {
+        let src = "fn main() -> Word { 0 }";
+        let program = parse_str(src).unwrap();
+        assert!(!program.functions[0].ephemeral);
     }
 
     #[test]

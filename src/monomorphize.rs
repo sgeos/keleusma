@@ -1051,6 +1051,7 @@ fn specialize_function(
         return_type,
         guard: func.guard.clone(),
         body,
+        ephemeral: func.ephemeral,
         span: func.span,
     }
 }
