@@ -4,7 +4,7 @@
 //! The `include_bytes!` macro returns `&'static [u8; N]` whose alignment
 //! is one byte. The zero-copy execution path requires the rkyv body to
 //! be at an 8-byte-aligned address within the slice. The wire format
-//! places the body at offset 16, so 8-byte body alignment follows from
+//! places the body at offset 32, so 8-byte body alignment follows from
 //! 8-byte alignment of the slice base. The `repr(C, align(16))`
 //! wrapper around the included array forces 16-byte alignment of the
 //! base, which satisfies the 8-byte body alignment by construction.
@@ -31,10 +31,10 @@ use keleusma::{Value, vm::Vm, vm::VmState};
 /// Length of the included bytecode binary. Hardcoded to match the
 /// file size. If the wire format changes and the file size changes,
 /// regenerate the binary and update this constant.
-const BYTECODE_LEN: usize = 292;
+const BYTECODE_LEN: usize = 312;
 
 /// Align the included byte array to 16 bytes so the rkyv body at
-/// offset 16 is 8-byte aligned. The body alignment is required by
+/// offset 32 is 8-byte aligned. The body alignment is required by
 /// the zero-copy execution path.
 #[repr(C, align(16))]
 struct AlignedBytecode([u8; BYTECODE_LEN]);
@@ -60,8 +60,8 @@ fn main() {
     println!("buffer len {} bytes", BYTECODE.0.len());
     println!("buffer base address 0x{:x}", BYTECODE.0.as_ptr() as usize);
     println!(
-        "body offset 16 address 0x{:x} (expected 8-byte alignment)",
-        BYTECODE.0.as_ptr() as usize + 16
+        "body offset 32 address 0x{:x} (expected 8-byte alignment)",
+        BYTECODE.0.as_ptr() as usize + 32
     );
 
     match vm.call(&[]) {

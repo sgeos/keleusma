@@ -3818,17 +3818,20 @@ mod tests {
 
     #[test]
     fn bytecode_rejects_bad_magic() {
-        // Pad to the minimum framing length (header 24 + footer 4 = 28)
+        // Pad to the minimum framing length (header 32 + footer 4 = 36)
         // so the slice passes the truncation check and reaches the
         // magic check.
         let bytes = alloc::vec![
             b'X', b'X', b'X', b'X', // magic
             0x08, 0x00, // version
-            0x1C, 0x00, 0x00, 0x00, // length = 28
+            0x24, 0x00, 0x00, 0x00, // length = 36
             6, 6, 6, // word_bits_log2, addr_bits_log2, float_bits_log2
-            0x00, 0x00, 0x00, // reserved
+            0x00, // flags
+            0x00, 0x00, // reserved
             0x00, 0x00, 0x00, 0x00, // wcet_cycles
             0x00, 0x00, 0x00, 0x00, // wcmu_bytes
+            0x00, 0x00, 0x00, 0x00, // shared_data_bytes
+            0x00, 0x00, 0x00, 0x00, // private_data_bytes
             0x00, 0x00, 0x00, 0x00, // CRC placeholder
         ];
         match Module::from_bytes(&bytes) {
@@ -3896,26 +3899,31 @@ mod tests {
         //
         // Source: `fn main() -> Word { 1 }`
         //
-        // Layout breakdown:
+        // Layout breakdown (header expanded to 32 bytes in V0.2 for
+        // the flags byte and the two data-byte-count fields):
         //   bytes[0..4]    = b"KELE"               magic
-        //   bytes[4..6]    = 0x02 0x00              version 2 (u16 LE)
-        //   bytes[6..10]   = 0xA8 0x00 0x00 0x00    length 168 (u32 LE)
+        //   bytes[4..6]    = 0x01 0x00              version 1 (u16 LE)
+        //   bytes[6..10]   = 0xBC 0x00 0x00 0x00    length 188 (u32 LE)
         //   bytes[10]      = 0x06                   word_bits_log2 = 6 (64-bit)
         //   bytes[11]      = 0x06                   addr_bits_log2 = 6 (64-bit)
         //   bytes[12]      = 0x06                   float_bits_log2 = 6 (f64)
-        //   bytes[13..16]  = 0x00 0x00 0x00         reserved
+        //   bytes[13]      = 0x00                   flags = 0
+        //   bytes[14..16]  = 0x00 0x00              reserved
         //   bytes[16..20]  = 0x00 0x00 0x00 0x00    wcet_cycles = 0 (auto)
         //   bytes[20..24]  = 0x00 0x00 0x00 0x00    wcmu_bytes = 0 (auto)
-        //   bytes[24..164] = rkyv body (includes empty param_types vec)
-        //   bytes[164..168] = CRC-32 (u32 LE)
+        //   bytes[24..28]  = 0x00 0x00 0x00 0x00    shared_data_bytes = 0
+        //   bytes[28..32]  = 0x00 0x00 0x00 0x00    private_data_bytes = 0
+        //   bytes[32..184] = rkyv body (includes empty param_types vec)
+        //   bytes[184..188] = CRC-32 (u32 LE)
         let expected: alloc::vec::Vec<u8> = alloc::vec![
-            75, 69, 76, 69, 2, 0, 168, 0, 0, 0, 6, 6, 6, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-            0, 0, 0, 0, 0, 39, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0,
-            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 109, 97, 105, 110, 255, 255, 255, 255,
-            200, 255, 255, 255, 2, 0, 0, 0, 208, 255, 255, 255, 1, 0, 0, 0, 232, 255, 255, 255, 0,
-            0, 0, 0, 0, 0, 0, 0, 220, 255, 255, 255, 0, 0, 0, 0, 212, 255, 255, 255, 1, 0, 0, 0,
-            248, 255, 255, 255, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-            0, 0, 6, 6, 6, 0, 0, 0, 0, 0, 0, 0, 0, 0, 85, 55, 184, 8,
+            75, 69, 76, 69, 1, 0, 188, 0, 0, 0, 6, 6, 6, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 39, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0,
+            1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 109, 97, 105,
+            110, 255, 255, 255, 255, 200, 255, 255, 255, 2, 0, 0, 0, 208, 255, 255, 255, 1, 0, 0,
+            0, 232, 255, 255, 255, 0, 0, 0, 0, 0, 0, 0, 0, 220, 255, 255, 255, 0, 0, 0, 0, 212,
+            255, 255, 255, 1, 0, 0, 0, 248, 255, 255, 255, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 6, 6, 6, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 69, 160, 51, 160,
         ];
         let src = "fn main() -> Word { 1 }";
         let tokens = tokenize(src).expect("lex");
@@ -4330,6 +4338,9 @@ mod tests {
             float_bits_log2: crate::bytecode::RUNTIME_FLOAT_BITS_LOG2,
             wcet_cycles: 0,
             wcmu_bytes: 0,
+            flags: 0,
+            shared_data_bytes: 0,
+            private_data_bytes: 0,
         };
         // The unchecked constructor still rejects on structural grounds.
         let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);

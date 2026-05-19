@@ -1272,14 +1272,57 @@ pub struct Module {
     /// [`Module::wcet_cycles`]. Total of stack and heap regions.
     /// Mirrored in the framing header.
     pub wcmu_bytes: u32,
+    /// Bit flags describing static properties of the module.
+    /// Currently defined bits.
+    ///
+    /// - `0x01` (`FLAG_EPHEMERAL`). The module is provably
+    ///   ephemeral: at every yield or return that crosses the
+    ///   host-VM boundary, no arena-resident value is observed,
+    ///   and at every resume or entry no value loaded from arena
+    ///   memory allocated prior to that resume or entry is read.
+    ///   Hosts that observe this bit may reuse a single arena
+    ///   across many modules of this kind, sized to the largest
+    ///   module's WCMU.
+    ///
+    /// Unused bits are reserved for future declarations and must
+    /// be zero. The runtime treats any unrecognised bits as
+    /// reserved and ignores them.
+    ///
+    /// Mirrored in the framing header.
+    pub flags: u8,
+    /// Bytes of shared data declared by this module. Shared
+    /// data lives in the Vm's owned slot storage and is
+    /// host-visible through `Vm::set_data` and `Vm::get_data`.
+    /// Survives RESET. Mirrored in the framing header.
+    pub shared_data_bytes: u32,
+    /// Bytes of private data declared by this module. Private
+    /// data lives in the arena's persistent (`.data`) region
+    /// and is not exposed through the host API. Survives
+    /// RESET. The host sizes its arena's persistent capacity to
+    /// match this value before loading the module. Mirrored in
+    /// the framing header.
+    pub private_data_bytes: u32,
 }
+
+/// Bit flags defined for [`Module::flags`].
+///
+/// See [`Module::flags`] for the semantic description of each bit.
+/// Unused bits are reserved.
+pub const FLAG_EPHEMERAL: u8 = 0x01;
 
 /// Magic prefix identifying serialized Keleusma bytecode (`KELE`).
 pub const BYTECODE_MAGIC: [u8; 4] = *b"KELE";
 
 /// Wire format version for serialized bytecode. Bytecode produced under a
 /// different version is rejected at load time.
-pub const BYTECODE_VERSION: u16 = 2;
+///
+/// V0.2 development releases briefly used version 2 before this crate
+/// achieved public adoption; the version was rolled back to 1 when the
+/// header was extended with the flags byte and the shared and private
+/// data byte counts. Bytecode produced under any earlier development
+/// build is rejected at load time on header-shape mismatch through the
+/// CRC trailer.
+pub const BYTECODE_VERSION: u16 = 1;
 
 /// Word size in bits assumed by this runtime build, encoded as the
 /// base-2 exponent. Actual width in bits is `1 << RUNTIME_WORD_BITS_LOG2`.
@@ -1310,24 +1353,42 @@ pub const RUNTIME_FLOAT_BITS_LOG2: u8 = 6;
 /// - bytes 10..11: word_bits_log2 (u8). Actual width is `1 << value`.
 /// - bytes 11..12: addr_bits_log2 (u8). Actual width is `1 << value`.
 /// - bytes 12..13: float_bits_log2 (u8). Actual width is `1 << value`.
-/// - bytes 13..16: reserved (zero), preserved for backward layout.
+/// - bytes 13..14: flags (u8). Bit 0 is `FLAG_EPHEMERAL`. Other
+///   bits reserved and must be zero.
+/// - bytes 14..16: reserved (zero), preserved for backward layout.
 /// - bytes 16..20: declared WCET in pipelined cycles per Stream-to-Reset
 ///   slice (u32 little-endian). `0` means auto (runtime computes).
 ///   `u32::MAX` means overflow (rejected at safe `Vm::new`).
 /// - bytes 20..24: declared WCMU in bytes per Stream-to-Reset slice
 ///   (u32 little-endian). Same `0`/`u32::MAX` conventions.
+/// - bytes 24..28: shared data bytes (u32 little-endian).
+/// - bytes 28..32: private data bytes (u32 little-endian).
 ///
-/// 24 bytes is divisible by 8, so the rkyv body begins at an
+/// 32 bytes is divisible by 8, so the rkyv body begins at an
 /// 8-byte-aligned offset within the buffer when the buffer base is
 /// itself 8-byte-aligned. Required for in-place access through
 /// `rkyv::access`.
-const HEADER_LEN: usize = 24;
+const HEADER_LEN: usize = 32;
+
+/// Offset of the flags byte in the framing header. Read by the
+/// verifier passes that populate the header fields and by hosts
+/// inspecting the bit set without decoding the body.
+#[allow(dead_code)]
+const HEADER_FLAGS_OFFSET: usize = 13;
 
 /// Offset of the declared WCET field in the framing header.
 const HEADER_WCET_OFFSET: usize = 16;
 
 /// Offset of the declared WCMU field in the framing header.
 const HEADER_WCMU_OFFSET: usize = 20;
+
+/// Offset of the shared data bytes field in the framing header.
+#[allow(dead_code)]
+const HEADER_SHARED_DATA_OFFSET: usize = 24;
+
+/// Offset of the private data bytes field in the framing header.
+#[allow(dead_code)]
+const HEADER_PRIVATE_DATA_OFFSET: usize = 28;
 
 /// Footer length in bytes (4-byte little-endian CRC-32).
 const FOOTER_LEN: usize = 4;
@@ -1541,12 +1602,15 @@ impl Module {
         buf.push(self.word_bits_log2);
         buf.push(self.addr_bits_log2);
         buf.push(self.float_bits_log2);
-        // Reserved bytes preserved for backward layout. The header
-        // grows past offset 16 with the declared WCET and WCMU fields.
-        buf.extend_from_slice(&[0u8; 3]);
+        // Flags byte. Bit 0 is `FLAG_EPHEMERAL`. Other bits reserved.
+        buf.push(self.flags);
+        // Reserved bytes preserved for future layout extensions.
+        buf.extend_from_slice(&[0u8; 2]);
         buf.extend_from_slice(&self.wcet_cycles.to_le_bytes());
         buf.extend_from_slice(&self.wcmu_bytes.to_le_bytes());
-        // Total header width is 24 bytes, divisible by 8, so the rkyv
+        buf.extend_from_slice(&self.shared_data_bytes.to_le_bytes());
+        buf.extend_from_slice(&self.private_data_bytes.to_le_bytes());
+        // Total header width is 32 bytes, divisible by 8, so the rkyv
         // body begins at an 8-byte-aligned offset.
         buf.extend_from_slice(&body);
         let crc = crc32(&buf);

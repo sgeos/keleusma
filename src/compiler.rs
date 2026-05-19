@@ -609,6 +609,15 @@ pub fn compile_with_target(
         // Populated below after structural verification succeeds.
         wcet_cycles: 0,
         wcmu_bytes: 0,
+        // Flags and per-region data byte counts are populated by
+        // the verifier when the `verify` feature is on. Phase 3
+        // and later land the language surface (`shared`,
+        // `private`, `ephemeral`) that drives the values; until
+        // then the fields stay at zero and the runtime treats
+        // them as auto.
+        flags: 0,
+        shared_data_bytes: 0,
+        private_data_bytes: 0,
     };
 
     // Compile-time defense-in-depth for the WCET and WCMU contract.

@@ -1521,6 +1521,9 @@ mod tests {
             float_bits_log2: crate::bytecode::RUNTIME_FLOAT_BITS_LOG2,
             wcet_cycles: 0,
             wcmu_bytes: 0,
+            flags: 0,
+            shared_data_bytes: 0,
+            private_data_bytes: 0,
         }
     }
 
@@ -2129,6 +2132,9 @@ mod tests {
             float_bits_log2: crate::bytecode::RUNTIME_FLOAT_BITS_LOG2,
             wcet_cycles: 0,
             wcmu_bytes: 0,
+            flags: 0,
+            shared_data_bytes: 0,
+            private_data_bytes: 0,
             data_layout: Some(DataLayout {
                 slots: vec![DataSlot {
                     name: String::from("ctx.x"),
@@ -2166,6 +2172,9 @@ mod tests {
             float_bits_log2: crate::bytecode::RUNTIME_FLOAT_BITS_LOG2,
             wcet_cycles: 0,
             wcmu_bytes: 0,
+            flags: 0,
+            shared_data_bytes: 0,
+            private_data_bytes: 0,
             data_layout: Some(DataLayout {
                 slots: vec![
                     DataSlot {
