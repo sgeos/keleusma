@@ -2,6 +2,13 @@
 //!
 //! These tests exercise the `#[derive(KeleusmaType)]` macro and the
 //! ergonomic `register_fn` and `register_fn_fallible` registration API.
+//!
+//! Gated on both the `compile` and `verify` features because the
+//! suite drives the full pipeline from source through VM execution.
+//! With either feature disabled the test file compiles to an empty
+//! module.
+
+#![cfg(all(feature = "compile", feature = "verify"))]
 
 extern crate alloc;
 

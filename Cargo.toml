@@ -19,7 +19,30 @@ rust-version = "1.88"
 rustdoc-args = ["--cfg", "docsrs"]
 
 [features]
-default = []
+default = ["compile", "verify"]
+
+# Enables the source-to-bytecode pipeline. With the feature on,
+# the public modules `lexer`, `parser`, `typecheck`,
+# `monomorphize`, `compiler`, `ast`, `token`, and `visitor` are
+# available. With the feature off, the runtime accepts only
+# precompiled bytecode loaded through `Module::from_bytes` or
+# `Vm::view_bytes_zero_copy`. Hosts that ship precompiled
+# bytecode and want a smaller runtime binary leave this feature
+# off and rely on a build-time compile step. Default on for
+# backward compatibility.
+compile = []
+
+# Enables the load-time and compile-time verifier. With the
+# feature on, `verify::verify`, `verify::wcet_stream_iteration`,
+# `verify::wcmu_stream_iteration`, `verify::module_wcmu`, the
+# WCMU text-size tracking pass, and the structural checks run
+# inside `Vm::new` are available. The compiler also invokes the
+# verifier at the end of `compile_with_target` to populate the
+# bytecode header's WCET and WCMU fields. With the feature off,
+# all of that machinery is absent. `Vm::new` becomes equivalent
+# to `Vm::new_unchecked` from the caller's perspective. Default
+# on for backward compatibility.
+verify = []
 
 # Enables surface support for the `Text` type, string literals,
 # f-string interpolation, the bundled string utility natives
@@ -52,17 +75,70 @@ sdl3 = { version = "0.18", features = ["build-from-source-static"], optional = t
 
 [[example]]
 name = "piano_roll"
-required-features = ["sdl3-example", "text"]
+required-features = ["compile", "verify", "sdl3-example", "text"]
 
 [[example]]
 name = "string_ops"
-required-features = ["text"]
+required-features = ["compile", "verify", "text"]
 
 [[example]]
 name = "opaque_rust_string"
-required-features = ["text"]
+required-features = ["compile", "verify", "text"]
 
 [[example]]
 name = "rogue"
 path = "examples/rogue/main.rs"
-required-features = ["sdl3-example", "text"]
+required-features = ["compile", "verify", "sdl3-example", "text"]
+
+[[example]]
+name = "generic_identity"
+required-features = ["compile", "verify"]
+
+[[example]]
+name = "generic_match"
+required-features = ["compile", "verify"]
+
+[[example]]
+name = "generic_struct"
+required-features = ["compile", "verify"]
+
+[[example]]
+name = "method_call"
+required-features = ["compile", "verify"]
+
+[[example]]
+name = "monomorphize_generic_method"
+required-features = ["compile", "verify"]
+
+[[example]]
+name = "regenerate_zero_copy_bytecode"
+required-features = ["compile", "verify"]
+
+[[example]]
+name = "struct_method_dispatch"
+required-features = ["compile", "verify"]
+
+[[example]]
+name = "target_aware_compile"
+required-features = ["compile", "verify"]
+
+[[example]]
+name = "wcmu_attestation"
+required-features = ["compile", "verify"]
+
+[[example]]
+name = "wcmu_basic"
+required-features = ["compile", "verify"]
+
+[[example]]
+name = "wcmu_rejection"
+required-features = ["compile", "verify"]
+
+[[example]]
+name = "yield_error"
+required-features = ["compile", "verify"]
+
+# zero_copy_include_bytes runs precompiled bytecode and therefore
+# works under any feature combination. No required-features.
+[[example]]
+name = "zero_copy_include_bytes"

@@ -3168,6 +3168,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "verify")]
     fn recursive_closure_rejected_by_compile_pipeline() {
         // The closure body references its own let-binding name. The
         // type checker accepts the program, the hoist pass produces a
@@ -3191,6 +3192,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "verify")]
     fn recursive_closure_with_capture_rejected_by_compile_pipeline() {
         // A recursive closure that also captures an outer-function
         // local is rejected for the same reason as the simpler

@@ -15,7 +15,7 @@ cd examples/rtos
 cargo run --release --bin three-task-std
 ```
 
-Bare-metal demonstrator (STM32N6570-DK, BOOT0 in dev position, ST-LINK V3-EC attached):
+Bare-metal demonstrator (STM32N6570-DK, BOOT0 in dev position, ST-LINK V3-EC attached). The line below builds the smallest possible image (~192 KB `.text`, precompiled bytecode under trust). See [`MANUAL.md`](MANUAL.md) section 2 for the full feature matrix and the recommended production configuration that retains load-time verification.
 
 ```bash
 cd examples/rtos

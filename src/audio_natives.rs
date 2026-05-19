@@ -203,7 +203,7 @@ pub fn register_audio_natives<'a, 'arena>(vm: &mut Vm<'a, 'arena>) {
     });
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "compile", feature = "verify"))]
 mod tests {
     use super::*;
     use crate::bytecode::Value;

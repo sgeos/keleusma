@@ -9,6 +9,7 @@ use allocator_api2::vec::Vec as ArenaVec;
 use keleusma_arena::BottomHandle;
 
 use crate::bytecode::*;
+#[cfg(feature = "verify")]
 use crate::verify;
 
 /// Operand stack and call-frame stack type. Borrows the host-owned
@@ -305,6 +306,12 @@ fn decode_all_ops(bytes: &[u8]) -> Result<Vec<Vec<Op>>, VmError> {
 /// Compute the smallest arena capacity that admits the given module
 /// under the supplied native attestations. Returns the maximum WCMU sum
 /// across Stream chunks, or zero if the module has no Stream chunks.
+///
+/// Available only when the `verify` feature is enabled because the
+/// computation routes through `verify::module_wcmu`. Hosts that
+/// build without the verifier must size arenas through a build-time
+/// analysis instead.
+#[cfg(feature = "verify")]
 pub fn auto_arena_capacity_for(
     module: &crate::bytecode::Module,
     native_wcmu: &[u32],
@@ -418,6 +425,9 @@ impl<'a, 'arena> Vm<'a, 'arena> {
     /// Used by cold-path methods such as resource-bounds re-verification
     /// and auto-arena-capacity computation that operate on owned
     /// `Module` values. The hot execution path uses `archived` directly.
+    /// Available only when the `verify` feature is enabled because all
+    /// current callers are themselves gated behind that feature.
+    #[cfg(feature = "verify")]
     fn module_owned(&self) -> Result<Module, VmError> {
         Ok(Module::from_bytes(self.bytecode.as_slice())?)
     }
@@ -588,14 +598,21 @@ impl<'a, 'arena> Vm<'a, 'arena> {
                 }
             }
         }
-        verify::verify(&module)
-            .map_err(|e| VmError::VerifyError(format!("{}: {}", e.chunk_name, e.message)))?;
-        // R31. Verify worst-case memory usage fits within the arena. The
-        // check is sound for programs without calls and without
-        // variable-iteration loops. See `verify_resource_bounds` for
-        // current limitations.
-        verify::verify_resource_bounds(&module, arena.capacity())
-            .map_err(|e| VmError::VerifyError(format!("{}: {}", e.chunk_name, e.message)))?;
+        // Structural verification and resource-bound verification.
+        // Gated behind the `verify` feature; when the feature is
+        // off, `Vm::new_with_options` behaves like
+        // `Vm::new_unchecked` from the caller's perspective.
+        #[cfg(feature = "verify")]
+        {
+            verify::verify(&module)
+                .map_err(|e| VmError::VerifyError(format!("{}: {}", e.chunk_name, e.message)))?;
+            // R31. Verify worst-case memory usage fits within the
+            // arena. The check is sound for programs without calls
+            // and without variable-iteration loops. See
+            // `verify_resource_bounds` for current limitations.
+            verify::verify_resource_bounds(&module, arena.capacity())
+                .map_err(|e| VmError::VerifyError(format!("{}: {}", e.chunk_name, e.message)))?;
+        }
         let vm = Self::construct(module, arena)?;
         Ok((vm, warnings))
     }
@@ -635,6 +652,14 @@ impl<'a, 'arena> Vm<'a, 'arena> {
                 "module has no entry point: declare a `fn main`, `yield main`, or `loop main`",
             )));
         }
+        // Structural verification is retained even in
+        // `new_unchecked` because the VM execution loop relies on
+        // its invariants (block nesting depth, jump bounds,
+        // productivity rule) for memory safety. Gated behind
+        // `verify` because the verifier itself is. With the
+        // feature off the host attests the bytecode's structural
+        // soundness through a build-time verification step.
+        #[cfg(feature = "verify")]
         verify::verify(&module)
             .map_err(|e| VmError::VerifyError(format!("{}: {}", e.chunk_name, e.message)))?;
         Self::construct(module, arena)
@@ -989,11 +1014,14 @@ impl<'a, 'arena> Vm<'a, 'arena> {
         new_module: Module,
         initial_data: Vec<Value>,
     ) -> Result<(), VmError> {
-        verify::verify(&new_module)
-            .map_err(|e| VmError::VerifyError(format!("{}: {}", e.chunk_name, e.message)))?;
-        // R31. Verify the new module's WCMU fits the existing arena.
-        verify::verify_resource_bounds(&new_module, self.arena.capacity())
-            .map_err(|e| VmError::VerifyError(format!("{}: {}", e.chunk_name, e.message)))?;
+        #[cfg(feature = "verify")]
+        {
+            verify::verify(&new_module)
+                .map_err(|e| VmError::VerifyError(format!("{}: {}", e.chunk_name, e.message)))?;
+            // R31. Verify the new module's WCMU fits the existing arena.
+            verify::verify_resource_bounds(&new_module, self.arena.capacity())
+                .map_err(|e| VmError::VerifyError(format!("{}: {}", e.chunk_name, e.message)))?;
+        }
 
         let expected_len = new_module
             .data_layout
@@ -1162,6 +1190,9 @@ impl<'a, 'arena> Vm<'a, 'arena> {
     ///
     /// Returns an error if any Stream chunk's WCMU exceeds the arena
     /// capacity.
+    ///
+    /// Available only when the `verify` feature is enabled.
+    #[cfg(feature = "verify")]
     pub fn verify_resources(&self) -> Result<(), VmError> {
         let module = self.module_owned()?;
         let native_wcmu: Vec<u32> = self.natives.iter().map(|n| n.wcmu_bytes).collect();
@@ -1175,6 +1206,9 @@ impl<'a, 'arena> Vm<'a, 'arena> {
     /// Returns the maximum WCMU sum across Stream chunks. If the module
     /// has no Stream chunk, returns zero. The host can use this to size
     /// a fresh VM appropriately.
+    ///
+    /// Available only when the `verify` feature is enabled.
+    #[cfg(feature = "verify")]
     pub fn auto_arena_capacity(&self) -> Result<usize, VmError> {
         let module = self.module_owned()?;
         let native_wcmu: Vec<u32> = self.natives.iter().map(|n| n.wcmu_bytes).collect();
@@ -2421,7 +2455,11 @@ impl<'a, 'arena> Vm<'a, 'arena> {
     }
 }
 
-#[cfg(test)]
+// The test module exercises the full pipeline (source through
+// VM execution) and therefore requires both the `compile` and
+// `verify` features. Without either, the helpers it imports
+// (`lexer`, `parser`, `compiler`, `verify`) are absent.
+#[cfg(all(test, feature = "compile", feature = "verify"))]
 mod tests {
     use super::*;
     use crate::compiler::compile;

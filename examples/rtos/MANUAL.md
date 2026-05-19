@@ -50,7 +50,34 @@ This is target-scoped so `cargo run --bin three-task-std` (host target) continue
 
 All commands run from inside `examples/rtos/`.
 
+### Cargo features that control image size and trust
+
+The microkernel offers two orthogonal cargo features that propagate into the parent crate to gate the source-to-bytecode pipeline and the load-time verifier respectively.
+
+| Feature | Effect when on |
+|---------|-----------------|
+| `keleusma-compile` | The runtime image carries the lexer, parser, type checker, monomorphizer, and compiler. Task scripts are tokenised and compiled at boot. |
+| `keleusma-verify` | The runtime image carries the structural verifier and the resource-bounds check. `Vm::new` runs them at load and rejects modules that violate the contract. |
+
+Both are in the default feature set. Disabling either trades flash for an explicit trust shift; disabling both yields the smallest runtime image.
+
+When `keleusma-compile` is off, `build.rs` invokes the parent crate's compile pipeline at host build time (through a `[build-dependencies]` entry) and emits one `OUT_DIR/<name>.kel.bin` per task script. The runtime then loads through `Module::from_bytes` on `include_bytes!` constants.
+
+When `keleusma-verify` is off, `Vm::new` skips the structural verifier and the resource-bounds check. The host is then attesting that an equivalent verification ran at the artefact-ingestion step. The bytecode-format invariants the VM relies on for memory safety are guaranteed by the producer rather than checked at load.
+
+Measured `.text` size on the bare-metal binary for each useful combination on the STM32N6570-DK target.
+
+| Combination | `.text` | Notes |
+|-------------|--------:|-------|
+| `keleusma-compile` + `keleusma-verify` (default) | 614 KB | Source compiled at boot, verified at load. Boot to scheduler around 215 milliseconds. |
+| `keleusma-verify` only | 211 KB | Precompiled bytecode, verified at load. Boot to scheduler around 43 milliseconds. |
+| Neither | 192 KB | Precompiled bytecode, trust-loaded. Boot to scheduler around 39 milliseconds. Smallest image. |
+
+The combination `keleusma-compile` without `keleusma-verify` is technically allowed but rarely useful, because the compiler-emitted bytecode then carries 0 in the WCET and WCMU header fields and the runtime has no analysis to populate them either.
+
 ### Std demonstrator
+
+Source mode (default):
 
 ```bash
 cargo run --release --bin three-task-std
@@ -58,7 +85,34 @@ cargo run --release --bin three-task-std
 
 Prints the boot banner and the three task log lines to stdout. The LED task's `gpio_set` calls log to stdout (`[gpio 13] -> H/L`); the sensor task logs the alarm crossing each time the simulated triangular wave goes above the threshold; the heartbeat task logs `system OK` every five seconds. Ctrl-C to stop.
 
+Precompiled-bytecode mode on the host:
+
+```bash
+cargo run --release --bin three-task-std \
+    --no-default-features --features std-platform,keleusma-verify
+```
+
+Same behaviour, but the runtime image does not include the compile pipeline. Useful for measuring the size or boot-time difference on the host before deploying the same configuration to the bare-metal target.
+
 ### Bare-metal demonstrator (STM32N6570-DK)
+
+Default features for the platform plus the source compile and verifier:
+
+```bash
+cargo run --release --bin three-task-n6 \
+    --target thumbv8m.main-none-eabihf \
+    --no-default-features --features stm32n6570dk-platform,keleusma-compile,keleusma-verify
+```
+
+Precompiled bytecode with the verifier (recommended for production):
+
+```bash
+cargo run --release --bin three-task-n6 \
+    --target thumbv8m.main-none-eabihf \
+    --no-default-features --features stm32n6570dk-platform,keleusma-verify
+```
+
+Precompiled bytecode under trust (smallest image):
 
 ```bash
 cargo run --release --bin three-task-n6 \

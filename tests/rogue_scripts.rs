@@ -5,7 +5,7 @@
 //! startup. The tests are guarded by the `text` feature because
 //! the host scripts may use string literals or f-strings.
 
-#![cfg(feature = "text")]
+#![cfg(all(feature = "text", feature = "compile", feature = "verify"))]
 
 use std::sync::{Arc, Mutex};
 

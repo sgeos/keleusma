@@ -291,7 +291,7 @@ mod text {
 #[cfg(feature = "shell")]
 pub mod shell;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "compile", feature = "verify"))]
 mod tests {
     use super::*;
     use crate::bytecode::Value;

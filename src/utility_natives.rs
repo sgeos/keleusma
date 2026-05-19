@@ -287,7 +287,7 @@ pub fn register_utility_natives_with_ctx<'a, 'arena>(vm: &mut Vm<'a, 'arena>) {
     register_utility_natives(vm);
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "compile", feature = "verify"))]
 mod tests {
     use super::*;
     use crate::compiler::compile;

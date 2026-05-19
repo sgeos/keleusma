@@ -1,25 +1,55 @@
 #![no_std]
 extern crate alloc;
 
-pub mod ast;
+// Always-on runtime modules. These compile under any feature
+// combination and form the minimum surface needed to load and
+// run precompiled bytecode.
 pub mod audio_natives;
 pub mod bytecode;
-pub mod compiler;
 pub mod kstring;
-pub mod lexer;
 pub mod marshall;
-pub mod monomorphize;
 pub mod opaque;
-pub mod parser;
 pub mod stddsl;
-pub mod target;
-pub mod text_size;
-pub mod token;
-pub mod typecheck;
 pub mod utility_natives;
-pub mod verify;
-pub mod visitor;
 pub mod vm;
+
+// Compile-pipeline modules. Gated behind the `compile` feature
+// (default on). With the feature off, the runtime accepts only
+// precompiled bytecode through `Module::from_bytes` and
+// `Vm::view_bytes_zero_copy`. Hosts that ship precompiled
+// bytecode for the smallest possible runtime binary leave this
+// feature off.
+#[cfg(feature = "compile")]
+pub mod ast;
+#[cfg(feature = "compile")]
+pub mod compiler;
+#[cfg(feature = "compile")]
+pub mod lexer;
+#[cfg(feature = "compile")]
+pub mod monomorphize;
+#[cfg(feature = "compile")]
+pub mod parser;
+#[cfg(feature = "compile")]
+pub mod target;
+#[cfg(feature = "compile")]
+pub mod token;
+#[cfg(feature = "compile")]
+pub mod typecheck;
+#[cfg(feature = "compile")]
+pub mod visitor;
+
+// Verifier modules. Gated behind the `verify` feature (default
+// on). With the feature off, `Vm::new` skips structural and
+// resource-bound verification and behaves like
+// `Vm::new_unchecked` from the caller's perspective. The
+// compiler's call to the verifier at the end of
+// `compile_with_target` is likewise gated; with the feature off
+// the compiler leaves the bytecode header's WCET and WCMU
+// fields at 0 (auto).
+#[cfg(feature = "verify")]
+pub mod text_size;
+#[cfg(feature = "verify")]
+pub mod verify;
 
 pub use keleusma_arena::{
     Arena, ArenaHandle, BottomHandle, Budget, EpochSaturated, Stale, TopHandle,
@@ -33,5 +63,6 @@ pub use bytecode::{
 pub use keleusma_macros::KeleusmaType;
 pub use marshall::{IntoFallibleNativeFn, IntoNativeFn, KeleusmaType};
 pub use opaque::{HostOpaque, host_arc};
+#[cfg(feature = "verify")]
 pub use text_size::{TextSize, op_cost_context};
 pub use vm::{NativeCtx, OverflowPolicy, VerifyWarning, VmError, VmOptions, WarningKind};

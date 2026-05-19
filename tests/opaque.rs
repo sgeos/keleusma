@@ -1,3 +1,4 @@
+#![cfg(all(feature = "compile", feature = "verify"))]
 //! End-to-end coverage for host-supplied opaque types.
 //!
 //! Exercises the `Value::Opaque` runtime variant, the `HostOpaque`

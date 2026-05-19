@@ -593,6 +593,11 @@ pub fn compile_with_target(
 
     let entry_point = function_map.get("main").map(|&idx| idx as usize);
 
+    // `mut` is only consumed inside the `verify`-gated block that
+    // populates the WCET and WCMU header fields. Suppress the
+    // unused-mut warning when the verify feature is off so the
+    // single declaration covers both feature combinations.
+    #[cfg_attr(not(feature = "verify"), allow(unused_mut))]
     let mut module = Module {
         chunks,
         native_names,
@@ -638,92 +643,102 @@ pub fn compile_with_target(
     // functions reuse the span of the first head, which matches the
     // single chunk produced for the group. Synthetic impl-method
     // chunks fall back to the impl block's span.
-    let mut chunk_spans: BTreeMap<String, crate::token::Span> = BTreeMap::new();
-    for func in &program.functions {
-        chunk_spans.entry(func.name.clone()).or_insert(func.span);
-    }
-    for func in &synth_impl_methods {
-        chunk_spans.entry(func.name.clone()).or_insert(func.span);
-    }
-    let span_for = |name: &str| -> crate::token::Span {
-        chunk_spans
-            .get(name)
-            .copied()
-            .unwrap_or_else(crate::token::Span::default)
-    };
+    // Compile-time structural verification and resource-bound
+    // analysis. Gated behind the `verify` feature so that
+    // `--no-default-features --features compile` produces a
+    // compile pipeline that emits bytecode without the safety
+    // checks built in. In that mode the bytecode header's WCET
+    // and WCMU fields stay at 0 (auto); load-time verification,
+    // if enabled in the consuming runtime, populates them.
+    #[cfg(feature = "verify")]
+    {
+        let mut chunk_spans: BTreeMap<String, crate::token::Span> = BTreeMap::new();
+        for func in &program.functions {
+            chunk_spans.entry(func.name.clone()).or_insert(func.span);
+        }
+        for func in &synth_impl_methods {
+            chunk_spans.entry(func.name.clone()).or_insert(func.span);
+        }
+        let span_for = |name: &str| -> crate::token::Span {
+            chunk_spans
+                .get(name)
+                .copied()
+                .unwrap_or_else(crate::token::Span::default)
+        };
 
-    crate::verify::verify(&module).map_err(|e| CompileError {
-        message: format!("structural verification: {}: {}", e.chunk_name, e.message),
-        span: span_for(&e.chunk_name),
-    })?;
-    for chunk in &module.chunks {
-        for op in &chunk.ops {
-            match op {
-                crate::bytecode::Op::CallIndirect(_) => {
-                    return Err(CompileError {
-                        message: format!(
-                            "WCET verification: {}: CallIndirect resolves its target chunk at runtime and cannot be statically bounded for WCET/WCMU analysis. First-class function dispatch is not admitted by the safe build pipeline. Restrict the program to direct calls.",
-                            chunk.name
-                        ),
-                        span: span_for(&chunk.name),
-                    });
+        crate::verify::verify(&module).map_err(|e| CompileError {
+            message: format!("structural verification: {}: {}", e.chunk_name, e.message),
+            span: span_for(&e.chunk_name),
+        })?;
+        for chunk in &module.chunks {
+            for op in &chunk.ops {
+                match op {
+                    crate::bytecode::Op::CallIndirect(_) => {
+                        return Err(CompileError {
+                            message: format!(
+                                "WCET verification: {}: CallIndirect resolves its target chunk at runtime and cannot be statically bounded for WCET/WCMU analysis. First-class function dispatch is not admitted by the safe build pipeline. Restrict the program to direct calls.",
+                                chunk.name
+                            ),
+                            span: span_for(&chunk.name),
+                        });
+                    }
+                    crate::bytecode::Op::MakeRecursiveClosure(target, _) => {
+                        return Err(CompileError {
+                            message: format!(
+                                "WCET verification: {}: MakeRecursiveClosure(chunk={}) introduces unbounded recursion that cannot be statically bounded for WCET/WCMU analysis. Recursive closures are not admitted by the safe build pipeline.",
+                                chunk.name, target
+                            ),
+                            span: span_for(&chunk.name),
+                        });
+                    }
+                    _ => {}
                 }
-                crate::bytecode::Op::MakeRecursiveClosure(target, _) => {
-                    return Err(CompileError {
-                        message: format!(
-                            "WCET verification: {}: MakeRecursiveClosure(chunk={}) introduces unbounded recursion that cannot be statically bounded for WCET/WCMU analysis. Recursive closures are not admitted by the safe build pipeline.",
-                            chunk.name, target
-                        ),
-                        span: span_for(&chunk.name),
-                    });
-                }
-                _ => {}
             }
         }
-    }
 
-    // Populate the declared WCET and WCMU fields in the framing
-    // header. The compile-time bounds use the bundled nominal cost
-    // model and zero native attestations, since native attestations
-    // are host-supplied at load time. The runtime re-runs the
-    // analysis at `Vm::new` against the host's actual cost model and
-    // attestations and may surface a tighter or looser bound.
-    //
-    // For atomic-total programs (no Stream chunks), the values stay
-    // at 0 (auto). For Stream programs, the values are the maximum
-    // across Stream chunks. Saturation to `u32::MAX` signals that
-    // computation overflowed; safe `Vm::new` rejects on `u32::MAX`.
-    let mut max_wcet: u32 = 0;
-    let mut max_wcmu: u32 = 0;
-    let mut wcet_overflow = false;
-    let mut wcmu_overflow = false;
-    for chunk in &module.chunks {
-        if matches!(chunk.block_type, crate::bytecode::BlockType::Stream) {
-            match crate::verify::wcet_stream_iteration(chunk) {
-                Ok(c) => {
-                    max_wcet = max_wcet.max(c);
-                }
-                Err(_) => {
-                    wcet_overflow = true;
-                }
-            }
-            match crate::verify::wcmu_stream_iteration(chunk) {
-                Ok((stack, heap)) => {
-                    let total = stack.saturating_add(heap);
-                    if total == u32::MAX {
-                        wcmu_overflow = true;
-                    } else {
-                        max_wcmu = max_wcmu.max(total);
+        // Populate the declared WCET and WCMU fields in the framing
+        // header. The compile-time bounds use the bundled nominal cost
+        // model and zero native attestations, since native attestations
+        // are host-supplied at load time. The runtime re-runs the
+        // analysis at `Vm::new` against the host's actual cost model and
+        // attestations and may surface a tighter or looser bound.
+        //
+        // For atomic-total programs (no Stream chunks), the values stay
+        // at 0 (auto). For Stream programs, the values are the maximum
+        // across Stream chunks. Saturation to `u32::MAX` signals that
+        // computation overflowed; safe `Vm::new` rejects on `u32::MAX`.
+        let mut max_wcet: u32 = 0;
+        let mut max_wcmu: u32 = 0;
+        let mut wcet_overflow = false;
+        let mut wcmu_overflow = false;
+        for chunk in &module.chunks {
+            if matches!(chunk.block_type, crate::bytecode::BlockType::Stream) {
+                match crate::verify::wcet_stream_iteration(chunk) {
+                    Ok(c) => {
+                        max_wcet = max_wcet.max(c);
+                    }
+                    Err(_) => {
+                        wcet_overflow = true;
                     }
                 }
-                Err(_) => {
-                    wcmu_overflow = true;
+                match crate::verify::wcmu_stream_iteration(chunk) {
+                    Ok((stack, heap)) => {
+                        let total = stack.saturating_add(heap);
+                        if total == u32::MAX {
+                            wcmu_overflow = true;
+                        } else {
+                            max_wcmu = max_wcmu.max(total);
+                        }
+                    }
+                    Err(_) => {
+                        wcmu_overflow = true;
+                    }
                 }
             }
         }
+        module.wcet_cycles = if wcet_overflow { u32::MAX } else { max_wcet };
+        module.wcmu_bytes = if wcmu_overflow { u32::MAX } else { max_wcmu };
     }
-    module.wcet_cycles = if wcet_overflow { u32::MAX } else { max_wcet };
-    module.wcmu_bytes = if wcmu_overflow { u32::MAX } else { max_wcmu };
 
     Ok(module)
 }
@@ -3733,6 +3748,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "verify")]
     fn recursive_closure_compile_error_carries_source_span() {
         // The compile-pipeline rejection for a recursive closure
         // used to emit `Span::default()`, hiding the offending

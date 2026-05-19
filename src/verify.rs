@@ -1504,7 +1504,7 @@ pub fn verify(module: &Module) -> Result<(), VerifyError> {
     Ok(())
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "compile"))]
 mod tests {
     use super::*;
     use crate::bytecode::{BlockType, Chunk, ConstValue, Module, Op};

@@ -5,7 +5,14 @@
 # detached lets the parent's `cargo build` stay light while
 # allowing the example to be flashed and run with a single
 # `cd examples/rtos && cargo run …`.
+#
+# `resolver = "2"` is required for build-dependency features to
+# stay separate from runtime-dependency features. Without it,
+# the `[build-dependencies]` entry below would attempt to pull
+# `compile` and `verify` into the runtime image, which would
+# defeat the size-reduction goal of the feature gating.
 [workspace]
+resolver = "2"
 
 [package]
 name = "keleusma-rtos"
@@ -23,6 +30,12 @@ build = "build.rs"
 # The Keleusma runtime. Path dependency against the parent
 # crate during development; this would become a versioned crates.io
 # dependency once the example is decoupled from the parent.
+#
+# `default-features = false` keeps the runtime image lean. The
+# `keleusma-compile` and `keleusma-verify` features below
+# re-add the source-to-bytecode pipeline and the load-time
+# verifier respectively. With both off, the runtime accepts
+# only precompiled bytecode loaded under trust.
 keleusma = { path = "../..", default-features = false, features = ["text"] }
 
 # --- N6 platform dependencies. All optional, all gated on the
@@ -75,12 +88,45 @@ critical-section = { version = "1.1", optional = true }
 # global allocator must be installed on no_std targets.
 embedded-alloc = { version = "0.6", optional = true }
 
+# Build-time dependency on the parent crate with the full
+# compile and verify pipelines enabled. Used by `build.rs` only
+# when the runtime `keleusma-compile` feature is off, in which
+# case build.rs precompiles every task script to bytecode in
+# OUT_DIR. Cargo's resolver-2 keeps build-dependency features
+# separate from runtime-dependency features, so enabling
+# `compile` and `verify` here does not pull them into the
+# runtime image.
+[build-dependencies]
+keleusma = { path = "../..", default-features = false, features = [
+    "compile",
+    "verify",
+    "text",
+] }
+
 [features]
-default = ["std-platform"]
+default = ["std-platform", "keleusma-compile", "keleusma-verify"]
 # The std-backed platform implementation and the demonstrator
 # binary. Disable this feature for bare-metal builds where the
 # host code chooses a different platform (e.g. embassy on the N6).
 std-platform = []
+# Pass-through to keleusma's `compile` feature. With this
+# feature on, the runtime image contains the source-to-bytecode
+# pipeline (lexer, parser, type checker, monomorphizer,
+# compiler) and the task scripts are compiled at boot. With it
+# off, build.rs precompiles every script through the parent's
+# build-time compile pipeline and emits OUT_DIR/*.kel.bin; the
+# runtime image then only carries the VM and the bytecode
+# format. Off is the right choice for the smallest flash image
+# on the embedded target; on is the right choice during script
+# authoring or for the host demonstrator.
+keleusma-compile = ["keleusma/compile"]
+# Pass-through to keleusma's `verify` feature. With this
+# feature on, `Vm::new` runs the structural verifier and the
+# resource-bounds check at load. With it off, `Vm::new` skips
+# verification and trust-loads the module; the host attests
+# that verification was performed at build time. Off saves a
+# further chunk of flash on top of the precompile feature.
+keleusma-verify = ["keleusma/verify"]
 # The STM32N6570-DK platform implementation. Pulls in the embassy
 # stack, defmt, cortex-m runtime, and a heap allocator. Enabling
 # this feature on its own builds the no_std library against the
