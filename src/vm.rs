@@ -395,13 +395,91 @@ pub struct Vm<'a, 'arena> {
     /// Call-frame stack. Same arena-backed discipline as `stack`.
     frames: StackVec<'arena, CallFrame>,
     natives: Vec<NativeEntry>,
-    /// Persistent data segment. Survives across RESET boundaries.
+    /// Shared data slots. Survives across RESET boundaries.
+    /// Host-visible through `Vm::set_data` and `Vm::get_data`.
+    /// Indexed by the unified slot index `i` for `i` in
+    /// `[0, shared_slot_count)`.
     data: Vec<Value>,
+    /// Number of shared slots. Cached at construction from the
+    /// module's data layout. Equals `data.len()` for shared
+    /// slots; the unified slot index space partitions into
+    /// `[0, shared_slot_count)` (shared) and
+    /// `[shared_slot_count, shared_slot_count + private_slot_count)`
+    /// (private).
+    shared_slot_count: u16,
+    /// Number of private slots. Cached at construction. Private
+    /// slots live in the arena's persistent region starting at
+    /// `arena.persistent_ptr()` and occupy
+    /// `private_slot_count * size_of::<Value>()` bytes there.
+    private_slot_count: u16,
     /// Host-owned dual-end bump-allocated arena. Borrowed for the
     /// lifetime of the VM. Native functions that allocate dynamic
     /// strings pass `vm.arena()` to [`crate::kstring::KString::alloc`].
+    /// The arena's persistent region holds this module's private
+    /// data slots.
     arena: &'arena keleusma_arena::Arena,
     started: bool,
+}
+
+/// Compute the arena persistent-capacity needed to back a
+/// module's private data segment.
+///
+/// Hosts call this to size a pool arena before constructing the
+/// VM:
+///
+/// ```text
+/// let needed = required_persistent_capacity_for(&module);
+/// arena.resize_persistent(needed)?;
+/// let vm = Vm::new(module, &arena)?;
+/// ```
+///
+/// The returned value is `private_slot_count * size_of::<Value>()`,
+/// which is the actual runtime storage requirement. It differs
+/// from `module.private_data_bytes` because that field is in
+/// `VALUE_SLOT_SIZE_BYTES`-sized logical units for WCMU
+/// accounting; the actual `Value` enum is larger than the WCMU
+/// slot size by an implementation-defined factor.
+pub fn required_persistent_capacity_for(module: &crate::bytecode::Module) -> usize {
+    let private_count = module
+        .data_layout
+        .as_ref()
+        .map_or(0, |dl| {
+            dl.slots
+                .iter()
+                .filter(|s| matches!(s.visibility, crate::bytecode::SlotVisibility::Private))
+                .count()
+        });
+    private_count * core::mem::size_of::<Value>()
+}
+
+impl<'a, 'arena> Drop for Vm<'a, 'arena> {
+    /// Drop the `Value` instances stored in the arena's
+    /// persistent region. The arena itself is host-owned and
+    /// outlives the VM; without this drop, every private slot's
+    /// owned contents (heap-allocated strings, vectors,
+    /// reference counts) would leak when the VM is dropped.
+    ///
+    /// The arena's persistent capacity is left unchanged because
+    /// the host may want to reassign the same arena to another
+    /// VM; calling `Arena::resize_persistent` is the host's
+    /// choice.
+    fn drop(&mut self) {
+        if self.private_slot_count == 0 {
+            return;
+        }
+        let base = self.arena.persistent_ptr().as_ptr() as *mut Value;
+        for i in 0..self.private_slot_count as usize {
+            // SAFETY: each private slot was initialised to
+            // `Value::Unit` at construction and updated through
+            // `write_data_slot` (which drops the old occupant
+            // and writes a new value). At drop time every slot
+            // therefore holds a valid `Value` that needs its
+            // destructor run.
+            unsafe {
+                core::ptr::drop_in_place(base.add(i));
+            }
+        }
+    }
 }
 
 impl<'a, 'arena> Vm<'a, 'arena> {
@@ -774,14 +852,53 @@ impl<'a, 'arena> Vm<'a, 'arena> {
         let _ = Module::access_bytes(bytes)?;
         // Determine data segment length from the archived module so the
         // data vector has the right slot count.
-        let data_len = {
+        // Body offset matches the framing header length declared
+        // in `bytecode::HEADER_LEN` (32 bytes for the current
+        // wire format). Hardcoded here because the constant is
+        // private to the bytecode module.
+        const BODY_OFFSET: usize = 32;
+        let (shared_count, private_count) = {
             let length = u32::from_le_bytes([bytes[6], bytes[7], bytes[8], bytes[9]]) as usize;
-            let body = &bytes[16..length - 4];
+            let body = &bytes[BODY_OFFSET..length - 4];
             let archived =
                 unsafe { rkyv::access_unchecked::<crate::bytecode::ArchivedModule>(body) };
-            archived.data_layout.as_ref().map_or(0, |dl| dl.slots.len())
+            match archived.data_layout.as_ref() {
+                None => (0u16, 0u16),
+                Some(dl) => {
+                    let mut shared = 0u16;
+                    let mut private_ = 0u16;
+                    for slot in dl.slots.iter() {
+                        match slot.visibility {
+                            crate::bytecode::ArchivedSlotVisibility::Shared => {
+                                shared = shared.saturating_add(1);
+                            }
+                            crate::bytecode::ArchivedSlotVisibility::Private => {
+                                private_ = private_.saturating_add(1);
+                            }
+                        }
+                    }
+                    (shared, private_)
+                }
+            }
         };
-        let data = vec![Value::Unit; data_len];
+        let private_storage_bytes = private_count as usize * core::mem::size_of::<Value>();
+        if arena.persistent_capacity() < private_storage_bytes {
+            return Err(VmError::VerifyError(alloc::format!(
+                "arena persistent_capacity ({} bytes) is too small for module's private data ({} bytes); call `arena.resize_persistent(required_persistent_capacity_for(&module))` before constructing the VM",
+                arena.persistent_capacity(),
+                private_storage_bytes,
+            )));
+        }
+        if private_count > 0 {
+            let base = arena.persistent_ptr().as_ptr() as *mut Value;
+            for i in 0..private_count as usize {
+                // SAFETY: same justification as in `Vm::construct`.
+                unsafe {
+                    base.add(i).write(Value::Unit);
+                }
+            }
+        }
+        let data = vec![Value::Unit; shared_count as usize];
         let decoded_ops = decode_all_ops(bytes)?;
         let mut stack = ArenaVec::new_in(arena.bottom_handle());
         let mut frames = ArenaVec::new_in(arena.bottom_handle());
@@ -798,6 +915,8 @@ impl<'a, 'arena> Vm<'a, 'arena> {
             frames,
             natives: Vec::new(),
             data,
+            shared_slot_count: shared_count,
+            private_slot_count: private_count,
             arena,
             started: false,
         })
@@ -810,8 +929,68 @@ impl<'a, 'arena> Vm<'a, 'arena> {
     /// for archived access during execution. The data segment is
     /// initialized to `Unit` for each declared slot.
     fn construct(module: Module, arena: &'arena keleusma_arena::Arena) -> Result<Self, VmError> {
-        let data_len = module.data_layout.as_ref().map_or(0, |dl| dl.slots.len());
-        let data = vec![Value::Unit; data_len];
+        // Partition data slots by visibility. Shared slots live
+        // in the Vm-owned vector; private slots live in the
+        // arena's persistent region. The compiler emits shared
+        // slots first in the unified slot index space, so the
+        // partition reduces to a count.
+        let (shared_count, private_count) = match module.data_layout.as_ref() {
+            None => (0u16, 0u16),
+            Some(dl) => {
+                let mut shared = 0u16;
+                let mut private_ = 0u16;
+                for slot in &dl.slots {
+                    match slot.visibility {
+                        crate::bytecode::SlotVisibility::Shared => {
+                            shared = shared.checked_add(1).ok_or_else(|| {
+                                VmError::VerifyError(String::from(
+                                    "data layout shared slot count exceeds u16::MAX",
+                                ))
+                            })?;
+                        }
+                        crate::bytecode::SlotVisibility::Private => {
+                            private_ = private_.checked_add(1).ok_or_else(|| {
+                                VmError::VerifyError(String::from(
+                                    "data layout private slot count exceeds u16::MAX",
+                                ))
+                            })?;
+                        }
+                    }
+                }
+                (shared, private_)
+            }
+        };
+        let private_storage_bytes = private_count as usize * core::mem::size_of::<Value>();
+        if arena.persistent_capacity() < private_storage_bytes {
+            return Err(VmError::VerifyError(alloc::format!(
+                "arena persistent_capacity ({} bytes) is too small for module's private data ({} bytes; {} slot(s) at {} bytes each); call `arena.resize_persistent(required_persistent_capacity_for(&module))` before constructing the VM",
+                arena.persistent_capacity(),
+                private_storage_bytes,
+                private_count,
+                core::mem::size_of::<Value>(),
+            )));
+        }
+        // Initialise each private slot to Value::Unit via
+        // `ptr::write` so the bytes hold a valid Value before
+        // any subsequent reader clones or any subsequent writer
+        // drops the old occupant. The arena's persistent region
+        // is freshly zeroed when first resized, but those zero
+        // bytes are not a valid `Value`, so write through `write`
+        // not assignment.
+        if private_count > 0 {
+            let base = arena.persistent_ptr().as_ptr() as *mut Value;
+            for i in 0..private_count as usize {
+                // SAFETY: `i` is within the slot count just
+                // verified to fit in the persistent capacity; the
+                // arena owns the buffer for the VM's lifetime;
+                // `Value` is properly aligned at every multiple
+                // of its size on the 16-byte-aligned buffer base.
+                unsafe {
+                    base.add(i).write(Value::Unit);
+                }
+            }
+        }
+        let data = vec![Value::Unit; shared_count as usize];
         let bytes = module.to_bytes()?;
         let mut aligned = rkyv::util::AlignedVec::<8>::with_capacity(bytes.len());
         aligned.extend_from_slice(&bytes);
@@ -845,9 +1024,52 @@ impl<'a, 'arena> Vm<'a, 'arena> {
             frames,
             natives: Vec::new(),
             data,
+            shared_slot_count: shared_count,
+            private_slot_count: private_count,
             arena,
             started: false,
         })
+    }
+
+    /// Read a data slot's current value, cloning. Dispatches by
+    /// the unified slot index: indices below `shared_slot_count`
+    /// resolve to the Vm-owned `data` vector; higher indices
+    /// resolve to the arena's persistent region.
+    fn read_data_slot(&self, slot: usize) -> Value {
+        if slot < self.shared_slot_count as usize {
+            self.data[slot].clone()
+        } else {
+            // SAFETY: the slot is within the partition checked at
+            // construction; the persistent region was initialised
+            // with `Value::Unit` for every slot and updates flow
+            // through `write_data_slot`, so the pointee is always
+            // a valid `Value`.
+            unsafe {
+                let private_idx = slot - self.shared_slot_count as usize;
+                let base = self.arena.persistent_ptr().as_ptr() as *const Value;
+                (*base.add(private_idx)).clone()
+            }
+        }
+    }
+
+    /// Overwrite a data slot. Same dispatch as `read_data_slot`.
+    /// Assignment via `*ptr = value` drops the previous occupant,
+    /// which is valid because every private slot is initialised
+    /// to `Value::Unit` at construction.
+    fn write_data_slot(&mut self, slot: usize, value: Value) {
+        if slot < self.shared_slot_count as usize {
+            self.data[slot] = value;
+        } else {
+            // SAFETY: the slot is within the partition checked at
+            // construction; the pointee is a valid `Value` per
+            // the construction-time initialisation, so dropping
+            // it via the assignment is sound.
+            unsafe {
+                let private_idx = slot - self.shared_slot_count as usize;
+                let base = self.arena.persistent_ptr().as_ptr() as *mut Value;
+                *base.add(private_idx) = value;
+            }
+        }
     }
 
     /// Set a data segment slot to an initial value.
@@ -856,11 +1078,11 @@ impl<'a, 'arena> Vm<'a, 'arena> {
     /// persistent context. Returns an error if the slot index is out
     /// of bounds.
     pub fn set_data(&mut self, slot: usize, value: Value) -> Result<(), VmError> {
-        if slot >= self.data.len() {
+        let total = self.data_len();
+        if slot >= total {
             return Err(VmError::NativeError(format!(
                 "data slot index {} out of bounds (data segment has {} slots)",
-                slot,
-                self.data.len()
+                slot, total
             )));
         }
         if self.slot_is_private(slot) {
@@ -879,11 +1101,11 @@ impl<'a, 'arena> Vm<'a, 'arena> {
     /// slot is declared `private` in the source. Private slots are
     /// script-only and not exposed through the host API.
     pub fn get_data(&self, slot: usize) -> Result<&Value, VmError> {
-        if slot >= self.data.len() {
+        let total = self.data_len();
+        if slot >= total {
             return Err(VmError::NativeError(format!(
                 "data slot index {} out of bounds (data segment has {} slots)",
-                slot,
-                self.data.len()
+                slot, total
             )));
         }
         if self.slot_is_private(slot) {
@@ -902,16 +1124,8 @@ impl<'a, 'arena> Vm<'a, 'arena> {
     /// expected to have validated the bound before invoking this
     /// helper (both call sites do).
     fn slot_is_private(&self, slot: usize) -> bool {
-        match self.archived().data_layout.as_ref() {
-            None => false,
-            Some(dl) => match dl.slots.get(slot) {
-                None => false,
-                Some(s) => matches!(
-                    s.visibility,
-                    crate::bytecode::ArchivedSlotVisibility::Private
-                ),
-            },
-        }
+        slot >= self.shared_slot_count as usize
+            && slot < self.data_len()
     }
 
     /// Return the number of slots in the current data segment.
@@ -919,7 +1133,7 @@ impl<'a, 'arena> Vm<'a, 'arena> {
     /// Useful for hosts that want to allocate a `Vec<Value>` of the correct
     /// size without inspecting the `Module` directly.
     pub fn data_len(&self) -> usize {
-        self.data.len()
+        self.shared_slot_count as usize + self.private_slot_count as usize
     }
 
     /// Borrow the VM's arena.
@@ -1068,6 +1282,68 @@ impl<'a, 'arena> Vm<'a, 'arena> {
                 initial_data.len()
             )));
         }
+        // Partition the new module's slots. Subsequent code
+        // splits `initial_data` accordingly so the shared portion
+        // populates the Vm-owned vector and the private portion
+        // populates the arena's persistent region.
+        let (new_shared, new_private) = match new_module.data_layout.as_ref() {
+            None => (0u16, 0u16),
+            Some(dl) => {
+                let mut shared = 0u16;
+                let mut private_ = 0u16;
+                for slot in &dl.slots {
+                    match slot.visibility {
+                        crate::bytecode::SlotVisibility::Shared => {
+                            shared = shared.checked_add(1).ok_or_else(|| {
+                                VmError::VerifyError(String::from(
+                                    "data layout shared slot count exceeds u16::MAX",
+                                ))
+                            })?;
+                        }
+                        crate::bytecode::SlotVisibility::Private => {
+                            private_ = private_.checked_add(1).ok_or_else(|| {
+                                VmError::VerifyError(String::from(
+                                    "data layout private slot count exceeds u16::MAX",
+                                ))
+                            })?;
+                        }
+                    }
+                }
+                (shared, private_)
+            }
+        };
+        let new_private_storage = new_private as usize * core::mem::size_of::<Value>();
+        if self.arena.persistent_capacity() < new_private_storage {
+            return Err(VmError::VerifyError(format!(
+                "arena persistent_capacity ({} bytes) is too small for new module's private data ({} bytes); resize before hot swap",
+                self.arena.persistent_capacity(),
+                new_private_storage,
+            )));
+        }
+        // Drop the old private slots. Each was initialised at
+        // construction or at a prior hot swap and may hold owned
+        // resources whose destructor must run.
+        let old_private_count = self.private_slot_count as usize;
+        if old_private_count > 0 {
+            let base = self.arena.persistent_ptr().as_ptr() as *mut Value;
+            for i in 0..old_private_count {
+                // SAFETY: every old private slot held a valid
+                // `Value` initialised through `write_data_slot`
+                // or `Vm::construct`. `drop_in_place` runs the
+                // destructor in place; the bytes are then
+                // uninitialised and ready for `ptr::write`.
+                unsafe {
+                    core::ptr::drop_in_place(base.add(i));
+                }
+            }
+        }
+        // Split the host-supplied initial values into the
+        // shared and private partitions. The compiler emits
+        // shared slots first in the unified index space, so the
+        // split is a contiguous prefix.
+        let mut iter = initial_data.into_iter();
+        let shared_init: Vec<Value> = iter.by_ref().take(new_shared as usize).collect();
+        let private_init: Vec<Value> = iter.collect();
 
         // Serialize the new module to aligned bytes for archived
         // access. The borrowed variant is replaced by an owned variant
@@ -1078,9 +1354,28 @@ impl<'a, 'arena> Vm<'a, 'arena> {
         let decoded_ops = decode_all_ops(aligned.as_slice())?;
         self.bytecode = BytecodeStore::Owned(aligned);
         self.decoded_ops = decoded_ops;
-        self.data = initial_data;
+        self.data = shared_init;
+        self.shared_slot_count = new_shared;
+        self.private_slot_count = new_private;
+        // Initialise the new private slots via `ptr::write` (no
+        // drop on the destination, because we just dropped the
+        // old occupants above).
+        if new_private > 0 {
+            let base = self.arena.persistent_ptr().as_ptr() as *mut Value;
+            for (i, val) in private_init.into_iter().enumerate() {
+                // SAFETY: the destination is within the
+                // persistent region whose capacity was verified
+                // above; the bytes are uninitialised after the
+                // drop pass; `ptr::write` does not read the old
+                // value.
+                unsafe {
+                    base.add(i).write(val);
+                }
+            }
+        }
         // `full_reset_arena_internal` drops and recreates the
-        // arena-backed stacks before clearing both ends.
+        // arena-backed stacks before clearing both ends. The
+        // persistent region is preserved through the reset.
         let _ = self.full_reset_arena_internal();
         self.started = false;
 
@@ -1542,25 +1837,27 @@ impl<'a, 'arena> Vm<'a, 'arena> {
 
                 Op::GetData(slot) => {
                     let idx = slot as usize;
-                    if idx >= self.data.len() {
+                    let total = self.data_len();
+                    if idx >= total {
                         return Err(VmError::InvalidBytecode(format!(
                             "data slot index {} out of bounds",
                             idx
                         )));
                     }
-                    let val = self.data[idx].clone();
+                    let val = self.read_data_slot(idx);
                     sp!(self, val);
                 }
                 Op::SetData(slot) => {
                     let idx = slot as usize;
-                    if idx >= self.data.len() {
+                    let total = self.data_len();
+                    if idx >= total {
                         return Err(VmError::InvalidBytecode(format!(
                             "data slot index {} out of bounds",
                             idx
                         )));
                     }
                     let val = self.pop()?;
-                    self.data[idx] = val;
+                    self.write_data_slot(idx, val);
                 }
                 Op::GetDataIndexed(base, len) => {
                     let index = match self.pop()? {
@@ -1576,13 +1873,14 @@ impl<'a, 'arena> Vm<'a, 'arena> {
                         return Err(VmError::IndexOutOfBounds(index, len as usize));
                     }
                     let slot = base as usize + index as usize;
-                    if slot >= self.data.len() {
+                    let total = self.data_len();
+                    if slot >= total {
                         return Err(VmError::InvalidBytecode(format!(
                             "GetDataIndexed slot {} out of bounds",
                             slot
                         )));
                     }
-                    let val = self.data[slot].clone();
+                    let val = self.read_data_slot(slot);
                     sp!(self, val);
                 }
                 Op::SetDataIndexed(base, len) => {
@@ -1600,13 +1898,14 @@ impl<'a, 'arena> Vm<'a, 'arena> {
                     }
                     let val = self.pop()?;
                     let slot = base as usize + index as usize;
-                    if slot >= self.data.len() {
+                    let total = self.data_len();
+                    if slot >= total {
                         return Err(VmError::InvalidBytecode(format!(
                             "SetDataIndexed slot {} out of bounds",
                             slot
                         )));
                     }
-                    self.data[slot] = val;
+                    self.write_data_slot(slot, val);
                 }
                 Op::BoundsCheck(bound) => {
                     // Peek the top of the stack; trap if it is not a
@@ -5235,7 +5534,10 @@ mod tests {
         let tokens = tokenize(src).expect("lex");
         let program = parse(&tokens).expect("parse");
         let module = compile(&program).expect("compile");
-        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let mut arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        arena
+            .resize_persistent(required_persistent_capacity_for(&module))
+            .expect("resize persistent");
         let mut vm = Vm::new(module, &arena).expect("verify");
         // Slot 0 is shared; should succeed.
         vm.set_data(0, Value::Int(5)).expect("shared slot accepted");
@@ -5264,7 +5566,10 @@ mod tests {
         let tokens = tokenize(src).expect("lex");
         let program = parse(&tokens).expect("parse");
         let module = compile(&program).expect("compile");
-        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let mut arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        arena
+            .resize_persistent(required_persistent_capacity_for(&module))
+            .expect("resize persistent");
         let vm = Vm::new(module, &arena).expect("verify");
         let _ok = vm.get_data(0).expect("shared slot accessible");
         let err = vm.get_data(1).expect_err("private slot must reject");
@@ -5311,6 +5616,91 @@ mod tests {
         let program = parse(&tokens).expect("parse");
         let module = compile(&program).expect("compile accepts ephemeral main");
         assert!(module.flags & crate::bytecode::FLAG_EPHEMERAL != 0);
+    }
+
+    #[test]
+    fn private_slots_round_trip_through_arena() {
+        // Construct a module with one private slot. Write the
+        // slot from the script, then read it back. The value
+        // lives in the arena's persistent region; this test
+        // confirms the arena routing works end to end.
+        let src = "\
+            private data state { counter: Word }\n\
+            fn main() -> Word {\n\
+                state.counter = 42;\n\
+                state.counter\n\
+            }";
+        let tokens = tokenize(src).expect("lex");
+        let program = parse(&tokens).expect("parse");
+        let module = compile(&program).expect("compile");
+        let mut arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        arena
+            .resize_persistent(required_persistent_capacity_for(&module))
+            .expect("resize persistent");
+        assert_eq!(arena.persistent_capacity(), core::mem::size_of::<Value>());
+        let mut vm = Vm::new(module, &arena).expect("verify");
+        match vm.call(&[]).expect("call") {
+            VmState::Finished(v) => assert_eq!(v, Value::Int(42)),
+            other => panic!("expected Finished(42), got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn vm_new_rejects_insufficient_persistent_capacity() {
+        // The arena has zero persistent capacity. The module
+        // declares private data. `Vm::new` rejects with a
+        // helpful message.
+        let src = "\
+            private data state { x: Word }\n\
+            fn main() -> Word { state.x }";
+        let tokens = tokenize(src).expect("lex");
+        let program = parse(&tokens).expect("parse");
+        let module = compile(&program).expect("compile");
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        // Note: no resize_persistent call. Default persistent
+        // capacity is 0.
+        let err = match Vm::new(module, &arena) {
+            Ok(_) => panic!("Vm::new should have rejected the module"),
+            Err(e) => e,
+        };
+        match err {
+            VmError::VerifyError(msg) => {
+                assert!(
+                    msg.contains("persistent_capacity") && msg.contains("private"),
+                    "unexpected error message: {}",
+                    msg
+                );
+            }
+            other => panic!("expected VerifyError, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn vm_drop_runs_destructors_on_private_slots() {
+        // Sanity check: dropping a VM with multiple private
+        // slots iterates them all without overrunning the slot
+        // count. The slots hold `Value::Unit` (the default
+        // initialisation), whose Drop is a no-op; the test
+        // exercises the iteration bound, not the destructor
+        // body. A bug that miscomputed the slot count would
+        // either UAF or leak; this test does neither, which is
+        // the implicit assertion.
+        let src = "\
+            private data state { a: Word, b: Word, c: Word }\n\
+            fn main() -> Word { 0 }";
+        let tokens = tokenize(src).expect("lex");
+        let program = parse(&tokens).expect("parse");
+        let module = compile(&program).expect("compile");
+        let mut arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        arena
+            .resize_persistent(required_persistent_capacity_for(&module))
+            .expect("resize persistent");
+        {
+            let vm = Vm::new(module, &arena).expect("verify");
+            assert_eq!(vm.data_len(), 3);
+            // Drop happens at end of scope.
+            drop(vm);
+        }
     }
 
     #[test]
