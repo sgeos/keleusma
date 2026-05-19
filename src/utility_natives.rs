@@ -18,6 +18,7 @@ fn render_value_to_string(arena: &Arena, val: &Value) -> String {
         Value::Int(n) => format!("{}", n),
         Value::Byte(b) => format!("{}", b),
         Value::Fixed(bits) => format!("Fixed({})", bits),
+        #[cfg(feature = "floats")]
         Value::Float(f) => format!("{}", f),
         Value::Bool(b) => format!("{}", b),
         Value::StaticStr(s) => s.clone(),
@@ -287,7 +288,7 @@ pub fn register_utility_natives_with_ctx<'a, 'arena>(vm: &mut Vm<'a, 'arena>) {
     register_utility_natives(vm);
 }
 
-#[cfg(all(test, feature = "compile", feature = "verify"))]
+#[cfg(all(test, feature = "compile", feature = "verify", feature = "floats"))]
 mod tests {
     use super::*;
     use crate::compiler::compile;

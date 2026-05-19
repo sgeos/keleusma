@@ -1610,6 +1610,7 @@ impl<'a, 'arena> Vm<'a, 'arena> {
     ///
     /// Third-party crates may implement `Library` on their own
     /// types to ship reusable bundles of native functions.
+    #[cfg(feature = "floats")]
     pub fn register_library<L: crate::stddsl::Library>(&mut self, library: L) {
         library.register(self);
     }
@@ -2051,6 +2052,7 @@ impl<'a, 'arena> Vm<'a, 'arena> {
                             // by type-check invariant.
                             sp!(self, Value::Fixed(x.wrapping_add(y)));
                         }
+                        #[cfg(feature = "floats")]
                         (Value::Float(x), Value::Float(y)) => sp!(self, Value::Float(x + y)),
                         (a, b)
                             if matches!(a, Value::StaticStr(_) | Value::KStr(_))
@@ -2104,6 +2106,7 @@ impl<'a, 'arena> Vm<'a, 'arena> {
                         (Value::Byte(x), Value::Byte(y)) => {
                             sp!(self, Value::Byte(x.wrapping_div(y)));
                         }
+                        #[cfg(feature = "floats")]
                         (Value::Float(x), Value::Float(y)) => sp!(self, Value::Float(x / y)),
                         (a, b) => {
                             return Err(VmError::TypeError(format!(
@@ -2131,6 +2134,7 @@ impl<'a, 'arena> Vm<'a, 'arena> {
                         (Value::Byte(x), Value::Byte(y)) => {
                             sp!(self, Value::Byte(x.wrapping_rem(y)));
                         }
+                        #[cfg(feature = "floats")]
                         (Value::Float(x), Value::Float(y)) => sp!(self, Value::Float(x % y)),
                         (a, b) => {
                             return Err(VmError::TypeError(format!(
@@ -2154,6 +2158,7 @@ impl<'a, 'arena> Vm<'a, 'arena> {
                         ),
                         Value::Byte(x) => sp!(self, Value::Byte(x.wrapping_neg())),
                         Value::Fixed(x) => sp!(self, Value::Fixed(x.wrapping_neg())),
+                        #[cfg(feature = "floats")]
                         Value::Float(x) => sp!(self, Value::Float(-x)),
                         v => {
                             return Err(VmError::TypeError(format!(
@@ -2634,6 +2639,7 @@ impl<'a, 'arena> Vm<'a, 'arena> {
                     sp!(self, Value::Bool(matches));
                 }
 
+                #[cfg(feature = "floats")]
                 Op::IntToFloat => {
                     let val = self.pop()?;
                     match val {
@@ -2646,6 +2652,13 @@ impl<'a, 'arena> Vm<'a, 'arena> {
                         }
                     }
                 }
+                #[cfg(not(feature = "floats"))]
+                Op::IntToFloat => {
+                    return Err(VmError::InvalidBytecode(String::from(
+                        "Op::IntToFloat requires the `floats` feature",
+                    )));
+                }
+                #[cfg(feature = "floats")]
                 Op::FloatToInt => {
                     let val = self.pop()?;
                     match val {
@@ -2657,6 +2670,12 @@ impl<'a, 'arena> Vm<'a, 'arena> {
                             )));
                         }
                     }
+                }
+                #[cfg(not(feature = "floats"))]
+                Op::FloatToInt => {
+                    return Err(VmError::InvalidBytecode(String::from(
+                        "Op::FloatToInt requires the `floats` feature",
+                    )));
                 }
                 Op::WordToByte => {
                     let val = self.pop()?;
@@ -2803,7 +2822,14 @@ impl<'a, 'arena> Vm<'a, 'arena> {
     fn binary_arith(
         &mut self,
         int_op: fn(i64, i64) -> i64,
-        float_op: fn(f64, f64) -> f64,
+        // `float_op` is kept in the signature regardless of the
+        // `floats` feature so existing call sites compile
+        // unchanged. With `floats` off the `Value::Float` match arm
+        // is gated out below and the closure is unreachable; LTO
+        // strips both the closure body and the transitive
+        // `compiler_builtins` soft-float routines from the final
+        // image.
+        #[allow(unused_variables)] float_op: fn(f64, f64) -> f64,
     ) -> Result<(), VmError> {
         let word_bits_log2 = self.word_bits_log2();
         let b = self.pop()?;
@@ -2832,6 +2858,7 @@ impl<'a, 'arena> Vm<'a, 'arena> {
                 let result = int_op(x, y);
                 sp!(self, Value::Fixed(result));
             }
+            #[cfg(feature = "floats")]
             (Value::Float(x), Value::Float(y)) => sp!(self, Value::Float(float_op(x, y))),
             (a, b) => {
                 return Err(VmError::TypeError(format!(
@@ -2854,6 +2881,7 @@ impl<'a, 'arena> Vm<'a, 'arena> {
             (Value::Int(x), Value::Int(y)) => x.cmp(y),
             (Value::Byte(x), Value::Byte(y)) => x.cmp(y),
             (Value::Fixed(x), Value::Fixed(y)) => x.cmp(y),
+            #[cfg(feature = "floats")]
             (Value::Float(x), Value::Float(y)) => {
                 x.partial_cmp(y).unwrap_or(core::cmp::Ordering::Equal)
             }
@@ -3357,18 +3385,21 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "floats")]
     fn eval_float_arithmetic() {
         let val = run_expect("fn main() -> Float { 1.5 + 2.5 }", &[]);
         assert_eq!(val, Value::Float(4.0));
     }
 
     #[test]
+    #[cfg(feature = "floats")]
     fn eval_cast_int_to_float() {
         let val = run_expect("fn main() -> Float { 42 as Float }", &[]);
         assert_eq!(val, Value::Float(42.0));
     }
 
     #[test]
+    #[cfg(feature = "floats")]
     fn eval_cast_float_to_int() {
         let val = run_expect("fn main() -> Word { 3.7 as Word }", &[]);
         assert_eq!(val, Value::Int(3));
@@ -3766,6 +3797,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "floats")]
     fn eval_tuple_mixed_types() {
         let val = run_expect("fn main() -> Float { let t = (42, 2.5, true); t.1 }", &[]);
         assert_eq!(val, Value::Float(2.5));
@@ -5449,6 +5481,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "floats")]
     fn call_with_wrong_arg_type_returns_typed_error() {
         // The runtime validates each argument against the
         // parameter's declared type tag and rejects mismatches
@@ -5470,6 +5503,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "floats")]
     fn resume_with_wrong_type_returns_typed_error() {
         // Reviewer reproduction: a loop with `x: Word` parameter
         // could be resumed with a Float without complaint. The
@@ -5535,6 +5569,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "floats")]
     fn untyped_param_inferred_rejects_wrong_type_at_call() {
         // `fn main(x) -> Word { x }` infers `x: Word`. The chunk's
         // param_types must carry that inferred tag so Vm::call

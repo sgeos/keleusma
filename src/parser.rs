@@ -2024,6 +2024,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "floats")]
     fn parse_float_literal() {
         let expr = parse_expr_str("2.75").unwrap();
         assert!(
@@ -2145,6 +2146,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "floats")]
     fn parse_qualified_call() {
         let expr = parse_expr_str("audio::set_freq(440.0)").unwrap();
         match expr {
@@ -2159,6 +2161,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "floats")]
     fn parse_enum_variant() {
         let expr = parse_expr_str("Command::NoteOn(1, 60, 0.8)").unwrap();
         match expr {
@@ -2441,6 +2444,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "floats")]
     fn parse_guard_clause() {
         let src = r#"
             fn severity(level: Float) -> Word when level >= 0.9 {

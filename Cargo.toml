@@ -19,7 +19,21 @@ rust-version = "1.88"
 rustdoc-args = ["--cfg", "docsrs"]
 
 [features]
-default = ["compile", "verify"]
+default = ["compile", "verify", "floats"]
+
+# Enables the `Float` type, the `Op::IntToFloat` and
+# `Op::FloatToInt` opcodes, the `Value::Float` and
+# `ConstValue::Float` variants, the f64 arithmetic arms in the
+# VM's binary-operator dispatch, the float literal in the lexer,
+# and the `KeleusmaType` impl for `f64`. With the feature off,
+# float literals and the `Float` type are rejected at lex/parse
+# time and every float-related runtime variant is compiled away.
+# Hosts targeting flash-constrained embedded environments that
+# only need integer and fixed-point arithmetic disable this
+# feature to drop the soft-float `compiler_builtins` routines
+# (`__divdf3`, `__adddf3`, `__muldf3`) from the runtime image.
+# Default on for backward compatibility.
+floats = []
 
 # Enables the source-to-bytecode pipeline. With the feature on,
 # the public modules `lexer`, `parser`, `typecheck`,

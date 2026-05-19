@@ -8,7 +8,7 @@
 //! With either feature disabled the test file compiles to an empty
 //! module.
 
-#![cfg(all(feature = "compile", feature = "verify"))]
+#![cfg(all(feature = "compile", feature = "verify", feature = "floats"))]
 
 extern crate alloc;
 

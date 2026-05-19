@@ -607,31 +607,47 @@ impl<'a> Lexer<'a> {
             self.advance();
         }
 
-        // Check for float (decimal point followed by digit).
+        // Check for float (decimal point followed by digit). The
+        // float-literal path is only taken when the `floats` feature
+        // is enabled at the parent crate; with the feature off the
+        // lexer rejects float literals at this point so downstream
+        // passes never see a `TokenKind::FloatLit`.
         if self.peek() == Some(b'.') && self.peek_at(1).is_some_and(|c| c.is_ascii_digit()) {
-            self.advance(); // consume '.'
-            while self.peek().is_some_and(|c| c.is_ascii_digit()) {
-                self.advance();
-            }
-            // Check for f64 suffix.
-            if self.peek() == Some(b'f')
-                && self.peek_at(1) == Some(b'6')
-                && self.peek_at(2) == Some(b'4')
+            #[cfg(not(feature = "floats"))]
             {
-                self.advance();
-                self.advance();
-                self.advance();
+                return Err(LexError {
+                    message: alloc::string::String::from(
+                        "float literals require the `floats` cargo feature",
+                    ),
+                    span: self.span_from(start, start_line, start_col),
+                });
             }
-            let text = core::str::from_utf8(&self.source[start..self.pos]).unwrap_or("0");
-            let text = text.trim_end_matches("f64");
-            let value: f64 = text.parse().map_err(|_| LexError {
-                message: alloc::format!("float literal `{}` is not parseable as f64", text),
-                span: self.span_from(start, start_line, start_col),
-            })?;
-            return Ok(Token {
-                kind: TokenKind::FloatLit(value),
-                span: self.span_from(start, start_line, start_col),
-            });
+            #[cfg(feature = "floats")]
+            {
+                self.advance(); // consume '.'
+                while self.peek().is_some_and(|c| c.is_ascii_digit()) {
+                    self.advance();
+                }
+                // Check for f64 suffix.
+                if self.peek() == Some(b'f')
+                    && self.peek_at(1) == Some(b'6')
+                    && self.peek_at(2) == Some(b'4')
+                {
+                    self.advance();
+                    self.advance();
+                    self.advance();
+                }
+                let text = core::str::from_utf8(&self.source[start..self.pos]).unwrap_or("0");
+                let text = text.trim_end_matches("f64");
+                let value: f64 = text.parse().map_err(|_| LexError {
+                    message: alloc::format!("float literal `{}` is not parseable as f64", text),
+                    span: self.span_from(start, start_line, start_col),
+                })?;
+                return Ok(Token {
+                    kind: TokenKind::FloatLit(value),
+                    span: self.span_from(start, start_line, start_col),
+                });
+            }
         }
 
         // Check for i64 suffix.
@@ -1051,6 +1067,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "floats")]
     fn float_literals() {
         let result = kinds("3.25 0.5 100.0 4.75f64");
         assert_eq!(
@@ -1482,6 +1499,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "floats")]
     fn guard_clause() {
         let result = kinds("fn severity(level: Float) -> Text when level >= 0.9 {");
         assert!(result.contains(&TokenKind::When));

@@ -69,6 +69,7 @@ impl KeleusmaType for u8 {
     }
 }
 
+#[cfg(feature = "floats")]
 impl KeleusmaType for f64 {
     fn from_value(v: &Value) -> Result<Self, VmError> {
         match v {
@@ -311,7 +312,7 @@ impl_into_native_fn!(4; A: 0, B: 1, C: 2, D: 3);
 
 // Tests live alongside the trait. Integration tests across vm.rs cover
 // register_fn registration end to end.
-#[cfg(test)]
+#[cfg(all(test, feature = "floats"))]
 mod tests {
     use super::*;
 

@@ -38,7 +38,10 @@ pub enum ConstValue {
     /// and is carried by the opcodes that consume the value
     /// rather than stored alongside.
     Fixed(i64),
-    /// 64-bit floating-point number.
+    /// 64-bit floating-point number. Gated behind the `floats`
+    /// cargo feature so flash-constrained targets that do not use
+    /// floating-point arithmetic can compile the variant out.
+    #[cfg(feature = "floats")]
     Float(f64),
     /// Immutable static string referenced from the rodata region.
     /// Source-level string literals compile to this variant.
@@ -91,7 +94,9 @@ pub enum Value {
     /// opcodes that produce or consume the value. On the V0.1.x
     /// host runtime the format is Q31.32 (32 fraction bits).
     Fixed(i64),
-    /// 64-bit floating-point number.
+    /// 64-bit floating-point number. Gated behind the `floats`
+    /// cargo feature.
+    #[cfg(feature = "floats")]
     Float(f64),
     /// Immutable static string referenced from the rodata region. Source-level
     /// string literals compile to this variant. Permitted to flow through the
@@ -175,6 +180,7 @@ impl PartialEq for Value {
             (Value::Int(a), Value::Int(b)) => a == b,
             (Value::Byte(a), Value::Byte(b)) => a == b,
             (Value::Fixed(a), Value::Fixed(b)) => a == b,
+            #[cfg(feature = "floats")]
             (Value::Float(a), Value::Float(b)) => a == b,
             // Static strings compare equal if their contents match.
             (Value::StaticStr(a), Value::StaticStr(b)) => a == b,
@@ -241,6 +247,7 @@ impl Value {
             Value::Int(_) => "Int",
             Value::Byte(_) => "Byte",
             Value::Fixed(_) => "Fixed",
+            #[cfg(feature = "floats")]
             Value::Float(_) => "Float",
             Value::StaticStr(_) => "StaticStr",
             Value::KStr(_) => "KStr",
@@ -329,6 +336,7 @@ impl Value {
             ArchivedConstValue::Int(i) => Value::Int(i.to_native()),
             ArchivedConstValue::Byte(b) => Value::Byte(*b),
             ArchivedConstValue::Fixed(i) => Value::Fixed(i.to_native()),
+            #[cfg(feature = "floats")]
             ArchivedConstValue::Float(f) => Value::Float(f.to_native()),
             ArchivedConstValue::StaticStr(s) => {
                 use alloc::string::ToString;
@@ -1214,7 +1222,10 @@ impl TypeTag {
             TypeTag::Byte => matches!(value, Value::Byte(_)),
             TypeTag::Word => matches!(value, Value::Int(_)),
             TypeTag::Fixed => matches!(value, Value::Fixed(_)),
+            #[cfg(feature = "floats")]
             TypeTag::Float => matches!(value, Value::Float(_)),
+            #[cfg(not(feature = "floats"))]
+            TypeTag::Float => false,
             TypeTag::Bool => matches!(value, Value::Bool(_)),
             TypeTag::Unit => matches!(value, Value::Unit),
             TypeTag::Text => matches!(value, Value::StaticStr(_) | Value::KStr(_)),
@@ -2006,6 +2017,7 @@ impl ConstValue {
             Value::Int(i) => Ok(ConstValue::Int(i)),
             Value::Byte(b) => Ok(ConstValue::Byte(b)),
             Value::Fixed(i) => Ok(ConstValue::Fixed(i)),
+            #[cfg(feature = "floats")]
             Value::Float(f) => Ok(ConstValue::Float(f)),
             Value::StaticStr(s) => Ok(ConstValue::StaticStr(s)),
             Value::KStr(_) => Err("KStr cannot be a compile-time constant"),
@@ -2060,6 +2072,7 @@ impl ConstValue {
             ConstValue::Int(i) => Value::Int(i),
             ConstValue::Byte(b) => Value::Byte(b),
             ConstValue::Fixed(i) => Value::Fixed(i),
+            #[cfg(feature = "floats")]
             ConstValue::Float(f) => Value::Float(f),
             ConstValue::StaticStr(s) => Value::StaticStr(s),
             ConstValue::Tuple(items) => {
@@ -2097,6 +2110,7 @@ impl PartialEq for ConstValue {
             (ConstValue::Int(a), ConstValue::Int(b)) => a == b,
             (ConstValue::Byte(a), ConstValue::Byte(b)) => a == b,
             (ConstValue::Fixed(a), ConstValue::Fixed(b)) => a == b,
+            #[cfg(feature = "floats")]
             (ConstValue::Float(a), ConstValue::Float(b)) => a == b,
             (ConstValue::StaticStr(a), ConstValue::StaticStr(b)) => a == b,
             (ConstValue::Tuple(a), ConstValue::Tuple(b))

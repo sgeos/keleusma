@@ -37,12 +37,15 @@ build = "build.rs"
 # verifier respectively. With both off, the runtime accepts
 # only precompiled bytecode loaded under trust.
 #
-# The `text` feature is intentionally NOT enabled: task scripts
-# do not use string literals or f-strings, and diagnostic
-# logging is performed through the numeric `host::log_event`
-# native. Dropping `text` removes the lexer, parser, and
-# runtime support for `Value::StaticStr` and `Value::KStr`
-# from the flash image.
+# The `text` and `floats` features are intentionally NOT
+# enabled: task scripts use only integer and fixed-point
+# arithmetic, and diagnostic logging is performed through the
+# numeric `host::log_event` native. Dropping `text` removes the
+# lexer, parser, and runtime support for `Value::StaticStr` and
+# `Value::KStr` from the flash image. Dropping `floats` removes
+# the `Value::Float` arm in the VM's binary-arith dispatch and
+# the transitive soft-float compiler_builtins routines
+# (`__divdf3`, `__adddf3`, `__muldf3`).
 keleusma = { path = "../..", default-features = false }
 
 # --- N6 platform dependencies. All optional, all gated on the
@@ -102,12 +105,13 @@ embedded-alloc = { version = "0.6", optional = true }
 # `compile` and `verify` here does not pull them into the
 # runtime image.
 [build-dependencies]
-# Scripts compile without the `text` feature; the build-time
-# pipeline therefore also runs with `text` off so that the
-# precompiled bytecode emitted by `build.rs` matches what the
-# runtime would accept. `compile` and `verify` are enabled
-# unconditionally so build.rs can run the full pipeline at
-# host build time regardless of the runtime feature selection.
+# Scripts compile without the `text` or `floats` features; the
+# build-time pipeline therefore also runs with those features
+# off so that the precompiled bytecode emitted by `build.rs`
+# matches what the runtime would accept. `compile` and `verify`
+# are enabled unconditionally so build.rs can run the full
+# pipeline at host build time regardless of the runtime feature
+# selection.
 keleusma = { path = "../..", default-features = false, features = [
     "compile",
     "verify",

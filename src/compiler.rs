@@ -1253,7 +1253,12 @@ fn const_value_any(init: &ConstInitializer) -> crate::bytecode::ConstValue {
     use crate::bytecode::ConstValue;
     match init {
         ConstInitializer::Scalar(Literal::Int(n)) => ConstValue::Int(*n),
+        #[cfg(feature = "floats")]
         ConstInitializer::Scalar(Literal::Float(f)) => ConstValue::Float(*f),
+        #[cfg(not(feature = "floats"))]
+        ConstInitializer::Scalar(Literal::Float(_)) => {
+            unreachable!("float literals are rejected at lex time when the `floats` feature is off")
+        }
         ConstInitializer::Scalar(Literal::Bool(b)) => ConstValue::Bool(*b),
         ConstInitializer::Scalar(Literal::String(s)) => ConstValue::StaticStr(s.clone()),
         ConstInitializer::Scalar(Literal::Unit) => ConstValue::Unit,
@@ -1319,6 +1324,7 @@ fn const_value_from_literal_for_field(
                 }
                 Ok(ConstValue::Byte(*n as u8))
             }
+            #[cfg(feature = "floats")]
             (Literal::Float(f), PrimType::Float) => Ok(ConstValue::Float(*f)),
             (Literal::Bool(b), PrimType::Bool) => Ok(ConstValue::Bool(*b)),
             (Literal::String(s), PrimType::Text) => Ok(ConstValue::StaticStr(s.clone())),
@@ -3256,9 +3262,16 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
                 let idx = fc.add_constant(Value::Int(*v));
                 fc.emit(Op::Const(idx));
             }
+            #[cfg(feature = "floats")]
             Literal::Float(v) => {
                 let idx = fc.add_constant(Value::Float(*v));
                 fc.emit(Op::Const(idx));
+            }
+            #[cfg(not(feature = "floats"))]
+            Literal::Float(_) => {
+                unreachable!(
+                    "float literals are rejected at lex time when the `floats` feature is off"
+                );
             }
             Literal::String(s) => {
                 let idx = fc.add_constant(Value::StaticStr(s.clone()));
@@ -3925,9 +3938,16 @@ fn compile_pattern_test(
                     let idx = fc.add_constant(Value::Int(*v));
                     fc.emit(Op::Const(idx));
                 }
+                #[cfg(feature = "floats")]
                 Literal::Float(v) => {
                     let idx = fc.add_constant(Value::Float(*v));
                     fc.emit(Op::Const(idx));
+                }
+                #[cfg(not(feature = "floats"))]
+                Literal::Float(_) => {
+                    unreachable!(
+                        "float literals are rejected at lex time when the `floats` feature is off"
+                    );
                 }
                 Literal::String(s) => {
                     let idx = fc.add_constant(Value::StaticStr(s.clone()));

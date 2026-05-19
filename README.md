@@ -37,8 +37,9 @@ The runtime crate exposes three orthogonal feature gates so hosts can strip pipe
 | `compile` | on | Lexer, parser, type checker, monomorphizer, compiler. The source-to-bytecode pipeline. | The host ships precompiled bytecode and loads through `Module::from_bytes` or `Vm::view_bytes_zero_copy`. |
 | `verify` | on | Structural verifier, WCET and WCMU resource-bounds pass. Used inside `Vm::new` at load time. | An equivalent verification ran at artefact-ingestion time; `Vm::new` then degrades to a trust-load equivalent to `Vm::new_unchecked`. |
 | `text` | on | Surface syntax for string literals and the `Text` type, f-string interpolation, the utility natives (`to_string`, `concat`, `slice`, `length`, `println`). The `Value::StaticStr` and `Value::KStr` runtime variants. | Scripts use only numeric arguments. Diagnostics route through registered host natives that take numeric event codes. |
+| `floats` | on | Surface syntax for the `Float` type and float literals, `Value::Float` and `ConstValue::Float` variants, `Op::IntToFloat` and `Op::FloatToInt` opcode bodies, the f64 arm in `Vm::binary_arith`, the `KeleusmaType` impl for `f64`, the `audio_natives` and `stddsl` bundles. | Scripts use only integer, byte, and fixed-point arithmetic. Dropping `floats` removes the soft-float `compiler_builtins` routines (`__divdf3`, `__adddf3`, `__muldf3`) from the runtime image; on the bare-metal STM32N6570-DK build this is roughly 12 KB. |
 
-The three features compose freely. The `examples/rtos/` cooperative microkernel disables `text` and uses precompiled bytecode under either `keleusma-verify` only (199 KB `.text`) or trust-load (180 KB `.text`) on the STM32N6570-DK; see [`examples/rtos/MANUAL.md`](examples/rtos/MANUAL.md) for the measured flash-size table.
+The features compose freely. The `examples/rtos/` cooperative microkernel disables both `text` and `floats` and uses precompiled bytecode under either `keleusma-verify` only (157 KB `.text`) or trust-load (137 KB `.text`) on the STM32N6570-DK; see [`examples/rtos/MANUAL.md`](examples/rtos/MANUAL.md) for the measured flash-size table.
 
 ## Quick Start
 

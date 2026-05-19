@@ -4,14 +4,26 @@ extern crate alloc;
 // Always-on runtime modules. These compile under any feature
 // combination and form the minimum surface needed to load and
 // run precompiled bytecode.
-pub mod audio_natives;
 pub mod bytecode;
 pub mod kstring;
 pub mod marshall;
 pub mod opaque;
-pub mod stddsl;
 pub mod utility_natives;
 pub mod vm;
+
+// Audio natives use floating-point arithmetic throughout (note
+// frequency, phase, filter coefficients) and are only useful on
+// hosts that enable the `floats` feature. Without floats the
+// bundle's native signatures cannot satisfy the `IntoNativeFn`
+// trait bounds because `KeleusmaType for f64` is not in scope.
+#[cfg(feature = "floats")]
+pub mod audio_natives;
+
+// The stddsl bundle exposes Math and other DSL helpers that pin
+// f64 parameters and returns. Gated alongside `floats` for the
+// same reason as `audio_natives`.
+#[cfg(feature = "floats")]
+pub mod stddsl;
 
 // Compile-pipeline modules. Gated behind the `compile` feature
 // (default on). With the feature off, the runtime accepts only

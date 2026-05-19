@@ -393,6 +393,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "floats")]
     fn embedded_16_rejects_float_literal() {
         let err = try_compile_with_target("fn main() -> Float { 1.5 }", &Target::embedded_16())
             .unwrap_err();

@@ -2801,6 +2801,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "floats")]
     fn arithmetic_type_mismatch_rejected() {
         let err = check_src("fn main() -> Word { 1 + 2.0 }").unwrap_err();
         assert!(err.message.contains("cannot add"));
@@ -2880,11 +2881,13 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "floats")]
     fn used_native_accepted() {
         check_src("use math::sqrt\nfn main() -> Float { math::sqrt(9.0) }").unwrap();
     }
 
     #[test]
+    #[cfg(feature = "floats")]
     fn qualified_call_treated_as_native() {
         // Qualified names with `::` are treated as natives even
         // without an explicit `use` declaration.
