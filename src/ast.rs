@@ -195,6 +195,41 @@ pub struct NativeSignature {
 pub enum TypeDef {
     Struct(StructDef),
     Enum(EnumDef),
+    Newtype(NewtypeDef),
+}
+
+/// A newtype definition.
+///
+/// `newtype Name = Underlying;` introduces a distinct nominal type
+/// `Name` that wraps the underlying type. The bytecode
+/// representation is identical to the underlying type's
+/// representation; no `Value::Struct` envelope is added. The type
+/// checker rejects mixing newtypes with their underlying type
+/// without explicit construction or extraction, which makes
+/// newtypes the right tool for unit discipline and semantic
+/// distinctions that should not be silently coerced.
+///
+/// Construction is `Name(expr)` at the expression level; the
+/// argument is checked against the underlying type. The compiled
+/// form is identity: only the inner expression's bytecode is
+/// emitted.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NewtypeDef {
+    pub name: String,
+    pub underlying: TypeExpr,
+    /// Optional refinement predicate. When `Some(name)`, the
+    /// compiler emits a call to the named atomic-total function at
+    /// every newtype construction site, followed by a trap if the
+    /// function returns false. The predicate function must be
+    /// declared in the same program and must have signature
+    /// `fn(Underlying) -> Bool`. The type checker enforces the
+    /// signature; the verifier confirms that the predicate is
+    /// total. The runtime cost of the check is paid at every
+    /// construction; constant folding may elide the call when the
+    /// argument is known at compile time, though that optimisation
+    /// is not yet implemented.
+    pub refinement: Option<String>,
+    pub span: Span,
 }
 
 /// A struct definition.

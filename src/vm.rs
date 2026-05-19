@@ -2998,6 +2998,56 @@ mod tests {
     }
 
     #[test]
+    fn newtype_construction_returns_underlying_at_runtime() {
+        // Newtype `Percent` is transparent at runtime; the value
+        // produced is the underlying Word.
+        let val = run_expect(
+            "newtype Percent = Word;\n\
+             fn main() -> Percent { Percent(42) }",
+            &[],
+        );
+        assert_eq!(val, Value::Int(42));
+    }
+
+    #[test]
+    fn refinement_predicate_passes_when_argument_in_range() {
+        // The predicate `nonneg` returns true for non-negative
+        // arguments; the construction succeeds and the value
+        // passes through.
+        let val = run_expect(
+            "fn nonneg(x: Word) -> bool { x >= 0 }\n\
+             newtype Counter = Word where nonneg;\n\
+             fn main() -> Counter { Counter(42) }",
+            &[],
+        );
+        assert_eq!(val, Value::Int(42));
+    }
+
+    #[test]
+    fn refinement_predicate_traps_when_argument_out_of_range() {
+        // The predicate `nonneg` returns false for -1; the
+        // newtype construction traps with a message naming the
+        // predicate and the newtype.
+        let err = run_program(
+            "fn nonneg(x: Word) -> bool { x >= 0 }\n\
+             newtype Counter = Word where nonneg;\n\
+             fn main() -> Counter { Counter(0 - 1) }",
+            &[],
+        )
+        .unwrap_err();
+        match err {
+            VmError::Trap(msg) => {
+                assert!(
+                    msg.contains("nonneg") && msg.contains("Counter"),
+                    "expected refinement-trap message naming `nonneg` and `Counter`, got: {}",
+                    msg
+                );
+            }
+            other => panic!("expected VmError::Trap, got {:?}", other),
+        }
+    }
+
+    #[test]
     fn enum_to_word_cast_implicit_discriminants() {
         // Implicit discriminants: Red=0, Green=1, Blue=2.
         let val = run_expect(

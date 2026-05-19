@@ -108,6 +108,12 @@ pub enum Type {
     /// Named enum with optional generic type arguments. Empty
     /// `Vec<Type>` for non-generic enums.
     Enum(String, Vec<Type>),
+    /// Distinct nominal type wrapping an underlying type. The
+    /// bytecode representation matches the underlying; the wrapper
+    /// exists only at the type-checker level. Two newtypes with
+    /// different names are not assignable to one another even when
+    /// their underlying types match.
+    Newtype(String, Box<Type>),
     /// Opaque type referenced by name.
     Opaque(String),
     /// Type variable for Hindley-Milner inference. Allocated by the
@@ -206,6 +212,18 @@ impl Type {
                 match defined_types.get(name) {
                     Some(TypeKind::Struct) => Type::Struct(name.clone(), resolved_args),
                     Some(TypeKind::Enum) => Type::Enum(name.clone(), resolved_args),
+                    Some(TypeKind::Newtype) => {
+                        // The newtype's underlying type lives in
+                        // `Ctx::newtypes`; consult it at the use
+                        // sites that actually need it (newtype
+                        // construction, value extraction). The
+                        // variant's stored underlying is a
+                        // placeholder here because the resolver does
+                        // not carry the newtype map; equality and
+                        // unification depend only on the name, not
+                        // on the underlying.
+                        Type::Newtype(name.clone(), Box::new(Type::Unknown))
+                    }
                     None => Type::Opaque(name.clone()),
                 }
             }
@@ -236,6 +254,7 @@ impl Type {
                     format!("{}<{}>", name, inner.join(", "))
                 }
             }
+            Type::Newtype(name, _) => name.clone(),
             Type::Opaque(name) => name.clone(),
             Type::Var(n) => format!("?T{}", n),
             Type::Unknown => "<unknown>".to_string(),
@@ -251,6 +270,7 @@ impl Type {
             Type::Array(elem, _) => elem.occurs(var),
             Type::Option(inner) => inner.occurs(var),
             Type::Struct(_, args) | Type::Enum(_, args) => args.iter().any(|t| t.occurs(var)),
+            Type::Newtype(_, underlying) => underlying.occurs(var),
             _ => false,
         }
     }
@@ -271,6 +291,9 @@ impl Type {
             }
             Type::Enum(name, args) => {
                 Type::Enum(name.clone(), args.iter().map(|t| t.apply(subst)).collect())
+            }
+            Type::Newtype(name, underlying) => {
+                Type::Newtype(name.clone(), Box::new(underlying.apply(subst)))
             }
             other => other.clone(),
         }
@@ -411,6 +434,13 @@ pub fn unify(a: &Type, b: &Type, subst: &mut Subst) -> Result<(), UnifyError> {
             Ok(())
         }
         (Type::Opaque(ln), Type::Opaque(rn)) if ln == rn => Ok(()),
+        // Newtypes unify by name alone. The stored underlying is a
+        // placeholder at use sites (the resolver does not carry the
+        // newtype map); the authoritative underlying lives in
+        // `Ctx::newtypes` and is consulted at construction or cast
+        // sites. Two newtypes with matching names are equivalent
+        // regardless of their stored underlying.
+        (Type::Newtype(ln, _), Type::Newtype(rn, _)) if ln == rn => Ok(()),
         (l, r) => Err(UnifyError::Mismatch { left: l, right: r }),
     }
 }
@@ -443,6 +473,11 @@ impl VarGen {
 enum TypeKind {
     Struct,
     Enum,
+    /// Distinct nominal type wrapping an underlying primitive or
+    /// composite. The underlying type is stored separately in
+    /// `Ctx::newtypes` so the resolver can recover it at
+    /// construction sites and at runtime cast points.
+    Newtype,
 }
 
 /// Return the canonical head name of a type, used as the implementing
@@ -465,6 +500,7 @@ fn type_head_name(t: &Type) -> Option<String> {
         Type::Array(_, _) => Some("array".to_string()),
         Type::Option(_) => Some("Option".to_string()),
         Type::Struct(name, _) | Type::Enum(name, _) | Type::Opaque(name) => Some(name.clone()),
+        Type::Newtype(name, _) => Some(name.clone()),
         Type::Var(_) | Type::Unknown => None,
     }
 }
@@ -534,6 +570,11 @@ struct Ctx {
     /// `Type::Struct("Pair", _)`, and so on.
     impls: BTreeMap<String, BTreeSet<String>>,
     functions: BTreeMap<String, FnSig>,
+    /// Newtype declarations keyed by name. Stores the resolved
+    /// underlying type for use at construction sites (where the
+    /// argument must match the underlying) and at extraction sites
+    /// (where the value's runtime representation is the underlying's).
+    newtypes: BTreeMap<String, Type>,
     /// Native function names imported via `use` declarations. Calls
     /// to these names are accepted with any argument types when the
     /// `use` declaration does not carry a signature; declarations
@@ -581,6 +622,7 @@ impl Ctx {
             functions: BTreeMap::new(),
             natives: BTreeSet::new(),
             native_signatures: BTreeMap::new(),
+            newtypes: BTreeMap::new(),
             data: BTreeMap::new(),
             locals: Vec::new(),
             current_return: None,
@@ -822,8 +864,9 @@ pub fn check(program: &mut Program) -> Result<(), TypeError> {
 }
 
 fn run_check(program: &mut Program, mut ctx: Ctx) -> Result<(), TypeError> {
-    // Pass 1a. Collect type kinds (struct vs enum) so name resolution
-    // works while reading field signatures.
+    // Pass 1a. Collect type kinds (struct, enum, newtype) so name
+    // resolution works while reading field signatures and newtype
+    // underlying types.
     for type_def in &program.types {
         match type_def {
             TypeDef::Struct(s) => {
@@ -832,6 +875,28 @@ fn run_check(program: &mut Program, mut ctx: Ctx) -> Result<(), TypeError> {
             TypeDef::Enum(e) => {
                 ctx.types.insert(e.name.clone(), TypeKind::Enum);
             }
+            TypeDef::Newtype(n) => {
+                ctx.types.insert(n.name.clone(), TypeKind::Newtype);
+            }
+        }
+    }
+
+    // Pass 1a'. Resolve newtype underlying types. Newtypes are
+    // resolved after every name has been registered in pass 1a so
+    // a newtype may reference structs, enums, or other newtypes
+    // declared in any order. Cycles between newtypes are not
+    // currently detected; a future check should reject them.
+    //
+    // Newtypes that carry a refinement predicate also have the
+    // predicate's signature validated here once the function
+    // signatures have been built in pass 1c. The signature check
+    // is deferred to a later pass; the underlying type is
+    // resolved now so refinement-augmented newtype types are
+    // available at construction sites in pass 2.
+    for type_def in &program.types {
+        if let TypeDef::Newtype(n) = type_def {
+            let underlying = ctx.resolve_type(&n.underlying);
+            ctx.newtypes.insert(n.name.clone(), underlying);
         }
     }
 
@@ -882,6 +947,11 @@ fn run_check(program: &mut Program, mut ctx: Ctx) -> Result<(), TypeError> {
                 }
                 ctx.enums.insert(e.name.clone(), variants);
                 ctx.enum_type_param_vars.insert(e.name.clone(), tp_vars);
+            }
+            TypeDef::Newtype(_) => {
+                // Newtype underlying types were resolved in
+                // pass 1a' above. Pass 1b's field/variant
+                // construction does not apply.
             }
         }
     }
@@ -976,6 +1046,68 @@ fn run_check(program: &mut Program, mut ctx: Ctx) -> Result<(), TypeError> {
         );
     }
 
+    // Pass 1c'. Validate refinement predicates on newtype
+    // declarations. Each `newtype Name = Underlying where pred`
+    // requires that `pred` is declared in the same program with
+    // signature `fn(Underlying) -> Bool` and category Atomic. The
+    // category check is enforced through `FnSig` already
+    // restricting to function-shaped signatures; the parameter
+    // and return type checks are explicit here.
+    for type_def in &program.types {
+        if let TypeDef::Newtype(n) = type_def
+            && let Some(pred_name) = &n.refinement
+        {
+            let underlying = ctx.newtypes.get(&n.name).cloned().unwrap_or(Type::Unknown);
+            // Clone the signature to release the borrow on `ctx`
+            // before calling `types_compatible`, which requires
+            // `&mut ctx`.
+            let sig = ctx.functions.get(pred_name).cloned().ok_or_else(|| {
+                TypeError::new(
+                    alloc::format!(
+                        "refinement predicate `{}` on newtype `{}` is not declared in this program",
+                        pred_name,
+                        n.name
+                    ),
+                    n.span,
+                )
+            })?;
+            if sig.params.len() != 1 {
+                return Err(TypeError::new(
+                    alloc::format!(
+                        "refinement predicate `{}` must take exactly 1 argument, takes {}",
+                        pred_name,
+                        sig.params.len()
+                    ),
+                    n.span,
+                ));
+            }
+            let sig_param = sig.params[0].clone();
+            let sig_return = sig.return_type.clone();
+            if !types_compatible(&mut ctx, &sig_param, &underlying) {
+                return Err(TypeError::new(
+                    alloc::format!(
+                        "refinement predicate `{}` parameter type {} does not match newtype `{}` underlying {}",
+                        pred_name,
+                        sig_param.display(),
+                        n.name,
+                        underlying.display()
+                    ),
+                    n.span,
+                ));
+            }
+            if !matches!(sig_return, Type::Bool) {
+                return Err(TypeError::new(
+                    alloc::format!(
+                        "refinement predicate `{}` must return Bool, returns {}",
+                        pred_name,
+                        sig_return.display()
+                    ),
+                    n.span,
+                ));
+            }
+        }
+    }
+
     // Pass 1d. Register trait declarations and implementation blocks.
     // Traits collect their declared method signatures. Impls record
     // the (trait, type) pair in `ctx.impls` so call-site bound
@@ -998,6 +1130,7 @@ fn run_check(program: &mut Program, mut ctx: Ctx) -> Result<(), TypeError> {
             Type::Array(_, _) => "array".to_string(),
             Type::Option(_) => "Option".to_string(),
             Type::Struct(name, _) | Type::Enum(name, _) | Type::Opaque(name) => name,
+            Type::Newtype(name, _) => name,
             Type::Var(_) | Type::Unknown => continue,
         };
         ctx.impls
@@ -1180,6 +1313,7 @@ fn run_check(program: &mut Program, mut ctx: Ctx) -> Result<(), TypeError> {
             Type::Array(_, _) => "array".to_string(),
             Type::Option(_) => "Option".to_string(),
             Type::Struct(name, _) | Type::Enum(name, _) | Type::Opaque(name) => name,
+            Type::Newtype(name, _) => name,
             Type::Var(_) | Type::Unknown => continue,
         };
         for method in &impl_block.methods {
@@ -2027,6 +2161,39 @@ fn type_of_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Type, TypeError> {
             // without a declared signature continue to be accepted
             // with any argument types and a fresh return-type
             // variable; this is the legacy permissive path.
+            // Newtype construction. `Name(value)` where `Name` is a
+            // declared newtype constructs a value of the newtype.
+            // The argument must match the newtype's underlying type;
+            // the resulting expression has type `Newtype(name,
+            // underlying)`. The bytecode emitted at the compiler
+            // layer is just the inner expression's value, because
+            // newtypes are transparent at the runtime level.
+            if let Some(TypeKind::Newtype) = ctx.types.get(name) {
+                if args.len() != 1 {
+                    return Err(TypeError::new(
+                        alloc::format!(
+                            "newtype `{}` constructor expects 1 argument, got {}",
+                            name,
+                            args.len()
+                        ),
+                        *span,
+                    ));
+                }
+                let underlying = ctx.newtypes.get(name).cloned().unwrap_or(Type::Unknown);
+                let arg_ty = type_of_expr(ctx, &args[0])?;
+                if !types_compatible(ctx, &arg_ty, &underlying) {
+                    return Err(TypeError::new(
+                        alloc::format!(
+                            "newtype `{}` constructor expects {}, got {}",
+                            name,
+                            underlying.display(),
+                            arg_ty.display()
+                        ),
+                        args[0].span(),
+                    ));
+                }
+                return Ok(Type::Newtype(name.clone(), Box::new(underlying)));
+            }
             let sig = match ctx.functions.get(name).cloned() {
                 Some(s) => s,
                 None => {
@@ -2787,6 +2954,150 @@ mod tests {
         crate::compiler::compile(&program)
             .map(|_| ())
             .map_err(|e| e.message)
+    }
+
+    #[test]
+    fn newtype_construction_accepts_underlying() {
+        // `newtype LocalMs = Word;` introduces a distinct nominal
+        // type whose underlying is Word. Construction with a Word
+        // argument type-checks.
+        check_src(
+            "newtype LocalMs = Word;\n\
+             fn main() -> LocalMs { LocalMs(42) }",
+        )
+        .expect("newtype construction with matching underlying should type-check");
+    }
+
+    #[test]
+    fn newtype_construction_rejects_wrong_underlying() {
+        // The newtype's underlying is Word; passing a Bool should
+        // be rejected.
+        let err = check_src(
+            "newtype LocalMs = Word;\n\
+             fn main() -> LocalMs { LocalMs(true) }",
+        )
+        .unwrap_err();
+        assert!(
+            err.message.contains("expects Word"),
+            "unexpected error: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn newtype_distinct_from_underlying() {
+        // A newtype is not assignable to its underlying type
+        // without explicit construction or extraction. A function
+        // declared to return Word cannot return a LocalMs value.
+        let err = check_src(
+            "newtype LocalMs = Word;\n\
+             fn main() -> Word { LocalMs(42) }",
+        )
+        .unwrap_err();
+        assert!(
+            err.message.contains("returns Word") && err.message.contains("LocalMs"),
+            "unexpected error: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn newtype_distinct_from_other_newtype() {
+        // Two newtypes over the same underlying are not
+        // interchangeable. A function declared to return
+        // OriginFrameMs cannot return a LocalMs.
+        let err = check_src(
+            "newtype LocalMs = Word;\n\
+             newtype OriginFrameMs = Word;\n\
+             fn main() -> OriginFrameMs { LocalMs(42) }",
+        )
+        .unwrap_err();
+        assert!(
+            err.message.contains("LocalMs") && err.message.contains("OriginFrameMs"),
+            "unexpected error: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn newtype_compiles_to_underlying() {
+        // The newtype is transparent at the bytecode level. The
+        // compiled program runs and returns the underlying value;
+        // accessing the wrapped Word through the newtype layer is
+        // a no-op at runtime.
+        compile_src(
+            "newtype LocalMs = Word;\n\
+             fn main() -> LocalMs { LocalMs(7 + 35) }",
+        )
+        .expect("newtype-wrapping program should compile");
+    }
+
+    #[test]
+    fn refinement_predicate_signature_validated() {
+        // The predicate must be a declared function taking the
+        // newtype's underlying type and returning Bool.
+        check_src(
+            "fn in_range(x: Word) -> bool { x >= 0 and x <= 100 }\n\
+             newtype Percent = Word where in_range;\n\
+             fn main() -> Percent { Percent(50) }",
+        )
+        .expect("well-formed refinement should type-check");
+    }
+
+    #[test]
+    fn refinement_predicate_must_exist() {
+        let err = check_src(
+            "newtype Percent = Word where in_range;\n\
+             fn main() -> Word { 0 }",
+        )
+        .unwrap_err();
+        assert!(
+            err.message.contains("is not declared"),
+            "unexpected error: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn refinement_predicate_must_return_bool() {
+        let err = check_src(
+            "fn returns_word(x: Word) -> Word { x }\n\
+             newtype Percent = Word where returns_word;\n\
+             fn main() -> Word { 0 }",
+        )
+        .unwrap_err();
+        assert!(
+            err.message.contains("must return Bool"),
+            "unexpected error: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn refinement_predicate_param_must_match_underlying() {
+        let err = check_src(
+            "fn from_bool(x: bool) -> bool { x }\n\
+             newtype Percent = Word where from_bool;\n\
+             fn main() -> Word { 0 }",
+        )
+        .unwrap_err();
+        assert!(
+            err.message.contains("does not match newtype"),
+            "unexpected error: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn refinement_compiles_to_call_trap_pair() {
+        // Verifies the end-to-end compile path. The runtime check
+        // is tested through actual VM execution in vm.rs.
+        compile_src(
+            "fn nonneg(x: Word) -> bool { x >= 0 }\n\
+             newtype Counter = Word where nonneg;\n\
+             fn main() -> Counter { Counter(42) }",
+        )
+        .expect("refined newtype with passing argument should compile");
     }
 
     #[test]

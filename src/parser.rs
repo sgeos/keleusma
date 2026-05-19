@@ -242,6 +242,7 @@ impl<'a> Parser<'a> {
             match self.peek() {
                 TokenKind::Struct => types.push(TypeDef::Struct(self.parse_struct_def()?)),
                 TokenKind::Enum => types.push(TypeDef::Enum(self.parse_enum_def()?)),
+                TokenKind::Newtype => types.push(TypeDef::Newtype(self.parse_newtype_def()?)),
                 TokenKind::Data | TokenKind::Shared | TokenKind::Private | TokenKind::Const => {
                     data_decls.push(self.parse_data_decl()?);
                 }
@@ -396,6 +397,43 @@ impl<'a> Parser<'a> {
             path,
             import: ImportItem::Name(import_name),
             signature,
+            span: merge_spans(start, end),
+        })
+    }
+
+    /// `newtype Name = Underlying;`
+    ///
+    /// Introduces a distinct nominal type that wraps an underlying
+    /// type. The bytecode representation is identical to the
+    /// underlying type's; the distinction is purely at the type-
+    /// checker level. Construction at expression position uses
+    /// `Name(expr)`.
+    fn parse_newtype_def(&mut self) -> Result<crate::ast::NewtypeDef, ParseError> {
+        let start = self.expect(&TokenKind::Newtype)?;
+        let (name, _) = self.expect_upper_ident()?;
+        self.expect(&TokenKind::Eq)?;
+        let underlying = self.parse_type_expr()?;
+        // Optional refinement predicate:
+        //     newtype Name = Underlying where predicate_name;
+        // The predicate must be a function declared in the same
+        // program with signature `fn(Underlying) -> Bool`. The
+        // type checker enforces the signature; the compiler emits
+        // a call followed by a trap at every newtype construction
+        // site.
+        let refinement = if self.eat(&TokenKind::Where) {
+            let (predicate_name, _) = self.expect_lower_ident()?;
+            Some(predicate_name)
+        } else {
+            None
+        };
+        // Optional trailing semicolon for symmetry with `use` and
+        // `let` declarations at the program-level scope.
+        self.eat(&TokenKind::Semicolon);
+        let end = self.prev_span();
+        Ok(crate::ast::NewtypeDef {
+            name,
+            underlying,
+            refinement,
             span: merge_spans(start, end),
         })
     }
@@ -1477,9 +1515,29 @@ impl<'a> Parser<'a> {
                         fields,
                         span: merge_spans(name_span, end),
                     })
+                } else if self.at(&TokenKind::LParen) {
+                    // Newtype construction: `Name(expr)`. The parser
+                    // emits a `Call` expression with the type name as
+                    // the function. The type checker resolves the
+                    // name to a newtype constructor, validates the
+                    // argument against the underlying type, and tags
+                    // the resulting expression with the newtype's
+                    // nominal type. If the name does not resolve to a
+                    // declared newtype, the type checker reports an
+                    // undefined-function error.
+                    self.pos += 1;
+                    let args = self.parse_arg_list()?;
+                    let end = self.expect(&TokenKind::RParen)?;
+                    Ok(Expr::Call {
+                        name,
+                        args,
+                        span: merge_spans(name_span, end),
+                    })
                 } else {
                     Err(ParseError {
-                        message: String::from("expected '::' or '{' after type name in expression"),
+                        message: String::from(
+                            "expected '::', '{', or '(' after type name in expression",
+                        ),
                         span: name_span,
                     })
                 }

@@ -46,6 +46,17 @@ struct TypeInfo {
     function_returns: BTreeMap<String, TypeExpr>,
     /// Data block name to (field name to declared field type).
     data_field_types: BTreeMap<String, BTreeMap<String, TypeExpr>>,
+    /// Names of declared newtypes. The compiler treats a call
+    /// expression whose function name is a newtype as a transparent
+    /// construction: the inner expression is compiled in place,
+    /// without emitting `Op::Call`. The newtype wrapper exists only
+    /// at the type-checker level.
+    newtype_names: alloc::collections::BTreeSet<String>,
+    /// Newtypes with refinement predicates. Maps the newtype name
+    /// to the predicate function name. The compiler emits a call
+    /// to the predicate at every newtype construction site and
+    /// traps if the predicate returns false.
+    newtype_refinements: BTreeMap<String, String>,
 }
 
 /// State for compiling a single function chunk.
@@ -720,6 +731,14 @@ pub fn compile_with_target(
                 }
                 type_info.enums.insert(e.name.clone(), variants);
                 type_info.enum_variant_order.insert(e.name.clone(), ordered);
+            }
+            TypeDef::Newtype(n) => {
+                type_info.newtype_names.insert(n.name.clone());
+                if let Some(pred) = &n.refinement {
+                    type_info
+                        .newtype_refinements
+                        .insert(n.name.clone(), pred.clone());
+                }
             }
         }
     }
@@ -1742,6 +1761,7 @@ fn validate_data_field_type(
             let type_def = types.iter().find(|td| match td {
                 TypeDef::Struct(s) => &s.name == name,
                 TypeDef::Enum(e) => &e.name == name,
+                TypeDef::Newtype(n) => &n.name == name,
             });
             match type_def {
                 Some(TypeDef::Struct(s)) => {
@@ -1759,6 +1779,12 @@ fn validate_data_field_type(
                             validate_data_field_type(ftype, types, visiting)?;
                         }
                     }
+                    visiting.remove(name);
+                    Ok(())
+                }
+                Some(TypeDef::Newtype(n)) => {
+                    visiting.insert(name.clone());
+                    validate_data_field_type(&n.underlying, types, visiting)?;
                     visiting.remove(name);
                     Ok(())
                 }
@@ -2908,6 +2934,9 @@ fn normalize_fixed_defaults(program: &mut Program, frac_bits: u8) {
                     }
                 }
             }
+            TypeDef::Newtype(n) => {
+                fix_type(&mut n.underlying, frac_bits);
+            }
         }
     }
     for data in program.data_decls.iter_mut() {
@@ -3888,6 +3917,71 @@ fn compile_call(
     args: &[Expr],
     span: &Span,
 ) -> Result<(), CompileError> {
+    // Newtype construction. `Name(value)` where `Name` is a
+    // declared newtype emits the inner expression's bytecode
+    // directly with no `Op::Call`. Newtypes are transparent at the
+    // runtime layer; the wrapper exists only at the type-checker
+    // level. The type checker has already validated the argument
+    // against the underlying type.
+    //
+    // If the newtype carries a refinement predicate, the compiled
+    // form additionally emits a `Dup`, a `Call(predicate, 1)`, an
+    // `If` block, and a `Trap` for the false branch. The
+    // predicate is required to be a declared atomic-total function
+    // with signature `fn(Underlying) -> Bool`; the type checker
+    // has already validated the signature.
+    if fc.type_info.newtype_names.contains(name) {
+        if args.len() != 1 {
+            return Err(CompileError {
+                message: alloc::format!(
+                    "newtype `{}` constructor expects 1 argument, got {}",
+                    name,
+                    args.len()
+                ),
+                span: *span,
+            });
+        }
+        compile_expr(fc, &args[0])?;
+        if let Some(pred_name) = fc.type_info.newtype_refinements.get(name).cloned() {
+            let pred_idx =
+                *fc.function_map
+                    .get(pred_name.as_str())
+                    .ok_or_else(|| CompileError {
+                        message: alloc::format!(
+                            "refinement predicate `{}` for newtype `{}` is not a declared function",
+                            pred_name,
+                            name
+                        ),
+                        span: *span,
+                    })?;
+            // Stack: [value]
+            fc.emit(Op::Dup);
+            // Stack: [value, value]
+            fc.emit(Op::Call(pred_idx, 1));
+            // Stack: [value, bool] (the call popped 1 arg, pushed 1 result)
+            let if_addr = fc.emit_jump(Op::If(0));
+            // True branch: predicate succeeded. Stack: [value].
+            // No additional work; fall through to Else which
+            // jumps to EndIf.
+            let else_addr = fc.emit_jump(Op::Else(0));
+            fc.patch_jump(if_addr);
+            // False branch: predicate failed. Trap with a message
+            // identifying the newtype and the predicate. The
+            // message construction is purely internal to the
+            // compiler and does not require the `text` surface
+            // feature.
+            let msg = fc.add_string_constant(&alloc::format!(
+                "refinement check `{}` failed for newtype `{}`",
+                pred_name,
+                name
+            ));
+            fc.emit(Op::Trap(msg));
+            fc.patch_jump(else_addr);
+            fc.emit(Op::EndIf);
+            // Stack: [value]
+        }
+        return Ok(());
+    }
     // Indirect call through a local variable holding a `Value::Func`.
     // The compiler pushes the function value, then the explicit
     // arguments, then emits `Op::CallIndirect(arg_count)`. The
