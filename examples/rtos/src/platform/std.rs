@@ -65,6 +65,36 @@ impl Platform for StdPlatform {
         println!("[t={:>6}ms] {}", t, line);
     }
 
+    fn log_event(code: u32, data: i64) {
+        let t = Self::now_ms();
+        // The event-code dispatch is kept in lock-step with
+        // the script-side numeric literals in `scripts/*.kel`.
+        // Codes 0 and above 255 are reserved for future use;
+        // unknown codes print a generic line so a mismatch
+        // between the script set and the host set surfaces
+        // visibly instead of silently dropping the event.
+        match code {
+            crate::natives::EV_HEARTBEAT_OK => {
+                println!("[t={:>6}ms] heartbeat: system OK", t);
+            }
+            crate::natives::EV_LED_GPIO_FAIL => {
+                println!("[t={:>6}ms] led: gpio_set failed, code={}", t, data);
+            }
+            crate::natives::EV_SENSOR_ABOVE => {
+                println!(
+                    "[t={:>6}ms] sensor ch0 ABOVE threshold (value={})",
+                    t, data
+                );
+            }
+            _ => {
+                println!(
+                    "[t={:>6}ms] unknown log_event(code={}, data={})",
+                    t, code, data
+                );
+            }
+        }
+    }
+
     fn gpio_set(pin: u8, high: bool) {
         let t = Self::now_ms();
         println!(

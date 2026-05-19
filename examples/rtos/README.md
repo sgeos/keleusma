@@ -55,7 +55,7 @@ cargo build --target thumbv8m.main-none-eabihf --lib \
 +-----------------------------------------------------------+
 |  Native function surface (src/natives.rs)                 |
 |  - host::clock_now  -> Word                               |
-|  - host::log(text)                                        |
+|  - host::log_event(code, data)                            |
 |  - host::gpio_set(pin, high) -> Status                    |
 |  - host::sensor_read(channel) -> Word     (legacy)        |
 |  - host::adc_read(channel) -> (Status, Word)              |

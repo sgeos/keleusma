@@ -44,7 +44,6 @@ use keleusma::compiler::compile;
 use keleusma::lexer::tokenize;
 #[cfg(feature = "keleusma-compile")]
 use keleusma::parser::parse;
-use keleusma::utility_natives::register_utility_natives;
 use keleusma::vm::{DEFAULT_ARENA_CAPACITY, Vm};
 use keleusma::{Arena, Module};
 
@@ -223,11 +222,13 @@ fn finish_build_task<P: Platform>(
     for slot in 0..vm.data_len() {
         let _ = vm.set_data(slot, Value::Int(0));
     }
-    // The utility natives provide `to_string`, `concat`, and the
-    // other helpers that f-string interpolation desugars to.
-    // Without them, scripts that use f-strings fail at compile
-    // time with `undefined function "concat"`.
-    register_utility_natives(&mut vm);
+    // The utility natives that back f-string interpolation
+    // (`to_string`, `concat`, `slice`, `length`, `println`) are
+    // no longer registered. Task scripts compile without the
+    // `text` surface feature and emit diagnostics through
+    // `host::log_event(code, data)` instead of constructing
+    // arena-resident strings, so the helpers would be dead
+    // weight in the runtime image.
     register_task_natives::<P>(&mut vm);
     Ok(Task {
         name,

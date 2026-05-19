@@ -59,10 +59,14 @@ use crate::ast::*;
 use crate::token::Span;
 
 /// Default `Fixed` fraction-bit count when the surface form is
-/// `Fixed` without an explicit `<N>` argument. Matches the host
-/// 64-bit runtime's Q31.32 format. Target-scaled resolution for
-/// 16-bit and 32-bit targets is a follow-on once the type
-/// checker carries the target descriptor.
+/// `Fixed` without an explicit `<N>` argument and no target
+/// descriptor is in scope. Matches the host 64-bit runtime's
+/// Q31.32 format. The target-aware entry point
+/// [`check_with_target`] resolves the default through the
+/// supplied target's [`crate::target::Target::fixed_default_frac_bits`]
+/// so cross-compilation to a 32-bit or 16-bit target produces
+/// Q15.16 or Q7.8 respectively. The bare [`check`] entry point
+/// falls back to this constant.
 pub const DEFAULT_FIXED_FRAC_BITS: u8 = 32;
 
 /// A computed type. The internal representation is independent of the
@@ -122,26 +126,34 @@ pub enum Type {
 }
 
 impl Type {
-    fn from_expr(expr: &TypeExpr, defined_types: &BTreeMap<String, TypeKind>) -> Type {
-        Type::from_expr_with_params(expr, defined_types, &BTreeMap::new())
-    }
-
-    /// Resolve a [`TypeExpr`] under a generic type parameter mapping.
+    /// Resolve a [`TypeExpr`] to a [`Type`] under a generic type
+    /// parameter mapping and an explicit Fixed-default fraction-bit
+    /// count.
     ///
     /// Names that match a key in `type_params` resolve to the mapped
     /// [`Type`], typically a [`Type::Var`] allocated at signature
     /// construction. Names that are not type parameters fall back to
     /// the existing struct/enum/opaque resolution.
-    fn from_expr_with_params(
+    ///
+    /// The `fixed_default_frac_bits` argument is the value substituted
+    /// for `PrimType::Fixed(None)` (the surface form `Fixed` without
+    /// `<N>`). The type checker reaches this method through
+    /// [`Ctx::resolve_type`] and [`Ctx::resolve_type_with_params`],
+    /// which forward the context's [`Ctx::fixed_default_frac_bits`].
+    /// The target-aware entry point [`check_with_target`] populates
+    /// that field from the supplied target; the bare [`check`] entry
+    /// point falls back to [`DEFAULT_FIXED_FRAC_BITS`].
+    fn from_expr_with_params_and_frac(
         expr: &TypeExpr,
         defined_types: &BTreeMap<String, TypeKind>,
         type_params: &BTreeMap<String, Type>,
+        fixed_default_frac_bits: u8,
     ) -> Type {
         match expr {
             TypeExpr::Prim(p, _) => match p {
                 PrimType::Byte => Type::Byte,
                 PrimType::Word => Type::Word,
-                PrimType::Fixed(maybe_n) => Type::Fixed(maybe_n.unwrap_or(DEFAULT_FIXED_FRAC_BITS)),
+                PrimType::Fixed(maybe_n) => Type::Fixed(maybe_n.unwrap_or(fixed_default_frac_bits)),
                 PrimType::Float => Type::Float,
                 PrimType::Bool => Type::Bool,
                 PrimType::Text => Type::Str,
@@ -149,29 +161,47 @@ impl Type {
             TypeExpr::Unit(_) => Type::Unit,
             TypeExpr::Tuple(ts, _) => Type::Tuple(
                 ts.iter()
-                    .map(|t| Type::from_expr_with_params(t, defined_types, type_params))
+                    .map(|t| {
+                        Type::from_expr_with_params_and_frac(
+                            t,
+                            defined_types,
+                            type_params,
+                            fixed_default_frac_bits,
+                        )
+                    })
                     .collect(),
             ),
             TypeExpr::Array(elem, len, _) => Type::Array(
-                Box::new(Type::from_expr_with_params(
+                Box::new(Type::from_expr_with_params_and_frac(
                     elem,
                     defined_types,
                     type_params,
+                    fixed_default_frac_bits,
                 )),
                 *len,
             ),
-            TypeExpr::Option(inner, _) => Type::Option(Box::new(Type::from_expr_with_params(
-                inner,
-                defined_types,
-                type_params,
-            ))),
+            TypeExpr::Option(inner, _) => {
+                Type::Option(Box::new(Type::from_expr_with_params_and_frac(
+                    inner,
+                    defined_types,
+                    type_params,
+                    fixed_default_frac_bits,
+                )))
+            }
             TypeExpr::Named(name, args, _) => {
                 if let Some(t) = type_params.get(name) {
                     return t.clone();
                 }
                 let resolved_args: Vec<Type> = args
                     .iter()
-                    .map(|a| Type::from_expr_with_params(a, defined_types, type_params))
+                    .map(|a| {
+                        Type::from_expr_with_params_and_frac(
+                            a,
+                            defined_types,
+                            type_params,
+                            fixed_default_frac_bits,
+                        )
+                    })
                     .collect();
                 match defined_types.get(name) {
                     Some(TypeKind::Struct) => Type::Struct(name.clone(), resolved_args),
@@ -518,6 +548,13 @@ struct Ctx {
     vargen: VarGen,
     /// Active substitution accumulating constraints solved so far.
     subst: Subst,
+    /// Fraction-bit count substituted for the surface form `Fixed`
+    /// (no explicit `<N>` argument). Defaults to
+    /// [`DEFAULT_FIXED_FRAC_BITS`]; the target-aware entry point
+    /// [`check_with_target`] overrides it with the supplied target's
+    /// [`crate::target::Target::fixed_default_frac_bits`] before
+    /// running the passes.
+    fixed_default_frac_bits: u8,
 }
 
 impl Ctx {
@@ -537,7 +574,38 @@ impl Ctx {
             current_return: None,
             vargen: VarGen::default(),
             subst: Subst::new(),
+            fixed_default_frac_bits: DEFAULT_FIXED_FRAC_BITS,
         }
+    }
+
+    /// Resolve a [`TypeExpr`] to a [`Type`] using the context's
+    /// type-kind table and its target-resolved Fixed default. Use
+    /// this rather than [`Type::from_expr`] from inside the type
+    /// checker so the default carries through to cross-compilation
+    /// targets.
+    fn resolve_type(&self, expr: &TypeExpr) -> Type {
+        Type::from_expr_with_params_and_frac(
+            expr,
+            &self.types,
+            &BTreeMap::new(),
+            self.fixed_default_frac_bits,
+        )
+    }
+
+    /// Generic-parameter-aware variant of [`Self::resolve_type`].
+    /// Equivalent to [`Type::from_expr_with_params`] except the
+    /// Fixed default comes from the context.
+    fn resolve_type_with_params(
+        &self,
+        expr: &TypeExpr,
+        type_params: &BTreeMap<String, Type>,
+    ) -> Type {
+        Type::from_expr_with_params_and_frac(
+            expr,
+            &self.types,
+            type_params,
+            self.fixed_default_frac_bits,
+        )
     }
 
     fn push_scope(&mut self) {
@@ -675,9 +743,29 @@ fn type_to_expr(ty: &Type, span: crate::token::Span) -> Option<TypeExpr> {
     }
 }
 
-pub fn check(program: &mut Program) -> Result<(), TypeError> {
+/// Target-aware type-check entry point. Identical to [`check`]
+/// except that the surface form `Fixed` without `<N>` resolves
+/// to the target's
+/// [`crate::target::Target::fixed_default_frac_bits`] (lower half
+/// of the target word width). Cross-compilation to a 32-bit or
+/// 16-bit target therefore picks up Q15.16 or Q7.8 without the
+/// programmer needing to write `Fixed<16>` or `Fixed<8>`
+/// explicitly.
+pub fn check_with_target(
+    program: &mut Program,
+    target: crate::target::Target,
+) -> Result<(), TypeError> {
     let mut ctx = Ctx::new();
+    ctx.fixed_default_frac_bits = target.fixed_default_frac_bits();
+    run_check(program, ctx)
+}
 
+pub fn check(program: &mut Program) -> Result<(), TypeError> {
+    let ctx = Ctx::new();
+    run_check(program, ctx)
+}
+
+fn run_check(program: &mut Program, mut ctx: Ctx) -> Result<(), TypeError> {
     // Pass 1a. Collect type kinds (struct vs enum) so name resolution
     // works while reading field signatures.
     for type_def in &program.types {
@@ -713,7 +801,7 @@ pub fn check(program: &mut Program) -> Result<(), TypeError> {
                 for f in &s.fields {
                     fields.insert(
                         f.name.clone(),
-                        Type::from_expr_with_params(&f.type_expr, &ctx.types, &tp_map),
+                        ctx.resolve_type_with_params(&f.type_expr, &tp_map),
                     );
                 }
                 ctx.structs.insert(s.name.clone(), fields);
@@ -732,7 +820,7 @@ pub fn check(program: &mut Program) -> Result<(), TypeError> {
                     let payload: Vec<Type> = v
                         .fields
                         .iter()
-                        .map(|t| Type::from_expr_with_params(t, &ctx.types, &tp_map))
+                        .map(|t| ctx.resolve_type_with_params(t, &tp_map))
                         .collect();
                     variants.insert(v.name.clone(), payload);
                 }
@@ -745,7 +833,7 @@ pub fn check(program: &mut Program) -> Result<(), TypeError> {
     for data in &program.data_decls {
         let mut fields = BTreeMap::new();
         for f in &data.fields {
-            fields.insert(f.name.clone(), Type::from_expr(&f.type_expr, &ctx.types));
+            fields.insert(f.name.clone(), ctx.resolve_type(&f.type_expr));
         }
         ctx.data.insert(data.name.clone(), fields);
     }
@@ -799,11 +887,11 @@ pub fn check(program: &mut Program) -> Result<(), TypeError> {
             .params
             .iter()
             .map(|p| match &p.type_expr {
-                Some(t) => Type::from_expr_with_params(t, &ctx.types, &tp_map),
+                Some(t) => ctx.resolve_type_with_params(t, &tp_map),
                 None => ctx.fresh(),
             })
             .collect();
-        let return_type = Type::from_expr_with_params(&func.return_type, &ctx.types, &tp_map);
+        let return_type = ctx.resolve_type_with_params(&func.return_type, &tp_map);
         ctx.functions.insert(
             func.name.clone(),
             FnSig {
@@ -826,7 +914,7 @@ pub fn check(program: &mut Program) -> Result<(), TypeError> {
             .insert(trait_def.name.clone(), trait_def.methods.clone());
     }
     for impl_block in &program.impls {
-        let head = match Type::from_expr(&impl_block.for_type, &ctx.types) {
+        let head = match ctx.resolve_type(&impl_block.for_type) {
             Type::Byte => "Byte".to_string(),
             Type::Word => "Word".to_string(),
             Type::Fixed(n) => alloc::format!("Fixed<{}>", n),
@@ -867,11 +955,11 @@ pub fn check(program: &mut Program) -> Result<(), TypeError> {
                 .params
                 .iter()
                 .map(|p| match &p.type_expr {
-                    Some(t) => Type::from_expr_with_params(t, &ctx.types, &tp_map),
+                    Some(t) => ctx.resolve_type_with_params(t, &tp_map),
                     None => ctx.fresh(),
                 })
                 .collect();
-            let return_type = Type::from_expr_with_params(&method.return_type, &ctx.types, &tp_map);
+            let return_type = ctx.resolve_type_with_params(&method.return_type, &tp_map);
             ctx.functions.insert(
                 mangled,
                 FnSig {
@@ -943,11 +1031,11 @@ pub fn check(program: &mut Program) -> Result<(), TypeError> {
                 .enumerate()
             {
                 let impl_ty = match &impl_param.type_expr {
-                    Some(t) => Type::from_expr(t, &ctx.types),
+                    Some(t) => ctx.resolve_type(t),
                     None => continue,
                 };
                 let trait_ty = match &trait_param.type_expr {
-                    Some(t) => Type::from_expr(t, &ctx.types),
+                    Some(t) => ctx.resolve_type(t),
                     None => continue,
                 };
                 if impl_ty != trait_ty {
@@ -964,8 +1052,8 @@ pub fn check(program: &mut Program) -> Result<(), TypeError> {
                     ));
                 }
             }
-            let impl_ret = Type::from_expr(&impl_method.return_type, &ctx.types);
-            let trait_ret = Type::from_expr(&trait_sig.return_type, &ctx.types);
+            let impl_ret = ctx.resolve_type(&impl_method.return_type);
+            let trait_ret = ctx.resolve_type(&trait_sig.return_type);
             if impl_ret != trait_ret {
                 return Err(TypeError::new(
                     format!(
@@ -1008,7 +1096,7 @@ pub fn check(program: &mut Program) -> Result<(), TypeError> {
     // their mangled names so the parameter and return type lookups
     // resolve through the same FnSig that was registered in pass 1d.
     for impl_block in &program.impls {
-        let head = match Type::from_expr(&impl_block.for_type, &ctx.types) {
+        let head = match ctx.resolve_type(&impl_block.for_type) {
             Type::Byte => "Byte".to_string(),
             Type::Word => "Word".to_string(),
             Type::Fixed(n) => alloc::format!("Fixed<{}>", n),
@@ -1523,7 +1611,7 @@ fn check_stmt(ctx: &mut Ctx, stmt: &Stmt) -> Result<(), TypeError> {
             let value_ty = type_of_expr(ctx, &let_stmt.value)?;
             let bound_ty = match &let_stmt.type_expr {
                 Some(t) => {
-                    let declared = Type::from_expr(t, &ctx.types);
+                    let declared = ctx.resolve_type(t);
                     if !types_compatible(ctx, &declared, &value_ty) {
                         return Err(TypeError::new(
                             format!(
@@ -2332,7 +2420,7 @@ fn type_of_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Type, TypeError> {
         }
         Expr::Cast { expr, target, span } => {
             let from_ty = type_of_expr(ctx, expr)?;
-            let to_ty = Type::from_expr(target, &ctx.types);
+            let to_ty = ctx.resolve_type(target);
             match (&from_ty, &to_ty) {
                 (Type::Word, Type::Float) | (Type::Float, Type::Word) => Ok(to_ty),
                 // Byte conversions. Word→Byte truncates to the low
@@ -2370,7 +2458,7 @@ fn type_of_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Type, TypeError> {
             ctx.push_scope();
             for param in params {
                 let t = match &param.type_expr {
-                    Some(t) => Type::from_expr(t, &ctx.types),
+                    Some(t) => ctx.resolve_type(t),
                     None => ctx.fresh(),
                 };
                 bind_pattern(ctx, &param.pattern, t);

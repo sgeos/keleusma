@@ -38,7 +38,7 @@ The shipped rogue example demonstrates the host-script architecture at consumer-
 |  - WCET and WCMU bounds proved at compile time            |
 +-----------------------------------------------------------+
 |  Native function surface (Rust)                           |
-|  - host::clock_now, host::sleep_until, host::log, etc.    |
+|  - host::clock_now, host::sleep_until, host::log_event,…  |
 |  - One implementation per native; trait-dispatched        |
 +-----------------------------------------------------------+
 |  Kernel core (Rust, generic over the platform trait)      |
@@ -357,7 +357,7 @@ Tasks call host natives to interact with the platform. The natives are thin wrap
 | Native | Signature | Semantics |
 |--------|-----------|-----------|
 | `host::clock_now() -> Word` | nullary | Returns `P::now_ms()`. |
-| `host::log(message: Text)` | unary | Calls `P::log`. |
+| `host::log_event(code: Word, data: Word)` | binary | Calls `P::log_event`. Numeric event discriminant plus one data word; the host owns the per-event format string. The `text` surface feature is not required. |
 | `host::gpio_set(pin: Word, high: Word)` | binary | Calls `P::gpio_set`. |
 | `host::sensor_read(channel: Word) -> Word` | unary | Calls `P::sensor_read`. |
 | `host::wait_for_event(event_id: Word)` | (unary, yields) | Yields with reason 1, payload `event_id`. |

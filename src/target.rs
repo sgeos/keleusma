@@ -152,6 +152,30 @@ impl Target {
         1u32 << self.float_bits_log2
     }
 
+    /// Default fraction-bit count for surface `Fixed` (no explicit
+    /// `<N>` argument) on this target. The convention is that the
+    /// fraction occupies the lower half of the word: Q31.32 on a
+    /// 64-bit target, Q15.16 on a 32-bit target, Q7.8 on a 16-bit
+    /// target, Q3.4 on an 8-bit target. Resolved against
+    /// [`Self::word_bits`] so the value tracks the target descriptor
+    /// rather than the host runtime.
+    ///
+    /// The result is the fraction-bit count `N` that the type
+    /// checker and the compiler substitute when the surface form is
+    /// `Fixed` without `<N>`. Explicit `Fixed<N>` continues to honour
+    /// the literal `N` regardless of target.
+    pub const fn fixed_default_frac_bits(&self) -> u8 {
+        // `word_bits_log2` of 3 means an 8-bit word, frac = 4 (Q3.4).
+        // The lower half of an 8-bit word is 4 bits; for narrower
+        // word widths the convention is undefined so the value
+        // saturates at zero.
+        if self.word_bits_log2 == 0 {
+            0
+        } else {
+            1u8 << (self.word_bits_log2 - 1)
+        }
+    }
+
     /// Validate that the target's widths are admissible by the
     /// current runtime. Returns an error describing the first
     /// width that exceeds the runtime's capability.
@@ -405,6 +429,69 @@ mod tests {
             err.contains("does not support string"),
             "unexpected error: {}",
             err,
+        );
+    }
+
+    #[test]
+    fn fixed_default_frac_bits_scales_with_target_word_width() {
+        // Q31.32 on the 64-bit host, Q15.16 on a 32-bit target,
+        // Q7.8 on a 16-bit target, Q3.4 on an 8-bit target. The
+        // fraction-bit count is the lower half of the word, so
+        // `frac = 1 << (word_bits_log2 - 1)`. The type checker
+        // substitutes this value for the surface form `Fixed`
+        // without `<N>` when the target-aware entry point
+        // `check_with_target` is used.
+        assert_eq!(Target::host().fixed_default_frac_bits(), 32);
+        assert_eq!(Target::wasm32().fixed_default_frac_bits(), 16);
+        assert_eq!(Target::embedded_32().fixed_default_frac_bits(), 16);
+        assert_eq!(Target::embedded_16().fixed_default_frac_bits(), 8);
+        assert_eq!(Target::embedded_8().fixed_default_frac_bits(), 4);
+    }
+
+    #[test]
+    fn fixed_default_changes_when_targeting_embedded_16() {
+        // The surface form `Fixed` without `<N>` resolves to the
+        // target's Q-format default. Compiling the same program
+        // against the host (Q31.32) and against embedded_16
+        // (Q7.8) produces different `Op::WordToFixed` immediates,
+        // verifying that `check_with_target` threads the target
+        // value into the type checker and the compiler reads it
+        // back at the cast site.
+        use crate::bytecode::Op;
+        let src = "fn main() -> Fixed { 1 as Fixed }";
+        let tokens = tokenize(src).expect("lex");
+        let program = parse(&tokens).expect("parse");
+
+        let host_module = compile_with_target(&program, &Target::host()).unwrap();
+        let host_imms: alloc::vec::Vec<u8> = host_module
+            .chunks
+            .iter()
+            .flat_map(|c| c.ops.iter())
+            .filter_map(|op| match op {
+                Op::WordToFixed(n) => Some(*n),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            host_imms,
+            alloc::vec![32u8],
+            "host target should emit Q31.32 (frac=32) for surface `Fixed`",
+        );
+
+        let embedded_module = compile_with_target(&program, &Target::embedded_16()).unwrap();
+        let embedded_imms: alloc::vec::Vec<u8> = embedded_module
+            .chunks
+            .iter()
+            .flat_map(|c| c.ops.iter())
+            .filter_map(|op| match op {
+                Op::WordToFixed(n) => Some(*n),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            embedded_imms,
+            alloc::vec![8u8],
+            "embedded_16 target should emit Q7.8 (frac=8) for surface `Fixed`",
         );
     }
 

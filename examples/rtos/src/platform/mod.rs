@@ -94,10 +94,38 @@ pub trait Platform: 'static {
     /// kernel's await sites do not change across platforms.
     fn sleep_until(at_ms: u64) -> impl core::future::Future<Output = ()>;
 
-    /// Emit a log line. On std this routes to stdout via
-    /// `println!`. On embedded targets this routes to defmt,
-    /// RTT, or a UART driver.
+    /// Emit a host-side log line. Used by the kernel for its
+    /// own diagnostics (task scheduling errors, VM error
+    /// surface). Scripts do not call this directly; they emit
+    /// log events through [`log_event`](Self::log_event)
+    /// instead, which carries a numeric event code and one
+    /// data word and therefore does not require the `text`
+    /// surface feature in the runtime.
+    ///
+    /// On std this routes to stdout via `println!`. On embedded
+    /// targets this routes to defmt, RTT, or a UART driver.
     fn log(line: &str);
+
+    /// Emit a script-originated log event. `code` is a
+    /// caller-defined event discriminant; `data` is a single
+    /// associated data word that the event-specific format
+    /// string interpolates (use 0 when the event carries no
+    /// data).
+    ///
+    /// The default body is a no-op so platforms that do not
+    /// surface script logging continue to satisfy the trait.
+    /// Concrete implementations dispatch on `code` to a fixed
+    /// per-event format string. The script side and the host
+    /// side must agree on the code-to-message mapping; the
+    /// convention is documented in `scripts/*.kel` alongside
+    /// the call sites.
+    ///
+    /// The split between [`log`](Self::log) and `log_event`
+    /// keeps the script-side surface free of arbitrary strings.
+    /// Scripts compile without the `text` feature, which
+    /// removes the lexer, parser, and runtime support for
+    /// string literals from the flash image.
+    fn log_event(_code: u32, _data: i64) {}
 
     /// Set a GPIO-like output. The `pin` index must satisfy
     /// `pin < RESOURCES.gpio_pin_count`; the natives layer

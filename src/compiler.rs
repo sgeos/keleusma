@@ -417,7 +417,15 @@ pub fn compile_with_target(
     target.validate_against_runtime()?;
     crate::target::validate_program_for_target(program, target)?;
     let mut owned = program.clone();
-    crate::typecheck::check(&mut owned).map_err(|e| CompileError {
+    // Resolve the surface form `Fixed` (no explicit `<N>`) to the
+    // target's Q-format default before the type checker observes
+    // the program. The compiler downstream reads the resolved
+    // immediate from the AST `PrimType::Fixed(Some(n))` to emit
+    // `Op::WordToFixed(n)`, `Op::FixedMul(n)`, and friends; the
+    // unresolved `Fixed(None)` form would silently fall back to
+    // `DEFAULT_FIXED_FRAC_BITS` (Q31.32) regardless of target.
+    normalize_fixed_defaults(&mut owned, target.fixed_default_frac_bits());
+    crate::typecheck::check_with_target(&mut owned, *target).map_err(|e| CompileError {
         message: format!("type error: {}", e.message),
         span: e.span,
     })?;
@@ -431,7 +439,7 @@ pub fn compile_with_target(
     let mut owned = crate::monomorphize::monomorphize(owned);
     // Re-typecheck the monomorphized program so specialized bodies
     // benefit from concrete-type method resolution.
-    crate::typecheck::check(&mut owned).map_err(|e| CompileError {
+    crate::typecheck::check_with_target(&mut owned, *target).map_err(|e| CompileError {
         message: format!("type error after monomorphization: {}", e.message),
         span: e.span,
     })?;
@@ -2687,6 +2695,231 @@ fn collect_free_in_block(
     };
     collector.visit_block(block);
     *out = collector.free;
+}
+
+/// Rewrite every `PrimType::Fixed(None)` in the program's
+/// type annotations to `PrimType::Fixed(Some(frac_bits))`.
+///
+/// The surface form `Fixed` (no explicit `<N>` argument) is a
+/// target-relative request for the target's default Q-format.
+/// The compiler emits target-aware `Op::WordToFixed`,
+/// `Op::FixedToWord`, `Op::FixedMul`, and `Op::FixedDiv`
+/// immediates by reading the fraction-bit count from the AST
+/// `PrimType::Fixed(Some(n))`; unresolved `Fixed(None)` would
+/// silently fall back to the host's `DEFAULT_FIXED_FRAC_BITS`
+/// (Q31.32) at the emission site, defeating cross-compilation
+/// to a 32-bit or 16-bit target. This pass runs once at the
+/// top of `compile_with_target` so every downstream consumer
+/// sees the resolved form.
+///
+/// The walker descends through every place a `TypeExpr` can
+/// appear: function parameter and return types, struct field
+/// types, enum variant argument types, data field types, let
+/// binding annotations, and cast targets. Composite type
+/// expressions (`Tuple`, `Array`, `Option`, `Named<T, U, …>`)
+/// recurse into their components.
+fn normalize_fixed_defaults(program: &mut Program, frac_bits: u8) {
+    use crate::ast::*;
+    fn fix_type(t: &mut TypeExpr, frac_bits: u8) {
+        match t {
+            TypeExpr::Prim(PrimType::Fixed(slot), _) => {
+                if slot.is_none() {
+                    *slot = Some(frac_bits);
+                }
+            }
+            TypeExpr::Prim(_, _) | TypeExpr::Unit(_) => {}
+            TypeExpr::Tuple(parts, _) => {
+                for p in parts.iter_mut() {
+                    fix_type(p, frac_bits);
+                }
+            }
+            TypeExpr::Array(elem, _, _) => fix_type(elem, frac_bits),
+            TypeExpr::Option(inner, _) => fix_type(inner, frac_bits),
+            TypeExpr::Named(_, args, _) => {
+                for a in args.iter_mut() {
+                    fix_type(a, frac_bits);
+                }
+            }
+        }
+    }
+    fn fix_opt(t: &mut Option<TypeExpr>, frac_bits: u8) {
+        if let Some(t) = t.as_mut() {
+            fix_type(t, frac_bits);
+        }
+    }
+    fn fix_block(block: &mut Block, frac_bits: u8) {
+        for stmt in block.stmts.iter_mut() {
+            fix_stmt(stmt, frac_bits);
+        }
+        if let Some(e) = block.tail_expr.as_mut() {
+            fix_expr(e, frac_bits);
+        }
+    }
+    fn fix_stmt(stmt: &mut Stmt, frac_bits: u8) {
+        match stmt {
+            Stmt::Let(l) => {
+                fix_opt(&mut l.type_expr, frac_bits);
+                fix_expr(&mut l.value, frac_bits);
+            }
+            Stmt::For(f) => {
+                match &mut f.iterable {
+                    Iterable::Range(s, e) => {
+                        fix_expr(s, frac_bits);
+                        fix_expr(e, frac_bits);
+                    }
+                    Iterable::Expr(e) => fix_expr(e, frac_bits),
+                }
+                fix_block(&mut f.body, frac_bits);
+            }
+            Stmt::Break(_) => {}
+            Stmt::DataFieldAssign { value, .. } => fix_expr(value, frac_bits),
+            Stmt::DataFieldIndexAssign { indices, value, .. } => {
+                for idx in indices.iter_mut() {
+                    fix_expr(idx, frac_bits);
+                }
+                fix_expr(value, frac_bits);
+            }
+            Stmt::Expr(e) => fix_expr(e, frac_bits),
+        }
+    }
+    fn fix_expr(expr: &mut Expr, frac_bits: u8) {
+        match expr {
+            Expr::Literal { .. }
+            | Expr::Ident { .. }
+            | Expr::Placeholder { .. }
+            | Expr::ClosureRef { .. } => {}
+            Expr::BinOp { left, right, .. } => {
+                fix_expr(left, frac_bits);
+                fix_expr(right, frac_bits);
+            }
+            Expr::UnaryOp { operand, .. } => fix_expr(operand, frac_bits),
+            Expr::Call { args, .. } => {
+                for a in args.iter_mut() {
+                    fix_expr(a, frac_bits);
+                }
+            }
+            Expr::Pipeline { left, args, .. } => {
+                fix_expr(left, frac_bits);
+                for a in args.iter_mut() {
+                    fix_expr(a, frac_bits);
+                }
+            }
+            Expr::Yield { value, .. } => fix_expr(value, frac_bits),
+            Expr::If {
+                condition,
+                then_block,
+                else_block,
+                ..
+            } => {
+                fix_expr(condition, frac_bits);
+                fix_block(then_block, frac_bits);
+                if let Some(eb) = else_block {
+                    fix_block(eb, frac_bits);
+                }
+            }
+            Expr::Match {
+                scrutinee, arms, ..
+            } => {
+                fix_expr(scrutinee, frac_bits);
+                for arm in arms.iter_mut() {
+                    fix_expr(&mut arm.expr, frac_bits);
+                }
+            }
+            Expr::Loop { body, .. } => fix_block(body, frac_bits),
+            Expr::Cast {
+                expr: inner,
+                target,
+                ..
+            } => {
+                fix_expr(inner, frac_bits);
+                fix_type(target, frac_bits);
+            }
+            Expr::TupleLiteral { elements, .. } => {
+                for e in elements.iter_mut() {
+                    fix_expr(e, frac_bits);
+                }
+            }
+            Expr::ArrayLiteral { elements, .. } => {
+                for e in elements.iter_mut() {
+                    fix_expr(e, frac_bits);
+                }
+            }
+            Expr::ArrayIndex { object, index, .. } => {
+                fix_expr(object, frac_bits);
+                fix_expr(index, frac_bits);
+            }
+            Expr::FieldAccess { object, .. } => fix_expr(object, frac_bits),
+            Expr::TupleIndex { object, .. } => fix_expr(object, frac_bits),
+            Expr::MethodCall { receiver, args, .. } => {
+                fix_expr(receiver, frac_bits);
+                for a in args.iter_mut() {
+                    fix_expr(a, frac_bits);
+                }
+            }
+            Expr::StructInit { fields, .. } => {
+                for f in fields.iter_mut() {
+                    fix_expr(&mut f.value, frac_bits);
+                }
+            }
+            Expr::EnumVariant { args, .. } => {
+                for a in args.iter_mut() {
+                    fix_expr(a, frac_bits);
+                }
+            }
+            Expr::Closure {
+                params,
+                return_type,
+                body,
+                ..
+            } => {
+                for p in params.iter_mut() {
+                    fix_opt(&mut p.type_expr, frac_bits);
+                }
+                fix_opt(return_type, frac_bits);
+                fix_block(body, frac_bits);
+            }
+        }
+    }
+    fn fix_function(func: &mut FunctionDef, frac_bits: u8) {
+        for p in func.params.iter_mut() {
+            fix_opt(&mut p.type_expr, frac_bits);
+        }
+        fix_type(&mut func.return_type, frac_bits);
+        fix_block(&mut func.body, frac_bits);
+    }
+    for type_def in program.types.iter_mut() {
+        match type_def {
+            TypeDef::Struct(s) => {
+                for f in s.fields.iter_mut() {
+                    fix_type(&mut f.type_expr, frac_bits);
+                }
+            }
+            TypeDef::Enum(e) => {
+                for v in e.variants.iter_mut() {
+                    for t in v.fields.iter_mut() {
+                        fix_type(t, frac_bits);
+                    }
+                }
+            }
+        }
+    }
+    for data in program.data_decls.iter_mut() {
+        for f in data.fields.iter_mut() {
+            fix_type(&mut f.type_expr, frac_bits);
+        }
+    }
+    for func in program.functions.iter_mut() {
+        fix_function(func, frac_bits);
+    }
+    for impl_block in program.impls.iter_mut() {
+        for method in impl_block.methods.iter_mut() {
+            for p in method.params.iter_mut() {
+                fix_opt(&mut p.type_expr, frac_bits);
+            }
+            fix_type(&mut method.return_type, frac_bits);
+            fix_block(&mut method.body, frac_bits);
+        }
+    }
 }
 
 /// Closure hoisting pass.

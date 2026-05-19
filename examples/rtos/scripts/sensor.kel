@@ -16,11 +16,18 @@
 // `host::sensor_read` which returns a bare Word for backwards
 // compatibility with the original demonstrator; new scripts
 // should prefer `host::adc_read` which returns `(Status, Word)`.
+// The numeric `ev_above` discriminant is kept in lock-step
+// with `natives::EV_SENSOR_ABOVE` and the matching arm in each
+// platform's `Platform::log_event` implementation.
+
+const data ev {
+    above: Word = 3,
+}
 
 loop main(_reason: Word) -> (Word, Word) {
     let value = host::sensor_read(0);
     if value > 1000 {
-        host::log("sensor ch0 ABOVE threshold");
+        host::log_event(ev.above, value);
     } else {};
     let next = host::clock_now() + 100;
     let _ = yield (0, next);

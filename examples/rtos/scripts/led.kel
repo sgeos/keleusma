@@ -5,10 +5,17 @@
 //
 // `Status` and `StatusErrorCode` are declared in the prelude
 // (`scripts/prelude.kel`), prepended at compile time by
-// `setup::build_module`.
+// `setup::build_module`. The numeric `ev_gpio_fail`
+// discriminant is kept in lock-step with
+// `natives::EV_LED_GPIO_FAIL` and the matching arm in each
+// platform's `Platform::log_event` implementation.
 
 data state {
     on: Word,
+}
+
+const data ev {
+    gpio_fail: Word = 2,
 }
 
 loop main(_reason: Word) -> (Word, Word) {
@@ -16,11 +23,12 @@ loop main(_reason: Word) -> (Word, Word) {
     // The `gpio_set` native returns `Status::Ok` on success and
     // `Status::Err(StatusErrorCode::InvalidPin)` if the pin is
     // out of range for the running platform. The match keeps
-    // the success path the hot path; the error path logs and
-    // proceeds without retry.
+    // the success path the hot path; the error path emits the
+    // failure code through `host::log_event` (the host owns
+    // the format string and the human-readable message).
     match host::gpio_set(13, state.on) {
         Status::Ok => (),
-        Status::Err(code) => host::log(f"led: gpio_set failed, code={code}"),
+        Status::Err(code) => host::log_event(ev.gpio_fail, code),
     };
     let next = host::clock_now() + 500;
     let _ = yield (0, next);

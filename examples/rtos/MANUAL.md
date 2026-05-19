@@ -70,9 +70,11 @@ Measured `.text` size on the bare-metal binary for each useful combination on th
 
 | Combination | `.text` | Notes |
 |-------------|--------:|-------|
-| `keleusma-compile` + `keleusma-verify` (default) | 614 KB | Source compiled at boot, verified at load. Boot to scheduler around 215 milliseconds. |
-| `keleusma-verify` only | 211 KB | Precompiled bytecode, verified at load. Boot to scheduler around 43 milliseconds. |
-| Neither | 192 KB | Precompiled bytecode, trust-loaded. Boot to scheduler around 39 milliseconds. Smallest image. |
+| `keleusma-compile` + `keleusma-verify` (default) | 622 KB | Source compiled at boot, verified at load. Boot to scheduler around 215 milliseconds. |
+| `keleusma-verify` only | 199 KB | Precompiled bytecode, verified at load. Boot to scheduler around 43 milliseconds. |
+| Neither | 180 KB | Precompiled bytecode, trust-loaded. Boot to scheduler around 39 milliseconds. Smallest image. |
+
+The `text` surface feature is disabled on the runtime keleusma dependency. Task scripts use only numeric arguments, and diagnostic logging routes through the `host::log_event(code, data)` native rather than `host::log(text)`. The `text` removal saves roughly 11 KB of `.text` in the precompiled-bytecode modes; the source-compile mode is dominated by the parser, type checker, and monomorphizer, so the saving is less visible there. Two further embassy-stm32 features (`exti` and `unstable-pac`) are dropped because the kernel does not exercise them.
 
 The combination `keleusma-compile` without `keleusma-verify` is technically allowed but rarely useful, because the compiler-emitted bytecode then carries 0 in the WCET and WCMU header fields and the runtime has no analysis to populate them either.
 
@@ -204,21 +206,32 @@ Write natives return `Status` directly. Read natives return `(Status, Word)` so 
 ### Idiomatic script-side usage
 
 ```keleusma
+const data ev {
+    gpio_fail: Word = 2,
+}
+
 match host::gpio_set(13, state.on) {
     Status::Ok => (),
-    Status::Err(code) => host::log(f"led: gpio_set failed, code={code}"),
+    Status::Err(code) => host::log_event(ev.gpio_fail, code),
 };
 ```
 
 The compiler emits an `Op::IsEnum(enum_const, variant_const)` chain that pattern-matches against the type-name and variant strings. Native-constructed `Value::Enum` values participate in the same dispatch.
 
+Script-side logging routes through `host::log_event(code, data)` rather than `host::log(text)`. The task scripts compile without the `text` surface feature, which removes the lexer, parser, and runtime support for string literals from the flash image. A per-event format string lives on the host side in each `Platform::log_event` implementation, and the script and host agree on the numeric event discriminants by convention. The constants in `src/natives.rs` (`EV_HEARTBEAT_OK`, `EV_LED_GPIO_FAIL`, `EV_SENSOR_ABOVE`) document the current set.
+
 ### Tuple-returning natives
 
 ```keleusma
+const data ev {
+    adc_ok: Word = 4,
+    adc_fail: Word = 5,
+}
+
 let (status, value) = host::adc_read(0);
 match status {
-    Status::Ok => host::log(f"adc ch0={value}"),
-    Status::Err(code) => host::log(f"adc read failed, code={code}"),
+    Status::Ok => host::log_event(ev.adc_ok, value),
+    Status::Err(code) => host::log_event(ev.adc_fail, code),
 };
 ```
 
@@ -299,7 +312,7 @@ The bundled `memory.x` allocates the AXISRAM2 region (1024 KB at `0x34100000`):
 
 | Region | Origin | Length | Purpose |
 |--------|--------|-------:|---------|
-| FLASH  | `0x34100000` | 640 KB | The Keleusma runtime image (lexer, parser, type checker, monomorphizer, compiler, VM, verifier) plus the kernel core, platform impl, embassy stack, defmt, and the entry binary. Current usage is ~614 KB. |
+| FLASH  | `0x34100000` | 640 KB | The Keleusma runtime image (lexer, parser, type checker, monomorphizer, compiler, VM, verifier) plus the kernel core, platform impl, embassy stack, defmt, and the entry binary. Current usage is ~622 KB under the full-pipeline default; precompiled bytecode modes use 180–199 KB. |
 | RAM    | `0x341A0000` | 384 KB | The global heap (320 KB), other `.bss` (transient), stack, and embassy executor state. The three per-task arenas are leaked into the heap. |
 
 The N6 has no on-chip flash. The boot ROM enables AXISRAM2 regardless of BOOT0 position, and probe-rs loads the application into it directly. The map fills AXISRAM2 entirely; future iterations may slim the FLASH image by shipping precompiled bytecode and stripping the compile-time pipeline.
@@ -357,7 +370,7 @@ What is **not** logged:
 - LED toggles. `host::gpio_set` does not log; the LED's behaviour is observable only on the board. PG10 should be visibly toggling at 2 Hz (high for 500 ms, low for 500 ms).
 - Sensor reads. The sensor task calls `host::sensor_read`, which the N6 impl currently stubs to `0`. The "above threshold" log only fires when the reading exceeds 1000, so the sensor task on the N6 produces no log lines during normal operation.
 
-To capture more, add `defmt::info!` calls inside `Stm32N6570DkPlatform::gpio_set` or extend the LED script to call `host::log` on each toggle.
+To capture more, add `defmt::info!` calls inside `Stm32N6570DkPlatform::gpio_set` or extend the LED script to call `host::log_event` on each toggle. The host owns the format string, so adding a new event takes three coordinated edits: define a new `EV_*` constant in `src/natives.rs`, add a matching arm in each platform's `Platform::log_event` implementation, and call `host::log_event(new_code, data)` from the script.
 
 ## 9. Troubleshooting
 

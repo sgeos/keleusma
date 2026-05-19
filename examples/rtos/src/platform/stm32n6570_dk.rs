@@ -111,6 +111,30 @@ impl Platform for Stm32N6570DkPlatform {
         defmt::info!("{=str}", line);
     }
 
+    fn log_event(code: u32, data: i64) {
+        // The event-code dispatch is kept in lock-step with
+        // the script-side numeric literals in `scripts/*.kel`
+        // and the matching dispatch in
+        // `crate::platform::std::Std::log_event`. defmt interns
+        // the literal format strings so RTT carries only the
+        // index plus the data word; this is the smallest flash
+        // footprint for script logging on the embedded target.
+        match code {
+            crate::natives::EV_HEARTBEAT_OK => {
+                defmt::info!("heartbeat: system OK");
+            }
+            crate::natives::EV_LED_GPIO_FAIL => {
+                defmt::info!("led: gpio_set failed, code={}", data);
+            }
+            crate::natives::EV_SENSOR_ABOVE => {
+                defmt::info!("sensor ch0 ABOVE threshold (value={})", data);
+            }
+            _ => {
+                defmt::info!("unknown log_event(code={}, data={})", code, data);
+            }
+        }
+    }
+
     fn gpio_set(pin: u8, high: bool) {
         // Only pin 13 is currently wired. The natives layer
         // accepts any index below `gpio_pin_count` (256); the

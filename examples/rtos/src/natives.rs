@@ -33,6 +33,25 @@ use keleusma::vm::{Vm, VmError};
 
 use crate::platform::Platform;
 
+/// Script-emitted log event discriminants. Kept in lock-step
+/// with the numeric literals at each `host::log_event(...)`
+/// call site in `scripts/*.kel`, and with the per-event format
+/// strings in the platform implementations of
+/// [`Platform::log_event`](crate::platform::Platform::log_event).
+///
+/// New event codes are appended; existing codes do not shift.
+/// The script side and the host side carry the table by
+/// numeric value, not by name, so a stale platform paired with
+/// a fresh script gracefully degrades to the unknown-code
+/// branch in the host dispatch.
+///
+/// Constants are `u32` so callers downcast a Word at the
+/// register-time boundary without sign concerns. The full
+/// `i64` script Word remains in the data argument.
+pub const EV_HEARTBEAT_OK: u32 = 1;
+pub const EV_LED_GPIO_FAIL: u32 = 2;
+pub const EV_SENSOR_ABOVE: u32 = 3;
+
 /// Discriminants for the script-side `StatusErrorCode` enum.
 /// Kept in lock-step with `scripts/prelude.kel`. The values
 /// here are what the host stuffs into the `Status::Err(Word)`
@@ -76,7 +95,7 @@ fn status_err(code: StatusErrorCode) -> Value {
 pub fn register_task_natives<P: Platform>(vm: &mut Vm) {
     // Time, log, and existing GPIO / sensor surface.
     register_clock_now::<P>(vm);
-    register_log::<P>(vm);
+    register_log_event::<P>(vm);
     register_gpio_set::<P>(vm);
     register_sensor_read::<P>(vm);
 
@@ -100,13 +119,28 @@ fn register_clock_now<P: Platform>(vm: &mut Vm) {
     );
 }
 
-fn register_log<P: Platform>(vm: &mut Vm) {
+/// `host::log_event(code: Word, data: Word) -> Unit`.
+///
+/// Forwards the script-supplied event code and data word to
+/// [`Platform::log_event`]. The code is downcast to `u32` at
+/// the boundary; out-of-range values saturate to `u32::MAX`,
+/// which the host dispatch then routes to the unknown-code
+/// branch. The data word is forwarded as the raw `i64` so the
+/// host's per-event format string may interpret it as signed
+/// or unsigned as the event requires.
+fn register_log_event<P: Platform>(vm: &mut Vm) {
     vm.register_native_closure(
-        "host::log",
+        "host::log_event",
         Box::new(|args: &[Value]| -> Result<Value, VmError> {
-            check_arity("log", 1, args)?;
-            let line = as_str(&args[0])?;
-            P::log(line);
+            check_arity("log_event", 2, args)?;
+            let code_word = as_i64(&args[0])?;
+            let data = as_i64(&args[1])?;
+            let code = if (0..=u32::MAX as i64).contains(&code_word) {
+                code_word as u32
+            } else {
+                u32::MAX
+            };
+            P::log_event(code, data);
             Ok(Value::Unit)
         }),
     );
@@ -343,19 +377,6 @@ fn as_i64(v: &Value) -> Result<i64, VmError> {
         Value::Int(n) => Ok(*n),
         other => Err(VmError::TypeError(format!(
             "expected Word, got {}",
-            other.type_name()
-        ))),
-    }
-}
-
-fn as_str(v: &Value) -> Result<&str, VmError> {
-    match v {
-        Value::StaticStr(s) => Ok(s.as_str()),
-        // `Value::KStr` would need an arena context to deref;
-        // the demonstrator only uses static strings so the
-        // KStr case is left as a `TypeError` for now.
-        other => Err(VmError::TypeError(format!(
-            "expected static Text, got {}",
             other.type_name()
         ))),
     }

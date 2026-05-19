@@ -8,8 +8,9 @@
 //   rising counter the host could read through `Vm::set_data`
 //   and `Vm::get_data` for telemetry.
 // - `const data cfg` (compile-time constant) holds the heartbeat
-//   period in milliseconds. Reads compile to constant loads; the
-//   period cannot be changed without rebuilding the bytecode.
+//   period in milliseconds and the host-side event discriminant
+//   the task emits each tick. Reads compile to constant loads;
+//   neither value can be changed without rebuilding the bytecode.
 //
 // On the N6 hardware the heartbeat is the primary
 // evidence-of-life signal in the defmt RTT stream because GPIO
@@ -18,7 +19,10 @@
 //
 // `Status` and `StatusErrorCode` are declared in the prelude
 // (`scripts/prelude.kel`), prepended at compile time by
-// `setup::build_module`.
+// `setup::build_module`. The numeric `ev_ok` discriminant is
+// kept in lock-step with `natives::EV_HEARTBEAT_OK` and the
+// matching arm in each platform's
+// `Platform::log_event` implementation.
 
 data state {
     count: Word,
@@ -26,11 +30,12 @@ data state {
 
 const data cfg {
     period_ms: Word = 5000,
+    ev_ok: Word = 1,
 }
 
 loop main(_reason: Word) -> (Word, Word) {
     state.count = state.count + 1;
-    host::log("heartbeat: system OK");
+    host::log_event(cfg.ev_ok, 0);
     let next = host::clock_now() + cfg.period_ms;
     let _ = yield (0, next);
     (0, 0)

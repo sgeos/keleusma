@@ -7,15 +7,17 @@
 // prepends the text to each task source. Line numbers in compile
 // errors for task scripts are offset by the prelude line count.
 //
-// The `use` declarations cover the unqualified natives that the
-// f-string desugaring emits at compile time. Qualified host
-// natives (anything `host::xxx`) do not need a `use` line.
-
-use concat
-use to_string
+// The `use` declarations cover only the qualified host natives
+// that every task script may call. Unqualified text utilities
+// (`to_string`, `concat`) are no longer needed because the task
+// scripts compile without the `text` feature and therefore do
+// not desugar f-strings. Diagnostic logging is performed through
+// `host::log_event(code, data)` which carries a numeric event
+// discriminant and a single data word; the per-event format
+// string lives on the host side.
 
 use host::clock_now
-use host::log
+use host::log_event
 use host::gpio_set
 use host::gpio_pin_count
 use host::sensor_read

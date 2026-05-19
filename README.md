@@ -28,6 +28,18 @@ The compile pipeline (parse, type-check, monomorphize, hoist, emit) admits a bro
 - **Static marshalling** through `KeleusmaType` derive for ergonomic native registration.
 - **`no_std + alloc` compatible** with a minimal dependency set.
 
+### Cargo features
+
+The runtime crate exposes three orthogonal feature gates so hosts can strip pipeline stages they do not need from the flash image.
+
+| Feature | Default | What it adds | Drop to save flash when |
+|---------|:-------:|--------------|-------------------------|
+| `compile` | on | Lexer, parser, type checker, monomorphizer, compiler. The source-to-bytecode pipeline. | The host ships precompiled bytecode and loads through `Module::from_bytes` or `Vm::view_bytes_zero_copy`. |
+| `verify` | on | Structural verifier, WCET and WCMU resource-bounds pass. Used inside `Vm::new` at load time. | An equivalent verification ran at artefact-ingestion time; `Vm::new` then degrades to a trust-load equivalent to `Vm::new_unchecked`. |
+| `text` | on | Surface syntax for string literals and the `Text` type, f-string interpolation, the utility natives (`to_string`, `concat`, `slice`, `length`, `println`). The `Value::StaticStr` and `Value::KStr` runtime variants. | Scripts use only numeric arguments. Diagnostics route through registered host natives that take numeric event codes. |
+
+The three features compose freely. The `examples/rtos/` cooperative microkernel disables `text` and uses precompiled bytecode under either `keleusma-verify` only (199 KB `.text`) or trust-load (180 KB `.text`) on the STM32N6570-DK; see [`examples/rtos/MANUAL.md`](examples/rtos/MANUAL.md) for the measured flash-size table.
+
 ## Quick Start
 
 Add to your `Cargo.toml`:
