@@ -863,21 +863,55 @@ impl<'a, 'arena> Vm<'a, 'arena> {
                 self.data.len()
             )));
         }
+        if self.slot_is_private(slot) {
+            return Err(VmError::NativeError(format!(
+                "data slot {} is private and not accessible through the host API",
+                slot
+            )));
+        }
         self.data[slot] = value;
         Ok(())
     }
 
     /// Read a data segment slot value.
     ///
-    /// Returns an error if the slot index is out of bounds.
+    /// Returns an error if the slot index is out of bounds or the
+    /// slot is declared `private` in the source. Private slots are
+    /// script-only and not exposed through the host API.
     pub fn get_data(&self, slot: usize) -> Result<&Value, VmError> {
-        self.data.get(slot).ok_or_else(|| {
-            VmError::NativeError(format!(
+        if slot >= self.data.len() {
+            return Err(VmError::NativeError(format!(
                 "data slot index {} out of bounds (data segment has {} slots)",
                 slot,
                 self.data.len()
-            ))
-        })
+            )));
+        }
+        if self.slot_is_private(slot) {
+            return Err(VmError::NativeError(format!(
+                "data slot {} is private and not accessible through the host API",
+                slot
+            )));
+        }
+        Ok(&self.data[slot])
+    }
+
+    /// True when the slot at `slot` is declared `private` in the
+    /// module's data layout. Used by [`Vm::set_data`] and
+    /// [`Vm::get_data`] to enforce the host-API boundary on private
+    /// slots. Out-of-bounds indices return false; the caller is
+    /// expected to have validated the bound before invoking this
+    /// helper (both call sites do).
+    fn slot_is_private(&self, slot: usize) -> bool {
+        match self.archived().data_layout.as_ref() {
+            None => false,
+            Some(dl) => match dl.slots.get(slot) {
+                None => false,
+                Some(s) => matches!(
+                    s.visibility,
+                    crate::bytecode::ArchivedSlotVisibility::Private
+                ),
+            },
+        }
     }
 
     /// Return the number of slots in the current data segment.
@@ -3907,23 +3941,24 @@ mod tests {
         //   bytes[10]      = 0x06                   word_bits_log2 = 6 (64-bit)
         //   bytes[11]      = 0x06                   addr_bits_log2 = 6 (64-bit)
         //   bytes[12]      = 0x06                   float_bits_log2 = 6 (f64)
-        //   bytes[13]      = 0x00                   flags = 0
+        //   bytes[13]      = 0x01                   flags = FLAG_EPHEMERAL
         //   bytes[14..16]  = 0x00 0x00              reserved
         //   bytes[16..20]  = 0x00 0x00 0x00 0x00    wcet_cycles = 0 (auto)
         //   bytes[20..24]  = 0x00 0x00 0x00 0x00    wcmu_bytes = 0 (auto)
         //   bytes[24..28]  = 0x00 0x00 0x00 0x00    shared_data_bytes = 0
         //   bytes[28..32]  = 0x00 0x00 0x00 0x00    private_data_bytes = 0
-        //   bytes[32..184] = rkyv body (includes empty param_types vec)
+        //   bytes[32..184] = rkyv body (includes empty param_types vec
+        //                    and flags = 1 mirror at body offset 140)
         //   bytes[184..188] = CRC-32 (u32 LE)
         let expected: alloc::vec::Vec<u8> = alloc::vec![
-            75, 69, 76, 69, 1, 0, 188, 0, 0, 0, 6, 6, 6, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            75, 69, 76, 69, 1, 0, 188, 0, 0, 0, 6, 6, 6, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
             0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 39, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0,
             1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 109, 97, 105,
             110, 255, 255, 255, 255, 200, 255, 255, 255, 2, 0, 0, 0, 208, 255, 255, 255, 1, 0, 0,
             0, 232, 255, 255, 255, 0, 0, 0, 0, 0, 0, 0, 0, 220, 255, 255, 255, 0, 0, 0, 0, 212,
             255, 255, 255, 1, 0, 0, 0, 248, 255, 255, 255, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0,
-            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 6, 6, 6, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-            0, 0, 0, 0, 0, 0, 69, 160, 51, 160,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 6, 6, 6, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 186, 4, 81, 174,
         ];
         let src = "fn main() -> Word { 1 }";
         let tokens = tokenize(src).expect("lex");
@@ -5149,5 +5184,147 @@ mod tests {
             }
             other => panic!("expected IndexOutOfBounds, got {:?}", other),
         }
+    }
+
+    // --- Data partition (shared vs private) and ephemeral flag ---
+
+    #[test]
+    fn shared_data_byte_count_in_header() {
+        let src = "\
+            data ctx { a: Word, b: Word }\n\
+            fn main() -> Word { ctx.a + ctx.b }";
+        let tokens = tokenize(src).expect("lex");
+        let program = parse(&tokens).expect("parse");
+        let module = compile(&program).expect("compile");
+        // Two shared slots times 32-byte VALUE_SLOT_SIZE_BYTES.
+        assert_eq!(module.shared_data_bytes, 64);
+        assert_eq!(module.private_data_bytes, 0);
+    }
+
+    #[test]
+    fn private_data_byte_count_in_header() {
+        let src = "\
+            private data state { counter: Word }\n\
+            fn main() -> Word { state.counter }";
+        let tokens = tokenize(src).expect("lex");
+        let program = parse(&tokens).expect("parse");
+        let module = compile(&program).expect("compile");
+        assert_eq!(module.shared_data_bytes, 0);
+        assert_eq!(module.private_data_bytes, 32);
+    }
+
+    #[test]
+    fn mixed_data_partitions_correctly() {
+        let src = "\
+            data shared_ctx { x: Word }\n\
+            private data priv_ctx { y: Word, z: Word }\n\
+            fn main() -> Word { shared_ctx.x + priv_ctx.y + priv_ctx.z }";
+        let tokens = tokenize(src).expect("lex");
+        let program = parse(&tokens).expect("parse");
+        let module = compile(&program).expect("compile");
+        assert_eq!(module.shared_data_bytes, 32);
+        assert_eq!(module.private_data_bytes, 64);
+    }
+
+    #[test]
+    fn set_data_rejects_private_slot() {
+        let src = "\
+            data shared_ctx { x: Word }\n\
+            private data priv_ctx { y: Word }\n\
+            fn main() -> Word { shared_ctx.x + priv_ctx.y }";
+        let tokens = tokenize(src).expect("lex");
+        let program = parse(&tokens).expect("parse");
+        let module = compile(&program).expect("compile");
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let mut vm = Vm::new(module, &arena).expect("verify");
+        // Slot 0 is shared; should succeed.
+        vm.set_data(0, Value::Int(5)).expect("shared slot accepted");
+        // Slot 1 is private; should reject.
+        let err = vm
+            .set_data(1, Value::Int(7))
+            .expect_err("private slot must reject");
+        match err {
+            VmError::NativeError(msg) => {
+                assert!(
+                    msg.contains("private"),
+                    "expected 'private' in error: {}",
+                    msg
+                );
+            }
+            other => panic!("expected NativeError, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn get_data_rejects_private_slot() {
+        let src = "\
+            data shared_ctx { x: Word }\n\
+            private data priv_ctx { y: Word }\n\
+            fn main() -> Word { shared_ctx.x + priv_ctx.y }";
+        let tokens = tokenize(src).expect("lex");
+        let program = parse(&tokens).expect("parse");
+        let module = compile(&program).expect("compile");
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let vm = Vm::new(module, &arena).expect("verify");
+        let _ok = vm.get_data(0).expect("shared slot accessible");
+        let err = vm.get_data(1).expect_err("private slot must reject");
+        match err {
+            VmError::NativeError(msg) => {
+                assert!(msg.contains("private"));
+            }
+            other => panic!("expected NativeError, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn ephemeral_bit_set_for_atomic_total_no_data() {
+        let src = "fn main() -> Word { 42 }";
+        let tokens = tokenize(src).expect("lex");
+        let program = parse(&tokens).expect("parse");
+        let module = compile(&program).expect("compile");
+        assert!(
+            module.flags & crate::bytecode::FLAG_EPHEMERAL != 0,
+            "expected FLAG_EPHEMERAL bit set, got flags = {:#04x}",
+            module.flags
+        );
+    }
+
+    #[test]
+    fn ephemeral_bit_clear_when_private_data_present() {
+        let src = "\
+            private data state { counter: Word }\n\
+            fn main() -> Word { state.counter }";
+        let tokens = tokenize(src).expect("lex");
+        let program = parse(&tokens).expect("parse");
+        let module = compile(&program).expect("compile");
+        assert!(
+            module.flags & crate::bytecode::FLAG_EPHEMERAL == 0,
+            "expected FLAG_EPHEMERAL cleared for module with private data; flags = {:#04x}",
+            module.flags
+        );
+    }
+
+    #[test]
+    fn explicit_ephemeral_modifier_accepted_when_proof_holds() {
+        let src = "ephemeral fn main() -> Word { 0 }";
+        let tokens = tokenize(src).expect("lex");
+        let program = parse(&tokens).expect("parse");
+        let module = compile(&program).expect("compile accepts ephemeral main");
+        assert!(module.flags & crate::bytecode::FLAG_EPHEMERAL != 0);
+    }
+
+    #[test]
+    fn explicit_ephemeral_modifier_rejected_when_private_data_present() {
+        let src = "\
+            private data state { x: Word }\n\
+            ephemeral fn main() -> Word { state.x }";
+        let tokens = tokenize(src).expect("lex");
+        let program = parse(&tokens).expect("parse");
+        let err = compile(&program).expect_err("compile should reject");
+        assert!(
+            err.message.contains("ephemeral") && err.message.contains("private data"),
+            "unexpected error message: {}",
+            err.message
+        );
     }
 }

@@ -2138,6 +2138,7 @@ mod tests {
             data_layout: Some(DataLayout {
                 slots: vec![DataSlot {
                     name: String::from("ctx.x"),
+                    visibility: crate::bytecode::SlotVisibility::Shared,
                 }],
             }),
         };
@@ -2179,9 +2180,11 @@ mod tests {
                 slots: vec![
                     DataSlot {
                         name: String::from("ctx.a"),
+                    visibility: crate::bytecode::SlotVisibility::Shared,
                     },
                     DataSlot {
                         name: String::from("ctx.b"),
+                    visibility: crate::bytecode::SlotVisibility::Shared,
                     },
                 ],
             }),

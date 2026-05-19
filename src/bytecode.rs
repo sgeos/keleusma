@@ -1095,6 +1095,28 @@ pub struct StructTemplate {
 pub struct DataSlot {
     /// Slot name (for host initialization and debugging).
     pub name: String,
+    /// Slot visibility to the host. Shared slots are accessible
+    /// through `Vm::set_data` and `Vm::get_data`. Private slots
+    /// are script-only; the host API rejects access. Both
+    /// persist across resets. Source declaration uses the
+    /// `shared` (default) and `private` modifiers on `data`
+    /// blocks.
+    pub visibility: SlotVisibility,
+}
+
+/// Slot visibility flag carried in [`DataSlot::visibility`].
+///
+/// Mirrors `ast::DataVisibility` at the bytecode layer so the
+/// runtime can enforce the host-API boundary without reading
+/// the source AST. Serialized as part of the data layout in the
+/// bytecode body; it is not part of the framing header.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Archive, Serialize, Deserialize)]
+pub enum SlotVisibility {
+    /// Host-visible slot. The default. `Vm::set_data` and
+    /// `Vm::get_data` admit this slot.
+    Shared,
+    /// Script-only slot. The host API rejects this slot.
+    Private,
 }
 
 /// Data segment layout declaration.

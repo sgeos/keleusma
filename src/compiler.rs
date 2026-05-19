@@ -437,60 +437,111 @@ pub fn compile_with_target(
         }
     }
 
-    // R28: at most one data block per program.
-    if program.data_decls.len() > 1 {
-        return Err(CompileError {
-            message: format!(
-                "at most one data block per program (R28), found {}",
-                program.data_decls.len()
-            ),
-            span: program.data_decls[1].span,
-        });
+    // R28: at most one data block per visibility class. The
+    // original rule said "at most one data block per program";
+    // with shared and private visibility introduced in V0.2.x a
+    // program may declare one shared block and one private
+    // block. Two blocks of the same visibility remain rejected.
+    let mut seen_shared_span: Option<crate::token::Span> = None;
+    let mut seen_private_span: Option<crate::token::Span> = None;
+    for decl in &program.data_decls {
+        let dup_slot = match decl.visibility {
+            DataVisibility::Shared => &mut seen_shared_span,
+            DataVisibility::Private => &mut seen_private_span,
+        };
+        if dup_slot.is_some() {
+            return Err(CompileError {
+                message: format!(
+                    "at most one {} data block per program (R28); found duplicate `{}`",
+                    match decl.visibility {
+                        DataVisibility::Shared => "shared",
+                        DataVisibility::Private => "private",
+                    },
+                    decl.name
+                ),
+                span: decl.span,
+            });
+        }
+        *dup_slot = Some(decl.span);
     }
 
     // Build data layout from data declarations. Validate that each field
     // type has a statically known fixed size before assigning a slot.
+    //
+    // Slot indices are partitioned: shared slots occupy the low
+    // range [0, shared_count) and private slots occupy
+    // [shared_count, shared_count + private_count). The runtime
+    // uses this partition to enforce the host-API boundary on
+    // `Vm::set_data`/`Vm::get_data`. The order within each
+    // partition matches the source declaration order so error
+    // messages and slot names remain predictable.
     let mut data_fields: BTreeMap<String, Vec<(String, u16)>> = BTreeMap::new();
-    let mut data_layout_slots: Vec<DataSlot> = Vec::new();
+    let mut shared_slots: Vec<DataSlot> = Vec::new();
+    let mut private_slots: Vec<DataSlot> = Vec::new();
     let mut data_slot_idx: u16 = 0;
-    for decl in &program.data_decls {
-        let mut fields = Vec::new();
-        for field in &decl.fields {
-            let mut visiting: BTreeSet<String> = BTreeSet::new();
-            validate_data_field_type(&field.type_expr, &program.types, &mut visiting)?;
-            fields.push((field.name.clone(), data_slot_idx));
-            // Array-typed fields expand into consecutive slots, one
-            // per scalar element. Scalar and other composite types
-            // continue to occupy a single slot whose `Value`
-            // representation carries the structure. Multi-
-            // dimensional arrays (nested `Array` types) flatten into
-            // a single contiguous slab; the runtime indexes through
-            // the flat region after the compiler emits the per-level
-            // stride arithmetic.
-            let n_slots = slots_for_data_type(&field.type_expr);
-            if n_slots == 1 {
-                data_layout_slots.push(DataSlot {
-                    name: format!("{}.{}", decl.name, field.name),
-                });
-            } else {
-                for k in 0..n_slots {
-                    data_layout_slots.push(DataSlot {
-                        name: format!("{}.{}[{}]", decl.name, field.name, k),
-                    });
-                }
+    // Two-pass loop. Pass 0 processes shared declarations; pass 1
+    // processes private declarations. The slot index counter is
+    // continuous across both passes.
+    for pass_visibility in [DataVisibility::Shared, DataVisibility::Private] {
+        for decl in &program.data_decls {
+            if decl.visibility != pass_visibility {
+                continue;
             }
-            data_slot_idx = data_slot_idx
-                .checked_add(n_slots)
-                .ok_or_else(|| CompileError {
-                    message: format!(
-                        "data segment field `{}.{}` overflows the 16-bit slot index space",
-                        decl.name, field.name
-                    ),
-                    span: field.span,
-                })?;
+            let mut fields = Vec::new();
+            for field in &decl.fields {
+                let mut visiting: BTreeSet<String> = BTreeSet::new();
+                validate_data_field_type(&field.type_expr, &program.types, &mut visiting)?;
+                fields.push((field.name.clone(), data_slot_idx));
+                // Array-typed fields expand into consecutive slots, one
+                // per scalar element. Scalar and other composite types
+                // continue to occupy a single slot whose `Value`
+                // representation carries the structure. Multi-
+                // dimensional arrays (nested `Array` types) flatten into
+                // a single contiguous slab; the runtime indexes through
+                // the flat region after the compiler emits the per-level
+                // stride arithmetic.
+                let n_slots = slots_for_data_type(&field.type_expr);
+                let visibility = match decl.visibility {
+                    DataVisibility::Shared => crate::bytecode::SlotVisibility::Shared,
+                    DataVisibility::Private => crate::bytecode::SlotVisibility::Private,
+                };
+                let target = match pass_visibility {
+                    DataVisibility::Shared => &mut shared_slots,
+                    DataVisibility::Private => &mut private_slots,
+                };
+                if n_slots == 1 {
+                    target.push(DataSlot {
+                        name: format!("{}.{}", decl.name, field.name),
+                        visibility,
+                    });
+                } else {
+                    for k in 0..n_slots {
+                        target.push(DataSlot {
+                            name: format!("{}.{}[{}]", decl.name, field.name, k),
+                            visibility,
+                        });
+                    }
+                }
+                data_slot_idx = data_slot_idx
+                    .checked_add(n_slots)
+                    .ok_or_else(|| CompileError {
+                        message: format!(
+                            "data segment field `{}.{}` overflows the 16-bit slot index space",
+                            decl.name, field.name
+                        ),
+                        span: field.span,
+                    })?;
+            }
+            data_fields.insert(decl.name.clone(), fields);
         }
-        data_fields.insert(decl.name.clone(), fields);
     }
+    // Compose the final slot table: shared slots first, then
+    // private slots. Slot indices in `data_fields` already
+    // reference the unified space.
+    let shared_count = shared_slots.len() as u32;
+    let private_count = private_slots.len() as u32;
+    let mut data_layout_slots: Vec<DataSlot> = shared_slots;
+    data_layout_slots.append(&mut private_slots);
     let data_layout = if data_layout_slots.is_empty() {
         None
     } else {
@@ -609,15 +660,16 @@ pub fn compile_with_target(
         // Populated below after structural verification succeeds.
         wcet_cycles: 0,
         wcmu_bytes: 0,
-        // Flags and per-region data byte counts are populated by
-        // the verifier when the `verify` feature is on. Phase 3
-        // and later land the language surface (`shared`,
-        // `private`, `ephemeral`) that drives the values; until
-        // then the fields stay at zero and the runtime treats
-        // them as auto.
+        // Flags is populated by the verifier (under `verify`
+        // feature) at end of compile_with_target. The shared
+        // and private byte counts mirror the partition computed
+        // above; their sum equals the total data segment size in
+        // bytes (one Value-sized slot per slot).
         flags: 0,
-        shared_data_bytes: 0,
-        private_data_bytes: 0,
+        shared_data_bytes: shared_count
+            .saturating_mul(crate::bytecode::VALUE_SLOT_SIZE_BYTES),
+        private_data_bytes: private_count
+            .saturating_mul(crate::bytecode::VALUE_SLOT_SIZE_BYTES),
     };
 
     // Compile-time defense-in-depth for the WCET and WCMU contract.
@@ -747,9 +799,75 @@ pub fn compile_with_target(
         }
         module.wcet_cycles = if wcet_overflow { u32::MAX } else { max_wcet };
         module.wcmu_bytes = if wcmu_overflow { u32::MAX } else { max_wcmu };
+
+        // Ephemerality analysis. The simple sufficient rule
+        // implemented here: a module is ephemeral when it has no
+        // private data and the entry function's signature carries
+        // no `Text` (which is the surface name for arena-resident
+        // dynamic strings). The full rule from the language design
+        // statement is stronger; this implementation is a safe
+        // approximation. Modules that fail the simple rule may
+        // still be inferred ephemeral by a future tightening that
+        // tracks per-yield arena state.
+        let entry_name = "main";
+        let entry_decl = program.functions.iter().find(|f| f.name == entry_name);
+        let signature_uses_text = entry_decl
+            .map(|f| {
+                f.params.iter().any(|p| {
+                    p.type_expr
+                        .as_ref()
+                        .map(type_expr_carries_text)
+                        .unwrap_or(false)
+                }) || type_expr_carries_text(&f.return_type)
+            })
+            .unwrap_or(false);
+        let provably_ephemeral = module.private_data_bytes == 0 && !signature_uses_text;
+        if provably_ephemeral {
+            module.flags |= crate::bytecode::FLAG_EPHEMERAL;
+        }
+        // Enforce explicit `ephemeral` declarations.
+        if let Some(decl) = entry_decl
+            && decl.ephemeral
+            && !provably_ephemeral
+        {
+            let mut reason = alloc::string::String::new();
+            if module.private_data_bytes != 0 {
+                reason.push_str("module declares `private data` which persists across resets");
+            } else if signature_uses_text {
+                if !reason.is_empty() {
+                    reason.push_str(" and ");
+                }
+                reason.push_str(
+                    "entry function signature carries `Text` which is arena-resident at runtime",
+                );
+            }
+            return Err(CompileError {
+                message: alloc::format!(
+                    "`ephemeral` modifier on `{}` is not provable: {}",
+                    decl.name,
+                    reason
+                ),
+                span: decl.span,
+            });
+        }
     }
 
     Ok(module)
+}
+
+/// True when the type expression contains `Text` anywhere within
+/// its structure (including inside tuples and arrays). Used by
+/// the ephemerality verifier pass to detect dialogue types that
+/// would carry arena-resident values across the host-VM boundary.
+#[cfg(feature = "verify")]
+fn type_expr_carries_text(t: &TypeExpr) -> bool {
+    match t {
+        TypeExpr::Prim(PrimType::Text, _) => true,
+        TypeExpr::Tuple(parts, _) => parts.iter().any(type_expr_carries_text),
+        TypeExpr::Array(elem, _, _) => type_expr_carries_text(elem),
+        TypeExpr::Option(inner, _) => type_expr_carries_text(inner),
+        _ => false,
+    }
 }
 
 /// Validate that a data segment field type has a statically known fixed size.
@@ -3623,12 +3741,24 @@ mod tests {
     }
 
     #[test]
-    fn multiple_data_blocks_rejected() {
+    fn multiple_data_blocks_same_visibility_rejected() {
+        // Two shared blocks remain rejected under R28. One shared
+        // plus one private would be accepted; see
+        // `mixed_data_partitions_correctly` in vm.rs tests.
         let src = "data ctx_a { x: Word }\n\
                    data ctx_b { y: Word }\n\
                    fn main() -> () { () }";
         let err = compile_str(src).unwrap_err();
-        assert!(err.message.contains("R28") || err.message.contains("one data block"));
+        assert!(err.message.contains("R28") || err.message.contains("one"));
+    }
+
+    #[test]
+    fn two_private_data_blocks_rejected() {
+        let src = "private data ctx_a { x: Word }\n\
+                   private data ctx_b { y: Word }\n\
+                   fn main() -> () { () }";
+        let err = compile_str(src).unwrap_err();
+        assert!(err.message.contains("R28") || err.message.contains("private"));
     }
 
     #[test]
