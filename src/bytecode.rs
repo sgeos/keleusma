@@ -1324,6 +1324,18 @@ pub struct Module {
     /// match this value before loading the module. Mirrored in
     /// the framing header.
     pub private_data_bytes: u32,
+    /// CRC-32 hash of the data-segment layout. Used by
+    /// [`crate::vm::Vm::replace_module`] to reject hot swaps
+    /// against incompatible schemas before any data is loaded.
+    /// Computed from a canonical serialisation of each slot's
+    /// name and visibility in declaration order; see
+    /// [`compute_schema_hash`] for the exact byte sequence. A
+    /// module with no data layout reports zero. The check is
+    /// strict by default; hosts that need to swap across
+    /// incompatible schemas (different data declaration, same
+    /// arena capacity) call
+    /// [`crate::vm::Vm::replace_module_unchecked`] to bypass it.
+    pub schema_hash: u32,
 }
 
 /// Bit flags defined for [`Module::flags`].
@@ -1458,6 +1470,48 @@ fn strip_shebang_prefix(bytes: &[u8]) -> &[u8] {
         return &bytes[nl + 1..];
     }
     bytes
+}
+
+/// CRC-32 of the data-segment layout's canonical byte serialisation.
+///
+/// Canonical form: for each slot in declaration order, emit
+///
+/// - the slot name's UTF-8 bytes,
+/// - a single null byte `0x00` as separator,
+/// - one byte for the visibility tag (`0x53` `'S'` for Shared,
+///   `0x50` `'P'` for Private),
+/// - a single newline `0x0A` as slot terminator.
+///
+/// The trailing newline keeps adjacent slots disambiguated when
+/// one slot's name is a prefix of the next. A module with no
+/// data layout returns 0.
+///
+/// The hash is computed at compile time and stored in
+/// [`Module::schema_hash`]; [`crate::vm::Vm::replace_module`]
+/// compares the values across a hot swap. The hash covers slot
+/// names and visibility but not per-slot type tags; the layout
+/// does not carry per-slot type information at the bytecode
+/// level. Type-level checks remain a future extension.
+pub fn compute_schema_hash(layout: Option<&DataLayout>) -> u32 {
+    let layout = match layout {
+        Some(l) => l,
+        None => return 0,
+    };
+    if layout.slots.is_empty() {
+        return 0;
+    }
+    let mut buf: Vec<u8> = Vec::new();
+    for slot in &layout.slots {
+        buf.extend_from_slice(slot.name.as_bytes());
+        buf.push(0x00);
+        let vis_tag = match slot.visibility {
+            SlotVisibility::Shared => b'S',
+            SlotVisibility::Private => b'P',
+        };
+        buf.push(vis_tag);
+        buf.push(b'\n');
+    }
+    crc32(&buf)
 }
 
 pub(crate) fn crc32(bytes: &[u8]) -> u32 {

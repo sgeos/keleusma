@@ -112,6 +112,7 @@ fn build_benchmark_chunk(pattern: &[Op], constants: &[ConstValue], repetitions: 
     };
 
     Module {
+        schema_hash: 0,
         chunks: vec![chunk],
         native_names: Vec::new(),
         entry_point: Some(0),

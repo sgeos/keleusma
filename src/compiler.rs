@@ -829,6 +829,7 @@ pub fn compile_with_target(
 
     #[cfg_attr(not(feature = "verify"), allow(unused_mut))]
     let mut module = Module {
+        schema_hash: crate::bytecode::compute_schema_hash(data_layout.as_ref()),
         chunks,
         native_names,
         entry_point,

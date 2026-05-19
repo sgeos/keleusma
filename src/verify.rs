@@ -1552,6 +1552,7 @@ mod tests {
 
     fn make_module(chunks: Vec<Chunk>) -> Module {
         Module {
+            schema_hash: 0,
             chunks,
             native_names: Vec::new(),
             entry_point: Some(0),
@@ -2164,6 +2165,7 @@ mod tests {
         use crate::bytecode::{DataLayout, DataSlot};
         let chunk = make_chunk("main", vec![Op::GetData(5), Op::Return], BlockType::Func);
         let module = Module {
+            schema_hash: 0,
             chunks: vec![chunk],
             native_names: Vec::new(),
             entry_point: Some(0),
@@ -2205,6 +2207,7 @@ mod tests {
             BlockType::Func,
         );
         let module = Module {
+            schema_hash: 0,
             chunks: vec![chunk],
             native_names: Vec::new(),
             entry_point: Some(0),

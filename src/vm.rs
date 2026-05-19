@@ -98,6 +98,68 @@ impl From<crate::bytecode::LoadError> for VmError {
     }
 }
 
+/// Coarse policy category for a [`VmError`]. Used by hosts that want
+/// to make a single retry-or-halt decision without matching the
+/// full variant set.
+///
+/// The category is a derivation from the variant, not a stored
+/// field, so adding a new `VmError` variant requires updating
+/// [`VmError::category`] but does not change the wire format or any
+/// per-error allocation. Hosts that need finer policy than the
+/// three-way split continue to match on the variant directly.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VmErrorCategory {
+    /// Unrecoverable. The VM is in an undefined intermediate state
+    /// and must not be resumed. Hosts that wish to continue running
+    /// programs must call [`Vm::reset_after_error`] before any
+    /// further [`Vm::call`] or [`Vm::resume`]. Examples:
+    /// `StackUnderflow`, `InvalidBytecode`, `VerifyError`,
+    /// `LoadError`, `OutOfArena`, `NotSuspended`.
+    Halt,
+    /// Recoverable script-side error. The script asked for something
+    /// that the VM rejected; the host may surface the error to the
+    /// script through [`Vm::resume_err`] or restart the iteration.
+    /// Examples: `TypeError`, `DivisionByZero`, `IndexOutOfBounds`,
+    /// `FieldNotFound`, `NoMatch`, `Trap`.
+    SoftScript,
+    /// Recoverable host-side error. A native function the host
+    /// registered returned an error. The host owns the recovery
+    /// policy (retry, fallback, surface to the script through
+    /// [`Vm::resume_err`]). Example: `NativeError`.
+    SoftHost,
+}
+
+impl VmError {
+    /// Coarse retry-or-halt category for this error.
+    ///
+    /// See [`VmErrorCategory`] for the three-way split and per-variant
+    /// rationale. Hosts that need finer policy match on `self`
+    /// directly.
+    pub fn category(&self) -> VmErrorCategory {
+        match self {
+            // Halt: the VM state is undefined or unrecoverable.
+            VmError::StackUnderflow
+            | VmError::InvalidBytecode(_)
+            | VmError::VerifyError(_)
+            | VmError::LoadError(_)
+            | VmError::OutOfArena(_)
+            | VmError::NotSuspended => VmErrorCategory::Halt,
+            // Soft script: the script's request was invalid at the
+            // VM level, but the VM's invariants hold and the host
+            // can ask the script to retry through `resume_err`.
+            VmError::TypeError(_)
+            | VmError::DivisionByZero
+            | VmError::IndexOutOfBounds(_, _)
+            | VmError::FieldNotFound(_, _)
+            | VmError::NoMatch(_)
+            | VmError::Trap(_) => VmErrorCategory::SoftScript,
+            // Soft host: a native returned an error. The host owns
+            // the policy.
+            VmError::NativeError(_) => VmErrorCategory::SoftHost,
+        }
+    }
+}
+
 /// The execution state of the VM.
 #[derive(Debug, Clone)]
 pub enum VmState {
@@ -1254,6 +1316,53 @@ impl<'a, 'arena> Vm<'a, 'arena> {
     /// the host's responsibility. The VM does not check it because
     /// dialogue types are erased at the bytecode level.
     pub fn replace_module(
+        &mut self,
+        new_module: Module,
+        initial_data: Vec<Value>,
+    ) -> Result<(), VmError> {
+        // Strict schema check. Reject hot swaps whose data-segment
+        // layout differs from the currently loaded module's layout.
+        // The hash covers slot names and visibility in declaration
+        // order; modules with no data segment have hash zero and
+        // therefore swap freely.
+        //
+        // The strict check is the safer default. Hosts that need to
+        // swap across incompatible schemas (typically because the
+        // new module declares a different `data` block by intent)
+        // call [`Vm::replace_module_unchecked`] instead, which
+        // bypasses this check and leaves the existing
+        // size-and-arena verification as the only guard.
+        let current_hash: u32 = self.archived().schema_hash.to_native();
+        if current_hash != new_module.schema_hash {
+            return Err(VmError::VerifyError(format!(
+                "schema mismatch on hot swap: current module schema_hash = {:#x}, new module schema_hash = {:#x}. Use `Vm::replace_module_unchecked` to force the swap if the data layout change is intentional.",
+                current_hash, new_module.schema_hash
+            )));
+        }
+        self.replace_module_inner(new_module, initial_data)
+    }
+
+    /// Hot swap without the schema-compatibility check.
+    ///
+    /// Equivalent to [`Self::replace_module`] except that the
+    /// schema-hash comparison is skipped. Hosts use this when the new
+    /// module declares a different data layout from the currently
+    /// loaded module by intent; the size check on `initial_data`
+    /// continues to enforce that the host supplies the right number
+    /// of initial slot values for the new layout.
+    ///
+    /// `unchecked` names the safety opt-out, not memory safety. The
+    /// VM continues to enforce structural verification and resource
+    /// bounds; only the schema-hash sanity check is bypassed.
+    pub fn replace_module_unchecked(
+        &mut self,
+        new_module: Module,
+        initial_data: Vec<Value>,
+    ) -> Result<(), VmError> {
+        self.replace_module_inner(new_module, initial_data)
+    }
+
+    fn replace_module_inner(
         &mut self,
         new_module: Module,
         initial_data: Vec<Value>,
@@ -2795,6 +2904,54 @@ mod tests {
     use crate::lexer::tokenize;
     use crate::parser::parse;
 
+    #[test]
+    fn vm_error_category_three_way_split() {
+        // Sanity-check that each VmError variant maps to the
+        // expected category. Halt covers the unrecoverable cases
+        // where the VM's state is undefined after the error; soft
+        // script covers the recoverable-via-resume_err cases; soft
+        // host covers the host-native error surface.
+        let halt: alloc::vec::Vec<VmError> = alloc::vec![
+            VmError::StackUnderflow,
+            VmError::InvalidBytecode(alloc::string::String::from("oops")),
+            VmError::VerifyError(alloc::string::String::from("oops")),
+            VmError::LoadError(alloc::string::String::from("oops")),
+            VmError::OutOfArena(alloc::string::String::from("oops")),
+            VmError::NotSuspended,
+        ];
+        for e in &halt {
+            assert_eq!(
+                e.category(),
+                VmErrorCategory::Halt,
+                "expected Halt for {:?}",
+                e
+            );
+        }
+        let soft_script: alloc::vec::Vec<VmError> = alloc::vec![
+            VmError::TypeError(alloc::string::String::from("oops")),
+            VmError::DivisionByZero,
+            VmError::IndexOutOfBounds(0, 0),
+            VmError::FieldNotFound(
+                alloc::string::String::from("S"),
+                alloc::string::String::from("f"),
+            ),
+            VmError::NoMatch(alloc::string::String::from("oops")),
+            VmError::Trap(alloc::string::String::from("oops")),
+        ];
+        for e in &soft_script {
+            assert_eq!(
+                e.category(),
+                VmErrorCategory::SoftScript,
+                "expected SoftScript for {:?}",
+                e
+            );
+        }
+        assert_eq!(
+            VmError::NativeError(alloc::string::String::from("oops")).category(),
+            VmErrorCategory::SoftHost,
+        );
+    }
+
     fn run_program(src: &str, args: &[Value]) -> Result<VmState, VmError> {
         let tokens = tokenize(src).expect("lex error");
         let program = parse(&tokens).expect("parse error");
@@ -3834,10 +3991,46 @@ mod tests {
     }
 
     #[test]
-    fn hot_swap_new_schema_replaced() {
-        // Module A: ctx { score: i64 }, returns ctx.score.
+    fn hot_swap_strict_rejects_schema_mismatch() {
+        // Replaces the previous `hot_swap_new_schema_replaced` test
+        // under the strict-by-default schema policy added in Item 6
+        // of the V0.2 design pass. Modules A and B declare different
+        // data layouts; `replace_module` now rejects the swap with a
+        // `VmError::VerifyError` whose message names the two
+        // schema_hash values. Hosts that intend to swap across
+        // incompatible schemas call `replace_module_unchecked`
+        // (covered by `hot_swap_unchecked_admits_new_schema` below).
         let src_a = "data ctx { score: Word }\nfn main() -> Word { ctx.score }";
-        // Module B: ctx { x: i64, y: i64, z: i64 }, returns x + y + z.
+        let src_b =
+            "data ctx { x: Word, y: Word, z: Word }\nfn main() -> Word { ctx.x + ctx.y + ctx.z }";
+
+        let mod_a = build_module(src_a);
+        let mod_b = build_module(src_b);
+
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let mut vm = Vm::new(mod_a, &arena).unwrap();
+        let err = vm
+            .replace_module(
+                mod_b,
+                alloc::vec![Value::Int(1), Value::Int(2), Value::Int(3)],
+            )
+            .unwrap_err();
+        match err {
+            VmError::VerifyError(msg) => assert!(
+                msg.contains("schema mismatch"),
+                "expected schema-mismatch error, got: {}",
+                msg
+            ),
+            other => panic!("expected VerifyError(schema mismatch), got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn hot_swap_unchecked_admits_new_schema() {
+        // The escape hatch: `replace_module_unchecked` bypasses the
+        // schema check and admits a swap to a module with a different
+        // data layout, retaining the previous V0.1 behaviour.
+        let src_a = "data ctx { score: Word }\nfn main() -> Word { ctx.score }";
         let src_b =
             "data ctx { x: Word, y: Word, z: Word }\nfn main() -> Word { ctx.x + ctx.y + ctx.z }";
 
@@ -3849,7 +4042,7 @@ mod tests {
         vm.set_data(0, Value::Int(7)).unwrap();
         assert_eq!(vm.data_len(), 1);
 
-        vm.replace_module(
+        vm.replace_module_unchecked(
             mod_b,
             alloc::vec![Value::Int(1), Value::Int(2), Value::Int(3)],
         )
@@ -3864,6 +4057,12 @@ mod tests {
 
     #[test]
     fn hot_swap_size_mismatch_rejected() {
+        // Schema-compatible swap that fails the size check. With the
+        // strict policy now in effect, the new and old modules must
+        // share a schema_hash for `replace_module` to even reach the
+        // size check; this test therefore uses
+        // `replace_module_unchecked` to bypass the schema check and
+        // exercise the size-mismatch path directly.
         let src_a = "data ctx { x: Word }\nfn main() -> Word { ctx.x }";
         let src_b = "data ctx { x: Word, y: Word }\nfn main() -> Word { ctx.x + ctx.y }";
 
@@ -3872,9 +4071,8 @@ mod tests {
 
         let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
         let mut vm = Vm::new(mod_a, &arena).unwrap();
-        // Supplying one value when the new module declares two slots must fail.
         let err = vm
-            .replace_module(mod_b, alloc::vec![Value::Int(99)])
+            .replace_module_unchecked(mod_b, alloc::vec![Value::Int(99)])
             .unwrap_err();
         match err {
             VmError::InvalidBytecode(msg) => assert!(msg.contains("size mismatch")),
@@ -3884,6 +4082,11 @@ mod tests {
 
     #[test]
     fn hot_swap_no_data_module_accepts_empty_vec() {
+        // Hot swap from a module with a data block to one without.
+        // The two schemas differ (the source module's data block
+        // produces a non-zero schema_hash; the target's absence
+        // produces zero), so this is a schema-incompatible swap that
+        // routes through `replace_module_unchecked`.
         let src_a = "data ctx { x: Word }\nfn main() -> Word { ctx.x }";
         let src_b = "fn main() -> Word { 42 }";
 
@@ -3892,10 +4095,33 @@ mod tests {
 
         let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
         let mut vm = Vm::new(mod_a, &arena).unwrap();
-        vm.replace_module(mod_b, Vec::new()).unwrap();
+        vm.replace_module_unchecked(mod_b, Vec::new()).unwrap();
         assert_eq!(vm.data_len(), 0);
         match vm.call(&[]).unwrap() {
             VmState::Finished(v) => assert_eq!(v, Value::Int(42)),
+            other => panic!("expected finished, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn hot_swap_strict_admits_schema_compatible() {
+        // Two modules with identical data layouts: same slot names,
+        // same visibility, same declaration order. The default
+        // `replace_module` admits the swap because the schema hashes
+        // match.
+        let src_a = "data ctx { x: Word }\nfn main() -> Word { ctx.x }";
+        let src_b = "data ctx { x: Word }\nfn main() -> Word { ctx.x + 1 }";
+
+        let mod_a = build_module(src_a);
+        let mod_b = build_module(src_b);
+
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let mut vm = Vm::new(mod_a, &arena).unwrap();
+        vm.set_data(0, Value::Int(5)).unwrap();
+        vm.replace_module(mod_b, alloc::vec![Value::Int(5)])
+            .unwrap();
+        match vm.call(&[]).unwrap() {
+            VmState::Finished(v) => assert_eq!(v, Value::Int(6)),
             other => panic!("expected finished, got {:?}", other),
         }
     }
@@ -4228,32 +4454,20 @@ mod tests {
         //
         // Source: `fn main() -> Word { 1 }`
         //
-        // Layout breakdown (header expanded to 32 bytes in V0.2 for
-        // the flags byte and the two data-byte-count fields):
-        //   bytes[0..4]    = b"KELE"               magic
-        //   bytes[4..6]    = 0x01 0x00              version 1 (u16 LE)
-        //   bytes[6..10]   = 0xBC 0x00 0x00 0x00    length 188 (u32 LE)
-        //   bytes[10]      = 0x06                   word_bits_log2 = 6 (64-bit)
-        //   bytes[11]      = 0x06                   addr_bits_log2 = 6 (64-bit)
-        //   bytes[12]      = 0x06                   float_bits_log2 = 6 (f64)
-        //   bytes[13]      = 0x01                   flags = FLAG_EPHEMERAL
-        //   bytes[14..16]  = 0x00 0x00              reserved
-        //   bytes[16..20]  = 0x00 0x00 0x00 0x00    wcet_cycles = 0 (auto)
-        //   bytes[20..24]  = 0x00 0x00 0x00 0x00    wcmu_bytes = 0 (auto)
-        //   bytes[24..28]  = 0x00 0x00 0x00 0x00    shared_data_bytes = 0
-        //   bytes[28..32]  = 0x00 0x00 0x00 0x00    private_data_bytes = 0
-        //   bytes[32..184] = rkyv body (includes empty param_types vec
-        //                    and flags = 1 mirror at body offset 140)
-        //   bytes[184..188] = CRC-32 (u32 LE)
+        // The wire format header is 32 bytes; the rkyv body grew by
+        // one u32 (`schema_hash`) in the V0.2 schema-strict hot-swap
+        // implementation, bringing the total length to 192 bytes
+        // including the 4-byte CRC trailer. For a function with no
+        // data layout, `schema_hash` is zero (no slots to hash).
         let expected: alloc::vec::Vec<u8> = alloc::vec![
-            75, 69, 76, 69, 1, 0, 188, 0, 0, 0, 6, 6, 6, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            75, 69, 76, 69, 1, 0, 192, 0, 0, 0, 6, 6, 6, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
             0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 39, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0,
             1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 109, 97, 105,
             110, 255, 255, 255, 255, 200, 255, 255, 255, 2, 0, 0, 0, 208, 255, 255, 255, 1, 0, 0,
             0, 232, 255, 255, 255, 0, 0, 0, 0, 0, 0, 0, 0, 220, 255, 255, 255, 0, 0, 0, 0, 212,
             255, 255, 255, 1, 0, 0, 0, 248, 255, 255, 255, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0,
             0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 6, 6, 6, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0,
-            0, 0, 0, 0, 0, 0, 186, 4, 81, 174,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 218, 19, 221, 224,
         ];
         let src = "fn main() -> Word { 1 }";
         let tokens = tokenize(src).expect("lex");
@@ -4659,6 +4873,7 @@ mod tests {
             param_types: alloc::vec![],
         };
         let module = Module {
+            schema_hash: 0,
             chunks: alloc::vec![chunk],
             native_names: alloc::vec![],
             entry_point: Some(0),
@@ -5722,6 +5937,34 @@ mod tests {
 
     #[test]
     #[cfg(feature = "text")]
+    fn ephemeral_bit_set_when_declared_text_return_never_produced() {
+        // The entry's declared return type carries `Text` through
+        // `Option<Text>`, but every concrete return path produces
+        // `Option::None` (a non-text discriminant). The per-yield
+        // arena dataflow refinement walks the compiled chunk in
+        // topological call order, observes that `Op::Return` peeks a
+        // non-text value, and admits the module as ephemeral despite
+        // the declared signature. The previous signature-only rule
+        // would have disqualified this program even though it never
+        // crosses the host-VM boundary with an arena-resident string.
+        //
+        // The test exercises both the per-yield dataflow refinement
+        // and the type-checker tightening that admits bare
+        // `Option::None` in a function-return position by unifying
+        // its inner type with the declared return type.
+        let src = "fn main() -> Option<Text> { Option::None }";
+        let tokens = tokenize(src).expect("lex");
+        let program = parse(&tokens).expect("parse");
+        let module = compile(&program).expect("compile");
+        assert!(
+            module.flags & crate::bytecode::FLAG_EPHEMERAL != 0,
+            "expected FLAG_EPHEMERAL set; declared Text return with no concrete text path should not disqualify, flags = {:#04x}",
+            module.flags
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "text")]
     fn ephemeral_bit_clear_when_declared_text_return_actually_produced() {
         // The entry's declared return type is `Text` and the body
         // actually produces a text value at the return site. The
@@ -5784,6 +6027,7 @@ mod tests {
         };
 
         let module = Module {
+            schema_hash: 0,
             chunks: alloc::vec![text_returning_chunk, int_returning_chunk],
             native_names: alloc::vec::Vec::new(),
             entry_point: Some(0),

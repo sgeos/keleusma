@@ -2373,11 +2373,56 @@ fn type_of_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Type, TypeError> {
                 }
                 None => {
                     if enum_name == "Option" {
-                        // Option::Some(t) and Option::None handled here.
-                        for arg in args {
-                            let _ = type_of_expr(ctx, arg)?;
+                        // `Option` is built-in and is not registered in
+                        // the user-declared `enums` map; the two
+                        // variants are handled inline. `Some(t)` takes
+                        // the payload's type as the inner; `None` takes
+                        // a fresh type variable so the surrounding
+                        // context (function return type, let-binding
+                        // annotation, match-arm sibling, function-call
+                        // argument position) can unify it. The previous
+                        // implementation returned `Option<Unknown>`
+                        // unconditionally, which left `Option::None`
+                        // unable to unify against any concrete
+                        // `Option<T>` because the unifier does not
+                        // narrow `Unknown` through `Option`'s recursive
+                        // arm.
+                        match variant.as_str() {
+                            "Some" => {
+                                if args.len() != 1 {
+                                    return Err(TypeError::new(
+                                        format!(
+                                            "`Option::Some` expects 1 argument, got {}",
+                                            args.len()
+                                        ),
+                                        *span,
+                                    ));
+                                }
+                                let inner = type_of_expr(ctx, &args[0])?;
+                                return Ok(Type::Option(Box::new(inner)));
+                            }
+                            "None" => {
+                                if !args.is_empty() {
+                                    return Err(TypeError::new(
+                                        format!(
+                                            "`Option::None` expects 0 arguments, got {}",
+                                            args.len()
+                                        ),
+                                        *span,
+                                    ));
+                                }
+                                return Ok(Type::Option(Box::new(ctx.fresh())));
+                            }
+                            _ => {
+                                return Err(TypeError::new(
+                                    format!(
+                                        "unknown variant `Option::{}`; expected `Some` or `None`",
+                                        variant
+                                    ),
+                                    *span,
+                                ));
+                            }
                         }
-                        return Ok(Type::Option(Box::new(Type::Unknown)));
                     }
                     Err(TypeError::new(
                         format!("unknown enum variant `{}::{}`", enum_name, variant),
