@@ -9,6 +9,8 @@ use allocator_api2::vec::Vec as ArenaVec;
 use keleusma_arena::BottomHandle;
 
 use crate::bytecode::*;
+#[allow(unused_imports)]
+use crate::word::{WideWord, Word};
 #[cfg(feature = "verify")]
 use crate::verify;
 
@@ -1512,9 +1514,9 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
     /// This allows closures that capture state, such as a shared command
     /// buffer for audio script integration. The closure does not receive
     /// arena context.
-    pub fn register_native_closure<F>(&mut self, name: &str, func: F)
+    pub fn register_native_closure<Func>(&mut self, name: &str, func: Func)
     where
-        F: Fn(&[crate::bytecode::GenericValue<W, F>]) -> Result<crate::bytecode::GenericValue<W, F>, VmError> + 'static,
+        Func: Fn(&[crate::bytecode::GenericValue<W, F>]) -> Result<crate::bytecode::GenericValue<W, F>, VmError> + 'static,
     {
         self.natives.push(NativeEntry {
             wcet: DEFAULT_NATIVE_WCET,
@@ -1548,9 +1550,9 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
 
     /// Register a native function that receives arena context using a
     /// closure.
-    pub fn register_native_with_ctx_closure<F>(&mut self, name: &str, func: F)
+    pub fn register_native_with_ctx_closure<Func>(&mut self, name: &str, func: Func)
     where
-        F: for<'b> Fn(&NativeCtx<'b>, &[crate::bytecode::GenericValue<W, F>]) -> Result<crate::bytecode::GenericValue<W, F>, VmError> + 'static,
+        Func: for<'b> Fn(&NativeCtx<'b>, &[crate::bytecode::GenericValue<W, F>]) -> Result<crate::bytecode::GenericValue<W, F>, VmError> + 'static,
     {
         self.natives.push(NativeEntry {
             wcet: DEFAULT_NATIVE_WCET,
@@ -1570,9 +1572,9 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
     /// [`register_fn_fallible`] instead.
     ///
     /// [`register_fn_fallible`]: Self::register_fn_fallible
-    pub fn register_fn<F, Args, R>(&mut self, name: &str, func: F)
+    pub fn register_fn<Func, Args, R>(&mut self, name: &str, func: Func)
     where
-        F: crate::marshall::IntoNativeFn<Args, R>,
+        Func: crate::marshall::IntoNativeFn<Args, R>,
     {
         self.natives.push(NativeEntry {
             wcet: DEFAULT_NATIVE_WCET,
@@ -1588,9 +1590,9 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
     /// The function returns `Result<R, VmError>`. Errors propagate to the
     /// script as native errors. Argument and return types must implement
     /// `KeleusmaType`.
-    pub fn register_fn_fallible<F, Args, R>(&mut self, name: &str, func: F)
+    pub fn register_fn_fallible<Func, Args, R>(&mut self, name: &str, func: Func)
     where
-        F: crate::marshall::IntoFallibleNativeFn<Args, R>,
+        Func: crate::marshall::IntoFallibleNativeFn<Args, R>,
     {
         self.natives.push(NativeEntry {
             wcet: DEFAULT_NATIVE_WCET,
@@ -1984,7 +1986,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                     if index < 0 || index >= len as i64 {
                         return Err(VmError::IndexOutOfBounds(index, len as usize));
                     }
-                    let slot = base as usize + index as usize;
+                    let slot = base as usize + index.to_i64() as usize;
                     let total = self.data_len();
                     if slot >= total {
                         return Err(VmError::InvalidBytecode(format!(
@@ -2009,7 +2011,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                         return Err(VmError::IndexOutOfBounds(index, len as usize));
                     }
                     let val = self.pop()?;
-                    let slot = base as usize + index as usize;
+                    let slot = base as usize + index.to_i64() as usize;
                     let total = self.data_len();
                     if slot >= total {
                         return Err(VmError::InvalidBytecode(format!(
@@ -2534,10 +2536,10 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                     match (container, index) {
                         (crate::bytecode::GenericValue::Array(arr), crate::bytecode::GenericValue::Int(i)) => {
                             let len = arr.len();
-                            if i < 0 || i as usize >= len {
+                            if i < 0 || i.to_i64() as usize >= len {
                                 return Err(VmError::IndexOutOfBounds(i, len));
                             }
-                            sp!(self, arr[i as usize].clone());
+                            sp!(self, arr[i.to_i64() as usize].clone());
                         }
                         (c, i) => {
                             return Err(VmError::TypeError(format!(
@@ -2649,7 +2651,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                 Op::IntToFloat => {
                     let val = self.pop()?;
                     match val {
-                        crate::bytecode::GenericValue::Int(i) => sp!(self, crate::bytecode::GenericValue::Float(i as f64)),
+                        crate::bytecode::GenericValue::Int(i) => sp!(self, crate::bytecode::GenericValue::Float(i.to_i64() as f64)),
                         v => {
                             return Err(VmError::TypeError(format!(
                                 "cannot cast {} to Float",
@@ -2668,7 +2670,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                 Op::FloatToInt => {
                     let val = self.pop()?;
                     match val {
-                        crate::bytecode::GenericValue::Float(f) => sp!(self, crate::bytecode::GenericValue::Int(f as i64)),
+                        crate::bytecode::GenericValue::Float(f) => sp!(self, crate::bytecode::GenericValue::Int(f.to_f64() as i64)),
                         v => {
                             return Err(VmError::TypeError(format!(
                                 "cannot cast {} to Word",
@@ -2686,7 +2688,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                 Op::WordToByte => {
                     let val = self.pop()?;
                     match val {
-                        crate::bytecode::GenericValue::Int(i) => sp!(self, crate::bytecode::GenericValue::Byte((i & 0xFF) as u8)),
+                        crate::bytecode::GenericValue::Int(i) => sp!(self, crate::bytecode::GenericValue::Byte((i.to_i64() & 0xFF) as u8)),
                         v => {
                             return Err(VmError::TypeError(format!(
                                 "cannot cast {} to Byte",
@@ -2714,10 +2716,10 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                             // Left-shift the word into the fixed
                             // representation. Saturate at
                             // i64::MAX/MIN on overflow.
-                            let shifted = (i as i128) << (frac_bits as u32);
-                            let bits = if shifted > i64::MAX as i128 {
+                            let shifted = i.widen() << (frac_bits as u32);
+                            let bits = if shifted > <W as crate::word::Word>::MAX.widen() {
                                 i64::MAX
-                            } else if shifted < i64::MIN as i128 {
+                            } else if shifted < <W as crate::word::Word>::MIN.widen() {
                                 i64::MIN
                             } else {
                                 shifted as i64
@@ -2758,11 +2760,11 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                             // avoid intermediate overflow, multiply,
                             // shift right by `frac_bits`, saturate
                             // back to i64.
-                            let product = (x as i128) * (y as i128);
+                            let product = x.widen() * y.widen();
                             let shifted = product >> (frac_bits as u32);
-                            let bits = if shifted > i64::MAX as i128 {
+                            let bits = if shifted > <W as crate::word::Word>::MAX.widen() {
                                 i64::MAX
-                            } else if shifted < i64::MIN as i128 {
+                            } else if shifted < <W as crate::word::Word>::MIN.widen() {
                                 i64::MIN
                             } else {
                                 shifted as i64
@@ -2790,11 +2792,11 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                             // i128 and left-shift by frac_bits before
                             // dividing, so the result retains the
                             // Q-format precision.
-                            let dividend = (x as i128) << (frac_bits as u32);
-                            let quotient = dividend / (y as i128);
-                            let bits = if quotient > i64::MAX as i128 {
+                            let dividend = x.widen() << (frac_bits as u32);
+                            let quotient = dividend / y.widen();
+                            let bits = if quotient > <W as crate::word::Word>::MAX.widen() {
                                 i64::MAX
-                            } else if quotient < i64::MIN as i128 {
+                            } else if quotient < <W as crate::word::Word>::MIN.widen() {
                                 i64::MIN
                             } else {
                                 quotient as i64
@@ -2831,19 +2833,19 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                             // low halves of the i128 result are
                             // pushed in all three cases so arm
                             // patterns can destructure them.
-                            let r = (x as i128) + (y as i128);
-                            let high = (r >> 64) as i64;
-                            let low = r as i64;
-                            let flag: i64 = if r >= i64::MIN as i128 && r <= i64::MAX as i128 {
+                            let r = x.widen() + y.widen();
+                            let high = <W as crate::word::Word>::from_wide_wrap(r.high_half());
+                            let low = <W as crate::word::Word>::from_wide_wrap(r);
+                            let flag: i64 = if r >= <W as crate::word::Word>::MIN.widen() && r <= <W as crate::word::Word>::MAX.widen() {
                                 0
-                            } else if r > i64::MAX as i128 {
+                            } else if r > <W as crate::word::Word>::MAX.widen() {
                                 1
                             } else {
                                 2
                             };
                             sp!(self, crate::bytecode::GenericValue::Int(high));
                             sp!(self, crate::bytecode::GenericValue::Int(low));
-                            sp!(self, crate::bytecode::GenericValue::Int(flag));
+                            sp!(self, crate::bytecode::GenericValue::Int(<W as crate::word::Word>::from_i64_wrap(flag)));
                         }
                         (a, b) => {
                             return Err(VmError::TypeError(format!(
@@ -2859,19 +2861,19 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                     let a = self.pop()?;
                     match (a, b) {
                         (crate::bytecode::GenericValue::Int(x), crate::bytecode::GenericValue::Int(y)) => {
-                            let r = (x as i128) - (y as i128);
-                            let high = (r >> 64) as i64;
-                            let low = r as i64;
-                            let flag: i64 = if r >= i64::MIN as i128 && r <= i64::MAX as i128 {
+                            let r = x.widen() - y.widen();
+                            let high = <W as crate::word::Word>::from_wide_wrap(r.high_half());
+                            let low = <W as crate::word::Word>::from_wide_wrap(r);
+                            let flag: i64 = if r >= <W as crate::word::Word>::MIN.widen() && r <= <W as crate::word::Word>::MAX.widen() {
                                 0
-                            } else if r > i64::MAX as i128 {
+                            } else if r > <W as crate::word::Word>::MAX.widen() {
                                 1
                             } else {
                                 2
                             };
                             sp!(self, crate::bytecode::GenericValue::Int(high));
                             sp!(self, crate::bytecode::GenericValue::Int(low));
-                            sp!(self, crate::bytecode::GenericValue::Int(flag));
+                            sp!(self, crate::bytecode::GenericValue::Int(<W as crate::word::Word>::from_i64_wrap(flag)));
                         }
                         (a, b) => {
                             return Err(VmError::TypeError(format!(
@@ -2893,19 +2895,19 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                             // direction of overflow based on the
                             // i128 result's sign relative to the
                             // i64 representable range.
-                            let r = (x as i128) * (y as i128);
-                            let high = (r >> 64) as i64;
-                            let low = r as i64;
-                            let flag: i64 = if r >= i64::MIN as i128 && r <= i64::MAX as i128 {
+                            let r = x.widen() * y.widen();
+                            let high = <W as crate::word::Word>::from_wide_wrap(r.high_half());
+                            let low = <W as crate::word::Word>::from_wide_wrap(r);
+                            let flag: i64 = if r >= <W as crate::word::Word>::MIN.widen() && r <= <W as crate::word::Word>::MAX.widen() {
                                 0
-                            } else if r > i64::MAX as i128 {
+                            } else if r > <W as crate::word::Word>::MAX.widen() {
                                 1
                             } else {
                                 2
                             };
                             sp!(self, crate::bytecode::GenericValue::Int(high));
                             sp!(self, crate::bytecode::GenericValue::Int(low));
-                            sp!(self, crate::bytecode::GenericValue::Int(flag));
+                            sp!(self, crate::bytecode::GenericValue::Int(<W as crate::word::Word>::from_i64_wrap(flag)));
                         }
                         (a, b) => {
                             return Err(VmError::TypeError(format!(
@@ -2924,17 +2926,17 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                             // result is `2^63`, which in i128 is
                             // (high=0, low=i64::MIN); we report
                             // overflow (flag=1) in that case.
-                            let r = -(x as i128);
-                            let high = (r >> 64) as i64;
-                            let low = r as i64;
-                            let flag: i64 = if r >= i64::MIN as i128 && r <= i64::MAX as i128 {
+                            let r = -x.widen();
+                            let high = <W as crate::word::Word>::from_wide_wrap(r.high_half());
+                            let low = <W as crate::word::Word>::from_wide_wrap(r);
+                            let flag: i64 = if r >= <W as crate::word::Word>::MIN.widen() && r <= <W as crate::word::Word>::MAX.widen() {
                                 0
                             } else {
                                 1
                             };
                             sp!(self, crate::bytecode::GenericValue::Int(high));
                             sp!(self, crate::bytecode::GenericValue::Int(low));
-                            sp!(self, crate::bytecode::GenericValue::Int(flag));
+                            sp!(self, crate::bytecode::GenericValue::Int(<W as crate::word::Word>::from_i64_wrap(flag)));
                         }
                         a => {
                             return Err(VmError::TypeError(format!(
@@ -2956,19 +2958,19 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                             // divisions fit in `Word`; the wrapped
                             // quotient becomes the low slot and the
                             // high slot is zero.
-                            let r = (x as i128) / (y as i128);
-                            let high = (r >> 64) as i64;
-                            let low = r as i64;
-                            let flag: i64 = if r >= i64::MIN as i128 && r <= i64::MAX as i128 {
+                            let r = x.widen() / y.widen();
+                            let high = <W as crate::word::Word>::from_wide_wrap(r.high_half());
+                            let low = <W as crate::word::Word>::from_wide_wrap(r);
+                            let flag: i64 = if r >= <W as crate::word::Word>::MIN.widen() && r <= <W as crate::word::Word>::MAX.widen() {
                                 0
-                            } else if r > i64::MAX as i128 {
+                            } else if r > <W as crate::word::Word>::MAX.widen() {
                                 1
                             } else {
                                 2
                             };
                             sp!(self, crate::bytecode::GenericValue::Int(high));
                             sp!(self, crate::bytecode::GenericValue::Int(low));
-                            sp!(self, crate::bytecode::GenericValue::Int(flag));
+                            sp!(self, crate::bytecode::GenericValue::Int(<W as crate::word::Word>::from_i64_wrap(flag)));
                         }
                         (a, b) => {
                             return Err(VmError::TypeError(format!(
@@ -2989,19 +2991,19 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                             // underlying division step; the true
                             // mathematical result is `0`. We
                             // detect this corner by computing in
-                            // i128 (`i64::MIN as i128) % (-1 as
+                            // i128 (`<W as crate::word::Word>::MIN.widen()) % (-1 as
                             // i128) == 0`) and report overflow
                             // (flag=1) so the arm dispatch matches
                             // the documented behaviour. The
                             // wrapped result is `0` in any case.
-                            let r = (x as i128) % (y as i128);
-                            let high = (r >> 64) as i64;
-                            let low = r as i64;
+                            let r = x.widen() % y.widen();
+                            let high = <W as crate::word::Word>::from_wide_wrap(r.high_half());
+                            let low = <W as crate::word::Word>::from_wide_wrap(r);
                             let corner = x == i64::MIN && y == -1;
                             let flag: i64 = if corner { 1 } else { 0 };
                             sp!(self, crate::bytecode::GenericValue::Int(high));
                             sp!(self, crate::bytecode::GenericValue::Int(low));
-                            sp!(self, crate::bytecode::GenericValue::Int(flag));
+                            sp!(self, crate::bytecode::GenericValue::Int(<W as crate::word::Word>::from_i64_wrap(flag)));
                         }
                         (a, b) => {
                             return Err(VmError::TypeError(format!(
@@ -3072,9 +3074,9 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         Ok(())
     }
 
-    fn compare_op<F>(&mut self, pred: F) -> Result<(), VmError>
+    fn compare_op<Pred>(&mut self, pred: Pred) -> Result<(), VmError>
     where
-        F: FnOnce(core::cmp::Ordering) -> bool,
+        Pred: FnOnce(core::cmp::Ordering) -> bool,
     {
         let b = self.pop()?;
         let a = self.pop()?;
@@ -3126,6 +3128,10 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
 // VM execution) and therefore requires both the `compile` and
 // `verify` features. Without either, the helpers it imports
 // (`lexer`, `parser`, `compiler`, `verify`) are absent.
+#[cfg(all(test, feature = "compile", feature = "verify"))]
+#[cfg(all(test, feature = "compile", feature = "verify"))]
+#[cfg(all(test, feature = "compile", feature = "verify"))]
+#[cfg(all(test, feature = "compile", feature = "verify"))]
 #[cfg(all(test, feature = "compile", feature = "verify"))]
 #[cfg(all(test, feature = "compile", feature = "verify"))]
 mod tests {
