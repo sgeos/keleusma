@@ -67,6 +67,16 @@ struct TypeInfo {
     /// single integer parameter or with non-evaluable bodies are
     /// not cached and fall through to the runtime path.
     refinement_bodies: BTreeMap<String, (String, Expr)>,
+    /// Per-function return-range summaries used by the
+    /// refinement-elision pass. Maps a function name to the
+    /// `IntervalSet` covering every value the function might
+    /// return. Computed by a fixed-point pass over the function
+    /// table at the top of `compile`. Functions whose body
+    /// cannot be reduced to an `IntervalSet` under the param-
+    /// range substitution are absent; the constructor-emit site
+    /// falls through to the runtime check when looking up a
+    /// missing summary.
+    function_return_ranges: BTreeMap<String, crate::interval::IntervalSet>,
 }
 
 /// State for compiling a single function chunk.
@@ -819,6 +829,19 @@ pub fn compile_with_target(
         }
         type_info.data_field_types.insert(decl.name.clone(), fields);
     }
+
+    // Compute per-function return-range summaries through a
+    // fixed-point pass. Each iteration tries to add a summary
+    // for any function whose body's range becomes inferable
+    // under the current map of known summaries. We stop when
+    // no new summaries are added in a full sweep. The fixed-
+    // point converges in O(N^2) worst-case steps where N is the
+    // function count; in practice nearly all summaries land in
+    // one or two passes. Functions whose bodies remain
+    // indeterminate after the loop are left absent, and call
+    // sites referencing them fall through to the runtime path.
+    let function_summaries = compute_function_return_ranges(program, &type_info);
+    type_info.function_return_ranges = function_summaries;
 
     // Compile each function group.
     let mut chunks: Vec<Chunk> = Vec::new();
@@ -2032,14 +2055,25 @@ fn compile_function_group(
             // decomposes to a single interval. This is the
             // primary source of non-singleton ranges consumed by
             // the refinement-elision lattice pass.
-            if let crate::ast::Pattern::Variable(_, _) = &param.pattern
-                && let Some(crate::ast::TypeExpr::Named(type_name, _, _)) = &param.type_expr
-                && let Some(pred_name) = fc.type_info.newtype_refinements.get(type_name).cloned()
-                && let Some((pred_param, body)) =
-                    fc.type_info.refinement_bodies.get(&pred_name).cloned()
-                && let Some(range) = predicate_true_set(&body, &pred_param)
-            {
-                fc.local_ranges.insert(param_slots[i], range);
+            if let crate::ast::Pattern::Variable(_, _) = &param.pattern {
+                if let Some(crate::ast::TypeExpr::Named(type_name, _, _)) = &param.type_expr
+                    && let Some(pred_name) =
+                        fc.type_info.newtype_refinements.get(type_name).cloned()
+                    && let Some((pred_param, body)) =
+                        fc.type_info.refinement_bodies.get(&pred_name).cloned()
+                    && let Some(range) = predicate_true_set(&body, &pred_param)
+                {
+                    fc.local_ranges.insert(param_slots[i], range);
+                } else if let Some(natural) = natural_range_of_type_expr(&param.type_expr) {
+                    // Primitive parameters carry their type's
+                    // natural range. The principal customer is
+                    // Byte (always in `[0, 255]`); the cast `b as
+                    // Word` carries this range through to a
+                    // newtype constructor and admits elision when
+                    // the newtype's predicate's true set covers
+                    // it.
+                    fc.local_ranges.insert(param_slots[i], natural);
+                }
             }
         }
 
@@ -3684,6 +3718,148 @@ fn comparison_set(op: crate::ast::BinOp, n: i64) -> Option<crate::interval::Inte
     }
 }
 
+/// Compute per-function return-range summaries through a fixed-
+/// point loop. Each iteration sweeps the function table and
+/// inserts a new summary whenever a function's body becomes
+/// decidable under the current set of summaries. Iteration ends
+/// when a full sweep adds nothing.
+fn compute_function_return_ranges(
+    program: &crate::ast::Program,
+    type_info: &TypeInfo,
+) -> BTreeMap<String, crate::interval::IntervalSet> {
+    let mut summaries: BTreeMap<String, crate::interval::IntervalSet> = BTreeMap::new();
+    loop {
+        let mut added = false;
+        for func in &program.functions {
+            if summaries.contains_key(&func.name) {
+                continue;
+            }
+            if let Some(range) = compute_function_return_range(func, type_info, &summaries) {
+                summaries.insert(func.name.clone(), range);
+                added = true;
+            }
+        }
+        if !added {
+            break;
+        }
+    }
+    summaries
+}
+
+/// Compute the return-range summary of a single function under
+/// the current `known_summaries` map. Returns `None` when the
+/// body is not a single tail expression or when the tail
+/// expression cannot be reduced to an `IntervalSet` under the
+/// parameter substitution.
+fn compute_function_return_range(
+    func: &crate::ast::FunctionDef,
+    type_info: &TypeInfo,
+    known_summaries: &BTreeMap<String, crate::interval::IntervalSet>,
+) -> Option<crate::interval::IntervalSet> {
+    if !func.body.stmts.is_empty() {
+        return None;
+    }
+    let tail = func.body.tail_expr.as_ref()?;
+    let mut params: BTreeMap<String, crate::interval::IntervalSet> = BTreeMap::new();
+    for param in &func.params {
+        let crate::ast::Pattern::Variable(name, _) = &param.pattern else {
+            return None;
+        };
+        let range = param_range_from_type(&param.type_expr, type_info)?;
+        params.insert(name.clone(), range);
+    }
+    eval_expr_to_range(tail, &params, type_info, known_summaries)
+}
+
+/// Resolve a function-parameter type expression to its compile-
+/// time range. Refined newtypes carry their predicate's true set;
+/// Byte parameters carry `[0, 255]`; Word parameters carry
+/// `full()`. Anything else returns `None`.
+fn param_range_from_type(
+    t: &Option<crate::ast::TypeExpr>,
+    type_info: &TypeInfo,
+) -> Option<crate::interval::IntervalSet> {
+    if let Some(crate::ast::TypeExpr::Named(type_name, _, _)) = t
+        && let Some(pred_name) = type_info.newtype_refinements.get(type_name)
+        && let Some((pred_param, body)) = type_info.refinement_bodies.get(pred_name)
+        && let Some(range) = predicate_true_set(body, pred_param)
+    {
+        return Some(range);
+    }
+    natural_range_of_type_expr(t)
+}
+
+/// Evaluate an expression to an `IntervalSet` under a parameter
+/// substitution map and a set of known function summaries. The
+/// recognised shapes mirror [`infer_arg_range`] plus an extra
+/// arm for `Expr::Call` that consults `known_summaries`.
+fn eval_expr_to_range(
+    expr: &Expr,
+    params: &BTreeMap<String, crate::interval::IntervalSet>,
+    _type_info: &TypeInfo,
+    known_summaries: &BTreeMap<String, crate::interval::IntervalSet>,
+) -> Option<crate::interval::IntervalSet> {
+    use crate::interval::IntervalSet;
+    match expr {
+        Expr::Literal {
+            value: crate::ast::Literal::Int(n),
+            ..
+        } => Some(IntervalSet::singleton(*n)),
+        Expr::Ident { name, .. } => params.get(name).cloned(),
+        Expr::UnaryOp {
+            op: crate::ast::UnaryOp::Neg,
+            operand,
+            ..
+        } => {
+            let inner = eval_expr_to_range(operand, params, _type_info, known_summaries)?;
+            Some(inner.neg())
+        }
+        Expr::BinOp {
+            op, left, right, ..
+        } => {
+            let l = eval_expr_to_range(left, params, _type_info, known_summaries)?;
+            let r = eval_expr_to_range(right, params, _type_info, known_summaries)?;
+            match op {
+                crate::ast::BinOp::Add => Some(l.add(&r)),
+                crate::ast::BinOp::Sub => Some(l.sub(&r)),
+                crate::ast::BinOp::Mul => Some(l.mul(&r)),
+                crate::ast::BinOp::Div => Some(l.div(&r)),
+                crate::ast::BinOp::Mod => Some(l.rem(&r)),
+                _ => None,
+            }
+        }
+        Expr::Cast { expr: inner, .. } => {
+            eval_expr_to_range(inner, params, _type_info, known_summaries)
+        }
+        Expr::Call { name, .. } => known_summaries.get(name).cloned(),
+        _ => None,
+    }
+}
+
+/// The natural range of a value of the given type expressed as
+/// an [`IntervalSet`] over the i64 representation that the
+/// runtime carries on the operand stack. Returns:
+///
+/// - Byte: `[0, 255]` (the u8 domain lifted to i64).
+/// - Word: `(-inf, +inf)` (no narrowing).
+/// - Anything else: `None`; the caller should not record a
+///   range. Fixed and other typed values share the i64 carrier
+///   but their refinement-predicate surface is not yet wired,
+///   so populating a natural range is premature.
+fn natural_range_of_type_expr(
+    t: &Option<crate::ast::TypeExpr>,
+) -> Option<crate::interval::IntervalSet> {
+    use crate::interval::{Interval, IntervalSet};
+    let Some(crate::ast::TypeExpr::Prim(prim, _)) = t else {
+        return None;
+    };
+    match prim {
+        crate::ast::PrimType::Byte => Some(IntervalSet::from_interval(Interval::range(0, 255))),
+        crate::ast::PrimType::Word => Some(IntervalSet::full()),
+        _ => None,
+    }
+}
+
 /// Infer the set of values a constructor's argument expression
 /// might evaluate to at runtime. Returns `None` when the
 /// expression falls outside the inference's recognised subset.
@@ -3767,6 +3943,12 @@ fn infer_arg_range(expr: &Expr, fc: &FuncCompiler) -> Option<crate::interval::In
         // passes through unchanged. The type checker has already
         // validated that the cast is admissible.
         Expr::Cast { expr: inner, .. } => infer_arg_range(inner, fc),
+        // Function calls consult the per-function return-range
+        // summary computed at the top of `compile`. Functions
+        // without a summary (recursive, side-effecting, or with
+        // bodies outside the inference's recognised subset)
+        // return None and the runtime check fires.
+        Expr::Call { name, .. } => fc.type_info.function_return_ranges.get(name).cloned(),
         _ => None,
     }
 }

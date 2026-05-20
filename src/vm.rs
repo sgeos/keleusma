@@ -3544,16 +3544,17 @@ mod tests {
     #[test]
     fn refinement_predicate_traps_when_argument_out_of_range() {
         // The predicate `nonneg` returns false for -1; the
-        // newtype construction traps at runtime when the constant
-        // folder cannot decide the argument statically. The
-        // argument here is computed through a function call, so
-        // the compile-time elision pass falls through to the
-        // runtime check.
+        // newtype construction traps at runtime when neither
+        // constant folding nor the cross-function range summary
+        // can decide the argument statically. The body of
+        // `mystery` uses an if-expression which the summary
+        // computer does not handle, so the call site falls
+        // through to the runtime check.
         let err = run_program(
             "fn nonneg(x: Word) -> bool { x >= 0 }\n\
              newtype Counter = Word where nonneg;\n\
-             fn neg_one() -> Word { 0 - 1 }\n\
-             fn main() -> Counter { Counter(neg_one()) }",
+             fn mystery() -> Word { if 0 == 0 { 0 - 1 } else { 1 } }\n\
+             fn main() -> Counter { Counter(mystery()) }",
             &[],
         )
         .unwrap_err();
@@ -3734,6 +3735,72 @@ mod tests {
             "expected compile-time diagnostic, got: {}",
             err.message
         );
+    }
+
+    #[test]
+    fn refinement_predicate_function_call_summary_admits() {
+        // Tier B: `always_42()` has return-range summary
+        // `singleton(42)`. The constructor argument is the call;
+        // the lattice subset check admits at compile time.
+        let val = run_expect(
+            "fn nonneg(x: Word) -> bool { x >= 0 }\n\
+             newtype Counter = Word where nonneg;\n\
+             fn always_42() -> Word { 42 }\n\
+             fn main() -> Counter { Counter(always_42()) }",
+            &[],
+        );
+        assert_eq!(val, Value::Int(42));
+    }
+
+    #[test]
+    fn refinement_predicate_function_call_summary_rejects_on_disjoint() {
+        // Tier B: `always_neg_one()` summary is `singleton(-1)`,
+        // disjoint from `nonneg`'s true set; the compile rejects.
+        let src = "fn nonneg(x: Word) -> bool { x >= 0 }\n\
+             newtype Counter = Word where nonneg;\n\
+             fn always_neg_one() -> Word { 0 - 1 }\n\
+             fn main() -> Counter { Counter(always_neg_one()) }";
+        let tokens = tokenize(src).expect("lex");
+        let program = parse(&tokens).expect("parse");
+        let err = compile(&program).expect_err("compile should reject");
+        assert!(
+            err.message.contains("nonneg") && err.message.contains("Counter"),
+            "expected cross-function summary diagnostic, got: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn refinement_predicate_function_call_with_parameter_admits_via_summary() {
+        // Tier B: `widen(c: Counter) -> Word { c as Word }` has
+        // summary `nonneg`'s true set (the parameter's range).
+        // Re-wrapping the call result admits cleanly.
+        let val = run_expect(
+            "fn nonneg(x: Word) -> bool { x >= 0 }\n\
+             newtype Counter = Word where nonneg;\n\
+             fn widen(c: Counter) -> Word { c as Word }\n\
+             fn main() -> Counter { Counter(widen(Counter(7))) }",
+            &[],
+        );
+        assert_eq!(val, Value::Int(7));
+    }
+
+    #[test]
+    fn refinement_predicate_byte_parameter_natural_range_admits_nonneg() {
+        // A Byte parameter carries the natural range [0, 255].
+        // Casting the parameter to Word preserves the range
+        // (zero-extension at the bytecode level is identity in
+        // i64). The newtype `Counter` requires non-negative,
+        // which the range [0, 255] satisfies; the lattice subset
+        // check admits the construction at compile time.
+        let val = run_expect(
+            "fn nonneg(x: Word) -> bool { x >= 0 }\n\
+             newtype Counter = Word where nonneg;\n\
+             fn from_byte(b: Byte) -> Counter { Counter(b as Word) }\n\
+             fn main() -> Counter { from_byte(7 as Byte) }",
+            &[],
+        );
+        assert_eq!(val, Value::Int(7));
     }
 
     #[test]
