@@ -1699,13 +1699,13 @@ mod tests {
             "main",
             vec![
                 Op::PushImmediate(1), // 0
-                Op::If(5),    // 1 -> else body at 5
-                Op::Const(0), // 2 (then body)
-                Op::Const(0), // 3 (then body continued)
-                Op::Else(6),  // 4 -> EndIf at 6
-                Op::Const(0), // 5 (else body)
-                Op::EndIf,    // 6
-                Op::Return,   // 7
+                Op::If(5),            // 1 -> else body at 5
+                Op::Const(0),         // 2 (then body)
+                Op::Const(0),         // 3 (then body continued)
+                Op::Else(6),          // 4 -> EndIf at 6
+                Op::Const(0),         // 5 (else body)
+                Op::EndIf,            // 6
+                Op::Return,           // 7
             ],
             BlockType::Func,
         );
@@ -1719,12 +1719,12 @@ mod tests {
         let chunk = make_chunk(
             "main",
             vec![
-                Op::Loop(4),    // 0 -> past EndLoop
-                Op::PushImmediate(1),   // 1
-                Op::BreakIf(4), // 2 -> past EndLoop
-                Op::EndLoop(1), // 3 -> after Loop (ip 1)
-                Op::PushImmediate(0),   // 4
-                Op::Return,     // 5
+                Op::Loop(4),          // 0 -> past EndLoop
+                Op::PushImmediate(1), // 1
+                Op::BreakIf(4),       // 2 -> past EndLoop
+                Op::EndLoop(1),       // 3 -> after Loop (ip 1)
+                Op::PushImmediate(0), // 4
+                Op::Return,           // 5
             ],
             BlockType::Func,
         );
@@ -1740,7 +1740,7 @@ mod tests {
                 Op::Stream,      // 0
                 Op::GetLocal(0), // 1
                 Op::Yield,       // 2
-                Op::PopN(1),         // 3
+                Op::PopN(1),     // 3
                 Op::Reset,       // 4
             ],
             BlockType::Stream,
@@ -1756,7 +1756,7 @@ mod tests {
             vec![
                 Op::GetLocal(0), // 0
                 Op::Yield,       // 1
-                Op::PopN(1),         // 2
+                Op::PopN(1),     // 2
                 Op::Return,      // 3
             ],
             BlockType::Reentrant,
@@ -1795,7 +1795,11 @@ mod tests {
 
     #[test]
     fn reentrant_without_yield_fails() {
-        let chunk = make_chunk("bad", vec![Op::PushImmediate(0), Op::Return], BlockType::Reentrant);
+        let chunk = make_chunk(
+            "bad",
+            vec![Op::PushImmediate(0), Op::Return],
+            BlockType::Reentrant,
+        );
         let module = make_module(vec![chunk]);
         let err = verify(&module).unwrap_err();
         assert!(err.message.contains("Yield"));
@@ -1891,12 +1895,12 @@ mod tests {
         let chunk = make_chunk(
             "bad",
             vec![
-                Op::Loop(4),    // 0
-                Op::PushImmediate(1),   // 1
-                Op::BreakIf(4), // 2
-                Op::EndLoop(0), // 3 -> should be 1, not 0
-                Op::PushImmediate(0),   // 4
-                Op::Return,     // 5
+                Op::Loop(4),          // 0
+                Op::PushImmediate(1), // 1
+                Op::BreakIf(4),       // 2
+                Op::EndLoop(0),       // 3 -> should be 1, not 0
+                Op::PushImmediate(0), // 4
+                Op::Return,           // 5
             ],
             BlockType::Func,
         );
@@ -1911,12 +1915,12 @@ mod tests {
             "bad",
             vec![
                 Op::PushImmediate(1), // 0
-                Op::If(3),    // 1 -> Else at 3
+                Op::If(3),            // 1 -> Else at 3
                 Op::PushImmediate(0), // 2
-                Op::Else(5),  // 3 -> targets PushUnit, not EndIf
+                Op::Else(5),          // 3 -> targets PushUnit, not EndIf
                 Op::PushImmediate(0), // 4
                 Op::PushImmediate(0), // 5 (not EndIf)
-                Op::Return,   // 6
+                Op::Return,           // 6
             ],
             BlockType::Func,
         );
@@ -1930,10 +1934,10 @@ mod tests {
         let chunk = make_chunk(
             "bad",
             vec![
-                Op::PushImmediate(1),   // 0
-                Op::If(3),      // 1 -> targets EndLoop
-                Op::PushImmediate(0),   // 2
-                Op::EndLoop(0), // 3 (EndLoop instead of EndIf)
+                Op::PushImmediate(1), // 0
+                Op::If(3),            // 1 -> targets EndLoop
+                Op::PushImmediate(0), // 2
+                Op::EndLoop(0),       // 3 (EndLoop instead of EndIf)
             ],
             BlockType::Func,
         );
@@ -1981,7 +1985,7 @@ mod tests {
                 Op::Stream,      // 0
                 Op::GetLocal(0), // 1
                 Op::Yield,       // 2
-                Op::PopN(1),         // 3
+                Op::PopN(1),     // 3
                 Op::Reset,       // 4
             ],
             BlockType::Stream,
@@ -1996,18 +2000,18 @@ mod tests {
         let chunk = make_chunk(
             "tick",
             vec![
-                Op::Stream,      // 0
-                Op::PushImmediate(1),    // 1
-                Op::If(6),       // 2 -> else body at 6
-                Op::GetLocal(0), // 3 (then)
-                Op::Yield,       // 4 (then)
-                Op::Else(9),     // 5 -> EndIf at 9
-                Op::GetLocal(0), // 6 (else)
-                Op::Yield,       // 7 (else)
-                Op::PopN(1),         // 8 (else)
-                Op::EndIf,       // 9
-                Op::PopN(1),         // 10
-                Op::Reset,       // 11
+                Op::Stream,           // 0
+                Op::PushImmediate(1), // 1
+                Op::If(6),            // 2 -> else body at 6
+                Op::GetLocal(0),      // 3 (then)
+                Op::Yield,            // 4 (then)
+                Op::Else(9),          // 5 -> EndIf at 9
+                Op::GetLocal(0),      // 6 (else)
+                Op::Yield,            // 7 (else)
+                Op::PopN(1),          // 8 (else)
+                Op::EndIf,            // 9
+                Op::PopN(1),          // 10
+                Op::Reset,            // 11
             ],
             BlockType::Stream,
         );
@@ -2021,18 +2025,18 @@ mod tests {
         let chunk = make_chunk(
             "tick",
             vec![
-                Op::Stream,      // 0
-                Op::GetLocal(0), // 1
-                Op::Yield,       // 2
-                Op::PopN(1),         // 3
-                Op::PushImmediate(1),    // 4
-                Op::If(8),       // 5 -> else body at 8
-                Op::PushImmediate(0),    // 6 (then)
-                Op::Else(10),    // 7 -> EndIf at 10
-                Op::PushImmediate(0),    // 8 (else)
-                Op::PopN(1),         // 9 (else)
-                Op::EndIf,       // 10
-                Op::Reset,       // 11
+                Op::Stream,           // 0
+                Op::GetLocal(0),      // 1
+                Op::Yield,            // 2
+                Op::PopN(1),          // 3
+                Op::PushImmediate(1), // 4
+                Op::If(8),            // 5 -> else body at 8
+                Op::PushImmediate(0), // 6 (then)
+                Op::Else(10),         // 7 -> EndIf at 10
+                Op::PushImmediate(0), // 8 (else)
+                Op::PopN(1),          // 9 (else)
+                Op::EndIf,            // 10
+                Op::Reset,            // 11
             ],
             BlockType::Stream,
         );
@@ -2046,18 +2050,18 @@ mod tests {
         let chunk = make_chunk(
             "tick",
             vec![
-                Op::Stream,      // 0
-                Op::PushImmediate(1),    // 1
-                Op::If(6),       // 2 -> else body at 6
-                Op::GetLocal(0), // 3 (then)
-                Op::Yield,       // 4 (then)
-                Op::Else(9),     // 5 -> EndIf at 9
-                Op::PushImmediate(0),    // 6 (else, no yield)
-                Op::PopN(1),         // 7 (else)
-                Op::PushImmediate(0),    // 8 (else)
-                Op::EndIf,       // 9
-                Op::PopN(1),         // 10
-                Op::Reset,       // 11
+                Op::Stream,           // 0
+                Op::PushImmediate(1), // 1
+                Op::If(6),            // 2 -> else body at 6
+                Op::GetLocal(0),      // 3 (then)
+                Op::Yield,            // 4 (then)
+                Op::Else(9),          // 5 -> EndIf at 9
+                Op::PushImmediate(0), // 6 (else, no yield)
+                Op::PopN(1),          // 7 (else)
+                Op::PushImmediate(0), // 8 (else)
+                Op::EndIf,            // 9
+                Op::PopN(1),          // 10
+                Op::Reset,            // 11
             ],
             BlockType::Stream,
         );
@@ -2072,14 +2076,14 @@ mod tests {
         let chunk = make_chunk(
             "tick",
             vec![
-                Op::Stream,      // 0
-                Op::PushImmediate(1),    // 1
-                Op::If(6),       // 2 -> EndIf at 6 (no Else)
-                Op::GetLocal(0), // 3 (then)
-                Op::Yield,       // 4 (then)
-                Op::PopN(1),         // 5 (then)
-                Op::EndIf,       // 6
-                Op::Reset,       // 7
+                Op::Stream,           // 0
+                Op::PushImmediate(1), // 1
+                Op::If(6),            // 2 -> EndIf at 6 (no Else)
+                Op::GetLocal(0),      // 3 (then)
+                Op::Yield,            // 4 (then)
+                Op::PopN(1),          // 5 (then)
+                Op::EndIf,            // 6
+                Op::Reset,            // 7
             ],
             BlockType::Stream,
         );
@@ -2095,15 +2099,15 @@ mod tests {
         let chunk = make_chunk(
             "tick",
             vec![
-                Op::Stream,      // 0
-                Op::Loop(8),     // 1 -> past EndLoop
-                Op::PushImmediate(1),    // 2
-                Op::BreakIf(8),  // 3 -> past EndLoop
-                Op::GetLocal(0), // 4
-                Op::Yield,       // 5
-                Op::PopN(1),         // 6
-                Op::EndLoop(2),  // 7 -> back to 2
-                Op::Reset,       // 8
+                Op::Stream,           // 0
+                Op::Loop(8),          // 1 -> past EndLoop
+                Op::PushImmediate(1), // 2
+                Op::BreakIf(8),       // 3 -> past EndLoop
+                Op::GetLocal(0),      // 4
+                Op::Yield,            // 5
+                Op::PopN(1),          // 6
+                Op::EndLoop(2),       // 7 -> back to 2
+                Op::Reset,            // 8
             ],
             BlockType::Stream,
         );
@@ -2119,16 +2123,16 @@ mod tests {
         let chunk = make_chunk(
             "tick",
             vec![
-                Op::Stream,      // 0
-                Op::GetLocal(0), // 1
-                Op::Yield,       // 2
-                Op::PopN(1),         // 3
-                Op::Loop(9),     // 4 -> past EndLoop
-                Op::PushImmediate(1),    // 5
-                Op::BreakIf(9),  // 6 -> past EndLoop
-                Op::PushImmediate(0),    // 7
-                Op::EndLoop(5),  // 8 -> back to 5
-                Op::Reset,       // 9
+                Op::Stream,           // 0
+                Op::GetLocal(0),      // 1
+                Op::Yield,            // 2
+                Op::PopN(1),          // 3
+                Op::Loop(9),          // 4 -> past EndLoop
+                Op::PushImmediate(1), // 5
+                Op::BreakIf(9),       // 6 -> past EndLoop
+                Op::PushImmediate(0), // 7
+                Op::EndLoop(5),       // 8 -> back to 5
+                Op::Reset,            // 9
             ],
             BlockType::Stream,
         );
@@ -2191,7 +2195,7 @@ mod tests {
                 Op::GetLocal(0), // 1: cost 1
                 Op::Add,         // 2: cost 2
                 Op::Yield,       // 3: cost 1
-                Op::PopN(1),         // 4: cost 1
+                Op::PopN(1),     // 4: cost 1
                 Op::Reset,       // 5: cost 1 (overhead)
             ],
             BlockType::Stream,
@@ -2211,17 +2215,17 @@ mod tests {
         let chunk = make_chunk(
             "tick",
             vec![
-                Op::Stream,   // 0
+                Op::Stream,           // 0
                 Op::PushImmediate(1), // 1
-                Op::If(5),    // 2 -> else body at 5
-                Op::Add,      // 3 (then body)
-                Op::Else(7),  // 4 -> EndIf at 7
-                Op::Div,      // 5 (else body)
-                Op::Mul,      // 6 (else body)
-                Op::EndIf,    // 7
-                Op::Yield,    // 8
-                Op::PopN(1),      // 9
-                Op::Reset,    // 10
+                Op::If(5),            // 2 -> else body at 5
+                Op::Add,              // 3 (then body)
+                Op::Else(7),          // 4 -> EndIf at 7
+                Op::Div,              // 5 (else body)
+                Op::Mul,              // 6 (else body)
+                Op::EndIf,            // 7
+                Op::Yield,            // 8
+                Op::PopN(1),          // 9
+                Op::Reset,            // 10
             ],
             BlockType::Stream,
         );
@@ -2231,7 +2235,11 @@ mod tests {
 
     #[test]
     fn wcet_non_stream_errors() {
-        let chunk = make_chunk("main", vec![Op::PushImmediate(0), Op::Return], BlockType::Func);
+        let chunk = make_chunk(
+            "main",
+            vec![Op::PushImmediate(0), Op::Return],
+            BlockType::Func,
+        );
         let err = wcet_stream_iteration(&chunk).unwrap_err();
         assert!(err.message.contains("Stream"));
     }
@@ -2306,7 +2314,12 @@ mod tests {
         use crate::bytecode::{DataLayout, DataSlot};
         let chunk = make_chunk(
             "main",
-            vec![Op::GetData(0), Op::SetData(1), Op::PushImmediate(0), Op::Return],
+            vec![
+                Op::GetData(0),
+                Op::SetData(1),
+                Op::PushImmediate(0),
+                Op::Return,
+            ],
             BlockType::Func,
         );
         let module = Module {
@@ -2352,7 +2365,7 @@ mod tests {
                 Op::Stream,      // 0
                 Op::GetLocal(0), // 1
                 Op::Yield,       // 2
-                Op::PopN(1),         // 3 — never reached after yield
+                Op::PopN(1),     // 3 — never reached after yield
                 Op::Reset,       // 4
             ],
             BlockType::Stream,
@@ -2372,23 +2385,23 @@ mod tests {
         let mut chunk = make_chunk(
             "tick",
             vec![
-                Op::Stream,      // 0
-                Op::PushImmediate(1),    // 1
-                Op::If(7),       // 2 -> else body at 7
-                Op::Const(0),    // 3 (then push)
-                Op::Const(0),    // 4 (then push)
-                Op::Const(0),    // 5 (then push, total 3 deep)
-                Op::Else(9),     // 6 -> EndIf at 9
-                Op::Const(0),    // 7 (else, push 1)
-                Op::PopN(1),         // 8 (else, pop)
-                Op::EndIf,       // 9
-                Op::PopN(1),         // 10 (consume one if any)
-                Op::PopN(1),         // 11
-                Op::PopN(1),         // 12
-                Op::GetLocal(0), // 13
-                Op::Yield,       // 14
-                Op::PopN(1),         // 15
-                Op::Reset,       // 16
+                Op::Stream,           // 0
+                Op::PushImmediate(1), // 1
+                Op::If(7),            // 2 -> else body at 7
+                Op::Const(0),         // 3 (then push)
+                Op::Const(0),         // 4 (then push)
+                Op::Const(0),         // 5 (then push, total 3 deep)
+                Op::Else(9),          // 6 -> EndIf at 9
+                Op::Const(0),         // 7 (else, push 1)
+                Op::PopN(1),          // 8 (else, pop)
+                Op::EndIf,            // 9
+                Op::PopN(1),          // 10 (consume one if any)
+                Op::PopN(1),          // 11
+                Op::PopN(1),          // 12
+                Op::GetLocal(0),      // 13
+                Op::Yield,            // 14
+                Op::PopN(1),          // 15
+                Op::Reset,            // 16
             ],
             BlockType::Stream,
         );
@@ -2450,7 +2463,11 @@ mod tests {
 
     #[test]
     fn wcmu_non_stream_errors() {
-        let chunk = make_chunk("main", vec![Op::PushImmediate(0), Op::Return], BlockType::Func);
+        let chunk = make_chunk(
+            "main",
+            vec![Op::PushImmediate(0), Op::Return],
+            BlockType::Func,
+        );
         let err = wcmu_stream_iteration(&chunk).unwrap_err();
         assert!(err.message.contains("Stream"));
     }
@@ -2460,7 +2477,13 @@ mod tests {
         // Small program fits in default arena.
         let chunk = make_chunk(
             "tick",
-            vec![Op::Stream, Op::PushImmediate(0), Op::Yield, Op::PopN(1), Op::Reset],
+            vec![
+                Op::Stream,
+                Op::PushImmediate(0),
+                Op::Yield,
+                Op::PopN(1),
+                Op::Reset,
+            ],
             BlockType::Stream,
         );
         let module = make_module(vec![chunk]);
@@ -2564,7 +2587,13 @@ mod tests {
         // breaking the WCET bound. The verifier admits this case.
         let chunk = make_chunk(
             "tick",
-            vec![Op::Stream, Op::PushFunc(0), Op::Yield, Op::PopN(1), Op::Reset],
+            vec![
+                Op::Stream,
+                Op::PushFunc(0),
+                Op::Yield,
+                Op::PopN(1),
+                Op::Reset,
+            ],
             BlockType::Stream,
         );
         let module = make_module(vec![chunk]);
@@ -2574,7 +2603,11 @@ mod tests {
     #[test]
     fn verify_resource_bounds_skips_non_stream() {
         // A module with only Func chunks has no WCMU bound to verify.
-        let chunk = make_chunk("util", vec![Op::PushImmediate(0), Op::Return], BlockType::Func);
+        let chunk = make_chunk(
+            "util",
+            vec![Op::PushImmediate(0), Op::Return],
+            BlockType::Func,
+        );
         let module = make_module(vec![chunk]);
         let result = verify_resource_bounds(&module, 16);
         assert!(result.is_ok());
@@ -2586,7 +2619,13 @@ mod tests {
     fn module_wcmu_returns_per_chunk_results() {
         let chunk = make_chunk(
             "tick",
-            vec![Op::Stream, Op::PushImmediate(0), Op::Yield, Op::PopN(1), Op::Reset],
+            vec![
+                Op::Stream,
+                Op::PushImmediate(0),
+                Op::Yield,
+                Op::PopN(1),
+                Op::Reset,
+            ],
             BlockType::Stream,
         );
         let module = make_module(vec![chunk]);
@@ -2619,13 +2658,13 @@ mod tests {
         let stream_chunk = make_chunk(
             "tick",
             vec![
-                Op::Stream,     // 0
-                Op::Call(0, 0), // 1 — calls alloc_array
-                Op::PopN(1),        // 2
-                Op::PushImmediate(0),   // 3
-                Op::Yield,      // 4
-                Op::PopN(1),        // 5
-                Op::Reset,      // 6
+                Op::Stream,           // 0
+                Op::Call(0, 0),       // 1 — calls alloc_array
+                Op::PopN(1),          // 2
+                Op::PushImmediate(0), // 3
+                Op::Yield,            // 4
+                Op::PopN(1),          // 5
+                Op::Reset,            // 6
             ],
             BlockType::Stream,
         );
@@ -2649,10 +2688,10 @@ mod tests {
             vec![
                 Op::Stream,           // 0
                 Op::CallNative(0, 0), // 1 — calls native 0
-                Op::PopN(1),              // 2
-                Op::PushImmediate(0),         // 3
+                Op::PopN(1),          // 2
+                Op::PushImmediate(0), // 3
                 Op::Yield,            // 4
-                Op::PopN(1),              // 5
+                Op::PopN(1),          // 5
                 Op::Reset,            // 6
             ],
             BlockType::Stream,
@@ -2698,7 +2737,11 @@ mod tests {
     #[test]
     fn module_wcmu_topological_handles_chain() {
         // Three-chunk chain: stream calls helper, helper calls leaf.
-        let leaf = make_chunk("leaf", vec![Op::PushImmediate(0), Op::Return], BlockType::Func);
+        let leaf = make_chunk(
+            "leaf",
+            vec![Op::PushImmediate(0), Op::Return],
+            BlockType::Func,
+        );
         let helper = make_chunk("helper", vec![Op::Call(0, 0), Op::Return], BlockType::Func);
         let stream = make_chunk(
             "tick",
@@ -2834,7 +2877,12 @@ mod tests {
         // A loop without the canonical pattern. Should return None.
         let chunk = make_chunk(
             "test",
-            vec![Op::Loop(4), Op::PushImmediate(1), Op::BreakIf(4), Op::EndLoop(1)],
+            vec![
+                Op::Loop(4),
+                Op::PushImmediate(1),
+                Op::BreakIf(4),
+                Op::EndLoop(1),
+            ],
             BlockType::Func,
         );
         let count = extract_loop_iteration_bound(&chunk, 0);
@@ -2848,16 +2896,16 @@ mod tests {
         let chunk = make_chunk(
             "tick",
             vec![
-                Op::Stream,     // 0
-                Op::Loop(7),    // 1 — non-canonical: no GetLocal/Const/CmpGe/BreakIf pattern.
-                Op::PushImmediate(1),   // 2
-                Op::BreakIf(7), // 3
-                Op::PushImmediate(0),   // 4
-                Op::PopN(1),        // 5
-                Op::EndLoop(2), // 6 — body falls through.
-                Op::Yield,      // 7 — past loop.
-                Op::PopN(1),        // 8
-                Op::Reset,      // 9
+                Op::Stream,           // 0
+                Op::Loop(7),          // 1 — non-canonical: no GetLocal/Const/CmpGe/BreakIf pattern.
+                Op::PushImmediate(1), // 2
+                Op::BreakIf(7),       // 3
+                Op::PushImmediate(0), // 4
+                Op::PopN(1),          // 5
+                Op::EndLoop(2),       // 6 — body falls through.
+                Op::Yield,            // 7 — past loop.
+                Op::PopN(1),          // 8
+                Op::Reset,            // 9
             ],
             BlockType::Stream,
         );
@@ -2877,14 +2925,14 @@ mod tests {
         let mut chunk = make_chunk(
             "tick",
             vec![
-                Op::Stream,     // 0
-                Op::Loop(5),    // 1
-                Op::Trap(0),    // 2 — body exits via Trap.
-                Op::EndLoop(2), // 3 — unreachable but required.
-                Op::PushImmediate(0),   // 4
-                Op::Yield,      // 5 — wait this index is 5, after EndLoop.
-                Op::PopN(1),        // 6
-                Op::Reset,      // 7
+                Op::Stream,           // 0
+                Op::Loop(5),          // 1
+                Op::Trap(0),          // 2 — body exits via Trap.
+                Op::EndLoop(2),       // 3 — unreachable but required.
+                Op::PushImmediate(0), // 4
+                Op::Yield,            // 5 — wait this index is 5, after EndLoop.
+                Op::PopN(1),          // 6
+                Op::Reset,            // 7
             ],
             BlockType::Stream,
         );

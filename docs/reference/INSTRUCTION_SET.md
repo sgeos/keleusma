@@ -52,16 +52,24 @@ The unified slot index space partitions into shared slots `[0, shared_count)` an
 
 ## Arithmetic
 
-The arithmetic opcode set consists of the checked variants only. Each pops two `Value::Int` operands (one for `CheckedNeg`), computes the true result in `i128`, and pushes three slots: the high half, the low half, and an outcome flag (`Int(0)` = ok, `Int(1)` = overflow, `Int(2)` = underflow). Surface-level pattern-arm matching destructures the three outputs. Source-level expressions that discard the high half and flag (the wrapping semantics) compile to the checked opcode followed by `PopN(2)`.
+Integer arithmetic uses the checked-arithmetic family. Each `CheckedAdd`, `CheckedSub`, `CheckedMul`, and `CheckedNeg` opcode pops `Value::Int` operands (two for the binary forms, one for `CheckedNeg`), computes the true result in `i128`, and pushes three slots: the low half, the high half, and an outcome flag (`Int(0)` ok, `Int(1)` overflow, `Int(2)` underflow). The push order places `low` at the bottom and `flag` on top so that surface-level wrapping expressions, such as `a + b` on `Int` operands, compile to the checked opcode followed by `PopN(2)` and leave the wrapping result on the stack. Source-level pattern-arm matching destructures the three outputs.
+
+The wrapping arithmetic opcodes `Add`, `Sub`, `Mul`, and `Neg` remain in the instruction set but no longer accept `Value::Int` operands. Their permitted operand types are `Byte`, `Fixed`, and `Float`. The V0.2.0 Consolidation B pass narrowed these opcodes by routing all `Int` arithmetic through the checked family; the compiler emits `CheckedXxx; PopN(2)` for every `Int` operand position. Operands whose type the compiler cannot statically infer fall through to the `Int` path as well, because `Word` is the default numeric type.
+
+`Op::Div` and `Op::Mod` remain polymorphic over `Int`, `Byte`, and `Float`. Their checked counterparts `CheckedDiv` and `CheckedMod` expose the corner cases of signed division.
 
 | Instruction | Operands | Cost | Description |
 |-------------|----------|------|-------------|
-| CheckedAdd | none | 3 | Pop two operands; push `(high, low, flag)`. |
-| CheckedSub | none | 3 | Pop two operands; push `(high, low, flag)`. |
-| CheckedMul | none | 4 | Pop two operands; push the full 128-bit product split into `(high, low, flag)`. The high half is the load-bearing value for big-number multiplication. |
-| CheckedNeg | none | 2 | Pop one operand; push `(high, low, flag)`. The only overflow case is `-i64::MIN`. |
-| CheckedDiv | none | 4 | Pop two operands; push `(high, low, flag)`. Traps on divide-by-zero. The only overflow case is `i64::MIN / -1`. |
-| CheckedMod | none | 4 | Pop two operands; push `(high, low, flag)`. Traps on divide-by-zero. The only overflow case is `i64::MIN % -1`. |
+| CheckedAdd | none | 3 | Pop two `Int` operands; push `(low, high, flag)`. |
+| CheckedSub | none | 3 | Pop two `Int` operands; push `(low, high, flag)`. |
+| CheckedMul | none | 4 | Pop two `Int` operands; push the full 128-bit product split into `(low, high, flag)`. The high half is the load-bearing value for big-number multiplication. |
+| CheckedNeg | none | 2 | Pop one `Int` operand; push `(low, high, flag)`. The only overflow case is `-i64::MIN`. |
+| CheckedDiv | none | 4 | Pop two `Int` operands; push `(low, high, flag)`. Traps on divide-by-zero. The only overflow case is `i64::MIN / -1`. |
+| CheckedMod | none | 4 | Pop two `Int` operands; push `(low, high, flag)`. Traps on divide-by-zero. The only overflow case is `i64::MIN % -1`. |
+| Add | none | 2 | Pop two operands of type `Byte`, `Fixed`, or `Float`; push the wrapping or IEEE 754 sum. The `Int` operand position is excluded; the compiler routes `Int + Int` through `CheckedAdd; PopN(2)`. |
+| Sub | none | 2 | Pop two operands of type `Byte`, `Fixed`, or `Float`; push the wrapping or IEEE 754 difference. The `Int` operand position is excluded. |
+| Mul | none | 2 | Pop two operands of type `Byte` or `Float`; push the wrapping or IEEE 754 product. `Fixed` multiplication uses `FixedMul(n)`; the `Int` operand position is excluded. |
+| Neg | none | 1 | Pop one operand of type `Byte`, `Fixed`, or `Float`; push the wrapping or IEEE 754 negation. The `Int` operand position is excluded. |
 | Div | none | 3 | Pop two values; push quotient. Traps on divide-by-zero. No overflow flag. |
 | Mod | none | 3 | Pop two values; push remainder. Traps on divide-by-zero. No overflow flag. |
 

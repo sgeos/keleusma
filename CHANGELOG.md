@@ -17,13 +17,13 @@ The reset is acceptable because the V0.1.x line has narrow adoption. Future wire
 
 #### ISA changes (V0.1.x → V0.2.0)
 
-- **Consolidations.** `PushTrue`, `PushFalse`, `PushUnit`, `PushNone`, `WrapSome`, `Pop`, `Add`, `Sub`, `Mul`, `Neg` are removed. `PushImmediate(u8)` replaces the four constant-pushing variants and additionally encodes small `Int` literals (`Int(0)` through `Int(15)`) inline. `PopN(u8)` replaces `Pop`; single-slot pops emit `PopN(1)`. Wrapping arithmetic is synthesized as the checked variant followed by `PopN(2)` to discard unused outputs.
+- **Consolidations.** `PushTrue`, `PushFalse`, `PushUnit`, `PushNone`, `WrapSome`, and `Pop` are removed. `PushImmediate(u8)` replaces the four constant-pushing variants and additionally encodes small `Int` literals (`Int(0)` through `Int(15)`) inline. `PopN(u8)` replaces `Pop`; single-slot pops emit `PopN(1)`. `Op::Add`, `Op::Sub`, `Op::Mul`, and `Op::Neg` remain in the instruction set but no longer accept `Value::Int` operands; the compiler routes `Int` arithmetic through `CheckedAdd` / `CheckedSub` / `CheckedMul` / `CheckedNeg` followed by `PopN(2)` to discard the unused `high` and `flag` outputs. The unchecked opcodes retain their `Byte`, `Fixed`, and `Float` arms.
 - **Drops.** `CallIndirect`, `PushFunc`, `MakeClosure`, `MakeRecursiveClosure` are removed. Closure-shaped surface expressions either compile to direct calls or are rejected at compile time.
 - **Splits.** `CallNative` splits into `CallVerifiedNative` and `CallExternalNative`. The two are distinguished by the source-level `use` declaration: `use module::name` produces `CallVerifiedNative`; `use external module::name` produces `CallExternalNative`. The host's registration ABI mirrors the distinction.
 - **Additions.** Five bitwise opcodes: `BitAnd`, `BitOr`, `BitXor`, `Shl`, `Shr`. Enables script-level bit manipulation and is a prerequisite for the deferred B19 Multiword<N> work.
 - **Operand narrowing.** Control-flow opcodes (`If`, `Else`, `Loop`, `EndLoop`, `Break`, `BreakIf`) carry `u16` jump targets instead of `u32`. Chunks are capped at 65,535 ops; the compiler emits a soft warning at 80% of the cap.
 
-Total opcode count goes from 71 in V0.1.x to 65 in V0.2.0.
+Total opcode count at the close of Consolidation B is 74. The audit's aspirational target of 65 anticipated dropping `Add` / `Sub` / `Mul` / `Neg` (Consolidation B) and `CallIndirect` / `PushFunc` / `MakeClosure` / `MakeRecursiveClosure` (Phase 4). Consolidation B narrowed `Add` / `Sub` / `Mul` / `Neg` to `Byte` / `Fixed` / `Float` operand types rather than removing them, because the runtime still needs entry points for those non-`Int` wrapping or IEEE 754 arithmetic forms. The closure-opcode drop remains pending.
 
 #### Wire format changes
 

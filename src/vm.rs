@@ -613,7 +613,10 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         self.archived().chunks[chunk_idx].local_count.to_native()
     }
 
-    /// Module-wide bit width exponent for arithmetic masking.
+    /// Module-wide word-width exponent. Used by the checked-
+    /// arithmetic dispatch to apply narrow-width truncation to the
+    /// `low` result when the bytecode declares a word size smaller
+    /// than the runtime supports (cross-architecture portability).
     fn word_bits_log2(&self) -> u8 {
         self.archived().word_bits_log2
     }
@@ -2139,27 +2142,14 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                 }
 
                 Op::Add => {
-                    let word_bits_log2 = self.word_bits_log2();
+                    // Consolidation B narrowed `Op::Add` away from
+                    // `Int` operands. The compiler emits
+                    // `CheckedAdd; PopN(2)` for any `Int + Int`
+                    // expression and routes only `Byte`, `Fixed`,
+                    // and `Float` through this opcode.
                     let b = self.pop()?;
                     let a = self.pop()?;
                     match (a, b) {
-                        (
-                            crate::bytecode::GenericValue::Int(x),
-                            crate::bytecode::GenericValue::Int(y),
-                        ) => {
-                            // Compute via W's wrapping arithmetic
-                            // (which truncates to W's bit width)
-                            // then additionally mask to the
-                            // bytecode's declared `word_bits_log2`
-                            // for the case where W is wider than
-                            // the bytecode (e.g. running 32-bit
-                            // bytecode on the default i64 Vm).
-                            let r = W::from_i64_wrap(crate::bytecode::truncate_int(
-                                x.wrapping_add(y).to_i64(),
-                                word_bits_log2,
-                            ));
-                            sp!(self, crate::bytecode::GenericValue::Int(r));
-                        }
                         (
                             crate::bytecode::GenericValue::Byte(x),
                             crate::bytecode::GenericValue::Byte(y),
@@ -2272,18 +2262,12 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                     }
                 }
                 Op::Neg => {
-                    let word_bits_log2 = self.word_bits_log2();
+                    // Consolidation B narrowed `Op::Neg` away from
+                    // `Int` operands. The compiler emits
+                    // `CheckedNeg; PopN(2)` for `-Int`. This opcode
+                    // handles `Byte`, `Fixed`, and `Float`.
                     let val = self.pop()?;
                     match val {
-                        crate::bytecode::GenericValue::Int(x) => sp!(
-                            self,
-                            crate::bytecode::GenericValue::Int(W::from_i64_wrap(
-                                crate::bytecode::truncate_int(
-                                    x.wrapping_neg().to_i64(),
-                                    word_bits_log2
-                                )
-                            ))
-                        ),
                         crate::bytecode::GenericValue::Byte(x) => {
                             sp!(self, crate::bytecode::GenericValue::Byte(x.wrapping_neg()))
                         }
@@ -3000,6 +2984,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                     return Err(VmError::Trap(msg));
                 }
                 Op::CheckedAdd => {
+                    let word_bits_log2 = self.word_bits_log2();
                     let b = self.pop()?;
                     let a = self.pop()?;
                     match (a, b) {
@@ -3016,9 +3001,24 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                             // low halves of the i128 result are
                             // pushed in all three cases so arm
                             // patterns can destructure them.
+                            //
+                            // Narrow-bytecode-on-wide-runtime: the
+                            // `low` half is sign-extended truncated
+                            // to the bytecode's declared word width
+                            // so the wrapping-arithmetic synthesis
+                            // (`CheckedAdd; PopN(2)`) matches the
+                            // declared-width semantics. The `flag`
+                            // and `high` halves remain relative to
+                            // the runtime word width.
                             let r = x.widen() + y.widen();
                             let high = <W as crate::word::Word>::from_wide_wrap(r.high_half());
-                            let low = <W as crate::word::Word>::from_wide_wrap(r);
+                            let low_raw = <W as crate::word::Word>::from_wide_wrap(r);
+                            let low = <W as crate::word::Word>::from_i64_wrap(
+                                crate::bytecode::truncate_int_to_declared_width(
+                                    low_raw.to_i64(),
+                                    word_bits_log2,
+                                ),
+                            );
                             let flag: i64 = if r >= <W as crate::word::Word>::MIN.widen()
                                 && r <= <W as crate::word::Word>::MAX.widen()
                             {
@@ -3052,6 +3052,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                     }
                 }
                 Op::CheckedSub => {
+                    let word_bits_log2 = self.word_bits_log2();
                     let b = self.pop()?;
                     let a = self.pop()?;
                     match (a, b) {
@@ -3061,7 +3062,13 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                         ) => {
                             let r = x.widen() - y.widen();
                             let high = <W as crate::word::Word>::from_wide_wrap(r.high_half());
-                            let low = <W as crate::word::Word>::from_wide_wrap(r);
+                            let low_raw = <W as crate::word::Word>::from_wide_wrap(r);
+                            let low = <W as crate::word::Word>::from_i64_wrap(
+                                crate::bytecode::truncate_int_to_declared_width(
+                                    low_raw.to_i64(),
+                                    word_bits_log2,
+                                ),
+                            );
                             let flag: i64 = if r >= <W as crate::word::Word>::MIN.widen()
                                 && r <= <W as crate::word::Word>::MAX.widen()
                             {
@@ -3090,6 +3097,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                     }
                 }
                 Op::CheckedMul => {
+                    let word_bits_log2 = self.word_bits_log2();
                     let b = self.pop()?;
                     let a = self.pop()?;
                     match (a, b) {
@@ -3105,7 +3113,13 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                             // i64 representable range.
                             let r = x.widen() * y.widen();
                             let high = <W as crate::word::Word>::from_wide_wrap(r.high_half());
-                            let low = <W as crate::word::Word>::from_wide_wrap(r);
+                            let low_raw = <W as crate::word::Word>::from_wide_wrap(r);
+                            let low = <W as crate::word::Word>::from_i64_wrap(
+                                crate::bytecode::truncate_int_to_declared_width(
+                                    low_raw.to_i64(),
+                                    word_bits_log2,
+                                ),
+                            );
                             let flag: i64 = if r >= <W as crate::word::Word>::MIN.widen()
                                 && r <= <W as crate::word::Word>::MAX.widen()
                             {
@@ -3134,6 +3148,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                     }
                 }
                 Op::CheckedNeg => {
+                    let word_bits_log2 = self.word_bits_log2();
                     let a = self.pop()?;
                     match a {
                         crate::bytecode::GenericValue::Int(x) => {
@@ -3143,7 +3158,13 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                             // overflow (flag=1) in that case.
                             let r = -x.widen();
                             let high = <W as crate::word::Word>::from_wide_wrap(r.high_half());
-                            let low = <W as crate::word::Word>::from_wide_wrap(r);
+                            let low_raw = <W as crate::word::Word>::from_wide_wrap(r);
+                            let low = <W as crate::word::Word>::from_i64_wrap(
+                                crate::bytecode::truncate_int_to_declared_width(
+                                    low_raw.to_i64(),
+                                    word_bits_log2,
+                                ),
+                            );
                             let flag: i64 = if r >= <W as crate::word::Word>::MIN.widen()
                                 && r <= <W as crate::word::Word>::MAX.widen()
                             {
@@ -3386,8 +3407,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                 // Phase 1: both CallVerified* and CallExternal*
                 // dispatch identically to CallNative. Phase 5
                 // introduces the per-class semantics.
-                Op::CallVerifiedNative(idx, arg_count)
-                | Op::CallExternalNative(idx, arg_count) => {
+                Op::CallVerifiedNative(idx, arg_count) | Op::CallExternalNative(idx, arg_count) => {
                     let n = arg_count as usize;
                     if self.stack.len() < n {
                         return Err(VmError::StackUnderflow);
@@ -3430,19 +3450,21 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         IntOp: Fn(W, W) -> W,
         FloatOp: Fn(F, F) -> F,
     {
-        let word_bits_log2 = self.word_bits_log2();
+        // Consolidation B narrowed `Op::Sub` and `Op::Mul` away
+        // from `Int` operands. The compiler emits the
+        // `CheckedXxx; PopN(2)` synthesis for `Int + Int`
+        // expressions. This helper retains the `Byte` and `Float`
+        // arms only; `Op::Mul` on `Fixed` goes through
+        // `Op::FixedMul(n)` rather than this helper, but `Op::Sub`
+        // on `Fixed` (which the compiler still emits via the
+        // generic `Op::Sub`) is admitted by widening the `Byte`
+        // arm pattern to include `Fixed`. The `int_op` closure is
+        // reused for `Byte` and `Fixed` arithmetic since both are
+        // wrapping integer operations on the underlying bit
+        // representation.
         let b = self.pop()?;
         let a = self.pop()?;
         match (a, b) {
-            (crate::bytecode::GenericValue::Int(x), crate::bytecode::GenericValue::Int(y)) => {
-                // Truncate to the bytecode-declared width for the
-                // case where W is wider than the bytecode.
-                let result = W::from_i64_wrap(crate::bytecode::truncate_int(
-                    int_op(x, y).to_i64(),
-                    word_bits_log2,
-                ));
-                sp!(self, crate::bytecode::GenericValue::Int(result));
-            }
             (crate::bytecode::GenericValue::Byte(x), crate::bytecode::GenericValue::Byte(y)) => {
                 // Byte arithmetic via i64 then mask: simulate the
                 // operand widening and post-result truncation that

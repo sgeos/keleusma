@@ -82,10 +82,7 @@ mod tests {
     #[test]
     fn println_returns_unit() {
         let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
-        let val = run_with_utilities(
-            "use println\nfn main() -> () { println(42) }",
-            &arena,
-        );
+        let val = run_with_utilities("use println\nfn main() -> () { println(42) }", &arena);
         assert_eq!(val, Value::Unit);
     }
 

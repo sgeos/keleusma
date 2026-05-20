@@ -223,6 +223,23 @@ impl FuncCompiler {
                 }
                 None
             }
+            // Chained field access: resolve the outer owner via the
+            // inner field's type. This lets `infer_expr_type` walk
+            // expressions like `origin.pt.x` where the field path
+            // descends through one struct into another.
+            Expr::FieldAccess { object, field, .. } => {
+                let owner = self.struct_name_of(object)?;
+                let field_ty = self
+                    .type_info
+                    .structs
+                    .get(&owner)
+                    .or_else(|| self.type_info.data_field_types.get(&owner))
+                    .and_then(|fields| fields.get(field))?;
+                if let TypeExpr::Named(struct_name, _, _) = field_ty {
+                    return Some(struct_name.clone());
+                }
+                None
+            }
             _ => None,
         }
     }
@@ -1716,10 +1733,21 @@ fn emit_indexed_offset(
         if stride != 1 {
             let stride_const = fc.add_constant(Value::Int(stride as i64));
             fc.emit(Op::Const(stride_const));
-            fc.emit(Op::Mul);
+            // Index-stride product is `Int * Int`. After
+            // Consolidation B narrowed `Op::Mul` away from
+            // `Int` operands, the compiler synthesizes the
+            // wrapping product via `CheckedMul` followed by
+            // `PopN(2)` so the overflow flag and high half are
+            // discarded.
+            fc.emit(Op::CheckedMul);
+            fc.emit(Op::PopN(2));
         }
         if emitted_first {
-            fc.emit(Op::Add);
+            // Flat offset accumulation is `Int + Int`.
+            // Consolidation B routes the wrapping sum through
+            // `CheckedAdd; PopN(2)`.
+            fc.emit(Op::CheckedAdd);
+            fc.emit(Op::PopN(2));
         } else {
             emitted_first = true;
         }
@@ -2381,9 +2409,30 @@ fn infer_expr_type(fc: &FuncCompiler, expr: &Expr) -> Option<TypeExpr> {
                 *span,
             ))
         }
+        // Tuple literal inference: per-element inference; one
+        // `None` element collapses the result because the let-
+        // pattern decomposition requires every component.
+        Expr::TupleLiteral { elements, span } => {
+            let mut elem_tys: Vec<TypeExpr> = Vec::with_capacity(elements.len());
+            for e in elements {
+                elem_tys.push(infer_expr_type(fc, e)?);
+            }
+            Some(TypeExpr::Tuple(elem_tys, *span))
+        }
         Expr::ArrayIndex { object, .. } => {
             let object_ty = infer_expr_type(fc, object)?;
             element_type_of(&object_ty)
+        }
+        // Tuple-index inference: walk the tuple type and project the
+        // indexed component. Out-of-range indices are caught by the
+        // type checker; here we conservatively report `None` so the
+        // arithmetic dispatch falls through to the generic emission.
+        Expr::TupleIndex { object, index, .. } => {
+            let object_ty = infer_expr_type(fc, object)?;
+            match object_ty {
+                TypeExpr::Tuple(elems, _) => elems.get(*index as usize).cloned(),
+                _ => None,
+            }
         }
         Expr::Match { arms, .. } => {
             let first = arms.first()?;
@@ -2452,11 +2501,6 @@ fn type_expr_head(ty: &TypeExpr) -> Option<String> {
     }
 }
 
-/// Compile a let binding pattern (allocate locals and store values).
-fn compile_let_pattern(fc: &mut FuncCompiler, pattern: &Pattern) -> Result<(), CompileError> {
-    compile_let_pattern_typed(fc, pattern, None)
-}
-
 /// Compile a let binding pattern with an associated type expression.
 ///
 /// The type, when present, is recorded on the resulting local for
@@ -2477,12 +2521,26 @@ fn compile_let_pattern_typed(
         }
         Pattern::Tuple(pats, _) => {
             // Value is on stack. Store in temp, then extract fields.
+            // Decompose the tuple type structurally so each inner
+            // pattern's bind carries the element type. Without this,
+            // patterns like `let (a, b) = (x, y)` bind `a` and `b`
+            // without type information and downstream type-driven
+            // dispatch (notably the V0.2.0 Consolidation B arithmetic
+            // split) cannot route Int operands to the checked-form
+            // emission.
+            let elem_types: Vec<Option<TypeExpr>> = match &ty {
+                Some(TypeExpr::Tuple(ts, _)) if ts.len() == pats.len() => {
+                    ts.iter().cloned().map(Some).collect()
+                }
+                _ => pats.iter().map(|_| None).collect(),
+            };
             let temp = fc.declare_local("__let_tmp");
             fc.emit(Op::SetLocal(temp));
             for (i, pat) in pats.iter().enumerate() {
                 fc.emit(Op::GetLocal(temp));
                 fc.emit(Op::GetTupleField(i as u8));
-                compile_let_pattern(fc, pat)?;
+                let sub_ty = elem_types.get(i).cloned().unwrap_or(None);
+                compile_let_pattern_typed(fc, pat, sub_ty)?;
             }
         }
         _ => {
@@ -2566,11 +2624,14 @@ fn compile_for_in_data_array(
     fc.emit(Op::PopN(1));
     fc.end_scope();
 
-    // `idx = idx + 1`
+    // `idx = idx + 1`. Consolidation B routes the wrapping
+    // sum through `CheckedAdd; PopN(2)` since the `Int` arm
+    // of `Op::Add` was removed from VM dispatch.
     fc.emit(Op::GetLocal(idx_slot));
     let one_const = fc.add_constant(Value::Int(1));
     fc.emit(Op::Const(one_const));
-    fc.emit(Op::Add);
+    fc.emit(Op::CheckedAdd);
+    fc.emit(Op::PopN(2));
     fc.emit(Op::SetLocal(idx_slot));
 
     let endloop_addr = fc.emit(Op::EndLoop(0));
@@ -2617,11 +2678,13 @@ fn compile_for(fc: &mut FuncCompiler, for_stmt: &ForStmt) -> Result<(), CompileE
             fc.emit(Op::PopN(1)); // Discard block value.
             fc.end_scope();
 
-            // Increment.
+            // Increment. Consolidation B routes the wrapping
+            // sum through `CheckedAdd; PopN(2)`.
             fc.emit(Op::GetLocal(var_slot));
             let one_const = fc.add_constant(Value::Int(1));
             fc.emit(Op::Const(one_const));
-            fc.emit(Op::Add);
+            fc.emit(Op::CheckedAdd);
+            fc.emit(Op::PopN(2));
             fc.emit(Op::SetLocal(var_slot));
 
             let endloop_addr = fc.emit(Op::EndLoop(0)); // Placeholder, patched to after Loop.
@@ -2723,11 +2786,13 @@ fn compile_for(fc: &mut FuncCompiler, for_stmt: &ForStmt) -> Result<(), CompileE
             fc.emit(Op::PopN(1));
             fc.end_scope();
 
-            // Increment index.
+            // Increment index. Consolidation B routes the
+            // wrapping sum through `CheckedAdd; PopN(2)`.
             fc.emit(Op::GetLocal(idx_slot));
             let one_const = fc.add_constant(Value::Int(1));
             fc.emit(Op::Const(one_const));
-            fc.emit(Op::Add);
+            fc.emit(Op::CheckedAdd);
+            fc.emit(Op::PopN(2));
             fc.emit(Op::SetLocal(idx_slot));
 
             let endloop_addr = fc.emit(Op::EndLoop(0));
@@ -4165,34 +4230,77 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
                 }
                 _ => {}
             }
-            // Infer left's type before compiling so we can pick the
-            // Fixed-specific multiply and divide opcodes when the
-            // operands are `Fixed`. Add and Sub on Fixed use the
-            // generic Op::Add/Sub dispatch, which the VM extends
-            // with a Value::Fixed arm. Multiply and divide require
-            // the fraction-bit count to maintain Q-format. The
-            // count comes from the operand's `PrimType::Fixed(n)`;
-            // when `n` is `None` (the default-form `Fixed` surface),
-            // it falls back to `DEFAULT_FIXED_FRAC_BITS` which
-            // matches the host runtime's Q31.32 format.
-            let left_fixed_n = match infer_expr_type(fc, left) {
+            // Infer the operand type before compiling so we can pick
+            // the type-specialized arithmetic opcode. The dispatch is
+            // a three-way split per V0.2.0 Consolidation B:
+            //   * `Fixed` operands → `FixedMul(n)` / `FixedDiv(n)` for
+            //     multiply and divide so the Q-format fraction-bit
+            //     count is preserved; add and subtract on `Fixed` use
+            //     the generic `Op::Add` / `Op::Sub` whose VM dispatch
+            //     extends to `Value::Fixed`.
+            //   * `Word` (Int) operands → checked-arithmetic
+            //     synthesis. The compiler emits the `CheckedXxx`
+            //     opcode followed by `PopN(2)` to discard the
+            //     `(high, flag)` pair, leaving the wrapping result on
+            //     the stack. This is semantically equivalent to the
+            //     previous `Op::Add` Int branch but routes the cost
+            //     through the checked-arithmetic family so the
+            //     overflow-flag results are available to the language
+            //     without a separate opcode for the unchecked form.
+            //   * `Byte` / `Float` operands → generic `Op::Add` etc.
+            //     whose VM dispatch retains the `Byte` and `Float`
+            //     arms after Consolidation B narrowed away the `Int`
+            //     arm.
+            // The `Fixed` fraction-bit count comes from the operand's
+            // `PrimType::Fixed(n)`; when `n` is `None` (the default-
+            // form `Fixed` surface), it falls back to
+            // `DEFAULT_FIXED_FRAC_BITS` which matches the host
+            // runtime's Q31.32 format.
+            let operand_ty = infer_expr_type(fc, left).or_else(|| infer_expr_type(fc, right));
+            let left_fixed_n = match &operand_ty {
                 Some(TypeExpr::Prim(PrimType::Fixed(n), _)) => {
                     Some(n.unwrap_or(crate::typecheck::DEFAULT_FIXED_FRAC_BITS))
                 }
                 _ => None,
             };
+            // Treat operands as `Word` (Int) when the compiler can
+            // confirm `Word` or when the type cannot be inferred.
+            // The compiler's `infer_expr_type` is a partial re-
+            // derivation that returns `None` for expressions whose
+            // type the type checker accepts but the compiler cannot
+            // resolve statically (notably host-native calls without
+            // a declared signature, and chained data-segment
+            // indexing). The default treats those operands as `Int`
+            // because the script's default numeric type is `Word`;
+            // `Float`, `Byte`, `Fixed`, and `Text` arithmetic on
+            // inference-opaque expressions requires an explicit
+            // annotation or a typed `use` declaration.
+            let left_is_int = matches!(&operand_ty, None | Some(TypeExpr::Prim(PrimType::Word, _)));
             compile_expr(fc, left)?;
             compile_expr(fc, right)?;
             match op {
                 BinOp::Add => {
-                    fc.emit(Op::Add);
+                    if left_is_int {
+                        fc.emit(Op::CheckedAdd);
+                        fc.emit(Op::PopN(2));
+                    } else {
+                        fc.emit(Op::Add);
+                    }
                 }
                 BinOp::Sub => {
-                    fc.emit(Op::Sub);
+                    if left_is_int {
+                        fc.emit(Op::CheckedSub);
+                        fc.emit(Op::PopN(2));
+                    } else {
+                        fc.emit(Op::Sub);
+                    }
                 }
                 BinOp::Mul => {
                     if let Some(n) = left_fixed_n {
                         fc.emit(Op::FixedMul(n));
+                    } else if left_is_int {
+                        fc.emit(Op::CheckedMul);
+                        fc.emit(Op::PopN(2));
                     } else {
                         fc.emit(Op::Mul);
                     }
@@ -4230,10 +4338,28 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
         }
 
         Expr::UnaryOp { op, operand, .. } => {
+            // Mirrors the binary-op type-specialization from
+            // Consolidation B: operands inferred or defaulted to
+            // `Int` route through `CheckedNeg` followed by
+            // `PopN(2)` so the unchecked negate opcode does not
+            // need an `Int` arm in the VM dispatch. Operands whose
+            // type is explicitly `Byte`, `Fixed`, or `Float`
+            // continue to use `Op::Neg` whose VM dispatch retains
+            // those three arms. Unknown-type operands default to
+            // `Int` for the same reason as the binary path.
+            let operand_is_int = matches!(
+                infer_expr_type(fc, operand),
+                None | Some(TypeExpr::Prim(PrimType::Word, _))
+            );
             compile_expr(fc, operand)?;
             match op {
                 UnaryOp::Neg => {
-                    fc.emit(Op::Neg);
+                    if operand_is_int {
+                        fc.emit(Op::CheckedNeg);
+                        fc.emit(Op::PopN(2));
+                    } else {
+                        fc.emit(Op::Neg);
+                    }
                 }
                 UnaryOp::Not => {
                     fc.emit(Op::Not);
@@ -4915,22 +5041,31 @@ fn compile_checked(
             test_literal(fc, l, low_slot, &mut fail_addrs);
         }
 
-        // Variable bindings.
-        let bind_var =
-            |fc: &mut FuncCompiler, pat: &Pattern, slot: u16| -> Result<(), CompileError> {
-                if let Pattern::Variable(name, _) = pat {
-                    let v_slot = fc.declare_local(name);
-                    fc.emit(Op::GetLocal(slot));
-                    fc.emit(Op::SetLocal(v_slot));
-                }
-                Ok(())
-            };
+        // Variable bindings. The bound names carry `Word` type
+        // information because the checked-arithmetic family
+        // produces `Int` low/high/flag triples by construction;
+        // typing the binds enables Consolidation B's type-driven
+        // arithmetic dispatch to route subsequent `h + l` etc.
+        // expressions through `CheckedAdd; PopN(2)`.
+        let word_ty = TypeExpr::Prim(PrimType::Word, *span);
+        let bind_var = |fc: &mut FuncCompiler,
+                        pat: &Pattern,
+                        slot: u16,
+                        ty: &TypeExpr|
+         -> Result<(), CompileError> {
+            if let Pattern::Variable(name, _) = pat {
+                let v_slot = fc.declare_local_typed(name, Some(ty.clone()));
+                fc.emit(Op::GetLocal(slot));
+                fc.emit(Op::SetLocal(v_slot));
+            }
+            Ok(())
+        };
         if let Some(p) = single_pattern {
-            bind_var(fc, p, low_slot)?;
+            bind_var(fc, p, low_slot, &word_ty)?;
         }
         if let (Some(h), Some(l)) = (h_pattern, l_pattern) {
-            bind_var(fc, h, high_slot)?;
-            bind_var(fc, l, low_slot)?;
+            bind_var(fc, h, high_slot, &word_ty)?;
+            bind_var(fc, l, low_slot, &word_ty)?;
         }
 
         // Guard expression.

@@ -599,3 +599,18 @@ Total estimated implementation effort: ~2,400 lines across the workspace.
 V0.1.x bytecode artefacts cannot be loaded by V0.2.0 runtimes. Hosts that have V0.1.x bytecode in flight at publication time must recompile against the V0.2.0 toolchain. The framing-header `version` field resets to `1` to signal the discontinuity; V0.2.0 runtimes reject V0.1.x bytecode at the framing-level check.
 
 The implementation lands as a sequence of commits on the V0.2.0 publication branch. The ISA and wire format are the published artefact; the implementation work is operational.
+
+### Phase status
+
+| Phase | Scope | Status |
+|-------|-------|--------|
+| 1 | Op enum additions (`PushImmediate`, `PopN`, `BitAnd`/`BitOr`/`BitXor`/`Shl`/`Shr`, `CallVerifiedNative`/`CallExternalNative`) | Done |
+| 2 | Source-level f-string and bytecode small-integer push consolidations | Done |
+| 3 | Op enum removals (`PushTrue`/`PushFalse`/`PushUnit`/`PushNone`/`Pop`/`WrapSome`) | Done |
+| 3.5 | Text-composition removal (utility natives, f-string desugaring, `stddsl::Text`); `Op::Add` text branch retired from VM dispatch | Done |
+| Consolidation B | `Int` arithmetic folded into `CheckedAdd` / `CheckedSub` / `CheckedMul` / `CheckedNeg` followed by `PopN(2)`; `Op::Add` / `Sub` / `Mul` / `Neg` narrowed to `Byte` / `Fixed` / `Float` operand types | Done |
+| 4 | Closure opcode removal (`CallIndirect`, `PushFunc`, `MakeClosure`, `MakeRecursiveClosure`) | Pending |
+| 5 | Native ABI split refinement: verified versus external semantics, source-level `use external` keyword | Pending |
+| 6 | Control-flow operand narrowing `u32` → `u16` with 80% soft warning | Pending |
+| 7 | Wire format: fixed-size opcode records, separate operand pool, expanded framing header | Pending |
+| 8 | Documentation alignment, `BYTECODE_VERSION` reset to 1 | Pending |

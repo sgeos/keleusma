@@ -659,7 +659,6 @@ pub enum Op {
 
     // -- V0.2.0 ISA additions (B20). Additive in Phase 1; compiler
     // -- emission and removal of legacy opcodes lands in later phases.
-
     /// Push an inline immediate value. Encoding:
     /// `0 = Unit`, `1 = true`, `2 = false`, `3 = None`,
     /// `4..19 = Int(operand - 4)`, `20..255 = reserved`.
@@ -718,7 +717,7 @@ pub const VALUE_SLOT_SIZE_BYTES: u32 = 32;
 /// opcode's cost. The WCMU text-size tracking pass populates the
 /// `lhs_text_len` and `rhs_text_len` fields when evaluating the
 /// heap-allocation cost of text-producing opcodes (`Op::Add` on
-/// text, the bundled `concat` and `slice` natives). Fields that
+/// text, plus host-registered text-producing natives). Fields that
 /// the analysis cannot bound are reported as `u32::MAX` (the
 /// saturation value for the length lattice), which conservatively
 /// propagates an "unbounded" verdict to the surrounding analysis.
@@ -1105,11 +1104,7 @@ impl Op {
     /// Number of operand-stack slots popped by this instruction.
     pub fn stack_shrink(&self) -> u32 {
         match self {
-            Op::Const(_)
-            | Op::GetLocal(_)
-            | Op::GetData(_)
-            | Op::Dup
-            | Op::PushFunc(_) => 0,
+            Op::Const(_) | Op::GetLocal(_) | Op::GetData(_) | Op::Dup | Op::PushFunc(_) => 0,
 
             Op::Not | Op::Neg => 0,
 
@@ -2341,14 +2336,25 @@ pub fn value_from_archived<W: crate::word::Word, F: crate::float::Float>(
     GenericValue::<W, F>::from_const_archived(archived)
 }
 
-/// Sign-extending mask for narrower-than-runtime integer arithmetic.
+/// Sign-extending truncation to a narrower-than-runtime word width.
 ///
-/// When a bytecode declares a word size narrower than the runtime
-/// supports, the VM applies this mask after each integer arithmetic
-/// op so that overflow points match the bytecode's declared width.
-/// For `word_bits_log2 >= 6` the function is the identity, since the
-/// runtime's native i64 already matches or exceeds the declared width.
-pub(crate) fn truncate_int(value: i64, word_bits_log2: u8) -> i64 {
+/// When bytecode declares a word size narrower than the runtime
+/// supports, the VM applies this mask to the low half of each
+/// integer-arithmetic result so the result fits the bytecode's
+/// declared width. For `word_bits_log2 >= 6` the function is the
+/// identity, since the runtime's native i64 already matches or
+/// exceeds the declared width.
+///
+/// V0.2.0 Consolidation B note. The `Op::Add` / `Op::Sub` / `Op::Mul`
+/// / `Op::Neg` family no longer accepts `Int` operands. The
+/// compiler routes `Int` arithmetic through `CheckedXxx` followed by
+/// `PopN(2)`; the checked dispatch applies this truncation to the
+/// `low` half so the wrapping result matches the bytecode's declared
+/// width. The `flag` and `high` halves are reported relative to the
+/// runtime word width (i.e., `W::MIN..=W::MAX`) rather than the
+/// bytecode's declared width. Narrow-width overflow detection
+/// against the declared range is deferred to a follow-up task.
+pub(crate) fn truncate_int_to_declared_width(value: i64, word_bits_log2: u8) -> i64 {
     if word_bits_log2 >= 6 {
         return value;
     }
