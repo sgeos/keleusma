@@ -2055,17 +2055,15 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                 Op::Mul => self
                     .binary_arith(|a: W, b: W| a.wrapping_mul(b), |a: F, b: F| a * b)?,
                 Op::Div => {
-                    let word_bits_log2 = self.word_bits_log2();
                     let b = self.pop()?;
                     let a = self.pop()?;
                     match (a, b) {
-                        (crate::bytecode::GenericValue::Int(_), crate::bytecode::GenericValue::Int(0)) => return Err(VmError::DivisionByZero),
+                        (crate::bytecode::GenericValue::Int(_), crate::bytecode::GenericValue::Int(y)) if y == W::default() => {
+                            return Err(VmError::DivisionByZero);
+                        }
                         (crate::bytecode::GenericValue::Int(x), crate::bytecode::GenericValue::Int(y)) => sp!(
                             self,
-                            crate::bytecode::GenericValue::Int(crate::bytecode::truncate_int(
-                                x.wrapping_div(y),
-                                word_bits_log2
-                            ),)
+                            crate::bytecode::GenericValue::Int(x.wrapping_div(y))
                         ),
                         (crate::bytecode::GenericValue::Byte(_), crate::bytecode::GenericValue::Byte(0)) => return Err(VmError::DivisionByZero),
                         (crate::bytecode::GenericValue::Byte(x), crate::bytecode::GenericValue::Byte(y)) => {
@@ -2083,17 +2081,15 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                     }
                 }
                 Op::Mod => {
-                    let word_bits_log2 = self.word_bits_log2();
                     let b = self.pop()?;
                     let a = self.pop()?;
                     match (a, b) {
-                        (crate::bytecode::GenericValue::Int(_), crate::bytecode::GenericValue::Int(0)) => return Err(VmError::DivisionByZero),
+                        (crate::bytecode::GenericValue::Int(_), crate::bytecode::GenericValue::Int(y)) if y == W::default() => {
+                            return Err(VmError::DivisionByZero);
+                        }
                         (crate::bytecode::GenericValue::Int(x), crate::bytecode::GenericValue::Int(y)) => sp!(
                             self,
-                            crate::bytecode::GenericValue::Int(crate::bytecode::truncate_int(
-                                x.wrapping_rem(y),
-                                word_bits_log2
-                            ),)
+                            crate::bytecode::GenericValue::Int(x.wrapping_rem(y))
                         ),
                         (crate::bytecode::GenericValue::Byte(_), crate::bytecode::GenericValue::Byte(0)) => return Err(VmError::DivisionByZero),
                         (crate::bytecode::GenericValue::Byte(x), crate::bytecode::GenericValue::Byte(y)) => {
@@ -2116,10 +2112,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                     match val {
                         crate::bytecode::GenericValue::Int(x) => sp!(
                             self,
-                            crate::bytecode::GenericValue::Int(crate::bytecode::truncate_int(
-                                x.wrapping_neg(),
-                                word_bits_log2
-                            ),)
+                            crate::bytecode::GenericValue::Int(x.wrapping_neg())
                         ),
                         crate::bytecode::GenericValue::Byte(x) => sp!(self, crate::bytecode::GenericValue::Byte(x.wrapping_neg())),
                         crate::bytecode::GenericValue::Fixed(x) => sp!(self, crate::bytecode::GenericValue::Fixed(x.wrapping_neg())),
@@ -2415,7 +2408,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                         return Err(VmError::StackUnderflow);
                     }
                     let values: Vec<crate::bytecode::GenericValue<W, F>> = self.stack.drain(self.stack.len() - n..).collect();
-                    let fields: Vec<(String, Value)> =
+                    let fields: Vec<(String, crate::bytecode::GenericValue<W, F>)> =
                         field_names.into_iter().zip(values).collect();
                     sp!(self, crate::bytecode::GenericValue::Struct { type_name, fields });
                 }
@@ -2493,8 +2486,8 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                     match (container, index) {
                         (crate::bytecode::GenericValue::Array(arr), crate::bytecode::GenericValue::Int(i)) => {
                             let len = arr.len();
-                            if i < 0 || i.to_i64() as usize >= len {
-                                return Err(VmError::IndexOutOfBounds(i, len));
+                            if i.to_i64() < 0 || i.to_i64() as usize >= len {
+                                return Err(VmError::IndexOutOfBounds(i.to_i64(), len));
                             }
                             sp!(self, arr[i.to_i64() as usize].clone());
                         }
@@ -2547,10 +2540,10 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                     let val = self.pop()?;
                     match val {
                         crate::bytecode::GenericValue::Array(arr) => {
-                            sp!(self, crate::bytecode::GenericValue::Int(arr.len() as i64));
+                            sp!(self, crate::bytecode::GenericValue::Int(<W as crate::word::Word>::from_i64_wrap(arr.len() as i64)));
                         }
                         crate::bytecode::GenericValue::StaticStr(s) => {
-                            sp!(self, crate::bytecode::GenericValue::Int(s.chars().count() as i64));
+                            sp!(self, crate::bytecode::GenericValue::Int(<W as crate::word::Word>::from_i64_wrap(s.chars().count() as i64)));
                         }
                         crate::bytecode::GenericValue::KStr(h) => {
                             let s = h.get(self.arena).map_err(|_| {
@@ -2558,10 +2551,10 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                                     "KStr is stale (arena reset since allocation)",
                                 ))
                             })?;
-                            sp!(self, crate::bytecode::GenericValue::Int(s.chars().count() as i64));
+                            sp!(self, crate::bytecode::GenericValue::Int(<W as crate::word::Word>::from_i64_wrap(s.chars().count() as i64)));
                         }
                         crate::bytecode::GenericValue::Tuple(t) => {
-                            sp!(self, crate::bytecode::GenericValue::Int(t.len() as i64));
+                            sp!(self, crate::bytecode::GenericValue::Int(<W as crate::word::Word>::from_i64_wrap(t.len() as i64)));
                         }
                         v => {
                             return Err(VmError::TypeError(format!(
@@ -3091,6 +3084,7 @@ impl<'a, 'arena> Vm<'a, 'arena> {
     /// return-value marshalling.
     pub fn register_fn<Func, Args, R>(&mut self, name: &str, func: Func)
     where
+        Func: crate::marshall::IntoNativeFn<Args, R>,
         Func: crate::marshall::IntoNativeFn<Args, R>,
     {
         self.natives.push(NativeEntry {
