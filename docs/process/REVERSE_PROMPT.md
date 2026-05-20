@@ -9,18 +9,18 @@ AI to Human communication channel.
 ## Last Updated
 
 **Date**: 2026-05-20
-**Status**: V0.2.0 ISA Phase 5 complete on the `V0.2.0-isa` branch. Native ABI split landed: `use external module::name` parses; the compiler emits `Op::CallVerifiedNative` / `Op::CallExternalNative` based on the source-level classification; `Op::CallNative` is retired. The host's `Vm::register_verified_native(name, fn, wcet, wcmu_bytes)` and `Vm::register_external_native(name, fn, max_invocations_per_iteration)` mirror the split, and the call-site dispatch cross-checks the registered classification against the opcode and rejects mismatches as `VmError::VerifyError`. Opcode count is 69 (was 70 after Phase 4).
+**Status**: V0.2.0 ISA Phase 5 open-concern follow-up landed on the `V0.2.0-isa` branch. Native classification mismatch is now detected at the entry of `Vm::call_function` through `Vm::verify_native_classifications`, replacing the per-dispatch check that fired only at the offending call site. External natives' per-call WCMU contribution is explicitly zeroed at the verifier handoff to guard against unsound over- or under-counting.
 
 ## Completed in this session round
 
 | Directive | Resolution |
 |-----------|------------|
-| Proceed with Phase 5. | Parser: `External` token added to the lexer; `parse_use_decl` accepts an optional `external` modifier between `use` and the first path segment and records it on `UseDecl::is_external`. Compiler: `compile_with_target` builds a parallel `native_externals: BTreeMap<String, bool>` map alongside `native_map`; the call-emission paths at the BinOp-style pipeline site and at the direct-call site consult the map to pick `Op::CallVerifiedNative` vs `Op::CallExternalNative`. Bytecode: `Op::CallNative` removed from the Op enum, the rkyv ArchivedOp conversion, the nominal cost table, the stack-effect dispatch, the verifier's WCMU walk, and the `text_size` module. VM: `NativeEntry` gains `classification: NativeClassification` and `max_invocations_per_iteration: Option<u32>`. New public `Vm::register_verified_native(name, fn, wcet, wcmu_bytes)` and `Vm::register_external_native(name, fn, max_invocations_per_iteration)` methods. The dispatch arm for both call opcodes computes the expected classification from the opcode match arm and compares against the registered entry's classification; mismatch returns `VmError::VerifyError` with a diagnostic naming both sides. Tests: five new tests covering the parser positive paths and the two mismatch directions; golden-bytes test updated for the smaller archived-op tag. |
+| Address Phase 5 open concerns: load-time classification check, external WCMU integration. | **Concern 2 (load-time check).** New `Vm::verify_native_classifications(&mut self)` walks every `Op::CallVerifiedNative` / `Op::CallExternalNative` site in the loaded module, looks up the registered `NativeEntry` by name, and compares classifications. Native names referenced by the bytecode but not yet registered are skipped (the dispatch path surfaces them as `InvalidBytecode` at the first invocation). The check is run lazily at the entry of `Vm::call_function`; the result is cached on the Vm (`native_classifications_verified: bool`) and invalidated by every `register_*` method and by `replace_module`. The per-dispatch check is removed; the load-time check is the source of truth. **Concern 1 (external WCMU).** External natives' per-call WCMU contribution is explicitly zeroed at the `verify_resources` / `auto_arena_capacity` handoff (replacing the previous `n.wcmu_bytes` blanket collection). The host's `max_invocations_per_iteration` attestation remains recorded on the entry; full chunk-level integration that bounds external-native cost as `max_invocations * per_call_wcmu` per chunk is documented as forward-looking work because it requires verifier-side classification awareness that the current `module_wcmu` API does not have. |
 
 ## Verification matrix
 
 ```bash
-cargo test --workspace                                                          # 752 lib + 53 rogue-script + 17 marshall tests, all green
+cargo test --workspace                                                          # 755 lib + 53 rogue-script + 17 marshall tests, all green
 cargo clippy --tests --all-targets -- -D warnings                               # clean
 cargo build --examples                                                          # clean
 cargo fmt --all                                                                 # idempotent
@@ -35,9 +35,8 @@ cargo fmt --all                                                                 
 
 | Item | Note |
 |------|------|
-| The `max_invocations_per_iteration` attestation is recorded on the `NativeEntry` but not yet consumed by the verifier. | Forward-looking. The current verifier folds the per-call `wcmu_bytes` attestation into the iteration budget for both verified and external natives. A follow-up pass should account for external-call cost through the invocation-count attestation rather than the per-call WCMU. The structural marker is in place; only the cost-model integration is pending. |
-| Mismatch is detected at the call-site dispatch rather than at `Vm::new`. | The documented intent in `INSTRUCTION_SET.md` originally referenced an `Vm::new`-time check. The implementation detects the mismatch at the first invocation of the affected native rather than module load time. The trade-off favors not requiring all natives to be registered before `Vm::new` returns. Hosts that wish for load-time detection can call the natives once after registration to force the check. |
-| Bounds parameters on `register_verified_native` flow into `NativeEntry::wcet` / `wcmu_bytes` directly. | Previously, hosts called `register_native` and then `set_native_bounds`. The new API folds the bound declaration into the registration call. `set_native_bounds` still exists for post-registration adjustment. |
+| External-native chunk-level WCMU integration deferred. | The verifier's `module_wcmu` API takes `native_wcmu: &[u32]` and applies the value per static call site. For external natives the sound bound is per-chunk: `max_invocations_per_iteration * per_call_wcmu` regardless of static call-site count. Implementing this correctly requires extending the verifier API with per-native classification awareness and a separate per-chunk pass over external-native references. The current handoff zeroes external natives so neither under- nor over-counting occurs through the existing path; the host accepts that external natives are outside the script's resource contract. |
+| Multiple registrations of the same name. | `register_*` methods push a new `NativeEntry`; duplicate names are not deduplicated. The dispatch `find` returns the first matching entry, so the second registration is shadowed. `set_native_bounds` updates every matching entry. Documented behaviour; consider a deduplication pass in a future API hardening. |
 
 ## Backlog summary
 
@@ -49,7 +48,7 @@ cargo fmt --all                                                                 
 | B16 | Parametric `Vm<W, A, F>` for sub-64-bit native runtimes | Resolved |
 | B17 | Embassy feature trimming | Resolved as not actionable |
 | B18 | Big-number arithmetic worked example | Resolved |
-| B20 | V0.2.0 ISA and wire format implementation | In progress (Phases 1, 2, 3, 3.5, Consolidation B, 4, 5 complete; Phases 6–8 pending) |
+| B20 | V0.2.0 ISA and wire format implementation | In progress (Phases 1, 2, 3, 3.5, Consolidation B, 4, 5 complete; Phases 6–8 pending; external-native WCMU integration is a Phase 5 follow-on) |
 
 ## Intended Next Step
 
@@ -58,6 +57,6 @@ Awaiting operator prompt. The next development action is one of:
 - B20 Phase 6: control-flow operand narrowing `u32` → `u16` with 80% soft warning.
 - B20 Phase 7: wire format with fixed-size opcode records and operand pool.
 - B20 Phase 8: documentation alignment and `BYTECODE_VERSION` reset to 1.
-- Verifier integration for the external-native invocation-count attestation.
+- External-native chunk-level WCMU integration (verifier API extension).
 - A narrow-width overflow-detection follow-up that brings `CheckedXxx` flag and high-half reporting in line with the bytecode's declared word width.
 - Operator selection of a different directive.

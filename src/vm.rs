@@ -526,6 +526,16 @@ pub struct GenericVm<
     /// data slots.
     arena: &'arena keleusma_arena::Arena,
     started: bool,
+    /// Cached load-time native classification check. Populated on
+    /// the first `call` after natives are registered (or after
+    /// `replace_module`). `None` means the check has not been run
+    /// yet; `Some(Ok(()))` means the check succeeded; the error
+    /// arm is surfaced at the call boundary the first time it is
+    /// detected and is not re-cached, so the host can recover by
+    /// re-registering natives with the correct classification.
+    /// Any `register_*` method or `replace_module` resets this
+    /// field to `None`.
+    native_classifications_verified: bool,
 }
 
 /// Compute the arena persistent-capacity needed to back a
@@ -1060,6 +1070,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
             private_slot_count: private_count,
             arena,
             started: false,
+            native_classifications_verified: false,
         })
     }
 
@@ -1219,6 +1230,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
             private_slot_count: private_count,
             arena,
             started: false,
+            native_classifications_verified: false,
         })
     }
 
@@ -1622,6 +1634,11 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         self.data = shared_init;
         self.shared_slot_count = new_shared;
         self.private_slot_count = new_private;
+        // New bytecode means the native-classification check must
+        // re-run; the previous module's chunks are gone and the
+        // new module's call sites have not yet been validated
+        // against the host's registered classifications.
+        self.native_classifications_verified = false;
         // Initialise the new private slots via `ptr::write` (no
         // drop on the destination, because we just dropped the
         // old occupants above).
@@ -1661,6 +1678,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
             &[crate::bytecode::GenericValue<W, F>],
         ) -> Result<crate::bytecode::GenericValue<W, F>, VmError>,
     ) {
+        self.native_classifications_verified = false;
         self.natives.push(NativeEntry {
             wcet: DEFAULT_NATIVE_WCET,
             wcmu_bytes: DEFAULT_NATIVE_WCMU_BYTES,
@@ -1687,6 +1705,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
             ) -> Result<crate::bytecode::GenericValue<W, F>, VmError>
             + 'static,
     {
+        self.native_classifications_verified = false;
         self.natives.push(NativeEntry {
             wcet: DEFAULT_NATIVE_WCET,
             wcmu_bytes: DEFAULT_NATIVE_WCMU_BYTES,
@@ -1719,6 +1738,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
             &[crate::bytecode::GenericValue<W, F>],
         ) -> Result<crate::bytecode::GenericValue<W, F>, VmError>,
     ) {
+        self.native_classifications_verified = false;
         self.natives.push(NativeEntry {
             wcet: DEFAULT_NATIVE_WCET,
             wcmu_bytes: DEFAULT_NATIVE_WCMU_BYTES,
@@ -1739,6 +1759,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
             ) -> Result<crate::bytecode::GenericValue<W, F>, VmError>
             + 'static,
     {
+        self.native_classifications_verified = false;
         self.natives.push(NativeEntry {
             wcet: DEFAULT_NATIVE_WCET,
             wcmu_bytes: DEFAULT_NATIVE_WCMU_BYTES,
@@ -1771,6 +1792,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         ) -> Result<crate::bytecode::GenericValue<W, F>, VmError>,
         max_invocations_per_iteration: u32,
     ) {
+        self.native_classifications_verified = false;
         self.natives.push(NativeEntry {
             wcet: DEFAULT_NATIVE_WCET,
             wcmu_bytes: DEFAULT_NATIVE_WCMU_BYTES,
@@ -1803,6 +1825,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         wcet: u32,
         wcmu_bytes: u32,
     ) {
+        self.native_classifications_verified = false;
         self.natives.push(NativeEntry {
             wcet,
             wcmu_bytes,
@@ -1839,7 +1862,25 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
     #[cfg(feature = "verify")]
     pub fn verify_resources(&self) -> Result<(), VmError> {
         let module = self.module_owned()?;
-        let native_wcmu: Vec<u32> = self.natives.iter().map(|n| n.wcmu_bytes).collect();
+        // External natives contribute zero to the per-site WCMU
+        // sum the verifier accumulates. The host-attested
+        // `max_invocations_per_iteration` bounds total external
+        // calls per iteration, which the verifier must apply per
+        // chunk (not per static call site); a per-site multiplier
+        // would either under-count (when `max_invocations` exceeds
+        // the static site count) or over-count (when it falls
+        // below). The chunk-level integration is forward-looking;
+        // until then external natives are treated as outside the
+        // script's per-iteration WCMU budget, consistent with the
+        // host's separate verification of their resource use.
+        let native_wcmu: Vec<u32> = self
+            .natives
+            .iter()
+            .map(|n| match n.classification {
+                NativeClassification::Verified => n.wcmu_bytes,
+                NativeClassification::External => 0,
+            })
+            .collect();
         verify::verify_resource_bounds_with_natives(&module, self.arena.capacity(), &native_wcmu)
             .map_err(|e| VmError::VerifyError(format!("{}: {}", e.chunk_name, e.message)))
     }
@@ -1855,8 +1896,114 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
     #[cfg(feature = "verify")]
     pub fn auto_arena_capacity(&self) -> Result<usize, VmError> {
         let module = self.module_owned()?;
-        let native_wcmu: Vec<u32> = self.natives.iter().map(|n| n.wcmu_bytes).collect();
+        // External natives contribute zero to the per-site WCMU
+        // sum the verifier accumulates. The host-attested
+        // `max_invocations_per_iteration` bounds total external
+        // calls per iteration, which the verifier must apply per
+        // chunk (not per static call site); a per-site multiplier
+        // would either under-count (when `max_invocations` exceeds
+        // the static site count) or over-count (when it falls
+        // below). The chunk-level integration is forward-looking;
+        // until then external natives are treated as outside the
+        // script's per-iteration WCMU budget, consistent with the
+        // host's separate verification of their resource use.
+        let native_wcmu: Vec<u32> = self
+            .natives
+            .iter()
+            .map(|n| match n.classification {
+                NativeClassification::Verified => n.wcmu_bytes,
+                NativeClassification::External => 0,
+            })
+            .collect();
         auto_arena_capacity_for(&module, &native_wcmu)
+    }
+
+    /// Verify that every native call site in the loaded module
+    /// matches the classification of its registered host native.
+    ///
+    /// Walks the module's chunks and inspects each
+    /// `Op::CallVerifiedNative` / `Op::CallExternalNative` site. For
+    /// each site, looks up the native's name through the module's
+    /// `native_names` table and finds the matching registered
+    /// `NativeEntry`. If the registered classification disagrees
+    /// with the opcode's classification, returns
+    /// `VmError::VerifyError` with a diagnostic naming both sides.
+    /// Native names referenced by the bytecode but not yet
+    /// registered are skipped: the dispatch path surfaces them as
+    /// `InvalidBytecode` at the first invocation, and the host may
+    /// still register the missing native after this method returns.
+    ///
+    /// The check is run lazily on the first `call` after natives
+    /// are registered. The result is cached so subsequent calls do
+    /// not repeat the walk. Any `register_*` method or
+    /// `replace_module` invalidates the cache. The host may call
+    /// this method explicitly to detect mismatches before the
+    /// first invocation; doing so eliminates the indirection
+    /// through `call` and lets the host surface the diagnostic at
+    /// a deployment-validation step rather than at use.
+    pub fn verify_native_classifications(&mut self) -> Result<(), VmError> {
+        if self.native_classifications_verified {
+            return Ok(());
+        }
+        // Snapshot the lookups so the borrow on `self.archived()`
+        // releases before we read `self.natives`. The archived
+        // chunks reference the module-owned native-name table; we
+        // only need the index and the classification per call
+        // site for the comparison.
+        let mut sites: Vec<(u16, bool)> = Vec::new();
+        {
+            let archived = self.archived();
+            for chunk in archived.chunks.iter() {
+                for op in chunk.ops.iter() {
+                    match op {
+                        crate::bytecode::ArchivedOp::CallVerifiedNative(idx, _) => {
+                            sites.push((idx.to_native(), false));
+                        }
+                        crate::bytecode::ArchivedOp::CallExternalNative(idx, _) => {
+                            sites.push((idx.to_native(), true));
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+        for (idx, expected_external) in sites {
+            let native_name = match self.native_name(idx as usize) {
+                Some(name) => name,
+                None => {
+                    return Err(VmError::InvalidBytecode(format!(
+                        "invalid native index: {}",
+                        idx
+                    )));
+                }
+            };
+            // Skip names that have no registration yet; the call-
+            // site dispatch surfaces them as `InvalidBytecode`
+            // when the bytecode reaches that site.
+            let entry = match self.natives.iter().find(|e| e.name == native_name) {
+                Some(e) => e,
+                None => continue,
+            };
+            let entry_external = entry.classification == NativeClassification::External;
+            if entry_external != expected_external {
+                return Err(VmError::VerifyError(format!(
+                    "native `{}` registered as {} but bytecode invokes it as {}",
+                    native_name,
+                    if entry_external {
+                        "external"
+                    } else {
+                        "verified"
+                    },
+                    if expected_external {
+                        "external"
+                    } else {
+                        "verified"
+                    },
+                )));
+            }
+        }
+        self.native_classifications_verified = true;
+        Ok(())
     }
 
     /// Set the worst-case execution time and memory usage attestation for
@@ -1914,6 +2061,13 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         chunk_idx: usize,
         args: &[crate::bytecode::GenericValue<W, F>],
     ) -> Result<GenericVmState<W, F>, VmError> {
+        // Native-classification check runs lazily before any
+        // execution. The first call after natives are registered
+        // (or after a hot swap) walks every native-call site and
+        // verifies the bytecode-declared classification matches
+        // the host's registered classification. Subsequent calls
+        // skip the walk because the result is cached.
+        self.verify_native_classifications()?;
         let archived = self.archived();
         let chunk = archived.chunks.get(chunk_idx).ok_or_else(|| {
             VmError::InvalidBytecode(format!("invalid chunk index: {}", chunk_idx))
@@ -3379,16 +3533,16 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                 }
                 // Verified and external native dispatch share the
                 // value-pop / arg-marshal sequence. The split
-                // opcodes carry the structural classification: the
-                // dispatch cross-checks the registered native's
-                // classification matches the opcode and rejects
-                // mismatches at the call site. The verifier
-                // observes the same classification to decide
-                // between per-call WCET/WCMU attestation
+                // opcodes carry the structural classification; the
+                // verifier observes the same classification to
+                // decide between per-call WCET/WCMU attestation
                 // (verified) and per-iteration invocation count
-                // (external).
+                // (external). The classification cross-check
+                // against the registered native runs lazily at
+                // `call_function` entry through
+                // `verify_native_classifications`; the dispatch
+                // arm here trusts the load-time check.
                 Op::CallVerifiedNative(idx, arg_count) | Op::CallExternalNative(idx, arg_count) => {
-                    let expected_external = matches!(op, Op::CallExternalNative(_, _));
                     let n = arg_count as usize;
                     if self.stack.len() < n {
                         return Err(VmError::StackUnderflow);
@@ -3408,23 +3562,6 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                                 native_name
                             ))
                         })?;
-                    let entry_external = entry.classification == NativeClassification::External;
-                    if entry_external != expected_external {
-                        return Err(VmError::VerifyError(format!(
-                            "native `{}` registered as {} but bytecode invokes it as {}",
-                            native_name,
-                            if entry_external {
-                                "external"
-                            } else {
-                                "verified"
-                            },
-                            if expected_external {
-                                "external"
-                            } else {
-                                "verified"
-                            },
-                        )));
-                    }
                     let ctx = NativeCtx { arena: self.arena };
                     let result = (entry.func)(&ctx, &args)?;
                     sp!(self, result);
@@ -3566,6 +3703,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
     where
         Func: crate::marshall::IntoNativeFn<W, F, Args, R>,
     {
+        self.native_classifications_verified = false;
         self.natives.push(NativeEntry {
             wcet: DEFAULT_NATIVE_WCET,
             wcmu_bytes: DEFAULT_NATIVE_WCMU_BYTES,
@@ -3582,6 +3720,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
     where
         Func: crate::marshall::IntoFallibleNativeFn<W, F, Args, R>,
     {
+        self.native_classifications_verified = false;
         self.natives.push(NativeEntry {
             wcet: DEFAULT_NATIVE_WCET,
             wcmu_bytes: DEFAULT_NATIVE_WCMU_BYTES,
@@ -5210,6 +5349,67 @@ mod tests {
             }
             other => panic!("expected VerifyError, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn classification_mismatch_detected_before_execution() {
+        // The load-time check fires at the entry of `call_function`
+        // before any bytecode executes. Even when the call site
+        // sits behind a branch that the test arguments would not
+        // take, the verification still reports the mismatch.
+        let src = "use host::log_event\n\
+                       fn main(x: Word) -> Word {\n\
+                           if x > 0 { x } else { host::log_event(x) }\n\
+                       }";
+        let tokens = tokenize(src).expect("lex error");
+        let program = parse(&tokens).expect("parse error");
+        let module = compile(&program).expect("compile error");
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let mut vm = Vm::new(module, &arena).unwrap();
+        vm.register_external_native("host::log_event", |args| Ok(args[0].clone()), 16);
+        // x > 0 takes the then-branch which does not reach the
+        // native; a runtime-only check would let this slip through.
+        // The load-time check catches it.
+        let err = vm.call(&[Value::Int(5)]).unwrap_err();
+        assert!(
+            matches!(&err, VmError::VerifyError(msg)
+                if msg.contains("registered as external")
+                && msg.contains("invokes it as verified")),
+            "unexpected error: {:?}",
+            err,
+        );
+    }
+
+    #[test]
+    fn verify_native_classifications_callable_before_first_call() {
+        // The host may invoke `verify_native_classifications`
+        // explicitly to surface mismatches at a deployment-
+        // validation step rather than at first call. The method
+        // returns Ok when registrations match.
+        let src = "use external host::log_event\nfn main(x: Word) -> Word { host::log_event(x) }";
+        let tokens = tokenize(src).expect("lex error");
+        let program = parse(&tokens).expect("parse error");
+        let module = compile(&program).expect("compile error");
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let mut vm = Vm::new(module, &arena).unwrap();
+        vm.register_external_native("host::log_event", |args| Ok(args[0].clone()), 16);
+        vm.verify_native_classifications().unwrap();
+    }
+
+    #[test]
+    fn verify_native_classifications_idempotent() {
+        // Calling verify_native_classifications twice in a row
+        // succeeds idempotently. The second call hits the cached-
+        // Ok path and returns without re-walking the chunks.
+        let src = "use external host::log_event\nfn main(x: Word) -> Word { host::log_event(x) }";
+        let tokens = tokenize(src).expect("lex error");
+        let program = parse(&tokens).expect("parse error");
+        let module = compile(&program).expect("compile error");
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let mut vm = Vm::new(module, &arena).unwrap();
+        vm.register_external_native("host::log_event", |args| Ok(args[0].clone()), 16);
+        vm.verify_native_classifications().unwrap();
+        vm.verify_native_classifications().unwrap();
     }
 
     #[test]
