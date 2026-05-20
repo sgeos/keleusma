@@ -347,22 +347,36 @@ All 642 lib tests pass under the new shape. Workspace and doctests clean. Bare-m
 
 The companion type-system invariant tightens accordingly: every unannotated position now produces a fresh `Type::Var` through `Ctx::fresh`, and inference proceeds uniformly through unification.
 
-## B16. Target-scaled `Fixed` defaults for sub-64-bit native runtimes
+## B16. Parametric `Vm<W, A, F>` for sub-64-bit native runtimes
 
-The V0.2 deferred-items pass added target-scaled `Fixed` defaults that thread the target descriptor's `fixed_default_frac_bits()` through the type checker and compiler. Bare `Fixed` resolves to Q31.32 on 64-bit hosts, Q15.16 on 32-bit, Q7.8 on 16-bit, and Q3.4 on 8-bit. The infrastructure handles cross-compilation cleanly when the runtime stays 64-bit, but a true 8-bit native runtime (`Value` represented in 8 bits, execution loop variant, target-defined primitive types `byte`, `bit`, `word`, `address`) is not implemented.
+The chosen design: parameterize `Vm` over three traits — `Word`, `Address`, and `Float` — corresponding to the wire-format header's `word_bits_log2`, `addr_bits_log2`, and `float_bits_log2` declared widths. The bundled runtime defaults to `Vm<i64, u64, f64>`. Sub-64-bit hosts instantiate `Vm<i16, u16, f32>`, `Vm<i8, u8, f32>`, etc. The bytecode-level `Target` descriptor and the existing `truncate_int` machinery handle cross-compilation; this entry covers the *runtime* parameterization so the `Value` memory footprint and arithmetic semantics actually shrink on narrow targets.
 
-### Scope
+### Steps (multi-pass)
 
-- Conditional `Value` layout per target. The current `Value` enum carries i64 / f64 / pointers; an 8-bit variant would carry u8 / fixed-point / arena handles.
-- Per-target execution loop. The current loop assumes 64-bit arithmetic on `Op::Add` and friends; an 8-bit loop would mask all operations to 8 bits and reject ops that don't fit (most floats).
-- Target-defined primitive types in the surface syntax. `byte`, `bit`, `word`, `address` would each map to a concrete width per target.
-- Cross-target codegen. Emitting native 6502 or ARM Thumb assembly from Keleusma source is the long-tail item that interacts with this.
+1. **Word trait foundation.** `src/word.rs`. Signed-integer abstraction with `wrapping_add`/`sub`/`mul`/`div`/`rem`/`neg`, an associated `Wide` type for the i128-style multiplication intermediate, and `BITS_LOG2` matching the bytecode header. Impls for `i8`, `i16`, `i32`, `i64`. *Resolved in commit `a820607`.*
 
-### Out of scope
+2. **Address trait.** `src/address.rs`. Unsigned-address abstraction with `BITS_LOG2` matching the wire-format `addr_bits_log2`. Impls for `u8`, `u16`, `u32`, `u64`. *Resolved in commit `af6a307`.*
 
-- The 32-bit and 16-bit cases are already handled by the existing infrastructure when the runtime stays 64-bit; the bytecode is portable. This entry concerns true sub-64-bit native runtimes.
+3. **Float trait.** `src/float.rs`. Floating-point abstraction with `add`/`sub`/`mul`/`div`/`neg` and `BITS_LOG2` matching `float_bits_log2`. Impls for `f32` and `f64`. The trait module is ungated so the parametric `Vm<W, A, F>` shape carries an `F` parameter regardless of the `floats` cargo feature. *Resolved in commits `af6a307`, `25e4a39`.*
 
-Deferred until a host with sub-64-bit hardware constraints demonstrates the need.
+4. **`GenericValue<W, F>` parametric runtime value.** `src/bytecode.rs`. Renames the `Value` enum to `GenericValue<W: Word, F: Float>` and adds `pub type Value = GenericValue<i64, f64>` so every existing call site compiles unchanged. Recursive variants (`Tuple`, `Array`, `Struct`, `Enum`, `Func`) carry `Vec<GenericValue<W, F>>`. The `Float(F)` variant remains gated by the `floats` feature; when off, a hidden `_PhantomFloat(PhantomData<F>)` variant satisfies Rust's "type parameters must be used non-recursively" rule. *Resolved in commit `dbd9594`.*
+
+5. **Parameterize `Vm<'a, 'arena, W, A, F>`.** Add the three type parameters with `i64`/`u64`/`f64` defaults. The operand stack becomes `StackVec<'arena, GenericValue<W, F>>`. The data segment becomes `Vec<GenericValue<W, F>>`. The Drop impl, every `impl<'a, 'arena>` block, and every method signature gain the type parameters. Each arithmetic site in the dispatch loop switches from concrete `i64::wrapping_add` etc. to `W::wrapping_add`. The checked-arithmetic opcodes (`CheckedAdd`/`Sub`/`Mul`/`Neg`/`Div`/`Mod`) switch from concrete `i128` to `W::Wide` via `W::widen` and `W::Wide::wide_mul`/`wide_add`. The phantom `_phantom_a: PhantomData<A>` field carries the unused `A` parameter (no Value variant carries an address payload; the parameter is consumed by future opcode evolution and host-side `A::MAX` bound checks). *Pending. Estimated 1500-3000 line diff across `src/vm.rs`.*
+
+6. **Parameterize the marshall layer and `KeleusmaType`.** The native ABI (`NativeCtx`, `IntoNativeFn`, `register_fn`, `KeleusmaType`) becomes generic over `(W, A, F)`. Existing impls (`KeleusmaType for i64`, etc.) become `KeleusmaType<i64, u64, f64> for i64`. Hosts that ship narrow runtimes introduce local type aliases for the ergonomic call sites (see the Cookbook recipe in step 7). *Pending. Estimated 400-700 line diff.*
+
+7. **Demonstrator `Vm<i16, u16, f32>` plus cookbook recipe.** Add a worked example exercising a narrow VM on small-Word arithmetic. Cookbook recipe documents the `pub type NarrowVm<'a, 'arena> = Vm<'a, 'arena, i16, u16, f32>` pattern hosts use to recover the ergonomic surface. *Pending.*
+
+### Status snapshot
+
+Steps 1-4 landed in commits `a820607`, `af6a307`, `25e4a39`, `dbd9594`. The trait foundations and parametric `GenericValue` exist; pattern matching and construction at all pre-existing call sites continue to work through the type-alias `Value = GenericValue<i64, f64>`.
+
+Step 5 is the load-bearing remaining piece. The Vm struct definition can be parameterized in a few lines; the cascade through `vm.rs`'s 6700-line dispatch loop and method signatures is what makes the step large. A dedicated focused session can complete the cascade if the work is sequenced as: (a) struct + Drop impl; (b) operand-stack and data-field types; (c) impl-block headers and method signatures; (d) arithmetic-site retargeting from concrete `i64` to `W` / `W::Wide`; (e) call-site validation across the marshall layer and tests.
+
+Out of scope (recorded for completeness):
+
+- Target-defined primitive surface syntax (`byte`, `bit`, `word`, `address` as user-facing types beyond the existing `Byte`, `Word`, `Fixed<N>`).
+- Cross-target native codegen (emitting 6502 or ARM Thumb assembly from Keleusma source).
 
 ## ~~B17. Embassy feature trimming~~ (Resolved as not actionable)
 
