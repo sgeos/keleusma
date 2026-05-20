@@ -448,20 +448,28 @@ pub enum Op {
 
     // -- Block-structured control flow --
     /// Pop bool; if false, skip to target (matching Else or EndIf).
-    If(u32),
-    /// Skip to target (matching EndIf). Reached when then-block falls through.
-    Else(u32),
+    /// Target is an op index within the current chunk; chunks are
+    /// capped at `u16::MAX` ops by the compiler.
+    If(u16),
+    /// Skip to target (matching EndIf). Reached when then-block
+    /// falls through. Target is an op index within the current
+    /// chunk.
+    Else(u16),
     /// Block delimiter for If/Else. No-op at runtime.
     EndIf,
 
-    /// Begin loop block. Target is past EndLoop (used by Break/BreakIf).
-    Loop(u32),
-    /// Back-edge to instruction after matching Loop.
-    EndLoop(u32),
-    /// Unconditional forward jump past enclosing EndLoop.
-    Break(u32),
+    /// Begin loop block. Target is past EndLoop (used by Break and
+    /// BreakIf). Target is an op index within the current chunk.
+    Loop(u16),
+    /// Back-edge to instruction after matching Loop. Target is an
+    /// op index within the current chunk.
+    EndLoop(u16),
+    /// Unconditional forward jump past enclosing EndLoop. Target is
+    /// an op index within the current chunk.
+    Break(u16),
     /// Pop bool; if true, forward jump past enclosing EndLoop.
-    BreakIf(u32),
+    /// Target is an op index within the current chunk.
+    BreakIf(u16),
 
     // -- Streaming --
     /// Stream block entry marker. No-op at runtime.

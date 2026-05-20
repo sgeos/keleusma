@@ -1679,6 +1679,12 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         ) -> Result<crate::bytecode::GenericValue<W, F>, VmError>,
     ) {
         self.native_classifications_verified = false;
+        // Deduplicate: a re-registration of the same name replaces
+        // the prior entry rather than shadowing it. Without this
+        // the dispatch `find` would return the first match
+        // regardless of subsequent registrations, making the
+        // re-registration silently no-op.
+        self.natives.retain(|e| e.name != name);
         self.natives.push(NativeEntry {
             wcet: DEFAULT_NATIVE_WCET,
             wcmu_bytes: DEFAULT_NATIVE_WCMU_BYTES,
@@ -1706,6 +1712,12 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
             + 'static,
     {
         self.native_classifications_verified = false;
+        // Deduplicate: a re-registration of the same name replaces
+        // the prior entry rather than shadowing it. Without this
+        // the dispatch `find` would return the first match
+        // regardless of subsequent registrations, making the
+        // re-registration silently no-op.
+        self.natives.retain(|e| e.name != name);
         self.natives.push(NativeEntry {
             wcet: DEFAULT_NATIVE_WCET,
             wcmu_bytes: DEFAULT_NATIVE_WCMU_BYTES,
@@ -1739,6 +1751,12 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         ) -> Result<crate::bytecode::GenericValue<W, F>, VmError>,
     ) {
         self.native_classifications_verified = false;
+        // Deduplicate: a re-registration of the same name replaces
+        // the prior entry rather than shadowing it. Without this
+        // the dispatch `find` would return the first match
+        // regardless of subsequent registrations, making the
+        // re-registration silently no-op.
+        self.natives.retain(|e| e.name != name);
         self.natives.push(NativeEntry {
             wcet: DEFAULT_NATIVE_WCET,
             wcmu_bytes: DEFAULT_NATIVE_WCMU_BYTES,
@@ -1760,6 +1778,12 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
             + 'static,
     {
         self.native_classifications_verified = false;
+        // Deduplicate: a re-registration of the same name replaces
+        // the prior entry rather than shadowing it. Without this
+        // the dispatch `find` would return the first match
+        // regardless of subsequent registrations, making the
+        // re-registration silently no-op.
+        self.natives.retain(|e| e.name != name);
         self.natives.push(NativeEntry {
             wcet: DEFAULT_NATIVE_WCET,
             wcmu_bytes: DEFAULT_NATIVE_WCMU_BYTES,
@@ -1793,6 +1817,12 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         max_invocations_per_iteration: u32,
     ) {
         self.native_classifications_verified = false;
+        // Deduplicate: a re-registration of the same name replaces
+        // the prior entry rather than shadowing it. Without this
+        // the dispatch `find` would return the first match
+        // regardless of subsequent registrations, making the
+        // re-registration silently no-op.
+        self.natives.retain(|e| e.name != name);
         self.natives.push(NativeEntry {
             wcet: DEFAULT_NATIVE_WCET,
             wcmu_bytes: DEFAULT_NATIVE_WCMU_BYTES,
@@ -1826,6 +1856,12 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         wcmu_bytes: u32,
     ) {
         self.native_classifications_verified = false;
+        // Deduplicate: a re-registration of the same name replaces
+        // the prior entry rather than shadowing it. Without this
+        // the dispatch `find` would return the first match
+        // regardless of subsequent registrations, making the
+        // re-registration silently no-op.
+        self.natives.retain(|e| e.name != name);
         self.natives.push(NativeEntry {
             wcet,
             wcmu_bytes,
@@ -3704,6 +3740,12 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         Func: crate::marshall::IntoNativeFn<W, F, Args, R>,
     {
         self.native_classifications_verified = false;
+        // Deduplicate: a re-registration of the same name replaces
+        // the prior entry rather than shadowing it. Without this
+        // the dispatch `find` would return the first match
+        // regardless of subsequent registrations, making the
+        // re-registration silently no-op.
+        self.natives.retain(|e| e.name != name);
         self.natives.push(NativeEntry {
             wcet: DEFAULT_NATIVE_WCET,
             wcmu_bytes: DEFAULT_NATIVE_WCMU_BYTES,
@@ -3721,6 +3763,12 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         Func: crate::marshall::IntoFallibleNativeFn<W, F, Args, R>,
     {
         self.native_classifications_verified = false;
+        // Deduplicate: a re-registration of the same name replaces
+        // the prior entry rather than shadowing it. Without this
+        // the dispatch `find` would return the first match
+        // regardless of subsequent registrations, making the
+        // re-registration silently no-op.
+        self.natives.retain(|e| e.name != name);
         self.natives.push(NativeEntry {
             wcet: DEFAULT_NATIVE_WCET,
             wcmu_bytes: DEFAULT_NATIVE_WCMU_BYTES,
@@ -5410,6 +5458,52 @@ mod tests {
         vm.register_external_native("host::log_event", |args| Ok(args[0].clone()), 16);
         vm.verify_native_classifications().unwrap();
         vm.verify_native_classifications().unwrap();
+    }
+
+    #[test]
+    fn duplicate_native_registration_replaces_prior_entry() {
+        // V0.2.0 Phase 6 follow-on (concern #2): re-registering a
+        // native with the same name replaces the prior entry
+        // rather than appending. The script reads the latest
+        // registration's behaviour, not the first.
+        let src = "use host::compute\nfn main(x: Word) -> Word { host::compute(x) }";
+        let tokens = tokenize(src).expect("lex error");
+        let program = parse(&tokens).expect("parse error");
+        let module = compile(&program).expect("compile error");
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let mut vm = Vm::new(module, &arena).unwrap();
+        vm.register_native("host::compute", |_args| Ok(Value::Int(1)));
+        vm.register_native("host::compute", |_args| Ok(Value::Int(2)));
+        match vm.call(&[Value::Int(99)]).unwrap() {
+            VmState::Finished(v) => assert_eq!(v, Value::Int(2)),
+            other => panic!("expected Int(2), got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn duplicate_native_registration_swaps_classification() {
+        // Re-registering with a different classification replaces
+        // both the function and the classification. A prior
+        // verified registration is removed when an external
+        // re-registration replaces it; the cache invalidation
+        // then forces a fresh load-time check that sees only the
+        // external entry.
+        let src = "use external host::compute\nfn main(x: Word) -> Word { host::compute(x) }";
+        let tokens = tokenize(src).expect("lex error");
+        let program = parse(&tokens).expect("parse error");
+        let module = compile(&program).expect("compile error");
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let mut vm = Vm::new(module, &arena).unwrap();
+        // Initial registration as verified: would mismatch the
+        // `use external` import. The dedup behaviour means the
+        // verified entry is wiped out by the external re-
+        // registration that follows.
+        vm.register_native("host::compute", |_args| Ok(Value::Int(1)));
+        vm.register_external_native("host::compute", |_args| Ok(Value::Int(2)), 16);
+        match vm.call(&[Value::Int(99)]).unwrap() {
+            VmState::Finished(v) => assert_eq!(v, Value::Int(2)),
+            other => panic!("expected Int(2), got {:?}", other),
+        }
     }
 
     #[test]

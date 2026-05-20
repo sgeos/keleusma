@@ -104,7 +104,7 @@ Short-circuit AND and OR are encoded as `If`-branching at the bytecode level; th
 
 ## Control Flow
 
-Block-structured control flow opcodes carry `u16` jump targets. A chunk's opcode count is therefore bounded at 65,535. The compiler emits a soft warning when a single chunk crosses 80% of the limit, prompting decomposition into helper functions; the bytecode at the limit remains valid.
+Block-structured control flow opcodes carry `u16` jump targets. A chunk's opcode count is therefore bounded at 65,535 (`CHUNK_SIZE_HARD_LIMIT`). The compiler emits a [`CompileWarning`](../../src/compiler.rs) when a single chunk crosses 80% of the limit (52,428 ops, `CHUNK_SIZE_SOFT_WARN_THRESHOLD`), prompting decomposition into helper functions; the bytecode at the limit remains valid. Chunks exceeding `CHUNK_SIZE_HARD_LIMIT` are rejected at compile time as a `CompileError`. The host invokes `keleusma::compiler::compile_with_warnings(program, target)` to receive the warning vector alongside the module; `compile_with_target` and `compile` discard the warnings for callers that do not need them.
 
 | Instruction | Operands | Cost | Description |
 |-------------|----------|------|-------------|

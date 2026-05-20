@@ -265,7 +265,13 @@ impl FuncCompiler {
     }
 
     fn patch_jump(&mut self, addr: usize) {
-        let target = self.chunk.ops.len() as u32;
+        // Cast to `u16` is safe under the post-chunk
+        // `enforce_chunk_size_limit` check, which rejects chunks
+        // whose op count exceeds `u16::MAX`. Targets within an
+        // admissible chunk always fit in `u16`; a truncation here
+        // would only fire on a chunk that the post-check
+        // immediately rejects.
+        let target = self.chunk.ops.len() as u16;
         match &mut self.chunk.ops[addr] {
             Op::If(a)
             | Op::Else(a)
@@ -488,6 +494,36 @@ fn type_tag_for_param(param: &Param) -> crate::bytecode::TypeTag {
     }
 }
 
+/// Non-fatal finding produced by [`compile_with_warnings`] that
+/// admits the module but signals a potential issue worth surfacing
+/// to the operator.
+///
+/// V0.2.0 Phase 6 narrowed the control-flow operand width from
+/// `u32` to `u16`. Chunks are now capped at `CHUNK_SIZE_HARD_LIMIT`
+/// ops; chunks crossing `CHUNK_SIZE_SOFT_WARN_THRESHOLD` produce
+/// one warning each prompting decomposition into helper functions.
+/// The hard limit is a [`CompileError`]; the soft threshold is a
+/// `CompileWarning`.
+#[derive(Debug, Clone)]
+pub struct CompileWarning {
+    /// Human-readable description of the warning.
+    pub message: String,
+    /// Name of the chunk that triggered the warning.
+    pub chunk_name: String,
+}
+
+/// Maximum number of operations in a single chunk. V0.2.0 Phase 6
+/// narrowed the control-flow operand width from `u32` to `u16`;
+/// chunks cannot exceed `u16::MAX` ops because the jump targets
+/// would not fit.
+pub const CHUNK_SIZE_HARD_LIMIT: usize = u16::MAX as usize;
+
+/// Soft warning threshold for a chunk's op count. Chunks crossing
+/// this threshold are admissible but the compiler emits a
+/// [`CompileWarning`] prompting decomposition. Set to 80% of
+/// [`CHUNK_SIZE_HARD_LIMIT`].
+pub const CHUNK_SIZE_SOFT_WARN_THRESHOLD: usize = (CHUNK_SIZE_HARD_LIMIT * 80) / 100;
+
 /// Compile a program against an explicit target descriptor.
 ///
 /// The target's word/address/float widths are baked into the
@@ -497,8 +533,11 @@ fn type_tag_for_param(param: &Param) -> crate::bytecode::TypeTag {
 /// rejects offending programs at compile time. The current 64-bit
 /// runtime accepts bytecode with widths at most its own; emitting
 /// for a narrower target produces bytecode the runtime can still
-/// load, with integer arithmetic masked to the declared width via
-/// `truncate_int`.
+/// load.
+///
+/// Soft warnings produced during compilation are discarded by this
+/// entry point; hosts that wish to surface them call
+/// [`compile_with_warnings`] instead.
 ///
 /// See `crate::target::Target` for available presets and the
 /// portability story.
@@ -506,6 +545,23 @@ pub fn compile_with_target(
     program: &Program,
     target: &crate::target::Target,
 ) -> Result<Module, CompileError> {
+    compile_with_warnings(program, target).map(|(module, _warnings)| module)
+}
+
+/// Compile a program with both the resulting module and any
+/// soft warnings produced during emission.
+///
+/// Same admissibility checks and return shape as
+/// [`compile_with_target`] for the module. Additionally returns a
+/// vector of [`CompileWarning`]s, one per chunk that crossed
+/// [`CHUNK_SIZE_SOFT_WARN_THRESHOLD`]. The vector is empty in the
+/// typical case; hosts can route the entries to deployment-time
+/// telemetry or surface them to the operator at the build step.
+pub fn compile_with_warnings(
+    program: &Program,
+    target: &crate::target::Target,
+) -> Result<(Module, Vec<CompileWarning>), CompileError> {
+    let mut warnings: Vec<CompileWarning> = Vec::new();
     target.validate_against_runtime()?;
     crate::target::validate_program_for_target(program, target)?;
     let mut owned = program.clone();
@@ -877,7 +933,13 @@ pub fn compile_with_target(
     let function_summaries = compute_function_return_ranges(program, &type_info);
     type_info.function_return_ranges = function_summaries;
 
-    // Compile each function group.
+    // Compile each function group. After emission, enforce the
+    // V0.2.0 Phase 6 chunk-size limit: any chunk whose op count
+    // exceeds `CHUNK_SIZE_HARD_LIMIT` is rejected as a
+    // `CompileError` because the control-flow opcodes carry `u16`
+    // jump targets that would not fit. Chunks that cross
+    // `CHUNK_SIZE_SOFT_WARN_THRESHOLD` are admissible but produce
+    // a `CompileWarning` prompting decomposition into helpers.
     let mut chunks: Vec<Chunk> = Vec::new();
     for (name, defs) in &groups {
         let chunk = compile_function_group(
@@ -890,6 +952,30 @@ pub fn compile_with_target(
             &const_fields,
             &type_info,
         )?;
+        let op_count = chunk.ops.len();
+        if op_count > CHUNK_SIZE_HARD_LIMIT {
+            return Err(CompileError {
+                message: format!(
+                    "chunk `{}` emitted {} ops, exceeding the V0.2.0 limit of {} \
+                     (u16 control-flow target width); decompose the function into helpers",
+                    chunk.name, op_count, CHUNK_SIZE_HARD_LIMIT,
+                ),
+                span: defs
+                    .first()
+                    .map(|d| d.span)
+                    .unwrap_or_else(crate::token::Span::default),
+            });
+        }
+        if op_count > CHUNK_SIZE_SOFT_WARN_THRESHOLD {
+            warnings.push(CompileWarning {
+                message: format!(
+                    "chunk `{}` has {} ops, crossing the 80% soft-warning threshold of \
+                     {} against the {} cap; consider decomposing the function into helpers",
+                    chunk.name, op_count, CHUNK_SIZE_SOFT_WARN_THRESHOLD, CHUNK_SIZE_HARD_LIMIT,
+                ),
+                chunk_name: chunk.name.clone(),
+            });
+        }
         chunks.push(chunk);
     }
 
@@ -1219,7 +1305,7 @@ pub fn compile_with_target(
         }
     }
 
-    Ok(module)
+    Ok((module, warnings))
 }
 
 /// True when the type expression contains `Text` anywhere within
@@ -2196,7 +2282,7 @@ fn compile_function_group(
             // patched to the position after EndLoop, which is where
             // the Op::Reset epilogue lives.
             let loop_ip = loop_marker.expect("Stream dispatch sets loop_marker");
-            fc.emit(Op::EndLoop((loop_ip + 1) as u32));
+            fc.emit(Op::EndLoop((loop_ip + 1) as u16));
             fc.patch_jump(loop_ip);
             for addr in &stream_break_addrs {
                 fc.patch_jump(*addr);
@@ -2629,14 +2715,14 @@ fn compile_for_in_data_array(
     fc.emit(Op::SetLocal(idx_slot));
 
     let endloop_addr = fc.emit(Op::EndLoop(0));
-    let after_endloop = fc.chunk.ops.len() as u32;
+    let after_endloop = fc.chunk.ops.len() as u16;
     if let Op::Loop(a) = &mut fc.chunk.ops[loop_addr] {
         *a = after_endloop;
     }
     if let Op::BreakIf(a) = &mut fc.chunk.ops[break_addr] {
         *a = after_endloop;
     }
-    let after_loop = (loop_addr + 1) as u32;
+    let after_loop = (loop_addr + 1) as u16;
     if let Op::EndLoop(a) = &mut fc.chunk.ops[endloop_addr] {
         *a = after_loop;
     }
@@ -2684,7 +2770,7 @@ fn compile_for(fc: &mut FuncCompiler, for_stmt: &ForStmt) -> Result<(), CompileE
             let endloop_addr = fc.emit(Op::EndLoop(0)); // Placeholder, patched to after Loop.
 
             // Patch Loop and BreakIf to point past EndLoop.
-            let after_endloop = fc.chunk.ops.len() as u32;
+            let after_endloop = fc.chunk.ops.len() as u16;
             if let Op::Loop(a) = &mut fc.chunk.ops[loop_addr] {
                 *a = after_endloop;
             }
@@ -2692,7 +2778,7 @@ fn compile_for(fc: &mut FuncCompiler, for_stmt: &ForStmt) -> Result<(), CompileE
                 *a = after_endloop;
             }
             // Patch EndLoop back-edge to instruction after Loop.
-            let after_loop = (loop_addr + 1) as u32;
+            let after_loop = (loop_addr + 1) as u16;
             if let Op::EndLoop(a) = &mut fc.chunk.ops[endloop_addr] {
                 *a = after_loop;
             }
@@ -2792,14 +2878,14 @@ fn compile_for(fc: &mut FuncCompiler, for_stmt: &ForStmt) -> Result<(), CompileE
             let endloop_addr = fc.emit(Op::EndLoop(0));
 
             // Patch jumps.
-            let after_endloop = fc.chunk.ops.len() as u32;
+            let after_endloop = fc.chunk.ops.len() as u16;
             if let Op::Loop(a) = &mut fc.chunk.ops[loop_addr] {
                 *a = after_endloop;
             }
             if let Op::BreakIf(a) = &mut fc.chunk.ops[break_addr] {
                 *a = after_endloop;
             }
-            let after_loop = (loop_addr + 1) as u32;
+            let after_loop = (loop_addr + 1) as u16;
             if let Op::EndLoop(a) = &mut fc.chunk.ops[endloop_addr] {
                 *a = after_loop;
             }
@@ -3117,11 +3203,11 @@ fn compile_enum_to_word(
     // Close the virtual loop. Pattern copied from
     // `compile_expr`'s `Match` arm.
     let endloop_addr = fc.emit(Op::EndLoop(0));
-    let after_loop = (loop_addr + 1) as u32;
+    let after_loop = (loop_addr + 1) as u16;
     if let Op::EndLoop(a) = &mut fc.chunk.ops[endloop_addr] {
         *a = after_loop;
     }
-    let after_endloop = fc.chunk.ops.len() as u32;
+    let after_endloop = fc.chunk.ops.len() as u16;
     if let Op::Loop(a) = &mut fc.chunk.ops[loop_addr] {
         *a = after_endloop;
     }
@@ -4161,13 +4247,13 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
             let endloop_addr = fc.emit(Op::EndLoop(0));
 
             // Patch EndLoop back-edge to instruction after Loop.
-            let after_loop = (loop_addr + 1) as u32;
+            let after_loop = (loop_addr + 1) as u16;
             if let Op::EndLoop(a) = &mut fc.chunk.ops[endloop_addr] {
                 *a = after_loop;
             }
 
             // Patch Loop to past EndLoop, and patch all Break addresses.
-            let after_endloop = fc.chunk.ops.len() as u32;
+            let after_endloop = fc.chunk.ops.len() as u16;
             if let Op::Loop(a) = &mut fc.chunk.ops[loop_addr] {
                 *a = after_endloop;
             }
@@ -4184,13 +4270,13 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
             let endloop_addr = fc.emit(Op::EndLoop(0));
 
             // Patch EndLoop back-edge to instruction after Loop.
-            let after_loop = (loop_addr + 1) as u32;
+            let after_loop = (loop_addr + 1) as u16;
             if let Op::EndLoop(a) = &mut fc.chunk.ops[endloop_addr] {
                 *a = after_loop;
             }
 
             // Patch Loop to past EndLoop, and patch all Break addresses.
-            let after_endloop = fc.chunk.ops.len() as u32;
+            let after_endloop = fc.chunk.ops.len() as u16;
             if let Op::Loop(a) = &mut fc.chunk.ops[loop_addr] {
                 *a = after_endloop;
             }
@@ -4674,11 +4760,11 @@ fn compile_checked(
     fc.emit(Op::Trap(msg));
 
     let endloop_addr = fc.emit(Op::EndLoop(0));
-    let after_loop = (loop_addr + 1) as u32;
+    let after_loop = (loop_addr + 1) as u16;
     if let Op::EndLoop(a) = &mut fc.chunk.ops[endloop_addr] {
         *a = after_loop;
     }
-    let after_endloop = fc.chunk.ops.len() as u32;
+    let after_endloop = fc.chunk.ops.len() as u16;
     if let Op::Loop(a) = &mut fc.chunk.ops[loop_addr] {
         *a = after_endloop;
     }
@@ -5723,5 +5809,34 @@ mod tests {
             crate::token::Span::default(),
             "expected source span on closure rejection",
         );
+    }
+
+    #[test]
+    fn chunk_size_thresholds_are_consistent() {
+        // The soft threshold sits at 80% of the hard limit, and
+        // the hard limit matches the u16 control-flow operand
+        // width.
+        assert_eq!(CHUNK_SIZE_HARD_LIMIT, u16::MAX as usize);
+        assert_eq!(
+            CHUNK_SIZE_SOFT_WARN_THRESHOLD,
+            (CHUNK_SIZE_HARD_LIMIT * 80) / 100
+        );
+        // The relation is checked through equality above; the
+        // ordering of the two constants is a derived property.
+        #[allow(clippy::assertions_on_constants)]
+        {
+            assert!(CHUNK_SIZE_SOFT_WARN_THRESHOLD < CHUNK_SIZE_HARD_LIMIT);
+        }
+    }
+
+    #[test]
+    fn small_chunk_produces_no_warnings() {
+        // A minimal program is well below the soft threshold so
+        // the warnings vector is empty.
+        let tokens = tokenize("fn main() -> Word { 1 + 2 }").expect("lex");
+        let program = parse(&tokens).expect("parse");
+        let (_module, warnings) =
+            compile_with_warnings(&program, &crate::target::Target::host()).unwrap();
+        assert!(warnings.is_empty(), "unexpected warnings: {:?}", warnings);
     }
 }
