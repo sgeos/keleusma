@@ -79,6 +79,8 @@ fn render_value_to_string(arena: &Arena, val: &Value) -> String {
             }
         }
         Value::Opaque(o) => format!("<opaque {}>", o.type_name()),
+        #[cfg(not(feature = "floats"))]
+        Value::_PhantomFloat(_) => unreachable!("_PhantomFloat is never constructed"),
     }
 }
 

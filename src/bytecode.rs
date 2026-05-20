@@ -77,27 +77,55 @@ pub enum ConstValue {
 /// `ConstValue::try_from(&Value)` lower direction is intentionally
 /// absent because runtime values cannot become compile-time
 /// constants.
+/// Type alias for the default 64-bit `GenericValue` shape.
+/// Existing call sites continue to write `Value` (no angle
+/// brackets); the alias expands to `GenericValue<i64, f64>` so
+/// pattern matching, construction, and trait impls all resolve
+/// to the concrete 64-bit specialization.
+///
+/// Sub-64-bit runtimes constructed via `Vm<W, A, F>` use a
+/// different specialization (e.g. `GenericValue<i16, f32>`).
+/// Hosts that ship narrow runtimes are encouraged to introduce a
+/// local type alias for ergonomic call sites; see the
+/// "Parametric VM" recipe in the Cookbook.
+///
+/// `Address` is intentionally not a `GenericValue` parameter
+/// because no runtime-value variant carries an address payload;
+/// addresses appear as opcode immediate operands and on the
+/// `Vm` itself, not on the values flowing through the operand
+/// stack.
+pub type Value = GenericValue<i64, f64>;
+
+/// Parametric runtime-value type. The bundled `Vm` uses
+/// `GenericValue<i64, f64>` aliased as `Value`; sub-64-bit
+/// runtimes use a different specialization. The `W: Word` and
+/// `F: Float` constraints match the bytecode header's
+/// `word_bits_log2` and `float_bits_log2` declared widths.
 #[derive(Debug, Clone)]
-pub enum Value {
+pub enum GenericValue<W: crate::word::Word, F: crate::float::Float> {
     /// Unit value `()`.
     Unit,
     /// Boolean.
     Bool(bool),
-    /// 64-bit signed integer. Surface type is `Word`.
-    Int(i64),
+    /// Script-visible signed integer. Surface type is `Word`.
+    /// The bit width is determined by the `W` parameter and
+    /// matches the bytecode header's `word_bits_log2`.
+    Int(W),
     /// Eight-bit unsigned integer. Surface type is `Byte`. Arithmetic
     /// uses wrapping `u8` semantics; conversions to and from `Word`
     /// go through `Op::WordToByte` and `Op::ByteToWord`.
     Byte(u8),
-    /// Signed Q-format fixed-point. The wrapped `i64` holds the
+    /// Signed Q-format fixed-point. The wrapped `W` holds the
     /// fixed-point bits; the fraction-bit count is carried by the
-    /// opcodes that produce or consume the value. On the V0.1.x
-    /// host runtime the format is Q31.32 (32 fraction bits).
-    Fixed(i64),
-    /// 64-bit floating-point number. Gated behind the `floats`
-    /// cargo feature.
+    /// opcodes that produce or consume the value.
+    Fixed(W),
+    /// Script-visible floating-point number. The width is
+    /// determined by the `F` parameter and matches the bytecode
+    /// header's `float_bits_log2`. Gated behind the `floats`
+    /// cargo feature alongside the rest of the floating-point
+    /// runtime surface.
     #[cfg(feature = "floats")]
-    Float(f64),
+    Float(F),
     /// Immutable static string referenced from the rodata region. Source-level
     /// string literals compile to this variant. Permitted to flow through the
     /// dialogue type B and across hot updates subject to the host attestation
@@ -112,19 +140,19 @@ pub enum Value {
     /// want bounded-memory accounting and stale-pointer detection.
     KStr(KString),
     /// Tuple of values.
-    Tuple(Vec<Value>),
+    Tuple(Vec<GenericValue<W, F>>),
     /// Fixed-size array of values.
-    Array(Vec<Value>),
+    Array(Vec<GenericValue<W, F>>),
     /// Named struct with ordered fields.
     Struct {
         type_name: String,
-        fields: Vec<(String, Value)>,
+        fields: Vec<(String, GenericValue<W, F>)>,
     },
     /// Enum variant with optional payload.
     Enum {
         type_name: String,
         variant: String,
-        fields: Vec<Value>,
+        fields: Vec<GenericValue<W, F>>,
     },
     /// Option::None.
     None,
@@ -140,7 +168,7 @@ pub enum Value {
     /// values produce non-empty `env` through `Op::MakeClosure`.
     Func {
         chunk_idx: u16,
-        env: Vec<Value>,
+        env: Vec<GenericValue<W, F>>,
         /// Whether the function is a recursive closure produced by
         /// [`Op::MakeRecursiveClosure`]. At each invocation through
         /// [`Op::CallIndirect`], a recursive `Func` is pushed onto
@@ -170,20 +198,29 @@ pub enum Value {
     /// own opaque heap supply a per-native attestation through
     /// [`crate::vm::Vm::set_native_bounds`].
     Opaque(alloc::sync::Arc<dyn crate::opaque::HostOpaque>),
+
+    /// Phantom variant kept only when the `floats` feature is
+    /// disabled, so the `F` type parameter is referenced non-
+    /// recursively. Never constructed at runtime; pattern
+    /// matches over `GenericValue` use a wildcard arm to absorb
+    /// this case under either feature combination.
+    #[cfg(not(feature = "floats"))]
+    #[doc(hidden)]
+    _PhantomFloat(core::marker::PhantomData<F>),
 }
 
-impl PartialEq for Value {
+impl<W: crate::word::Word, F: crate::float::Float> PartialEq for GenericValue<W, F> {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
-            (Value::Unit, Value::Unit) | (Value::None, Value::None) => true,
-            (Value::Bool(a), Value::Bool(b)) => a == b,
-            (Value::Int(a), Value::Int(b)) => a == b,
-            (Value::Byte(a), Value::Byte(b)) => a == b,
-            (Value::Fixed(a), Value::Fixed(b)) => a == b,
+            (Self::Unit, Self::Unit) | (Self::None, Self::None) => true,
+            (Self::Bool(a), Self::Bool(b)) => a == b,
+            (Self::Int(a), Self::Int(b)) => a == b,
+            (Self::Byte(a), Self::Byte(b)) => a == b,
+            (Self::Fixed(a), Self::Fixed(b)) => a == b,
             #[cfg(feature = "floats")]
-            (Value::Float(a), Value::Float(b)) => a == b,
+            (Self::Float(a), Self::Float(b)) => a == b,
             // Static strings compare equal if their contents match.
-            (Value::StaticStr(a), Value::StaticStr(b)) => a == b,
+            (Self::StaticStr(a), Self::StaticStr(b)) => a == b,
             // KStr equality compares the captured handle (pointer and
             // epoch). Two KStr handles are equal only if they point to
             // the same arena allocation under the same epoch. Content
@@ -192,37 +229,37 @@ impl PartialEq for Value {
             // `PartialEq` does not provide. Hosts that want content
             // equality must compare through `as_str_with_arena` against
             // a known arena.
-            (Value::KStr(a), Value::KStr(b)) => a.epoch() == b.epoch(),
+            (Self::KStr(a), Self::KStr(b)) => a.epoch() == b.epoch(),
             (
-                Value::Func {
+                Self::Func {
                     chunk_idx: a,
                     env: ae,
                     recursive: ar,
                 },
-                Value::Func {
+                Self::Func {
                     chunk_idx: b,
                     env: be,
                     recursive: br,
                 },
             ) => a == b && ae == be && ar == br,
-            (Value::Tuple(a), Value::Tuple(b)) | (Value::Array(a), Value::Array(b)) => a == b,
+            (Self::Tuple(a), Self::Tuple(b)) | (Self::Array(a), Self::Array(b)) => a == b,
             (
-                Value::Struct {
+                Self::Struct {
                     type_name: na,
                     fields: fa,
                 },
-                Value::Struct {
+                Self::Struct {
                     type_name: nb,
                     fields: fb,
                 },
             ) => na == nb && fa == fb,
             (
-                Value::Enum {
+                Self::Enum {
                     type_name: na,
                     variant: va,
                     fields: fa,
                 },
-                Value::Enum {
+                Self::Enum {
                     type_name: nb,
                     variant: vb,
                     fields: fb,
@@ -232,129 +269,120 @@ impl PartialEq for Value {
             // equal only if they share the same allocation. This
             // matches the convention for host-managed references
             // and avoids requiring `Eq` on the host's opaque type.
-            (Value::Opaque(a), Value::Opaque(b)) => alloc::sync::Arc::ptr_eq(a, b),
+            (Self::Opaque(a), Self::Opaque(b)) => alloc::sync::Arc::ptr_eq(a, b),
             _ => false,
         }
     }
 }
 
-impl Value {
+impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
     /// Return a human-readable type name for error messages.
     pub fn type_name(&self) -> &'static str {
         match self {
-            Value::Unit => "Unit",
-            Value::Bool(_) => "Bool",
-            Value::Int(_) => "Int",
-            Value::Byte(_) => "Byte",
-            Value::Fixed(_) => "Fixed",
+            Self::Unit => "Unit",
+            Self::Bool(_) => "Bool",
+            Self::Int(_) => "Int",
+            Self::Byte(_) => "Byte",
+            Self::Fixed(_) => "Fixed",
             #[cfg(feature = "floats")]
-            Value::Float(_) => "Float",
-            Value::StaticStr(_) => "StaticStr",
-            Value::KStr(_) => "KStr",
-            Value::Func { .. } => "Func",
-            Value::Tuple(_) => "Tuple",
-            Value::Array(_) => "Array",
-            Value::Struct { .. } => "Struct",
-            Value::Enum { .. } => "Enum",
-            Value::None => "None",
+            Self::Float(_) => "Float",
+            Self::StaticStr(_) => "StaticStr",
+            Self::KStr(_) => "KStr",
+            Self::Func { .. } => "Func",
+            Self::Tuple(_) => "Tuple",
+            Self::Array(_) => "Array",
+            Self::Struct { .. } => "Struct",
+            Self::Enum { .. } => "Enum",
+            Self::None => "None",
             // Returning a `&'static str` for an opaque value would
             // require leaking the host-supplied name, so we surface
             // a generic literal here. Diagnostics that need the
             // host's specific name read it through
-            // [`Value::opaque_type_name`].
-            Value::Opaque(_) => "Opaque",
+            // [`GenericValue::opaque_type_name`].
+            Self::Opaque(_) => "Opaque",
+            #[cfg(not(feature = "floats"))]
+            Self::_PhantomFloat(_) => unreachable!("_PhantomFloat is never constructed"),
         }
     }
 
     /// Return the host-supplied script-side type name for an
-    /// opaque value, or `None` if the value is not opaque. Used by
-    /// the type checker to match runtime opaque values against
-    /// declared `Type::Opaque(name)` annotations.
+    /// opaque value, or `None` if the value is not opaque.
     pub fn opaque_type_name(&self) -> Option<&'static str> {
         match self {
-            Value::Opaque(o) => Some(o.type_name()),
+            Self::Opaque(o) => Some(o.type_name()),
             _ => None,
         }
     }
 
     /// Borrow the underlying UTF-8 contents of a static string.
-    ///
-    /// Returns `None` if the value is not a string or is a [`Value::KStr`].
-    /// Used at sites that read static-string contents without arena
-    /// context, such as type-name lookups in the constant pool. KStr
-    /// access requires arena context and goes through
-    /// [`Value::as_str_with_arena`].
     pub fn as_str(&self) -> Option<&str> {
         match self {
-            Value::StaticStr(s) => Some(s.as_str()),
+            Self::StaticStr(s) => Some(s.as_str()),
             _ => Option::None,
         }
     }
 
     /// Borrow the underlying UTF-8 contents of any string variant,
     /// resolving `KStr` through the supplied arena.
-    ///
-    /// Returns `Ok(None)` if the value is not a string. Returns
-    /// `Err(Stale)` if the value is a `KStr` whose epoch no longer
-    /// matches the arena's. Returns `Ok(Some(s))` for any string
-    /// variant whose contents are accessible.
     pub fn as_str_with_arena<'a>(
         &'a self,
         arena: &'a keleusma_arena::Arena,
     ) -> Result<Option<&'a str>, keleusma_arena::Stale> {
         match self {
-            Value::StaticStr(s) => Ok(Some(s.as_str())),
-            Value::KStr(h) => h.get(arena).map(Some),
+            Self::StaticStr(s) => Ok(Some(s.as_str())),
+            Self::KStr(h) => h.get(arena).map(Some),
             _ => Ok(Option::None),
         }
     }
 
-    /// Returns true if the value is an arena-resident dynamic string or
-    /// transitively contains one. `KStr` is the only dynamic-string
-    /// variant subject to the cross-yield prohibition (R31).
+    /// Returns true if the value is an arena-resident dynamic
+    /// string or transitively contains one.
     pub fn contains_dynstr(&self) -> bool {
         match self {
-            Value::KStr(_) => true,
-            Value::Tuple(items) | Value::Array(items) => items.iter().any(Value::contains_dynstr),
-            Value::Struct { fields, .. } => fields.iter().any(|(_, v)| v.contains_dynstr()),
-            Value::Enum { fields, .. } => fields.iter().any(Value::contains_dynstr),
+            Self::KStr(_) => true,
+            Self::Tuple(items) | Self::Array(items) => items.iter().any(Self::contains_dynstr),
+            Self::Struct { fields, .. } => fields.iter().any(|(_, v)| v.contains_dynstr()),
+            Self::Enum { fields, .. } => fields.iter().any(Self::contains_dynstr),
             _ => false,
         }
     }
 
-    /// Lift an archived constant pool entry into a runtime `Value`.
+    /// Lift an archived constant pool entry into a runtime
+    /// `GenericValue<W, F>`.
     ///
-    /// The constant pool stores [`ConstValue`] entries which the rkyv
-    /// archive serializes faithfully. At op-fetch time, the runtime
-    /// reads the archived form and lifts it through this conversion.
-    /// `KStr` is never produced by this lift because the constant pool
-    /// does not contain runtime-only variants.
-    pub fn from_const_archived(c: &ArchivedConstValue) -> Value {
+    /// The constant pool stores [`ConstValue`] entries with fixed
+    /// `i64` and `f64` payloads; this lift converts each constant
+    /// to the runtime's `W` and `F` types via `Word::from_i64_wrap`
+    /// and `Float::from_f64`. The conversion truncates / rounds
+    /// when the runtime's word or float width is narrower than
+    /// the bytecode's; programs whose constants do not fit are
+    /// rejected at load time by the bytecode-header width check.
+    pub fn from_const_archived(c: &ArchivedConstValue) -> Self {
         match c {
-            ArchivedConstValue::Unit => Value::Unit,
-            ArchivedConstValue::Bool(b) => Value::Bool(*b),
-            ArchivedConstValue::Int(i) => Value::Int(i.to_native()),
-            ArchivedConstValue::Byte(b) => Value::Byte(*b),
-            ArchivedConstValue::Fixed(i) => Value::Fixed(i.to_native()),
+            ArchivedConstValue::Unit => Self::Unit,
+            ArchivedConstValue::Bool(b) => Self::Bool(*b),
+            ArchivedConstValue::Int(i) => Self::Int(W::from_i64_wrap(i.to_native())),
+            ArchivedConstValue::Byte(b) => Self::Byte(*b),
+            ArchivedConstValue::Fixed(i) => Self::Fixed(W::from_i64_wrap(i.to_native())),
             #[cfg(feature = "floats")]
-            ArchivedConstValue::Float(f) => Value::Float(f.to_native()),
+            ArchivedConstValue::Float(f) => Self::Float(F::from_f64(f.to_native())),
             ArchivedConstValue::StaticStr(s) => {
                 use alloc::string::ToString;
-                Value::StaticStr(s.as_str().to_string())
+                Self::StaticStr(s.as_str().to_string())
             }
             ArchivedConstValue::Tuple(items) => {
-                Value::Tuple(items.iter().map(Value::from_const_archived).collect())
+                Self::Tuple(items.iter().map(Self::from_const_archived).collect())
             }
             ArchivedConstValue::Array(items) => {
-                Value::Array(items.iter().map(Value::from_const_archived).collect())
+                Self::Array(items.iter().map(Self::from_const_archived).collect())
             }
             ArchivedConstValue::Struct { type_name, fields } => {
                 use alloc::string::ToString;
-                Value::Struct {
+                Self::Struct {
                     type_name: type_name.as_str().to_string(),
                     fields: fields
                         .iter()
-                        .map(|kv| (kv.0.as_str().to_string(), Value::from_const_archived(&kv.1)))
+                        .map(|kv| (kv.0.as_str().to_string(), Self::from_const_archived(&kv.1)))
                         .collect(),
                 }
             }
@@ -364,13 +392,13 @@ impl Value {
                 fields,
             } => {
                 use alloc::string::ToString;
-                Value::Enum {
+                Self::Enum {
                     type_name: type_name.as_str().to_string(),
                     variant: variant.as_str().to_string(),
-                    fields: fields.iter().map(Value::from_const_archived).collect(),
+                    fields: fields.iter().map(Self::from_const_archived).collect(),
                 }
             }
-            ArchivedConstValue::None => Value::None,
+            ArchivedConstValue::None => Self::None,
         }
     }
 }
@@ -2132,6 +2160,8 @@ impl ConstValue {
                 })
             }
             Value::None => Ok(ConstValue::None),
+            #[cfg(not(feature = "floats"))]
+            Value::_PhantomFloat(_) => unreachable!("_PhantomFloat is never constructed"),
         }
     }
 
