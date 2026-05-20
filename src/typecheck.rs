@@ -114,6 +114,13 @@ pub enum Type {
     /// different names are not assignable to one another even when
     /// their underlying types match.
     Newtype(String, Box<Type>),
+    /// Type with information-flow labels. The wrapped type is the
+    /// underlying type; the label set is the set of user-defined
+    /// labels the value carries. Empty label set is represented by
+    /// the absence of the wrapper. Labels propagate through
+    /// arithmetic by union, and assignment requires the source's
+    /// label set to be a subset of the target's.
+    Labelled(Box<Type>, BTreeSet<String>),
     /// Opaque type referenced by name.
     Opaque(String),
     /// Type variable for Hindley-Milner inference. Allocated by the
@@ -227,6 +234,29 @@ impl Type {
                     None => Type::Opaque(name.clone()),
                 }
             }
+            TypeExpr::Labelled(inner, labels, _) => {
+                let inner_ty = Type::from_expr_with_params_and_frac(
+                    inner,
+                    defined_types,
+                    type_params,
+                    fixed_default_frac_bits,
+                );
+                let label_set: BTreeSet<String> = labels.iter().cloned().collect();
+                if label_set.is_empty() {
+                    inner_ty
+                } else {
+                    // Avoid nesting `Labelled` inside `Labelled`;
+                    // union the labels and keep the underlying.
+                    match inner_ty {
+                        Type::Labelled(inner_inner, inner_labels) => {
+                            let merged: BTreeSet<String> =
+                                inner_labels.union(&label_set).cloned().collect();
+                            Type::Labelled(inner_inner, merged)
+                        }
+                        other => Type::Labelled(Box::new(other), label_set),
+                    }
+                }
+            }
         }
     }
 
@@ -255,6 +285,15 @@ impl Type {
                 }
             }
             Type::Newtype(name, _) => name.clone(),
+            Type::Labelled(inner, labels) => {
+                let mut labels_sorted: Vec<&str> = labels.iter().map(|s| s.as_str()).collect();
+                labels_sorted.sort();
+                if labels_sorted.len() == 1 {
+                    format!("{}@{}", inner.display(), labels_sorted[0])
+                } else {
+                    format!("{}@{{{}}}", inner.display(), labels_sorted.join(", "))
+                }
+            }
             Type::Opaque(name) => name.clone(),
             Type::Var(n) => format!("?T{}", n),
             Type::Unknown => "<unknown>".to_string(),
@@ -271,6 +310,7 @@ impl Type {
             Type::Option(inner) => inner.occurs(var),
             Type::Struct(_, args) | Type::Enum(_, args) => args.iter().any(|t| t.occurs(var)),
             Type::Newtype(_, underlying) => underlying.occurs(var),
+            Type::Labelled(inner, _) => inner.occurs(var),
             _ => false,
         }
     }
@@ -294,6 +334,9 @@ impl Type {
             }
             Type::Newtype(name, underlying) => {
                 Type::Newtype(name.clone(), Box::new(underlying.apply(subst)))
+            }
+            Type::Labelled(inner, labels) => {
+                Type::Labelled(Box::new(inner.apply(subst)), labels.clone())
             }
             other => other.clone(),
         }
@@ -486,6 +529,28 @@ enum TypeKind {
 /// Type variables and unresolved `Type::Unknown` are treated as
 /// matching any implementation; the caller decides how to handle
 /// these cases.
+/// Remove the outermost `Type::Labelled` wrapper, returning the
+/// underlying type. The labels are dropped; callers that need
+/// to consult them must inspect the original type before
+/// stripping. This is the standard preparation step for code
+/// paths that dispatch on the underlying type's structure
+/// without regard to information-flow markers.
+fn strip_labels(t: Type) -> Type {
+    match t {
+        Type::Labelled(inner, _) => *inner,
+        other => other,
+    }
+}
+
+/// Return the label set carried by a type. The empty set is
+/// returned for types without a `Labelled` wrapper.
+fn labels_of(t: &Type) -> BTreeSet<String> {
+    match t {
+        Type::Labelled(_, labels) => labels.clone(),
+        _ => BTreeSet::new(),
+    }
+}
+
 fn type_head_name(t: &Type) -> Option<String> {
     use alloc::string::ToString;
     match t {
@@ -501,6 +566,7 @@ fn type_head_name(t: &Type) -> Option<String> {
         Type::Option(_) => Some("Option".to_string()),
         Type::Struct(name, _) | Type::Enum(name, _) | Type::Opaque(name) => Some(name.clone()),
         Type::Newtype(name, _) => Some(name.clone()),
+        Type::Labelled(inner, _) => type_head_name(inner),
         Type::Var(_) | Type::Unknown => None,
     }
 }
@@ -763,7 +829,25 @@ fn types_compatible(ctx: &mut Ctx, a: &Type, b: &Type) -> bool {
     if matches!(a, Type::Unknown) || matches!(b, Type::Unknown) {
         return true;
     }
-    unify(a, b, &mut ctx.subst).is_ok()
+    // Information-flow check. `a` is the source (the value being
+    // produced); `b` is the target (the slot accepting the value).
+    // The flow is admitted only when the source's label set is a
+    // subset of the target's; otherwise the source carries labels
+    // the target does not authorise, which constitutes an
+    // information disclosure that requires explicit
+    // `declassify`. Empty source labels flow into any target
+    // (classify is implicit at the target end).
+    let source_labels = labels_of(a);
+    let target_labels = labels_of(b);
+    if !source_labels.is_subset(&target_labels) {
+        return false;
+    }
+    // Unify the underlying types with labels stripped. The label
+    // check above is sufficient at this layer; unification at the
+    // underlying-type layer establishes structural compatibility.
+    let a_inner = strip_labels(a.clone());
+    let b_inner = strip_labels(b.clone());
+    unify(&a_inner, &b_inner, &mut ctx.subst).is_ok()
 }
 
 /// Top-level type check entry point.
@@ -1118,7 +1202,7 @@ fn run_check(program: &mut Program, mut ctx: Ctx) -> Result<(), TypeError> {
             .insert(trait_def.name.clone(), trait_def.methods.clone());
     }
     for impl_block in &program.impls {
-        let head = match ctx.resolve_type(&impl_block.for_type) {
+        let head = match strip_labels(ctx.resolve_type(&impl_block.for_type)) {
             Type::Byte => "Byte".to_string(),
             Type::Word => "Word".to_string(),
             Type::Fixed(n) => alloc::format!("Fixed<{}>", n),
@@ -1131,6 +1215,7 @@ fn run_check(program: &mut Program, mut ctx: Ctx) -> Result<(), TypeError> {
             Type::Option(_) => "Option".to_string(),
             Type::Struct(name, _) | Type::Enum(name, _) | Type::Opaque(name) => name,
             Type::Newtype(name, _) => name,
+            Type::Labelled(_, _) => unreachable!("strip_labels removed Labelled"),
             Type::Var(_) | Type::Unknown => continue,
         };
         ctx.impls
@@ -1301,7 +1386,7 @@ fn run_check(program: &mut Program, mut ctx: Ctx) -> Result<(), TypeError> {
     // their mangled names so the parameter and return type lookups
     // resolve through the same FnSig that was registered in pass 1d.
     for impl_block in &program.impls {
-        let head = match ctx.resolve_type(&impl_block.for_type) {
+        let head = match strip_labels(ctx.resolve_type(&impl_block.for_type)) {
             Type::Byte => "Byte".to_string(),
             Type::Word => "Word".to_string(),
             Type::Fixed(n) => alloc::format!("Fixed<{}>", n),
@@ -1314,6 +1399,7 @@ fn run_check(program: &mut Program, mut ctx: Ctx) -> Result<(), TypeError> {
             Type::Option(_) => "Option".to_string(),
             Type::Struct(name, _) | Type::Enum(name, _) | Type::Opaque(name) => name,
             Type::Newtype(name, _) => name,
+            Type::Labelled(_, _) => unreachable!("strip_labels removed Labelled"),
             Type::Var(_) | Type::Unknown => continue,
         };
         for method in &impl_block.methods {
@@ -2994,6 +3080,44 @@ fn type_of_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Type, TypeError> {
             // surrounding construct's expected type.
             Ok(Type::Word)
         }
+        Expr::Classify { value, labels, .. } => {
+            // Classify adds labels to the value's label set.
+            // The underlying type is unchanged. Always admitted;
+            // adding labels only tightens flow restrictions.
+            let value_ty = type_of_expr(ctx, value)?;
+            let (underlying, mut current_labels) = match value_ty {
+                Type::Labelled(inner, ls) => (*inner, ls),
+                other => (other, BTreeSet::new()),
+            };
+            for l in labels {
+                current_labels.insert(l.clone());
+            }
+            if current_labels.is_empty() {
+                Ok(underlying)
+            } else {
+                Ok(Type::Labelled(Box::new(underlying), current_labels))
+            }
+        }
+        Expr::Declassify { value, labels, .. } => {
+            // Declassify removes labels from the value's label
+            // set. The underlying type is unchanged. The
+            // operation is always admitted but constitutes an
+            // explicit information disclosure audit point that
+            // a future iteration may record for review.
+            let value_ty = type_of_expr(ctx, value)?;
+            let (underlying, mut current_labels) = match value_ty {
+                Type::Labelled(inner, ls) => (*inner, ls),
+                other => (other, BTreeSet::new()),
+            };
+            for l in labels {
+                current_labels.remove(l);
+            }
+            if current_labels.is_empty() {
+                Ok(underlying)
+            } else {
+                Ok(Type::Labelled(Box::new(underlying), current_labels))
+            }
+        }
     }
 }
 
@@ -3172,6 +3296,75 @@ mod tests {
              fn main() -> LocalMs { LocalMs(7 + 35) }",
         )
         .expect("newtype-wrapping program should compile");
+    }
+
+    #[test]
+    fn qif_open_flows_into_labeled() {
+        // A value with no labels flows into a slot expecting
+        // labels because the empty label set is a subset of any
+        // label set (classify is implicit at the target).
+        check_src("fn main() -> Word@Secret { 42 }").expect("Word flows into Word@Secret silently");
+    }
+
+    #[test]
+    fn qif_labeled_to_open_requires_declassify() {
+        // A labeled value cannot flow into an unlabeled slot.
+        let err = check_src(
+            "fn produce() -> Word@Secret { 42 }\n\
+             fn main() -> Word { produce() }",
+        )
+        .unwrap_err();
+        assert!(
+            err.message.contains("Word@Secret") && err.message.contains("Word"),
+            "unexpected error: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn qif_classify_adds_labels() {
+        // The result type is the value's underlying with the
+        // named labels added.
+        check_src(
+            "fn produce() -> Word@Secret { 42 }\n\
+             fn main() -> Word@{Mission, Secret} { classify produce()@Mission }",
+        )
+        .expect("classify adds Mission to existing Secret");
+    }
+
+    #[test]
+    fn qif_declassify_removes_labels() {
+        // declassify is the explicit way to lower restrictions.
+        // The result type is the value's underlying with the
+        // named labels removed.
+        check_src(
+            "fn produce() -> Word@Secret { 42 }\n\
+             fn main() -> Word { declassify produce()@Secret }",
+        )
+        .expect("declassify removes Secret, value flows to Word");
+    }
+
+    #[test]
+    fn qif_multi_label_subset_rule() {
+        // {Mission} ⊆ {Mission, Secret}: source flows into a
+        // target that accepts more labels.
+        check_src(
+            "fn produce() -> Word@Mission { 42 }\n\
+             fn main() -> Word@{Mission, Secret} { produce() }",
+        )
+        .expect("source with fewer labels flows into target with more");
+    }
+
+    #[test]
+    fn qif_classify_is_not_a_keyword() {
+        // `classify` must remain usable as a function name so
+        // existing scripts that defined a `classify` helper are
+        // not broken by the QIF extension.
+        check_src(
+            "fn classify(x: Word) -> Word { x }\n\
+             fn main() -> Word { classify(42) }",
+        )
+        .expect("classify usable as a function name");
     }
 
     #[test]

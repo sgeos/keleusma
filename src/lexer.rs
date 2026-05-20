@@ -471,6 +471,11 @@ impl<'a> Lexer<'a> {
                 }
             }
 
+            b'@' => Ok(Token {
+                kind: TokenKind::At,
+                span: self.span_from(start, start_line, start_col),
+            }),
+
             // String literal
             #[cfg(feature = "text")]
             b'"' => self.lex_string(start, start_line, start_col),

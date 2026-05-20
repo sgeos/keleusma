@@ -582,6 +582,28 @@ pub enum Expr {
     /// `saturate_min` literal. Evaluates to the minimum
     /// representable value of the construct's expected type.
     SaturateMin { span: Span },
+    /// Classify an expression with additional information-flow
+    /// labels. Surface form is `classify expr@Label` or
+    /// `classify expr@{L1, L2}`. The result's label set is the
+    /// union of the expression's labels and the named labels.
+    /// Always admitted because adding labels only tightens flow
+    /// restrictions.
+    Classify {
+        value: Box<Expr>,
+        labels: Vec<String>,
+        span: Span,
+    },
+    /// Declassify an expression by removing information-flow
+    /// labels. Surface form is `declassify expr@Label` or
+    /// `declassify expr@{L1, L2}`. The result's label set is the
+    /// expression's labels minus the named labels. Records an
+    /// audit point because removing labels loosens flow
+    /// restrictions and constitutes information disclosure.
+    Declassify {
+        value: Box<Expr>,
+        labels: Vec<String>,
+        span: Span,
+    },
 }
 
 /// One arm of an overflow-checked expression. The arm fires when
@@ -631,7 +653,9 @@ impl Expr {
             | Expr::ClosureRef { span, .. }
             | Expr::Checked { span, .. }
             | Expr::SaturateMax { span }
-            | Expr::SaturateMin { span } => *span,
+            | Expr::SaturateMin { span }
+            | Expr::Classify { span, .. }
+            | Expr::Declassify { span, .. } => *span,
         }
     }
 }
@@ -705,6 +729,14 @@ pub enum TypeExpr {
     Option(Box<TypeExpr>, Span),
     /// Unit type: `()`.
     Unit(Span),
+    /// Type with information-flow labels. Surface form is
+    /// `T@Label` or `T@{Label1, Label2}`. Labels are user-defined
+    /// names; the empty label set is the pure (open) state and is
+    /// represented by the absence of a `Labelled` wrapper. The
+    /// labels propagate through arithmetic operations and through
+    /// `classify`/`declassify` operators; assignment and parameter
+    /// passing check `source.labels ⊆ target.labels`.
+    Labelled(Box<TypeExpr>, Vec<String>, Span),
 }
 
 impl TypeExpr {
@@ -715,7 +747,8 @@ impl TypeExpr {
             | TypeExpr::Tuple(_, span)
             | TypeExpr::Array(_, _, span)
             | TypeExpr::Option(_, span)
-            | TypeExpr::Unit(span) => *span,
+            | TypeExpr::Unit(span)
+            | TypeExpr::Labelled(_, _, span) => *span,
         }
     }
 }

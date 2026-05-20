@@ -3061,6 +3061,26 @@ mod tests {
     }
 
     #[test]
+    fn qif_labels_are_erased_at_runtime() {
+        // The information-flow labels are a compile-time
+        // discipline. Both classify and declassify compile to
+        // identity at the bytecode layer; the runtime value
+        // produced is identical to the unlabeled equivalent.
+        let val = run_expect(
+            "fn produce() -> Word@Secret { 42 }\n\
+             fn main() -> Word { declassify produce()@Secret }",
+            &[],
+        );
+        assert_eq!(val, Value::Int(42));
+    }
+
+    #[test]
+    fn qif_classify_runtime_value_is_unchanged() {
+        let val = run_expect("fn main() -> Word@Secret { classify 99@Secret }", &[]);
+        assert_eq!(val, Value::Int(99));
+    }
+
+    #[test]
     fn checked_overflow_ok_arm_passes_result() {
         // `1 + 2` does not overflow, so the construct evaluates
         // to the `ok` arm's body which binds the successful

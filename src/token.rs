@@ -44,6 +44,9 @@ pub enum TokenKind {
     Underflow,
     SaturateMax,
     SaturateMin,
+    /// `@` separator for information-flow labels on types and
+    /// `classify`/`declassify` operators.
+    At,
     True,
     False,
     As,
@@ -159,6 +162,14 @@ impl TokenKind {
             "underflow" => Some(TokenKind::Underflow),
             "saturate_max" => Some(TokenKind::SaturateMax),
             "saturate_min" => Some(TokenKind::SaturateMin),
+            // `classify` and `declassify` are intentionally NOT
+            // reserved as keywords because they may also be used
+            // as user-defined function names. The parser
+            // recognises them as information-flow operators
+            // through context-sensitive lookahead: in expression
+            // position, a `classify` or `declassify` identifier
+            // followed by anything other than `(` is the operator
+            // form; followed by `(` it is a function call.
             "true" => Some(TokenKind::True),
             "false" => Some(TokenKind::False),
             "as" => Some(TokenKind::As),

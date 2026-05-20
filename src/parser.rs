@@ -1442,6 +1442,38 @@ impl<'a> Parser<'a> {
             return Ok(Expr::SaturateMin { span: tok.span });
         }
 
+        // Information-flow operators. `classify` and
+        // `declassify` are context-sensitive: a lowercase
+        // identifier with that spelling at the start of an
+        // expression, followed by something other than `(`, is
+        // the operator form. A `LowerIdent("classify")` followed
+        // by `(` is a function call (the user may legitimately
+        // name a function `classify`).
+        if let TokenKind::LowerIdent(name) = &tok.kind
+            && (name == "classify" || name == "declassify")
+            && !matches!(self.peek_ahead(1), TokenKind::LParen)
+        {
+            let is_classify = name == "classify";
+            self.bump();
+            let value = self.parse_postfix_expr()?;
+            self.expect(&TokenKind::At)?;
+            let labels = self.parse_label_spec()?;
+            let span = merge_spans(tok.span, self.prev_span());
+            return if is_classify {
+                Ok(Expr::Classify {
+                    value: alloc::boxed::Box::new(value),
+                    labels,
+                    span,
+                })
+            } else {
+                Ok(Expr::Declassify {
+                    value: alloc::boxed::Box::new(value),
+                    labels,
+                    span,
+                })
+            };
+        }
+
         match tok.kind {
             // Closure literal: `|args| body` or `|args| -> ret { body }`.
             // Bar (`|`) introduces the parameter list. The body can
@@ -1818,7 +1850,39 @@ impl<'a> Parser<'a> {
         self.enter_depth()?;
         let result = self.parse_type_expr_inner();
         self.leave_depth();
-        result
+        let inner = result?;
+        // Attach an information-flow label set when one is
+        // present. The surface form is `T@Label` for a single
+        // label or `T@{L1, L2, ...}` for multiple labels.
+        if self.eat(&TokenKind::At) {
+            let labels = self.parse_label_spec()?;
+            let span = merge_spans(inner.span(), self.prev_span());
+            Ok(TypeExpr::Labelled(
+                alloc::boxed::Box::new(inner),
+                labels,
+                span,
+            ))
+        } else {
+            Ok(inner)
+        }
+    }
+
+    fn parse_label_spec(&mut self) -> Result<Vec<String>, ParseError> {
+        if self.eat(&TokenKind::LBrace) {
+            let mut labels = Vec::new();
+            while !self.at(&TokenKind::RBrace) {
+                let (name, _) = self.expect_upper_ident()?;
+                labels.push(name);
+                if !self.eat(&TokenKind::Comma) {
+                    break;
+                }
+            }
+            self.expect(&TokenKind::RBrace)?;
+            Ok(labels)
+        } else {
+            let (name, _) = self.expect_upper_ident()?;
+            Ok(alloc::vec![name])
+        }
     }
 
     fn parse_type_expr_inner(&mut self) -> Result<TypeExpr, ParseError> {

@@ -781,6 +781,7 @@ fn type_arg_canonical(t: &TypeExpr) -> String {
             format!("arr_{}_{}", type_arg_canonical(elem), n)
         }
         TypeExpr::Option(inner, _) => format!("opt_{}", type_arg_canonical(inner)),
+        TypeExpr::Labelled(inner, _, _) => type_arg_canonical(inner),
     }
 }
 
@@ -985,6 +986,7 @@ fn type_head_for_impl(ty: &TypeExpr) -> String {
         TypeExpr::Tuple(_, _) => "tuple".to_string(),
         TypeExpr::Array(_, _, _) => "array".to_string(),
         TypeExpr::Option(_, _) => "Option".to_string(),
+        TypeExpr::Labelled(inner, _, _) => type_head_for_impl(inner),
     }
 }
 
@@ -1017,6 +1019,11 @@ fn subst_type_expr(t: &TypeExpr, subst: &BTreeMap<String, TypeExpr>) -> TypeExpr
         TypeExpr::Option(inner, span) => {
             TypeExpr::Option(Box::new(subst_type_expr(inner, subst)), *span)
         }
+        TypeExpr::Labelled(inner, labels, span) => TypeExpr::Labelled(
+            Box::new(subst_type_expr(inner, subst)),
+            labels.clone(),
+            *span,
+        ),
     }
 }
 
@@ -1325,6 +1332,24 @@ fn subst_in_expr(expr: &Expr, subst: &BTreeMap<String, TypeExpr>) -> Expr {
         },
         Expr::SaturateMax { span } => Expr::SaturateMax { span: *span },
         Expr::SaturateMin { span } => Expr::SaturateMin { span: *span },
+        Expr::Classify {
+            value,
+            labels,
+            span,
+        } => Expr::Classify {
+            value: Box::new(subst_in_expr(value, subst)),
+            labels: labels.clone(),
+            span: *span,
+        },
+        Expr::Declassify {
+            value,
+            labels,
+            span,
+        } => Expr::Declassify {
+            value: Box::new(subst_in_expr(value, subst)),
+            labels: labels.clone(),
+            span: *span,
+        },
     }
 }
 

@@ -174,6 +174,9 @@ pub trait MutVisitor {
                 }
             }
             Expr::SaturateMax { .. } | Expr::SaturateMin { .. } => {}
+            Expr::Classify { value, .. } | Expr::Declassify { value, .. } => {
+                self.visit_expr(value);
+            }
         }
     }
 }
@@ -326,6 +329,9 @@ pub trait Visitor {
                 }
             }
             Expr::SaturateMax { .. } | Expr::SaturateMin { .. } => {}
+            Expr::Classify { value, .. } | Expr::Declassify { value, .. } => {
+                self.visit_expr(value);
+            }
         }
     }
 }

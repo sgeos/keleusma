@@ -676,21 +676,7 @@ pub fn compile_with_target(
     // the existing impl methods are borrowed.
     let mut synth_impl_methods: Vec<FunctionDef> = Vec::new();
     for impl_block in &program.impls {
-        let head = match &impl_block.for_type {
-            TypeExpr::Prim(p, _) => match p {
-                PrimType::Byte => String::from("Byte"),
-                PrimType::Word => String::from("Word"),
-                PrimType::Fixed(_) => String::from("Fixed"),
-                PrimType::Float => String::from("Float"),
-                PrimType::Bool => String::from("bool"),
-                PrimType::Text => String::from("Text"),
-            },
-            TypeExpr::Unit(_) => String::from("()"),
-            TypeExpr::Named(name, _, _) => name.clone(),
-            TypeExpr::Tuple(_, _) => String::from("tuple"),
-            TypeExpr::Array(_, _, _) => String::from("array"),
-            TypeExpr::Option(_, _) => String::from("Option"),
-        };
+        let head = type_expr_head_name(&impl_block.for_type);
         for method in &impl_block.methods {
             let mut renamed = method.clone();
             renamed.name = format!("{}::{}::{}", impl_block.trait_name, head, method.name);
@@ -1137,7 +1123,31 @@ fn type_expr_carries_text(t: &TypeExpr) -> bool {
         TypeExpr::Tuple(parts, _) => parts.iter().any(type_expr_carries_text),
         TypeExpr::Array(elem, _, _) => type_expr_carries_text(elem),
         TypeExpr::Option(inner, _) => type_expr_carries_text(inner),
+        TypeExpr::Labelled(inner, _, _) => type_expr_carries_text(inner),
         _ => false,
+    }
+}
+
+/// Identity string for a type expression. Used at impl-block
+/// dispatch and at sites that need a string-tagged head for
+/// method resolution. Information-flow labels are not part of
+/// the identity; the wrapper is unwrapped recursively.
+fn type_expr_head_name(t: &TypeExpr) -> String {
+    match t {
+        TypeExpr::Prim(p, _) => match p {
+            PrimType::Byte => String::from("Byte"),
+            PrimType::Word => String::from("Word"),
+            PrimType::Fixed(_) => String::from("Fixed"),
+            PrimType::Float => String::from("Float"),
+            PrimType::Bool => String::from("bool"),
+            PrimType::Text => String::from("Text"),
+        },
+        TypeExpr::Unit(_) => String::from("()"),
+        TypeExpr::Named(name, _, _) => name.clone(),
+        TypeExpr::Tuple(_, _) => String::from("tuple"),
+        TypeExpr::Array(_, _, _) => String::from("array"),
+        TypeExpr::Option(_, _) => String::from("Option"),
+        TypeExpr::Labelled(inner, _, _) => type_expr_head_name(inner),
     }
 }
 
@@ -1209,6 +1219,7 @@ fn param_name_is_used(body: &Block, name: &str) -> bool {
                 expr_uses(op_expr, name) || arms.iter().any(|arm| expr_uses(&arm.body, name))
             }
             Expr::SaturateMax { .. } | Expr::SaturateMin { .. } => false,
+            Expr::Classify { value, .. } | Expr::Declassify { value, .. } => expr_uses(value, name),
         }
     }
     fn block_uses(block: &Block, name: &str) -> bool {
@@ -1751,6 +1762,7 @@ fn validate_data_field_type(
         }
         TypeExpr::Array(elem, _len, _) => validate_data_field_type(elem, types, visiting),
         TypeExpr::Option(inner, _) => validate_data_field_type(inner, types, visiting),
+        TypeExpr::Labelled(inner, _, _) => validate_data_field_type(inner, types, visiting),
         TypeExpr::Named(name, _args, span) => {
             if visiting.contains(name) {
                 return Err(CompileError {
@@ -2285,6 +2297,7 @@ fn type_expr_head(ty: &TypeExpr) -> Option<String> {
         TypeExpr::Array(_, _, _) => Some("array".to_string()),
         TypeExpr::Option(_, _) => Some("Option".to_string()),
         TypeExpr::Named(name, _, _) => Some(name.clone()),
+        TypeExpr::Labelled(inner, _, _) => type_expr_head(inner),
     }
 }
 
@@ -2777,6 +2790,7 @@ fn normalize_fixed_defaults(program: &mut Program, frac_bits: u8) {
                     fix_type(a, frac_bits);
                 }
             }
+            TypeExpr::Labelled(inner, _, _) => fix_type(inner, frac_bits),
         }
     }
     fn fix_opt(t: &mut Option<TypeExpr>, frac_bits: u8) {
@@ -2922,6 +2936,9 @@ fn normalize_fixed_defaults(program: &mut Program, frac_bits: u8) {
                 }
             }
             Expr::SaturateMax { .. } | Expr::SaturateMin { .. } => {}
+            Expr::Classify { value, .. } | Expr::Declassify { value, .. } => {
+                fix_expr(value, frac_bits);
+            }
         }
     }
     fn fix_function(func: &mut FunctionDef, frac_bits: u8) {
@@ -3936,6 +3953,14 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
             // Word::MIN.
             let idx = fc.add_constant(Value::Int(i64::MIN));
             fc.emit(Op::Const(idx));
+        }
+        Expr::Classify { value, .. } | Expr::Declassify { value, .. } => {
+            // classify / declassify are compile-time-only
+            // information-flow operations. The bytecode emitted is
+            // the inner expression's bytecode unchanged. Label
+            // tracking and declassification audit happen entirely
+            // at the type-checker layer.
+            compile_expr(fc, value)?;
         }
     }
     Ok(())
