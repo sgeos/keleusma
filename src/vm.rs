@@ -393,6 +393,65 @@ fn out_of_arena_min(capacity: usize) -> VmError {
 /// Both the owned (`AlignedVec`) and the borrowed (`&[u8]`) paths
 /// route through this helper. The single source of truth for op
 /// pre-decoding lives here.
+/// Compute the `(low, high, flag)` outputs that the
+/// `CheckedAdd` / `CheckedSub` / `CheckedMul` / `CheckedNeg`
+/// dispatch pushes, given the true result `r` in `W::Wide` and
+/// the bytecode's declared word width.
+///
+/// Semantics. The flag is `0` ok, `1` overflow, `2` underflow
+/// against the declared width. The low half is sign-extended
+/// truncated to the declared width through
+/// [`crate::bytecode::truncate_int_to_declared_width`]; the
+/// high half carries the bits above the declared low half, so
+/// `r == (high << declared_bits) + low_signed_at_declared_width`
+/// reproduces the true result. Both halves are interpreted as
+/// signed values at the declared width.
+///
+/// When the bytecode-declared word width matches or exceeds the
+/// runtime word width (`word_bits_log2 >= W::BITS_LOG2`), the
+/// helper reduces to the runtime-width semantics: `high` becomes
+/// the wide high half, `low` becomes the wide-to-narrow wrap of
+/// `r`, and `flag` fires at `W::MIN` / `W::MAX`. When the
+/// bytecode declares a narrower width than the runtime supports,
+/// the flag fires at the declared range and the high half
+/// carries the bits beyond the declared low.
+fn checked_arith_outputs<W: crate::word::Word>(r: W::Wide, word_bits_log2: u8) -> (W, W, W) {
+    let runtime_bits_log2 = <W as crate::word::Word>::BITS_LOG2;
+    let (declared_min, declared_max, narrow) = if word_bits_log2 >= runtime_bits_log2 {
+        (
+            <W as crate::word::Word>::MIN.widen(),
+            <W as crate::word::Word>::MAX.widen(),
+            false,
+        )
+    } else {
+        let declared_bits = 1u32 << word_bits_log2;
+        let one_widened = <W as crate::word::Word>::from_i64_wrap(1).widen();
+        let max = (one_widened << (declared_bits - 1)) - one_widened;
+        let min = -(one_widened << (declared_bits - 1));
+        (min, max, true)
+    };
+    let low_raw = <W as crate::word::Word>::from_wide_wrap(r);
+    let low_at_declared_i64 =
+        crate::bytecode::truncate_int_to_declared_width(low_raw.to_i64(), word_bits_log2);
+    let low = <W as crate::word::Word>::from_i64_wrap(low_at_declared_i64);
+    let high = if narrow {
+        let declared_bits = 1u32 << word_bits_log2;
+        let low_widened = low.widen();
+        let high_wide = (r - low_widened) >> declared_bits;
+        <W as crate::word::Word>::from_wide_wrap(high_wide)
+    } else {
+        <W as crate::word::Word>::from_wide_wrap(r.high_half())
+    };
+    let flag: i64 = if r >= declared_min && r <= declared_max {
+        0
+    } else if r > declared_max {
+        1
+    } else {
+        2
+    };
+    (low, high, <W as crate::word::Word>::from_i64_wrap(flag))
+}
+
 fn decode_all_ops(bytes: &[u8]) -> Result<Vec<Vec<Op>>, VmError> {
     // V0.2.0 Phase 7c routes the per-chunk op decode through
     // the wire-format opcode stream. Each chunk's slice in the
@@ -3202,42 +3261,8 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                             crate::bytecode::GenericValue::Int(x),
                             crate::bytecode::GenericValue::Int(y),
                         ) => {
-                            // Compute the true sum in i128 and
-                            // derive the outcome flag from the
-                            // i128 range relative to i64. The flag
-                            // values are `0` ok (fits in i64),
-                            // `1` overflow (> i64::MAX), `2`
-                            // underflow (< i64::MIN). The high and
-                            // low halves of the i128 result are
-                            // pushed in all three cases so arm
-                            // patterns can destructure them.
-                            //
-                            // Narrow-bytecode-on-wide-runtime: the
-                            // `low` half is sign-extended truncated
-                            // to the bytecode's declared word width
-                            // so the wrapping-arithmetic synthesis
-                            // (`CheckedAdd; PopN(2)`) matches the
-                            // declared-width semantics. The `flag`
-                            // and `high` halves remain relative to
-                            // the runtime word width.
                             let r = x.widen() + y.widen();
-                            let high = <W as crate::word::Word>::from_wide_wrap(r.high_half());
-                            let low_raw = <W as crate::word::Word>::from_wide_wrap(r);
-                            let low = <W as crate::word::Word>::from_i64_wrap(
-                                crate::bytecode::truncate_int_to_declared_width(
-                                    low_raw.to_i64(),
-                                    word_bits_log2,
-                                ),
-                            );
-                            let flag: i64 = if r >= <W as crate::word::Word>::MIN.widen()
-                                && r <= <W as crate::word::Word>::MAX.widen()
-                            {
-                                0
-                            } else if r > <W as crate::word::Word>::MAX.widen() {
-                                1
-                            } else {
-                                2
-                            };
+                            let (low, high, flag) = checked_arith_outputs::<W>(r, word_bits_log2);
                             // Push order is (low, high, flag) so the
                             // wrapping-arithmetic synthesis emitted by
                             // the compiler — `CheckedAdd; PopN(2)` —
@@ -3245,12 +3270,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                             // high) and leaves `low` on the stack.
                             sp!(self, crate::bytecode::GenericValue::Int(low));
                             sp!(self, crate::bytecode::GenericValue::Int(high));
-                            sp!(
-                                self,
-                                crate::bytecode::GenericValue::Int(
-                                    <W as crate::word::Word>::from_i64_wrap(flag)
-                                )
-                            );
+                            sp!(self, crate::bytecode::GenericValue::Int(flag));
                         }
                         (a, b) => {
                             return Err(VmError::TypeError(format!(
@@ -3271,31 +3291,10 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                             crate::bytecode::GenericValue::Int(y),
                         ) => {
                             let r = x.widen() - y.widen();
-                            let high = <W as crate::word::Word>::from_wide_wrap(r.high_half());
-                            let low_raw = <W as crate::word::Word>::from_wide_wrap(r);
-                            let low = <W as crate::word::Word>::from_i64_wrap(
-                                crate::bytecode::truncate_int_to_declared_width(
-                                    low_raw.to_i64(),
-                                    word_bits_log2,
-                                ),
-                            );
-                            let flag: i64 = if r >= <W as crate::word::Word>::MIN.widen()
-                                && r <= <W as crate::word::Word>::MAX.widen()
-                            {
-                                0
-                            } else if r > <W as crate::word::Word>::MAX.widen() {
-                                1
-                            } else {
-                                2
-                            };
+                            let (low, high, flag) = checked_arith_outputs::<W>(r, word_bits_log2);
                             sp!(self, crate::bytecode::GenericValue::Int(low));
                             sp!(self, crate::bytecode::GenericValue::Int(high));
-                            sp!(
-                                self,
-                                crate::bytecode::GenericValue::Int(
-                                    <W as crate::word::Word>::from_i64_wrap(flag)
-                                )
-                            );
+                            sp!(self, crate::bytecode::GenericValue::Int(flag));
                         }
                         (a, b) => {
                             return Err(VmError::TypeError(format!(
@@ -3317,36 +3316,16 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                         ) => {
                             // True product in i128; both halves are
                             // load-bearing for big-number
-                            // multiplication. Flag reports the
-                            // direction of overflow based on the
-                            // i128 result's sign relative to the
-                            // i64 representable range.
+                            // multiplication. The shared helper
+                            // computes high relative to the
+                            // declared word width and reports flag
+                            // direction (overflow / underflow) at
+                            // the declared range.
                             let r = x.widen() * y.widen();
-                            let high = <W as crate::word::Word>::from_wide_wrap(r.high_half());
-                            let low_raw = <W as crate::word::Word>::from_wide_wrap(r);
-                            let low = <W as crate::word::Word>::from_i64_wrap(
-                                crate::bytecode::truncate_int_to_declared_width(
-                                    low_raw.to_i64(),
-                                    word_bits_log2,
-                                ),
-                            );
-                            let flag: i64 = if r >= <W as crate::word::Word>::MIN.widen()
-                                && r <= <W as crate::word::Word>::MAX.widen()
-                            {
-                                0
-                            } else if r > <W as crate::word::Word>::MAX.widen() {
-                                1
-                            } else {
-                                2
-                            };
+                            let (low, high, flag) = checked_arith_outputs::<W>(r, word_bits_log2);
                             sp!(self, crate::bytecode::GenericValue::Int(low));
                             sp!(self, crate::bytecode::GenericValue::Int(high));
-                            sp!(
-                                self,
-                                crate::bytecode::GenericValue::Int(
-                                    <W as crate::word::Word>::from_i64_wrap(flag)
-                                )
-                            );
+                            sp!(self, crate::bytecode::GenericValue::Int(flag));
                         }
                         (a, b) => {
                             return Err(VmError::TypeError(format!(
@@ -3362,34 +3341,18 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                     let a = self.pop()?;
                     match a {
                         crate::bytecode::GenericValue::Int(x) => {
-                            // Only `-i64::MIN` overflows. The true
-                            // result is `2^63`, which in i128 is
-                            // (high=0, low=i64::MIN); we report
-                            // overflow (flag=1) in that case.
+                            // The only runtime-width overflow is
+                            // `-i64::MIN`. At a narrower declared
+                            // width, both `-declared_min` and
+                            // every value of `x` that lands outside
+                            // the declared range surface as
+                            // overflow/underflow through the
+                            // shared helper.
                             let r = -x.widen();
-                            let high = <W as crate::word::Word>::from_wide_wrap(r.high_half());
-                            let low_raw = <W as crate::word::Word>::from_wide_wrap(r);
-                            let low = <W as crate::word::Word>::from_i64_wrap(
-                                crate::bytecode::truncate_int_to_declared_width(
-                                    low_raw.to_i64(),
-                                    word_bits_log2,
-                                ),
-                            );
-                            let flag: i64 = if r >= <W as crate::word::Word>::MIN.widen()
-                                && r <= <W as crate::word::Word>::MAX.widen()
-                            {
-                                0
-                            } else {
-                                1
-                            };
+                            let (low, high, flag) = checked_arith_outputs::<W>(r, word_bits_log2);
                             sp!(self, crate::bytecode::GenericValue::Int(low));
                             sp!(self, crate::bytecode::GenericValue::Int(high));
-                            sp!(
-                                self,
-                                crate::bytecode::GenericValue::Int(
-                                    <W as crate::word::Word>::from_i64_wrap(flag)
-                                )
-                            );
+                            sp!(self, crate::bytecode::GenericValue::Int(flag));
                         }
                         a => {
                             return Err(VmError::TypeError(format!(
@@ -8352,5 +8315,114 @@ mod tests {
             "expected non-exhaustive diagnostic, got: {}",
             err.message
         );
+    }
+
+    // The narrow-bytecode CheckedXxx tests directly exercise
+    // `checked_arith_outputs` at every supported declared word
+    // width to confirm that the `(low, high, flag)` triple is
+    // computed at the bytecode-declared width rather than the
+    // runtime width. This addresses the unresolved concern
+    // documented in REVERSE_PROMPT for V0.2.0 Phase 8.
+
+    #[test]
+    fn checked_arith_outputs_runtime_width_in_range() {
+        // Declared width matches the runtime: `100 + 50 = 150`
+        // fits in i64, so flag = 0, high = 0, low = 150.
+        let r: i128 = 100i64.widen() + 50i64.widen();
+        let (low, high, flag) = super::checked_arith_outputs::<i64>(r, 6);
+        assert_eq!(low, 150);
+        assert_eq!(high, 0);
+        assert_eq!(flag, 0);
+    }
+
+    #[test]
+    fn checked_arith_outputs_runtime_width_overflow() {
+        // `i64::MAX + 1` overflows the runtime range; flag = 1,
+        // low wraps to `i64::MIN`, high carries the i128 high
+        // half (zero in this case because the result fits in 65
+        // bits but is positive).
+        let r: i128 = i64::MAX.widen() + 1i64.widen();
+        let (low, high, flag) = super::checked_arith_outputs::<i64>(r, 6);
+        assert_eq!(low, i64::MIN);
+        assert_eq!(high, 0);
+        assert_eq!(flag, 1);
+    }
+
+    #[test]
+    fn checked_arith_outputs_runtime_width_underflow() {
+        // `i64::MIN + i64::MIN` underflows; flag = 2.
+        let r: i128 = i64::MIN.widen() + i64::MIN.widen();
+        let (_low, high, flag) = super::checked_arith_outputs::<i64>(r, 6);
+        // High half: -2 * 2^63 == -(2^64), shifted right by 64
+        // is -1.
+        assert_eq!(high, -1);
+        assert_eq!(flag, 2);
+    }
+
+    #[test]
+    fn checked_arith_outputs_narrow_declared_32_in_range() {
+        // Declared 32-bit on a 64-bit runtime: a value that fits
+        // i32 reports flag = 0, low = the value sign-extended at
+        // 32, high = 0.
+        let r: i128 = (i32::MAX as i64).widen() + 0i64.widen();
+        let (low, high, flag) = super::checked_arith_outputs::<i64>(r, 5);
+        assert_eq!(low, i32::MAX as i64);
+        assert_eq!(high, 0);
+        assert_eq!(flag, 0);
+    }
+
+    #[test]
+    fn checked_arith_outputs_narrow_declared_32_overflow() {
+        // `i32::MAX + 1` overflows the declared 32-bit range.
+        // Flag = 1; the low half is `i32::MIN` (the truncated
+        // sign-extended value); the high half is 1.
+        let r: i128 = (i32::MAX as i64).widen() + 1i64.widen();
+        let (low, high, flag) = super::checked_arith_outputs::<i64>(r, 5);
+        assert_eq!(low, i32::MIN as i64);
+        assert_eq!(high, 1);
+        assert_eq!(flag, 1);
+    }
+
+    #[test]
+    fn checked_arith_outputs_narrow_declared_32_underflow() {
+        // `i32::MIN - 1` underflows the declared 32-bit range.
+        // Flag = 2; low half is `i32::MAX`; high half is -1.
+        let r: i128 = (i32::MIN as i64).widen() - 1i64.widen();
+        let (low, high, flag) = super::checked_arith_outputs::<i64>(r, 5);
+        assert_eq!(low, i32::MAX as i64);
+        assert_eq!(high, -1);
+        assert_eq!(flag, 2);
+    }
+
+    #[test]
+    fn checked_arith_outputs_narrow_declared_16_overflow() {
+        // `i16::MAX + 1` overflows the declared 16-bit range.
+        let r: i128 = (i16::MAX as i64).widen() + 1i64.widen();
+        let (low, high, flag) = super::checked_arith_outputs::<i64>(r, 4);
+        assert_eq!(low, i16::MIN as i64);
+        assert_eq!(high, 1);
+        assert_eq!(flag, 1);
+    }
+
+    #[test]
+    fn checked_arith_outputs_narrow_declared_8_underflow() {
+        // `i8::MIN - 1` underflows the declared 8-bit range.
+        let r: i128 = (i8::MIN as i64).widen() - 1i64.widen();
+        let (low, high, flag) = super::checked_arith_outputs::<i64>(r, 3);
+        assert_eq!(low, i8::MAX as i64);
+        assert_eq!(high, -1);
+        assert_eq!(flag, 2);
+    }
+
+    #[test]
+    fn checked_arith_outputs_narrow_declared_reconstructs_true_value() {
+        // The (low, high) pair reconstructs the true value via
+        // `r == (high << declared_bits) + low_signed`. Verify
+        // this invariant at 32-bit declared width with a value
+        // that crosses the declared boundary.
+        let true_value: i128 = (i32::MAX as i128) + 100;
+        let (low, high, _flag) = super::checked_arith_outputs::<i64>(true_value, 5);
+        let reconstructed = ((high as i128) << 32) + (low as i128);
+        assert_eq!(reconstructed, true_value);
     }
 }

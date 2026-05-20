@@ -11,3 +11,13 @@ tmp/*
 !tmp/.gitkeep
 secret/*
 !secret/.gitkeep
+
+# Precompiled Keleusma bytecode artefacts. The wire format is
+# producer-specific and goes stale across V0.2.x patch releases
+# whose semantic content is unchanged but whose archived
+# representation may shift (e.g. when `rkyv` updates the
+# auxiliary body layout). Hosts that want precompiled bytecode
+# regenerate it at build time, typically through a `build.rs`
+# that walks `*.kel` sources and emits `*.kel.bin` to `OUT_DIR`.
+# See `examples/rtos/build.rs` for the canonical pattern.
+*.kel.bin

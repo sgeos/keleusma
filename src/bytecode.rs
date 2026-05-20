@@ -2022,15 +2022,15 @@ pub fn value_from_archived<W: crate::word::Word, F: crate::float::Float>(
 /// identity, since the runtime's native i64 already matches or
 /// exceeds the declared width.
 ///
-/// V0.2.0 Consolidation B note. The `Op::Add` / `Op::Sub` / `Op::Mul`
-/// / `Op::Neg` family no longer accepts `Int` operands. The
-/// compiler routes `Int` arithmetic through `CheckedXxx` followed by
-/// `PopN(2)`; the checked dispatch applies this truncation to the
-/// `low` half so the wrapping result matches the bytecode's declared
-/// width. The `flag` and `high` halves are reported relative to the
-/// runtime word width (i.e., `W::MIN..=W::MAX`) rather than the
-/// bytecode's declared width. Narrow-width overflow detection
-/// against the declared range is deferred to a follow-up task.
+/// V0.2.0 Consolidation B and the post-V0.2.0 follow-on. The
+/// `Op::Add` / `Op::Sub` / `Op::Mul` / `Op::Neg` family no longer
+/// accepts `Int` operands; the compiler routes `Int` arithmetic
+/// through `CheckedXxx` followed by `PopN(2)`. The checked
+/// dispatch applies this truncation to the `low` half so the
+/// wrapping result matches the bytecode's declared width, and the
+/// flag detection through [`declared_width_range`] reports
+/// overflow against the declared (narrower) range rather than the
+/// runtime width.
 pub(crate) fn truncate_int_to_declared_width(value: i64, word_bits_log2: u8) -> i64 {
     if word_bits_log2 >= 6 {
         return value;

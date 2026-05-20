@@ -142,10 +142,6 @@ name = "monomorphize_generic_method"
 required-features = ["compile", "verify"]
 
 [[example]]
-name = "regenerate_zero_copy_bytecode"
-required-features = ["compile", "verify"]
-
-[[example]]
 name = "struct_method_dispatch"
 required-features = ["compile", "verify"]
 
@@ -173,7 +169,12 @@ required-features = ["compile", "verify"]
 name = "yield_error"
 required-features = ["compile", "verify"]
 
-# zero_copy_include_bytes runs precompiled bytecode and therefore
-# works under any feature combination. No required-features.
+# zero_copy_include_bytes compiles the demonstration script
+# at runtime and exercises the zero-copy view path. Requires
+# the compile pipeline since the bytecode is produced
+# on-the-fly. Hosts that ship precompiled bytecode through
+# `include_bytes!` use the build.rs pattern in
+# `examples/rtos/build.rs`.
 [[example]]
 name = "zero_copy_include_bytes"
+required-features = ["compile", "verify"]

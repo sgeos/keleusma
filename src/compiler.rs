@@ -524,6 +524,50 @@ pub const CHUNK_SIZE_HARD_LIMIT: usize = u16::MAX as usize;
 /// [`CHUNK_SIZE_HARD_LIMIT`].
 pub const CHUNK_SIZE_SOFT_WARN_THRESHOLD: usize = (CHUNK_SIZE_HARD_LIMIT * 80) / 100;
 
+/// Enforce the V0.2.0 Phase 6 chunk-size limits against the
+/// supplied chunk. Returns a hard `CompileError` if the chunk's
+/// op count exceeds [`CHUNK_SIZE_HARD_LIMIT`]; appends a
+/// [`CompileWarning`] to `warnings` if it crosses
+/// [`CHUNK_SIZE_SOFT_WARN_THRESHOLD`]; returns `Ok(())` if the
+/// chunk fits.
+///
+/// Extracted from the inline check in [`compile_with_warnings`]
+/// so the threshold logic is testable in isolation through a
+/// hand-constructed `Chunk`. Live coverage of the soft-warning
+/// path through the surface compile pipeline would require a
+/// source program with more than 52,428 ops, which is
+/// impractical at test time; the unit test in
+/// `compiler::tests::soft_warning_fires_on_long_chunk` exercises
+/// the helper against a synthetic chunk.
+pub fn check_chunk_size_against_limits(
+    chunk: &Chunk,
+    span: crate::token::Span,
+    warnings: &mut Vec<CompileWarning>,
+) -> Result<(), CompileError> {
+    let op_count = chunk.ops.len();
+    if op_count > CHUNK_SIZE_HARD_LIMIT {
+        return Err(CompileError {
+            message: format!(
+                "chunk `{}` emitted {} ops, exceeding the V0.2.0 limit of {} \
+                 (u16 control-flow target width); decompose the function into helpers",
+                chunk.name, op_count, CHUNK_SIZE_HARD_LIMIT,
+            ),
+            span,
+        });
+    }
+    if op_count > CHUNK_SIZE_SOFT_WARN_THRESHOLD {
+        warnings.push(CompileWarning {
+            message: format!(
+                "chunk `{}` has {} ops, crossing the 80% soft-warning threshold of \
+                 {} against the {} cap; consider decomposing the function into helpers",
+                chunk.name, op_count, CHUNK_SIZE_SOFT_WARN_THRESHOLD, CHUNK_SIZE_HARD_LIMIT,
+            ),
+            chunk_name: chunk.name.clone(),
+        });
+    }
+    Ok(())
+}
+
 /// Compile a program against an explicit target descriptor.
 ///
 /// The target's word/address/float widths are baked into the
@@ -952,30 +996,11 @@ pub fn compile_with_warnings(
             &const_fields,
             &type_info,
         )?;
-        let op_count = chunk.ops.len();
-        if op_count > CHUNK_SIZE_HARD_LIMIT {
-            return Err(CompileError {
-                message: format!(
-                    "chunk `{}` emitted {} ops, exceeding the V0.2.0 limit of {} \
-                     (u16 control-flow target width); decompose the function into helpers",
-                    chunk.name, op_count, CHUNK_SIZE_HARD_LIMIT,
-                ),
-                span: defs
-                    .first()
-                    .map(|d| d.span)
-                    .unwrap_or_else(crate::token::Span::default),
-            });
-        }
-        if op_count > CHUNK_SIZE_SOFT_WARN_THRESHOLD {
-            warnings.push(CompileWarning {
-                message: format!(
-                    "chunk `{}` has {} ops, crossing the 80% soft-warning threshold of \
-                     {} against the {} cap; consider decomposing the function into helpers",
-                    chunk.name, op_count, CHUNK_SIZE_SOFT_WARN_THRESHOLD, CHUNK_SIZE_HARD_LIMIT,
-                ),
-                chunk_name: chunk.name.clone(),
-            });
-        }
+        let span = defs
+            .first()
+            .map(|d| d.span)
+            .unwrap_or_else(crate::token::Span::default);
+        check_chunk_size_against_limits(&chunk, span, &mut warnings)?;
         chunks.push(chunk);
     }
 
@@ -5195,6 +5220,7 @@ mod tests {
     use super::*;
     use crate::lexer::tokenize;
     use crate::parser::parse;
+    use alloc::string::ToString;
 
     fn compile_str(src: &str) -> Result<Module, CompileError> {
         let tokens = tokenize(src).expect("lex error");
@@ -5838,5 +5864,84 @@ mod tests {
         let (_module, warnings) =
             compile_with_warnings(&program, &crate::target::Target::host()).unwrap();
         assert!(warnings.is_empty(), "unexpected warnings: {:?}", warnings);
+    }
+
+    fn make_chunk_with_ops(name: &str, ops: alloc::vec::Vec<crate::bytecode::Op>) -> Chunk {
+        Chunk {
+            name: name.into(),
+            ops,
+            constants: alloc::vec::Vec::new(),
+            struct_templates: alloc::vec::Vec::new(),
+            local_count: 0,
+            param_count: 0,
+            block_type: crate::bytecode::BlockType::Func,
+            param_types: alloc::vec::Vec::new(),
+        }
+    }
+
+    #[test]
+    fn soft_warning_fires_on_long_chunk() {
+        // Construct a chunk with `CHUNK_SIZE_SOFT_WARN_THRESHOLD + 1`
+        // ops: just over the 80% mark, comfortably below the hard
+        // cap. The helper appends one `CompileWarning` and
+        // returns Ok.
+        let op_count = CHUNK_SIZE_SOFT_WARN_THRESHOLD + 1;
+        let ops: alloc::vec::Vec<crate::bytecode::Op> =
+            (0..op_count).map(|_| crate::bytecode::Op::Return).collect();
+        let chunk = make_chunk_with_ops("long_chunk", ops);
+        let mut warnings: alloc::vec::Vec<CompileWarning> = alloc::vec::Vec::new();
+        check_chunk_size_against_limits(&chunk, crate::token::Span::default(), &mut warnings)
+            .expect("admissible at this threshold");
+        assert_eq!(warnings.len(), 1, "expected one soft warning");
+        let warning = &warnings[0];
+        assert_eq!(warning.chunk_name, "long_chunk");
+        assert!(
+            warning.message.contains("soft-warning threshold"),
+            "unexpected warning message: {}",
+            warning.message,
+        );
+        assert!(
+            warning.message.contains(&op_count.to_string()),
+            "warning message should name the op count, got: {}",
+            warning.message,
+        );
+    }
+
+    #[test]
+    fn hard_cap_rejects_oversize_chunk() {
+        // One op past the hard cap. The helper returns
+        // CompileError without populating the warnings vec.
+        let op_count = CHUNK_SIZE_HARD_LIMIT + 1;
+        let ops: alloc::vec::Vec<crate::bytecode::Op> =
+            (0..op_count).map(|_| crate::bytecode::Op::Return).collect();
+        let chunk = make_chunk_with_ops("oversize_chunk", ops);
+        let mut warnings: alloc::vec::Vec<CompileWarning> = alloc::vec::Vec::new();
+        let err =
+            check_chunk_size_against_limits(&chunk, crate::token::Span::default(), &mut warnings)
+                .unwrap_err();
+        assert!(
+            err.message.contains("oversize_chunk"),
+            "diagnostic should name the chunk: {}",
+            err.message,
+        );
+        assert!(err.message.contains(&CHUNK_SIZE_HARD_LIMIT.to_string()));
+        assert!(
+            warnings.is_empty(),
+            "hard cap rejection should not also emit a warning",
+        );
+    }
+
+    #[test]
+    fn boundary_chunk_size_no_warning() {
+        // Exactly at the soft threshold (not over it) produces
+        // no warning. The threshold check is `>` not `>=`.
+        let op_count = CHUNK_SIZE_SOFT_WARN_THRESHOLD;
+        let ops: alloc::vec::Vec<crate::bytecode::Op> =
+            (0..op_count).map(|_| crate::bytecode::Op::Return).collect();
+        let chunk = make_chunk_with_ops("boundary", ops);
+        let mut warnings: alloc::vec::Vec<CompileWarning> = alloc::vec::Vec::new();
+        check_chunk_size_against_limits(&chunk, crate::token::Span::default(), &mut warnings)
+            .unwrap();
+        assert!(warnings.is_empty());
     }
 }

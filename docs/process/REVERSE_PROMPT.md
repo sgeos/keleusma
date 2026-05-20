@@ -9,35 +9,31 @@ AI to Human communication channel.
 ## Last Updated
 
 **Date**: 2026-05-20
-**Status**: V0.2.0 ISA Phase 8 landed on the `V0.2.0-isa` branch. The V0.2.0 publication readiness pass is complete. All eight phases of B20 (1, 2, 3, 3.5, Consolidation B, 4, 5, 6, 7a, 7b, 7c, 8) are done; B20 closes. The branch is ready for merge to `main` and for the V0.2.0 publication step.
+**Status**: V0.2.0 ISA Phase 8 cleanup follow-on landed on the `V0.2.0-isa` branch. The two open concerns from the prior session round (live soft-warning trigger, narrow-bytecode-on-wide-runtime `CheckedXxx` flag and high half) are resolved. Repository hygiene tightened by ignoring `*.kel.bin` artefacts. R41 added rejecting the five-opcode dynamic-string-builder proposal. The branch is ready for merge to `main` and for the V0.2.0 publication step.
 
 ## Completed in this session round
 
 | Directive | Resolution |
 |-----------|------------|
-| Proceed with Phase 8. Address any open concerns if possible. | **Documentation alignment.** FAQ "Strings" section rewritten: the `text` cargo feature, f-string interpolation surface, and the bundled `to_string` / `concat` / `length` / `slice` utility natives are retired references and the section now describes the static-string-plus-host-natives V0.2.0 surface. The static-string escape table no longer references `\{` / `\}`. COOKBOOK "Working with Text" section follows the same shape. The FAQ "Closures" entry and the WHY_REJECTED.md "Recursive closure" / "CallIndirect" entries point at the type-checker-stage rejection diagnostic introduced in Phase 4. The EMBEDDING "Bundled Natives" section updated to reflect `register_utility_natives` shrinking to `println` only and to add `stddsl::Math` / `stddsl::Audio` / `stddsl::Shell` as the bundled library surface. **Version re-affirmation.** `BYTECODE_VERSION` is `1` in `src/bytecode.rs:1429`. **rkyv derives dropped.** `Module`, `Chunk`, and `Op` no longer carry `Archive`, `Serialize`, `Deserialize` because the wire-format codec is the sole serialization path; `WireAuxBody`, `WireChunk`, `ConstValue`, `StructTemplate`, `DataLayout`, `DataSlot`, `SlotVisibility`, `BlockType`, `TypeTag` retain their derives because they participate in the rkyv-encoded auxiliary body. **Stale fixtures retired.** `examples/scripts/piano_roll/piano_roll_*.kel.bin` (10 files) deleted; nothing in the workspace consumed them. |
+| `.gitignore` should ignore `*.kel.bin` and stale fixtures should be removed. | New `.gitignore` entry covers `*.kel.bin` with rationale about wire-format staleness across V0.2.x patch releases. Retired `examples/zero_copy_demo.kel.bin` and `examples/regenerate_zero_copy_bytecode.rs`. Rewrote `examples/zero_copy_include_bytes.rs` to compile the script at runtime through `include_str!` of `examples/zero_copy_demo.kel`; example now requires the `compile` and `verify` features and demonstrates the zero-copy execution path against an `AlignedVec<8>` populated from a freshly compiled module. `Cargo.toml` cleaned up to drop the regenerator example entry and gate `zero_copy_include_bytes` on the required features. |
+| Document and reject the five-opcode dynamic-string-builder proposal. | New R41 in `docs/decisions/RESOLVED.md` enumerating the proposed opcodes (`BuildKStr`, `KStrAppendStatic`, `KStrAppendInt`, `KStrAppendFloat`, `KStrAppendBool`, `KStrFinalize`) and the three rejection reasons: dispatch-table cost versus host-side responsibility, WCMU bound looseness under over-declared capacity, and conflict with the V0.2.0 opcode-count target (current 69, proposal would have raised to 74). Records the recommended alternative path: host-registered `format` native delivering a `Value::KStr`. |
+| Concern: live soft-warning trigger test. | Extracted `compiler::check_chunk_size_against_limits(chunk, span, &mut warnings)` from the inline `compile_function` check so the threshold logic is now testable in isolation. Three new tests directly exercise the helper with synthetic `Chunk` instances: `soft_warning_fires_on_long_chunk` at threshold + 1 ops, `hard_cap_rejects_oversize_chunk` at the hard cap + 1 ops, and `boundary_chunk_size_no_warning` at exactly the threshold. The previous live-trigger impracticality (synthetic source program at > 52,428 ops) is now sidestepped because the helper is the unit under test, not the surface compile path. |
+| Concern: narrow-bytecode-on-wide-runtime `CheckedXxx` flag and high half. | Replaced the per-arm `(low, high, flag)` computation in `Op::CheckedAdd` / `CheckedSub` / `CheckedMul` / `CheckedNeg` with a shared `checked_arith_outputs::<W>(r: W::Wide, word_bits_log2: u8) -> (W, W, W)` helper in `src/vm.rs`. The helper computes the declared `[min, max]` range in `W::Wide` (using `WideWord` shift, negate, and subtract; no `i128` literals so it works for every `Word` impl), reports `flag` direction (`0` ok, `1` overflow, `2` underflow) at the declared range rather than the runtime range, and computes the `high` half as `(r - low_widened) >> declared_bits` so the `(high, low)` pair reconstructs the true wide result. Nine new unit tests in `vm::tests` (`checked_arith_outputs_*`) cover runtime-width in-range / overflow / underflow, declared 32 / 16 / 8 -bit overflow and underflow, and the reconstruction invariant `r == (high << declared_bits) + low_signed_at_declared_width`. The unused `declared_width_range` helper in `src/bytecode.rs` is removed; the helper computes the range inline through `WideWord` ops. |
 
 ## Verification matrix
 
 ```bash
-cargo test --workspace                                                          # 785 lib + 53 rogue-script + 17 marshall tests, all green
-cargo test --lib --no-default-features --features compile,verify                # 699 no-floats lib tests, all green
-cargo clippy --tests --all-targets -- -D warnings                               # clean
-cargo build --examples                                                          # clean
+cargo test --workspace                                                          # 797 lib + 53 rogue-script + 17 marshall tests, all green
+cargo clippy --tests --workspace --all-features -- -D warnings                  # clean
+cargo build --examples --workspace                                              # clean
+cargo run --example zero_copy_include_bytes                                     # runtime-compile path returns 42
 cargo fmt --all                                                                 # idempotent
-
-# Bare-metal STM32N6570-DK build, full pipeline.
-(cd examples/rtos && cargo build --release --bin three-task-n6 \
-    --target thumbv8m.main-none-eabihf --no-default-features \
-    --features stm32n6570dk-platform)                                          # clean
+(cd examples/rtos && cargo build --release --bin three-task-std)                # host RTOS build clean
 ```
 
 ## Open concerns
 
-| Item | Note |
-|------|------|
-| Live soft-warning trigger test still not added. | Inherited from Phase 6. A live trigger needs a synthetic source program with > 52,428 ops; compile time alone makes this impractical. The threshold logic is exercised through `chunk_size_thresholds_are_consistent` and indirectly through code review. The hard cap path is exercised through the `CompileError` surface; the soft-warning return shape is exercised through `small_chunk_produces_no_warnings`. |
-| Narrow-bytecode-on-wide-runtime `CheckedXxx` flag / high half. | Inherited from Consolidation B. The `low` half is correctly sign-extended truncated through `truncate_int_to_declared_width`. Narrow-width overflow detection through `flag` and the `high` half is deferred to a future verifier pass. |
+None. The two carried-forward concerns from the prior round are resolved.
 
 ## Backlog summary
 
@@ -57,6 +53,5 @@ V0.2.0-isa branch is ready for merge to `main`. The natural next step is one of:
 
 - Merge the `V0.2.0-isa` branch into `main` and tag the release.
 - Manual `cargo publish` of the V0.2.0 crate (the publication step is operator-owned; the agent does not run `cargo publish`).
-- A narrow-width overflow-detection follow-up for `CheckedXxx` flag and high-half reporting under bytecode-declared narrower word width.
 - A B15 follow-on: remove `Type::Unknown` entirely now that the V0.2.0 ISA work is closed.
 - Operator selection of a different directive.

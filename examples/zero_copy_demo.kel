@@ -1,13 +1,14 @@
-// Source for the zero-copy include_bytes example.
+// Source for the zero-copy execution example. The
+// `examples/zero_copy_include_bytes.rs` example loads this
+// script via `include_str!`, compiles it at startup, copies
+// into an `AlignedVec<8>`, and demonstrates
+// `Vm::view_bytes_zero_copy` against the aligned slice.
 //
-// This file documents the source the binary `zero_copy_demo.kel.bin`
-// was compiled from. To regenerate the binary after a wire format
-// change, run:
-//
-//     cargo run --example regenerate_zero_copy_bytecode
-//
-// The output is a self-describing serialized Module conforming to
-// `BYTECODE_VERSION` in `src/bytecode.rs`.
+// V0.2.0 retired the `.kel.bin` fixture pattern that this
+// example previously relied on. Hosts that ship precompiled
+// bytecode through `include_bytes!` regenerate the artefact
+// at build time; see `examples/rtos/build.rs` for the
+// canonical build-time precompile pattern.
 
 fn double(x: Word) -> Word {
     x * 2

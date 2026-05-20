@@ -264,3 +264,28 @@ The wire format partitions the bytecode body into independently relocatable sect
 58 of 65 opcodes carry their operand inline in the 4-byte record. 7 opcodes reference the operand pool. The framing header grows from 24 bytes to 64 bytes to carry the new section offsets and lengths. The rkyv-archived encoding from R39 survives as an internal mechanism for cross-process module transport, but the execution loop consumes the fixed-size opcode + operand pool layout described above.
 
 See [INSTRUCTION_SET.md](../reference/INSTRUCTION_SET.md) for the per-opcode specification and [EXECUTION_MODEL.md](../architecture/EXECUTION_MODEL.md) for the wire format details.
+
+## R41. Five-opcode dynamic-string builder rejected
+
+V0.2.0 Phase 3.5 retired the script-side text-composition machinery. The bundled utility natives (`to_string`, `concat`, `slice`, `length`) were removed alongside f-string interpolation; only static `Value::StaticStr` literals and host-registered native functions that produce `Value::KStr` arena handles survive at the script level. The retirement raised the natural follow-up question: can the f-string surface come back through opcodes that lay bytes onto the ephemeral arena directly, without re-introducing a heap-allocating native?
+
+The proposal was a five-opcode set:
+
+- `BuildKStr(u16 capacity)` reserves a buffer of the declared byte capacity in the ephemeral arena and pushes a builder handle.
+- `KStrAppendStatic(u16 const_idx)` pops a builder, appends the bytes of the named static-string constant, and pushes the builder back.
+- `KStrAppendInt`, `KStrAppendFloat`, `KStrAppendBool` (or one polymorphic `KStrAppend`) pop a builder and a value, format the value to bytes against a fixed-precision convention, append, and push the builder back.
+- `KStrFinalize` pops a builder and pushes the resulting `Value::KStr` handle.
+
+The builder threads byte appends through the ephemeral arena. Bounded WCMU is preserved because the declared capacity at `BuildKStr` bounds the heap allocation, the value-formatting opcodes write a known maximum number of bytes per call, and the finalizer freezes the handle for use across the host boundary (subject to the cross-yield prohibition).
+
+**Decision: reject.** Three reasons.
+
+First, the five opcodes net add to the dispatch table for a feature that is properly the host's responsibility. The cost-of-purity calculus that drove the V0.2.0 ISA work prefers a smaller dispatch table at the cost of host-side composition; the host's Rust standard library is already a far better string vocabulary than any opcode set we would ship. The same applies to format-specifier handling, locale awareness, and Unicode boundary rules: pushing this into bytecode commits us to specification surface that a host-registered native can dodge by deferring to the Rust ecosystem.
+
+Second, the per-call WCMU bound is hard to make tight. `BuildKStr(capacity)` lets the producer over-declare the buffer; the verifier folds the declared capacity into the per-iteration WCMU regardless of the actual append count. Programs that issue many `BuildKStr` calls with conservative capacities consume verifier budget for buffers they never fill. The alternative of attesting the post-finalize length retroactively would require a verifier-side path that tracks the per-builder append history, which is not in the present analysis. Host-registered natives sidestep this through the per-call WCMU attestation the host already provides.
+
+Third, the V0.2.0 publication target prioritized a stable, minimal ISA. Adding a builder family at the publication step would push the opcode count back above the 65-opcode aspirational target (V0.2.0 closes at 69 after preserving the `Byte` / `Fixed` / `Float` arithmetic family; the builder family would land at 74). The structural simplicity of the ISA is load-bearing on its own.
+
+Hosts that want the f-string-like ergonomic register a `format` native that takes a static-string template plus an argument list and produces a `Value::KStr`. The per-call WCMU attestation bounds the output length; the host's Rust implementation handles formatting through the standard library; the script consumes the result through a `use` declaration. The pattern is documented in [COOKBOOK.md](../guide/COOKBOOK.md#working-with-text) and [FAQ.md](../guide/FAQ.md#strings).
+
+This rejection does not preclude a future revisit. If a real workload demonstrates that host-registered text natives are insufficient (for example, a use case where the host is too resource-constrained to format strings and a script-side builder genuinely beats a native), the builder family can return as a V0.3 addition with the WCMU-attestation gap closed first.
