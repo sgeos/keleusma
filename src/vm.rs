@@ -1571,57 +1571,12 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
     /// automatically. For functions that may fail, use
     /// [`register_fn_fallible`] instead.
     ///
-    /// [`register_fn_fallible`]: Self::register_fn_fallible
-    pub fn register_fn<Func, Args, R>(&mut self, name: &str, func: Func)
-    where
-        Func: crate::marshall::IntoNativeFn<Args, R>,
-    {
-        self.natives.push(NativeEntry {
-            wcet: DEFAULT_NATIVE_WCET,
-            wcmu_bytes: DEFAULT_NATIVE_WCMU_BYTES,
-            name: String::from(name),
-            func: func.into_native_fn(),
-        });
-    }
-
-    /// Register a fallible host function with automatic argument and
-    /// return-value marshalling.
-    ///
-    /// The function returns `Result<R, VmError>`. Errors propagate to the
-    /// script as native errors. Argument and return types must implement
-    /// `KeleusmaType`.
-    pub fn register_fn_fallible<Func, Args, R>(&mut self, name: &str, func: Func)
-    where
-        Func: crate::marshall::IntoFallibleNativeFn<Args, R>,
-    {
-        self.natives.push(NativeEntry {
-            wcet: DEFAULT_NATIVE_WCET,
-            wcmu_bytes: DEFAULT_NATIVE_WCMU_BYTES,
-            name: String::from(name),
-            func: func.into_native_fn(),
-        });
-    }
-
-    /// Register a [`crate::stddsl::Library`] bundle on the VM.
-    ///
-    /// Delegates to the library's `register` method. The bundle is
-    /// consumed by value, so unit-struct libraries drop after the
-    /// call returns. Hosts use this to install the standard
-    /// libraries:
-    ///
-    /// ```ignore
-    /// use keleusma::stddsl;
-    /// vm.register_library(stddsl::Math);
-    /// vm.register_library(stddsl::Audio);
-    /// vm.register_library(stddsl::Text);
-    /// ```
-    ///
-    /// Third-party crates may implement `Library` on their own
-    /// types to ship reusable bundles of native functions.
-    #[cfg(feature = "floats")]
-    pub fn register_library<L: crate::stddsl::Library>(&mut self, library: L) {
-        library.register(self);
-    }
+    // register_fn, register_fn_fallible, register_library are
+    // marshall-tied and live on a specialized impl<Vm<'a,
+    // 'arena>> block below. The marshall layer's IntoNativeFn /
+    // KeleusmaType / stddsl::Library traits are concrete on
+    // Value; step 6 lifts them to be parametric and these
+    // methods can move into this generic impl block.
 
     /// Re-verify resource bounds with current native attestations.
     ///
@@ -2095,8 +2050,10 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                         }
                     }
                 }
-                Op::Sub => self.binary_arith(|a, b| a.wrapping_sub(b), |a, b| a - b)?,
-                Op::Mul => self.binary_arith(|a, b| a.wrapping_mul(b), |a, b| a * b)?,
+                Op::Sub => self
+                    .binary_arith(|a: W, b: W| a.wrapping_sub(b), |a: F, b: F| a - b)?,
+                Op::Mul => self
+                    .binary_arith(|a: W, b: W| a.wrapping_mul(b), |a: F, b: F| a * b)?,
                 Op::Div => {
                     let word_bits_log2 = self.word_bits_log2();
                     let b = self.pop()?;
@@ -2718,11 +2675,11 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                             // i64::MAX/MIN on overflow.
                             let shifted = i.widen() << (frac_bits as u32);
                             let bits = if shifted > <W as crate::word::Word>::MAX.widen() {
-                                i64::MAX
+                                <W as crate::word::Word>::MAX
                             } else if shifted < <W as crate::word::Word>::MIN.widen() {
-                                i64::MIN
+                                <W as crate::word::Word>::MIN
                             } else {
-                                shifted as i64
+                                <W as crate::word::Word>::from_wide_wrap(shifted)
                             };
                             sp!(self, crate::bytecode::GenericValue::Fixed(bits));
                         }
@@ -2763,11 +2720,11 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                             let product = x.widen() * y.widen();
                             let shifted = product >> (frac_bits as u32);
                             let bits = if shifted > <W as crate::word::Word>::MAX.widen() {
-                                i64::MAX
+                                <W as crate::word::Word>::MAX
                             } else if shifted < <W as crate::word::Word>::MIN.widen() {
-                                i64::MIN
+                                <W as crate::word::Word>::MIN
                             } else {
-                                shifted as i64
+                                <W as crate::word::Word>::from_wide_wrap(shifted)
                             };
                             sp!(self, crate::bytecode::GenericValue::Fixed(bits));
                         }
@@ -2795,11 +2752,11 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                             let dividend = x.widen() << (frac_bits as u32);
                             let quotient = dividend / y.widen();
                             let bits = if quotient > <W as crate::word::Word>::MAX.widen() {
-                                i64::MAX
+                                <W as crate::word::Word>::MAX
                             } else if quotient < <W as crate::word::Word>::MIN.widen() {
-                                i64::MIN
+                                <W as crate::word::Word>::MIN
                             } else {
-                                quotient as i64
+                                <W as crate::word::Word>::from_wide_wrap(quotient)
                             };
                             sp!(self, crate::bytecode::GenericValue::Fixed(bits));
                         }
@@ -3022,47 +2979,47 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         self.stack.pop().ok_or(VmError::StackUnderflow)
     }
 
-    fn binary_arith(
+    fn binary_arith<IntOp, FloatOp>(
         &mut self,
-        int_op: fn(i64, i64) -> i64,
-        // `float_op` is kept in the signature regardless of the
-        // `floats` feature so existing call sites compile
-        // unchanged. With `floats` off the `crate::bytecode::GenericValue::Float` match arm
-        // is gated out below and the closure is unreachable; LTO
-        // strips both the closure body and the transitive
-        // `compiler_builtins` soft-float routines from the final
-        // image.
-        #[allow(unused_variables)] float_op: fn(f64, f64) -> f64,
-    ) -> Result<(), VmError> {
+        int_op: IntOp,
+        // `float_op` is kept regardless of the `floats` feature so
+        // existing call sites compile unchanged.
+        #[allow(unused_variables)] float_op: FloatOp,
+    ) -> Result<(), VmError>
+    where
+        IntOp: Fn(W, W) -> W,
+        FloatOp: Fn(F, F) -> F,
+    {
         let word_bits_log2 = self.word_bits_log2();
+        let _ = word_bits_log2;
         let b = self.pop()?;
         let a = self.pop()?;
         match (a, b) {
             (crate::bytecode::GenericValue::Int(x), crate::bytecode::GenericValue::Int(y)) => {
-                let result = crate::bytecode::truncate_int(int_op(x, y), word_bits_log2);
+                let result = int_op(x, y);
                 sp!(self, crate::bytecode::GenericValue::Int(result));
             }
             (crate::bytecode::GenericValue::Byte(x), crate::bytecode::GenericValue::Byte(y)) => {
-                // Byte arithmetic uses the integer op as if both
-                // operands had been zero-extended to i64, then
-                // truncates the result back to the low eight bits.
-                // This matches wrapping `u8` semantics for Add,
-                // Sub, and Mul. Div and Mod are handled separately
-                // by the caller because they reject zero divisors.
-                let result = int_op(x as i64, y as i64);
-                sp!(self, crate::bytecode::GenericValue::Byte((result & 0xFF) as u8));
+                // Byte arithmetic via i64 then mask: simulate the
+                // operand widening and post-result truncation that
+                // the i64 default runtime performs.
+                let result = int_op(
+                    <W as crate::word::Word>::from_i64_wrap(x as i64),
+                    <W as crate::word::Word>::from_i64_wrap(y as i64),
+                );
+                sp!(
+                    self,
+                    crate::bytecode::GenericValue::Byte((result.to_i64() & 0xFF) as u8)
+                );
             }
             (crate::bytecode::GenericValue::Fixed(x), crate::bytecode::GenericValue::Fixed(y)) => {
-                // Fixed Sub is integer sub of the fixed-point
-                // bits. Fixed Add is handled directly in `Op::Add`;
-                // Fixed Mul and Div are emitted as dedicated
-                // `Op::FixedMul` and `Op::FixedDiv` opcodes
-                // because they require the fraction-bit count.
                 let result = int_op(x, y);
                 sp!(self, crate::bytecode::GenericValue::Fixed(result));
             }
             #[cfg(feature = "floats")]
-            (crate::bytecode::GenericValue::Float(x), crate::bytecode::GenericValue::Float(y)) => sp!(self, crate::bytecode::GenericValue::Float(float_op(x, y))),
+            (crate::bytecode::GenericValue::Float(x), crate::bytecode::GenericValue::Float(y)) => {
+                sp!(self, crate::bytecode::GenericValue::Float(float_op(x, y)))
+            }
             (a, b) => {
                 return Err(VmError::TypeError(format!(
                     "type mismatch: {} and {}",
@@ -3124,15 +3081,50 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
     }
 }
 
+// Marshall-integration methods specialized to the default
+// `Vm<'a, 'arena>`. The marshall layer's IntoNativeFn /
+// KeleusmaType / stddsl::Library traits are concrete on Value;
+// step 6 of B16 lifts those traits and these methods can move
+// back to the generic impl.
+impl<'a, 'arena> Vm<'a, 'arena> {
+    /// Register an infallible host function with automatic argument and
+    /// return-value marshalling.
+    pub fn register_fn<Func, Args, R>(&mut self, name: &str, func: Func)
+    where
+        Func: crate::marshall::IntoNativeFn<Args, R>,
+    {
+        self.natives.push(NativeEntry {
+            wcet: DEFAULT_NATIVE_WCET,
+            wcmu_bytes: DEFAULT_NATIVE_WCMU_BYTES,
+            name: String::from(name),
+            func: func.into_native_fn(),
+        });
+    }
+
+    /// Register a fallible host function with automatic argument and
+    /// return-value marshalling.
+    pub fn register_fn_fallible<Func, Args, R>(&mut self, name: &str, func: Func)
+    where
+        Func: crate::marshall::IntoFallibleNativeFn<Args, R>,
+    {
+        self.natives.push(NativeEntry {
+            wcet: DEFAULT_NATIVE_WCET,
+            wcmu_bytes: DEFAULT_NATIVE_WCMU_BYTES,
+            name: String::from(name),
+            func: func.into_native_fn(),
+        });
+    }
+
+    /// Register a [`crate::stddsl::Library`] bundle on the VM.
+    #[cfg(feature = "floats")]
+    pub fn register_library<L: crate::stddsl::Library>(&mut self, library: L) {
+        library.register(self);
+    }
+}
+
 // The test module exercises the full pipeline (source through
 // VM execution) and therefore requires both the `compile` and
-// `verify` features. Without either, the helpers it imports
-// (`lexer`, `parser`, `compiler`, `verify`) are absent.
-#[cfg(all(test, feature = "compile", feature = "verify"))]
-#[cfg(all(test, feature = "compile", feature = "verify"))]
-#[cfg(all(test, feature = "compile", feature = "verify"))]
-#[cfg(all(test, feature = "compile", feature = "verify"))]
-#[cfg(all(test, feature = "compile", feature = "verify"))]
+// `verify` features.
 #[cfg(all(test, feature = "compile", feature = "verify"))]
 mod tests {
     use super::*;
