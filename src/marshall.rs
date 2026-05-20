@@ -1,10 +1,26 @@
-//! Static marshalling between Rust types and the runtime `Value` enum.
+//! Static marshalling between Rust types and the runtime [`GenericValue`] enum.
 //!
-//! This module provides the `KeleusmaType` trait for fixed-size, fixed-layout
-//! interop types and the `IntoNativeFn` and `IntoFallibleNativeFn` trait
+//! This module provides the [`KeleusmaType`] trait for fixed-size, fixed-layout
+//! interop types and the [`IntoNativeFn`] and [`IntoFallibleNativeFn`] trait
 //! families that allow the host to register Rust functions of arbitrary
-//! arity directly with the VM. The `Vm::register_fn` and
-//! `Vm::register_fn_fallible` methods are the user-facing entry points.
+//! arity directly with the VM. The [`crate::vm::Vm::register_fn`] and
+//! [`crate::vm::Vm::register_fn_fallible`] methods are the user-facing entry
+//! points.
+//!
+//! ## Parametric over (Word, Float)
+//!
+//! Step 6 of B16 lifted these traits to be generic over the runtime's
+//! word and float types. The bundled `Vm` aliases `Value =
+//! GenericValue<i64, f64>`, so existing call sites continue to compile
+//! unchanged. Hosts targeting narrower runtimes parameterise their
+//! `register_fn` calls through a local type alias; see the cookbook
+//! recipe for the pattern.
+//!
+//! The Rust-side type the host writes against does not have to match
+//! the script's word width. `impl KeleusmaType<W, F> for i64` truncates
+//! through [`Word::from_i64_wrap`] when `W` is narrower; the script
+//! sees the truncated value. Hosts that want native-width Rust types
+//! can add their own `KeleusmaType<W, F>` impls.
 //!
 //! See R30 in `docs/decisions/RESOLVED.md` for the design decision and
 //! `docs/reference/RELATED_WORK.md` Section 9 for the comparison with
@@ -14,33 +30,37 @@ extern crate alloc;
 use alloc::format;
 use alloc::vec::Vec;
 
-use crate::bytecode::Value;
+use crate::bytecode::GenericValue;
+use crate::float::Float;
 use crate::vm::VmError;
+use crate::word::Word;
 
 /// A type that can cross the host-script boundary.
 ///
-/// All implementations have statically known size. Implementations exist
-/// for primitives, the unit type, fixed-arity tuples, fixed-length arrays,
-/// and `Option<T>`. Host structs and enums become implementations through
-/// the `#[derive(KeleusmaType)]` derive macro defined in the
+/// Implementations are parametric over the runtime's word type `W`
+/// and float type `F`. All implementations have statically known
+/// size. Implementations exist for primitives, the unit type,
+/// fixed-arity tuples, fixed-length arrays, and `Option<T>`. Host
+/// structs and enums become implementations through the
+/// `#[derive(KeleusmaType)]` derive macro defined in the
 /// `keleusma-macros` crate.
-pub trait KeleusmaType: Sized {
-    /// Convert from a runtime `Value` to the Rust type.
+pub trait KeleusmaType<W: Word, F: Float>: Sized {
+    /// Convert from a runtime [`GenericValue`] to the Rust type.
     ///
-    /// Returns a `VmError::TypeError` if the value does not match the
+    /// Returns a [`VmError::TypeError`] if the value does not match the
     /// expected shape.
-    fn from_value(v: &Value) -> Result<Self, VmError>;
+    fn from_value(v: &GenericValue<W, F>) -> Result<Self, VmError>;
 
-    /// Convert from the Rust type into a runtime `Value`.
-    fn into_value(self) -> Value;
+    /// Convert from the Rust type into a runtime [`GenericValue`].
+    fn into_value(self) -> GenericValue<W, F>;
 }
 
 // -- Primitive impls --
 
-impl KeleusmaType for i64 {
-    fn from_value(v: &Value) -> Result<Self, VmError> {
+impl<W: Word, F: Float> KeleusmaType<W, F> for i64 {
+    fn from_value(v: &GenericValue<W, F>) -> Result<Self, VmError> {
         match v {
-            Value::Int(n) => Ok(*n),
+            GenericValue::Int(n) => Ok(W::to_i64(*n)),
             other => Err(VmError::TypeError(format!(
                 "expected Word, got {}",
                 other.type_name()
@@ -48,15 +68,15 @@ impl KeleusmaType for i64 {
         }
     }
 
-    fn into_value(self) -> Value {
-        Value::Int(self)
+    fn into_value(self) -> GenericValue<W, F> {
+        GenericValue::Int(W::from_i64_wrap(self))
     }
 }
 
-impl KeleusmaType for u8 {
-    fn from_value(v: &Value) -> Result<Self, VmError> {
+impl<W: Word, F: Float> KeleusmaType<W, F> for u8 {
+    fn from_value(v: &GenericValue<W, F>) -> Result<Self, VmError> {
         match v {
-            Value::Byte(b) => Ok(*b),
+            GenericValue::Byte(b) => Ok(*b),
             other => Err(VmError::TypeError(format!(
                 "expected Byte, got {}",
                 other.type_name()
@@ -64,17 +84,17 @@ impl KeleusmaType for u8 {
         }
     }
 
-    fn into_value(self) -> Value {
-        Value::Byte(self)
+    fn into_value(self) -> GenericValue<W, F> {
+        GenericValue::Byte(self)
     }
 }
 
 #[cfg(feature = "floats")]
-impl KeleusmaType for f64 {
-    fn from_value(v: &Value) -> Result<Self, VmError> {
+impl<W: Word, F: Float> KeleusmaType<W, F> for f64 {
+    fn from_value(v: &GenericValue<W, F>) -> Result<Self, VmError> {
         match v {
-            Value::Float(f) => Ok(*f),
-            Value::Int(n) => Ok(*n as f64),
+            GenericValue::Float(f) => Ok(F::to_f64(*f)),
+            GenericValue::Int(n) => Ok(W::to_i64(*n) as f64),
             other => Err(VmError::TypeError(format!(
                 "expected Float, got {}",
                 other.type_name()
@@ -82,15 +102,15 @@ impl KeleusmaType for f64 {
         }
     }
 
-    fn into_value(self) -> Value {
-        Value::Float(self)
+    fn into_value(self) -> GenericValue<W, F> {
+        GenericValue::Float(F::from_f64(self))
     }
 }
 
-impl KeleusmaType for bool {
-    fn from_value(v: &Value) -> Result<Self, VmError> {
+impl<W: Word, F: Float> KeleusmaType<W, F> for bool {
+    fn from_value(v: &GenericValue<W, F>) -> Result<Self, VmError> {
         match v {
-            Value::Bool(b) => Ok(*b),
+            GenericValue::Bool(b) => Ok(*b),
             other => Err(VmError::TypeError(format!(
                 "expected bool, got {}",
                 other.type_name()
@@ -98,15 +118,15 @@ impl KeleusmaType for bool {
         }
     }
 
-    fn into_value(self) -> Value {
-        Value::Bool(self)
+    fn into_value(self) -> GenericValue<W, F> {
+        GenericValue::Bool(self)
     }
 }
 
-impl KeleusmaType for () {
-    fn from_value(v: &Value) -> Result<Self, VmError> {
+impl<W: Word, F: Float> KeleusmaType<W, F> for () {
+    fn from_value(v: &GenericValue<W, F>) -> Result<Self, VmError> {
         match v {
-            Value::Unit => Ok(()),
+            GenericValue::Unit => Ok(()),
             other => Err(VmError::TypeError(format!(
                 "expected unit, got {}",
                 other.type_name()
@@ -114,17 +134,17 @@ impl KeleusmaType for () {
         }
     }
 
-    fn into_value(self) -> Value {
-        Value::Unit
+    fn into_value(self) -> GenericValue<W, F> {
+        GenericValue::Unit
     }
 }
 
 // -- Option<T> --
 
-impl<T: KeleusmaType> KeleusmaType for Option<T> {
-    fn from_value(v: &Value) -> Result<Self, VmError> {
+impl<W: Word, F: Float, T: KeleusmaType<W, F>> KeleusmaType<W, F> for Option<T> {
+    fn from_value(v: &GenericValue<W, F>) -> Result<Self, VmError> {
         match v {
-            Value::None => Ok(Option::None),
+            GenericValue::None => Ok(Option::None),
             other => {
                 // The runtime represents Option::Some(x) as the inner value
                 // wrapped in a single-field struct named "Some" by the compiler
@@ -139,20 +159,22 @@ impl<T: KeleusmaType> KeleusmaType for Option<T> {
         }
     }
 
-    fn into_value(self) -> Value {
+    fn into_value(self) -> GenericValue<W, F> {
         match self {
             Some(t) => t.into_value(),
-            Option::None => Value::None,
+            Option::None => GenericValue::None,
         }
     }
 }
 
 // -- Fixed-length arrays --
 
-impl<T: KeleusmaType + Clone, const N: usize> KeleusmaType for [T; N] {
-    fn from_value(v: &Value) -> Result<Self, VmError> {
+impl<W: Word, F: Float, T: KeleusmaType<W, F> + Clone, const N: usize> KeleusmaType<W, F>
+    for [T; N]
+{
+    fn from_value(v: &GenericValue<W, F>) -> Result<Self, VmError> {
         match v {
-            Value::Array(items) => {
+            GenericValue::Array(items) => {
                 if items.len() != N {
                     return Err(VmError::TypeError(format!(
                         "expected array of length {}, got {}",
@@ -175,9 +197,9 @@ impl<T: KeleusmaType + Clone, const N: usize> KeleusmaType for [T; N] {
         }
     }
 
-    fn into_value(self) -> Value {
-        let items: Vec<Value> = self.into_iter().map(|t| t.into_value()).collect();
-        Value::Array(items)
+    fn into_value(self) -> GenericValue<W, F> {
+        let items: Vec<GenericValue<W, F>> = self.into_iter().map(|t| t.into_value()).collect();
+        GenericValue::Array(items)
     }
 }
 
@@ -185,11 +207,13 @@ impl<T: KeleusmaType + Clone, const N: usize> KeleusmaType for [T; N] {
 
 macro_rules! impl_tuple {
     ($($name:ident: $idx:tt),*) => {
-        impl<$($name: KeleusmaType),*> KeleusmaType for ($($name,)*) {
+        impl<W: Word, FloatT: Float, $($name: KeleusmaType<W, FloatT>),*>
+            KeleusmaType<W, FloatT> for ($($name,)*)
+        {
             #[allow(clippy::unused_unit, unused_assignments, non_snake_case)]
-            fn from_value(v: &Value) -> Result<Self, VmError> {
+            fn from_value(v: &GenericValue<W, FloatT>) -> Result<Self, VmError> {
                 match v {
-                    Value::Tuple(items) => {
+                    GenericValue::Tuple(items) => {
                         let expected = [$(stringify!($name),)*].len();
                         if items.len() != expected {
                             return Err(VmError::TypeError(format!(
@@ -208,9 +232,9 @@ macro_rules! impl_tuple {
             }
 
             #[allow(non_snake_case)]
-            fn into_value(self) -> Value {
+            fn into_value(self) -> GenericValue<W, FloatT> {
                 let ($($name,)*) = self;
-                Value::Tuple(::alloc::vec![$($name.into_value(),)*])
+                GenericValue::Tuple(::alloc::vec![$($name.into_value(),)*])
             }
         }
     };
@@ -228,8 +252,11 @@ impl_tuple!(A: 0, B: 1, C: 2, D: 3, E: 4);
 /// All native functions internally accept a [`crate::vm::NativeCtx`]
 /// to support arena-aware natives. Marshalled functions registered
 /// through this trait family ignore the context.
-type BoxedNativeFn = alloc::boxed::Box<
-    dyn for<'a> Fn(&crate::vm::NativeCtx<'a>, &[Value]) -> Result<Value, VmError>,
+pub type BoxedNativeFn<W, F> = alloc::boxed::Box<
+    dyn for<'a> Fn(
+        &crate::vm::NativeCtx<'a>,
+        &[GenericValue<W, F>],
+    ) -> Result<GenericValue<W, F>, VmError>,
 >;
 
 /// A function-like value whose Rust signature can be wrapped as a native
@@ -237,29 +264,31 @@ type BoxedNativeFn = alloc::boxed::Box<
 /// closure or function signature. `R` is the return type.
 ///
 /// Implementations exist for arities 0 through 4 with infallible return
-/// types. Use `IntoFallibleNativeFn` for functions that return
+/// types. Use [`IntoFallibleNativeFn`] for functions that return
 /// `Result<R, VmError>`.
-pub trait IntoNativeFn<Args, R> {
-    fn into_native_fn(self) -> BoxedNativeFn;
+pub trait IntoNativeFn<W: Word, F: Float, Args, R> {
+    fn into_native_fn(self) -> BoxedNativeFn<W, F>;
 }
 
 /// A function-like value whose Rust return type is `Result<R, VmError>`.
-pub trait IntoFallibleNativeFn<Args, R> {
-    fn into_native_fn(self) -> BoxedNativeFn;
+pub trait IntoFallibleNativeFn<W: Word, F: Float, Args, R> {
+    fn into_native_fn(self) -> BoxedNativeFn<W, F>;
 }
 
 macro_rules! impl_into_native_fn {
     ($arity:expr; $($name:ident: $idx:tt),*) => {
-        impl<F, $($name,)* R> IntoNativeFn<($($name,)*), R> for F
+        impl<W: Word, FloatT: Float, Func, $($name,)* R>
+            IntoNativeFn<W, FloatT, ($($name,)*), R> for Func
         where
-            F: Fn($($name,)*) -> R + 'static,
-            $($name: KeleusmaType,)*
-            R: KeleusmaType,
+            Func: Fn($($name,)*) -> R + 'static,
+            $($name: KeleusmaType<W, FloatT>,)*
+            R: KeleusmaType<W, FloatT>,
         {
             #[allow(unused_variables, clippy::let_unit_value, non_snake_case)]
-            fn into_native_fn(self) -> BoxedNativeFn {
+            fn into_native_fn(self) -> BoxedNativeFn<W, FloatT> {
                 alloc::boxed::Box::new(
-                    move |_ctx: &crate::vm::NativeCtx<'_>, args: &[Value]| -> Result<Value, VmError> {
+                    move |_ctx: &crate::vm::NativeCtx<'_>, args: &[GenericValue<W, FloatT>]|
+                        -> Result<GenericValue<W, FloatT>, VmError> {
                         if args.len() != $arity {
                             return Err(VmError::NativeError(format!(
                                 "native function expected {} argument(s), got {}",
@@ -268,7 +297,7 @@ macro_rules! impl_into_native_fn {
                             )));
                         }
                         $(
-                            let $name = $name::from_value(&args[$idx])?;
+                            let $name = <$name as KeleusmaType<W, FloatT>>::from_value(&args[$idx])?;
                         )*
                         Ok(self($($name,)*).into_value())
                     },
@@ -276,16 +305,18 @@ macro_rules! impl_into_native_fn {
             }
         }
 
-        impl<F, $($name,)* R> IntoFallibleNativeFn<($($name,)*), R> for F
+        impl<W: Word, FloatT: Float, Func, $($name,)* R>
+            IntoFallibleNativeFn<W, FloatT, ($($name,)*), R> for Func
         where
-            F: Fn($($name,)*) -> Result<R, VmError> + 'static,
-            $($name: KeleusmaType,)*
-            R: KeleusmaType,
+            Func: Fn($($name,)*) -> Result<R, VmError> + 'static,
+            $($name: KeleusmaType<W, FloatT>,)*
+            R: KeleusmaType<W, FloatT>,
         {
             #[allow(unused_variables, clippy::let_unit_value, non_snake_case)]
-            fn into_native_fn(self) -> BoxedNativeFn {
+            fn into_native_fn(self) -> BoxedNativeFn<W, FloatT> {
                 alloc::boxed::Box::new(
-                    move |_ctx: &crate::vm::NativeCtx<'_>, args: &[Value]| -> Result<Value, VmError> {
+                    move |_ctx: &crate::vm::NativeCtx<'_>, args: &[GenericValue<W, FloatT>]|
+                        -> Result<GenericValue<W, FloatT>, VmError> {
                         if args.len() != $arity {
                             return Err(VmError::NativeError(format!(
                                 "native function expected {} argument(s), got {}",
@@ -294,9 +325,9 @@ macro_rules! impl_into_native_fn {
                             )));
                         }
                         $(
-                            let $name = $name::from_value(&args[$idx])?;
+                            let $name = <$name as KeleusmaType<W, FloatT>>::from_value(&args[$idx])?;
                         )*
-                        self($($name,)*).map(KeleusmaType::into_value)
+                        self($($name,)*).map(<R as KeleusmaType<W, FloatT>>::into_value)
                     },
                 )
             }
@@ -315,28 +346,47 @@ impl_into_native_fn!(4; A: 0, B: 1, C: 2, D: 3);
 #[cfg(all(test, feature = "floats"))]
 mod tests {
     use super::*;
+    use crate::bytecode::Value;
 
     #[test]
     fn primitive_roundtrip() {
-        assert_eq!(i64::from_value(&Value::Int(42)).unwrap(), 42);
-        assert_eq!(f64::from_value(&Value::Float(2.5)).unwrap(), 2.5);
-        assert!(bool::from_value(&Value::Bool(true)).unwrap());
-        <()>::from_value(&Value::Unit).unwrap();
+        assert_eq!(
+            <i64 as KeleusmaType<i64, f64>>::from_value(&Value::Int(42)).unwrap(),
+            42
+        );
+        assert_eq!(
+            <f64 as KeleusmaType<i64, f64>>::from_value(&Value::Float(2.5)).unwrap(),
+            2.5
+        );
+        assert!(<bool as KeleusmaType<i64, f64>>::from_value(&Value::Bool(true)).unwrap());
+        <() as KeleusmaType<i64, f64>>::from_value(&Value::Unit).unwrap();
 
-        assert_eq!(42i64.into_value(), Value::Int(42));
-        assert_eq!(2.5f64.into_value(), Value::Float(2.5));
-        assert_eq!(true.into_value(), Value::Bool(true));
-        assert_eq!(().into_value(), Value::Unit);
+        assert_eq!(
+            <i64 as KeleusmaType<i64, f64>>::into_value(42i64),
+            Value::Int(42)
+        );
+        assert_eq!(
+            <f64 as KeleusmaType<i64, f64>>::into_value(2.5f64),
+            Value::Float(2.5)
+        );
+        assert_eq!(
+            <bool as KeleusmaType<i64, f64>>::into_value(true),
+            Value::Bool(true)
+        );
+        assert_eq!(<() as KeleusmaType<i64, f64>>::into_value(()), Value::Unit);
     }
 
     #[test]
     fn i64_to_f64_widening() {
-        assert_eq!(f64::from_value(&Value::Int(7)).unwrap(), 7.0);
+        assert_eq!(
+            <f64 as KeleusmaType<i64, f64>>::from_value(&Value::Int(7)).unwrap(),
+            7.0
+        );
     }
 
     #[test]
     fn type_mismatch_errors() {
-        let err = i64::from_value(&Value::Bool(true)).unwrap_err();
+        let err = <i64 as KeleusmaType<i64, f64>>::from_value(&Value::Bool(true)).unwrap_err();
         match err {
             VmError::TypeError(msg) => assert!(msg.contains("expected Word")),
             other => panic!("expected TypeError, got {:?}", other),
@@ -345,41 +395,44 @@ mod tests {
 
     #[test]
     fn option_roundtrip() {
-        let some = Some(42i64).into_value();
+        let some = <Option<i64> as KeleusmaType<i64, f64>>::into_value(Some(42i64));
         assert_eq!(some, Value::Int(42));
-        let none = Option::<i64>::None.into_value();
+        let none = <Option<i64> as KeleusmaType<i64, f64>>::into_value(Option::<i64>::None);
         assert_eq!(none, Value::None);
 
-        let recovered: Option<i64> = Option::<i64>::from_value(&Value::Int(42)).unwrap();
+        let recovered: Option<i64> =
+            <Option<i64> as KeleusmaType<i64, f64>>::from_value(&Value::Int(42)).unwrap();
         assert_eq!(recovered, Some(42));
-        let recovered_none: Option<i64> = Option::<i64>::from_value(&Value::None).unwrap();
+        let recovered_none: Option<i64> =
+            <Option<i64> as KeleusmaType<i64, f64>>::from_value(&Value::None).unwrap();
         assert_eq!(recovered_none, Option::None);
     }
 
     #[test]
     fn tuple_roundtrip() {
         let t = (1i64, 2.0f64, true);
-        let v = t.into_value();
+        let v = <(i64, f64, bool) as KeleusmaType<i64, f64>>::into_value(t);
         match &v {
             Value::Tuple(items) => assert_eq!(items.len(), 3),
             other => panic!("expected tuple, got {:?}", other),
         }
-        let r: (i64, f64, bool) = <(i64, f64, bool)>::from_value(&v).unwrap();
+        let r: (i64, f64, bool) =
+            <(i64, f64, bool) as KeleusmaType<i64, f64>>::from_value(&v).unwrap();
         assert_eq!(r, (1, 2.0, true));
     }
 
     #[test]
     fn array_roundtrip() {
         let a: [i64; 3] = [10, 20, 30];
-        let v = a.into_value();
-        let r: [i64; 3] = <[i64; 3]>::from_value(&v).unwrap();
+        let v = <[i64; 3] as KeleusmaType<i64, f64>>::into_value(a);
+        let r: [i64; 3] = <[i64; 3] as KeleusmaType<i64, f64>>::from_value(&v).unwrap();
         assert_eq!(r, [10, 20, 30]);
     }
 
     #[test]
     fn array_length_mismatch() {
         let v = Value::Array(::alloc::vec![Value::Int(1), Value::Int(2)]);
-        let err = <[i64; 3]>::from_value(&v).unwrap_err();
+        let err = <[i64; 3] as KeleusmaType<i64, f64>>::from_value(&v).unwrap_err();
         match err {
             VmError::TypeError(msg) => assert!(msg.contains("length")),
             other => panic!("expected TypeError, got {:?}", other),
@@ -393,7 +446,7 @@ mod tests {
     #[test]
     fn into_native_fn_arity_zero() {
         let f = || 42i64;
-        let native = IntoNativeFn::into_native_fn(f);
+        let native = <_ as IntoNativeFn<i64, f64, (), i64>>::into_native_fn(f);
         let arena = keleusma_arena::Arena::with_capacity(64);
         let r = native(&ctx(&arena), &[]).unwrap();
         assert_eq!(r, Value::Int(42));
@@ -402,7 +455,7 @@ mod tests {
     #[test]
     fn into_native_fn_arity_one() {
         let f = |x: i64| x * 2;
-        let native = IntoNativeFn::into_native_fn(f);
+        let native = <_ as IntoNativeFn<i64, f64, (i64,), i64>>::into_native_fn(f);
         let arena = keleusma_arena::Arena::with_capacity(64);
         let r = native(&ctx(&arena), &[Value::Int(7)]).unwrap();
         assert_eq!(r, Value::Int(14));
@@ -411,7 +464,7 @@ mod tests {
     #[test]
     fn into_native_fn_arity_two() {
         let f = |a: i64, b: i64| a + b;
-        let native = IntoNativeFn::into_native_fn(f);
+        let native = <_ as IntoNativeFn<i64, f64, (i64, i64), i64>>::into_native_fn(f);
         let arena = keleusma_arena::Arena::with_capacity(64);
         let r = native(&ctx(&arena), &[Value::Int(3), Value::Int(4)]).unwrap();
         assert_eq!(r, Value::Int(7));
@@ -420,7 +473,7 @@ mod tests {
     #[test]
     fn into_native_fn_arity_mismatch_errors() {
         let f = |x: i64| x;
-        let native = IntoNativeFn::into_native_fn(f);
+        let native = <_ as IntoNativeFn<i64, f64, (i64,), i64>>::into_native_fn(f);
         let arena = keleusma_arena::Arena::with_capacity(64);
         let err = native(&ctx(&arena), &[Value::Int(1), Value::Int(2)]).unwrap_err();
         match err {
@@ -438,7 +491,7 @@ mod tests {
                 Ok(100 / x)
             }
         };
-        let native = IntoFallibleNativeFn::into_native_fn(f);
+        let native = <_ as IntoFallibleNativeFn<i64, f64, (i64,), i64>>::into_native_fn(f);
         let arena = keleusma_arena::Arena::with_capacity(64);
         let r = native(&ctx(&arena), &[Value::Int(5)]).unwrap();
         assert_eq!(r, Value::Int(20));
@@ -451,7 +504,7 @@ mod tests {
 
     #[test]
     fn type_error_message_contains_typename() {
-        let err = i64::from_value(&Value::Float(1.5)).unwrap_err();
+        let err = <i64 as KeleusmaType<i64, f64>>::from_value(&Value::Float(1.5)).unwrap_err();
         match err {
             VmError::TypeError(msg) => {
                 assert!(msg.contains("Float"), "got message: {}", msg)

@@ -75,19 +75,13 @@ impl Platform for StdPlatform {
         // visibly instead of silently dropping the event.
         match code {
             crate::natives::EV_HEARTBEAT_OK => {
-                println!(
-                    "[t={:>6}ms] heartbeat: system OK (count={})",
-                    t, data
-                );
+                println!("[t={:>6}ms] heartbeat: system OK (count={})", t, data);
             }
             crate::natives::EV_LED_GPIO_FAIL => {
                 println!("[t={:>6}ms] led: gpio_set failed, code={}", t, data);
             }
             crate::natives::EV_SENSOR_ABOVE => {
-                println!(
-                    "[t={:>6}ms] sensor ch0 ABOVE threshold (value={})",
-                    t, data
-                );
+                println!("[t={:>6}ms] sensor ch0 ABOVE threshold (value={})", t, data);
             }
             crate::natives::EV_KERNEL_VM_ERROR => {
                 let category = match data {
@@ -114,22 +108,13 @@ impl Platform for StdPlatform {
                 );
             }
             crate::natives::EV_KERNEL_UNEXPECTED_STATE => {
-                println!(
-                    "[t={:>6}ms] kernel: task returned unexpected vm state",
-                    t
-                );
+                println!("[t={:>6}ms] kernel: task returned unexpected vm state", t);
             }
             crate::natives::EV_KERNEL_TASK_RESTARTED => {
-                println!(
-                    "[t={:>6}ms] kernel: task restarted (count={})",
-                    t, data
-                );
+                println!("[t={:>6}ms] kernel: task restarted (count={})", t, data);
             }
             crate::natives::EV_EVENT_LISTENER_WAKE => {
-                println!(
-                    "[t={:>6}ms] event_listener: woke (wake_count={})",
-                    t, data
-                );
+                println!("[t={:>6}ms] event_listener: woke (wake_count={})", t, data);
             }
             crate::natives::EV_FAULTY_TRIGGER => {
                 println!(

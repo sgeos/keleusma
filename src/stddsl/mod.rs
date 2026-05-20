@@ -43,7 +43,10 @@
 
 extern crate alloc;
 
-use crate::vm::Vm;
+use crate::address::Address;
+use crate::float::Float;
+use crate::vm::{GenericVm, Vm};
+use crate::word::Word;
 
 /// Host-registerable bundle of native functions.
 ///
@@ -53,12 +56,18 @@ use crate::vm::Vm;
 /// The trait method takes `self` by value so unit structs can be
 /// dropped after registration.
 ///
-/// Hosts call [`Vm::register_library`] which delegates to
+/// Hosts call [`GenericVm::register_library`] which delegates to
 /// [`Library::register`]; the trait is the extensibility surface
 /// for third-party bundles.
-pub trait Library {
+///
+/// The trait is parametric over the runtime's word, address, and
+/// float types so library authors can opt their bundles into
+/// narrow-runtime support. The standard bundles ([`Math`],
+/// [`Audio`], [`Text`], [`Shell`]) are presently implemented only
+/// for the default `(i64, u64, f64)` shape.
+pub trait Library<W: Word, A: Address, F: Float> {
     /// Register every native function in this bundle on `vm`.
-    fn register<'a, 'arena>(self, vm: &mut Vm<'a, 'arena>);
+    fn register<'a, 'arena>(self, vm: &mut GenericVm<'a, 'arena, W, A, F>);
 }
 
 /// Pure floating-point math routines and named constants.
@@ -127,26 +136,26 @@ pub struct Text;
 /// `shell` feature enabled.
 pub struct Shell;
 
-impl Library for Math {
+impl Library<i64, u64, f64> for Math {
     fn register<'a, 'arena>(self, vm: &mut Vm<'a, 'arena>) {
         math::register(vm);
     }
 }
 
-impl Library for Audio {
+impl Library<i64, u64, f64> for Audio {
     fn register<'a, 'arena>(self, vm: &mut Vm<'a, 'arena>) {
         crate::audio_natives::register_audio_natives(vm);
     }
 }
 
-impl Library for Text {
+impl Library<i64, u64, f64> for Text {
     fn register<'a, 'arena>(self, vm: &mut Vm<'a, 'arena>) {
         text::register(vm);
     }
 }
 
 #[cfg(feature = "shell")]
-impl Library for Shell {
+impl Library<i64, u64, f64> for Shell {
     fn register<'a, 'arena>(self, vm: &mut Vm<'a, 'arena>) {
         shell::register(vm);
     }

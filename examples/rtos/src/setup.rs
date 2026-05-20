@@ -157,7 +157,13 @@ pub fn three_task_kernel_with_arena_capacity<P: Platform>(
     // event-listener and faulty tasks demonstrate the per-task
     // budget mechanism: pass `Some(budget)` to reject hot swaps
     // whose declared WCET exceeds the budget.
-    kernel.add_task(build_task_full::<P>("led", led_src, arena_capacity, None, 0)?);
+    kernel.add_task(build_task_full::<P>(
+        "led",
+        led_src,
+        arena_capacity,
+        None,
+        0,
+    )?);
     kernel.add_task(build_task_full::<P>(
         "sensor",
         sensor_src,
@@ -265,7 +271,13 @@ pub fn build_task_full<P: Platform>(
     max_restarts: u32,
 ) -> Result<Task, String> {
     let module = build_module(src).map_err(|e| format!("build_module for {}: {}", name, e))?;
-    finish_build_task::<P>(name, module, arena_capacity, wcet_budget_cycles, max_restarts)
+    finish_build_task::<P>(
+        name,
+        module,
+        arena_capacity,
+        wcet_budget_cycles,
+        max_restarts,
+    )
 }
 
 #[cfg(not(feature = "keleusma-compile"))]
@@ -276,9 +288,15 @@ pub fn build_task_full<P: Platform>(
     wcet_budget_cycles: Option<u32>,
     max_restarts: u32,
 ) -> Result<Task, String> {
-    let module = Module::from_bytes(bytes)
-        .map_err(|e| format!("load_module for {}: {:?}", name, e))?;
-    finish_build_task::<P>(name, module, arena_capacity, wcet_budget_cycles, max_restarts)
+    let module =
+        Module::from_bytes(bytes).map_err(|e| format!("load_module for {}: {:?}", name, e))?;
+    finish_build_task::<P>(
+        name,
+        module,
+        arena_capacity,
+        wcet_budget_cycles,
+        max_restarts,
+    )
 }
 
 /// Shared tail of [`build_task_with_arena_capacity`]. Validates

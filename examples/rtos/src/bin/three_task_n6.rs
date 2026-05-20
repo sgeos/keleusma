@@ -155,17 +155,16 @@ async fn main(_spawner: Spawner) {
     );
     info!("Tasks: led (500ms), sensor (100ms), heartbeat (5000ms)");
 
-    let mut kernel = match three_task_kernel_with_arena_capacity::<Stm32N6570DkPlatform>(
-        TASK_ARENA_CAPACITY,
-    ) {
-        Ok(k) => k,
-        Err(e) => {
-            defmt::error!("kernel construction failed: {=str}", e.as_str());
-            loop {
-                embassy_time::Timer::after_millis(1000).await;
+    let mut kernel =
+        match three_task_kernel_with_arena_capacity::<Stm32N6570DkPlatform>(TASK_ARENA_CAPACITY) {
+            Ok(k) => k,
+            Err(e) => {
+                defmt::error!("kernel construction failed: {=str}", e.as_str());
+                loop {
+                    embassy_time::Timer::after_millis(1000).await;
+                }
             }
-        }
-    };
+        };
 
     info!("kernel: scheduler entering loop");
     kernel.run().await;

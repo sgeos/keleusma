@@ -3335,19 +3335,18 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
     }
 }
 
-// Marshall-integration methods specialized to the default
-// `Vm<'a, 'arena>`. The marshall layer's IntoNativeFn /
-// KeleusmaType / stddsl::Library traits are concrete on Value;
-// step 6 of B16 lifts those traits and these methods can move
-// back to the generic impl.
-impl<'a, 'arena> Vm<'a, 'arena> {
+// Marshall-integration methods. The marshall layer's
+// IntoNativeFn / KeleusmaType / stddsl::Library traits are
+// parametric over (W, F); these methods quantify the same way
+// so any `GenericVm<W, A, F>` can register host functions.
+impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::float::Float>
+    GenericVm<'a, 'arena, W, A, F>
+{
     /// Register an infallible host function with automatic argument and
-    /// return-value marshalling.
     /// return-value marshalling.
     pub fn register_fn<Func, Args, R>(&mut self, name: &str, func: Func)
     where
-        Func: crate::marshall::IntoNativeFn<Args, R>,
-        Func: crate::marshall::IntoNativeFn<Args, R>,
+        Func: crate::marshall::IntoNativeFn<W, F, Args, R>,
     {
         self.natives.push(NativeEntry {
             wcet: DEFAULT_NATIVE_WCET,
@@ -3361,7 +3360,7 @@ impl<'a, 'arena> Vm<'a, 'arena> {
     /// return-value marshalling.
     pub fn register_fn_fallible<Func, Args, R>(&mut self, name: &str, func: Func)
     where
-        Func: crate::marshall::IntoFallibleNativeFn<Args, R>,
+        Func: crate::marshall::IntoFallibleNativeFn<W, F, Args, R>,
     {
         self.natives.push(NativeEntry {
             wcet: DEFAULT_NATIVE_WCET,
@@ -3373,7 +3372,7 @@ impl<'a, 'arena> Vm<'a, 'arena> {
 
     /// Register a [`crate::stddsl::Library`] bundle on the VM.
     #[cfg(feature = "floats")]
-    pub fn register_library<L: crate::stddsl::Library>(&mut self, library: L) {
+    pub fn register_library<L: crate::stddsl::Library<W, A, F>>(&mut self, library: L) {
         library.register(self);
     }
 }

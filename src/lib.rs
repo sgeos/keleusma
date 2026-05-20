@@ -80,12 +80,15 @@ pub use keleusma_arena::{
 };
 pub use kstring::KString;
 
+pub use address::Address;
 pub use bytecode::{
-    CostModel, Module, NOMINAL_COST_MODEL, OpCost, OpCostContext, VALUE_SLOT_SIZE_BYTES, Value,
-    nominal_op_cycles,
+    CostModel, GenericValue, Module, NOMINAL_COST_MODEL, OpCost, OpCostContext,
+    VALUE_SLOT_SIZE_BYTES, Value, nominal_op_cycles,
 };
+pub use float::Float;
 pub use keleusma_macros::KeleusmaType;
 pub use marshall::{IntoFallibleNativeFn, IntoNativeFn, KeleusmaType};
+pub use word::Word;
 pub use opaque::{HostOpaque, host_arc};
 #[cfg(feature = "verify")]
 pub use text_size::{TextSize, op_cost_context};

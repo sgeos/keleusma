@@ -40,7 +40,7 @@ struct Frame {
 #[test]
 fn derive_struct_roundtrip() {
     let p = Point { x: 3.0, y: 4.0 };
-    let v = p.clone().into_value();
+    let v: Value = p.clone().into_value();
     let recovered = Point::from_value(&v).unwrap();
     assert_eq!(recovered, p);
 }
@@ -52,7 +52,7 @@ fn derive_nested_struct_roundtrip() {
         width: 100.0,
         height: 50.0,
     };
-    let v = f.clone().into_value();
+    let v: Value = f.clone().into_value();
     let recovered = Frame::from_value(&v).unwrap();
     assert_eq!(recovered, f);
 }
@@ -99,7 +99,7 @@ enum Status {
 #[test]
 fn derive_enum_unit_variant() {
     let s = Status::Idle;
-    let v = s.clone().into_value();
+    let v: Value = s.clone().into_value();
     let recovered = Status::from_value(&v).unwrap();
     assert_eq!(recovered, s);
 }
@@ -107,7 +107,7 @@ fn derive_enum_unit_variant() {
 #[test]
 fn derive_enum_tuple_variant_one_field() {
     let s = Status::Active(42);
-    let v = s.clone().into_value();
+    let v: Value = s.clone().into_value();
     let recovered = Status::from_value(&v).unwrap();
     assert_eq!(recovered, s);
 }
@@ -115,7 +115,7 @@ fn derive_enum_tuple_variant_one_field() {
 #[test]
 fn derive_enum_tuple_variant_two_fields() {
     let s = Status::Pair(7, 2.5);
-    let v = s.clone().into_value();
+    let v: Value = s.clone().into_value();
     let recovered = Status::from_value(&v).unwrap();
     assert_eq!(recovered, s);
 }
@@ -123,7 +123,7 @@ fn derive_enum_tuple_variant_two_fields() {
 #[test]
 fn derive_enum_struct_variant() {
     let s = Status::Range { start: 1, end: 10 };
-    let v = s.clone().into_value();
+    let v: Value = s.clone().into_value();
     let recovered = Status::from_value(&v).unwrap();
     assert_eq!(recovered, s);
 }

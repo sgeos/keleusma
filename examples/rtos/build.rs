@@ -66,18 +66,14 @@ fn precompile_scripts() {
             .unwrap_or_else(|e| panic!("read script {:?}: {}", src_path, e));
         let combined = format!("{}\n{}", prelude_src, task_src);
 
-        let tokens =
-            tokenize(&combined).unwrap_or_else(|e| panic!("lex {}: {:?}", name, e));
-        let program =
-            parse(&tokens).unwrap_or_else(|e| panic!("parse {}: {:?}", name, e));
-        let module =
-            compile(&program).unwrap_or_else(|e| panic!("compile {}: {:?}", name, e));
+        let tokens = tokenize(&combined).unwrap_or_else(|e| panic!("lex {}: {:?}", name, e));
+        let program = parse(&tokens).unwrap_or_else(|e| panic!("parse {}: {:?}", name, e));
+        let module = compile(&program).unwrap_or_else(|e| panic!("compile {}: {:?}", name, e));
         let bytes = module
             .to_bytes()
             .unwrap_or_else(|e| panic!("serialize {}: {:?}", name, e));
 
         let out_path = out_dir.join(format!("{}.kel.bin", name));
-        fs::write(&out_path, &bytes)
-            .unwrap_or_else(|e| panic!("write {:?}: {}", out_path, e));
+        fs::write(&out_path, &bytes).unwrap_or_else(|e| panic!("write {:?}: {}", out_path, e));
     }
 }

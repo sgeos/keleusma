@@ -71,7 +71,19 @@ pub fn derive_keleusma_type(input: TokenStream) -> TokenStream {
     let name = &input.ident;
     let name_str = name.to_string();
     let generics = &input.generics;
-    let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
+    let (_, ty_generics, where_clause) = generics.split_for_impl();
+
+    // Synthesise an impl-generics list with the parametric VM's
+    // Word and Float type parameters appended so the derived impl
+    // applies to any `Vm<W, A, F>` shape.
+    let mut generics_with_wf = generics.clone();
+    generics_with_wf
+        .params
+        .push(syn::parse_quote!(__KW: ::keleusma::Word));
+    generics_with_wf
+        .params
+        .push(syn::parse_quote!(__KF: ::keleusma::Float));
+    let (impl_generics_wf, _, _) = generics_with_wf.split_for_impl();
 
     let body = match &input.data {
         Data::Struct(data) => derive_struct_body(name, &name_str, data),
@@ -84,7 +96,9 @@ pub fn derive_keleusma_type(input: TokenStream) -> TokenStream {
     };
 
     let expanded = quote! {
-        impl #impl_generics ::keleusma::KeleusmaType for #name #ty_generics #where_clause {
+        impl #impl_generics_wf ::keleusma::KeleusmaType<__KW, __KF>
+            for #name #ty_generics #where_clause
+        {
             #body
         }
     };
@@ -103,16 +117,18 @@ fn derive_struct_body(_name: &Ident, name_str: &str, data: &DataStruct) -> Token
             let field_types: Vec<&syn::Type> = fields_named.named.iter().map(|f| &f.ty).collect();
 
             quote! {
-                fn from_value(v: &::keleusma::Value) -> ::core::result::Result<Self, ::keleusma::VmError> {
+                fn from_value(v: &::keleusma::GenericValue<__KW, __KF>)
+                    -> ::core::result::Result<Self, ::keleusma::VmError>
+                {
                     match v {
-                        ::keleusma::Value::Struct { type_name, fields } if type_name == #name_str => {
+                        ::keleusma::GenericValue::Struct { type_name, fields } if type_name == #name_str => {
                             #(
                                 let #field_names = {
                                     let pair = fields.iter().find(|(n, _)| n == #field_name_strs)
                                         .ok_or_else(|| ::keleusma::VmError::TypeError(
                                             ::alloc::format!("missing field `{}` on `{}`", #field_name_strs, #name_str)
                                         ))?;
-                                    <#field_types as ::keleusma::KeleusmaType>::from_value(&pair.1)?
+                                    <#field_types as ::keleusma::KeleusmaType<__KW, __KF>>::from_value(&pair.1)?
                                 };
                             )*
                             ::core::result::Result::Ok(Self { #(#field_names),* })
@@ -123,16 +139,19 @@ fn derive_struct_body(_name: &Ident, name_str: &str, data: &DataStruct) -> Token
                     }
                 }
 
-                fn into_value(self) -> ::keleusma::Value {
-                    let fields: ::alloc::vec::Vec<(::alloc::string::String, ::keleusma::Value)> = ::alloc::vec![
+                fn into_value(self) -> ::keleusma::GenericValue<__KW, __KF> {
+                    let fields: ::alloc::vec::Vec<(
+                        ::alloc::string::String,
+                        ::keleusma::GenericValue<__KW, __KF>,
+                    )> = ::alloc::vec![
                         #(
                             (
                                 ::alloc::string::String::from(#field_name_strs),
-                                <#field_types as ::keleusma::KeleusmaType>::into_value(self.#field_names),
+                                <#field_types as ::keleusma::KeleusmaType<__KW, __KF>>::into_value(self.#field_names),
                             ),
                         )*
                     ];
-                    ::keleusma::Value::Struct {
+                    ::keleusma::GenericValue::Struct {
                         type_name: ::alloc::string::String::from(#name_str),
                         fields,
                     }
@@ -181,7 +200,7 @@ fn derive_enum_body(_name: &Ident, name_str: &str, data: &DataEnum) -> TokenStre
                                 ));
                             }
                             #(
-                                let #bindings = <#types as ::keleusma::KeleusmaType>::from_value(&fields[#positions])?;
+                                let #bindings = <#types as ::keleusma::KeleusmaType<__KW, __KF>>::from_value(&fields[#positions])?;
                             )*
                             ::core::result::Result::Ok(Self::#v_ident(#(#bindings),*))
                         }
@@ -200,7 +219,7 @@ fn derive_enum_body(_name: &Ident, name_str: &str, data: &DataEnum) -> TokenStre
                                 ));
                             }
                             #(
-                                let #names = <#types as ::keleusma::KeleusmaType>::from_value(&fields[#positions])?;
+                                let #names = <#types as ::keleusma::KeleusmaType<__KW, __KF>>::from_value(&fields[#positions])?;
                             )*
                             ::core::result::Result::Ok(Self::#v_ident { #(#names),* })
                         }
@@ -218,7 +237,7 @@ fn derive_enum_body(_name: &Ident, name_str: &str, data: &DataEnum) -> TokenStre
             let v_str = v_ident.to_string();
             match &v.fields {
                 Fields::Unit => quote! {
-                    Self::#v_ident => ::keleusma::Value::Enum {
+                    Self::#v_ident => ::keleusma::GenericValue::Enum {
                         type_name: ::alloc::string::String::from(#name_str),
                         variant: ::alloc::string::String::from(#v_str),
                         fields: ::alloc::vec::Vec::new(),
@@ -231,12 +250,12 @@ fn derive_enum_body(_name: &Ident, name_str: &str, data: &DataEnum) -> TokenStre
                         .map(|i| Ident::new(&format!("__f{}", i), proc_macro2::Span::call_site()))
                         .collect();
                     quote! {
-                        Self::#v_ident(#(#bindings),*) => ::keleusma::Value::Enum {
+                        Self::#v_ident(#(#bindings),*) => ::keleusma::GenericValue::Enum {
                             type_name: ::alloc::string::String::from(#name_str),
                             variant: ::alloc::string::String::from(#v_str),
                             fields: ::alloc::vec![
                                 #(
-                                    <#types as ::keleusma::KeleusmaType>::into_value(#bindings),
+                                    <#types as ::keleusma::KeleusmaType<__KW, __KF>>::into_value(#bindings),
                                 )*
                             ],
                         },
@@ -250,12 +269,12 @@ fn derive_enum_body(_name: &Ident, name_str: &str, data: &DataEnum) -> TokenStre
                         .collect();
                     let types: Vec<&syn::Type> = named.named.iter().map(|f| &f.ty).collect();
                     quote! {
-                        Self::#v_ident { #(#names),* } => ::keleusma::Value::Enum {
+                        Self::#v_ident { #(#names),* } => ::keleusma::GenericValue::Enum {
                             type_name: ::alloc::string::String::from(#name_str),
                             variant: ::alloc::string::String::from(#v_str),
                             fields: ::alloc::vec![
                                 #(
-                                    <#types as ::keleusma::KeleusmaType>::into_value(#names),
+                                    <#types as ::keleusma::KeleusmaType<__KW, __KF>>::into_value(#names),
                                 )*
                             ],
                         },
@@ -266,9 +285,11 @@ fn derive_enum_body(_name: &Ident, name_str: &str, data: &DataEnum) -> TokenStre
         .collect();
 
     quote! {
-        fn from_value(v: &::keleusma::Value) -> ::core::result::Result<Self, ::keleusma::VmError> {
+        fn from_value(v: &::keleusma::GenericValue<__KW, __KF>)
+            -> ::core::result::Result<Self, ::keleusma::VmError>
+        {
             match v {
-                ::keleusma::Value::Enum { type_name, variant, fields } if type_name == #name_str => {
+                ::keleusma::GenericValue::Enum { type_name, variant, fields } if type_name == #name_str => {
                     match variant.as_str() {
                         #(#from_arms)*
                         other => ::core::result::Result::Err(::keleusma::VmError::TypeError(
@@ -282,7 +303,7 @@ fn derive_enum_body(_name: &Ident, name_str: &str, data: &DataEnum) -> TokenStre
             }
         }
 
-        fn into_value(self) -> ::keleusma::Value {
+        fn into_value(self) -> ::keleusma::GenericValue<__KW, __KF> {
             match self {
                 #(#into_arms)*
             }

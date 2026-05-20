@@ -252,10 +252,7 @@ impl<P: Platform> Kernel<P> {
                     1 => TaskState::Ready(WakeReason::Timer),
                     2 => TaskState::WaitingFor(payload as u8),
                     _ => {
-                        P::log_event(
-                            crate::natives::EV_KERNEL_UNKNOWN_YIELD,
-                            r,
-                        );
+                        P::log_event(crate::natives::EV_KERNEL_UNKNOWN_YIELD, r);
                         TaskState::Finished
                     }
                 };

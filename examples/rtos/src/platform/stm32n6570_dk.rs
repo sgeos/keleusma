@@ -180,7 +180,9 @@ impl Platform for Stm32N6570DkPlatform {
                     out.set_low();
                 }
             } else {
-                defmt::warn!("gpio_set: LED_PG10 not installed; call Stm32N6570DkPlatform::install");
+                defmt::warn!(
+                    "gpio_set: LED_PG10 not installed; call Stm32N6570DkPlatform::install"
+                );
             }
         });
     }
