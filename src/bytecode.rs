@@ -378,7 +378,12 @@ pub enum BlockType {
 }
 
 /// A bytecode instruction.
-#[derive(Debug, Clone, Copy, PartialEq, Archive, Serialize, Deserialize)]
+///
+/// V0.2.0 Phase 7c moved opcode serialization out of the rkyv
+/// archive and into the [`crate::wire_format`] opcode stream; the
+/// rkyv derives retire alongside `ArchivedModule` and
+/// `op_from_archived` in Phase 8.
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Op {
     /// Push a constant from the chunk's constant pool.
     Const(u16),
@@ -1192,7 +1197,13 @@ pub struct DataLayout {
 }
 
 /// A compiled function.
-#[derive(Debug, Clone, Archive, Serialize, Deserialize)]
+///
+/// V0.2.0 Phase 7c moved the on-the-wire representation to
+/// [`crate::wire_format::WireChunk`], which carries the same
+/// per-chunk metadata minus the ops (which live in the opcode
+/// stream section). `Chunk` is the in-memory representation;
+/// the rkyv derives retire in Phase 8.
+#[derive(Debug, Clone)]
 pub struct Chunk {
     /// Function name (for debugging and lookup).
     pub name: String,
@@ -1308,7 +1319,17 @@ impl TypeTag {
 }
 
 /// A compiled Keleusma module.
-#[derive(Debug, Clone, Archive, Serialize, Deserialize)]
+///
+/// V0.2.0 Phase 7c cut the on-the-wire serialization over to
+/// the section-partitioned wire format defined in
+/// [`crate::wire_format`]; the rkyv archive of the full
+/// `Module` is no longer produced or consumed. `Module` is the
+/// in-memory representation; serialization flows through
+/// `Module::to_bytes` -> `module_to_wire_bytes` and
+/// deserialization through `module_from_wire_bytes` ->
+/// `Module`. The Phase 8 publication readiness pass drops the
+/// rkyv derives.
+#[derive(Debug, Clone)]
 pub struct Module {
     /// Compiled function chunks.
     pub chunks: Vec<Chunk>,

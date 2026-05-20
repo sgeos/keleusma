@@ -8,28 +8,17 @@ This document collects surprises that early adopters have run into. The intent i
 
 **Strings are not the Keleusma value proposition.** The language's value proposition is definitive Worst-Case Execution Time and Worst-Case Memory Usage verification for embedded real-time scripting. For string-heavy standalone work, a dynamic language with a rich standard library is the better tool. Python, Ruby, JavaScript, or any of the many shell-and-text-processing languages will all handle strings more ergonomically and with more built-in utility than Keleusma. Strings in Keleusma exist as a host-boundary type and as a debugging convenience; they are not the surface to optimise for.
 
-### Enabling text support
+### Text surface in V0.2.0
 
-Surface support for strings is gated behind the `text` cargo feature, which is disabled by default. With the feature off, the lexer rejects string literals (`"..."`) and f-strings (`f"..."`) with `string literals require the text cargo feature, which is disabled in this build`, the parser does not recognise the `Text` primitive type, and the bundled string utility natives are not useful because no script can produce a string argument.
+V0.2.0 ships only the static-string surface at the script level. String literals (`"..."`) compile to `Value::StaticStr` constants in the bytecode's read-only constant pool. The `Text` primitive type names the surface type for static strings, host-produced dynamic strings (`Value::KStr` arena handles), and string-typed parameters across the host boundary. The bundled `to_string`, `concat`, `slice`, and `length` utility natives retired alongside f-string interpolation in the V0.2.0 Phase 3.5 text-composition removal. The runtime still distinguishes static (`StaticStr`) and dynamic (`KStr`) variants behind `Text`; the cross-yield prohibition continues to apply to dynamic strings.
 
-Hosts that want script-side string concatenation, f-strings, and the bundled utility natives (`to_string`, `concat`, `slice`, `length` against text) enable the feature explicitly in their `Cargo.toml`.
-
-````toml
-[dependencies]
-keleusma = { version = "0.2", features = ["text"] }
-````
-
-The `keleusma-cli` crate enables the feature for the CLI runner and the REPL, so users running scripts from the command line do not have to think about the feature. Embedding hosts that target small embedded runtimes and do not need scripts to manipulate text get a smaller compiled artifact by leaving the feature off.
-
-That said, real applications routinely need some string work in context. **The recommended pattern is to register native Rust functions that perform the string work and expose them to the script.** Rust's standard library handles formatting, splitting, regex, encoding conversion, and Unicode operations far better than anything reasonable to build inside the script. The host writes a small Rust function, registers it with one `register_fn` call, and the script gets a single `use` declaration that yields native performance and full Rust ecosystem access.
+The recommended pattern is to register native Rust functions that perform the string work and expose them to the script. Rust's standard library handles formatting, splitting, regex, encoding conversion, and Unicode operations far better than anything reasonable to build inside the script. The host writes a small Rust function, registers it with one `register_fn` call, and the script gets a single `use` declaration that yields native performance and full Rust ecosystem access.
 
 ````rust
 // Rust host code.
 use keleusma::{Arena, Value, vm::Vm};
-use keleusma::utility_natives::register_utility_natives;
 
 let mut vm = Vm::new(module, &arena)?;
-register_utility_natives(&mut vm);
 
 // Host-defined string helpers using Rust's standard library.
 vm.register_fn("text::upper", |s: String| -> String {
@@ -55,73 +44,31 @@ vm.register_fn_fallible(
 //     use text::split_first_word
 //
 //     fn greet(name: Text) -> Text {
-//         let cleaned = trim(name);
-//         let first = split_first_word(cleaned);
-//         f"hello, {upper(first)}!"
+//         text::upper(text::trim(name))
 //     }
 ````
 
-The host owns the string-handling vocabulary; the script consumes it through `use` declarations. This is the same registration pattern that exposes the bundled `concat`, `to_string`, `length`, and `slice` helpers, applied to whatever string operations the application actually needs. See [EMBEDDING.md](./EMBEDDING.md) for the full native-registration surface.
-
-The following items collect the string-related rough edges still visible in V0.1.x for callers who do use the bundled string helpers.
-
-### F-strings require `use concat` and `use to_string`
-
-The f-string syntax `f"text {expr}"` desugars at lex time into a chain of `concat` and `to_string` native function calls. The desugaring runs before the type checker sees the program, so the script must import the two functions or compilation fails with `undefined function 'concat'` or `undefined function 'to_string'`.
-
-````
-use concat
-use to_string
-
-fn greet(name: Text) -> Text {
-    f"hello, {name}!"
-}
-````
-
-The CLI runner pre-registers both functions, but the type checker still requires the `use` declarations for the script's own type-resolution pass. A future release may auto-inject these `use` declarations when the lexer emits f-string desugaring; until then, the declarations are user-visible.
-
-### Literal `{` and `}` in f-strings
-
-Use backslash escapes inside an f-string.
-
-````
-use concat
-use to_string
-
-fn main() -> Text {
-    f"open\{brace\}close"
-}
-````
-
-This produces the literal string `open{brace}close`. Outside f-strings (in plain `"..."` strings) the braces are ordinary characters and do not need escaping.
-
-### Empty interpolation `{}`
-
-`f"hi {}"` is rejected at lex time with `empty f-string interpolation '{}'`. Whitespace-only interpolation such as `f"{   }"` is rejected the same way. Write an expression between the braces, or use `\{` and `\}` for literal braces.
-
-### Complete escape table
-
-| Escape | Result | Where |
-|--------|--------|-------|
-| `\n` | newline (`U+000A`) | string and f-string |
-| `\t` | tab (`U+0009`) | string and f-string |
-| `\r` | carriage return (`U+000D`) | string and f-string |
-| `\\` | literal backslash | string and f-string |
-| `\"` | literal double quote | string and f-string |
-| `\0` | null byte | string and f-string |
-| `\{` | literal `{` | f-string only |
-| `\}` | literal `}` | f-string only |
-
-All other characters that are not special in source (single quotes, dollar signs, hash marks, ordinary Unicode) appear directly without escaping. Any other backslash sequence is a lex error.
+The host owns the string-handling vocabulary; the script consumes it through `use` declarations. See [EMBEDDING.md](./EMBEDDING.md) for the full native-registration surface.
 
 ### Where text works
 
-- **Static string literals.** Compiled to `Value::StaticStr` and reside in the rodata region of the loaded image. May flow anywhere admissible, including across the yield boundary in the dialogue type.
-- **Arena-resident dynamic strings.** Produced by `Op::Add` on text operands and by the bundled `concat`, `slice`, and `to_string` natives. Carried as `Value::KStr` handles that resolve through the host-owned arena and become stale on the next arena reset. Subject to the cross-yield prohibition. See [TYPE_SYSTEM.md](../design/TYPE_SYSTEM.md) for the full text-type discipline.
+- **Static string literals.** Compiled to `Value::StaticStr` and reside in the bytecode's constant pool. May flow anywhere admissible, including across the yield boundary in the dialogue type.
+- **Arena-resident dynamic strings.** Produced by host-registered native functions through the `KString::alloc` arena boundary. Carried as `Value::KStr` handles that resolve through the host-owned arena and become stale on the next arena reset. Subject to the cross-yield prohibition. See [TYPE_SYSTEM.md](../design/TYPE_SYSTEM.md) for the full text-type discipline.
 
-The `Value::DynStr` global-heap variant present in V0.1.x was removed in V0.2.0. All dynamic text is now arena-resident.
+The `Value::DynStr` global-heap variant present in V0.1.x was removed in V0.2.0. All dynamic text is arena-resident.
 
-For text operations beyond what the bundled `register_utility_natives` provides (`to_string`, `length`, `concat`, `slice`), host applications register their own natives.
+### Escape table for static string literals
+
+| Escape | Result |
+|--------|--------|
+| `\n`   | newline (`U+000A`) |
+| `\t`   | tab (`U+0009`) |
+| `\r`   | carriage return (`U+000D`) |
+| `\\`   | literal backslash |
+| `\"`   | literal double quote |
+| `\0`   | null byte |
+
+All other characters appear directly without escaping. Any other backslash sequence is a lex error. V0.2.0 retired the f-string-specific `\{` and `\}` escapes alongside f-string interpolation; `{` and `}` are ordinary characters inside `"..."`.
 
 ## WCMU Coverage
 
@@ -224,9 +171,9 @@ Hosts that produce Keleusma source programmatically (templating, code generation
 
 `let` bindings cannot be rebound or mutated. The data segment is the only region of mutable state observable to a script, and it is accessible only from a `loop`-classified entry point. Accumulation across a loop iteration in an atomic-total `fn` is therefore not possible without either (a) a `loop main` script using the data segment, or (b) a host-side fold native. See [WHY_REJECTED.md](./WHY_REJECTED.md) under the recursive-closure entry for examples of both rewrites.
 
-### Closures compile but the safe verifier rejects them
+### Closures are rejected at the type-checker stage
 
-The compile pipeline accepts closures with environment capture; the safe constructor `Vm::new` rejects programs that invoke them through `Op::CallIndirect` because indirect dispatch cannot be statically bounded. This is the conservative-verification stance, documented in [LANGUAGE_DESIGN.md](../architecture/LANGUAGE_DESIGN.md#conservative-verification). The valid form of unbounded execution is the top-level `loop` block enforced by the productivity rule. Closures exist in the language so the rejection can be precise.
+V0.2.0 Phase 4 retired the closure family: the `Op::PushFunc`, `Op::MakeClosure`, `Op::MakeRecursiveClosure`, and `Op::CallIndirect` opcodes are gone, the `Value::Func` runtime variant is gone, and the closure-hoisting compiler pass is gone. The type checker now rejects `Expr::Closure` with the diagnostic `closures are not supported; V0.2.0 admits only direct calls and trait dispatch under the conservative-verification stance. Rewrite as a top-level fn or trait method.` First-class function references (e.g. `let f = my_func;`) are likewise rejected by the compiler. This is the conservative-verification stance documented in [LANGUAGE_DESIGN.md](../architecture/LANGUAGE_DESIGN.md#conservative-verification). The valid form of unbounded execution is the top-level `loop` block enforced by the productivity rule.
 
 ### Pipeline operator requires parentheses
 

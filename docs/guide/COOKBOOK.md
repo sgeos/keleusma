@@ -23,18 +23,17 @@ The host or a script needs to handle strings. Names, log messages, error reports
 
 ### Solution
 
-Three rules.
+Two rules.
 
-**One. Enable the `text` cargo feature.** String literals and the `Text` primitive type are gated behind this feature. With it off, the lexer rejects `"..."` and `f"..."` with an explicit error, and the parser does not recognise the `Text` type. Hosts that want script-side string support enable the feature in their `Cargo.toml`.
+**One. Use string literals for static text.** Source-level string literals compile to `Value::StaticStr` and live in the bytecode's read-only constant pool. They are immutable, fixed-size handles, and admissible in function arguments, return values, and `yield` payloads. The script's surface type is `Text`; the runtime preserves the static-versus-dynamic distinction internally.
 
-```toml
-[dependencies]
-keleusma = { version = "0.2", features = ["text"] }
+```keleusma
+fn label() -> Text {
+    "ready"
+}
 ```
 
-**Two. Static and dynamic strings flow on different paths.** Keleusma distinguishes two string variants behind the surface `Text` type. *Static* strings reside in the bytecode's read-only data section; source-level string literals compile to static strings; they are immutable, fixed-size handles, and admissible in function arguments, return values, and `yield` payloads. *Dynamic* strings reside in the arena heap; they are produced by native function calls; they are admissible on the stack and in local bindings but cannot cross a `yield` boundary. Treating the two cases uniformly through `Text` is the script's view; the runtime keeps the distinction load-bearing for safety.
-
-**Three. Register Rust functions for everything beyond literals and the bundled helpers.** The surface language supports string literals and the bundled utility natives (`to_string`, `concat`, `slice`, `length` against text). Anything fancier — formatting, splitting, regular expressions, Unicode operations, encoding conversion — belongs in a Rust function the host registers and the script imports.
+**Two. Register Rust functions for every text operation beyond literals.** V0.2.0 retired the bundled `concat`, `to_string`, `slice`, and `length` utility natives along with f-string interpolation. Script-side string composition flows through host-registered functions. Hosts that need formatting, splitting, regular expressions, Unicode operations, or encoding conversion register a Rust function and the script imports it through `use`.
 
 ```rust
 vm.register_fn("text::upper", |s: String| -> String { s.to_uppercase() });
@@ -46,30 +45,19 @@ use text::upper
 use text::trim
 
 fn greet(name: Text) -> Text {
-    f"hello, {upper(trim(name))}!"
+    text::upper(text::trim(name))
 }
 ```
 
-### F-strings need explicit imports
-
-The `f"..."` syntax desugars at lex time into a chain of `concat` and `to_string` calls. The script must import both functions or compilation fails. Brace escapes inside an f-string use a leading backslash (`\{`, `\}`).
-
-```keleusma
-use concat
-use to_string
-
-fn main() -> Text {
-    f"hello, {name}!"
-}
-```
+Host-produced dynamic strings reside in the arena heap as `Value::KStr` (arena-handled). They are admissible on the stack and in local bindings but cannot cross a `yield` boundary; the verifier rejects programs that would carry an arena-resident `KStr` across the host-VM boundary.
 
 ### Why this works for an RTOS or embedded target
 
-Static strings live in the read-only data section and cost no allocation. A script that returns names or log labels through static strings consumes zero arena. Dynamic strings cost arena heap that counts against the script's WCMU, which the verifier bounds. There is no path by which string work can grow unbounded; either it goes through a fixed-size static-string handle, or it counts against a verifier-bounded heap allocation, or it never compiles.
+Static strings live in the read-only data section and cost no allocation. A script that returns names or log labels through static strings consumes zero arena. Host-produced dynamic strings cost arena heap that the host attests through `register_verified_native(name, fn, wcet, wcmu_bytes)`; the verifier folds the per-call WCMU into the iteration budget. There is no path by which string work can grow unbounded; either it goes through a fixed-size static-string handle, or it counts against a verifier-bounded heap allocation, or it never compiles.
 
 ### Cross-references
 
-- [FAQ.md, Strings](./FAQ.md#strings) covers the surface caveats, the f-string import requirement, brace escaping, and identifier reuse rules in more detail.
+- [FAQ.md, Strings](./FAQ.md#strings) covers the surface caveats and the static-string escape table.
 - [TYPE_SYSTEM.md, Text Types](../design/TYPE_SYSTEM.md#text-types) is the type-system specification.
 - The rogue example's bestiary script returns monster names through this pattern.
 
@@ -94,12 +82,13 @@ let arena = Arena::with_capacity(cap);
 let vm = Vm::new(module, &arena)?;
 ```
 
-The second argument is a slice of per-native heap-allocation attestations. Pass an empty slice when no native allocates from the arena. Pass the appropriate `u32` values when the host has registered heap-allocating natives like the bundled `concat` and `to_string`.
+The second argument is a slice of per-native heap-allocation attestations. Pass an empty slice when no native allocates from the arena. Pass the appropriate `u32` values when the host has registered heap-allocating natives.
 
 ```rust
-// Script that uses `concat` and `to_string`. The bundled utility
-// natives have attested heap WCMU values; pass them through.
-let native_wcmu = &[concat_wcmu, to_string_wcmu];
+// Script that uses host-registered text or buffer natives. The
+// host's per-call attestations flow through the slice in the
+// same order as the module's `native_names` table.
+let native_wcmu = &[upper_wcmu, trim_wcmu];
 let cap = auto_arena_capacity_for(&module, native_wcmu)?;
 ```
 

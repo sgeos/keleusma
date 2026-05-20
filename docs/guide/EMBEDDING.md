@@ -143,16 +143,17 @@ A boxed closure variant `register_native_closure` captures host state. A context
 
 ### Bundled Natives
 
-The runtime ships two convenience modules.
+V0.2.0 retired the script-side text-composition machinery (the `to_string`, `concat`, `slice`, `length` utility natives and the f-string interpolation surface). The runtime ships a small bundled set:
 
-- `keleusma::utility_natives::register_utility_natives` registers `to_string`, `length`, `concat`, `slice`, `println`, and a few math helpers.
+- `keleusma::utility_natives::register_utility_natives` registers `println` (a debug primitive that is a no-op on `no_std` targets; hosts that want output override with a `register_native_closure`).
 - `keleusma::audio_natives::register_audio_natives` registers `audio::midi_to_freq`, `audio::freq_to_midi`, `audio::db_to_linear`, `audio::linear_to_db`, and the `math::*` functions enumerated in [STANDARD_LIBRARY.md](../design/STANDARD_LIBRARY.md).
+- `keleusma::stddsl::Math`, `Audio`, and `Shell` register through `Vm::register_library` (see the "Standard DSL Libraries" section below).
 
-Both register through `register_fn` under the hood. Hosts can register all bundled natives, register a subset, or replace any function with their own implementation.
+All register through `register_fn` or `register_native` under the hood. Hosts can register all bundled natives, register a subset, or replace any function with their own implementation.
 
 ### Host-Defined String Helpers
 
-Keleusma's bundled string surface is intentionally minimal: `to_string`, `concat`, `slice`, `length`. The language is not the right vehicle for heavy string manipulation, and the runtime does not try to ship a string standard library. **Where an application needs string work in context, register native Rust functions and let the script consume them through `use` declarations.** Rust's standard library handles formatting, splitting, regex, Unicode operations, and encoding conversion far better than anything reasonable to build inside the script.
+The language is not the right vehicle for heavy string manipulation, and V0.2.0 does not ship a string standard library. **Where an application needs string work in context, register native Rust functions and let the script consume them through `use` declarations.** Rust's standard library handles formatting, splitting, regex, Unicode operations, and encoding conversion far better than anything reasonable to build inside the script.
 
 ````rust
 vm.register_fn("text::upper", |s: String| -> String { s.to_uppercase() });
@@ -176,9 +177,7 @@ use text::trim
 use text::split_first_word
 
 fn greet(name: Text) -> Text {
-    let cleaned = trim(name);
-    let first = split_first_word(cleaned);
-    f"hello, {upper(first)}!"
+    text::upper(text::trim(name))
 }
 ````
 

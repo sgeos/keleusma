@@ -21,12 +21,12 @@ The categories are coherent because the language treats rejection as the safety 
 ### MakeRecursiveClosure
 
 ````
-WCET verification: <chunk>: MakeRecursiveClosure(chunk=N) introduces unbounded
-recursion that cannot be statically bounded for WCET/WCMU analysis. Recursive
-closures are not admitted by the safe build pipeline.
+type error: closures are not supported; V0.2.0 admits only direct calls and
+trait dispatch under the conservative-verification stance. Rewrite as a
+top-level fn or trait method.
 ````
 
-**Category.** First. Self-referential dispatch admits unbounded recursion within a single Stream-to-Reset slice by construction.
+**Category.** First. V0.2.0 Phase 4 retired the closure family entirely: the closure opcodes are gone from the Op enum, the `Value::Func` runtime variant is gone, and the type checker rejects `Expr::Closure` directly. The diagnostic surfaces from the type checker rather than the load-time verifier; the rejection moves earlier in the pipeline so the error message names the construct rather than the lowered opcode.
 
 **Trigger.** A `let` binding refers to itself by name, producing a closure value that captures its own environment slot.
 
@@ -62,33 +62,37 @@ fn main() -> Word {
 
 The choice depends on whether the iteration count is unbounded (the host drives `loop`) or finite and known at compile time (the host registers a fold native).
 
-### CallIndirect
+### First-class function references
 
 ````
-WCET verification: <chunk>: CallIndirect resolves its target chunk at runtime
-and cannot be statically bounded for WCET/WCMU analysis. First-class function
-dispatch is not admitted by the safe build pipeline. Restrict the program to
-direct calls.
+first-class function references are not supported in V0.2.0; rewrite `name` as
+a direct call site or as a trait-bounded generic
 ````
 
-**Category.** Second. Non-recursive closure invocation is bounded in fact, but the present verifier rejects it because indirect dispatch through `Op::CallIndirect` requires a flow analysis that has not been implemented.
+**Category.** First. V0.2.0 Phase 4 retired the `Op::PushFunc` and `Op::CallIndirect` opcodes alongside the closures they served. A bare reference to a top-level function name in a value position (rather than a call position) used to compile to `Op::PushFunc`; the compiler now rejects the pattern with the diagnostic above.
 
-**Trigger.** A `let` binding holds a closure value, and a subsequent expression invokes it.
-
-````
-let f = |x: Word| x + 1;
-f(5)
-````
-
-**Rewrite.** Replace the closure with a top-level function and call it directly.
+**Trigger.** A `let` binding holds a function value, or a function value flows through an argument.
 
 ````
 fn increment(x: Word) -> Word { x + 1 }
 
-increment(5)
+fn main() -> Word {
+    let f = increment;  // rejected: first-class function reference
+    f(5)
+}
 ````
 
-Closures are useful at the surface for compositional patterns, but the safe verifier rejects all `Op::CallIndirect` invocation regardless of whether the closure is recursive. A future flow-analysis extension can admit the non-recursive cases.
+**Rewrite.** Replace the indirect dispatch with a direct call or a trait method.
+
+````
+fn increment(x: Word) -> Word { x + 1 }
+
+fn main() -> Word {
+    increment(5)
+}
+````
+
+For compositional patterns that previously used first-class functions, V0.2.0 admits trait-bounded generics whose impls dispatch statically through monomorphization. See [LANGUAGE_DESIGN.md](../architecture/LANGUAGE_DESIGN.md) for the trait surface.
 
 ### Loop Iteration Bound Not Extractable
 
