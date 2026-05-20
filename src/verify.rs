@@ -448,6 +448,7 @@ fn wcmu_region(
     end: usize,
     break_results: &mut Vec<McuResult>,
     resolver: &CallResolver,
+    value_slot_bytes: u32,
 ) -> Result<Option<McuResult>, VerifyError> {
     let ops = &chunk.ops;
     let mut current_offset: i32 = 0;
@@ -525,6 +526,7 @@ fn wcmu_region(
                         current_offset,
                         break_results,
                         resolver,
+                        value_slot_bytes,
                     )?;
                     let else_branch = wcmu_subregion(
                         chunk,
@@ -533,6 +535,7 @@ fn wcmu_region(
                         current_offset,
                         break_results,
                         resolver,
+                        value_slot_bytes,
                     )?;
                     match (then_branch, else_branch) {
                         (Some(a), Some(b)) => {
@@ -565,6 +568,7 @@ fn wcmu_region(
                         current_offset,
                         break_results,
                         resolver,
+                        value_slot_bytes,
                     )?;
                     if let Some(a) = then_branch {
                         peak = peak.max(a.peak_above_initial);
@@ -594,6 +598,7 @@ fn wcmu_region(
                     current_offset,
                     &mut loop_breaks,
                     resolver,
+                    value_slot_bytes,
                 )?;
                 let body_peak = body.as_ref().map_or(0, |r| r.peak_above_initial);
                 let body_heap_one = body.as_ref().map_or(0, |r| r.heap_total);
@@ -645,8 +650,7 @@ fn wcmu_region(
                 // minus the n args being passed plus the callee's stack
                 // is the peak observed.
                 let (callee_stack_bytes, callee_heap_bytes) = resolver.resolve_chunk(*callee_idx);
-                let callee_stack_slots =
-                    (callee_stack_bytes / crate::bytecode::VALUE_SLOT_SIZE_BYTES) as i32;
+                let callee_stack_slots = (callee_stack_bytes / value_slot_bytes) as i32;
                 let n = *n_args as i32;
                 let during_peak = (current_offset + callee_stack_slots - n)
                     .max(current_offset + 1)
@@ -702,9 +706,17 @@ fn wcmu_subregion(
     offset_at_start: i32,
     break_results: &mut Vec<McuResult>,
     resolver: &CallResolver,
+    value_slot_bytes: u32,
 ) -> Result<Option<McuResult>, VerifyError> {
     let mut sub_breaks: Vec<McuResult> = Vec::new();
-    let result = wcmu_region(chunk, start, end, &mut sub_breaks, resolver)?;
+    let result = wcmu_region(
+        chunk,
+        start,
+        end,
+        &mut sub_breaks,
+        resolver,
+        value_slot_bytes,
+    )?;
     // Lift breaks from the subregion into the caller's frame of reference.
     for b in sub_breaks {
         break_results.push(McuResult {
@@ -735,6 +747,20 @@ fn wcmu_subregion(
 /// mirror the existing WCET implementation and are tracked for future
 /// work.
 pub fn wcmu_stream_iteration(chunk: &Chunk) -> Result<(u32, u32), VerifyError> {
+    wcmu_stream_iteration_with_value_slot_bytes(chunk, crate::bytecode::VALUE_SLOT_SIZE_BYTES)
+}
+
+/// Variant of [`wcmu_stream_iteration`] that uses a host-supplied
+/// `value_slot_bytes` for the bytes-per-slot multiplier. Hosts
+/// running narrow `GenericVm<W, A, F>` instances pass
+/// `size_of::<GenericValue<W, F>>()` so the bound matches the
+/// runtime's actual slot footprint rather than the conservative
+/// 64-bit-runtime default. The default-parameter shape is
+/// preserved through [`wcmu_stream_iteration`].
+pub fn wcmu_stream_iteration_with_value_slot_bytes(
+    chunk: &Chunk,
+    value_slot_bytes: u32,
+) -> Result<(u32, u32), VerifyError> {
     if chunk.block_type != BlockType::Stream {
         return Err(VerifyError {
             chunk_name: chunk.name.clone(),
@@ -760,14 +786,21 @@ pub fn wcmu_stream_iteration(chunk: &Chunk) -> Result<(u32, u32), VerifyError> {
 
     let mut breaks: Vec<McuResult> = Vec::new();
     let resolver = CallResolver::empty();
-    let body = wcmu_region(chunk, stream_pos + 1, reset_pos, &mut breaks, &resolver)?
-        .unwrap_or(McuResult::empty());
+    let body = wcmu_region(
+        chunk,
+        stream_pos + 1,
+        reset_pos,
+        &mut breaks,
+        &resolver,
+        value_slot_bytes,
+    )?
+    .unwrap_or(McuResult::empty());
 
     let body_peak = body.peak_above_initial;
     let body_heap = body.heap_total;
 
     let stack_slots = chunk.local_count as u32 + body_peak;
-    let stack_bytes = stack_slots * crate::bytecode::VALUE_SLOT_SIZE_BYTES;
+    let stack_bytes = stack_slots * value_slot_bytes;
 
     Ok((stack_bytes, body_heap))
 }
@@ -827,6 +860,20 @@ pub fn wcet_stream_iteration(chunk: &Chunk) -> Result<u32, VerifyError> {
 /// The call graph is required to be acyclic (R4 forbids recursion).
 /// Returns an error if a recursive call is detected.
 pub fn module_wcmu(module: &Module, native_wcmu: &[u32]) -> Result<Vec<(u32, u32)>, VerifyError> {
+    module_wcmu_with_value_slot_bytes(module, native_wcmu, crate::bytecode::VALUE_SLOT_SIZE_BYTES)
+}
+
+/// Variant of [`module_wcmu`] that uses a host-supplied
+/// `value_slot_bytes` for the bytes-per-slot multiplier. Hosts
+/// running narrow `GenericVm<W, A, F>` instances pass
+/// `size_of::<GenericValue<W, F>>()` so the bound matches the
+/// runtime's actual slot footprint rather than the conservative
+/// 64-bit-runtime default.
+pub fn module_wcmu_with_value_slot_bytes(
+    module: &Module,
+    native_wcmu: &[u32],
+    value_slot_bytes: u32,
+) -> Result<Vec<(u32, u32)>, VerifyError> {
     // The WCMU analysis is sound only for acyclic call graphs that
     // the static analysis can fully traverse. Two op kinds violate
     // this contract:
@@ -898,7 +945,7 @@ pub fn module_wcmu(module: &Module, native_wcmu: &[u32]) -> Result<Vec<(u32, u32
             native_wcmu,
         };
         let (wcmu_result, returns_text) =
-            compute_chunk_wcmu(chunk, &resolver, &chunk_returns_text)?;
+            compute_chunk_wcmu(chunk, &resolver, &chunk_returns_text, value_slot_bytes)?;
         chunk_wcmu[chunk_idx] = Some(wcmu_result);
         chunk_returns_text[chunk_idx] = returns_text;
     }
@@ -1001,6 +1048,7 @@ fn compute_chunk_wcmu(
     chunk: &Chunk,
     resolver: &CallResolver,
     chunk_returns_text: &[bool],
+    value_slot_bytes: u32,
 ) -> Result<((u32, u32), bool), VerifyError> {
     let (start, end) = match chunk.block_type {
         BlockType::Stream => {
@@ -1026,10 +1074,11 @@ fn compute_chunk_wcmu(
     };
 
     let mut breaks: Vec<McuResult> = Vec::new();
-    let body = wcmu_region(chunk, start, end, &mut breaks, resolver)?.unwrap_or(McuResult::empty());
+    let body = wcmu_region(chunk, start, end, &mut breaks, resolver, value_slot_bytes)?
+        .unwrap_or(McuResult::empty());
 
     let stack_slots = chunk.local_count as u32 + body.peak_above_initial;
-    let stack_bytes = stack_slots * crate::bytecode::VALUE_SLOT_SIZE_BYTES;
+    let stack_bytes = stack_slots * value_slot_bytes;
 
     // Augment the heap bound with the chunk's text-allocation bound
     // computed by the text-size abstract interpretation pass. The
@@ -1096,14 +1145,24 @@ pub fn verify_resource_bounds(module: &Module, arena_capacity: usize) -> Result<
 pub fn verify_resource_bounds_with_cost_model(
     module: &Module,
     arena_capacity: usize,
-    _cost_model: &crate::bytecode::CostModel,
+    cost_model: &crate::bytecode::CostModel,
     native_wcmu: &[u32],
 ) -> Result<(), VerifyError> {
-    // Internal threading of the cost model through `module_wcmu` is
-    // tracked as future work. The API surface accepts the model now
-    // so hosts can begin building against the contract; the bound is
-    // currently computed against the nominal cost model.
-    verify_resource_bounds_with_natives(module, arena_capacity, native_wcmu)
+    // The `value_slot_bytes` field of the cost model drives the WCMU
+    // analysis's bytes-per-slot multiplier. Hosts running narrow
+    // `GenericVm<W, A, F>` instances supply a cost model whose
+    // `value_slot_bytes` equals `size_of::<GenericValue<W, F>>()` to
+    // tighten the bound from the default 32-byte 64-bit-runtime
+    // assumption. The cycle component of the cost model
+    // (`op_cycles`) is not yet threaded through the per-chunk
+    // computation; that thread remains future work tracked under
+    // B10's cost-table follow-on.
+    verify_resource_bounds_with_natives_and_value_slot_bytes(
+        module,
+        arena_capacity,
+        native_wcmu,
+        cost_model.value_slot_bytes,
+    )
 }
 
 /// Verify that the module's worst-case memory usage fits within the
@@ -1125,7 +1184,26 @@ pub fn verify_resource_bounds_with_natives(
     arena_capacity: usize,
     native_wcmu: &[u32],
 ) -> Result<(), VerifyError> {
-    let chunk_wcmu = module_wcmu(module, native_wcmu)?;
+    verify_resource_bounds_with_natives_and_value_slot_bytes(
+        module,
+        arena_capacity,
+        native_wcmu,
+        crate::bytecode::VALUE_SLOT_SIZE_BYTES,
+    )
+}
+
+/// Variant of [`verify_resource_bounds_with_natives`] that uses a
+/// host-supplied `value_slot_bytes` for the bytes-per-slot
+/// multiplier. The parametric `GenericVm<W, A, F>` runtime calls
+/// this with `size_of::<GenericValue<W, F>>()` so the bound matches
+/// the runtime's actual slot footprint.
+pub fn verify_resource_bounds_with_natives_and_value_slot_bytes(
+    module: &Module,
+    arena_capacity: usize,
+    native_wcmu: &[u32],
+    value_slot_bytes: u32,
+) -> Result<(), VerifyError> {
+    let chunk_wcmu = module_wcmu_with_value_slot_bytes(module, native_wcmu, value_slot_bytes)?;
     for (chunk_idx, chunk) in module.chunks.iter().enumerate() {
         if chunk.block_type != BlockType::Stream {
             continue;

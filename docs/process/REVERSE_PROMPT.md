@@ -9,22 +9,36 @@ AI to Human communication channel.
 ## Last Updated
 
 **Date**: 2026-05-20
-**Status**: B16 step 10 lifts `stddsl::Math` and `stddsl::Audio` to be generic over `F` and runs the documentation-prose audit. All four `stddsl` bundles now impl `Library<W, A, F>` universally; the parametric `GenericVm<W, A, F>` shape is documented across the architecture, design, decisions, and guide knowledge-graph sections. Three documentation files were updated to remove stale prose that treated the default 64-bit runtime as the only runtime shape.
+**Status**: B16 step 11 lands the four post-audit follow-ups together. The WCMU verifier now threads a per-runtime `value_slot_bytes` through the chunk-WCMU computation, so narrow `GenericVm<W, A, F>` instances are no longer subject to the conservative 32-byte default. Three additional integration tests (Audio bundle on narrow runtime, two `view_bytes_zero_copy` regressions, two `Vm<i8>` smoke tests) round out the coverage matrix. B16 is closed across runtime, marshall, library bundles, verifier, knowledge-graph documentation, and end-to-end integration tests.
 
 ## Completed in this session round
 
 | Directive | Resolution |
 |-----------|------------|
-| Lift `Math` and `Audio` to be generic over `F`. | `impl<W: Word, A: Address, F: Float> Library<W, A, F>` for both bundles. The inner `math::register` and `audio_natives::register_audio_natives` quantify the same way. The closures retain their `f64` argument and return signatures; on a runtime whose `F` is `f32`, every closure argument and return passes through `Float::from_f64` / `Float::to_f64` at the marshall boundary, narrowing constants and intermediates. The narrowing is mathematically defined and silent. New test `f32_narrow_runtime_can_register_math_library_via_lifted_impl` pins `math::sqrt(9.0) = 3.0_f32` on `GenericVm<i64, u64, f32>`. |
-| Update the cookbook recipe. | The *Narrow-runtime type alias* recipe in `docs/guide/COOKBOOK.md` is rewritten to reflect that all four `stddsl` bundles register on narrow runtimes. The former *Standard library bundles remain on the default shape* heading becomes *Standard library bundles work on narrow runtimes*; the body documents the `Float::from_f64` / `Float::to_f64` narrowing path for Math and Audio on f32 runtimes and the precision tradeoff. |
-| Audit architecture and design prose for stale narrow-runtime references. | Three knowledge-graph files updated. `docs/architecture/LANGUAGE_DESIGN.md`: the cost-model paragraph replaces "current 64-bit Keleusma runtime" with parametric-aware text describing the bundled default and the narrow shape; the checked-arithmetic paragraph replaces the literal `i128` with `W::Wide` and adds a concrete mapping table for each `Word` impl. `docs/architecture/EXECUTION_MODEL.md`: the bytecode-load paragraph distinguishes the binary's framing-level upper bound (the `RUNTIME_*_BITS_LOG2` constants) from the per-Vm bound (the `<W as Word>::BITS_LOG2` and siblings) and explains how the two compose. `docs/design/TYPE_SYSTEM.md` and `docs/design/GRAMMAR.md`: the primitive-type tables annotate `Word` and `Float` sizes as defaults that vary under the parametric shape, with cross-references to the cookbook recipe. |
+| Verifier `value_slot_bytes` threading (item 1). | The internal `wcmu_region`, `wcmu_subregion`, and `compute_chunk_wcmu` functions now take a `value_slot_bytes: u32` parameter. New public variants `module_wcmu_with_value_slot_bytes`, `wcmu_stream_iteration_with_value_slot_bytes`, and `verify_resource_bounds_with_natives_and_value_slot_bytes` expose the parameter. The `verify_resource_bounds_with_cost_model` entry point previously ignored its `_cost_model` argument; it now honors `cost_model.value_slot_bytes` through the plumbing. `Vm::new_with_options` and `replace_module_inner` pass `core::mem::size_of::<GenericValue<W, F>>() as u32` so the WCMU bound matches the runtime's actual slot footprint. Existing public API (`module_wcmu`, `wcmu_stream_iteration`, `verify_resource_bounds_with_natives`, `verify_resource_bounds`) keeps the 32-byte default for back compat. |
+| Audio bundle narrow-runtime test (item 6). | New `narrow_runtime_can_register_audio_library_via_lifted_impl` registers `stddsl::Audio` on `GenericVm<i16, u16, f64>` and confirms `audio::midi_to_freq(69) = 440.0_f64`. Belt-and-suspenders coverage of the lift code path. |
+| `view_bytes_zero_copy` regression tests (item 7). | Two new tests. `narrow_runtime_view_bytes_zero_copy_runs_embedded_16_bytecode` runs a narrow runtime against precompiled narrow bytes through the zero-copy entry point. `narrow_runtime_view_bytes_zero_copy_rejects_wider_bytecode` confirms the load-time width check fires on the zero-copy path as well as `Vm::new`. |
+| `Vm<i8>` end-to-end smoke tests (item 8). | Two new tests against `Target::embedded_8()` bytecode. `i8_narrow_runtime_runs_embedded_8_bytecode` confirms `100 + 27 = 127_i8` (boundary case). `i8_narrow_runtime_wraps_at_i8_boundary` confirms `100 + 28 = -128_i8` (wraps via `Word::wrapping_add`). |
+
+## Comment on items 2, 3, 4, and 5
+
+The user asked for commentary on the four standing items rather than action. Each item is presented with its current status and recommended course of action.
+
+**Item 2: `truncate_int` workaround in `Op::Add` and `binary_arith`.** The workaround applies sign-extending truncation when a wide-Vm runs narrow bytecode (for example, default `Vm<i64>` running `Target::embedded_16()` bytecode). The path is load-bearing for the supported direction and intentionally retained. *Recommended action: leave in place.* The load-time width check (step 8) means truncate_int now only fires in the supported direction; the opposite direction is rejected at construction. Removing it would break the documented "wide Vm admits narrow bytecode" contract.
+
+**Item 3: `Address` parameter `A` participates only in load-time width validation.** No opcode dispatches against `A::MAX` or otherwise consumes the address type at runtime. The `_phantom_a: PhantomData<A>` field encodes the present status. *Recommended action: leave as is.* Adding semantic weight requires a concrete opcode-level use case (a host-side `A::MAX` bound check in a pointer-shaped opcode). Without such a use case, the parameter contributes only at load-time validation and the additional design surface would be speculative. The parametric infrastructure is ready when the use case lands.
+
+**Item 4: No 128-bit Word impl, no 16-bit Float impl.** Extensions would require widening the wire-format width encoding (the byte-10/11/12 fields are u8, currently encoding exponents 3-6; an i128 would need exponent 7) and adding `Word for i128`, `Float for f16`, `WideWord for i256` (or removing the wide-multiplication assumption for i128). *Recommended action: leave out of scope until a concrete consumer.* Adding these prematurely accumulates dead-code monomorphization weight on every host binary. A future host that genuinely needs i128 arithmetic or f16 precision can drive the extension with concrete requirements.
+
+**Item 5: `RUNTIME_*_BITS_LOG2` global constants remain at 6.** These set the binary build's framing-level upper bound on bytecode widths. Reducing them on a binary that only ships narrow runtimes would tighten the framing-level rejection earlier (before the per-Vm check). *Recommended action: expose as a build-time configuration if a host requests it.* The change is mechanically simple (cargo feature or const-evaluated build flag) but has no concrete consumer yet. Hosts can already achieve the same effect by validating bytecode out-of-band before passing it to `Vm::load_bytes`.
 
 ## Verification matrix
 
 ```bash
 cargo test -p keleusma --lib                                                    # 736 lib tests pass
-cargo test --workspace --features text                                          # all workspace tests pass; 11 narrow_vm tests (was 10)
+cargo test --workspace --features text                                          # all workspace tests pass
 cargo test -p keleusma --no-default-features --features compile,verify --lib    # 644 lib tests pass (floats off)
+cargo test --test narrow_vm --features text                                     # 16 tests pass (was 11; +5)
 cargo check --features shell                                                    # clean
 cargo clippy --tests --all-targets --features text -- -D warnings               # clean
 cargo fmt --all                                                                 # idempotent
@@ -43,17 +57,10 @@ cargo run --example narrow_runtime                                              
 | B13 | Refinement-type compile-time elision through range analysis | Deferred |
 | B14 | CallIndirect flow analysis for non-recursive closures | Deferred to V0.3 |
 | B15 | Remove `Type::Unknown` entirely | Foundation in place; refactor pending |
-| B16 | Parametric `Vm<W, A, F>` for sub-64-bit native runtimes | Resolved (ten steps complete) |
+| B16 | Parametric `Vm<W, A, F>` for sub-64-bit native runtimes | Resolved (eleven steps complete) |
 | B17 | Embassy feature trimming | Resolved as not actionable |
 | B18 | Big-number arithmetic worked example | Resolved |
 
-## Notes
-
-- All four `stddsl` bundles (`Math`, `Audio`, `Text`, `Shell`) now register on any admissible `GenericVm<W, A, F>` shape. `Math` and `Audio` carry their inner closures in `f64`; on an `f32` runtime the marshall boundary narrows through `Float::from_f64` / `Float::to_f64`, a documented design tradeoff.
-- The `truncate_int` workaround retained in `Op::Add` and `binary_arith` is intentional backward-compat scaffolding for the supported direction (wide Vm running narrow bytecode). The load-time width check rejects the opposite direction.
-- The `Address` parameter `A` participates in load-time width validation but not in any opcode's runtime dispatch. Future opcodes that consume `A::MAX` would tighten its semantic weight. The `_phantom_a: PhantomData<A>` field encodes the present status.
-- `RUNTIME_*_BITS_LOG2` global constants remain at 6 (i64) as the binary build's framing-level upper bound. Each Vm enforces a tighter per-instance bound through `<W as Word>::BITS_LOG2` and siblings. Reducing the global constants for builds that exclude i64 bytecode entirely is a build-configuration question rather than a runtime gap.
-
 ## Intended Next Step
 
-Awaiting operator prompt. B16 is closed end-to-end across the runtime, the marshall layer, all standard library bundles, the demonstrator example, the integration tests, the cookbook recipe, and the architecture/design knowledge-graph prose. The next development action belongs to the operator's selection from B13, B14, B15, or a new directive.
+Awaiting operator prompt. B16 is closed end-to-end. Standing items 2, 3, 4, 5 are documented design properties; no action is recommended without a concrete driver. The next development action belongs to the operator's selection from B13, B14, B15, or a new directive.

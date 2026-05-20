@@ -769,8 +769,21 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
             // arena. The check is sound for programs without calls
             // and without variable-iteration loops. See
             // `verify_resource_bounds` for current limitations.
-            verify::verify_resource_bounds(&module, arena.capacity())
-                .map_err(|e| VmError::VerifyError(format!("{}: {}", e.chunk_name, e.message)))?;
+            //
+            // B16 step 11: parametric runtimes pass the runtime's
+            // actual `size_of::<GenericValue<W, F>>()` as the
+            // bytes-per-slot multiplier so the bound matches the
+            // narrow runtime's footprint rather than the default
+            // 32-byte 64-bit-runtime conservative bound.
+            let value_slot_bytes =
+                core::mem::size_of::<crate::bytecode::GenericValue<W, F>>() as u32;
+            verify::verify_resource_bounds_with_natives_and_value_slot_bytes(
+                &module,
+                arena.capacity(),
+                &[],
+                value_slot_bytes,
+            )
+            .map_err(|e| VmError::VerifyError(format!("{}: {}", e.chunk_name, e.message)))?;
         }
         let vm = Self::construct(module, arena)?;
         Ok((vm, warnings))
@@ -1466,8 +1479,18 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
             verify::verify(&new_module)
                 .map_err(|e| VmError::VerifyError(format!("{}: {}", e.chunk_name, e.message)))?;
             // R31. Verify the new module's WCMU fits the existing arena.
-            verify::verify_resource_bounds(&new_module, self.arena.capacity())
-                .map_err(|e| VmError::VerifyError(format!("{}: {}", e.chunk_name, e.message)))?;
+            // B16 step 11: same parametric value_slot_bytes plumbing
+            // as `new_with_options` so the hot-swap path tightens
+            // the bound on narrow runtimes.
+            let value_slot_bytes =
+                core::mem::size_of::<crate::bytecode::GenericValue<W, F>>() as u32;
+            verify::verify_resource_bounds_with_natives_and_value_slot_bytes(
+                &new_module,
+                self.arena.capacity(),
+                &[],
+                value_slot_bytes,
+            )
+            .map_err(|e| VmError::VerifyError(format!("{}: {}", e.chunk_name, e.message)))?;
         }
 
         let expected_len = new_module

@@ -249,6 +249,128 @@ fn narrow_runtime_can_register_text_library_via_lifted_impl() {
 
 #[cfg(feature = "floats")]
 #[test]
+fn narrow_runtime_can_register_audio_library_via_lifted_impl() {
+    // Item 6 follow-up: explicitly exercise the Audio bundle on a
+    // narrow-Word runtime. Mirrors the Math test but registers Audio
+    // and calls audio::midi_to_freq.
+    let target = Target {
+        word_bits_log2: 4,
+        addr_bits_log2: 4,
+        float_bits_log2: 6,
+        has_floats: true,
+        has_strings: false,
+    };
+    let src = "use audio::midi_to_freq\nfn main() -> Float { audio::midi_to_freq(69) }";
+    let tokens = tokenize(src).expect("lex");
+    let program = parse(&tokens).expect("parse");
+    let module = compile_with_target(&program, &target).expect("compile");
+
+    let arena = Arena::with_capacity(4096);
+    let mut vm: NarrowWordF64Vm<'_, '_> = NarrowWordF64Vm::new(module, &arena).expect("new");
+    vm.register_library(keleusma::stddsl::Audio);
+    match vm.call(&[]).expect("call") {
+        GenericVmState::Finished(GenericValue::Float(f)) => {
+            // MIDI 69 = A4 = 440 Hz.
+            assert!((f - 440.0_f64).abs() < 1e-9);
+        }
+        other => panic!("unexpected: {:?}", other),
+    }
+}
+
+#[test]
+fn narrow_runtime_view_bytes_zero_copy_runs_embedded_16_bytecode() {
+    // Item 7: regression test that view_bytes_zero_copy threads the
+    // load-time width check correctly on a narrow runtime. The zero-
+    // copy path reads widths from framing-header bytes 10..12 rather
+    // than materialising a Module; the path is exercised by reading
+    // a precompiled byte slice produced via Module::to_bytes.
+    let src = "fn main() -> Word { 1 + 2 }";
+    let module = {
+        let tokens = tokenize(src).expect("lex");
+        let program = parse(&tokens).expect("parse");
+        compile_with_target(&program, &Target::embedded_16()).expect("compile")
+    };
+    let bytes = module.to_bytes().expect("serialize");
+    // Align the bytes to 8-byte boundary as view_bytes_zero_copy requires.
+    let mut aligned: rkyv::util::AlignedVec<8> = rkyv::util::AlignedVec::with_capacity(bytes.len());
+    aligned.extend_from_slice(&bytes);
+
+    let arena = Arena::with_capacity(4096);
+    let mut vm: NarrowVm<'_, '_> =
+        unsafe { NarrowVm::view_bytes_zero_copy(aligned.as_slice(), &arena) }.expect("view");
+    match vm.call(&[]).expect("call") {
+        GenericVmState::Finished(GenericValue::Int(n)) => assert_eq!(n, 3_i16),
+        other => panic!("unexpected: {:?}", other),
+    }
+}
+
+#[test]
+fn narrow_runtime_view_bytes_zero_copy_rejects_wider_bytecode() {
+    // Item 7 paired regression: the zero-copy path must reject a
+    // mismatched width just as Vm::new does.
+    let src = "fn main() -> Word { 0 }";
+    let module = {
+        let tokens = tokenize(src).expect("lex");
+        let program = parse(&tokens).expect("parse");
+        compile_with_target(&program, &Target::host()).expect("compile")
+    };
+    let bytes = module.to_bytes().expect("serialize");
+    let mut aligned: rkyv::util::AlignedVec<8> = rkyv::util::AlignedVec::with_capacity(bytes.len());
+    aligned.extend_from_slice(&bytes);
+
+    let arena = Arena::with_capacity(4096);
+    let err = match unsafe { NarrowVm::view_bytes_zero_copy(aligned.as_slice(), &arena) } {
+        Ok(_) => panic!("must reject wider bytecode on zero-copy path"),
+        Err(e) => e,
+    };
+    let msg = format!("{:?}", err);
+    assert!(
+        msg.contains("word_bits_log2"),
+        "expected width-mismatch error, got: {}",
+        msg
+    );
+}
+
+#[test]
+fn i8_narrow_runtime_runs_embedded_8_bytecode() {
+    // Item 8: end-to-end smoke test for Vm<i8>. The embedded_8 target
+    // has no floats and no strings, so the script is integer-only.
+    // 100 + 27 = 127 fits i8::MAX exactly. 100 + 28 wraps via
+    // Word::wrapping_add to -128 (i8 boundary).
+    let src = "fn main() -> Word { 100 + 27 }";
+    let tokens = tokenize(src).expect("lex");
+    let program = parse(&tokens).expect("parse");
+    let module = compile_with_target(&program, &Target::embedded_8()).expect("compile");
+
+    let arena = Arena::with_capacity(4096);
+    type RetroVm<'a, 'arena> = GenericVm<'a, 'arena, i8, u16, f32>;
+    let mut vm: RetroVm<'_, '_> = RetroVm::new(module, &arena).expect("new");
+    match vm.call(&[]).expect("call") {
+        GenericVmState::Finished(GenericValue::Int(n)) => assert_eq!(n, 127_i8),
+        other => panic!("unexpected: {:?}", other),
+    }
+}
+
+#[test]
+fn i8_narrow_runtime_wraps_at_i8_boundary() {
+    // Item 8 paired regression: 100 + 28 = 128 exceeds i8::MAX and
+    // wraps to -128 via Word::wrapping_add.
+    let src = "fn main() -> Word { 100 + 28 }";
+    let tokens = tokenize(src).expect("lex");
+    let program = parse(&tokens).expect("parse");
+    let module = compile_with_target(&program, &Target::embedded_8()).expect("compile");
+
+    let arena = Arena::with_capacity(4096);
+    type RetroVm<'a, 'arena> = GenericVm<'a, 'arena, i8, u16, f32>;
+    let mut vm: RetroVm<'_, '_> = RetroVm::new(module, &arena).expect("new");
+    match vm.call(&[]).expect("call") {
+        GenericVmState::Finished(GenericValue::Int(n)) => assert_eq!(n, -128_i8),
+        other => panic!("unexpected: {:?}", other),
+    }
+}
+
+#[cfg(feature = "floats")]
+#[test]
 fn f32_narrow_runtime_can_register_math_library_via_lifted_impl() {
     // After step 10, Math lifts to Library<W, A, F> for any (W, A, F).
     // Register Math on a runtime whose Float type is f32; the host
