@@ -27,12 +27,12 @@ Total opcode count at the close of Phase 5 is 69. The audit's aspirational targe
 
 #### Wire format changes
 
-- **Fixed-size opcode records.** Each opcode is a 4-byte record: 1 byte `opcode_id` (with the high bit serving as a parity bit), 3 bytes operand field. Inline operand fields cover 58 of 65 opcodes; the remaining 7 reference an operand pool.
-- **Separate operand pool.** Compound operands (`(u16, u8)`, `(u16, u16)`, `(u16, u16, u8)`) live in 8-byte aligned pool entries with a type tag and parity byte.
-- **Section-partitioned body.** The framing header carries offsets and lengths for the opcode stream, operand pool, constant pool, chunk table, and data layout. Each section is independently relocatable.
-- **Framing header grows** from 24 bytes to 64 bytes to carry the new section offsets and lengths.
+- **Fixed-size opcode records.** Each opcode is a 4-byte record: 7-bit `opcode_id` plus a 1-bit parity in byte zero, 3 bytes inline operand or operand pool index in bytes one through three. Inline operand fields cover 65 of 69 V0.2.0 opcodes; the remaining 4 reference an operand pool.
+- **Separate operand pool.** Compound operands (`(u16, u16)` and `(u16, u16, u8)`) live in 8-byte aligned pool entries with a type tag and parity byte.
+- **Section-partitioned body.** The framing header carries offsets and lengths for the opcode stream, operand pool, and auxiliary body. Each section is independently relocatable.
+- **Framing header grows** from 32 bytes to 64 bytes to carry the new section offsets and lengths.
 
-The rkyv-archived encoding survives as an internal mechanism for cross-process module transport but is not consumed by the execution loop.
+The rkyv-archived encoding survives as an internal mechanism for the auxiliary body and for cross-process module transport. V0.2.0 Phase 7a publishes the specification and the wire-format types; Phase 7b switches the producer and consumer to the section-partitioned body and Phase 7c removes the rkyv dependency from the execution path.
 
 ### Changed
 

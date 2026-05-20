@@ -612,5 +612,7 @@ The implementation lands as a sequence of commits on the V0.2.0 publication bran
 | 4 | Closure opcode removal (`CallIndirect`, `PushFunc`, `MakeClosure`, `MakeRecursiveClosure`) plus `Value::Func` retirement; closure-hoisting pass dropped; closures rejected at the type-checker stage | Done |
 | 5 | Native ABI split: source-level `use external` keyword; compiler emits `CallVerifiedNative` versus `CallExternalNative`; `Op::CallNative` retired; `Vm::register_verified_native` and `Vm::register_external_native` host registration methods with classification cross-check via `Vm::verify_native_classifications`; external natives' per-call WCMU explicitly zeroed at the verifier handoff | Done |
 | 6 | Control-flow operand narrowing `u32` → `u16` with hard cap at `u16::MAX` ops as `CompileError` and 80% soft warning surfaced via `compile_with_warnings` | Done |
-| 7 | Wire format: fixed-size opcode records, separate operand pool, expanded framing header | Pending |
+| 7a | Wire format specification (`docs/architecture/WIRE_FORMAT.md`) plus `wire_format` module: framing header layout, four-byte opcode records with parity, eight-byte operand pool entries with type tag and parity, opcode-id table, encoder, decoder, round-trip tests. Execution path remains on rkyv. | Done |
+| 7b | Section-partitioned bytecode body: `Module::to_bytes` and `from_bytes` emit and consume opcode stream + operand pool + auxiliary body. Execution loop reads opcode stream and operand pool through `wire_format` types. Auxiliary body stays rkyv. | Pending |
+| 7c | Auxiliary body in custom format; rkyv removed from execution path; serves only as a cross-process transport | Pending |
 | 8 | Documentation alignment, `BYTECODE_VERSION` reset to 1 | Pending |

@@ -11,6 +11,7 @@ pub mod marshall;
 pub mod opaque;
 pub mod utility_natives;
 pub mod vm;
+pub mod wire_format;
 pub mod word;
 
 // Audio natives use floating-point arithmetic throughout (note

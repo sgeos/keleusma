@@ -947,6 +947,98 @@ pub fn module_wcmu_with_value_slot_bytes(
         .collect())
 }
 
+/// Per-native attestation passed to
+/// [`module_wcmu_with_bounds`] and friends. Carries the host-
+/// attested per-call WCMU and, for external natives, the
+/// invocation-count attestation. The verifier sums per-call WCMU
+/// over static call sites for verified natives and adds
+/// `max_invocations_per_iteration * per_call_wcmu_bytes` once per
+/// chunk for external natives, matching the
+/// `use external module::name` source-level semantics.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct NativeIterationBound {
+    /// Per-call WCMU bytes from the host attestation. Applies
+    /// both to verified natives (summed over call sites) and
+    /// external natives (multiplied by `max_invocations` once
+    /// per chunk).
+    pub per_call_wcmu_bytes: u32,
+    /// `None` for verified natives. `Some(n)` for external
+    /// natives where `n` is the host-attested upper bound on
+    /// per-iteration invocations.
+    pub max_invocations: Option<u32>,
+}
+
+/// Variant of [`module_wcmu`] that consumes per-native attestations
+/// with classification awareness. For each chunk in topological
+/// call order, walks the chunk's ops once to compute the per-site
+/// WCMU contribution (verified natives only, since external
+/// natives' per-call bound is excluded from the per-site sum) and
+/// then adds one chunk-level contribution per unique external
+/// native referenced.
+///
+/// The chunk-level external contribution is
+/// `max_invocations * per_call_wcmu` regardless of how many
+/// static call sites reference the native. This matches the
+/// `use external` contract: the host attests total invocations
+/// per iteration, not per call site.
+///
+/// Hosts that need only per-call attestations call the simpler
+/// [`module_wcmu`] entry point, which under the hood routes
+/// through this function with all-verified bounds.
+pub fn module_wcmu_with_bounds(
+    module: &Module,
+    bounds: &[NativeIterationBound],
+    value_slot_bytes: u32,
+) -> Result<Vec<(u32, u32)>, VerifyError> {
+    let n = module.chunks.len();
+    let mut chunk_wcmu: Vec<Option<(u32, u32)>> = alloc::vec![None; n];
+    let mut chunk_returns_text: Vec<bool> = alloc::vec![false; n];
+    // Per-site WCMU collected through `CallResolver` consumes
+    // only the verified per-call values; external natives surface
+    // as zero from the resolver and are added per chunk below.
+    let per_site_native_wcmu: Vec<u32> = bounds
+        .iter()
+        .map(|b| match b.max_invocations {
+            Some(_) => 0,
+            None => b.per_call_wcmu_bytes,
+        })
+        .collect();
+    let order = topological_call_order(module)?;
+    for chunk_idx in order {
+        let chunk = &module.chunks[chunk_idx];
+        let resolver = CallResolver {
+            chunk_wcmu: &chunk_wcmu,
+            native_wcmu: &per_site_native_wcmu,
+        };
+        let (mut wcmu_result, returns_text) =
+            compute_chunk_wcmu(chunk, &resolver, &chunk_returns_text, value_slot_bytes)?;
+        // Chunk-level external-native contribution. Walk the
+        // chunk's ops once to collect unique external native
+        // indices, then add each native's
+        // `max_invocations * per_call_wcmu` to the chunk's heap
+        // total. Deduplication ensures the bound is independent
+        // of the static call-site count.
+        let mut seen_external: alloc::collections::BTreeSet<u16> =
+            alloc::collections::BTreeSet::new();
+        for op in &chunk.ops {
+            if let Op::CallExternalNative(idx, _) = op
+                && seen_external.insert(*idx)
+                && let Some(bound) = bounds.get(*idx as usize)
+                && let Some(max_inv) = bound.max_invocations
+            {
+                let contribution = bound.per_call_wcmu_bytes.saturating_mul(max_inv);
+                wcmu_result.1 = wcmu_result.1.saturating_add(contribution);
+            }
+        }
+        chunk_wcmu[chunk_idx] = Some(wcmu_result);
+        chunk_returns_text[chunk_idx] = returns_text;
+    }
+    Ok(chunk_wcmu
+        .into_iter()
+        .map(|o| o.unwrap_or((0, 0)))
+        .collect())
+}
+
 /// Per-chunk text-flow analysis for the whole module, computed in
 /// topological call order so each caller sees its callees' resolved
 /// text-returning bits. The returned vector is indexed by chunk index
@@ -1199,6 +1291,33 @@ pub fn verify_resource_bounds_with_natives_and_value_slot_bytes(
     value_slot_bytes: u32,
 ) -> Result<(), VerifyError> {
     let chunk_wcmu = module_wcmu_with_value_slot_bytes(module, native_wcmu, value_slot_bytes)?;
+    enforce_arena_capacity(module, arena_capacity, &chunk_wcmu)
+}
+
+/// Variant of [`verify_resource_bounds_with_natives_and_value_slot_bytes`]
+/// that consumes per-native attestations with classification
+/// awareness. External natives' chunk-level contribution is
+/// `max_invocations_per_iteration * per_call_wcmu_bytes` per
+/// chunk, applied once regardless of the static call-site count.
+pub fn verify_resource_bounds_with_bounds(
+    module: &Module,
+    arena_capacity: usize,
+    bounds: &[NativeIterationBound],
+    value_slot_bytes: u32,
+) -> Result<(), VerifyError> {
+    let chunk_wcmu = module_wcmu_with_bounds(module, bounds, value_slot_bytes)?;
+    enforce_arena_capacity(module, arena_capacity, &chunk_wcmu)
+}
+
+/// Enforce that every Stream chunk's WCMU fits within the
+/// supplied arena capacity. Shared by both
+/// `verify_resource_bounds_with_natives_and_value_slot_bytes` and
+/// `verify_resource_bounds_with_bounds`.
+fn enforce_arena_capacity(
+    module: &Module,
+    arena_capacity: usize,
+    chunk_wcmu: &[(u32, u32)],
+) -> Result<(), VerifyError> {
     for (chunk_idx, chunk) in module.chunks.iter().enumerate() {
         if chunk.block_type != BlockType::Stream {
             continue;
@@ -2628,6 +2747,118 @@ mod tests {
         // Attestation of 1024 bytes; arena of 16 bytes is too small.
         let err = verify_resource_bounds_with_natives(&module, 16, &[1024]).unwrap_err();
         assert!(err.message.contains("exceeds arena capacity"));
+    }
+
+    #[test]
+    fn module_wcmu_with_bounds_verified_matches_per_site_sum() {
+        // Verified natives accumulate per static call site. Two
+        // call sites in one chunk yield twice the per-call WCMU.
+        let stream_chunk = make_chunk(
+            "tick",
+            vec![
+                Op::Stream,
+                Op::CallVerifiedNative(0, 0),
+                Op::PopN(1),
+                Op::CallVerifiedNative(0, 0),
+                Op::PopN(1),
+                Op::PushImmediate(0),
+                Op::Yield,
+                Op::PopN(1),
+                Op::Reset,
+            ],
+            BlockType::Stream,
+        );
+        let mut module = make_module(vec![stream_chunk]);
+        module.native_names = vec![String::from("host::alloc")];
+
+        let bounds = alloc::vec![NativeIterationBound {
+            per_call_wcmu_bytes: 100,
+            max_invocations: None,
+        }];
+        let results =
+            module_wcmu_with_bounds(&module, &bounds, crate::bytecode::VALUE_SLOT_SIZE_BYTES)
+                .unwrap();
+        let (_, heap) = results[0];
+        assert_eq!(heap, 200, "two verified call sites at 100 each");
+    }
+
+    #[test]
+    fn module_wcmu_with_bounds_external_uses_max_invocations() {
+        // External natives apply max_invocations * per_call_wcmu
+        // once per chunk regardless of the static call-site
+        // count. Two call sites still yield a single
+        // chunk-level contribution.
+        let stream_chunk = make_chunk(
+            "tick",
+            vec![
+                Op::Stream,
+                Op::CallExternalNative(0, 0),
+                Op::PopN(1),
+                Op::CallExternalNative(0, 0),
+                Op::PopN(1),
+                Op::PushImmediate(0),
+                Op::Yield,
+                Op::PopN(1),
+                Op::Reset,
+            ],
+            BlockType::Stream,
+        );
+        let mut module = make_module(vec![stream_chunk]);
+        module.native_names = vec![String::from("host::log_event")];
+
+        let bounds = alloc::vec![NativeIterationBound {
+            per_call_wcmu_bytes: 100,
+            max_invocations: Some(50),
+        }];
+        let results =
+            module_wcmu_with_bounds(&module, &bounds, crate::bytecode::VALUE_SLOT_SIZE_BYTES)
+                .unwrap();
+        let (_, heap) = results[0];
+        // External contribution: 100 * 50 = 5000. Independent of
+        // the two static call sites.
+        assert_eq!(heap, 5000);
+    }
+
+    #[test]
+    fn module_wcmu_with_bounds_mixed_classifications() {
+        // A chunk that calls both a verified and an external
+        // native sums the verified per-site contribution and the
+        // external chunk-level contribution.
+        let stream_chunk = make_chunk(
+            "tick",
+            vec![
+                Op::Stream,
+                Op::CallVerifiedNative(0, 0),
+                Op::PopN(1),
+                Op::CallExternalNative(1, 0),
+                Op::PopN(1),
+                Op::PushImmediate(0),
+                Op::Yield,
+                Op::PopN(1),
+                Op::Reset,
+            ],
+            BlockType::Stream,
+        );
+        let mut module = make_module(vec![stream_chunk]);
+        module.native_names = vec![String::from("host::alloc"), String::from("host::log_event")];
+
+        let bounds = alloc::vec![
+            NativeIterationBound {
+                per_call_wcmu_bytes: 256,
+                max_invocations: None,
+            },
+            NativeIterationBound {
+                per_call_wcmu_bytes: 64,
+                max_invocations: Some(10),
+            },
+        ];
+        let results =
+            module_wcmu_with_bounds(&module, &bounds, crate::bytecode::VALUE_SLOT_SIZE_BYTES)
+                .unwrap();
+        let (_, heap) = results[0];
+        // Verified: 256 (one call site). External: 64 * 10 = 640.
+        // Total: 896.
+        assert_eq!(heap, 896);
     }
 
     #[test]

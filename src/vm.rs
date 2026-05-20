@@ -1898,27 +1898,21 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
     #[cfg(feature = "verify")]
     pub fn verify_resources(&self) -> Result<(), VmError> {
         let module = self.module_owned()?;
-        // External natives contribute zero to the per-site WCMU
-        // sum the verifier accumulates. The host-attested
-        // `max_invocations_per_iteration` bounds total external
-        // calls per iteration, which the verifier must apply per
-        // chunk (not per static call site); a per-site multiplier
-        // would either under-count (when `max_invocations` exceeds
-        // the static site count) or over-count (when it falls
-        // below). The chunk-level integration is forward-looking;
-        // until then external natives are treated as outside the
-        // script's per-iteration WCMU budget, consistent with the
-        // host's separate verification of their resource use.
-        let native_wcmu: Vec<u32> = self
-            .natives
-            .iter()
-            .map(|n| match n.classification {
-                NativeClassification::Verified => n.wcmu_bytes,
-                NativeClassification::External => 0,
-            })
-            .collect();
-        verify::verify_resource_bounds_with_natives(&module, self.arena.capacity(), &native_wcmu)
-            .map_err(|e| VmError::VerifyError(format!("{}: {}", e.chunk_name, e.message)))
+        // Per-native attestations carry both the per-call WCMU
+        // bound and the external-native invocation count. The
+        // verifier sums per-call WCMU over static call sites for
+        // verified natives and applies
+        // `max_invocations_per_iteration * per_call_wcmu` once
+        // per chunk for external natives.
+        let bounds = self.native_iteration_bounds();
+        let value_slot_bytes = core::mem::size_of::<crate::bytecode::GenericValue<W, F>>() as u32;
+        verify::verify_resource_bounds_with_bounds(
+            &module,
+            self.arena.capacity(),
+            &bounds,
+            value_slot_bytes,
+        )
+        .map_err(|e| VmError::VerifyError(format!("{}: {}", e.chunk_name, e.message)))
     }
 
     /// Compute the smallest arena capacity that admits this VM's module
@@ -1932,26 +1926,46 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
     #[cfg(feature = "verify")]
     pub fn auto_arena_capacity(&self) -> Result<usize, VmError> {
         let module = self.module_owned()?;
-        // External natives contribute zero to the per-site WCMU
-        // sum the verifier accumulates. The host-attested
-        // `max_invocations_per_iteration` bounds total external
-        // calls per iteration, which the verifier must apply per
-        // chunk (not per static call site); a per-site multiplier
-        // would either under-count (when `max_invocations` exceeds
-        // the static site count) or over-count (when it falls
-        // below). The chunk-level integration is forward-looking;
-        // until then external natives are treated as outside the
-        // script's per-iteration WCMU budget, consistent with the
-        // host's separate verification of their resource use.
-        let native_wcmu: Vec<u32> = self
-            .natives
+        let bounds = self.native_iteration_bounds();
+        let chunk_wcmu = verify::module_wcmu_with_bounds(
+            &module,
+            &bounds,
+            crate::bytecode::VALUE_SLOT_SIZE_BYTES,
+        )
+        .map_err(|e| VmError::VerifyError(format!("{}: {}", e.chunk_name, e.message)))?;
+        let mut max_total: usize = 0;
+        for (chunk_idx, chunk) in module.chunks.iter().enumerate() {
+            if chunk.block_type == crate::bytecode::BlockType::Stream {
+                let (s, h) = chunk_wcmu[chunk_idx];
+                let total = (s as usize).saturating_add(h as usize);
+                if total > max_total {
+                    max_total = total;
+                }
+            }
+        }
+        Ok(max_total)
+    }
+
+    /// Build per-native attestations for the verifier. Verified
+    /// natives carry `max_invocations: None` and the
+    /// `wcmu_bytes` field set by `set_native_bounds` or the
+    /// per-call argument to `register_verified_native`. External
+    /// natives carry `max_invocations: Some(n)` set at
+    /// `register_external_native`.
+    #[cfg(feature = "verify")]
+    fn native_iteration_bounds(&self) -> Vec<verify::NativeIterationBound> {
+        self.natives
             .iter()
-            .map(|n| match n.classification {
-                NativeClassification::Verified => n.wcmu_bytes,
-                NativeClassification::External => 0,
+            .map(|n| verify::NativeIterationBound {
+                per_call_wcmu_bytes: n.wcmu_bytes,
+                max_invocations: match n.classification {
+                    NativeClassification::Verified => None,
+                    NativeClassification::External => {
+                        Some(n.max_invocations_per_iteration.unwrap_or(0))
+                    }
+                },
             })
-            .collect();
-        auto_arena_capacity_for(&module, &native_wcmu)
+            .collect()
     }
 
     /// Verify that every native call site in the loaded module

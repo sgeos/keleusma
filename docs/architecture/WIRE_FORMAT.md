@@ -1,0 +1,125 @@
+# Wire Format
+
+> **Navigation**: [Architecture](./README.md) | [Documentation Root](../README.md)
+
+This document specifies the V0.2.0 bytecode wire format. The format pairs a fixed-size 64-byte framing header with a section-partitioned body. The body partitions into a fixed-size opcode stream, a separately addressed operand pool for compound operands, and the in-place archived auxiliary data (chunk metadata, constant pool, struct templates, native names, data layout) that the existing rkyv path produces.
+
+V0.2.0 introduces the format. V0.1.x runtimes cannot read V0.2.0 bytecode. The framing-header `version` field resets to `1` to signal the discontinuity. The rkyv-archived encoding survives as the internal representation for the auxiliary body and as a cross-process transport mechanism, but the execution loop reads the opcode stream and the operand pool directly through the new fixed-size records.
+
+## Status
+
+V0.2.0 Phase 7a publishes this specification and the wire-format types in `src/wire_format.rs`. The opcode encoder and decoder are implemented and exercised by round-trip tests covering every `Op` variant. The execution loop, `Module::to_bytes`, and `Module::from_bytes` continue to round-trip through rkyv until Phase 7b cuts over to the section-partitioned body and Phase 7c removes the rkyv dependency from the execution path. The phased cutover preserves the existing test surface while the new format gains coverage.
+
+## Design rationale
+
+The wire format is shaped by three concerns.
+
+First, decoder simplicity. Fixed-size opcode records remove the variable-length operand decoding step that the rkyv-archived enum representation requires. A decoder advances exactly four bytes per record without consulting a length field or a discriminator table. This shape suits a hardware decoder that pipelines record fetch and operand expansion in lockstep.
+
+Second, integrity at the record level. Each opcode record and each operand pool entry carry a parity bit covering the rest of the payload. Single bit flips are detected at the consumer site before the record reaches the dispatch table. The parity is cheap to compute and does not require a separate CRC pass.
+
+Third, separation of code and data. The opcode stream is contiguous and the operand pool is addressed separately. Compound operands that exceed three inline bytes (the addressable space within a four-byte record) reference an entry in the operand pool by index. Pool entries are eight-byte aligned, which matches a natural cache-line boundary and lets a host that streams the pool into a separately mapped region do so without realignment.
+
+The audit considered an alternative variable-length encoding that placed compound operands inline. The fixed-size record won on decoder simplicity and on the observation that compound operands cover only four of the sixty-nine V0.2.0 opcodes. The pool indirection cost is paid only for those four.
+
+## Framing header
+
+The framing header is exactly sixty-four bytes. Multiples of eight preserve alignment for the eight-byte operand pool entries that follow when the body starts at a header-aligned offset. The header carries the magic, version, total length, target widths, declared WCET and WCMU, the data segment sizes, and section offsets and lengths for the opcode stream, operand pool, and rkyv-archived auxiliary body.
+
+| Offset | Width | Field |
+|--------|-------|-------|
+| 0      | 4     | Magic `b"KELE"` |
+| 4      | 2     | Version (u16 little-endian) |
+| 6      | 2     | Header length (u16 little-endian, equals 64) |
+| 8      | 4     | Total length (u32 little-endian, includes header, sections, CRC trailer) |
+| 12     | 1     | Target word bits log2 (u8) |
+| 13     | 1     | Target address bits log2 (u8) |
+| 14     | 1     | Target float bits log2 (u8) |
+| 15     | 1     | Flags (u8) |
+| 16     | 4     | Declared WCET cycles (u32 little-endian) |
+| 20     | 4     | Declared WCMU bytes (u32 little-endian) |
+| 24     | 4     | Shared data bytes (u32 little-endian) |
+| 28     | 4     | Private data bytes (u32 little-endian) |
+| 32     | 4     | Opcode stream offset (u32 little-endian) |
+| 36     | 4     | Opcode stream length (u32 little-endian, multiple of 4) |
+| 40     | 4     | Operand pool offset (u32 little-endian) |
+| 44     | 4     | Operand pool length (u32 little-endian, multiple of 8) |
+| 48     | 4     | Auxiliary body offset (u32 little-endian) |
+| 52     | 4     | Auxiliary body length (u32 little-endian) |
+| 56     | 4     | Reserved (u32, zero) |
+| 60     | 4     | Reserved (u32, zero) |
+
+The reserved fields cover future section additions. A V0.2.x runtime that encounters non-zero reserved fields rejects the bytecode as `LoadError::InvalidFormat` to preserve forward-compatibility against future producers that adopt the same magic and version.
+
+## Opcode records
+
+Each opcode is a four-byte record. The record carries the opcode identifier in the low seven bits of byte zero and a parity bit in the high bit. Bytes one through three carry the operand inline when it fits in twenty-four bits and carry a pool index otherwise.
+
+| Offset | Width | Field |
+|--------|-------|-------|
+| 0      | 1     | Bit 7: parity. Bits 0..6: opcode identifier. |
+| 1      | 1     | Operand byte 0 (low). |
+| 2      | 1     | Operand byte 1. |
+| 3      | 1     | Operand byte 2 (high). |
+
+The parity bit is the XOR of the other thirty-one bits in the record. A consumer reads byte zero, computes the parity over the seven low bits of byte zero and all bits of bytes one through three, compares against the high bit of byte zero, and rejects the record on mismatch. The parity covers the entire record so single bit flips anywhere are detected at the consumer site.
+
+The opcode identifier is the index of the `Op` variant in the canonical V0.2.0 listing. The table is fixed at version 1 of the wire format. The mapping is stable across the V0.2.0 series and across V0.2.x patch releases. The identifier fits in seven bits because the V0.2.0 ISA has sixty-nine variants; future ISA additions that exceed one hundred and twenty-eight variants would require a version bump.
+
+The operand semantics depend on the opcode variant. Inline operands cover four shapes:
+
+- **No operand.** Bytes one through three are zero. Thirty-six variants.
+- **`u8`.** Byte one carries the value; bytes two and three are zero. Nine variants.
+- **`u16`.** Bytes one through two carry the value little-endian; byte three is zero. Seventeen variants.
+- **`(u16, u8)`.** Bytes one through two carry the `u16` little-endian; byte three carries the `u8`. Three variants.
+
+The remaining four variants reference the operand pool because their payload does not fit in three bytes:
+
+- **`(u16, u16)`.** Pool entry tag `0x01`. Three variants: `GetDataIndexed`, `SetDataIndexed`, `IsEnum`.
+- **`(u16, u16, u8)`.** Pool entry tag `0x02`. One variant: `NewEnum`.
+
+For pool-referencing opcodes, the inline operand bytes carry the twenty-four-bit pool index in little-endian. A pool of up to 16,777,216 entries (no observed program approaches one tenth of this) covers the foreseeable case. A producer that exceeds the limit emits a `CompileError`.
+
+## Operand pool
+
+The operand pool is a contiguous sequence of eight-byte entries. Each entry is self-describing through a type tag and integrity-checked through a parity byte.
+
+| Offset | Width | Field |
+|--------|-------|-------|
+| 0      | 1     | Type tag (`0x01` for `(u16, u16)`, `0x02` for `(u16, u16, u8)`). |
+| 1      | 1     | Parity (XOR of bytes 0 and 2 through 7). |
+| 2      | 2     | First `u16` little-endian. |
+| 4      | 2     | Second `u16` little-endian. |
+| 6      | 1     | `u8` (for tag `0x02`) or zero (for tag `0x01`). |
+| 7      | 1     | Reserved (zero). |
+
+The pool offset declared in the framing header is eight-byte aligned within the bytecode buffer. A consumer reading a pool entry validates the type tag against the expected tag for the consuming opcode and validates the parity against the rest of the entry. Tag and parity mismatches surface as `LoadError::CorruptOperandPool`.
+
+The reserved byte at offset seven is included so each entry occupies a full cache line within an eight-byte aligned region. The entry width is fixed at eight bytes regardless of the tag so a producer can compute pool offsets through `index * 8` arithmetic without consulting per-entry metadata.
+
+## Section-partitioned body
+
+The body of the bytecode partitions into three sections after the framing header:
+
+1. **Opcode stream.** Concatenated four-byte records for every chunk in declaration order. Per-chunk boundaries live in the auxiliary body's chunk table.
+2. **Operand pool.** Concatenated eight-byte entries indexed by the inline pool index in the opcode records that reference them.
+3. **Auxiliary body.** Constant pool, struct templates, chunk table (name, op offset, op count, local count, parameter types), native names, data layout, and entry point index. The auxiliary body uses the existing rkyv archived encoding through V0.2.x and migrates to a custom encoding under a Phase 7c follow-on.
+
+The CRC-32 trailer covers the header and all three sections. The trailer's algebraic self-inclusion property holds: a consumer computing the CRC over the bytes from offset zero through the four-byte trailer obtains the residue constant `0x2144DF1C`. This property survives the section-partitioned body unchanged.
+
+## Wire format types
+
+The V0.2.0 Phase 7a release ships the following types in `src/wire_format.rs`:
+
+- `WireFormatHeader` mirrors the sixty-four-byte framing header layout. Fields are `pub` for direct access; helpers encode and decode against `[u8; 64]`.
+- `OpcodeId` is a `u8` newtype carrying the seven-bit opcode identifier. The mapping table converts to and from the `Op` enum.
+- `OpcodeRecord` is a `[u8; 4]` newtype with constructors that take an `OpcodeId` and either inline operand bytes or a pool index, and that compute the parity bit before returning the record.
+- `OperandPoolEntry` is a `[u8; 8]` newtype with constructors for the `(u16, u16)` and `(u16, u16, u8)` tag variants and a decoder that returns the typed operand on parity success.
+
+The encoder accepts an `Op` and emits an `OpcodeRecord`, queueing pool entries through a `&mut Vec<OperandPoolEntry>` accumulator. The decoder accepts an `OpcodeRecord` and an `&[OperandPoolEntry]` and reconstructs the `Op`. Round-trip tests cover every variant.
+
+## Migration
+
+V0.1.x bytecode artefacts cannot be loaded by V0.2.0 runtimes. Hosts that have V0.1.x bytecode in flight at publication time recompile against the V0.2.0 toolchain. The framing-header `version` field resets to `1` to signal the discontinuity; V0.2.0 runtimes reject V0.1.x bytecode at the framing-level check.
+
+Within the V0.2.0 series, the Phase 7a release ships the wire-format types and tests but does not yet route the execution loop through them. `Module::to_bytes` and `Module::from_bytes` continue to produce and consume the V0.1.x-style framing plus rkyv body. Phase 7b switches the producer to emit the section-partitioned body and the consumer to read the opcode stream and operand pool through the new types; the auxiliary body remains rkyv. Phase 7c migrates the auxiliary body to a custom encoding and removes the rkyv dependency from the execution loop. The CRC trailer and the magic remain stable across all three phases.
