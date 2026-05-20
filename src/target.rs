@@ -379,10 +379,31 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "floats")]
     fn host_target_admits_floats_and_strings() {
+        // Float literals require the `floats` cargo feature at
+        // the lexer level. Gate the test so the no-floats build
+        // (`--no-default-features --features compile,verify`)
+        // does not regress on a literal the lexer rejects.
         try_compile_with_target(
             "fn main() -> Word {\n\
                  let f: Float = 1.5;\n\
+                 let s: Text = \"hello\";\n\
+                 0\n\
+             }",
+            &Target::host(),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    #[cfg(not(feature = "floats"))]
+    fn host_target_admits_strings_without_floats() {
+        // No-floats counterpart of `host_target_admits_floats_and_strings`.
+        // Exercises the host target's admissibility surface for
+        // static strings without referencing float literals.
+        try_compile_with_target(
+            "fn main() -> Word {\n\
                  let s: Text = \"hello\";\n\
                  0\n\
              }",

@@ -8,7 +8,11 @@ V0.2.0 introduces the format. V0.1.x runtimes cannot read V0.2.0 bytecode. The f
 
 ## Status
 
-V0.2.0 Phase 7a publishes this specification and the wire-format types in `src/wire_format.rs`. The opcode encoder and decoder are implemented and exercised by round-trip tests covering every `Op` variant. The execution loop, `Module::to_bytes`, and `Module::from_bytes` continue to round-trip through rkyv until Phase 7b cuts over to the section-partitioned body and Phase 7c removes the rkyv dependency from the execution path. The phased cutover preserves the existing test surface while the new format gains coverage.
+V0.2.0 Phase 7a publishes this specification and the wire-format types in `src/wire_format.rs`. The opcode encoder and decoder are implemented and exercised by round-trip tests covering every `Op` variant.
+
+V0.2.0 Phase 7b adds `wire_format::module_to_wire_bytes(&Module)` and `wire_format::module_from_wire_bytes(&[u8])` that round-trip an entire `Module` through the V0.2.0 wire format: 64-byte framing header, opcode stream, operand pool, rkyv-archived auxiliary body, CRC trailer. The encoder splits each chunk's `ops` into the opcode stream while the auxiliary body's `WireChunk` entries carry the byte offsets and record counts. The decoder validates the framing, reads each section, deserializes the auxiliary body, and reconstructs each chunk's `ops` from the opcode stream. Round-trip tests cover empty modules, minimal programs, branchy programs, pool-using programs, Stream chunks, plus the BadMagic, BadChecksum, Truncated, and shebang error and recovery paths. The default `Module::to_bytes` / `Module::from_bytes` / `Module::access_bytes` continue to round-trip through rkyv pending the Phase 7c cutover.
+
+Phase 7c cuts `Module::to_bytes` and `Module::from_bytes` over to the section-partitioned body and removes the rkyv dependency from the execution path. The phased cutover preserves the existing test surface while the new format gains coverage.
 
 ## Design rationale
 

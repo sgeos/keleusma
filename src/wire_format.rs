@@ -24,9 +24,16 @@
 
 extern crate alloc;
 
+use alloc::format;
+use alloc::string::String;
 use alloc::vec::Vec;
 
-use crate::bytecode::Op;
+use rkyv::{Archive, Deserialize, Serialize};
+
+use crate::bytecode::{
+    BYTECODE_MAGIC, BYTECODE_VERSION, BlockType, Chunk, ConstValue, DataLayout, LoadError, Module,
+    Op, StructTemplate, TypeTag, crc32,
+};
 
 /// Error surfaced by the wire-format decoder.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -699,6 +706,435 @@ fn decode_pool_u16_u16_u8(
     Ok(entry.as_u16_u16_u8())
 }
 
+/// Footer length: the trailing CRC-32 over the entire framed
+/// bytecode.
+pub const WIRE_FORMAT_FOOTER_BYTES: usize = 4;
+
+/// Reflected polynomial residue produced after concatenating any
+/// byte sequence with the little-endian encoding of its CRC-32.
+/// The wire-format reader verifies the bytecode through this
+/// residue equality.
+const WIRE_FORMAT_CRC32_RESIDUE: u32 = 0x2144DF1C;
+
+/// Wire-format chunk metadata. Mirrors [`Chunk`] but moves the
+/// `ops` vector out of the rkyv-archived body and into the
+/// opcode stream section. Carries the byte offset and record
+/// count needed to recover the chunk's opcode sequence from the
+/// section-partitioned body.
+#[derive(Debug, Clone, Archive, Serialize, Deserialize)]
+pub struct WireChunk {
+    /// Function name; matches `Chunk::name`.
+    pub name: String,
+    /// Constant pool; matches `Chunk::constants`.
+    pub constants: Vec<ConstValue>,
+    /// Struct templates; matches `Chunk::struct_templates`.
+    pub struct_templates: Vec<StructTemplate>,
+    /// Total local variable slots; matches `Chunk::local_count`.
+    pub local_count: u16,
+    /// Number of parameters; matches `Chunk::param_count`.
+    pub param_count: u8,
+    /// Block type classification; matches `Chunk::block_type`.
+    pub block_type: BlockType,
+    /// Parameter type tags; matches `Chunk::param_types`.
+    pub param_types: Vec<TypeTag>,
+    /// Byte offset into the opcode stream section where this
+    /// chunk's opcode records start. Always a multiple of
+    /// [`OPCODE_RECORD_BYTES`].
+    pub op_byte_offset: u32,
+    /// Number of opcode records that compose this chunk's body.
+    /// The chunk's total byte span in the opcode stream is
+    /// `op_record_count * OPCODE_RECORD_BYTES`.
+    pub op_record_count: u32,
+}
+
+/// Wire-format auxiliary body. Mirrors [`Module`] but carries
+/// [`WireChunk`] metadata (ops live in the opcode stream
+/// section).
+#[derive(Debug, Clone, Archive, Serialize, Deserialize)]
+pub struct WireAuxBody {
+    pub chunks: Vec<WireChunk>,
+    pub native_names: Vec<String>,
+    pub entry_point: Option<usize>,
+    pub data_layout: Option<DataLayout>,
+    pub word_bits_log2: u8,
+    pub addr_bits_log2: u8,
+    pub float_bits_log2: u8,
+    pub wcet_cycles: u32,
+    pub wcmu_bytes: u32,
+    pub flags: u8,
+    pub shared_data_bytes: u32,
+    pub private_data_bytes: u32,
+    pub schema_hash: u32,
+}
+
+/// Strip a `#!` shebang prefix from a byte slice. Wire-format
+/// bytes that begin with `#!` are produced when a host appends
+/// the bytecode after an executable shebang; the strip returns
+/// the slice past the first `\n`. Bytes without the prefix pass
+/// through unchanged.
+fn strip_shebang_prefix(bytes: &[u8]) -> &[u8] {
+    if bytes.starts_with(b"#!") {
+        if let Some(newline_pos) = bytes.iter().position(|&b| b == b'\n') {
+            &bytes[newline_pos + 1..]
+        } else {
+            bytes
+        }
+    } else {
+        bytes
+    }
+}
+
+/// Encode a [`Module`] into the V0.2.0 wire format: 64-byte
+/// framing header, opcode stream, operand pool, rkyv-archived
+/// auxiliary body, 4-byte CRC-32 trailer.
+///
+/// The opcode stream packs every chunk's opcodes as 4-byte
+/// records in chunk declaration order. The auxiliary body's
+/// [`WireChunk`] entries point into the opcode stream through
+/// `op_byte_offset` and `op_record_count`. Compound operands
+/// (`(u16, u16)` for `Op::GetDataIndexed` / `Op::SetDataIndexed`
+/// / `Op::IsEnum` and `(u16, u16, u8)` for `Op::NewEnum`) flow
+/// into the operand pool as 8-byte entries indexed by the
+/// inline 24-bit pool index in the opcode record.
+///
+/// V0.2.0 Phase 7b ships this function as a parallel route to
+/// [`Module::to_bytes`]; the cutover to the V0.2.0 format as the
+/// default serializer is Phase 7c.
+pub fn module_to_wire_bytes(module: &Module) -> Result<Vec<u8>, LoadError> {
+    // Build the opcode stream and operand pool. Track per-chunk
+    // byte offsets and record counts for the WireChunk metadata.
+    let mut opcode_stream: Vec<u8> = Vec::new();
+    let mut operand_pool: Vec<OperandPoolEntry> = Vec::new();
+    let mut wire_chunks: Vec<WireChunk> = Vec::with_capacity(module.chunks.len());
+    for chunk in &module.chunks {
+        let op_byte_offset = opcode_stream.len() as u32;
+        let op_record_count = chunk.ops.len() as u32;
+        for op in &chunk.ops {
+            let record = encode_op(op, &mut operand_pool)
+                .map_err(|e| LoadError::Codec(format!("opcode encode failed: {:?}", e)))?;
+            opcode_stream.extend_from_slice(&record.0);
+        }
+        wire_chunks.push(WireChunk {
+            name: chunk.name.clone(),
+            constants: chunk.constants.clone(),
+            struct_templates: chunk.struct_templates.clone(),
+            local_count: chunk.local_count,
+            param_count: chunk.param_count,
+            block_type: chunk.block_type,
+            param_types: chunk.param_types.clone(),
+            op_byte_offset,
+            op_record_count,
+        });
+    }
+    let aux = WireAuxBody {
+        chunks: wire_chunks,
+        native_names: module.native_names.clone(),
+        entry_point: module.entry_point,
+        data_layout: module.data_layout.clone(),
+        word_bits_log2: module.word_bits_log2,
+        addr_bits_log2: module.addr_bits_log2,
+        float_bits_log2: module.float_bits_log2,
+        wcet_cycles: module.wcet_cycles,
+        wcmu_bytes: module.wcmu_bytes,
+        flags: module.flags,
+        shared_data_bytes: module.shared_data_bytes,
+        private_data_bytes: module.private_data_bytes,
+        schema_hash: module.schema_hash,
+    };
+    let aux_bytes = rkyv::to_bytes::<rkyv::rancor::Error>(&aux)
+        .map_err(|e| LoadError::Codec(format!("aux body encode failed: {}", e)))?;
+
+    // Flatten operand pool to bytes.
+    let mut operand_pool_bytes: Vec<u8> =
+        Vec::with_capacity(operand_pool.len() * OPERAND_POOL_ENTRY_BYTES);
+    for entry in &operand_pool {
+        operand_pool_bytes.extend_from_slice(&entry.0);
+    }
+
+    // Compute section offsets. The opcode stream begins
+    // immediately after the 64-byte framing header. The operand
+    // pool begins at the next 8-byte aligned offset, which is
+    // already aligned because the opcode stream is a multiple
+    // of 4 bytes per record and the section count is a multiple
+    // of 8 records (records are 4 bytes; 8 records = 32 bytes
+    // align). Conservatively pad to 8-byte alignment.
+    let opcode_stream_offset = WIRE_FORMAT_HEADER_BYTES as u32;
+    let opcode_stream_length = opcode_stream.len() as u32;
+    let mut after_opcodes = opcode_stream_offset + opcode_stream_length;
+    let opcode_padding = ((8 - (after_opcodes as usize % 8)) % 8) as u32;
+    after_opcodes += opcode_padding;
+    let operand_pool_offset = after_opcodes;
+    let operand_pool_length = operand_pool_bytes.len() as u32;
+    let mut after_pool = operand_pool_offset + operand_pool_length;
+    let pool_padding = ((8 - (after_pool as usize % 8)) % 8) as u32;
+    after_pool += pool_padding;
+    let aux_body_offset = after_pool;
+    let aux_body_length = aux_bytes.len() as u32;
+    let after_aux = aux_body_offset + aux_body_length;
+    let total_length = after_aux + WIRE_FORMAT_FOOTER_BYTES as u32;
+
+    // Assemble the buffer.
+    let mut buf: Vec<u8> = Vec::with_capacity(total_length as usize);
+    // Framing header.
+    buf.extend_from_slice(&BYTECODE_MAGIC);
+    buf.extend_from_slice(&BYTECODE_VERSION.to_le_bytes());
+    buf.extend_from_slice(&(WIRE_FORMAT_HEADER_BYTES as u16).to_le_bytes());
+    buf.extend_from_slice(&total_length.to_le_bytes());
+    buf.push(module.word_bits_log2);
+    buf.push(module.addr_bits_log2);
+    buf.push(module.float_bits_log2);
+    buf.push(module.flags);
+    buf.extend_from_slice(&module.wcet_cycles.to_le_bytes());
+    buf.extend_from_slice(&module.wcmu_bytes.to_le_bytes());
+    buf.extend_from_slice(&module.shared_data_bytes.to_le_bytes());
+    buf.extend_from_slice(&module.private_data_bytes.to_le_bytes());
+    buf.extend_from_slice(&opcode_stream_offset.to_le_bytes());
+    buf.extend_from_slice(&opcode_stream_length.to_le_bytes());
+    buf.extend_from_slice(&operand_pool_offset.to_le_bytes());
+    buf.extend_from_slice(&operand_pool_length.to_le_bytes());
+    buf.extend_from_slice(&aux_body_offset.to_le_bytes());
+    buf.extend_from_slice(&aux_body_length.to_le_bytes());
+    buf.extend_from_slice(&[0u8; 4]); // reserved
+    buf.extend_from_slice(&[0u8; 4]); // reserved
+    debug_assert_eq!(buf.len(), WIRE_FORMAT_HEADER_BYTES);
+
+    // Opcode stream + alignment padding.
+    buf.extend_from_slice(&opcode_stream);
+    buf.resize(buf.len() + opcode_padding as usize, 0);
+
+    // Operand pool + alignment padding.
+    buf.extend_from_slice(&operand_pool_bytes);
+    buf.resize(buf.len() + pool_padding as usize, 0);
+
+    // Auxiliary body.
+    buf.extend_from_slice(&aux_bytes);
+
+    // CRC trailer over header + sections.
+    let crc = crc32(&buf);
+    buf.extend_from_slice(&crc.to_le_bytes());
+    debug_assert_eq!(buf.len(), total_length as usize);
+    Ok(buf)
+}
+
+/// Decode the V0.2.0 wire format produced by
+/// [`module_to_wire_bytes`] back into a [`Module`].
+///
+/// Validates the framing header, the CRC residue, and the
+/// declared section offsets/lengths. Reads the opcode stream
+/// and operand pool, deserializes the rkyv-archived auxiliary
+/// body, and reconstructs each chunk's `ops` from its byte
+/// offset and record count.
+///
+/// V0.2.0 Phase 7b ships this function as a parallel route to
+/// [`Module::from_bytes`]; the cutover is Phase 7c.
+pub fn module_from_wire_bytes(bytes: &[u8]) -> Result<Module, LoadError> {
+    let bytes = strip_shebang_prefix(bytes);
+    if bytes.len() < WIRE_FORMAT_HEADER_BYTES + WIRE_FORMAT_FOOTER_BYTES {
+        return Err(LoadError::Truncated);
+    }
+    if bytes[0..4] != BYTECODE_MAGIC {
+        return Err(LoadError::BadMagic);
+    }
+    let version = u16::from_le_bytes([bytes[4], bytes[5]]);
+    if version != BYTECODE_VERSION {
+        return Err(LoadError::UnsupportedVersion {
+            got: version,
+            expected: BYTECODE_VERSION,
+        });
+    }
+    let header_length = u16::from_le_bytes([bytes[6], bytes[7]]) as usize;
+    if header_length != WIRE_FORMAT_HEADER_BYTES {
+        return Err(LoadError::Codec(format!(
+            "wire format header length {} does not match the expected {}",
+            header_length, WIRE_FORMAT_HEADER_BYTES
+        )));
+    }
+    let total_length = u32::from_le_bytes([bytes[8], bytes[9], bytes[10], bytes[11]]) as usize;
+    if total_length < WIRE_FORMAT_HEADER_BYTES + WIRE_FORMAT_FOOTER_BYTES
+        || total_length > bytes.len()
+    {
+        return Err(LoadError::Truncated);
+    }
+    let bytes = &bytes[..total_length];
+    if crc32(bytes) != WIRE_FORMAT_CRC32_RESIDUE {
+        return Err(LoadError::BadChecksum);
+    }
+    let word_bits_log2 = bytes[12];
+    let addr_bits_log2 = bytes[13];
+    let float_bits_log2 = bytes[14];
+    let flags = bytes[15];
+    let wcet_cycles = u32::from_le_bytes([bytes[16], bytes[17], bytes[18], bytes[19]]);
+    let wcmu_bytes = u32::from_le_bytes([bytes[20], bytes[21], bytes[22], bytes[23]]);
+    let shared_data_bytes = u32::from_le_bytes([bytes[24], bytes[25], bytes[26], bytes[27]]);
+    let private_data_bytes = u32::from_le_bytes([bytes[28], bytes[29], bytes[30], bytes[31]]);
+    let opcode_stream_offset =
+        u32::from_le_bytes([bytes[32], bytes[33], bytes[34], bytes[35]]) as usize;
+    let opcode_stream_length =
+        u32::from_le_bytes([bytes[36], bytes[37], bytes[38], bytes[39]]) as usize;
+    let operand_pool_offset =
+        u32::from_le_bytes([bytes[40], bytes[41], bytes[42], bytes[43]]) as usize;
+    let operand_pool_length =
+        u32::from_le_bytes([bytes[44], bytes[45], bytes[46], bytes[47]]) as usize;
+    let aux_body_offset = u32::from_le_bytes([bytes[48], bytes[49], bytes[50], bytes[51]]) as usize;
+    let aux_body_length = u32::from_le_bytes([bytes[52], bytes[53], bytes[54], bytes[55]]) as usize;
+    let reserved_a = u32::from_le_bytes([bytes[56], bytes[57], bytes[58], bytes[59]]);
+    let reserved_b = u32::from_le_bytes([bytes[60], bytes[61], bytes[62], bytes[63]]);
+    if reserved_a != 0 || reserved_b != 0 {
+        return Err(LoadError::Codec(format!(
+            "wire format header reserved fields must be zero; got {:#010x} and {:#010x}",
+            reserved_a, reserved_b,
+        )));
+    }
+    // Section bounds sanity. Each section fits entirely within
+    // the frame (after the header, before the CRC trailer).
+    let body_end = total_length - WIRE_FORMAT_FOOTER_BYTES;
+    let in_body = |off: usize, len: usize| -> bool {
+        off >= WIRE_FORMAT_HEADER_BYTES && off.checked_add(len).is_some_and(|end| end <= body_end)
+    };
+    if !in_body(opcode_stream_offset, opcode_stream_length)
+        || !in_body(operand_pool_offset, operand_pool_length)
+        || !in_body(aux_body_offset, aux_body_length)
+    {
+        return Err(LoadError::Truncated);
+    }
+    if !opcode_stream_length.is_multiple_of(OPCODE_RECORD_BYTES) {
+        return Err(LoadError::Codec(format!(
+            "opcode stream length {} is not a multiple of the record size {}",
+            opcode_stream_length, OPCODE_RECORD_BYTES,
+        )));
+    }
+    if !operand_pool_length.is_multiple_of(OPERAND_POOL_ENTRY_BYTES) {
+        return Err(LoadError::Codec(format!(
+            "operand pool length {} is not a multiple of the entry size {}",
+            operand_pool_length, OPERAND_POOL_ENTRY_BYTES,
+        )));
+    }
+
+    // Slice the sections.
+    let opcode_stream = &bytes[opcode_stream_offset..opcode_stream_offset + opcode_stream_length];
+    let operand_pool_bytes = &bytes[operand_pool_offset..operand_pool_offset + operand_pool_length];
+    let aux_body_bytes = &bytes[aux_body_offset..aux_body_offset + aux_body_length];
+
+    // Decode the operand pool. Each entry's parity is validated
+    // here so a corruption error surfaces before the chunks are
+    // walked.
+    let mut operand_pool: Vec<OperandPoolEntry> = Vec::with_capacity(operand_pool_bytes.len() / 8);
+    for chunk_offset in (0..operand_pool_bytes.len()).step_by(OPERAND_POOL_ENTRY_BYTES) {
+        let mut entry_bytes = [0u8; OPERAND_POOL_ENTRY_BYTES];
+        entry_bytes.copy_from_slice(
+            &operand_pool_bytes[chunk_offset..chunk_offset + OPERAND_POOL_ENTRY_BYTES],
+        );
+        let entry = OperandPoolEntry(entry_bytes);
+        entry
+            .check_parity()
+            .map_err(|e| LoadError::Codec(format!("operand pool entry corruption: {:?}", e)))?;
+        operand_pool.push(entry);
+    }
+
+    // Deserialize the auxiliary body.
+    let aux = rkyv::from_bytes::<WireAuxBody, rkyv::rancor::Error>(aux_body_bytes)
+        .map_err(|e| LoadError::Codec(format!("aux body decode failed: {}", e)))?;
+
+    // Cross-check header-mirrored fields against the auxiliary
+    // body. The header is the fast-path view; the aux body is
+    // the authoritative copy. Disagreement signals a malformed
+    // producer or a corrupted artefact.
+    if aux.word_bits_log2 != word_bits_log2
+        || aux.addr_bits_log2 != addr_bits_log2
+        || aux.float_bits_log2 != float_bits_log2
+        || aux.flags != flags
+        || aux.wcet_cycles != wcet_cycles
+        || aux.wcmu_bytes != wcmu_bytes
+        || aux.shared_data_bytes != shared_data_bytes
+        || aux.private_data_bytes != private_data_bytes
+    {
+        return Err(LoadError::Codec(String::from(
+            "wire-format header fields disagree with the auxiliary body",
+        )));
+    }
+
+    // Validate target widths against the runtime maxima before
+    // proceeding to opcode decode.
+    if word_bits_log2 > crate::bytecode::RUNTIME_WORD_BITS_LOG2 {
+        return Err(LoadError::WordSizeMismatch {
+            got: word_bits_log2,
+            max_supported: crate::bytecode::RUNTIME_WORD_BITS_LOG2,
+        });
+    }
+    if addr_bits_log2 > crate::bytecode::RUNTIME_ADDRESS_BITS_LOG2 {
+        return Err(LoadError::AddressSizeMismatch {
+            got: addr_bits_log2,
+            max_supported: crate::bytecode::RUNTIME_ADDRESS_BITS_LOG2,
+        });
+    }
+    if float_bits_log2 > crate::bytecode::RUNTIME_FLOAT_BITS_LOG2 {
+        return Err(LoadError::FloatSizeMismatch {
+            got: float_bits_log2,
+            max_supported: crate::bytecode::RUNTIME_FLOAT_BITS_LOG2,
+        });
+    }
+
+    // Decode chunks. Each WireChunk identifies its opcode span
+    // by (op_byte_offset, op_record_count). The records and any
+    // pool entries they reference are read from the previously-
+    // decoded `operand_pool`.
+    let mut chunks: Vec<Chunk> = Vec::with_capacity(aux.chunks.len());
+    for wc in &aux.chunks {
+        let start = wc.op_byte_offset as usize;
+        let record_count = wc.op_record_count as usize;
+        let byte_span = record_count
+            .checked_mul(OPCODE_RECORD_BYTES)
+            .ok_or_else(|| LoadError::Codec(String::from("opcode span overflow")))?;
+        let end = start
+            .checked_add(byte_span)
+            .ok_or_else(|| LoadError::Codec(String::from("opcode span overflow")))?;
+        if end > opcode_stream.len() {
+            return Err(LoadError::Codec(format!(
+                "chunk `{}` opcode span [{}..{}) exceeds opcode stream length {}",
+                wc.name,
+                start,
+                end,
+                opcode_stream.len(),
+            )));
+        }
+        let mut ops: Vec<Op> = Vec::with_capacity(record_count);
+        let chunk_bytes = &opcode_stream[start..end];
+        for offset in (0..byte_span).step_by(OPCODE_RECORD_BYTES) {
+            let mut rec = [0u8; OPCODE_RECORD_BYTES];
+            rec.copy_from_slice(&chunk_bytes[offset..offset + OPCODE_RECORD_BYTES]);
+            let op = decode_op(OpcodeRecord(rec), &operand_pool)
+                .map_err(|e| LoadError::Codec(format!("opcode decode failed: {:?}", e)))?;
+            ops.push(op);
+        }
+        chunks.push(Chunk {
+            name: wc.name.clone(),
+            ops,
+            constants: wc.constants.clone(),
+            struct_templates: wc.struct_templates.clone(),
+            local_count: wc.local_count,
+            param_count: wc.param_count,
+            block_type: wc.block_type,
+            param_types: wc.param_types.clone(),
+        });
+    }
+
+    Ok(Module {
+        chunks,
+        native_names: aux.native_names,
+        entry_point: aux.entry_point,
+        data_layout: aux.data_layout,
+        word_bits_log2: aux.word_bits_log2,
+        addr_bits_log2: aux.addr_bits_log2,
+        float_bits_log2: aux.float_bits_log2,
+        wcet_cycles: aux.wcet_cycles,
+        wcmu_bytes: aux.wcmu_bytes,
+        flags: aux.flags,
+        shared_data_bytes: aux.shared_data_bytes,
+        private_data_bytes: aux.private_data_bytes,
+        schema_hash: aux.schema_hash,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1009,5 +1445,257 @@ mod tests {
         let pool: Vec<OperandPoolEntry> = Vec::new();
         let result = decode_op(record, &pool);
         assert_eq!(result, Err(WireFormatError::UnknownOpcodeId(100)));
+    }
+
+    fn module_roundtrip_through_wire_format(module: Module) {
+        let bytes = module_to_wire_bytes(&module).expect("encode");
+        // Header sanity: magic and version.
+        assert_eq!(&bytes[0..4], &BYTECODE_MAGIC);
+        assert_eq!(u16::from_le_bytes([bytes[4], bytes[5]]), BYTECODE_VERSION,);
+        assert_eq!(
+            u16::from_le_bytes([bytes[6], bytes[7]]),
+            WIRE_FORMAT_HEADER_BYTES as u16,
+        );
+        let decoded = module_from_wire_bytes(&bytes).expect("decode");
+        // Compare structurally. The Module derives `Debug + Clone`
+        // but not `PartialEq`; compare through serialized bytes.
+        let re_encoded = module_to_wire_bytes(&decoded).expect("re-encode");
+        assert_eq!(bytes, re_encoded, "wire-format round trip differs");
+    }
+
+    fn make_minimal_module() -> Module {
+        // Hand-crafted chunk: PushImmediate(1) then Return.
+        let chunk = Chunk {
+            name: alloc::string::String::from("main"),
+            ops: alloc::vec![Op::PushImmediate(5), Op::Return],
+            constants: alloc::vec::Vec::new(),
+            struct_templates: alloc::vec::Vec::new(),
+            local_count: 0,
+            param_count: 0,
+            block_type: BlockType::Func,
+            param_types: alloc::vec::Vec::new(),
+        };
+        Module {
+            chunks: alloc::vec![chunk],
+            native_names: alloc::vec::Vec::new(),
+            entry_point: Some(0),
+            data_layout: None,
+            word_bits_log2: crate::bytecode::RUNTIME_WORD_BITS_LOG2,
+            addr_bits_log2: crate::bytecode::RUNTIME_ADDRESS_BITS_LOG2,
+            float_bits_log2: crate::bytecode::RUNTIME_FLOAT_BITS_LOG2,
+            wcet_cycles: 0,
+            wcmu_bytes: 0,
+            flags: 0,
+            shared_data_bytes: 0,
+            private_data_bytes: 0,
+            schema_hash: 0,
+        }
+    }
+
+    #[test]
+    fn module_roundtrip_empty_chunks() {
+        // Zero chunks: opcode stream and operand pool both empty.
+        // Verifies the section-offset math and the rkyv encoding
+        // of an empty `WireAuxBody::chunks`.
+        let module = Module {
+            chunks: alloc::vec::Vec::new(),
+            native_names: alloc::vec::Vec::new(),
+            entry_point: None,
+            data_layout: None,
+            word_bits_log2: crate::bytecode::RUNTIME_WORD_BITS_LOG2,
+            addr_bits_log2: crate::bytecode::RUNTIME_ADDRESS_BITS_LOG2,
+            float_bits_log2: crate::bytecode::RUNTIME_FLOAT_BITS_LOG2,
+            wcet_cycles: 0,
+            wcmu_bytes: 0,
+            flags: 0,
+            shared_data_bytes: 0,
+            private_data_bytes: 0,
+            schema_hash: 0,
+        };
+        module_roundtrip_through_wire_format(module);
+    }
+
+    #[test]
+    fn module_roundtrip_minimal_program() {
+        module_roundtrip_through_wire_format(make_minimal_module());
+    }
+
+    #[test]
+    fn module_roundtrip_branchy_program() {
+        // Exercise If/Else/EndIf and a loop with a BreakIf.
+        let body_chunk = Chunk {
+            name: alloc::string::String::from("loop_body"),
+            ops: alloc::vec![
+                Op::Loop(7),
+                Op::PushImmediate(2),
+                Op::PushImmediate(2),
+                Op::CmpEq,
+                Op::BreakIf(7),
+                Op::EndLoop(1),
+                Op::PushImmediate(0),
+                Op::Return,
+            ],
+            constants: alloc::vec::Vec::new(),
+            struct_templates: alloc::vec::Vec::new(),
+            local_count: 0,
+            param_count: 0,
+            block_type: BlockType::Func,
+            param_types: alloc::vec::Vec::new(),
+        };
+        let if_chunk = Chunk {
+            name: alloc::string::String::from("if_chain"),
+            ops: alloc::vec![
+                Op::PushImmediate(1),
+                Op::If(4),
+                Op::PushImmediate(5),
+                Op::Else(5),
+                Op::PushImmediate(6),
+                Op::EndIf,
+                Op::Return,
+            ],
+            constants: alloc::vec::Vec::new(),
+            struct_templates: alloc::vec::Vec::new(),
+            local_count: 0,
+            param_count: 0,
+            block_type: BlockType::Func,
+            param_types: alloc::vec::Vec::new(),
+        };
+        let module = Module {
+            chunks: alloc::vec![body_chunk, if_chunk],
+            native_names: alloc::vec::Vec::new(),
+            entry_point: Some(0),
+            data_layout: None,
+            word_bits_log2: crate::bytecode::RUNTIME_WORD_BITS_LOG2,
+            addr_bits_log2: crate::bytecode::RUNTIME_ADDRESS_BITS_LOG2,
+            float_bits_log2: crate::bytecode::RUNTIME_FLOAT_BITS_LOG2,
+            wcet_cycles: 0,
+            wcmu_bytes: 0,
+            flags: 0,
+            shared_data_bytes: 0,
+            private_data_bytes: 0,
+            schema_hash: 0,
+        };
+        module_roundtrip_through_wire_format(module);
+    }
+
+    #[test]
+    fn module_roundtrip_pool_using_program() {
+        // Exercise the operand pool. NewEnum uses the
+        // `(u16, u16, u8)` shape; IsEnum and GetDataIndexed use
+        // `(u16, u16)`. All four pool-using opcodes appear at
+        // least once.
+        let chunk = Chunk {
+            name: alloc::string::String::from("pool_user"),
+            ops: alloc::vec![
+                Op::NewEnum(3, 4, 1),
+                Op::NewEnum(0, 0, 0),
+                Op::IsEnum(3, 4),
+                Op::GetDataIndexed(7, 8),
+                Op::SetDataIndexed(7, 8),
+                Op::Return,
+            ],
+            constants: alloc::vec::Vec::new(),
+            struct_templates: alloc::vec::Vec::new(),
+            local_count: 0,
+            param_count: 0,
+            block_type: BlockType::Func,
+            param_types: alloc::vec::Vec::new(),
+        };
+        let module = Module {
+            chunks: alloc::vec![chunk],
+            native_names: alloc::vec::Vec::new(),
+            entry_point: Some(0),
+            data_layout: None,
+            word_bits_log2: crate::bytecode::RUNTIME_WORD_BITS_LOG2,
+            addr_bits_log2: crate::bytecode::RUNTIME_ADDRESS_BITS_LOG2,
+            float_bits_log2: crate::bytecode::RUNTIME_FLOAT_BITS_LOG2,
+            wcet_cycles: 0,
+            wcmu_bytes: 0,
+            flags: 0,
+            shared_data_bytes: 0,
+            private_data_bytes: 0,
+            schema_hash: 0,
+        };
+        module_roundtrip_through_wire_format(module);
+    }
+
+    #[test]
+    fn module_roundtrip_stream_chunk() {
+        // Stream chunks have distinct structural constraints
+        // (Op::Stream, Op::Yield, Op::Reset). Round-trip a
+        // minimal Stream chunk to confirm block-type preservation
+        // and full opcode stream coverage.
+        let chunk = Chunk {
+            name: alloc::string::String::from("tick"),
+            ops: alloc::vec![
+                Op::Stream,
+                Op::PushImmediate(7),
+                Op::Yield,
+                Op::PopN(1),
+                Op::Reset,
+            ],
+            constants: alloc::vec::Vec::new(),
+            struct_templates: alloc::vec::Vec::new(),
+            local_count: 0,
+            param_count: 0,
+            block_type: BlockType::Stream,
+            param_types: alloc::vec::Vec::new(),
+        };
+        let module = Module {
+            chunks: alloc::vec![chunk],
+            native_names: alloc::vec::Vec::new(),
+            entry_point: Some(0),
+            data_layout: None,
+            word_bits_log2: crate::bytecode::RUNTIME_WORD_BITS_LOG2,
+            addr_bits_log2: crate::bytecode::RUNTIME_ADDRESS_BITS_LOG2,
+            float_bits_log2: crate::bytecode::RUNTIME_FLOAT_BITS_LOG2,
+            wcet_cycles: 0,
+            wcmu_bytes: 0,
+            flags: 0,
+            shared_data_bytes: 0,
+            private_data_bytes: 0,
+            schema_hash: 0,
+        };
+        module_roundtrip_through_wire_format(module);
+    }
+
+    #[test]
+    fn module_roundtrip_bad_magic_rejected() {
+        let module = make_minimal_module();
+        let mut bytes = module_to_wire_bytes(&module).expect("encode");
+        bytes[0] = b'X';
+        let err = module_from_wire_bytes(&bytes).unwrap_err();
+        assert!(matches!(err, LoadError::BadMagic));
+    }
+
+    #[test]
+    fn module_roundtrip_bad_crc_rejected() {
+        let module = make_minimal_module();
+        let mut bytes = module_to_wire_bytes(&module).expect("encode");
+        let len = bytes.len();
+        bytes[len - 1] ^= 0x01;
+        let err = module_from_wire_bytes(&bytes).unwrap_err();
+        assert!(matches!(err, LoadError::BadChecksum));
+    }
+
+    #[test]
+    fn module_roundtrip_truncated_rejected() {
+        let module = make_minimal_module();
+        let bytes = module_to_wire_bytes(&module).expect("encode");
+        let err = module_from_wire_bytes(&bytes[..32]).unwrap_err();
+        assert!(matches!(err, LoadError::Truncated));
+    }
+
+    #[test]
+    fn module_roundtrip_shebang_stripped() {
+        let module = make_minimal_module();
+        let bytes = module_to_wire_bytes(&module).expect("encode");
+        let mut with_shebang: alloc::vec::Vec<u8> =
+            alloc::vec::Vec::from(b"#!/usr/bin/env keleusma\n".as_slice());
+        with_shebang.extend_from_slice(&bytes);
+        let decoded = module_from_wire_bytes(&with_shebang).expect("decode");
+        // Confirm the decoded chunk preserves the ops.
+        assert_eq!(decoded.chunks.len(), 1);
+        assert_eq!(decoded.chunks[0].ops.len(), 2);
     }
 }
