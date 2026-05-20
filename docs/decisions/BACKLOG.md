@@ -364,21 +364,47 @@ The V0.2 deferred-items pass added target-scaled `Fixed` defaults that thread th
 
 Deferred until a host with sub-64-bit hardware constraints demonstrates the need.
 
-## B17. Embassy feature trimming
+## ~~B17. Embassy feature trimming~~ (Resolved as not actionable)
 
-The microkernel's STM32N6570-DK build links the full `embassy-stm32` peripheral abstraction. The V0.2 deferred-items pass dropped the `exti` and `unstable-pac` features when their natives were retired, but the remaining default-on features account for some unmeasured fraction of the bare-metal `.text`. A measured trim could shrink the precompiled-bytecode and trust-load images further; the full-pipeline image is dominated by the source compiler and benefits less.
+A `cargo-bloat` profiling pass measured the microkernel's bare-metal `.text` per feature combination on the STM32N6570-DK target. The findings: **`embassy-stm32` is not the trimming target**. Its symbol contribution is essentially negligible in all three feature modes:
 
-### Approach
+| Mode | Total `.text` | `embassy_stm32` | Share |
+|------|--------------:|----------------:|------:|
+| Trust-load | 125.5 KiB | 1.9 KiB | 1.5% |
+| Verifier-only | 142.5 KiB | 1.9 KiB | 1.3% |
+| Full pipeline | 654.8 KiB | 1.9 KiB | 0.3% |
 
-- Profile the build with `cargo-bloat` against each `embassy_stm32` feature combination. Identify features whose symbols dominate the unused-symbol set.
-- Disable features one at a time, confirm the microkernel still builds and runs on the demonstrator (heartbeat, sensor, LED, event listener, faulty), and measure the size delta.
-- Document the resulting minimal feature set in `examples/rtos/Cargo.toml` with comments explaining each retained feature.
+The crate-level breakdown (full pipeline) is dominated by `keleusma` itself at 530.4 KiB (81%). The largest contributors inside the runtime are:
 
-### Out of scope
+| Symbol | Size | Share of `.text` |
+|--------|-----:|-----------------:|
+| `Vm::run` | 49.8 KiB | 7.6% |
+| `compile_with_target` | 38.4 KiB | 5.9% |
+| `typecheck::run_check` | 23.5 KiB | 3.6% |
+| `typecheck::type_of_expr` | 22.3 KiB | 3.4% |
+| `monomorphize::monomorphize` | 14.7 KiB | 2.2% |
+| `compiler::compile_expr` | 12.8 KiB | 2.0% |
+| `parser::parse_program` | 12.2 KiB | 1.9% |
+| `compiler::compile_block` | 11.4 KiB | 1.7% |
+| `parser::parse_postfix_expr` | 10.4 KiB | 1.6% |
+| `Vm::new_with_options` | 9.6 KiB | 1.5% |
 
-- Trimming `embassy-executor` or `embassy-time`. The kernel relies on both as load-bearing dependencies; reducing them would require replacing the cooperative scheduler with a hand-rolled equivalent.
+In verifier-only mode (the production embedded mode), `keleusma` is 95.7 KiB (67%) of 142.5 KiB total; `Vm::run` alone is 49.8 KiB (35%) and `Vm::new_with_options` is another 15.7 KiB. Several BTreeMap monomorphizations at 2-3 KiB each appear across compiler / typechecker / monomorphizer; reducing the variety of key-value type pairs might claw back a few KiB.
 
-Deferred until the embedded production modes are under measured size pressure for a real deployment target.
+### Rationale for closing as not actionable
+
+The V0.2 deferred-items pass already dropped `embassy-stm32`'s `exti` and `unstable-pac` features. The remaining default-on features account for less than 2 KiB total. Disabling more would risk breaking the platform impl without measurable benefit. The profiling concretely demonstrates that further size reduction work belongs against the runtime VM (`Vm::run`) and the compile pipeline (`compile_with_target`, the parser, the type checker), not against embassy.
+
+### Recorded for future passes
+
+Future size-reduction work targeting the runtime should:
+
+- Investigate splitting `Vm::run`'s opcode dispatch (a giant `match` over `Op`) into per-opcode functions. Each opcode's body could become a `#[inline(never)]` function dispatched through a small jump table. This would trade some inline expansion for shared code, potentially shrinking the dispatch surface.
+- Audit BTreeMap key-value monomorphizations: 4 distinct instances at 2-3 KiB each (`compiler.rs` produces several). Consolidating to a smaller set of `(K, V)` pairs would reduce the duplication.
+- Consider gating the source compiler's monomorphization pass behind a feature when the workload is known not to use generics. The microkernel scripts don't use generics; saving the 14.7 KiB of `monomorphize` would be useful.
+- The `Debug` impls visible in verifier-only mode (1.8 KiB for `&T: Debug::fmt`) suggest some inadvertent format-machinery retention even with `floats` off and `text` off. Worth investigating where the residual Debug derives originate.
+
+None of the above require embassy changes.
 
 ## ~~B18. Big-number arithmetic worked example using the pattern-arm form~~ (Resolved)
 
