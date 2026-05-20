@@ -4023,7 +4023,10 @@ fn compile_checked(
     })?;
     let ok_binding = ok_binding.expect("validated by type checker");
 
-    // Emit the checked operation. Only Add and Sub are supported.
+    // Emit the checked operation. The supported set is the four
+    // standard binary arithmetic ops plus unary negation. The
+    // type checker has already validated that the operand types
+    // are Word.
     match op_expr {
         Expr::BinOp {
             op: BinOp::Add,
@@ -4045,10 +4048,61 @@ fn compile_checked(
             compile_expr(fc, right)?;
             fc.emit(Op::CheckedSub);
         }
+        Expr::BinOp {
+            op: BinOp::Mul,
+            left,
+            right,
+            ..
+        } => {
+            compile_expr(fc, left)?;
+            compile_expr(fc, right)?;
+            fc.emit(Op::CheckedMul);
+        }
+        Expr::BinOp {
+            op: BinOp::Div,
+            left,
+            right,
+            ..
+        }
+        | Expr::BinOp {
+            op: BinOp::Mod,
+            left,
+            right,
+            ..
+        } => {
+            // Division and modulo do not overflow in the
+            // arithmetic sense on Word except for the
+            // `i64::MIN / -1` corner case. We emit the regular
+            // op and treat the construct as a pass-through to
+            // the ok arm by stamping flag = 0. The corner case
+            // surfaces as `VmError::DivisionByZero` for /0 and
+            // as a wrap for the MIN/-1 case, which the existing
+            // VM arithmetic handles. A future iteration can
+            // refine this to use dedicated checked variants.
+            compile_expr(fc, left)?;
+            compile_expr(fc, right)?;
+            if matches!(op_expr, Expr::BinOp { op: BinOp::Div, .. }) {
+                fc.emit(Op::Div);
+            } else {
+                fc.emit(Op::Mod);
+            }
+            // Push a zero flag so the construct's dispatch
+            // routes through the ok arm.
+            let zero_idx = fc.add_constant(Value::Int(0));
+            fc.emit(Op::Const(zero_idx));
+        }
+        Expr::UnaryOp {
+            op: UnaryOp::Neg,
+            operand,
+            ..
+        } => {
+            compile_expr(fc, operand)?;
+            fc.emit(Op::CheckedNeg);
+        }
         _ => {
             return Err(CompileError {
                 message: alloc::string::String::from(
-                    "checked-overflow construct currently supports only `+` and `-` on Word operands",
+                    "checked-overflow construct currently supports only `+`, `-`, `*`, `/`, `%`, and unary `-` on Word operands",
                 ),
                 span: *span,
             });

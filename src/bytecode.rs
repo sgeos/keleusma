@@ -613,6 +613,15 @@ pub enum Op {
     /// strongly-negative); underflow is set when the true
     /// difference is below `i64::MIN`.
     CheckedSub,
+    /// Overflow-checked Word multiplication. Same stack effect.
+    /// Flag direction inferred from the sign of the true product
+    /// using `i64::overflowing_mul`.
+    CheckedMul,
+    /// Overflow-checked Word negation. Pops one `Value::Int`,
+    /// pushes the negated result and the flag. Negation of
+    /// `i64::MIN` overflows (no positive counterpart in
+    /// signed 64-bit); the flag reports overflow in that case.
+    CheckedNeg,
 }
 
 /// Size in bytes of one operand-stack slot, namely the size of `Value` on
@@ -869,6 +878,8 @@ pub fn nominal_op_cycles(op: &Op) -> u32 {
         | Op::Sub
         | Op::CheckedAdd
         | Op::CheckedSub
+        | Op::CheckedMul
+        | Op::CheckedNeg
         | Op::Mul
         | Op::Neg
         | Op::CmpEq
@@ -949,10 +960,16 @@ impl Op {
 
             Op::WrapSome | Op::Not | Op::Neg => 0,
 
-            // CheckedAdd / CheckedSub pop two operands and push
-            // (result, flag); the second push reaches the entry
-            // depth so the above-entry peak is zero.
-            Op::CheckedAdd | Op::CheckedSub => 0,
+            // CheckedAdd / CheckedSub / CheckedMul pop two
+            // operands and push (result, flag); the second push
+            // reaches the entry depth so the above-entry peak
+            // is zero. CheckedNeg pops one and pushes two; the
+            // peak above entry is +1 momentarily but the
+            // wrapper-result-flag pattern is consistent with
+            // arithmetic ops whose final delta is computed via
+            // stack_shrink.
+            Op::CheckedAdd | Op::CheckedSub | Op::CheckedMul => 0,
+            Op::CheckedNeg => 1,
 
             Op::Add
             | Op::Sub
@@ -1025,10 +1042,12 @@ impl Op {
 
             Op::WrapSome | Op::Not | Op::Neg => 0,
 
-            // CheckedAdd / CheckedSub have a net stack delta of
-            // zero (pop two, push two), so the post-execution
-            // shrink is also zero.
-            Op::CheckedAdd | Op::CheckedSub => 0,
+            // CheckedAdd / CheckedSub / CheckedMul have a net
+            // stack delta of zero (pop two, push two), so the
+            // post-execution shrink is also zero. CheckedNeg
+            // pops one and pushes two, net +1; shrink is 0
+            // (no net pop).
+            Op::CheckedAdd | Op::CheckedSub | Op::CheckedMul | Op::CheckedNeg => 0,
 
             Op::Add
             | Op::Sub
@@ -2029,6 +2048,8 @@ pub fn op_from_archived(archived: &ArchivedOp) -> Op {
         ArchivedOp::Trap(idx) => Op::Trap(idx.to_native()),
         ArchivedOp::CheckedAdd => Op::CheckedAdd,
         ArchivedOp::CheckedSub => Op::CheckedSub,
+        ArchivedOp::CheckedMul => Op::CheckedMul,
+        ArchivedOp::CheckedNeg => Op::CheckedNeg,
     }
 }
 

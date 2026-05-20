@@ -2874,6 +2874,58 @@ impl<'a, 'arena> Vm<'a, 'arena> {
                         }
                     }
                 }
+                Op::CheckedMul => {
+                    let b = self.pop()?;
+                    let a = self.pop()?;
+                    match (a, b) {
+                        (Value::Int(x), Value::Int(y)) => {
+                            // Multiplication overflow direction is
+                            // determined by the operands' signs.
+                            // Same-sign operands' true product is
+                            // non-negative; opposite-sign is
+                            // non-positive. The flag reflects which
+                            // direction the wrap occurred.
+                            let (result, wrapped) = x.overflowing_mul(y);
+                            let flag: i64 = if !wrapped {
+                                0
+                            } else if (x ^ y) >= 0 {
+                                1
+                            } else {
+                                2
+                            };
+                            sp!(self, Value::Int(result));
+                            sp!(self, Value::Int(flag));
+                        }
+                        (a, b) => {
+                            return Err(VmError::TypeError(format!(
+                                "Op::CheckedMul expects Word operands, got {} and {}",
+                                a.type_name(),
+                                b.type_name()
+                            )));
+                        }
+                    }
+                }
+                Op::CheckedNeg => {
+                    let a = self.pop()?;
+                    match a {
+                        Value::Int(x) => {
+                            // Negation of `i64::MIN` overflows
+                            // because no positive counterpart
+                            // exists in signed 64-bit. The flag
+                            // reports overflow in that case.
+                            let (result, wrapped) = x.overflowing_neg();
+                            let flag: i64 = if !wrapped { 0 } else { 1 };
+                            sp!(self, Value::Int(result));
+                            sp!(self, Value::Int(flag));
+                        }
+                        a => {
+                            return Err(VmError::TypeError(format!(
+                                "Op::CheckedNeg expects a Word operand, got {}",
+                                a.type_name()
+                            )));
+                        }
+                    }
+                }
             }
         }
     }
@@ -3138,6 +3190,62 @@ mod tests {
             &[],
         );
         assert_eq!(val, Value::Int(i64::MIN));
+    }
+
+    #[test]
+    fn checked_mul_overflow_detected() {
+        // Multiplication of two large positives overflows;
+        // the construct routes to the overflow arm.
+        let val = run_expect(
+            "fn main() -> Word {\n\
+                let m = 9223372036854775807;\n\
+                let y = m * 2 {\n\
+                    overflow => 1,\n\
+                    underflow => 2,\n\
+                    ok(v) => v,\n\
+                };\n\
+                y\n\
+             }",
+            &[],
+        );
+        assert_eq!(val, Value::Int(1));
+    }
+
+    #[test]
+    fn checked_neg_min_overflows() {
+        // Negation of Word::MIN overflows because no positive
+        // counterpart exists in signed 64-bit.
+        let val = run_expect(
+            "fn main() -> Word {\n\
+                let m = 0 - 9223372036854775807;\n\
+                let y = -(m - 1) {\n\
+                    overflow => 1,\n\
+                    underflow => 2,\n\
+                    ok(v) => v,\n\
+                };\n\
+                y\n\
+             }",
+            &[],
+        );
+        assert_eq!(val, Value::Int(1));
+    }
+
+    #[test]
+    fn checked_div_ok_path() {
+        // Division does not overflow in V0.2's checked form;
+        // the ok arm always fires for valid divisors.
+        let val = run_expect(
+            "fn main() -> Word {\n\
+                let y = 10 / 3 {\n\
+                    overflow => 0,\n\
+                    underflow => 0,\n\
+                    ok(v) => v,\n\
+                };\n\
+                y\n\
+             }",
+            &[],
+        );
+        assert_eq!(val, Value::Int(3));
     }
 
     #[test]

@@ -551,6 +551,26 @@ fn labels_of(t: &Type) -> BTreeSet<String> {
     }
 }
 
+/// Wrap `t` in `Type::Labelled` with the supplied label set when
+/// the set is non-empty; return `t` unchanged when the set is
+/// empty. Used by arithmetic and branching propagation to
+/// re-apply the union of operand labels to the structural
+/// result without introducing redundant wrappers around pure
+/// values.
+fn apply_labels(t: Type, labels: &BTreeSet<String>) -> Type {
+    if labels.is_empty() {
+        t
+    } else {
+        match t {
+            Type::Labelled(inner, existing) => {
+                let union: BTreeSet<String> = existing.union(labels).cloned().collect();
+                Type::Labelled(inner, union)
+            }
+            other => Type::Labelled(Box::new(other), labels.clone()),
+        }
+    }
+}
+
 fn type_head_name(t: &Type) -> Option<String> {
     use alloc::string::ToString;
     match t {
@@ -981,6 +1001,39 @@ fn run_check(program: &mut Program, mut ctx: Ctx) -> Result<(), TypeError> {
         if let TypeDef::Newtype(n) = type_def {
             let underlying = ctx.resolve_type(&n.underlying);
             ctx.newtypes.insert(n.name.clone(), underlying);
+        }
+    }
+
+    // Pass 1a''. Detect newtype dependency cycles. A newtype
+    // chain `newtype A = B; newtype B = A;` would otherwise
+    // produce a well-formed type system entry whose underlying
+    // dispatch loops forever. The detection walks the newtype
+    // graph and rejects any cycle with a diagnostic naming the
+    // participating newtypes.
+    {
+        let mut newtype_decls: BTreeMap<String, crate::token::Span> = BTreeMap::new();
+        for type_def in &program.types {
+            if let TypeDef::Newtype(n) = type_def {
+                newtype_decls.insert(n.name.clone(), n.span);
+            }
+        }
+        for (name, span) in &newtype_decls {
+            let mut visited: BTreeSet<String> = BTreeSet::new();
+            let mut current = name.clone();
+            loop {
+                if !visited.insert(current.clone()) {
+                    return Err(TypeError::new(
+                        alloc::format!("newtype `{}` participates in a definition cycle", name),
+                        *span,
+                    ));
+                }
+                // Walk to the next newtype if the current's
+                // underlying is itself a newtype.
+                match ctx.newtypes.get(&current) {
+                    Some(Type::Newtype(next, _)) => current = next.clone(),
+                    _ => break,
+                }
+            }
         }
     }
 
@@ -2099,9 +2152,21 @@ fn type_of_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Type, TypeError> {
             right,
             span,
         } => {
-            let lt = type_of_expr(ctx, left)?;
-            let rt = type_of_expr(ctx, right)?;
-            match op {
+            let lt_raw = type_of_expr(ctx, left)?;
+            let rt_raw = type_of_expr(ctx, right)?;
+            // Information-flow label propagation. The operands'
+            // labels are unioned to form the result's labels;
+            // arithmetic on a labeled value taints the result.
+            // Structural dispatch below operates on label-stripped
+            // types so the existing match arms see through
+            // `Labelled` wrappers.
+            let combined_labels: BTreeSet<String> = labels_of(&lt_raw)
+                .union(&labels_of(&rt_raw))
+                .cloned()
+                .collect();
+            let lt = strip_labels(lt_raw);
+            let rt = strip_labels(rt_raw);
+            let bare_result = match op {
                 BinOp::Add => {
                     if matches!(lt, Type::Word) && matches!(rt, Type::Word) {
                         Ok(Type::Word)
@@ -2199,11 +2264,17 @@ fn type_of_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Type, TypeError> {
                     }
                     Ok(Type::Bool)
                 }
-            }
+            };
+            // Re-apply the union of operand labels to the
+            // structural result. If both operands were unlabeled,
+            // the union is empty and the result is unchanged.
+            bare_result.map(|t| apply_labels(t, &combined_labels))
         }
         Expr::UnaryOp { op, operand, span } => {
-            let ty = type_of_expr(ctx, operand)?;
-            match op {
+            let ty_raw = type_of_expr(ctx, operand)?;
+            let labels = labels_of(&ty_raw);
+            let ty = strip_labels(ty_raw);
+            let bare_result = match op {
                 UnaryOp::Neg => match ty {
                     Type::Word
                     | Type::Byte
@@ -2225,7 +2296,8 @@ fn type_of_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Type, TypeError> {
                     }
                     Ok(Type::Bool)
                 }
-            }
+            };
+            bare_result.map(|t| apply_labels(t, &labels))
         }
         Expr::Call { name, args, span } => {
             // If `name` resolves to a local first, this is an indirect
@@ -2440,7 +2512,9 @@ fn type_of_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Type, TypeError> {
             else_block,
             span,
         } => {
-            let cond_ty = type_of_expr(ctx, condition)?;
+            let cond_ty_raw = type_of_expr(ctx, condition)?;
+            let cond_labels = labels_of(&cond_ty_raw);
+            let cond_ty = strip_labels(cond_ty_raw);
             if !types_compatible(ctx, &cond_ty, &Type::Bool) {
                 return Err(TypeError::new(
                     format!("if condition must be bool, got {}", cond_ty.display()),
@@ -2448,10 +2522,19 @@ fn type_of_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Type, TypeError> {
                 ));
             }
             let then_ty = type_of_block(ctx, then_block)?;
-            match else_block {
+            let result_ty = match else_block {
                 Some(b) => {
                     let else_ty = type_of_block(ctx, b)?;
-                    if !types_compatible(ctx, &then_ty, &else_ty) {
+                    // Branches must unify structurally; their
+                    // labels are unioned to form the result's
+                    // labels. The structural check ignores
+                    // labels because two branches with the same
+                    // underlying type but different labels are
+                    // legitimately combinable into a labeled
+                    // result.
+                    let then_bare = strip_labels(then_ty.clone());
+                    let else_bare = strip_labels(else_ty.clone());
+                    if unify(&then_bare, &else_bare, &mut ctx.subst).is_err() {
                         return Err(TypeError::new(
                             format!(
                                 "if branches have differing types {} and {}",
@@ -2461,34 +2544,50 @@ fn type_of_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Type, TypeError> {
                             *span,
                         ));
                     }
-                    Ok(then_ty)
+                    let branch_labels: BTreeSet<String> = labels_of(&then_ty)
+                        .union(&labels_of(&else_ty))
+                        .cloned()
+                        .collect();
+                    apply_labels(then_bare, &branch_labels)
                 }
-                None => Ok(Type::Unit),
-            }
+                None => Type::Unit,
+            };
+            // Branching condition taint. The condition's labels
+            // propagate to the result because an observer of the
+            // result can infer information about the condition
+            // (which arm fired).
+            Ok(apply_labels(result_ty, &cond_labels))
         }
         Expr::Match {
             scrutinee,
             arms,
             span,
         } => {
-            let scrutinee_ty = type_of_expr(ctx, scrutinee)?;
+            let scrutinee_ty_raw = type_of_expr(ctx, scrutinee)?;
+            let scrutinee_labels = labels_of(&scrutinee_ty_raw);
+            let scrutinee_ty = strip_labels(scrutinee_ty_raw);
             // Type the body of each arm. The arm bodies must agree.
             let mut common: Option<Type> = None;
+            let mut arm_labels: BTreeSet<String> = BTreeSet::new();
             for arm in arms {
                 check_pattern_against_type(ctx, &arm.pattern, &scrutinee_ty)?;
                 ctx.push_scope();
                 bind_pattern(ctx, &arm.pattern, scrutinee_ty.clone());
                 let arm_ty = type_of_expr(ctx, &arm.expr)?;
                 ctx.pop_scope();
+                arm_labels = arm_labels.union(&labels_of(&arm_ty)).cloned().collect();
+                let arm_ty_bare = strip_labels(arm_ty);
                 match &common {
-                    None => common = Some(arm_ty),
+                    None => common = Some(arm_ty_bare),
                     Some(c) => {
-                        if !types_compatible(ctx, c, &arm_ty) {
+                        // Arms unify structurally; labels are
+                        // aggregated above into `arm_labels`.
+                        if unify(c, &arm_ty_bare, &mut ctx.subst).is_err() {
                             return Err(TypeError::new(
                                 format!(
                                     "match arms have differing types {} and {}",
                                     c.display(),
-                                    arm_ty.display()
+                                    arm_ty_bare.display()
                                 ),
                                 arm.span,
                             ));
@@ -2497,7 +2596,13 @@ fn type_of_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Type, TypeError> {
                 }
             }
             check_exhaustiveness(ctx, arms, &scrutinee_ty, *span)?;
-            Ok(common.unwrap_or(Type::Unit))
+            let bare = common.unwrap_or(Type::Unit);
+            // The result carries the union of all arm labels
+            // (any arm could fire) plus the scrutinee labels
+            // (observing which arm fired discloses information
+            // about the scrutinee).
+            let combined: BTreeSet<String> = arm_labels.union(&scrutinee_labels).cloned().collect();
+            Ok(apply_labels(bare, &combined))
         }
         Expr::Loop { body, .. } => {
             let _ = type_of_block(ctx, body)?;
@@ -2944,22 +3049,27 @@ fn type_of_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Type, TypeError> {
             span,
         } => {
             // The guarded operation must be a single arithmetic
-            // binary operation on Word operands. V0.2 supports
-            // Add and Sub; other operations and other operand
-            // types are reserved for later iterations.
-            let op = match op_expr.as_ref() {
-                Expr::BinOp { op: BinOp::Add, .. } => BinOp::Add,
-                Expr::BinOp { op: BinOp::Sub, .. } => BinOp::Sub,
-                _ => {
-                    return Err(TypeError::new(
-                        alloc::string::String::from(
-                            "checked-overflow construct currently guards only `+` and `-` on Word operands",
-                        ),
-                        *span,
-                    ));
+            // operation on Word operands. V0.2 supports the four
+            // standard binary ops plus unary negation; other
+            // operand types are reserved for later iterations.
+            let supported = matches!(
+                op_expr.as_ref(),
+                Expr::BinOp {
+                    op: BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod,
+                    ..
+                } | Expr::UnaryOp {
+                    op: UnaryOp::Neg,
+                    ..
                 }
-            };
-            let _ = op;
+            );
+            if !supported {
+                return Err(TypeError::new(
+                    alloc::string::String::from(
+                        "checked-overflow construct currently guards only `+`, `-`, `*`, `/`, `%`, and unary `-` on Word operands",
+                    ),
+                    *span,
+                ));
+            }
             let inner_ty = type_of_expr(ctx, op_expr)?;
             if !types_compatible(ctx, &inner_ty, &Type::Word) {
                 return Err(TypeError::new(
@@ -3223,6 +3333,51 @@ mod tests {
     }
 
     #[test]
+    fn newtype_cycle_rejected() {
+        // `newtype A = B; newtype B = A;` is a definition cycle
+        // that the pass 1a'' check rejects.
+        let err = check_src(
+            "newtype A = B;\n\
+             newtype B = A;\n\
+             fn main() -> Word { 0 }",
+        )
+        .unwrap_err();
+        assert!(
+            err.message.contains("definition cycle"),
+            "unexpected error: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn newtype_with_refinement_composition() {
+        // The `newtype Name = T where predicate;` form composes
+        // nominal-type distinctness with runtime range checking.
+        // The composition is exercised end-to-end through the
+        // type checker.
+        check_src(
+            "fn in_range(x: Word) -> bool { x >= 0 and x <= 100 }\n\
+             newtype Percent = Word where in_range;\n\
+             fn main() -> Percent { Percent(50) }",
+        )
+        .expect("newtype with refinement composes");
+    }
+
+    #[test]
+    fn newtype_chain_admitted() {
+        // `newtype A = Word; newtype B = A; newtype C = B;` is a
+        // legitimate chain with no cycle. The cycle check admits
+        // it.
+        check_src(
+            "newtype A = Word;\n\
+             newtype B = A;\n\
+             newtype C = B;\n\
+             fn main() -> C { C(B(A(42))) }",
+        )
+        .expect("non-cyclic newtype chain admitted");
+    }
+
+    #[test]
     fn newtype_construction_accepts_underlying() {
         // `newtype LocalMs = Word;` introduces a distinct nominal
         // type whose underlying is Word. Construction with a Word
@@ -3356,6 +3511,103 @@ mod tests {
     }
 
     #[test]
+    fn qif_arithmetic_taints_result_label() {
+        // `secret + 0` should produce a Word@Secret. Previously
+        // the BinOp arm stripped labels and returned a pure
+        // Word, which was the soundness gap. The result now
+        // inherits the union of operand labels.
+        check_src(
+            "fn produce() -> Word@Secret { 42 }\n\
+             fn main() -> Word@Secret { produce() + 1 }",
+        )
+        .expect("arithmetic taints result with operand label");
+    }
+
+    #[test]
+    fn qif_arithmetic_taint_blocks_leak() {
+        // The tainted result cannot flow to an unlabeled slot
+        // without declassify; this confirms the propagation is
+        // actually checked at the function-return boundary.
+        let err = check_src(
+            "fn produce() -> Word@Secret { 42 }\n\
+             fn main() -> Word { produce() + 1 }",
+        )
+        .unwrap_err();
+        assert!(
+            err.message.contains("Word@Secret") && err.message.contains("Word"),
+            "unexpected error: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn qif_arithmetic_unions_operand_labels() {
+        // `a@Mission + b@Sensor` produces `Word@{Mission,Sensor}`.
+        check_src(
+            "fn a() -> Word@Mission { 1 }\n\
+             fn b() -> Word@Sensor { 2 }\n\
+             fn main() -> Word@{Mission, Sensor} { a() + b() }",
+        )
+        .expect("label union on arithmetic");
+    }
+
+    #[test]
+    fn qif_if_taints_with_condition_labels() {
+        // The condition's labels propagate to the result; the
+        // observer of the result can infer information about
+        // the condition.
+        check_src(
+            "fn cond() -> bool@Secret { true }\n\
+             fn main() -> Word@Secret { if cond() { 1 } else { 2 } }",
+        )
+        .expect("if condition labels taint result");
+    }
+
+    #[test]
+    fn qif_if_branch_labels_join_with_condition() {
+        // Branch arms may carry their own labels; the result
+        // is the join of the condition's labels and the arms'
+        // labels.
+        check_src(
+            "fn cond() -> bool@Secret { true }\n\
+             fn make() -> Word@Mission { 1 }\n\
+             fn main() -> Word@{Secret, Mission} { if cond() { make() } else { 0 } }",
+        )
+        .expect("if combines condition and branch labels");
+    }
+
+    #[test]
+    fn qif_native_signature_with_labels() {
+        // Native function signatures admit labels. A native
+        // declared as `host::transmit(p: Word@Open) -> bool`
+        // rejects calls that pass a labeled value without
+        // declassify.
+        let err = check_src(
+            "use host::transmit(Word@Open) -> bool\n\
+             fn produce() -> Word@Secret { 42 }\n\
+             fn main() -> bool { host::transmit(produce()) }",
+        )
+        .unwrap_err();
+        assert!(
+            err.message.contains("argument 0 expects"),
+            "unexpected error: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn qif_native_signature_admits_declassified() {
+        // The same call site with explicit declassify is
+        // admitted.
+        check_src(
+            "use host::transmit(Word@Open) -> bool\n\
+             fn produce() -> Word@Secret { 42 }\n\
+             fn main() -> bool { host::transmit(declassify produce()@Secret) }",
+        )
+        .expect("declassified value flows into Open native parameter");
+    }
+
+    #[test]
     fn qif_classify_is_not_a_keyword() {
         // `classify` must remain usable as a function name so
         // existing scripts that defined a `classify` helper are
@@ -3425,10 +3677,11 @@ mod tests {
     }
 
     #[test]
-    fn checked_overflow_rejects_non_arithmetic_op() {
-        let err = check_src(
+    fn checked_overflow_admits_multiplication() {
+        // Multiplication is supported by the construct.
+        check_src(
             "fn main() -> Word {\n\
-                let y = 1 * 2 {\n\
+                let y = 7 * 6 {\n\
                     overflow => 0,\n\
                     underflow => 0,\n\
                     ok(v) => v,\n\
@@ -3436,9 +3689,43 @@ mod tests {
                 y\n\
              }",
         )
+        .expect("checked construct admits `*`");
+    }
+
+    #[test]
+    fn checked_overflow_admits_unary_neg() {
+        // Unary negation is supported by the construct.
+        check_src(
+            "fn main() -> Word {\n\
+                let y = -1 {\n\
+                    overflow => 0,\n\
+                    underflow => 0,\n\
+                    ok(v) => v,\n\
+                };\n\
+                y\n\
+             }",
+        )
+        .expect("checked construct admits unary `-`");
+    }
+
+    #[test]
+    fn checked_overflow_rejects_non_arithmetic_op() {
+        // The construct rejects non-arithmetic operations such
+        // as comparison and logical ops.
+        let err = check_src(
+            "fn main() -> bool {\n\
+                let y = 1 == 2 {\n\
+                    overflow => false,\n\
+                    underflow => false,\n\
+                    ok(v) => v,\n\
+                };\n\
+                y\n\
+             }",
+        )
         .unwrap_err();
         assert!(
-            err.message.contains("only `+` and `-`"),
+            err.message
+                .contains("only `+`, `-`, `*`, `/`, `%`, and unary `-`"),
             "unexpected error: {}",
             err.message
         );
