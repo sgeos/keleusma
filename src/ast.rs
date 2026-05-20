@@ -564,23 +564,27 @@ pub enum Expr {
     /// the operation overflowed, underflowed, or completed
     /// normally. The construct's surface form is
     ///
-    ///     expr {
-    ///         overflow => arm_body,
-    ///         underflow => arm_body,
-    ///         ok(name) => arm_body,
-    ///     }
+    /// ```text
+    /// expr {
+    ///     ok(v)          => arm_body,
+    ///     overflow(h, l) => arm_body,
+    ///     underflow(h, l) => arm_body,
+    /// }
+    /// ```
     ///
-    /// where any arm may combine multiple kinds via the pipe
-    /// pattern `overflow|underflow => ...`. The `ok` arm binds the
-    /// successful result through `name`.
+    /// Each arm carries one outcome kind with patterns and an
+    /// optional `when guard` clause. Patterns may be a bare
+    /// identifier (binds), the wildcard `_` (ignores), or an
+    /// integer literal (matches by equality). Multiple arms per
+    /// outcome class are admitted as long as the last covering
+    /// arm per class is an unguarded catch-all (bare identifier
+    /// or wildcard).
     Checked {
-        /// The arithmetic operation guarded by the construct. The
-        /// type checker validates that this is a single
-        /// arithmetic operation; only `BinOp::Add` and `BinOp::Sub`
-        /// on `Word` operands are supported in V0.2.
+        /// The arithmetic operation guarded by the construct. Only
+        /// `+`, `-`, `*`, `/`, `%`, and unary `-` on `Word`
+        /// operands are supported.
         op_expr: Box<Expr>,
-        /// Arms in declaration order. Each arm covers one or more
-        /// of overflow, underflow, and ok.
+        /// Arms in declaration order.
         arms: Vec<CheckedArm>,
         span: Span,
     },
@@ -617,22 +621,39 @@ pub enum Expr {
 }
 
 /// One arm of an overflow-checked expression. The arm fires when
-/// the guarded operation's outcome matches one of the kinds in
-/// `kinds`. The pipe pattern at the surface produces an arm whose
-/// `kinds` carries multiple entries.
+/// the guarded operation's outcome class matches `kind` *and* the
+/// kind's pattern(s) match the runtime value(s) *and* the optional
+/// `guard` evaluates to true.
+///
+/// Each arm carries exactly one outcome class. The previous
+/// pipe-combined form (`overflow | underflow => body`) is no
+/// longer admitted; rewrite as two arms with the same body.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CheckedArm {
-    pub kinds: Vec<CheckedArmKind>,
+    pub kind: CheckedArmKind,
+    pub guard: Option<Expr>,
     pub body: Expr,
     pub span: Span,
 }
 
-/// Which outcome an arm covers.
+/// Which outcome an arm covers, together with the pattern(s) that
+/// destructure the runtime value(s) pushed by the checked op.
+///
+/// - `Ok(p)` matches when the guarded operation produced an
+///   in-range result. The pattern `p` is matched against the
+///   result `Word`.
+/// - `Overflow(h, l)` matches a positive-overflow outcome. The
+///   patterns `h` and `l` are matched against the high and low
+///   halves of the i128 intermediate result respectively. The
+///   high half carries the sign-extended carry for additive ops
+///   and the high `Word` for multiplicative ops.
+/// - `Underflow(h, l)` matches a negative-overflow outcome with
+///   the same destructuring.
 #[derive(Debug, Clone, PartialEq)]
 pub enum CheckedArmKind {
-    Overflow,
-    Underflow,
-    Ok { binding: String },
+    Ok(Pattern),
+    Overflow(Pattern, Pattern),
+    Underflow(Pattern, Pattern),
 }
 
 impl Expr {

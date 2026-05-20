@@ -43,9 +43,9 @@ const data cfg {
 
 loop main(_reason: Word) -> (Word, Word) {
     state.count = state.count + 1 {
-        overflow => saturate_max,
-        underflow => saturate_min,
         ok(v) => v,
+        overflow(_, _) => saturate_max,
+        underflow(_, _) => saturate_min,
     };
     host::log_event(cfg.ev_ok, state.count);
     let next = host::clock_now() + cfg.period_ms;

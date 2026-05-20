@@ -4009,67 +4009,39 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
     Ok(())
 }
 
-/// Compile an overflow-checked construct. Lowers `op_expr {
-/// overflow => ..., underflow => ..., ok(name) => ... }` to a
-/// sequence of checked-arithmetic and conditional-branch
-/// opcodes.
+/// Compile an overflow-checked construct.
 ///
-/// The current implementation supports `BinOp::Add` and
-/// `BinOp::Sub` on `Word` operands. Each is compiled by emitting
-/// the operands followed by `Op::CheckedAdd` or `Op::CheckedSub`,
-/// which leave `(result, flag)` on the operand stack. The flag
-/// is stashed to a temporary local and dispatched through nested
-/// `If`/`Else` blocks. The arm that matches the flag's value
-/// runs; the result binding for the `ok` arm is initialised from
-/// the stashed value.
+/// Surface form: `op_expr { ok(p) => body, overflow(ph, pl) =>
+/// body, underflow(ph, pl) => body }` with optional `when guard`
+/// clauses. Patterns may be `_`, a bare identifier (binds a
+/// `Word`), or an integer literal (matches by equality).
+///
+/// Lowering shape:
+/// 1. Emit the operands and the checked opcode (`CheckedAdd`,
+///    `CheckedSub`, `CheckedMul`, `CheckedNeg`, or `Div`/`Mod`
+///    with stamped overflow contract). The stack carries
+///    `[high, low, flag]` after the opcode.
+/// 2. Stash all three slots into temporary locals.
+/// 3. Wrap the arms in a virtual `Loop` so the first matching
+///    arm can `Break` out with its body's result on the stack.
+/// 4. For each arm in declaration order, emit a class-flag check
+///    (`flag == 0` for `ok`, `1` for `overflow`, `2` for
+///    `underflow`), then literal-pattern equality checks against
+///    `high_slot` / `low_slot`, then optional guard evaluation,
+///    then bind variable patterns and compile the body.
+/// 5. After the last arm, emit a `Trap` for the unreachable case
+///    where no catch-all matched (defense-in-depth; the type
+///    checker rejects non-exhaustive constructs).
 fn compile_checked(
     fc: &mut FuncCompiler,
     op_expr: &Expr,
     arms: &[crate::ast::CheckedArm],
     span: &Span,
 ) -> Result<(), CompileError> {
-    use crate::ast::CheckedArmKind;
-    // Find the three arms (overflow, underflow, ok). The type
-    // checker has already validated that each of the three is
-    // covered exactly once.
-    let mut ok_arm: Option<&crate::ast::CheckedArm> = None;
-    let mut overflow_arm: Option<&crate::ast::CheckedArm> = None;
-    let mut underflow_arm: Option<&crate::ast::CheckedArm> = None;
-    let mut ok_binding: Option<String> = None;
-    for arm in arms {
-        for kind in &arm.kinds {
-            match kind {
-                CheckedArmKind::Ok { binding } => {
-                    ok_arm = Some(arm);
-                    ok_binding = Some(binding.clone());
-                }
-                CheckedArmKind::Overflow => {
-                    overflow_arm = Some(arm);
-                }
-                CheckedArmKind::Underflow => {
-                    underflow_arm = Some(arm);
-                }
-            }
-        }
-    }
-    let ok_arm = ok_arm.ok_or_else(|| CompileError {
-        message: alloc::string::String::from("checked-overflow construct missing `ok` arm"),
-        span: *span,
-    })?;
-    let overflow_arm = overflow_arm.ok_or_else(|| CompileError {
-        message: alloc::string::String::from("checked-overflow construct missing `overflow` arm"),
-        span: *span,
-    })?;
-    let underflow_arm = underflow_arm.ok_or_else(|| CompileError {
-        message: alloc::string::String::from("checked-overflow construct missing `underflow` arm"),
-        span: *span,
-    })?;
-    let ok_binding = ok_binding.expect("validated by type checker");
+    use crate::ast::{CheckedArmKind, Pattern};
 
-    // Emit the checked operation. The supported set is the four
-    // standard binary arithmetic ops plus unary negation. The
-    // type checker has already validated that the operand types
-    // are Word.
+    // Emit the checked operation. Each path leaves [high, low,
+    // flag] on the stack.
     match op_expr {
         Expr::BinOp {
             op: BinOp::Add,
@@ -4113,15 +4085,12 @@ fn compile_checked(
             right,
             ..
         } => {
-            // Division and modulo do not overflow in the
-            // arithmetic sense on Word except for the
-            // `i64::MIN / -1` corner case. We emit the regular
-            // op and treat the construct as a pass-through to
-            // the ok arm by stamping flag = 0. The corner case
-            // surfaces as `VmError::DivisionByZero` for /0 and
-            // as a wrap for the MIN/-1 case, which the existing
-            // VM arithmetic handles. A future iteration can
-            // refine this to use dedicated checked variants.
+            // Division and modulo only overflow in the
+            // `i64::MIN / -1` corner; the existing op handles
+            // both wrap and divide-by-zero. We stamp the (h, l,
+            // flag) shape: high = 0, low = op result, flag = 0
+            // (always ok). A future iteration can introduce a
+            // dedicated checked-div op that flags the corner.
             compile_expr(fc, left)?;
             compile_expr(fc, right)?;
             if matches!(op_expr, Expr::BinOp { op: BinOp::Div, .. }) {
@@ -4129,10 +4098,17 @@ fn compile_checked(
             } else {
                 fc.emit(Op::Mod);
             }
-            // Push a zero flag so the construct's dispatch
-            // routes through the ok arm.
+            // After op: stack = [low]. Stamp the (high, flag)
+            // wrappers: insert a 0 below (high) and push 0
+            // (flag) above. We use a temporary local to
+            // reorder without a dedicated swap opcode.
+            let div_low_name = alloc::format!("__checked_div_low_{}", span.start);
+            let div_low_slot = fc.declare_local(&div_low_name);
+            fc.emit(Op::SetLocal(div_low_slot));
             let zero_idx = fc.add_constant(Value::Int(0));
-            fc.emit(Op::Const(zero_idx));
+            fc.emit(Op::Const(zero_idx)); // high
+            fc.emit(Op::GetLocal(div_low_slot)); // low
+            fc.emit(Op::Const(zero_idx)); // flag
         }
         Expr::UnaryOp {
             op: UnaryOp::Neg,
@@ -4151,53 +4127,123 @@ fn compile_checked(
             });
         }
     }
-    // Stack: [result, flag]. Stash both to temporary locals so
-    // the arms can dispatch cleanly. The local names embed the
-    // span's start position so multiple checked constructs in
-    // the same function get distinct slots.
-    let synthetic_suffix = span.start;
-    let flag_name = alloc::format!("__checked_flag_{}", synthetic_suffix);
-    let result_name = alloc::format!("__checked_result_{}", synthetic_suffix);
+
+    // Stack: [high, low, flag]. Stash to temporary locals. The
+    // local names embed the span's start position so multiple
+    // checked constructs in the same function get distinct slots.
+    let suffix = span.start;
+    let flag_name = alloc::format!("__checked_flag_{}", suffix);
+    let low_name = alloc::format!("__checked_low_{}", suffix);
+    let high_name = alloc::format!("__checked_high_{}", suffix);
     let flag_slot = fc.declare_local(&flag_name);
-    let result_slot = fc.declare_local(&result_name);
+    let low_slot = fc.declare_local(&low_name);
+    let high_slot = fc.declare_local(&high_name);
     fc.emit(Op::SetLocal(flag_slot));
-    fc.emit(Op::SetLocal(result_slot));
-    // Allocate the binding slot for the ok arm; its value is the
-    // stashed result.
-    let v_slot = fc.declare_local(&ok_binding);
+    fc.emit(Op::SetLocal(low_slot));
+    fc.emit(Op::SetLocal(high_slot));
 
-    // First branch: is the flag zero (ok)?
-    fc.emit(Op::GetLocal(flag_slot));
-    let zero_idx = fc.add_constant(Value::Int(0));
-    fc.emit(Op::Const(zero_idx));
-    fc.emit(Op::CmpEq);
-    // Stack: [is_ok]
-    let if_addr = fc.emit_jump(Op::If(0));
-    // True branch: ok. Initialise the binding from the stashed
-    // result and compile the ok body.
-    fc.emit(Op::GetLocal(result_slot));
-    fc.emit(Op::SetLocal(v_slot));
-    compile_expr(fc, &ok_arm.body)?;
-    let after_ok = fc.emit_jump(Op::Else(0));
-    fc.patch_jump(if_addr);
+    // Wrap the arm dispatch in a virtual loop so the first
+    // matching arm can break out with its body's result.
+    let loop_addr = fc.emit(Op::Loop(0));
+    fc.enter_loop();
 
-    // False branch: dispatch between overflow and underflow.
-    fc.emit(Op::GetLocal(flag_slot));
-    let one_idx = fc.add_constant(Value::Int(1));
-    fc.emit(Op::Const(one_idx));
-    fc.emit(Op::CmpEq);
-    let if_addr_inner = fc.emit_jump(Op::If(0));
-    // True branch: overflow.
-    compile_expr(fc, &overflow_arm.body)?;
-    let after_inner = fc.emit_jump(Op::Else(0));
-    fc.patch_jump(if_addr_inner);
-    // False branch: underflow (the type checker guarantees the
-    // flag's value is 0, 1, or 2; this branch covers 2).
-    compile_expr(fc, &underflow_arm.body)?;
-    fc.patch_jump(after_inner);
-    fc.emit(Op::EndIf);
-    fc.patch_jump(after_ok);
-    fc.emit(Op::EndIf);
+    for arm in arms {
+        fc.begin_scope();
+        let mut fail_addrs: Vec<usize> = Vec::new();
+
+        // Class-flag check.
+        let (class_flag, single_pattern, h_pattern, l_pattern) = match &arm.kind {
+            CheckedArmKind::Ok(p) => (0_i64, Some(p), None, None),
+            CheckedArmKind::Overflow(h, l) => (1_i64, None, Some(h), Some(l)),
+            CheckedArmKind::Underflow(h, l) => (2_i64, None, Some(h), Some(l)),
+        };
+        fc.emit(Op::GetLocal(flag_slot));
+        let class_idx = fc.add_constant(Value::Int(class_flag));
+        fc.emit(Op::Const(class_idx));
+        fc.emit(Op::CmpEq);
+        let class_fail = fc.emit_jump(Op::If(0));
+        fail_addrs.push(class_fail);
+
+        // Literal pattern tests against the high/low slots.
+        let test_literal =
+            |fc: &mut FuncCompiler, pat: &Pattern, slot: u16, fail_addrs: &mut Vec<usize>| {
+                if let Pattern::Literal(crate::ast::Literal::Int(v), _) = pat {
+                    fc.emit(Op::GetLocal(slot));
+                    let idx = fc.add_constant(Value::Int(*v));
+                    fc.emit(Op::Const(idx));
+                    fc.emit(Op::CmpEq);
+                    let fail = fc.emit_jump(Op::If(0));
+                    fail_addrs.push(fail);
+                }
+            };
+        if let Some(p) = single_pattern {
+            // For `ok(p)`, the bound value is the low slot (the
+            // representable result in the in-range case).
+            test_literal(fc, p, low_slot, &mut fail_addrs);
+        }
+        if let (Some(h), Some(l)) = (h_pattern, l_pattern) {
+            test_literal(fc, h, high_slot, &mut fail_addrs);
+            test_literal(fc, l, low_slot, &mut fail_addrs);
+        }
+
+        // Variable bindings.
+        let bind_var =
+            |fc: &mut FuncCompiler, pat: &Pattern, slot: u16| -> Result<(), CompileError> {
+                if let Pattern::Variable(name, _) = pat {
+                    let v_slot = fc.declare_local(name);
+                    fc.emit(Op::GetLocal(slot));
+                    fc.emit(Op::SetLocal(v_slot));
+                }
+                Ok(())
+            };
+        if let Some(p) = single_pattern {
+            bind_var(fc, p, low_slot)?;
+        }
+        if let (Some(h), Some(l)) = (h_pattern, l_pattern) {
+            bind_var(fc, h, high_slot)?;
+            bind_var(fc, l, low_slot)?;
+        }
+
+        // Guard expression.
+        if let Some(guard) = arm.guard.as_ref() {
+            compile_expr(fc, guard)?;
+            let guard_fail = fc.emit_jump(Op::If(0));
+            fail_addrs.push(guard_fail);
+        }
+
+        // Arm body, then break out of the virtual loop with the
+        // result on the stack.
+        compile_expr(fc, &arm.body)?;
+        let break_addr = fc.emit(Op::Break(0));
+        if let Some(breaks) = fc.loop_breaks.last_mut() {
+            breaks.push(break_addr);
+        }
+
+        fc.end_scope();
+
+        // Patch failure jumps in reverse to close nested Ifs.
+        for addr in fail_addrs.into_iter().rev() {
+            fc.patch_jump(addr);
+            fc.emit(Op::EndIf);
+        }
+    }
+
+    // Unreachable when the type checker has validated
+    // exhaustiveness; trap as a defensive measure.
+    let msg = fc.add_string_constant("no matching arm in checked-overflow construct");
+    fc.emit(Op::Trap(msg));
+
+    let endloop_addr = fc.emit(Op::EndLoop(0));
+    let after_loop = (loop_addr + 1) as u32;
+    if let Op::EndLoop(a) = &mut fc.chunk.ops[endloop_addr] {
+        *a = after_loop;
+    }
+    let after_endloop = fc.chunk.ops.len() as u32;
+    if let Op::Loop(a) = &mut fc.chunk.ops[loop_addr] {
+        *a = after_endloop;
+    }
+    fc.exit_loop();
+
     Ok(())
 }
 

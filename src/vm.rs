@@ -2816,22 +2816,27 @@ impl<'a, 'arena> Vm<'a, 'arena> {
                     let a = self.pop()?;
                     match (a, b) {
                         (Value::Int(x), Value::Int(y)) => {
-                            // Compute the wrapped sum and detect the
-                            // direction of overflow. For signed
-                            // addition, overflow can occur only when
-                            // both operands share the same sign; the
-                            // sign of the wrapped result distinguishes
-                            // the two cases. The flag values are
-                            // `0` ok, `1` overflow, `2` underflow.
-                            let (result, wrapped) = x.overflowing_add(y);
-                            let flag: i64 = if !wrapped {
+                            // Compute the true sum in i128 and
+                            // derive the outcome flag from the
+                            // i128 range relative to i64. The flag
+                            // values are `0` ok (fits in i64),
+                            // `1` overflow (> i64::MAX), `2`
+                            // underflow (< i64::MIN). The high and
+                            // low halves of the i128 result are
+                            // pushed in all three cases so arm
+                            // patterns can destructure them.
+                            let r = (x as i128) + (y as i128);
+                            let high = (r >> 64) as i64;
+                            let low = r as i64;
+                            let flag: i64 = if r >= i64::MIN as i128 && r <= i64::MAX as i128 {
                                 0
-                            } else if x >= 0 {
+                            } else if r > i64::MAX as i128 {
                                 1
                             } else {
                                 2
                             };
-                            sp!(self, Value::Int(result));
+                            sp!(self, Value::Int(high));
+                            sp!(self, Value::Int(low));
                             sp!(self, Value::Int(flag));
                         }
                         (a, b) => {
@@ -2848,21 +2853,18 @@ impl<'a, 'arena> Vm<'a, 'arena> {
                     let a = self.pop()?;
                     match (a, b) {
                         (Value::Int(x), Value::Int(y)) => {
-                            // Signed subtraction overflows when the
-                            // operands have opposite signs and the
-                            // wrapped result's sign matches the
-                            // subtrahend rather than the minuend. The
-                            // direction of the failure is recovered
-                            // from the minuend's sign.
-                            let (result, wrapped) = x.overflowing_sub(y);
-                            let flag: i64 = if !wrapped {
+                            let r = (x as i128) - (y as i128);
+                            let high = (r >> 64) as i64;
+                            let low = r as i64;
+                            let flag: i64 = if r >= i64::MIN as i128 && r <= i64::MAX as i128 {
                                 0
-                            } else if x >= 0 {
+                            } else if r > i64::MAX as i128 {
                                 1
                             } else {
                                 2
                             };
-                            sp!(self, Value::Int(result));
+                            sp!(self, Value::Int(high));
+                            sp!(self, Value::Int(low));
                             sp!(self, Value::Int(flag));
                         }
                         (a, b) => {
@@ -2879,21 +2881,24 @@ impl<'a, 'arena> Vm<'a, 'arena> {
                     let a = self.pop()?;
                     match (a, b) {
                         (Value::Int(x), Value::Int(y)) => {
-                            // Multiplication overflow direction is
-                            // determined by the operands' signs.
-                            // Same-sign operands' true product is
-                            // non-negative; opposite-sign is
-                            // non-positive. The flag reflects which
-                            // direction the wrap occurred.
-                            let (result, wrapped) = x.overflowing_mul(y);
-                            let flag: i64 = if !wrapped {
+                            // True product in i128; both halves are
+                            // load-bearing for big-number
+                            // multiplication. Flag reports the
+                            // direction of overflow based on the
+                            // i128 result's sign relative to the
+                            // i64 representable range.
+                            let r = (x as i128) * (y as i128);
+                            let high = (r >> 64) as i64;
+                            let low = r as i64;
+                            let flag: i64 = if r >= i64::MIN as i128 && r <= i64::MAX as i128 {
                                 0
-                            } else if (x ^ y) >= 0 {
+                            } else if r > i64::MAX as i128 {
                                 1
                             } else {
                                 2
                             };
-                            sp!(self, Value::Int(result));
+                            sp!(self, Value::Int(high));
+                            sp!(self, Value::Int(low));
                             sp!(self, Value::Int(flag));
                         }
                         (a, b) => {
@@ -2909,13 +2914,20 @@ impl<'a, 'arena> Vm<'a, 'arena> {
                     let a = self.pop()?;
                     match a {
                         Value::Int(x) => {
-                            // Negation of `i64::MIN` overflows
-                            // because no positive counterpart
-                            // exists in signed 64-bit. The flag
-                            // reports overflow in that case.
-                            let (result, wrapped) = x.overflowing_neg();
-                            let flag: i64 = if !wrapped { 0 } else { 1 };
-                            sp!(self, Value::Int(result));
+                            // Only `-i64::MIN` overflows. The true
+                            // result is `2^63`, which in i128 is
+                            // (high=0, low=i64::MIN); we report
+                            // overflow (flag=1) in that case.
+                            let r = -(x as i128);
+                            let high = (r >> 64) as i64;
+                            let low = r as i64;
+                            let flag: i64 = if r >= i64::MIN as i128 && r <= i64::MAX as i128 {
+                                0
+                            } else {
+                                1
+                            };
+                            sp!(self, Value::Int(high));
+                            sp!(self, Value::Int(low));
                             sp!(self, Value::Int(flag));
                         }
                         a => {
@@ -3140,9 +3152,9 @@ mod tests {
         let val = run_expect(
             "fn main() -> Word {\n\
                 let y = 1 + 2 {\n\
-                    overflow => saturate_max,\n\
-                    underflow => saturate_min,\n\
                     ok(v) => v,\n\
+                    overflow(_, _) => saturate_max,\n\
+                    underflow(_, _) => saturate_min,\n\
                 };\n\
                 y\n\
              }",
@@ -3159,9 +3171,9 @@ mod tests {
             "fn main() -> Word {\n\
                 let m = 9223372036854775807;\n\
                 let y = m + 1 {\n\
-                    overflow => saturate_max,\n\
-                    underflow => saturate_min,\n\
                     ok(v) => v,\n\
+                    overflow(_, _) => saturate_max,\n\
+                    underflow(_, _) => saturate_min,\n\
                 };\n\
                 y\n\
              }",
@@ -3181,9 +3193,9 @@ mod tests {
             "fn main() -> Word {\n\
                 let m = 0 - 9223372036854775807;\n\
                 let y = m - 2 {\n\
-                    overflow => saturate_max,\n\
-                    underflow => saturate_min,\n\
                     ok(v) => v,\n\
+                    overflow(_, _) => saturate_max,\n\
+                    underflow(_, _) => saturate_min,\n\
                 };\n\
                 y\n\
              }",
@@ -3200,9 +3212,9 @@ mod tests {
             "fn main() -> Word {\n\
                 let m = 9223372036854775807;\n\
                 let y = m * 2 {\n\
-                    overflow => 1,\n\
-                    underflow => 2,\n\
                     ok(v) => v,\n\
+                    overflow(_, _) => 1,\n\
+                    underflow(_, _) => 2,\n\
                 };\n\
                 y\n\
              }",
@@ -3219,9 +3231,9 @@ mod tests {
             "fn main() -> Word {\n\
                 let m = 0 - 9223372036854775807;\n\
                 let y = -(m - 1) {\n\
-                    overflow => 1,\n\
-                    underflow => 2,\n\
                     ok(v) => v,\n\
+                    overflow(_, _) => 1,\n\
+                    underflow(_, _) => 2,\n\
                 };\n\
                 y\n\
              }",
@@ -3237,9 +3249,9 @@ mod tests {
         let val = run_expect(
             "fn main() -> Word {\n\
                 let y = 10 / 3 {\n\
-                    overflow => 0,\n\
-                    underflow => 0,\n\
                     ok(v) => v,\n\
+                    overflow(_, _) => 0,\n\
+                    underflow(_, _) => 0,\n\
                 };\n\
                 y\n\
              }",
@@ -3249,22 +3261,70 @@ mod tests {
     }
 
     #[test]
-    fn checked_overflow_combined_arm_via_pipe() {
-        // The combined `overflow|underflow` arm shares a body
-        // across both failure cases. The body here returns 0
-        // unconditionally; the ok arm returns the result.
+    fn checked_mul_overflow_exposes_high_half() {
+        // The high half of the i128 intermediate is the load-
+        // bearing value for big-number multiplication. `2^32 *
+        // 2^32 == 2^64`, which in i128 is (high=1, low=0); the
+        // construct binds both and the body returns the high
+        // half.
         let val = run_expect(
             "fn main() -> Word {\n\
-                let m = 9223372036854775807;\n\
-                let y = m + 1 {\n\
-                    overflow|underflow => 0,\n\
-                    ok(v) => v,\n\
+                let m = 4294967296;\n\
+                let y = m * m {\n\
+                    ok(v) => 0 - 1,\n\
+                    overflow(h, _) => h,\n\
+                    underflow(_, _) => 0 - 2,\n\
                 };\n\
                 y\n\
              }",
             &[],
         );
-        assert_eq!(val, Value::Int(0));
+        assert_eq!(val, Value::Int(1));
+    }
+
+    #[test]
+    fn checked_overflow_arm_pattern_matches_literal_high() {
+        // A literal `0` in the high position selects the small-
+        // overflow specialization. For signed addition of two
+        // positive operands at i64::MAX, the true sum is
+        // (high=0, low=-2 wrapped), so the `overflow(0, l)` arm
+        // fires.
+        let val = run_expect(
+            "fn main() -> Word {\n\
+                let m = 9223372036854775807;\n\
+                let y = m + m {\n\
+                    ok(v) => v,\n\
+                    overflow(0, l) => l,\n\
+                    overflow(h, _) => h,\n\
+                    underflow(_, _) => 0,\n\
+                };\n\
+                y\n\
+             }",
+            &[],
+        );
+        // i64::MAX + i64::MAX == -2 wrapped (low half).
+        assert_eq!(val, Value::Int(-2));
+    }
+
+    #[test]
+    fn checked_overflow_arm_guard_falls_through() {
+        // The first arm's pattern matches but its guard returns
+        // false; dispatch falls through to the catch-all.
+        let val = run_expect(
+            "fn main() -> Word {\n\
+                let m = 9223372036854775807;\n\
+                let y = m + 1 {\n\
+                    ok(v) => v,\n\
+                    overflow(h, l) when h == 99 => 0,\n\
+                    overflow(_, l) => l,\n\
+                    underflow(_, _) => 0 - 1,\n\
+                };\n\
+                y\n\
+             }",
+            &[],
+        );
+        // i64::MAX + 1 == i64::MIN wrapped (low half).
+        assert_eq!(val, Value::Int(i64::MIN));
     }
 
     #[test]
@@ -6693,9 +6753,9 @@ mod tests {
              fn main() -> Limited {\n\
                 let m = 9223372036854775807;\n\
                 m + 1 {\n\
-                    overflow => saturate_max,\n\
-                    underflow => saturate_min,\n\
                     ok(v) => Limited(v),\n\
+                    overflow(_, _) => saturate_max,\n\
+                    underflow(_, _) => saturate_min,\n\
                 }\n\
              }",
             &[],
@@ -6714,9 +6774,9 @@ mod tests {
              fn main() -> Word {\n\
                 let m = 0 - 9223372036854775807;\n\
                 let y: Limited = m - 2 {\n\
-                    overflow => saturate_max,\n\
-                    underflow => saturate_min,\n\
                     ok(v) => Limited(v),\n\
+                    overflow(_, _) => saturate_max,\n\
+                    underflow(_, _) => saturate_min,\n\
                 };\n\
                 y as Word\n\
              }",
@@ -6736,9 +6796,9 @@ mod tests {
              fn main() -> Word {\n\
                 let m = 9223372036854775807;\n\
                 let y = m + 1 {\n\
-                    overflow => saturate_max,\n\
-                    underflow => saturate_min,\n\
                     ok(v) => v,\n\
+                    overflow(_, _) => saturate_max,\n\
+                    underflow(_, _) => saturate_min,\n\
                 };\n\
                 y\n\
              }",
@@ -6767,7 +6827,7 @@ mod tests {
              fn main() -> Word { classify(0) + classify(5) + classify(0 - 3) }",
             &[],
         );
-        assert_eq!(val, Value::Int(0 + 1 + (-1)));
+        assert_eq!(val, Value::Int(1 - 1));
     }
 
     #[test]

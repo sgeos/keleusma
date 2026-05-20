@@ -644,20 +644,43 @@ let theta: ServoAngle = ServoAngle(90);    // predicate passes
 ### Numeric Overflow Construct
 
 ````
-overflow_expr = arith_expr '{' overflow_arm { ',' overflow_arm } [ ',' ] '}'
-overflow_arm  = overflow_kind { '|' overflow_kind } '=>' expr
-overflow_kind = 'overflow' | 'underflow' | 'ok' '(' lower_ident ')'
+overflow_expr  = arith_expr '{' overflow_arm { ',' overflow_arm } [ ',' ] '}'
+overflow_arm   = overflow_kind [ 'when' expr ] '=>' expr
+overflow_kind  = 'ok' '(' arm_pattern ')'
+               | 'overflow' '(' arm_pattern ',' arm_pattern ')'
+               | 'underflow' '(' arm_pattern ',' arm_pattern ')'
+arm_pattern    = '_' | lower_ident | signed_int_lit
 ````
 
-Guards a single arithmetic operation against overflow and underflow. The operation may be `+`, `-`, `*`, `/`, `%`, or unary `-` on Word operands. The construct must cover each of `ok`, `overflow`, and `underflow` exactly once (pipe-combined arms are admitted). The `saturate_max` and `saturate_min` keywords inside arm bodies denote context-determined saturation values. When the surrounding expected type is `Word`, they resolve to `Word::MAX` and `Word::MIN` respectively. When the surrounding expected type is a refined newtype declared with a `with saturate_max = N` or `with saturate_min = M` clause, the keyword resolves to a constructor call against that literal. The construct itself remains zero-cost at the bytecode layer.
+Guards a single arithmetic operation against overflow and underflow. The operation may be `+`, `-`, `*`, `/`, `%`, or unary `-` on Word operands. The runtime computes the true result in `i128` and pushes `(high, low, flag)`; arm patterns destructure the high and low halves so big-number arithmetic can chain through successive checked operations. Each outcome class (`ok`, `overflow`, `underflow`) must have at least one arm, and the last covering arm per class must be an unguarded catch-all (bare identifier or wildcard in every position). Patterns are admitted from a restricted subset (wildcard, variable, signed integer literal); an optional `when expr` guard between the pattern and the `=>` is checked as `Bool` and falls through to the next arm when false.
+
+The `saturate_max` and `saturate_min` keywords inside arm bodies denote context-determined saturation values. When the surrounding expected type is `Word`, they resolve to `Word::MAX` and `Word::MIN` respectively. When the surrounding expected type is a refined newtype declared with a `with saturate_max = N` or `with saturate_min = M` clause, the keyword resolves to a constructor call against that literal.
 
 Example:
 
 ````
 let y = state.x + n {
-    overflow => saturate_max,
-    underflow => saturate_min,
     ok(v) => v,
+    overflow(_, _) => saturate_max,
+    underflow(_, _) => saturate_min,
+};
+
+// Big-number addition. The high half is the carry word; the low
+// half is the wrapped i64 result. Subsequent words consume the
+// carry through similar checked additions.
+let (hi, lo) = a + b {
+    ok(v) => (0, v),
+    overflow(h, l) => (h, l),
+    underflow(h, l) => (h, l),
+};
+
+// Pattern-matched arms with a guard. The specialized arm fires
+// only when the high half equals zero and the guard returns true.
+let result = x + y {
+    ok(v) => v,
+    overflow(0, l) when l > 0 - 1000 => l,
+    overflow(_, _) => saturate_max,
+    underflow(_, _) => saturate_min,
 };
 ````
 

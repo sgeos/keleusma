@@ -1656,6 +1656,38 @@ fn check_function(ctx: &mut Ctx, func: &mut FunctionDef) -> Result<(), TypeError
 }
 
 /// Bind a pattern's variables into the current scope at the given type.
+/// Returns true if every pattern in a `CheckedArmKind` is a
+/// catch-all (wildcard or bare variable). A catch-all arm matches
+/// every runtime value for its outcome class.
+fn checked_arm_is_catchall(kind: &crate::ast::CheckedArmKind) -> bool {
+    use crate::ast::CheckedArmKind;
+    let is_catchall_pat = |p: &Pattern| matches!(p, Pattern::Wildcard(_) | Pattern::Variable(_, _));
+    match kind {
+        CheckedArmKind::Ok(p) => is_catchall_pat(p),
+        CheckedArmKind::Overflow(h, l) | CheckedArmKind::Underflow(h, l) => {
+            is_catchall_pat(h) && is_catchall_pat(l)
+        }
+    }
+}
+
+/// Bind a checked-arm pattern's variables into the current scope.
+/// The bound type is always `Word`; wildcards and literals
+/// introduce no bindings. The compiler relies on the type checker
+/// to reject pattern shapes that cannot match a `Word` (e.g. a
+/// string literal pattern would fail unification at the test
+/// site, not here).
+fn bind_checked_pattern(ctx: &mut Ctx, pattern: &Pattern) {
+    match pattern {
+        Pattern::Variable(name, _) => ctx.add_local(name.clone(), Type::Word),
+        Pattern::Wildcard(_) | Pattern::Literal(_, _) => {}
+        // Other pattern shapes are rejected at parse time by
+        // `parse_checked_arm_pattern`; if one slips through, fall
+        // back to no binding so the body type check fails on
+        // missing-identifier rather than on a panic here.
+        _ => {}
+    }
+}
+
 fn bind_pattern(ctx: &mut Ctx, pattern: &Pattern, ty: Type) {
     match pattern {
         Pattern::Variable(name, _) => ctx.add_local(name.clone(), ty),
@@ -3276,91 +3308,96 @@ fn type_of_expr(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError> {
                     *span,
                 ));
             }
-            // Validate arm structure: exactly one ok arm; combined
-            // overflow + underflow coverage; arms unify.
-            let mut saw_ok = false;
-            let mut saw_overflow = false;
-            let mut saw_underflow = false;
-            let mut ok_binding: Option<String> = None;
+            // Validate arm structure. Each outcome class (ok,
+            // overflow, underflow) must have at least one arm, and
+            // the last covering arm per class must be an unguarded
+            // catch-all (bare variable or wildcard pattern in every
+            // position). Patterns are restricted to wildcard,
+            // variable, and integer literal; type unification on the
+            // arm scope catches mismatches in the literal case.
+            use crate::ast::CheckedArmKind;
+            let mut ok_catchall_seen = false;
+            let mut overflow_catchall_seen = false;
+            let mut underflow_catchall_seen = false;
             for arm in arms.iter() {
-                for kind in &arm.kinds {
-                    match kind {
-                        crate::ast::CheckedArmKind::Ok { binding } => {
-                            if saw_ok {
-                                return Err(TypeError::new(
-                                    alloc::string::String::from(
-                                        "checked-overflow construct has more than one `ok` arm",
-                                    ),
-                                    arm.span,
-                                ));
-                            }
-                            saw_ok = true;
-                            ok_binding = Some(binding.clone());
-                        }
-                        crate::ast::CheckedArmKind::Overflow => {
-                            if saw_overflow {
-                                return Err(TypeError::new(
-                                    alloc::string::String::from(
-                                        "checked-overflow construct has more than one `overflow` arm",
-                                    ),
-                                    arm.span,
-                                ));
-                            }
-                            saw_overflow = true;
-                        }
-                        crate::ast::CheckedArmKind::Underflow => {
-                            if saw_underflow {
-                                return Err(TypeError::new(
-                                    alloc::string::String::from(
-                                        "checked-overflow construct has more than one `underflow` arm",
-                                    ),
-                                    arm.span,
-                                ));
-                            }
-                            saw_underflow = true;
-                        }
+                // Outcomes whose catchall has already been seen
+                // cannot have further arms; subsequent arms in the
+                // same outcome are dead code.
+                let class_catchall_seen = match &arm.kind {
+                    CheckedArmKind::Ok(_) => ok_catchall_seen,
+                    CheckedArmKind::Overflow(_, _) => overflow_catchall_seen,
+                    CheckedArmKind::Underflow(_, _) => underflow_catchall_seen,
+                };
+                if class_catchall_seen {
+                    return Err(TypeError::new(
+                        alloc::string::String::from(
+                            "checked-overflow arm is unreachable: a prior catch-all arm in the same outcome class already covers it",
+                        ),
+                        arm.span,
+                    ));
+                }
+                let is_catchall = arm.guard.is_none() && checked_arm_is_catchall(&arm.kind);
+                if is_catchall {
+                    match &arm.kind {
+                        CheckedArmKind::Ok(_) => ok_catchall_seen = true,
+                        CheckedArmKind::Overflow(_, _) => overflow_catchall_seen = true,
+                        CheckedArmKind::Underflow(_, _) => underflow_catchall_seen = true,
                     }
                 }
             }
-            if !saw_ok {
+            if !ok_catchall_seen {
                 return Err(TypeError::new(
                     alloc::string::String::from(
-                        "checked-overflow construct must include an `ok(name)` arm",
+                        "checked-overflow construct is non-exhaustive on `ok`: the last `ok` arm must be an unguarded catch-all (bare variable or wildcard)",
                     ),
                     *span,
                 ));
             }
-            if !saw_overflow {
+            if !overflow_catchall_seen {
                 return Err(TypeError::new(
                     alloc::string::String::from(
-                        "checked-overflow construct must include an `overflow` arm",
+                        "checked-overflow construct is non-exhaustive on `overflow`: the last `overflow` arm must be an unguarded catch-all (bare variables or wildcards)",
                     ),
                     *span,
                 ));
             }
-            if !saw_underflow {
+            if !underflow_catchall_seen {
                 return Err(TypeError::new(
                     alloc::string::String::from(
-                        "checked-overflow construct must include an `underflow` arm",
+                        "checked-overflow construct is non-exhaustive on `underflow`: the last `underflow` arm must be an unguarded catch-all (bare variables or wildcards)",
                     ),
                     *span,
                 ));
             }
-            // Type-check arm bodies. Each arm body is type-checked
-            // against a fresh scope; for the `ok` arm the binding is
-            // a `Word` (the operation's successful result). All arm
-            // bodies must unify; the construct's result type is
-            // their join.
+            // Type-check arm bodies. Each arm scope binds the
+            // pattern variables to `Word`. The guard expression (if
+            // present) is checked in the same scope and must be
+            // Bool. All arm bodies unify against the construct's
+            // result type.
             let result_ty = ctx.fresh();
             for arm in arms.iter_mut() {
                 ctx.push_scope();
-                if arm
-                    .kinds
-                    .iter()
-                    .any(|k| matches!(k, crate::ast::CheckedArmKind::Ok { .. }))
-                    && let Some(name) = &ok_binding
-                {
-                    ctx.add_local(name.clone(), Type::Word);
+                match &arm.kind {
+                    CheckedArmKind::Ok(p) => {
+                        bind_checked_pattern(ctx, p);
+                    }
+                    CheckedArmKind::Overflow(h, l) | CheckedArmKind::Underflow(h, l) => {
+                        bind_checked_pattern(ctx, h);
+                        bind_checked_pattern(ctx, l);
+                    }
+                }
+                if let Some(guard) = arm.guard.as_mut() {
+                    let guard_ty = type_of_expr(ctx, guard)?;
+                    if !types_compatible(ctx, &strip_labels(guard_ty.clone()), &Type::Bool) {
+                        ctx.pop_scope();
+                        return Err(TypeError::new(
+                            alloc::format!(
+                                "checked-overflow arm guard must be Bool, got {}",
+                                guard_ty.display()
+                            ),
+                            arm.span,
+                        ));
+                    }
                 }
                 let body_ty = type_of_expr(ctx, &mut arm.body)?;
                 ctx.pop_scope();
@@ -3932,15 +3969,15 @@ mod tests {
         let err = check_src(
             "fn main() -> Word {\n\
                 let y = 1 + 2 {\n\
-                    overflow => 0,\n\
-                    underflow => 0,\n\
+                    overflow(_, _) => 0,\n\
+                    underflow(_, _) => 0,\n\
                 };\n\
                 y\n\
              }",
         )
         .unwrap_err();
         assert!(
-            err.message.contains("must include an `ok"),
+            err.message.contains("non-exhaustive on `ok`"),
             "unexpected error: {}",
             err.message
         );
@@ -3951,7 +3988,7 @@ mod tests {
         let err = check_src(
             "fn main() -> Word {\n\
                 let y = 1 + 2 {\n\
-                    underflow => 0,\n\
+                    underflow(_, _) => 0,\n\
                     ok(v) => v,\n\
                 };\n\
                 y\n\
@@ -3959,7 +3996,7 @@ mod tests {
         )
         .unwrap_err();
         assert!(
-            err.message.contains("must include an `overflow"),
+            err.message.contains("non-exhaustive on `overflow`"),
             "unexpected error: {}",
             err.message
         );
@@ -3970,7 +4007,7 @@ mod tests {
         let err = check_src(
             "fn main() -> Word {\n\
                 let y = 1 + 2 {\n\
-                    overflow => 0,\n\
+                    overflow(_, _) => 0,\n\
                     ok(v) => v,\n\
                 };\n\
                 y\n\
@@ -3978,7 +4015,7 @@ mod tests {
         )
         .unwrap_err();
         assert!(
-            err.message.contains("must include an `underflow"),
+            err.message.contains("non-exhaustive on `underflow`"),
             "unexpected error: {}",
             err.message
         );
@@ -3990,9 +4027,9 @@ mod tests {
         check_src(
             "fn main() -> Word {\n\
                 let y = 7 * 6 {\n\
-                    overflow => 0,\n\
-                    underflow => 0,\n\
                     ok(v) => v,\n\
+                    overflow(_, _) => 0,\n\
+                    underflow(_, _) => 0,\n\
                 };\n\
                 y\n\
              }",
@@ -4006,9 +4043,9 @@ mod tests {
         check_src(
             "fn main() -> Word {\n\
                 let y = -1 {\n\
-                    overflow => 0,\n\
-                    underflow => 0,\n\
                     ok(v) => v,\n\
+                    overflow(_, _) => 0,\n\
+                    underflow(_, _) => 0,\n\
                 };\n\
                 y\n\
              }",
@@ -4023,9 +4060,9 @@ mod tests {
         let err = check_src(
             "fn main() -> bool {\n\
                 let y = 1 == 2 {\n\
-                    overflow => false,\n\
-                    underflow => false,\n\
                     ok(v) => v,\n\
+                    overflow(_, _) => false,\n\
+                    underflow(_, _) => false,\n\
                 };\n\
                 y\n\
              }",

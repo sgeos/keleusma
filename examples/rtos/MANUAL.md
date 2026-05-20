@@ -304,13 +304,13 @@ The heartbeat task's counter increment uses the V0.2 numeric overflow construct 
 
 ````
 state.count = state.count + 1 {
-    overflow => saturate_max,
-    underflow => saturate_min,
     ok(v) => v,
+    overflow(_, _) => saturate_max,
+    underflow(_, _) => saturate_min,
 };
 ````
 
-The `saturate_max` and `saturate_min` keywords resolve to `Word::MAX` and `Word::MIN` respectively. The `ok(v) => v` arm passes the successful sum through unchanged. The construct is supported for `+`, `-`, `*`, `/`, `%`, and unary `-` on Word operands; each must cover `ok`, `overflow`, and `underflow` exactly once (the pipe pattern `overflow|underflow => shared_body` combines two outcomes).
+The `saturate_max` and `saturate_min` keywords resolve to `Word::MAX` and `Word::MIN` respectively when the surrounding expected type is `Word`. The `ok(v) => v` arm passes the successful sum through unchanged. Arm patterns may be `_` to ignore a value, a bare identifier to bind, or an integer literal to match by equality; an optional `when expr` guard runs after the pattern binds and falls through to the next arm when false. The `overflow(h, l)` and `underflow(h, l)` arms bind the high and low halves of the `i128` intermediate result, so big-number addition and multiplication can chain through successive checked operations. The construct is supported for `+`, `-`, `*`, `/`, `%`, and unary `-` on Word operands; each outcome class (`ok`, `overflow`, `underflow`) must end in an unguarded catch-all arm.
 
 The construct compiles to a checked-arithmetic opcode (`Op::CheckedAdd`, `Op::CheckedSub`, `Op::CheckedMul`, `Op::CheckedNeg`, or for division and modulo the regular opcode plus a stamped zero flag) followed by a flag-based dispatch through an If/Else block. The runtime cost per construction is the arithmetic opcode plus the dispatch (one local store, one local load, one compare, one branch); no host-side cycle counting is required because the bound is statically known.
 

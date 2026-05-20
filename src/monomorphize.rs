@@ -1324,7 +1324,8 @@ fn subst_in_expr(expr: &Expr, subst: &BTreeMap<String, TypeExpr>) -> Expr {
             arms: arms
                 .iter()
                 .map(|arm| crate::ast::CheckedArm {
-                    kinds: arm.kinds.clone(),
+                    kind: arm.kind.clone(),
+                    guard: arm.guard.as_ref().map(|g| subst_in_expr(g, subst)),
                     body: subst_in_expr(&arm.body, subst),
                     span: arm.span,
                 })

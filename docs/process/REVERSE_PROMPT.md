@@ -9,38 +9,48 @@ AI to Human communication channel.
 ## Last Updated
 
 **Date**: 2026-05-19
-**Status**: Refined-newtype saturation contracts implemented end to end. The previously deferred Item 2 of the V0.2 gap list (`saturate_max` / `saturate_min` resolving from refinement contracts) is now resolved through a bidirectional type-checking pass and a context-driven AST mutation. 637 lib tests pass. Grammar, language-design doc, CHANGELOG, and TASKLOG updated.
+**Status**: Pattern-matched checked-arithmetic arms with `(h, l)` bindings, match-arm guards, and i128 intermediate runtime computation. Breaking syntax change committed (V0.2 unreleased; narrow-adoption rationale extended). 642 lib tests pass. Grammar, language-design doc, MANUAL.md Section 5.5, microkernel heartbeat script, CHANGELOG, and TASKLOG all updated.
 
 ## Completed in this session round
 
 | Directive | Resolution |
 |-----------|------------|
-| Item 2. Saturate values from refinement contracts. | New surface syntax `newtype Name = T where pred with saturate_max = N, saturate_min = M` parses through `NewtypeDef.saturate_max` and `NewtypeDef.saturate_min`. Parser admits signed integer literals (including a leading minus). The type checker carries `Ctx::newtype_saturate_max` and `Ctx::newtype_saturate_min` populated in pass 1a' from the AST, and an `Ctx::expected_type_stack` pushed by annotated `let` bindings (Stmt::Let with a declared type) and by function return types (`check_function`). At the `Expr::SaturateMax` / `Expr::SaturateMin` site, the type checker peeks the top of the expected-type stack, strips any information-flow labels, and if the result is a `Type::Newtype` whose name has a recorded saturate value, mutates the AST node in place to `Expr::Call { name, args: [Literal::Int(value)], span }` and returns `Type::Newtype(name, underlying)`. The refinement predicate is verified at runtime on the literal exactly as for any other constructor invocation. Cascading `&mut` propagation through `type_of_expr`, `type_of_block`, `check_stmt`, `check_function`, and `check_native_call_with_signature` enables the mutation. Three new VM-level tests cover function-return context, annotated-let context, and the fall-back-to-`Word::MAX`/`MIN` path. `docs/design/GRAMMAR.md` Section 7.5 EBNF and `docs/architecture/LANGUAGE_DESIGN.md` Section "Surface Extensions Added in V0.2" updated. CHANGELOG entry added under `[Unreleased]` / Added. |
+| Match-arm guards. | `MatchArm` gains `guard: Option<Expr>`. Parser admits `pattern when expr => body`. Type checker enforces `Bool` on the guard expression and treats guarded arms as non-catch-all in exhaustiveness analysis (wildcard / variable catch-all, Bool true/false coverage, enum-variant coverage, Unit-literal coverage, Option Some/None coverage all skip guarded arms). Compiler emits the guard as another `Op::If` fail-jump that participates in the existing pattern-test fail-jump list. Three new VM tests. |
+| Pattern-matched checked-arithmetic arms. | `CheckedArmKind` rewritten: `Ok(Pattern)`, `Overflow(Pattern, Pattern)`, `Underflow(Pattern, Pattern)`. `CheckedArm` gains `guard: Option<Expr>` and drops the pipe-combined `kinds` Vec in favour of a single `kind`. Patterns are admitted from a restricted subset (wildcard, variable, signed integer literal) by a new `parse_checked_arm_pattern` helper. Type-check exhaustiveness shifts from "exactly one of each outcome" to "each outcome's last covering arm is an unguarded catch-all (bare identifier or wildcard in every position)". A `bind_checked_pattern` helper binds variables into the arm scope. |
+| i128 intermediate runtime and (h, l, flag) push. | `Op::CheckedAdd`, `Op::CheckedSub`, `Op::CheckedMul`, `Op::CheckedNeg` now compute the true result in `i128` and push `(high, low, flag)`. Flag derivation uses the i128 range relative to `i64::MIN`/`i64::MAX` rather than the i64 wrap pattern (the prior implementation produced incorrect flags for `i64::MAX + 1`). Bytecode stack-effect entries updated: binary growth `1`, unary growth `2`, shrink `0` for all four. Division and modulo continue to use the stamped-zero-flag pattern (high = 0, flag = 0). |
+| Compiler dispatch rewrite. | `compile_checked` rewritten as a virtual loop over arms. For each arm: emit a class-flag equality test (`flag == 0` / `1` / `2`), then literal-pattern equality tests against the high/low slots, then variable-pattern binding into fresh locals, then guard evaluation, then arm body, then `Break`. Failure jumps from any of the tests fall through to the next arm. Defensive `Op::Trap` after the last arm covers the unreachable no-match case. |
+| Refined-newtype saturate contracts. | Confirmed unchanged behaviour under the new arm shape; the expected-type-stack push remains driven by annotated `let` bindings and function return types, and the `Expr::SaturateMax` / `Expr::SaturateMin` resolution path still consults `ctx.expected_type()` after stripping information-flow labels. All three pre-existing saturate-contract tests pass under the new arm shape. |
+| Migration of existing call sites. | Six VM-level `checked_*` tests rewritten to the new arm syntax. Six typechecker-level `checked_overflow_*` tests rewritten with the updated error-message expectations (`non-exhaustive on ok|overflow|underflow`). The microkernel heartbeat script (`examples/rtos/scripts/heartbeat.kel`) updated in place. `examples/rtos/MANUAL.md` Section 5.5 updated. `docs/design/GRAMMAR.md` EBNF and example updated. `docs/architecture/LANGUAGE_DESIGN.md` Surface Extensions section updated. The pipe-combined `overflow|underflow => body` test (`checked_overflow_combined_arm_via_pipe`) is removed; that form is no longer admitted. |
 
 ## Verification matrix
 
 ```bash
 cargo build --quiet                                                            # clean
-cargo test --lib --quiet                                                       # 637 lib tests pass
+cargo test --lib --quiet                                                       # 642 lib tests pass
+cargo test --workspace --quiet                                                 # all workspace + doctest crates clean
 cargo clippy --tests --quiet -- -D warnings                                    # clean
+cargo fmt --all                                                                # idempotent
 ```
 
-The new behaviour is exercised by three tests in `src/vm.rs`:
+Tests of interest:
 
-- `saturate_keywords_resolve_to_newtype_contract_via_function_return`: function returning the refined newtype drives resolution of `saturate_max` to the declared value (100), wrapped by the newtype constructor; the runtime `nonneg` predicate accepts 100.
-- `saturate_keywords_resolve_to_newtype_contract_via_let_annotation`: `let y: Limited = m - 2 { ... }` drives resolution of `saturate_min` to 0, with explicit `as Word` extraction in the function return.
-- `saturate_keywords_fall_back_to_word_extrema_without_newtype_context`: a `fn main() -> Word` with no newtype context preserves the legacy `Word::MAX` semantics.
+- `match_arm_guard_dispatches_on_runtime_predicate`, `match_arm_guard_falls_through_to_next_arm_when_false`, `match_arm_guarded_pattern_is_not_a_catchall`.
+- `checked_mul_overflow_exposes_high_half`: `m * m` for `m = 2^32` produces `i128 = 2^64 = (high=1, low=0)`; the body returns the high half, demonstrating that the new shape exposes the load-bearing big-number-multiplication value.
+- `checked_overflow_arm_pattern_matches_literal_high`: `i64::MAX + i64::MAX` produces `(high=0, low=-2 wrapped)`; the `overflow(0, l)` arm fires before the catch-all.
+- `checked_overflow_arm_guard_falls_through`: the first overflow arm's pattern matches but its guard returns false; dispatch falls through to the catch-all.
+- All three `saturate_keywords_*` tests pass unchanged under the new arm shape.
 
 ## Notes
 
-- The expected-type stack is consulted only by `Expr::SaturateMax` and `Expr::SaturateMin` for now. Other surface positions that could plausibly push expected types (struct-field assignment, match-arm position) are not yet wired and would need a separate pass if future features want to use them.
-- Refinement-driven cast paths and refinement-type compile-time elision (Item 4 of the original V0.2 gap list) remain on the backlog. Those require range analysis on the underlying type, which is a larger investment than bidirectional checking.
-- `Type::Unknown` removal stays on the backlog. The foundation (native signatures and the expected-type stack) is now in place but a full removal still touches 26 call sites with risk of inference regressions.
+- The pipe-combined `overflow|underflow => body` form is removed. The migration is mechanical: rewrite as two arms with the same body. The microkernel heartbeat script never used this form; the only consumer was a single VM test which has been deleted.
+- Bytecode wire format `BYTECODE_VERSION` stays at 1. The narrow-adoption rationale extends to this change: V0.2 is unreleased, the existing `Op::CheckedAdd`/`Sub`/`Mul`/`Neg` discriminants are reused with changed stack effects, and no shipping consumer holds bytecode in the old (`result, flag`) shape. Future consumers should pin against the V0.2.0 commit if they need an authoritative wire-format reference for this label.
+- Division and modulo overflow still stamp `(high=0, low=result, flag=0)` because the only true overflow case (`i64::MIN / -1`) is left to the existing arithmetic. A dedicated `Op::CheckedDiv` / `Op::CheckedMod` family is deferred until a real consumer needs the corner-case detection.
+- Arm-pattern shapes that don't satisfy the restricted subset (struct patterns, enum-variant patterns, tuples) are rejected at parse time by `parse_checked_arm_pattern` with a span-localized diagnostic. Type checker fallback for unknown shapes binds nothing rather than panicking so any escaped case surfaces as a missing-identifier error in the body.
 
 ## Intended Next Step
 
 Awaiting operator prompt.
 
-1. **Operator action**: hardware verification on STM32N6570-DK. The full command set was provided in the prior turn and covers host smoke test, bare-metal library compile check, the three-mode size check, flashing under all three feature combinations, and the per-mode pass criteria. The new saturate-contract feature does not affect the microkernel images because none of the demonstrator scripts adopt refined newtypes; the verification confirms the V0.2 closing pass remains intact.
-2. **Operator action**: V0.2 release tag. With Items 2, 3, 4, 6, 7 of the V0.2 gap list now closed and flash items B, C, I delivered, V0.2 is in releasable shape. Item 5 (CallIndirect flow analysis) stays deferred to V0.3 as previously agreed. Operator decides timing.
-3. **Backlog**: B1 follow-up (remove `Type::Unknown` entirely), Item 4 follow-up (compile-time elision of refinement predicates on provably-in-range arguments), target-scaled `Fixed` for sub-64-bit native runtimes, and the remaining embassy feature trimming.
+1. **Operator action**: hardware verification on STM32N6570-DK. The full command set was provided previously and remains current. The microkernel heartbeat script rebuilds correctly under the new arm shape; an N6 flash run confirms the kernel-construction and dispatch timeline is unchanged.
+2. **Operator action**: V0.2 release tag. With the checked-arithmetic and match-guard work landed, V0.2 carries a meaningful generalization of the construct that closes Item 2 of the gap list with broader semantics than the original ask.
+3. **Backlog**: `Op::CheckedDiv` / `Op::CheckedMod` with proper `(h, l, flag)` for the `i64::MIN / -1` corner, `Type::Unknown` removal (B1 follow-up), refinement-type compile-time elision through range analysis (Item 4 follow-up), and the remaining target-scaled `Fixed` and embassy feature trimming items.

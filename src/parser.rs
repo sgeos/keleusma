@@ -1223,19 +1223,18 @@ impl<'a> Parser<'a> {
         let mut arms: alloc::vec::Vec<crate::ast::CheckedArm> = alloc::vec::Vec::new();
         while !self.at(&TokenKind::RBrace) {
             let arm_start = self.peek_span();
-            let mut kinds: alloc::vec::Vec<crate::ast::CheckedArmKind> = alloc::vec::Vec::new();
-            loop {
-                let kind = self.parse_checked_arm_kind()?;
-                kinds.push(kind);
-                if !self.eat(&TokenKind::Bar) {
-                    break;
-                }
-            }
+            let kind = self.parse_checked_arm_kind()?;
+            let guard = if self.eat(&TokenKind::When) {
+                Some(self.parse_expr()?)
+            } else {
+                None
+            };
             self.expect(&TokenKind::FatArrow)?;
             let body = self.parse_expr()?;
             let arm_end = body.span();
             arms.push(crate::ast::CheckedArm {
-                kinds,
+                kind,
+                guard,
                 body,
                 span: merge_spans(arm_start, arm_end),
             });
@@ -1251,26 +1250,67 @@ impl<'a> Parser<'a> {
         })
     }
 
+    /// Parse a single arm pattern position for a checked construct.
+    /// Accepts the wildcard `_`, a bare lower-case identifier
+    /// (binds), or an integer literal with optional leading `-`.
+    fn parse_checked_arm_pattern(&mut self) -> Result<crate::ast::Pattern, ParseError> {
+        let tok = self.tokens[self.pos].clone();
+        match &tok.kind {
+            TokenKind::Underscore => {
+                self.bump();
+                Ok(crate::ast::Pattern::Wildcard(tok.span))
+            }
+            TokenKind::LowerIdent(name) => {
+                self.bump();
+                Ok(crate::ast::Pattern::Variable(name.clone(), tok.span))
+            }
+            TokenKind::IntLit(_) | TokenKind::Minus => {
+                let v = self.parse_signed_integer_literal()?;
+                Ok(crate::ast::Pattern::Literal(
+                    crate::ast::Literal::Int(v),
+                    tok.span,
+                ))
+            }
+            other => Err(ParseError {
+                message: alloc::format!(
+                    "expected `_`, identifier, or integer literal in checked-arm pattern, found {:?}",
+                    other
+                ),
+                span: tok.span,
+            }),
+        }
+    }
+
     fn parse_checked_arm_kind(&mut self) -> Result<crate::ast::CheckedArmKind, ParseError> {
         match self.peek().clone() {
             TokenKind::Overflow => {
                 self.bump();
-                Ok(crate::ast::CheckedArmKind::Overflow)
+                self.expect(&TokenKind::LParen)?;
+                let h = self.parse_checked_arm_pattern()?;
+                self.expect(&TokenKind::Comma)?;
+                let l = self.parse_checked_arm_pattern()?;
+                self.expect(&TokenKind::RParen)?;
+                Ok(crate::ast::CheckedArmKind::Overflow(h, l))
             }
             TokenKind::Underflow => {
                 self.bump();
-                Ok(crate::ast::CheckedArmKind::Underflow)
+                self.expect(&TokenKind::LParen)?;
+                let h = self.parse_checked_arm_pattern()?;
+                self.expect(&TokenKind::Comma)?;
+                let l = self.parse_checked_arm_pattern()?;
+                self.expect(&TokenKind::RParen)?;
+                Ok(crate::ast::CheckedArmKind::Underflow(h, l))
             }
             TokenKind::LowerIdent(name) if name == "ok" => {
                 self.bump();
                 self.expect(&TokenKind::LParen)?;
-                let (binding, _) = self.expect_lower_ident()?;
+                let p = self.parse_checked_arm_pattern()?;
                 self.expect(&TokenKind::RParen)?;
-                Ok(crate::ast::CheckedArmKind::Ok { binding })
+                Ok(crate::ast::CheckedArmKind::Ok(p))
             }
             other => Err(ParseError {
                 message: alloc::format!(
-                    "expected overflow-arm keyword (`overflow`, `underflow`, or `ok(name)`), found {:?}",
+                    "expected `ok(pattern)`, `overflow(h, l)`, or `underflow(h, l)`, found {:?}",
                     other
                 ),
                 span: self.peek_span(),

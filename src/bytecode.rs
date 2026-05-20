@@ -600,27 +600,27 @@ pub enum Op {
     Trap(u16),
 
     /// Overflow-checked Word addition. Pops two `Value::Int`
-    /// operands and pushes the wrapped sum followed by an
-    /// outcome flag: `Value::Int(0)` for ok, `Value::Int(1)`
-    /// for overflow, `Value::Int(2)` for underflow. Used by the
-    /// surface `expr { overflow => ..., underflow => ...,
-    /// ok(v) => ... }` construct to dispatch on arithmetic
-    /// outcome without relying on host-side cycle counting.
+    /// operands, computes the true sum in `i128`, and pushes three
+    /// slots: the high 64 bits as `Value::Int`, the low 64 bits as
+    /// `Value::Int`, and an outcome flag `Value::Int(0)` (ok),
+    /// `Value::Int(1)` (overflow), or `Value::Int(2)` (underflow).
+    /// The compiler stashes all three into temporary locals at the
+    /// dispatch site. The construct's surface form is `expr {
+    /// ok(v) => ..., overflow(h, l) => ..., underflow(h, l) =>
+    /// ... }`.
     CheckedAdd,
     /// Overflow-checked Word subtraction. Same stack effect as
-    /// `Op::CheckedAdd`. Overflow flag is set when the true
-    /// difference exceeds `i64::MAX` (a positive minus a
-    /// strongly-negative); underflow is set when the true
-    /// difference is below `i64::MIN`.
+    /// `Op::CheckedAdd`. The true difference is computed in `i128`
+    /// and split into high and low halves before the flag.
     CheckedSub,
     /// Overflow-checked Word multiplication. Same stack effect.
-    /// Flag direction inferred from the sign of the true product
-    /// using `i64::overflowing_mul`.
+    /// The true product is computed in `i128`; the high half is
+    /// the load-bearing value for big-number multiplication.
     CheckedMul,
-    /// Overflow-checked Word negation. Pops one `Value::Int`,
-    /// pushes the negated result and the flag. Negation of
-    /// `i64::MIN` overflows (no positive counterpart in
-    /// signed 64-bit); the flag reports overflow in that case.
+    /// Overflow-checked Word negation. Pops one `Value::Int` and
+    /// pushes three slots in the same shape: high, low, flag. The
+    /// only overflow case is `-i64::MIN`, in which the high half
+    /// is `0` and the low half is `i64::MIN` (the wrapped result).
     CheckedNeg,
 }
 
@@ -961,15 +961,13 @@ impl Op {
             Op::WrapSome | Op::Not | Op::Neg => 0,
 
             // CheckedAdd / CheckedSub / CheckedMul pop two
-            // operands and push (result, flag); the second push
-            // reaches the entry depth so the above-entry peak
-            // is zero. CheckedNeg pops one and pushes two; the
-            // peak above entry is +1 momentarily but the
-            // wrapper-result-flag pattern is consistent with
-            // arithmetic ops whose final delta is computed via
-            // stack_shrink.
-            Op::CheckedAdd | Op::CheckedSub | Op::CheckedMul => 0,
-            Op::CheckedNeg => 1,
+            // operands and push (high, low, flag); net delta +1.
+            // CheckedNeg pops one and pushes three; net delta +2.
+            // The high half is the i128 intermediate's high 64
+            // bits, providing the load-bearing value for big-
+            // number multiplication.
+            Op::CheckedAdd | Op::CheckedSub | Op::CheckedMul => 1,
+            Op::CheckedNeg => 2,
 
             Op::Add
             | Op::Sub
@@ -1042,11 +1040,10 @@ impl Op {
 
             Op::WrapSome | Op::Not | Op::Neg => 0,
 
-            // CheckedAdd / CheckedSub / CheckedMul have a net
-            // stack delta of zero (pop two, push two), so the
-            // post-execution shrink is also zero. CheckedNeg
-            // pops one and pushes two, net +1; shrink is 0
-            // (no net pop).
+            // CheckedAdd / CheckedSub / CheckedMul net +1
+            // (pop 2, push 3). CheckedNeg net +2 (pop 1, push 3).
+            // The growth/shrink split records peak vs. final;
+            // shrink is zero because there is no net pop.
             Op::CheckedAdd | Op::CheckedSub | Op::CheckedMul | Op::CheckedNeg => 0,
 
             Op::Add
