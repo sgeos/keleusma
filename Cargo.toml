@@ -79,6 +79,35 @@ shell = []
 # from source via CMake) and is therefore opt-in.
 sdl3-example = ["dep:sdl3"]
 
+# Binary build's framing-level upper bound on bytecode widths
+# (B16 step 12). The `narrow-word-*`, `narrow-address-*`, and
+# `narrow-float-32` features each lower one of the global
+# `RUNTIME_WORD_BITS_LOG2`, `RUNTIME_ADDRESS_BITS_LOG2`, and
+# `RUNTIME_FLOAT_BITS_LOG2` constants in `bytecode.rs`. The
+# "narrowest wins" rule applies if multiple narrowing features
+# are enabled in the same dimension (the narrowest selection is
+# used; this preserves Cargo's additive-features semantics).
+# With no narrowing feature enabled, the constants default to 6
+# (i64, u64, f64), admitting any bytecode the wire format allows.
+#
+# Hosts that ship only a narrow `GenericVm<W, A, F>` instance can
+# enable the matching narrowing features so the framing-level
+# check rejects wider bytecode before deserialization, instead of
+# deferring rejection to the per-Vm load-time check. The Vm-level
+# check at `<W as Word>::BITS_LOG2` continues to apply on top.
+#
+# The features do not change opcode dispatch or the parametric
+# `Vm` shape. They only change what bytecode the binary's
+# `Module::access_bytes` and `Module::from_bytes` admit and what
+# widths `Target::host()` reports.
+narrow-word-8 = []
+narrow-word-16 = []
+narrow-word-32 = []
+narrow-address-8 = []
+narrow-address-16 = []
+narrow-address-32 = []
+narrow-float-32 = []
+
 [dependencies]
 libm = "0.2"
 keleusma-macros = { path = "keleusma-macros", version = "0.1.0" }

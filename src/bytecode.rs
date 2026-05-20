@@ -1473,24 +1473,60 @@ pub const BYTECODE_MAGIC: [u8; 4] = *b"KELE";
 /// CRC trailer.
 pub const BYTECODE_VERSION: u16 = 1;
 
-/// Word size in bits assumed by this runtime build, encoded as the
+/// Word size in bits assumed by this binary build, encoded as the
 /// base-2 exponent. Actual width in bits is `1 << RUNTIME_WORD_BITS_LOG2`.
-/// The current Keleusma runtime uses 64-bit words (i64 and f64), so the
-/// exponent is 6.
+/// Default value is `6` (64-bit words). The `narrow-word-8`,
+/// `narrow-word-16`, and `narrow-word-32` Cargo features lower the
+/// value to `3`, `4`, and `5` respectively, narrowing the framing-level
+/// upper bound on bytecode this binary admits. The narrowest enabled
+/// feature wins, preserving Cargo's additive-features semantics. See
+/// B16 step 12 in `docs/decisions/BACKLOG.md` for the rationale.
+#[cfg(feature = "narrow-word-8")]
+pub const RUNTIME_WORD_BITS_LOG2: u8 = 3;
+#[cfg(all(feature = "narrow-word-16", not(feature = "narrow-word-8")))]
+pub const RUNTIME_WORD_BITS_LOG2: u8 = 4;
+#[cfg(all(
+    feature = "narrow-word-32",
+    not(any(feature = "narrow-word-8", feature = "narrow-word-16"))
+))]
+pub const RUNTIME_WORD_BITS_LOG2: u8 = 5;
+#[cfg(not(any(
+    feature = "narrow-word-8",
+    feature = "narrow-word-16",
+    feature = "narrow-word-32"
+)))]
 pub const RUNTIME_WORD_BITS_LOG2: u8 = 6;
 
-/// Address size in bits assumed by this runtime build, encoded as the
+/// Address size in bits assumed by this binary build, encoded as the
 /// base-2 exponent. Actual width in bits is
-/// `1 << RUNTIME_ADDRESS_BITS_LOG2`. The current Keleusma runtime
-/// targets 64-bit address spaces, so the exponent is 6.
+/// `1 << RUNTIME_ADDRESS_BITS_LOG2`. Default value is `6` (64-bit
+/// addresses). The `narrow-address-8`, `narrow-address-16`, and
+/// `narrow-address-32` Cargo features lower the value following the
+/// same narrowest-wins rule as `RUNTIME_WORD_BITS_LOG2`.
+#[cfg(feature = "narrow-address-8")]
+pub const RUNTIME_ADDRESS_BITS_LOG2: u8 = 3;
+#[cfg(all(feature = "narrow-address-16", not(feature = "narrow-address-8")))]
+pub const RUNTIME_ADDRESS_BITS_LOG2: u8 = 4;
+#[cfg(all(
+    feature = "narrow-address-32",
+    not(any(feature = "narrow-address-8", feature = "narrow-address-16"))
+))]
+pub const RUNTIME_ADDRESS_BITS_LOG2: u8 = 5;
+#[cfg(not(any(
+    feature = "narrow-address-8",
+    feature = "narrow-address-16",
+    feature = "narrow-address-32"
+)))]
 pub const RUNTIME_ADDRESS_BITS_LOG2: u8 = 6;
 
-/// Floating-point width in bits assumed by this runtime build, encoded
-/// as the base-2 exponent. Actual width in bits is
-/// `1 << RUNTIME_FLOAT_BITS_LOG2`. The current Keleusma runtime uses
-/// f64 exclusively, so the exponent is 6. Narrower or wider floats
-/// (f32 = 5, f128 = 7) are reserved for future portability work
-/// tracked under B10.
+/// Floating-point width in bits assumed by this binary build,
+/// encoded as the base-2 exponent. Actual width in bits is
+/// `1 << RUNTIME_FLOAT_BITS_LOG2`. Default value is `6` (f64). The
+/// `narrow-float-32` Cargo feature lowers the value to `5`,
+/// rejecting f64 bytecode at the framing level.
+#[cfg(feature = "narrow-float-32")]
+pub const RUNTIME_FLOAT_BITS_LOG2: u8 = 5;
+#[cfg(not(feature = "narrow-float-32"))]
 pub const RUNTIME_FLOAT_BITS_LOG2: u8 = 6;
 
 /// Header length in bytes. The fields are
@@ -2291,6 +2327,53 @@ mod cost_model_tests {
     #[test]
     fn nominal_cost_model_value_slot_bytes_matches_constant() {
         assert_eq!(NOMINAL_COST_MODEL.value_slot_bytes, VALUE_SLOT_SIZE_BYTES);
+    }
+
+    #[test]
+    fn runtime_width_constants_track_narrowing_features() {
+        // B16 step 12: the RUNTIME_*_BITS_LOG2 constants reflect the
+        // narrowing Cargo features in effect for this build. The
+        // narrowest enabled feature wins per dimension. With no
+        // narrowing features enabled the defaults are 6/6/6 (i64,
+        // u64, f64). The test pins the constants per feature
+        // combination so future refactors do not regress the
+        // narrowest-wins rule.
+        #[cfg(feature = "narrow-word-8")]
+        assert_eq!(RUNTIME_WORD_BITS_LOG2, 3);
+        #[cfg(all(feature = "narrow-word-16", not(feature = "narrow-word-8")))]
+        assert_eq!(RUNTIME_WORD_BITS_LOG2, 4);
+        #[cfg(all(
+            feature = "narrow-word-32",
+            not(any(feature = "narrow-word-8", feature = "narrow-word-16"))
+        ))]
+        assert_eq!(RUNTIME_WORD_BITS_LOG2, 5);
+        #[cfg(not(any(
+            feature = "narrow-word-8",
+            feature = "narrow-word-16",
+            feature = "narrow-word-32"
+        )))]
+        assert_eq!(RUNTIME_WORD_BITS_LOG2, 6);
+
+        #[cfg(feature = "narrow-address-8")]
+        assert_eq!(RUNTIME_ADDRESS_BITS_LOG2, 3);
+        #[cfg(all(feature = "narrow-address-16", not(feature = "narrow-address-8")))]
+        assert_eq!(RUNTIME_ADDRESS_BITS_LOG2, 4);
+        #[cfg(all(
+            feature = "narrow-address-32",
+            not(any(feature = "narrow-address-8", feature = "narrow-address-16"))
+        ))]
+        assert_eq!(RUNTIME_ADDRESS_BITS_LOG2, 5);
+        #[cfg(not(any(
+            feature = "narrow-address-8",
+            feature = "narrow-address-16",
+            feature = "narrow-address-32"
+        )))]
+        assert_eq!(RUNTIME_ADDRESS_BITS_LOG2, 6);
+
+        #[cfg(feature = "narrow-float-32")]
+        assert_eq!(RUNTIME_FLOAT_BITS_LOG2, 5);
+        #[cfg(not(feature = "narrow-float-32"))]
+        assert_eq!(RUNTIME_FLOAT_BITS_LOG2, 6);
     }
 
     #[test]

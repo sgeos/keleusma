@@ -3595,6 +3595,15 @@ mod tests {
         assert_eq!(val, Value::Int(i64::MAX));
     }
 
+    // B16 step 12: this test exercises i64-specific boundary
+    // arithmetic. Narrowed binary builds reject the wider literals
+    // at the framing or compile level; the test is gated to the
+    // default 64-bit runtime configuration.
+    #[cfg(not(any(
+        feature = "narrow-word-8",
+        feature = "narrow-word-16",
+        feature = "narrow-word-32"
+    )))]
     #[test]
     fn checked_underflow_arm_returns_saturate_min() {
         // A negative overflow ((Word::MIN + 1) - 2) dispatches
@@ -3636,6 +3645,11 @@ mod tests {
         assert_eq!(val, Value::Int(1));
     }
 
+    #[cfg(not(any(
+        feature = "narrow-word-8",
+        feature = "narrow-word-16",
+        feature = "narrow-word-32"
+    )))]
     #[test]
     fn checked_neg_min_overflows() {
         // Negation of Word::MIN overflows because no positive
@@ -3673,6 +3687,11 @@ mod tests {
         assert_eq!(val, Value::Int(3));
     }
 
+    #[cfg(not(any(
+        feature = "narrow-word-8",
+        feature = "narrow-word-16",
+        feature = "narrow-word-32"
+    )))]
     #[test]
     fn checked_div_min_by_neg_one_overflows() {
         // `i64::MIN / -1` is the only overflow case in signed
@@ -3697,6 +3716,11 @@ mod tests {
         assert_eq!(val, Value::Int(i64::MIN));
     }
 
+    #[cfg(not(any(
+        feature = "narrow-word-8",
+        feature = "narrow-word-16",
+        feature = "narrow-word-32"
+    )))]
     #[test]
     fn checked_mod_min_by_neg_one_surfaces_corner() {
         // `i64::MIN % -1` is mathematically `0` but the
@@ -4494,6 +4518,11 @@ mod tests {
         assert_eq!(val, Value::Int(5));
     }
 
+    #[cfg(not(any(
+        feature = "narrow-word-8",
+        feature = "narrow-word-16",
+        feature = "narrow-word-32"
+    )))]
     #[test]
     fn fixed_cast_from_word_uses_q31_32_format() {
         let val = run_expect("fn main() -> Fixed { 1 as Fixed }", &[]);
@@ -4565,6 +4594,11 @@ mod tests {
         assert_eq!(val, Value::Int(20));
     }
 
+    #[cfg(not(any(
+        feature = "narrow-word-8",
+        feature = "narrow-word-16",
+        feature = "narrow-word-32"
+    )))]
     #[test]
     fn fixed_default_form_resolves_to_q31_32() {
         // The default `Fixed` surface form resolves to Q31.32 on
@@ -5294,6 +5328,10 @@ mod tests {
     }
 
     #[test]
+    // B16 step 12: integer-magnitude test that fits i16/i32/i64 but
+    // not i8; the narrow-word-8 binary masks 100 + 200 = 300 to 8
+    // bits and the test's expected value no longer holds.
+    #[cfg(not(feature = "narrow-word-8"))]
     fn eval_data_host_initialized() {
         // Host initializes data, script reads it.
         let src = "\
@@ -5804,6 +5842,15 @@ mod tests {
         }
     }
 
+    #[cfg(not(any(
+        feature = "narrow-word-8",
+        feature = "narrow-word-16",
+        feature = "narrow-word-32",
+        feature = "narrow-address-8",
+        feature = "narrow-address-16",
+        feature = "narrow-address-32",
+        feature = "narrow-float-32"
+    )))]
     #[test]
     fn bytecode_golden_bytes_for_main_returning_one() {
         // Pin the exact serialized form of a minimal Keleusma program
@@ -6113,6 +6160,11 @@ mod tests {
         }
     }
 
+    #[cfg(not(any(
+        feature = "narrow-word-8",
+        feature = "narrow-word-16",
+        feature = "narrow-word-32"
+    )))]
     #[test]
     fn bytecode_admits_narrower_word_size() {
         // Compile a module, patch the word_bits_log2 to a value below
@@ -6138,6 +6190,11 @@ mod tests {
         }
     }
 
+    #[cfg(not(any(
+        feature = "narrow-word-8",
+        feature = "narrow-word-16",
+        feature = "narrow-word-32"
+    )))]
     #[test]
     fn bytecode_masking_truncates_to_declared_width() {
         // Construct a Module with word_bits_log2 = 5 (32-bit) and an
@@ -7712,6 +7769,11 @@ mod tests {
         assert_eq!(val, Value::Int(100));
     }
 
+    #[cfg(not(any(
+        feature = "narrow-word-8",
+        feature = "narrow-word-16",
+        feature = "narrow-word-32"
+    )))]
     #[test]
     fn saturate_keywords_resolve_to_newtype_contract_via_let_annotation() {
         // The `let y: Limited = ...` annotation pushes `Limited` onto

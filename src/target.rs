@@ -393,7 +393,10 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "floats")]
+    #[cfg(all(
+        feature = "floats",
+        not(any(feature = "narrow-word-8", feature = "narrow-address-8"))
+    ))]
     fn embedded_16_rejects_float_literal() {
         let err = try_compile_with_target("fn main() -> Float { 1.5 }", &Target::embedded_16())
             .unwrap_err();
@@ -405,6 +408,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(any(feature = "narrow-word-8", feature = "narrow-address-8")))]
     fn embedded_16_rejects_float_type_in_param() {
         let err = try_compile_with_target(
             "fn add(x: Float) -> Float { x }\nfn main() -> Word { 0 }",
@@ -434,6 +438,11 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(any(
+        feature = "narrow-word-8",
+        feature = "narrow-word-16",
+        feature = "narrow-word-32"
+    )))]
     fn fixed_default_frac_bits_scales_with_target_word_width() {
         // Q31.32 on the 64-bit host, Q15.16 on a 32-bit target,
         // Q7.8 on a 16-bit target, Q3.4 on an 8-bit target. The
@@ -450,6 +459,11 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(any(
+        feature = "narrow-word-8",
+        feature = "narrow-word-16",
+        feature = "narrow-word-32"
+    )))]
     fn fixed_default_changes_when_targeting_embedded_16() {
         // The surface form `Fixed` without `<N>` resolves to the
         // target's Q-format default. Compiling the same program
@@ -506,6 +520,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(any(feature = "narrow-word-8", feature = "narrow-address-8")))]
     fn target_widths_propagate_to_module() {
         let tokens = tokenize("fn main() -> Word { 0 }").expect("lex");
         let program = parse(&tokens).expect("parse");
