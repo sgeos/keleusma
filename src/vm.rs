@@ -3786,6 +3786,118 @@ mod tests {
     }
 
     #[test]
+    fn refinement_predicate_if_expression_summary_admits() {
+        // The function-summary pass now handles `if`/`else`
+        // bodies, computing the union of the branch ranges. The
+        // example function returns 0 or 1; the summary is
+        // `[0, 1]`, a subset of `nonneg`'s true set, so the
+        // construction admits at compile time.
+        let val = run_expect(
+            "fn nonneg(x: Word) -> bool { x >= 0 }\n\
+             newtype Counter = Word where nonneg;\n\
+             fn flag(n: Word) -> Word {\n\
+                if n == 0 { 0 } else { 1 }\n\
+             }\n\
+             fn main() -> Counter { Counter(flag(7)) }",
+            &[],
+        );
+        assert_eq!(val, Value::Int(1));
+    }
+
+    // Note on recursive-function summaries: the widening
+    // infrastructure on the interval lattice (`Interval::widen`,
+    // `IntervalSet::widen`) converges the function-summary
+    // fixed-point pass for recursive bodies. End-to-end runtime
+    // tests are deferred because the WCMU verifier rejects
+    // recursive functions at load time (their stack-frame count
+    // is not statically bounded under V0.2's static analysis).
+    // The widening pass nevertheless computes a sound compile-
+    // time summary; future work that admits recursive functions
+    // under a relaxed WCMU bound or trust-skipped load will
+    // exercise this path end-to-end.
+
+    #[test]
+    fn refinement_predicate_match_arm_narrowing_admits_via_literal_pattern() {
+        // Match-arm narrowing: the scrutinee `n` has the
+        // parameter range full(). The arm `42 => Counter(42)`
+        // narrows the scrutinee to singleton(42), and the body
+        // uses the literal 42 directly which folds. The arm
+        // `v => Counter(0)` always returns 0. Both arm bodies
+        // are non-negative; the function-return summary is
+        // singleton(0) union singleton(42), and the construction
+        // `Counter(classify(...))` consults the summary.
+        let val = run_expect(
+            "fn nonneg(x: Word) -> bool { x >= 0 }\n\
+             newtype Counter = Word where nonneg;\n\
+             fn classify(n: Word) -> Word {\n\
+                match n {\n\
+                    42 => 42,\n\
+                    v => 0,\n\
+                }\n\
+             }\n\
+             fn main() -> Counter { Counter(classify(7)) }",
+            &[],
+        );
+        assert_eq!(val, Value::Int(0));
+    }
+
+    #[test]
+    fn refinement_predicate_match_arm_narrowing_admits_via_variable_pattern() {
+        // The variable-pattern arm binds `v` to the scrutinee's
+        // narrowed range. When the scrutinee is a non-negative
+        // parameter, the binding range is non-negative; using
+        // it inside a `Counter(...)` admits.
+        let val = run_expect(
+            "fn nonneg(x: Word) -> bool { x >= 0 }\n\
+             newtype Counter = Word where nonneg;\n\
+             newtype NonNeg = Word where nonneg;\n\
+             fn passthrough(n: NonNeg) -> Word {\n\
+                match n as Word {\n\
+                    v => v,\n\
+                }\n\
+             }\n\
+             fn main() -> Counter { Counter(passthrough(NonNeg(7))) }",
+            &[],
+        );
+        assert_eq!(val, Value::Int(7));
+    }
+
+    #[test]
+    fn byte_refinement_predicate_compiles_with_literal_coercion() {
+        // The type checker coerces the `0` and `100` literals to
+        // Byte at the comparison sites. The Byte refinement
+        // predicate compiles cleanly; constructing `Percent(42)`
+        // works through the elision pathway (the literal 42 is
+        // coerced and the predicate's true set covers it).
+        let val = run_expect(
+            "fn in_range(x: Byte) -> bool { x >= 0 and x <= 100 }\n\
+             newtype Percent = Byte where in_range;\n\
+             fn main() -> Percent { Percent(42 as Byte) }",
+            &[],
+        );
+        assert_eq!(val, Value::Byte(42));
+    }
+
+    #[test]
+    fn byte_refinement_predicate_elision_when_in_range() {
+        // The Byte parameter carries the natural range [0, 255],
+        // which is a subset of `[0, 100]`? Let's check: the
+        // predicate true set is `[0, 100]`; the natural range
+        // is `[0, 255]`. The argument `b as Byte` carries the
+        // parameter range. The intersection is `[0, 100]` (non-
+        // empty, non-subset), so the lattice path falls through
+        // to the runtime check. For an in-range literal, the
+        // constant-fold path elides at compile time.
+        let val = run_expect(
+            "fn in_range(x: Byte) -> bool { x >= 0 and x <= 100 }\n\
+             newtype Percent = Byte where in_range;\n\
+             fn main() -> Percent { Percent(50 as Byte) }",
+            &[],
+        );
+        assert_eq!(val, Value::Byte(50));
+    }
+
+    #[test]
     fn refinement_predicate_byte_parameter_natural_range_admits_nonneg() {
         // A Byte parameter carries the natural range [0, 255].
         // Casting the parameter to Word preserves the range

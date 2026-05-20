@@ -1650,6 +1650,63 @@ fn bind_checked_pattern(ctx: &mut Ctx, pattern: &Pattern) {
     }
 }
 
+/// Coerce a bare integer-literal expression to match the
+/// counterpart's narrower numeric type. When `expr` is an
+/// `Expr::Literal::Int(n)` with type `Word` and the counterpart
+/// is `Byte` or `Fixed<N>`, mutate `expr` to wrap the literal in
+/// a cast and return the coerced type. For Byte, the literal
+/// must fit in `[0, 255]`; out-of-range values fall through
+/// unchanged. For Fixed, any integer literal coerces (the cast
+/// op shifts to the fraction-bit representation at runtime).
+///
+/// The mutation is a one-shot rewrite; on subsequent calls the
+/// expression is no longer a bare literal, so the helper is a
+/// no-op. This preserves idempotence under the surrounding
+/// binop's left- and right-side coercion calls.
+fn coerce_integer_literal(
+    _ctx: &mut Ctx,
+    expr: &mut Expr,
+    expr_ty: Type,
+    counterpart: &Type,
+    span: Span,
+) -> Type {
+    let counterpart_bare = strip_labels(counterpart.clone());
+    if !matches!(strip_labels(expr_ty.clone()), Type::Word) {
+        return expr_ty;
+    }
+    let lit_value = match expr {
+        Expr::Literal {
+            value: Literal::Int(n),
+            ..
+        } => *n,
+        _ => return expr_ty,
+    };
+    match counterpart_bare {
+        Type::Byte => {
+            if !(0..=255).contains(&lit_value) {
+                return expr_ty;
+            }
+            let inner = expr.clone();
+            *expr = Expr::Cast {
+                expr: Box::new(inner),
+                target: TypeExpr::Prim(PrimType::Byte, span),
+                span,
+            };
+            Type::Byte
+        }
+        Type::Fixed(n) => {
+            let inner = expr.clone();
+            *expr = Expr::Cast {
+                expr: Box::new(inner),
+                target: TypeExpr::Prim(PrimType::Fixed(Some(n)), span),
+                span,
+            };
+            Type::Fixed(n)
+        }
+        _ => expr_ty,
+    }
+}
+
 fn bind_pattern(ctx: &mut Ctx, pattern: &Pattern, ty: Type) {
     match pattern {
         Pattern::Variable(name, _) => ctx.add_local(name.clone(), ty),
@@ -2283,6 +2340,18 @@ fn type_of_expr(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError> {
         } => {
             let lt_raw = type_of_expr(ctx, left)?;
             let rt_raw = type_of_expr(ctx, right)?;
+            // Integer-literal coercion. When one operand is a
+            // bare integer literal typed as `Word` and the other
+            // is `Byte` or `Fixed<N>`, wrap the literal in a cast
+            // so the operator's existing same-type dispatch sees
+            // matching types. The mutation preserves the source's
+            // intent; the compiler emits a cast opcode (a no-op
+            // for Word-to-Byte truncation in range and an integer-
+            // to-fixed shift for Fixed targets). Out-of-range
+            // literals fall through to the regular type-error
+            // path.
+            let lt_raw = coerce_integer_literal(ctx, left, lt_raw, &rt_raw, *span);
+            let rt_raw = coerce_integer_literal(ctx, right, rt_raw, &lt_raw, *span);
             // Information-flow label propagation. The operands'
             // labels are unioned to form the result's labels;
             // arithmetic on a labeled value taints the result.

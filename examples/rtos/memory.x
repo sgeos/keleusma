@@ -21,26 +21,24 @@
  *   NPURAM   0x343C0000   256 KB
  *   VENCRAM  0x34400000   128 KB
  *
- * The kernel fills AXISRAM2 entirely: 704 KB FLASH for the
+ * The kernel fills AXISRAM2 entirely: 768 KB FLASH for the
  * Keleusma runtime (lexer, parser, type checker, compiler, VM,
- * verifier, plus the kernel core) and 320 KB RAM for the three
- * task arenas plus the heap, stack, and executor state. Sizes
- * tuned after observing that LlffHeap fragmentation defeated a
- * 224-KB heap with three 64-KB arenas; the smaller per-task
- * arena (16 KB, configured in the N6 bin) and the 256-KB heap
- * leave comfortable headroom while accommodating the V0.2
- * compile pipeline growth from match-arm guards and pattern-
- * matched checked-arithmetic arms.
+ * verifier, refinement-elision lattice, plus the kernel core)
+ * and 256 KB RAM for the three task arenas plus the heap,
+ * stack, and executor state. Sizes tuned after the V0.2
+ * compile pipeline grew further from the interval lattice,
+ * disjoint IntervalSet, cross-function range summaries, and
+ * widening for recursive functions.
  *
- * Current binary footprint: text ~660 KB (FLASH) under the
+ * Current binary footprint: text ~700 KB (FLASH) under the
  * full pipeline, falling to ~140 KB under trust-load and
  * ~160 KB under verify-only. Bss ~70 KB before the heap buffer
- * plus 256 KB heap (RAM). Future iterations may slim the FLASH
+ * plus 192 KB heap (RAM). Future iterations may slim the FLASH
  * image further by trimming embassy features and the source
  * compiler.
  */
 MEMORY
 {
-  FLASH : ORIGIN = 0x34100000, LENGTH = 704K
-  RAM   : ORIGIN = 0x341B0000, LENGTH = 320K
+  FLASH : ORIGIN = 0x34100000, LENGTH = 768K
+  RAM   : ORIGIN = 0x341C0000, LENGTH = 256K
 }

@@ -306,11 +306,15 @@ The MVP landed: literal-argument refinement elision. When a refined newtype cons
 - **Byte natural-range parameter tracking.** Byte-typed parameters populate `local_ranges` with `[0, 255]`. A cast `b as Word` carries the range through; constructors whose predicate's true set covers `[0, 255]` admit. Byte and Fixed&lt;N&gt; refinement predicates over the source surface remain blocked by a separate type-checker gap (integer literals default to Word; `x >= 0` on a Byte does not type-check). Closing that gap is recorded as a type-checker follow-up; the lattice infrastructure is ready when the surface supports it.
 - **Cross-function return-range summaries.** New per-function `function_return_ranges` map computed at the top of `compile` through a fixed-point pass. Each function's summary is the `IntervalSet` covering every value its body might return under the parameters' natural / refinement ranges. The summary computation respects existing summaries on calls within the body, so chained calls converge in one or two sweeps. The constructor-emit site's `infer_arg_range` consults the summary at `Expr::Call` sites; the customer is `Counter(some_function())` where `some_function`'s body is decidable under the lattice.
 
-### Follow-ons still open
+### Follow-ons resolved (final pass)
 
-- Byte and Fixed&lt;N&gt; refinement-predicate surface. The type checker currently rejects `x >= 0` when `x: Byte` because integer literals default to Word. Closing this gap requires literal-coercion or type-directed integer-literal resolution. The lattice infrastructure on the i64 carrier is ready to consume Byte-typed predicates once the surface supports them.
-- Recursive function summaries. The current fixed-point pass does not converge on a non-trivial range for recursive functions; their summaries remain absent. A more sophisticated analysis with widening operators would handle this but adds soundness obligations.
-- Match-arm conditional range narrowing. A match arm's body executes under a refined range (e.g. inside `0 => ...`, the scrutinee is `singleton(0)`). Threading the narrowing through the arm body would admit constructors whose argument is a match expression on a known scrutinee.
+- **Byte/Fixed literal coercion.** The type checker rewrites integer literals at binary-operator sites when one operand is Byte (and the literal fits in `[0, 255]`) or Fixed&lt;N&gt;. The literal is wrapped in an `Expr::Cast` so the existing same-type dispatch and downstream emit produce the correct conversion. Byte-typed refinement predicates now compile.
+- **Match-arm conditional range narrowing.** `infer_arg_range_with` gained a shadow-map parameter and a new `Expr::Match` arm; each arm intersects the scrutinee range with the arm's pattern range and binds a variable pattern to the narrowed range. The summary-pass equivalent in `eval_expr_to_range` gained matching `Expr::If` and `Expr::Match` arms.
+- **Widening for recursive function summaries.** New `Interval::widen` and `IntervalSet::widen` operators (Cousot-Cousot style) widen growing bounds to infinity. The function-summary pass seeds every function to `IntervalSet::empty` and uses widening after `WIDEN_AFTER_ITERATIONS` rounds to converge on recursive bodies. Recursive functions get a sound compile-time summary even though the WCMU verifier rejects them at load time in V0.2; the widening infrastructure is in place for future passes that admit a relaxed WCMU bound or trust-skip recursion.
+
+### No remaining B13 follow-ons
+
+All open items in the B13 entry are now resolved. The refinement-elision pass admits literal-folded arguments, let-bound integer constants, arithmetic on the above, function-parameter ranges (including refined-newtype and primitive Byte natural ranges), function-call return ranges (computed through a fixed-point pass with widening), and match-arm narrowed bindings.
 
 ## B14. CallIndirect flow analysis for non-recursive closure invocation
 

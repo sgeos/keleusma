@@ -234,6 +234,50 @@ impl Interval {
         self.add(&other.neg())
     }
 
+    /// Widening operator (Cousot-Cousot style). Compares `self`
+    /// (the previous iteration's value) with `other` (the new
+    /// candidate). Bounds that grow are widened to infinity in
+    /// the growth direction; bounds that shrink or stay are
+    /// preserved. Used by the function-summary fixed-point pass
+    /// to force convergence on recursive functions whose body
+    /// would otherwise expand the range by a constant each
+    /// iteration.
+    ///
+    /// Soundness: the widened result is always a superset of
+    /// `other`. The pass may overshoot precision but never
+    /// undershoots safety.
+    pub fn widen(&self, other: &Self) -> Self {
+        if self.is_empty() {
+            return *other;
+        }
+        if other.is_empty() {
+            return *self;
+        }
+        let lo = match (self.lo, other.lo) {
+            (None, _) => None,
+            (_, None) => None,
+            (Some(a), Some(b)) => {
+                if b < a {
+                    None
+                } else {
+                    Some(a)
+                }
+            }
+        };
+        let hi = match (self.hi, other.hi) {
+            (None, _) => None,
+            (_, None) => None,
+            (Some(a), Some(b)) => {
+                if b > a {
+                    None
+                } else {
+                    Some(a)
+                }
+            }
+        };
+        Self { lo, hi }
+    }
+
     /// Multiplication transfer. For fully-bounded operand
     /// intervals `[a, b] * [c, d]` the result is the convex hull
     /// of the four corner products. Either operand having an
@@ -580,6 +624,27 @@ impl IntervalSet {
     pub fn rem(&self, other: &Self) -> Self {
         pairwise(self, other, Interval::rem)
     }
+
+    /// Widening at the set level. Reduces both sets to their
+    /// convex hulls and widens those. Coarse compared to a
+    /// piecewise widening but sound; the customer (function-
+    /// summary convergence) only needs a final upper bound.
+    pub fn widen(&self, other: &Self) -> Self {
+        let self_hull = hull(self);
+        let other_hull = hull(other);
+        Self::from_interval(self_hull.widen(&other_hull))
+    }
+}
+
+/// Convex hull of an `IntervalSet`: the smallest `Interval`
+/// containing every component. Empty set returns the empty
+/// interval.
+fn hull(s: &IntervalSet) -> Interval {
+    let mut acc = Interval::empty();
+    for i in &s.intervals {
+        acc = acc.union(i);
+    }
+    acc
 }
 
 /// Compare two lower bounds with `None` as `-infinity`.
@@ -987,6 +1052,43 @@ mod tests {
             n.parts(),
             &[Interval::range(-20, -10), Interval::range(-5, 0)]
         );
+    }
+
+    #[test]
+    fn widen_stops_when_bounds_stable() {
+        let a = Interval::range(0, 100);
+        let b = Interval::range(0, 100);
+        assert_eq!(a.widen(&b), Interval::range(0, 100));
+    }
+
+    #[test]
+    fn widen_extends_to_positive_infinity_on_upper_growth() {
+        let a = Interval::range(0, 10);
+        let b = Interval::range(0, 11);
+        assert_eq!(a.widen(&b), Interval::at_least(0));
+    }
+
+    #[test]
+    fn widen_extends_to_negative_infinity_on_lower_growth() {
+        let a = Interval::range(0, 100);
+        let b = Interval::range(-1, 100);
+        assert_eq!(a.widen(&b), Interval::at_most(100));
+    }
+
+    #[test]
+    fn widen_to_full_on_both_directions() {
+        let a = Interval::range(0, 10);
+        let b = Interval::range(-1, 11);
+        assert_eq!(a.widen(&b), Interval::full());
+    }
+
+    #[test]
+    fn interval_set_widen_takes_hull() {
+        let a = IntervalSet::from_interval(Interval::range(0, 10));
+        let b = IntervalSet::from_interval(Interval::range(0, 100));
+        // Hull of a is [0, 10]; hull of b is [0, 100]; widening
+        // extends the upper bound to +infinity.
+        assert_eq!(a.widen(&b).parts(), &[Interval::at_least(0)]);
     }
 
     #[test]

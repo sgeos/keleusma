@@ -3719,30 +3719,70 @@ fn comparison_set(op: crate::ast::BinOp, n: i64) -> Option<crate::interval::Inte
 }
 
 /// Compute per-function return-range summaries through a fixed-
-/// point loop. Each iteration sweeps the function table and
-/// inserts a new summary whenever a function's body becomes
-/// decidable under the current set of summaries. Iteration ends
-/// when a full sweep adds nothing.
+/// point loop with Cousot-Cousot widening for recursive
+/// functions.
+///
+/// Each function starts with the empty `IntervalSet` (bottom).
+/// Each iteration sweeps the function table and recomputes the
+/// new candidate summary using the current map. When the new
+/// candidate differs from the existing summary, the entry is
+/// updated through a union for the first
+/// `WIDEN_AFTER_ITERATIONS` rounds and then through widening,
+/// forcing convergence on recursive functions whose body would
+/// otherwise expand the range by a constant each iteration.
+/// Iteration ends when a sweep produces no changes.
+const WIDEN_AFTER_ITERATIONS: usize = 3;
+const SUMMARY_PASS_LIMIT: usize = 16;
+
 fn compute_function_return_ranges(
     program: &crate::ast::Program,
     type_info: &TypeInfo,
 ) -> BTreeMap<String, crate::interval::IntervalSet> {
-    let mut summaries: BTreeMap<String, crate::interval::IntervalSet> = BTreeMap::new();
-    loop {
-        let mut added = false;
+    use crate::interval::IntervalSet;
+    // Seed every function with the empty set so recursive calls
+    // through `eval_expr_to_range::Call` find a lookup target.
+    // Functions that never produce a non-empty candidate will be
+    // dropped at the end so the elision pass sees only useful
+    // summaries.
+    let mut summaries: BTreeMap<String, IntervalSet> = BTreeMap::new();
+    for func in &program.functions {
+        summaries.insert(func.name.clone(), IntervalSet::empty());
+    }
+    for iteration in 0..SUMMARY_PASS_LIMIT {
+        let mut changed = false;
         for func in &program.functions {
-            if summaries.contains_key(&func.name) {
+            let Some(new_range) = compute_function_return_range(func, type_info, &summaries) else {
+                continue;
+            };
+            let old = summaries
+                .get(&func.name)
+                .cloned()
+                .unwrap_or_else(IntervalSet::empty);
+            if new_range == old {
                 continue;
             }
-            if let Some(range) = compute_function_return_range(func, type_info, &summaries) {
-                summaries.insert(func.name.clone(), range);
-                added = true;
+            let updated = if iteration >= WIDEN_AFTER_ITERATIONS {
+                old.widen(&new_range)
+            } else {
+                old.union(&new_range)
+            };
+            if updated != old {
+                summaries.insert(func.name.clone(), updated);
+                changed = true;
             }
         }
-        if !added {
+        if !changed {
             break;
         }
     }
+    // Drop functions whose summary remained empty; the elision
+    // pass treats absence as "no information" and falls through
+    // to the runtime check, which is the same behaviour as an
+    // empty range under the subset check (empty intersects with
+    // anything to empty, so the pass would fail). Removing the
+    // empty entries keeps the map size proportional to actual
+    // information.
+    summaries.retain(|_, range| !range.is_empty());
     summaries
 }
 
@@ -3832,8 +3872,70 @@ fn eval_expr_to_range(
             eval_expr_to_range(inner, params, _type_info, known_summaries)
         }
         Expr::Call { name, .. } => known_summaries.get(name).cloned(),
+        Expr::If {
+            then_block,
+            else_block,
+            ..
+        } => {
+            // Both branches must reduce to a single tail
+            // expression for the summary pass to apply; otherwise
+            // we lose the result value. The union of the branch
+            // ranges is a sound bound. A missing else (Unit-
+            // returning if) returns None because the if's value
+            // type is then Unit, outside the lattice's domain.
+            let then_range = block_tail_range(then_block, params, _type_info, known_summaries)?;
+            let else_range = match else_block {
+                Some(b) => block_tail_range(b, params, _type_info, known_summaries)?,
+                None => return None,
+            };
+            Some(then_range.union(&else_range))
+        }
+        Expr::Match {
+            scrutinee, arms, ..
+        } => {
+            // Narrowing match analysis (function-summary edition).
+            // Mirrors the in-function narrowing in
+            // `infer_arg_range_with`; differs in operand sources
+            // (param map and summary map rather than function
+            // compiler).
+            use crate::interval::IntervalSet;
+            let scrut_range = eval_expr_to_range(scrutinee, params, _type_info, known_summaries)?;
+            let mut result = IntervalSet::empty();
+            for arm in arms {
+                let pattern_range = pattern_to_range(&arm.pattern)?;
+                let arm_scrut = scrut_range.intersect(&pattern_range);
+                if arm_scrut.is_empty() {
+                    continue;
+                }
+                let mut arm_params = params.clone();
+                if let Pattern::Variable(name, _) = &arm.pattern {
+                    arm_params.insert(name.clone(), arm_scrut.clone());
+                }
+                let body_range =
+                    eval_expr_to_range(&arm.expr, &arm_params, _type_info, known_summaries)?;
+                result = result.union(&body_range);
+            }
+            Some(result)
+        }
         _ => None,
     }
+}
+
+/// Helper for the summary pass's if/else handling: evaluate a
+/// block's tail expression to an `IntervalSet`. Returns `None`
+/// when the block has any statements or no tail (the summary
+/// pass deals only with expression-bodied blocks).
+fn block_tail_range(
+    block: &crate::ast::Block,
+    params: &BTreeMap<String, crate::interval::IntervalSet>,
+    type_info: &TypeInfo,
+    known_summaries: &BTreeMap<String, crate::interval::IntervalSet>,
+) -> Option<crate::interval::IntervalSet> {
+    if !block.stmts.is_empty() {
+        return None;
+    }
+    let tail = block.tail_expr.as_ref()?;
+    eval_expr_to_range(tail, params, type_info, known_summaries)
 }
 
 /// The natural range of a value of the given type expressed as
@@ -3866,6 +3968,31 @@ fn natural_range_of_type_expr(
 /// Sound: the returned set is a superset of the actual runtime
 /// range, so a subset-of-true-set check is conservative.
 fn infer_arg_range(expr: &Expr, fc: &FuncCompiler) -> Option<crate::interval::IntervalSet> {
+    infer_arg_range_with(expr, fc, &BTreeMap::new())
+}
+
+/// Convert a match-arm pattern into the interval set of values
+/// that match it. Returns `None` for patterns outside the
+/// recognised subset (wildcard, variable, integer literal).
+fn pattern_to_range(pattern: &Pattern) -> Option<crate::interval::IntervalSet> {
+    use crate::interval::IntervalSet;
+    match pattern {
+        Pattern::Wildcard(_) | Pattern::Variable(_, _) => Some(IntervalSet::full()),
+        Pattern::Literal(Literal::Int(n), _) => Some(IntervalSet::singleton(*n)),
+        _ => None,
+    }
+}
+
+/// Range inference with an identifier shadow map. Bare-variable
+/// identifiers resolve through `shadow` first, then fall back to
+/// the function compiler's local constant and range tables. The
+/// shadow is used by the match-arm narrowing pathway to bind a
+/// pattern's variable to the arm's intersected scrutinee range.
+fn infer_arg_range_with(
+    expr: &Expr,
+    fc: &FuncCompiler,
+    shadow: &BTreeMap<String, crate::interval::IntervalSet>,
+) -> Option<crate::interval::IntervalSet> {
     use crate::interval::IntervalSet;
     match expr {
         Expr::Literal {
@@ -3873,6 +4000,9 @@ fn infer_arg_range(expr: &Expr, fc: &FuncCompiler) -> Option<crate::interval::In
             ..
         } => Some(IntervalSet::singleton(*n)),
         Expr::Ident { name, .. } => {
+            if let Some(r) = shadow.get(name) {
+                return Some(r.clone());
+            }
             let slot = fc.resolve_local(name.as_str())?;
             if let Some(v) = fc.local_const_values.get(&slot) {
                 Some(IntervalSet::singleton(*v))
@@ -3885,70 +4015,56 @@ fn infer_arg_range(expr: &Expr, fc: &FuncCompiler) -> Option<crate::interval::In
             operand,
             ..
         } => {
-            let inner = infer_arg_range(operand, fc)?;
+            let inner = infer_arg_range_with(operand, fc, shadow)?;
             Some(inner.neg())
         }
         Expr::BinOp {
-            op: crate::ast::BinOp::Add,
-            left,
-            right,
-            ..
+            op, left, right, ..
         } => {
-            let l = infer_arg_range(left, fc)?;
-            let r = infer_arg_range(right, fc)?;
-            Some(l.add(&r))
+            let l = infer_arg_range_with(left, fc, shadow)?;
+            let r = infer_arg_range_with(right, fc, shadow)?;
+            match op {
+                crate::ast::BinOp::Add => Some(l.add(&r)),
+                crate::ast::BinOp::Sub => Some(l.sub(&r)),
+                crate::ast::BinOp::Mul => Some(l.mul(&r)),
+                crate::ast::BinOp::Div => Some(l.div(&r)),
+                crate::ast::BinOp::Mod => Some(l.rem(&r)),
+                _ => None,
+            }
         }
-        Expr::BinOp {
-            op: crate::ast::BinOp::Sub,
-            left,
-            right,
-            ..
-        } => {
-            let l = infer_arg_range(left, fc)?;
-            let r = infer_arg_range(right, fc)?;
-            Some(l.sub(&r))
-        }
-        Expr::BinOp {
-            op: crate::ast::BinOp::Mul,
-            left,
-            right,
-            ..
-        } => {
-            let l = infer_arg_range(left, fc)?;
-            let r = infer_arg_range(right, fc)?;
-            Some(l.mul(&r))
-        }
-        Expr::BinOp {
-            op: crate::ast::BinOp::Div,
-            left,
-            right,
-            ..
-        } => {
-            let l = infer_arg_range(left, fc)?;
-            let r = infer_arg_range(right, fc)?;
-            Some(l.div(&r))
-        }
-        Expr::BinOp {
-            op: crate::ast::BinOp::Mod,
-            left,
-            right,
-            ..
-        } => {
-            let l = infer_arg_range(left, fc)?;
-            let r = infer_arg_range(right, fc)?;
-            Some(l.rem(&r))
-        }
-        // Newtype-to-underlying casts (e.g. `c as Word`) are
-        // identity at the bytecode level, so the inferred range
-        // passes through unchanged. The type checker has already
-        // validated that the cast is admissible.
-        Expr::Cast { expr: inner, .. } => infer_arg_range(inner, fc),
-        // Function calls consult the per-function return-range
-        // summary computed at the top of `compile`. Functions
-        // without a summary (recursive, side-effecting, or with
-        // bodies outside the inference's recognised subset)
-        // return None and the runtime check fires.
+        Expr::Cast { expr: inner, .. } => infer_arg_range_with(inner, fc, shadow),
         Expr::Call { name, .. } => fc.type_info.function_return_ranges.get(name).cloned(),
+        Expr::Match {
+            scrutinee, arms, ..
+        } => {
+            // Narrowed match analysis. Compute the scrutinee's
+            // range, then walk each arm: intersect with the
+            // pattern's value set to get the arm's effective
+            // scrutinee range, bind a variable pattern's name to
+            // that range in the shadow, and recurse on the body.
+            // Union the arm bodies' ranges. An arm whose pattern
+            // is disjoint from the scrutinee range is unreachable
+            // and contributes nothing. Guarded arms degrade to
+            // the unguarded analysis (the guard might exclude
+            // some values, but the analysis returns a sound
+            // superset regardless).
+            let scrut_range = infer_arg_range_with(scrutinee, fc, shadow)?;
+            let mut result = IntervalSet::empty();
+            for arm in arms {
+                let pattern_range = pattern_to_range(&arm.pattern)?;
+                let arm_scrut = scrut_range.intersect(&pattern_range);
+                if arm_scrut.is_empty() {
+                    continue;
+                }
+                let mut arm_shadow = shadow.clone();
+                if let Pattern::Variable(name, _) = &arm.pattern {
+                    arm_shadow.insert(name.clone(), arm_scrut.clone());
+                }
+                let body_range = infer_arg_range_with(&arm.expr, fc, &arm_shadow)?;
+                result = result.union(&body_range);
+            }
+            Some(result)
+        }
         _ => None,
     }
 }
