@@ -9,10 +9,10 @@ use allocator_api2::vec::Vec as ArenaVec;
 use keleusma_arena::BottomHandle;
 
 use crate::bytecode::*;
-#[allow(unused_imports)]
-use crate::word::{WideWord, Word};
 #[cfg(feature = "verify")]
 use crate::verify;
+#[allow(unused_imports)]
+use crate::word::{WideWord, Word};
 
 /// Operand stack and call-frame stack type. Borrows the host-owned
 /// arena's bottom region. The `Vm` drops and recreates these at every
@@ -510,6 +510,14 @@ pub struct GenericVm<
 /// accounting; the actual `Value` enum is larger than the WCMU
 /// slot size by an implementation-defined factor.
 pub fn required_persistent_capacity_for(module: &crate::bytecode::Module) -> usize {
+    required_persistent_capacity_for_generic::<i64, f64>(module)
+}
+
+/// Generic counterpart sized against the host's specific
+/// `GenericValue<W, F>` storage requirement.
+pub fn required_persistent_capacity_for_generic<W: crate::word::Word, F: crate::float::Float>(
+    module: &crate::bytecode::Module,
+) -> usize {
     let private_count = module.data_layout.as_ref().map_or(0, |dl| {
         dl.slots
             .iter()
@@ -519,7 +527,9 @@ pub fn required_persistent_capacity_for(module: &crate::bytecode::Module) -> usi
     private_count * core::mem::size_of::<crate::bytecode::GenericValue<W, F>>()
 }
 
-impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::float::Float> Drop for GenericVm<'a, 'arena, W, A, F> {
+impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::float::Float> Drop
+    for GenericVm<'a, 'arena, W, A, F>
+{
     /// Drop the `Value` instances stored in the arena's
     /// persistent region. The arena itself is host-owned and
     /// outlives the VM; without this drop, every private slot's
@@ -549,7 +559,9 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
     }
 }
 
-impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::float::Float> GenericVm<'a, 'arena, W, A, F> {
+impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::float::Float>
+    GenericVm<'a, 'arena, W, A, F>
+{
     /// Borrow the archived module from internal bytecode storage.
     ///
     /// The bytes were validated at construction time, so accessing the
@@ -651,7 +663,9 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
     }
 }
 
-impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::float::Float> GenericVm<'a, 'arena, W, A, F> {
+impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::float::Float>
+    GenericVm<'a, 'arena, W, A, F>
+{
     /// Create a new VM with the given compiled module and a host-owned
     /// arena.
     ///
@@ -948,7 +962,8 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                 }
             }
         };
-        let private_storage_bytes = private_count as usize * core::mem::size_of::<crate::bytecode::GenericValue<W, F>>();
+        let private_storage_bytes =
+            private_count as usize * core::mem::size_of::<crate::bytecode::GenericValue<W, F>>();
         if arena.persistent_capacity() < private_storage_bytes {
             return Err(VmError::VerifyError(alloc::format!(
                 "arena persistent_capacity ({} bytes) is too small for module's private data ({} bytes); call `arena.resize_persistent(required_persistent_capacity_for(&module))` before constructing the VM",
@@ -977,6 +992,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
             .map_err(|_| out_of_arena_min(arena.capacity()))?;
         Ok(Self {
             bytecode: BytecodeStore::Borrowed(bytes),
+            _phantom_a: core::marker::PhantomData,
             decoded_ops,
             stack,
             frames,
@@ -1027,7 +1043,8 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                 (shared, private_)
             }
         };
-        let private_storage_bytes = private_count as usize * core::mem::size_of::<crate::bytecode::GenericValue<W, F>>();
+        let private_storage_bytes =
+            private_count as usize * core::mem::size_of::<crate::bytecode::GenericValue<W, F>>();
         if arena.persistent_capacity() < private_storage_bytes {
             return Err(VmError::VerifyError(alloc::format!(
                 "arena persistent_capacity ({} bytes) is too small for module's private data ({} bytes; {} slot(s) at {} bytes each); call `arena.resize_persistent(required_persistent_capacity_for(&module))` before constructing the VM",
@@ -1086,6 +1103,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
             .map_err(|_| out_of_arena_min(arena.capacity()))?;
         Ok(Self {
             bytecode: BytecodeStore::Owned(aligned),
+            _phantom_a: core::marker::PhantomData,
             decoded_ops,
             stack,
             frames,
@@ -1113,7 +1131,8 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
             // a valid `Value`.
             unsafe {
                 let private_idx = slot - self.shared_slot_count as usize;
-                let base = self.arena.persistent_ptr().as_ptr() as *const crate::bytecode::GenericValue<W, F>;
+                let base = self.arena.persistent_ptr().as_ptr()
+                    as *const crate::bytecode::GenericValue<W, F>;
                 (*base.add(private_idx)).clone()
             }
         }
@@ -1133,7 +1152,8 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
             // it via the assignment is sound.
             unsafe {
                 let private_idx = slot - self.shared_slot_count as usize;
-                let base = self.arena.persistent_ptr().as_ptr() as *mut crate::bytecode::GenericValue<W, F>;
+                let base = self.arena.persistent_ptr().as_ptr()
+                    as *mut crate::bytecode::GenericValue<W, F>;
                 *base.add(private_idx) = value;
             }
         }
@@ -1144,7 +1164,11 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
     /// The host calls this before execution begins to populate the
     /// persistent context. Returns an error if the slot index is out
     /// of bounds.
-    pub fn set_data(&mut self, slot: usize, value: crate::bytecode::GenericValue<W, F>) -> Result<(), VmError> {
+    pub fn set_data(
+        &mut self,
+        slot: usize,
+        value: crate::bytecode::GenericValue<W, F>,
+    ) -> Result<(), VmError> {
         let total = self.data_len();
         if slot >= total {
             return Err(VmError::NativeError(format!(
@@ -1425,7 +1449,8 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                 (shared, private_)
             }
         };
-        let new_private_storage = new_private as usize * core::mem::size_of::<crate::bytecode::GenericValue<W, F>>();
+        let new_private_storage =
+            new_private as usize * core::mem::size_of::<crate::bytecode::GenericValue<W, F>>();
         if self.arena.persistent_capacity() < new_private_storage {
             return Err(VmError::VerifyError(format!(
                 "arena persistent_capacity ({} bytes) is too small for new module's private data ({} bytes); resize before hot swap",
@@ -1438,7 +1463,8 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         // resources whose destructor must run.
         let old_private_count = self.private_slot_count as usize;
         if old_private_count > 0 {
-            let base = self.arena.persistent_ptr().as_ptr() as *mut crate::bytecode::GenericValue<W, F>;
+            let base =
+                self.arena.persistent_ptr().as_ptr() as *mut crate::bytecode::GenericValue<W, F>;
             for i in 0..old_private_count {
                 // SAFETY: every old private slot held a valid
                 // `Value` initialised through `write_data_slot`
@@ -1455,7 +1481,8 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         // shared slots first in the unified index space, so the
         // split is a contiguous prefix.
         let mut iter = initial_data.into_iter();
-        let shared_init: Vec<crate::bytecode::GenericValue<W, F>> = iter.by_ref().take(new_shared as usize).collect();
+        let shared_init: Vec<crate::bytecode::GenericValue<W, F>> =
+            iter.by_ref().take(new_shared as usize).collect();
         let private_init: Vec<crate::bytecode::GenericValue<W, F>> = iter.collect();
 
         // Serialize the new module to aligned bytes for archived
@@ -1474,7 +1501,8 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         // drop on the destination, because we just dropped the
         // old occupants above).
         if new_private > 0 {
-            let base = self.arena.persistent_ptr().as_ptr() as *mut crate::bytecode::GenericValue<W, F>;
+            let base =
+                self.arena.persistent_ptr().as_ptr() as *mut crate::bytecode::GenericValue<W, F>;
             for (i, val) in private_init.into_iter().enumerate() {
                 // SAFETY: the destination is within the
                 // persistent region whose capacity was verified
@@ -1500,12 +1528,23 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
     /// The supplied function does not receive arena context. Native
     /// functions that need arena access for [`crate::bytecode::GenericValue::KStr`] allocation
     /// register through [`Vm::register_native_with_ctx`] instead.
-    pub fn register_native(&mut self, name: &str, func: fn(&[crate::bytecode::GenericValue<W, F>]) -> Result<crate::bytecode::GenericValue<W, F>, VmError>) {
+    #[allow(clippy::type_complexity)]
+    pub fn register_native(
+        &mut self,
+        name: &str,
+        func: fn(
+            &[crate::bytecode::GenericValue<W, F>],
+        ) -> Result<crate::bytecode::GenericValue<W, F>, VmError>,
+    ) {
         self.natives.push(NativeEntry {
             wcet: DEFAULT_NATIVE_WCET,
             wcmu_bytes: DEFAULT_NATIVE_WCMU_BYTES,
             name: String::from(name),
-            func: Box::new(move |_ctx: &NativeCtx<'_>, args: &[crate::bytecode::GenericValue<W, F>]| func(args)),
+            func: Box::new(
+                move |_ctx: &NativeCtx<'_>, args: &[crate::bytecode::GenericValue<W, F>]| {
+                    func(args)
+                },
+            ),
         });
     }
 
@@ -1516,13 +1555,20 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
     /// arena context.
     pub fn register_native_closure<Func>(&mut self, name: &str, func: Func)
     where
-        Func: Fn(&[crate::bytecode::GenericValue<W, F>]) -> Result<crate::bytecode::GenericValue<W, F>, VmError> + 'static,
+        Func: Fn(
+                &[crate::bytecode::GenericValue<W, F>],
+            ) -> Result<crate::bytecode::GenericValue<W, F>, VmError>
+            + 'static,
     {
         self.natives.push(NativeEntry {
             wcet: DEFAULT_NATIVE_WCET,
             wcmu_bytes: DEFAULT_NATIVE_WCMU_BYTES,
             name: String::from(name),
-            func: Box::new(move |_ctx: &NativeCtx<'_>, args: &[crate::bytecode::GenericValue<W, F>]| func(args)),
+            func: Box::new(
+                move |_ctx: &NativeCtx<'_>, args: &[crate::bytecode::GenericValue<W, F>]| {
+                    func(args)
+                },
+            ),
         });
     }
 
@@ -1535,10 +1581,14 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
     /// [`crate::bytecode::GenericValue::KStr`]. The boundary type carries epoch-tagged
     /// stale-pointer detection. Outstanding handles become
     /// [`keleusma_arena::Stale`] on the next reset.
+    #[allow(clippy::type_complexity)]
     pub fn register_native_with_ctx(
         &mut self,
         name: &str,
-        func: for<'b> fn(&NativeCtx<'b>, &[crate::bytecode::GenericValue<W, F>]) -> Result<crate::bytecode::GenericValue<W, F>, VmError>,
+        func: for<'b> fn(
+            &NativeCtx<'b>,
+            &[crate::bytecode::GenericValue<W, F>],
+        ) -> Result<crate::bytecode::GenericValue<W, F>, VmError>,
     ) {
         self.natives.push(NativeEntry {
             wcet: DEFAULT_NATIVE_WCET,
@@ -1552,7 +1602,11 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
     /// closure.
     pub fn register_native_with_ctx_closure<Func>(&mut self, name: &str, func: Func)
     where
-        Func: for<'b> Fn(&NativeCtx<'b>, &[crate::bytecode::GenericValue<W, F>]) -> Result<crate::bytecode::GenericValue<W, F>, VmError> + 'static,
+        Func: for<'b> Fn(
+                &NativeCtx<'b>,
+                &[crate::bytecode::GenericValue<W, F>],
+            ) -> Result<crate::bytecode::GenericValue<W, F>, VmError>
+            + 'static,
     {
         self.natives.push(NativeEntry {
             wcet: DEFAULT_NATIVE_WCET,
@@ -1562,15 +1616,6 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         });
     }
 
-    /// Register an infallible host function with automatic argument and
-    /// return-value marshalling.
-    ///
-    /// The function may take any number of arguments through arity 4 whose
-    /// types implement `KeleusmaType`. The return type must also implement
-    /// `KeleusmaType`. Arity and type checks happen at the boundary
-    /// automatically. For functions that may fail, use
-    /// [`register_fn_fallible`] instead.
-    ///
     // register_fn, register_fn_fallible, register_library are
     // marshall-tied and live on a specialized impl<Vm<'a,
     // 'arena>> block below. The marshall layer's IntoNativeFn /
@@ -1649,7 +1694,10 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
     }
 
     /// Call the module's entry point with the given arguments.
-    pub fn call(&mut self, args: &[crate::bytecode::GenericValue<W, F>]) -> Result<GenericVmState<W, F>, VmError> {
+    pub fn call(
+        &mut self,
+        args: &[crate::bytecode::GenericValue<W, F>],
+    ) -> Result<GenericVmState<W, F>, VmError> {
         let entry = self
             .archived()
             .entry_point
@@ -1660,7 +1708,11 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
     }
 
     /// Call a specific function by chunk index with the given arguments.
-    pub fn call_function(&mut self, chunk_idx: usize, args: &[crate::bytecode::GenericValue<W, F>]) -> Result<GenericVmState<W, F>, VmError> {
+    pub fn call_function(
+        &mut self,
+        chunk_idx: usize,
+        args: &[crate::bytecode::GenericValue<W, F>],
+    ) -> Result<GenericVmState<W, F>, VmError> {
         let archived = self.archived();
         let chunk = archived.chunks.get(chunk_idx).ok_or_else(|| {
             VmError::InvalidBytecode(format!("invalid chunk index: {}", chunk_idx))
@@ -1764,12 +1816,18 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
     /// automatic propagation (Rust-like `?`) must implement that
     /// pattern in the script through pattern matching and early
     /// `return`.
-    pub fn resume_err(&mut self, error_value: crate::bytecode::GenericValue<W, F>) -> Result<GenericVmState<W, F>, VmError> {
+    pub fn resume_err(
+        &mut self,
+        error_value: crate::bytecode::GenericValue<W, F>,
+    ) -> Result<GenericVmState<W, F>, VmError> {
         self.resume(error_value)
     }
 
     /// Resume execution after a yield or reset, providing the input value.
-    pub fn resume(&mut self, input: crate::bytecode::GenericValue<W, F>) -> Result<GenericVmState<W, F>, VmError> {
+    pub fn resume(
+        &mut self,
+        input: crate::bytecode::GenericValue<W, F>,
+    ) -> Result<GenericVmState<W, F>, VmError> {
         if !self.started || self.frames.is_empty() {
             return Err(VmError::NotSuspended);
         }
@@ -1827,7 +1885,10 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
 
             if ip >= self.chunk_op_count(chunk_idx) {
                 // End of chunk without explicit return: return Unit.
-                let result = self.stack.pop().unwrap_or(crate::bytecode::GenericValue::Unit);
+                let result = self
+                    .stack
+                    .pop()
+                    .unwrap_or(crate::bytecode::GenericValue::Unit);
                 self.frames.pop();
                 if self.frames.is_empty() {
                     return Ok(GenericVmState::Finished(result));
@@ -2000,26 +2061,57 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                     let b = self.pop()?;
                     let a = self.pop()?;
                     match (a, b) {
-                        (crate::bytecode::GenericValue::Int(x), crate::bytecode::GenericValue::Int(y)) => {
-                            let r =
-                                x.wrapping_add(y);
+                        (
+                            crate::bytecode::GenericValue::Int(x),
+                            crate::bytecode::GenericValue::Int(y),
+                        ) => {
+                            // Compute via W's wrapping arithmetic
+                            // (which truncates to W's bit width)
+                            // then additionally mask to the
+                            // bytecode's declared `word_bits_log2`
+                            // for the case where W is wider than
+                            // the bytecode (e.g. running 32-bit
+                            // bytecode on the default i64 Vm).
+                            let r = W::from_i64_wrap(crate::bytecode::truncate_int(
+                                x.wrapping_add(y).to_i64(),
+                                word_bits_log2,
+                            ));
                             sp!(self, crate::bytecode::GenericValue::Int(r));
                         }
-                        (crate::bytecode::GenericValue::Byte(x), crate::bytecode::GenericValue::Byte(y)) => {
+                        (
+                            crate::bytecode::GenericValue::Byte(x),
+                            crate::bytecode::GenericValue::Byte(y),
+                        ) => {
                             sp!(self, crate::bytecode::GenericValue::Byte(x.wrapping_add(y)));
                         }
-                        (crate::bytecode::GenericValue::Fixed(x), crate::bytecode::GenericValue::Fixed(y)) => {
+                        (
+                            crate::bytecode::GenericValue::Fixed(x),
+                            crate::bytecode::GenericValue::Fixed(y),
+                        ) => {
                             // Fixed Add is integer add of the
                             // fixed-point bits; the fraction-bit
                             // count is the same for both operands
                             // by type-check invariant.
-                            sp!(self, crate::bytecode::GenericValue::Fixed(x.wrapping_add(y)));
+                            sp!(
+                                self,
+                                crate::bytecode::GenericValue::Fixed(x.wrapping_add(y))
+                            );
                         }
                         #[cfg(feature = "floats")]
-                        (crate::bytecode::GenericValue::Float(x), crate::bytecode::GenericValue::Float(y)) => sp!(self, crate::bytecode::GenericValue::Float(x + y)),
+                        (
+                            crate::bytecode::GenericValue::Float(x),
+                            crate::bytecode::GenericValue::Float(y),
+                        ) => sp!(self, crate::bytecode::GenericValue::Float(x + y)),
                         (a, b)
-                            if matches!(a, crate::bytecode::GenericValue::StaticStr(_) | crate::bytecode::GenericValue::KStr(_))
-                                && matches!(b, crate::bytecode::GenericValue::StaticStr(_) | crate::bytecode::GenericValue::KStr(_)) =>
+                            if matches!(
+                                a,
+                                crate::bytecode::GenericValue::StaticStr(_)
+                                    | crate::bytecode::GenericValue::KStr(_)
+                            ) && matches!(
+                                b,
+                                crate::bytecode::GenericValue::StaticStr(_)
+                                    | crate::bytecode::GenericValue::KStr(_)
+                            ) =>
                         {
                             let arena = self.arena;
                             let lhs = a.as_str_with_arena(arena).map_err(|_| {
@@ -2050,27 +2142,37 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                         }
                     }
                 }
-                Op::Sub => self
-                    .binary_arith(|a: W, b: W| a.wrapping_sub(b), |a: F, b: F| a - b)?,
-                Op::Mul => self
-                    .binary_arith(|a: W, b: W| a.wrapping_mul(b), |a: F, b: F| a * b)?,
+                Op::Sub => self.binary_arith(|a: W, b: W| a.wrapping_sub(b), |a: F, b: F| a - b)?,
+                Op::Mul => self.binary_arith(|a: W, b: W| a.wrapping_mul(b), |a: F, b: F| a * b)?,
                 Op::Div => {
                     let b = self.pop()?;
                     let a = self.pop()?;
                     match (a, b) {
-                        (crate::bytecode::GenericValue::Int(_), crate::bytecode::GenericValue::Int(y)) if y == W::default() => {
+                        (
+                            crate::bytecode::GenericValue::Int(_),
+                            crate::bytecode::GenericValue::Int(y),
+                        ) if y == W::default() => {
                             return Err(VmError::DivisionByZero);
                         }
-                        (crate::bytecode::GenericValue::Int(x), crate::bytecode::GenericValue::Int(y)) => sp!(
-                            self,
-                            crate::bytecode::GenericValue::Int(x.wrapping_div(y))
-                        ),
-                        (crate::bytecode::GenericValue::Byte(_), crate::bytecode::GenericValue::Byte(0)) => return Err(VmError::DivisionByZero),
-                        (crate::bytecode::GenericValue::Byte(x), crate::bytecode::GenericValue::Byte(y)) => {
+                        (
+                            crate::bytecode::GenericValue::Int(x),
+                            crate::bytecode::GenericValue::Int(y),
+                        ) => sp!(self, crate::bytecode::GenericValue::Int(x.wrapping_div(y))),
+                        (
+                            crate::bytecode::GenericValue::Byte(_),
+                            crate::bytecode::GenericValue::Byte(0),
+                        ) => return Err(VmError::DivisionByZero),
+                        (
+                            crate::bytecode::GenericValue::Byte(x),
+                            crate::bytecode::GenericValue::Byte(y),
+                        ) => {
                             sp!(self, crate::bytecode::GenericValue::Byte(x.wrapping_div(y)));
                         }
                         #[cfg(feature = "floats")]
-                        (crate::bytecode::GenericValue::Float(x), crate::bytecode::GenericValue::Float(y)) => sp!(self, crate::bytecode::GenericValue::Float(x / y)),
+                        (
+                            crate::bytecode::GenericValue::Float(x),
+                            crate::bytecode::GenericValue::Float(y),
+                        ) => sp!(self, crate::bytecode::GenericValue::Float(x / y)),
                         (a, b) => {
                             return Err(VmError::TypeError(format!(
                                 "cannot divide {} by {}",
@@ -2084,19 +2186,31 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                     let b = self.pop()?;
                     let a = self.pop()?;
                     match (a, b) {
-                        (crate::bytecode::GenericValue::Int(_), crate::bytecode::GenericValue::Int(y)) if y == W::default() => {
+                        (
+                            crate::bytecode::GenericValue::Int(_),
+                            crate::bytecode::GenericValue::Int(y),
+                        ) if y == W::default() => {
                             return Err(VmError::DivisionByZero);
                         }
-                        (crate::bytecode::GenericValue::Int(x), crate::bytecode::GenericValue::Int(y)) => sp!(
-                            self,
-                            crate::bytecode::GenericValue::Int(x.wrapping_rem(y))
-                        ),
-                        (crate::bytecode::GenericValue::Byte(_), crate::bytecode::GenericValue::Byte(0)) => return Err(VmError::DivisionByZero),
-                        (crate::bytecode::GenericValue::Byte(x), crate::bytecode::GenericValue::Byte(y)) => {
+                        (
+                            crate::bytecode::GenericValue::Int(x),
+                            crate::bytecode::GenericValue::Int(y),
+                        ) => sp!(self, crate::bytecode::GenericValue::Int(x.wrapping_rem(y))),
+                        (
+                            crate::bytecode::GenericValue::Byte(_),
+                            crate::bytecode::GenericValue::Byte(0),
+                        ) => return Err(VmError::DivisionByZero),
+                        (
+                            crate::bytecode::GenericValue::Byte(x),
+                            crate::bytecode::GenericValue::Byte(y),
+                        ) => {
                             sp!(self, crate::bytecode::GenericValue::Byte(x.wrapping_rem(y)));
                         }
                         #[cfg(feature = "floats")]
-                        (crate::bytecode::GenericValue::Float(x), crate::bytecode::GenericValue::Float(y)) => sp!(self, crate::bytecode::GenericValue::Float(x % y)),
+                        (
+                            crate::bytecode::GenericValue::Float(x),
+                            crate::bytecode::GenericValue::Float(y),
+                        ) => sp!(self, crate::bytecode::GenericValue::Float(x % y)),
                         (a, b) => {
                             return Err(VmError::TypeError(format!(
                                 "cannot modulo {} by {}",
@@ -2112,12 +2226,23 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                     match val {
                         crate::bytecode::GenericValue::Int(x) => sp!(
                             self,
-                            crate::bytecode::GenericValue::Int(x.wrapping_neg())
+                            crate::bytecode::GenericValue::Int(W::from_i64_wrap(
+                                crate::bytecode::truncate_int(
+                                    x.wrapping_neg().to_i64(),
+                                    word_bits_log2
+                                )
+                            ))
                         ),
-                        crate::bytecode::GenericValue::Byte(x) => sp!(self, crate::bytecode::GenericValue::Byte(x.wrapping_neg())),
-                        crate::bytecode::GenericValue::Fixed(x) => sp!(self, crate::bytecode::GenericValue::Fixed(x.wrapping_neg())),
+                        crate::bytecode::GenericValue::Byte(x) => {
+                            sp!(self, crate::bytecode::GenericValue::Byte(x.wrapping_neg()))
+                        }
+                        crate::bytecode::GenericValue::Fixed(x) => {
+                            sp!(self, crate::bytecode::GenericValue::Fixed(x.wrapping_neg()))
+                        }
                         #[cfg(feature = "floats")]
-                        crate::bytecode::GenericValue::Float(x) => sp!(self, crate::bytecode::GenericValue::Float(-x)),
+                        crate::bytecode::GenericValue::Float(x) => {
+                            sp!(self, crate::bytecode::GenericValue::Float(-x))
+                        }
                         v => {
                             return Err(VmError::TypeError(format!(
                                 "cannot negate {}",
@@ -2145,7 +2270,9 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                 Op::Not => {
                     let val = self.pop()?;
                     match val {
-                        crate::bytecode::GenericValue::Bool(b) => sp!(self, crate::bytecode::GenericValue::Bool(!b)),
+                        crate::bytecode::GenericValue::Bool(b) => {
+                            sp!(self, crate::bytecode::GenericValue::Bool(!b))
+                        }
                         v => {
                             return Err(VmError::TypeError(format!(
                                 "cannot apply not to {}",
@@ -2275,7 +2402,8 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                     if self.stack.len() < n {
                         return Err(VmError::StackUnderflow);
                     }
-                    let args: Vec<crate::bytecode::GenericValue<W, F>> = self.stack.drain(self.stack.len() - n..).collect();
+                    let args: Vec<crate::bytecode::GenericValue<W, F>> =
+                        self.stack.drain(self.stack.len() - n..).collect();
                     let native_name = self.native_name(idx as usize).ok_or_else(|| {
                         VmError::InvalidBytecode(format!("invalid native index: {}", idx))
                     })?;
@@ -2407,10 +2535,14 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                     if self.stack.len() < n {
                         return Err(VmError::StackUnderflow);
                     }
-                    let values: Vec<crate::bytecode::GenericValue<W, F>> = self.stack.drain(self.stack.len() - n..).collect();
+                    let values: Vec<crate::bytecode::GenericValue<W, F>> =
+                        self.stack.drain(self.stack.len() - n..).collect();
                     let fields: Vec<(String, crate::bytecode::GenericValue<W, F>)> =
                         field_names.into_iter().zip(values).collect();
-                    sp!(self, crate::bytecode::GenericValue::Struct { type_name, fields });
+                    sp!(
+                        self,
+                        crate::bytecode::GenericValue::Struct { type_name, fields }
+                    );
                 }
                 Op::NewEnum(enum_const, var_const, arg_count) => {
                     let type_name = self
@@ -2440,12 +2572,14 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                 }
                 Op::NewArray(count) => {
                     let n = count as usize;
-                    let elements: Vec<crate::bytecode::GenericValue<W, F>> = self.stack.drain(self.stack.len() - n..).collect();
+                    let elements: Vec<crate::bytecode::GenericValue<W, F>> =
+                        self.stack.drain(self.stack.len() - n..).collect();
                     sp!(self, crate::bytecode::GenericValue::Array(elements));
                 }
                 Op::NewTuple(count) => {
                     let n = count as usize;
-                    let elements: Vec<crate::bytecode::GenericValue<W, F>> = self.stack.drain(self.stack.len() - n..).collect();
+                    let elements: Vec<crate::bytecode::GenericValue<W, F>> =
+                        self.stack.drain(self.stack.len() - n..).collect();
                     sp!(self, crate::bytecode::GenericValue::Tuple(elements));
                 }
                 Op::WrapSome => {
@@ -2484,7 +2618,10 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                     let index = self.pop()?;
                     let container = self.pop()?;
                     match (container, index) {
-                        (crate::bytecode::GenericValue::Array(arr), crate::bytecode::GenericValue::Int(i)) => {
+                        (
+                            crate::bytecode::GenericValue::Array(arr),
+                            crate::bytecode::GenericValue::Int(i),
+                        ) => {
                             let len = arr.len();
                             if i.to_i64() < 0 || i.to_i64() as usize >= len {
                                 return Err(VmError::IndexOutOfBounds(i.to_i64(), len));
@@ -2540,10 +2677,22 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                     let val = self.pop()?;
                     match val {
                         crate::bytecode::GenericValue::Array(arr) => {
-                            sp!(self, crate::bytecode::GenericValue::Int(<W as crate::word::Word>::from_i64_wrap(arr.len() as i64)));
+                            sp!(
+                                self,
+                                crate::bytecode::GenericValue::Int(
+                                    <W as crate::word::Word>::from_i64_wrap(arr.len() as i64)
+                                )
+                            );
                         }
                         crate::bytecode::GenericValue::StaticStr(s) => {
-                            sp!(self, crate::bytecode::GenericValue::Int(<W as crate::word::Word>::from_i64_wrap(s.chars().count() as i64)));
+                            sp!(
+                                self,
+                                crate::bytecode::GenericValue::Int(
+                                    <W as crate::word::Word>::from_i64_wrap(
+                                        s.chars().count() as i64
+                                    )
+                                )
+                            );
                         }
                         crate::bytecode::GenericValue::KStr(h) => {
                             let s = h.get(self.arena).map_err(|_| {
@@ -2551,10 +2700,22 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                                     "KStr is stale (arena reset since allocation)",
                                 ))
                             })?;
-                            sp!(self, crate::bytecode::GenericValue::Int(<W as crate::word::Word>::from_i64_wrap(s.chars().count() as i64)));
+                            sp!(
+                                self,
+                                crate::bytecode::GenericValue::Int(
+                                    <W as crate::word::Word>::from_i64_wrap(
+                                        s.chars().count() as i64
+                                    )
+                                )
+                            );
                         }
                         crate::bytecode::GenericValue::Tuple(t) => {
-                            sp!(self, crate::bytecode::GenericValue::Int(<W as crate::word::Word>::from_i64_wrap(t.len() as i64)));
+                            sp!(
+                                self,
+                                crate::bytecode::GenericValue::Int(
+                                    <W as crate::word::Word>::from_i64_wrap(t.len() as i64)
+                                )
+                            );
                         }
                         v => {
                             return Err(VmError::TypeError(format!(
@@ -2592,8 +2753,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                             VmError::InvalidBytecode(String::from("type const not string"))
                         })?;
                     let val = self.stack.last().ok_or(VmError::StackUnderflow)?;
-                    let matches =
-                        matches!(val, crate::bytecode::GenericValue::Struct { type_name, .. } if type_name == &expected);
+                    let matches = matches!(val, crate::bytecode::GenericValue::Struct { type_name, .. } if type_name == &expected);
                     sp!(self, crate::bytecode::GenericValue::Bool(matches));
                 }
 
@@ -2601,7 +2761,12 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                 Op::IntToFloat => {
                     let val = self.pop()?;
                     match val {
-                        crate::bytecode::GenericValue::Int(i) => sp!(self, crate::bytecode::GenericValue::Float(i.to_i64() as f64)),
+                        crate::bytecode::GenericValue::Int(i) => sp!(
+                            self,
+                            crate::bytecode::GenericValue::Float(
+                                <F as crate::float::Float>::from_f64(i.to_i64() as f64)
+                            )
+                        ),
                         v => {
                             return Err(VmError::TypeError(format!(
                                 "cannot cast {} to Float",
@@ -2620,7 +2785,12 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                 Op::FloatToInt => {
                     let val = self.pop()?;
                     match val {
-                        crate::bytecode::GenericValue::Float(f) => sp!(self, crate::bytecode::GenericValue::Int(f.to_f64() as i64)),
+                        crate::bytecode::GenericValue::Float(f) => sp!(
+                            self,
+                            crate::bytecode::GenericValue::Int(
+                                <W as crate::word::Word>::from_i64_wrap(f.to_f64() as i64)
+                            )
+                        ),
                         v => {
                             return Err(VmError::TypeError(format!(
                                 "cannot cast {} to Word",
@@ -2638,7 +2808,10 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                 Op::WordToByte => {
                     let val = self.pop()?;
                     match val {
-                        crate::bytecode::GenericValue::Int(i) => sp!(self, crate::bytecode::GenericValue::Byte((i.to_i64() & 0xFF) as u8)),
+                        crate::bytecode::GenericValue::Int(i) => sp!(
+                            self,
+                            crate::bytecode::GenericValue::Byte((i.to_i64() & 0xFF) as u8)
+                        ),
                         v => {
                             return Err(VmError::TypeError(format!(
                                 "cannot cast {} to Byte",
@@ -2650,7 +2823,12 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                 Op::ByteToWord => {
                     let val = self.pop()?;
                     match val {
-                        crate::bytecode::GenericValue::Byte(b) => sp!(self, crate::bytecode::GenericValue::Int(b as i64)),
+                        crate::bytecode::GenericValue::Byte(b) => sp!(
+                            self,
+                            crate::bytecode::GenericValue::Int(
+                                <W as crate::word::Word>::from_i64_wrap(b as i64)
+                            )
+                        ),
                         v => {
                             return Err(VmError::TypeError(format!(
                                 "cannot cast {} to Word",
@@ -2691,7 +2869,10 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                             // Arithmetic-right-shift to drop the
                             // fraction bits. Negative values keep
                             // their sign through the shift.
-                            sp!(self, crate::bytecode::GenericValue::Int(bits >> (frac_bits as u32)));
+                            sp!(
+                                self,
+                                crate::bytecode::GenericValue::Int(bits >> (frac_bits as u32))
+                            );
                         }
                         v => {
                             return Err(VmError::TypeError(format!(
@@ -2705,7 +2886,10 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                     let b = self.pop()?;
                     let a = self.pop()?;
                     match (a, b) {
-                        (crate::bytecode::GenericValue::Fixed(x), crate::bytecode::GenericValue::Fixed(y)) => {
+                        (
+                            crate::bytecode::GenericValue::Fixed(x),
+                            crate::bytecode::GenericValue::Fixed(y),
+                        ) => {
                             // Q-format multiply: extend to i128 to
                             // avoid intermediate overflow, multiply,
                             // shift right by `frac_bits`, saturate
@@ -2734,10 +2918,16 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                     let b = self.pop()?;
                     let a = self.pop()?;
                     match (a, b) {
-                        (crate::bytecode::GenericValue::Fixed(_), crate::bytecode::GenericValue::Fixed(0)) => {
+                        (
+                            crate::bytecode::GenericValue::Fixed(_),
+                            crate::bytecode::GenericValue::Fixed(y),
+                        ) if y == W::default() => {
                             return Err(VmError::DivisionByZero);
                         }
-                        (crate::bytecode::GenericValue::Fixed(x), crate::bytecode::GenericValue::Fixed(y)) => {
+                        (
+                            crate::bytecode::GenericValue::Fixed(x),
+                            crate::bytecode::GenericValue::Fixed(y),
+                        ) => {
                             // Q-format divide: extend the dividend to
                             // i128 and left-shift by frac_bits before
                             // dividing, so the result retains the
@@ -2773,7 +2963,10 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                     let b = self.pop()?;
                     let a = self.pop()?;
                     match (a, b) {
-                        (crate::bytecode::GenericValue::Int(x), crate::bytecode::GenericValue::Int(y)) => {
+                        (
+                            crate::bytecode::GenericValue::Int(x),
+                            crate::bytecode::GenericValue::Int(y),
+                        ) => {
                             // Compute the true sum in i128 and
                             // derive the outcome flag from the
                             // i128 range relative to i64. The flag
@@ -2786,7 +2979,9 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                             let r = x.widen() + y.widen();
                             let high = <W as crate::word::Word>::from_wide_wrap(r.high_half());
                             let low = <W as crate::word::Word>::from_wide_wrap(r);
-                            let flag: i64 = if r >= <W as crate::word::Word>::MIN.widen() && r <= <W as crate::word::Word>::MAX.widen() {
+                            let flag: i64 = if r >= <W as crate::word::Word>::MIN.widen()
+                                && r <= <W as crate::word::Word>::MAX.widen()
+                            {
                                 0
                             } else if r > <W as crate::word::Word>::MAX.widen() {
                                 1
@@ -2795,7 +2990,12 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                             };
                             sp!(self, crate::bytecode::GenericValue::Int(high));
                             sp!(self, crate::bytecode::GenericValue::Int(low));
-                            sp!(self, crate::bytecode::GenericValue::Int(<W as crate::word::Word>::from_i64_wrap(flag)));
+                            sp!(
+                                self,
+                                crate::bytecode::GenericValue::Int(
+                                    <W as crate::word::Word>::from_i64_wrap(flag)
+                                )
+                            );
                         }
                         (a, b) => {
                             return Err(VmError::TypeError(format!(
@@ -2810,11 +3010,16 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                     let b = self.pop()?;
                     let a = self.pop()?;
                     match (a, b) {
-                        (crate::bytecode::GenericValue::Int(x), crate::bytecode::GenericValue::Int(y)) => {
+                        (
+                            crate::bytecode::GenericValue::Int(x),
+                            crate::bytecode::GenericValue::Int(y),
+                        ) => {
                             let r = x.widen() - y.widen();
                             let high = <W as crate::word::Word>::from_wide_wrap(r.high_half());
                             let low = <W as crate::word::Word>::from_wide_wrap(r);
-                            let flag: i64 = if r >= <W as crate::word::Word>::MIN.widen() && r <= <W as crate::word::Word>::MAX.widen() {
+                            let flag: i64 = if r >= <W as crate::word::Word>::MIN.widen()
+                                && r <= <W as crate::word::Word>::MAX.widen()
+                            {
                                 0
                             } else if r > <W as crate::word::Word>::MAX.widen() {
                                 1
@@ -2823,7 +3028,12 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                             };
                             sp!(self, crate::bytecode::GenericValue::Int(high));
                             sp!(self, crate::bytecode::GenericValue::Int(low));
-                            sp!(self, crate::bytecode::GenericValue::Int(<W as crate::word::Word>::from_i64_wrap(flag)));
+                            sp!(
+                                self,
+                                crate::bytecode::GenericValue::Int(
+                                    <W as crate::word::Word>::from_i64_wrap(flag)
+                                )
+                            );
                         }
                         (a, b) => {
                             return Err(VmError::TypeError(format!(
@@ -2838,7 +3048,10 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                     let b = self.pop()?;
                     let a = self.pop()?;
                     match (a, b) {
-                        (crate::bytecode::GenericValue::Int(x), crate::bytecode::GenericValue::Int(y)) => {
+                        (
+                            crate::bytecode::GenericValue::Int(x),
+                            crate::bytecode::GenericValue::Int(y),
+                        ) => {
                             // True product in i128; both halves are
                             // load-bearing for big-number
                             // multiplication. Flag reports the
@@ -2848,7 +3061,9 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                             let r = x.widen() * y.widen();
                             let high = <W as crate::word::Word>::from_wide_wrap(r.high_half());
                             let low = <W as crate::word::Word>::from_wide_wrap(r);
-                            let flag: i64 = if r >= <W as crate::word::Word>::MIN.widen() && r <= <W as crate::word::Word>::MAX.widen() {
+                            let flag: i64 = if r >= <W as crate::word::Word>::MIN.widen()
+                                && r <= <W as crate::word::Word>::MAX.widen()
+                            {
                                 0
                             } else if r > <W as crate::word::Word>::MAX.widen() {
                                 1
@@ -2857,7 +3072,12 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                             };
                             sp!(self, crate::bytecode::GenericValue::Int(high));
                             sp!(self, crate::bytecode::GenericValue::Int(low));
-                            sp!(self, crate::bytecode::GenericValue::Int(<W as crate::word::Word>::from_i64_wrap(flag)));
+                            sp!(
+                                self,
+                                crate::bytecode::GenericValue::Int(
+                                    <W as crate::word::Word>::from_i64_wrap(flag)
+                                )
+                            );
                         }
                         (a, b) => {
                             return Err(VmError::TypeError(format!(
@@ -2879,14 +3099,21 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                             let r = -x.widen();
                             let high = <W as crate::word::Word>::from_wide_wrap(r.high_half());
                             let low = <W as crate::word::Word>::from_wide_wrap(r);
-                            let flag: i64 = if r >= <W as crate::word::Word>::MIN.widen() && r <= <W as crate::word::Word>::MAX.widen() {
+                            let flag: i64 = if r >= <W as crate::word::Word>::MIN.widen()
+                                && r <= <W as crate::word::Word>::MAX.widen()
+                            {
                                 0
                             } else {
                                 1
                             };
                             sp!(self, crate::bytecode::GenericValue::Int(high));
                             sp!(self, crate::bytecode::GenericValue::Int(low));
-                            sp!(self, crate::bytecode::GenericValue::Int(<W as crate::word::Word>::from_i64_wrap(flag)));
+                            sp!(
+                                self,
+                                crate::bytecode::GenericValue::Int(
+                                    <W as crate::word::Word>::from_i64_wrap(flag)
+                                )
+                            );
                         }
                         a => {
                             return Err(VmError::TypeError(format!(
@@ -2900,8 +3127,14 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                     let b = self.pop()?;
                     let a = self.pop()?;
                     match (a, b) {
-                        (crate::bytecode::GenericValue::Int(_), crate::bytecode::GenericValue::Int(0)) => return Err(VmError::DivisionByZero),
-                        (crate::bytecode::GenericValue::Int(x), crate::bytecode::GenericValue::Int(y)) => {
+                        (
+                            crate::bytecode::GenericValue::Int(_),
+                            crate::bytecode::GenericValue::Int(y),
+                        ) if y == W::default() => return Err(VmError::DivisionByZero),
+                        (
+                            crate::bytecode::GenericValue::Int(x),
+                            crate::bytecode::GenericValue::Int(y),
+                        ) => {
                             // Only `i64::MIN / -1` overflows. The
                             // true result is `2^63`, which in i128
                             // is (high=0, low=i64::MIN). All other
@@ -2911,7 +3144,9 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                             let r = x.widen() / y.widen();
                             let high = <W as crate::word::Word>::from_wide_wrap(r.high_half());
                             let low = <W as crate::word::Word>::from_wide_wrap(r);
-                            let flag: i64 = if r >= <W as crate::word::Word>::MIN.widen() && r <= <W as crate::word::Word>::MAX.widen() {
+                            let flag: i64 = if r >= <W as crate::word::Word>::MIN.widen()
+                                && r <= <W as crate::word::Word>::MAX.widen()
+                            {
                                 0
                             } else if r > <W as crate::word::Word>::MAX.widen() {
                                 1
@@ -2920,7 +3155,12 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                             };
                             sp!(self, crate::bytecode::GenericValue::Int(high));
                             sp!(self, crate::bytecode::GenericValue::Int(low));
-                            sp!(self, crate::bytecode::GenericValue::Int(<W as crate::word::Word>::from_i64_wrap(flag)));
+                            sp!(
+                                self,
+                                crate::bytecode::GenericValue::Int(
+                                    <W as crate::word::Word>::from_i64_wrap(flag)
+                                )
+                            );
                         }
                         (a, b) => {
                             return Err(VmError::TypeError(format!(
@@ -2935,25 +3175,34 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                     let b = self.pop()?;
                     let a = self.pop()?;
                     match (a, b) {
-                        (crate::bytecode::GenericValue::Int(_), crate::bytecode::GenericValue::Int(0)) => return Err(VmError::DivisionByZero),
-                        (crate::bytecode::GenericValue::Int(x), crate::bytecode::GenericValue::Int(y)) => {
+                        (
+                            crate::bytecode::GenericValue::Int(_),
+                            crate::bytecode::GenericValue::Int(y),
+                        ) if y == W::default() => return Err(VmError::DivisionByZero),
+                        (
+                            crate::bytecode::GenericValue::Int(x),
+                            crate::bytecode::GenericValue::Int(y),
+                        ) => {
                             // `i64::MIN % -1` overflows on the
                             // underlying division step; the true
                             // mathematical result is `0`. We
                             // detect this corner by computing in
-                            // i128 (`<W as crate::word::Word>::MIN.widen()) % (-1 as
-                            // i128) == 0`) and report overflow
+                            // the widened type and report overflow
                             // (flag=1) so the arm dispatch matches
-                            // the documented behaviour. The
-                            // wrapped result is `0` in any case.
+                            // the documented behaviour.
                             let r = x.widen() % y.widen();
                             let high = <W as crate::word::Word>::from_wide_wrap(r.high_half());
                             let low = <W as crate::word::Word>::from_wide_wrap(r);
-                            let corner = x == i64::MIN && y == -1;
+                            let corner = x == W::MIN && y == W::from_i64_wrap(-1);
                             let flag: i64 = if corner { 1 } else { 0 };
                             sp!(self, crate::bytecode::GenericValue::Int(high));
                             sp!(self, crate::bytecode::GenericValue::Int(low));
-                            sp!(self, crate::bytecode::GenericValue::Int(<W as crate::word::Word>::from_i64_wrap(flag)));
+                            sp!(
+                                self,
+                                crate::bytecode::GenericValue::Int(
+                                    <W as crate::word::Word>::from_i64_wrap(flag)
+                                )
+                            );
                         }
                         (a, b) => {
                             return Err(VmError::TypeError(format!(
@@ -2984,12 +3233,16 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         FloatOp: Fn(F, F) -> F,
     {
         let word_bits_log2 = self.word_bits_log2();
-        let _ = word_bits_log2;
         let b = self.pop()?;
         let a = self.pop()?;
         match (a, b) {
             (crate::bytecode::GenericValue::Int(x), crate::bytecode::GenericValue::Int(y)) => {
-                let result = int_op(x, y);
+                // Truncate to the bytecode-declared width for the
+                // case where W is wider than the bytecode.
+                let result = W::from_i64_wrap(crate::bytecode::truncate_int(
+                    int_op(x, y).to_i64(),
+                    word_bits_log2,
+                ));
                 sp!(self, crate::bytecode::GenericValue::Int(result));
             }
             (crate::bytecode::GenericValue::Byte(x), crate::bytecode::GenericValue::Byte(y)) => {
@@ -3031,16 +3284,24 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         let b = self.pop()?;
         let a = self.pop()?;
         let ord = match (&a, &b) {
-            (crate::bytecode::GenericValue::Int(x), crate::bytecode::GenericValue::Int(y)) => x.cmp(y),
-            (crate::bytecode::GenericValue::Byte(x), crate::bytecode::GenericValue::Byte(y)) => x.cmp(y),
-            (crate::bytecode::GenericValue::Fixed(x), crate::bytecode::GenericValue::Fixed(y)) => x.cmp(y),
+            (crate::bytecode::GenericValue::Int(x), crate::bytecode::GenericValue::Int(y)) => {
+                x.cmp(y)
+            }
+            (crate::bytecode::GenericValue::Byte(x), crate::bytecode::GenericValue::Byte(y)) => {
+                x.cmp(y)
+            }
+            (crate::bytecode::GenericValue::Fixed(x), crate::bytecode::GenericValue::Fixed(y)) => {
+                x.cmp(y)
+            }
             #[cfg(feature = "floats")]
             (crate::bytecode::GenericValue::Float(x), crate::bytecode::GenericValue::Float(y)) => {
                 x.partial_cmp(y).unwrap_or(core::cmp::Ordering::Equal)
             }
             (
-                a @ (crate::bytecode::GenericValue::StaticStr(_) | crate::bytecode::GenericValue::KStr(_)),
-                b @ (crate::bytecode::GenericValue::StaticStr(_) | crate::bytecode::GenericValue::KStr(_)),
+                a @ (crate::bytecode::GenericValue::StaticStr(_)
+                | crate::bytecode::GenericValue::KStr(_)),
+                b @ (crate::bytecode::GenericValue::StaticStr(_)
+                | crate::bytecode::GenericValue::KStr(_)),
             ) => {
                 let arena = self.arena;
                 let xs = a
@@ -3081,6 +3342,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
 // back to the generic impl.
 impl<'a, 'arena> Vm<'a, 'arena> {
     /// Register an infallible host function with automatic argument and
+    /// return-value marshalling.
     /// return-value marshalling.
     pub fn register_fn<Func, Args, R>(&mut self, name: &str, func: Func)
     where
