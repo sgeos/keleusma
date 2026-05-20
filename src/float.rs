@@ -18,7 +18,20 @@
 use core::fmt::Debug;
 
 /// A script-visible floating-point type.
-pub trait Float: Copy + Default + PartialEq + PartialOrd + Debug + 'static {
+pub trait Float:
+    Copy
+    + Default
+    + PartialEq
+    + PartialOrd
+    + Debug
+    + 'static
+    + core::ops::Add<Output = Self>
+    + core::ops::Sub<Output = Self>
+    + core::ops::Mul<Output = Self>
+    + core::ops::Div<Output = Self>
+    + core::ops::Rem<Output = Self>
+    + core::ops::Neg<Output = Self>
+{
     /// `log2` of the bit width. Matches the bytecode header's
     /// `float_bits_log2` field. Values: `f32` → 5, `f64` → 6.
     const BITS_LOG2: u8;

@@ -35,7 +35,19 @@ use core::fmt::Debug;
 /// `Wide` type is the next-larger signed integer, used as the
 /// multiplication intermediate by the checked-arithmetic
 /// opcodes.
-pub trait Word: Copy + Default + Eq + Ord + Debug + 'static {
+pub trait Word:
+    Copy
+    + Default
+    + Eq
+    + Ord
+    + Debug
+    + 'static
+    + core::ops::BitAnd<Output = Self>
+    + core::ops::BitOr<Output = Self>
+    + core::ops::BitXor<Output = Self>
+    + core::ops::Shr<u32, Output = Self>
+    + core::ops::Shl<u32, Output = Self>
+{
     /// The widened signed integer for multiplication and the
     /// `i128`-style intermediates in the checked-arithmetic
     /// opcodes. Equal to twice the bit width of `Self`.
