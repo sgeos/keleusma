@@ -123,7 +123,9 @@ Native function calls partition into two classes distinguished by the source-lev
 - **Verified natives.** Imported with `use module::name`. Host registers through `Vm::register_verified_native(name, fn, wcet_bound, wcmu_bound)`. The host-attested cost folds into the iteration's WCET and WCMU budget. Compiler emits `CallVerifiedNative`.
 - **External natives.** Imported with `use external module::name`. Host registers through `Vm::register_external_native(name, fn, max_invocations_per_iteration)`. The host attests an upper bound on per-iteration invocation count rather than per-call cost. Compiler emits `CallExternalNative`.
 
-The runtime cross-checks each declared native against its host registration at `Vm::new`. A mismatch (e.g., a bytecode importing `use math::sqrt` but a host registering `sqrt` through `register_external_native`) is rejected at load time.
+The runtime cross-checks each declared native against its host registration at the call-site dispatch. A mismatch (e.g., a bytecode importing `use math::sqrt` but a host registering `sqrt` through `register_external_native`) is rejected as `VmError::VerifyError` when the call site is reached. The check guards against accidental registration through the wrong ABI; well-formed hosts that match the source-level classification observe the dispatch as a no-op.
+
+V0.2.0 Phase 5 introduced the verified-versus-external split. The legacy `Op::CallNative` opcode was retired; every native call site compiles to either `Op::CallVerifiedNative` or `Op::CallExternalNative`. Hosts that previously called `Vm::register_native` continue to register verified natives because that method ascribes the verified classification.
 
 | Instruction | Operands | Cost | Description |
 |-------------|----------|------|-------------|

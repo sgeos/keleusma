@@ -91,6 +91,13 @@ struct FuncCompiler {
     function_map: BTreeMap<String, u16>,
     /// Map from native function name to native registry index.
     native_map: BTreeMap<String, u16>,
+    /// Per-native verified-versus-external classification from its
+    /// `use` declaration. `true` means the import was declared
+    /// `use external module::name` and call sites compile to
+    /// `Op::CallExternalNative`; `false` (the default) means a bare
+    /// `use module::name` and call sites compile to
+    /// `Op::CallVerifiedNative`.
+    native_externals: BTreeMap<String, bool>,
     /// Map from data block name to a list of (field_name, slot_index) pairs.
     /// Holds entries for shared and private data only. Const data
     /// fields do not consume runtime slots and are tracked through
@@ -127,11 +134,13 @@ struct FuncCompiler {
 }
 
 impl FuncCompiler {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         name: &str,
         block_type: BlockType,
         function_map: BTreeMap<String, u16>,
         native_map: BTreeMap<String, u16>,
+        native_externals: BTreeMap<String, bool>,
         data_fields: BTreeMap<String, Vec<(String, u16)>>,
         const_fields: BTreeMap<String, BTreeMap<String, crate::bytecode::ConstValue>>,
         type_info: TypeInfo,
@@ -153,6 +162,7 @@ impl FuncCompiler {
             loop_breaks: Vec::new(),
             function_map,
             native_map,
+            native_externals,
             data_fields,
             const_fields,
             type_info,
@@ -537,6 +547,12 @@ pub fn compile_with_target(
     let mut native_map: BTreeMap<String, u16> = BTreeMap::new();
 
     // Collect native function names from use declarations.
+    // Parallel `native_externals` map records each native's
+    // verified-versus-external classification from its `use`
+    // declaration. The compiler consults this map at call sites
+    // to pick between `Op::CallVerifiedNative` and
+    // `Op::CallExternalNative`.
+    let mut native_externals: BTreeMap<String, bool> = BTreeMap::new();
     for use_decl in &program.uses {
         match &use_decl.import {
             ImportItem::Name(name) => {
@@ -556,6 +572,7 @@ pub fn compile_with_target(
                 };
                 let idx = native_names.len() as u16;
                 native_map.insert(full.clone(), idx);
+                native_externals.insert(full.clone(), use_decl.is_external);
                 native_names.push(full);
             }
             ImportItem::Wildcard => {
@@ -868,6 +885,7 @@ pub fn compile_with_target(
             defs,
             &function_map,
             &native_map,
+            &native_externals,
             &data_fields,
             &const_fields,
             &type_info,
@@ -1978,11 +1996,13 @@ fn pattern_shape_eq(a: &Pattern, b: &Pattern) -> bool {
 }
 
 /// Compile a group of function definitions with the same name into one chunk.
+#[allow(clippy::too_many_arguments)]
 fn compile_function_group(
     name: &str,
     defs: &[&FunctionDef],
     function_map: &BTreeMap<String, u16>,
     native_map: &BTreeMap<String, u16>,
+    native_externals: &BTreeMap<String, bool>,
     data_fields: &BTreeMap<String, Vec<(String, u16)>>,
     const_fields: &BTreeMap<String, BTreeMap<String, crate::bytecode::ConstValue>>,
     type_info: &TypeInfo,
@@ -2028,6 +2048,7 @@ fn compile_function_group(
         block_type,
         function_map.clone(),
         native_map.clone(),
+        native_externals.clone(),
         data_fields.clone(),
         const_fields.clone(),
         type_info.clone(),
@@ -4044,7 +4065,16 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
             if let Some(&idx) = fc.function_map.get(func.as_str()) {
                 fc.emit(Op::Call(idx, arg_count));
             } else if let Some(&idx) = fc.native_map.get(func.as_str()) {
-                fc.emit(Op::CallNative(idx, arg_count));
+                let is_external = fc
+                    .native_externals
+                    .get(func.as_str())
+                    .copied()
+                    .unwrap_or(false);
+                if is_external {
+                    fc.emit(Op::CallExternalNative(idx, arg_count));
+                } else {
+                    fc.emit(Op::CallVerifiedNative(idx, arg_count));
+                }
             } else {
                 return Err(CompileError {
                     message: format!("undefined function: {}", func),
@@ -4811,7 +4841,12 @@ fn compile_call(
     if let Some(&idx) = fc.function_map.get(name) {
         fc.emit(Op::Call(idx, arg_count));
     } else if let Some(&idx) = fc.native_map.get(name) {
-        fc.emit(Op::CallNative(idx, arg_count));
+        let is_external = fc.native_externals.get(name).copied().unwrap_or(false);
+        if is_external {
+            fc.emit(Op::CallExternalNative(idx, arg_count));
+        } else {
+            fc.emit(Op::CallVerifiedNative(idx, arg_count));
+        }
     } else {
         return Err(CompileError {
             message: format!("undefined function: {}", name),

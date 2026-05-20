@@ -664,10 +664,15 @@ fn wcmu_region(
                 current_offset += 1 - n;
                 ip += 1;
             }
-            Op::CallNative(native_idx, n_args) => {
+            Op::CallVerifiedNative(native_idx, n_args)
+            | Op::CallExternalNative(native_idx, n_args) => {
                 // Native function runs in host code. The operand-stack
                 // effect is just the argument pop and return push. Heap
-                // contribution comes from the host attestation.
+                // contribution comes from the host attestation. Both
+                // classification opcodes contribute the same
+                // structural effect at the operand-stack level; the
+                // per-class WCET budget distinction is observed by the
+                // pipelined-cycle pass.
                 let native_heap = resolver.resolve_native(*native_idx);
                 let n = *n_args as i32;
                 let during_peak = (current_offset + 1).max(0) as u32;
@@ -2145,7 +2150,8 @@ mod tests {
         assert_eq!(Op::NewTuple(0).cost(), 5);
 
         assert_eq!(Op::Call(0, 0).cost(), 10);
-        assert_eq!(Op::CallNative(0, 0).cost(), 10);
+        assert_eq!(Op::CallVerifiedNative(0, 0).cost(), 10);
+        assert_eq!(Op::CallExternalNative(0, 0).cost(), 10);
     }
 
     #[test]
@@ -2576,13 +2582,13 @@ mod tests {
         let stream_chunk = make_chunk(
             "tick",
             vec![
-                Op::Stream,           // 0
-                Op::CallNative(0, 0), // 1 — calls native 0
-                Op::PopN(1),          // 2
-                Op::PushImmediate(0), // 3
-                Op::Yield,            // 4
-                Op::PopN(1),          // 5
-                Op::Reset,            // 6
+                Op::Stream,                   // 0
+                Op::CallVerifiedNative(0, 0), // 1 — calls native 0
+                Op::PopN(1),                  // 2
+                Op::PushImmediate(0),         // 3
+                Op::Yield,                    // 4
+                Op::PopN(1),                  // 5
+                Op::Reset,                    // 6
             ],
             BlockType::Stream,
         );
@@ -2607,7 +2613,7 @@ mod tests {
             "tick",
             vec![
                 Op::Stream,
-                Op::CallNative(0, 0),
+                Op::CallVerifiedNative(0, 0),
                 Op::PopN(1),
                 Op::PushImmediate(0),
                 Op::Yield,

@@ -161,6 +161,14 @@ pub struct UseDecl {
     /// accepts any argument types and assigns a fresh type variable
     /// to the result.
     pub signature: Option<NativeSignature>,
+    /// True when the surface form is `use external module::name`.
+    /// The compiler emits `Op::CallExternalNative` for invocations
+    /// of an external-marked import and `Op::CallVerifiedNative`
+    /// otherwise. The runtime cross-checks each declared native
+    /// against its host registration at `Vm::new`; an import
+    /// registered with the wrong classification is rejected at
+    /// load time.
+    pub is_external: bool,
     pub span: Span,
 }
 

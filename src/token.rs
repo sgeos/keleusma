@@ -36,6 +36,11 @@ pub enum TokenKind {
     Else,
     Match,
     Use,
+    /// `external` keyword as a modifier on a `use` declaration.
+    /// Marks the import as an external native call whose iteration
+    /// cost is tracked through a per-iteration invocation-count
+    /// bound rather than a per-call WCET/WCMU attestation.
+    External,
     Struct,
     Enum,
     Newtype,
@@ -154,6 +159,7 @@ impl TokenKind {
             "else" => Some(TokenKind::Else),
             "match" => Some(TokenKind::Match),
             "use" => Some(TokenKind::Use),
+            "external" => Some(TokenKind::External),
             "struct" => Some(TokenKind::Struct),
             "enum" => Some(TokenKind::Enum),
             "newtype" => Some(TokenKind::Newtype),

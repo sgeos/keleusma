@@ -610,7 +610,7 @@ The implementation lands as a sequence of commits on the V0.2.0 publication bran
 | 3.5 | Text-composition removal (utility natives, f-string desugaring, `stddsl::Text`); `Op::Add` text branch retired from VM dispatch | Done |
 | Consolidation B | `Int` arithmetic folded into `CheckedAdd` / `CheckedSub` / `CheckedMul` / `CheckedNeg` followed by `PopN(2)`; `Op::Add` / `Sub` / `Mul` / `Neg` narrowed to `Byte` / `Fixed` / `Float` operand types | Done |
 | 4 | Closure opcode removal (`CallIndirect`, `PushFunc`, `MakeClosure`, `MakeRecursiveClosure`) plus `Value::Func` retirement; closure-hoisting pass dropped; closures rejected at the type-checker stage | Done |
-| 5 | Native ABI split refinement: verified versus external semantics, source-level `use external` keyword | Pending |
+| 5 | Native ABI split: source-level `use external` keyword; compiler emits `CallVerifiedNative` versus `CallExternalNative`; `Op::CallNative` retired; `Vm::register_verified_native` and `Vm::register_external_native` host registration methods with classification cross-check at the call-site dispatch | Done |
 | 6 | Control-flow operand narrowing `u32` → `u16` with 80% soft warning | Pending |
 | 7 | Wire format: fixed-size opcode records, separate operand pool, expanded framing header | Pending |
 | 8 | Documentation alignment, `BYTECODE_VERSION` reset to 1 | Pending |

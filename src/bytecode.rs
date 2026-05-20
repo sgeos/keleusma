@@ -472,8 +472,6 @@ pub enum Op {
     // -- Functions --
     /// Call compiled function by chunk index with N arguments.
     Call(u16, u8),
-    /// Call native function by registry index with N arguments.
-    CallNative(u16, u8),
     /// Return from the current function.
     Return,
 
@@ -615,16 +613,21 @@ pub enum Op {
 
     /// Call a verified native function with attested WCET/WCMU
     /// bounds. Cost folds into the iteration's WCET/WCMU budget per
-    /// host attestation. Phase 1 dispatches identically to
-    /// `Op::CallNative`; Phase 5 introduces the per-class
-    /// verification semantics.
+    /// host attestation. Emitted by the compiler for `use module::name`
+    /// imports. The runtime cross-checks the registered native's
+    /// classification at `Vm::new`; a native registered through
+    /// `register_external_native` referenced here is rejected at
+    /// load time.
     CallVerifiedNative(u16, u8),
 
     /// Call an external native function. Iteration cost budget
     /// pauses for the call duration; the verifier tracks invocation
-    /// count per iteration instead of per-call cost. Phase 1
-    /// dispatches identically to `Op::CallNative`; Phase 5
-    /// introduces the per-class verification semantics.
+    /// count per iteration instead of per-call cost. Emitted by the
+    /// compiler for `use external module::name` imports. The runtime
+    /// cross-checks the registered native's classification at
+    /// `Vm::new`; a native registered through
+    /// `register_verified_native` referenced here is rejected at
+    /// load time.
     CallExternalNative(u16, u8),
 }
 
@@ -909,7 +912,7 @@ pub fn nominal_op_cycles(op: &Op) -> u32 {
 
         Op::NewStruct(_) | Op::NewEnum(_, _, _) | Op::NewArray(_) | Op::NewTuple(_) => 5,
 
-        Op::Call(_, _) | Op::CallNative(_, _) => 10,
+        Op::Call(_, _) => 10,
 
         // V0.2.0 ISA additions.
         Op::PushImmediate(_) | Op::PopN(_) => 1,
@@ -991,7 +994,7 @@ impl Op {
             Op::Stream | Op::Reset => 0,
             Op::Yield => 0,
 
-            Op::Call(_, _) | Op::CallNative(_, _) => 1,
+            Op::Call(_, _) => 1,
             Op::Return => 0,
 
             Op::NewStruct(_) | Op::NewEnum(_, _, _) | Op::NewArray(_) | Op::NewTuple(_) => 1,
@@ -1066,7 +1069,7 @@ impl Op {
             Op::Stream | Op::Reset => 0,
             Op::Yield => 1,
 
-            Op::Call(_, n) | Op::CallNative(_, n) => *n as u32,
+            Op::Call(_, n) => *n as u32,
             Op::Return => 0,
 
             Op::NewStruct(_) => 0,
@@ -2050,7 +2053,6 @@ pub fn op_from_archived(archived: &ArchivedOp) -> Op {
         ArchivedOp::Stream => Op::Stream,
         ArchivedOp::Reset => Op::Reset,
         ArchivedOp::Call(c, n) => Op::Call(c.to_native(), *n),
-        ArchivedOp::CallNative(c, n) => Op::CallNative(c.to_native(), *n),
         ArchivedOp::Return => Op::Return,
         ArchivedOp::Yield => Op::Yield,
         ArchivedOp::Dup => Op::Dup,

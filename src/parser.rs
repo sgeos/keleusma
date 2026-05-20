@@ -344,6 +344,12 @@ impl<'a> Parser<'a> {
 
     fn parse_use_decl(&mut self) -> Result<UseDecl, ParseError> {
         let start = self.expect(&TokenKind::Use)?;
+        // Optional `external` modifier between `use` and the first
+        // path segment. Marks the import as an external native
+        // (`Op::CallExternalNative`) whose per-iteration cost is
+        // bounded by invocation count rather than by an attested
+        // per-call WCET/WCMU budget.
+        let is_external = self.eat(&TokenKind::External);
         let mut path = Vec::new();
 
         let (first, _) = self.expect_lower_ident()?;
@@ -359,6 +365,7 @@ impl<'a> Parser<'a> {
                     path,
                     import: ImportItem::Wildcard,
                     signature: None,
+                    is_external,
                     span: merge_spans(start, end),
                 });
             }
@@ -402,6 +409,7 @@ impl<'a> Parser<'a> {
             path,
             import: ImportItem::Name(import_name),
             signature,
+            is_external,
             span: merge_spans(start, end),
         })
     }
@@ -2821,6 +2829,7 @@ mod tests {
             program.uses[0].import,
             ImportItem::Name(String::from("set_frequency"))
         );
+        assert!(!program.uses[0].is_external);
     }
 
     #[test]
@@ -2828,6 +2837,28 @@ mod tests {
         let src = "use audio::* fn test() -> Word { 0 }";
         let program = parse_str(src).unwrap();
         assert_eq!(program.uses[0].import, ImportItem::Wildcard);
+        assert!(!program.uses[0].is_external);
+    }
+
+    #[test]
+    fn parse_use_external() {
+        let src = "use external host::log_event fn test() -> Word { 0 }";
+        let program = parse_str(src).unwrap();
+        assert_eq!(program.uses.len(), 1);
+        assert_eq!(program.uses[0].path, vec!["host"]);
+        assert_eq!(
+            program.uses[0].import,
+            ImportItem::Name(String::from("log_event")),
+        );
+        assert!(program.uses[0].is_external);
+    }
+
+    #[test]
+    fn parse_use_external_wildcard() {
+        let src = "use external host::* fn test() -> Word { 0 }";
+        let program = parse_str(src).unwrap();
+        assert_eq!(program.uses[0].import, ImportItem::Wildcard);
+        assert!(program.uses[0].is_external);
     }
 
     #[test]

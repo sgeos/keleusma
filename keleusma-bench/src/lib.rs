@@ -369,7 +369,9 @@ pub fn emit_cost_model_source(measurements: &[Measurement], counter_name: &str) 
 
     let fc = cat("function_call");
     out.push_str(&format!("        // Function calls ({} cycles).\n", fc));
-    out.push_str("        Op::Call(_, _) | Op::CallNative(_, _) => ");
+    out.push_str("        Op::Call(_, _)\n");
+    out.push_str("        | Op::CallVerifiedNative(_, _)\n");
+    out.push_str("        | Op::CallExternalNative(_, _) => ");
     out.push_str(&format!("{},\n", fc));
 
     out.push_str("    }\n");

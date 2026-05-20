@@ -286,10 +286,47 @@ struct NativeEntry<W: crate::word::Word, F: crate::float::Float> {
     /// to remain sound. Default `DEFAULT_NATIVE_WCMU_BYTES`.
     #[allow(dead_code)]
     wcmu_bytes: u32,
+    /// Classification recorded at registration. Cross-checked at
+    /// the call-site dispatch against the bytecode's opcode
+    /// (`CallVerifiedNative` versus `CallExternalNative`). A
+    /// mismatch is rejected as a `VmError::VerifyError`.
+    classification: NativeClassification,
+    /// External-native upper bound on the per-iteration invocation
+    /// count. Recorded for external natives at registration and
+    /// consumed by future verifier passes that bound external-call
+    /// cost contribution against this attestation. `None` for
+    /// verified natives. Current verifier passes use `wcmu_bytes`
+    /// for the per-call attestation; the invocation-count
+    /// attestation is forward-looking V0.2.x work.
+    #[allow(dead_code)]
+    max_invocations_per_iteration: Option<u32>,
+}
+
+/// Per-native classification recorded at host registration and
+/// cross-checked against the call-site opcode at `Vm::new`.
+///
+/// `Verified` natives are registered through
+/// [`GenericVm::register_native`], [`GenericVm::register_fn`], or
+/// [`GenericVm::register_verified_native`]. The host attests the
+/// per-call WCET and WCMU bound; the verifier folds these into the
+/// iteration's static budget.
+///
+/// `External` natives are registered through
+/// [`GenericVm::register_external_native`]. The host attests the
+/// maximum invocation count per iteration rather than the per-call
+/// cost; the verifier observes the structural marker without
+/// charging the iteration budget for individual call cost.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NativeClassification {
+    /// `use module::name` import. Per-call WCET / WCMU attested.
+    Verified,
+    /// `use external module::name` import. Per-iteration invocation
+    /// count attested.
+    External,
 }
 
 /// Default WCET attestation for a native function. Equal to the cost of a
-/// single `CallNative` instruction.
+/// single native-call opcode.
 pub const DEFAULT_NATIVE_WCET: u32 = 10;
 
 /// Default WCMU attestation for a native function. Native functions that
@@ -1633,6 +1670,8 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                     func(args)
                 },
             ),
+            classification: NativeClassification::Verified,
+            max_invocations_per_iteration: None,
         });
     }
 
@@ -1657,6 +1696,8 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                     func(args)
                 },
             ),
+            classification: NativeClassification::Verified,
+            max_invocations_per_iteration: None,
         });
     }
 
@@ -1683,6 +1724,8 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
             wcmu_bytes: DEFAULT_NATIVE_WCMU_BYTES,
             name: String::from(name),
             func: Box::new(func),
+            classification: NativeClassification::Verified,
+            max_invocations_per_iteration: None,
         });
     }
 
@@ -1701,6 +1744,76 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
             wcmu_bytes: DEFAULT_NATIVE_WCMU_BYTES,
             name: String::from(name),
             func: Box::new(func),
+            classification: NativeClassification::Verified,
+            max_invocations_per_iteration: None,
+        });
+    }
+
+    /// Register an external native function with an attested upper
+    /// bound on the per-iteration invocation count.
+    ///
+    /// External natives correspond to source-level
+    /// `use external module::name` imports; the compiler emits
+    /// `Op::CallExternalNative` for their call sites. The host
+    /// attests `max_invocations_per_iteration` rather than the
+    /// per-call WCET / WCMU budget. The attestation is recorded
+    /// on the entry and consumed by future verifier passes; the
+    /// current verifier admits external natives without folding
+    /// per-call cost into the iteration budget. A mismatch
+    /// between the registration classification and the call-site
+    /// opcode is rejected at the call-site dispatch.
+    #[allow(clippy::type_complexity)]
+    pub fn register_external_native(
+        &mut self,
+        name: &str,
+        func: fn(
+            &[crate::bytecode::GenericValue<W, F>],
+        ) -> Result<crate::bytecode::GenericValue<W, F>, VmError>,
+        max_invocations_per_iteration: u32,
+    ) {
+        self.natives.push(NativeEntry {
+            wcet: DEFAULT_NATIVE_WCET,
+            wcmu_bytes: DEFAULT_NATIVE_WCMU_BYTES,
+            name: String::from(name),
+            func: Box::new(
+                move |_ctx: &NativeCtx<'_>, args: &[crate::bytecode::GenericValue<W, F>]| {
+                    func(args)
+                },
+            ),
+            classification: NativeClassification::External,
+            max_invocations_per_iteration: Some(max_invocations_per_iteration),
+        });
+    }
+
+    /// Register a verified native function with attested per-call
+    /// WCET and WCMU bounds.
+    ///
+    /// Verified natives correspond to source-level
+    /// `use module::name` imports; the compiler emits
+    /// `Op::CallVerifiedNative` for their call sites. The verifier
+    /// folds the per-call attested cost into the iteration's
+    /// WCET / WCMU budget.
+    #[allow(clippy::type_complexity)]
+    pub fn register_verified_native(
+        &mut self,
+        name: &str,
+        func: fn(
+            &[crate::bytecode::GenericValue<W, F>],
+        ) -> Result<crate::bytecode::GenericValue<W, F>, VmError>,
+        wcet: u32,
+        wcmu_bytes: u32,
+    ) {
+        self.natives.push(NativeEntry {
+            wcet,
+            wcmu_bytes,
+            name: String::from(name),
+            func: Box::new(
+                move |_ctx: &NativeCtx<'_>, args: &[crate::bytecode::GenericValue<W, F>]| {
+                    func(args)
+                },
+            ),
+            classification: NativeClassification::Verified,
+            max_invocations_per_iteration: None,
         });
     }
 
@@ -2385,30 +2498,6 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                             base: new_base,
                         }
                     );
-                }
-                Op::CallNative(idx, arg_count) => {
-                    let n = arg_count as usize;
-                    if self.stack.len() < n {
-                        return Err(VmError::StackUnderflow);
-                    }
-                    let args: Vec<crate::bytecode::GenericValue<W, F>> =
-                        self.stack.drain(self.stack.len() - n..).collect();
-                    let native_name = self.native_name(idx as usize).ok_or_else(|| {
-                        VmError::InvalidBytecode(format!("invalid native index: {}", idx))
-                    })?;
-                    let entry = self
-                        .natives
-                        .iter()
-                        .find(|e| e.name == native_name)
-                        .ok_or_else(|| {
-                            VmError::InvalidBytecode(format!(
-                                "unregistered native: {}",
-                                native_name
-                            ))
-                        })?;
-                    let ctx = NativeCtx { arena: self.arena };
-                    let result = (entry.func)(&ctx, &args)?;
-                    sp!(self, result);
                 }
                 Op::Return => {
                     let result = self.pop()?;
@@ -3288,10 +3377,18 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                         }
                     }
                 }
-                // Phase 1: both CallVerified* and CallExternal*
-                // dispatch identically to CallNative. Phase 5
-                // introduces the per-class semantics.
+                // Verified and external native dispatch share the
+                // value-pop / arg-marshal sequence. The split
+                // opcodes carry the structural classification: the
+                // dispatch cross-checks the registered native's
+                // classification matches the opcode and rejects
+                // mismatches at the call site. The verifier
+                // observes the same classification to decide
+                // between per-call WCET/WCMU attestation
+                // (verified) and per-iteration invocation count
+                // (external).
                 Op::CallVerifiedNative(idx, arg_count) | Op::CallExternalNative(idx, arg_count) => {
+                    let expected_external = matches!(op, Op::CallExternalNative(_, _));
                     let n = arg_count as usize;
                     if self.stack.len() < n {
                         return Err(VmError::StackUnderflow);
@@ -3311,6 +3408,23 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                                 native_name
                             ))
                         })?;
+                    let entry_external = entry.classification == NativeClassification::External;
+                    if entry_external != expected_external {
+                        return Err(VmError::VerifyError(format!(
+                            "native `{}` registered as {} but bytecode invokes it as {}",
+                            native_name,
+                            if entry_external {
+                                "external"
+                            } else {
+                                "verified"
+                            },
+                            if expected_external {
+                                "external"
+                            } else {
+                                "verified"
+                            },
+                        )));
+                    }
                     let ctx = NativeCtx { arena: self.arena };
                     let result = (entry.func)(&ctx, &args)?;
                     sp!(self, result);
@@ -3457,6 +3571,8 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
             wcmu_bytes: DEFAULT_NATIVE_WCMU_BYTES,
             name: String::from(name),
             func: func.into_native_fn(),
+            classification: NativeClassification::Verified,
+            max_invocations_per_iteration: None,
         });
     }
 
@@ -3471,6 +3587,8 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
             wcmu_bytes: DEFAULT_NATIVE_WCMU_BYTES,
             name: String::from(name),
             func: func.into_native_fn(),
+            classification: NativeClassification::Verified,
+            max_invocations_per_iteration: None,
         });
     }
 
@@ -5033,6 +5151,68 @@ mod tests {
     }
 
     #[test]
+    fn external_native_round_trip() {
+        // `use external` imports compile to `Op::CallExternalNative`.
+        // Registering the native through `register_external_native`
+        // sets the matching classification; the call succeeds.
+        let src = "use external host::log_event\nfn main(x: Word) -> Word { host::log_event(x) }";
+        let tokens = tokenize(src).expect("lex error");
+        let program = parse(&tokens).expect("parse error");
+        let module = compile(&program).expect("compile error");
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let mut vm = Vm::new(module, &arena).unwrap();
+        vm.register_external_native("host::log_event", |args| Ok(args[0].clone()), 16);
+        match vm.call(&[Value::Int(7)]).unwrap() {
+            VmState::Finished(v) => assert_eq!(v, Value::Int(7)),
+            other => panic!("expected finished, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn native_classification_mismatch_rejected_at_call() {
+        // The script imports `host::log_event` as a verified
+        // native (bare `use`), but the host registers it through
+        // `register_external_native`. The mismatch is detected at
+        // the call site dispatch and surfaces as VmError::VerifyError.
+        let src = "use host::log_event\nfn main(x: Word) -> Word { host::log_event(x) }";
+        let tokens = tokenize(src).expect("lex error");
+        let program = parse(&tokens).expect("parse error");
+        let module = compile(&program).expect("compile error");
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let mut vm = Vm::new(module, &arena).unwrap();
+        vm.register_external_native("host::log_event", |args| Ok(args[0].clone()), 16);
+        let err = vm.call(&[Value::Int(7)]).unwrap_err();
+        match err {
+            VmError::VerifyError(msg) => {
+                assert!(msg.contains("registered as external"), "{}", msg);
+                assert!(msg.contains("invokes it as verified"), "{}", msg);
+            }
+            other => panic!("expected VerifyError, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn external_classification_mismatch_rejected_at_call() {
+        // The script imports `host::log_event` as external but the
+        // host registers it through `register_native` (verified).
+        let src = "use external host::log_event\nfn main(x: Word) -> Word { host::log_event(x) }";
+        let tokens = tokenize(src).expect("lex error");
+        let program = parse(&tokens).expect("parse error");
+        let module = compile(&program).expect("compile error");
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let mut vm = Vm::new(module, &arena).unwrap();
+        vm.register_native("host::log_event", |args| Ok(args[0].clone()));
+        let err = vm.call(&[Value::Int(7)]).unwrap_err();
+        match err {
+            VmError::VerifyError(msg) => {
+                assert!(msg.contains("registered as verified"), "{}", msg);
+                assert!(msg.contains("invokes it as external"), "{}", msg);
+            }
+            other => panic!("expected VerifyError, got {:?}", other),
+        }
+    }
+
+    #[test]
     fn eval_guard_clause() {
         let val = run_expect(
             "fn abs(x: Word) -> Word when x < 0 { -x }\nfn abs(x: Word) -> Word { x }\nfn main() -> Word { abs(-5) + abs(3) }",
@@ -5829,13 +6009,13 @@ mod tests {
         // data layout, `schema_hash` is zero (no slots to hash).
         let expected: alloc::vec::Vec<u8> = alloc::vec![
             75, 69, 76, 69, 1, 0, 192, 0, 0, 0, 6, 6, 6, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 32, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 31, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0,
             1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 109, 97, 105,
             110, 255, 255, 255, 255, 200, 255, 255, 255, 2, 0, 0, 0, 208, 255, 255, 255, 1, 0, 0,
             0, 232, 255, 255, 255, 0, 0, 0, 0, 0, 0, 0, 0, 220, 255, 255, 255, 0, 0, 0, 0, 212,
             255, 255, 255, 1, 0, 0, 0, 248, 255, 255, 255, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0,
             0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 6, 6, 6, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0,
-            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 93, 42, 147, 103,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 100, 202, 138, 1,
         ];
         let src = "fn main() -> Word { 1 }";
         let tokens = tokenize(src).expect("lex");

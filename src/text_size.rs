@@ -470,7 +470,7 @@ impl TextAnalysis {
                 self.push(sat(pushed));
                 0
             }
-            Op::CallNative(_, n_args) => {
+            Op::CallVerifiedNative(_, n_args) | Op::CallExternalNative(_, n_args) => {
                 for _ in 0..*n_args {
                     self.pop();
                 }
@@ -718,7 +718,7 @@ mod tests {
         let chunk = make_chunk(
             vec![
                 Op::Const(0),
-                Op::CallNative(0, 1), // some host-attested native
+                Op::CallVerifiedNative(0, 1), // some host-attested native
                 Op::Const(0),
                 Op::Add, // adds an Unbounded native result to "a"
                 Op::Return,
