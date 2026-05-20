@@ -8,7 +8,6 @@
 //! use keleusma::stddsl;
 //! vm.register_library(stddsl::Math);
 //! vm.register_library(stddsl::Audio);
-//! vm.register_library(stddsl::Text);
 //! ```
 //!
 //! ## Available libraries
@@ -19,10 +18,6 @@
 //!   `audio::` namespace. The Audio bundle does not register
 //!   `math::` entries; a host script that needs both should
 //!   register Math and Audio.
-//! - [`Text`] - text utilities (`to_string`, `length`, `concat`,
-//!   `slice`, `println`). Requires the `text` cargo feature on the
-//!   library; the script-side surface for text is also gated on
-//!   the same feature.
 //! - [`Shell`] - shell-script utilities (`shell::getenv`,
 //!   `shell::run`, `shell::run_checked`, `shell::exit`). Requires
 //!   the `shell` cargo feature, which adds a `std` dependency.
@@ -63,8 +58,8 @@ use crate::word::Word;
 /// The trait is parametric over the runtime's word, address, and
 /// float types so library authors can opt their bundles into
 /// narrow-runtime support. The standard bundles ([`Math`],
-/// [`Audio`], [`Text`], [`Shell`]) are presently implemented only
-/// for the default `(i64, u64, f64)` shape.
+/// [`Audio`], [`Shell`]) are presently implemented only for the
+/// default `(i64, u64, f64)` shape.
 pub trait Library<W: Word, A: Address, F: Float> {
     /// Register every native function in this bundle on `vm`.
     fn register<'a, 'arena>(self, vm: &mut GenericVm<'a, 'arena, W, A, F>);
@@ -115,14 +110,6 @@ pub struct Math;
 /// `libm`.
 pub struct Audio;
 
-/// Text utilities. Requires the `text` cargo feature.
-///
-/// Registers `to_string`, `length`, `concat`, `slice`, `println`.
-/// The Text bundle is a no-op when the `text` feature is
-/// disabled; scripts that compile without the feature cannot
-/// produce text values for these natives to operate on.
-pub struct Text;
-
 /// Shell-script utilities. Requires the `shell` cargo feature.
 ///
 /// Registers `shell::getenv` (returns `Option<Text>`),
@@ -145,12 +132,6 @@ impl<W: Word, A: Address, F: Float> Library<W, A, F> for Math {
 impl<W: Word, A: Address, F: Float> Library<W, A, F> for Audio {
     fn register<'a, 'arena>(self, vm: &mut GenericVm<'a, 'arena, W, A, F>) {
         crate::audio_natives::register_audio_natives(vm);
-    }
-}
-
-impl<W: Word, A: Address, F: Float> Library<W, A, F> for Text {
-    fn register<'a, 'arena>(self, vm: &mut GenericVm<'a, 'arena, W, A, F>) {
-        text::register(vm);
     }
 }
 
@@ -286,24 +267,6 @@ mod math {
         vm.register_fn("math::sqrt_2", || -> f64 { consts::SQRT_2 });
         vm.register_fn("math::ln_2", || -> f64 { consts::LN_2 });
         vm.register_fn("math::ln_10", || -> f64 { consts::LN_10 });
-    }
-}
-
-mod text {
-    use crate::address::Address;
-    use crate::float::Float;
-    use crate::vm::GenericVm;
-    use crate::word::Word;
-    pub fn register<'a, 'arena, W: Word, A: Address, F: Float>(
-        vm: &mut GenericVm<'a, 'arena, W, A, F>,
-    ) {
-        // Delegate to the existing utility_natives bundle which
-        // registers the arena-aware `to_string`, `concat`,
-        // `slice`, `length`, and `println`. The math::* entries
-        // formerly registered alongside these have been moved to
-        // the Math bundle; this delegate now installs only the
-        // text-shaped utilities.
-        crate::utility_natives::register_utility_natives(vm);
     }
 }
 

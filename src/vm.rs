@@ -2184,37 +2184,6 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                             crate::bytecode::GenericValue::Float(x),
                             crate::bytecode::GenericValue::Float(y),
                         ) => sp!(self, crate::bytecode::GenericValue::Float(x + y)),
-                        (a, b)
-                            if matches!(
-                                a,
-                                crate::bytecode::GenericValue::StaticStr(_)
-                                    | crate::bytecode::GenericValue::KStr(_)
-                            ) && matches!(
-                                b,
-                                crate::bytecode::GenericValue::StaticStr(_)
-                                    | crate::bytecode::GenericValue::KStr(_)
-                            ) =>
-                        {
-                            let arena = self.arena;
-                            let lhs = a.as_str_with_arena(arena).map_err(|_| {
-                                VmError::TypeError(String::from(
-                                    "KStr is stale (arena reset since allocation)",
-                                ))
-                            })?;
-                            let rhs = b.as_str_with_arena(arena).map_err(|_| {
-                                VmError::TypeError(String::from(
-                                    "KStr is stale (arena reset since allocation)",
-                                ))
-                            })?;
-                            let lhs = lhs.unwrap_or("");
-                            let rhs = rhs.unwrap_or("");
-                            let mut concatenated = String::with_capacity(lhs.len() + rhs.len());
-                            concatenated.push_str(lhs);
-                            concatenated.push_str(rhs);
-                            let handle = crate::kstring::KString::alloc(arena, &concatenated)
-                                .map_err(|_| out_of_arena_push("text", arena.capacity()))?;
-                            sp!(self, crate::bytecode::GenericValue::KStr(handle));
-                        }
                         (a, b) => {
                             return Err(VmError::TypeError(format!(
                                 "cannot add {} and {}",
@@ -5167,26 +5136,6 @@ mod tests {
     }
 
     #[test]
-    fn eval_string_concat() {
-        let src = "fn main() -> Text { \"hello\" + \" world\" }";
-        let tokens = tokenize(src).expect("lex error");
-        let program = parse(&tokens).expect("parse error");
-        let module = compile(&program).expect("compile error");
-        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
-        let mut vm = Vm::new(module, &arena).unwrap();
-        let val = match vm.call(&[]).unwrap() {
-            VmState::Finished(v) => v,
-            other => panic!("unexpected: {:?}", other),
-        };
-        let s = val
-            .as_str_with_arena(&arena)
-            .expect("KStr should resolve against live arena")
-            .expect("Op::Add on Text operands yields a string variant");
-        assert_eq!(s, "hello world");
-        assert!(matches!(val, Value::KStr(_)));
-    }
-
-    #[test]
     fn exponential_text_concat_rejected_at_safe_constructor() {
         // The FAQ exponential-string-concat example expressed as a
         // Stream block, which is the form subject to the per-iteration
@@ -5759,45 +5708,16 @@ mod tests {
         }
     }
 
-    #[test]
-    fn yield_dynamic_string_fails() {
-        // to_string returns a KStr. Yielding it must fail at runtime.
-        let src = "use to_string\n\
-                   loop main(input: Word) -> Text { \
-                       let input = yield to_string(input); \"done\" }";
-        let tokens = tokenize(src).expect("lex error");
-        let program = parse(&tokens).expect("parse error");
-        let module = compile(&program).expect("compile error");
-        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
-        let mut vm = Vm::new(module, &arena).unwrap();
-        crate::utility_natives::register_utility_natives(&mut vm);
-        let err = vm.call(&[Value::Int(42)]).unwrap_err();
-        match err {
-            VmError::TypeError(msg) => {
-                assert!(msg.contains("dynamic string") || msg.contains("KStr"))
-            }
-            other => panic!("expected TypeError, got {:?}", other),
-        }
-    }
-
-    #[test]
-    fn yield_tuple_with_dynamic_string_fails() {
-        // Yielding a tuple containing a KStr must fail.
-        let src = "use to_string\n\
-                   loop main(input: Word) -> (Word, Text) { \
-                       let input = yield (input, to_string(input)); (0, \"\") }";
-        let tokens = tokenize(src).expect("lex error");
-        let program = parse(&tokens).expect("parse error");
-        let module = compile(&program).expect("compile error");
-        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
-        let mut vm = Vm::new(module, &arena).unwrap();
-        crate::utility_natives::register_utility_natives(&mut vm);
-        let err = vm.call(&[Value::Int(7)]).unwrap_err();
-        match err {
-            VmError::TypeError(msg) => assert!(msg.contains("dynamic string")),
-            other => panic!("expected TypeError, got {:?}", other),
-        }
-    }
+    // V0.2.0 removed the `to_string`, `concat`, `slice`, and `length`
+    // utility natives that previously produced KStr values from
+    // script-level operations. The cross-yield prohibition for
+    // `Value::KStr` is still enforced at runtime; tests for that path
+    // now need a host-registered native that produces a KStr. The
+    // `yield_dynamic_string_fails` and
+    // `yield_tuple_with_dynamic_string_fails` tests were removed in
+    // this transition; they should be reinstated alongside the
+    // Phase 5 work that introduces the verified/external native ABI
+    // split (and a test native that produces a KStr).
 
     // -- Arena integration --
 

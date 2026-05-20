@@ -218,34 +218,9 @@ fn narrow_runtime_rejects_hot_swap_to_wider_bytecode() {
     );
 }
 
-#[cfg(feature = "floats")]
-#[test]
-fn narrow_runtime_can_register_text_library_via_lifted_impl() {
-    // The stddsl::Text bundle now lifts to Library<W, A, F> for any
-    // (W, A, F). A narrow Vm whose W = i16 can register it; the
-    // utility natives use Word::from_i64_wrap for length values and
-    // Word::to_i64 for index arguments so the script-visible word
-    // type drives the boundary semantics.
-    let target = Target {
-        word_bits_log2: 4,
-        addr_bits_log2: 4,
-        float_bits_log2: 6,
-        has_floats: true,
-        has_strings: true,
-    };
-    let src = "use length\nfn main() -> Word { length(\"hello\") }";
-    let tokens = tokenize(src).expect("lex");
-    let program = parse(&tokens).expect("parse");
-    let module = compile_with_target(&program, &target).expect("compile");
-
-    let arena = Arena::with_capacity(4096);
-    let mut vm: NarrowWordF64Vm<'_, '_> = NarrowWordF64Vm::new(module, &arena).expect("new");
-    vm.register_library(keleusma::stddsl::Text);
-    match vm.call(&[]).expect("call") {
-        GenericVmState::Finished(GenericValue::Int(n)) => assert_eq!(n, 5_i16),
-        other => panic!("unexpected: {:?}", other),
-    }
-}
+// `narrow_runtime_can_register_text_library_via_lifted_impl` was
+// removed in V0.2.0 with the deletion of `stddsl::Text` and the
+// `length`/`to_string`/`concat`/`slice` utility natives.
 
 #[cfg(feature = "floats")]
 #[test]

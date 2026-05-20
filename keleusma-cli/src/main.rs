@@ -423,7 +423,6 @@ fn drive_to_completion(vm: &mut Vm, arena: &Arena) -> Result<(), String> {
     // audio, text, and shell utilities by default.
     vm.register_library(stddsl::Math);
     vm.register_library(stddsl::Audio);
-    vm.register_library(stddsl::Text);
     vm.register_library(stddsl::Shell);
     match vm.call(&[]).map_err(|e| format!("vm: {:?}", e))? {
         VmState::Finished(v) => {
