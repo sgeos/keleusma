@@ -784,6 +784,186 @@ fn strip_shebang_prefix(bytes: &[u8]) -> &[u8] {
     }
 }
 
+/// Borrowed view of the three body sections inside a framed
+/// V0.2.0 wire-format buffer. Callers obtain this through
+/// [`parse_wire_sections`] after framing-level validation has
+/// run.
+#[derive(Debug, Clone, Copy)]
+pub struct WireSections<'a> {
+    /// Bytes of the opcode stream section. Length is a multiple
+    /// of [`OPCODE_RECORD_BYTES`].
+    pub opcode_stream: &'a [u8],
+    /// Bytes of the operand pool section. Length is a multiple
+    /// of [`OPERAND_POOL_ENTRY_BYTES`].
+    pub operand_pool: &'a [u8],
+    /// Bytes of the rkyv-archived auxiliary body.
+    pub aux_body: &'a [u8],
+}
+
+/// Header-mirrored fields exposed by [`read_header_fields`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HeaderFields {
+    pub word_bits_log2: u8,
+    pub addr_bits_log2: u8,
+    pub float_bits_log2: u8,
+    pub flags: u8,
+    pub wcet_cycles: u32,
+    pub wcmu_bytes: u32,
+    pub shared_data_bytes: u32,
+    pub private_data_bytes: u32,
+}
+
+/// Parse a framed V0.2.0 wire-format buffer and return slices
+/// for the three body sections. Validates the framing header
+/// (magic, version, header length, total length), the CRC-32
+/// residue, and the section bounds. Does not deserialize the
+/// auxiliary body; callers feed `aux_body` to
+/// `rkyv::access::<ArchivedWireAuxBody, _>` or to
+/// `rkyv::from_bytes::<WireAuxBody, _>`.
+///
+/// The returned slices borrow from the input. Used by both
+/// [`module_from_wire_bytes`] and the VM's zero-copy view path.
+pub fn parse_wire_sections(bytes: &[u8]) -> Result<WireSections<'_>, LoadError> {
+    let bytes = strip_shebang_prefix(bytes);
+    if bytes.len() < WIRE_FORMAT_HEADER_BYTES + WIRE_FORMAT_FOOTER_BYTES {
+        return Err(LoadError::Truncated);
+    }
+    if bytes[0..4] != BYTECODE_MAGIC {
+        return Err(LoadError::BadMagic);
+    }
+    let version = u16::from_le_bytes([bytes[4], bytes[5]]);
+    if version != BYTECODE_VERSION {
+        return Err(LoadError::UnsupportedVersion {
+            got: version,
+            expected: BYTECODE_VERSION,
+        });
+    }
+    let header_length = u16::from_le_bytes([bytes[6], bytes[7]]) as usize;
+    if header_length != WIRE_FORMAT_HEADER_BYTES {
+        return Err(LoadError::Codec(format!(
+            "wire format header length {} does not match the expected {}",
+            header_length, WIRE_FORMAT_HEADER_BYTES
+        )));
+    }
+    let total_length = u32::from_le_bytes([bytes[8], bytes[9], bytes[10], bytes[11]]) as usize;
+    if total_length < WIRE_FORMAT_HEADER_BYTES + WIRE_FORMAT_FOOTER_BYTES
+        || total_length > bytes.len()
+    {
+        return Err(LoadError::Truncated);
+    }
+    let bytes = &bytes[..total_length];
+    if crc32(bytes) != WIRE_FORMAT_CRC32_RESIDUE {
+        return Err(LoadError::BadChecksum);
+    }
+    let opcode_stream_offset =
+        u32::from_le_bytes([bytes[32], bytes[33], bytes[34], bytes[35]]) as usize;
+    let opcode_stream_length =
+        u32::from_le_bytes([bytes[36], bytes[37], bytes[38], bytes[39]]) as usize;
+    let operand_pool_offset =
+        u32::from_le_bytes([bytes[40], bytes[41], bytes[42], bytes[43]]) as usize;
+    let operand_pool_length =
+        u32::from_le_bytes([bytes[44], bytes[45], bytes[46], bytes[47]]) as usize;
+    let aux_body_offset = u32::from_le_bytes([bytes[48], bytes[49], bytes[50], bytes[51]]) as usize;
+    let aux_body_length = u32::from_le_bytes([bytes[52], bytes[53], bytes[54], bytes[55]]) as usize;
+    let body_end = total_length - WIRE_FORMAT_FOOTER_BYTES;
+    let in_body = |off: usize, len: usize| -> bool {
+        off >= WIRE_FORMAT_HEADER_BYTES && off.checked_add(len).is_some_and(|end| end <= body_end)
+    };
+    if !in_body(opcode_stream_offset, opcode_stream_length)
+        || !in_body(operand_pool_offset, operand_pool_length)
+        || !in_body(aux_body_offset, aux_body_length)
+    {
+        return Err(LoadError::Truncated);
+    }
+    if !opcode_stream_length.is_multiple_of(OPCODE_RECORD_BYTES) {
+        return Err(LoadError::Codec(format!(
+            "opcode stream length {} is not a multiple of the record size {}",
+            opcode_stream_length, OPCODE_RECORD_BYTES,
+        )));
+    }
+    if !operand_pool_length.is_multiple_of(OPERAND_POOL_ENTRY_BYTES) {
+        return Err(LoadError::Codec(format!(
+            "operand pool length {} is not a multiple of the entry size {}",
+            operand_pool_length, OPERAND_POOL_ENTRY_BYTES,
+        )));
+    }
+    Ok(WireSections {
+        opcode_stream: &bytes[opcode_stream_offset..opcode_stream_offset + opcode_stream_length],
+        operand_pool: &bytes[operand_pool_offset..operand_pool_offset + operand_pool_length],
+        aux_body: &bytes[aux_body_offset..aux_body_offset + aux_body_length],
+    })
+}
+
+/// Read header-mirrored target widths and declared WCET / WCMU
+/// fields from a framed V0.2.0 wire-format buffer. Used by
+/// [`crate::bytecode::Module::access_bytes`] (and the VM's
+/// zero-copy path) to surface the fast-path metadata without
+/// deserializing the auxiliary body.
+pub fn read_header_fields(bytes: &[u8]) -> Result<HeaderFields, LoadError> {
+    // The parse_wire_sections call validates framing and CRC;
+    // reuse it so the header read participates in the same
+    // validation pass.
+    let _ = parse_wire_sections(bytes)?;
+    let bytes = strip_shebang_prefix(bytes);
+    Ok(HeaderFields {
+        word_bits_log2: bytes[12],
+        addr_bits_log2: bytes[13],
+        float_bits_log2: bytes[14],
+        flags: bytes[15],
+        wcet_cycles: u32::from_le_bytes([bytes[16], bytes[17], bytes[18], bytes[19]]),
+        wcmu_bytes: u32::from_le_bytes([bytes[20], bytes[21], bytes[22], bytes[23]]),
+        shared_data_bytes: u32::from_le_bytes([bytes[24], bytes[25], bytes[26], bytes[27]]),
+        private_data_bytes: u32::from_le_bytes([bytes[28], bytes[29], bytes[30], bytes[31]]),
+    })
+}
+
+/// Decode every opcode record in `opcode_stream` against
+/// `operand_pool` and return the resulting `Vec<Op>`. Used by
+/// the VM at construction time to populate `decoded_ops` from
+/// the wire-format sections.
+pub fn decode_op_stream(
+    opcode_stream: &[u8],
+    operand_pool_bytes: &[u8],
+) -> Result<Vec<Op>, LoadError> {
+    if !opcode_stream.len().is_multiple_of(OPCODE_RECORD_BYTES) {
+        return Err(LoadError::Codec(format!(
+            "opcode stream length {} is not a multiple of {}",
+            opcode_stream.len(),
+            OPCODE_RECORD_BYTES,
+        )));
+    }
+    if !operand_pool_bytes
+        .len()
+        .is_multiple_of(OPERAND_POOL_ENTRY_BYTES)
+    {
+        return Err(LoadError::Codec(format!(
+            "operand pool length {} is not a multiple of {}",
+            operand_pool_bytes.len(),
+            OPERAND_POOL_ENTRY_BYTES,
+        )));
+    }
+    let mut pool: Vec<OperandPoolEntry> =
+        Vec::with_capacity(operand_pool_bytes.len() / OPERAND_POOL_ENTRY_BYTES);
+    for chunk_off in (0..operand_pool_bytes.len()).step_by(OPERAND_POOL_ENTRY_BYTES) {
+        let mut entry = [0u8; OPERAND_POOL_ENTRY_BYTES];
+        entry.copy_from_slice(&operand_pool_bytes[chunk_off..chunk_off + OPERAND_POOL_ENTRY_BYTES]);
+        let entry = OperandPoolEntry(entry);
+        entry
+            .check_parity()
+            .map_err(|e| LoadError::Codec(format!("operand pool entry corruption: {:?}", e)))?;
+        pool.push(entry);
+    }
+    let mut ops: Vec<Op> = Vec::with_capacity(opcode_stream.len() / OPCODE_RECORD_BYTES);
+    for off in (0..opcode_stream.len()).step_by(OPCODE_RECORD_BYTES) {
+        let mut rec = [0u8; OPCODE_RECORD_BYTES];
+        rec.copy_from_slice(&opcode_stream[off..off + OPCODE_RECORD_BYTES]);
+        let op = decode_op(OpcodeRecord(rec), &pool)
+            .map_err(|e| LoadError::Codec(format!("opcode decode failed: {:?}", e)))?;
+        ops.push(op);
+    }
+    Ok(ops)
+}
+
 /// Encode a [`Module`] into the V0.2.0 wire format: 64-byte
 /// framing header, opcode stream, operand pool, rkyv-archived
 /// auxiliary body, 4-byte CRC-32 trailer.
@@ -796,10 +976,6 @@ fn strip_shebang_prefix(bytes: &[u8]) -> &[u8] {
 /// / `Op::IsEnum` and `(u16, u16, u8)` for `Op::NewEnum`) flow
 /// into the operand pool as 8-byte entries indexed by the
 /// inline 24-bit pool index in the opcode record.
-///
-/// V0.2.0 Phase 7b ships this function as a parallel route to
-/// [`Module::to_bytes`]; the cutover to the V0.2.0 format as the
-/// default serializer is Phase 7c.
 pub fn module_to_wire_bytes(module: &Module) -> Result<Vec<u8>, LoadError> {
     // Build the opcode stream and operand pool. Track per-chunk
     // byte offsets and record counts for the WireChunk metadata.
@@ -1031,6 +1207,30 @@ pub fn module_from_wire_bytes(bytes: &[u8]) -> Result<Module, LoadError> {
         operand_pool.push(entry);
     }
 
+    // Validate target widths against the runtime maxima before
+    // touching the auxiliary body so the most specific error
+    // surfaces. A header field that exceeds the runtime maximum
+    // is reported as the matching SizeMismatch variant rather
+    // than as a header-versus-aux mismatch.
+    if word_bits_log2 > crate::bytecode::RUNTIME_WORD_BITS_LOG2 {
+        return Err(LoadError::WordSizeMismatch {
+            got: word_bits_log2,
+            max_supported: crate::bytecode::RUNTIME_WORD_BITS_LOG2,
+        });
+    }
+    if addr_bits_log2 > crate::bytecode::RUNTIME_ADDRESS_BITS_LOG2 {
+        return Err(LoadError::AddressSizeMismatch {
+            got: addr_bits_log2,
+            max_supported: crate::bytecode::RUNTIME_ADDRESS_BITS_LOG2,
+        });
+    }
+    if float_bits_log2 > crate::bytecode::RUNTIME_FLOAT_BITS_LOG2 {
+        return Err(LoadError::FloatSizeMismatch {
+            got: float_bits_log2,
+            max_supported: crate::bytecode::RUNTIME_FLOAT_BITS_LOG2,
+        });
+    }
+
     // Deserialize the auxiliary body.
     let aux = rkyv::from_bytes::<WireAuxBody, rkyv::rancor::Error>(aux_body_bytes)
         .map_err(|e| LoadError::Codec(format!("aux body decode failed: {}", e)))?;
@@ -1051,27 +1251,6 @@ pub fn module_from_wire_bytes(bytes: &[u8]) -> Result<Module, LoadError> {
         return Err(LoadError::Codec(String::from(
             "wire-format header fields disagree with the auxiliary body",
         )));
-    }
-
-    // Validate target widths against the runtime maxima before
-    // proceeding to opcode decode.
-    if word_bits_log2 > crate::bytecode::RUNTIME_WORD_BITS_LOG2 {
-        return Err(LoadError::WordSizeMismatch {
-            got: word_bits_log2,
-            max_supported: crate::bytecode::RUNTIME_WORD_BITS_LOG2,
-        });
-    }
-    if addr_bits_log2 > crate::bytecode::RUNTIME_ADDRESS_BITS_LOG2 {
-        return Err(LoadError::AddressSizeMismatch {
-            got: addr_bits_log2,
-            max_supported: crate::bytecode::RUNTIME_ADDRESS_BITS_LOG2,
-        });
-    }
-    if float_bits_log2 > crate::bytecode::RUNTIME_FLOAT_BITS_LOG2 {
-        return Err(LoadError::FloatSizeMismatch {
-            got: float_bits_log2,
-            max_supported: crate::bytecode::RUNTIME_FLOAT_BITS_LOG2,
-        });
     }
 
     // Decode chunks. Each WireChunk identifies its opcode span

@@ -394,18 +394,46 @@ fn out_of_arena_min(capacity: usize) -> VmError {
 /// route through this helper. The single source of truth for op
 /// pre-decoding lives here.
 fn decode_all_ops(bytes: &[u8]) -> Result<Vec<Vec<Op>>, VmError> {
-    let archived = crate::bytecode::Module::access_bytes(bytes)?;
-    Ok(archived
-        .chunks
-        .iter()
-        .map(|chunk| {
-            chunk
-                .ops
-                .iter()
-                .map(crate::bytecode::op_from_archived)
-                .collect()
-        })
-        .collect())
+    // V0.2.0 Phase 7c routes the per-chunk op decode through
+    // the wire-format opcode stream. Each chunk's slice in the
+    // stream is bounded by the WireChunk's `op_byte_offset` and
+    // `op_record_count`; the records decode through the shared
+    // operand pool.
+    let sections = crate::wire_format::parse_wire_sections(bytes)?;
+    let archived = rkyv::access::<crate::wire_format::ArchivedWireAuxBody, rkyv::rancor::Error>(
+        sections.aux_body,
+    )
+    .map_err(|e| crate::bytecode::LoadError::Codec(alloc::format!("rkyv access failed: {}", e)))?;
+    let mut all_ops: Vec<Vec<Op>> = Vec::with_capacity(archived.chunks.len());
+    for chunk in archived.chunks.iter() {
+        let start = chunk.op_byte_offset.to_native() as usize;
+        let record_count = chunk.op_record_count.to_native() as usize;
+        let byte_span = record_count
+            .checked_mul(crate::wire_format::OPCODE_RECORD_BYTES)
+            .ok_or_else(|| {
+                crate::bytecode::LoadError::Codec(alloc::string::String::from(
+                    "opcode span overflow",
+                ))
+            })?;
+        let end = start.checked_add(byte_span).ok_or_else(|| {
+            crate::bytecode::LoadError::Codec(alloc::string::String::from("opcode span overflow"))
+        })?;
+        if end > sections.opcode_stream.len() {
+            return Err(crate::bytecode::LoadError::Codec(alloc::format!(
+                "chunk opcode span [{}..{}) exceeds opcode stream length {}",
+                start,
+                end,
+                sections.opcode_stream.len(),
+            ))
+            .into());
+        }
+        let ops = crate::wire_format::decode_op_stream(
+            &sections.opcode_stream[start..end],
+            sections.operand_pool,
+        )?;
+        all_ops.push(ops);
+    }
+    Ok(all_ops)
 }
 
 /// Compute the smallest arena capacity that admits the given module
@@ -609,19 +637,24 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
 impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::float::Float>
     GenericVm<'a, 'arena, W, A, F>
 {
-    /// Borrow the archived module from internal bytecode storage.
+    /// Borrow the archived auxiliary body from internal bytecode storage.
     ///
-    /// The bytes were validated at construction time, so accessing the
-    /// archived form via `access_unchecked` is sound. For owned bytes
-    /// produced by `Module::to_bytes`, the bytes are well-formed by
-    /// construction. For borrowed bytes from `view_bytes_unchecked`,
-    /// the framing was validated and the caller attests through the
-    /// unsafe marker that the rkyv structure is valid.
-    fn archived(&self) -> &crate::bytecode::ArchivedModule {
+    /// V0.2.0 Phase 7c routes the lookup through the section-
+    /// partitioned wire format. The opcode stream and operand
+    /// pool sections are not consulted here; consumers of
+    /// per-chunk ops use `self.decoded_ops` which was populated
+    /// once at construction time. The aux body section starts
+    /// at an 8-byte aligned offset declared in the framing
+    /// header. The bytes were validated at construction time,
+    /// so `access_unchecked` is sound here.
+    fn archived(&self) -> &crate::wire_format::ArchivedWireAuxBody {
         let bytes = self.bytecode.as_slice();
-        let length = u32::from_le_bytes([bytes[6], bytes[7], bytes[8], bytes[9]]) as usize;
-        let body = &bytes[16..length - 4];
-        unsafe { rkyv::access_unchecked::<crate::bytecode::ArchivedModule>(body) }
+        let aux_body_offset =
+            u32::from_le_bytes([bytes[48], bytes[49], bytes[50], bytes[51]]) as usize;
+        let aux_body_length =
+            u32::from_le_bytes([bytes[52], bytes[53], bytes[54], bytes[55]]) as usize;
+        let aux = &bytes[aux_body_offset..aux_body_offset + aux_body_length];
+        unsafe { rkyv::access_unchecked::<crate::wire_format::ArchivedWireAuxBody>(aux) }
     }
 
     /// Deserialize the current bytecode to an owned `Module`.
@@ -650,9 +683,14 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         crate::bytecode::value_from_archived(&chunk.constants[idx])
     }
 
-    /// Number of ops in the chunk.
+    /// Number of ops in the chunk. V0.2.0 Phase 7c reads the
+    /// count from the WireChunk's `op_record_count` rather than
+    /// the no-longer-present `ops` vector; the ops themselves
+    /// live in the opcode stream section.
     fn chunk_op_count(&self, chunk_idx: usize) -> usize {
-        self.archived().chunks[chunk_idx].ops.len()
+        self.archived().chunks[chunk_idx]
+            .op_record_count
+            .to_native() as usize
     }
 
     /// Local-variable slot count for the chunk (includes parameters).
@@ -991,43 +1029,37 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         bytes: &'a [u8],
         arena: &'arena keleusma_arena::Arena,
     ) -> Result<Self, VmError> {
-        // Framing validation only (magic, length, CRC, version, sizes).
-        // No rkyv structural validation, no execution-side verification.
-        let _ = Module::access_bytes(bytes)?;
-        // B16 step 8: width validation against this VM's W/A/F trait
-        // parameters. The framing header carries the declared widths
-        // at fixed offsets; reading directly here avoids materialising
-        // the archived form for the width check alone.
-        Self::check_runtime_widths(bytes[10], bytes[11], bytes[12])?;
-        // Determine data segment length from the archived module so the
-        // data vector has the right slot count.
-        // Body offset matches the framing header length declared
-        // in `bytecode::HEADER_LEN` (32 bytes for the current
-        // wire format). Hardcoded here because the constant is
-        // private to the bytecode module.
-        const BODY_OFFSET: usize = 32;
-        let (shared_count, private_count) = {
-            let length = u32::from_le_bytes([bytes[6], bytes[7], bytes[8], bytes[9]]) as usize;
-            let body = &bytes[BODY_OFFSET..length - 4];
-            let archived =
-                unsafe { rkyv::access_unchecked::<crate::bytecode::ArchivedModule>(body) };
-            match archived.data_layout.as_ref() {
-                None => (0u16, 0u16),
-                Some(dl) => {
-                    let mut shared = 0u16;
-                    let mut private_ = 0u16;
-                    for slot in dl.slots.iter() {
-                        match slot.visibility {
-                            crate::bytecode::ArchivedSlotVisibility::Shared => {
-                                shared = shared.saturating_add(1);
-                            }
-                            crate::bytecode::ArchivedSlotVisibility::Private => {
-                                private_ = private_.saturating_add(1);
-                            }
+        // V0.2.0 Phase 7c routes zero-copy through the wire
+        // format. `access_bytes` validates the framing and
+        // returns the archived auxiliary body slice; we use the
+        // same slice (via `archived()` after construction)
+        // throughout the VM lifetime.
+        let archived = Module::access_bytes(bytes)?;
+        // B16 step 8: width validation against this VM's W/A/F
+        // trait parameters. The wire-format header carries the
+        // declared widths at bytes 12 (word), 13 (address), and
+        // 14 (float).
+        Self::check_runtime_widths(bytes[12], bytes[13], bytes[14])?;
+        // Determine data segment slot counts from the archived
+        // auxiliary body. The data layout structure is shared
+        // with the legacy format; only the chunk-ops separation
+        // is new.
+        let (shared_count, private_count) = match archived.data_layout.as_ref() {
+            None => (0u16, 0u16),
+            Some(dl) => {
+                let mut shared = 0u16;
+                let mut private_ = 0u16;
+                for slot in dl.slots.iter() {
+                    match slot.visibility {
+                        crate::bytecode::ArchivedSlotVisibility::Shared => {
+                            shared = shared.saturating_add(1);
+                        }
+                        crate::bytecode::ArchivedSlotVisibility::Private => {
+                            private_ = private_.saturating_add(1);
                         }
                     }
-                    (shared, private_)
                 }
+                (shared, private_)
             }
         };
         let private_storage_bytes =
@@ -1995,22 +2027,21 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         if self.native_classifications_verified {
             return Ok(());
         }
-        // Snapshot the lookups so the borrow on `self.archived()`
-        // releases before we read `self.natives`. The archived
-        // chunks reference the module-owned native-name table; we
-        // only need the index and the classification per call
-        // site for the comparison.
+        // Walk the decoded ops to collect native call sites.
+        // The decoded_ops field is populated at construction
+        // from the wire-format opcode stream and carries the
+        // owned `Op` enum directly. The archived form's chunks
+        // no longer hold the ops after the Phase 7c cutover.
         let mut sites: Vec<(u16, bool)> = Vec::new();
         {
-            let archived = self.archived();
-            for chunk in archived.chunks.iter() {
-                for op in chunk.ops.iter() {
+            for chunk_ops in self.decoded_ops.iter() {
+                for op in chunk_ops.iter() {
                     match op {
-                        crate::bytecode::ArchivedOp::CallVerifiedNative(idx, _) => {
-                            sites.push((idx.to_native(), false));
+                        Op::CallVerifiedNative(idx, _) => {
+                            sites.push((*idx, false));
                         }
-                        crate::bytecode::ArchivedOp::CallExternalNative(idx, _) => {
-                            sites.push((idx.to_native(), true));
+                        Op::CallExternalNative(idx, _) => {
+                            sites.push((*idx, true));
                         }
                         _ => {}
                     }
@@ -2666,11 +2697,13 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                     // here.
                     let _ = self.reset_arena_internal();
 
-                    // Find Stream instruction and set IP to instruction after it.
-                    let stream_ip = self.archived().chunks[reset_chunk_idx]
-                        .ops
+                    // Find Stream instruction and set IP to
+                    // instruction after it. V0.2.0 Phase 7c reads
+                    // decoded_ops instead of the archived chunk's
+                    // (no longer present) ops field.
+                    let stream_ip = self.decoded_ops[reset_chunk_idx]
                         .iter()
-                        .position(|op| matches!(op, crate::bytecode::ArchivedOp::Stream));
+                        .position(|op| matches!(op, Op::Stream));
                     match stream_ip {
                         Some(pos) => self.frames.last_mut().unwrap().ip = pos + 1,
                         None => {
@@ -6220,22 +6253,14 @@ mod tests {
 
     #[test]
     fn bytecode_rejects_bad_magic() {
-        // Pad to the minimum framing length (header 32 + footer 4 = 36)
-        // so the slice passes the truncation check and reaches the
-        // magic check.
-        let bytes = alloc::vec![
-            b'X', b'X', b'X', b'X', // magic
-            0x08, 0x00, // version
-            0x24, 0x00, 0x00, 0x00, // length = 36
-            6, 6, 6,    // word_bits_log2, addr_bits_log2, float_bits_log2
-            0x00, // flags
-            0x00, 0x00, // reserved
-            0x00, 0x00, 0x00, 0x00, // wcet_cycles
-            0x00, 0x00, 0x00, 0x00, // wcmu_bytes
-            0x00, 0x00, 0x00, 0x00, // shared_data_bytes
-            0x00, 0x00, 0x00, 0x00, // private_data_bytes
-            0x00, 0x00, 0x00, 0x00, // CRC placeholder
-        ];
+        // Pad to the V0.2.0 wire-format minimum framing length
+        // (64-byte header + 4-byte CRC = 68 bytes) so the slice
+        // passes the truncation check and reaches the magic
+        // check. The body fields after the magic do not matter
+        // because the wire-format reader rejects on the magic
+        // mismatch before reading further.
+        let mut bytes = alloc::vec![b'X', b'X', b'X', b'X']; // bad magic
+        bytes.resize(68, 0);
         match Module::from_bytes(&bytes) {
             Err(crate::bytecode::LoadError::BadMagic) => {}
             other => panic!("expected BadMagic, got {:?}", other),
@@ -6302,28 +6327,24 @@ mod tests {
     #[test]
     fn bytecode_golden_bytes_for_main_returning_one() {
         // Pin the exact serialized form of a minimal Keleusma program
-        // to guard against unintended wire format changes and
-        // endian-dependent code paths. Updating this byte sequence
-        // requires a deliberate decision recorded in R39 and a
-        // BYTECODE_VERSION bump if the change is not backwards
-        // compatible.
+        // under the V0.2.0 wire format (Phase 7c).
         //
         // Source: `fn main() -> Word { 1 }`
         //
-        // The wire format header is 32 bytes; the rkyv body grew by
-        // one u32 (`schema_hash`) in the V0.2 schema-strict hot-swap
-        // implementation, bringing the total length to 192 bytes
-        // including the 4-byte CRC trailer. For a function with no
-        // data layout, `schema_hash` is zero (no slots to hash).
+        // Layout: 64-byte framing header + opcode stream (8 bytes:
+        // PushImmediate(5) + Return as 4-byte records) + empty
+        // operand pool + rkyv-archived WireAuxBody + 4-byte CRC.
+        // Total length: 216 bytes.
         let expected: alloc::vec::Vec<u8> = alloc::vec![
-            75, 69, 76, 69, 1, 0, 192, 0, 0, 0, 6, 6, 6, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 31, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0,
-            1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 109, 97, 105,
-            110, 255, 255, 255, 255, 200, 255, 255, 255, 2, 0, 0, 0, 208, 255, 255, 255, 1, 0, 0,
-            0, 232, 255, 255, 255, 0, 0, 0, 0, 0, 0, 0, 0, 220, 255, 255, 255, 0, 0, 0, 0, 212,
-            255, 255, 255, 1, 0, 0, 0, 248, 255, 255, 255, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0,
-            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 6, 6, 6, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0,
-            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 100, 202, 138, 1,
+            75, 69, 76, 69, 1, 0, 64, 0, 216, 0, 0, 0, 6, 6, 6, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 64, 0, 0, 0, 8, 0, 0, 0, 72, 0, 0, 0, 0, 0, 0, 0, 72, 0, 0, 0, 140, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 159, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 1, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 109, 97, 105, 110,
+            255, 255, 255, 255, 216, 255, 255, 255, 1, 0, 0, 0, 240, 255, 255, 255, 0, 0, 0, 0, 0,
+            0, 0, 0, 228, 255, 255, 255, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 212, 255, 255, 255, 1,
+            0, 0, 0, 248, 255, 255, 255, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 6, 6, 6, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 205, 36, 48, 180,
         ];
         let src = "fn main() -> Word { 1 }";
         let tokens = tokenize(src).expect("lex");
@@ -6381,7 +6402,15 @@ mod tests {
         shifted.extend_from_slice(&bytes);
         let unaligned = &shifted[1..];
         match Module::view_bytes(unaligned) {
-            Err(crate::bytecode::LoadError::Codec(msg)) if msg.contains("not 8-byte aligned") => {}
+            // V0.2.0 Phase 7c: the rkyv access path on the
+            // auxiliary body section produces an "unaligned
+            // pointer" message; either that or the legacy
+            // alignment string is acceptable evidence of
+            // rejection.
+            Err(crate::bytecode::LoadError::Codec(msg))
+                if msg.contains("not 8-byte aligned")
+                    || msg.contains("unaligned")
+                    || msg.contains("alignment") => {}
             // The shifted slice may also misalign the framing reads in
             // ways that surface as BadMagic or BadChecksum before the
             // alignment check. Either is acceptable evidence that the
@@ -6421,29 +6450,28 @@ mod tests {
     }
 
     #[test]
-    fn bytecode_archived_op_round_trip_matches_owned() {
-        // op_from_archived materializes an owned Op from an archived Op
-        // without information loss. Verify the ops in a compiled module
-        // compare equal across the archive round trip. This is the
-        // foundation for the future zero-copy execution loop, which
-        // will fetch ArchivedOp and convert per step.
-        use crate::bytecode::{ArchivedModule, op_from_archived};
+    fn bytecode_op_round_trip_matches_owned() {
+        // V0.2.0 Phase 7c moves the per-op encoding from the
+        // rkyv archive into the wire-format opcode stream. The
+        // round-trip equivalence between an in-memory `Op` and
+        // its on-the-wire form is now exercised through
+        // `Module::to_bytes` and `Module::from_bytes` in this
+        // test; the wire_format crate carries direct unit tests
+        // for every variant in `module_roundtrip_*` and the
+        // `opcode_record_roundtrip_*` suite.
         let src = "fn main() -> Word { 1 + 2 }";
         let tokens = tokenize(src).expect("lex");
         let program = parse(&tokens).expect("parse");
         let module = compile(&program).expect("compile");
         let bytes = module.to_bytes().expect("encode");
-        let mut aligned = rkyv::util::AlignedVec::<8>::with_capacity(bytes.len());
-        aligned.extend_from_slice(&bytes);
-        let archived: &ArchivedModule = Module::access_bytes(&aligned).expect("access");
-        let main_chunk = &archived.chunks[0];
-        for (i, archived_op) in main_chunk.ops.iter().enumerate() {
-            let owned_op = op_from_archived(archived_op);
-            let original_op = module.chunks[0].ops[i];
+        let decoded = Module::from_bytes(&bytes).expect("decode");
+        assert_eq!(module.chunks.len(), decoded.chunks.len());
+        for (chunk_idx, (orig, dec)) in module.chunks.iter().zip(decoded.chunks.iter()).enumerate()
+        {
             assert_eq!(
-                owned_op, original_op,
-                "op at index {} mismatches across archive round trip",
-                i
+                orig.ops, dec.ops,
+                "chunk {} ops mismatch across wire-format round trip",
+                chunk_idx
             );
         }
     }
@@ -6452,7 +6480,7 @@ mod tests {
     fn bytecode_archived_value_round_trip_matches_owned() {
         // value_from_archived materializes an owned Value from an
         // archived Value. Verify constants survive the round trip.
-        use crate::bytecode::{ArchivedModule, value_from_archived};
+        use crate::bytecode::value_from_archived;
         let src = "fn main() -> Word { 42 }";
         let tokens = tokenize(src).expect("lex");
         let program = parse(&tokens).expect("parse");
@@ -6460,7 +6488,8 @@ mod tests {
         let bytes = module.to_bytes().expect("encode");
         let mut aligned = rkyv::util::AlignedVec::<8>::with_capacity(bytes.len());
         aligned.extend_from_slice(&bytes);
-        let archived: &ArchivedModule = Module::access_bytes(&aligned).expect("access");
+        let archived: &crate::wire_format::ArchivedWireAuxBody =
+            Module::access_bytes(&aligned).expect("access");
         let main_chunk = &archived.chunks[0];
         for (i, archived_val) in main_chunk.constants.iter().enumerate() {
             let owned = value_from_archived(archived_val);
@@ -6475,10 +6504,10 @@ mod tests {
 
     #[test]
     fn bytecode_access_bytes_returns_archived_view() {
-        // access_bytes returns a borrowed ArchivedModule. The archived
-        // form preserves the chunk count, the entry point, and the word
-        // and address sizes, exposed through native conversions.
-        use crate::bytecode::ArchivedModule;
+        // access_bytes returns a borrowed `ArchivedWireAuxBody`
+        // under the V0.2.0 wire format. The archived form
+        // preserves the chunk count, the entry point, and the
+        // word and address sizes through native conversions.
         let src = "fn double(x: Word) -> Word { x * 2 }\nfn main() -> Word { double(21) }";
         let tokens = tokenize(src).expect("lex");
         let program = parse(&tokens).expect("parse");
@@ -6486,7 +6515,8 @@ mod tests {
         let bytes = module.to_bytes().expect("encode");
         let mut aligned = rkyv::util::AlignedVec::<8>::with_capacity(bytes.len());
         aligned.extend_from_slice(&bytes);
-        let archived: &ArchivedModule = Module::access_bytes(&aligned).expect("access");
+        let archived: &crate::wire_format::ArchivedWireAuxBody =
+            Module::access_bytes(&aligned).expect("access");
         assert_eq!(archived.chunks.len(), 2);
         assert_eq!(
             archived.word_bits_log2,
@@ -6565,17 +6595,19 @@ mod tests {
 
     #[test]
     fn bytecode_rejects_word_size_mismatch() {
-        // Compile a real module, patch the word_bits_log2 field to a
-        // value greater than the runtime supports, and recompute the
-        // CRC trailer so the residue check passes. The version and
-        // length fields are intact so only the word size mismatch
-        // surfaces.
+        // Compile a real module, patch the header's word_bits_log2
+        // field to a value greater than the runtime supports, and
+        // recompute the CRC trailer so the residue check passes.
+        // The V0.2.0 wire format places word_bits_log2 at byte 12.
+        // The width validation runs before the header-vs-aux
+        // cross-check, so the patched header surfaces as
+        // WordSizeMismatch.
         let src = "fn main() -> Word { 1 }";
         let tokens = tokenize(src).expect("lex");
         let program = parse(&tokens).expect("parse");
         let module = compile(&program).expect("compile");
         let mut bytes = module.to_bytes().expect("encode");
-        bytes[10] = crate::bytecode::RUNTIME_WORD_BITS_LOG2 + 1;
+        bytes[12] = crate::bytecode::RUNTIME_WORD_BITS_LOG2 + 1;
         let trailer_start = bytes.len() - 4;
         let new_crc = crate::bytecode::crc32(&bytes[..trailer_start]);
         bytes[trailer_start..].copy_from_slice(&new_crc.to_le_bytes());
@@ -6590,12 +6622,14 @@ mod tests {
 
     #[test]
     fn bytecode_rejects_address_size_mismatch() {
+        // Header's addr_bits_log2 is at byte 13 in the V0.2.0
+        // wire format.
         let src = "fn main() -> Word { 1 }";
         let tokens = tokenize(src).expect("lex");
         let program = parse(&tokens).expect("parse");
         let module = compile(&program).expect("compile");
         let mut bytes = module.to_bytes().expect("encode");
-        bytes[11] = crate::bytecode::RUNTIME_ADDRESS_BITS_LOG2 + 1;
+        bytes[13] = crate::bytecode::RUNTIME_ADDRESS_BITS_LOG2 + 1;
         let trailer_start = bytes.len() - 4;
         let new_crc = crate::bytecode::crc32(&bytes[..trailer_start]);
         bytes[trailer_start..].copy_from_slice(&new_crc.to_le_bytes());
@@ -6615,21 +6649,21 @@ mod tests {
     )))]
     #[test]
     fn bytecode_admits_narrower_word_size() {
-        // Compile a module, patch the word_bits_log2 to a value below
-        // the runtime maximum, and recompute the CRC. The runtime
-        // accepts narrower-than-runtime bytecode under the relaxed
-        // policy. The masking pass in the VM keeps arithmetic within
-        // the declared narrower width.
+        // The runtime accepts narrower-than-runtime bytecode
+        // under the relaxed-width policy. With the V0.2.0 wire
+        // format, the auxiliary body also mirrors the
+        // word_bits_log2 field, so simply patching the header
+        // byte produces a header-vs-aux mismatch. Build a
+        // narrower-target module through `compile_with_target`
+        // instead; both the header and the auxiliary body carry
+        // the matching narrower width.
         let src = "fn main() -> Word { 1 }";
         let tokens = tokenize(src).expect("lex");
         let program = parse(&tokens).expect("parse");
-        let module = compile(&program).expect("compile");
-        let mut bytes = module.to_bytes().expect("encode");
-        // Declare 32-bit words. Runtime is 64-bit so 5 <= 6 holds.
-        bytes[10] = 5;
-        let trailer_start = bytes.len() - 4;
-        let new_crc = crate::bytecode::crc32(&bytes[..trailer_start]);
-        bytes[trailer_start..].copy_from_slice(&new_crc.to_le_bytes());
+        let module =
+            crate::compiler::compile_with_target(&program, &crate::target::Target::embedded_16())
+                .expect("compile");
+        let bytes = module.to_bytes().expect("encode");
         let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
         let mut vm = Vm::load_bytes(&bytes, &arena).expect("narrower bytecode should be admitted");
         match vm.call(&[]).unwrap() {

@@ -1504,79 +1504,12 @@ pub const RUNTIME_FLOAT_BITS_LOG2: u8 = 6;
 /// - bytes 24..28: shared data bytes (u32 little-endian).
 /// - bytes 28..32: private data bytes (u32 little-endian).
 ///
-/// 32 bytes is divisible by 8, so the rkyv body begins at an
-/// 8-byte-aligned offset within the buffer when the buffer base is
-/// itself 8-byte-aligned. Required for in-place access through
-/// `rkyv::access`.
-const HEADER_LEN: usize = 32;
-
-/// Offset of the flags byte in the framing header. Read by the
-/// verifier passes that populate the header fields and by hosts
-/// inspecting the bit set without decoding the body.
-#[allow(dead_code)]
-const HEADER_FLAGS_OFFSET: usize = 13;
-
-/// Offset of the declared WCET field in the framing header.
-const HEADER_WCET_OFFSET: usize = 16;
-
-/// Offset of the declared WCMU field in the framing header.
-const HEADER_WCMU_OFFSET: usize = 20;
-
-/// Offset of the shared data bytes field in the framing header.
-#[allow(dead_code)]
-const HEADER_SHARED_DATA_OFFSET: usize = 24;
-
-/// Offset of the private data bytes field in the framing header.
-#[allow(dead_code)]
-const HEADER_PRIVATE_DATA_OFFSET: usize = 28;
-
-/// Footer length in bytes (4-byte little-endian CRC-32).
-const FOOTER_LEN: usize = 4;
-
 /// Reflected polynomial for the standard CRC-32 (IEEE 802.3, gzip, PNG,
 /// ZIP). Reflected form of 0x04C11DB7. Paired with init 0xFFFFFFFF,
-/// refin/refout true, and xor-out 0xFFFFFFFF.
+/// refin/refout true, and xor-out 0xFFFFFFFF. The V0.2.0 wire format
+/// uses the residue self-inclusion property to verify integrity in a
+/// single pass over the framed buffer.
 const CRC32_POLY: u32 = 0xEDB88320;
-
-/// Residue constant for the CRC-32 parameters above. After computing the
-/// CRC over any byte sequence followed by the little-endian encoding of
-/// that sequence's CRC, the result equals this constant. The verifier
-/// exploits this property to check integrity in a single pass without
-/// separating the CRC field from the data, satisfying the algebraic
-/// self-inclusion contract recorded in R39.
-const CRC32_RESIDUE: u32 = 0x2144DF1C;
-
-/// Compute the standard CRC-32 of `bytes`.
-///
-/// Bit-by-bit implementation. Adequate for bytecode-sized inputs in the
-/// kilobyte to megabyte range. The verifier runs this once over the
-/// entire serialized form including the appended CRC and checks against
-/// [`CRC32_RESIDUE`]. Visibility is `pub(crate)` for use by integrity
-/// tests that need to construct bytecode with a hand-tweaked field and
-/// a recomputed checksum.
-/// If `bytes` begins with a shebang line (`#!...`), return the slice
-/// starting after the next `\n`. Otherwise return `bytes` unchanged.
-///
-/// Allows compiled bytecode files to be Unix-executable through a
-/// `#!/usr/bin/env keleusma` prefix. The bytecode loader strips the
-/// envelope before validating the magic and CRC residue. The CRC trailer
-/// covers only the post-strip range, so the envelope is not part of the
-/// signed payload.
-///
-/// Note that the post-strip slice generally is not 8-byte aligned, so
-/// shebang-prefixed bytecode does not satisfy the alignment requirement
-/// of [`Module::access_bytes`] (zero-copy). Hosts that want the zero-copy
-/// path must hand the loader an aligned, shebang-free buffer; the
-/// allocating [`Module::from_bytes`] path copies to `AlignedVec` and
-/// works regardless.
-fn strip_shebang_prefix(bytes: &[u8]) -> &[u8] {
-    if bytes.starts_with(b"#!")
-        && let Some(nl) = bytes.iter().position(|&b| b == b'\n')
-    {
-        return &bytes[nl + 1..];
-    }
-    bytes
-}
 
 /// CRC-32 of the data-segment layout's canonical byte serialisation.
 ///
@@ -1773,31 +1706,13 @@ impl Module {
     /// so encode failures are not expected in practice and indicate
     /// corruption of the runtime data.
     pub fn to_bytes(&self) -> Result<Vec<u8>, LoadError> {
-        use alloc::format;
-        let body = rkyv::to_bytes::<rkyv::rancor::Error>(self)
-            .map_err(|e| LoadError::Codec(format!("encode failed: {}", e)))?;
-        let total_len = (HEADER_LEN + body.len() + FOOTER_LEN) as u32;
-        let mut buf = Vec::with_capacity(total_len as usize);
-        buf.extend_from_slice(&BYTECODE_MAGIC);
-        buf.extend_from_slice(&BYTECODE_VERSION.to_le_bytes());
-        buf.extend_from_slice(&total_len.to_le_bytes());
-        buf.push(self.word_bits_log2);
-        buf.push(self.addr_bits_log2);
-        buf.push(self.float_bits_log2);
-        // Flags byte. Bit 0 is `FLAG_EPHEMERAL`. Other bits reserved.
-        buf.push(self.flags);
-        // Reserved bytes preserved for future layout extensions.
-        buf.extend_from_slice(&[0u8; 2]);
-        buf.extend_from_slice(&self.wcet_cycles.to_le_bytes());
-        buf.extend_from_slice(&self.wcmu_bytes.to_le_bytes());
-        buf.extend_from_slice(&self.shared_data_bytes.to_le_bytes());
-        buf.extend_from_slice(&self.private_data_bytes.to_le_bytes());
-        // Total header width is 32 bytes, divisible by 8, so the rkyv
-        // body begins at an 8-byte-aligned offset.
-        buf.extend_from_slice(&body);
-        let crc = crc32(&buf);
-        buf.extend_from_slice(&crc.to_le_bytes());
-        Ok(buf)
+        // V0.2.0 Phase 7c cuts the producer over to the section-
+        // partitioned wire format defined in `wire_format.rs`. The
+        // ops live in the opcode stream and the operand pool;
+        // every other Module field is rkyv-archived in the
+        // auxiliary body section. See `docs/architecture/WIRE_FORMAT.md`
+        // for the framing-header layout and the section semantics.
+        crate::wire_format::module_to_wire_bytes(self)
     }
 
     /// Deserialize a module from a self-describing byte slice.
@@ -1818,84 +1733,14 @@ impl Module {
     /// to [`crate::vm::Vm::new_unchecked`] for trust-based skipping of
     /// the bounds checks.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, LoadError> {
-        use alloc::format;
-        let bytes = strip_shebang_prefix(bytes);
-        if bytes.len() < HEADER_LEN + FOOTER_LEN {
-            return Err(LoadError::Truncated);
-        }
-        if bytes[0..4] != BYTECODE_MAGIC {
-            return Err(LoadError::BadMagic);
-        }
-        // Read the recorded total length and validate that the slice has
-        // at least that many bytes and that the recorded length is at
-        // least the minimum framing size. Trailing bytes after the
-        // recorded length are ignored.
-        let length = u32::from_le_bytes([bytes[6], bytes[7], bytes[8], bytes[9]]) as usize;
-        if length < HEADER_LEN + FOOTER_LEN || length > bytes.len() {
-            return Err(LoadError::Truncated);
-        }
-        let bytes = &bytes[..length];
-        // CRC residue check covers the entire truncated slice including
-        // the trailer. A correctly produced bytecode produces
-        // CRC32_RESIDUE.
-        if crc32(bytes) != CRC32_RESIDUE {
-            return Err(LoadError::BadChecksum);
-        }
-        let version = u16::from_le_bytes([bytes[4], bytes[5]]);
-        if version != BYTECODE_VERSION {
-            return Err(LoadError::UnsupportedVersion {
-                got: version,
-                expected: BYTECODE_VERSION,
-            });
-        }
-        let word_bits_log2 = bytes[10];
-        if word_bits_log2 > RUNTIME_WORD_BITS_LOG2 {
-            return Err(LoadError::WordSizeMismatch {
-                got: word_bits_log2,
-                max_supported: RUNTIME_WORD_BITS_LOG2,
-            });
-        }
-        let addr_bits_log2 = bytes[11];
-        if addr_bits_log2 > RUNTIME_ADDRESS_BITS_LOG2 {
-            return Err(LoadError::AddressSizeMismatch {
-                got: addr_bits_log2,
-                max_supported: RUNTIME_ADDRESS_BITS_LOG2,
-            });
-        }
-        let float_bits_log2 = bytes[12];
-        if float_bits_log2 > RUNTIME_FLOAT_BITS_LOG2 {
-            return Err(LoadError::FloatSizeMismatch {
-                got: float_bits_log2,
-                max_supported: RUNTIME_FLOAT_BITS_LOG2,
-            });
-        }
-        let header_wcet = u32::from_le_bytes([
-            bytes[HEADER_WCET_OFFSET],
-            bytes[HEADER_WCET_OFFSET + 1],
-            bytes[HEADER_WCET_OFFSET + 2],
-            bytes[HEADER_WCET_OFFSET + 3],
-        ]);
-        let header_wcmu = u32::from_le_bytes([
-            bytes[HEADER_WCMU_OFFSET],
-            bytes[HEADER_WCMU_OFFSET + 1],
-            bytes[HEADER_WCMU_OFFSET + 2],
-            bytes[HEADER_WCMU_OFFSET + 3],
-        ]);
-        if header_wcet == u32::MAX {
-            return Err(LoadError::WcetOverflow);
-        }
-        if header_wcmu == u32::MAX {
-            return Err(LoadError::WcmuOverflow);
-        }
-        let body = &bytes[HEADER_LEN..length - FOOTER_LEN];
-        // rkyv requires the body buffer to be 8-byte aligned. Copy
-        // into an AlignedVec to satisfy this for arbitrary host slices.
-        // For hosts that supply an aligned buffer directly, see
-        // [`Module::view_bytes`] which skips the copy.
-        let mut aligned = rkyv::util::AlignedVec::<8>::with_capacity(body.len());
-        aligned.extend_from_slice(body);
-        rkyv::from_bytes::<Module, rkyv::rancor::Error>(&aligned)
-            .map_err(|e| LoadError::Codec(format!("decode failed: {}", e)))
+        // V0.2.0 Phase 7c routes the consumer through the wire-
+        // format reader. The framing, magic, version, length,
+        // and CRC residue checks run inside
+        // `module_from_wire_bytes`; the opcode stream and
+        // operand pool sections supply the chunk ops while the
+        // auxiliary body's rkyv archive supplies the rest of the
+        // module.
+        crate::wire_format::module_from_wire_bytes(bytes)
     }
 
     /// Validate framing and return a borrowed archived view of the module.
@@ -1917,78 +1762,54 @@ impl Module {
     /// body is not aligned, or when the rkyv structural validator
     /// rejects the body. Returns the other `LoadError` variants for
     /// header validation failures.
-    pub fn access_bytes(bytes: &[u8]) -> Result<&ArchivedModule, LoadError> {
+    pub fn access_bytes(
+        bytes: &[u8],
+    ) -> Result<&crate::wire_format::ArchivedWireAuxBody, LoadError> {
         use alloc::format;
-        let bytes = strip_shebang_prefix(bytes);
-        if bytes.len() < HEADER_LEN + FOOTER_LEN {
-            return Err(LoadError::Truncated);
-        }
-        if bytes[0..4] != BYTECODE_MAGIC {
-            return Err(LoadError::BadMagic);
-        }
-        let length = u32::from_le_bytes([bytes[6], bytes[7], bytes[8], bytes[9]]) as usize;
-        if length < HEADER_LEN + FOOTER_LEN || length > bytes.len() {
-            return Err(LoadError::Truncated);
-        }
-        let bytes = &bytes[..length];
-        if crc32(bytes) != CRC32_RESIDUE {
-            return Err(LoadError::BadChecksum);
-        }
-        let version = u16::from_le_bytes([bytes[4], bytes[5]]);
-        if version != BYTECODE_VERSION {
-            return Err(LoadError::UnsupportedVersion {
-                got: version,
-                expected: BYTECODE_VERSION,
-            });
-        }
-        let word_bits_log2 = bytes[10];
-        if word_bits_log2 > RUNTIME_WORD_BITS_LOG2 {
+        // V0.2.0 Phase 7c routes the zero-copy view through the
+        // wire format. `parse_wire_sections` validates the
+        // framing header, CRC residue, and section bounds; the
+        // header-mirrored target widths are checked separately
+        // through `read_header_fields`. The returned auxiliary
+        // body slice points into the input buffer at the
+        // wire-format aux_body section; that section is rkyv-
+        // archived and lives on an 8-byte aligned offset.
+        let header = crate::wire_format::read_header_fields(bytes)?;
+        if header.word_bits_log2 > RUNTIME_WORD_BITS_LOG2 {
             return Err(LoadError::WordSizeMismatch {
-                got: word_bits_log2,
+                got: header.word_bits_log2,
                 max_supported: RUNTIME_WORD_BITS_LOG2,
             });
         }
-        let addr_bits_log2 = bytes[11];
-        if addr_bits_log2 > RUNTIME_ADDRESS_BITS_LOG2 {
+        if header.addr_bits_log2 > RUNTIME_ADDRESS_BITS_LOG2 {
             return Err(LoadError::AddressSizeMismatch {
-                got: addr_bits_log2,
+                got: header.addr_bits_log2,
                 max_supported: RUNTIME_ADDRESS_BITS_LOG2,
             });
         }
-        let float_bits_log2 = bytes[12];
-        if float_bits_log2 > RUNTIME_FLOAT_BITS_LOG2 {
+        if header.float_bits_log2 > RUNTIME_FLOAT_BITS_LOG2 {
             return Err(LoadError::FloatSizeMismatch {
-                got: float_bits_log2,
+                got: header.float_bits_log2,
                 max_supported: RUNTIME_FLOAT_BITS_LOG2,
             });
         }
-        let header_wcet = u32::from_le_bytes([
-            bytes[HEADER_WCET_OFFSET],
-            bytes[HEADER_WCET_OFFSET + 1],
-            bytes[HEADER_WCET_OFFSET + 2],
-            bytes[HEADER_WCET_OFFSET + 3],
-        ]);
-        let header_wcmu = u32::from_le_bytes([
-            bytes[HEADER_WCMU_OFFSET],
-            bytes[HEADER_WCMU_OFFSET + 1],
-            bytes[HEADER_WCMU_OFFSET + 2],
-            bytes[HEADER_WCMU_OFFSET + 3],
-        ]);
-        if header_wcet == u32::MAX {
+        if header.wcet_cycles == u32::MAX {
             return Err(LoadError::WcetOverflow);
         }
-        if header_wcmu == u32::MAX {
+        if header.wcmu_bytes == u32::MAX {
             return Err(LoadError::WcmuOverflow);
         }
-        let body = &bytes[HEADER_LEN..length - FOOTER_LEN];
-        if !(body.as_ptr() as usize).is_multiple_of(8) {
+        let sections = crate::wire_format::parse_wire_sections(bytes)?;
+        if !(sections.aux_body.as_ptr() as usize).is_multiple_of(8) {
             return Err(LoadError::Codec(format!(
-                "body not 8-byte aligned (slice base 0x{:x}); use Module::from_bytes for unaligned input",
+                "auxiliary body not 8-byte aligned (slice base 0x{:x}); use Module::from_bytes for unaligned input",
                 bytes.as_ptr() as usize
             )));
         }
-        rkyv::access::<ArchivedModule, rkyv::rancor::Error>(body)
-            .map_err(|e| LoadError::Codec(format!("rkyv access failed: {}", e)))
+        rkyv::access::<crate::wire_format::ArchivedWireAuxBody, rkyv::rancor::Error>(
+            sections.aux_body,
+        )
+        .map_err(|e| LoadError::Codec(format!("rkyv access failed: {}", e)))
     }
 
     /// Deserialize a module from an aligned byte slice without the
@@ -2009,97 +1830,11 @@ impl Module {
     /// Requires the body to be 8-byte aligned. See [`Module::access_bytes`]
     /// for the alignment contract.
     pub fn view_bytes(bytes: &[u8]) -> Result<Module, LoadError> {
-        use alloc::format;
-        let archived = Self::access_bytes(bytes)?;
-        rkyv::deserialize::<Module, rkyv::rancor::Error>(archived)
-            .map_err(|e| LoadError::Codec(format!("deserialize failed: {}", e)))
-    }
-}
-
-/// Convert an archived `Op` to its owned form.
-///
-/// The archived form stores multi-byte integer payloads in
-/// little-endian-explicit types from `rkyv::rend`. This helper
-/// materializes an owned `Op` for execution. `Op` is `Copy`, so the
-/// returned value carries no heap allocation. Used by the zero-copy
-/// execution path where the bytecode buffer is not deserialized into an
-/// owned `Module`.
-pub fn op_from_archived(archived: &ArchivedOp) -> Op {
-    match archived {
-        ArchivedOp::Const(idx) => Op::Const(idx.to_native()),
-        ArchivedOp::GetLocal(idx) => Op::GetLocal(idx.to_native()),
-        ArchivedOp::SetLocal(idx) => Op::SetLocal(idx.to_native()),
-        ArchivedOp::GetData(idx) => Op::GetData(idx.to_native()),
-        ArchivedOp::SetData(idx) => Op::SetData(idx.to_native()),
-        ArchivedOp::GetDataIndexed(base, len) => {
-            Op::GetDataIndexed(base.to_native(), len.to_native())
-        }
-        ArchivedOp::SetDataIndexed(base, len) => {
-            Op::SetDataIndexed(base.to_native(), len.to_native())
-        }
-        ArchivedOp::BoundsCheck(b) => Op::BoundsCheck(b.to_native()),
-        ArchivedOp::Add => Op::Add,
-        ArchivedOp::Sub => Op::Sub,
-        ArchivedOp::Mul => Op::Mul,
-        ArchivedOp::Div => Op::Div,
-        ArchivedOp::Mod => Op::Mod,
-        ArchivedOp::Neg => Op::Neg,
-        ArchivedOp::CmpEq => Op::CmpEq,
-        ArchivedOp::CmpNe => Op::CmpNe,
-        ArchivedOp::CmpLt => Op::CmpLt,
-        ArchivedOp::CmpGt => Op::CmpGt,
-        ArchivedOp::CmpLe => Op::CmpLe,
-        ArchivedOp::CmpGe => Op::CmpGe,
-        ArchivedOp::Not => Op::Not,
-        ArchivedOp::If(t) => Op::If(t.to_native()),
-        ArchivedOp::Else(t) => Op::Else(t.to_native()),
-        ArchivedOp::EndIf => Op::EndIf,
-        ArchivedOp::Loop(t) => Op::Loop(t.to_native()),
-        ArchivedOp::EndLoop(t) => Op::EndLoop(t.to_native()),
-        ArchivedOp::Break(t) => Op::Break(t.to_native()),
-        ArchivedOp::BreakIf(t) => Op::BreakIf(t.to_native()),
-        ArchivedOp::Stream => Op::Stream,
-        ArchivedOp::Reset => Op::Reset,
-        ArchivedOp::Call(c, n) => Op::Call(c.to_native(), *n),
-        ArchivedOp::Return => Op::Return,
-        ArchivedOp::Yield => Op::Yield,
-        ArchivedOp::Dup => Op::Dup,
-        ArchivedOp::NewStruct(t) => Op::NewStruct(t.to_native()),
-        ArchivedOp::NewEnum(t, v, n) => Op::NewEnum(t.to_native(), v.to_native(), *n),
-        ArchivedOp::NewArray(n) => Op::NewArray(n.to_native()),
-        ArchivedOp::NewTuple(n) => Op::NewTuple(*n),
-        ArchivedOp::GetField(idx) => Op::GetField(idx.to_native()),
-        ArchivedOp::GetIndex => Op::GetIndex,
-        ArchivedOp::GetTupleField(idx) => Op::GetTupleField(*idx),
-        ArchivedOp::GetEnumField(idx) => Op::GetEnumField(*idx),
-        ArchivedOp::Len => Op::Len,
-        ArchivedOp::IsEnum(t, v) => Op::IsEnum(t.to_native(), v.to_native()),
-        ArchivedOp::IsStruct(t) => Op::IsStruct(t.to_native()),
-        ArchivedOp::IntToFloat => Op::IntToFloat,
-        ArchivedOp::FloatToInt => Op::FloatToInt,
-        ArchivedOp::WordToByte => Op::WordToByte,
-        ArchivedOp::ByteToWord => Op::ByteToWord,
-        ArchivedOp::WordToFixed(n) => Op::WordToFixed(*n),
-        ArchivedOp::FixedToWord(n) => Op::FixedToWord(*n),
-        ArchivedOp::FixedMul(n) => Op::FixedMul(*n),
-        ArchivedOp::FixedDiv(n) => Op::FixedDiv(*n),
-        ArchivedOp::Trap(idx) => Op::Trap(idx.to_native()),
-        ArchivedOp::CheckedAdd => Op::CheckedAdd,
-        ArchivedOp::CheckedSub => Op::CheckedSub,
-        ArchivedOp::CheckedMul => Op::CheckedMul,
-        ArchivedOp::CheckedNeg => Op::CheckedNeg,
-        ArchivedOp::CheckedDiv => Op::CheckedDiv,
-        ArchivedOp::CheckedMod => Op::CheckedMod,
-        // V0.2.0 ISA additions.
-        ArchivedOp::PushImmediate(v) => Op::PushImmediate(*v),
-        ArchivedOp::PopN(n) => Op::PopN(*n),
-        ArchivedOp::BitAnd => Op::BitAnd,
-        ArchivedOp::BitOr => Op::BitOr,
-        ArchivedOp::BitXor => Op::BitXor,
-        ArchivedOp::Shl => Op::Shl,
-        ArchivedOp::Shr => Op::Shr,
-        ArchivedOp::CallVerifiedNative(c, n) => Op::CallVerifiedNative(c.to_native(), *n),
-        ArchivedOp::CallExternalNative(c, n) => Op::CallExternalNative(c.to_native(), *n),
+        // V0.2.0 Phase 7c routes view_bytes through the wire
+        // format. The aux body's archived form does not carry
+        // the ops; the wire-format reader assembles each chunk's
+        // ops from the opcode stream section.
+        crate::wire_format::module_from_wire_bytes(bytes)
     }
 }
 

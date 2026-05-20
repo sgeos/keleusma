@@ -32,7 +32,7 @@ Total opcode count at the close of Phase 5 is 69. The audit's aspirational targe
 - **Section-partitioned body.** The framing header carries offsets and lengths for the opcode stream, operand pool, and auxiliary body. Each section is independently relocatable.
 - **Framing header grows** from 32 bytes to 64 bytes to carry the new section offsets and lengths.
 
-The rkyv-archived encoding survives as an internal mechanism for the auxiliary body and for cross-process module transport. V0.2.0 Phase 7a publishes the specification and the wire-format types. Phase 7b ships `wire_format::module_to_wire_bytes` and `module_from_wire_bytes` that round-trip an entire `Module` through the section-partitioned body as a parallel route; the default `Module::to_bytes` / `Module::from_bytes` continue to route through rkyv pending the Phase 7c cutover. Phase 7c removes the rkyv `Module` archive from the execution path.
+The rkyv-archived encoding survives only for the auxiliary body. V0.2.0 Phase 7a publishes the specification and the wire-format types. Phase 7b ships `wire_format::module_to_wire_bytes` and `module_from_wire_bytes` as a parallel route. Phase 7c cuts the default `Module::to_bytes` / `Module::from_bytes` / `Module::access_bytes` over to the wire format: `to_bytes` delegates to `module_to_wire_bytes`; `from_bytes` delegates to `module_from_wire_bytes`; `access_bytes` returns `&ArchivedWireAuxBody`. The VM's zero-copy execution path reads opcodes through the opcode stream section and accesses the auxiliary body via the wire-format header offsets. The legacy 32-byte framing header, the `op_from_archived` conversion, and the legacy CRC residue constants retire alongside the cutover.
 
 ### Changed
 
