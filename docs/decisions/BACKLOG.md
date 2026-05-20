@@ -375,4 +375,5 @@ The example is exercised by the integration test [`tests/big_number_arithmetic.r
 Follow-on items that interact but remain out of scope:
 
 - A standard-library `BigInt` type with arbitrary precision and the full arithmetic surface. The worked example demonstrates the underlying pattern; a fully-featured `BigInt` is its own subsystem.
-- `Op::CheckedDiv` / `Op::CheckedMod` exposing the `i64::MIN / -1` corner. Currently `Op::Div` and `Op::Mod` stamp `(high=0, low=result, flag=0)`; a dedicated checked variant would surface the corner case for big-number division.
+
+The `Op::CheckedDiv` and `Op::CheckedMod` follow-on landed separately: the checked construct's `/` and `%` paths now route through dedicated opcodes that surface the `i64::MIN / -1` and `i64::MIN % -1` corners through the standard pattern-arm dispatch.

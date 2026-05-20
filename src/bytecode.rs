@@ -622,6 +622,24 @@ pub enum Op {
     /// only overflow case is `-i64::MIN`, in which the high half
     /// is `0` and the low half is `i64::MIN` (the wrapped result).
     CheckedNeg,
+    /// Overflow-checked Word division. Same stack shape as the
+    /// other `Op::Checked*` variants: pops two operands and pushes
+    /// `(high, low, flag)`. Division by zero traps with
+    /// `VmError::DivisionByZero` as usual. The only overflow case
+    /// is `i64::MIN / -1`, whose true mathematical result is
+    /// `2^63` and does not fit in `Word`; the construct routes to
+    /// the overflow arm with `high = 0`, `low = i64::MIN`. All
+    /// other inputs route through the ok arm with `high = 0` and
+    /// the wrapped quotient as `low`.
+    CheckedDiv,
+    /// Overflow-checked Word modulo. Same stack shape. Division
+    /// by zero traps. The only overflow case is `i64::MIN % -1`,
+    /// whose mathematical result is `0` but whose computation
+    /// overflows on the underlying `i64::MIN / -1`. The construct
+    /// routes to the overflow arm with `high = 0`, `low = 0` in
+    /// that case. All other inputs route through ok with `high =
+    /// 0` and the wrapped remainder as `low`.
+    CheckedMod,
 }
 
 /// Size in bytes of one operand-stack slot, namely the size of `Value` on
@@ -880,6 +898,8 @@ pub fn nominal_op_cycles(op: &Op) -> u32 {
         | Op::CheckedSub
         | Op::CheckedMul
         | Op::CheckedNeg
+        | Op::CheckedDiv
+        | Op::CheckedMod
         | Op::Mul
         | Op::Neg
         | Op::CmpEq
@@ -960,13 +980,13 @@ impl Op {
 
             Op::WrapSome | Op::Not | Op::Neg => 0,
 
-            // CheckedAdd / CheckedSub / CheckedMul pop two
-            // operands and push (high, low, flag); net delta +1.
-            // CheckedNeg pops one and pushes three; net delta +2.
-            // The high half is the i128 intermediate's high 64
-            // bits, providing the load-bearing value for big-
-            // number multiplication.
-            Op::CheckedAdd | Op::CheckedSub | Op::CheckedMul => 1,
+            // CheckedAdd / CheckedSub / CheckedMul / CheckedDiv /
+            // CheckedMod pop two operands and push (high, low,
+            // flag); net delta +1. CheckedNeg pops one and pushes
+            // three; net delta +2. The high half is the i128
+            // intermediate's high 64 bits, providing the load-
+            // bearing value for big-number multiplication.
+            Op::CheckedAdd | Op::CheckedSub | Op::CheckedMul | Op::CheckedDiv | Op::CheckedMod => 1,
             Op::CheckedNeg => 2,
 
             Op::Add
@@ -1040,11 +1060,17 @@ impl Op {
 
             Op::WrapSome | Op::Not | Op::Neg => 0,
 
-            // CheckedAdd / CheckedSub / CheckedMul net +1
-            // (pop 2, push 3). CheckedNeg net +2 (pop 1, push 3).
-            // The growth/shrink split records peak vs. final;
-            // shrink is zero because there is no net pop.
-            Op::CheckedAdd | Op::CheckedSub | Op::CheckedMul | Op::CheckedNeg => 0,
+            // CheckedAdd / CheckedSub / CheckedMul / CheckedDiv /
+            // CheckedMod net +1 (pop 2, push 3). CheckedNeg net +2
+            // (pop 1, push 3). The growth/shrink split records
+            // peak vs. final; shrink is zero because there is no
+            // net pop.
+            Op::CheckedAdd
+            | Op::CheckedSub
+            | Op::CheckedMul
+            | Op::CheckedNeg
+            | Op::CheckedDiv
+            | Op::CheckedMod => 0,
 
             Op::Add
             | Op::Sub
@@ -2047,6 +2073,8 @@ pub fn op_from_archived(archived: &ArchivedOp) -> Op {
         ArchivedOp::CheckedSub => Op::CheckedSub,
         ArchivedOp::CheckedMul => Op::CheckedMul,
         ArchivedOp::CheckedNeg => Op::CheckedNeg,
+        ArchivedOp::CheckedDiv => Op::CheckedDiv,
+        ArchivedOp::CheckedMod => Op::CheckedMod,
     }
 }
 

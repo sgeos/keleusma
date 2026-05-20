@@ -2938,6 +2938,74 @@ impl<'a, 'arena> Vm<'a, 'arena> {
                         }
                     }
                 }
+                Op::CheckedDiv => {
+                    let b = self.pop()?;
+                    let a = self.pop()?;
+                    match (a, b) {
+                        (Value::Int(_), Value::Int(0)) => return Err(VmError::DivisionByZero),
+                        (Value::Int(x), Value::Int(y)) => {
+                            // Only `i64::MIN / -1` overflows. The
+                            // true result is `2^63`, which in i128
+                            // is (high=0, low=i64::MIN). All other
+                            // divisions fit in `Word`; the wrapped
+                            // quotient becomes the low slot and the
+                            // high slot is zero.
+                            let r = (x as i128) / (y as i128);
+                            let high = (r >> 64) as i64;
+                            let low = r as i64;
+                            let flag: i64 = if r >= i64::MIN as i128 && r <= i64::MAX as i128 {
+                                0
+                            } else if r > i64::MAX as i128 {
+                                1
+                            } else {
+                                2
+                            };
+                            sp!(self, Value::Int(high));
+                            sp!(self, Value::Int(low));
+                            sp!(self, Value::Int(flag));
+                        }
+                        (a, b) => {
+                            return Err(VmError::TypeError(format!(
+                                "Op::CheckedDiv expects Word operands, got {} and {}",
+                                a.type_name(),
+                                b.type_name()
+                            )));
+                        }
+                    }
+                }
+                Op::CheckedMod => {
+                    let b = self.pop()?;
+                    let a = self.pop()?;
+                    match (a, b) {
+                        (Value::Int(_), Value::Int(0)) => return Err(VmError::DivisionByZero),
+                        (Value::Int(x), Value::Int(y)) => {
+                            // `i64::MIN % -1` overflows on the
+                            // underlying division step; the true
+                            // mathematical result is `0`. We
+                            // detect this corner by computing in
+                            // i128 (`i64::MIN as i128) % (-1 as
+                            // i128) == 0`) and report overflow
+                            // (flag=1) so the arm dispatch matches
+                            // the documented behaviour. The
+                            // wrapped result is `0` in any case.
+                            let r = (x as i128) % (y as i128);
+                            let high = (r >> 64) as i64;
+                            let low = r as i64;
+                            let corner = x == i64::MIN && y == -1;
+                            let flag: i64 = if corner { 1 } else { 0 };
+                            sp!(self, Value::Int(high));
+                            sp!(self, Value::Int(low));
+                            sp!(self, Value::Int(flag));
+                        }
+                        (a, b) => {
+                            return Err(VmError::TypeError(format!(
+                                "Op::CheckedMod expects Word operands, got {} and {}",
+                                a.type_name(),
+                                b.type_name()
+                            )));
+                        }
+                    }
+                }
             }
         }
     }
@@ -3244,8 +3312,8 @@ mod tests {
 
     #[test]
     fn checked_div_ok_path() {
-        // Division does not overflow in V0.2's checked form;
-        // the ok arm always fires for valid divisors.
+        // Division of in-range operands routes through the ok arm
+        // with the quotient as the bound value.
         let val = run_expect(
             "fn main() -> Word {\n\
                 let y = 10 / 3 {\n\
@@ -3258,6 +3326,71 @@ mod tests {
             &[],
         );
         assert_eq!(val, Value::Int(3));
+    }
+
+    #[test]
+    fn checked_div_min_by_neg_one_overflows() {
+        // `i64::MIN / -1` is the only overflow case in signed
+        // 64-bit division because the true result is `2^63` and
+        // does not fit in `Word`. The construct routes to the
+        // overflow arm; the high half is zero (the true result
+        // fits in 65 bits) and the low half is `i64::MIN` (the
+        // wrapped quotient).
+        let val = run_expect(
+            "fn main() -> Word {\n\
+                let m = 0 - 9223372036854775807 - 1;\n\
+                let y = m / (0 - 1) {\n\
+                    ok(_) => 0,\n\
+                    overflow(h, l) => h + l,\n\
+                    underflow(_, _) => 0 - 1,\n\
+                };\n\
+                y\n\
+             }",
+            &[],
+        );
+        // h = 0, l = i64::MIN; sum is i64::MIN.
+        assert_eq!(val, Value::Int(i64::MIN));
+    }
+
+    #[test]
+    fn checked_mod_min_by_neg_one_surfaces_corner() {
+        // `i64::MIN % -1` is mathematically `0` but the
+        // underlying division step overflows. The construct
+        // surfaces the corner through the overflow arm with high
+        // and low both zero (the mathematical result).
+        let val = run_expect(
+            "fn main() -> Word {\n\
+                let m = 0 - 9223372036854775807 - 1;\n\
+                let y = m % (0 - 1) {\n\
+                    ok(_) => 0 - 1,\n\
+                    overflow(h, l) => h + l + 42,\n\
+                    underflow(_, _) => 0 - 1,\n\
+                };\n\
+                y\n\
+             }",
+            &[],
+        );
+        // h = 0, l = 0; the overflow arm body returns 0 + 0 + 42.
+        assert_eq!(val, Value::Int(42));
+    }
+
+    #[test]
+    fn checked_div_by_zero_traps() {
+        // Division by zero traps with VmError::DivisionByZero;
+        // the construct does not catch it (the arm dispatch does
+        // not run because the opcode itself fails).
+        let result = run_program(
+            "fn main() -> Word {\n\
+                let y = 10 / 0 {\n\
+                    ok(v) => v,\n\
+                    overflow(_, _) => 0,\n\
+                    underflow(_, _) => 0,\n\
+                };\n\
+                y\n\
+             }",
+            &[],
+        );
+        assert!(matches!(result, Err(VmError::DivisionByZero)));
     }
 
     #[test]

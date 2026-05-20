@@ -4078,37 +4078,20 @@ fn compile_checked(
             left,
             right,
             ..
+        } => {
+            compile_expr(fc, left)?;
+            compile_expr(fc, right)?;
+            fc.emit(Op::CheckedDiv);
         }
-        | Expr::BinOp {
+        Expr::BinOp {
             op: BinOp::Mod,
             left,
             right,
             ..
         } => {
-            // Division and modulo only overflow in the
-            // `i64::MIN / -1` corner; the existing op handles
-            // both wrap and divide-by-zero. We stamp the (h, l,
-            // flag) shape: high = 0, low = op result, flag = 0
-            // (always ok). A future iteration can introduce a
-            // dedicated checked-div op that flags the corner.
             compile_expr(fc, left)?;
             compile_expr(fc, right)?;
-            if matches!(op_expr, Expr::BinOp { op: BinOp::Div, .. }) {
-                fc.emit(Op::Div);
-            } else {
-                fc.emit(Op::Mod);
-            }
-            // After op: stack = [low]. Stamp the (high, flag)
-            // wrappers: insert a 0 below (high) and push 0
-            // (flag) above. We use a temporary local to
-            // reorder without a dedicated swap opcode.
-            let div_low_name = alloc::format!("__checked_div_low_{}", span.start);
-            let div_low_slot = fc.declare_local(&div_low_name);
-            fc.emit(Op::SetLocal(div_low_slot));
-            let zero_idx = fc.add_constant(Value::Int(0));
-            fc.emit(Op::Const(zero_idx)); // high
-            fc.emit(Op::GetLocal(div_low_slot)); // low
-            fc.emit(Op::Const(zero_idx)); // flag
+            fc.emit(Op::CheckedMod);
         }
         Expr::UnaryOp {
             op: UnaryOp::Neg,
