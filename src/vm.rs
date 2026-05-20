@@ -1938,8 +1938,8 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                             )));
                         }
                     };
-                    if index < 0 || index >= len as i64 {
-                        return Err(VmError::IndexOutOfBounds(index, len as usize));
+                    if index.to_i64() < 0 || index.to_i64() >= len as i64 {
+                        return Err(VmError::IndexOutOfBounds(index.to_i64(), len as usize));
                     }
                     let slot = base as usize + index.to_i64() as usize;
                     let total = self.data_len();
@@ -1962,8 +1962,8 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                             )));
                         }
                     };
-                    if index < 0 || index >= len as i64 {
-                        return Err(VmError::IndexOutOfBounds(index, len as usize));
+                    if index.to_i64() < 0 || index.to_i64() >= len as i64 {
+                        return Err(VmError::IndexOutOfBounds(index.to_i64(), len as usize));
                     }
                     let val = self.pop()?;
                     let slot = base as usize + index.to_i64() as usize;
@@ -1990,8 +1990,8 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                             )));
                         }
                     };
-                    if value < 0 || value >= bound as i64 {
-                        return Err(VmError::IndexOutOfBounds(value, bound as usize));
+                    if value.to_i64() < 0 || value.to_i64() >= bound as i64 {
+                        return Err(VmError::IndexOutOfBounds(value.to_i64(), bound as usize));
                     }
                 }
 
@@ -2002,7 +2002,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                     match (a, b) {
                         (crate::bytecode::GenericValue::Int(x), crate::bytecode::GenericValue::Int(y)) => {
                             let r =
-                                crate::bytecode::truncate_int(x.wrapping_add(y), word_bits_log2);
+                                x.wrapping_add(y);
                             sp!(self, crate::bytecode::GenericValue::Int(r));
                         }
                         (crate::bytecode::GenericValue::Byte(x), crate::bytecode::GenericValue::Byte(y)) => {
