@@ -482,3 +482,97 @@ Follow-on items that interact but remain out of scope:
 - A standard-library `BigInt` type with arbitrary precision and the full arithmetic surface. The worked example demonstrates the underlying pattern; a fully-featured `BigInt` is its own subsystem.
 
 The `Op::CheckedDiv` and `Op::CheckedMod` follow-on landed separately: the checked construct's `/` and `%` paths now route through dedicated opcodes that surface the `i64::MIN / -1` and `i64::MIN % -1` corners through the standard pattern-arm dispatch.
+
+## B19. `Multiword<N>` parametric bignum type
+
+### Goal
+
+Provide a first-class fixed-width bignum type whose surface syntax carries the digit count as a const parameter and whose operations compile to per-N inline cascades over the existing checked-arithmetic opcodes. The user-facing surface is the operator set on multi-word signed integers; the compiler emits the bytecode that performs the cascading carry / borrow / partial-product / quotient-estimation work at each use site.
+
+Deferred to a future language version. The V0.3.0 milestone is committed to self-hosting Keleusma's lexer, parser, and compiler as stream processors in Keleusma itself, which is the more load-bearing language-validation target. `Multiword<N>` does not interact with self-hosting; the lexer / parser / compiler bootstrap exercises string handling, pattern matching, bounded iteration, and the coroutine model rather than arithmetic. Implementing `Multiword<N>` in the current Rust compiler now and re-implementing it in the bootstrapped Keleusma compiler later is wasteful; specifying the design now retains the design value at near-zero cost. The mechanical-ness of the per-operation cascades (recorded below) means future implementation will be straightforward in either compiler.
+
+### Surface syntax
+
+```keleusma
+// Type expression. N is a positive integer literal, validated at
+// type-check time.
+fn add(a: Multiword<4>, b: Multiword<4>) -> Multiword<4> { a + b }
+
+// Construction. Two equivalent forms.
+let x: Multiword<4> = Multiword::<4>(42, 0, 0, 0);
+let y: Multiword<4> = (42, 0, 0, 0) as Multiword<4>;
+
+// Indexing. m[i] returns the i-th Word digit in little-endian
+// order (digit 0 is the least significant). Index i is a runtime
+// Word with a bounds check `0 <= i < N` that traps on violation.
+let lo = x[0];
+let hi = x[3];
+
+// Arithmetic operators on Multiword<N> with the same N.
+let s = a + b;       // wrapping at the Multiword<N> boundary
+let d = a - b;
+let p = a * b;       // truncated to Multiword<N>; full 2N width
+                     // requires a separate widening multiply op
+let q = a / b;
+let r = a % b;
+
+// Bit shift operators with a shift amount of Word type.
+let l = a << 8;
+let r2 = a >> 16;
+
+// Comparison operators. The result is `Bool`.
+let eq = a == b;
+let lt = a < b;
+let le = a <= b;
+let gt = a > b;
+let ge = a >= b;
+```
+
+### Internal representation
+
+A `Multiword<N>` value lives at runtime as a `Value::Array([Value::Int; N])`. The N entries are signed `Word` digits in little-endian order: digit 0 is the least significant. The top digit's sign bit is the overall sign of the Multiword<N> value. Construction through the tuple-like constructor or the `(tuple) as Multiword<N>` cast emits `Op::NewArray` populated with the N digit values. Indexing `m[i]` reuses the existing `Op::ArrayIndex` opcode; the bounds check is the same as for any array.
+
+The type checker tracks `Multiword<N>` as a distinct nominal type. The runtime representation as `Value::Array` is implementation detail; the surface does not admit treating a `Multiword<N>` as an `[Word; N]` array without an explicit cast.
+
+### Per-operation compilation approach
+
+The compiler emits a specialised inline bytecode sequence per `(operation, N)`. No new opcodes are required; all per-digit work routes through the existing `Op::CheckedAdd`, `Op::CheckedSub`, `Op::CheckedMul`, `Op::CheckedDiv`, `Op::CheckedMod` and the existing array opcodes.
+
+| Operation | Algorithm | Linear / quadratic | Approximate op count at N = 4 |
+|-----------|-----------|--------------------|-------------------------------|
+| `+`, `-` | N-step cascade. Each digit: `Op::CheckedAdd` (or Sub), unpack `(high, low, flag)`, fold the carry / borrow into the next digit. | Linear in N | ~50 |
+| `==`, `!=` | N digit-wise equality reduction via the existing `Op::Eq` and AND. | Linear in N | ~30 |
+| `<`, `<=`, `>`, `>=` | Compare from most-significant to least-significant digit. The top digit is signed; lower digits are unsigned. Break on first inequality. | Linear in N | ~80 |
+| `*` | Schoolbook: N² partial products via `Op::CheckedMul`, each depositing `(high, low)` at adjacent digit positions, then a carry-propagation pass. The result is truncated to Multiword<N>; full 2N width requires a separate widening multiply op not in this spec. | Quadratic in N | ~250 |
+| `/`, `%` | Knuth Algorithm D long division. N quotient-digit estimations, each followed by a multiply-by-divisor and subtract-from-remainder, with a small adjustment step when the estimate is off by 1. Loop bound is N, statically extractable. | Quadratic in N | ~500-800 |
+| `<<`, `>>` | Constant shift amount K: split into K/W full-digit shifts and K%W bit-level shifts, unrolled at compile time. Variable amount: bounded runtime loop that consults a Word-typed shift count and applies the digit-level and bit-level steps in turn. | Linear in N for constant K; bounded for variable | ~80 for constant K |
+| `m[i]` | Direct `Op::ArrayIndex` with the existing array-bounds-check semantics. | Trivial | ~3 |
+
+### Why no new opcodes are needed
+
+- The checked-arithmetic opcodes (`Op::CheckedAdd` / Sub / Mul / Div / Mod) already produce the `(high, low, flag)` triple that the cascade consumes. The pattern-arm `ok` / `overflow` / `underflow` dispatch surfaces the flag through bytecode without an extra opcode.
+- `Op::ArrayIndex` and `Op::NewArray` handle the internal array storage.
+- Local slots and `Op::GetLocal` / `Op::SetLocal` carry the intermediate carries, borrows, and partial products between digit steps.
+- `Op::If` and `Op::Loop` are sufficient for the comparison short-circuit, the Knuth D adjustment step, and the variable shift loop.
+
+### Phased implementation plan (for the eventual implementation)
+
+| Phase | Scope | Approximate Rust-side effort |
+|-------|-------|----------------------------|
+| 1 | Lexer + parser + AST + type checker for `Multiword<N>`, tuple constructor, `(...) as Multiword<N>` cast, indexing | ~600 lines |
+| 2 | `+`, `-`, all six comparison operators | ~500 lines |
+| 3 | `*` (schoolbook with carry plumbing) | ~300 lines |
+| 4 | `/`, `%` (Knuth Algorithm D unrolled) | ~400 lines |
+| 5 | `<<`, `>>` (constant amount first; variable amount as a stretch) | ~300 lines |
+
+Each phase ends with end-to-end integration tests at N = 2 (128-bit on the default i64 runtime), N = 3 (192-bit), and N = 4 (256-bit). Earlier phases unblock testing of later phases.
+
+### Interaction with other backlog items
+
+- **B16 (parametric Vm).** `Multiword<N>` operations are defined per script-visible Word width, so a `GenericVm<i32, ...>` runtime with `Multiword<4>` carries 128-bit values rather than 256-bit. The compilation cascade is identical; only the digit type changes.
+- **B14 (CallIndirect flow analysis).** No interaction. Bignum operations compile to direct bytecode; no indirect dispatch.
+- **B10 (target portability) remaining target-defined primitive types.** Independent. Bignum surface does not depend on target-defined primitives.
+
+### Surface-syntax precedent
+
+The `Multiword<N>` syntax is a forward-looking grammar that the rest of the type system does not generalise to (no general const generics on types). The type checker treats `Multiword<N>` as a recognised type-name pattern, not as an instance of a broader parametric-types mechanism. A future grammar pass that adds general const generics could subsume the `Multiword` recognition into a uniform mechanism without changing the user-visible surface.
