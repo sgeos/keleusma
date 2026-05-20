@@ -2081,7 +2081,7 @@ fn compile_function_group(
             // Stream function: wrap body in Stream...Reset.
             fc.emit(Op::Stream);
             compile_block(&mut fc, &first.body)?;
-            fc.emit(Op::Pop); // Discard body value before Reset.
+            fc.emit(Op::PopN(1)); // Discard body value before Reset.
             fc.emit(Op::Reset);
         } else {
             compile_block(&mut fc, &first.body)?;
@@ -2148,7 +2148,7 @@ fn compile_function_group(
 
             compile_block(&mut fc, &def.body)?;
             if stream_dispatch {
-                fc.emit(Op::Pop);
+                fc.emit(Op::PopN(1));
                 let break_addr = fc.emit_jump(Op::Break(0));
                 stream_break_addrs.push(break_addr);
             } else {
@@ -2220,7 +2220,7 @@ fn compile_block(fc: &mut FuncCompiler, block: &Block) -> Result<(), CompileErro
     if let Some(tail) = &block.tail_expr {
         compile_expr(fc, tail)?;
     } else {
-        fc.emit(Op::PushUnit);
+        fc.emit(Op::PushImmediate(0));
     }
     fc.end_scope();
     Ok(())
@@ -2332,7 +2332,7 @@ fn compile_stmt(fc: &mut FuncCompiler, stmt: &Stmt) -> Result<(), CompileError> 
         }
         Stmt::Expr(expr) => {
             compile_expr(fc, expr)?;
-            fc.emit(Op::Pop);
+            fc.emit(Op::PopN(1));
         }
     }
     Ok(())
@@ -2473,7 +2473,7 @@ fn compile_let_pattern_typed(
             fc.emit(Op::SetLocal(slot));
         }
         Pattern::Wildcard(_) => {
-            fc.emit(Op::Pop);
+            fc.emit(Op::PopN(1));
         }
         Pattern::Tuple(pats, _) => {
             // Value is on stack. Store in temp, then extract fields.
@@ -2563,7 +2563,7 @@ fn compile_for_in_data_array(
     // Body.
     fc.begin_scope();
     compile_block(fc, &for_stmt.body)?;
-    fc.emit(Op::Pop);
+    fc.emit(Op::PopN(1));
     fc.end_scope();
 
     // `idx = idx + 1`
@@ -2614,7 +2614,7 @@ fn compile_for(fc: &mut FuncCompiler, for_stmt: &ForStmt) -> Result<(), CompileE
             // Body.
             fc.begin_scope();
             compile_block(fc, &for_stmt.body)?;
-            fc.emit(Op::Pop); // Discard block value.
+            fc.emit(Op::PopN(1)); // Discard block value.
             fc.end_scope();
 
             // Increment.
@@ -2720,7 +2720,7 @@ fn compile_for(fc: &mut FuncCompiler, for_stmt: &ForStmt) -> Result<(), CompileE
             // Body.
             fc.begin_scope();
             compile_block(fc, &for_stmt.body)?;
-            fc.emit(Op::Pop);
+            fc.emit(Op::PopN(1));
             fc.end_scope();
 
             // Increment index.
@@ -3431,7 +3431,7 @@ fn compile_enum_to_word(
         fc.emit(Op::GetLocal(temp));
         fc.emit(Op::IsEnum(e_const, v_const));
         let fail_addr = fc.emit_jump(Op::If(0));
-        fc.emit(Op::Pop); // Discard the peeked enum value.
+        fc.emit(Op::PopN(1)); // Discard the peeked enum value.
         let disc_const = fc.add_constant(Value::Int(*discriminant));
         fc.emit(Op::Const(disc_const));
         let break_addr = fc.emit(Op::Break(0));
@@ -4093,13 +4093,13 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
                 fc.emit(Op::Const(idx));
             }
             Literal::Bool(true) => {
-                fc.emit(Op::PushTrue);
+                fc.emit(Op::PushImmediate(1));
             }
             Literal::Bool(false) => {
-                fc.emit(Op::PushFalse);
+                fc.emit(Op::PushImmediate(2));
             }
             Literal::Unit => {
-                fc.emit(Op::PushUnit);
+                fc.emit(Op::PushImmediate(0));
             }
         },
 
@@ -4138,7 +4138,7 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
                     fc.emit(Op::Dup);
                     let if_addr = fc.emit_jump(Op::If(0));
                     // a was true: discard dup, evaluate b.
-                    fc.emit(Op::Pop);
+                    fc.emit(Op::PopN(1));
                     compile_expr(fc, right)?;
                     let else_addr = fc.emit_jump(Op::Else(0));
                     fc.patch_jump(if_addr);
@@ -4154,7 +4154,7 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
                     fc.emit(Op::Not);
                     let if_addr = fc.emit_jump(Op::If(0));
                     // a was false (Not gave true, If continued): discard dup, evaluate b.
-                    fc.emit(Op::Pop);
+                    fc.emit(Op::PopN(1));
                     compile_expr(fc, right)?;
                     let else_addr = fc.emit_jump(Op::Else(0));
                     fc.patch_jump(if_addr);
@@ -4364,7 +4364,7 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
             } else {
                 let else_addr = fc.emit_jump(Op::Else(0));
                 fc.patch_jump(if_addr);
-                fc.emit(Op::PushUnit);
+                fc.emit(Op::PushImmediate(0));
                 fc.patch_jump(else_addr);
                 fc.emit(Op::EndIf);
             }
@@ -4437,7 +4437,7 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
             fc.enter_loop();
 
             compile_block(fc, body)?;
-            fc.emit(Op::Pop); // Discard block value.
+            fc.emit(Op::PopN(1)); // Discard block value.
 
             let endloop_addr = fc.emit(Op::EndLoop(0));
 
@@ -4455,7 +4455,7 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
             fc.exit_loop();
 
             // Loop expression evaluates to Unit after break.
-            fc.emit(Op::PushUnit);
+            fc.emit(Op::PushImmediate(0));
         }
 
         Expr::FieldAccess {
@@ -4854,9 +4854,12 @@ fn compile_checked(
         }
     }
 
-    // Stack: [high, low, flag]. Stash to temporary locals. The
+    // Stack: [low, high, flag]. Stash to temporary locals. The
     // local names embed the span's start position so multiple
     // checked constructs in the same function get distinct slots.
+    // The push order (low at the bottom, flag on top) lets the
+    // wrapping-arithmetic synthesis `CheckedXxx; PopN(2)` discard
+    // the top two slots and leave `low` on the stack.
     let suffix = span.start;
     let flag_name = alloc::format!("__checked_flag_{}", suffix);
     let low_name = alloc::format!("__checked_low_{}", suffix);
@@ -4865,8 +4868,8 @@ fn compile_checked(
     let low_slot = fc.declare_local(&low_name);
     let high_slot = fc.declare_local(&high_name);
     fc.emit(Op::SetLocal(flag_slot));
-    fc.emit(Op::SetLocal(low_slot));
     fc.emit(Op::SetLocal(high_slot));
+    fc.emit(Op::SetLocal(low_slot));
 
     // Wrap the arm dispatch in a virtual loop so the first
     // matching arm can break out with its body's result.
@@ -5167,13 +5170,13 @@ fn compile_pattern_test(
                     fc.emit(Op::Const(idx));
                 }
                 Literal::Bool(true) => {
-                    fc.emit(Op::PushTrue);
+                    fc.emit(Op::PushImmediate(1));
                 }
                 Literal::Bool(false) => {
-                    fc.emit(Op::PushFalse);
+                    fc.emit(Op::PushImmediate(2));
                 }
                 Literal::Unit => {
-                    fc.emit(Op::PushUnit);
+                    fc.emit(Op::PushImmediate(0));
                 }
             }
             fc.emit(Op::CmpEq);
@@ -5195,7 +5198,7 @@ fn compile_pattern_test(
             // same `Value::Enum` shape.
             if enum_name == "Option" && variant == "None" {
                 fc.emit(Op::GetLocal(value_slot));
-                fc.emit(Op::PushNone);
+                fc.emit(Op::PushImmediate(3));
                 fc.emit(Op::CmpEq);
                 fail_addrs.push(fc.emit_jump(Op::If(0)));
                 return Ok(fail_addrs);
@@ -5206,7 +5209,7 @@ fn compile_pattern_test(
             let v_const = fc.add_string_constant(variant);
             fc.emit(Op::IsEnum(e_const, v_const));
             fail_addrs.push(fc.emit_jump(Op::If(0)));
-            fc.emit(Op::Pop); // Discard the peeked value.
+            fc.emit(Op::PopN(1)); // Discard the peeked value.
 
             // Test sub-patterns on extracted fields.
             for (i, sub_pat) in sub_pats.iter().enumerate() {
@@ -5226,7 +5229,7 @@ fn compile_pattern_test(
             let t_const = fc.add_string_constant(type_name);
             fc.emit(Op::IsStruct(t_const));
             fail_addrs.push(fc.emit_jump(Op::If(0)));
-            fc.emit(Op::Pop);
+            fc.emit(Op::PopN(1));
 
             for field_pat in field_pats {
                 if let Some(pat) = &field_pat.pattern {
@@ -5338,7 +5341,7 @@ fn compile_pattern_bind_typed(
                         let slot = fc.declare_local_typed(vname, field_ty);
                         fc.emit(Op::SetLocal(slot));
                     } else if matches!(pat, Pattern::Wildcard(_)) {
-                        fc.emit(Op::Pop);
+                        fc.emit(Op::PopN(1));
                     } else {
                         let temp = fc.declare_local(&format!("__sf_{}", field_pat.name));
                         fc.emit(Op::SetLocal(temp));

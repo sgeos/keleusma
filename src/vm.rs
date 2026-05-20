@@ -3073,8 +3073,13 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                             } else {
                                 2
                             };
-                            sp!(self, crate::bytecode::GenericValue::Int(high));
+                            // Push order is (low, high, flag) so the
+                            // wrapping-arithmetic synthesis emitted by
+                            // the compiler — `CheckedAdd; PopN(2)` —
+                            // discards the top two slots (flag and
+                            // high) and leaves `low` on the stack.
                             sp!(self, crate::bytecode::GenericValue::Int(low));
+                            sp!(self, crate::bytecode::GenericValue::Int(high));
                             sp!(
                                 self,
                                 crate::bytecode::GenericValue::Int(
@@ -3111,8 +3116,8 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                             } else {
                                 2
                             };
-                            sp!(self, crate::bytecode::GenericValue::Int(high));
                             sp!(self, crate::bytecode::GenericValue::Int(low));
+                            sp!(self, crate::bytecode::GenericValue::Int(high));
                             sp!(
                                 self,
                                 crate::bytecode::GenericValue::Int(
@@ -3155,8 +3160,8 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                             } else {
                                 2
                             };
-                            sp!(self, crate::bytecode::GenericValue::Int(high));
                             sp!(self, crate::bytecode::GenericValue::Int(low));
+                            sp!(self, crate::bytecode::GenericValue::Int(high));
                             sp!(
                                 self,
                                 crate::bytecode::GenericValue::Int(
@@ -3191,8 +3196,8 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                             } else {
                                 1
                             };
-                            sp!(self, crate::bytecode::GenericValue::Int(high));
                             sp!(self, crate::bytecode::GenericValue::Int(low));
+                            sp!(self, crate::bytecode::GenericValue::Int(high));
                             sp!(
                                 self,
                                 crate::bytecode::GenericValue::Int(
@@ -3238,8 +3243,8 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                             } else {
                                 2
                             };
-                            sp!(self, crate::bytecode::GenericValue::Int(high));
                             sp!(self, crate::bytecode::GenericValue::Int(low));
+                            sp!(self, crate::bytecode::GenericValue::Int(high));
                             sp!(
                                 self,
                                 crate::bytecode::GenericValue::Int(
@@ -3280,8 +3285,8 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                             let low = <W as crate::word::Word>::from_wide_wrap(r);
                             let corner = x == W::MIN && y == W::from_i64_wrap(-1);
                             let flag: i64 = if corner { 1 } else { 0 };
-                            sp!(self, crate::bytecode::GenericValue::Int(high));
                             sp!(self, crate::bytecode::GenericValue::Int(low));
+                            sp!(self, crate::bytecode::GenericValue::Int(high));
                             sp!(
                                 self,
                                 crate::bytecode::GenericValue::Int(
