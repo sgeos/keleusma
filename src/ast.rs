@@ -229,6 +229,16 @@ pub struct NewtypeDef {
     /// argument is known at compile time, though that optimisation
     /// is not yet implemented.
     pub refinement: Option<String>,
+    /// Optional declared maximum saturation value. The
+    /// `saturate_max` keyword inside a checked-overflow construct
+    /// resolves to this value when the construct's expected
+    /// output type is this newtype. When absent, the keyword
+    /// resolves to the underlying type's `MAX` (currently
+    /// `i64::MAX` for Word).
+    pub saturate_max: Option<i64>,
+    /// Optional declared minimum saturation value. Same
+    /// semantics as `saturate_max` for the minimum direction.
+    pub saturate_min: Option<i64>,
     pub span: Span,
 }
 

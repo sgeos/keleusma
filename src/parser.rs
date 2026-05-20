@@ -431,6 +431,63 @@ impl<'a> Parser<'a> {
         } else {
             None
         };
+        // Optional saturation contract:
+        //     newtype Name = Underlying where pred
+        //         with saturate_max = N, saturate_min = M;
+        // The values populate the newtype's saturation contract,
+        // which the `saturate_max` and `saturate_min` keywords
+        // inside a checked-overflow construct resolve to when the
+        // construct's expected output type is this newtype. The
+        // clause is optional; either field may be omitted; the
+        // order is not significant.
+        let mut saturate_max: Option<i64> = None;
+        let mut saturate_min: Option<i64> = None;
+        if self.at_lower("with") {
+            self.bump();
+            loop {
+                let tok = self.tokens[self.pos].clone();
+                let kind_label = match &tok.kind {
+                    TokenKind::SaturateMax => "saturate_max",
+                    TokenKind::SaturateMin => "saturate_min",
+                    other => {
+                        return Err(ParseError {
+                            message: alloc::format!(
+                                "expected `saturate_max` or `saturate_min` after `with`, found {:?}",
+                                other
+                            ),
+                            span: tok.span,
+                        });
+                    }
+                };
+                self.bump();
+                self.expect(&TokenKind::Eq)?;
+                let value = self.parse_signed_integer_literal()?;
+                if kind_label == "saturate_max" {
+                    if saturate_max.is_some() {
+                        return Err(ParseError {
+                            message: alloc::string::String::from(
+                                "duplicate `saturate_max` in newtype contract",
+                            ),
+                            span: tok.span,
+                        });
+                    }
+                    saturate_max = Some(value);
+                } else {
+                    if saturate_min.is_some() {
+                        return Err(ParseError {
+                            message: alloc::string::String::from(
+                                "duplicate `saturate_min` in newtype contract",
+                            ),
+                            span: tok.span,
+                        });
+                    }
+                    saturate_min = Some(value);
+                }
+                if !self.eat(&TokenKind::Comma) {
+                    break;
+                }
+            }
+        }
         // Optional trailing semicolon for symmetry with `use` and
         // `let` declarations at the program-level scope.
         self.eat(&TokenKind::Semicolon);
@@ -439,8 +496,28 @@ impl<'a> Parser<'a> {
             name,
             underlying,
             refinement,
+            saturate_max,
+            saturate_min,
             span: merge_spans(start, end),
         })
+    }
+
+    /// Parse a signed integer literal (admits a leading minus on
+    /// a positive literal). Used by the newtype saturation
+    /// contract.
+    fn parse_signed_integer_literal(&mut self) -> Result<i64, ParseError> {
+        let negate = self.eat(&TokenKind::Minus);
+        let tok = self.tokens[self.pos].clone();
+        match tok.kind {
+            TokenKind::IntLit(n) => {
+                self.bump();
+                if negate { Ok(-n) } else { Ok(n) }
+            }
+            other => Err(ParseError {
+                message: alloc::format!("expected integer literal, found {:?}", other),
+                span: tok.span,
+            }),
+        }
     }
 
     fn parse_struct_def(&mut self) -> Result<StructDef, ParseError> {

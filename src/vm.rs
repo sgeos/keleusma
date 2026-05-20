@@ -6672,4 +6672,78 @@ mod tests {
             err.message
         );
     }
+
+    // The `with saturate_max = N, saturate_min = M` clause on a refined
+    // newtype declaration defines context-determined values for the
+    // `saturate_max` and `saturate_min` keywords. When the surrounding
+    // expected type is the refined newtype, the keywords resolve to a
+    // constructor call wrapping the declared literal. When the
+    // surrounding expected type is the underlying primitive, the
+    // keywords retain the legacy behaviour of evaluating to
+    // `Word::MAX` / `Word::MIN`.
+    #[test]
+    fn saturate_keywords_resolve_to_newtype_contract_via_function_return() {
+        // The function's declared return type drives the resolution.
+        // The overflow path produces the declared `saturate_max` value
+        // (100), wrapped by the `Limited` constructor. The refinement
+        // predicate `nonneg` is satisfied at runtime because 100 >= 0.
+        let val = run_expect(
+            "fn nonneg(x: Word) -> bool { x >= 0 }\n\
+             newtype Limited = Word where nonneg with saturate_max = 100, saturate_min = 0;\n\
+             fn main() -> Limited {\n\
+                let m = 9223372036854775807;\n\
+                m + 1 {\n\
+                    overflow => saturate_max,\n\
+                    underflow => saturate_min,\n\
+                    ok(v) => Limited(v),\n\
+                }\n\
+             }",
+            &[],
+        );
+        assert_eq!(val, Value::Int(100));
+    }
+
+    #[test]
+    fn saturate_keywords_resolve_to_newtype_contract_via_let_annotation() {
+        // The `let y: Limited = ...` annotation pushes `Limited` onto
+        // the expected-type stack so the underflow arm's `saturate_min`
+        // resolves to 0 (the declared contract).
+        let val = run_expect(
+            "fn nonneg(x: Word) -> bool { x >= 0 }\n\
+             newtype Limited = Word where nonneg with saturate_max = 100, saturate_min = 0;\n\
+             fn main() -> Word {\n\
+                let m = 0 - 9223372036854775807;\n\
+                let y: Limited = m - 2 {\n\
+                    overflow => saturate_max,\n\
+                    underflow => saturate_min,\n\
+                    ok(v) => Limited(v),\n\
+                };\n\
+                y as Word\n\
+             }",
+            &[],
+        );
+        assert_eq!(val, Value::Int(0));
+    }
+
+    #[test]
+    fn saturate_keywords_fall_back_to_word_extrema_without_newtype_context() {
+        // The function return type is `Word`, so the saturate keywords
+        // retain the legacy semantics: `saturate_max` evaluates to
+        // `Word::MAX`, not any newtype's declared contract.
+        let val = run_expect(
+            "fn nonneg(x: Word) -> bool { x >= 0 }\n\
+             newtype Limited = Word where nonneg with saturate_max = 100, saturate_min = 0;\n\
+             fn main() -> Word {\n\
+                let m = 9223372036854775807;\n\
+                let y = m + 1 {\n\
+                    overflow => saturate_max,\n\
+                    underflow => saturate_min,\n\
+                    ok(v) => v,\n\
+                };\n\
+                y\n\
+             }",
+            &[],
+        );
+        assert_eq!(val, Value::Int(i64::MAX));
+    }
 }

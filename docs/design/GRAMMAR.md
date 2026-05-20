@@ -615,12 +615,14 @@ The following constructs were added to the surface during the V0.2 design pass. 
 ### Newtype Declarations
 
 ````
-newtype_decl  = 'newtype' upper_ident '=' type_expr
-                [ 'where' lower_ident ]
-                ';'
+newtype_decl   = 'newtype' upper_ident '=' type_expr
+                 [ 'where' lower_ident ]
+                 [ 'with' saturate_clause { ',' saturate_clause } ]
+                 ';'
+saturate_clause = ( 'saturate_max' | 'saturate_min' ) '=' signed_int_lit
 ````
 
-Introduces a distinct nominal type wrapping an underlying type. The bytecode representation is identical to the underlying. Two newtypes with different names are never interchangeable even when their underlying types match. Construction at expression position uses `Name(value)`; extraction uses `value as Underlying`. The optional `where` clause names a predicate function of signature `fn(Underlying) -> bool` that the compiler emits at every construction site (a trap fires on a false result).
+Introduces a distinct nominal type wrapping an underlying type. The bytecode representation is identical to the underlying. Two newtypes with different names are never interchangeable even when their underlying types match. Construction at expression position uses `Name(value)`; extraction uses `value as Underlying`. The optional `where` clause names a predicate function of signature `fn(Underlying) -> bool` that the compiler emits at every construction site (a trap fires on a false result). The optional `with` clause declares context-determined saturation values for the `saturate_max` and `saturate_min` keywords inside a numeric overflow construct. Either or both saturation values may be supplied. When the surrounding expected type (function return, annotated let binding) is the refined newtype, the keyword resolves to a constructor call against the declared literal; the refinement predicate is verified at runtime on that literal exactly as for any other constructor invocation.
 
 Example:
 
@@ -630,6 +632,9 @@ newtype OriginFrameMs = Word;
 
 fn in_servo_range(x: Word) -> bool { x >= 0 and x <= 180 }
 newtype ServoAngle = Word where in_servo_range;
+
+fn nonneg(x: Word) -> bool { x >= 0 }
+newtype Limited = Word where nonneg with saturate_max = 100, saturate_min = 0;
 
 let t: LocalProperMs = LocalProperMs(42);
 let raw: Word = t as Word;
@@ -644,7 +649,7 @@ overflow_arm  = overflow_kind { '|' overflow_kind } '=>' expr
 overflow_kind = 'overflow' | 'underflow' | 'ok' '(' lower_ident ')'
 ````
 
-Guards a single arithmetic operation against overflow and underflow. The operation may be `+`, `-`, `*`, `/`, `%`, or unary `-` on Word operands. The construct must cover each of `ok`, `overflow`, and `underflow` exactly once (pipe-combined arms are admitted). The `saturate_max` and `saturate_min` keywords inside arm bodies denote the result type's maximum and minimum representable values.
+Guards a single arithmetic operation against overflow and underflow. The operation may be `+`, `-`, `*`, `/`, `%`, or unary `-` on Word operands. The construct must cover each of `ok`, `overflow`, and `underflow` exactly once (pipe-combined arms are admitted). The `saturate_max` and `saturate_min` keywords inside arm bodies denote context-determined saturation values. When the surrounding expected type is `Word`, they resolve to `Word::MAX` and `Word::MIN` respectively. When the surrounding expected type is a refined newtype declared with a `with saturate_max = N` or `with saturate_min = M` clause, the keyword resolves to a constructor call against that literal. The construct itself remains zero-cost at the bytecode layer.
 
 Example:
 

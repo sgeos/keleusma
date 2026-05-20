@@ -698,6 +698,25 @@ struct Ctx {
     /// argument must match the underlying) and at extraction sites
     /// (where the value's runtime representation is the underlying's).
     newtypes: BTreeMap<String, Type>,
+    /// Newtype maximum-saturation contracts. When a checked-
+    /// overflow construct's expected output type is a newtype
+    /// listed here, the `saturate_max` keyword inside an arm body
+    /// resolves to the stored value rather than the underlying
+    /// type's `MAX`. Populated from `newtype Name = T with
+    /// saturate_max = N;` declarations.
+    newtype_saturate_max: BTreeMap<String, i64>,
+    /// Newtype minimum-saturation contracts. Same semantics for
+    /// `saturate_min`.
+    newtype_saturate_min: BTreeMap<String, i64>,
+    /// Bidirectional-inference stack of expected types. Sites
+    /// that know the type of an upcoming expression position
+    /// push the expected type before checking the expression and
+    /// pop afterwards. Context-sensitive resolution sites
+    /// (currently `Expr::SaturateMax` and `Expr::SaturateMin`)
+    /// consult the top of the stack to determine the type the
+    /// expression's value should fit. When the stack is empty,
+    /// resolution falls back to the default (Word).
+    expected_type_stack: Vec<Type>,
     /// Native function names imported via `use` declarations. Calls
     /// to these names are accepted with any argument types when the
     /// `use` declaration does not carry a signature; declarations
@@ -746,6 +765,9 @@ impl Ctx {
             natives: BTreeSet::new(),
             native_signatures: BTreeMap::new(),
             newtypes: BTreeMap::new(),
+            newtype_saturate_max: BTreeMap::new(),
+            newtype_saturate_min: BTreeMap::new(),
+            expected_type_stack: Vec::new(),
             data: BTreeMap::new(),
             locals: Vec::new(),
             current_return: None,
@@ -783,6 +805,27 @@ impl Ctx {
             type_params,
             self.fixed_default_frac_bits,
         )
+    }
+
+    /// Push an expected type onto the bidirectional-inference
+    /// stack. The caller must pair this with a matching
+    /// [`Self::pop_expected`] when leaving the position.
+    fn push_expected(&mut self, ty: Type) {
+        self.expected_type_stack.push(ty);
+    }
+
+    fn pop_expected(&mut self) {
+        self.expected_type_stack.pop();
+    }
+
+    /// Top of the expected-type stack, with the current
+    /// substitution applied. Returns `None` when the stack is
+    /// empty (the position has no known expected type and
+    /// resolution should fall back to defaults).
+    fn expected_type(&self) -> Option<Type> {
+        self.expected_type_stack
+            .last()
+            .map(|t| t.apply(&self.subst))
     }
 
     fn push_scope(&mut self) {
@@ -985,7 +1028,7 @@ pub fn check_with_target(
 fn check_native_call_with_signature(
     ctx: &mut Ctx,
     name: &str,
-    args: &[Expr],
+    args: &mut [Expr],
     span: &crate::token::Span,
     sig: &FnSig,
 ) -> Result<Type, TypeError> {
@@ -1000,7 +1043,7 @@ fn check_native_call_with_signature(
             *span,
         ));
     }
-    for (i, (arg, expected)) in args.iter().zip(sig.params.iter()).enumerate() {
+    for (i, (arg, expected)) in args.iter_mut().zip(sig.params.iter()).enumerate() {
         let arg_ty = type_of_expr(ctx, arg)?;
         if !types_compatible(ctx, &arg_ty, expected) {
             return Err(TypeError::new(
@@ -1057,6 +1100,12 @@ fn run_check(program: &mut Program, mut ctx: Ctx) -> Result<(), TypeError> {
         if let TypeDef::Newtype(n) = type_def {
             let underlying = ctx.resolve_type(&n.underlying);
             ctx.newtypes.insert(n.name.clone(), underlying);
+            if let Some(v) = n.saturate_max {
+                ctx.newtype_saturate_max.insert(n.name.clone(), v);
+            }
+            if let Some(v) = n.saturate_min {
+                ctx.newtype_saturate_min.insert(n.name.clone(), v);
+            }
         }
     }
 
@@ -1514,14 +1563,14 @@ fn run_check(program: &mut Program, mut ctx: Ctx) -> Result<(), TypeError> {
         for method in &impl_block.methods {
             let mut renamed = method.clone();
             renamed.name = format!("{}::{}::{}", impl_block.trait_name, head, method.name);
-            check_function(&mut ctx, &renamed)?;
+            check_function(&mut ctx, &mut renamed)?;
         }
     }
 
     Ok(())
 }
 
-fn check_function(ctx: &mut Ctx, func: &FunctionDef) -> Result<(), TypeError> {
+fn check_function(ctx: &mut Ctx, func: &mut FunctionDef) -> Result<(), TypeError> {
     // The `ephemeral` modifier is only meaningful on the entry
     // point. The verifier's ephemerality proof is a whole-module
     // property; attaching the modifier to a helper function is a
@@ -1560,8 +1609,13 @@ fn check_function(ctx: &mut Ctx, func: &FunctionDef) -> Result<(), TypeError> {
     }
     // Check body. The block's tail expression must match the return
     // type when the return type is not Unit. For Unit-returning
-    // functions, an absent tail is admissible.
-    let body_type = type_of_block(ctx, &func.body)?;
+    // functions, an absent tail is admissible. The declared return
+    // type is pushed as the expected type so refinement-driven
+    // saturate keywords inside the tail can consult it.
+    ctx.push_expected(return_type.clone());
+    let body_result = type_of_block(ctx, &mut func.body);
+    ctx.pop_expected();
+    let body_type = body_result?;
     if !types_compatible(ctx, &body_type, &return_type) {
         ctx.pop_scope();
         ctx.current_return = None;
@@ -1980,12 +2034,12 @@ fn check_exhaustiveness(
     }
 }
 
-fn type_of_block(ctx: &mut Ctx, block: &Block) -> Result<Type, TypeError> {
+fn type_of_block(ctx: &mut Ctx, block: &mut Block) -> Result<Type, TypeError> {
     ctx.push_scope();
-    for stmt in &block.stmts {
+    for stmt in block.stmts.iter_mut() {
         check_stmt(ctx, stmt)?;
     }
-    let ty = match &block.tail_expr {
+    let ty = match block.tail_expr.as_mut() {
         Some(e) => type_of_expr(ctx, e)?,
         None => Type::Unit,
     };
@@ -1993,7 +2047,7 @@ fn type_of_block(ctx: &mut Ctx, block: &Block) -> Result<Type, TypeError> {
     Ok(ty)
 }
 
-fn check_stmt(ctx: &mut Ctx, stmt: &Stmt) -> Result<(), TypeError> {
+fn check_stmt(ctx: &mut Ctx, stmt: &mut Stmt) -> Result<(), TypeError> {
     match stmt {
         Stmt::Let(let_stmt) => {
             // Self-referential closure binding: `let f = |...| ... f(...) ...`.
@@ -2009,10 +2063,23 @@ fn check_stmt(ctx: &mut Ctx, stmt: &Stmt) -> Result<(), TypeError> {
                 let pre_ty = ctx.vargen.fresh();
                 scope.insert(name.clone(), pre_ty);
             }
-            let value_ty = type_of_expr(ctx, &let_stmt.value)?;
-            let bound_ty = match &let_stmt.type_expr {
-                Some(t) => {
-                    let declared = ctx.resolve_type(t);
+            // Bidirectional check: if the binding has a type annotation,
+            // resolve it and push onto the expected-type stack so that
+            // refinement-driven keywords (saturate_max / saturate_min)
+            // inside the value can consult it. Pop after the value is
+            // checked regardless of outcome.
+            let declared_pre: Option<Type> =
+                let_stmt.type_expr.as_ref().map(|t| ctx.resolve_type(t));
+            if let Some(d) = &declared_pre {
+                ctx.push_expected(d.clone());
+            }
+            let value_result = type_of_expr(ctx, &mut let_stmt.value);
+            if declared_pre.is_some() {
+                ctx.pop_expected();
+            }
+            let value_ty = value_result?;
+            let bound_ty = match declared_pre {
+                Some(declared) => {
                     if !types_compatible(ctx, &declared, &value_ty) {
                         return Err(TypeError::new(
                             format!(
@@ -2031,7 +2098,7 @@ fn check_stmt(ctx: &mut Ctx, stmt: &Stmt) -> Result<(), TypeError> {
             Ok(())
         }
         Stmt::For(for_stmt) => {
-            let elem_ty = match &for_stmt.iterable {
+            let elem_ty = match &mut for_stmt.iterable {
                 Iterable::Range(start, end) => {
                     let s = type_of_expr(ctx, start)?;
                     let e = type_of_expr(ctx, end)?;
@@ -2061,7 +2128,7 @@ fn check_stmt(ctx: &mut Ctx, stmt: &Stmt) -> Result<(), TypeError> {
             };
             ctx.push_scope();
             ctx.add_local(for_stmt.var.clone(), elem_ty);
-            let _ = type_of_block(ctx, &for_stmt.body)?;
+            let _ = type_of_block(ctx, &mut for_stmt.body)?;
             ctx.pop_scope();
             Ok(())
         }
@@ -2119,7 +2186,7 @@ fn check_stmt(ctx: &mut Ctx, stmt: &Stmt) -> Result<(), TypeError> {
             // Peel one Array layer per index, validating each index
             // as a Word and ensuring the final type is a scalar.
             let mut current = declared;
-            for idx in indices.iter() {
+            for idx in indices.iter_mut() {
                 let idx_ty = type_of_expr(ctx, idx)?;
                 if !types_compatible(ctx, &idx_ty, &Type::Word) {
                     return Err(TypeError::new(
@@ -2174,7 +2241,7 @@ fn check_stmt(ctx: &mut Ctx, stmt: &Stmt) -> Result<(), TypeError> {
     }
 }
 
-fn type_of_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Type, TypeError> {
+fn type_of_expr(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError> {
     match expr {
         Expr::Literal { value, .. } => Ok(match value {
             Literal::Int(_) => Type::Word,
@@ -2394,7 +2461,7 @@ fn type_of_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Type, TypeError> {
                     ));
                 }
                 let underlying = ctx.newtypes.get(name).cloned().unwrap_or(Type::Unknown);
-                let arg_ty = type_of_expr(ctx, &args[0])?;
+                let arg_ty = type_of_expr(ctx, &mut args[0])?;
                 if !types_compatible(ctx, &arg_ty, &underlying) {
                     return Err(TypeError::new(
                         alloc::format!(
@@ -2443,7 +2510,7 @@ fn type_of_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Type, TypeError> {
             // type variables before unifying with actual argument
             // types. For non-generic functions this is a no-op clone.
             let (inst_params, inst_return, fresh_vars) = instantiate_sig(ctx, &sig);
-            for (arg, param_ty) in args.iter().zip(inst_params.iter()) {
+            for (arg, param_ty) in args.iter_mut().zip(inst_params.iter()) {
                 let arg_ty = type_of_expr(ctx, arg)?;
                 if !types_compatible(ctx, &arg_ty, param_ty) {
                     return Err(TypeError::new(
@@ -2527,7 +2594,7 @@ fn type_of_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Type, TypeError> {
                         expr.span(),
                     ));
                 }
-                for (arg, param_ty) in args.iter().zip(sig.params.iter().skip(1)) {
+                for (arg, param_ty) in args.iter_mut().zip(sig.params.iter().skip(1)) {
                     let arg_ty = type_of_expr(ctx, arg)?;
                     if !types_compatible(ctx, &arg_ty, param_ty) {
                         return Err(TypeError::new(
@@ -2625,11 +2692,11 @@ fn type_of_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Type, TypeError> {
             // Type the body of each arm. The arm bodies must agree.
             let mut common: Option<Type> = None;
             let mut arm_labels: BTreeSet<String> = BTreeSet::new();
-            for arm in arms {
+            for arm in arms.iter_mut() {
                 check_pattern_against_type(ctx, &arm.pattern, &scrutinee_ty)?;
                 ctx.push_scope();
                 bind_pattern(ctx, &arm.pattern, scrutinee_ty.clone());
-                let arm_ty = type_of_expr(ctx, &arm.expr)?;
+                let arm_ty = type_of_expr(ctx, &mut arm.expr)?;
                 ctx.pop_scope();
                 arm_labels = arm_labels.union(&labels_of(&arm_ty)).cloned().collect();
                 let arm_ty_bare = strip_labels(arm_ty);
@@ -2787,7 +2854,7 @@ fn type_of_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Type, TypeError> {
                 .cloned()
                 .unwrap_or_default();
             let (inst, type_args) = build_instance_subst(ctx, &abstract_vars);
-            for init in fields {
+            for init in fields.iter_mut() {
                 let declared = declared_fields.get(&init.name).ok_or_else(|| {
                     TypeError::new(
                         format!("struct `{}` has no field `{}`", name, init.name),
@@ -2795,7 +2862,7 @@ fn type_of_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Type, TypeError> {
                     )
                 })?;
                 let declared_inst = declared.apply(&inst);
-                let value_ty = type_of_expr(ctx, &init.value)?;
+                let value_ty = type_of_expr(ctx, &mut init.value)?;
                 if !types_compatible(ctx, &value_ty, &declared_inst) {
                     return Err(TypeError::new(
                         format!(
@@ -2848,7 +2915,7 @@ fn type_of_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Type, TypeError> {
                         .cloned()
                         .unwrap_or_default();
                     let (inst, type_args) = build_instance_subst(ctx, &abstract_vars);
-                    for (arg, expected) in args.iter().zip(types.iter()) {
+                    for (arg, expected) in args.iter_mut().zip(types.iter()) {
                         let expected_inst = expected.apply(&inst);
                         let arg_ty = type_of_expr(ctx, arg)?;
                         if !types_compatible(ctx, &arg_ty, &expected_inst) {
@@ -2891,7 +2958,7 @@ fn type_of_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Type, TypeError> {
                                         *span,
                                     ));
                                 }
-                                let inner = type_of_expr(ctx, &args[0])?;
+                                let inner = type_of_expr(ctx, &mut args[0])?;
                                 return Ok(Type::Option(Box::new(inner)));
                             }
                             "None" => {
@@ -2926,7 +2993,7 @@ fn type_of_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Type, TypeError> {
         }
         Expr::ArrayLiteral { elements, span } => {
             let mut elem_ty: Option<Type> = None;
-            for e in elements {
+            for e in elements.iter_mut() {
                 let t = type_of_expr(ctx, e)?;
                 match &elem_ty {
                     None => elem_ty = Some(t),
@@ -3128,7 +3195,7 @@ fn type_of_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Type, TypeError> {
                 ));
             }
             // Unify remaining args with the rest of the parameters.
-            for (arg, param_ty) in args.iter().zip(inst_params.iter().skip(1)) {
+            for (arg, param_ty) in args.iter_mut().zip(inst_params.iter().skip(1)) {
                 let arg_ty = type_of_expr(ctx, arg)?;
                 if !types_compatible(ctx, &arg_ty, param_ty) {
                     return Err(TypeError::new(
@@ -3187,7 +3254,7 @@ fn type_of_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Type, TypeError> {
             let mut saw_overflow = false;
             let mut saw_underflow = false;
             let mut ok_binding: Option<String> = None;
-            for arm in arms {
+            for arm in arms.iter() {
                 for kind in &arm.kinds {
                     match kind {
                         crate::ast::CheckedArmKind::Ok { binding } => {
@@ -3257,7 +3324,7 @@ fn type_of_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Type, TypeError> {
             // bodies must unify; the construct's result type is
             // their join.
             let result_ty = ctx.fresh();
-            for arm in arms {
+            for arm in arms.iter_mut() {
                 ctx.push_scope();
                 if arm
                     .kinds
@@ -3267,7 +3334,7 @@ fn type_of_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Type, TypeError> {
                 {
                     ctx.add_local(name.clone(), Type::Word);
                 }
-                let body_ty = type_of_expr(ctx, &arm.body)?;
+                let body_ty = type_of_expr(ctx, &mut arm.body)?;
                 ctx.pop_scope();
                 if !types_compatible(ctx, &body_ty, &result_ty) {
                     return Err(TypeError::new(
@@ -3282,13 +3349,49 @@ fn type_of_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Type, TypeError> {
             }
             Ok(result_ty.apply(&ctx.subst))
         }
-        Expr::SaturateMax { .. } | Expr::SaturateMin { .. } => {
+        Expr::SaturateMax { span } | Expr::SaturateMin { span } => {
             // `saturate_max` / `saturate_min` have a context-
             // determined type. They are admitted as `Word` in V0.2
             // because the checked-overflow construct only supports
             // Word operations; future iterations extend this to
             // Byte and Fixed by tying the saturation type to the
             // surrounding construct's expected type.
+            //
+            // Refinement-driven resolution: when the surrounding
+            // expected type is a refined newtype that declared a
+            // `saturate_max` / `saturate_min` value in its `with`
+            // clause, mutate the AST node in place to a `Literal::Int`
+            // carrying that value. The construct is otherwise
+            // transparent at the bytecode layer.
+            let span_copy = *span;
+            let is_max = matches!(expr, Expr::SaturateMax { .. });
+            if let Some(exp_ty) = ctx.expected_type()
+                && let Type::Newtype(name, _) = strip_labels(exp_ty)
+            {
+                let resolved = if is_max {
+                    ctx.newtype_saturate_max.get(&name).copied()
+                } else {
+                    ctx.newtype_saturate_min.get(&name).copied()
+                };
+                if let Some(value) = resolved {
+                    // Replace the keyword with a constructor call
+                    // `Name(value)` so the produced expression has the
+                    // refined newtype as its type. The refinement
+                    // predicate (declared in the `where` clause) is
+                    // verified at runtime by the constructor call on
+                    // the literal argument.
+                    let underlying = ctx.newtypes.get(&name).cloned().unwrap_or(Type::Word);
+                    *expr = Expr::Call {
+                        name: name.clone(),
+                        args: alloc::vec![Expr::Literal {
+                            value: Literal::Int(value),
+                            span: span_copy,
+                        }],
+                        span: span_copy,
+                    };
+                    return Ok(Type::Newtype(name, Box::new(underlying)));
+                }
+            }
             Ok(Type::Word)
         }
         Expr::Classify { value, labels, .. } => {
