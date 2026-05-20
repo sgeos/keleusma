@@ -352,6 +352,53 @@ fn i8_narrow_runtime_runs_embedded_8_bytecode() {
 }
 
 #[test]
+fn i8_narrow_runtime_handles_aggregate_tuple() {
+    // i8 runtime against an aggregate type (tuple). Each tuple element
+    // is an i8-valued Word; the runtime stores Value::Tuple([Int(W); 2])
+    // and returns the second element as Word.
+    let src = "fn pair() -> (Word, Word) { (10, 20) }\n\
+               fn main() -> Word {\n\
+                   let p = pair();\n\
+                   p.1\n\
+               }";
+    let tokens = tokenize(src).expect("lex");
+    let program = parse(&tokens).expect("parse");
+    let module = compile_with_target(&program, &Target::embedded_8()).expect("compile");
+
+    let arena = Arena::with_capacity(4096);
+    type RetroVm<'a, 'arena> = GenericVm<'a, 'arena, i8, u16, f32>;
+    let mut vm: RetroVm<'_, '_> = RetroVm::new(module, &arena).expect("new");
+    match vm.call(&[]).expect("call") {
+        GenericVmState::Finished(GenericValue::Int(n)) => assert_eq!(n, 20_i8),
+        other => panic!("unexpected: {:?}", other),
+    }
+}
+
+#[test]
+fn i8_narrow_runtime_view_bytes_zero_copy_round_trips() {
+    // Belt-and-suspenders: the zero-copy load path threads the load-time
+    // width check through Vm<i8> as well as Vm<i16>.
+    let src = "fn main() -> Word { 100 + 20 }";
+    let module = {
+        let tokens = tokenize(src).expect("lex");
+        let program = parse(&tokens).expect("parse");
+        compile_with_target(&program, &Target::embedded_8()).expect("compile")
+    };
+    let bytes = module.to_bytes().expect("serialize");
+    let mut aligned: rkyv::util::AlignedVec<8> = rkyv::util::AlignedVec::with_capacity(bytes.len());
+    aligned.extend_from_slice(&bytes);
+
+    let arena = Arena::with_capacity(4096);
+    type RetroVm<'a, 'arena> = GenericVm<'a, 'arena, i8, u16, f32>;
+    let mut vm: RetroVm<'_, '_> =
+        unsafe { RetroVm::view_bytes_zero_copy(aligned.as_slice(), &arena) }.expect("view");
+    match vm.call(&[]).expect("call") {
+        GenericVmState::Finished(GenericValue::Int(n)) => assert_eq!(n, 120_i8),
+        other => panic!("unexpected: {:?}", other),
+    }
+}
+
+#[test]
 fn i8_narrow_runtime_wraps_at_i8_boundary() {
     // Item 8 paired regression: 100 + 28 = 128 exceeds i8::MAX and
     // wraps to -128 via Word::wrapping_add.

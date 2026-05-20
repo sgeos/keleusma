@@ -17,10 +17,27 @@ use keleusma::parser::parse;
 use keleusma::vm::{DEFAULT_ARENA_CAPACITY, Vm, VmState};
 
 const SRC_BIG_NUMBERS: &str = include_str!("../examples/scripts/09_big_numbers.kel");
+const SRC_MULTBYTE: &str = include_str!("../examples/scripts/10_multbyte.kel");
 
 #[test]
 fn big_number_example_returns_1() {
     let tokens = tokenize(SRC_BIG_NUMBERS).expect("lex");
+    let program = parse(&tokens).expect("parse");
+    let module = compile(&program).expect("compile");
+    let arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+    let mut vm = Vm::new(module, &arena).expect("vm new");
+    match vm.call(&[]).expect("call") {
+        VmState::Finished(v) => assert_eq!(v, Value::Int(1)),
+        other => panic!("expected finished, got {:?}", other),
+    }
+}
+
+#[test]
+fn multbyte_example_returns_1() {
+    // Compiles the `Multbyte<2>` worked example and confirms both the
+    // carry-out (add) and borrow-out (sub) cascades produce the
+    // expected (low, high) pairs through the signed-range boundary.
+    let tokens = tokenize(SRC_MULTBYTE).expect("lex");
     let program = parse(&tokens).expect("parse");
     let module = compile(&program).expect("compile");
     let arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);

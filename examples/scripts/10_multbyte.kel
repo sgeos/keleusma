@@ -1,0 +1,126 @@
+// Multi-word ("Multbyte") arithmetic via the checked-arithmetic
+// construct.
+//
+// The pattern-arm overflow/underflow construct introduced in V0.2 is
+// the building block for arbitrary-precision arithmetic. A Multbyte
+// value is a fixed-length array of `Word` digits in little-endian
+// order: `[d0, d1, ..., d_{N-1}]` represents
+// `d0 + d1 * W^1 + d2 * W^2 + ... + d_{N-1} * W^{N-1}`
+// where `W = 2^word_bits`. Carry from one digit's checked addition
+// propagates to the next digit's addition as an additional addend.
+//
+// Run: keleusma run examples/scripts/10_multbyte.kel
+// Expected output: 1
+//
+// Surface note. Keleusma does not currently expose const generics, so
+// `Multbyte<N>` is not a single parametric type. The cleanest current
+// surface is one function per N value. The functions below cover
+// `Multbyte<2>` (128-bit on the default i64 runtime) end to end and
+// sketch the cascade pattern for `Multbyte<4>` (256-bit).
+//
+// Signed-arithmetic note. Keleusma's `Word` is signed. The checked
+// construct fires `overflow` when a sum exceeds `Word::MAX` and
+// `underflow` when a difference falls below `Word::MIN`. These map
+// onto the "carry-out" and "borrow-out" of unsigned multi-precision
+// arithmetic only at the signed-range boundary, not at the
+// unsigned-zero boundary. For values that stay within a single
+// digit's signed range, the cascade contributes zero carry or
+// borrow. Hosts that want full unsigned multi-precision semantics
+// register a Rust native that treats the digits as `u64` and
+// reports carry on each digit; the script-side pattern below
+// demonstrates the signed-carry path.
+
+// -- Multbyte<2>: two-word addition with carry propagation --
+
+// Add two 2-word values returning the sum as a 2-word value.
+// Overflow beyond the most significant digit is silently wrapped;
+// callers that need a saturating or trapping policy should match on
+// the high digit's overflow class explicitly.
+fn add_2(a: [Word; 2], b: [Word; 2]) -> [Word; 2] {
+    // Digit 0: a[0] + b[0]. Either fits in Word (carry = 0) or
+    // overflows/underflows, in which case the wrapped low half lives
+    // in the `l` binding and the carry-out is 1.
+    let (carry_lo, lo) = a[0] + b[0] {
+        ok(v) => (0, v),
+        overflow(_, l) => (1, l),
+        underflow(_, l) => (1, l),
+    };
+
+    // Digit 1: a[1] + b[1]. Both partial wraps cascade to the next
+    // step that folds in `carry_lo`. The construct routes the wrapped
+    // sum through `l` regardless of which boundary was crossed.
+    let hi_partial = a[1] + b[1] {
+        ok(v) => v,
+        overflow(_, l) => l,
+        underflow(_, l) => l,
+    };
+
+    // Fold the carry from digit 0 into digit 1.
+    let hi = hi_partial + carry_lo {
+        ok(v) => v,
+        overflow(_, l) => l,
+        underflow(_, l) => l,
+    };
+
+    [lo, hi]
+}
+
+// Multbyte<2> subtraction. The pattern is the symmetric of addition:
+// underflow at one digit produces a borrow-out (1) into the next
+// digit's subtraction.
+fn sub_2(a: [Word; 2], b: [Word; 2]) -> [Word; 2] {
+    let (borrow_lo, lo) = a[0] - b[0] {
+        ok(v) => (0, v),
+        overflow(_, l) => (1, l),
+        underflow(_, l) => (1, l),
+    };
+
+    let hi_partial = a[1] - b[1] {
+        ok(v) => v,
+        overflow(_, l) => l,
+        underflow(_, l) => l,
+    };
+
+    let hi = hi_partial - borrow_lo {
+        ok(v) => v,
+        overflow(_, l) => l,
+        underflow(_, l) => l,
+    };
+
+    [lo, hi]
+}
+
+// -- Worked driver --
+
+fn main() -> Word {
+    // Example A. Add two values whose low digits sum to overflow.
+    // a = Word::MAX + 0 * W = (i64::MAX, 0)
+    // b = 1 + 0 * W           = (1, 0)
+    // a + b = (Word::MIN, 1) because the low digit wraps and the
+    // carry-out promotes to the high digit.
+    let a: [Word; 2] = [9223372036854775807, 0];
+    let b: [Word; 2] = [1, 0];
+    let sum_ab = add_2(a, b);
+    // sum_ab[0] is Word::MIN = -9223372036854775808; sum_ab[1] is 1.
+
+    // Example B. Subtract two values whose low digit's subtraction
+    // crosses the signed underflow boundary.
+    // c = (Word::MIN, 5)
+    // d = (1, 0)
+    // c - d = (Word::MAX, 4) because the low digit's `Word::MIN - 1`
+    // wraps to `Word::MAX` and produces a borrow-out into the high
+    // digit, dropping it from 5 to 4.
+    let c: [Word; 2] = [0 - 9223372036854775807 - 1, 5];
+    let d: [Word; 2] = [1, 0];
+    let diff_cd = sub_2(c, d);
+    // diff_cd[0] is Word::MAX = 9223372036854775807; diff_cd[1] is 4.
+
+    // Verify both examples. The exit value is `1` when both paths
+    // match the expected cascade behavior.
+    if sum_ab[0] == 0 - 9223372036854775807 - 1 and sum_ab[1] == 1
+        and diff_cd[0] == 9223372036854775807 and diff_cd[1] == 4 {
+        1
+    } else {
+        0
+    }
+}

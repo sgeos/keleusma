@@ -127,6 +127,7 @@ fn wcet_region(
     start: usize,
     end: usize,
     break_costs: &mut Vec<u32>,
+    cost_model: &crate::bytecode::CostModel,
 ) -> Result<Option<u32>, VerifyError> {
     let ops = &chunk.ops;
     let mut cost: u32 = 0;
@@ -135,7 +136,7 @@ fn wcet_region(
     while ip < end {
         match &ops[ip] {
             Op::Break(_) => {
-                cost += ops[ip].cost();
+                cost += cost_model.cycles(&ops[ip]);
                 break_costs.push(cost);
                 return Ok(None);
             }
@@ -143,17 +144,17 @@ fn wcet_region(
                 // Trap halts execution. Treat as path-exit. Does not
                 // push to break_costs because it does not transfer
                 // control to the enclosing loop.
-                cost += ops[ip].cost();
+                cost += cost_model.cycles(&ops[ip]);
                 let _ = cost;
                 return Ok(None);
             }
             Op::BreakIf(_) => {
-                cost += ops[ip].cost();
+                cost += cost_model.cycles(&ops[ip]);
                 break_costs.push(cost);
                 ip += 1;
             }
             Op::If(target) => {
-                cost += ops[ip].cost();
+                cost += cost_model.cycles(&ops[ip]);
                 let target = *target as usize;
                 if target > 0 && matches!(&ops[target - 1], Op::Else(_)) {
                     let endif_pos = if let Op::Else(e) = &ops[target - 1] {
@@ -161,8 +162,9 @@ fn wcet_region(
                     } else {
                         unreachable!()
                     };
-                    let then_cost = wcet_region(chunk, ip + 1, target - 1, break_costs)?;
-                    let else_cost = wcet_region(chunk, target, endif_pos, break_costs)?;
+                    let then_cost =
+                        wcet_region(chunk, ip + 1, target - 1, break_costs, cost_model)?;
+                    let else_cost = wcet_region(chunk, target, endif_pos, break_costs, cost_model)?;
                     let branch_cost = match (then_cost, else_cost) {
                         (Some(a), Some(b)) => Some(if a > b { a } else { b }),
                         (Some(a), None) => Some(a),
@@ -172,7 +174,7 @@ fn wcet_region(
                     cost += branch_cost.unwrap_or(0);
                     ip = endif_pos + 1;
                 } else {
-                    let then_cost = wcet_region(chunk, ip + 1, target, break_costs)?;
+                    let then_cost = wcet_region(chunk, ip + 1, target, break_costs, cost_model)?;
                     // False path has zero additional cost (skips to EndIf).
                     // Worst case is the then-body if it is more expensive.
                     match then_cost {
@@ -185,11 +187,12 @@ fn wcet_region(
                 }
             }
             Op::Loop(target) => {
-                cost += ops[ip].cost();
+                cost += cost_model.cycles(&ops[ip]);
                 let loop_exit_target = *target as usize;
                 let endloop_ip = loop_exit_target - 1;
                 let mut loop_break_costs: Vec<u32> = Vec::new();
-                let body_cost = wcet_region(chunk, ip + 1, endloop_ip, &mut loop_break_costs)?;
+                let body_cost =
+                    wcet_region(chunk, ip + 1, endloop_ip, &mut loop_break_costs, cost_model)?;
                 if loop_break_costs.is_empty() && body_cost.is_none() {
                     return Ok(None);
                 }
@@ -226,7 +229,7 @@ fn wcet_region(
                 ip += 1;
             }
             _ => {
-                cost += ops[ip].cost();
+                cost += cost_model.cycles(&ops[ip]);
                 ip += 1;
             }
         }
@@ -812,6 +815,20 @@ pub fn wcmu_stream_iteration_with_value_slot_bytes(
 /// Returns the worst-case cost as a unitless integer. Returns an error
 /// if the chunk is not a Stream block type or lacks Stream/Reset.
 pub fn wcet_stream_iteration(chunk: &Chunk) -> Result<u32, VerifyError> {
+    wcet_stream_iteration_with_cost_model(chunk, &crate::bytecode::NOMINAL_COST_MODEL)
+}
+
+/// Variant of [`wcet_stream_iteration`] that uses a host-supplied
+/// cost model for the per-op cycle table. Hosts targeting a
+/// specific microarchitecture supply a measured `CostModel` so the
+/// WCET bound reflects the target's pipelined-cycle costs rather
+/// than the nominal table. The model's `value_slot_bytes` field is
+/// not consulted by the WCET computation; the WCMU side uses it
+/// through [`wcmu_stream_iteration_with_value_slot_bytes`].
+pub fn wcet_stream_iteration_with_cost_model(
+    chunk: &Chunk,
+    cost_model: &crate::bytecode::CostModel,
+) -> Result<u32, VerifyError> {
     if chunk.block_type != BlockType::Stream {
         return Err(VerifyError {
             chunk_name: chunk.name.clone(),
@@ -836,10 +853,16 @@ pub fn wcet_stream_iteration(chunk: &Chunk) -> Result<u32, VerifyError> {
         })?;
 
     let mut break_costs: Vec<u32> = Vec::new();
-    let body_cost = wcet_region(chunk, stream_pos + 1, reset_pos, &mut break_costs)?;
+    let body_cost = wcet_region(
+        chunk,
+        stream_pos + 1,
+        reset_pos,
+        &mut break_costs,
+        cost_model,
+    )?;
 
     // Include Stream and Reset instruction costs.
-    let overhead = ops[stream_pos].cost() + ops[reset_pos].cost();
+    let overhead = cost_model.cycles(&ops[stream_pos]) + cost_model.cycles(&ops[reset_pos]);
     let region_cost = body_cost.unwrap_or(0);
 
     Ok(overhead + region_cost)
@@ -1154,9 +1177,12 @@ pub fn verify_resource_bounds_with_cost_model(
     // `value_slot_bytes` equals `size_of::<GenericValue<W, F>>()` to
     // tighten the bound from the default 32-byte 64-bit-runtime
     // assumption. The cycle component of the cost model
-    // (`op_cycles`) is not yet threaded through the per-chunk
-    // computation; that thread remains future work tracked under
-    // B10's cost-table follow-on.
+    // (`op_cycles`) drives the WCET computation through
+    // [`wcet_stream_iteration_with_cost_model`]; this entry point
+    // currently routes only the WCMU side because the runtime
+    // accepts the bytecode's declared WCET cycle field as a
+    // host attestation rather than re-verifying it against the
+    // arena.
     verify_resource_bounds_with_natives_and_value_slot_bytes(
         module,
         arena_capacity,
