@@ -10,6 +10,7 @@ pub mod marshall;
 pub mod opaque;
 pub mod utility_natives;
 pub mod vm;
+pub mod word;
 
 // Audio natives use floating-point arithmetic throughout (note
 // frequency, phase, filter coefficients) and are only useful on
