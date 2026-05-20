@@ -316,23 +316,19 @@ The structural verifier's conservative-verification stance rejects programs cont
 
 Deferred to V0.3 per the design pass.
 
-## B15. Remove `Type::Unknown` entirely
+## ~~B15. Remove `Type::Unknown` entirely~~ (Resolved)
 
-The Hindley-Milner pass landed in V0.1-M3 retained `Type::Unknown` as a permissive transitional anchor for runtime-only dispatch positions (most prominently, native function calls without declared signatures and the underlying type of newtypes whose definitions had not yet been resolved). V0.2 added native function signature declarations (`use host::name(T1, T2) -> R`) that close the largest gap, and the bidirectional type checking infrastructure for the saturate-contract feature handles newtype-underlying lookups through `Ctx::newtypes` rather than the placeholder stored in `Type::Newtype`. Removing `Type::Unknown` is now structurally feasible.
+The `Type::Unknown` variant is gone from the runtime crate. The refactor proceeded in three phases:
 
-### Scope
+1. **Drop the placeholder underlying from `Type::Newtype`.** The variant changed from `Newtype(String, Box<Type>)` to `Newtype(String)`. The authoritative underlying lives in `Ctx::newtypes`; the boxed placeholder was dead weight. This eliminated the largest `Type::Unknown` producer (the resolver at `from_expr_with_params_and_frac`).
 
-- Replace every `Type::Unknown` production with a fresh type variable (`Type::Var`).
-- Update `types_compatible` to drop the `Type::Unknown` wildcard branch.
-- Audit the 26 call sites that currently produce or consume `Type::Unknown` (per the typecheck module documentation) and convert each to either a typed value or a fresh variable.
-- Add tests covering inference paths that previously relied on the permissive wildcard.
+2. **Convert remaining producers to fresh type variables.** The two `unwrap_or(Type::Unknown)` sites in the newtype-construction paths now route through `ctx.fresh()` when the newtype is not yet recorded in `ctx.newtypes`.
 
-### Risks
+3. **Remove the `types_compatible` wildcard short-circuit and drop the variant.** Every `Type::Unknown` consumer arm collapsed into the surrounding `Type::Var(_)` arm; standalone `Type::Unknown => ctx.fresh()` arms were deleted because the now-uniform `Type::Var(_)` arm already covers them. The cast wildcard `(Type::Unknown, _) | (_, Type::Unknown) => to_ty.clone()` became `(Type::Var(_), _) | (_, Type::Var(_)) => to_ty.clone()`.
 
-- Inference regressions. Some unannotated positions currently work because `Type::Unknown` short-circuits the unifier; replacing with a fresh variable forces the inference to find a concrete type, which may surface ambiguities that were previously hidden.
-- Native call sites without declared signatures will need to fall back to fresh variables and accept the consequence that the return type is undetermined until the call is unified against a use site.
+All 642 lib tests pass under the new shape. Workspace and doctests clean. Bare-metal STM32N6570-DK full-pipeline build verified.
 
-Foundation work is complete (native signatures, expected-type stack). The removal pass itself is a self-contained refactor.
+The companion type-system invariant tightens accordingly: every unannotated position now produces a fresh `Type::Var` through `Ctx::fresh`, and inference proceeds uniformly through unification.
 
 ## B16. Target-scaled `Fixed` defaults for sub-64-bit native runtimes
 

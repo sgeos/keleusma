@@ -113,7 +113,11 @@ pub enum Type {
     /// exists only at the type-checker level. Two newtypes with
     /// different names are not assignable to one another even when
     /// their underlying types match.
-    Newtype(String, Box<Type>),
+    /// Newtype reference by name. The authoritative underlying
+    /// type is stored in [`Ctx::newtypes`]; the type variant
+    /// itself carries only the nominal name because the unifier
+    /// distinguishes newtypes by name alone.
+    Newtype(String),
     /// Type with information-flow labels. The wrapped type is the
     /// underlying type; the label set is the set of user-defined
     /// labels the value carries. Empty label set is represented by
@@ -127,39 +131,10 @@ pub enum Type {
     /// checker for expressions whose type is constrained but not yet
     /// solved. Resolved through unification against the constraint
     /// set; a final pass applies the substitution and reports any
-    /// unresolved variable as an inference failure.
+    /// unresolved variable as an inference failure. All
+    /// unannotated positions produce a fresh `Type::Var` through
+    /// [`Ctx::fresh`].
     Var(u32),
-    /// Wildcard sentinel for positions where structural inference
-    /// cannot or need not narrow the type. Three current uses:
-    ///
-    /// 1. **Newtype underlying placeholder.** When `Type::Newtype`
-    ///    is produced by the structural resolver
-    ///    ([`Self::from_expr_with_params_and_frac`]), the resolver
-    ///    does not carry the newtype map and cannot recover the
-    ///    authoritative underlying type. The wrapper stores
-    ///    `Box::new(Type::Unknown)` as a placeholder; call sites
-    ///    that need the real underlying consult
-    ///    [`Ctx::newtypes`] directly.
-    ///
-    /// 2. **Cast dispatch fallback.** The `Expr::Cast` arm admits
-    ///    `Type::Unknown` on either side as a pass-through. This
-    ///    matches the historical behaviour for partially-inferred
-    ///    expressions where the structural type is unresolved but
-    ///    the cast target is concrete.
-    ///
-    /// 3. **`types_compatible` wildcard.** A presence on either
-    ///    side of the compatibility check short-circuits to true,
-    ///    matching the historical lenient inference behaviour for
-    ///    positions the structural pass produces but the HM
-    ///    pipeline has not yet constrained.
-    ///
-    /// The proper Hindley-Milner inference path produces
-    /// [`Type::Var`] instead. Newer code should prefer fresh type
-    /// variables via [`Ctx::fresh`] over `Type::Unknown`. The
-    /// variant remains useful for the three roles above where a
-    /// fresh variable would propagate constraints downstream in
-    /// ways the simpler sentinel intentionally does not.
-    Unknown,
 }
 
 impl Type {
@@ -248,12 +223,10 @@ impl Type {
                         // `Ctx::newtypes`; consult it at the use
                         // sites that actually need it (newtype
                         // construction, value extraction). The
-                        // variant's stored underlying is a
-                        // placeholder here because the resolver does
-                        // not carry the newtype map; equality and
-                        // unification depend only on the name, not
-                        // on the underlying.
-                        Type::Newtype(name.clone(), Box::new(Type::Unknown))
+                        // variant carries only the nominal name;
+                        // equality and unification depend on the
+                        // name, not on the underlying.
+                        Type::Newtype(name.clone())
                     }
                     None => Type::Opaque(name.clone()),
                 }
@@ -308,7 +281,7 @@ impl Type {
                     format!("{}<{}>", name, inner.join(", "))
                 }
             }
-            Type::Newtype(name, _) => name.clone(),
+            Type::Newtype(name) => name.clone(),
             Type::Labelled(inner, labels) => {
                 let mut labels_sorted: Vec<&str> = labels.iter().map(|s| s.as_str()).collect();
                 labels_sorted.sort();
@@ -320,7 +293,6 @@ impl Type {
             }
             Type::Opaque(name) => name.clone(),
             Type::Var(n) => format!("?T{}", n),
-            Type::Unknown => "<unknown>".to_string(),
         }
     }
 
@@ -333,7 +305,7 @@ impl Type {
             Type::Array(elem, _) => elem.occurs(var),
             Type::Option(inner) => inner.occurs(var),
             Type::Struct(_, args) | Type::Enum(_, args) => args.iter().any(|t| t.occurs(var)),
-            Type::Newtype(_, underlying) => underlying.occurs(var),
+            Type::Newtype(_) => false,
             Type::Labelled(inner, _) => inner.occurs(var),
             _ => false,
         }
@@ -356,9 +328,7 @@ impl Type {
             Type::Enum(name, args) => {
                 Type::Enum(name.clone(), args.iter().map(|t| t.apply(subst)).collect())
             }
-            Type::Newtype(name, underlying) => {
-                Type::Newtype(name.clone(), Box::new(underlying.apply(subst)))
-            }
+            Type::Newtype(name) => Type::Newtype(name.clone()),
             Type::Labelled(inner, labels) => {
                 Type::Labelled(Box::new(inner.apply(subst)), labels.clone())
             }
@@ -520,7 +490,7 @@ pub fn unify(a: &Type, b: &Type, subst: &mut Subst) -> Result<(), UnifyError> {
         // `Ctx::newtypes` and is consulted at construction or cast
         // sites. Two newtypes with matching names are equivalent
         // regardless of their stored underlying.
-        (Type::Newtype(ln, _), Type::Newtype(rn, _)) if ln == rn => Ok(()),
+        (Type::Newtype(ln), Type::Newtype(rn)) if ln == rn => Ok(()),
         (l, r) => Err(UnifyError::Mismatch { left: l, right: r }),
     }
 }
@@ -563,9 +533,8 @@ enum TypeKind {
 /// Return the canonical head name of a type, used as the implementing
 /// type's identity in the trait `impls` map. Primitive types have
 /// stable lower-case names; named types use their declaration name.
-/// Type variables and unresolved `Type::Unknown` are treated as
-/// matching any implementation; the caller decides how to handle
-/// these cases.
+/// Type variables are treated as matching any implementation;
+/// the caller decides how to handle the underspecified case.
 /// Remove the outermost `Type::Labelled` wrapper, returning the
 /// underlying type. The labels are dropped; callers that need
 /// to consult them must inspect the original type before
@@ -622,9 +591,9 @@ fn type_head_name(t: &Type) -> Option<String> {
         Type::Array(_, _) => Some("array".to_string()),
         Type::Option(_) => Some("Option".to_string()),
         Type::Struct(name, _) | Type::Enum(name, _) | Type::Opaque(name) => Some(name.clone()),
-        Type::Newtype(name, _) => Some(name.clone()),
+        Type::Newtype(name) => Some(name.clone()),
         Type::Labelled(inner, _) => type_head_name(inner),
-        Type::Var(_) | Type::Unknown => None,
+        Type::Var(_) => None,
     }
 }
 
@@ -915,20 +884,10 @@ fn instantiate_sig(ctx: &mut Ctx, sig: &FnSig) -> (Vec<Type>, Type, Vec<Type>) {
 /// false if the unification fails. The caller is responsible for
 /// converting that into a [`TypeError`] with an appropriate message.
 ///
-/// `Type::Unknown` is treated as compatible with anything for backwards
-/// compatibility with the narrow ad-hoc inference; positions that are
-/// unannotated should prefer fresh type variables through
-/// [`Ctx::fresh`] over `Unknown` so that constraints can propagate.
+/// Type variables are routed through `unify` so the constraint is
+/// recorded in the substitution; distinct generic instantiations
+/// thereby fail to unify when their inferred types diverge.
 fn types_compatible(ctx: &mut Ctx, a: &Type, b: &Type) -> bool {
-    // The legacy `Type::Unknown` sentinel is compatible with anything
-    // because the narrow inference produces it when no constraint can
-    // be derived. `Type::Var` is NOT short-circuited here; it must go
-    // through `unify` so the constraint is recorded in the
-    // substitution. Otherwise distinct generic instantiations would
-    // appear compatible regardless of their actual types.
-    if matches!(a, Type::Unknown) || matches!(b, Type::Unknown) {
-        return true;
-    }
     // Information-flow check is recursive: per-position label
     // subset rule applies at every composite layer. See
     // `flow_admissible`.
@@ -1135,7 +1094,7 @@ fn run_check(program: &mut Program, mut ctx: Ctx) -> Result<(), TypeError> {
                 // Walk to the next newtype if the current's
                 // underlying is itself a newtype.
                 match ctx.newtypes.get(&current) {
-                    Some(Type::Newtype(next, _)) => current = next.clone(),
+                    Some(Type::Newtype(next)) => current = next.clone(),
                     _ => break,
                 }
             }
@@ -1299,7 +1258,10 @@ fn run_check(program: &mut Program, mut ctx: Ctx) -> Result<(), TypeError> {
         if let TypeDef::Newtype(n) = type_def
             && let Some(pred_name) = &n.refinement
         {
-            let underlying = ctx.newtypes.get(&n.name).cloned().unwrap_or(Type::Unknown);
+            let underlying = match ctx.newtypes.get(&n.name).cloned() {
+                Some(ty) => ty,
+                None => ctx.fresh(),
+            };
             // Clone the signature to release the borrow on `ctx`
             // before calling `types_compatible`, which requires
             // `&mut ctx`.
@@ -1372,9 +1334,9 @@ fn run_check(program: &mut Program, mut ctx: Ctx) -> Result<(), TypeError> {
             Type::Array(_, _) => "array".to_string(),
             Type::Option(_) => "Option".to_string(),
             Type::Struct(name, _) | Type::Enum(name, _) | Type::Opaque(name) => name,
-            Type::Newtype(name, _) => name,
+            Type::Newtype(name) => name,
             Type::Labelled(_, _) => unreachable!("strip_labels removed Labelled"),
-            Type::Var(_) | Type::Unknown => continue,
+            Type::Var(_) => continue,
         };
         ctx.impls
             .entry(impl_block.trait_name.clone())
@@ -1556,9 +1518,9 @@ fn run_check(program: &mut Program, mut ctx: Ctx) -> Result<(), TypeError> {
             Type::Array(_, _) => "array".to_string(),
             Type::Option(_) => "Option".to_string(),
             Type::Struct(name, _) | Type::Enum(name, _) | Type::Opaque(name) => name,
-            Type::Newtype(name, _) => name,
+            Type::Newtype(name) => name,
             Type::Labelled(_, _) => unreachable!("strip_labels removed Labelled"),
-            Type::Var(_) | Type::Unknown => continue,
+            Type::Var(_) => continue,
         };
         for method in &impl_block.methods {
             let mut renamed = method.clone();
@@ -1793,7 +1755,7 @@ fn check_pattern_against_type(
                 }
                 Ok(())
             }
-            Type::Unknown | Type::Var(_) => Ok(()),
+            Type::Var(_) => Ok(()),
             _ => Err(TypeError::new(
                 format!(
                     "tuple pattern does not match scrutinee type {}",
@@ -1844,7 +1806,7 @@ fn check_pattern_against_type(
                         }
                     }
                 }
-                if matches!(scrutinee_ty, Type::Unknown | Type::Var(_)) {
+                if matches!(scrutinee_ty, Type::Var(_)) {
                     return Ok(());
                 }
                 return Err(TypeError::new(
@@ -1860,7 +1822,7 @@ fn check_pattern_against_type(
             // Check enum name matches scrutinee.
             match scrutinee_ty {
                 Type::Enum(scrutinee_name, _) if scrutinee_name == enum_name => {}
-                Type::Unknown | Type::Var(_) => return Ok(()),
+                Type::Var(_) => return Ok(()),
                 _ => {
                     return Err(TypeError::new(
                         format!(
@@ -1905,7 +1867,7 @@ fn check_pattern_against_type(
         Pattern::Struct(name, field_pats, span) => {
             match scrutinee_ty {
                 Type::Struct(scrutinee_name, _) if scrutinee_name == name => {}
-                Type::Unknown | Type::Var(_) => return Ok(()),
+                Type::Var(_) => return Ok(()),
                 _ => {
                     return Err(TypeError::new(
                         format!(
@@ -2067,7 +2029,7 @@ fn check_exhaustiveness(
             }
             Ok(())
         }
-        Type::Unknown | Type::Var(_) => Ok(()),
+        Type::Var(_) => Ok(()),
         other => Err(TypeError::new(
             format!(
                 "non-exhaustive match on {}: requires a wildcard arm",
@@ -2352,9 +2314,7 @@ fn type_of_expr(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError> {
                         Ok(Type::Float)
                     } else if matches!(lt, Type::Str) && matches!(rt, Type::Str) {
                         Ok(Type::Str)
-                    } else if matches!(lt, Type::Unknown | Type::Var(_))
-                        || matches!(rt, Type::Unknown | Type::Var(_))
-                    {
+                    } else if matches!(lt, Type::Var(_)) || matches!(rt, Type::Var(_)) {
                         Ok(ctx.fresh())
                     } else {
                         Err(TypeError::new(
@@ -2383,9 +2343,7 @@ fn type_of_expr(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError> {
                         }
                     } else if matches!(lt, Type::Float) && matches!(rt, Type::Float) {
                         Ok(Type::Float)
-                    } else if matches!(lt, Type::Unknown | Type::Var(_))
-                        || matches!(rt, Type::Unknown | Type::Var(_))
-                    {
+                    } else if matches!(lt, Type::Var(_)) || matches!(rt, Type::Var(_)) {
                         Ok(ctx.fresh())
                     } else {
                         Err(TypeError::new(
@@ -2443,12 +2401,7 @@ fn type_of_expr(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError> {
             let ty = strip_labels(ty_raw);
             let bare_result = match op {
                 UnaryOp::Neg => match ty {
-                    Type::Word
-                    | Type::Byte
-                    | Type::Fixed(_)
-                    | Type::Float
-                    | Type::Unknown
-                    | Type::Var(_) => Ok(ty),
+                    Type::Word | Type::Byte | Type::Fixed(_) | Type::Float | Type::Var(_) => Ok(ty),
                     other => Err(TypeError::new(
                         format!("cannot negate {}", other.display()),
                         *span,
@@ -2504,7 +2457,10 @@ fn type_of_expr(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError> {
                         *span,
                     ));
                 }
-                let underlying = ctx.newtypes.get(name).cloned().unwrap_or(Type::Unknown);
+                let underlying = match ctx.newtypes.get(name).cloned() {
+                    Some(ty) => ty,
+                    None => ctx.fresh(),
+                };
                 let arg_ty = type_of_expr(ctx, &mut args[0])?;
                 if !types_compatible(ctx, &arg_ty, &underlying) {
                     return Err(TypeError::new(
@@ -2517,7 +2473,8 @@ fn type_of_expr(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError> {
                         args[0].span(),
                     ));
                 }
-                return Ok(Type::Newtype(name.clone(), Box::new(underlying)));
+                let _ = underlying;
+                return Ok(Type::Newtype(name.clone()));
             }
             let sig = match ctx.functions.get(name).cloned() {
                 Some(s) => s,
@@ -2828,7 +2785,7 @@ fn type_of_expr(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError> {
                         *span,
                     ))
                 }
-                Type::Unknown | Type::Var(_) => Ok(ctx.fresh()),
+                Type::Var(_) => Ok(ctx.fresh()),
                 other => Err(TypeError::new(
                     format!("field access on non-struct type {}", other.display()),
                     *span,
@@ -2856,7 +2813,6 @@ fn type_of_expr(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError> {
                         ))
                     }
                 }
-                Type::Unknown => Ok(ctx.fresh()),
                 other => Err(TypeError::new(
                     format!("tuple index on non-tuple type {}", other.display()),
                     *span,
@@ -2878,7 +2834,6 @@ fn type_of_expr(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError> {
             }
             match obj_ty {
                 Type::Array(inner, _) => Ok(*inner),
-                Type::Unknown => Ok(ctx.fresh()),
                 other => Err(TypeError::new(
                     format!("array index on non-array type {}", other.display()),
                     *span,
@@ -3100,24 +3055,22 @@ fn type_of_expr(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError> {
             // bytecode level because newtypes are transparent.
             // The underlying type lives in `ctx.newtypes`; the
             // placeholder on `Type::Newtype` is not authoritative.
-            let from_underlying = if let Type::Newtype(name, _) = &from_ty {
+            let from_underlying = if let Type::Newtype(name) = &from_ty {
                 ctx.newtypes.get(name).cloned()
             } else {
                 None
             };
-            let to_underlying = if let Type::Newtype(name, _) = &to_ty {
+            let to_underlying = if let Type::Newtype(name) = &to_ty {
                 ctx.newtypes.get(name).cloned()
             } else {
                 None
             };
             let result_ty = match (&from_ty, &to_ty) {
-                (Type::Newtype(_, _), other) if from_underlying.as_ref() == Some(other) => {
+                (Type::Newtype(_), other) if from_underlying.as_ref() == Some(other) => {
                     other.clone()
                 }
-                (other, Type::Newtype(_, _)) if to_underlying.as_ref() == Some(other) => {
-                    to_ty.clone()
-                }
-                (Type::Newtype(_, _), _) if from_underlying.is_some() => {
+                (other, Type::Newtype(_)) if to_underlying.as_ref() == Some(other) => to_ty.clone(),
+                (Type::Newtype(_), _) if from_underlying.is_some() => {
                     return Err(TypeError::new(
                         format!(
                             "cannot cast {} to {}; newtypes only cast to their underlying type {}",
@@ -3145,7 +3098,12 @@ fn type_of_expr(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError> {
                 // tests; the runtime selects the matching
                 // discriminant.
                 (Type::Enum(_, _), Type::Word) => to_ty.clone(),
-                (Type::Unknown, _) | (_, Type::Unknown) => to_ty.clone(),
+                // Type variables on either side of a cast pass
+                // through (the unifier will narrow them when
+                // possible). Casts between fully-resolved types
+                // require structural equality unless they hit one
+                // of the conversion arms above.
+                (Type::Var(_), _) | (_, Type::Var(_)) => to_ty.clone(),
                 (a, b) if a == b => to_ty.clone(),
                 _ => {
                     return Err(TypeError::new(
@@ -3190,11 +3148,11 @@ fn type_of_expr(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError> {
             // trait that has an impl for the receiver's type. The
             // receiver is passed as the first argument.
             //
-            // For unresolved receiver types (Type::Var or
-            // Type::Unknown), the resolution is deferred. The current
-            // session emits a fresh return type and skips bound
-            // checking; B2.4 monomorphization will resolve the call
-            // by substituting the concrete instantiation.
+            // For unresolved receiver types (Type::Var), the
+            // resolution is deferred. The current session emits a
+            // fresh return type and skips bound checking; B2.4
+            // monomorphization will resolve the call by substituting
+            // the concrete instantiation.
             let receiver_ty = type_of_expr(ctx, receiver)?;
             let receiver_resolved = receiver_ty.apply(&ctx.subst);
             let head = match type_head_name(&receiver_resolved) {
@@ -3431,7 +3389,7 @@ fn type_of_expr(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError> {
             let span_copy = *span;
             let is_max = matches!(expr, Expr::SaturateMax { .. });
             if let Some(exp_ty) = ctx.expected_type()
-                && let Type::Newtype(name, _) = strip_labels(exp_ty)
+                && let Type::Newtype(name) = strip_labels(exp_ty)
             {
                 let resolved = if is_max {
                     ctx.newtype_saturate_max.get(&name).copied()
@@ -3445,7 +3403,6 @@ fn type_of_expr(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError> {
                     // predicate (declared in the `where` clause) is
                     // verified at runtime by the constructor call on
                     // the literal argument.
-                    let underlying = ctx.newtypes.get(&name).cloned().unwrap_or(Type::Word);
                     *expr = Expr::Call {
                         name: name.clone(),
                         args: alloc::vec![Expr::Literal {
@@ -3454,7 +3411,7 @@ fn type_of_expr(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError> {
                         }],
                         span: span_copy,
                     };
-                    return Ok(Type::Newtype(name, Box::new(underlying)));
+                    return Ok(Type::Newtype(name));
                 }
             }
             Ok(Type::Word)
