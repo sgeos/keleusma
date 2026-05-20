@@ -19,7 +19,7 @@ categories = ["command-line-utilities", "compilers"]
 # (Keleusma's value proposition does not centre on string handling);
 # the CLI opts in because users expect the runner and REPL to handle
 # strings.
-keleusma = { path = "..", version = "0.1", features = ["text", "shell"] }
+keleusma = { path = "..", version = "0.1", features = ["shell"] }
 keleusma-arena = { path = "../keleusma-arena", version = "0.3" }
 
 [[bin]]

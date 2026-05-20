@@ -218,7 +218,7 @@ fn narrow_runtime_rejects_hot_swap_to_wider_bytecode() {
     );
 }
 
-#[cfg(all(feature = "floats", feature = "text"))]
+#[cfg(feature = "floats")]
 #[test]
 fn narrow_runtime_can_register_text_library_via_lifted_impl() {
     // The stddsl::Text bundle now lifts to Library<W, A, F> for any

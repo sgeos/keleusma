@@ -4884,7 +4884,6 @@ mod tests {
         assert_eq!(val, Value::Int(0));
     }
 
-    #[cfg(feature = "text")]
     #[test]
     fn eval_string_literal() {
         let val = run_expect("fn main() -> Text { \"hello\" }", &[]);
@@ -5083,7 +5082,6 @@ mod tests {
         }
     }
 
-    #[cfg(feature = "text")]
     #[test]
     fn eval_multiheaded_literal() {
         let val = run_expect(
@@ -5093,7 +5091,6 @@ mod tests {
         assert_eq!(val, Value::StaticStr(String::from("zero")));
     }
 
-    #[cfg(feature = "text")]
     #[test]
     fn eval_multiheaded_fallthrough() {
         let val = run_expect(
@@ -5112,7 +5109,6 @@ mod tests {
         assert_eq!(val, Value::Int(42));
     }
 
-    #[cfg(feature = "text")]
     #[test]
     fn eval_match_literal() {
         let val = run_expect(
@@ -5122,7 +5118,6 @@ mod tests {
         assert_eq!(val, Value::StaticStr(String::from("one")));
     }
 
-    #[cfg(feature = "text")]
     #[test]
     fn eval_match_wildcard() {
         let val = run_expect(
@@ -5171,7 +5166,6 @@ mod tests {
         assert_eq!(val, Value::Int(8));
     }
 
-    #[cfg(feature = "text")]
     #[test]
     fn eval_string_concat() {
         let src = "fn main() -> Text { \"hello\" + \" world\" }";
@@ -5192,7 +5186,6 @@ mod tests {
         assert!(matches!(val, Value::KStr(_)));
     }
 
-    #[cfg(feature = "text")]
     #[test]
     fn exponential_text_concat_rejected_at_safe_constructor() {
         // The FAQ exponential-string-concat example expressed as a
@@ -5751,7 +5744,6 @@ mod tests {
 
     // -- Cross-yield prohibition on dynamic strings (R31) --
 
-    #[cfg(feature = "text")]
     #[test]
     fn yield_static_string_succeeds() {
         // Static string literals can be yielded.
@@ -5767,7 +5759,6 @@ mod tests {
         }
     }
 
-    #[cfg(feature = "text")]
     #[test]
     fn yield_dynamic_string_fails() {
         // to_string returns a KStr. Yielding it must fail at runtime.
@@ -5789,7 +5780,6 @@ mod tests {
         }
     }
 
-    #[cfg(feature = "text")]
     #[test]
     fn yield_tuple_with_dynamic_string_fails() {
         // Yielding a tuple containing a KStr must fail.
@@ -7482,7 +7472,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "text")]
     fn ephemeral_bit_set_when_text_param_is_unused() {
         // A `Text` parameter that the body never references
         // cannot carry arena-resident data across the
@@ -7501,7 +7490,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "text")]
     fn ephemeral_bit_set_when_declared_text_return_never_produced() {
         // The entry's declared return type carries `Text` through
         // `Option<Text>`, but every concrete return path produces
@@ -7529,7 +7517,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "text")]
     fn ephemeral_bit_clear_when_declared_text_return_actually_produced() {
         // The entry's declared return type is `Text` and the body
         // actually produces a text value at the return site. The
@@ -7624,7 +7611,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "text")]
     fn ephemeral_bit_clear_when_text_param_is_used() {
         // The same shape but the body actually references the
         // Text param. The verifier conservatively assumes the

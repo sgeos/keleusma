@@ -5463,7 +5463,6 @@ mod tests {
         assert!(quad.ops.iter().any(|op| matches!(op, Op::Call(_, 1))));
     }
 
-    #[cfg(feature = "text")]
     #[test]
     fn compile_multiheaded() {
         let module = compile_str(

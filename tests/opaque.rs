@@ -7,8 +7,6 @@
 //! returned to the host as a typed reference through
 //! `dyn HostOpaque::downcast_ref`.
 
-#![cfg(feature = "text")]
-
 use alloc::sync::Arc;
 use keleusma::compiler::compile;
 use keleusma::lexer::tokenize;

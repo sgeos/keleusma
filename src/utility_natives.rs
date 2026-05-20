@@ -387,7 +387,6 @@ mod tests {
         assert_eq!(resolved.as_deref(), Some("true"));
     }
 
-    #[cfg(feature = "text")]
     #[test]
     fn to_string_string() {
         let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
@@ -409,7 +408,6 @@ mod tests {
         assert_eq!(val, Value::Int(3));
     }
 
-    #[cfg(feature = "text")]
     #[test]
     fn length_string() {
         let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
@@ -480,69 +478,8 @@ mod tests {
         assert_eq!(val, Value::Float(3.0));
     }
 
-    // -- f-string interpolation --
-
-    #[cfg(feature = "text")]
-    #[test]
-    fn fstring_no_interpolation() {
-        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
-        let (val, _) = run_with_utilities("fn main() -> Text { f\"hello\" }", &arena);
-        assert_eq!(val, Value::StaticStr(String::from("hello")));
-    }
-
-    #[cfg(feature = "text")]
-    #[test]
-    fn fstring_single_interp() {
-        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
-        let (val, resolved) = run_with_utilities(
-            "use to_string\nfn main() -> Text { let n: Word = 42; f\"{n}\" }",
-            &arena,
-        );
-        assert!(matches!(val, Value::KStr(_)));
-        assert_eq!(resolved.as_deref(), Some("42"));
-    }
-
-    #[cfg(feature = "text")]
-    #[test]
-    fn fstring_mixed_interp() {
-        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
-        let (val, resolved) = run_with_utilities(
-            "use to_string\nuse concat\n\
-             fn main() -> Text { let n: Word = 42; f\"x = {n}!\" }",
-            &arena,
-        );
-        assert!(matches!(val, Value::KStr(_)));
-        assert_eq!(resolved.as_deref(), Some("x = 42!"));
-    }
-
-    #[cfg(feature = "text")]
-    #[test]
-    fn fstring_multiple_interps() {
-        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
-        let (val, resolved) = run_with_utilities(
-            "use to_string\nuse concat\n\
-             fn main() -> Text {\n\
-                let a: Word = 1;\n\
-                let b: Word = 2;\n\
-                f\"({a}, {b})\"\n\
-             }",
-            &arena,
-        );
-        assert!(matches!(val, Value::KStr(_)));
-        assert_eq!(resolved.as_deref(), Some("(1, 2)"));
-    }
-
-    #[cfg(feature = "text")]
-    #[test]
-    fn fstring_escaped_braces() {
-        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
-        let (val, _) = run_with_utilities("fn main() -> Text { f\"\\{key\\}\" }", &arena);
-        assert_eq!(val, Value::StaticStr(String::from("{key}")));
-    }
-
     // -- Concat and slice --
 
-    #[cfg(feature = "text")]
     #[test]
     fn concat_two_static_strings() {
         let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
@@ -554,7 +491,6 @@ mod tests {
         assert_eq!(resolved.as_deref(), Some("hello, world"));
     }
 
-    #[cfg(feature = "text")]
     #[test]
     fn concat_static_with_dynamic() {
         let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
@@ -566,7 +502,6 @@ mod tests {
         assert_eq!(resolved.as_deref(), Some("x = 42"));
     }
 
-    #[cfg(feature = "text")]
     #[test]
     fn slice_basic() {
         let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
@@ -578,7 +513,6 @@ mod tests {
         assert_eq!(resolved.as_deref(), Some("ell"));
     }
 
-    #[cfg(feature = "text")]
     #[test]
     fn slice_full_range() {
         let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
@@ -590,7 +524,6 @@ mod tests {
         assert_eq!(resolved.as_deref(), Some("hello"));
     }
 
-    #[cfg(feature = "text")]
     #[test]
     fn slice_empty_range() {
         let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);

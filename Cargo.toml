@@ -58,18 +58,6 @@ compile = []
 # on for backward compatibility.
 verify = []
 
-# Enables surface support for the `Text` type, string literals,
-# f-string interpolation, the bundled string utility natives
-# (`to_string`, `concat`, `slice`, `length` against `Text`), and
-# the `Op::Add` text concatenation branch. Default off. Keleusma's
-# value proposition is bounded execution time and memory for stream
-# processors. Text manipulation is not in that value proposition;
-# applications that need string work should register host-supplied
-# native functions and accept the host-attested WCMU bound. Hosts
-# that want script-side string concatenation, f-strings, and the
-# bundled utility natives must enable this feature explicitly.
-text = []
-
 # Enables the `stddsl::Shell` library bundle. Requires `std` for
 # `std::env` and `std::process::Command`. Embedded `no_std` hosts
 # leave this feature off; the Shell library is not compiled.
@@ -118,20 +106,20 @@ sdl3 = { version = "0.18", features = ["build-from-source-static"], optional = t
 
 [[example]]
 name = "piano_roll"
-required-features = ["compile", "verify", "sdl3-example", "text"]
+required-features = ["compile", "verify", "sdl3-example"]
 
 [[example]]
 name = "string_ops"
-required-features = ["compile", "verify", "text"]
+required-features = ["compile", "verify"]
 
 [[example]]
 name = "opaque_rust_string"
-required-features = ["compile", "verify", "text"]
+required-features = ["compile", "verify"]
 
 [[example]]
 name = "rogue"
 path = "examples/rogue/main.rs"
-required-features = ["compile", "verify", "sdl3-example", "text"]
+required-features = ["compile", "verify", "sdl3-example"]
 
 [[example]]
 name = "generic_identity"

@@ -1941,7 +1941,6 @@ mod tests {
         assert!(verify(&module).is_err());
     }
 
-    #[cfg(feature = "text")]
     #[test]
     fn verify_compiled_programs() {
         // Integration test: compile real programs and verify them.

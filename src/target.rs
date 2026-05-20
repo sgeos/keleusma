@@ -378,7 +378,6 @@ mod tests {
         try_compile_with_target("fn main() -> Word { 1 + 2 }", &Target::host()).unwrap();
     }
 
-    #[cfg(feature = "text")]
     #[test]
     fn host_target_admits_floats_and_strings() {
         try_compile_with_target(
@@ -422,7 +421,6 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "text")]
     #[test]
     fn embedded_8_rejects_string_literal() {
         let err = try_compile_with_target(
