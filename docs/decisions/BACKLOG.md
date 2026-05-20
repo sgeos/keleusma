@@ -392,13 +392,13 @@ The chosen design: parameterize `Vm` over three traits — `Word`, `Address`, an
 
    **Ergonomic note**: at host call sites that use the bundled `Vm<'a, 'arena>` (= `GenericVm<i64, u64, f64>`), `vm.register_fn("name", |x: i64| ...)` continues to work with no turbofish because `W` and `F` are concrete from the receiver's type. Free-standing test calls like `let v = p.into_value();` need a type ascription `let v: Value = p.into_value();` so Rust can pick the `KeleusmaType<i64, f64>` impl from the universal family.
 
-7. **Demonstrator `Vm<i16, u16, f32>` plus cookbook recipe.** Add a worked example exercising a narrow VM on small-Word arithmetic. Cookbook recipe documents the `pub type NarrowVm<'a, 'arena> = Vm<'a, 'arena, i16, u16, f32>` pattern hosts use to recover the ergonomic surface. *Pending.*
+7. **Demonstrator `Vm<i16, u16, f32>` plus cookbook recipe.** Worked example at `examples/narrow_runtime.rs` exercises `GenericVm<i16, u16, f32>` against bytecode compiled with `Target::embedded_16()`. Three scenarios: plain arithmetic (1 + 2 = 3 as i16), wrapping at the word boundary (30_000 + 10_000 = -25_536 in i16), and host-side `register_fn` with a natural Rust `i64` closure that the marshall layer truncates to `i16`. Integration test at `tests/narrow_vm.rs` pins all three. Cookbook recipe added at `docs/guide/COOKBOOK.md` under *Narrow-runtime type alias*, documenting the `type NarrowVm<'a, 'arena> = GenericVm<'a, 'arena, i16, u16, f32>` pattern, the host-function marshall-widening behaviour, the standard-library-bundle bound to the default shape, and the word-width arithmetic discipline. *Resolved on `v0.2.0`.*
 
 ### Status snapshot
 
-Steps 1-4 landed in commits `a820607`, `af6a307`, `25e4a39`, `dbd9594`. The trait foundations and parametric `GenericValue` exist; pattern matching and construction at all pre-existing call sites continue to work through the type-alias `Value = GenericValue<i64, f64>`.
+All seven steps complete. Steps 1-4 landed in commits `a820607`, `af6a307`, `25e4a39`, `dbd9594`. Step 5 landed on the `V0.2.0-parametric-vm` feature branch and merged to `v0.2.0` in merge commit `fa68a3f`; six WIP checkpoints from the feature branch travel into trunk as one merge. Step 6 landed on `v0.2.0` in commit `4f7be84`. Step 7 lands alongside this BACKLOG update.
 
-Step 5 is the load-bearing remaining piece. The Vm struct definition can be parameterized in a few lines; the cascade through `vm.rs`'s 6700-line dispatch loop and method signatures is what makes the step large. A dedicated focused session can complete the cascade if the work is sequenced as: (a) struct + Drop impl; (b) operand-stack and data-field types; (c) impl-block headers and method signatures; (d) arithmetic-site retargeting from concrete `i64` to `W` / `W::Wide`; (e) call-site validation across the marshall layer and tests.
+The bundled `Vm<'a, 'arena>` aliases `GenericVm<'a, 'arena, i64, u64, f64>`, so every pre-existing call site compiles unchanged. Hosts targeting narrower runtimes instantiate `GenericVm<i16, u16, f32>` (or any other admissible combination) directly. The worked demonstrator at `examples/narrow_runtime.rs` and the cookbook recipe at `docs/guide/COOKBOOK.md` document the host-side ergonomics.
 
 Out of scope (recorded for completeness):
 

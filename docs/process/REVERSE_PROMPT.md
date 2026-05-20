@@ -9,24 +9,25 @@ AI to Human communication channel.
 ## Last Updated
 
 **Date**: 2026-05-20
-**Status**: B16 step 6 complete. The marshall layer is now parametric over `(W, F)`; the `KeleusmaType`, `IntoNativeFn`, `IntoFallibleNativeFn`, and `stddsl::Library` traits all quantify universally over the runtime's word and float types. The `register_fn`, `register_fn_fallible`, and `register_library` methods moved back into the generic `impl<W, A, F> GenericVm` block. The `#[derive(KeleusmaType)]` macro now emits universal impls. Standard `stddsl` bundles remain bound to the default `(i64, u64, f64)` shape because their inner closures pin `f64`. Step 5 of B16 landed via merge commit `fa68a3f` on 2026-05-19.
+**Status**: B16 complete. All seven steps of the parametric `Vm<W, A, F>` design landed on `v0.2.0`. The bundled `Vm<'a, 'arena>` aliases `GenericVm<'a, 'arena, i64, u64, f64>` so pre-existing call sites compile unchanged. Hosts targeting narrower native runtimes instantiate `GenericVm<W, A, F>` directly. The worked demonstrator and the cookbook recipe document the host-side ergonomics.
 
 ## Completed in this session round
 
 | Directive | Resolution |
 |-----------|------------|
-| Merge `V0.2.0-parametric-vm` into `v0.2.0`. | Fast-forward-free merge committed as `fa68a3f`. Six WIP checkpoints from the feature branch land as one merge commit. 734 lib tests pass against the merged state. |
-| Step 6 of B16: parameterize the marshall layer and `KeleusmaType`. | `src/marshall.rs` rewritten. `KeleusmaType<W: Word, F: Float>` carries a parametric `GenericValue<W, F>` in its `from_value` and `into_value` signatures. Impls for `i64`, `u8`, `f64`, `bool`, `()`, `Option<T>`, fixed-length arrays, and tuples (arities 2-5) all quantify universally over `<W, F>` and use trait methods (`W::to_i64`, `W::from_i64_wrap`, `F::to_f64`, `F::from_f64`) to bridge canonical Rust types to the script word and float. `IntoNativeFn<W, F, Args, R>` and `IntoFallibleNativeFn<W, F, Args, R>` reshape with the new parameters; the macro expansion uses the trait-fully-qualified `<$name as KeleusmaType<W, FloatT>>::from_value` and `<R as KeleusmaType<W, FloatT>>::into_value`. The internal closure type parameter is renamed `Func` to avoid colliding with the outer `F: Float`. Tests in `src/marshall.rs` and `tests/marshall.rs` updated with type ascription on free-standing `into_value()` calls. `register_fn`, `register_fn_fallible`, and `register_library` move into the generic `impl<W: Word, A: Address, F: Float> GenericVm` block. `stddsl::Library<W, A, F>` carries the three parameters; standard bundles impl `Library<i64, u64, f64>` because their inner closures pin `f64`. The `#[derive(KeleusmaType)]` macro emits `impl<existing_generics, __KW: Word, __KF: Float> KeleusmaType<__KW, __KF> for #name`; the synthetic param names `__KW` and `__KF` avoid colliding with user type parameters. `keleusma::Address`, `keleusma::Float`, `keleusma::Word`, and `keleusma::GenericValue` re-exported at the crate root so derived impls compile without users touching the `address`, `float`, `word`, or `bytecode` modules directly. |
+| Merge step 5 to `v0.2.0`. | Fast-forward-free merge `fa68a3f`. Six WIP checkpoints from the `V0.2.0-parametric-vm` feature branch travel into trunk as one merge. |
+| Step 6: parameterize the marshall layer and `KeleusmaType`. | Commit `4f7be84`. The marshall layer's `KeleusmaType<W, F>`, `IntoNativeFn<W, F, Args, R>`, `IntoFallibleNativeFn<W, F, Args, R>`, and `BoxedNativeFn<W, F>` are parametric over the runtime's word and float types. The `stddsl::Library<W, A, F>` trait carries all three. Universal impls for `i64`, `u8`, `bool`, `()`, `f64`, `Option<T>`, fixed arrays, and tuples (arities 2-5) bridge canonical Rust types to the script's narrower words and floats through `Word::to_i64`, `Word::from_i64_wrap`, `Float::to_f64`, and `Float::from_f64`. The `#[derive(KeleusmaType)]` macro emits universal impls with synthetic generic parameters `__KW: Word` and `__KF: Float` so user-side type parameters do not collide. The `register_fn`, `register_fn_fallible`, and `register_library` methods move back into the generic `impl<W, A, F> GenericVm` block. Crate-root re-exports added for `Address`, `Float`, `Word`, and `GenericValue` so derived impls compile without users touching the implementation modules. |
+| Step 7: narrow-runtime demonstrator and cookbook recipe. | `examples/narrow_runtime.rs` exercises `GenericVm<i16, u16, f32>` against bytecode compiled with `Target::embedded_16()`. Three scenarios: plain arithmetic, wrapping at the word boundary (30_000 + 10_000 = -25_536 in i16), and host-side `register_fn` with a natural Rust `i64` closure that the marshall layer truncates to `i16`. Integration test `tests/narrow_vm.rs` pins all three. Cookbook recipe at `docs/guide/COOKBOOK.md` under *Narrow-runtime type alias* documents the `type NarrowVm<'a, 'arena> = GenericVm<'a, 'arena, i16, u16, f32>` pattern, the marshall-widening behaviour, the standard-library-bundle bound to the default shape, and the word-width arithmetic discipline. |
 
 ## Verification matrix
 
 ```bash
-cargo build --quiet                                                            # clean
-cargo test -p keleusma --lib --quiet                                            # 734 lib tests pass
-cargo test --workspace --quiet                                                  # all workspace + doctest crates clean
-cargo test --no-default-features --features compile,verify --quiet              # 642 lib tests pass (floats off)
-cargo clippy --tests --all-targets --quiet -- -D warnings                       # clean
-cargo fmt --all                                                                # idempotent
+cargo test -p keleusma --lib                                                    # 734 lib tests pass
+cargo test --workspace                                                          # all workspace tests pass
+cargo test -p keleusma --no-default-features --features compile,verify --lib    # 642 lib tests pass (floats off)
+cargo clippy --tests --all-targets -- -D warnings                               # clean
+cargo fmt --all                                                                 # idempotent
+cargo run --example narrow_runtime                                              # prints expected output
 
 # Bare-metal STM32N6570-DK build, full pipeline.
 (cd examples/rtos && cargo check --bin three-task-n6 \
@@ -41,16 +42,16 @@ cargo fmt --all                                                                #
 | B13 | Refinement-type compile-time elision through range analysis | Deferred |
 | B14 | CallIndirect flow analysis for non-recursive closures | Deferred to V0.3 |
 | B15 | Remove `Type::Unknown` entirely | Foundation in place; refactor pending |
-| B16 | Parametric `Vm<W, A, F>` for sub-64-bit native runtimes | Steps 1-6 complete; step 7 (demonstrator + cookbook) pending |
+| B16 | Parametric `Vm<W, A, F>` for sub-64-bit native runtimes | Resolved (all seven steps complete) |
 | B17 | Embassy feature trimming | Resolved as not actionable |
 | B18 | Big-number arithmetic worked example | Resolved |
 
 ## Notes
 
-- Branch `v0.2.0` carries the B16 step 5 merge (`fa68a3f`) ahead of `origin/v0.2.0`. Step 6 work is unstaged at the time of this writing; will be committed in this session round.
-- The deprecated `register_utility_natives_with_ctx` alias remains specialized to the default `Vm<'a, 'arena>`; it is left untouched because it is a temporary wrapper for the V0.2.0 transition.
-- Standard `stddsl` bundles (`Math`, `Audio`, `Text`, `Shell`) implement `Library<i64, u64, f64>` only. Hosts targeting narrow runtimes write their own `Library<W, A, F>` impls; step 7's cookbook recipe will document the pattern.
+- The deprecated `register_utility_natives_with_ctx` alias remains specialized to the default `Vm<'a, 'arena>`; it is the V0.2.0 transition wrapper and is left untouched.
+- Standard `stddsl` bundles (`Math`, `Audio`, `Text`, `Shell`) impl `Library<i64, u64, f64>` only. Hosts targeting narrow runtimes write their own `Library<W, A, F>` impls.
+- A future enhancement could add load-time validation that bytecode's declared `word_bits_log2` matches `<W as Word>::BITS_LOG2`. Not in scope for B16; the present runtime permits wider Vm running narrower bytecode through `Word::from_i64_wrap`, which is the same wrap-on-load discipline `truncate_int` provides for the default shape.
 
 ## Intended Next Step
 
-Step 7 of B16: demonstrator `Vm<i16, u16, f32>` and cookbook recipe documenting the `pub type NarrowVm<'a, 'arena> = Vm<'a, 'arena, i16, u16, f32>` pattern. Awaiting operator prompt.
+Awaiting operator prompt. B16 is closed end-to-end. The next development action belongs to the operator's selection from the remaining backlog (B13, B14, B15) or a new directive.

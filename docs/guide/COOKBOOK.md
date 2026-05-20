@@ -11,6 +11,7 @@ Recipes are working patterns for embedding Keleusma in larger systems. Each reci
 | [Working with `Text`](#working-with-text) | The host or scripts need to handle strings. |
 | [Auto-sizing the arena from the module](#auto-sizing-the-arena-from-the-module) | The host wants exact `WCMU`-bounded arena sizing instead of a hardcoded capacity. |
 | [The data-loader pattern](#the-data-loader-pattern) | The host needs read-only configuration data that benefits from script-side editing. |
+| [Narrow-runtime type alias](#narrow-runtime-type-alias) | The host targets a sub-64-bit native runtime (16-bit or 8-bit signed word). |
 
 ---
 
@@ -266,3 +267,72 @@ The pattern fits when all of the following hold.
 ### Examples in this repository
 
 The rogue example uses this pattern for its bestiary and equipment tables; see [ROGUE.md, *Reading the bestiary script*](./ROGUE.md#reading-the-bestiary-script).
+
+---
+
+## Narrow-runtime type alias
+
+### Problem
+
+The host targets a sub-64-bit native runtime. A 16-bit microcontroller, a retro-class 8-bit machine, a 32-bit embedded core. The default `Vm<'a, 'arena>` is `GenericVm<'a, 'arena, i64, u64, f64>`. Carrying 64-bit values on a 16-bit native target wastes memory and forces software arithmetic on machine operands the hardware does not natively support. The host wants the runtime's word, address, and float widths to match the target.
+
+### Solution
+
+The `Vm` shape is generic over three trait parameters that mirror the bytecode header's `word_bits_log2`, `addr_bits_log2`, and `float_bits_log2` declared widths. Instantiate `GenericVm<W, A, F>` directly with the host's chosen widths and define a type alias for the ergonomic call sites.
+
+```rust
+use keleusma::vm::GenericVm;
+
+// 16-bit signed word, 16-bit unsigned address, 32-bit float.
+type NarrowVm<'a, 'arena> = GenericVm<'a, 'arena, i16, u16, f32>;
+
+// 8-bit signed word, 16-bit unsigned address, 32-bit float
+// (6502-class retro target with floats kept for future opcodes).
+type RetroVm<'a, 'arena> = GenericVm<'a, 'arena, i8, u16, f32>;
+```
+
+Bytecode for the narrow target is produced through `compile_with_target`. The `embedded_16` preset rejects floating-point opcodes; use a custom `Target` if floats are wanted at a narrower width.
+
+```rust
+use keleusma::Arena;
+use keleusma::compiler::compile_with_target;
+use keleusma::lexer::tokenize;
+use keleusma::parser::parse;
+use keleusma::target::Target;
+
+let module = {
+    let tokens = tokenize(src).expect("lex");
+    let program = parse(&tokens).expect("parse");
+    compile_with_target(&program, &Target::embedded_16()).expect("compile")
+};
+
+let arena = Arena::with_capacity(4096);
+let mut vm: NarrowVm<'_, '_> = NarrowVm::new(module, &arena).expect("verify");
+```
+
+### Host functions speak Rust's natural types
+
+The marshall layer (`KeleusmaType`, `IntoNativeFn`, `IntoFallibleNativeFn`) is parametric over `(W, F)`, with universal impls for `i64`, `f64`, `bool`, `()`, `Option<T>`, fixed arrays, and tuples (arities 2 to 5). The universal `KeleusmaType<W, F> for i64` impl bridges through `Word::to_i64` and `Word::from_i64_wrap`; the universal `KeleusmaType<W, F> for f64` impl bridges through `Float::to_f64` and `Float::from_f64`.
+
+The host author writes `i64` and `f64` in closure signatures regardless of the script's narrower word and float types. The runtime truncates at the boundary.
+
+```rust
+vm.register_fn("host::triple", |x: i64| -> i64 { x * 3 });
+```
+
+On a `NarrowVm`, the script-side `i16` argument widens to `i64` for the host closure; the `i64` return truncates back to `i16` through `Word::from_i64_wrap`. Hosts that want native-width Rust types (a closure body that takes `i16` directly to avoid widening) can add their own `KeleusmaType<i16, f32> for i16` impl in their crate.
+
+### Standard library bundles remain on the default shape
+
+The `stddsl::Math`, `Audio`, `Text`, and `Shell` bundles implement `Library<i64, u64, f64>` because their inner closures pin `f64`. A `NarrowVm` cannot register these bundles. Hosts targeting narrow runtimes write their own library bundle on top of the parametric `register_fn` surface, or implement `Library<W, A, F>` for their narrow shape.
+
+### Word-width arithmetic discipline
+
+Script-side arithmetic on a narrow runtime wraps at the runtime's word boundary, not at 64 bits. The `Word` trait's `wrapping_add`, `wrapping_sub`, `wrapping_mul`, `wrapping_div`, `wrapping_rem`, and `wrapping_neg` methods drive every arithmetic dispatch site. On `NarrowVm`, `30_000 + 10_000` produces `-25_536` rather than `40_000`. Programs that depend on wider arithmetic should declare a wider word, or perform the operation host-side through a registered native that takes the natural Rust type.
+
+### Cross-references
+
+- `examples/narrow_runtime.rs` is the worked demonstrator.
+- `tests/narrow_vm.rs` is the integration test that pins the pattern.
+- [`docs/decisions/BACKLOG.md`, B16](../decisions/BACKLOG.md) records the architectural rationale for the parametric shape.
+- The `Word`, `Address`, and `Float` traits live in `src/word.rs`, `src/address.rs`, and `src/float.rs`. Custom impls are admissible; the bundled impls cover the standard widths.

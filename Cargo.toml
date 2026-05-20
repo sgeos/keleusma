@@ -133,6 +133,10 @@ name = "struct_method_dispatch"
 required-features = ["compile", "verify"]
 
 [[example]]
+name = "narrow_runtime"
+required-features = ["compile", "verify"]
+
+[[example]]
 name = "target_aware_compile"
 required-features = ["compile", "verify"]
 

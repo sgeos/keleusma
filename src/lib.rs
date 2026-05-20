@@ -88,8 +88,8 @@ pub use bytecode::{
 pub use float::Float;
 pub use keleusma_macros::KeleusmaType;
 pub use marshall::{IntoFallibleNativeFn, IntoNativeFn, KeleusmaType};
-pub use word::Word;
 pub use opaque::{HostOpaque, host_arc};
 #[cfg(feature = "verify")]
 pub use text_size::{TextSize, op_cost_context};
 pub use vm::{NativeCtx, OverflowPolicy, VerifyWarning, VmError, VmOptions, WarningKind};
+pub use word::Word;
