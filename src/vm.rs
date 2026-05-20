@@ -3690,11 +3690,11 @@ mod tests {
 
     #[test]
     fn refinement_predicate_parameter_range_falls_through_when_predicate_undecidable() {
-        // Tier 3 soundness: when the predicate cannot be
-        // decomposed to a convex interval (e.g. it uses
-        // disjunction), the lattice path returns None and the
-        // runtime check fires. The example predicate's true set
-        // is `x < 0 or x > 100`, which is not a single interval.
+        // The IntervalSet lattice handles disjunction exactly,
+        // so a predicate body of `x < 0 or x > 100` decomposes
+        // to the set `(-inf, -1] U [101, +inf)`. The argument
+        // `0 - 50` folds to `-50`, which lies in the first
+        // component; elision fires at compile time.
         let val = run_expect(
             "fn outside(x: Word) -> bool { x < 0 or x > 100 }\n\
              newtype Edge = Word where outside;\n\
@@ -3702,6 +3702,54 @@ mod tests {
             &[],
         );
         assert_eq!(val, Value::Int(-50));
+    }
+
+    #[test]
+    fn refinement_predicate_disjoint_set_admits_constant_outside_singleton() {
+        // The predicate `not (x == 5)` has true set
+        // `(-inf, 4] U [6, +inf)`. The argument `42` lies in
+        // the second component; the IntervalSet subset check
+        // admits the construction.
+        let val = run_expect(
+            "fn not_five(x: Word) -> bool { not (x == 5) }\n\
+             newtype NotFive = Word where not_five;\n\
+             fn main() -> NotFive { NotFive(42) }",
+            &[],
+        );
+        assert_eq!(val, Value::Int(42));
+    }
+
+    #[test]
+    fn refinement_predicate_disjoint_set_rejects_constant_at_singleton_excluded() {
+        // The literal `5` is excluded by `not (x == 5)`. The
+        // compile-time check rejects the construction.
+        let src = "fn not_five(x: Word) -> bool { not (x == 5) }\n\
+             newtype NotFive = Word where not_five;\n\
+             fn main() -> NotFive { NotFive(5) }";
+        let tokens = tokenize(src).expect("lex");
+        let program = parse(&tokens).expect("parse");
+        let err = compile(&program).expect_err("compile should reject");
+        assert!(
+            err.message.contains("not_five") && err.message.contains("NotFive"),
+            "expected compile-time diagnostic, got: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn refinement_predicate_disjunction_admits_via_lattice_union() {
+        // Parameter `e: Edge` carries the union range
+        // `(-inf, -1] U [101, +inf)`. Re-wrapping the parameter
+        // through `Edge(e as Word)` hits the IntervalSet subset
+        // check (argument range == true set).
+        let val = run_expect(
+            "fn outside(x: Word) -> bool { x < 0 or x > 100 }\n\
+             newtype Edge = Word where outside;\n\
+             fn rewrap(e: Edge) -> Edge { Edge(e as Word) }\n\
+             fn main() -> Edge { rewrap(Edge(200)) }",
+            &[],
+        );
+        assert_eq!(val, Value::Int(200));
     }
 
     #[test]
