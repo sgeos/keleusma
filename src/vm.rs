@@ -1452,6 +1452,15 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         new_module: Module,
         initial_data: Vec<crate::bytecode::GenericValue<W, F>>,
     ) -> Result<(), VmError> {
+        // B16 step 8: the new module's declared widths must match
+        // the runtime's W/A/F trait parameters, same as Vm::new.
+        // Without this the hot-swap path would re-introduce the
+        // silent-truncation foot-gun the construct path closed.
+        Self::check_runtime_widths(
+            new_module.word_bits_log2,
+            new_module.addr_bits_log2,
+            new_module.float_bits_log2,
+        )?;
         #[cfg(feature = "verify")]
         {
             verify::verify(&new_module)

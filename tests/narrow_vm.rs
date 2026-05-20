@@ -10,6 +10,8 @@
 
 #![cfg(all(feature = "compile", feature = "verify"))]
 
+extern crate alloc;
+
 use keleusma::Arena;
 use keleusma::GenericValue;
 use keleusma::compiler::compile_with_target;
@@ -145,6 +147,72 @@ fn wider_float_bytecode_rejected_by_f32_runtime() {
     let msg = format!("{:?}", err);
     assert!(
         msg.contains("float_bits_log2"),
+        "expected width-mismatch error, got: {}",
+        msg
+    );
+}
+
+#[test]
+fn narrow_runtime_checked_arithmetic_exercises_word_widen() {
+    // Pattern-arm checked multiplication. On the narrow i16 runtime,
+    // 200 * 200 = 40_000 exceeds i16::MAX (32_767); the runtime
+    // computes the true product via W::widen / WideWord::wide_mul
+    // (i16 -> i32) and surfaces the (high, low) intermediate
+    // through the overflow arm. The example verifies that
+    // narrow-word checked arithmetic uses the right widened type:
+    // high = 40000 >> 16 = 0; low = 40000 - 32768 - 32768 = wraps
+    // (40000 as i16 = -25_536).
+    let src = "
+        fn product_overflow_low() -> Word {
+            200 * 200 {
+                ok(v) => v,
+                overflow(_, l) => l,
+                underflow(_, l) => l,
+            }
+        }
+        fn main() -> Word { product_overflow_low() }
+    ";
+    let tokens = tokenize(src).expect("lex");
+    let program = parse(&tokens).expect("parse");
+    let module = compile_with_target(&program, &Target::embedded_16()).expect("compile");
+
+    let arena = Arena::with_capacity(4096);
+    let mut vm: NarrowVm<'_, '_> = NarrowVm::new(module, &arena).expect("new");
+    match vm.call(&[]).expect("call") {
+        GenericVmState::Finished(GenericValue::Int(n)) => assert_eq!(n, -25_536_i16),
+        other => panic!("unexpected: {:?}", other),
+    }
+}
+
+#[test]
+fn narrow_runtime_rejects_hot_swap_to_wider_bytecode() {
+    // Construct a narrow Vm against narrow bytecode (admitted), then
+    // attempt to hot-swap to wider bytecode (must be rejected by the
+    // load-time width check inside replace_module_inner, not silently
+    // installed). Without the check the post-swap Vm would silently
+    // truncate i64 constants through Word::from_i64_wrap.
+    let narrow_src = "fn main() -> Word { 0 }";
+    let narrow_module = {
+        let tokens = tokenize(narrow_src).expect("lex");
+        let program = parse(&tokens).expect("parse");
+        compile_with_target(&program, &Target::embedded_16()).expect("compile")
+    };
+    let wider_src = "fn main() -> Word { 0 }";
+    let wider_module = {
+        let tokens = tokenize(wider_src).expect("lex");
+        let program = parse(&tokens).expect("parse");
+        compile_with_target(&program, &Target::host()).expect("compile")
+    };
+
+    let arena = Arena::with_capacity(4096);
+    let mut vm: NarrowVm<'_, '_> = NarrowVm::new(narrow_module, &arena).expect("new");
+    let err = match vm.replace_module_unchecked(wider_module, alloc::vec::Vec::new()) {
+        Ok(_) => panic!("must reject wider hot-swap"),
+        Err(e) => e,
+    };
+    let msg = format!("{:?}", err);
+    assert!(
+        msg.contains("word_bits_log2"),
         "expected width-mismatch error, got: {}",
         msg
     );
