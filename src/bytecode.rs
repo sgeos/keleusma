@@ -668,6 +668,49 @@ pub enum Op {
     /// that case. All other inputs route through ok with `high =
     /// 0` and the wrapped remainder as `low`.
     CheckedMod,
+
+    // -- V0.2.0 ISA additions (B20). Additive in Phase 1; compiler
+    // -- emission and removal of legacy opcodes lands in later phases.
+
+    /// Push an inline immediate value. Encoding:
+    /// `0 = Unit`, `1 = true`, `2 = false`, `3 = None`,
+    /// `4..19 = Int(operand - 4)`, `20..255 = reserved`.
+    PushImmediate(u8),
+
+    /// Pop `n` values from the top of the stack and discard them.
+    /// Replaces single-slot `Op::Pop` and multi-slot pop sequences.
+    /// `n = 0` is a no-op (admissible but redundant).
+    PopN(u8),
+
+    /// Bitwise AND of two `Value::Int` operands. Pops two, pushes one.
+    BitAnd,
+    /// Bitwise OR of two `Value::Int` operands. Pops two, pushes one.
+    BitOr,
+    /// Bitwise XOR of two `Value::Int` operands. Pops two, pushes one.
+    BitXor,
+    /// Logical shift-left of a `Value::Int` by a `Value::Int` count.
+    /// Count is masked to the word width (`count & (word_bits - 1)`)
+    /// so behavior is defined for all counts. Pops count then value;
+    /// pushes the shifted value.
+    Shl,
+    /// Arithmetic right shift of a `Value::Int` by a `Value::Int`
+    /// count (sign-preserving). Count is masked to the word width.
+    /// Pops count then value; pushes the shifted value.
+    Shr,
+
+    /// Call a verified native function with attested WCET/WCMU
+    /// bounds. Cost folds into the iteration's WCET/WCMU budget per
+    /// host attestation. Phase 1 dispatches identically to
+    /// `Op::CallNative`; Phase 5 introduces the per-class
+    /// verification semantics.
+    CallVerifiedNative(u16, u8),
+
+    /// Call an external native function. Iteration cost budget
+    /// pauses for the call duration; the verifier tracks invocation
+    /// count per iteration instead of per-call cost. Phase 1
+    /// dispatches identically to `Op::CallNative`; Phase 5
+    /// introduces the per-class verification semantics.
+    CallExternalNative(u16, u8),
 }
 
 /// Size in bytes of one operand-stack slot, namely the size of `Value` on
@@ -960,6 +1003,11 @@ pub fn nominal_op_cycles(op: &Op) -> u32 {
         Op::Call(_, _) | Op::CallNative(_, _) | Op::CallIndirect(_) => 10,
         Op::PushFunc(_) => 0,
         Op::MakeClosure(_, _) | Op::MakeRecursiveClosure(_, _) => 5,
+
+        // V0.2.0 ISA additions.
+        Op::PushImmediate(_) | Op::PopN(_) => 1,
+        Op::BitAnd | Op::BitOr | Op::BitXor | Op::Shl | Op::Shr => 2,
+        Op::CallVerifiedNative(_, _) | Op::CallExternalNative(_, _) => 10,
     }
 }
 
@@ -1070,6 +1118,12 @@ impl Op {
             // MakeClosure pushes one closure value (regardless of
             // captures, which net out against the pops).
             Op::MakeClosure(_, _) | Op::MakeRecursiveClosure(_, _) => 1,
+
+            // V0.2.0 ISA additions.
+            Op::PushImmediate(_) => 1,
+            Op::PopN(_) => 0,
+            Op::BitAnd | Op::BitOr | Op::BitXor | Op::Shl | Op::Shr => 0,
+            Op::CallVerifiedNative(_, _) | Op::CallExternalNative(_, _) => 1,
         }
     }
 
@@ -1152,6 +1206,14 @@ impl Op {
 
             // MakeClosure pops `n` captures.
             Op::MakeClosure(_, n) | Op::MakeRecursiveClosure(_, n) => *n as u32,
+
+            // V0.2.0 ISA additions.
+            Op::PushImmediate(_) => 0,
+            Op::PopN(n) => *n as u32,
+            // Bit ops pop 2, push 1; net shrink = 1 in the same
+            // convention as `Add` etc.
+            Op::BitAnd | Op::BitOr | Op::BitXor | Op::Shl | Op::Shr => 1,
+            Op::CallVerifiedNative(_, n) | Op::CallExternalNative(_, n) => *n as u32,
         }
     }
 
@@ -2146,6 +2208,16 @@ pub fn op_from_archived(archived: &ArchivedOp) -> Op {
         ArchivedOp::CheckedNeg => Op::CheckedNeg,
         ArchivedOp::CheckedDiv => Op::CheckedDiv,
         ArchivedOp::CheckedMod => Op::CheckedMod,
+        // V0.2.0 ISA additions.
+        ArchivedOp::PushImmediate(v) => Op::PushImmediate(*v),
+        ArchivedOp::PopN(n) => Op::PopN(*n),
+        ArchivedOp::BitAnd => Op::BitAnd,
+        ArchivedOp::BitOr => Op::BitOr,
+        ArchivedOp::BitXor => Op::BitXor,
+        ArchivedOp::Shl => Op::Shl,
+        ArchivedOp::Shr => Op::Shr,
+        ArchivedOp::CallVerifiedNative(c, n) => Op::CallVerifiedNative(c.to_native(), *n),
+        ArchivedOp::CallExternalNative(c, n) => Op::CallExternalNative(c.to_native(), *n),
     }
 }
 

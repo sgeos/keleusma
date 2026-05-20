@@ -3298,6 +3298,159 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                         }
                     }
                 }
+
+                // V0.2.0 ISA additions (B20). Phase 1: dispatch
+                // implemented; compiler emission and migration land
+                // in later phases.
+                Op::PushImmediate(value) => {
+                    let v = match value {
+                        0 => crate::bytecode::GenericValue::Unit,
+                        1 => crate::bytecode::GenericValue::Bool(true),
+                        2 => crate::bytecode::GenericValue::Bool(false),
+                        3 => crate::bytecode::GenericValue::None,
+                        n @ 4..=19 => crate::bytecode::GenericValue::Int(
+                            <W as crate::word::Word>::from_i64_wrap((n - 4) as i64),
+                        ),
+                        other => {
+                            return Err(VmError::InvalidBytecode(format!(
+                                "Op::PushImmediate({}) operand is reserved; valid range is 0..=19",
+                                other
+                            )));
+                        }
+                    };
+                    sp!(self, v);
+                }
+                Op::PopN(n) => {
+                    let count = n as usize;
+                    if self.stack.len() < count {
+                        return Err(VmError::StackUnderflow);
+                    }
+                    let new_len = self.stack.len() - count;
+                    self.stack.truncate(new_len);
+                }
+                Op::BitAnd => {
+                    let b = self.pop()?;
+                    let a = self.pop()?;
+                    match (a, b) {
+                        (
+                            crate::bytecode::GenericValue::Int(x),
+                            crate::bytecode::GenericValue::Int(y),
+                        ) => sp!(self, crate::bytecode::GenericValue::Int(x & y)),
+                        (a, b) => {
+                            return Err(VmError::TypeError(format!(
+                                "Op::BitAnd expects Word operands, got {} and {}",
+                                a.type_name(),
+                                b.type_name()
+                            )));
+                        }
+                    }
+                }
+                Op::BitOr => {
+                    let b = self.pop()?;
+                    let a = self.pop()?;
+                    match (a, b) {
+                        (
+                            crate::bytecode::GenericValue::Int(x),
+                            crate::bytecode::GenericValue::Int(y),
+                        ) => sp!(self, crate::bytecode::GenericValue::Int(x | y)),
+                        (a, b) => {
+                            return Err(VmError::TypeError(format!(
+                                "Op::BitOr expects Word operands, got {} and {}",
+                                a.type_name(),
+                                b.type_name()
+                            )));
+                        }
+                    }
+                }
+                Op::BitXor => {
+                    let b = self.pop()?;
+                    let a = self.pop()?;
+                    match (a, b) {
+                        (
+                            crate::bytecode::GenericValue::Int(x),
+                            crate::bytecode::GenericValue::Int(y),
+                        ) => sp!(self, crate::bytecode::GenericValue::Int(x ^ y)),
+                        (a, b) => {
+                            return Err(VmError::TypeError(format!(
+                                "Op::BitXor expects Word operands, got {} and {}",
+                                a.type_name(),
+                                b.type_name()
+                            )));
+                        }
+                    }
+                }
+                Op::Shl => {
+                    let count = self.pop()?;
+                    let value = self.pop()?;
+                    match (value, count) {
+                        (
+                            crate::bytecode::GenericValue::Int(v),
+                            crate::bytecode::GenericValue::Int(c),
+                        ) => {
+                            let word_bits = 1u32 << <W as crate::word::Word>::BITS_LOG2;
+                            let shift = (<W as crate::word::Word>::to_i64(c) as u32)
+                                & word_bits.saturating_sub(1);
+                            sp!(self, crate::bytecode::GenericValue::Int(v << shift));
+                        }
+                        (a, b) => {
+                            return Err(VmError::TypeError(format!(
+                                "Op::Shl expects Word operands, got {} and {}",
+                                a.type_name(),
+                                b.type_name()
+                            )));
+                        }
+                    }
+                }
+                Op::Shr => {
+                    let count = self.pop()?;
+                    let value = self.pop()?;
+                    match (value, count) {
+                        (
+                            crate::bytecode::GenericValue::Int(v),
+                            crate::bytecode::GenericValue::Int(c),
+                        ) => {
+                            let word_bits = 1u32 << <W as crate::word::Word>::BITS_LOG2;
+                            let shift = (<W as crate::word::Word>::to_i64(c) as u32)
+                                & word_bits.saturating_sub(1);
+                            sp!(self, crate::bytecode::GenericValue::Int(v >> shift));
+                        }
+                        (a, b) => {
+                            return Err(VmError::TypeError(format!(
+                                "Op::Shr expects Word operands, got {} and {}",
+                                a.type_name(),
+                                b.type_name()
+                            )));
+                        }
+                    }
+                }
+                // Phase 1: both CallVerified* and CallExternal*
+                // dispatch identically to CallNative. Phase 5
+                // introduces the per-class semantics.
+                Op::CallVerifiedNative(idx, arg_count)
+                | Op::CallExternalNative(idx, arg_count) => {
+                    let n = arg_count as usize;
+                    if self.stack.len() < n {
+                        return Err(VmError::StackUnderflow);
+                    }
+                    let args: Vec<crate::bytecode::GenericValue<W, F>> =
+                        self.stack.drain(self.stack.len() - n..).collect();
+                    let native_name = self.native_name(idx as usize).ok_or_else(|| {
+                        VmError::InvalidBytecode(format!("invalid native index: {}", idx))
+                    })?;
+                    let entry = self
+                        .natives
+                        .iter()
+                        .find(|e| e.name == native_name)
+                        .ok_or_else(|| {
+                            VmError::InvalidBytecode(format!(
+                                "unregistered native: {}",
+                                native_name
+                            ))
+                        })?;
+                    let ctx = NativeCtx { arena: self.arena };
+                    let result = (entry.func)(&ctx, &args)?;
+                    sp!(self, result);
+                }
             }
         }
     }
