@@ -293,17 +293,13 @@ pub fn emit_cost_model_source(measurements: &[Measurement], counter_name: &str) 
         dm
     ));
     out.push_str("        Op::Const(_)\n");
-    out.push_str("        | Op::PushUnit\n");
-    out.push_str("        | Op::PushTrue\n");
-    out.push_str("        | Op::PushFalse\n");
+    out.push_str("        | Op::PushImmediate(_)\n");
     out.push_str("        | Op::GetLocal(_)\n");
     out.push_str("        | Op::SetLocal(_)\n");
     out.push_str("        | Op::GetData(_)\n");
     out.push_str("        | Op::SetData(_)\n");
-    out.push_str("        | Op::Pop\n");
+    out.push_str("        | Op::PopN(_)\n");
     out.push_str("        | Op::Dup\n");
-    out.push_str("        | Op::PushNone\n");
-    out.push_str("        | Op::WrapSome\n");
     out.push_str("        | Op::Not => ");
     out.push_str(&format!("{},\n\n", dm));
 
@@ -417,91 +413,91 @@ pub fn emit_cost_model_source(measurements: &[Measurement], counter_name: &str) 
 pub const OPCODE_SPECS: &[OpcodeSpec] = &[
     OpcodeSpec {
         name: "Const",
-        build: || vec![Op::Const(0), Op::Pop],
+        build: || vec![Op::Const(0), Op::PopN(1)],
         constants: &[ConstValueDescriptor::Int(0)],
         ops_per_pattern: 2,
     },
     OpcodeSpec {
         name: "PushUnit",
-        build: || vec![Op::PushUnit, Op::Pop],
+        build: || vec![Op::PushImmediate(0), Op::PopN(1)],
         constants: &[],
         ops_per_pattern: 2,
     },
     OpcodeSpec {
         name: "PushTrue",
-        build: || vec![Op::PushTrue, Op::Pop],
+        build: || vec![Op::PushImmediate(1), Op::PopN(1)],
         constants: &[],
         ops_per_pattern: 2,
     },
     OpcodeSpec {
         name: "GetLocal",
-        build: || vec![Op::GetLocal(0), Op::Pop],
+        build: || vec![Op::GetLocal(0), Op::PopN(1)],
         constants: &[],
         ops_per_pattern: 2,
     },
     OpcodeSpec {
         name: "Pop",
-        build: || vec![Op::PushUnit, Op::Pop],
+        build: || vec![Op::PushImmediate(0), Op::PopN(1)],
         constants: &[],
         ops_per_pattern: 2,
     },
     OpcodeSpec {
         name: "Dup",
-        build: || vec![Op::PushUnit, Op::Dup, Op::Pop, Op::Pop],
+        build: || vec![Op::PushImmediate(0), Op::Dup, Op::PopN(1), Op::PopN(1)],
         constants: &[],
         ops_per_pattern: 4,
     },
     OpcodeSpec {
         name: "Add",
-        build: || vec![Op::Const(0), Op::Const(0), Op::Add, Op::Pop],
+        build: || vec![Op::Const(0), Op::Const(0), Op::Add, Op::PopN(1)],
         constants: &[ConstValueDescriptor::Int(7)],
         ops_per_pattern: 4,
     },
     OpcodeSpec {
         name: "Sub",
-        build: || vec![Op::Const(0), Op::Const(0), Op::Sub, Op::Pop],
+        build: || vec![Op::Const(0), Op::Const(0), Op::Sub, Op::PopN(1)],
         constants: &[ConstValueDescriptor::Int(7)],
         ops_per_pattern: 4,
     },
     OpcodeSpec {
         name: "Mul",
-        build: || vec![Op::Const(0), Op::Const(0), Op::Mul, Op::Pop],
+        build: || vec![Op::Const(0), Op::Const(0), Op::Mul, Op::PopN(1)],
         constants: &[ConstValueDescriptor::Int(7)],
         ops_per_pattern: 4,
     },
     OpcodeSpec {
         name: "Div",
-        build: || vec![Op::Const(0), Op::Const(0), Op::Div, Op::Pop],
+        build: || vec![Op::Const(0), Op::Const(0), Op::Div, Op::PopN(1)],
         constants: &[ConstValueDescriptor::Int(7)],
         ops_per_pattern: 4,
     },
     OpcodeSpec {
         name: "Mod",
-        build: || vec![Op::Const(0), Op::Const(0), Op::Mod, Op::Pop],
+        build: || vec![Op::Const(0), Op::Const(0), Op::Mod, Op::PopN(1)],
         constants: &[ConstValueDescriptor::Int(7)],
         ops_per_pattern: 4,
     },
     OpcodeSpec {
         name: "Neg",
-        build: || vec![Op::Const(0), Op::Neg, Op::Pop],
+        build: || vec![Op::Const(0), Op::Neg, Op::PopN(1)],
         constants: &[ConstValueDescriptor::Int(7)],
         ops_per_pattern: 3,
     },
     OpcodeSpec {
         name: "CmpEq",
-        build: || vec![Op::Const(0), Op::Const(0), Op::CmpEq, Op::Pop],
+        build: || vec![Op::Const(0), Op::Const(0), Op::CmpEq, Op::PopN(1)],
         constants: &[ConstValueDescriptor::Int(7)],
         ops_per_pattern: 4,
     },
     OpcodeSpec {
         name: "CmpLt",
-        build: || vec![Op::Const(0), Op::Const(0), Op::CmpLt, Op::Pop],
+        build: || vec![Op::Const(0), Op::Const(0), Op::CmpLt, Op::PopN(1)],
         constants: &[ConstValueDescriptor::Int(7)],
         ops_per_pattern: 4,
     },
     OpcodeSpec {
         name: "Not",
-        build: || vec![Op::PushTrue, Op::Not, Op::Pop],
+        build: || vec![Op::PushImmediate(1), Op::Not, Op::PopN(1)],
         constants: &[],
         ops_per_pattern: 3,
     },
@@ -513,7 +509,7 @@ pub const OPCODE_SPECS: &[OpcodeSpec] = &[
                 Op::Const(0),
                 Op::Const(0),
                 Op::NewArray(3),
-                Op::Pop,
+                Op::PopN(1),
             ]
         },
         constants: &[ConstValueDescriptor::Int(0)],
@@ -521,7 +517,7 @@ pub const OPCODE_SPECS: &[OpcodeSpec] = &[
     },
     OpcodeSpec {
         name: "NewTuple",
-        build: || vec![Op::Const(0), Op::Const(0), Op::NewTuple(2), Op::Pop],
+        build: || vec![Op::Const(0), Op::Const(0), Op::NewTuple(2), Op::PopN(1)],
         constants: &[ConstValueDescriptor::Int(0)],
         ops_per_pattern: 4,
     },
@@ -531,7 +527,7 @@ pub const OPCODE_SPECS: &[OpcodeSpec] = &[
         // inside a Func chunk because Func chunks reject yields.
         // Substitute Pop+PushUnit as a control-flow-marker proxy.
         // The category emitter treats this as the marker class.
-        build: || vec![Op::PushUnit, Op::Pop],
+        build: || vec![Op::PushImmediate(0), Op::PopN(1)],
         constants: &[],
         ops_per_pattern: 2,
     },
@@ -541,7 +537,7 @@ pub const OPCODE_SPECS: &[OpcodeSpec] = &[
         // module would need a callee chunk; for this simple version
         // we measure a no-op pattern as a placeholder. A full version
         // would construct a multi-chunk module with a trivial callee.
-        build: || vec![Op::PushUnit, Op::Pop],
+        build: || vec![Op::PushImmediate(0), Op::PopN(1)],
         constants: &[],
         ops_per_pattern: 2,
     },
@@ -550,7 +546,7 @@ pub const OPCODE_SPECS: &[OpcodeSpec] = &[
         // MakeClosure requires a chunk index. The simple version
         // measures a substitute pattern. A full version would
         // construct a multi-chunk module with a closure target.
-        build: || vec![Op::PushUnit, Op::Pop],
+        build: || vec![Op::PushImmediate(0), Op::PopN(1)],
         constants: &[],
         ops_per_pattern: 2,
     },

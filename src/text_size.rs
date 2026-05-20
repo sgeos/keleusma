@@ -433,8 +433,10 @@ impl TextAnalysis {
                 }
                 0
             }
-            Op::Pop => {
-                self.pop();
+            Op::PopN(n) => {
+                for _ in 0..*n {
+                    self.pop();
+                }
                 0
             }
             Op::Dup => {
@@ -699,7 +701,7 @@ mod tests {
                 Op::Const(0),
                 Op::Const(0),
                 Op::Add,
-                Op::Pop,
+                Op::PopN(1),
                 Op::EndLoop(0), // 5
                 Op::Return,
             ],

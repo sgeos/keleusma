@@ -419,12 +419,6 @@ pub enum BlockType {
 pub enum Op {
     /// Push a constant from the chunk's constant pool.
     Const(u16),
-    /// Push unit value `()`.
-    PushUnit,
-    /// Push `true`.
-    PushTrue,
-    /// Push `false`.
-    PushFalse,
 
     /// Push local variable by slot index.
     GetLocal(u16),
@@ -558,8 +552,6 @@ pub enum Op {
     /// Yield: pop output value, suspend. On resume, input is pushed.
     Yield,
 
-    /// Pop and discard top of stack.
-    Pop,
     /// Duplicate top of stack.
     Dup,
 
@@ -571,10 +563,6 @@ pub enum Op {
     NewArray(u16),
     /// Build tuple from top N stack values.
     NewTuple(u8),
-    /// Wrap top of stack in Some (identity for value representation).
-    WrapSome,
-    /// Push None.
-    PushNone,
 
     /// Pop struct, push field value by name (const pool index).
     GetField(u16),
@@ -938,17 +926,11 @@ pub const NOMINAL_COST_MODEL: CostModel = CostModel {
 pub fn nominal_op_cycles(op: &Op) -> u32 {
     match op {
         Op::Const(_)
-        | Op::PushUnit
-        | Op::PushTrue
-        | Op::PushFalse
         | Op::GetLocal(_)
         | Op::SetLocal(_)
         | Op::GetData(_)
         | Op::SetData(_)
-        | Op::Pop
         | Op::Dup
-        | Op::PushNone
-        | Op::WrapSome
         | Op::Not => 1,
 
         Op::If(_)
@@ -1045,16 +1027,9 @@ impl Op {
     /// WCMU analysis to compute peak stack consumption.
     pub fn stack_growth(&self) -> u32 {
         match self {
-            Op::Const(_)
-            | Op::PushUnit
-            | Op::PushTrue
-            | Op::PushFalse
-            | Op::GetLocal(_)
-            | Op::GetData(_)
-            | Op::Dup
-            | Op::PushNone => 1,
+            Op::Const(_) | Op::GetLocal(_) | Op::GetData(_) | Op::Dup => 1,
 
-            Op::WrapSome | Op::Not | Op::Neg => 0,
+            Op::Not | Op::Neg => 0,
 
             // CheckedAdd / CheckedSub / CheckedMul / CheckedDiv /
             // CheckedMod pop two operands and push (high, low,
@@ -1077,7 +1052,7 @@ impl Op {
             | Op::CmpLe
             | Op::CmpGe => 0,
 
-            Op::SetLocal(_) | Op::SetData(_) | Op::Pop => 0,
+            Op::SetLocal(_) | Op::SetData(_) => 0,
 
             // GetDataIndexed pops one index, pushes one value.
             Op::GetDataIndexed(_, _) => 1,
@@ -1131,16 +1106,12 @@ impl Op {
     pub fn stack_shrink(&self) -> u32 {
         match self {
             Op::Const(_)
-            | Op::PushUnit
-            | Op::PushTrue
-            | Op::PushFalse
             | Op::GetLocal(_)
             | Op::GetData(_)
             | Op::Dup
-            | Op::PushNone
             | Op::PushFunc(_) => 0,
 
-            Op::WrapSome | Op::Not | Op::Neg => 0,
+            Op::Not | Op::Neg => 0,
 
             // CheckedAdd / CheckedSub / CheckedMul / CheckedDiv /
             // CheckedMod net +1 (pop 2, push 3). CheckedNeg net +2
@@ -1166,7 +1137,7 @@ impl Op {
             | Op::CmpLe
             | Op::CmpGe => 1,
 
-            Op::SetLocal(_) | Op::SetData(_) | Op::Pop => 1,
+            Op::SetLocal(_) | Op::SetData(_) => 1,
 
             // GetDataIndexed pops the index, SetDataIndexed pops the
             // index then the value, BoundsCheck does not pop.
@@ -2134,9 +2105,6 @@ impl Module {
 pub fn op_from_archived(archived: &ArchivedOp) -> Op {
     match archived {
         ArchivedOp::Const(idx) => Op::Const(idx.to_native()),
-        ArchivedOp::PushUnit => Op::PushUnit,
-        ArchivedOp::PushTrue => Op::PushTrue,
-        ArchivedOp::PushFalse => Op::PushFalse,
         ArchivedOp::GetLocal(idx) => Op::GetLocal(idx.to_native()),
         ArchivedOp::SetLocal(idx) => Op::SetLocal(idx.to_native()),
         ArchivedOp::GetData(idx) => Op::GetData(idx.to_native()),
@@ -2178,14 +2146,11 @@ pub fn op_from_archived(archived: &ArchivedOp) -> Op {
         ArchivedOp::MakeRecursiveClosure(idx, n) => Op::MakeRecursiveClosure(idx.to_native(), *n),
         ArchivedOp::Return => Op::Return,
         ArchivedOp::Yield => Op::Yield,
-        ArchivedOp::Pop => Op::Pop,
         ArchivedOp::Dup => Op::Dup,
         ArchivedOp::NewStruct(t) => Op::NewStruct(t.to_native()),
         ArchivedOp::NewEnum(t, v, n) => Op::NewEnum(t.to_native(), v.to_native(), *n),
         ArchivedOp::NewArray(n) => Op::NewArray(n.to_native()),
         ArchivedOp::NewTuple(n) => Op::NewTuple(*n),
-        ArchivedOp::WrapSome => Op::WrapSome,
-        ArchivedOp::PushNone => Op::PushNone,
         ArchivedOp::GetField(idx) => Op::GetField(idx.to_native()),
         ArchivedOp::GetIndex => Op::GetIndex,
         ArchivedOp::GetTupleField(idx) => Op::GetTupleField(*idx),
@@ -2455,7 +2420,7 @@ mod cost_model_tests {
         // a representative sample across the cost tiers.
         let ops: alloc::vec::Vec<Op> = alloc::vec![
             Op::Const(0),
-            Op::PushUnit,
+            Op::PushImmediate(0),
             Op::Add,
             Op::Mul,
             Op::Div,
@@ -2523,7 +2488,7 @@ mod cost_model_tests {
             op_cycles: flat_hundred,
         };
         assert_eq!(custom.cycles(&Op::Add), 100);
-        assert_eq!(custom.cycles(&Op::PushUnit), 100);
+        assert_eq!(custom.cycles(&Op::PushImmediate(0)), 100);
         assert_eq!(custom.cycles(&Op::Call(0, 0)), 100);
     }
 

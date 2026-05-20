@@ -1991,9 +1991,6 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                     let val = self.chunk_const(chunk_idx, idx as usize);
                     sp!(self, val);
                 }
-                Op::PushUnit => sp!(self, crate::bytecode::GenericValue::Unit),
-                Op::PushTrue => sp!(self, crate::bytecode::GenericValue::Bool(true)),
-                Op::PushFalse => sp!(self, crate::bytecode::GenericValue::Bool(false)),
                 Op::PushFunc(idx) => sp!(
                     self,
                     crate::bytecode::GenericValue::Func {
@@ -2605,9 +2602,6 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                     return Ok(GenericVmState::Yielded(output));
                 }
 
-                Op::Pop => {
-                    self.pop()?;
-                }
                 Op::Dup => {
                     let val = self.stack.last().ok_or(VmError::StackUnderflow)?.clone();
                     sp!(self, val);
@@ -2667,14 +2661,6 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                         self.stack.drain(self.stack.len() - n..).collect();
                     sp!(self, crate::bytecode::GenericValue::Tuple(elements));
                 }
-                Op::WrapSome => {
-                    // In our representation, Some(v) is just v. None is crate::bytecode::GenericValue::None.
-                    // WrapSome is a no-op for the value itself.
-                }
-                Op::PushNone => {
-                    sp!(self, crate::bytecode::GenericValue::None);
-                }
-
                 Op::GetField(name_const) => {
                     let container = self.pop()?;
                     let field_name = self
@@ -6027,13 +6013,13 @@ mod tests {
         // data layout, `schema_hash` is zero (no slots to hash).
         let expected: alloc::vec::Vec<u8> = alloc::vec![
             75, 69, 76, 69, 1, 0, 192, 0, 0, 0, 6, 6, 6, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 39, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 36, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0,
             1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 109, 97, 105,
             110, 255, 255, 255, 255, 200, 255, 255, 255, 2, 0, 0, 0, 208, 255, 255, 255, 1, 0, 0,
             0, 232, 255, 255, 255, 0, 0, 0, 0, 0, 0, 0, 0, 220, 255, 255, 255, 0, 0, 0, 0, 212,
             255, 255, 255, 1, 0, 0, 0, 248, 255, 255, 255, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0,
             0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 6, 6, 6, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0,
-            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 218, 19, 221, 224,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 116, 190, 171, 119,
         ];
         let src = "fn main() -> Word { 1 }";
         let tokens = tokenize(src).expect("lex");
