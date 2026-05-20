@@ -1205,6 +1205,10 @@ fn param_name_is_used(body: &Block, name: &str) -> bool {
             Expr::Loop { body, .. } => block_uses(body, name),
             Expr::Closure { body, .. } => block_uses(body, name),
             Expr::ClosureRef { captures, .. } => captures.iter().any(|c| c == name),
+            Expr::Checked { op_expr, arms, .. } => {
+                expr_uses(op_expr, name) || arms.iter().any(|arm| expr_uses(&arm.body, name))
+            }
+            Expr::SaturateMax { .. } | Expr::SaturateMin { .. } => false,
         }
     }
     fn block_uses(block: &Block, name: &str) -> bool {
@@ -2911,6 +2915,13 @@ fn normalize_fixed_defaults(program: &mut Program, frac_bits: u8) {
                 fix_opt(return_type, frac_bits);
                 fix_block(body, frac_bits);
             }
+            Expr::Checked { op_expr, arms, .. } => {
+                fix_expr(op_expr, frac_bits);
+                for arm in arms.iter_mut() {
+                    fix_expr(&mut arm.body, frac_bits);
+                }
+            }
+            Expr::SaturateMax { .. } | Expr::SaturateMin { .. } => {}
         }
     }
     fn fix_function(func: &mut FunctionDef, frac_bits: u8) {
@@ -3906,7 +3917,165 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
                 fc.emit(Op::MakeClosure(chunk_idx, n));
             }
         }
+        Expr::Checked {
+            op_expr,
+            arms,
+            span,
+        } => {
+            compile_checked(fc, op_expr, arms, span)?;
+        }
+        Expr::SaturateMax { .. } => {
+            // Word::MAX. Future iterations refine the value based
+            // on the construct's expected type (Byte::MAX,
+            // Fixed-specific bound, or a refined-type contract's
+            // saturate_max declaration). V0.2 supports only Word.
+            let idx = fc.add_constant(Value::Int(i64::MAX));
+            fc.emit(Op::Const(idx));
+        }
+        Expr::SaturateMin { .. } => {
+            // Word::MIN.
+            let idx = fc.add_constant(Value::Int(i64::MIN));
+            fc.emit(Op::Const(idx));
+        }
     }
+    Ok(())
+}
+
+/// Compile an overflow-checked construct. Lowers `op_expr {
+/// overflow => ..., underflow => ..., ok(name) => ... }` to a
+/// sequence of checked-arithmetic and conditional-branch
+/// opcodes.
+///
+/// The current implementation supports `BinOp::Add` and
+/// `BinOp::Sub` on `Word` operands. Each is compiled by emitting
+/// the operands followed by `Op::CheckedAdd` or `Op::CheckedSub`,
+/// which leave `(result, flag)` on the operand stack. The flag
+/// is stashed to a temporary local and dispatched through nested
+/// `If`/`Else` blocks. The arm that matches the flag's value
+/// runs; the result binding for the `ok` arm is initialised from
+/// the stashed value.
+fn compile_checked(
+    fc: &mut FuncCompiler,
+    op_expr: &Expr,
+    arms: &[crate::ast::CheckedArm],
+    span: &Span,
+) -> Result<(), CompileError> {
+    use crate::ast::CheckedArmKind;
+    // Find the three arms (overflow, underflow, ok). The type
+    // checker has already validated that each of the three is
+    // covered exactly once.
+    let mut ok_arm: Option<&crate::ast::CheckedArm> = None;
+    let mut overflow_arm: Option<&crate::ast::CheckedArm> = None;
+    let mut underflow_arm: Option<&crate::ast::CheckedArm> = None;
+    let mut ok_binding: Option<String> = None;
+    for arm in arms {
+        for kind in &arm.kinds {
+            match kind {
+                CheckedArmKind::Ok { binding } => {
+                    ok_arm = Some(arm);
+                    ok_binding = Some(binding.clone());
+                }
+                CheckedArmKind::Overflow => {
+                    overflow_arm = Some(arm);
+                }
+                CheckedArmKind::Underflow => {
+                    underflow_arm = Some(arm);
+                }
+            }
+        }
+    }
+    let ok_arm = ok_arm.ok_or_else(|| CompileError {
+        message: alloc::string::String::from("checked-overflow construct missing `ok` arm"),
+        span: *span,
+    })?;
+    let overflow_arm = overflow_arm.ok_or_else(|| CompileError {
+        message: alloc::string::String::from("checked-overflow construct missing `overflow` arm"),
+        span: *span,
+    })?;
+    let underflow_arm = underflow_arm.ok_or_else(|| CompileError {
+        message: alloc::string::String::from("checked-overflow construct missing `underflow` arm"),
+        span: *span,
+    })?;
+    let ok_binding = ok_binding.expect("validated by type checker");
+
+    // Emit the checked operation. Only Add and Sub are supported.
+    match op_expr {
+        Expr::BinOp {
+            op: BinOp::Add,
+            left,
+            right,
+            ..
+        } => {
+            compile_expr(fc, left)?;
+            compile_expr(fc, right)?;
+            fc.emit(Op::CheckedAdd);
+        }
+        Expr::BinOp {
+            op: BinOp::Sub,
+            left,
+            right,
+            ..
+        } => {
+            compile_expr(fc, left)?;
+            compile_expr(fc, right)?;
+            fc.emit(Op::CheckedSub);
+        }
+        _ => {
+            return Err(CompileError {
+                message: alloc::string::String::from(
+                    "checked-overflow construct currently supports only `+` and `-` on Word operands",
+                ),
+                span: *span,
+            });
+        }
+    }
+    // Stack: [result, flag]. Stash both to temporary locals so
+    // the arms can dispatch cleanly. The local names embed the
+    // span's start position so multiple checked constructs in
+    // the same function get distinct slots.
+    let synthetic_suffix = span.start;
+    let flag_name = alloc::format!("__checked_flag_{}", synthetic_suffix);
+    let result_name = alloc::format!("__checked_result_{}", synthetic_suffix);
+    let flag_slot = fc.declare_local(&flag_name);
+    let result_slot = fc.declare_local(&result_name);
+    fc.emit(Op::SetLocal(flag_slot));
+    fc.emit(Op::SetLocal(result_slot));
+    // Allocate the binding slot for the ok arm; its value is the
+    // stashed result.
+    let v_slot = fc.declare_local(&ok_binding);
+
+    // First branch: is the flag zero (ok)?
+    fc.emit(Op::GetLocal(flag_slot));
+    let zero_idx = fc.add_constant(Value::Int(0));
+    fc.emit(Op::Const(zero_idx));
+    fc.emit(Op::CmpEq);
+    // Stack: [is_ok]
+    let if_addr = fc.emit_jump(Op::If(0));
+    // True branch: ok. Initialise the binding from the stashed
+    // result and compile the ok body.
+    fc.emit(Op::GetLocal(result_slot));
+    fc.emit(Op::SetLocal(v_slot));
+    compile_expr(fc, &ok_arm.body)?;
+    let after_ok = fc.emit_jump(Op::Else(0));
+    fc.patch_jump(if_addr);
+
+    // False branch: dispatch between overflow and underflow.
+    fc.emit(Op::GetLocal(flag_slot));
+    let one_idx = fc.add_constant(Value::Int(1));
+    fc.emit(Op::Const(one_idx));
+    fc.emit(Op::CmpEq);
+    let if_addr_inner = fc.emit_jump(Op::If(0));
+    // True branch: overflow.
+    compile_expr(fc, &overflow_arm.body)?;
+    let after_inner = fc.emit_jump(Op::Else(0));
+    fc.patch_jump(if_addr_inner);
+    // False branch: underflow (the type checker guarantees the
+    // flag's value is 0, 1, or 2; this branch covers 2).
+    compile_expr(fc, &underflow_arm.body)?;
+    fc.patch_jump(after_inner);
+    fc.emit(Op::EndIf);
+    fc.patch_jump(after_ok);
+    fc.emit(Op::EndIf);
     Ok(())
 }
 

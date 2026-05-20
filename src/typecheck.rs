@@ -2852,6 +2852,148 @@ fn type_of_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Type, TypeError> {
             }
             Ok(inst_return)
         }
+        Expr::Checked {
+            op_expr,
+            arms,
+            span,
+        } => {
+            // The guarded operation must be a single arithmetic
+            // binary operation on Word operands. V0.2 supports
+            // Add and Sub; other operations and other operand
+            // types are reserved for later iterations.
+            let op = match op_expr.as_ref() {
+                Expr::BinOp { op: BinOp::Add, .. } => BinOp::Add,
+                Expr::BinOp { op: BinOp::Sub, .. } => BinOp::Sub,
+                _ => {
+                    return Err(TypeError::new(
+                        alloc::string::String::from(
+                            "checked-overflow construct currently guards only `+` and `-` on Word operands",
+                        ),
+                        *span,
+                    ));
+                }
+            };
+            let _ = op;
+            let inner_ty = type_of_expr(ctx, op_expr)?;
+            if !types_compatible(ctx, &inner_ty, &Type::Word) {
+                return Err(TypeError::new(
+                    alloc::format!(
+                        "checked-overflow construct expects a Word arithmetic operation, got {}",
+                        inner_ty.display()
+                    ),
+                    *span,
+                ));
+            }
+            // Validate arm structure: exactly one ok arm; combined
+            // overflow + underflow coverage; arms unify.
+            let mut saw_ok = false;
+            let mut saw_overflow = false;
+            let mut saw_underflow = false;
+            let mut ok_binding: Option<String> = None;
+            for arm in arms {
+                for kind in &arm.kinds {
+                    match kind {
+                        crate::ast::CheckedArmKind::Ok { binding } => {
+                            if saw_ok {
+                                return Err(TypeError::new(
+                                    alloc::string::String::from(
+                                        "checked-overflow construct has more than one `ok` arm",
+                                    ),
+                                    arm.span,
+                                ));
+                            }
+                            saw_ok = true;
+                            ok_binding = Some(binding.clone());
+                        }
+                        crate::ast::CheckedArmKind::Overflow => {
+                            if saw_overflow {
+                                return Err(TypeError::new(
+                                    alloc::string::String::from(
+                                        "checked-overflow construct has more than one `overflow` arm",
+                                    ),
+                                    arm.span,
+                                ));
+                            }
+                            saw_overflow = true;
+                        }
+                        crate::ast::CheckedArmKind::Underflow => {
+                            if saw_underflow {
+                                return Err(TypeError::new(
+                                    alloc::string::String::from(
+                                        "checked-overflow construct has more than one `underflow` arm",
+                                    ),
+                                    arm.span,
+                                ));
+                            }
+                            saw_underflow = true;
+                        }
+                    }
+                }
+            }
+            if !saw_ok {
+                return Err(TypeError::new(
+                    alloc::string::String::from(
+                        "checked-overflow construct must include an `ok(name)` arm",
+                    ),
+                    *span,
+                ));
+            }
+            if !saw_overflow {
+                return Err(TypeError::new(
+                    alloc::string::String::from(
+                        "checked-overflow construct must include an `overflow` arm",
+                    ),
+                    *span,
+                ));
+            }
+            if !saw_underflow {
+                return Err(TypeError::new(
+                    alloc::string::String::from(
+                        "checked-overflow construct must include an `underflow` arm",
+                    ),
+                    *span,
+                ));
+            }
+            // Type-check arm bodies. Each arm body is type-checked
+            // against a fresh scope; for the `ok` arm the binding is
+            // a `Word` (the operation's successful result). All arm
+            // bodies must unify; the construct's result type is
+            // their join.
+            let result_ty = ctx.fresh();
+            for arm in arms {
+                ctx.push_scope();
+                if arm
+                    .kinds
+                    .iter()
+                    .any(|k| matches!(k, crate::ast::CheckedArmKind::Ok { .. }))
+                    && let Some(name) = &ok_binding
+                {
+                    ctx.add_local(name.clone(), Type::Word);
+                }
+                let body_ty = type_of_expr(ctx, &arm.body)?;
+                ctx.pop_scope();
+                if !types_compatible(ctx, &body_ty, &result_ty) {
+                    return Err(TypeError::new(
+                        alloc::format!(
+                            "checked-overflow arm produces {} which does not unify with the construct's result type {}",
+                            body_ty.display(),
+                            result_ty.apply(&ctx.subst).display()
+                        ),
+                        arm.span,
+                    ));
+                }
+            }
+            Ok(result_ty.apply(&ctx.subst))
+        }
+        Expr::SaturateMax { .. } | Expr::SaturateMin { .. } => {
+            // `saturate_max` / `saturate_min` have a context-
+            // determined type. They are admitted as `Word` in V0.2
+            // because the checked-overflow construct only supports
+            // Word operations; future iterations extend this to
+            // Byte and Fixed by tying the saturation type to the
+            // surrounding construct's expected type.
+            Ok(Type::Word)
+        }
     }
 }
 
@@ -3030,6 +3172,83 @@ mod tests {
              fn main() -> LocalMs { LocalMs(7 + 35) }",
         )
         .expect("newtype-wrapping program should compile");
+    }
+
+    #[test]
+    fn checked_overflow_requires_ok_arm() {
+        let err = check_src(
+            "fn main() -> Word {\n\
+                let y = 1 + 2 {\n\
+                    overflow => 0,\n\
+                    underflow => 0,\n\
+                };\n\
+                y\n\
+             }",
+        )
+        .unwrap_err();
+        assert!(
+            err.message.contains("must include an `ok"),
+            "unexpected error: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn checked_overflow_requires_overflow_arm() {
+        let err = check_src(
+            "fn main() -> Word {\n\
+                let y = 1 + 2 {\n\
+                    underflow => 0,\n\
+                    ok(v) => v,\n\
+                };\n\
+                y\n\
+             }",
+        )
+        .unwrap_err();
+        assert!(
+            err.message.contains("must include an `overflow"),
+            "unexpected error: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn checked_overflow_requires_underflow_arm() {
+        let err = check_src(
+            "fn main() -> Word {\n\
+                let y = 1 + 2 {\n\
+                    overflow => 0,\n\
+                    ok(v) => v,\n\
+                };\n\
+                y\n\
+             }",
+        )
+        .unwrap_err();
+        assert!(
+            err.message.contains("must include an `underflow"),
+            "unexpected error: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn checked_overflow_rejects_non_arithmetic_op() {
+        let err = check_src(
+            "fn main() -> Word {\n\
+                let y = 1 * 2 {\n\
+                    overflow => 0,\n\
+                    underflow => 0,\n\
+                    ok(v) => v,\n\
+                };\n\
+                y\n\
+             }",
+        )
+        .unwrap_err();
+        assert!(
+            err.message.contains("only `+` and `-`"),
+            "unexpected error: {}",
+            err.message
+        );
     }
 
     #[test]

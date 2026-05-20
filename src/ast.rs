@@ -549,6 +549,58 @@ pub enum Expr {
         recursive: bool,
         span: Span,
     },
+    /// Overflow-checked expression. The inner expression is a
+    /// single arithmetic operation; the arms dispatch on whether
+    /// the operation overflowed, underflowed, or completed
+    /// normally. The construct's surface form is
+    ///
+    ///     expr {
+    ///         overflow => arm_body,
+    ///         underflow => arm_body,
+    ///         ok(name) => arm_body,
+    ///     }
+    ///
+    /// where any arm may combine multiple kinds via the pipe
+    /// pattern `overflow|underflow => ...`. The `ok` arm binds the
+    /// successful result through `name`.
+    Checked {
+        /// The arithmetic operation guarded by the construct. The
+        /// type checker validates that this is a single
+        /// arithmetic operation; only `BinOp::Add` and `BinOp::Sub`
+        /// on `Word` operands are supported in V0.2.
+        op_expr: Box<Expr>,
+        /// Arms in declaration order. Each arm covers one or more
+        /// of overflow, underflow, and ok.
+        arms: Vec<CheckedArm>,
+        span: Span,
+    },
+    /// `saturate_max` literal. Evaluates to the maximum
+    /// representable value of the construct's expected type. The
+    /// type checker assigns the context type; the compiler emits
+    /// a constant.
+    SaturateMax { span: Span },
+    /// `saturate_min` literal. Evaluates to the minimum
+    /// representable value of the construct's expected type.
+    SaturateMin { span: Span },
+}
+
+/// One arm of an overflow-checked expression. The arm fires when
+/// the guarded operation's outcome matches one of the kinds in
+/// `kinds`. The pipe pattern at the surface produces an arm whose
+/// `kinds` carries multiple entries.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CheckedArm {
+    pub kinds: Vec<CheckedArmKind>,
+    pub body: Expr,
+    pub span: Span,
+}
+
+/// Which outcome an arm covers.
+#[derive(Debug, Clone, PartialEq)]
+pub enum CheckedArmKind {
+    Overflow,
+    Underflow,
+    Ok { binding: String },
 }
 
 impl Expr {
@@ -576,7 +628,10 @@ impl Expr {
             | Expr::Cast { span, .. }
             | Expr::Placeholder { span }
             | Expr::Closure { span, .. }
-            | Expr::ClosureRef { span, .. } => *span,
+            | Expr::ClosureRef { span, .. }
+            | Expr::Checked { span, .. }
+            | Expr::SaturateMax { span }
+            | Expr::SaturateMin { span } => *span,
         }
     }
 }

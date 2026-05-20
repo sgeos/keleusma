@@ -167,6 +167,13 @@ pub trait MutVisitor {
             Expr::Closure { body, .. } => {
                 self.visit_block(body);
             }
+            Expr::Checked { op_expr, arms, .. } => {
+                self.visit_expr(op_expr);
+                for arm in arms.iter_mut() {
+                    self.visit_expr(&mut arm.body);
+                }
+            }
+            Expr::SaturateMax { .. } | Expr::SaturateMin { .. } => {}
         }
     }
 }
@@ -312,6 +319,13 @@ pub trait Visitor {
             Expr::Closure { body, .. } => {
                 self.visit_block(body);
             }
+            Expr::Checked { op_expr, arms, .. } => {
+                self.visit_expr(op_expr);
+                for arm in arms.iter() {
+                    self.visit_expr(&arm.body);
+                }
+            }
+            Expr::SaturateMax { .. } | Expr::SaturateMin { .. } => {}
         }
     }
 }

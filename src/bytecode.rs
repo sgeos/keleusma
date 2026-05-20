@@ -598,6 +598,21 @@ pub enum Op {
 
     /// Halt execution with a runtime error.
     Trap(u16),
+
+    /// Overflow-checked Word addition. Pops two `Value::Int`
+    /// operands and pushes the wrapped sum followed by an
+    /// outcome flag: `Value::Int(0)` for ok, `Value::Int(1)`
+    /// for overflow, `Value::Int(2)` for underflow. Used by the
+    /// surface `expr { overflow => ..., underflow => ...,
+    /// ok(v) => ... }` construct to dispatch on arithmetic
+    /// outcome without relying on host-side cycle counting.
+    CheckedAdd,
+    /// Overflow-checked Word subtraction. Same stack effect as
+    /// `Op::CheckedAdd`. Overflow flag is set when the true
+    /// difference exceeds `i64::MAX` (a positive minus a
+    /// strongly-negative); underflow is set when the true
+    /// difference is below `i64::MIN`.
+    CheckedSub,
 }
 
 /// Size in bytes of one operand-stack slot, namely the size of `Value` on
@@ -852,6 +867,8 @@ pub fn nominal_op_cycles(op: &Op) -> u32 {
 
         Op::Add
         | Op::Sub
+        | Op::CheckedAdd
+        | Op::CheckedSub
         | Op::Mul
         | Op::Neg
         | Op::CmpEq
@@ -932,6 +949,11 @@ impl Op {
 
             Op::WrapSome | Op::Not | Op::Neg => 0,
 
+            // CheckedAdd / CheckedSub pop two operands and push
+            // (result, flag); the second push reaches the entry
+            // depth so the above-entry peak is zero.
+            Op::CheckedAdd | Op::CheckedSub => 0,
+
             Op::Add
             | Op::Sub
             | Op::Mul
@@ -1002,6 +1024,11 @@ impl Op {
             | Op::PushFunc(_) => 0,
 
             Op::WrapSome | Op::Not | Op::Neg => 0,
+
+            // CheckedAdd / CheckedSub have a net stack delta of
+            // zero (pop two, push two), so the post-execution
+            // shrink is also zero.
+            Op::CheckedAdd | Op::CheckedSub => 0,
 
             Op::Add
             | Op::Sub
@@ -2000,6 +2027,8 @@ pub fn op_from_archived(archived: &ArchivedOp) -> Op {
         ArchivedOp::FixedMul(n) => Op::FixedMul(*n),
         ArchivedOp::FixedDiv(n) => Op::FixedDiv(*n),
         ArchivedOp::Trap(idx) => Op::Trap(idx.to_native()),
+        ArchivedOp::CheckedAdd => Op::CheckedAdd,
+        ArchivedOp::CheckedSub => Op::CheckedSub,
     }
 }
 

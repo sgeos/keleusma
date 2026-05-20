@@ -2811,6 +2811,69 @@ impl<'a, 'arena> Vm<'a, 'arena> {
                         .unwrap_or_else(|| String::from("trap"));
                     return Err(VmError::Trap(msg));
                 }
+                Op::CheckedAdd => {
+                    let b = self.pop()?;
+                    let a = self.pop()?;
+                    match (a, b) {
+                        (Value::Int(x), Value::Int(y)) => {
+                            // Compute the wrapped sum and detect the
+                            // direction of overflow. For signed
+                            // addition, overflow can occur only when
+                            // both operands share the same sign; the
+                            // sign of the wrapped result distinguishes
+                            // the two cases. The flag values are
+                            // `0` ok, `1` overflow, `2` underflow.
+                            let (result, wrapped) = x.overflowing_add(y);
+                            let flag: i64 = if !wrapped {
+                                0
+                            } else if x >= 0 {
+                                1
+                            } else {
+                                2
+                            };
+                            sp!(self, Value::Int(result));
+                            sp!(self, Value::Int(flag));
+                        }
+                        (a, b) => {
+                            return Err(VmError::TypeError(format!(
+                                "Op::CheckedAdd expects Word operands, got {} and {}",
+                                a.type_name(),
+                                b.type_name()
+                            )));
+                        }
+                    }
+                }
+                Op::CheckedSub => {
+                    let b = self.pop()?;
+                    let a = self.pop()?;
+                    match (a, b) {
+                        (Value::Int(x), Value::Int(y)) => {
+                            // Signed subtraction overflows when the
+                            // operands have opposite signs and the
+                            // wrapped result's sign matches the
+                            // subtrahend rather than the minuend. The
+                            // direction of the failure is recovered
+                            // from the minuend's sign.
+                            let (result, wrapped) = x.overflowing_sub(y);
+                            let flag: i64 = if !wrapped {
+                                0
+                            } else if x >= 0 {
+                                1
+                            } else {
+                                2
+                            };
+                            sp!(self, Value::Int(result));
+                            sp!(self, Value::Int(flag));
+                        }
+                        (a, b) => {
+                            return Err(VmError::TypeError(format!(
+                                "Op::CheckedSub expects Word operands, got {} and {}",
+                                a.type_name(),
+                                b.type_name()
+                            )));
+                        }
+                    }
+                }
             }
         }
     }
@@ -2995,6 +3058,85 @@ mod tests {
             VmState::Yielded(v) => panic!("unexpected yield: {:?}", v),
             VmState::Reset => panic!("unexpected reset"),
         }
+    }
+
+    #[test]
+    fn checked_overflow_ok_arm_passes_result() {
+        // `1 + 2` does not overflow, so the construct evaluates
+        // to the `ok` arm's body which binds the successful
+        // result and returns it.
+        let val = run_expect(
+            "fn main() -> Word {\n\
+                let y = 1 + 2 {\n\
+                    overflow => saturate_max,\n\
+                    underflow => saturate_min,\n\
+                    ok(v) => v,\n\
+                };\n\
+                y\n\
+             }",
+            &[],
+        );
+        assert_eq!(val, Value::Int(3));
+    }
+
+    #[test]
+    fn checked_overflow_arm_returns_saturate_max() {
+        // A positive overflow (Word::MAX + 1) dispatches to the
+        // overflow arm; `saturate_max` evaluates to Word::MAX.
+        let val = run_expect(
+            "fn main() -> Word {\n\
+                let m = 9223372036854775807;\n\
+                let y = m + 1 {\n\
+                    overflow => saturate_max,\n\
+                    underflow => saturate_min,\n\
+                    ok(v) => v,\n\
+                };\n\
+                y\n\
+             }",
+            &[],
+        );
+        assert_eq!(val, Value::Int(i64::MAX));
+    }
+
+    #[test]
+    fn checked_underflow_arm_returns_saturate_min() {
+        // A negative overflow ((Word::MIN + 1) - 2) dispatches
+        // to the underflow arm. The minuend is constructed as
+        // `0 - 9223372036854775807` because the bare literal
+        // `-9223372036854775808` would not lex (the absolute
+        // value is one past `i64::MAX`).
+        let val = run_expect(
+            "fn main() -> Word {\n\
+                let m = 0 - 9223372036854775807;\n\
+                let y = m - 2 {\n\
+                    overflow => saturate_max,\n\
+                    underflow => saturate_min,\n\
+                    ok(v) => v,\n\
+                };\n\
+                y\n\
+             }",
+            &[],
+        );
+        assert_eq!(val, Value::Int(i64::MIN));
+    }
+
+    #[test]
+    fn checked_overflow_combined_arm_via_pipe() {
+        // The combined `overflow|underflow` arm shares a body
+        // across both failure cases. The body here returns 0
+        // unconditionally; the ok arm returns the result.
+        let val = run_expect(
+            "fn main() -> Word {\n\
+                let m = 9223372036854775807;\n\
+                let y = m + 1 {\n\
+                    overflow|underflow => 0,\n\
+                    ok(v) => v,\n\
+                };\n\
+                y\n\
+             }",
+            &[],
+        );
+        assert_eq!(val, Value::Int(0));
     }
 
     #[test]

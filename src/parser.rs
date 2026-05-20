@@ -123,6 +123,11 @@ impl<'a> Parser<'a> {
         &self.tokens[self.pos].kind
     }
 
+    fn peek_ahead(&self, n: usize) -> &TokenKind {
+        let idx = (self.pos + n).min(self.tokens.len() - 1);
+        &self.tokens[idx].kind
+    }
+
     fn peek_span(&self) -> Span {
         self.tokens[self.pos].span
     }
@@ -1112,9 +1117,88 @@ impl<'a> Parser<'a> {
 
     fn parse_expr(&mut self) -> Result<Expr, ParseError> {
         self.enter_depth()?;
-        let result = self.parse_pipeline_expr();
+        let inner = self.parse_pipeline_expr();
         self.leave_depth();
-        result
+        let mut inner = inner?;
+        // Attach an overflow-checked arm block when one is
+        // syntactically present. The construct is recognised by
+        // an opening `{` followed by one of the arm keywords
+        // (`overflow`, `underflow`, or the lowercase identifier
+        // `ok`). Other `{`s (struct literals, block expressions
+        // in if/match/let positions) are handled by their
+        // respective parsers and do not reach this point.
+        if matches!(self.peek(), TokenKind::LBrace) && self.peek_ahead_is_checked_arm_keyword() {
+            inner = self.parse_checked_arms_after(inner)?;
+        }
+        Ok(inner)
+    }
+
+    fn peek_ahead_is_checked_arm_keyword(&self) -> bool {
+        matches!(
+            self.peek_ahead(1),
+            TokenKind::Overflow | TokenKind::Underflow
+        ) || matches!(self.peek_ahead(1), TokenKind::LowerIdent(s) if s == "ok")
+    }
+
+    fn parse_checked_arms_after(&mut self, op_expr: Expr) -> Result<Expr, ParseError> {
+        let start_span = op_expr.span();
+        self.expect(&TokenKind::LBrace)?;
+        let mut arms: alloc::vec::Vec<crate::ast::CheckedArm> = alloc::vec::Vec::new();
+        while !self.at(&TokenKind::RBrace) {
+            let arm_start = self.peek_span();
+            let mut kinds: alloc::vec::Vec<crate::ast::CheckedArmKind> = alloc::vec::Vec::new();
+            loop {
+                let kind = self.parse_checked_arm_kind()?;
+                kinds.push(kind);
+                if !self.eat(&TokenKind::Bar) {
+                    break;
+                }
+            }
+            self.expect(&TokenKind::FatArrow)?;
+            let body = self.parse_expr()?;
+            let arm_end = body.span();
+            arms.push(crate::ast::CheckedArm {
+                kinds,
+                body,
+                span: merge_spans(arm_start, arm_end),
+            });
+            if !self.eat(&TokenKind::Comma) {
+                break;
+            }
+        }
+        let end = self.expect(&TokenKind::RBrace)?;
+        Ok(Expr::Checked {
+            op_expr: alloc::boxed::Box::new(op_expr),
+            arms,
+            span: merge_spans(start_span, end),
+        })
+    }
+
+    fn parse_checked_arm_kind(&mut self) -> Result<crate::ast::CheckedArmKind, ParseError> {
+        match self.peek().clone() {
+            TokenKind::Overflow => {
+                self.bump();
+                Ok(crate::ast::CheckedArmKind::Overflow)
+            }
+            TokenKind::Underflow => {
+                self.bump();
+                Ok(crate::ast::CheckedArmKind::Underflow)
+            }
+            TokenKind::LowerIdent(name) if name == "ok" => {
+                self.bump();
+                self.expect(&TokenKind::LParen)?;
+                let (binding, _) = self.expect_lower_ident()?;
+                self.expect(&TokenKind::RParen)?;
+                Ok(crate::ast::CheckedArmKind::Ok { binding })
+            }
+            other => Err(ParseError {
+                message: alloc::format!(
+                    "expected overflow-arm keyword (`overflow`, `underflow`, or `ok(name)`), found {:?}",
+                    other
+                ),
+                span: self.peek_span(),
+            }),
+        }
     }
 
     fn parse_pipeline_expr(&mut self) -> Result<Expr, ParseError> {
@@ -1344,6 +1428,19 @@ impl<'a> Parser<'a> {
     #[allow(clippy::too_many_lines)]
     fn parse_primary_expr(&mut self) -> Result<Expr, ParseError> {
         let tok = self.tokens[self.pos].clone();
+
+        // Saturation literals. Used inside overflow-checked arms
+        // to denote the type's max or min value. The compiler
+        // resolves the constant based on the surrounding
+        // construct's expected type; V0.2 supports Word only.
+        if matches!(tok.kind, TokenKind::SaturateMax) {
+            self.bump();
+            return Ok(Expr::SaturateMax { span: tok.span });
+        }
+        if matches!(tok.kind, TokenKind::SaturateMin) {
+            self.bump();
+            return Ok(Expr::SaturateMin { span: tok.span });
+        }
 
         match tok.kind {
             // Closure literal: `|args| body` or `|args| -> ret { body }`.

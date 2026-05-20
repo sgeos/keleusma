@@ -1307,6 +1307,24 @@ fn subst_in_expr(expr: &Expr, subst: &BTreeMap<String, TypeExpr>) -> Expr {
             recursive: *recursive,
             span: *span,
         },
+        Expr::Checked {
+            op_expr,
+            arms,
+            span,
+        } => Expr::Checked {
+            op_expr: Box::new(subst_in_expr(op_expr, subst)),
+            arms: arms
+                .iter()
+                .map(|arm| crate::ast::CheckedArm {
+                    kinds: arm.kinds.clone(),
+                    body: subst_in_expr(&arm.body, subst),
+                    span: arm.span,
+                })
+                .collect(),
+            span: *span,
+        },
+        Expr::SaturateMax { span } => Expr::SaturateMax { span: *span },
+        Expr::SaturateMin { span } => Expr::SaturateMin { span: *span },
     }
 }
 
