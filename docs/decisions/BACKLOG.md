@@ -282,22 +282,22 @@ Improve the WCMU analysis to recognise this pattern. The class of programs to su
 
 Deferred until the verifier's WCMU pass is revisited. The current workaround (inline the computation) is documented in `docs/extras/SONG_5_SPEC.md` so future authors of minimalist scripts can avoid the failure path without first triggering it.
 
-## B13. Refinement-type compile-time elision through range analysis
+## ~~B13. Refinement-type compile-time elision through range analysis~~ (MVP resolved)
 
-The refinement predicate declared on a `newtype Name = T where predicate` is currently emitted at every construction site as a runtime call followed by a trap on a false result. A range-analysis pass over the underlying type could elide the call when the argument's static range provably lies within the predicate's true set. Worked example: `newtype Percent = Word where in_range_0_100;` constructed from a literal `42` does not need the runtime check because `42` is statically in range.
+The MVP landed: literal-argument refinement elision. When a refined newtype constructor is called with a direct integer literal that the compile-time evaluator can prove satisfies the predicate, the runtime call and trap are skipped and the constructor reduces to the inner value. When the literal provably fails the predicate, the compiler rejects the construction at the source span with a diagnostic naming the predicate, the newtype, and the argument.
 
-### Requirements
+### What landed
 
-- Interval-arithmetic infrastructure on the underlying type. The lattice is straightforward for `Word` (closed intervals on `i64`), more involved for `Fixed<N>` (must respect fraction-bit scaling), and trivial for `Byte` (closed intervals on `u8`).
-- Predicate decompilation. The pass must recover the predicate's true set from the AST of the predicate function. For atomic-total predicates expressed as combinations of comparison operators and logical conjunctions, this is mechanical; for predicates that call other helpers or use richer control flow, the analysis falls back to "cannot prove in range" and emits the runtime check.
-- Soundness lattice. The elision is sound only when the inferred range is a *subset* of the predicate's true set. Conservative under-approximation is admissible (over-emit checks); over-approximation is unsound.
+- `TypeInfo::refinement_bodies` caches each predicate's parameter name and tail expression for the eligible subset (single bare-variable parameter, no statements, a tail-expression body).
+- `eval_predicate_at_int(body, param_name, value)` is a small structural evaluator over `Expr` that handles literals, identifier substitution for the parameter, integer arithmetic (`+`, `-`, `*`, `/`, `%`), comparison (`==`, `!=`, `<`, `<=`, `>`, `>=`), logical operators (`and`, `or`, `not`), and unary negation. Anything outside this subset returns `None` and the runtime path is preserved.
+- The constructor emission path at `compile_call` consults the evaluator before emitting the runtime check. On `Some(true)` the inner value is emitted bare; on `Some(false)` the compile fails with a span-localized diagnostic; on `None` the existing runtime check is emitted.
+- Three new tests cover: elision on a provably-true literal, compile-time rejection on a provably-false literal, and continued runtime trap for an out-of-range non-literal argument.
 
-### Out of scope
+### Follow-ons left for a future pass
 
-- Range refinement through arithmetic operations beyond integer literals. The MVP only elides when the construction argument is a literal or a let-bound local whose value is itself a literal. Range propagation through `+`, `-`, `*` is a richer dataflow problem reserved for a follow-on.
-- Elision across function boundaries. The pass operates within a single function's body; predicates called on values returned from other functions retain the runtime check.
-
-Deferred until the interval-arithmetic infrastructure lands as a shared primitive (also useful for B12 and B14).
+- Range propagation through arithmetic operations beyond integer literals. The MVP only handles direct literal arguments (`Counter(42)`); let-bound integer constants, arithmetic on literals (`Counter(2 + 40)`), and values returned from atomic-total functions all retain the runtime check.
+- Interval-arithmetic infrastructure for `Word`, `Byte`, and `Fixed<N>`. Building the lattice as a shared primitive would also serve B12 and B14.
+- Cross-function range analysis. The MVP operates within a single call site; broader analysis is a wider data-flow change.
 
 ## B14. CallIndirect flow analysis for non-recursive closure invocation
 

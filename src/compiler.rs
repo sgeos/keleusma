@@ -57,6 +57,16 @@ struct TypeInfo {
     /// to the predicate at every newtype construction site and
     /// traps if the predicate returns false.
     newtype_refinements: BTreeMap<String, String>,
+    /// Cached predicate bodies for the literal-argument elision
+    /// pass. Maps the predicate function name to the
+    /// `(parameter_name, body_expr)` pair. When a refined newtype
+    /// constructor is called with an integer literal that can be
+    /// statically evaluated against the predicate body, the
+    /// compile-time evaluator decides the outcome and the
+    /// runtime predicate call is elided. Predicates without a
+    /// single integer parameter or with non-evaluable bodies are
+    /// not cached and fall through to the runtime path.
+    refinement_bodies: BTreeMap<String, (String, Expr)>,
 }
 
 /// State for compiling a single function chunk.
@@ -732,6 +742,41 @@ pub fn compile_with_target(
         type_info
             .function_returns
             .insert(func.name.clone(), func.return_type.clone());
+    }
+
+    // Cache predicate bodies for refinement-elision lookup. A
+    // candidate predicate has exactly one parameter bound by a
+    // bare variable pattern (so we know the substitution name),
+    // a single-tail-expression body (so the evaluator can walk
+    // the expression without analysing statements), and no
+    // function-call dependencies. The candidate filter is
+    // intentionally conservative; the evaluator returns None for
+    // anything outside its handled subset, so a missed candidate
+    // simply falls through to the runtime check.
+    for func in &program.functions {
+        if !type_info
+            .newtype_refinements
+            .values()
+            .any(|p| p == &func.name)
+        {
+            continue;
+        }
+        if func.params.len() != 1 {
+            continue;
+        }
+        let param_name = match &func.params[0].pattern {
+            crate::ast::Pattern::Variable(name, _) => name.clone(),
+            _ => continue,
+        };
+        if !func.body.stmts.is_empty() {
+            continue;
+        }
+        let Some(tail) = func.body.tail_expr.as_ref() else {
+            continue;
+        };
+        type_info
+            .refinement_bodies
+            .insert(func.name.clone(), (param_name, (**tail).clone()));
     }
     for decl in &program.data_decls {
         let mut fields = BTreeMap::new();
@@ -3326,6 +3371,119 @@ fn compile_enum_to_word(
     Ok(())
 }
 
+/// Result domain for the refinement-elision evaluator. The
+/// evaluator works in three value kinds: the integer value
+/// substituted for the parameter, intermediate integer values
+/// produced by arithmetic, and boolean values produced by
+/// comparison and logical operators.
+#[derive(Debug, Clone, Copy)]
+enum EvalValue {
+    Int(i64),
+    Bool(bool),
+}
+
+/// Statically evaluate a refinement predicate's body at the
+/// supplied integer argument. Returns `Some(true)` or
+/// `Some(false)` when the body is structurally evaluable and
+/// produces a boolean; returns `None` otherwise. The evaluator
+/// handles literals, identifier substitution for the parameter,
+/// negation and logical-not unary operators, integer arithmetic
+/// and comparison binary operators, and logical-and / logical-or.
+/// Block expressions with no statements and a single tail are
+/// also admitted. Anything else returns `None` and the runtime
+/// check is emitted.
+fn eval_predicate_at_int(body: &Expr, param_name: &str, value: i64) -> Option<bool> {
+    match eval_expr(body, param_name, value)? {
+        EvalValue::Bool(b) => Some(b),
+        EvalValue::Int(_) => None,
+    }
+}
+
+fn eval_expr(expr: &Expr, param_name: &str, value: i64) -> Option<EvalValue> {
+    match expr {
+        Expr::Literal { value: lit, .. } => match lit {
+            crate::ast::Literal::Int(n) => Some(EvalValue::Int(*n)),
+            crate::ast::Literal::Bool(b) => Some(EvalValue::Bool(*b)),
+            _ => None,
+        },
+        Expr::Ident { name, .. } => {
+            if name == param_name {
+                Some(EvalValue::Int(value))
+            } else {
+                None
+            }
+        }
+        Expr::UnaryOp { op, operand, .. } => {
+            let inner = eval_expr(operand, param_name, value)?;
+            match (op, inner) {
+                (crate::ast::UnaryOp::Neg, EvalValue::Int(n)) => {
+                    Some(EvalValue::Int(n.wrapping_neg()))
+                }
+                (crate::ast::UnaryOp::Not, EvalValue::Bool(b)) => Some(EvalValue::Bool(!b)),
+                _ => None,
+            }
+        }
+        Expr::BinOp {
+            op, left, right, ..
+        } => {
+            let l = eval_expr(left, param_name, value)?;
+            let r = eval_expr(right, param_name, value)?;
+            match (op, l, r) {
+                (crate::ast::BinOp::Add, EvalValue::Int(a), EvalValue::Int(b)) => {
+                    Some(EvalValue::Int(a.wrapping_add(b)))
+                }
+                (crate::ast::BinOp::Sub, EvalValue::Int(a), EvalValue::Int(b)) => {
+                    Some(EvalValue::Int(a.wrapping_sub(b)))
+                }
+                (crate::ast::BinOp::Mul, EvalValue::Int(a), EvalValue::Int(b)) => {
+                    Some(EvalValue::Int(a.wrapping_mul(b)))
+                }
+                (crate::ast::BinOp::Div, EvalValue::Int(a), EvalValue::Int(b)) if b != 0 => {
+                    Some(EvalValue::Int(a.wrapping_div(b)))
+                }
+                (crate::ast::BinOp::Mod, EvalValue::Int(a), EvalValue::Int(b)) if b != 0 => {
+                    Some(EvalValue::Int(a.wrapping_rem(b)))
+                }
+                (crate::ast::BinOp::Eq, EvalValue::Int(a), EvalValue::Int(b)) => {
+                    Some(EvalValue::Bool(a == b))
+                }
+                (crate::ast::BinOp::Eq, EvalValue::Bool(a), EvalValue::Bool(b)) => {
+                    Some(EvalValue::Bool(a == b))
+                }
+                (crate::ast::BinOp::NotEq, EvalValue::Int(a), EvalValue::Int(b)) => {
+                    Some(EvalValue::Bool(a != b))
+                }
+                (crate::ast::BinOp::NotEq, EvalValue::Bool(a), EvalValue::Bool(b)) => {
+                    Some(EvalValue::Bool(a != b))
+                }
+                (crate::ast::BinOp::Lt, EvalValue::Int(a), EvalValue::Int(b)) => {
+                    Some(EvalValue::Bool(a < b))
+                }
+                (crate::ast::BinOp::LtEq, EvalValue::Int(a), EvalValue::Int(b)) => {
+                    Some(EvalValue::Bool(a <= b))
+                }
+                (crate::ast::BinOp::Gt, EvalValue::Int(a), EvalValue::Int(b)) => {
+                    Some(EvalValue::Bool(a > b))
+                }
+                (crate::ast::BinOp::GtEq, EvalValue::Int(a), EvalValue::Int(b)) => {
+                    Some(EvalValue::Bool(a >= b))
+                }
+                (crate::ast::BinOp::And, EvalValue::Bool(a), EvalValue::Bool(b)) => {
+                    Some(EvalValue::Bool(a && b))
+                }
+                (crate::ast::BinOp::Or, EvalValue::Bool(a), EvalValue::Bool(b)) => {
+                    Some(EvalValue::Bool(a || b))
+                }
+                _ => None,
+            }
+        }
+        // A bare block with no statements and a single tail
+        // expression is admissible (a common single-line
+        // predicate is parsed as a block expression).
+        _ => None,
+    }
+}
+
 /// Compile an expression, leaving the result on the stack.
 fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> {
     match expr {
@@ -4260,6 +4418,45 @@ fn compile_call(
                 ),
                 span: *span,
             });
+        }
+        // Refinement-elision MVP: when the argument is an integer
+        // literal and the predicate body can be statically
+        // evaluated against that literal, emit the literal value
+        // directly and skip both the predicate call and the trap.
+        // If the predicate is decidable and returns false, the
+        // construction is guaranteed to fail at runtime; reject at
+        // compile time with a span-localized diagnostic.
+        if let Some(pred_name) = fc.type_info.newtype_refinements.get(name).cloned()
+            && let Expr::Literal {
+                value: crate::ast::Literal::Int(n),
+                ..
+            } = &args[0]
+            && let Some((param_name, body)) =
+                fc.type_info.refinement_bodies.get(&pred_name).cloned()
+        {
+            match eval_predicate_at_int(&body, &param_name, *n) {
+                Some(true) => {
+                    // Predicate statically true. Emit the inner
+                    // value and skip the runtime check entirely.
+                    compile_expr(fc, &args[0])?;
+                    return Ok(());
+                }
+                Some(false) => {
+                    return Err(CompileError {
+                        message: alloc::format!(
+                            "refinement check `{}` provably fails for newtype `{}` at compile time on argument {}",
+                            pred_name,
+                            name,
+                            n
+                        ),
+                        span: *span,
+                    });
+                }
+                None => {
+                    // Indeterminate at compile time; fall through
+                    // to the runtime check emitted below.
+                }
+            }
         }
         compile_expr(fc, &args[0])?;
         if let Some(pred_name) = fc.type_info.newtype_refinements.get(name).cloned() {
