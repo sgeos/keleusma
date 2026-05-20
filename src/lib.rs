@@ -36,6 +36,8 @@ pub mod ast;
 #[cfg(feature = "compile")]
 pub mod compiler;
 #[cfg(feature = "compile")]
+pub mod interval;
+#[cfg(feature = "compile")]
 pub mod lexer;
 #[cfg(feature = "compile")]
 pub mod monomorphize;

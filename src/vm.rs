@@ -3644,6 +3644,67 @@ mod tests {
     }
 
     #[test]
+    fn refinement_predicate_parameter_range_eliminated() {
+        // Tier 3: the parameter `c: Counter` carries the
+        // predicate's true set as its compile-time range. Re-
+        // wrapping the parameter through `Counter(c as Word)`
+        // hits the lattice subset check (argument range == true
+        // set) and elides the runtime predicate call.
+        let val = run_expect(
+            "fn nonneg(x: Word) -> bool { x >= 0 }\n\
+             newtype Counter = Word where nonneg;\n\
+             fn rewrap(c: Counter) -> Counter { Counter(c as Word) }\n\
+             fn main() -> Counter { rewrap(Counter(42)) }",
+            &[],
+        );
+        assert_eq!(val, Value::Int(42));
+    }
+
+    #[test]
+    fn refinement_predicate_parameter_range_rejects_on_disjoint() {
+        // Tier 3: a function takes a parameter from a wider
+        // refined newtype and constructs a narrower one. The
+        // lattice subset check fires only when the wider range
+        // is contained in the narrower's true set. Conversely,
+        // when the construction is provably out-of-range (the
+        // ranges are disjoint), the compile rejects.
+        //
+        // Here `Wide` (`x < 0`) and `NonNeg` (`x >= 0`) are
+        // disjoint; constructing a `NonNeg` from a `Wide`-typed
+        // parameter is rejected at compile time.
+        let src = "fn negative(x: Word) -> bool { x < 0 }\n\
+             fn nonneg(x: Word) -> bool { x >= 0 }\n\
+             newtype Wide = Word where negative;\n\
+             newtype NonNeg = Word where nonneg;\n\
+             fn convert(w: Wide) -> NonNeg { NonNeg(w as Word) }\n\
+             fn main() -> NonNeg { convert(Wide(0 - 1)) }";
+        let tokens = tokenize(src).expect("lex");
+        let program = parse(&tokens).expect("parse");
+        let err = compile(&program).expect_err("compile should reject");
+        assert!(
+            err.message.contains("nonneg") && err.message.contains("NonNeg"),
+            "expected lattice-driven compile-time diagnostic, got: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn refinement_predicate_parameter_range_falls_through_when_predicate_undecidable() {
+        // Tier 3 soundness: when the predicate cannot be
+        // decomposed to a convex interval (e.g. it uses
+        // disjunction), the lattice path returns None and the
+        // runtime check fires. The example predicate's true set
+        // is `x < 0 or x > 100`, which is not a single interval.
+        let val = run_expect(
+            "fn outside(x: Word) -> bool { x < 0 or x > 100 }\n\
+             newtype Edge = Word where outside;\n\
+             fn main() -> Edge { Edge(0 - 50) }",
+            &[],
+        );
+        assert_eq!(val, Value::Int(-50));
+    }
+
+    #[test]
     fn refinement_predicate_non_constant_let_falls_through_to_runtime() {
         // Tier 2: a let-bound value that does NOT fold to a
         // constant (because it comes from a function call) does

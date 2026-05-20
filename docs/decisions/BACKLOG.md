@@ -297,11 +297,14 @@ The MVP landed: literal-argument refinement elision. When a refined newtype cons
 
 - **Tier 1** (constant-folded argument expressions). `Counter(2 + 40)`, `Counter(0 - 1)`, and arbitrary literal-only arithmetic chains fold through the evaluator and route through the predicate check.
 - **Tier 2** (let-bound integer constants). `let n = 42; Counter(n)` resolves through a per-function `local_const_values` map populated at let-stmt emission. Chained constants walk the recorded values.
+- **Tier 3** (interval lattice on Word). New `src/interval.rs` carries the lattice (closed signed intervals on `i64`, with bounds as `Option<i64>` for the infinity directions). Constructors: `full`, `empty`, `singleton`, `at_least`, `at_most`, `range`. Predicates: `is_empty`, `contains`, `is_subset_of`. Lattice operations: `intersect`, `union`. Transfer functions for `neg`, `add`, `sub`. The predicate decomposer at `compiler::predicate_true_set` handles `true` / `false` literals, comparison against the parameter (on either side), `and` (intersection), and `not` over a single comparison (operator inversion). The constructor emission path consults the lattice when constant-fold fails: `infer_arg_range` walks the argument expression through literals, identifiers, unary negation, addition, subtraction, and newtype-to-underlying casts; when the inferred range is a subset of the predicate's true set, the runtime check is elided; when the ranges are disjoint, the compile fails. Function parameters declared as refined newtypes populate `local_ranges` with the predicate's true set, providing the principal source of non-singleton ranges. Three integration tests cover parameter-range elision, disjoint-range rejection, and graceful fall-through on a predicate the decomposer cannot reduce to a single interval (e.g. one containing `or`).
 
 ### Follow-ons still open
 
-- Interval-arithmetic infrastructure for `Word`, `Byte`, and `Fixed<N>`. The lattice would admit ranges (not just constants) at the construction site, enabling elision of `Counter(some_function())` when `some_function`'s return range can be inferred. Building the lattice as a shared primitive would also serve B12 and B14.
-- Cross-function range analysis. The current pass operates within a single call site; broader analysis requires per-function range summaries and is a wider data-flow change.
+- Sign-aware multiplication, division, and modulo transfer functions on the interval lattice. The current MVP omits these because they require case analysis on operand signs to compute tight bounds. Adding them would enable elision of `Counter(p * 2)` and similar shapes when `p`'s range is known.
+- Disjoint-interval support (a list of intervals rather than a single convex interval). Would admit `Counter(x)` under predicates like `x < 0 or x > 100` and `not (x == 5)`. The current MVP returns `None` for these cases and preserves the runtime check.
+- Byte and Fixed&lt;N&gt; lattices. The arithmetic shapes are similar but require type-aware constructors and transfer functions.
+- Cross-function range analysis (per-function range summaries on returns and parameters). Would admit `Counter(some_function())` when `some_function`'s return range can be inferred from its body. Wider data-flow change.
 
 ## B14. CallIndirect flow analysis for non-recursive closure invocation
 

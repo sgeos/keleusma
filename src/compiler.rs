@@ -103,6 +103,15 @@ struct FuncCompiler {
     /// Keleusma's `let` bindings are immutable; a slot's mapping
     /// remains valid for the lifetime of the binding.
     local_const_values: BTreeMap<u16, i64>,
+    /// Map from local slot to the inferred range of the value
+    /// bound to that slot. Populated for function parameters
+    /// whose declared type is a refined newtype: the parameter's
+    /// range is the predicate's true set, derived by the
+    /// predicate decompiler. The refinement-elision pass uses
+    /// this map to admit `Counter(p)` where `p: Counter` (the
+    /// argument's range is a subset of the predicate's true set
+    /// by construction).
+    local_ranges: BTreeMap<u16, crate::interval::Interval>,
 }
 
 impl FuncCompiler {
@@ -136,6 +145,7 @@ impl FuncCompiler {
             const_fields,
             type_info,
             local_const_values: BTreeMap::new(),
+            local_ranges: BTreeMap::new(),
         }
     }
 
@@ -2015,6 +2025,20 @@ fn compile_function_group(
                 param_slots[i],
                 param.type_expr.clone(),
             );
+            // Populate the parameter's range when the declared
+            // type is a refined newtype with a predicate that
+            // decomposes to a single interval. This is the
+            // primary source of non-singleton ranges consumed by
+            // the refinement-elision lattice pass.
+            if let crate::ast::Pattern::Variable(_, _) = &param.pattern
+                && let Some(crate::ast::TypeExpr::Named(type_name, _, _)) = &param.type_expr
+                && let Some(pred_name) = fc.type_info.newtype_refinements.get(type_name).cloned()
+                && let Some((pred_param, body)) =
+                    fc.type_info.refinement_bodies.get(&pred_name).cloned()
+                && let Some(interval) = predicate_true_set(&body, &pred_param)
+            {
+                fc.local_ranges.insert(param_slots[i], interval);
+            }
         }
 
         if block_type == BlockType::Stream {
@@ -3534,6 +3558,210 @@ fn eval_expr_with(expr: &Expr, lookup: &dyn Fn(&str) -> Option<EvalValue>) -> Op
     }
 }
 
+/// Decompose a refinement predicate body into the interval of
+/// values for which the predicate returns true. Returns `None`
+/// when the body falls outside the decomposer's recognised
+/// subset; the elision pass then falls back to the runtime check
+/// (sound by construction).
+///
+/// Handled forms:
+/// - `true` / `false` literals (full / empty intervals).
+/// - Comparison against the parameter on either side: `x op N`
+///   or `N op x` with `op` in `<`, `<=`, `==`, `>`, `>=`.
+/// - `predicate_a and predicate_b` (intersection).
+/// - `not (x op N)` (operator inversion, exact for single
+///   comparisons).
+///
+/// Disjunction (`or`), inequality (`!=`), and `not` over compound
+/// predicates are not handled because their true sets are not
+/// convex; the decomposer returns `None` to preserve soundness.
+fn predicate_true_set(body: &Expr, param: &str) -> Option<crate::interval::Interval> {
+    use crate::interval::Interval;
+    match body {
+        Expr::Literal {
+            value: crate::ast::Literal::Bool(true),
+            ..
+        } => Some(Interval::full()),
+        Expr::Literal {
+            value: crate::ast::Literal::Bool(false),
+            ..
+        } => Some(Interval::empty()),
+        Expr::BinOp {
+            op, left, right, ..
+        } => {
+            if let Some((cmp, n)) = comparison_against_param(*op, left, right, param) {
+                comparison_interval(cmp, n)
+            } else if matches!(op, crate::ast::BinOp::And) {
+                let l = predicate_true_set(left, param)?;
+                let r = predicate_true_set(right, param)?;
+                Some(l.intersect(&r))
+            } else {
+                None
+            }
+        }
+        Expr::UnaryOp {
+            op: crate::ast::UnaryOp::Not,
+            operand,
+            ..
+        } => {
+            if let Expr::BinOp {
+                op: cmp_op,
+                left,
+                right,
+                ..
+            } = operand.as_ref()
+                && let Some((cmp, n)) = comparison_against_param(*cmp_op, left, right, param)
+            {
+                comparison_interval(invert_cmp(cmp), n)
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
+/// Match a comparison `lhs op rhs` against a comparison of the
+/// parameter `param` to an integer constant. Returns `(op, n)`
+/// in the normalized form `param op n` (with the operator
+/// flipped when the parameter appears on the right).
+fn comparison_against_param(
+    op: crate::ast::BinOp,
+    lhs: &Expr,
+    rhs: &Expr,
+    param: &str,
+) -> Option<(crate::ast::BinOp, i64)> {
+    if !matches!(
+        op,
+        crate::ast::BinOp::Lt
+            | crate::ast::BinOp::LtEq
+            | crate::ast::BinOp::Gt
+            | crate::ast::BinOp::GtEq
+            | crate::ast::BinOp::Eq
+    ) {
+        return None;
+    }
+    let param_on_left = matches!(lhs, Expr::Ident { name, .. } if name == param);
+    let param_on_right = matches!(rhs, Expr::Ident { name, .. } if name == param);
+    if param_on_left {
+        let n = fold_to_int(rhs, &|_| None)?;
+        Some((op, n))
+    } else if param_on_right {
+        let n = fold_to_int(lhs, &|_| None)?;
+        Some((flip_cmp(op), n))
+    } else {
+        None
+    }
+}
+
+/// Flip a comparison operator left-to-right: `a < b` is the same
+/// as `b > a`. Used when the parameter appears on the right of
+/// a comparison.
+fn flip_cmp(op: crate::ast::BinOp) -> crate::ast::BinOp {
+    match op {
+        crate::ast::BinOp::Lt => crate::ast::BinOp::Gt,
+        crate::ast::BinOp::LtEq => crate::ast::BinOp::GtEq,
+        crate::ast::BinOp::Gt => crate::ast::BinOp::Lt,
+        crate::ast::BinOp::GtEq => crate::ast::BinOp::LtEq,
+        crate::ast::BinOp::Eq => crate::ast::BinOp::Eq,
+        other => other,
+    }
+}
+
+/// Invert a comparison operator: `not (a < b)` is `a >= b`.
+/// Used by the `not` arm of the predicate decompiler. The
+/// inversion is exact for the five admitted comparisons.
+fn invert_cmp(op: crate::ast::BinOp) -> crate::ast::BinOp {
+    match op {
+        crate::ast::BinOp::Lt => crate::ast::BinOp::GtEq,
+        crate::ast::BinOp::LtEq => crate::ast::BinOp::Gt,
+        crate::ast::BinOp::Gt => crate::ast::BinOp::LtEq,
+        crate::ast::BinOp::GtEq => crate::ast::BinOp::Lt,
+        crate::ast::BinOp::Eq => crate::ast::BinOp::NotEq,
+        other => other,
+    }
+}
+
+/// Compute the interval of values satisfying `param op n`. Returns
+/// `None` for inequality (`!=`) because the true set is two
+/// disjoint half-bounded intervals, not representable as a single
+/// convex range.
+fn comparison_interval(op: crate::ast::BinOp, n: i64) -> Option<crate::interval::Interval> {
+    use crate::interval::Interval;
+    match op {
+        crate::ast::BinOp::Lt => match n.checked_sub(1) {
+            Some(m) => Some(Interval::at_most(m)),
+            None => Some(Interval::empty()),
+        },
+        crate::ast::BinOp::LtEq => Some(Interval::at_most(n)),
+        crate::ast::BinOp::Gt => match n.checked_add(1) {
+            Some(m) => Some(Interval::at_least(m)),
+            None => Some(Interval::empty()),
+        },
+        crate::ast::BinOp::GtEq => Some(Interval::at_least(n)),
+        crate::ast::BinOp::Eq => Some(Interval::singleton(n)),
+        _ => None,
+    }
+}
+
+/// Infer the interval of values a constructor's argument
+/// expression might evaluate to at runtime. Returns `None` when
+/// the expression falls outside the inference's recognised
+/// subset. Sound: the returned interval is a superset of the
+/// actual runtime range, so a subset-of-true-set check is
+/// conservative.
+fn infer_arg_range(expr: &Expr, fc: &FuncCompiler) -> Option<crate::interval::Interval> {
+    use crate::interval::Interval;
+    match expr {
+        Expr::Literal {
+            value: crate::ast::Literal::Int(n),
+            ..
+        } => Some(Interval::singleton(*n)),
+        Expr::Ident { name, .. } => {
+            let slot = fc.resolve_local(name.as_str())?;
+            if let Some(v) = fc.local_const_values.get(&slot) {
+                Some(Interval::singleton(*v))
+            } else {
+                fc.local_ranges.get(&slot).copied()
+            }
+        }
+        Expr::UnaryOp {
+            op: crate::ast::UnaryOp::Neg,
+            operand,
+            ..
+        } => {
+            let inner = infer_arg_range(operand, fc)?;
+            Some(inner.neg())
+        }
+        Expr::BinOp {
+            op: crate::ast::BinOp::Add,
+            left,
+            right,
+            ..
+        } => {
+            let l = infer_arg_range(left, fc)?;
+            let r = infer_arg_range(right, fc)?;
+            Some(l.add(&r))
+        }
+        Expr::BinOp {
+            op: crate::ast::BinOp::Sub,
+            left,
+            right,
+            ..
+        } => {
+            let l = infer_arg_range(left, fc)?;
+            let r = infer_arg_range(right, fc)?;
+            Some(l.sub(&r))
+        }
+        // Newtype-to-underlying casts (e.g. `c as Word`) are
+        // identity at the bytecode level, so the inferred range
+        // passes through unchanged. The type checker has already
+        // validated that the cast is admissible.
+        Expr::Cast { expr: inner, .. } => infer_arg_range(inner, fc),
+        _ => None,
+    }
+}
+
 /// Compile an expression, leaving the result on the stack.
 fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> {
     match expr {
@@ -4469,39 +4697,59 @@ fn compile_call(
                 span: *span,
             });
         }
-        // Refinement-elision: fold the constructor's argument to
-        // an integer constant when possible, then statically
-        // evaluate the predicate against that value. The argument
-        // may be a bare integer literal, a unary negation of a
-        // literal, an arithmetic expression over literals, a
-        // reference to a let-bound local whose value folded to an
-        // integer, or any chain of these.
+        // Refinement-elision pathway. Two layers in priority
+        // order. (1) Constant fold: if the argument expression
+        // reduces to a single integer (literal, let-bound
+        // constant, arithmetic over the above), evaluate the
+        // predicate at that integer. (2) Range subset: if the
+        // argument expression has an inferable interval (e.g.
+        // the argument is a function parameter declared as a
+        // refined newtype) and the predicate decomposes to a
+        // convex true set, admit when the argument range is a
+        // subset of the true set. Both pathways fall through to
+        // the runtime check when undecided.
         if let Some(pred_name) = fc.type_info.newtype_refinements.get(name).cloned()
             && let Some((param_name, body)) =
                 fc.type_info.refinement_bodies.get(&pred_name).cloned()
-            && let Some(n) = fold_to_int(&args[0], &|s| fc.local_const_lookup(s))
         {
-            match eval_predicate_at_int(&body, &param_name, n) {
-                Some(true) => {
-                    // Predicate statically true. Emit the inner
-                    // value and skip the runtime check entirely.
+            // Layer 1: constant fold.
+            if let Some(n) = fold_to_int(&args[0], &|s| fc.local_const_lookup(s)) {
+                match eval_predicate_at_int(&body, &param_name, n) {
+                    Some(true) => {
+                        compile_expr(fc, &args[0])?;
+                        return Ok(());
+                    }
+                    Some(false) => {
+                        return Err(CompileError {
+                            message: alloc::format!(
+                                "refinement check `{}` provably fails for newtype `{}` at compile time on argument {}",
+                                pred_name,
+                                name,
+                                n
+                            ),
+                            span: *span,
+                        });
+                    }
+                    None => {}
+                }
+            }
+            // Layer 2: range subset via the interval lattice.
+            if let Some(arg_range) = infer_arg_range(&args[0], fc)
+                && let Some(true_set) = predicate_true_set(&body, &param_name)
+            {
+                if !arg_range.is_empty() && arg_range.is_subset_of(&true_set) {
                     compile_expr(fc, &args[0])?;
                     return Ok(());
                 }
-                Some(false) => {
+                if !arg_range.is_empty() && arg_range.intersect(&true_set).is_empty() {
                     return Err(CompileError {
                         message: alloc::format!(
-                            "refinement check `{}` provably fails for newtype `{}` at compile time on argument {}",
+                            "refinement check `{}` provably fails for newtype `{}` at compile time; argument range is disjoint from the predicate's true set",
                             pred_name,
-                            name,
-                            n
+                            name
                         ),
                         span: *span,
                     });
-                }
-                None => {
-                    // Indeterminate at compile time; fall through
-                    // to the runtime check emitted below.
                 }
             }
         }
