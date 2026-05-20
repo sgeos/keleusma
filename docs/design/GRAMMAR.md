@@ -40,11 +40,14 @@ Structural verification at the bytecode level is implemented. See [TARGET_ISA.md
 
 ````
 fn  yield  loop  break  let  for  in  if  else  match
-use  struct  enum  trait  impl  data  true  false  as  when
-not  and  or  pure  shared  private  const  ephemeral
+use  struct  enum  newtype  trait  impl  data  true  false  as  when
+not  and  or  pure  shared  private  const  ephemeral  where
+overflow  underflow  saturate_max  saturate_min
 ````
 
 All keywords are reserved and cannot be used as identifiers.
+
+The `classify` and `declassify` identifiers are intentionally **not** reserved keywords. They are recognised as information-flow operators by the parser only in expression position when not followed by `(`; the same identifier is admissible as a user-defined function name in any context. See Section 4 "Expressions" for the operator forms and Section 7 "Information-Flow Labels" for the type-system rule.
 
 ### Identifiers
 
@@ -84,6 +87,8 @@ Integer literals support decimal, hexadecimal, and binary notation. Float litera
 | Statement terminator | `;` |
 | Return type | `->` |
 | Match arm | `=>` |
+| Information-flow label | `@` |
+| Arm alternation | `\|` |
 
 ### Comments
 
@@ -602,6 +607,79 @@ vm.register_fn("audio::set_frequency", |channel_handle: i64, freq: f64| {
 ### Purity as a Host Declaration
 
 Purity is a declaration from the host, not verified by the Keleusma compiler. Analysis trusts the declaration. Certain guarantees, such as deterministic replay and optimization, will be invalid if the declaration is false.
+
+## 7.5. V0.2 Surface Extensions
+
+The following constructs were added to the surface during the V0.2 design pass. They supplement the core surface defined in Sections 1 through 7.
+
+### Newtype Declarations
+
+````
+newtype_decl  = 'newtype' upper_ident '=' type_expr
+                [ 'where' lower_ident ]
+                ';'
+````
+
+Introduces a distinct nominal type wrapping an underlying type. The bytecode representation is identical to the underlying. Two newtypes with different names are never interchangeable even when their underlying types match. Construction at expression position uses `Name(value)`; extraction uses `value as Underlying`. The optional `where` clause names a predicate function of signature `fn(Underlying) -> bool` that the compiler emits at every construction site (a trap fires on a false result).
+
+Example:
+
+````
+newtype LocalProperMs = Word;
+newtype OriginFrameMs = Word;
+
+fn in_servo_range(x: Word) -> bool { x >= 0 and x <= 180 }
+newtype ServoAngle = Word where in_servo_range;
+
+let t: LocalProperMs = LocalProperMs(42);
+let raw: Word = t as Word;
+let theta: ServoAngle = ServoAngle(90);    // predicate passes
+````
+
+### Numeric Overflow Construct
+
+````
+overflow_expr = arith_expr '{' overflow_arm { ',' overflow_arm } [ ',' ] '}'
+overflow_arm  = overflow_kind { '|' overflow_kind } '=>' expr
+overflow_kind = 'overflow' | 'underflow' | 'ok' '(' lower_ident ')'
+````
+
+Guards a single arithmetic operation against overflow and underflow. The operation may be `+`, `-`, `*`, `/`, `%`, or unary `-` on Word operands. The construct must cover each of `ok`, `overflow`, and `underflow` exactly once (pipe-combined arms are admitted). The `saturate_max` and `saturate_min` keywords inside arm bodies denote the result type's maximum and minimum representable values.
+
+Example:
+
+````
+let y = state.x + n {
+    overflow => saturate_max,
+    underflow => saturate_min,
+    ok(v) => v,
+};
+````
+
+### Information-Flow Labels
+
+````
+labelled_type = type_expr_inner '@' label_spec
+label_spec    = upper_ident | '{' upper_ident { ',' upper_ident } '}'
+classify_expr = 'classify' postfix_expr '@' label_spec
+declassify_expr = 'declassify' postfix_expr '@' label_spec
+````
+
+Types carry a set of user-defined information-flow labels written as `T@Label` for a single label or `T@{L1, L2}` for multiple. The empty label set is the pure state. The `classify` operator adds labels to a value; `declassify` removes them. Labels propagate through arithmetic operations, comparisons, conditional branches, and composite-type positions (tuple elements, array elements, option payloads). The label-flow rule at every position is `source.labels ⊆ target.labels`; violations are rejected at compile time. The mechanism is zero-cost at the bytecode layer.
+
+Example:
+
+````
+use host::transmit(payload: Word@Open) -> bool
+
+fn read_position() -> Word@MissionSecret { 42 }
+
+fn main() -> bool {
+    let pos: Word@MissionSecret = read_position();
+    // host::transmit(pos);                       // type error: label leak
+    host::transmit(declassify pos@MissionSecret)  // explicit audit point
+}
+````
 
 ## 8. Pattern Matching
 

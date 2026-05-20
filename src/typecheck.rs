@@ -129,12 +129,36 @@ pub enum Type {
     /// set; a final pass applies the substitution and reports any
     /// unresolved variable as an inference failure.
     Var(u32),
-    /// Sentinel for an expression whose type cannot be determined
-    /// without inference (e.g., unannotated let bound to a `match`
-    /// expression returning a variable). Treated as compatible with
-    /// anything in this MVP pass. Retained for backwards compatibility
-    /// with the narrow ad-hoc inference; the HM pipeline produces
-    /// `Type::Var` instead.
+    /// Wildcard sentinel for positions where structural inference
+    /// cannot or need not narrow the type. Three current uses:
+    ///
+    /// 1. **Newtype underlying placeholder.** When `Type::Newtype`
+    ///    is produced by the structural resolver
+    ///    ([`Self::from_expr_with_params_and_frac`]), the resolver
+    ///    does not carry the newtype map and cannot recover the
+    ///    authoritative underlying type. The wrapper stores
+    ///    `Box::new(Type::Unknown)` as a placeholder; call sites
+    ///    that need the real underlying consult
+    ///    [`Ctx::newtypes`] directly.
+    ///
+    /// 2. **Cast dispatch fallback.** The `Expr::Cast` arm admits
+    ///    `Type::Unknown` on either side as a pass-through. This
+    ///    matches the historical behaviour for partially-inferred
+    ///    expressions where the structural type is unresolved but
+    ///    the cast target is concrete.
+    ///
+    /// 3. **`types_compatible` wildcard.** A presence on either
+    ///    side of the compatibility check short-circuits to true,
+    ///    matching the historical lenient inference behaviour for
+    ///    positions the structural pass produces but the HM
+    ///    pipeline has not yet constrained.
+    ///
+    /// The proper Hindley-Milner inference path produces
+    /// [`Type::Var`] instead. Newer code should prefer fresh type
+    /// variables via [`Ctx::fresh`] over `Type::Unknown`. The
+    /// variant remains useful for the three roles above where a
+    /// fresh variable would propagate constraints downstream in
+    /// ways the simpler sentinel intentionally does not.
     Unknown,
 }
 

@@ -298,6 +298,34 @@ Compile-time constants. Field reads compile to constant loads in the per-chunk c
 
 The compiler enforces these rules. Mixing classes is permitted (one block of each visibility per module under R28).
 
+## 5.5. Numeric overflow handling (demonstrated by the heartbeat task)
+
+The heartbeat task's counter increment uses the V0.2 numeric overflow construct to saturate on `Word::MAX` rather than wrap on a hypothetical long-running deployment whose mission outlives the i64 range. The construct dispatches on the arithmetic outcome and selects a saturation value when overflow or underflow occurs.
+
+````
+state.count = state.count + 1 {
+    overflow => saturate_max,
+    underflow => saturate_min,
+    ok(v) => v,
+};
+````
+
+The `saturate_max` and `saturate_min` keywords resolve to `Word::MAX` and `Word::MIN` respectively. The `ok(v) => v` arm passes the successful sum through unchanged. The construct is supported for `+`, `-`, `*`, `/`, `%`, and unary `-` on Word operands; each must cover `ok`, `overflow`, and `underflow` exactly once (the pipe pattern `overflow|underflow => shared_body` combines two outcomes).
+
+The construct compiles to a checked-arithmetic opcode (`Op::CheckedAdd`, `Op::CheckedSub`, `Op::CheckedMul`, `Op::CheckedNeg`, or for division and modulo the regular opcode plus a stamped zero flag) followed by a flag-based dispatch through an If/Else block. The runtime cost per construction is the arithmetic opcode plus the dispatch (one local store, one local load, one compare, one branch); no host-side cycle counting is required because the bound is statically known.
+
+For probe and embedded deployments where saturation rather than wrapping is the correct failure mode for accumulators, the construct removes a class of silent-arithmetic bugs without imposing the overhead of dynamic checks at every site.
+
+## 5.6. Other V0.2 language features
+
+The remaining V0.2 surface extensions (newtype declarations, refinement-type predicates, information-flow labels) are not yet adopted by the microkernel demonstrator but compose naturally with the patterns shown above. The reference documentation is in [`docs/design/GRAMMAR.md`](../../docs/design/GRAMMAR.md) Section 7.5 and [`docs/architecture/LANGUAGE_DESIGN.md`](../../docs/architecture/LANGUAGE_DESIGN.md) Section "Surface Extensions Added in V0.2".
+
+Worked patterns operators may want to adopt:
+
+- **Newtype for time-precision discipline.** `newtype LocalProperMs = Word; newtype OriginFrameMs = Word;` plus host natives that produce each separately makes accidental cross-frame arithmetic a type error.
+- **Refinement types for input validation.** `newtype Percent = Word where in_range_0_100;` traps at the construction site rather than at downstream use, localising the failure to the point of input rather than the point of damage.
+- **Information-flow labels for telemetry separation.** `Word@MissionSecret` on sensitive sensor channels and `Word@Open` on transmittable telemetry, with explicit `declassify` operators marking the disclosure audit points.
+
 ## 6. Porting to a new board
 
 The three-layer split (kernel core, platform impl, entry binary) makes the port mechanical. The kernel core does not change.
