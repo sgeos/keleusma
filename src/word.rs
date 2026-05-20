@@ -78,6 +78,15 @@ pub trait Word:
     /// widths.
     fn to_i64(self) -> i64;
 
+    /// Convert `Self` to `usize` for indexing into Rust-side
+    /// containers. Returns `None` for negative values (since
+    /// `usize` is unsigned) and for values that exceed
+    /// `usize::MAX` on the host (relevant only for `i64` on a
+    /// 32-bit host). Mirrors [`crate::address::Address::to_usize_checked`].
+    fn to_usize_checked(self) -> Option<usize> {
+        usize::try_from(self.to_i64()).ok()
+    }
+
     /// Widen to the multiplication intermediate.
     fn widen(self) -> Self::Wide;
 
@@ -291,6 +300,27 @@ mod tests {
         assert_eq!(i8::MAX.wrapping_add(1), i8::MIN);
         // i8::MIN.wrapping_neg() saturates to i8::MIN.
         assert_eq!(i8::MIN.wrapping_neg(), i8::MIN);
+    }
+
+    #[test]
+    fn to_usize_checked_succeeds_for_non_negative() {
+        assert_eq!(<i8 as Word>::to_usize_checked(0_i8), Some(0_usize));
+        assert_eq!(<i8 as Word>::to_usize_checked(127_i8), Some(127_usize));
+        assert_eq!(
+            <i16 as Word>::to_usize_checked(30_000_i16),
+            Some(30_000_usize)
+        );
+        assert_eq!(
+            <i64 as Word>::to_usize_checked(1_000_000_i64),
+            Some(1_000_000_usize)
+        );
+    }
+
+    #[test]
+    fn to_usize_checked_rejects_negative() {
+        assert_eq!(<i8 as Word>::to_usize_checked(-1_i8), None);
+        assert_eq!(<i16 as Word>::to_usize_checked(i16::MIN), None);
+        assert_eq!(<i64 as Word>::to_usize_checked(-42_i64), None);
     }
 
     #[test]

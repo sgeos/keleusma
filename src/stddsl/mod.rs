@@ -136,14 +136,14 @@ pub struct Text;
 /// `shell` feature enabled.
 pub struct Shell;
 
-impl Library<i64, u64, f64> for Math {
-    fn register<'a, 'arena>(self, vm: &mut Vm<'a, 'arena>) {
+impl<W: Word, A: Address> Library<W, A, f64> for Math {
+    fn register<'a, 'arena>(self, vm: &mut GenericVm<'a, 'arena, W, A, f64>) {
         math::register(vm);
     }
 }
 
-impl Library<i64, u64, f64> for Audio {
-    fn register<'a, 'arena>(self, vm: &mut Vm<'a, 'arena>) {
+impl<W: Word, A: Address> Library<W, A, f64> for Audio {
+    fn register<'a, 'arena>(self, vm: &mut GenericVm<'a, 'arena, W, A, f64>) {
         crate::audio_natives::register_audio_natives(vm);
     }
 }
@@ -166,9 +166,11 @@ mod math {
     use alloc::string::String;
     use core::f64::consts;
 
-    use crate::vm::{Vm, VmError};
+    use crate::address::Address;
+    use crate::vm::{GenericVm, VmError};
+    use crate::word::Word;
 
-    pub fn register<'a, 'arena>(vm: &mut Vm<'a, 'arena>) {
+    pub fn register<'a, 'arena, W: Word, A: Address>(vm: &mut GenericVm<'a, 'arena, W, A, f64>) {
         // Algebraic and rounding routines.
         vm.register_fn("math::sqrt", |x: f64| -> f64 { libm::sqrt(x) });
         vm.register_fn("math::pow", |base: f64, exp: f64| -> f64 {

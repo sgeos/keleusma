@@ -931,6 +931,11 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         // Framing validation only (magic, length, CRC, version, sizes).
         // No rkyv structural validation, no execution-side verification.
         let _ = Module::access_bytes(bytes)?;
+        // B16 step 8: width validation against this VM's W/A/F trait
+        // parameters. The framing header carries the declared widths
+        // at fixed offsets; reading directly here avoids materialising
+        // the archived form for the width check alone.
+        Self::check_runtime_widths(bytes[10], bytes[11], bytes[12])?;
         // Determine data segment length from the archived module so the
         // data vector has the right slot count.
         // Body offset matches the framing header length declared
@@ -1011,7 +1016,55 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
     /// constructors. Serializes the owned module to an aligned vector
     /// for archived access during execution. The data segment is
     /// initialized to `Unit` for each declared slot.
+    /// Validate that the module's declared widths are admissible by
+    /// this VM's compile-time trait parameters `W`, `A`, `F`.
+    ///
+    /// The bytecode's `word_bits_log2`, `addr_bits_log2`, and
+    /// `float_bits_log2` fields must each be no greater than the
+    /// corresponding trait's `BITS_LOG2` constant. The VM's chosen
+    /// widths act as an upper bound on bytecode it can run; narrower
+    /// bytecode is admitted and wrapped through `Word::from_i64_wrap`
+    /// at constant-load time. Wider bytecode would silently truncate
+    /// runtime values and is rejected here.
+    fn check_runtime_widths(
+        word_bits_log2: u8,
+        addr_bits_log2: u8,
+        float_bits_log2: u8,
+    ) -> Result<(), VmError> {
+        if word_bits_log2 > <W as crate::word::Word>::BITS_LOG2 {
+            return Err(VmError::VerifyError(alloc::format!(
+                "bytecode declares word_bits_log2 = {} but this Vm runs at word_bits_log2 = {} (chosen Word type is narrower than the bytecode requires)",
+                word_bits_log2,
+                <W as crate::word::Word>::BITS_LOG2,
+            )));
+        }
+        if addr_bits_log2 > <A as crate::address::Address>::BITS_LOG2 {
+            return Err(VmError::VerifyError(alloc::format!(
+                "bytecode declares addr_bits_log2 = {} but this Vm runs at addr_bits_log2 = {} (chosen Address type is narrower than the bytecode requires)",
+                addr_bits_log2,
+                <A as crate::address::Address>::BITS_LOG2,
+            )));
+        }
+        if float_bits_log2 > <F as crate::float::Float>::BITS_LOG2 {
+            return Err(VmError::VerifyError(alloc::format!(
+                "bytecode declares float_bits_log2 = {} but this Vm runs at float_bits_log2 = {} (chosen Float type is narrower than the bytecode requires)",
+                float_bits_log2,
+                <F as crate::float::Float>::BITS_LOG2,
+            )));
+        }
+        Ok(())
+    }
+
     fn construct(module: Module, arena: &'arena keleusma_arena::Arena) -> Result<Self, VmError> {
+        // B16 step 8: validate the module's declared widths against
+        // this VM's compile-time W/A/F trait parameters. A narrower
+        // Vm running wider bytecode would silently truncate values
+        // through Word::from_i64_wrap; reject the mismatch instead.
+        Self::check_runtime_widths(
+            module.word_bits_log2,
+            module.addr_bits_log2,
+            module.float_bits_log2,
+        )?;
         // Partition data slots by visibility. Shared slots live
         // in the Vm-owned vector; private slots live in the
         // arena's persistent region. The compiler emits shared
