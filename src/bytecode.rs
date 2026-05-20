@@ -1312,20 +1312,27 @@ impl TypeTag {
     }
 
     /// Returns `true` if `value` is admissible for a parameter
-    /// declared with this tag.
-    pub fn admits(&self, value: &Value) -> bool {
+    /// declared with this tag. Generic over the parametric value
+    /// type so the bundled `Vm<i64, u64, f64>` and a host-
+    /// instantiated narrower `Vm<W, A, F>` share the same check.
+    pub fn admits<W: crate::word::Word, F: crate::float::Float>(
+        &self,
+        value: &GenericValue<W, F>,
+    ) -> bool {
         match self {
             TypeTag::Composite => true,
-            TypeTag::Byte => matches!(value, Value::Byte(_)),
-            TypeTag::Word => matches!(value, Value::Int(_)),
-            TypeTag::Fixed => matches!(value, Value::Fixed(_)),
+            TypeTag::Byte => matches!(value, GenericValue::Byte(_)),
+            TypeTag::Word => matches!(value, GenericValue::Int(_)),
+            TypeTag::Fixed => matches!(value, GenericValue::Fixed(_)),
             #[cfg(feature = "floats")]
-            TypeTag::Float => matches!(value, Value::Float(_)),
+            TypeTag::Float => matches!(value, GenericValue::Float(_)),
             #[cfg(not(feature = "floats"))]
             TypeTag::Float => false,
-            TypeTag::Bool => matches!(value, Value::Bool(_)),
-            TypeTag::Unit => matches!(value, Value::Unit),
-            TypeTag::Text => matches!(value, Value::StaticStr(_) | Value::KStr(_)),
+            TypeTag::Bool => matches!(value, GenericValue::Bool(_)),
+            TypeTag::Unit => matches!(value, GenericValue::Unit),
+            TypeTag::Text => {
+                matches!(value, GenericValue::StaticStr(_) | GenericValue::KStr(_))
+            }
         }
     }
 
@@ -2255,8 +2262,10 @@ impl PartialEq for ConstValue {
 /// constant's size; for primitive constants the cost is one match arm
 /// and a small copy. For string and composite constants the cost
 /// includes a heap allocation.
-pub fn value_from_archived(archived: &ArchivedConstValue) -> Value {
-    Value::from_const_archived(archived)
+pub fn value_from_archived<W: crate::word::Word, F: crate::float::Float>(
+    archived: &ArchivedConstValue,
+) -> GenericValue<W, F> {
+    GenericValue::<W, F>::from_const_archived(archived)
 }
 
 /// Sign-extending mask for narrower-than-runtime integer arithmetic.

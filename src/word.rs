@@ -111,7 +111,22 @@ pub trait Word:
 /// `Wide` type of each [`Word`] impl. Carries the arithmetic
 /// and range-check operations the VM needs to derive the
 /// `(high, low, flag)` shape of the checked-arithmetic opcodes.
-pub trait WideWord: Copy + Default + Eq + Ord + Debug + 'static {
+pub trait WideWord:
+    Copy
+    + Default
+    + Eq
+    + Ord
+    + Debug
+    + 'static
+    + core::ops::Add<Output = Self>
+    + core::ops::Sub<Output = Self>
+    + core::ops::Mul<Output = Self>
+    + core::ops::Div<Output = Self>
+    + core::ops::Rem<Output = Self>
+    + core::ops::Neg<Output = Self>
+    + core::ops::Shr<u32, Output = Self>
+    + core::ops::Shl<u32, Output = Self>
+{
     /// Add two widened operands.
     fn wide_add(self, other: Self) -> Self;
 
