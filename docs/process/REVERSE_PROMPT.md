@@ -9,18 +9,15 @@ AI to Human communication channel.
 ## Last Updated
 
 **Date**: 2026-05-19
-**Status**: Pattern-matched checked-arithmetic arms with `(h, l)` bindings, match-arm guards, and i128 intermediate runtime computation. Breaking syntax change committed (V0.2 unreleased; narrow-adoption rationale extended). 642 lib tests pass. Grammar, language-design doc, MANUAL.md Section 5.5, microkernel heartbeat script, CHANGELOG, and TASKLOG all updated.
+**Status**: STM32N6570-DK hardware verification passed under the V0.2 image after the AXISRAM2 rebalance. LED toggling observed on the board. Six new backlog items recorded as B13 through B18, capturing the remaining V0.2 design-pass deferred work and the newly-opened items from the pattern-arm refactor.
 
 ## Completed in this session round
 
 | Directive | Resolution |
 |-----------|------------|
-| Match-arm guards. | `MatchArm` gains `guard: Option<Expr>`. Parser admits `pattern when expr => body`. Type checker enforces `Bool` on the guard expression and treats guarded arms as non-catch-all in exhaustiveness analysis (wildcard / variable catch-all, Bool true/false coverage, enum-variant coverage, Unit-literal coverage, Option Some/None coverage all skip guarded arms). Compiler emits the guard as another `Op::If` fail-jump that participates in the existing pattern-test fail-jump list. Three new VM tests. |
-| Pattern-matched checked-arithmetic arms. | `CheckedArmKind` rewritten: `Ok(Pattern)`, `Overflow(Pattern, Pattern)`, `Underflow(Pattern, Pattern)`. `CheckedArm` gains `guard: Option<Expr>` and drops the pipe-combined `kinds` Vec in favour of a single `kind`. Patterns are admitted from a restricted subset (wildcard, variable, signed integer literal) by a new `parse_checked_arm_pattern` helper. Type-check exhaustiveness shifts from "exactly one of each outcome" to "each outcome's last covering arm is an unguarded catch-all (bare identifier or wildcard in every position)". A `bind_checked_pattern` helper binds variables into the arm scope. |
-| i128 intermediate runtime and (h, l, flag) push. | `Op::CheckedAdd`, `Op::CheckedSub`, `Op::CheckedMul`, `Op::CheckedNeg` now compute the true result in `i128` and push `(high, low, flag)`. Flag derivation uses the i128 range relative to `i64::MIN`/`i64::MAX` rather than the i64 wrap pattern (the prior implementation produced incorrect flags for `i64::MAX + 1`). Bytecode stack-effect entries updated: binary growth `1`, unary growth `2`, shrink `0` for all four. Division and modulo continue to use the stamped-zero-flag pattern (high = 0, flag = 0). |
-| Compiler dispatch rewrite. | `compile_checked` rewritten as a virtual loop over arms. For each arm: emit a class-flag equality test (`flag == 0` / `1` / `2`), then literal-pattern equality tests against the high/low slots, then variable-pattern binding into fresh locals, then guard evaluation, then arm body, then `Break`. Failure jumps from any of the tests fall through to the next arm. Defensive `Op::Trap` after the last arm covers the unreachable no-match case. |
-| Refined-newtype saturate contracts. | Confirmed unchanged behaviour under the new arm shape; the expected-type-stack push remains driven by annotated `let` bindings and function return types, and the `Expr::SaturateMax` / `Expr::SaturateMin` resolution path still consults `ctx.expected_type()` after stripping information-flow labels. All three pre-existing saturate-contract tests pass under the new arm shape. |
-| Migration of existing call sites. | Six VM-level `checked_*` tests rewritten to the new arm syntax. Six typechecker-level `checked_overflow_*` tests rewritten with the updated error-message expectations (`non-exhaustive on ok|overflow|underflow`). The microkernel heartbeat script (`examples/rtos/scripts/heartbeat.kel`) updated in place. `examples/rtos/MANUAL.md` Section 5.5 updated. `docs/design/GRAMMAR.md` EBNF and example updated. `docs/architecture/LANGUAGE_DESIGN.md` Surface Extensions section updated. The pipe-combined `overflow|underflow => body` test (`checked_overflow_combined_arm_via_pipe`) is removed; that form is no longer admitted. |
+| Memory rebalance to fit the full-pipeline image. | The pattern-matched checked-arithmetic refactor (commit `68e7cb5`) expanded the compiler emission and pulled in `compiler_builtins` 128-bit helpers, growing the full-pipeline image from ~622 KB to ~663 KB and overflowing the 640 KB FLASH region by ~22 KB. Rebalanced AXISRAM2: FLASH `640 KB → 704 KB`, RAM `384 KB → 320 KB`, `HEAP_SIZE` `320 KB → 256 KB`. All three feature modes now link clean (trust-load 142 KB, verifier-only 165 KB, full pipeline 663 KB). MANUAL.md updated. |
+| STM32N6570-DK hardware verification. | Operator-confirmed pass. LED toggling observed on the board; defmt RTT logs render through the new event-code path. The hardware-verification command set in the prior turn covered host smoke test, bare-metal library compile check, three-mode size check, flash-and-observe under each feature combination, and the pass criteria from MANUAL.md Section 10. |
+| Queue remaining V0.2 design-pass items and newly-opened items. | Six new BACKLOG entries added: B13 refinement-type compile-time elision through range analysis (Item 4 of the V0.2 gap list), B14 CallIndirect flow analysis (Item 5, deferred to V0.3), B15 remove `Type::Unknown` entirely (B1 follow-up), B16 target-scaled `Fixed` defaults for sub-64-bit native runtimes, B17 embassy feature trimming, B18 big-number arithmetic worked example using the pattern-arm form. Each entry carries scope, out-of-scope items, and a deferral rationale. |
 
 ## Verification matrix
 
@@ -30,27 +27,43 @@ cargo test --lib --quiet                                                       #
 cargo test --workspace --quiet                                                 # all workspace + doctest crates clean
 cargo clippy --tests --quiet -- -D warnings                                    # clean
 cargo fmt --all                                                                # idempotent
+
+# Bare-metal STM32N6570-DK builds, all three modes.
+(cd examples/rtos && cargo build --target thumbv8m.main-none-eabihf --release \
+    --bin three-task-n6 --no-default-features --features stm32n6570dk-platform)
+(cd examples/rtos && cargo build --target thumbv8m.main-none-eabihf --release \
+    --bin three-task-n6 --no-default-features --features stm32n6570dk-platform,keleusma-verify)
+(cd examples/rtos && cargo build --target thumbv8m.main-none-eabihf --release \
+    --bin three-task-n6 --no-default-features --features stm32n6570dk-platform,keleusma-compile,keleusma-verify)
 ```
 
-Tests of interest:
+Hardware: STM32N6570-DK, operator-verified 2026-05-19.
 
-- `match_arm_guard_dispatches_on_runtime_predicate`, `match_arm_guard_falls_through_to_next_arm_when_false`, `match_arm_guarded_pattern_is_not_a_catchall`.
-- `checked_mul_overflow_exposes_high_half`: `m * m` for `m = 2^32` produces `i128 = 2^64 = (high=1, low=0)`; the body returns the high half, demonstrating that the new shape exposes the load-bearing big-number-multiplication value.
-- `checked_overflow_arm_pattern_matches_literal_high`: `i64::MAX + i64::MAX` produces `(high=0, low=-2 wrapped)`; the `overflow(0, l)` arm fires before the catch-all.
-- `checked_overflow_arm_guard_falls_through`: the first overflow arm's pattern matches but its guard returns false; dispatch falls through to the catch-all.
-- All three `saturate_keywords_*` tests pass unchanged under the new arm shape.
+## Backlog summary
+
+| ID | Title | Status |
+|----|-------|--------|
+| B13 | Refinement-type compile-time elision through range analysis | Deferred (needs interval-arithmetic infrastructure) |
+| B14 | CallIndirect flow analysis for non-recursive closures | Deferred to V0.3 |
+| B15 | Remove `Type::Unknown` entirely (B1 follow-up) | Foundation in place; refactor pending |
+| B16 | Target-scaled `Fixed` defaults for sub-64-bit native runtimes | Deferred until host demand |
+| B17 | Embassy feature trimming | Deferred until measured size pressure |
+| B18 | Big-number arithmetic worked example | Deferred until adoption demand |
+
+Also tracked as newly-opened from the checked-arithmetic refactor (not yet in BACKLOG.md as standalone entries):
+
+- `Op::CheckedDiv` / `Op::CheckedMod` with proper `(h, l, flag)` for the `i64::MIN / -1` corner. Small change; deferred until a real consumer hits it. Cross-references B18 (prerequisite for big-number division and modulo).
 
 ## Notes
 
-- The pipe-combined `overflow|underflow => body` form is removed. The migration is mechanical: rewrite as two arms with the same body. The microkernel heartbeat script never used this form; the only consumer was a single VM test which has been deleted.
-- Bytecode wire format `BYTECODE_VERSION` stays at 1. The narrow-adoption rationale extends to this change: V0.2 is unreleased, the existing `Op::CheckedAdd`/`Sub`/`Mul`/`Neg` discriminants are reused with changed stack effects, and no shipping consumer holds bytecode in the old (`result, flag`) shape. Future consumers should pin against the V0.2.0 commit if they need an authoritative wire-format reference for this label.
-- Division and modulo overflow still stamp `(high=0, low=result, flag=0)` because the only true overflow case (`i64::MIN / -1`) is left to the existing arithmetic. A dedicated `Op::CheckedDiv` / `Op::CheckedMod` family is deferred until a real consumer needs the corner-case detection.
-- Arm-pattern shapes that don't satisfy the restricted subset (struct patterns, enum-variant patterns, tuples) are rejected at parse time by `parse_checked_arm_pattern` with a span-localized diagnostic. Type checker fallback for unknown shapes binds nothing rather than panicking so any escaped case surfaces as a missing-identifier error in the body.
+- Four branch commits on `v0.2.0` ahead of `origin/v0.2.0` (`46a649f`, `771e2b1`, `68e7cb5`, `1c9e3a8`). Push remains operator-driven.
+- With hardware verification passed, V0.2 is in releasable shape from the agent side. The remaining release-tag action is operator-driven.
+- The newly-opened `Op::CheckedDiv` / `Op::CheckedMod` item could be added as a standalone B19 entry if it warrants tracking outside the checked-arithmetic refactor's commit; left as a note for now.
 
 ## Intended Next Step
 
 Awaiting operator prompt.
 
-1. **Operator action**: hardware verification on STM32N6570-DK. The full command set was provided previously and remains current. The microkernel heartbeat script rebuilds correctly under the new arm shape; an N6 flash run confirms the kernel-construction and dispatch timeline is unchanged.
-2. **Operator action**: V0.2 release tag. With the checked-arithmetic and match-guard work landed, V0.2 carries a meaningful generalization of the construct that closes Item 2 of the gap list with broader semantics than the original ask.
-3. **Backlog**: `Op::CheckedDiv` / `Op::CheckedMod` with proper `(h, l, flag)` for the `i64::MIN / -1` corner, `Type::Unknown` removal (B1 follow-up), refinement-type compile-time elision through range analysis (Item 4 follow-up), and the remaining target-scaled `Fixed` and embassy feature trimming items.
+1. **Operator action**: V0.2 release tag. All design-pass items closed or deferred; hardware verification passed; backlog recorded.
+2. **Operator action**: optional `Op::CheckedDiv` / `Op::CheckedMod` request if the `i64::MIN / -1` corner case matters for an upcoming consumer.
+3. **Backlog**: B13 through B18 stand ready for selection when a future development phase opens.

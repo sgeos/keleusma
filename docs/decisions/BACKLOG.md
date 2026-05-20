@@ -281,3 +281,106 @@ The mitigation cost is low for compositions whose hot bodies are small (song 5 h
 Improve the WCMU analysis to recognise this pattern. The class of programs to support is helper functions that take primitive arguments, return primitive values, perform only integer arithmetic, and call no allocating natives. These should be analysed as zero-top-allocation regardless of how many times they are called. The improvement is composition-friendly and preserves the verifier's correctness guarantees.
 
 Deferred until the verifier's WCMU pass is revisited. The current workaround (inline the computation) is documented in `docs/extras/SONG_5_SPEC.md` so future authors of minimalist scripts can avoid the failure path without first triggering it.
+
+## B13. Refinement-type compile-time elision through range analysis
+
+The refinement predicate declared on a `newtype Name = T where predicate` is currently emitted at every construction site as a runtime call followed by a trap on a false result. A range-analysis pass over the underlying type could elide the call when the argument's static range provably lies within the predicate's true set. Worked example: `newtype Percent = Word where in_range_0_100;` constructed from a literal `42` does not need the runtime check because `42` is statically in range.
+
+### Requirements
+
+- Interval-arithmetic infrastructure on the underlying type. The lattice is straightforward for `Word` (closed intervals on `i64`), more involved for `Fixed<N>` (must respect fraction-bit scaling), and trivial for `Byte` (closed intervals on `u8`).
+- Predicate decompilation. The pass must recover the predicate's true set from the AST of the predicate function. For atomic-total predicates expressed as combinations of comparison operators and logical conjunctions, this is mechanical; for predicates that call other helpers or use richer control flow, the analysis falls back to "cannot prove in range" and emits the runtime check.
+- Soundness lattice. The elision is sound only when the inferred range is a *subset* of the predicate's true set. Conservative under-approximation is admissible (over-emit checks); over-approximation is unsound.
+
+### Out of scope
+
+- Range refinement through arithmetic operations beyond integer literals. The MVP only elides when the construction argument is a literal or a let-bound local whose value is itself a literal. Range propagation through `+`, `-`, `*` is a richer dataflow problem reserved for a follow-on.
+- Elision across function boundaries. The pass operates within a single function's body; predicates called on values returned from other functions retain the runtime check.
+
+Deferred until the interval-arithmetic infrastructure lands as a shared primitive (also useful for B12 and B14).
+
+## B14. CallIndirect flow analysis for non-recursive closure invocation
+
+The structural verifier's conservative-verification stance rejects programs containing `Op::CallIndirect` because the dispatch target is not statically known. For closures whose call sites are reachable from a finite set of `Op::PushFunc` and `Op::MakeClosure` instructions, a flow analysis could lift the rejection by tracking the points-to set of every indirect-dispatch site.
+
+### Approach
+
+- Per-stack-slot abstract interpretation. The text-size analysis pass already tracks lattice values per operand-stack position through the compiled bytecode; extend the lattice with a "function pointer" element that carries the set of `chunk_idx` values it might refer to.
+- Per-call-site target set. At each `Op::CallIndirect`, the points-to set of the topmost operand-stack slot is the set of possible target chunks. When the set is finite and the WCET and WCMU of each target is statically bounded, the call site can be admitted with cost equal to the maximum over targets.
+- Conservative fallback. When the points-to set is unbounded or contains a cycle through `Op::MakeRecursiveClosure`, retain the current rejection.
+
+### Out of scope
+
+- Recursive closures (`Op::MakeRecursiveClosure`). The first-category rejection (unbounded recursion through indirect dispatch) remains; the analysis cannot lift it without separate termination arguments.
+- Closure dispatch through data segments or yields. The MVP analyses purely intra-chunk flow; closures stored in data segments or passed across yields require an interprocedural extension.
+
+Deferred to V0.3 per the design pass.
+
+## B15. Remove `Type::Unknown` entirely
+
+The Hindley-Milner pass landed in V0.1-M3 retained `Type::Unknown` as a permissive transitional anchor for runtime-only dispatch positions (most prominently, native function calls without declared signatures and the underlying type of newtypes whose definitions had not yet been resolved). V0.2 added native function signature declarations (`use host::name(T1, T2) -> R`) that close the largest gap, and the bidirectional type checking infrastructure for the saturate-contract feature handles newtype-underlying lookups through `Ctx::newtypes` rather than the placeholder stored in `Type::Newtype`. Removing `Type::Unknown` is now structurally feasible.
+
+### Scope
+
+- Replace every `Type::Unknown` production with a fresh type variable (`Type::Var`).
+- Update `types_compatible` to drop the `Type::Unknown` wildcard branch.
+- Audit the 26 call sites that currently produce or consume `Type::Unknown` (per the typecheck module documentation) and convert each to either a typed value or a fresh variable.
+- Add tests covering inference paths that previously relied on the permissive wildcard.
+
+### Risks
+
+- Inference regressions. Some unannotated positions currently work because `Type::Unknown` short-circuits the unifier; replacing with a fresh variable forces the inference to find a concrete type, which may surface ambiguities that were previously hidden.
+- Native call sites without declared signatures will need to fall back to fresh variables and accept the consequence that the return type is undetermined until the call is unified against a use site.
+
+Foundation work is complete (native signatures, expected-type stack). The removal pass itself is a self-contained refactor.
+
+## B16. Target-scaled `Fixed` defaults for sub-64-bit native runtimes
+
+The V0.2 deferred-items pass added target-scaled `Fixed` defaults that thread the target descriptor's `fixed_default_frac_bits()` through the type checker and compiler. Bare `Fixed` resolves to Q31.32 on 64-bit hosts, Q15.16 on 32-bit, Q7.8 on 16-bit, and Q3.4 on 8-bit. The infrastructure handles cross-compilation cleanly when the runtime stays 64-bit, but a true 8-bit native runtime (`Value` represented in 8 bits, execution loop variant, target-defined primitive types `byte`, `bit`, `word`, `address`) is not implemented.
+
+### Scope
+
+- Conditional `Value` layout per target. The current `Value` enum carries i64 / f64 / pointers; an 8-bit variant would carry u8 / fixed-point / arena handles.
+- Per-target execution loop. The current loop assumes 64-bit arithmetic on `Op::Add` and friends; an 8-bit loop would mask all operations to 8 bits and reject ops that don't fit (most floats).
+- Target-defined primitive types in the surface syntax. `byte`, `bit`, `word`, `address` would each map to a concrete width per target.
+- Cross-target codegen. Emitting native 6502 or ARM Thumb assembly from Keleusma source is the long-tail item that interacts with this.
+
+### Out of scope
+
+- The 32-bit and 16-bit cases are already handled by the existing infrastructure when the runtime stays 64-bit; the bytecode is portable. This entry concerns true sub-64-bit native runtimes.
+
+Deferred until a host with sub-64-bit hardware constraints demonstrates the need.
+
+## B17. Embassy feature trimming
+
+The microkernel's STM32N6570-DK build links the full `embassy-stm32` peripheral abstraction. The V0.2 deferred-items pass dropped the `exti` and `unstable-pac` features when their natives were retired, but the remaining default-on features account for some unmeasured fraction of the bare-metal `.text`. A measured trim could shrink the precompiled-bytecode and trust-load images further; the full-pipeline image is dominated by the source compiler and benefits less.
+
+### Approach
+
+- Profile the build with `cargo-bloat` against each `embassy_stm32` feature combination. Identify features whose symbols dominate the unused-symbol set.
+- Disable features one at a time, confirm the microkernel still builds and runs on the demonstrator (heartbeat, sensor, LED, event listener, faulty), and measure the size delta.
+- Document the resulting minimal feature set in `examples/rtos/Cargo.toml` with comments explaining each retained feature.
+
+### Out of scope
+
+- Trimming `embassy-executor` or `embassy-time`. The kernel relies on both as load-bearing dependencies; reducing them would require replacing the cooperative scheduler with a hand-rolled equivalent.
+
+Deferred until the embedded production modes are under measured size pressure for a real deployment target.
+
+## B18. Big-number arithmetic worked example using the pattern-arm form
+
+The V0.2 pattern-matched checked-arithmetic refactor (commit `68e7cb5`) extends the construct to bind `(high, low)` halves of an i128 intermediate. This is the load-bearing mechanism for big-number addition, subtraction, and multiplication, but the project does not yet have a worked example demonstrating the pattern end to end. Operators considering adoption would benefit from a concrete reference.
+
+### Scope
+
+- A standalone Keleusma example (e.g. `examples/scripts/big_num_add.kel`) that implements unsigned 128-bit or 256-bit addition by chaining checked-add operations across `Word`-sized digits and propagating the carry through the high half of each step.
+- A multiplication example using the high half of the i128 result to construct a full 128-bit product from two 64-bit operands.
+- An integration test in the runtime crate that compiles the example and verifies the result against a known answer (e.g. `(2^64 - 1) + 1 = 2^64`, decomposed as `(high=1, low=0)`).
+- Documentation in `docs/guide/` (probably a new `BIG_NUMBERS.md`) walking through the pattern with prose explaining how the carry chain composes.
+
+### Out of scope
+
+- A standard-library `BigInt` type. The worked example demonstrates the pattern; a fully-featured `BigInt` with arbitrary precision and the full arithmetic surface is its own subsystem.
+- Division and modulo. The current `Op::Div` and `Op::Mod` paths through the checked construct stamp `(high=0, low=result, flag=0)` and do not expose the corner case (`i64::MIN / -1`) needed for big-number division. The `Op::CheckedDiv` / `Op::CheckedMod` items recorded as newly-opened are prerequisites for that direction.
+
+Deferred until adoption demand or a request for a reference pattern surfaces.
