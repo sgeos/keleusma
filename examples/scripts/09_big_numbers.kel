@@ -1,0 +1,57 @@
+// Big-number arithmetic via the pattern-arm checked construct.
+//
+// The V0.2 checked-arithmetic construct binds the high and low
+// halves of an i128 intermediate result. This is the load-bearing
+// mechanism for chained multi-digit arithmetic: the carry from one
+// digit becomes an addend at the next position, and a 64x64 -> 128
+// multiplication can return both halves of its true product.
+//
+// Run: keleusma run examples/scripts/09_big_numbers.kel
+// Expected output: 1
+//
+// The example demonstrates two patterns:
+//   - `mul_full` returns the full 128-bit product of two `Word`
+//     values as a `(high, low)` tuple, reading the high half
+//     directly from `Op::CheckedMul`'s i128 intermediate.
+//   - `add_with_carry` returns the wrapped sum together with a
+//     carry-out flag derived from the overflow class. The carry
+//     can be threaded into a subsequent checked addition at the
+//     next-higher digit position.
+
+// 64x64 -> 128-bit multiplication. The `overflow(h, l)` arm reads
+// the high half directly. The `ok(v)` arm fires when the true
+// product fits in `Word`, in which case the high half is zero.
+fn mul_full(a: Word, b: Word) -> (Word, Word) {
+    a * b {
+        ok(v) => (0, v),
+        overflow(h, l) => (h, l),
+        underflow(h, l) => (h, l),
+    }
+}
+
+// 64-bit addition returning a carry-out flag and the wrapped
+// result. The carry is 1 when the true sum exceeds `Word`'s range
+// in either direction, 0 otherwise.
+fn add_with_carry(a: Word, b: Word) -> (Word, Word) {
+    a + b {
+        ok(v) => (0, v),
+        overflow(_, l) => (1, l),
+        underflow(_, l) => (1, l),
+    }
+}
+
+fn main() -> Word {
+    // Multiplication: 2^32 * 2^32 = 2^64. The true product needs
+    // 65 bits and overflows `Word`. The construct routes to the
+    // overflow arm with high = 1, low = 0.
+    let (mul_hi, _) = mul_full(4294967296, 4294967296);
+
+    // Addition: i64::MAX + 1 = 2^63. The true sum exceeds
+    // `Word::MAX`, so the overflow arm fires and the carry-out is
+    // 1. The wrapped low half is i64::MIN (the bit pattern of 2^63
+    // truncated to 64 bits).
+    let (carry, _) = add_with_carry(9223372036854775807, 1);
+
+    // Both patterns produce the expected high-half / carry values.
+    if mul_hi == 1 and carry == 1 { 1 } else { 0 }
+}

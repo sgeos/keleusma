@@ -367,20 +367,16 @@ The microkernel's STM32N6570-DK build links the full `embassy-stm32` peripheral 
 
 Deferred until the embedded production modes are under measured size pressure for a real deployment target.
 
-## B18. Big-number arithmetic worked example using the pattern-arm form
+## ~~B18. Big-number arithmetic worked example using the pattern-arm form~~ (Resolved)
 
-The V0.2 pattern-matched checked-arithmetic refactor (commit `68e7cb5`) extends the construct to bind `(high, low)` halves of an i128 intermediate. This is the load-bearing mechanism for big-number addition, subtraction, and multiplication, but the project does not yet have a worked example demonstrating the pattern end to end. Operators considering adoption would benefit from a concrete reference.
+A worked example landed at [`examples/scripts/09_big_numbers.kel`](../../examples/scripts/09_big_numbers.kel) demonstrating two patterns:
 
-### Scope
+- **Full 64x64 -> 128-bit multiplication.** `mul_full(a, b)` reads the high half of the `Op::CheckedMul` i128 intermediate directly. Worked input: `2^32 * 2^32 = 2^64` produces `(high=1, low=0)`.
+- **Addition with carry-out.** `add_with_carry(a, b)` returns the wrapped sum together with a carry-out flag derived from the overflow class. Worked input: `i64::MAX + 1` produces carry=1, low=i64::MIN.
 
-- A standalone Keleusma example (e.g. `examples/scripts/big_num_add.kel`) that implements unsigned 128-bit or 256-bit addition by chaining checked-add operations across `Word`-sized digits and propagating the carry through the high half of each step.
-- A multiplication example using the high half of the i128 result to construct a full 128-bit product from two 64-bit operands.
-- An integration test in the runtime crate that compiles the example and verifies the result against a known answer (e.g. `(2^64 - 1) + 1 = 2^64`, decomposed as `(high=1, low=0)`).
-- Documentation in `docs/guide/` (probably a new `BIG_NUMBERS.md`) walking through the pattern with prose explaining how the carry chain composes.
+The example is exercised by the integration test [`tests/big_number_arithmetic.rs`](../../tests/big_number_arithmetic.rs) (`big_number_example_returns_1`) and documented in the guide at [`docs/guide/BIG_NUMBERS.md`](../guide/BIG_NUMBERS.md) with a discussion of the signed/unsigned caveats, the chained two-digit addition pattern, and the cross-references to the grammar and language-design sections.
 
-### Out of scope
+Follow-on items that interact but remain out of scope:
 
-- A standard-library `BigInt` type. The worked example demonstrates the pattern; a fully-featured `BigInt` with arbitrary precision and the full arithmetic surface is its own subsystem.
-- Division and modulo. The current `Op::Div` and `Op::Mod` paths through the checked construct stamp `(high=0, low=result, flag=0)` and do not expose the corner case (`i64::MIN / -1`) needed for big-number division. The `Op::CheckedDiv` / `Op::CheckedMod` items recorded as newly-opened are prerequisites for that direction.
-
-Deferred until adoption demand or a request for a reference pattern surfaces.
+- A standard-library `BigInt` type with arbitrary precision and the full arithmetic surface. The worked example demonstrates the underlying pattern; a fully-featured `BigInt` is its own subsystem.
+- `Op::CheckedDiv` / `Op::CheckedMod` exposing the `i64::MIN / -1` corner. Currently `Op::Div` and `Op::Mod` stamp `(high=0, low=result, flag=0)`; a dedicated checked variant would surface the corner case for big-number division.
