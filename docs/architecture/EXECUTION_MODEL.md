@@ -318,13 +318,7 @@ Additionally, `wcet_stream_iteration()` computes the worst-case execution cost o
 
 Definitive WCET and WCMU is the language's load-bearing guarantee. The verifier rejects any program whose execution time or memory use cannot be statically bounded. The rejection is conservative by design: programs whose bound is unprovable, and programs whose bound is provable in principle but not yet computable by the current analysis, are both rejected. See [LANGUAGE_DESIGN.md Conservative Verification](./LANGUAGE_DESIGN.md#conservative-verification) for the design stance behind this choice.
 
-The two op kinds that violate the WCET contract are rejected outright by `verify::module_wcmu`.
-
-1. `Op::MakeRecursiveClosure` constructs a self-referential closure whose body dispatches to itself through indirect call. The resulting program admits unbounded recursion within a single Stream-to-Reset iteration. Rejected at module verification.
-
-2. `Op::CallIndirect` resolves its target chunk at runtime from a `Value::Func` on the operand stack. The static analysis cannot follow this edge through the call graph, so the cost of the indirect call cannot be bounded without a flow analysis that the present verifier does not implement. Rejected at module verification regardless of which construction op produced the value being dispatched.
-
-The construction ops `Op::PushFunc` and `Op::MakeClosure` remain admissible because they produce values that can be yielded, stored in the data segment, or otherwise consumed without invocation. Only the dispatch through `Op::CallIndirect` introduces the unbounded behavior. A program that pushes a function value but never calls it is bounded.
+V0.2.0 Phase 4 of the ISA reset retired the closure family (`Op::PushFunc`, `Op::MakeClosure`, `Op::MakeRecursiveClosure`, `Op::CallIndirect`) along with the corresponding `Value::Func` runtime variant. First-class function values and indirect-call dispatch are no longer representable in the bytecode; closure-shaped source expressions are rejected at the type-checker stage. The previous module-verification rejection path (which scanned for `Op::MakeRecursiveClosure` and `Op::CallIndirect`) is gone because the opcodes themselves do not exist. The conservative-verification stance is preserved at compile time rather than at load time for this case.
 
 The valid form of unbounded execution is the top-level `loop` block in the productive divergent function category. The structural verifier enforces the productivity rule at this level: every control flow path from `Op::Stream` to `Op::Reset` must pass through at least one `Op::Yield`. The bounded-step contract holds yield-to-yield, so unbounded execution across the RESET cycle is the expected steady-state of a stream processor.
 

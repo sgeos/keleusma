@@ -243,7 +243,6 @@ pub fn emit_cost_model_source(measurements: &[Measurement], counter_name: &str) 
         ("division", &["Div", "Mod"]),
         ("composite_construction", &["NewArray", "NewTuple"]),
         ("function_call", &["Call"]),
-        ("closure_construction", &["MakeClosure"]),
     ];
 
     let mut category_costs: BTreeMap<&str, u32> = BTreeMap::new();
@@ -370,20 +369,8 @@ pub fn emit_cost_model_source(measurements: &[Measurement], counter_name: &str) 
 
     let fc = cat("function_call");
     out.push_str(&format!("        // Function calls ({} cycles).\n", fc));
-    out.push_str("        Op::Call(_, _)\n");
-    out.push_str("        | Op::CallNative(_, _)\n");
-    out.push_str("        | Op::CallIndirect(_) => ");
+    out.push_str("        Op::Call(_, _) | Op::CallNative(_, _) => ");
     out.push_str(&format!("{},\n", fc));
-    out.push_str("        Op::PushFunc(_) => 0,\n\n");
-
-    let cl = cat("closure_construction");
-    out.push_str(&format!(
-        "        // Closure construction ({} cycles).\n",
-        cl
-    ));
-    out.push_str("        Op::MakeClosure(_, _)\n");
-    out.push_str("        | Op::MakeRecursiveClosure(_, _) => ");
-    out.push_str(&format!("{},\n", cl));
 
     out.push_str("    }\n");
     out.push_str("}\n");

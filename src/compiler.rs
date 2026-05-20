@@ -525,12 +525,12 @@ pub fn compile_with_target(
         message: format!("type error after monomorphization: {}", e.message),
         span: e.span,
     })?;
-    // Hoist closure literals to top-level functions. Each
-    // `Expr::Closure` becomes `Expr::Ident { name: "__closure_<n>" }`
-    // and a synthetic `FunctionDef` is added to the program. The
-    // closure's evaluation at runtime emits `Op::PushFunc(idx)` where
-    // `idx` is the synthetic function's chunk index.
-    let owned = hoist_closures(owned);
+    // V0.2.0 Consolidation Phase 4 retired the closure-hoisting
+    // pass and the four closure opcodes (`Op::PushFunc`,
+    // `Op::MakeClosure`, `Op::MakeRecursiveClosure`, and
+    // `Op::CallIndirect`). The type checker rejects
+    // `Expr::Closure` before the program reaches this point, so
+    // no closure-shaped expressions survive into compilation.
     let program = &owned;
 
     let mut native_names: Vec<String> = Vec::new();
@@ -982,15 +982,13 @@ pub fn compile_with_target(
     // without an immediate VM construction surface these rejections
     // at the build step rather than deferring them to load.
     //
-    // Two checks fire at compile time:
-    //
-    // 1. Structural verification (block nesting, jump offsets,
-    //    block-type constraints, break containment, productivity
-    //    rule). Runs on every chunk.
-    //
-    // 2. Unbounded-construct scan (`Op::CallIndirect`,
-    //    `Op::MakeRecursiveClosure`). Identical to the rejection
-    //    that `verify::module_wcmu` performs at load time.
+    // Structural verification (block nesting, jump offsets,
+    // block-type constraints, break containment, productivity
+    // rule) runs on every chunk at compile time. V0.2.0 Phase 4
+    // dropped the closure family, so the previous unbounded-
+    // construct scan (`Op::CallIndirect` / `Op::MakeRecursiveClosure`)
+    // is no longer needed; the type checker rejects closures
+    // before any bytecode is generated.
     //
     // The full WCMU and WCET computation including loop iteration
     // bound extraction and arena-capacity check remain deferred to
@@ -1033,31 +1031,6 @@ pub fn compile_with_target(
             message: format!("structural verification: {}: {}", e.chunk_name, e.message),
             span: span_for(&e.chunk_name),
         })?;
-        for chunk in &module.chunks {
-            for op in &chunk.ops {
-                match op {
-                    crate::bytecode::Op::CallIndirect(_) => {
-                        return Err(CompileError {
-                            message: format!(
-                                "WCET verification: {}: CallIndirect resolves its target chunk at runtime and cannot be statically bounded for WCET/WCMU analysis. First-class function dispatch is not admitted by the safe build pipeline. Restrict the program to direct calls.",
-                                chunk.name
-                            ),
-                            span: span_for(&chunk.name),
-                        });
-                    }
-                    crate::bytecode::Op::MakeRecursiveClosure(target, _) => {
-                        return Err(CompileError {
-                            message: format!(
-                                "WCET verification: {}: MakeRecursiveClosure(chunk={}) introduces unbounded recursion that cannot be statically bounded for WCET/WCMU analysis. Recursive closures are not admitted by the safe build pipeline.",
-                                chunk.name, target
-                            ),
-                            span: span_for(&chunk.name),
-                        });
-                    }
-                    _ => {}
-                }
-            }
-        }
 
         // Populate the declared WCET and WCMU fields in the framing
         // header. The compile-time bounds use the bundled nominal cost
@@ -2816,156 +2789,6 @@ fn compile_for(fc: &mut FuncCompiler, for_stmt: &ForStmt) -> Result<(), CompileE
     Ok(())
 }
 
-/// Collect the variable names bound by a pattern. Tuple, struct,
-/// and enum sub-patterns recurse. Wildcards bind nothing.
-fn collect_pattern_names(
-    pattern: &Pattern,
-    out: &mut alloc::collections::BTreeSet<alloc::string::String>,
-) {
-    match pattern {
-        Pattern::Variable(name, _) => {
-            out.insert(name.clone());
-        }
-        Pattern::Wildcard(_) | Pattern::Literal(_, _) => {}
-        Pattern::Tuple(parts, _) => {
-            for p in parts {
-                collect_pattern_names(p, out);
-            }
-        }
-        Pattern::Enum(_, _, sub_pats, _) => {
-            for p in sub_pats {
-                collect_pattern_names(p, out);
-            }
-        }
-        Pattern::Struct(_, field_pats, _) => {
-            for fp in field_pats {
-                if let Some(p) = &fp.pattern {
-                    collect_pattern_names(p, out);
-                } else {
-                    out.insert(fp.name.clone());
-                }
-            }
-        }
-    }
-}
-
-/// Collect free identifiers in a block. A free identifier is one that
-/// is referenced but not in the current `bound` set. Matching let
-/// bindings and for-loop variables extend `bound` for the rest of
-/// the block. Closures within the block are NOT recursed into here
-/// because they have their own free-variable analysis.
-/// Free-variable collector implemented as an immutable AST visitor.
-/// The `bound` set tracks names introduced into scope as the walk
-/// descends. The `free` list accumulates identifiers used at a
-/// position where they were not in scope.
-struct FreeVarCollector {
-    bound: alloc::collections::BTreeSet<alloc::string::String>,
-    free: Vec<alloc::string::String>,
-}
-
-impl FreeVarCollector {
-    fn record_if_free(&mut self, name: &str) {
-        if !self.bound.contains(name) && !self.free.iter().any(|n| n.as_str() == name) {
-            self.free.push(alloc::string::String::from(name));
-        }
-    }
-}
-
-impl crate::visitor::Visitor for FreeVarCollector {
-    fn visit_block(&mut self, block: &Block) {
-        // A block introduces a fresh scope. Save and restore `bound`
-        // so let bindings inside the block do not leak out.
-        let saved = self.bound.clone();
-        self.walk_block(block);
-        self.bound = saved;
-    }
-
-    fn visit_stmt(&mut self, stmt: &Stmt) {
-        match stmt {
-            Stmt::Let(l) => {
-                self.visit_expr(&l.value);
-                collect_pattern_names(&l.pattern, &mut self.bound);
-            }
-            Stmt::For(f) => {
-                match &f.iterable {
-                    Iterable::Range(s, e) => {
-                        self.visit_expr(s);
-                        self.visit_expr(e);
-                    }
-                    Iterable::Expr(e) => self.visit_expr(e),
-                }
-                // For-body introduces the iteration variable for the
-                // body's scope only.
-                let saved = self.bound.clone();
-                self.bound.insert(f.var.clone());
-                self.visit_block(&f.body);
-                self.bound = saved;
-            }
-            _ => self.walk_stmt(stmt),
-        }
-    }
-
-    fn visit_expr(&mut self, expr: &Expr) {
-        match expr {
-            Expr::Ident { name, .. } => self.record_if_free(name),
-            Expr::Call { name, args, .. } => {
-                // Conservatively treat the call name as potentially
-                // referring to a local. The compile site filters
-                // non-locals against function_map. See the original
-                // walker comment for the rationale.
-                self.record_if_free(name);
-                for a in args {
-                    self.visit_expr(a);
-                }
-            }
-            Expr::Match {
-                scrutinee, arms, ..
-            } => {
-                self.visit_expr(scrutinee);
-                for arm in arms {
-                    let saved = self.bound.clone();
-                    collect_pattern_names(&arm.pattern, &mut self.bound);
-                    if let Some(g) = arm.guard.as_ref() {
-                        self.visit_expr(g);
-                    }
-                    self.visit_expr(&arm.expr);
-                    self.bound = saved;
-                }
-            }
-            Expr::Closure { .. } => {
-                // Should not occur after the hoist pass replaces every
-                // closure literal with a ClosureRef. Conservatively do
-                // nothing here; the surrounding pass will hoist on
-                // the next walk.
-            }
-            Expr::ClosureRef { captures, .. } => {
-                // Inner closures already hoisted. Each capture that is
-                // not bound here is a free variable of the enclosing
-                // expression, propagating transitive captures through
-                // nested closures.
-                for capture in captures {
-                    self.record_if_free(capture);
-                }
-            }
-            _ => self.walk_expr(expr),
-        }
-    }
-}
-
-fn collect_free_in_block(
-    block: &Block,
-    bound: &alloc::collections::BTreeSet<alloc::string::String>,
-    out: &mut Vec<alloc::string::String>,
-) {
-    use crate::visitor::Visitor;
-    let mut collector = FreeVarCollector {
-        bound: bound.clone(),
-        free: core::mem::take(out),
-    };
-    collector.visit_block(block);
-    *out = collector.free;
-}
-
 /// Rewrite every `PrimType::Fixed(None)` in the program's
 /// type annotations to `PrimType::Fixed(Some(frac_bits))`.
 ///
@@ -3205,253 +3028,6 @@ fn normalize_fixed_defaults(program: &mut Program, frac_bits: u8) {
             fix_type(&mut method.return_type, frac_bits);
             fix_block(&mut method.body, frac_bits);
         }
-    }
-}
-
-/// Closure hoisting pass.
-///
-/// Walks every function body and impl method body in the program,
-/// replacing `Expr::Closure` expressions with `Expr::Ident {
-/// name: "__closure_<n>" }` references and emitting a synthetic
-/// `FunctionDef` per closure. The synthetic functions go to the
-/// end of `program.functions` so they receive chunk indices in the
-/// expected order. Surrounding compilation logic resolves the
-/// `Expr::Ident` to a chunk-emitting `Op::PushFunc(idx)` because the
-/// synthetic name is in `function_map` but never appears as a
-/// local.
-fn hoist_closures(mut program: Program) -> Program {
-    // Build the set of native names declared via `use` so the
-    // free-variable analysis does not treat them as captures.
-    // Closures that reference native functions resolve through the
-    // synthetic chunk's normal call path at compile time.
-    let mut natives: alloc::collections::BTreeSet<alloc::string::String> =
-        alloc::collections::BTreeSet::new();
-    for use_decl in &program.uses {
-        if let ImportItem::Name(name) = &use_decl.import {
-            let full = if use_decl.path.is_empty() {
-                name.clone()
-            } else {
-                let mut full = String::new();
-                for (i, seg) in use_decl.path.iter().enumerate() {
-                    if i > 0 {
-                        full.push_str("::");
-                    }
-                    full.push_str(seg);
-                }
-                full.push_str("::");
-                full.push_str(name);
-                full
-            };
-            natives.insert(full);
-            natives.insert(name.clone());
-        }
-    }
-    use crate::visitor::MutVisitor;
-    let mut counter: usize = 0;
-    let mut new_functions: Vec<FunctionDef> = Vec::new();
-    {
-        let mut hoister = ClosureHoister {
-            counter: &mut counter,
-            out: &mut new_functions,
-            natives: &natives,
-        };
-        for func in program.functions.iter_mut() {
-            hoister.visit_block(&mut func.body);
-        }
-        for impl_block in program.impls.iter_mut() {
-            for method in impl_block.methods.iter_mut() {
-                hoister.visit_block(&mut method.body);
-            }
-        }
-    }
-    program.functions.extend(new_functions);
-    program
-}
-
-/// Closure hoisting visitor. Walks the AST in post-order, replacing
-/// each `Expr::Closure` with an `Expr::ClosureRef` and synthesizing
-/// a top-level `FunctionDef` per closure. `Stmt::Let` whose value is
-/// a closure receives special handling for the recursive case.
-struct ClosureHoister<'a> {
-    counter: &'a mut usize,
-    out: &'a mut Vec<FunctionDef>,
-    natives: &'a alloc::collections::BTreeSet<alloc::string::String>,
-}
-
-impl ClosureHoister<'_> {
-    /// Hoist a closure that is the value of a `let` binding,
-    /// detecting self-reference. When the closure body's free
-    /// variables include the let-binding name, the closure is
-    /// treated as recursive: the synthetic chunk's parameter list
-    /// places the binding name after the other captures, the
-    /// runtime fills that slot with the closure value at each
-    /// invocation, and the compiler emits
-    /// `Op::MakeRecursiveClosure`. Non-recursive cases fall through
-    /// to the regular `Expr::Closure` walk.
-    fn hoist_let_bound_closure(&mut self, let_name: alloc::string::String, expr: &mut Expr) {
-        use crate::visitor::MutVisitor;
-        let (params, return_type, body, span) = match expr {
-            Expr::Closure {
-                params,
-                return_type,
-                body,
-                span,
-            } => (params, return_type, body, *span),
-            _ => return,
-        };
-        // Hoist nested closures inside the body first.
-        self.visit_block(body);
-        let mut bound: alloc::collections::BTreeSet<alloc::string::String> =
-            alloc::collections::BTreeSet::new();
-        for p in params.iter() {
-            collect_pattern_names(&p.pattern, &mut bound);
-        }
-        let mut free: Vec<alloc::string::String> = Vec::new();
-        collect_free_in_block(body, &bound, &mut free);
-        let recursive = free.iter().any(|n| n == &let_name);
-        if !recursive {
-            self.visit_expr(expr);
-            return;
-        }
-        free.retain(|n| n != &let_name);
-        let name = format!("__closure_{}", *self.counter);
-        *self.counter += 1;
-        let mut all_params: Vec<Param> = Vec::with_capacity(free.len() + 1 + params.len());
-        for capture in &free {
-            all_params.push(Param {
-                pattern: Pattern::Variable(capture.clone(), span),
-                type_expr: None,
-                span,
-            });
-        }
-        all_params.push(Param {
-            pattern: Pattern::Variable(let_name.clone(), span),
-            type_expr: None,
-            span,
-        });
-        all_params.extend(params.iter().cloned());
-        let body_owned = core::mem::replace(
-            body,
-            Block {
-                stmts: Vec::new(),
-                tail_expr: None,
-                span,
-            },
-        );
-        let synth = FunctionDef {
-            category: FunctionCategory::Fn,
-            name: name.clone(),
-            type_params: Vec::new(),
-            params: all_params,
-            return_type: return_type.clone().unwrap_or(TypeExpr::Unit(span)),
-            guard: None,
-            body: body_owned,
-            ephemeral: false,
-            span,
-        };
-        self.out.push(synth);
-        *expr = Expr::ClosureRef {
-            name,
-            captures: free,
-            recursive: true,
-            span,
-        };
-    }
-}
-
-impl crate::visitor::MutVisitor for ClosureHoister<'_> {
-    fn visit_stmt(&mut self, stmt: &mut Stmt) {
-        if let Stmt::Let(l) = stmt
-            && let Pattern::Variable(let_name, _) = &l.pattern
-            && let Expr::Closure { .. } = &l.value
-        {
-            // Special-case `let f = |...| ...` where the closure body
-            // may reference the let-binding name. See
-            // `hoist_let_bound_closure` for the recursive contract.
-            let name = let_name.clone();
-            self.hoist_let_bound_closure(name, &mut l.value);
-            return;
-        }
-        self.walk_stmt(stmt);
-    }
-
-    fn visit_expr(&mut self, expr: &mut Expr) {
-        if matches!(expr, Expr::Closure { .. }) {
-            // Recurse into the body first so nested closures are
-            // hoisted, then transform this Closure into a ClosureRef.
-            if let Expr::Closure { body, .. } = expr {
-                self.visit_block(body);
-            }
-            self.hoist_closure_in_place(expr);
-            return;
-        }
-        self.walk_expr(expr);
-    }
-}
-
-impl ClosureHoister<'_> {
-    /// Replace a non-recursive `Expr::Closure` with an
-    /// `Expr::ClosureRef` and synthesize the corresponding
-    /// `FunctionDef`. The body is assumed to have been hoisted
-    /// already by the caller.
-    fn hoist_closure_in_place(&mut self, expr: &mut Expr) {
-        let (params, return_type, body, span) = match expr {
-            Expr::Closure {
-                params,
-                return_type,
-                body,
-                span,
-            } => (params, return_type, body, *span),
-            _ => return,
-        };
-        let mut bound: alloc::collections::BTreeSet<alloc::string::String> =
-            alloc::collections::BTreeSet::new();
-        for p in params.iter() {
-            collect_pattern_names(&p.pattern, &mut bound);
-        }
-        let mut free: Vec<alloc::string::String> = Vec::new();
-        collect_free_in_block(body, &bound, &mut free);
-        // Filter out names that are top-level natives (declared via
-        // `use`) since those are resolved through CallNative rather
-        // than indirect call. The `natives` set handles this.
-        free.retain(|n| !self.natives.contains(n));
-        let name = format!("__closure_{}", *self.counter);
-        *self.counter += 1;
-        let mut all_params: Vec<Param> = Vec::with_capacity(free.len() + params.len());
-        for capture in &free {
-            all_params.push(Param {
-                pattern: Pattern::Variable(capture.clone(), span),
-                type_expr: None,
-                span,
-            });
-        }
-        all_params.extend(params.iter().cloned());
-        let body_owned = core::mem::replace(
-            body,
-            Block {
-                stmts: Vec::new(),
-                tail_expr: None,
-                span,
-            },
-        );
-        let synth = FunctionDef {
-            category: FunctionCategory::Fn,
-            name: name.clone(),
-            type_params: Vec::new(),
-            params: all_params,
-            return_type: return_type.clone().unwrap_or(TypeExpr::Unit(span)),
-            guard: None,
-            body: body_owned,
-            ephemeral: false,
-            span,
-        };
-        self.out.push(synth);
-        *expr = Expr::ClosureRef {
-            name,
-            captures: free,
-            recursive: false,
-            span,
-        };
     }
 }
 
@@ -4171,11 +3747,21 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
         Expr::Ident { name, span } => {
             if let Some(slot) = fc.resolve_local(name) {
                 fc.emit(Op::GetLocal(slot));
-            } else if let Some(&idx) = fc.function_map.get(name) {
-                // The name resolves to a top-level function (or a
-                // hoisted closure). Emit a `Func` value that the
-                // runtime can invoke through `Op::CallIndirect`.
-                fc.emit(Op::PushFunc(idx));
+            } else if fc.function_map.contains_key(name) {
+                // V0.2.0 Phase 4 dropped the `Op::PushFunc` opcode
+                // along with the rest of the closure family.
+                // First-class function values are no longer
+                // representable; the surface expression must be a
+                // direct call site rather than a bare reference.
+                return Err(CompileError {
+                    message: alloc::format!(
+                        "first-class function references are not supported in V0.2.0; \
+                         rewrite `{}` as a direct call site or as a trait-bounded \
+                         generic",
+                        name
+                    ),
+                    span: *span,
+                });
             } else if fc.is_data_block(name) {
                 return Err(CompileError {
                     message: format!(
@@ -4790,61 +4376,21 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
                 span: *span,
             });
         }
-        Expr::Closure { span, .. } => {
+        Expr::Closure { span, .. } | Expr::ClosureRef { span, .. } => {
+            // V0.2.0 Phase 4 retired the closure family. The type
+            // checker rejects `Expr::Closure` before compilation
+            // and `Expr::ClosureRef` is no longer synthesized
+            // (the closure-hoisting pass was removed). Reaching
+            // this arm indicates a compiler-internal bug; report a
+            // clear diagnostic rather than panicking so the
+            // upstream pass can be located.
             return Err(CompileError {
-                message: String::from("internal: closure expression encountered after hoist pass"),
+                message: String::from(
+                    "internal: closure expression reached the compiler after V0.2.0 \
+                     Phase 4 retired the closure family. This is a compiler bug.",
+                ),
                 span: *span,
             });
-        }
-        Expr::ClosureRef {
-            name,
-            captures,
-            recursive,
-            span,
-        } => {
-            let chunk_idx = match fc.function_map.get(name) {
-                Some(&i) => i,
-                None => {
-                    return Err(CompileError {
-                        message: format!("internal: synthetic closure name {} not found", name),
-                        span: *span,
-                    });
-                }
-            };
-            for capture in captures {
-                if let Some(slot) = fc.resolve_local(capture) {
-                    fc.emit(Op::GetLocal(slot));
-                } else if let Some(&fn_idx) = fc.function_map.get(capture) {
-                    // The capture refers to a top-level function (or
-                    // an already-hoisted synthetic chunk) rather than
-                    // a local. Push a non-recursive function value
-                    // for it. This case arises when an inner closure
-                    // captures an outer closure's binding name.
-                    fc.emit(Op::PushFunc(fn_idx));
-                } else {
-                    return Err(CompileError {
-                        message: format!(
-                            "closure captures `{}` which is not a local in the enclosing scope",
-                            capture
-                        ),
-                        span: *span,
-                    });
-                }
-            }
-            let n = captures.len() as u8;
-            if *recursive {
-                // For recursive closures, the synthetic chunk's first
-                // implicit parameter after the captures is the self
-                // reference, populated at each indirect-call by the
-                // runtime. The compiler emits the recursive variant
-                // even when the captures list is empty so the runtime
-                // knows to push the closure value into the self slot.
-                fc.emit(Op::MakeRecursiveClosure(chunk_idx, n));
-            } else if n == 0 {
-                fc.emit(Op::PushFunc(chunk_idx));
-            } else {
-                fc.emit(Op::MakeClosure(chunk_idx, n));
-            }
         }
         Expr::Checked {
             op_expr,
@@ -5239,17 +4785,23 @@ fn compile_call(
         }
         return Ok(());
     }
-    // Indirect call through a local variable holding a `Value::Func`.
-    // The compiler pushes the function value, then the explicit
-    // arguments, then emits `Op::CallIndirect(arg_count)`. The
-    // runtime pops the args plus the func value before invoking.
-    if let Some(slot) = fc.resolve_local(name) {
-        fc.emit(Op::GetLocal(slot));
-        for arg in args {
-            compile_expr(fc, arg)?;
-        }
-        fc.emit(Op::CallIndirect(args.len() as u8));
-        return Ok(());
+    // V0.2.0 Phase 4 dropped indirect-call dispatch. A name that
+    // resolves to a local in a call position is no longer a
+    // `Value::Func` invocation; the type checker rejects the
+    // closures and first-class function values that produced
+    // such locals. Reaching this point with a local name in a
+    // call position means the user invoked something that is not
+    // a callable.
+    if let Some(_slot) = fc.resolve_local(name) {
+        return Err(CompileError {
+            message: alloc::format!(
+                "`{}` is a local variable, not a callable. \
+                 V0.2.0 admits only direct calls to top-level \
+                 functions, methods, and host natives.",
+                name
+            ),
+            span: *span,
+        });
     }
     for arg in args {
         compile_expr(fc, arg)?;
@@ -6116,30 +5668,25 @@ mod tests {
 
     #[test]
     #[cfg(feature = "verify")]
-    fn recursive_closure_compile_error_carries_source_span() {
-        // The compile-pipeline rejection for a recursive closure
-        // used to emit `Span::default()`, hiding the offending
-        // source position. The compiler now attaches the synthetic
-        // closure's hoisted span (which originates at the closure
-        // expression site), so callers and IDEs can highlight the
-        // construct that caused the rejection.
+    fn closure_compile_error_carries_source_span() {
+        // V0.2.0 Phase 4 retired the closure family. The rejection
+        // now fires at the type-checker stage with a real source
+        // span pointing at the closure expression rather than the
+        // synthetic-chunk default.
         let src = "fn main() -> Word {\n\
                        let fact = |n: Word| if n <= 1 { 1 } else { n * fact(n - 1) };\n\
                        fact(5)\n\
                    }";
         let err = compile_str(src).expect_err("expected rejection");
-        // The rejection should be the recursive-closure check.
         assert!(
-            err.message.contains("MakeRecursiveClosure") || err.message.contains("CallIndirect"),
+            err.message.contains("closures are not supported"),
             "unexpected error: {}",
             err.message
         );
-        // The span must point at a real source position, not the
-        // default-constructed zero span.
         assert_ne!(
             err.span,
             crate::token::Span::default(),
-            "expected source span on structural-verification error",
+            "expected source span on closure rejection",
         );
     }
 }

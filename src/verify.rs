@@ -898,59 +898,23 @@ pub fn module_wcmu_with_value_slot_bytes(
     value_slot_bytes: u32,
 ) -> Result<Vec<(u32, u32)>, VerifyError> {
     // The WCMU analysis is sound only for acyclic call graphs that
-    // the static analysis can fully traverse. Two op kinds violate
-    // this contract:
-    //
-    // 1. `Op::MakeRecursiveClosure` constructs a self-referential
-    //    closure that dispatches to itself through indirect call.
-    //    By construction, the resulting program admits unbounded
-    //    recursion within a single Stream-to-Reset iteration.
-    //
-    // 2. `Op::CallIndirect` resolves its target chunk at runtime
-    //    from a `Value::Func` on the operand stack. The static
-    //    analysis cannot follow this edge through the call graph,
-    //    so the cost of the indirect call cannot be bounded without
-    //    a flow analysis that the present verifier does not
-    //    implement.
-    //
-    // Both ops are rejected here. The strict rejection is the
-    // load-bearing guarantee of the WCET and WCMU contract: programs
-    // admitted by `verify_resource_bounds` have a definitive, static
-    // bound on stream-iteration execution time and memory use. The
-    // construction ops `Op::PushFunc` and `Op::MakeClosure` remain
-    // admissible because they produce values that can be yielded or
-    // stored without ever being invoked. Only invocation through
-    // `Op::CallIndirect` introduces the unbounded behavior.
+    // the static analysis can fully traverse. V0.2.0 Phase 4
+    // retired the closure family (`Op::PushFunc`, `Op::MakeClosure`,
+    // `Op::MakeRecursiveClosure`, `Op::CallIndirect`); first-class
+    // function values and indirect-call dispatch are rejected at
+    // the type-checker stage and cannot reach the verifier. The
+    // previous pre-emptive rejection loop is therefore no longer
+    // required. The call graph that this analysis traverses is
+    // acyclic by construction because the type checker also
+    // rejects mutually-recursive top-level functions; mutual
+    // recursion is tracked under B14's CallIndirect flow analysis
+    // for V0.3.
     //
     // `Vm::new_unchecked` exists for hosts that load precompiled
     // bytecode whose resource bounds were validated during the
     // build pipeline. It is not a path for admitting unbounded
     // programs at runtime; using it that way is intentional misuse
     // outside the language's WCET contract.
-    for chunk in &module.chunks {
-        for op in &chunk.ops {
-            match op {
-                Op::MakeRecursiveClosure(target, _) => {
-                    return Err(VerifyError {
-                        chunk_name: chunk.name.clone(),
-                        message: alloc::format!(
-                            "MakeRecursiveClosure(chunk={}) introduces unbounded recursion that cannot be statically bounded for WCET/WCMU analysis. Recursive closures are not admitted by `verify_resource_bounds`.",
-                            target
-                        ),
-                    });
-                }
-                Op::CallIndirect(_) => {
-                    return Err(VerifyError {
-                        chunk_name: chunk.name.clone(),
-                        message: alloc::string::String::from(
-                            "CallIndirect resolves its target chunk at runtime and cannot be statically bounded for WCET/WCMU analysis. First-class function dispatch is not admitted by `verify_resource_bounds`. Restrict the program to direct calls.",
-                        ),
-                    });
-                }
-                _ => {}
-            }
-        }
-    }
     let n = module.chunks.len();
     let mut chunk_wcmu: Vec<Option<(u32, u32)>> = alloc::vec![None; n];
     // Per-chunk text-returning flag. Populated in topological order
@@ -2516,89 +2480,15 @@ mod tests {
         assert!(err.message.contains("exceeds arena capacity"));
     }
 
-    #[test]
-    fn verify_resource_bounds_rejects_recursive_closures() {
-        // A chunk that contains `Op::MakeRecursiveClosure` introduces
-        // unbounded recursion that the WCMU analysis cannot bound.
-        // The verifier rejects the module before consulting the
-        // arena capacity, so the resource-bounds API is safe for
-        // hosts that rely on the analysis to reason about real-time
-        // execution.
-        let chunk = make_chunk(
-            "tick",
-            vec![
-                Op::Stream,
-                Op::MakeRecursiveClosure(0, 0),
-                Op::PopN(1),
-                Op::PushImmediate(0),
-                Op::Yield,
-                Op::PopN(1),
-                Op::Reset,
-            ],
-            BlockType::Stream,
-        );
-        let module = make_module(vec![chunk]);
-        let err = verify_resource_bounds(&module, 1024 * 1024).unwrap_err();
-        assert!(
-            err.message.contains("MakeRecursiveClosure")
-                || err.message.contains("unbounded recursion"),
-            "unexpected error message: {}",
-            err.message,
-        );
-    }
-
-    #[test]
-    fn verify_resource_bounds_rejects_call_indirect() {
-        // Indirect dispatch through `Op::CallIndirect` resolves its
-        // target chunk at runtime, so the WCMU analysis cannot
-        // statically bound it. The safe verifier rejects any module
-        // that would invoke a first-class function value, regardless
-        // of which construction op produced the value. Programs that
-        // wish to be admissible must restrict themselves to direct
-        // calls.
-        let chunk = make_chunk(
-            "tick",
-            vec![
-                Op::Stream,
-                Op::PushFunc(0),
-                Op::CallIndirect(0),
-                Op::PopN(1),
-                Op::PushImmediate(0),
-                Op::Yield,
-                Op::PopN(1),
-                Op::Reset,
-            ],
-            BlockType::Stream,
-        );
-        let module = make_module(vec![chunk]);
-        let err = verify_resource_bounds(&module, 1024 * 1024).unwrap_err();
-        assert!(
-            err.message.contains("CallIndirect"),
-            "unexpected error message: {}",
-            err.message,
-        );
-    }
-
-    #[test]
-    fn verify_resource_bounds_admits_push_func_without_call_indirect() {
-        // `Op::PushFunc` constructs a `Value::Func` but does not
-        // invoke it. Without `Op::CallIndirect` in the program, the
-        // value can flow through yield or a host boundary without
-        // breaking the WCET bound. The verifier admits this case.
-        let chunk = make_chunk(
-            "tick",
-            vec![
-                Op::Stream,
-                Op::PushFunc(0),
-                Op::Yield,
-                Op::PopN(1),
-                Op::Reset,
-            ],
-            BlockType::Stream,
-        );
-        let module = make_module(vec![chunk]);
-        verify_resource_bounds(&module, 1024 * 1024).unwrap();
-    }
+    // V0.2.0 Phase 4 retired the closure family
+    // (`Op::PushFunc`, `Op::MakeClosure`, `Op::MakeRecursiveClosure`,
+    // `Op::CallIndirect`). The previous verifier tests that
+    // exercised the pre-emptive rejection path are no longer
+    // applicable; the opcodes do not exist and closure-shaped
+    // source expressions are rejected at the type checker. The
+    // type-checker-stage rejection is covered by
+    // `closures_rejected_at_typecheck` and
+    // `first_class_function_rejected_at_compile` in `typecheck.rs`.
 
     #[test]
     fn verify_resource_bounds_skips_non_stream() {

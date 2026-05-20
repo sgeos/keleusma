@@ -3185,24 +3185,38 @@ fn type_of_expr(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError> {
             Ok(apply_labels(result_ty, &from_labels))
         }
         Expr::Placeholder { .. } => Ok(ctx.fresh()),
-        Expr::ClosureRef { .. } => Ok(ctx.fresh()),
-        Expr::Closure { params, body, .. } => {
-            // Type-check the closure body in a fresh scope where the
-            // parameters are bound to fresh type variables (or their
-            // declared types). The closure's surface type is left as
-            // a fresh type variable for now; first-class function
-            // types are tracked under future B3 follow-on work.
-            ctx.push_scope();
-            for param in params {
-                let t = match &param.type_expr {
-                    Some(t) => ctx.resolve_type(t),
-                    None => ctx.fresh(),
-                };
-                bind_pattern(ctx, &param.pattern, t);
-            }
-            let _body_ty = type_of_block(ctx, body)?;
-            ctx.pop_scope();
-            Ok(ctx.fresh())
+        Expr::ClosureRef { span, .. } => {
+            // `ClosureRef` is produced by the compiler's closure-
+            // hoisting pass. V0.2.0 retires that pass alongside the
+            // closure opcodes, so a `ClosureRef` reaching the type
+            // checker is a compiler-internal error rather than a
+            // user-facing one.
+            Err(TypeError::new(
+                alloc::string::String::from(
+                    "internal: ClosureRef reached the type checker; \
+                     V0.2.0 retired the closure-hoisting pass",
+                ),
+                *span,
+            ))
+        }
+        Expr::Closure { span, .. } => {
+            // Closures are rejected under the V0.2.0 conservative-
+            // verification stance. The four closure opcodes
+            // (`Op::PushFunc`, `Op::MakeClosure`, `Op::MakeRecursiveClosure`,
+            // `Op::CallIndirect`) were removed in Phase 4 of the V0.2.0
+            // ISA reset (B20); first-class functions and closures
+            // cannot be lowered to bytecode. Rewrite the surface
+            // expression as a direct call to a named top-level
+            // function or trait method.
+            Err(TypeError::new(
+                alloc::string::String::from(
+                    "closures are not supported; V0.2.0 admits only direct \
+                     calls and trait dispatch under the conservative-\
+                     verification stance. Rewrite as a top-level `fn` or \
+                     trait method.",
+                ),
+                *span,
+            ))
         }
         Expr::MethodCall {
             receiver,
@@ -4828,16 +4842,23 @@ mod tests {
     }
 
     #[test]
-    fn closure_executes_end_to_end() {
-        // The compile pipeline includes hoisting; the type checker
-        // accepts the closure expression and the indirect call site.
-        check_src(
+    fn closure_rejected_at_typecheck() {
+        // V0.2.0 Phase 4 retired the closure family. The type
+        // checker now rejects `Expr::Closure` directly rather than
+        // accepting the program and relying on the verifier to
+        // reject the resulting bytecode.
+        let err = check_src(
             "fn main() -> Word {\n\
                 let f = |x: Word| x + 1;\n\
                 f(41)\n\
              }",
         )
-        .unwrap();
+        .unwrap_err();
+        assert!(
+            err.message.contains("closures are not supported"),
+            "unexpected error: {}",
+            err.message,
+        );
     }
 
     #[test]
@@ -4855,14 +4876,12 @@ mod tests {
 
     #[test]
     #[cfg(feature = "verify")]
-    fn recursive_closure_rejected_by_compile_pipeline() {
-        // The closure body references its own let-binding name. The
-        // type checker accepts the program, the hoist pass produces a
-        // recursive ClosureRef, and the compiler emits
-        // MakeRecursiveClosure. The compile-time WCET check then
-        // rejects the program because recursive closures introduce
-        // unbounded recursion. This is the conservative-verification
-        // stance applied at the build step.
+    fn recursive_closure_rejected_at_typecheck() {
+        // V0.2.0 Phase 4 retired the closure family. The type
+        // checker rejects the closure expression directly; the
+        // compile pipeline never sees `MakeRecursiveClosure` or
+        // `CallIndirect` bytecode because the opcodes themselves
+        // are gone.
         let err = compile_src(
             "fn main() -> Word {\n\
                 let fact = |n: Word| if n <= 1 { 1 } else { n * fact(n - 1) };\n\
@@ -4871,7 +4890,7 @@ mod tests {
         )
         .unwrap_err();
         assert!(
-            err.contains("MakeRecursiveClosure") || err.contains("CallIndirect"),
+            err.contains("closures are not supported"),
             "unexpected error: {}",
             err,
         );
@@ -4879,10 +4898,9 @@ mod tests {
 
     #[test]
     #[cfg(feature = "verify")]
-    fn recursive_closure_with_capture_rejected_by_compile_pipeline() {
+    fn recursive_closure_with_capture_rejected_at_typecheck() {
         // A recursive closure that also captures an outer-function
-        // local is rejected for the same reason as the simpler
-        // recursive case.
+        // local is rejected at the same stage.
         let err = compile_src(
             "fn main() -> Word {\n\
                 let base: Word = 1000;\n\
@@ -4892,7 +4910,7 @@ mod tests {
         )
         .unwrap_err();
         assert!(
-            err.contains("MakeRecursiveClosure") || err.contains("CallIndirect"),
+            err.contains("closures are not supported"),
             "unexpected error: {}",
             err,
         );
@@ -4953,49 +4971,53 @@ mod tests {
     }
 
     #[test]
-    fn closure_passed_as_argument() {
-        // A generic function takes a closure as an argument and
-        // invokes it. The body uses the parameter as a callable
-        // through indirect dispatch.
-        check_src(
+    fn closure_passed_as_argument_rejected() {
+        // V0.2.0 Phase 4: closures are rejected by the type
+        // checker. The function-as-parameter pattern requires
+        // a closure-shaped expression at the call site, which
+        // is no longer permitted.
+        let err = check_src(
             "fn apply<F>(f: F, x: Word) -> Word { f(x) }\n\
              fn main() -> Word {\n\
                 let g = |x: Word| x + 1;\n\
                 apply(g, 41)\n\
              }",
         )
-        .unwrap();
+        .unwrap_err();
+        assert!(err.message.contains("closures are not supported"));
     }
 
     #[test]
-    fn closure_captures_outer_local() {
-        check_src(
+    fn closure_captures_outer_local_rejected() {
+        let err = check_src(
             "fn main() -> Word {\n\
                 let n: Word = 10;\n\
                 let f = |x: Word| x + n;\n\
                 f(5)\n\
              }",
         )
-        .unwrap();
+        .unwrap_err();
+        assert!(err.message.contains("closures are not supported"));
     }
 
     #[test]
-    fn closure_no_param_callable() {
-        check_src(
+    fn closure_no_param_rejected() {
+        let err = check_src(
             "fn main() -> Word {\n\
                 let f = || 42;\n\
                 f()\n\
              }",
         )
-        .unwrap();
+        .unwrap_err();
+        assert!(err.message.contains("closures are not supported"));
     }
 
     #[test]
-    fn closure_nested_inside_closure_typechecks() {
-        // A closure body containing another closure literal should
-        // type check. The inner closure captures the outer closure's
-        // parameter; the hoist pass should lift each separately.
-        check_src(
+    fn closure_nested_inside_closure_rejected() {
+        // The outer closure is rejected before the inner one is
+        // inspected; the type checker errors at the first closure
+        // expression encountered.
+        let err = check_src(
             "fn main() -> Word {\n\
                 let outer = |x: Word| {\n\
                     let inner = |y: Word| x + y;\n\
@@ -5004,7 +5026,8 @@ mod tests {
                 outer(7)\n\
              }",
         )
-        .unwrap();
+        .unwrap_err();
+        assert!(err.message.contains("closures are not supported"));
     }
 
     #[test]
@@ -5092,11 +5115,8 @@ mod tests {
     }
 
     #[test]
-    fn closure_nested_capturing_outer_local_typechecks() {
-        // The inner closure captures both an outer local from the
-        // enclosing function and the outer closure's parameter. Both
-        // captures must be threaded through the hoist pass.
-        check_src(
+    fn closure_nested_capturing_outer_local_rejected() {
+        let err = check_src(
             "fn main() -> Word {\n\
                 let base: Word = 100;\n\
                 let outer = |x: Word| {\n\
@@ -5106,7 +5126,8 @@ mod tests {
                 outer(7)\n\
              }",
         )
-        .unwrap();
+        .unwrap_err();
+        assert!(err.message.contains("closures are not supported"));
     }
 
     #[test]

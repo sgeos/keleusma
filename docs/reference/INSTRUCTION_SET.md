@@ -132,7 +132,7 @@ The runtime cross-checks each declared native against its host registration at `
 | CallExternalNative | u16 native_idx, u8 argc | 5 | Call an external native function. Iteration cost budget pauses during the call; the verifier tracks invocation count per iteration. |
 | Return | none | 2 | Return from the current chunk. |
 
-The closure-construction and indirect-dispatch opcodes (`PushFunc`, `MakeClosure`, `MakeRecursiveClosure`, `CallIndirect`) are not present in the ISA. Closure-shaped surface expressions either compile to compile-time-resolved direct calls or are rejected at compile time.
+The closure-construction and indirect-dispatch opcodes (`PushFunc`, `MakeClosure`, `MakeRecursiveClosure`, `CallIndirect`) are not present in the ISA. Closure-shaped surface expressions are rejected at the type-checker stage with a diagnostic that names the construct; first-class function values are likewise rejected. The `Value::Func` runtime variant was retired alongside the opcodes in V0.2.0 Phase 4. Surface programs that previously used closures must be rewritten as top-level `fn` definitions or trait methods.
 
 ## Coroutine and Streaming
 

@@ -1994,52 +1994,6 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                     let val = self.chunk_const(chunk_idx, idx as usize);
                     sp!(self, val);
                 }
-                Op::PushFunc(idx) => sp!(
-                    self,
-                    crate::bytecode::GenericValue::Func {
-                        chunk_idx: idx,
-                        env: alloc::vec::Vec::new(),
-                        recursive: false,
-                    }
-                ),
-                Op::MakeClosure(chunk_idx_val, n_captures) => {
-                    let n = n_captures as usize;
-                    if self.stack.len() < n {
-                        return Err(VmError::StackUnderflow);
-                    }
-                    let env: alloc::vec::Vec<crate::bytecode::GenericValue<W, F>> =
-                        self.stack.drain(self.stack.len() - n..).collect();
-                    sp!(
-                        self,
-                        crate::bytecode::GenericValue::Func {
-                            chunk_idx: chunk_idx_val,
-                            env,
-                            recursive: false,
-                        }
-                    );
-                }
-                Op::MakeRecursiveClosure(chunk_idx_val, n_captures) => {
-                    // Identical to MakeClosure except the resulting
-                    // crate::bytecode::GenericValue::Func is marked recursive. At each
-                    // CallIndirect invocation, the runtime will push
-                    // the func itself between the env values and the
-                    // explicit arguments, populating the synthetic
-                    // chunk's self parameter with the closure value.
-                    let n = n_captures as usize;
-                    if self.stack.len() < n {
-                        return Err(VmError::StackUnderflow);
-                    }
-                    let env: alloc::vec::Vec<crate::bytecode::GenericValue<W, F>> =
-                        self.stack.drain(self.stack.len() - n..).collect();
-                    sp!(
-                        self,
-                        crate::bytecode::GenericValue::Func {
-                            chunk_idx: chunk_idx_val,
-                            env,
-                            recursive: true,
-                        }
-                    );
-                }
 
                 Op::GetLocal(slot) => {
                     let val = self.stack[base + slot as usize].clone();
@@ -2455,76 +2409,6 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                     let ctx = NativeCtx { arena: self.arena };
                     let result = (entry.func)(&ctx, &args)?;
                     sp!(self, result);
-                }
-                Op::CallIndirect(arg_count) => {
-                    // The operand stack holds, from top down, the
-                    // function arguments (arg_count items) and then
-                    // the `crate::bytecode::GenericValue::Func` carrying the chunk index and
-                    // optional captured environment. Pop the args
-                    // aside, pop the func, push the env values, push
-                    // the saved args, then push extra `Unit` slots
-                    // for the chunk's locals beyond its parameters.
-                    // The total argument count seen by the called
-                    // chunk is `env.len() + arg_count`.
-                    let n = arg_count as usize;
-                    if self.stack.len() < n + 1 {
-                        return Err(VmError::StackUnderflow);
-                    }
-                    let args_start = self.stack.len() - n;
-                    let saved_args: alloc::vec::Vec<crate::bytecode::GenericValue<W, F>> =
-                        self.stack.drain(args_start..).collect();
-                    let func_value = self.pop()?;
-                    let (chunk_idx, env, recursive) = match func_value.clone() {
-                        crate::bytecode::GenericValue::Func {
-                            chunk_idx,
-                            env,
-                            recursive,
-                        } => (chunk_idx, env, recursive),
-                        other => {
-                            return Err(VmError::TypeError(format!(
-                                "indirect call expected Func, got {}",
-                                other.type_name()
-                            )));
-                        }
-                    };
-                    if chunk_idx as usize >= self.chunk_count() {
-                        return Err(VmError::InvalidBytecode(format!(
-                            "invalid chunk: {}",
-                            chunk_idx
-                        )));
-                    }
-                    let env_len = env.len();
-                    for v in env {
-                        sp!(self, v);
-                    }
-                    // For recursive closures, push the closure value
-                    // itself between the env values and the explicit
-                    // arguments. This populates the synthetic chunk's
-                    // self parameter so the body's references to the
-                    // closure's let-binding resolve to the closure
-                    // value through indirect dispatch.
-                    let self_count = if recursive { 1 } else { 0 };
-                    if recursive {
-                        sp!(self, func_value);
-                    }
-                    for v in saved_args {
-                        sp!(self, v);
-                    }
-                    let total_args = env_len + self_count + n;
-                    let called_local_count = self.chunk_local_count(chunk_idx as usize) as usize;
-                    let new_base = self.stack.len() - total_args;
-                    let extra = called_local_count - total_args;
-                    for _ in 0..extra {
-                        sp!(self, crate::bytecode::GenericValue::Unit);
-                    }
-                    fp!(
-                        self,
-                        CallFrame {
-                            chunk_idx: chunk_idx as usize,
-                            ip: 0,
-                            base: new_base,
-                        }
-                    );
                 }
                 Op::Return => {
                     let result = self.pop()?;
@@ -5945,13 +5829,13 @@ mod tests {
         // data layout, `schema_hash` is zero (no slots to hash).
         let expected: alloc::vec::Vec<u8> = alloc::vec![
             75, 69, 76, 69, 1, 0, 192, 0, 0, 0, 6, 6, 6, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 36, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 32, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0,
             1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 109, 97, 105,
             110, 255, 255, 255, 255, 200, 255, 255, 255, 2, 0, 0, 0, 208, 255, 255, 255, 1, 0, 0,
             0, 232, 255, 255, 255, 0, 0, 0, 0, 0, 0, 0, 0, 220, 255, 255, 255, 0, 0, 0, 0, 212,
             255, 255, 255, 1, 0, 0, 0, 248, 255, 255, 255, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0,
             0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 6, 6, 6, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0,
-            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 116, 190, 171, 119,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 93, 42, 147, 103,
         ];
         let src = "fn main() -> Word { 1 }";
         let tokens = tokenize(src).expect("lex");

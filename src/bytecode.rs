@@ -156,30 +156,6 @@ pub enum GenericValue<W: crate::word::Word, F: crate::float::Float> {
     },
     /// Option::None.
     None,
-    /// First-class function value carrying a chunk index and an
-    /// optional captured environment. Produced by closure
-    /// expressions hoisted to top-level chunks at compile time.
-    /// Invoked through [`Op::CallIndirect`] which pops the `Func`
-    /// value and the explicit arguments, pushes the captured
-    /// environment values onto the operand stack as additional
-    /// implicit arguments, and invokes the referenced chunk. The
-    /// `env` is empty for plain function references such as those
-    /// produced by `Op::PushFunc`. Closures with captured outer-scope
-    /// values produce non-empty `env` through `Op::MakeClosure`.
-    Func {
-        chunk_idx: u16,
-        env: Vec<GenericValue<W, F>>,
-        /// Whether the function is a recursive closure produced by
-        /// [`Op::MakeRecursiveClosure`]. At each invocation through
-        /// [`Op::CallIndirect`], a recursive `Func` is pushed onto
-        /// the operand stack as an additional implicit argument
-        /// between the env values and the explicit arguments. The
-        /// synthetic chunk's parameter list is laid out to receive
-        /// this self argument in the slot named after the closure's
-        /// let-binding, so references to the binding name inside the
-        /// body resolve to the local that holds the closure itself.
-        recursive: bool,
-    },
     /// Opaque host-managed value referenced through a shared
     /// reference-counted pointer. Produced by host-registered native
     /// functions that operate on Rust types the script does not
@@ -230,18 +206,6 @@ impl<W: crate::word::Word, F: crate::float::Float> PartialEq for GenericValue<W,
             // equality must compare through `as_str_with_arena` against
             // a known arena.
             (Self::KStr(a), Self::KStr(b)) => a.epoch() == b.epoch(),
-            (
-                Self::Func {
-                    chunk_idx: a,
-                    env: ae,
-                    recursive: ar,
-                },
-                Self::Func {
-                    chunk_idx: b,
-                    env: be,
-                    recursive: br,
-                },
-            ) => a == b && ae == be && ar == br,
             (Self::Tuple(a), Self::Tuple(b)) | (Self::Array(a), Self::Array(b)) => a == b,
             (
                 Self::Struct {
@@ -288,7 +252,6 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
             Self::Float(_) => "Float",
             Self::StaticStr(_) => "StaticStr",
             Self::KStr(_) => "KStr",
-            Self::Func { .. } => "Func",
             Self::Tuple(_) => "Tuple",
             Self::Array(_) => "Array",
             Self::Struct { .. } => "Struct",
@@ -511,41 +474,6 @@ pub enum Op {
     Call(u16, u8),
     /// Call native function by registry index with N arguments.
     CallNative(u16, u8),
-    /// Indirect call. Pops N arguments and then a `Value::Func`
-    /// from the operand stack, then invokes the function chunk
-    /// referenced by the popped `Func` value. The argument count
-    /// is encoded inline; the chunk index comes from the popped
-    /// value at runtime.
-    CallIndirect(u8),
-    /// Push `Value::Func { chunk_idx, env: [] }` onto the operand
-    /// stack. Emitted for closures that capture nothing and for
-    /// plain function-name references used as values. The resulting
-    /// `Func` value can flow through locals or be invoked through
-    /// `Op::CallIndirect`.
-    PushFunc(u16),
-    /// Build a closure value that captures `n_captures` values from
-    /// the operand stack. The runtime pops `n_captures` values
-    /// (top of stack first), stores them as the closure's
-    /// environment in declaration order, and pushes
-    /// `Value::Func { chunk_idx, env: captured }`. The captured
-    /// values are passed as additional implicit arguments at
-    /// invocation through `Op::CallIndirect`, prepended to the
-    /// explicit arguments.
-    MakeClosure(u16, u8),
-    /// Build a recursive closure value. Identical to
-    /// [`Op::MakeClosure`] except the resulting `Value::Func` carries
-    /// `recursive = true`. At each invocation through
-    /// [`Op::CallIndirect`], the runtime pushes the closure value
-    /// itself as an additional implicit argument between the
-    /// captured environment values and the explicit arguments. This
-    /// implements the self-reference contract for closures bound
-    /// through `let f = |...| ... f(...) ...` where the let-binding
-    /// name appears in the closure's body. The synthetic chunk
-    /// receives parameters in the order
-    /// `(other_captures..., self_param, explicit_params...)` so
-    /// references to the binding name inside the body resolve to the
-    /// implicit self parameter and dispatch through indirect-call.
-    MakeRecursiveClosure(u16, u8),
     /// Return from the current function.
     Return,
 
@@ -981,9 +909,7 @@ pub fn nominal_op_cycles(op: &Op) -> u32 {
 
         Op::NewStruct(_) | Op::NewEnum(_, _, _) | Op::NewArray(_) | Op::NewTuple(_) => 5,
 
-        Op::Call(_, _) | Op::CallNative(_, _) | Op::CallIndirect(_) => 10,
-        Op::PushFunc(_) => 0,
-        Op::MakeClosure(_, _) | Op::MakeRecursiveClosure(_, _) => 5,
+        Op::Call(_, _) | Op::CallNative(_, _) => 10,
 
         // V0.2.0 ISA additions.
         Op::PushImmediate(_) | Op::PopN(_) => 1,
@@ -1065,8 +991,7 @@ impl Op {
             Op::Stream | Op::Reset => 0,
             Op::Yield => 0,
 
-            Op::Call(_, _) | Op::CallNative(_, _) | Op::CallIndirect(_) => 1,
-            Op::PushFunc(_) => 0,
+            Op::Call(_, _) | Op::CallNative(_, _) => 1,
             Op::Return => 0,
 
             Op::NewStruct(_) | Op::NewEnum(_, _, _) | Op::NewArray(_) | Op::NewTuple(_) => 1,
@@ -1089,10 +1014,6 @@ impl Op {
 
             Op::Trap(_) => 0,
 
-            // MakeClosure pushes one closure value (regardless of
-            // captures, which net out against the pops).
-            Op::MakeClosure(_, _) | Op::MakeRecursiveClosure(_, _) => 1,
-
             // V0.2.0 ISA additions.
             Op::PushImmediate(_) => 1,
             Op::PopN(_) => 0,
@@ -1104,7 +1025,7 @@ impl Op {
     /// Number of operand-stack slots popped by this instruction.
     pub fn stack_shrink(&self) -> u32 {
         match self {
-            Op::Const(_) | Op::GetLocal(_) | Op::GetData(_) | Op::Dup | Op::PushFunc(_) => 0,
+            Op::Const(_) | Op::GetLocal(_) | Op::GetData(_) | Op::Dup => 0,
 
             Op::Not | Op::Neg => 0,
 
@@ -1146,8 +1067,6 @@ impl Op {
             Op::Yield => 1,
 
             Op::Call(_, n) | Op::CallNative(_, n) => *n as u32,
-            // CallIndirect pops the args plus the Func value itself.
-            Op::CallIndirect(n) => (*n as u32) + 1,
             Op::Return => 0,
 
             Op::NewStruct(_) => 0,
@@ -1169,9 +1088,6 @@ impl Op {
             Op::FixedMul(_) | Op::FixedDiv(_) => 0,
 
             Op::Trap(_) => 0,
-
-            // MakeClosure pops `n` captures.
-            Op::MakeClosure(_, n) | Op::MakeRecursiveClosure(_, n) => *n as u32,
 
             // V0.2.0 ISA additions.
             Op::PushImmediate(_) => 0,
@@ -2135,10 +2051,6 @@ pub fn op_from_archived(archived: &ArchivedOp) -> Op {
         ArchivedOp::Reset => Op::Reset,
         ArchivedOp::Call(c, n) => Op::Call(c.to_native(), *n),
         ArchivedOp::CallNative(c, n) => Op::CallNative(c.to_native(), *n),
-        ArchivedOp::CallIndirect(n) => Op::CallIndirect(*n),
-        ArchivedOp::PushFunc(idx) => Op::PushFunc(idx.to_native()),
-        ArchivedOp::MakeClosure(idx, n) => Op::MakeClosure(idx.to_native(), *n),
-        ArchivedOp::MakeRecursiveClosure(idx, n) => Op::MakeRecursiveClosure(idx.to_native(), *n),
         ArchivedOp::Return => Op::Return,
         ArchivedOp::Yield => Op::Yield,
         ArchivedOp::Dup => Op::Dup,
@@ -2200,7 +2112,6 @@ impl ConstValue {
             Value::StaticStr(s) => Ok(ConstValue::StaticStr(s)),
             Value::KStr(_) => Err("KStr cannot be a compile-time constant"),
             Value::Opaque(_) => Err("Opaque cannot be a compile-time constant"),
-            Value::Func { .. } => Err("Func cannot be a compile-time constant"),
             Value::Tuple(items) => items
                 .into_iter()
                 .map(ConstValue::try_from_value)
@@ -2432,8 +2343,6 @@ mod cost_model_tests {
             Op::Div,
             Op::NewArray(2),
             Op::Call(0, 0),
-            Op::PushFunc(0),
-            Op::MakeClosure(0, 0),
             Op::Yield,
         ];
         for op in &ops {
