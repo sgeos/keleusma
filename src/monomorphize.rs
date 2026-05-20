@@ -1200,6 +1200,7 @@ fn subst_in_expr(expr: &Expr, subst: &BTreeMap<String, TypeExpr>) -> Expr {
                 .iter()
                 .map(|a| MatchArm {
                     pattern: a.pattern.clone(),
+                    guard: a.guard.as_ref().map(|g| subst_in_expr(g, subst)),
                     expr: subst_in_expr(&a.expr, subst),
                     span: a.span,
                 })

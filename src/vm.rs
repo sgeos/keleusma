@@ -6746,4 +6746,62 @@ mod tests {
         );
         assert_eq!(val, Value::Int(i64::MAX));
     }
+
+    // Match-arm guard tests. A guard is an optional `when expr`
+    // clause between the pattern and the `=>`; the arm fires only
+    // when the pattern matches *and* the guard evaluates to true.
+    // The exhaustiveness check treats guarded arms as non-catch-all
+    // regardless of pattern shape.
+    #[test]
+    fn match_arm_guard_dispatches_on_runtime_predicate() {
+        // Three arms differing only in guard select the correct
+        // branch based on the bound value at runtime.
+        let val = run_expect(
+            "fn classify(n: Word) -> Word {\n\
+                match n {\n\
+                    v when v < 0 => 0 - 1,\n\
+                    v when v == 0 => 0,\n\
+                    v => 1,\n\
+                }\n\
+             }\n\
+             fn main() -> Word { classify(0) + classify(5) + classify(0 - 3) }",
+            &[],
+        );
+        assert_eq!(val, Value::Int(0 + 1 + (-1)));
+    }
+
+    #[test]
+    fn match_arm_guard_falls_through_to_next_arm_when_false() {
+        // The first arm's pattern matches but its guard returns
+        // false; dispatch falls through to the unguarded catch-all.
+        let val = run_expect(
+            "fn main() -> Word {\n\
+                match 5 {\n\
+                    v when v > 10 => 999,\n\
+                    v => v,\n\
+                }\n\
+             }",
+            &[],
+        );
+        assert_eq!(val, Value::Int(5));
+    }
+
+    #[test]
+    fn match_arm_guarded_pattern_is_not_a_catchall() {
+        // A guarded bare-variable arm does not satisfy the
+        // exhaustiveness requirement for a bool scrutinee.
+        let src = "fn main() -> Word {\n\
+                match true {\n\
+                    v when v == true => 1,\n\
+                }\n\
+             }";
+        let tokens = tokenize(src).expect("lex");
+        let program = parse(&tokens).expect("parse");
+        let err = compile(&program).expect_err("compile should reject");
+        assert!(
+            err.message.contains("non-exhaustive"),
+            "expected non-exhaustive diagnostic, got: {}",
+            err.message
+        );
+    }
 }

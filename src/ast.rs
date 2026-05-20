@@ -706,10 +706,17 @@ pub enum UnaryOp {
     Not,
 }
 
-/// A match arm: `pattern => expression`.
+/// A match arm: `pattern [when guard] => expression`.
+///
+/// The optional `guard` expression must evaluate to `Bool`; when
+/// present, the arm fires only if the pattern matches *and* the
+/// guard is true. An arm whose guard is present is never treated
+/// as a catch-all by the exhaustiveness check regardless of the
+/// pattern shape.
 #[derive(Debug, Clone, PartialEq)]
 pub struct MatchArm {
     pub pattern: Pattern,
+    pub guard: Option<Expr>,
     pub expr: Expr,
     pub span: Span,
 }

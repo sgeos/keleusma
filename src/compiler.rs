@@ -1205,7 +1205,16 @@ fn param_name_is_used(body: &Block, name: &str) -> bool {
             }
             Expr::Match {
                 scrutinee, arms, ..
-            } => expr_uses(scrutinee, name) || arms.iter().any(|arm| expr_uses(&arm.expr, name)),
+            } => {
+                expr_uses(scrutinee, name)
+                    || arms.iter().any(|arm| {
+                        arm.guard
+                            .as_ref()
+                            .map(|g| expr_uses(g, name))
+                            .unwrap_or(false)
+                            || expr_uses(&arm.expr, name)
+                    })
+            }
             Expr::TupleLiteral { elements, .. } => elements.iter().any(|e| expr_uses(e, name)),
             Expr::ArrayLiteral { elements, .. } => elements.iter().any(|e| expr_uses(e, name)),
             Expr::StructInit { fields, .. } => fields.iter().any(|f| expr_uses(&f.value, name)),
@@ -2709,6 +2718,9 @@ impl crate::visitor::Visitor for FreeVarCollector {
                 for arm in arms {
                     let saved = self.bound.clone();
                     collect_pattern_names(&arm.pattern, &mut self.bound);
+                    if let Some(g) = arm.guard.as_ref() {
+                        self.visit_expr(g);
+                    }
                     self.visit_expr(&arm.expr);
                     self.bound = saved;
                 }
@@ -2873,6 +2885,9 @@ fn normalize_fixed_defaults(program: &mut Program, frac_bits: u8) {
             } => {
                 fix_expr(scrutinee, frac_bits);
                 for arm in arms.iter_mut() {
+                    if let Some(g) = arm.guard.as_mut() {
+                        fix_expr(g, frac_bits);
+                    }
                     fix_expr(&mut arm.expr, frac_bits);
                 }
             }
@@ -3626,8 +3641,17 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
             for arm in arms {
                 fc.begin_scope();
 
-                let fail_addrs = compile_pattern_test(fc, &arm.pattern, temp)?;
+                let mut fail_addrs = compile_pattern_test(fc, &arm.pattern, temp)?;
                 compile_pattern_bind(fc, &arm.pattern, temp)?;
+                // Optional guard: evaluate in the scope of the
+                // pattern's bindings; on false, fall through to the
+                // next arm via the same If/EndIf machinery used by
+                // pattern tests.
+                if let Some(guard) = &arm.guard {
+                    compile_expr(fc, guard)?;
+                    let guard_fail = fc.emit_jump(Op::If(0));
+                    fail_addrs.push(guard_fail);
+                }
                 compile_expr(fc, &arm.expr)?;
 
                 // Break out of virtual loop (arm matched, result on stack).

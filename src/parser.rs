@@ -1787,11 +1787,17 @@ impl<'a> Parser<'a> {
                 let mut arms = Vec::new();
                 while !self.at(&TokenKind::RBrace) {
                     let pattern = self.parse_pattern()?;
+                    let guard = if self.eat(&TokenKind::When) {
+                        Some(self.parse_expr()?)
+                    } else {
+                        None
+                    };
                     self.expect(&TokenKind::FatArrow)?;
                     let expr = self.parse_expr()?;
                     let arm_span = merge_spans(pattern.span(), expr.span());
                     arms.push(MatchArm {
                         pattern,
+                        guard,
                         expr,
                         span: arm_span,
                     });

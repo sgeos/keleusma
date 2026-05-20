@@ -1917,9 +1917,12 @@ fn check_exhaustiveness(
     scrutinee_ty: &Type,
     span: Span,
 ) -> Result<(), TypeError> {
-    let has_catchall = arms
-        .iter()
-        .any(|arm| matches!(arm.pattern, Pattern::Wildcard(_) | Pattern::Variable(_, _)));
+    // A wildcard or variable pattern is a catch-all only when it is
+    // unguarded; a guarded arm cannot prove coverage statically
+    // because the guard's runtime value is not analysed here.
+    let has_catchall = arms.iter().any(|arm| {
+        arm.guard.is_none() && matches!(arm.pattern, Pattern::Wildcard(_) | Pattern::Variable(_, _))
+    });
     if has_catchall {
         return Ok(());
     }
@@ -1928,6 +1931,9 @@ fn check_exhaustiveness(
             let mut has_true = false;
             let mut has_false = false;
             for arm in arms {
+                if arm.guard.is_some() {
+                    continue;
+                }
                 if let Pattern::Literal(Literal::Bool(b), _) = &arm.pattern {
                     if *b {
                         has_true = true;
@@ -1953,6 +1959,9 @@ fn check_exhaustiveness(
                 .ok_or_else(|| TypeError::new(format!("unknown enum `{}`", enum_name), span))?;
             let mut covered: BTreeSet<String> = BTreeSet::new();
             for arm in arms {
+                if arm.guard.is_some() {
+                    continue;
+                }
                 if let Pattern::Enum(en, variant, _, _) = &arm.pattern
                     && en == enum_name
                 {
@@ -1977,9 +1986,9 @@ fn check_exhaustiveness(
             // Unit has only one value. A literal Unit pattern or a
             // variable/wildcard arm covers it. We checked for
             // catchall above, so check for a Unit literal arm.
-            let has_unit_lit = arms
-                .iter()
-                .any(|arm| matches!(arm.pattern, Pattern::Literal(Literal::Unit, _)));
+            let has_unit_lit = arms.iter().any(|arm| {
+                arm.guard.is_none() && matches!(arm.pattern, Pattern::Literal(Literal::Unit, _))
+            });
             if has_unit_lit {
                 Ok(())
             } else {
@@ -1995,6 +2004,9 @@ fn check_exhaustiveness(
             let mut has_some = false;
             let mut has_none = false;
             for arm in arms {
+                if arm.guard.is_some() {
+                    continue;
+                }
                 if let Pattern::Enum(name, variant, _, _) = &arm.pattern
                     && name == "Option"
                 {
@@ -2696,6 +2708,22 @@ fn type_of_expr(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError> {
                 check_pattern_against_type(ctx, &arm.pattern, &scrutinee_ty)?;
                 ctx.push_scope();
                 bind_pattern(ctx, &arm.pattern, scrutinee_ty.clone());
+                // Guard expression must evaluate to Bool. The guard
+                // is checked in the scope of the pattern's bindings
+                // so it can refer to bound names.
+                if let Some(guard) = arm.guard.as_mut() {
+                    let guard_ty = type_of_expr(ctx, guard)?;
+                    if !types_compatible(ctx, &strip_labels(guard_ty.clone()), &Type::Bool) {
+                        ctx.pop_scope();
+                        return Err(TypeError::new(
+                            alloc::format!(
+                                "match-arm guard must be Bool, got {}",
+                                guard_ty.display()
+                            ),
+                            arm.span,
+                        ));
+                    }
+                }
                 let arm_ty = type_of_expr(ctx, &mut arm.expr)?;
                 ctx.pop_scope();
                 arm_labels = arm_labels.union(&labels_of(&arm_ty)).cloned().collect();

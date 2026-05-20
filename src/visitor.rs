@@ -124,6 +124,9 @@ pub trait MutVisitor {
             } => {
                 self.visit_expr(scrutinee);
                 for arm in arms.iter_mut() {
+                    if let Some(g) = arm.guard.as_mut() {
+                        self.visit_expr(g);
+                    }
                     self.visit_expr(&mut arm.expr);
                 }
             }
@@ -279,6 +282,9 @@ pub trait Visitor {
             } => {
                 self.visit_expr(scrutinee);
                 for arm in arms.iter() {
+                    if let Some(g) = arm.guard.as_ref() {
+                        self.visit_expr(g);
+                    }
                     self.visit_expr(&arm.expr);
                 }
             }
