@@ -3544,12 +3544,16 @@ mod tests {
     #[test]
     fn refinement_predicate_traps_when_argument_out_of_range() {
         // The predicate `nonneg` returns false for -1; the
-        // newtype construction traps with a message naming the
-        // predicate and the newtype.
+        // newtype construction traps at runtime when the constant
+        // folder cannot decide the argument statically. The
+        // argument here is computed through a function call, so
+        // the compile-time elision pass falls through to the
+        // runtime check.
         let err = run_program(
             "fn nonneg(x: Word) -> bool { x >= 0 }\n\
              newtype Counter = Word where nonneg;\n\
-             fn main() -> Counter { Counter(0 - 1) }",
+             fn neg_one() -> Word { 0 - 1 }\n\
+             fn main() -> Counter { Counter(neg_one()) }",
             &[],
         )
         .unwrap_err();
@@ -3563,6 +3567,130 @@ mod tests {
             }
             other => panic!("expected VmError::Trap, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn refinement_predicate_folded_arithmetic_argument_eliminated() {
+        // Tier 1: arithmetic over literal arguments folds to a
+        // compile-time constant and routes through the predicate
+        // evaluator. `Counter(2 + 40)` reduces to `Counter(42)`
+        // statically; the predicate `nonneg(42)` is true and the
+        // runtime check is elided.
+        let val = run_expect(
+            "fn nonneg(x: Word) -> bool { x >= 0 }\n\
+             newtype Counter = Word where nonneg;\n\
+             fn main() -> Counter { Counter(2 + 40) }",
+            &[],
+        );
+        assert_eq!(val, Value::Int(42));
+    }
+
+    #[test]
+    fn refinement_predicate_let_bound_constant_eliminated() {
+        // Tier 2: a let-bound local that constant-folds to an
+        // integer at compile time resolves through the elision
+        // pass. The runtime predicate call and trap are skipped.
+        let val = run_expect(
+            "fn nonneg(x: Word) -> bool { x >= 0 }\n\
+             newtype Counter = Word where nonneg;\n\
+             fn main() -> Counter {\n\
+                let n = 42;\n\
+                Counter(n)\n\
+             }",
+            &[],
+        );
+        assert_eq!(val, Value::Int(42));
+    }
+
+    #[test]
+    fn refinement_predicate_let_bound_arithmetic_chain_eliminated() {
+        // Tier 2: chained let-bound constants. Each binding folds
+        // through the previous one's recorded value.
+        let val = run_expect(
+            "fn nonneg(x: Word) -> bool { x >= 0 }\n\
+             newtype Counter = Word where nonneg;\n\
+             fn main() -> Counter {\n\
+                let a = 2;\n\
+                let b = a * 21;\n\
+                Counter(b)\n\
+             }",
+            &[],
+        );
+        assert_eq!(val, Value::Int(42));
+    }
+
+    #[test]
+    fn refinement_predicate_let_bound_constant_compile_rejects_provable_failure() {
+        // Tier 2: a let-bound value that folds to a value
+        // provably failing the predicate is rejected at compile
+        // time. The diagnostic names the predicate, the newtype,
+        // and the folded value.
+        let src = "fn small(x: Word) -> bool { x < 10 }\n\
+             newtype Tiny = Word where small;\n\
+             fn main() -> Tiny {\n\
+                let big = 100;\n\
+                Tiny(big)\n\
+             }";
+        let tokens = tokenize(src).expect("lex");
+        let program = parse(&tokens).expect("parse");
+        let err = compile(&program).expect_err("compile should reject");
+        assert!(
+            err.message.contains("small")
+                && err.message.contains("Tiny")
+                && err.message.contains("100"),
+            "expected compile-time diagnostic, got: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn refinement_predicate_non_constant_let_falls_through_to_runtime() {
+        // Tier 2: a let-bound value that does NOT fold to a
+        // constant (because it comes from a function call) does
+        // not record a constant entry. The elision pass falls
+        // through to the runtime check.
+        let err = run_program(
+            "fn nonneg(x: Word) -> bool { x >= 0 }\n\
+             newtype Counter = Word where nonneg;\n\
+             fn neg_one() -> Word { 0 - 1 }\n\
+             fn main() -> Counter {\n\
+                let n = neg_one();\n\
+                Counter(n)\n\
+             }",
+            &[],
+        )
+        .unwrap_err();
+        match err {
+            VmError::Trap(msg) => {
+                assert!(
+                    msg.contains("nonneg") && msg.contains("Counter"),
+                    "expected refinement-trap message naming `nonneg` and `Counter`, got: {}",
+                    msg
+                );
+            }
+            other => panic!("expected VmError::Trap, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn refinement_predicate_folded_arithmetic_compile_rejects_on_provable_failure() {
+        // Tier 1: the folded value `0 - 1` is `-1`, which fails
+        // the `nonneg` predicate statically. The construction is
+        // rejected at compile time even though the source uses an
+        // arithmetic expression rather than a bare literal.
+        let src = "fn nonneg(x: Word) -> bool { x >= 0 }\n\
+             newtype Counter = Word where nonneg;\n\
+             fn main() -> Counter { Counter(0 - 1) }";
+        let tokens = tokenize(src).expect("lex");
+        let program = parse(&tokens).expect("parse");
+        let err = compile(&program).expect_err("compile should reject");
+        assert!(
+            err.message.contains("nonneg")
+                && err.message.contains("Counter")
+                && err.message.contains("-1"),
+            "expected compile-time diagnostic, got: {}",
+            err.message
+        );
     }
 
     #[test]

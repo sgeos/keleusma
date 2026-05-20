@@ -293,11 +293,15 @@ The MVP landed: literal-argument refinement elision. When a refined newtype cons
 - The constructor emission path at `compile_call` consults the evaluator before emitting the runtime check. On `Some(true)` the inner value is emitted bare; on `Some(false)` the compile fails with a span-localized diagnostic; on `None` the existing runtime check is emitted.
 - Three new tests cover: elision on a provably-true literal, compile-time rejection on a provably-false literal, and continued runtime trap for an out-of-range non-literal argument.
 
-### Follow-ons left for a future pass
+### Follow-ons resolved
 
-- Range propagation through arithmetic operations beyond integer literals. The MVP only handles direct literal arguments (`Counter(42)`); let-bound integer constants, arithmetic on literals (`Counter(2 + 40)`), and values returned from atomic-total functions all retain the runtime check.
-- Interval-arithmetic infrastructure for `Word`, `Byte`, and `Fixed<N>`. Building the lattice as a shared primitive would also serve B12 and B14.
-- Cross-function range analysis. The MVP operates within a single call site; broader analysis is a wider data-flow change.
+- **Tier 1** (constant-folded argument expressions). `Counter(2 + 40)`, `Counter(0 - 1)`, and arbitrary literal-only arithmetic chains fold through the evaluator and route through the predicate check.
+- **Tier 2** (let-bound integer constants). `let n = 42; Counter(n)` resolves through a per-function `local_const_values` map populated at let-stmt emission. Chained constants walk the recorded values.
+
+### Follow-ons still open
+
+- Interval-arithmetic infrastructure for `Word`, `Byte`, and `Fixed<N>`. The lattice would admit ranges (not just constants) at the construction site, enabling elision of `Counter(some_function())` when `some_function`'s return range can be inferred. Building the lattice as a shared primitive would also serve B12 and B14.
+- Cross-function range analysis. The current pass operates within a single call site; broader analysis requires per-function range summaries and is a wider data-flow change.
 
 ## B14. CallIndirect flow analysis for non-recursive closure invocation
 

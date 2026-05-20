@@ -95,6 +95,14 @@ struct FuncCompiler {
     /// Static type information used by the for-in iteration bound
     /// inference and similar narrow optimizations.
     type_info: TypeInfo,
+    /// Map from local slot to its compile-time integer value, for
+    /// the subset of let-bound locals whose value expression
+    /// constant-folds to an integer. Used by the refinement-
+    /// elision pass to resolve identifier references in a
+    /// constructor's argument. Entries are never removed because
+    /// Keleusma's `let` bindings are immutable; a slot's mapping
+    /// remains valid for the lifetime of the binding.
+    local_const_values: BTreeMap<u16, i64>,
 }
 
 impl FuncCompiler {
@@ -127,6 +135,7 @@ impl FuncCompiler {
             data_fields,
             const_fields,
             type_info,
+            local_const_values: BTreeMap::new(),
         }
     }
 
@@ -264,6 +273,19 @@ impl FuncCompiler {
             }
         }
         Option::None
+    }
+
+    /// Resolve a bare-identifier name to its compile-time
+    /// integer value if the binding was recorded as a constant
+    /// during let-stmt emission. Returns `None` when the name
+    /// does not resolve to a known local or when the local's
+    /// value did not fold to an integer.
+    fn local_const_lookup(&self, name: &str) -> Option<EvalValue> {
+        let slot = self.resolve_local(name)?;
+        self.local_const_values
+            .get(&slot)
+            .copied()
+            .map(EvalValue::Int)
     }
 
     /// Check if a name refers to a data block. Returns true for
@@ -2184,8 +2206,23 @@ fn compile_stmt(fc: &mut FuncCompiler, stmt: &Stmt) -> Result<(), CompileError> 
                 .type_expr
                 .clone()
                 .or_else(|| infer_expr_type(fc, &let_stmt.value));
+            // If the value expression constant-folds to an
+            // integer and the binding is a bare variable, record
+            // the (slot, value) mapping for the refinement-
+            // elision identifier lookup. The fold reuses the
+            // existing local-constant map so chains like `let x =
+            // 2; let y = x * 21; Counter(y)` resolve through y
+            // back to x's compile-time value. Failure to fold is
+            // silently fine; the entry is simply not recorded.
+            let folded = fold_to_int(&let_stmt.value, &|n| fc.local_const_lookup(n));
             compile_expr(fc, &let_stmt.value)?;
             compile_let_pattern_typed(fc, &let_stmt.pattern, ty)?;
+            if let (Some(value), crate::ast::Pattern::Variable(name, _)) =
+                (folded, &let_stmt.pattern)
+                && let Some(slot) = fc.resolve_local(name.as_str())
+            {
+                fc.local_const_values.insert(slot, value);
+            }
         }
         Stmt::For(for_stmt) => {
             compile_for(fc, for_stmt)?;
@@ -3385,36 +3422,52 @@ enum EvalValue {
 /// Statically evaluate a refinement predicate's body at the
 /// supplied integer argument. Returns `Some(true)` or
 /// `Some(false)` when the body is structurally evaluable and
-/// produces a boolean; returns `None` otherwise. The evaluator
-/// handles literals, identifier substitution for the parameter,
-/// negation and logical-not unary operators, integer arithmetic
-/// and comparison binary operators, and logical-and / logical-or.
-/// Block expressions with no statements and a single tail are
-/// also admitted. Anything else returns `None` and the runtime
-/// check is emitted.
+/// produces a boolean; returns `None` otherwise.
 fn eval_predicate_at_int(body: &Expr, param_name: &str, value: i64) -> Option<bool> {
-    match eval_expr(body, param_name, value)? {
+    let lookup = |name: &str| -> Option<EvalValue> {
+        if name == param_name {
+            Some(EvalValue::Int(value))
+        } else {
+            None
+        }
+    };
+    match eval_expr_with(body, &lookup)? {
         EvalValue::Bool(b) => Some(b),
         EvalValue::Int(_) => None,
     }
 }
 
-fn eval_expr(expr: &Expr, param_name: &str, value: i64) -> Option<EvalValue> {
+/// Fold an expression that contains only literals (and any
+/// identifiers resolved by `lookup`) to an integer constant.
+/// Returns `None` when the expression contains anything outside
+/// the constant-folding subset.
+fn fold_to_int(expr: &Expr, lookup: &dyn Fn(&str) -> Option<EvalValue>) -> Option<i64> {
+    match eval_expr_with(expr, lookup)? {
+        EvalValue::Int(n) => Some(n),
+        EvalValue::Bool(_) => None,
+    }
+}
+
+/// Statically evaluate an expression to either an integer or a
+/// boolean value. `lookup` resolves bare identifiers; pass a
+/// closure that returns `None` for everything to evaluate
+/// literal-only expressions.
+///
+/// Handled forms: integer and boolean literals; identifier
+/// references (via `lookup`); unary negation on integers; logical
+/// negation on booleans; integer arithmetic (`+`, `-`, `*`, `/`,
+/// `%`); comparison (`==`, `!=`, `<`, `<=`, `>`, `>=`); logical
+/// operators (`and`, `or`). Anything else returns `None`.
+fn eval_expr_with(expr: &Expr, lookup: &dyn Fn(&str) -> Option<EvalValue>) -> Option<EvalValue> {
     match expr {
         Expr::Literal { value: lit, .. } => match lit {
             crate::ast::Literal::Int(n) => Some(EvalValue::Int(*n)),
             crate::ast::Literal::Bool(b) => Some(EvalValue::Bool(*b)),
             _ => None,
         },
-        Expr::Ident { name, .. } => {
-            if name == param_name {
-                Some(EvalValue::Int(value))
-            } else {
-                None
-            }
-        }
+        Expr::Ident { name, .. } => lookup(name.as_str()),
         Expr::UnaryOp { op, operand, .. } => {
-            let inner = eval_expr(operand, param_name, value)?;
+            let inner = eval_expr_with(operand, lookup)?;
             match (op, inner) {
                 (crate::ast::UnaryOp::Neg, EvalValue::Int(n)) => {
                     Some(EvalValue::Int(n.wrapping_neg()))
@@ -3426,8 +3479,8 @@ fn eval_expr(expr: &Expr, param_name: &str, value: i64) -> Option<EvalValue> {
         Expr::BinOp {
             op, left, right, ..
         } => {
-            let l = eval_expr(left, param_name, value)?;
-            let r = eval_expr(right, param_name, value)?;
+            let l = eval_expr_with(left, lookup)?;
+            let r = eval_expr_with(right, lookup)?;
             match (op, l, r) {
                 (crate::ast::BinOp::Add, EvalValue::Int(a), EvalValue::Int(b)) => {
                     Some(EvalValue::Int(a.wrapping_add(b)))
@@ -3477,9 +3530,6 @@ fn eval_expr(expr: &Expr, param_name: &str, value: i64) -> Option<EvalValue> {
                 _ => None,
             }
         }
-        // A bare block with no statements and a single tail
-        // expression is admissible (a common single-line
-        // predicate is parsed as a block expression).
         _ => None,
     }
 }
@@ -4419,22 +4469,19 @@ fn compile_call(
                 span: *span,
             });
         }
-        // Refinement-elision MVP: when the argument is an integer
-        // literal and the predicate body can be statically
-        // evaluated against that literal, emit the literal value
-        // directly and skip both the predicate call and the trap.
-        // If the predicate is decidable and returns false, the
-        // construction is guaranteed to fail at runtime; reject at
-        // compile time with a span-localized diagnostic.
+        // Refinement-elision: fold the constructor's argument to
+        // an integer constant when possible, then statically
+        // evaluate the predicate against that value. The argument
+        // may be a bare integer literal, a unary negation of a
+        // literal, an arithmetic expression over literals, a
+        // reference to a let-bound local whose value folded to an
+        // integer, or any chain of these.
         if let Some(pred_name) = fc.type_info.newtype_refinements.get(name).cloned()
-            && let Expr::Literal {
-                value: crate::ast::Literal::Int(n),
-                ..
-            } = &args[0]
             && let Some((param_name, body)) =
                 fc.type_info.refinement_bodies.get(&pred_name).cloned()
+            && let Some(n) = fold_to_int(&args[0], &|s| fc.local_const_lookup(s))
         {
-            match eval_predicate_at_int(&body, &param_name, *n) {
+            match eval_predicate_at_int(&body, &param_name, n) {
                 Some(true) => {
                     // Predicate statically true. Emit the inner
                     // value and skip the runtime check entirely.
