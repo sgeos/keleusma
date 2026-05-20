@@ -22,9 +22,11 @@ pub mod word;
 pub mod audio_natives;
 
 // Parametric floating-point trait for sub-64-bit native runtimes
-// (B16). Gated alongside the rest of the floating-point surface;
-// hosts that target integer-only runtimes never see this module.
-#[cfg(feature = "floats")]
+// (B16). The trait and its `f32` / `f64` impls are always
+// compiled so the generic `Vm<W, A, F>` shape carries a Float
+// type parameter regardless of the `floats` feature; the
+// floating-point variants of `Value` and the floating-point
+// opcodes remain gated by `floats` per their existing design.
 pub mod float;
 
 // The stddsl bundle exposes Math and other DSL helpers that pin
