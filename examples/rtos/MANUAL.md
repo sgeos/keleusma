@@ -70,9 +70,9 @@ Measured `.text` size on the bare-metal binary for each useful combination on th
 
 | Combination | `.text` | Notes |
 |-------------|--------:|-------|
-| `keleusma-compile` + `keleusma-verify` (default) | 622 KB | Source compiled at boot, verified at load. Boot to scheduler around 215 milliseconds. |
-| `keleusma-verify` only | 160 KB | Precompiled bytecode, verified at load. Boot to scheduler around 43 milliseconds. |
-| Neither | 140 KB | Precompiled bytecode, trust-loaded. Boot to scheduler around 39 milliseconds. Smallest image. |
+| `keleusma-compile` + `keleusma-verify` (default) | 663 KB | Source compiled at boot, verified at load. Boot to scheduler around 215 milliseconds. |
+| `keleusma-verify` only | 165 KB | Precompiled bytecode, verified at load. Boot to scheduler around 43 milliseconds. |
+| Neither | 142 KB | Precompiled bytecode, trust-loaded. Boot to scheduler around 39 milliseconds. Smallest image. |
 
 The table grew slightly from the prior pass when two new demonstrator tasks were added: `event_listener` (waits on event id 1, exercises the ISR-to-task wake-up pattern) and `faulty` (triggers `DivisionByZero` every fifth iteration to exercise the supervised-restart policy). The added compiled chunks plus the kernel's pending-event queue, the per-task WCET budget and restart counter fields, and the platform watchdog hook together account for roughly 3 KB.
 
@@ -82,11 +82,11 @@ Cumulative reduction against the pre-pass baseline:
 
 | Combination | Baseline | Current | Delta |
 |-------------|---------:|--------:|------:|
-| `keleusma-compile` + `keleusma-verify` | 614 KB | 621 KB | +7 KB |
-| `keleusma-verify` only | 211 KB | 160 KB | **-51 KB** |
-| Neither | 192 KB | 140 KB | **-52 KB** |
+| `keleusma-compile` + `keleusma-verify` | 614 KB | 663 KB | +49 KB |
+| `keleusma-verify` only | 211 KB | 165 KB | **-46 KB** |
+| Neither | 192 KB | 142 KB | **-50 KB** |
 
-The full-pipeline mode is essentially unchanged because the source compiler (lexer, parser, type checker, monomorphizer) dominates that image; the savings concentrate in the embedded production modes.
+The full-pipeline mode grew because the V0.2 pattern-matched checked-arithmetic refactor expanded the compiler's emission pass and the `i128` intermediate runtime pulled in `compiler_builtins` 128-bit helpers. The FLASH region in `memory.x` was bumped from 640 KB to 704 KB (with a matching 320 KB → 256 KB heap reduction) to accommodate the larger image; the heap headroom remains comfortable for the three demonstrator scripts. The embedded production modes (verifier-only and trust-load) retain their relative savings over the V0.1 baseline.
 
 The combination `keleusma-compile` without `keleusma-verify` is technically allowed but rarely useful, because the compiler-emitted bytecode then carries 0 in the WCET and WCMU header fields and the runtime has no analysis to populate them either.
 
@@ -352,14 +352,14 @@ The bundled `memory.x` allocates the AXISRAM2 region (1024 KB at `0x34100000`):
 
 | Region | Origin | Length | Purpose |
 |--------|--------|-------:|---------|
-| FLASH  | `0x34100000` | 640 KB | The Keleusma runtime image (lexer, parser, type checker, monomorphizer, compiler, VM, verifier) plus the kernel core, platform impl, embassy stack, defmt, and the entry binary. Current usage is ~622 KB under the full-pipeline default; precompiled bytecode modes use 140-160 KB, leaving 480-500 KB free for user code and NPU weights. |
-| RAM    | `0x341A0000` | 384 KB | The global heap (320 KB), other `.bss` (transient), stack, and embassy executor state. The three per-task arenas are leaked into the heap. |
+| FLASH  | `0x34100000` | 704 KB | The Keleusma runtime image (lexer, parser, type checker, monomorphizer, compiler, VM, verifier) plus the kernel core, platform impl, embassy stack, defmt, and the entry binary. Current usage is ~663 KB under the full-pipeline default; precompiled bytecode modes use 142-165 KB, leaving 540-562 KB free for user code and NPU weights. |
+| RAM    | `0x341B0000` | 320 KB | The global heap (256 KB), other `.bss` (transient), stack, and embassy executor state. The three per-task arenas are leaked into the heap. |
 
 The N6 has no on-chip flash. The boot ROM enables AXISRAM2 regardless of BOOT0 position, and probe-rs loads the application into it directly. The map fills AXISRAM2 entirely; future iterations may slim the FLASH image by shipping precompiled bytecode and stripping the compile-time pipeline.
 
 ### Heap sizing
 
-`HEAP_SIZE = 320 KB` in `three_task_n6.rs` is sized to cover:
+`HEAP_SIZE = 256 KB` in `three_task_n6.rs` is sized to cover:
 
 - Three leaked task arenas: `3 * TASK_ARENA_CAPACITY = 48 KB`.
 - The compile-pipeline transient state for each task (tokens, AST, bytecode, constant pool, monomorphization): tens of KB per task, freed when the per-task `build_module` returns. Peak demand happens during the third task's build, when two prior arenas already occupy 32 KB and the compile pipeline runs against a third script.
@@ -457,7 +457,7 @@ Verified on 2026-05-18 against an STM32N6570-DK.
 |-------|--------|
 | Std demonstrator runs end-to-end with the expected timeline (LED 500 ms, sensor ~100 ms, heartbeat 5000 ms). | Pass. |
 | Bare-metal `--lib` build for `thumbv8m.main-none-eabihf` succeeds with `--features stm32n6570dk-platform`. | Pass. |
-| Bare-metal binary build succeeds. | Pass. text 614 KB, bss 329 KB; fits the declared 640 KB FLASH + 384 KB RAM. |
+| Bare-metal binary build succeeds. | Pass. text 608 KB plus rodata 53 KB; fits the 704 KB FLASH + 320 KB RAM region after the V0.2 rebalancing. |
 | Bare-metal binary flashes and runs on the N6. | Pass. Boot banner, kernel-construction trace, scheduler entry at t≈215 ms, heartbeat at t≈218 ms and every 5000 ms thereafter. Captured 15+ seconds with four heartbeat ticks. |
 | `cargo test --release`. | Pass. Two unit tests on the `Status` helpers. |
 | `cargo clippy --release -- -D warnings`. | Clean. |

@@ -112,8 +112,11 @@ static HEAP: ZeroSizeOk<Heap> = ZeroSizeOk(Heap::empty());
 /// compile-pipeline transient state for each task (`Vec`,
 /// `String`, `BTreeMap`, AST/bytecode/module structures), with
 /// margin for `linked_list_allocator` fragmentation between the
-/// sequential task builds.
-const HEAP_SIZE: usize = 320 * 1024;
+/// sequential task builds. Reduced from 320 KB to 256 KB to
+/// accommodate the expanded FLASH region in `memory.x`; the
+/// observed peak heap working set on the three demonstrator
+/// tasks is comfortably below the new ceiling.
+const HEAP_SIZE: usize = 256 * 1024;
 static mut HEAP_MEM: [MaybeUninit<u8>; HEAP_SIZE] = [MaybeUninit::uninit(); HEAP_SIZE];
 
 /// Per-task arena capacity for the embedded build. The
