@@ -239,3 +239,28 @@ The new error variant `VmError::LoadError(String)` carries deserialization and h
 The validation order in `Module::from_bytes` is truncation, magic, length, CRC residue, version, word size, address size, and body decode. The CRC check precedes the version, word size, and address size checks because a corrupted byte in any of those fields would otherwise be reported as a mismatch rather than the more accurate `BadChecksum`. The length check precedes the CRC check because the CRC range depends on the recorded length. Separate tests in the runtime construct bytecode with deliberately wrong version, word size, and address size fields and recomputed CRC trailers to exercise each rejection path independently of the checksum path.
 
 Existing entries B9 and B10 in the backlog reference the precompiled-code question. R39 implements the loading and trust-skip portions. B9 (yielded static string lifetimes) and the broader portability work in B10 remain open.
+
+## R40. V0.2.0 ISA and wire format reset
+
+V0.2.0 publishes a new bytecode ISA and a new wire format. The framing-header `version` field resets to `1`. V0.1.x and V0.2.0 bytecode are not mutually loadable; existing artefacts must be recompiled against the V0.2.0 toolchain. The reset is acceptable because the V0.1.x line has narrow adoption.
+
+The ISA consolidates 71 V0.1.x opcodes to 65 V0.2.0 opcodes through a combination of removals, additions, splits, and operand narrowings. The full per-opcode listing lives in [INSTRUCTION_SET.md](../reference/INSTRUCTION_SET.md). The notable changes:
+
+- `PushImmediate(u8)` replaces `PushTrue`, `PushFalse`, `PushUnit`, and `PushNone`, and additionally encodes `Int(0)` through `Int(15)` inline. Operand values 0..3 select sentinels; 4..19 select small integers; 20..255 are reserved and indicate corruption.
+- The unchecked arithmetic opcodes (`Add`, `Sub`, `Mul`, `Neg`) are removed. Wrapping arithmetic is synthesized as the checked variant followed by `PopN(2)` to discard the unused high and flag outputs.
+- `Pop` is removed in favor of `PopN(u8)`. Single-slot pops emit `PopN(1)`; multi-slot discards (notably after checked-arithmetic opcodes) emit `PopN(n)`.
+- `WrapSome` is removed (it was an identity at the value-representation level).
+- The closure-and-indirect-dispatch opcodes (`CallIndirect`, `PushFunc`, `MakeClosure`, `MakeRecursiveClosure`) are removed. Closure-shaped surface expressions either compile to direct calls or are rejected at compile time. Future work that admits non-recursive closures (B14) can reintroduce indirect dispatch under a stronger verifier.
+- `CallNative` splits into `CallVerifiedNative` and `CallExternalNative`. The source-level `use` declaration distinguishes the two: `use module::name` produces `CallVerifiedNative`; `use external module::name` produces `CallExternalNative`. The host's registration ABI mirrors the distinction (`Vm::register_verified_native` versus `Vm::register_external_native`). The runtime cross-checks at `Vm::new`; a mismatch is rejected.
+- Five bitwise opcodes are added: `BitAnd`, `BitOr`, `BitXor`, `Shl`, `Shr`. These enable script-level bit manipulation and are a prerequisite for the B19 `Multiword<N>` work.
+- Control-flow opcodes (`If`, `Else`, `Loop`, `EndLoop`, `Break`, `BreakIf`) carry `u16` jump targets instead of `u32`. Chunks are capped at 65,535 ops. The compiler emits a soft warning at 80% of the cap, prompting decomposition without coercing it.
+
+The wire format partitions the bytecode body into independently relocatable sections, each addressed by an offset and length in the framing header:
+
+- **Opcode stream.** Array of fixed-size 4-byte opcode records. Byte 0 is the `opcode_id` (low 7 bits) with the high bit serving as a per-record parity bit. Bytes 1-3 are the operand field, interpreted by opcode class.
+- **Operand pool.** Array of 8-byte aligned entries holding compound operands `(u16, u8)`, `(u16, u16)`, `(u16, u16, u8)` for the 7 opcodes that exceed the 24-bit inline operand field. Each entry carries a type tag and parity byte.
+- **Constant pool**, **chunk table**, **data layout** retain their existing roles as independently addressable sections.
+
+58 of 65 opcodes carry their operand inline in the 4-byte record. 7 opcodes reference the operand pool. The framing header grows from 24 bytes to 64 bytes to carry the new section offsets and lengths. The rkyv-archived encoding from R39 survives as an internal mechanism for cross-process module transport, but the execution loop consumes the fixed-size opcode + operand pool layout described above.
+
+See [INSTRUCTION_SET.md](../reference/INSTRUCTION_SET.md) for the per-opcode specification and [EXECUTION_MODEL.md](../architecture/EXECUTION_MODEL.md) for the wire format details.

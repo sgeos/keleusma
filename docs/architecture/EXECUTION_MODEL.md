@@ -135,23 +135,102 @@ Compiled modules can be loaded from any addressable byte slice. The runtime crat
 
 ### Wire Format
 
-The serialized form begins with a twenty-four-byte header followed by the rkyv-encoded module body followed by a four-byte little-endian CRC-32 trailer. The header carries the four-byte magic `KELE`, a little-endian sixteen-bit version, a little-endian thirty-two-bit total framing length, an eight-bit word size, an eight-bit address size, and an eight-bit float size (each encoded as the base-2 exponent), three reserved bytes, a little-endian thirty-two-bit declared worst-case execution time in pipelined cycles per Stream-to-Reset slice, and a little-endian thirty-two-bit declared worst-case memory usage in bytes per Stream-to-Reset slice. The header is twenty-four bytes, a multiple of eight, so the rkyv body begins at an eight-byte-aligned offset within the buffer. The minimum framing size is twenty-eight bytes.
+The V0.3.0 wire format partitions the bytecode body into independently relocatable sections, each accessible through an offset and length in the framing header. The opcode stream is a fixed-size encoding for predictable decoding; the operand pool holds compound operands separately; the constant pool, chunk table, and data layout remain as their own sections. The format begins at `BYTECODE_VERSION = 1` with the V0.2.0 publication.
 
-The declared WCET and WCMU fields use two sentinel values. `0` means "auto", indicating the producer did not declare a value and the runtime computes the bound at load time through its own verifier pass. `u32::MAX` means "overflow", indicating the producer attempted to compute a bound but the result exceeded the field's range; the safe constructor `Vm::new` rejects on either sentinel through the `LoadError::WcetOverflow` and `LoadError::WcmuOverflow` variants. Other values are the producer's declared bound, mirrored from the rkyv body for fast inspection without body decode.
+#### Framing header
+
+The header is 64 bytes, multiple of eight so the body begins at an 8-byte-aligned offset. Followed by the body and a 4-byte little-endian CRC-32 trailer over the framed range.
+
+```
+bytes 0..4    : magic ("KELE")
+bytes 4..6    : version (u16 little-endian, set to 1 for V0.2.0)
+bytes 6..10   : total framing length (u32 LE; includes header and trailer)
+bytes 10..11  : word_bits_log2 (u8; runtime word width as base-2 exponent)
+bytes 11..12  : addr_bits_log2 (u8; runtime address width)
+bytes 12..13  : float_bits_log2 (u8; runtime float width)
+bytes 13..14  : header_flags (u8)
+bytes 14..16  : reserved
+bytes 16..20  : declared WCET in pipelined cycles per Stream-to-Reset slice (u32 LE)
+bytes 20..24  : declared WCMU in bytes per Stream-to-Reset slice (u32 LE)
+bytes 24..28  : opcode_stream_offset (u32 LE, from start of body)
+bytes 28..32  : opcode_stream_length (u32 LE, in 4-byte records)
+bytes 32..36  : operand_pool_offset (u32 LE, from start of body)
+bytes 36..40  : operand_pool_length (u32 LE, in bytes; multiple of 8)
+bytes 40..44  : constant_pool_offset (u32 LE)
+bytes 44..48  : constant_pool_length (u32 LE, in bytes)
+bytes 48..52  : chunk_table_offset (u32 LE)
+bytes 52..56  : chunk_table_length (u32 LE, in entries)
+bytes 56..60  : data_layout_offset (u32 LE; 0 if no data segment)
+bytes 60..64  : data_layout_length (u32 LE; 0 if no data segment)
+... body ...
+last 4 bytes  : CRC-32 trailer (over the entire framed range minus the trailer)
+```
+
+The declared WCET and WCMU fields use two sentinel values. `0` means "auto", indicating the producer did not declare a value and the runtime computes the bound at load time through its own verifier pass. `u32::MAX` means "overflow", indicating the producer attempted to compute a bound but the result exceeded the field's range; the safe constructor `Vm::new` rejects on either sentinel through the `LoadError::WcetOverflow` and `LoadError::WcmuOverflow` variants. Other values are the producer's declared bound.
 
 The bytecode loader strips a leading shebang line (`#!...\n`) before validating the magic and CRC residue. Compiled bytecode files prepended with `#!/usr/bin/env keleusma` are therefore Unix-executable through the kernel shebang dispatch; the envelope is not part of the signed payload.
 
-The header allows the runtime to reject foreign or incompatible bytecode at load time before any deserialization is attempted. The trailer detects bit-level corruption anywhere in the framed range. The `BYTECODE_MAGIC`, `BYTECODE_VERSION`, `RUNTIME_WORD_BITS_LOG2`, `RUNTIME_ADDRESS_BITS_LOG2`, and `RUNTIME_FLOAT_BITS_LOG2` constants in the bytecode module record the binary build's maximum supported widths. The binary build rejects bytecode whose declared exponents exceed those maxima at the framing-level check. Each parametric `GenericVm<W, A, F>` instance enforces a tighter, per-Vm bound by additionally requiring the bytecode's declared widths to be at most `<W as Word>::BITS_LOG2`, `<A as Address>::BITS_LOG2`, and `<F as Float>::BITS_LOG2`. The two checks compose: a binary that ships only narrow runtimes still admits all bytecode the framing rules allow, but each Vm rejects what its own widths cannot accommodate. The VM applies sign-extending integer truncation in `Add`, `Sub`, `Mul`, `Div`, `Mod`, and `Neg` when the declared word size is narrower than the runtime's `W`, so arithmetic overflow points match the declared width.
+The header allows the runtime to reject foreign or incompatible bytecode at load time before any decoding is attempted. The trailer detects corruption anywhere in the framed range. The `BYTECODE_MAGIC`, `BYTECODE_VERSION`, `RUNTIME_WORD_BITS_LOG2`, `RUNTIME_ADDRESS_BITS_LOG2`, and `RUNTIME_FLOAT_BITS_LOG2` constants in the bytecode module record the binary build's maximum supported widths. The binary build rejects bytecode whose declared exponents exceed those maxima at the framing-level check. Each parametric `GenericVm<W, A, F>` instance enforces a tighter, per-Vm bound by additionally requiring the bytecode's declared widths to be at most `<W as Word>::BITS_LOG2`, `<A as Address>::BITS_LOG2`, and `<F as Float>::BITS_LOG2`. The two checks compose: a binary that ships only narrow runtimes still admits all bytecode the framing rules allow, but each Vm rejects what its own widths cannot accommodate.
 
-The body format is rkyv. Rkyv produces a self-relative addressable layout that supports zero-copy access through `rkyv::access`. The `from_bytes` path copies the body to an `AlignedVec` and deserializes to an owned `Module` for compatibility with arbitrary unaligned host slices. The `view_bytes` path skips the body copy when the host supplies an aligned slice and validates the archived form in place via `access_bytes`. The execution loop currently operates on the deserialized owned `Module` regardless of which load path was used. A future zero-copy execution path (P10 Phase 2 step 2) will read directly from the buffer without deserialization, bounded by a lifetime parameter on the `Vm`.
+#### Opcode stream
+
+The opcode stream is an array of fixed-size 4-byte opcode records. Every opcode in every chunk occupies one record. Chunks are demarcated by the chunk table, not by in-stream markers. Each record carries:
+
+| Bytes | Field | Notes |
+|-------|-------|-------|
+| 0 | `opcode_id` (u8) | The dispatch index. The low 7 bits select among the 65 opcodes; opcode values 0-64 are valid, values 65-127 are reserved. The high bit is a **parity bit** over bytes 0-3 of the record, supporting per-record integrity verification at decode time. |
+| 1-3 | `operand_field` (24 bits) | Interpreted per opcode class. See "Operand field encoding" below. |
+
+A chunk's opcode count is bounded by the operand width of the control-flow opcodes (`u16`, see [INSTRUCTION_SET.md](../reference/INSTRUCTION_SET.md)), which caps it at 65,535 ops per chunk. The compiler emits a soft warning at 80% of this limit. The cap encourages function-level decomposition, which is consistent with Keleusma's three function-category model (`fn`, `yield fn`, `loop fn`).
+
+#### Operand field encoding
+
+The 24-bit operand field of each opcode record is interpreted by the opcode's operand shape (see [INSTRUCTION_SET.md](../reference/INSTRUCTION_SET.md) for the per-opcode shape):
+
+| Opcode shape | Encoding |
+|--------------|----------|
+| Zero-operand | All 24 bits are a fixed sentinel pattern (`0x000000`). Deviation from the sentinel signals corruption. |
+| `u8` operand | Byte 1 holds the `u8` operand. Bytes 2-3 are the sentinel pattern. |
+| `u16` operand | Bytes 1-2 hold the `u16` operand (little-endian). Byte 3 is the sentinel pattern. |
+| Compound `(u16, u8)`, `(u16, u16)`, `(u16, u16, u8)` | Bytes 1-2 hold a `u16` index into the operand pool. Byte 3 is the sentinel pattern. |
+
+58 of 65 opcodes carry their operand inline in the 4-byte record; 7 opcodes reference the operand pool.
+
+#### Operand pool
+
+The operand pool is an array of fixed-size 8-byte aligned entries, each holding the compound operand for one pool-referencing opcode. Each entry has the following layout:
+
+| Bytes | Field | Notes |
+|-------|-------|-------|
+| 0 | `entry_type` (u8) | One of three values: `1 = (u16, u8)`, `2 = (u16, u16)`, `3 = (u16, u16, u8)`. Other values signal corruption. |
+| 1 | `parity` (u8) | Parity over bytes 0-7 of the entry. |
+| 2-7 | `payload` (6 bytes) | The compound operand, type-tagged by `entry_type`. Unused bytes within the payload are zero. |
+
+The fixed 8-byte alignment lets the runtime read a pool entry in a single memory access; the fixed entry size lets the verifier scan the operand pool with a stride loop, independently of the opcode stream.
+
+#### Decoder behavior
+
+For each opcode, the runtime performs:
+
+1. **Fetch.** Read the next 4-byte opcode record from the opcode stream at the current instruction pointer. The instruction pointer advances by 4.
+2. **Integrity check.** Verify the parity bit (the high bit of byte 0) over bytes 0-3. Mismatch indicates corruption.
+3. **Dispatch.** Extract the low 7 bits of byte 0 as the dispatch index.
+4. **Operand fetch.** Per opcode class:
+   - Zero / u8 / u16 operand: already in the fetched record. No additional memory access.
+   - Compound operand: bytes 1-2 form a `u16` pool index; read the 8-byte pool entry, verify its parity, extract the compound operand.
+5. **Execute.** Invoke the dispatch entry with the extracted operand(s).
+
+Most opcodes execute with one memory access (the opcode record). Compound-operand opcodes execute with two memory accesses (the opcode record plus the pool entry).
+
+#### CRC and recorded length
 
 The recorded length is authoritative. The deserializer truncates the input slice to the recorded length before any further processing. Trailing bytes after the recorded length are ignored, supporting bytecode embedded inside a larger buffer such as a flash region with padding. Slices shorter than the recorded length, or recorded lengths below the minimum framing size, are rejected as `Truncated`.
 
-The CRC-32 uses the standard IEEE 802.3 reflected polynomial with init `0xFFFFFFFF`, refin and refout true, and xor-out `0xFFFFFFFF`. The verification path exploits the algebraic self-inclusion residue of this parameterization. Computing the CRC over the entire byte slice including the trailer yields the residue constant `0x2144DF1C` for valid bytecode. The verifier runs the CRC once over the full slice and checks for the residue in a single linear pass. The trailer is part of the checksummed range without requiring zero-fill or position-aware special casing during verification.
+The CRC-32 uses the standard IEEE 802.3 reflected polynomial with init `0xFFFFFFFF`, refin and refout true, and xor-out `0xFFFFFFFF`. Computing the CRC over the entire byte slice including the trailer yields the residue constant `0x2144DF1C` for valid bytecode. The verifier runs the CRC once over the full slice and checks for the residue in a single linear pass. The trailer is part of the checksummed range without requiring zero-fill or position-aware special casing during verification.
 
-The choice of rkyv reflects the constraints of `no_std` plus `alloc` operation and the goal of zero-copy execution from `.rodata` (P10). Rkyv produces a self-relative addressable layout that supports in-place access through `rkyv::access`, and its `bytecheck` integration validates the archived form before access. The serialization uses `#[derive(Archive, Serialize, Deserialize)]` on every type that participates in the Module structure, including `Module`, `Chunk`, `Op`, `ConstValue`, `BlockType`, `StructTemplate`, `DataSlot`, and `DataLayout`. The runtime `Value` enum is not directly archived; `ConstValue` is the archived constant-pool type, and `Value::from_const_archived` lifts it at push time. See R39 in [RESOLVED.md](../decisions/RESOLVED.md) for the full rationale.
+#### Cross-process module serialization
 
-The deserialized Module owns heap-allocated data and does not borrow from the input slice. The bytecode buffer can persist in `.rodata` even though the parsed form is heap-allocated. Future work under P10 introduces a zero-copy variant where the parsed Module borrows directly from the input buffer.
+The execution wire format above is the canonical encoding for bytecode that runs on the VM. A secondary serialization (rkyv-archived) survives as an internal mechanism for hosts that transport the in-memory `Module` between processes (e.g., a host process compiling a module and shipping it to a worker process before the worker emits the execution wire format). The execution loop does not consume the rkyv form directly.
 
 ### Loading API
 

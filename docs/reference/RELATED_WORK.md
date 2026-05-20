@@ -86,7 +86,7 @@ All three standards require qualification of software tools used in development.
 
 SCADE's KCG code generator is qualified at DO-178C TQL-1, providing the most direct precedent for qualifying a synchronous language compiler for safety-critical applications [SC1].
 
-**Relationship to Keleusma.** Keleusma's documentation describes the language as suitable for "safety-critical systems" including "aerospace, robotics, and flight control." These statements reflect design aspirations informed by synchronous language principles, not current certification status.
+**Relationship to Keleusma.** Keleusma's documentation describes the language as suitable for "safety-critical control systems." These statements reflect design aspirations informed by synchronous language principles, not current certification status.
 
 The gap between Keleusma's current implementation and industrial certification readiness includes the following areas.
 

@@ -7,47 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Wire-format note
+### Wire-format reset
 
-V0.2.0 adds three new bytecode opcodes to support the
-indexed-array data-segment feature described under **Added**.
-The new variants are declared in `bytecode::Op` in this order
-and at the same position as the other data-segment ops, that
-is between `Op::SetData` and `Op::Add`:
+V0.2.0 publishes a new bytecode wire format and the framing-header version field resets to `1`. The format is the result of an ISA audit covering opcode consolidation, opcode addition, encoding regularization, and a section-partitioned body layout. See [`docs/reference/INSTRUCTION_SET.md`](docs/reference/INSTRUCTION_SET.md) for the full opcode listing and [`docs/architecture/EXECUTION_MODEL.md`](docs/architecture/EXECUTION_MODEL.md) for the wire format specification.
 
-- `Op::GetDataIndexed(base: u16, len: u16)`
-- `Op::SetDataIndexed(base: u16, len: u16)`
-- `Op::BoundsCheck(bound: u16)`
+V0.1.x runtimes cannot read V0.2.0 bytecode. V0.2.0 runtimes cannot read V0.1.x bytecode. The version-field reset signals the discontinuity to hosts; existing artefacts must be recompiled against the V0.2.0 toolchain.
 
-The wire-format `version` field in the framing header is
-intentionally not bumped from 2. Two consequences follow.
+The reset is acceptable because the V0.1.x line has narrow adoption. Future wire-format changes will continue to bump the version field rather than reset it.
 
-First, V0.1.1 runtimes cannot deserialise V0.2.0 bytecode that
-uses any of the three new opcodes; the rkyv `bytecheck`
-validator rejects the unknown enum discriminant during
-deserialisation and the failure surfaces as a clean
-`VmError::LoadError`. The bytecode body never reaches the
-execution path, so the failure mode is a load-time rejection
-rather than undefined behaviour.
+#### ISA changes (V0.1.x → V0.2.0)
 
-Second, the rkyv discriminant assignment for every `Op`
-variant declared after `Op::SetData` in the enum has shifted
-by three positions to make room for the new variants. A
-runtime built against an intermediate snapshot of V0.2.0
-without this feature would therefore misinterpret `Op::Add`
-and every later opcode in bytecode produced by the post-
-feature codebase. The failure mode in that case is not a
-clean rejection because the shifted byte still names a valid
-variant in the older runtime's enum; it is silent
-misexecution. The risk is bounded to pre-release V0.2.0
-snapshots of the codebase; no shipped runtime is affected.
+- **Consolidations.** `PushTrue`, `PushFalse`, `PushUnit`, `PushNone`, `WrapSome`, `Pop`, `Add`, `Sub`, `Mul`, `Neg` are removed. `PushImmediate(u8)` replaces the four constant-pushing variants and additionally encodes small `Int` literals (`Int(0)` through `Int(15)`) inline. `PopN(u8)` replaces `Pop`; single-slot pops emit `PopN(1)`. Wrapping arithmetic is synthesized as the checked variant followed by `PopN(2)` to discard unused outputs.
+- **Drops.** `CallIndirect`, `PushFunc`, `MakeClosure`, `MakeRecursiveClosure` are removed. Closure-shaped surface expressions either compile to direct calls or are rejected at compile time.
+- **Splits.** `CallNative` splits into `CallVerifiedNative` and `CallExternalNative`. The two are distinguished by the source-level `use` declaration: `use module::name` produces `CallVerifiedNative`; `use external module::name` produces `CallExternalNative`. The host's registration ABI mirrors the distinction.
+- **Additions.** Five bitwise opcodes: `BitAnd`, `BitOr`, `BitXor`, `Shl`, `Shr`. Enables script-level bit manipulation and is a prerequisite for the deferred B19 Multiword<N> work.
+- **Operand narrowing.** Control-flow opcodes (`If`, `Else`, `Loop`, `EndLoop`, `Break`, `BreakIf`) carry `u16` jump targets instead of `u32`. Chunks are capped at 65,535 ops; the compiler emits a soft warning at 80% of the cap.
 
-The rationale for not bumping the wire version is that V0.1.1
-has narrow adoption. The wire-version bump policy reasserts
-at the next release that ships into a broader ecosystem.
-Hosts that pin bytecode artefacts against a specific runtime
-build should treat the V0.2.0 release commit as the
-authoritative wire-format reference for this version label.
+Total opcode count goes from 71 in V0.1.x to 65 in V0.2.0.
+
+#### Wire format changes
+
+- **Fixed-size opcode records.** Each opcode is a 4-byte record: 1 byte `opcode_id` (with the high bit serving as a parity bit), 3 bytes operand field. Inline operand fields cover 58 of 65 opcodes; the remaining 7 reference an operand pool.
+- **Separate operand pool.** Compound operands (`(u16, u8)`, `(u16, u16)`, `(u16, u16, u8)`) live in 8-byte aligned pool entries with a type tag and parity byte.
+- **Section-partitioned body.** The framing header carries offsets and lengths for the opcode stream, operand pool, constant pool, chunk table, and data layout. Each section is independently relocatable.
+- **Framing header grows** from 24 bytes to 64 bytes to carry the new section offsets and lengths.
+
+The rkyv-archived encoding survives as an internal mechanism for cross-process module transport but is not consumed by the execution loop.
 
 ### Changed
 

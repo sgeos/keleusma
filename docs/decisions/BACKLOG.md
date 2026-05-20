@@ -576,3 +576,26 @@ Each phase ends with end-to-end integration tests at N = 2 (128-bit on the defau
 ### Surface-syntax precedent
 
 The `Multiword<N>` syntax is a forward-looking grammar that the rest of the type system does not generalise to (no general const generics on types). The type checker treats `Multiword<N>` as a recognised type-name pattern, not as an instance of a broader parametric-types mechanism. A future grammar pass that adds general const generics could subsume the `Multiword` recognition into a uniform mechanism without changing the user-visible surface.
+
+## B20. V0.2.0 ISA and wire format implementation
+
+R40 in [RESOLVED.md](RESOLVED.md) describes the V0.2.0 ISA and wire format. This backlog entry tracks the implementation work that lands the design in code.
+
+### Scope
+
+The implementation effort spans the compiler, verifier, and runtime. Approximate Rust-side effort:
+
+- **Wire format types and serializer/deserializer.** Define the fixed-size opcode record and operand pool entry layouts. Implement encoding from the in-memory `Module` representation and decoding from the byte stream. Replace the rkyv-based execution wire format with the new layout; retain the rkyv-archived encoding only as an internal cross-process transport mechanism. ~600 lines.
+- **Compiler emission updates.** Rewrite `compile_with_target` to emit the new opcode set. Implement the `PushImmediate` encoding (small-integer literals), the `CallVerifiedNative` / `CallExternalNative` split with source-level `use external` parsing, the `PopN(u8)` consolidation, and the consolidated checked-arithmetic emission with `PopN(2)` for the wrapping cases. ~500 lines.
+- **Verifier updates.** Update the WCET, WCMU, and ephemerality passes to use the new opcode set. Wire the new opcodes' cost contributions through the cost model. Update the structural verifier to walk the opcode stream and operand pool independently. ~300 lines.
+- **Runtime decoder.** Rewrite `Vm::run` to dispatch from the new wire format. Implement the per-record parity check, the per-pool-entry parity check, and the inline-versus-pool operand fetch. ~400 lines.
+- **Hot swap and zero-copy paths.** Update `replace_module`, `view_bytes`, `view_bytes_zero_copy`, and the related entry points to consume the new wire format. ~200 lines.
+- **Examples, tests, documentation.** Update every example, every test, and the reference documentation to match the new ISA and wire format. The existing test surface is approximately 750 tests; many will require minor updates, a small number will require rewriting. ~400 lines.
+
+Total estimated implementation effort: ~2,400 lines across the workspace.
+
+### Migration
+
+V0.1.x bytecode artefacts cannot be loaded by V0.2.0 runtimes. Hosts that have V0.1.x bytecode in flight at publication time must recompile against the V0.2.0 toolchain. The framing-header `version` field resets to `1` to signal the discontinuity; V0.2.0 runtimes reject V0.1.x bytecode at the framing-level check.
+
+The implementation lands as a sequence of commits on the V0.2.0 publication branch. The ISA and wire format are the published artefact; the implementation work is operational.
