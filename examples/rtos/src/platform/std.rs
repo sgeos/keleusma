@@ -75,7 +75,10 @@ impl Platform for StdPlatform {
         // visibly instead of silently dropping the event.
         match code {
             crate::natives::EV_HEARTBEAT_OK => {
-                println!("[t={:>6}ms] heartbeat: system OK", t);
+                println!(
+                    "[t={:>6}ms] heartbeat: system OK (count={})",
+                    t, data
+                );
             }
             crate::natives::EV_LED_GPIO_FAIL => {
                 println!("[t={:>6}ms] led: gpio_set failed, code={}", t, data);

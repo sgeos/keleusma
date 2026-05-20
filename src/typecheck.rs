@@ -415,8 +415,21 @@ pub enum UnifyError {
 /// - Two options unify if their inner types unify.
 /// - Named types unify only when their names match.
 pub fn unify(a: &Type, b: &Type, subst: &mut Subst) -> Result<(), UnifyError> {
-    let a = a.apply(subst);
-    let b = b.apply(subst);
+    // Strip information-flow labels at the unifier entry. The
+    // labels are not part of structural compatibility; per-
+    // position label flow is checked by `types_compatible` /
+    // `flow_admissible` at the higher level. Stripping at every
+    // unify call ensures nested labels (inside tuples, arrays,
+    // options) are also seen through during recursive
+    // unification.
+    let mut a = a.apply(subst);
+    let mut b = b.apply(subst);
+    while let Type::Labelled(inner, _) = a {
+        a = *inner;
+    }
+    while let Type::Labelled(inner, _) = b {
+        b = *inner;
+    }
     match (a, b) {
         (Type::Fixed(a_n), Type::Fixed(b_n)) => {
             if a_n == b_n {
@@ -849,25 +862,44 @@ fn types_compatible(ctx: &mut Ctx, a: &Type, b: &Type) -> bool {
     if matches!(a, Type::Unknown) || matches!(b, Type::Unknown) {
         return true;
     }
-    // Information-flow check. `a` is the source (the value being
-    // produced); `b` is the target (the slot accepting the value).
-    // The flow is admitted only when the source's label set is a
-    // subset of the target's; otherwise the source carries labels
-    // the target does not authorise, which constitutes an
-    // information disclosure that requires explicit
-    // `declassify`. Empty source labels flow into any target
-    // (classify is implicit at the target end).
-    let source_labels = labels_of(a);
-    let target_labels = labels_of(b);
+    // Information-flow check is recursive: per-position label
+    // subset rule applies at every composite layer. See
+    // `flow_admissible`.
+    if !flow_admissible(a, b) {
+        return false;
+    }
+    // Structural unification. `unify` strips outer labels at
+    // entry so nested labels do not interfere with the
+    // structural match.
+    unify(a, b, &mut ctx.subst).is_ok()
+}
+
+/// Recursive information-flow admissibility check. Returns true
+/// when the source's labels at every position are a subset of
+/// the target's labels at the corresponding position. Composite
+/// structures (tuples, arrays, options) recurse element-wise.
+///
+/// The check is the soundness layer above structural unification:
+/// two types may unify structurally and still be incompatible
+/// because the source carries labels the target does not
+/// authorise.
+fn flow_admissible(source: &Type, target: &Type) -> bool {
+    let source_labels = labels_of(source);
+    let target_labels = labels_of(target);
     if !source_labels.is_subset(&target_labels) {
         return false;
     }
-    // Unify the underlying types with labels stripped. The label
-    // check above is sufficient at this layer; unification at the
-    // underlying-type layer establishes structural compatibility.
-    let a_inner = strip_labels(a.clone());
-    let b_inner = strip_labels(b.clone());
-    unify(&a_inner, &b_inner, &mut ctx.subst).is_ok()
+    let s = strip_labels(source.clone());
+    let t = strip_labels(target.clone());
+    match (s, t) {
+        (Type::Tuple(ss), Type::Tuple(ts)) if ss.len() == ts.len() => ss
+            .iter()
+            .zip(ts.iter())
+            .all(|(se, te)| flow_admissible(se, te)),
+        (Type::Array(s_elem, _), Type::Array(t_elem, _)) => flow_admissible(&s_elem, &t_elem),
+        (Type::Option(s_inner), Type::Option(t_inner)) => flow_admissible(&s_inner, &t_inner),
+        _ => true,
+    }
 }
 
 /// Top-level type check entry point.
@@ -2901,33 +2933,78 @@ fn type_of_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Type, TypeError> {
             Ok(Type::Tuple(tys))
         }
         Expr::Cast { expr, target, span } => {
-            let from_ty = type_of_expr(ctx, expr)?;
-            let to_ty = ctx.resolve_type(target);
-            match (&from_ty, &to_ty) {
-                (Type::Word, Type::Float) | (Type::Float, Type::Word) => Ok(to_ty),
+            let from_ty_raw = type_of_expr(ctx, expr)?;
+            let to_ty_raw = ctx.resolve_type(target);
+            // Strip information-flow labels before the cast
+            // dispatch. The cast operates on the underlying type;
+            // labels propagate through the cast unchanged (the
+            // labels on the source flow to the target).
+            let from_labels = labels_of(&from_ty_raw);
+            let from_ty = strip_labels(from_ty_raw);
+            let to_ty = strip_labels(to_ty_raw);
+            // Newtype <-> underlying extraction. A newtype value
+            // can be cast to its underlying type (extraction); a
+            // value of the underlying type can be cast to the
+            // newtype (construction). Both are identity at the
+            // bytecode level because newtypes are transparent.
+            // The underlying type lives in `ctx.newtypes`; the
+            // placeholder on `Type::Newtype` is not authoritative.
+            let from_underlying = if let Type::Newtype(name, _) = &from_ty {
+                ctx.newtypes.get(name).cloned()
+            } else {
+                None
+            };
+            let to_underlying = if let Type::Newtype(name, _) = &to_ty {
+                ctx.newtypes.get(name).cloned()
+            } else {
+                None
+            };
+            let result_ty = match (&from_ty, &to_ty) {
+                (Type::Newtype(_, _), other) if from_underlying.as_ref() == Some(other) => {
+                    other.clone()
+                }
+                (other, Type::Newtype(_, _)) if to_underlying.as_ref() == Some(other) => {
+                    to_ty.clone()
+                }
+                (Type::Newtype(_, _), _) if from_underlying.is_some() => {
+                    return Err(TypeError::new(
+                        format!(
+                            "cannot cast {} to {}; newtypes only cast to their underlying type {}",
+                            from_ty.display(),
+                            to_ty.display(),
+                            from_underlying.unwrap().display()
+                        ),
+                        *span,
+                    ));
+                }
+                (Type::Word, Type::Float) | (Type::Float, Type::Word) => to_ty.clone(),
                 // Byte conversions. Word→Byte truncates to the low
                 // eight bits; Byte→Word zero-extends. Both are
                 // explicit casts; implicit narrowing or widening is
                 // not permitted because the boundary at which a
                 // value is reinterpreted should be visible at the
                 // call site.
-                (Type::Word, Type::Byte) | (Type::Byte, Type::Word) => Ok(to_ty),
+                (Type::Word, Type::Byte) | (Type::Byte, Type::Word) => to_ty.clone(),
                 // Fixed conversions. Word→Fixed left-shifts by the
                 // target fraction-bit count; Fixed→Word arithmetic-
                 // right-shifts. Both are explicit casts.
-                (Type::Word, Type::Fixed(_)) | (Type::Fixed(_), Type::Word) => Ok(to_ty),
+                (Type::Word, Type::Fixed(_)) | (Type::Fixed(_), Type::Word) => to_ty.clone(),
                 // Enum-to-Word produces the variant's discriminant
                 // value. The compiler emits a chain of IsEnum
                 // tests; the runtime selects the matching
                 // discriminant.
-                (Type::Enum(_, _), Type::Word) => Ok(to_ty),
-                (Type::Unknown, _) | (_, Type::Unknown) => Ok(to_ty),
-                (a, b) if a == b => Ok(to_ty),
-                _ => Err(TypeError::new(
-                    format!("cannot cast {} to {}", from_ty.display(), to_ty.display()),
-                    *span,
-                )),
-            }
+                (Type::Enum(_, _), Type::Word) => to_ty.clone(),
+                (Type::Unknown, _) | (_, Type::Unknown) => to_ty.clone(),
+                (a, b) if a == b => to_ty.clone(),
+                _ => {
+                    return Err(TypeError::new(
+                        format!("cannot cast {} to {}", from_ty.display(), to_ty.display()),
+                        *span,
+                    ));
+                }
+            };
+            // Labels follow the value through the cast.
+            Ok(apply_labels(result_ty, &from_labels))
         }
         Expr::Placeholder { .. } => Ok(ctx.fresh()),
         Expr::ClosureRef { .. } => Ok(ctx.fresh()),
@@ -3350,6 +3427,27 @@ mod tests {
     }
 
     #[test]
+    fn newtype_extraction_via_as_cast() {
+        // The `as` cast from a newtype to its underlying type
+        // is the surface form for extracting the wrapped value.
+        // The cast is identity at the bytecode level because the
+        // newtype is transparent.
+        let result = compile_src(
+            "newtype LocalMs = Word;\n\
+             fn main() -> Word {\n\
+                 let t: LocalMs = LocalMs(42);\n\
+                 t as Word\n\
+             }",
+        );
+        // The extraction may not yet be supported; record the
+        // observed behaviour so the gap is visible.
+        match result {
+            Ok(()) => {}
+            Err(msg) => panic!("newtype extraction via `as` should compile: {}", msg),
+        }
+    }
+
+    #[test]
     fn newtype_with_refinement_composition() {
         // The `newtype Name = T where predicate;` form composes
         // nominal-type distinctness with runtime range checking.
@@ -3508,6 +3606,61 @@ mod tests {
              fn main() -> Word@{Mission, Secret} { produce() }",
         )
         .expect("source with fewer labels flows into target with more");
+    }
+
+    #[test]
+    fn qif_tuple_preserves_per_element_labels() {
+        // A tuple expression preserves labels on each element
+        // because `Type::Tuple` holds a vector of types and each
+        // element's type can independently be `Labelled`.
+        let tokens = tokenize(
+            "fn secret() -> Word@Secret { 1 }\n\
+             fn main() -> (Word@Secret, Word) {\n\
+                 (secret(), 2)\n\
+             }",
+        )
+        .expect("lex");
+        let mut program = parse(&tokens).expect("parse");
+        let result = check(&mut program);
+        if let Err(e) = &result {
+            panic!(
+                "tuple preserves per-element labels: {} at span {:?}",
+                e.message, e.span
+            );
+        }
+    }
+
+    #[test]
+    fn qif_tuple_destructure_preserves_labels() {
+        // Destructuring the tuple binds each component with its
+        // own label.
+        check_src(
+            "fn secret() -> Word@Secret { 1 }\n\
+             fn main() -> Word@Secret {\n\
+                 let t = (secret(), 2);\n\
+                 t.0\n\
+             }",
+        )
+        .expect("tuple index preserves label");
+    }
+
+    #[test]
+    fn qif_tuple_blocks_leak_through_unlabeled_field() {
+        // Reading a labeled tuple field into an unlabeled slot
+        // is rejected.
+        let err = check_src(
+            "fn secret() -> Word@Secret { 1 }\n\
+             fn main() -> Word {\n\
+                 let t = (secret(), 2);\n\
+                 t.0\n\
+             }",
+        )
+        .unwrap_err();
+        assert!(
+            err.message.contains("Word@Secret") && err.message.contains("Word"),
+            "unexpected error: {}",
+            err.message
+        );
     }
 
     #[test]

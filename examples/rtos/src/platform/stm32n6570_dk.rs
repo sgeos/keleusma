@@ -121,7 +121,7 @@ impl Platform for Stm32N6570DkPlatform {
         // footprint for script logging on the embedded target.
         match code {
             crate::natives::EV_HEARTBEAT_OK => {
-                defmt::info!("heartbeat: system OK");
+                defmt::info!("heartbeat: system OK (count={})", data);
             }
             crate::natives::EV_LED_GPIO_FAIL => {
                 defmt::info!("led: gpio_set failed, code={}", data);

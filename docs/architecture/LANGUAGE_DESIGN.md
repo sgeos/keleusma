@@ -242,6 +242,30 @@ Hot code swapping at the bytecode level is part of the design and is described i
 
 Keleusma's design choices are informed by synchronous reactive language principles and are favorable for eventual safety-critical certification, but current claims of suitability for "aerospace, robotics, and flight control" are design aspirations, not certification status. See [RELATED_WORK.md](../reference/RELATED_WORK.md) Section 7 for a gap analysis between the current implementation and industrial certification readiness.
 
+## Surface Extensions Added in V0.2
+
+The following language-level mechanisms were added during the V0.2 design pass and supplement the core design described above.
+
+### Newtype Declarations
+
+`newtype Name = Underlying;` introduces a distinct nominal type that wraps an underlying type. The bytecode representation is identical to the underlying. The type checker rejects mixing the newtype with its underlying without explicit construction or extraction. Construction at expression position uses `Name(value)`; extraction uses `value as Underlying`. Newtypes compose with refinement predicates through the `where` clause.
+
+### Refinement Types
+
+`newtype Name = Underlying where predicate;` augments a newtype with a user-defined predicate that the compiler emits at every construction site. The predicate must be a declared atomic-total function of signature `fn(Underlying) -> bool`. The construction site is compiled to a sequence that calls the predicate and traps on a false result. The runtime cost is paid at every construction; compile-time elision when the argument is provably in range is a follow-on optimisation.
+
+### Numeric Overflow Construct
+
+`expr { overflow => ..., underflow => ..., ok(name) => ... }` guards a single arithmetic operation against overflow and underflow. The supported operations are `+`, `-`, `*`, `/`, `%`, and unary `-` on Word operands. Each of the three outcome arms must be covered exactly once; the pipe pattern `overflow|underflow => ...` shares an arm body across two outcomes. The `saturate_max` and `saturate_min` keywords inside arm bodies denote the result type's max and min representable values; V0.2 resolves these to `Word::MAX` and `Word::MIN` unconditionally, with refinement-contract-driven saturation values reserved for a follow-on.
+
+### Information-Flow Labels
+
+Types may carry a set of user-defined information-flow labels written as `T@Label` for a single label or `T@{L1, L2}` for multiple. The empty label set is the pure state; more labels indicate more restrictions. Two operators relabel values: `classify expr@Label` adds labels (always admitted because adding labels only tightens flow restrictions), and `declassify expr@Label` removes labels (always admitted but constitutes an explicit information-disclosure audit point that an operator's review process should track).
+
+Labels propagate through every position of a composite type independently. Arithmetic on labeled operands unions the operand labels into the result. Branching on a labeled condition propagates the condition's labels to the result, because an observer of the result can infer information about the condition. The label-flow rule at every position is `source.labels ⊆ target.labels`; violations are rejected at compile time. The mechanism is zero-cost at the bytecode layer; the bytecode is identical regardless of label annotations.
+
+Native function signatures admit labels in both parameter and return positions: `use host::transmit(payload: Word@Open) -> Status` rejects calls that pass a labeled value without explicit declassification.
+
 ## Cross-References
 
 - [GRAMMAR.md](../design/GRAMMAR.md) provides the formal EBNF grammar specification.

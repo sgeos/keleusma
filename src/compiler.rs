@@ -3837,37 +3837,56 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
                 return Ok(());
             }
             compile_expr(fc, inner)?;
-            match (source.as_ref(), target) {
-                (_, TypeExpr::Prim(PrimType::Float, _)) => {
-                    fc.emit(Op::IntToFloat);
-                }
-                (Some(TypeExpr::Prim(PrimType::Byte, _)), TypeExpr::Prim(PrimType::Word, _)) => {
-                    fc.emit(Op::ByteToWord);
-                }
-                (
-                    Some(TypeExpr::Prim(PrimType::Fixed(n), _)),
-                    TypeExpr::Prim(PrimType::Word, _),
-                ) => {
-                    fc.emit(Op::FixedToWord(
-                        n.unwrap_or(crate::typecheck::DEFAULT_FIXED_FRAC_BITS),
-                    ));
-                }
-                (_, TypeExpr::Prim(PrimType::Word, _)) => {
-                    // Default for `as Word`: source is `Float`.
-                    // Byte and Fixed sources are caught by the more
-                    // specific arms above.
-                    fc.emit(Op::FloatToInt);
-                }
-                (_, TypeExpr::Prim(PrimType::Byte, _)) => {
-                    fc.emit(Op::WordToByte);
-                }
-                (_, TypeExpr::Prim(PrimType::Fixed(n), _)) => {
-                    fc.emit(Op::WordToFixed(
-                        n.unwrap_or(crate::typecheck::DEFAULT_FIXED_FRAC_BITS),
-                    ));
-                }
-                _ => {
-                    // Other casts are identity at runtime.
+            // Newtype <-> underlying casts are identity at the
+            // bytecode level because newtypes are transparent.
+            // Detect both directions and emit nothing.
+            let source_is_newtype = match source.as_ref() {
+                Some(TypeExpr::Named(name, _, _)) => fc.type_info.newtype_names.contains(name),
+                _ => false,
+            };
+            let target_is_newtype = match target {
+                TypeExpr::Named(name, _, _) => fc.type_info.newtype_names.contains(name),
+                _ => false,
+            };
+            if source_is_newtype || target_is_newtype {
+                // No opcode emitted; the value flows through
+                // unchanged.
+            } else {
+                match (source.as_ref(), target) {
+                    (_, TypeExpr::Prim(PrimType::Float, _)) => {
+                        fc.emit(Op::IntToFloat);
+                    }
+                    (
+                        Some(TypeExpr::Prim(PrimType::Byte, _)),
+                        TypeExpr::Prim(PrimType::Word, _),
+                    ) => {
+                        fc.emit(Op::ByteToWord);
+                    }
+                    (
+                        Some(TypeExpr::Prim(PrimType::Fixed(n), _)),
+                        TypeExpr::Prim(PrimType::Word, _),
+                    ) => {
+                        fc.emit(Op::FixedToWord(
+                            n.unwrap_or(crate::typecheck::DEFAULT_FIXED_FRAC_BITS),
+                        ));
+                    }
+                    (_, TypeExpr::Prim(PrimType::Word, _)) => {
+                        // Default for `as Word`: source is `Float`.
+                        // Byte and Fixed sources are caught by the more
+                        // specific arms above.
+                        fc.emit(Op::FloatToInt);
+                    }
+                    (_, TypeExpr::Prim(PrimType::Byte, _)) => {
+                        fc.emit(Op::WordToByte);
+                    }
+                    (_, TypeExpr::Prim(PrimType::Fixed(n), _)) => {
+                        fc.emit(Op::WordToFixed(
+                            n.unwrap_or(crate::typecheck::DEFAULT_FIXED_FRAC_BITS),
+                        ));
+                    }
+                    _ => {
+                        // Other casts are identity at runtime.
+                    }
                 }
             }
         }

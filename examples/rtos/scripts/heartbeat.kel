@@ -23,6 +23,14 @@
 // kept in lock-step with `natives::EV_HEARTBEAT_OK` and the
 // matching arm in each platform's
 // `Platform::log_event` implementation.
+//
+// V0.2 language-feature demonstration:
+//
+// - The counter increment uses the numeric-overflow construct
+//   to saturate at `Word::MAX` rather than wrap on a hypothetical
+//   long-running probe whose mission outlives the i64 range.
+//   The construct's `saturate_max` keyword yields `Word::MAX`;
+//   `underflow` cannot fire because the addend is positive.
 
 data state {
     count: Word,
@@ -34,8 +42,12 @@ const data cfg {
 }
 
 loop main(_reason: Word) -> (Word, Word) {
-    state.count = state.count + 1;
-    host::log_event(cfg.ev_ok, 0);
+    state.count = state.count + 1 {
+        overflow => saturate_max,
+        underflow => saturate_min,
+        ok(v) => v,
+    };
+    host::log_event(cfg.ev_ok, state.count);
     let next = host::clock_now() + cfg.period_ms;
     let _ = yield (0, next);
     (0, 0)
