@@ -249,6 +249,39 @@ fn narrow_runtime_can_register_text_library_via_lifted_impl() {
 
 #[cfg(feature = "floats")]
 #[test]
+fn f32_narrow_runtime_can_register_math_library_via_lifted_impl() {
+    // After step 10, Math lifts to Library<W, A, F> for any (W, A, F).
+    // Register Math on a runtime whose Float type is f32; the host
+    // closures' f64 arguments and returns truncate at the marshall
+    // boundary through Float::from_f64 / Float::to_f64. The numeric
+    // result (sqrt(9.0) = 3.0) survives the narrowing because 3.0
+    // is exactly representable in f32.
+    let target = Target {
+        word_bits_log2: 6,
+        addr_bits_log2: 6,
+        float_bits_log2: 5,
+        has_floats: true,
+        has_strings: false,
+    };
+    let src = "use math::sqrt\nfn main() -> Float { math::sqrt(9.0) }";
+    let tokens = tokenize(src).expect("lex");
+    let program = parse(&tokens).expect("parse");
+    let module = compile_with_target(&program, &target).expect("compile");
+
+    let arena = Arena::with_capacity(4096);
+    type F32Vm<'a, 'arena> = GenericVm<'a, 'arena, i64, u64, f32>;
+    let mut vm: F32Vm<'_, '_> = F32Vm::new(module, &arena).expect("new");
+    vm.register_library(keleusma::stddsl::Math);
+    match vm.call(&[]).expect("call") {
+        GenericVmState::Finished(GenericValue::Float(f)) => {
+            assert_eq!(f, 3.0_f32);
+        }
+        other => panic!("unexpected: {:?}", other),
+    }
+}
+
+#[cfg(feature = "floats")]
+#[test]
 fn narrow_runtime_can_register_math_library_via_lifted_impl() {
     // The stddsl::Math bundle was lifted to `Library<W, A, f64>` so
     // a runtime with W = i16 (and F kept at f64 because the bundle's

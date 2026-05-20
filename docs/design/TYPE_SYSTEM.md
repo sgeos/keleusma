@@ -8,16 +8,16 @@ Keleusma uses a static nominal type system with Rust syntax. There is no implici
 
 ## Primitive Types
 
-| Type | Description | Size (bytes) | Alignment (bytes) |
+| Type | Description | Size on default `Vm<i64, u64, f64>` (bytes) | Alignment (bytes) |
 |------|-------------|---|---|
-| `Word` | 64-bit signed integer | 8 | 8 |
-| `Float` | 64-bit floating-point number | 8 | 8 |
+| `Word` | Signed integer of the runtime's word width | 8 | 8 |
+| `Float` | Floating-point number of the runtime's float width | 8 | 8 |
 | `bool` | Boolean value | 1 | 1 |
 | `()` | Unit type | 0 | 1 |
 
-All numeric operations use `Word` or `Float`. When host structs contain smaller integer types such as `i32` or `u16`, those values are widened to `Word` at the boundary between the host and the script.
+All numeric operations use `Word` or `Float`. When host structs contain integer types other than the runtime's word, those values are widened or truncated through `Word::to_i64` and `Word::from_i64_wrap` at the boundary between the host and the script.
 
-Sizes and alignments above assume the modern 64-bit target. Future work extends the type system with `word`, `byte`, `bit`, and `address` primitives whose sizes and alignments are target-defined. See R33 and B10 for the modern-target assumption and the portability future work.
+The `Word` and `Float` surface types refer to the runtime's chosen word and float widths. The bundled default runtime is `Vm<i64, u64, f64>`, which makes `Word` a 64-bit signed integer and `Float` a 64-bit IEEE-754 floating-point number; the sizes and alignments above reflect that default. Hosts that instantiate the parametric `GenericVm<W, A, F>` shape with narrower trait parameters change the underlying widths accordingly. The bytecode header's `word_bits_log2`, `addr_bits_log2`, and `float_bits_log2` fields record the declared widths so a runtime can reject mismatched bytecode at load time. See B16 in [BACKLOG.md](../decisions/BACKLOG.md) for the parametric-Vm cascade and `docs/guide/COOKBOOK.md` for the narrow-runtime type-alias recipe.
 
 ## Text Types
 
@@ -190,8 +190,8 @@ All values in the virtual machine are represented as variants of the `Value` enu
 |---------|----------|-------------|
 | `Value::Unit` | None | The unit value `()` |
 | `Value::Bool(bool)` | A boolean | True or false |
-| `Value::Int(Word)` | A 64-bit integer | Signed integer value |
-| `Value::Float(Float)` | A 64-bit float | Floating-point value |
+| `Value::Int(Word)` | A runtime-width signed integer | Signed integer value |
+| `Value::Float(Float)` | A runtime-width floating-point number | Floating-point value |
 | `Value::StaticStr(String)` | A UTF-8 static string | Static string referenced from the code image |
 | `Value::KStr(KString)` | An arena-resident `KString` handle | Dynamic string allocated in the host-owned arena's top region |
 | `Value::Tuple(Vec<Value>)` | A vector of values | Anonymous product type |

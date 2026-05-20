@@ -322,9 +322,18 @@ vm.register_fn("host::triple", |x: i64| -> i64 { x * 3 });
 
 On a `NarrowVm`, the script-side `i16` argument widens to `i64` for the host closure; the `i64` return truncates back to `i16` through `Word::from_i64_wrap`. Hosts that want native-width Rust types (a closure body that takes `i16` directly to avoid widening) can add their own `KeleusmaType<i16, f32> for i16` impl in their crate.
 
-### Standard library bundles remain on the default shape
+### Standard library bundles work on narrow runtimes
 
-The `stddsl::Math`, `Audio`, `Text`, and `Shell` bundles implement `Library<i64, u64, f64>` because their inner closures pin `f64`. A `NarrowVm` cannot register these bundles. Hosts targeting narrow runtimes write their own library bundle on top of the parametric `register_fn` surface, or implement `Library<W, A, F>` for their narrow shape.
+All four `stddsl` bundles implement `Library<W, A, F>` universally and register on any admissible runtime shape. `Math` and `Audio` carry their inner closures in `f64`; on a runtime whose `F` is `f32`, every closure argument and return value passes through `Float::from_f64` and `Float::to_f64` at the marshall boundary, narrowing intermediates and constants. The narrowing is mathematically defined and silent. `Text` and `Shell` have no floating-point surface and so quantify over `F` without precision implications.
+
+```rust
+let mut vm: NarrowVm<'_, '_> = NarrowVm::new(module, &arena).expect("verify");
+vm.register_library(keleusma::stddsl::Math);
+vm.register_library(keleusma::stddsl::Audio);
+vm.register_library(keleusma::stddsl::Text);
+```
+
+Programs that require full `f64` precision should declare a runtime whose `F` is `f64` rather than relying on the silent narrowing. The narrow-float runtime is the appropriate choice when the target's FPU is single-precision and the script does not need the extra mantissa.
 
 ### Word-width arithmetic discipline
 

@@ -15,6 +15,7 @@ use alloc::string::String;
 use core::f64::consts;
 
 use crate::address::Address;
+use crate::float::Float;
 use crate::vm::{GenericVm, VmError};
 use crate::word::Word;
 
@@ -23,15 +24,16 @@ use crate::word::Word;
 /// These are pure functions that do not require engine access.
 /// They are available under the `audio::` namespace.
 ///
-/// Parametric over `W: Word` and `A: Address` and pinned to
-/// `F = f64`. Hosts targeting a narrow runtime can therefore
-/// register the audio bundle through
-/// `vm.register_library(stddsl::Audio)` so long as they keep the
-/// runtime's float type as `f64`. The closures use the universal
-/// `KeleusmaType<W, f64>` impls for `i64`, `f64`, and tuples to
-/// bridge the host signatures to the script-visible word type.
-pub fn register_audio_natives<'a, 'arena, W: Word, A: Address>(
-    vm: &mut GenericVm<'a, 'arena, W, A, f64>,
+/// Parametric over the full `(W, A, F)` triple. The closures use
+/// the universal `KeleusmaType<W, F> for i64` and `for f64` impls
+/// to bridge the host's Rust signatures to the runtime's script
+/// word and float types. When `F = f32`, every `f64`-typed
+/// closure argument and return value passes through
+/// `Float::from_f64` and `Float::to_f64` at the boundary; this
+/// narrows constants and intermediates and is documented as a
+/// known precision tradeoff for narrow-float runtimes.
+pub fn register_audio_natives<'a, 'arena, W: Word, A: Address, F: Float>(
+    vm: &mut GenericVm<'a, 'arena, W, A, F>,
 ) {
     // -- Pitch conversion --
 

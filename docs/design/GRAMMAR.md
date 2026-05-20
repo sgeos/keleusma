@@ -119,13 +119,15 @@ Whitespace (spaces, tabs, newlines) is not significant except as a token separat
 
 ### Primitive Types
 
-| Type | Description | Rust Equivalent |
+| Type | Description | Rust Equivalent on default `Vm<i64, u64, f64>` |
 |------|-------------|-----------------|
-| `Word` | 64-bit signed integer | `i64` |
-| `Float` | 64-bit floating point | `f64` |
+| `Word` | Signed integer of the runtime's word width | `i64` |
+| `Float` | Floating-point number of the runtime's float width | `f64` |
 | `bool` | Boolean value | `bool` |
 | `Text` | UTF-8 string | `String` |
 | `()` | Unit type | `()` |
+
+The `Word` and `Float` Rust equivalents shown reflect the bundled default runtime. Hosts that instantiate the parametric `GenericVm<W, A, F>` shape pick narrower Rust types for `Word` and `Float`. See [TYPE_SYSTEM.md, Primitive Types](TYPE_SYSTEM.md#primitive-types) for the full statement.
 
 All numeric operations use `Word` or `Float`. Smaller integer types (`u8`, `u32`) from host structs are widened to `Word` when accessed in Keleusma. Native function bindings handle the narrowing conversion at the boundary.
 

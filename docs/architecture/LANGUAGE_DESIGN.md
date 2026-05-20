@@ -154,7 +154,7 @@ WCET is reported in **pipelined cycles**. WCMU is reported in **bytes**.
 
 A pipelined cycle is a CPU cycle in which the host's pipeline operates at steady-state throughput. The cycle assumes warm instruction and data caches, correctly predicted branches, and no contention from other cores or peripherals on the memory bus. The pipelined-cycle metric is what CPU optimization tables, including Agner Fog's instruction tables and the Intel Optimization Reference Manual, call "throughput" or "reciprocal throughput" per instruction. The metric is observable, reproducible, and measurable through standard benchmarking with warmed caches and a stable branch predictor.
 
-The byte unit is target-independent in principle. The actual byte count returned by the analysis depends on the runtime's value-slot size, which the cost model carries as `value_slot_bytes`. The current 64-bit Keleusma runtime declares 32 bytes per slot, a conservative bound that includes alignment padding for the runtime-tagged `Value` enum. A future 32-bit runtime would declare a smaller value.
+The byte unit is target-independent in principle. The actual byte count returned by the analysis depends on the runtime's value-slot size, which the cost model carries as `value_slot_bytes`. The bundled default Keleusma runtime (`Vm<i64, u64, f64>`) declares 32 bytes per slot, a conservative bound that includes alignment padding for the runtime-tagged `GenericValue<i64, f64>` enum. Hosts targeting sub-64-bit native runtimes through the parametric `GenericVm<W, A, F>` shape consume fewer bytes per slot, although the verifier currently retains the 32-byte conservative bound regardless of the chosen `W` and `F`; see B16 in [BACKLOG.md](../decisions/BACKLOG.md) for the parametric-Vm cascade.
 
 ### What the language guarantees
 
@@ -258,7 +258,7 @@ A refined newtype may additionally declare saturation contracts through the `wit
 
 ### Numeric Overflow Construct
 
-`expr { ok(p) => ..., overflow(ph, pl) => ..., underflow(ph, pl) => ... }` guards a single arithmetic operation against overflow and underflow. The supported operations are `+`, `-`, `*`, `/`, `%`, and unary `-` on Word operands. The runtime computes the true result in `i128` and pushes `(high, low, flag)` so arm patterns can destructure the high and low halves; this is the load-bearing mechanism for big-number arithmetic.
+`expr { ok(p) => ..., overflow(ph, pl) => ..., underflow(ph, pl) => ... }` guards a single arithmetic operation against overflow and underflow. The supported operations are `+`, `-`, `*`, `/`, `%`, and unary `-` on Word operands. The runtime computes the true result in the next-larger signed integer (`W::Wide`: `i16` for `Word = i8`, `i32` for `i16`, `i64` for `i32`, `i128` for `i64`) and pushes `(high, low, flag)` so arm patterns can destructure the high and low halves; this is the load-bearing mechanism for big-number arithmetic. On the default `i64` runtime, the widened type is `i128`.
 
 Arms follow pattern-match semantics. Each pattern position admits the wildcard `_`, a bare identifier (binds a `Word`), or a signed integer literal (matches by equality). An optional `when expr` guard between the pattern and the `=>` is checked as `Bool` and falls through to the next arm when false. Each outcome class (`ok`, `overflow`, `underflow`) must end in an unguarded catch-all arm. Multiple specialized arms per class are admitted as long as the catch-all is the last covering arm.
 
