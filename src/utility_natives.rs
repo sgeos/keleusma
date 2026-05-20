@@ -3,32 +3,39 @@ use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 
+use crate::address::Address;
+use crate::bytecode::GenericValue;
+use crate::float::Float;
 use crate::kstring::KString;
+use crate::vm::{GenericVm, NativeCtx, Vm, VmError};
+use crate::word::Word;
 use keleusma_arena::Arena;
-
-use crate::bytecode::Value;
-use crate::vm::{NativeCtx, Vm, VmError};
 
 /// Render a value to its string representation, resolving
 /// arena-backed `KStr` handles through the supplied arena.
 ///
 /// Stale `KStr` handles render as the literal `<stale>` placeholder.
-fn render_value_to_string(arena: &Arena, val: &Value) -> String {
+///
+/// Parametric over `(W, F)`. Integer payloads are formatted through
+/// `Word::to_i64` so any narrow word type produces the same numeric
+/// rendering as the default i64. Float payloads are formatted
+/// through `Float::to_f64` for the same reason.
+fn render_value_to_string<W: Word, F: Float>(arena: &Arena, val: &GenericValue<W, F>) -> String {
     match val {
-        Value::Int(n) => format!("{}", n),
-        Value::Byte(b) => format!("{}", b),
-        Value::Fixed(bits) => format!("Fixed({})", bits),
+        GenericValue::Int(n) => format!("{}", W::to_i64(*n)),
+        GenericValue::Byte(b) => format!("{}", b),
+        GenericValue::Fixed(bits) => format!("Fixed({})", W::to_i64(*bits)),
         #[cfg(feature = "floats")]
-        Value::Float(f) => format!("{}", f),
-        Value::Bool(b) => format!("{}", b),
-        Value::StaticStr(s) => s.clone(),
-        Value::KStr(h) => match h.get(arena) {
+        GenericValue::Float(f) => format!("{}", F::to_f64(*f)),
+        GenericValue::Bool(b) => format!("{}", b),
+        GenericValue::StaticStr(s) => s.clone(),
+        GenericValue::KStr(h) => match h.get(arena) {
             Ok(s) => String::from(s),
             Err(_) => String::from("<stale>"),
         },
-        Value::Unit => String::from("()"),
-        Value::None => String::from("None"),
-        Value::Func {
+        GenericValue::Unit => String::from("()"),
+        GenericValue::None => String::from("None"),
+        GenericValue::Func {
             chunk_idx,
             env,
             recursive,
@@ -40,21 +47,21 @@ fn render_value_to_string(arena: &Arena, val: &Value) -> String {
                 format!("<{}:{}/{}>", kind, chunk_idx, env.len())
             }
         }
-        Value::Tuple(elems) => {
+        GenericValue::Tuple(elems) => {
             let parts: Vec<String> = elems
                 .iter()
                 .map(|e| render_value_to_string(arena, e))
                 .collect();
             format!("({})", parts.join(", "))
         }
-        Value::Array(elems) => {
+        GenericValue::Array(elems) => {
             let parts: Vec<String> = elems
                 .iter()
                 .map(|e| render_value_to_string(arena, e))
                 .collect();
             format!("[{}]", parts.join(", "))
         }
-        Value::Struct {
+        GenericValue::Struct {
             type_name, fields, ..
         } => {
             let parts: Vec<String> = fields
@@ -63,7 +70,7 @@ fn render_value_to_string(arena: &Arena, val: &Value) -> String {
                 .collect();
             format!("{} {{ {} }}", type_name, parts.join(", "))
         }
-        Value::Enum {
+        GenericValue::Enum {
             type_name,
             variant,
             fields,
@@ -78,18 +85,21 @@ fn render_value_to_string(arena: &Arena, val: &Value) -> String {
                 format!("{}::{}({})", type_name, variant, parts.join(", "))
             }
         }
-        Value::Opaque(o) => format!("<opaque {}>", o.type_name()),
+        GenericValue::Opaque(o) => format!("<opaque {}>", o.type_name()),
         #[cfg(not(feature = "floats"))]
-        Value::_PhantomFloat(_) => unreachable!("_PhantomFloat is never constructed"),
+        GenericValue::_PhantomFloat(_) => unreachable!("_PhantomFloat is never constructed"),
     }
 }
 
 /// Convert any value to its string representation.
 ///
-/// Returns a [`Value::KStr`] backed by the host-owned arena's top
-/// region. The result becomes [`keleusma_arena::Stale`] on the next
-/// reset.
-fn native_to_string_with_ctx(ctx: &NativeCtx<'_>, args: &[Value]) -> Result<Value, VmError> {
+/// Returns a [`GenericValue::KStr`] backed by the host-owned arena's
+/// top region. The result becomes [`keleusma_arena::Stale`] on the
+/// next reset.
+fn native_to_string_with_ctx<W: Word, F: Float>(
+    ctx: &NativeCtx<'_>,
+    args: &[GenericValue<W, F>],
+) -> Result<GenericValue<W, F>, VmError> {
     check_arity("to_string", 1, args)?;
     let s = render_value_to_string(ctx.arena, &args[0]);
     finalize_string_result("to_string", ctx.arena, s)
@@ -97,19 +107,30 @@ fn native_to_string_with_ctx(ctx: &NativeCtx<'_>, args: &[Value]) -> Result<Valu
 
 /// Get the length of an array, string, or tuple with arena context.
 ///
-/// Resolves [`Value::KStr`] handles through the arena.
-fn native_length_with_ctx(ctx: &NativeCtx<'_>, args: &[Value]) -> Result<Value, VmError> {
+/// Resolves [`GenericValue::KStr`] handles through the arena. The
+/// returned integer is wrapped through `Word::from_i64_wrap` so the
+/// length fits the runtime's word width. Lengths that exceed `W`'s
+/// range silently truncate; hosts running narrow runtimes against
+/// long arrays should bound input sizes elsewhere.
+fn native_length_with_ctx<W: Word, F: Float>(
+    ctx: &NativeCtx<'_>,
+    args: &[GenericValue<W, F>],
+) -> Result<GenericValue<W, F>, VmError> {
     check_arity("length", 1, args)?;
     match &args[0] {
-        Value::Array(arr) => Ok(Value::Int(arr.len() as i64)),
-        Value::StaticStr(s) => Ok(Value::Int(s.chars().count() as i64)),
-        Value::KStr(h) => match h.get(ctx.arena) {
-            Ok(s) => Ok(Value::Int(s.chars().count() as i64)),
+        GenericValue::Array(arr) => Ok(GenericValue::Int(W::from_i64_wrap(arr.len() as i64))),
+        GenericValue::StaticStr(s) => Ok(GenericValue::Int(W::from_i64_wrap(
+            s.chars().count() as i64
+        ))),
+        GenericValue::KStr(h) => match h.get(ctx.arena) {
+            Ok(s) => Ok(GenericValue::Int(
+                W::from_i64_wrap(s.chars().count() as i64),
+            )),
             Err(_) => Err(VmError::NativeError(String::from(
                 "length: KStr is stale (arena reset since allocation)",
             ))),
         },
-        Value::Tuple(t) => Ok(Value::Int(t.len() as i64)),
+        GenericValue::Tuple(t) => Ok(GenericValue::Int(W::from_i64_wrap(t.len() as i64))),
         other => Err(VmError::TypeError(format!(
             "length: unsupported type {}",
             other.type_name()
@@ -118,15 +139,14 @@ fn native_length_with_ctx(ctx: &NativeCtx<'_>, args: &[Value]) -> Result<Value, 
 }
 
 /// Helper: read a string Value as an owned `String`, resolving
-/// arena-backed `Value::KStr` through the supplied arena.
-///
-/// `Value::StaticStr` clones the contents. `Value::KStr` is resolved
-/// through `KString::get` and copied. Stale KStr handles produce a
-/// `NativeError`.
-fn read_string_arg(arena: &Arena, v: &Value) -> Result<String, VmError> {
+/// arena-backed `GenericValue::KStr` through the supplied arena.
+fn read_string_arg<W: Word, F: Float>(
+    arena: &Arena,
+    v: &GenericValue<W, F>,
+) -> Result<String, VmError> {
     match v {
-        Value::StaticStr(s) => Ok(s.clone()),
-        Value::KStr(h) => match h.get(arena) {
+        GenericValue::StaticStr(s) => Ok(s.clone()),
+        GenericValue::KStr(h) => match h.get(arena) {
             Ok(s) => Ok(String::from(s)),
             Err(_) => Err(VmError::NativeError(String::from(
                 "KStr is stale (arena reset since allocation)",
@@ -142,7 +162,11 @@ fn read_string_arg(arena: &Arena, v: &Value) -> Result<String, VmError> {
 /// Helper: validate that the argument count matches `expected` and
 /// produce a uniform error message otherwise. Used by every native
 /// in this module that has a fixed arity.
-fn check_arity(name: &str, expected: usize, args: &[Value]) -> Result<(), VmError> {
+fn check_arity<W: Word, F: Float>(
+    name: &str,
+    expected: usize,
+    args: &[GenericValue<W, F>],
+) -> Result<(), VmError> {
     if args.len() != expected {
         return Err(VmError::NativeError(format!(
             "{}: expected {} argument{}, got {}",
@@ -155,10 +179,16 @@ fn check_arity(name: &str, expected: usize, args: &[Value]) -> Result<(), VmErro
     Ok(())
 }
 
-/// Helper: read an i64 argument or produce a typed error.
-fn read_i64_arg(name: &str, arg_label: &str, v: &Value) -> Result<i64, VmError> {
+/// Helper: read an i64-valued argument or produce a typed error.
+/// Sign-extends the runtime's word type via `Word::to_i64` so callers
+/// can treat the value as an `i64` regardless of `W`'s width.
+fn read_i64_arg<W: Word, F: Float>(
+    name: &str,
+    arg_label: &str,
+    v: &GenericValue<W, F>,
+) -> Result<i64, VmError> {
     match v {
-        Value::Int(i) => Ok(*i),
+        GenericValue::Int(i) => Ok(W::to_i64(*i)),
         other => Err(VmError::TypeError(format!(
             "{}: {} must be Word, got {}",
             name,
@@ -169,25 +199,25 @@ fn read_i64_arg(name: &str, arg_label: &str, v: &Value) -> Result<i64, VmError> 
 }
 
 /// Helper: copy a produced `String` into the arena and wrap the
-/// resulting handle in `Value::KStr`. The error path produces a
-/// clear allocation-failure message that mentions the originating
+/// resulting handle in `GenericValue::KStr`. The error path produces
+/// a clear allocation-failure message that mentions the originating
 /// native name.
-fn finalize_string_result(name: &str, arena: &Arena, out: String) -> Result<Value, VmError> {
+fn finalize_string_result<W: Word, F: Float>(
+    name: &str,
+    arena: &Arena,
+    out: String,
+) -> Result<GenericValue<W, F>, VmError> {
     let handle = KString::alloc(arena, &out).map_err(|_| {
         VmError::NativeError(format!("{}: arena allocation failed (out of memory)", name))
     })?;
-    Ok(Value::KStr(handle))
+    Ok(GenericValue::KStr(handle))
 }
 
 /// Concatenate two strings with arena context.
-///
-/// Worst-case output length is the sum of the operand lengths.
-/// Hosts that rely on `verify_resource_bounds` for real-time
-/// embedding must declare a heap bound through `set_native_bounds`
-/// before invoking the VM. Without an attestation, the analysis
-/// treats `concat` as zero-cost, which is unsound for unbounded
-/// inputs.
-fn native_concat_with_ctx(ctx: &NativeCtx<'_>, args: &[Value]) -> Result<Value, VmError> {
+fn native_concat_with_ctx<W: Word, F: Float>(
+    ctx: &NativeCtx<'_>,
+    args: &[GenericValue<W, F>],
+) -> Result<GenericValue<W, F>, VmError> {
     check_arity("concat", 2, args)?;
     let a = read_string_arg(ctx.arena, &args[0])?;
     let b = read_string_arg(ctx.arena, &args[1])?;
@@ -199,15 +229,10 @@ fn native_concat_with_ctx(ctx: &NativeCtx<'_>, args: &[Value]) -> Result<Value, 
 
 /// Substring slice from `start` (inclusive) to `end` (exclusive) with
 /// arena context.
-///
-/// Bounds: `0 <= start <= end <= length`. Out-of-range indices return
-/// a `NativeError`. Indexes are character counts measured in Unicode
-/// code points (matching `length`'s semantics), not byte offsets, so
-/// multi-byte characters are not split.
-///
-/// Worst-case output length is `end - start`. The same WCMU
-/// attestation guidance as `concat` applies.
-fn native_slice_with_ctx(ctx: &NativeCtx<'_>, args: &[Value]) -> Result<Value, VmError> {
+fn native_slice_with_ctx<W: Word, F: Float>(
+    ctx: &NativeCtx<'_>,
+    args: &[GenericValue<W, F>],
+) -> Result<GenericValue<W, F>, VmError> {
     check_arity("slice", 3, args)?;
     let s = read_string_arg(ctx.arena, &args[0])?;
     let start = read_i64_arg("slice", "start", &args[1])?;
@@ -216,9 +241,7 @@ fn native_slice_with_ctx(ctx: &NativeCtx<'_>, args: &[Value]) -> Result<Value, V
     finalize_string_result("slice", ctx.arena, out)
 }
 
-/// Helper: extract a substring by character indices. Returns a new
-/// owned `String`. Bounds-checks both indices and rejects out-of-range
-/// or inverted ranges.
+/// Helper: extract a substring by character indices.
 fn slice_chars(s: &str, start: i64, end: i64) -> Result<String, VmError> {
     if start < 0 {
         return Err(VmError::NativeError(format!(
@@ -248,40 +271,45 @@ fn slice_chars(s: &str, start: i64, end: i64) -> Result<String, VmError> {
 /// Debug print a value. Returns Unit. In no_std this is a no-op; the host
 /// can override with a closure using `register_native_closure` if output
 /// is desired.
-fn native_println(args: &[Value]) -> Result<Value, VmError> {
+fn native_println<W: Word, F: Float>(
+    args: &[GenericValue<W, F>],
+) -> Result<GenericValue<W, F>, VmError> {
     check_arity("println", 1, args)?;
     // No-op in no_std. The value is consumed but not printed.
-    Ok(Value::Unit)
+    Ok(GenericValue::Unit)
 }
 
 /// Register utility native functions on the VM.
 ///
-/// `to_string` returns [`Value::KStr`] backed by the host-owned
-/// arena's top region. The result becomes
+/// `to_string` returns [`GenericValue::KStr`] backed by the
+/// host-owned arena's top region. The result becomes
 /// [`keleusma_arena::Stale`] on the next reset. `length` resolves
-/// `Value::KStr` arguments through the arena before counting
+/// `GenericValue::KStr` arguments through the arena before counting
 /// characters. `concat` and `slice` produce arena-allocated
-/// `Value::KStr` results from their `StaticStr` or `KStr` inputs.
+/// `GenericValue::KStr` results from their `StaticStr` or `KStr`
+/// inputs.
 ///
 /// Registers: `to_string`, `length`, `concat`, `slice`, `println`.
 ///
-/// Math routines that previously rode along with this bundle
-/// have been consolidated under [`crate::stddsl::Math`]. Hosts
-/// that need `math::sqrt`, `math::floor`, `math::ceil`,
-/// `math::round`, or `math::log2` alongside the text utilities
-/// should also register `stddsl::Math`.
-pub fn register_utility_natives<'a, 'arena>(vm: &mut Vm<'a, 'arena>) {
-    vm.register_native_with_ctx("to_string", native_to_string_with_ctx);
-    vm.register_native_with_ctx("length", native_length_with_ctx);
-    vm.register_native_with_ctx("concat", native_concat_with_ctx);
-    vm.register_native_with_ctx("slice", native_slice_with_ctx);
-    vm.register_native("println", native_println);
+/// Parametric over `(W, A, F)` so narrow runtimes can register the
+/// bundle without writing their own utility-natives equivalents.
+/// Lengths returned by `length` and indices accepted by `slice` are
+/// bridged through `Word::to_i64` and `Word::from_i64_wrap`; lengths
+/// that exceed `W`'s range silently truncate.
+pub fn register_utility_natives<'a, 'arena, W: Word, A: Address, F: Float>(
+    vm: &mut GenericVm<'a, 'arena, W, A, F>,
+) {
+    vm.register_native_with_ctx("to_string", native_to_string_with_ctx::<W, F>);
+    vm.register_native_with_ctx("length", native_length_with_ctx::<W, F>);
+    vm.register_native_with_ctx("concat", native_concat_with_ctx::<W, F>);
+    vm.register_native_with_ctx("slice", native_slice_with_ctx::<W, F>);
+    vm.register_native("println", native_println::<W, F>);
 }
 
 /// Deprecated alias for [`register_utility_natives`]. Retained for
 /// API compatibility; both registration entry points now produce
-/// arena-allocated `Value::KStr` results since `Value::DynStr` was
-/// removed in V0.2.0.
+/// arena-allocated `GenericValue::KStr` results since
+/// `GenericValue::DynStr` was removed in V0.2.0.
 #[deprecated(
     since = "0.2.0",
     note = "Value::DynStr was removed in V0.2.0; use register_utility_natives, which is now arena-aware by default."
@@ -293,6 +321,7 @@ pub fn register_utility_natives_with_ctx<'a, 'arena>(vm: &mut Vm<'a, 'arena>) {
 #[cfg(all(test, feature = "compile", feature = "verify", feature = "floats"))]
 mod tests {
     use super::*;
+    use crate::bytecode::Value;
     use crate::compiler::compile;
     use crate::lexer::tokenize;
     use crate::parser::parse;

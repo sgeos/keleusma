@@ -45,7 +45,7 @@ extern crate alloc;
 
 use crate::address::Address;
 use crate::float::Float;
-use crate::vm::{GenericVm, Vm};
+use crate::vm::GenericVm;
 use crate::word::Word;
 
 /// Host-registerable bundle of native functions.
@@ -148,15 +148,15 @@ impl<W: Word, A: Address> Library<W, A, f64> for Audio {
     }
 }
 
-impl Library<i64, u64, f64> for Text {
-    fn register<'a, 'arena>(self, vm: &mut Vm<'a, 'arena>) {
+impl<W: Word, A: Address, F: Float> Library<W, A, F> for Text {
+    fn register<'a, 'arena>(self, vm: &mut GenericVm<'a, 'arena, W, A, F>) {
         text::register(vm);
     }
 }
 
 #[cfg(feature = "shell")]
-impl Library<i64, u64, f64> for Shell {
-    fn register<'a, 'arena>(self, vm: &mut Vm<'a, 'arena>) {
+impl<W: Word, A: Address, F: Float> Library<W, A, F> for Shell {
+    fn register<'a, 'arena>(self, vm: &mut GenericVm<'a, 'arena, W, A, F>) {
         shell::register(vm);
     }
 }
@@ -287,8 +287,13 @@ mod math {
 }
 
 mod text {
-    use crate::vm::Vm;
-    pub fn register<'a, 'arena>(vm: &mut Vm<'a, 'arena>) {
+    use crate::address::Address;
+    use crate::float::Float;
+    use crate::vm::GenericVm;
+    use crate::word::Word;
+    pub fn register<'a, 'arena, W: Word, A: Address, F: Float>(
+        vm: &mut GenericVm<'a, 'arena, W, A, F>,
+    ) {
         // Delegate to the existing utility_natives bundle which
         // registers the arena-aware `to_string`, `concat`,
         // `slice`, `length`, and `println`. The math::* entries
@@ -309,7 +314,7 @@ mod tests {
     use crate::compiler::compile;
     use crate::lexer::tokenize;
     use crate::parser::parse;
-    use crate::vm::{DEFAULT_ARENA_CAPACITY, VmState};
+    use crate::vm::{DEFAULT_ARENA_CAPACITY, Vm, VmState};
 
     /// Run a Keleusma program with the Math bundle registered and
     /// return the result. Test helper local to the Math bundle

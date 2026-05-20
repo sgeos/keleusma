@@ -9,22 +9,23 @@ AI to Human communication channel.
 ## Last Updated
 
 **Date**: 2026-05-20
-**Status**: B16 step 8 lands the soundness-closure follow-up pass. The three gaps recorded in the previous gap audit are all addressed: load-time width validation rejects bytecode that exceeds the runtime's chosen `W`/`A`/`F` widths; `stddsl::Math` and `stddsl::Audio` lift to be generic over `(W, A)` so narrow runtimes can register them; and `Word::to_usize_checked` joins the trait surface as a default-method mirror of `Address::to_usize_checked`. The `Address` parameter `A` now carries runtime semantics through the width check.
+**Status**: B16 step 9 lifts `stddsl::Text` and `stddsl::Shell` to be generic over `(W, A, F)`. All four standard library bundles are now parametric: `Math` and `Audio` over `(W, A)` with `F` pinned to `f64`; `Text` and `Shell` over `(W, A, F)` with no pinning. The utility-natives and shell-natives modules are generic over the runtime's word and float types, with integer payload bridging through `Word::to_i64` and `Word::from_i64_wrap`. B16 is fully closed from a runtime-correctness standpoint.
 
 ## Completed in this session round
 
 | Directive | Resolution |
 |-----------|------------|
-| Close the three gaps surfaced in the gap audit. | (1) Load-time width validation. New private helper `GenericVm::check_runtime_widths` rejects bytecode whose declared widths exceed the runtime's `<W as Word>::BITS_LOG2`, `<A as Address>::BITS_LOG2`, or `<F as Float>::BITS_LOG2`. Wired into the top of `construct` (catches `Vm::new` and `Vm::new_unchecked` through the shared path) and into `view_bytes_zero_copy` (which reads the widths directly from the framing header bytes 10-12). Rejection surfaces as `VmError::VerifyError` with a message naming the offending field. (2) Standard-library bundle lift. `stddsl::Math` and `stddsl::Audio` move from `Library<i64, u64, f64>` to `impl<W: Word, A: Address> Library<W, A, f64>`. The inner `math::register` and `audio_natives::register_audio_natives` take `&mut GenericVm<W, A, f64>` so the closures can compile against the universal `KeleusmaType<W, f64>` impls. `stddsl::Text` and `stddsl::Shell` remain `Library<i64, u64, f64>` because their inner natives use `&[Value]` directly. (3) `Word::to_usize_checked` added as a default trait method delegating to `to_i64` and `usize::try_from`. Two unit tests pin the positive and negative branches across `i8`, `i16`, and `i64`. Four new integration tests in `tests/narrow_vm.rs` verify the lifted bundles and the rejection paths. |
+| Lift `stddsl::Text` and `stddsl::Shell` to be generic. | `src/utility_natives.rs` rewritten with every native function and helper quantifying over `<W: Word, F: Float>`. Pattern arms switch from `Value::` to `GenericValue::`; integer payload formatting bridges through `W::to_i64` so any narrow word type renders the same numeric output as the default i64; length values from `length` wrap through `W::from_i64_wrap` so they fit the runtime's word width. `register_utility_natives<'a, 'arena, W: Word, A: Address, F: Float>` takes `&mut GenericVm<W, A, F>` and passes generic function pointers to `register_native_with_ctx` and `register_native`. `src/stddsl/shell.rs` lifted the same way for `getenv`, `has_env`, `run`, `run_checked`, and `exit`; the exit-code argument bridges through `W::to_i64` for the `std::process::exit(code as i32)` call site, and the `(exit_code, stdout)` tuple wraps the exit code through `W::from_i64_wrap`. `src/stddsl/mod.rs` updated to impl `Library<W, A, F>` for `Text` and `Shell` universally; the inner `text::register` quantifies the same way. A new integration test in `tests/narrow_vm.rs` (gated on the `text` feature) registers `stddsl::Text` on `GenericVm<i16, u16, f64>` and confirms `length("hello")` returns `5_i16`. |
 
 ## Verification matrix
 
 ```bash
-cargo test -p keleusma --lib                                                    # 736 lib tests pass (was 734; +2 to_usize_checked)
+cargo test -p keleusma --lib                                                    # 736 lib tests pass
 cargo test --workspace                                                          # all workspace tests pass
-cargo test -p keleusma --no-default-features --features compile,verify --lib    # 644 lib tests pass (floats off; was 642; +2)
-cargo test --test narrow_vm                                                     # 7 tests pass (was 4; +3 width / bundle / f32)
-cargo clippy --tests --all-targets -- -D warnings                               # clean
+cargo test --workspace --features text                                          # 10 narrow_vm tests pass (was 9; +1 Text lift)
+cargo test -p keleusma --no-default-features --features compile,verify --lib    # 644 lib tests pass (floats off)
+cargo check --features shell                                                    # clean
+cargo clippy --tests --all-targets --features text -- -D warnings               # clean
 cargo fmt --all                                                                 # idempotent
 cargo run --example narrow_runtime                                              # prints expected output
 
@@ -41,16 +42,17 @@ cargo run --example narrow_runtime                                              
 | B13 | Refinement-type compile-time elision through range analysis | Deferred |
 | B14 | CallIndirect flow analysis for non-recursive closures | Deferred to V0.3 |
 | B15 | Remove `Type::Unknown` entirely | Foundation in place; refactor pending |
-| B16 | Parametric `Vm<W, A, F>` for sub-64-bit native runtimes | Resolved (all eight steps complete) |
+| B16 | Parametric `Vm<W, A, F>` for sub-64-bit native runtimes | Resolved (nine steps complete) |
 | B17 | Embassy feature trimming | Resolved as not actionable |
 | B18 | Big-number arithmetic worked example | Resolved |
 
 ## Notes
 
-- The deprecated `register_utility_natives_with_ctx` alias and `register_utility_natives` itself remain specialized to the default `Vm<'a, 'arena>` because their native function signatures take `&[Value]`. Lifting these to `&[GenericValue<W, F>]` is the path to letting `stddsl::Text` work on narrow runtimes; the work is out of scope for this pass and would touch every `native_*` function in `utility_natives.rs`.
-- Address-bound runtime opcodes that would consume the `A` parameter for more than the load-time width check remain a future enhancement. The current pass elevates `A` from purely-phantom to "validated at load time"; further weight (host-side `A::MAX` bound checks in pointer-shaped opcodes) waits for a concrete consumer.
-- The `truncate_int` workaround in `Op::Add` and `binary_arith` is retained as documented backward-compatibility scaffolding; it is now genuinely backward-compat rather than load-bearing, because the load-time width check rejects the mismatch case that would have required it.
+- All four `stddsl` bundles (`Math`, `Audio`, `Text`, `Shell`) are now registrable on narrow runtimes through the `register_library` entry point. `Math` and `Audio` retain the `F = f64` constraint because their inner closures pin `f64`; a host running an f32 runtime would silently truncate constants through `Float::from_f64` if those bundles were lifted further. `Text` and `Shell` have no float surface and so quantify over `F` without restriction.
+- The `truncate_int` workaround retained in `Op::Add` and `binary_arith` remains intentional, documented backward-compat scaffolding. The load-time width check (step 8) means this path now only fires when a wide Vm runs narrow bytecode (the supported direction).
+- Address-bound runtime opcodes that would consume the `A` parameter for more than the load-time width check remain a future enhancement; no concrete consumer yet. The `A` parameter is no longer purely-phantom because of step 8 but does not yet participate in any opcode's dispatch.
+- The `RUNTIME_*_BITS_LOG2` global constants in `bytecode.rs` remain at 6 (i64) as the binary's bytecode-level upper bound. They could be reduced for a binary build that wants to exclude i64 bytecode entirely; that is a build-configuration question rather than a runtime gap.
 
 ## Intended Next Step
 
-Awaiting operator prompt. B16 is closed end-to-end with the soundness gaps addressed. The next development action belongs to the operator's selection from the remaining backlog (B13, B14, B15, or a Text-bundle lift follow-up) or a new directive.
+Awaiting operator prompt. B16 is closed end-to-end across runtime, marshall, standard-library bundles, and demonstrator/cookbook documentation. The next development action belongs to the operator's selection from B13, B14, B15, or a new directive.

@@ -31,22 +31,29 @@ extern crate std;
 
 use std::process::Command;
 
-use crate::bytecode::Value;
-use crate::vm::{Vm, VmError};
+use crate::address::Address;
+use crate::bytecode::GenericValue;
+use crate::float::Float;
+use crate::vm::{GenericVm, VmError};
+use crate::word::Word;
 
-pub fn register<'a, 'arena>(vm: &mut Vm<'a, 'arena>) {
+pub fn register<'a, 'arena, W: Word, A: Address, F: Float>(
+    vm: &mut GenericVm<'a, 'arena, W, A, F>,
+) {
     // The KeleusmaType marshalling family does not currently
     // support `String` arguments or tuple return types, so the
     // shell natives use the lower-level `register_native` entry
-    // point and pattern-match on `Value` directly.
-    vm.register_native("shell::getenv", getenv_native);
-    vm.register_native("shell::has_env", has_env_native);
-    vm.register_native("shell::run", run_native);
-    vm.register_native("shell::run_checked", run_checked_native);
-    vm.register_native("shell::exit", exit_native);
+    // point and pattern-match on `GenericValue` directly.
+    vm.register_native("shell::getenv", getenv_native::<W, F>);
+    vm.register_native("shell::has_env", has_env_native::<W, F>);
+    vm.register_native("shell::run", run_native::<W, F>);
+    vm.register_native("shell::run_checked", run_checked_native::<W, F>);
+    vm.register_native("shell::exit", exit_native::<W, F>);
 }
 
-fn has_env_native(args: &[Value]) -> Result<Value, VmError> {
+fn has_env_native<W: Word, F: Float>(
+    args: &[GenericValue<W, F>],
+) -> Result<GenericValue<W, F>, VmError> {
     if args.len() != 1 {
         return Err(VmError::NativeError(std::string::String::from(
             "shell::has_env: expected exactly one argument",
@@ -58,17 +65,19 @@ fn has_env_native(args: &[Value]) -> Result<Value, VmError> {
             args[0].type_name()
         ))
     })?;
-    Ok(Value::Bool(std::env::var(name).is_ok()))
+    Ok(GenericValue::Bool(std::env::var(name).is_ok()))
 }
 
-fn exit_native(args: &[Value]) -> Result<Value, VmError> {
+fn exit_native<W: Word, F: Float>(
+    args: &[GenericValue<W, F>],
+) -> Result<GenericValue<W, F>, VmError> {
     if args.len() != 1 {
         return Err(VmError::NativeError(std::string::String::from(
             "shell::exit: expected exactly one argument",
         )));
     }
     let code = match args[0] {
-        Value::Int(n) => n,
+        GenericValue::Int(n) => W::to_i64(n),
         ref v => {
             return Err(VmError::TypeError(std::format!(
                 "shell::exit: expected Word, got {}",
@@ -79,7 +88,9 @@ fn exit_native(args: &[Value]) -> Result<Value, VmError> {
     std::process::exit(code as i32);
 }
 
-fn getenv_native(args: &[Value]) -> Result<Value, VmError> {
+fn getenv_native<W: Word, F: Float>(
+    args: &[GenericValue<W, F>],
+) -> Result<GenericValue<W, F>, VmError> {
     if args.len() != 1 {
         return Err(VmError::NativeError(std::string::String::from(
             "shell::getenv: expected exactly one argument",
@@ -92,12 +103,12 @@ fn getenv_native(args: &[Value]) -> Result<Value, VmError> {
         ))
     })?;
     match std::env::var(name) {
-        Ok(value) => Ok(Value::Enum {
+        Ok(value) => Ok(GenericValue::Enum {
             type_name: std::string::String::from("Option"),
             variant: std::string::String::from("Some"),
-            fields: std::vec![Value::StaticStr(value)],
+            fields: std::vec![GenericValue::StaticStr(value)],
         }),
-        Err(std::env::VarError::NotPresent) => Ok(Value::None),
+        Err(std::env::VarError::NotPresent) => Ok(GenericValue::None),
         Err(std::env::VarError::NotUnicode(_)) => Err(VmError::NativeError(std::format!(
             "shell::getenv: {} is not valid Unicode",
             name
@@ -105,7 +116,9 @@ fn getenv_native(args: &[Value]) -> Result<Value, VmError> {
     }
 }
 
-fn run_native(args: &[Value]) -> Result<Value, VmError> {
+fn run_native<W: Word, F: Float>(
+    args: &[GenericValue<W, F>],
+) -> Result<GenericValue<W, F>, VmError> {
     if args.len() != 1 {
         return Err(VmError::NativeError(std::string::String::from(
             "shell::run: expected exactly one argument",
@@ -124,13 +137,15 @@ fn run_native(args: &[Value]) -> Result<Value, VmError> {
         .map_err(|e| VmError::NativeError(std::format!("shell::run: failed to spawn sh: {}", e)))?;
     let exit_code = output.status.code().unwrap_or(-1) as i64;
     let stdout = std::string::String::from_utf8_lossy(&output.stdout).into_owned();
-    Ok(Value::Tuple(std::vec![
-        Value::Int(exit_code),
-        Value::StaticStr(stdout),
+    Ok(GenericValue::Tuple(std::vec![
+        GenericValue::Int(W::from_i64_wrap(exit_code)),
+        GenericValue::StaticStr(stdout),
     ]))
 }
 
-fn run_checked_native(args: &[Value]) -> Result<Value, VmError> {
+fn run_checked_native<W: Word, F: Float>(
+    args: &[GenericValue<W, F>],
+) -> Result<GenericValue<W, F>, VmError> {
     if args.len() != 1 {
         return Err(VmError::NativeError(std::string::String::from(
             "shell::run_checked: expected exactly one argument",
@@ -162,5 +177,5 @@ fn run_checked_native(args: &[Value]) -> Result<Value, VmError> {
         )));
     }
     let stdout = std::string::String::from_utf8_lossy(&output.stdout).into_owned();
-    Ok(Value::StaticStr(stdout))
+    Ok(GenericValue::StaticStr(stdout))
 }
