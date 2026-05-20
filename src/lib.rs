@@ -4,6 +4,7 @@ extern crate alloc;
 // Always-on runtime modules. These compile under any feature
 // combination and form the minimum surface needed to load and
 // run precompiled bytecode.
+pub mod address;
 pub mod bytecode;
 pub mod kstring;
 pub mod marshall;
@@ -19,6 +20,12 @@ pub mod word;
 // trait bounds because `KeleusmaType for f64` is not in scope.
 #[cfg(feature = "floats")]
 pub mod audio_natives;
+
+// Parametric floating-point trait for sub-64-bit native runtimes
+// (B16). Gated alongside the rest of the floating-point surface;
+// hosts that target integer-only runtimes never see this module.
+#[cfg(feature = "floats")]
+pub mod float;
 
 // The stddsl bundle exposes Math and other DSL helpers that pin
 // f64 parameters and returns. Gated alongside `floats` for the
