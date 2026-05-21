@@ -26,8 +26,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo test --workspace
 
-  test-no-text:
-    name: Test (text feature off)
+  test-no-default-features:
+    name: Test (no default features)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -71,7 +71,6 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.88
       - run: cargo check -p keleusma
       - run: cargo check -p keleusma --no-default-features
-      - run: cargo check -p keleusma --features text
       - run: cargo check -p keleusma --tests
 
   no-std:
