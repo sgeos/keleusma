@@ -9,22 +9,30 @@ AI to Human communication channel.
 ## Last Updated
 
 **Date**: 2026-05-20
-**Status**: Pre-merge documentation-sync pass landed on the `V0.2.0-isa` branch. Reference, architecture, and guide docs are now aligned with the ISA that actually shipped (69 opcodes, 64-byte wire-format header, type-checker-stage closure rejection, no f-string surface, no bundled text-composition natives, no `text` cargo feature). The V0.2.0 ISA cleanup follow-on from the prior round (gitignore, R41, soft-warning helper, narrow-bytecode CheckedXxx flag/high half) remains landed. The branch is ready for merge to `main` and for the V0.2.0 publication step.
+**Status**: Cross-architecture rkyv-decode regression on the STM32N6570-DK fixed and hardware-verified. The V0.2.0 ISA branch is now hardware-clean across both `--no-default-features --features stm32n6570dk-platform` and `--features stm32n6570dk-platform,keleusma-verify` configurations. The branch is ready for merge to `main`.
 
 ## Completed in this session round
 
 | Directive | Resolution |
 |-----------|------------|
-| Documentation-sync pass before merge. | Reference and architecture docs realigned with the V0.2.0 ISA: 69 opcodes (was 65/74 in stale places), 64-byte wire-format header (was 16/24/32/V0.3.0-mislabel), inline `(u16, u8)` operand shape (was incorrectly described as pool-referencing), inline-vs-pool split now 65/4 (was 58/7 with wrong totals), per-instruction WCET cost column aligned with `nominal_op_cycles` across ~26 rows, stack growth/shrink tables rebuilt from `Op::stack_growth` / `Op::stack_shrink`. `INSTRUCTION_SET.md` Cost Summary regenerated. `EXECUTION_MODEL.md` mislabelled wire format as V0.3.0 (now V0.2.0) and carried a stale framing-header byte-offset table (now matches `WIRE_FORMAT.md`). Guide and design docs realigned with the V0.2.0 surface: `README.md`, `GRAMMAR.md`, `LANGUAGE_DESIGN.md`, `STANDARD_LIBRARY.md`, `EMBEDDING.md`, `COOKBOOK.md`, `WHY_REJECTED.md`, and `BACKLOG.md` B3/B5b/B6 entries lost references to the retired f-string surface, `text` cargo feature (gone), `stddsl::Text` bundle (gone), bundled `to_string`/`concat`/`slice`/`length` natives (gone), `closure-hoisting` pipeline stage (gone), and `Op::CallIndirect` / `Op::PushFunc` / `Op::MakeClosure` / `Op::MakeRecursiveClosure` opcodes (gone). Closure rejection is now consistently described as a type-checker-stage diagnostic rather than a load-time verifier rejection. The `Text` keyword replaces stray `String` usages in surface examples. The cleanup follow-on from the prior round (gitignore `*.kel.bin`, R41 rejecting five-opcode string builder, soft-warning helper, narrow-bytecode CheckedXxx flag/high half) remains landed unchanged. |
+| Address the bare-metal rkyv-decode regression without reverting. | Root cause: V0.2.0 Phase 7c (593f541) cut `Module::from_bytes` over to `wire_format::module_from_wire_bytes` without porting the pre-cutover `AlignedVec<8>` copy step. `rkyv::from_bytes` calls `rkyv::access` internally, which requires the input buffer to be 8-byte aligned. The post-cutover code passed a raw `&[u8]` subslice from arbitrary input alignment; on x86_64 the host bin (`three-task-std`) uses the `keleusma-compile` runtime-compile path and never exercised the regression, so it was masked. On the N6 target (`include_bytes!` precompiled into the `.text` section, no compile-path), the aux-body subslice landed at a 4-byte boundary and rancor rejected the decode with the opaque "failed without error information" message. Fix: copy `aux_body_bytes` into a `rkyv::util::AlignedVec<8>` before calling `rkyv::from_bytes`, mirroring the legacy pattern. The owned-decode contract of `Module::from_bytes` and `Module::view_bytes` is now uniform: both tolerate arbitrarily aligned input. The zero-copy alignment contract is preserved by `Module::access_bytes` and `Vm::view_bytes_zero_copy`, which still check `aux_body.as_ptr() % 8 == 0` explicitly. Test `bytecode_view_bytes_rejects_unaligned_input` (which encoded the legacy reject-on-unaligned behaviour) is rewritten as `bytecode_view_bytes_handles_unaligned_input` asserting the new tolerance plus round-trip soundness. Verified on hardware: the N6 binary now boots, loads led/sensor/heartbeat/event_listener/faulty, enters the scheduler loop, and exercises the supervised-restart path on the faulty task across both no-verify and verify configurations. |
 
 ## Verification matrix
 
 ```bash
-cargo test --workspace                                                          # 797 lib + 53 rogue-script + 17 marshall + integration suites, all green (from prior round; no source changed this round)
-cargo clippy --tests --workspace --all-features -- -D warnings                  # clean (prior round)
+cargo test --workspace                                                          # 956 tests across 16 suites, all green
+cargo clippy --tests --workspace --all-features -- -D warnings                  # clean
+cargo fmt --all -- --check                                                      # idempotent
+(cd examples/rtos && cargo build --release --bin three-task-n6 \
+    --target thumbv8m.main-none-eabihf --no-default-features \
+    --features stm32n6570dk-platform)                                          # clean
+(cd examples/rtos && cargo run  --release --bin three-task-n6 \
+    --target thumbv8m.main-none-eabihf --no-default-features \
+    --features stm32n6570dk-platform)                                          # boots, all tasks load, scheduler runs
+(cd examples/rtos && cargo run  --release --bin three-task-n6 \
+    --target thumbv8m.main-none-eabihf --no-default-features \
+    --features stm32n6570dk-platform,keleusma-verify)                          # boots, all tasks load+verify, scheduler runs
 ```
-
-The documentation-sync pass in this round touched only `*.md` files. No source was modified, so the tests, clippy, and example builds from the prior round remain valid.
 
 ## Open concerns
 

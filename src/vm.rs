@@ -6350,41 +6350,30 @@ mod tests {
     }
 
     #[test]
-    fn bytecode_view_bytes_rejects_unaligned_input() {
-        // A plain Vec<u8> is not guaranteed to be 8-byte aligned. The
-        // view path fails with an alignment-specific Codec message
-        // rather than silently succeeding under undefined behavior.
+    fn bytecode_view_bytes_handles_unaligned_input() {
+        // `Module::view_bytes` and `Module::from_bytes` both route
+        // through `wire_format::module_from_wire_bytes`, which copies
+        // the rkyv-archived auxiliary body into an `AlignedVec<8>`
+        // before deserialization. Unaligned input is therefore
+        // handled gracefully without requiring the caller to align
+        // the buffer. The zero-copy alignment contract is preserved
+        // by the distinct `Module::access_bytes` and
+        // `Vm::view_bytes_zero_copy` entry points; this test pins
+        // the owned-decode tolerance.
         let src = "fn main() -> Word { 1 }";
         let tokens = tokenize(src).expect("lex");
         let program = parse(&tokens).expect("parse");
         let module = compile(&program).expect("compile");
         let bytes = module.to_bytes().expect("encode");
         // Force unaligned by prepending one byte then taking bytes[1..].
-        // This guarantees the body slice is not 8-byte aligned.
         let mut shifted = alloc::vec![0u8];
         shifted.extend_from_slice(&bytes);
         let unaligned = &shifted[1..];
-        match Module::view_bytes(unaligned) {
-            // V0.2.0 Phase 7c: the rkyv access path on the
-            // auxiliary body section produces an "unaligned
-            // pointer" message; either that or the legacy
-            // alignment string is acceptable evidence of
-            // rejection.
-            Err(crate::bytecode::LoadError::Codec(msg))
-                if msg.contains("not 8-byte aligned")
-                    || msg.contains("unaligned")
-                    || msg.contains("alignment") => {}
-            // The shifted slice may also misalign the framing reads in
-            // ways that surface as BadMagic or BadChecksum before the
-            // alignment check. Either is acceptable evidence that the
-            // path rejects unaligned input.
-            Err(crate::bytecode::LoadError::BadMagic) => {}
-            Err(crate::bytecode::LoadError::BadChecksum) => {}
-            other => panic!(
-                "expected alignment or magic/checksum failure, got {:?}",
-                other
-            ),
-        }
+        let decoded = Module::view_bytes(unaligned).expect("decode unaligned");
+        // Round-trip soundness: the entry chunk is reachable and the
+        // module's declared widths survive the decode.
+        assert!(decoded.entry_point.is_some());
+        assert_eq!(decoded.word_bits_log2, module.word_bits_log2);
     }
 
     #[test]

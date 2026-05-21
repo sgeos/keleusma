@@ -1231,8 +1231,24 @@ pub fn module_from_wire_bytes(bytes: &[u8]) -> Result<Module, LoadError> {
         });
     }
 
-    // Deserialize the auxiliary body.
-    let aux = rkyv::from_bytes::<WireAuxBody, rkyv::rancor::Error>(aux_body_bytes)
+    // Deserialize the auxiliary body. `rkyv::from_bytes` calls
+    // `rkyv::access` internally which validates the archive in
+    // place; the validation requires the buffer to be aligned to
+    // `align_of::<ArchivedWireAuxBody>()` (8 bytes). The
+    // `aux_body_bytes` subslice inherits the input buffer's
+    // alignment, which is not guaranteed for `include_bytes!`
+    // payloads, file reads, or arbitrary host-supplied byte
+    // sources. Copy into an 8-byte-aligned scratch buffer so the
+    // archive validation observes the required alignment on every
+    // target architecture. The legacy `Module::from_bytes` path
+    // (pre V0.2.0 Phase 7c) used the same pattern; the cutover
+    // dropped the copy step, which produced an unaligned decode
+    // on 32-bit targets where the input buffer happens to land at
+    // a 4-byte boundary.
+    let mut aligned: rkyv::util::AlignedVec<8> =
+        rkyv::util::AlignedVec::with_capacity(aux_body_bytes.len());
+    aligned.extend_from_slice(aux_body_bytes);
+    let aux = rkyv::from_bytes::<WireAuxBody, rkyv::rancor::Error>(&aligned)
         .map_err(|e| LoadError::Codec(format!("aux body decode failed: {}", e)))?;
 
     // Cross-check header-mirrored fields against the auxiliary
