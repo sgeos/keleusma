@@ -15,7 +15,7 @@ cd examples/rtos
 cargo run --release --bin three-task-std
 ```
 
-Bare-metal demonstrator (STM32N6570-DK, BOOT0 in dev position, ST-LINK V3-EC attached). The line below builds the smallest possible image (~192 KB `.text`, precompiled bytecode under trust). See [`MANUAL.md`](MANUAL.md) section 2 for the full feature matrix and the recommended production configuration that retains load-time verification.
+Bare-metal demonstrator (STM32N6570-DK, BOOT0 in dev position, ST-LINK V3-EC attached). The line below builds the smallest possible image (~140 KB `.text`, precompiled bytecode under trust). See [`MANUAL.md`](MANUAL.md) section 2 for the full feature matrix and the recommended production configuration that retains load-time verification.
 
 ```bash
 cd examples/rtos
@@ -110,7 +110,7 @@ cargo build --target thumbv8m.main-none-eabihf --lib \
 | `src/bin/three_task_std.rs` | Thin host-side entry point. |
 | `src/bin/three_task_n6.rs` | Bare-metal entry point. `#![no_std] #![no_main]`. Installs the `embedded_alloc::LlffHeap` global allocator (wrapped to handle zero-byte requests) and drives the kernel under the embassy executor. |
 | `build.rs` | Emits embedded link arguments (`--nmagic`, `-Tlink.x`, `-Tdefmt.x`) only when `CARGO_CFG_TARGET_OS == "none"`. |
-| `memory.x` | AXISRAM2 map for the embedded build. 640 KB FLASH at 0x34100000, 384 KB RAM at 0x341A0000. |
+| `memory.x` | AXISRAM2 map for the embedded build. 768 KB FLASH at 0x34100000, 256 KB RAM at 0x341C0000. |
 | `.cargo/config.toml` | Target-scoped `runner = "probe-rs run --chip STM32N657"` for `thumbv8m.main-none-eabihf`. |
 | `rust-toolchain.toml` | Toolchain pin (Rust 1.92) with the `thumbv8m.main-none-eabihf` target. |
 | `scripts/prelude.kel` | Shared script-side prelude. Declares `Status`, `StatusErrorCode`, and the `use` lines for the host natives. |

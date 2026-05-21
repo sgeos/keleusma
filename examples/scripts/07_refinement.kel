@@ -1,0 +1,32 @@
+// Refinement types: a newtype with a predicate the verifier
+// enforces at every construction site.
+//
+// `newtype Name = Underlying where predicate;` declares a wrapper
+// over `Underlying` whose construction succeeds only when the
+// predicate returns true for the argument. The predicate is a
+// regular `fn` whose only argument matches the newtype's
+// underlying type. The compiler elides the runtime check when the
+// argument is a literal whose predicate result is decidable at
+// compile time; otherwise the check runs at construction.
+//
+// Direct literal arguments that statically violate the predicate
+// are rejected at compile time with a diagnostic naming the
+// predicate, the newtype, and the offending value.
+//
+// Run: keleusma run examples/scripts/07_refinement.kel
+// Expected output: 100
+
+fn nonneg(x: Word) -> bool { x >= 0 }
+
+newtype Counter = Word where nonneg;
+
+fn double(c: Counter) -> Counter {
+    let n = c as Word;
+    Counter(n + n)
+}
+
+fn main() -> Word {
+    let c = Counter(50);
+    let d = double(c);
+    d as Word
+}
