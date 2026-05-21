@@ -2,7 +2,7 @@
 
 > **Navigation**: [Roadmap](./README.md) | [Documentation Root](../README.md)
 
-**Status**: Strategy (research pass complete; implementation not started)
+**Status**: Strategy ready for implementation. Research pass complete; bootstrap procedure documented; inter-stage data shapes sketched; success criteria stated. Implementation not yet started.
 
 ## Goal
 
@@ -92,6 +92,127 @@ V0.3.0 documents this alternative but does not recommend it. The reason is that 
 
 If V0.3.0 implementation surfaces a real reason to prefer the integrated form (for example, the inter-stage buffering cost dominates the per-stage compilation cost, or the testability advantage of the pipeline turns out to be illusory), the design is on the shelf and the migration is straightforward: collapse the three `loop` functions into one, drop the inter-stage `yield` boundaries, and inline the staging.
 
+## Bootstrap procedure
+
+Three phases. The pattern is canonical across Wirth's *Project Oberon*, LLVM, Rust, and Go.
+
+**Phase A. Cross-compile.** The self-hosted compiler is written in Keleusma source under `compiler/kelc.kel` (and supporting files, as the decomposition into lexer/parser/compiler suggests at least three files plus shared AST and bytecode-encoding helpers). The existing Rust-hosted compiler produces its bytecode. The output is a Keleusma bytecode artefact, call it `kelc.0.kel.bin`, that runs on the VM and accepts Keleusma source as input.
+
+**Phase B. Self-compile.** `kelc.0.kel.bin` is loaded into a VM instance and invoked against `compiler/kelc.kel` as its input. The output is `kelc.1.kel.bin`. If `kelc.0` is correct, `kelc.1` is byte-identical to `kelc.0` modulo non-essential ordering (map iteration order, etc.). Any divergence is a bug in `kelc.0`.
+
+**Phase C. Fixed point.** `kelc.1.kel.bin` is loaded into a VM instance and invoked against `compiler/kelc.kel`. The output is `kelc.2.kel.bin`. `kelc.2` must be byte-identical to `kelc.1`. Fixed-point reached.
+
+Validation runs alongside Phases B and C: every test in the existing Rust-side regression corpus is recompiled under both the Rust-hosted compiler and `kelc.1`. The bytecode outputs must be byte-identical (modulo the same non-essential ordering). Divergence on the corpus is a bug in the self-hosted compiler.
+
+The bootstrap procedure is mechanical. It does not require additional design work; it is included here so the next session does not need to derive it from prior art. The risk in the bootstrap is not the procedure but the surface-language gap: the self-hosted compiler may need features the V0.2.0 surface does not yet provide ergonomically (see "Required surface-language features" below).
+
+## Inter-stage data shapes
+
+The pipeline's value depends on the inter-stage data being expressible as Keleusma values. The following shapes are starting points; the implementation may refine them.
+
+**Lexer output (one yield per token):**
+
+```
+struct Token {
+    kind: TokenKind,
+    span: Span,
+}
+
+enum TokenKind {
+    Word,
+    Identifier(Text),
+    Integer(Word),
+    Float(Float),
+    StringLiteral(Text),
+    Punctuation(Byte),       // '(', ')', '{', '}', etc.
+    Keyword(KeywordKind),    // fn, yield, loop, let, ...
+    Eof,
+}
+
+struct Span {
+    start: Word,             // byte offset
+    end: Word,
+    line: Word,
+    column: Word,
+}
+```
+
+**Parser output (one yield per top-level declaration):**
+
+A `Declaration` enum covering the same surface forms the existing parser accepts: `Function`, `Struct`, `Enum`, `Newtype`, `Trait`, `Impl`, `Use`, `Data`. Each variant carries the fully parsed sub-tree. The parser yields a fully formed declaration; expressions and statements inside are recursive data structures that the parser builds on its local stack and emits as a complete sub-tree.
+
+The "expressions are recursive data structures" point is the load-bearing constraint. Keleusma forbids recursion in `fn` and `yield` categories. The parser must either (a) build expression trees using an explicit stack rather than recursive calls, (b) be granted a recursion exception, or (c) be written as a `loop` function where the "recursion" is encoded as iteration over the input stream with a manual stack of parser states. Brinch Hansen's compilers used option (a). Wirth's used recursive descent within the language's natural depth bound. The choice is recorded as an open question; option (a) is the safest default.
+
+**Compiler output (one yield per chunk):**
+
+```
+struct CompiledChunk {
+    name: Text,
+    ops: Array<u8>,                  // opcode-stream bytes
+    operand_pool: Array<u8>,         // operand-pool bytes
+    constants: Array<ConstValue>,
+    metadata: ChunkMetadata,         // WireChunk-shaped
+}
+```
+
+The host-side driver collects compiled chunks, builds the auxiliary body's rkyv-archived form, and assembles the wire-format buffer. The compiler stage does not emit the wire format directly; it emits chunk-level outputs and the host serialises them. This split keeps the compiler stage's working set bounded by chunk size, not module size.
+
+**Inter-stage buffering.** Keleusma's yield/resume protocol provides implicit back-pressure: a downstream stage that has not resumed blocks the upstream stage's next yield. No explicit bounded-queue machinery is required. The buffer size is effectively one item per stage.
+
+## Required surface-language features
+
+The compiler-in-Keleusma needs the features below. The first group exists today and is sufficient. The second group exists but with caveats. The third group is missing or limited and may need to land in V0.2.x before V0.3.0 begins.
+
+**Sufficient as of V0.2.0:**
+
+- Structs, enums, pattern matching, multiheaded functions, guards.
+- For-in loops over arrays and bounded ranges.
+- Static string literals for keyword tables and diagnostic messages.
+- `Byte` type and explicit `WordToByte` / `ByteToWord` casts for bytewise lexer work.
+- Information-flow labels (positive and negative; R43) for tracking provenance through the compiler if desired.
+- `signed` modifier and the signing API for emitting signed compiler artefacts.
+
+**Exists with caveats:**
+
+- **Generics and traits.** Available, but the compiler itself probably does not need many. The compiler may be written largely without generics, relying on enum-based dispatch instead.
+- **Hindley-Milner inference.** The compiler implements H-M; the compiler itself should be written with explicit type annotations so the compiler-checking-itself does not stress its own inference.
+- **Text type.** Keleusma's `Text` covers static strings and arena-allocated dynamic strings. The lexer needs byte-level inspection of the source. The current convention is for the host to register a native that exposes bytes; whether the self-hosted compiler can do this internally depends on the surface admitting byte iteration over text.
+
+**Missing or limited (may need V0.2.x work first):**
+
+- **Map / dictionary data structure.** The compiler's symbol table needs a string-keyed lookup. Keleusma has arrays but no built-in Map type. Options: (a) linear scan over arrays of `(name, type)` pairs, acceptable for small programs; (b) sorted array with binary search, requires a sort helper that the surface does not currently provide; (c) host-registered native wrapping a Rust `BTreeMap`, but this defeats self-hosting; (d) a Keleusma-side balanced tree, which needs recursion or explicit-stack walking. The simplest V0.3.0 answer is (a) with a known scaling ceiling, escalating to (b) when measurement justifies it.
+
+- **Byte iteration over `Text`.** A lexer scanning source needs to read bytes one at a time. Static strings are opaque at the surface level; iterating over them by byte index is not currently expressible without a host native. V0.3.0 either grows the surface (add an indexable static-bytes type or a byte-iteration trait) or accepts a host shim. The shim is the simpler path.
+
+- **Persistent compiler state.** Generic-function specialization tables, trait `impl` registries, and similar cross-declaration state persist for the duration of a compilation. The compiler's `loop` function's data segment holds these. Keleusma's data segment is fine for this purpose; the WCMU bound on the data segment is the limit. A specialization table is small (the number of distinct specializations is typically dozens, not thousands), so the bound is generous.
+
+- **String building.** Diagnostic messages, mangled names, and emitted identifiers all need string building. Keleusma's V0.2.0 surface retired the bundled `concat` / `to_string` natives; hosts register them as needed. The self-hosted compiler should register a minimal text-composition native or use a fixed-capacity scratch buffer in the arena. The latter is more in keeping with the WCMU discipline.
+
+## Success criteria
+
+V0.3.0 is complete when:
+
+1. `compiler/kelc.kel` exists in the repository, structured as the three-stage pipeline (lexer, parser, compiler, plus shared AST and bytecode-encoding helpers).
+2. The Rust-hosted compiler produces `kelc.0.kel.bin` without error. The existing test suite continues to pass.
+3. Phase B fixed-point: `kelc.0.kel.bin` recompiles `compiler/kelc.kel` to produce `kelc.1.kel.bin`. `kelc.1` is byte-identical to `kelc.0` modulo non-essential ordering, formally documented.
+4. Phase C fixed-point: `kelc.1.kel.bin` recompiles `compiler/kelc.kel` to produce `kelc.2.kel.bin`, byte-identical to `kelc.1`.
+5. Regression corpus equivalence: every script in `examples/scripts/` and the workspace tests compiles to byte-identical bytecode under both the Rust-hosted compiler and `kelc.1`.
+6. The CLI gains a `--self-hosted` flag (or similar) that routes through `kelc.1` instead of the Rust-hosted compile path. Programs compile and run end-to-end.
+7. Documentation: `docs/architecture/`, `docs/guide/`, and the README acknowledge the self-hosted compiler as an alternative path. The Rust-hosted compiler continues to ship; V0.3.0 does not retire it.
+
+The dual-compiler period is intentional. The Rust-hosted compiler remains the reference implementation; the self-hosted compiler is the validation that the language admits its own toolchain.
+
+## Risks and mitigations
+
+| Risk | Mitigation |
+|---|---|
+| Hindley-Milner inference cannot be streamed cleanly because the constraint graph spans an entire function body | Restrict the self-hosted compiler's surface input to programs whose bindings are explicitly annotated. The restriction is documented; the Rust-hosted compiler continues to accept un-annotated programs. The annotated form is a strict subset and is what the compiler-in-Keleusma is itself written in. |
+| The specialization table grows unbounded across a large compilation | Adopt Modula-2-style separate compilation. Each module compiled independently with a per-module specialization table reset at module boundaries. Cross-module specializations land on the consumer side, bounded by the consumer's own program complexity. |
+| Diagnostic quality regresses from the Rust-hosted compiler's level | Accept the regression in V0.3.0; document it. Invest in error-recovery in V0.3.1 once the streaming architecture is proven. Single-pass compilers historically have brittle error recovery (per the prior-art survey); some regression is expected. |
+| The self-hosted compiler is materially slower than the Rust-hosted compiler | Profile. Single-pass compilers in the Wirth tradition are typically the fastest per unit of code; the streaming decomposition is theoretically equivalent. If measurement shows the inter-stage buffering cost dominates, fall back to the integrated single-pass alternative documented above. |
+| The compiler's per-stage WCMU bound is too loose because of the fixup table or the symbol table | Bound the table sizes explicitly. Reject programs that exceed the declared bound at compile time. The bound is published as a documented limit; programs that need more compile through the Rust-hosted compiler. |
+| A required surface-language feature (Map, byte iteration over Text, etc.) is not yet ergonomic | Land the feature in a V0.2.x release before starting V0.3.0 implementation. The "Required surface-language features" section above is the candidate list. |
+
 ## Open questions
 
 The following questions are deferred to implementation. They are not blockers for the strategy.
@@ -109,8 +230,6 @@ The following questions are deferred to implementation. They are not blockers fo
 ## Out of scope
 
 The following are explicitly out of scope for this strategy document.
-
-- **The bootstrap mechanism.** How the self-hosted compiler is bootstrapped (cross-compile from the Rust-hosted compiler, then verify the bootstrap by recompiling under the bootstrapped compiler) is an implementation question, not an architecture question. The mechanism is well-understood in the prior art and does not need design work here. See *Project Oberon* (2013 edition) for a worked bootstrap example.
 
 - **The implementation schedule.** Whether V0.3.0 lands in calendar quarter X or Y depends on capacity that this document cannot allocate. The strategy is correct regardless of when the implementation begins.
 
