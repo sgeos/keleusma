@@ -1,5 +1,9 @@
 # keleusma-macros
 
+[![Crates.io](https://img.shields.io/crates/v/keleusma-macros.svg)](https://crates.io/crates/keleusma-macros)
+[![Docs.rs](https://docs.rs/keleusma-macros/badge.svg)](https://docs.rs/keleusma-macros)
+[![License: 0BSD](https://img.shields.io/badge/license-0BSD-blue.svg)](../LICENSE)
+
 Procedural macros for the [Keleusma](https://crates.io/crates/keleusma) scripting language.
 
 ## Implementation detail

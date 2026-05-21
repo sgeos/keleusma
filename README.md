@@ -1,5 +1,10 @@
 # Keleusma
 
+[![Crates.io](https://img.shields.io/crates/v/keleusma.svg)](https://crates.io/crates/keleusma)
+[![Docs.rs](https://docs.rs/keleusma/badge.svg)](https://docs.rs/keleusma)
+[![License: 0BSD](https://img.shields.io/badge/license-0BSD-blue.svg)](LICENSE)
+[![CI](https://github.com/sgeos/keleusma/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/sgeos/keleusma/actions/workflows/ci.yml)
+
 A Total Functional Stream Processor that compiles to bytecode and runs on a stack-based virtual machine. Keleusma targets `no_std + alloc` environments.
 
 The ecosystem value proposition is **definitive WCET and WCMU**. Programs whose worst-case execution time or worst-case memory usage cannot be statically bounded are rejected by the safe verifier. Programs that pass verification carry a definitive bound on stream-iteration execution time and memory consumption.

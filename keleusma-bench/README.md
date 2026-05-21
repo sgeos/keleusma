@@ -1,5 +1,9 @@
 # keleusma-bench
 
+[![Crates.io](https://img.shields.io/crates/v/keleusma-bench.svg)](https://crates.io/crates/keleusma-bench)
+[![Docs.rs](https://docs.rs/keleusma-bench/badge.svg)](https://docs.rs/keleusma-bench)
+[![License: 0BSD](https://img.shields.io/badge/license-0BSD-blue.svg)](LICENSE)
+
 Cost-model calibration tool for Keleusma. Measures pipelined cycles per opcode on a host CPU and emits a `CostModel` implementation that the Keleusma runtime can use for WCET analysis on that host.
 
 ## Purpose

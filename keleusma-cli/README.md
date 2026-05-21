@@ -1,5 +1,9 @@
 # keleusma-cli
 
+[![Crates.io](https://img.shields.io/crates/v/keleusma-cli.svg)](https://crates.io/crates/keleusma-cli)
+[![Docs.rs](https://docs.rs/keleusma-cli/badge.svg)](https://docs.rs/keleusma-cli)
+[![License: 0BSD](https://img.shields.io/badge/license-0BSD-blue.svg)](LICENSE)
+
 Standalone command-line frontend for Keleusma. Provides a script runner, a bytecode compiler, and an interactive REPL so users can work with Keleusma scripts without writing any Rust host code.
 
 ## Installation

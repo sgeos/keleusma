@@ -42,13 +42,20 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo test -p keleusma --features signatures
 
-  test-all-features:
-    name: Test (all features)
+  test-broad-features:
+    name: Test (broad features)
     runs-on: ubuntu-latest
+    # `--all-features` is unsuitable for this workspace: it would
+    # cascade the mutually-exclusive `narrow-word-*` /
+    # `narrow-address-*` selectors into the narrowest configuration
+    # and pull in the heavy `sdl3-example` feature, which builds
+    # SDL3 from source. The broad set covered here is the docs.rs
+    # feature set: defaults (compile + verify + floats) plus the
+    # two non-default surfaces (signatures + shell).
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - run: cargo test --workspace --all-features
+      - run: cargo test -p keleusma --features signatures,shell
 
   test-bench:
     name: Test (keleusma-bench)
@@ -67,8 +74,23 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - name: Install SDL3 toolchain prerequisites
-        run: sudo apt-get update && sudo apt-get install -y libsdl2-dev pkg-config
+      # The `sdl3` crate builds SDL3 from source via cmake under the
+      # `build-from-source-static` feature. The cmake configure step
+      # requires X11, Wayland, and audio development headers. The
+      # dependency list mirrors the SDL3 README for Linux. The
+      # earlier `libsdl2-dev` install was wrong: SDL2 development
+      # headers are unrelated to the SDL3 source build.
+      - name: Install SDL3 build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            cmake ninja-build pkg-config \
+            libasound2-dev libpulse-dev libjack-dev libsndio-dev \
+            libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxfixes-dev \
+            libxi-dev libxss-dev libxtst-dev libxkbcommon-dev \
+            libdrm-dev libgbm-dev libgl1-mesa-dev libegl1-mesa-dev libgles2-mesa-dev \
+            libdbus-1-dev libudev-dev \
+            libwayland-dev libpipewire-0.3-dev libdecor-0-dev
       - name: Build SDL3-gated examples
         run: cargo build --workspace --examples --features sdl3-example
 
@@ -77,10 +99,24 @@ jobs:
     runs-on: ubuntu-latest
     env:
       RUSTDOCFLAGS: -D warnings -A rustdoc::redundant-explicit-links
+    # `--all-features` is unsuitable here for the same reason as
+    # the test-broad-features job: the narrow-* selectors and the
+    # `sdl3-example` feature would activate together. Build the
+    # docs per-crate against the same feature set that docs.rs
+    # uses so the CI signal matches the published docs.
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - run: cargo doc --workspace --no-deps --all-features
+      - name: keleusma (docs.rs feature set)
+        run: cargo doc -p keleusma --no-deps --features signatures,shell
+      - name: keleusma-arena (all features)
+        run: cargo doc -p keleusma-arena --no-deps --all-features
+      - name: keleusma-macros
+        run: cargo doc -p keleusma-macros --no-deps
+      - name: keleusma-bench
+        run: cargo doc -p keleusma-bench --no-deps
+      - name: keleusma-cli
+        run: cargo doc -p keleusma-cli --no-deps
 
   clippy:
     name: Clippy

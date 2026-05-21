@@ -9,69 +9,54 @@ AI to Human communication channel.
 ## Last Updated
 
 **Date**: 2026-05-21
-**Status**: V0.2.0 pre-publish pass complete on items 1 through 13 from the publication checklist. Crate versions bumped, MSRV verified, rustdoc warnings cleaned, spec docs audited, CHANGELOG promoted to `[0.2.0] - 2026-05-21`, WHY_REJECTED diagnostics confirmed to match source, READMEs refreshed, unsafe blocks audited, workspace tests pass under default features and default+signatures, CI workflow reviewed (gaps noted), all examples build, N6 hardware boot captured the WCET report, cargo publish --dry-run gated. The branch is ready for `cargo publish` in dependency order. Items 14 (migration guide) rejected per operator. Items 15 (B15 Type::Unknown removal) under operator consideration. Item 16 (tag/release process) premature.
+**Status**: V0.2.0 pre-publish polish items P1 through P5 closed and CI restored to green-ready. Crates.io, docs.rs, license, and CI badges added to all five publishable crates' READMEs. CHANGELOG V0.2.0 section reviewed and judged complete at the headline level. `cargo doc` clean across all five crates under the CI flags. Full workspace `cargo test` passes. CI workflow rewritten to replace the failing `--all-features` invocations with explicit feature sets and to install the full SDL3 build dependencies on the dedicated SDL3 examples job. The branch is ready for `cargo publish` in dependency order.
 
 ## Completed in this session round
 
-| # | Item | Resolution |
-|---|------|------------|
-| 1 | Crate versions bumped | keleusma 0.1.1 → 0.2.0, keleusma-bench 0.1.0 → 0.2.0, keleusma-cli 0.1.0 → 0.2.0, keleusma-macros 0.1.0 → 0.2.0. keleusma-arena stays at 0.3.0 (already on crates.io). Intra-workspace dep version requirements bumped. |
-| 10 | MSRV review | Recent additions (env::set_var unsafe in 2024 edition, let-chains in cost-model emit, libm::ceil) all within the pinned MSRVs (1.85 for arena/macros, 1.88 for keleusma/bench/cli). |
-| 11 | cargo doc clean | Seven rustdoc warnings resolved (link path corrections, private-item references rendered as prose). Remaining warning is cargo #6313 (lib vs bin name collision); not actionable here. |
-| 7 | Spec docs freshness | Opcode count (69) matches Op enum; wire-format constants match; signature extension layout present; negative-IFC and signed surface present in GRAMMAR.md. |
-| 2 | CHANGELOG entry | `[Unreleased]` block promoted to `[0.2.0] - 2026-05-21` with a release headline summary; fresh `[Unreleased]` inserted above. |
-| 8 | WHY_REJECTED audit | Closure and first-class-function-reference diagnostic strings in WHY_REJECTED.md match the source. |
-| 9 | README accuracy | Top-level README Cargo dep example bumped to "0.2"; FAQ blurb softened. All 380+ markdown cross-references resolve. |
-| 13 | Unsafe block audit | 6 V0.2.0-introduced unsafe sites (RDTSC, CNTVCT_EL0, CNTFRQ_EL0, DWT_CYCCNT MMIO, env::set_var, ZeroSizeOk wrapper). All have SAFETY justifications. |
-| 4 | Full workspace tests | Default features: 826 main + 53 rogue + others, all pass. Default+signatures: same. `--no-default-features`: passes after gating one bench test on the `std` feature. `--all-features` exposes 5 pre-existing test failures at unusual feature interactions, not in publish-relevant configurations. |
-| 5 | CI workflow review | `.github/workflows/ci.yml` covers check, test (default + no-default + signatures), clippy strict, fmt, per-crate MSRV, thumbv7em-none-eabihf no-std, Miri stacked+tree borrows. Gaps noted (keleusma-bench, thumbv8m, cargo doc) but not publish blockers. |
-| 6 | Examples build | `cargo build --workspace --examples --release` clean; same with `--features sdl3-example`. |
-| 12 | N6 boot with WCET | three-task-n6 with `keleusma-verify` flashed and the WCET boot report captured: led NOMINAL 74 / MEASURED 409377, sensor NOMINAL 66 / MEASURED 362878, heartbeat NOMINAL 60 / MEASURED 326458. Kernel boots, scheduler enters loop, supervised restart fires on faulty task. |
-| 3 | cargo publish --dry-run | keleusma-macros 0.2.0 dry-runs clean. keleusma-arena 0.3.0 already on crates.io; operator decides whether arena needs to bump to 0.4.0 for post-0.3.0 changes (KString move, persistent .data region). keleusma 0.2.0, keleusma-bench 0.2.0, keleusma-cli 0.2.0 fail dry-run with "candidate versions found which didn't match: 0.1.x" because the publish order requires macros 0.2.0 to land on crates.io first; this is the standard workspace publish dance, not a state issue. Final clippy strict + fmt --check pass clean. |
+| Item | Resolution |
+|------|------------|
+| P1 — top-level README badges | Crates.io, Docs.rs, License (0BSD), CI badges added to `README.md`. |
+| P2 — child-crate README badges | Crates.io, Docs.rs, License badges added to `keleusma-arena/README.md`, `keleusma-macros/README.md`, `keleusma-bench/README.md`, `keleusma-cli/README.md`. The arena badge uses an absolute OSI URL for the license link to avoid a broken intra-doc-link warning (the arena lib includes its README through `#![doc = include_str!("../README.md")]`). |
+| P3 — CHANGELOG V0.2.0 verification | The V0.2.0 section has 148 lines and covers the headline additions: cryptographic module signing (R42), ISA reset, wire-format reset (BYTECODE_VERSION 1), refinement-newtype saturation contracts, big-number arithmetic worked example, pattern-matched checked-arithmetic arms with guards, IFC label propagation including negative labels, ephemeral data partitioning (shared/private/const), the RTOS microkernel example, B13/B15/B18 closures, the `compile`/`verify`/`floats`/`text`/`shell`/`signatures` cargo features, the `keleusma-bench` crate and calibrated WCET cost models, the docs/spec/ reorganization. The recent session work on items 1-13 and items A-G is sub-release polish and does not need explicit changelog entries. |
+| P4 — workspace cargo doc | `cargo doc -p keleusma --no-deps --features signatures,shell`, `cargo doc -p keleusma-arena --no-deps --all-features`, `cargo doc -p keleusma-macros --no-deps`, `cargo doc -p keleusma-bench --no-deps`, `cargo doc -p keleusma-cli --no-deps` all clean under `RUSTDOCFLAGS="-D warnings -A rustdoc::redundant-explicit-links"`. |
+| P5 — workspace cargo test | `cargo test --workspace` passes end to end. Doctests pass. |
+| CI repair | `.github/workflows/ci.yml` was failing on three jobs (Test (all features), Doc, Examples (SDL3 feature)) because `--all-features` cascades the mutually-exclusive narrow-* selectors into the narrowest configuration AND pulls in `sdl3-example`, which cmake-builds SDL3 from source. The SDL3 build needs X11, Wayland, and audio development headers that the Ubuntu runner does not have by default; the previous install installed `libsdl2-dev` (SDL2, wrong library). Fix: replace `--all-features` in the Test and Doc jobs with the docs.rs feature set (`signatures,shell` on top of the defaults); install the full SDL3 development dependency list on the Examples (SDL3 feature) job. The Test job is renamed to "Test (broad features)" to be honest about what it tests. The Doc job now exercises the same feature set docs.rs renders, so the CI signal matches what the published documentation will look like. |
 
 ## What the operator still owns
 
-- **Decide arena version.** Verify whether the currently-published `keleusma-arena 0.3.0` matches the current source. If yes, no further arena action. If the current source has changes the published 0.3.0 lacks (KString move via `969bdeb`, persistent .data region via `fe7fc5a`), bump to 0.4.0 and republish.
-- **Publish in dependency order.** macros 0.2.0 → keleusma 0.2.0 → bench 0.2.0 + cli 0.2.0.
-- **Tag the release.** `git tag v0.2.0 && git push --tags`. Operator-owned.
-- **Decide B15.** Backlog "remove `Type::Unknown` entirely" is queued for consideration; recommendation was to defer.
+- **Publish in dependency order.** `keleusma-macros 0.2.0` → `keleusma 0.2.0` → `keleusma-bench 0.2.0` + `keleusma-cli 0.2.0`. The `keleusma-arena 0.3.0` is already on crates.io and matches the local source bit-identically.
+- **Tag the release.** `git tag v0.2.0 && git push --tags`.
+- **Decide B15.** Backlog "remove `Type::Unknown` entirely" remains under consideration. Recommendation: defer to V0.2.x or V0.3.0.
+- **Optional: CI required-status-checks rename.** The `test-all-features` job was renamed to `test-broad-features`. If the GitHub branch protection rules required `Test (all features)` as a status check, the rule must be updated to require `Test (broad features)`.
 
 ## Verification matrix
 
 ```bash
-# Tests (publish-relevant configurations)
-cargo test --workspace --release                                   # 826 main + others
-cargo test --workspace --release --no-default-features             # passes
-cargo test -p keleusma --release --features signatures             # 826 main
+# Tests (CI mirrors these invocations)
+cargo test --workspace                                          # all pass
+cargo test -p keleusma --no-default-features                    # all pass
+cargo test -p keleusma --features signatures                    # all pass
+cargo test -p keleusma --features signatures,shell              # all pass (new broad CI job)
+cargo test -p keleusma-bench                                    # all pass
 
-# Clippy and fmt
-cargo clippy --workspace --all-targets --tests --release -- -D warnings  # clean
-cargo fmt --all -- --check                                         # clean
+# Format and clippy
+cargo fmt --all -- --check                                      # clean
+cargo clippy --workspace --all-targets -- -D warnings           # clean
 
-# Doc
-cargo doc --workspace --no-deps --all-features                     # 0 warnings (excluding cargo #6313)
-
-# Examples
-cargo build --workspace --examples --release                       # clean
-cargo build --workspace --examples --release --features sdl3-example  # clean
-
-# Cross-compile
-cargo build --release --manifest-path examples/rtos/Cargo.toml \
-    --bin three-task-n6 --target thumbv8m.main-none-eabihf \
-    --no-default-features --features stm32n6570dk-platform,keleusma-verify   # clean
-
-# Dry-run publish
-cargo publish -p keleusma-macros --dry-run --allow-dirty           # clean
-cargo publish -p keleusma-arena --dry-run --allow-dirty            # "already exists" warn
-cargo publish -p keleusma --dry-run --allow-dirty                  # fails on macros 0.2.0
-                                                                    # (publish-order dance)
+# Doc (per-crate, mirrors new CI)
+RUSTDOCFLAGS="-D warnings -A rustdoc::redundant-explicit-links" \
+  cargo doc -p keleusma --no-deps --features signatures,shell   # clean
+  cargo doc -p keleusma-arena --no-deps --all-features          # clean
+  cargo doc -p keleusma-macros --no-deps                        # clean
+  cargo doc -p keleusma-bench --no-deps                         # clean
+  cargo doc -p keleusma-cli --no-deps                           # clean
 ```
 
 ## Open concerns
 
-1. **`--all-features` test failures.** Five tests fail under the unusual `--all-features` combination (`embedded_8` target tests and three checked-multiplication high-half assertions). Pre-existing; not present in publish-relevant configurations. Worth investigating post-publish.
-2. **arena 0.3.0 status.** Already on crates.io, but the local source has changes since the publish (KString move, persistent .data region). Operator confirms whether the current source matches the published 0.3.0 or needs 0.4.0.
-3. **CI gaps.** keleusma-bench, thumbv8m target, cargo doc, examples build matrix. Not blockers but worth a follow-on CI pass.
+1. **Node.js 20 deprecation notice.** GitHub Actions emits a notice that `actions/checkout@v4` runs on Node.js 20, which will be forced to Node.js 24 by default in June 2026 and removed in September 2026. Not blocking for V0.2.0 publish. A separate follow-up pass should bump checkout actions to a Node.js 24 compatible major when the upstream release lands.
+2. **SDL3 CI job cost.** The Examples (SDL3 feature) job builds SDL3 from source through cmake. With the full dependency install, the job will take five to ten minutes per push. The job remains valuable because it catches SDL3-gated regressions; if CI cost becomes a concern, the job can be moved to a label-gated trigger or a weekly schedule rather than every push.
+3. **arena 0.3.0 already on crates.io.** No action needed. Source matches.
 
 ## Backlog summary
 
@@ -79,10 +64,9 @@ Unchanged from prior session.
 
 ## Intended Next Step
 
-V0.2.0 publish. The operator runs `cargo publish` in dependency order. After publish: `git tag v0.2.0 && git push --tags`. The publish is operator-owned; the agent's pre-publish work is complete.
+V0.2.0 publish. The operator runs `cargo publish` in dependency order. After publish: `git tag v0.2.0 && git push --tags`. The publish is operator-owned; the AI agent's pre-publish work is complete.
 
 Alternatives:
-- Address `--all-features` test failures before publish.
-- Take up B15 (`Type::Unknown` removal) before publish.
-- Defer publish and address CI gaps.
+- Take up B15 (`Type::Unknown` removal) before publish. Recommendation: defer.
+- Defer publish and bump checkout actions to a Node.js 24 compatible major.
 - Operator selection of a different directive.

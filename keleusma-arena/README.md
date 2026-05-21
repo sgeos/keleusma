@@ -1,5 +1,9 @@
 # keleusma-arena
 
+[![Crates.io](https://img.shields.io/crates/v/keleusma-arena.svg)](https://crates.io/crates/keleusma-arena)
+[![Docs.rs](https://docs.rs/keleusma-arena/badge.svg)](https://docs.rs/keleusma-arena)
+[![License: 0BSD](https://img.shields.io/badge/license-0BSD-blue.svg)](https://opensource.org/licenses/0BSD)
+
 > Simple and boring memory allocator for exciting applications.
 
 A dual-end bump-allocated arena for embedded Rust. Single contiguous buffer. Two pointers growing toward each other from opposite ends. Constant-time allocation. Fail-fast on exhaustion. `core`-only when the `alloc` feature is off.
