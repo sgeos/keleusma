@@ -42,6 +42,46 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo test -p keleusma --features signatures
 
+  test-all-features:
+    name: Test (all features)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo test --workspace --all-features
+
+  test-bench:
+    name: Test (keleusma-bench)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Default features
+        run: cargo test -p keleusma-bench
+      - name: No default features
+        run: cargo build -p keleusma-bench --no-default-features
+
+  examples-sdl3:
+    name: Examples (SDL3 feature)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install SDL3 toolchain prerequisites
+        run: sudo apt-get update && sudo apt-get install -y libsdl2-dev pkg-config
+      - name: Build SDL3-gated examples
+        run: cargo build --workspace --examples --features sdl3-example
+
+  doc:
+    name: Doc
+    runs-on: ubuntu-latest
+    env:
+      RUSTDOCFLAGS: -D warnings -A rustdoc::redundant-explicit-links
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo doc --workspace --no-deps --all-features
+
   clippy:
     name: Clippy
     runs-on: ubuntu-latest
@@ -92,6 +132,36 @@ jobs:
           targets: thumbv7em-none-eabihf
       - name: Build keleusma against thumbv7em-none-eabihf
         run: cargo build -p keleusma --target thumbv7em-none-eabihf
+
+  rtos-n6-build:
+    name: RTOS demonstrator build (N6 / thumbv8m.main-none-eabihf)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: thumbv8m.main-none-eabihf
+      - name: three-task-n6
+        run: |
+          cd examples/rtos
+          cargo build --release --bin three-task-n6 \
+            --target thumbv8m.main-none-eabihf \
+            --no-default-features \
+            --features stm32n6570dk-platform
+      - name: three-task-n6 with verify (boot-time WCET report)
+        run: |
+          cd examples/rtos
+          cargo build --release --bin three-task-n6 \
+            --target thumbv8m.main-none-eabihf \
+            --no-default-features \
+            --features stm32n6570dk-platform,keleusma-verify
+      - name: bench-n6
+        run: |
+          cd examples/rtos
+          cargo build --release --bin bench_n6 \
+            --target thumbv8m.main-none-eabihf \
+            --no-default-features \
+            --features stm32n6570dk-platform
 
   miri:
     name: Miri

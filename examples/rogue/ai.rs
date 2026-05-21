@@ -23,6 +23,12 @@ use keleusma::parser::parse;
 use keleusma::vm::{DEFAULT_ARENA_CAPACITY, Vm, VmError, VmState};
 use keleusma::{Arena, Module};
 
+/// Five-component outcome of a level-descend dispatch: the updated
+/// level, max HP, HP, skill, and floor. Type alias because clippy's
+/// `type_complexity` lint trips on the inline tuple at the call site
+/// under `--all-features`.
+type DescendOutputs = (i64, i64, i64, i64, i64);
+
 use crate::bestiary::AiKind;
 
 /// Embedded script sources, keyed by filename. The startup path
@@ -476,7 +482,7 @@ impl AiPool {
         hp: i64,
         skill: i64,
         floor: i64,
-    ) -> Result<(i64, i64, i64, i64, i64), Box<dyn std::error::Error>> {
+    ) -> Result<DescendOutputs, Box<dyn std::error::Error>> {
         let t = call_pure_ints(
             &mut self.descend,
             "descend",

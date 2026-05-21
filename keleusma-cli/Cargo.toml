@@ -27,3 +27,10 @@ rand_core = { version = "0.6", default-features = false, features = ["getrandom"
 [[bin]]
 name = "keleusma"
 path = "src/main.rs"
+# Suppress rustdoc for the bin to avoid the
+# https://github.com/rust-lang/cargo/issues/6313 collision between the
+# `keleusma` lib (in the parent crate) and the `keleusma` bin (here).
+# Both targets would otherwise emit to target/doc/keleusma/index.html.
+# The bin's user-facing documentation lives in keleusma-cli/README.md;
+# the lib's docs remain on docs.rs.
+doc = false

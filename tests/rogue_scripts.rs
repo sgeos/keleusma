@@ -910,7 +910,18 @@ fn scroll_enchant_armor_returns_status_5_arg_1() {
     assert_eq!((status, arg), (5, 1));
 }
 
+// Gated against narrow-word runtimes because the dungeon-generator
+// at depth 100 computes intermediate values (e.g., a width seeded
+// from `floor * scaling`) that wrap on a narrow Word and trip a
+// runtime range check (`rng_range: hi -108 not greater than lo 100`).
+// The smaller-depth test (`dungen_runs_floor_1`) stays within range
+// on every supported Word and continues to run on narrowed builds.
 #[test]
+#[cfg(not(any(
+    feature = "narrow-word-8",
+    feature = "narrow-word-16",
+    feature = "narrow-word-32"
+)))]
 fn dungen_runs_floor_100_places_exit() {
     let module = build(SRC_DUNGEN);
     let arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);

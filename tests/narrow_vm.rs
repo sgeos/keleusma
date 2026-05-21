@@ -8,7 +8,22 @@
 //! standalone example and `docs/guide/COOKBOOK.md` for the type-alias
 //! recipe.
 
-#![cfg(all(feature = "compile", feature = "verify"))]
+// The tests instantiate parametric runtimes such as
+// `GenericVm<i16, u16, f32>` and compile against `Target::embedded_16`
+// or `Target::embedded_8`. `compile_with_target` validates the
+// target against the build-wide `RUNTIME_*_BITS_LOG2` ceiling, not
+// against the parametric runtime instantiated in the test. Under
+// `narrow-word-8` the build's ceiling is 3 bits and the
+// `embedded_16` target's 4 bits exceeds it; the compile rejects
+// before the runtime widening has a chance to run. Gate the entire
+// file on a build wide enough to admit `embedded_16`. Hosts that
+// build with the narrowest runtime do not exercise these
+// demonstrators.
+#![cfg(all(
+    feature = "compile",
+    feature = "verify",
+    not(any(feature = "narrow-word-8", feature = "narrow-address-8"))
+))]
 
 extern crate alloc;
 

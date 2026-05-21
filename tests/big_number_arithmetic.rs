@@ -5,7 +5,20 @@
 //! both the `mul_full` and `add_with_carry` patterns produced the
 //! expected high-half and carry-out values respectively.
 
-#![cfg(all(feature = "compile", feature = "verify"))]
+// The worked-example scripts embed integer literals sized for an
+// i64 Word (2^32, i64::MAX, etc.). Gate on `not(narrow-word-*)`
+// so the tests do not run on narrowed parametric runtimes where
+// the literals overflow at lex time. Same rationale as the lib-side
+// checked-overflow tests in `src/vm.rs`.
+#![cfg(all(
+    feature = "compile",
+    feature = "verify",
+    not(any(
+        feature = "narrow-word-8",
+        feature = "narrow-word-16",
+        feature = "narrow-word-32"
+    ))
+))]
 
 extern crate alloc;
 

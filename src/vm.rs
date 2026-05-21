@@ -4264,7 +4264,19 @@ mod tests {
         assert!(matches!(result, Err(VmError::DivisionByZero)));
     }
 
+    // The next three checked-overflow tests embed integer literals
+    // (4294967296 = 2^32, large guard values, literal-high patterns)
+    // sized for an i64 Word. Under any of the `narrow-word-*`
+    // features the runtime Word is i32 or smaller and the constant
+    // either fails to fit or wraps to a value the test does not
+    // expect. Gated so they only run on the default i64 runtime.
+
     #[test]
+    #[cfg(not(any(
+        feature = "narrow-word-8",
+        feature = "narrow-word-16",
+        feature = "narrow-word-32"
+    )))]
     fn checked_mul_overflow_exposes_high_half() {
         // The high half of the i128 intermediate is the load-
         // bearing value for big-number multiplication. `2^32 *
@@ -4287,6 +4299,11 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(any(
+        feature = "narrow-word-8",
+        feature = "narrow-word-16",
+        feature = "narrow-word-32"
+    )))]
     fn checked_overflow_arm_pattern_matches_literal_high() {
         // A literal `0` in the high position selects the small-
         // overflow specialization. For signed addition of two
@@ -4311,6 +4328,11 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(any(
+        feature = "narrow-word-8",
+        feature = "narrow-word-16",
+        feature = "narrow-word-32"
+    )))]
     fn checked_overflow_arm_guard_falls_through() {
         // The first arm's pattern matches but its guard returns
         // false; dispatch falls through to the catch-all.

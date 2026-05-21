@@ -443,7 +443,12 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(feature = "narrow-address-8"))]
     fn embedded_8_rejects_string_literal() {
+        // The embedded_8 target has 16-bit addresses (addr_bits_log2 = 4).
+        // Under `narrow-address-8` the runtime caps addresses at 8 bits
+        // (addr_bits_log2 = 3) and rejects the embedded_8 target's
+        // address width before reaching the string-literal check.
         let err = try_compile_with_target(
             "fn main() -> Word { let s = \"hello\"; 0 }",
             &Target::embedded_8(),
@@ -530,7 +535,12 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(feature = "narrow-address-8"))]
     fn embedded_8_admits_int_only_program() {
+        // Same as `embedded_8_rejects_string_literal`: gated against
+        // `narrow-address-8` which caps the runtime at 8-bit
+        // addresses and rejects the embedded_8 target's 16-bit
+        // addr_bits_log2.
         try_compile_with_target(
             "fn main() -> Word { let x: Word = 7; x + 3 }",
             &Target::embedded_8(),
