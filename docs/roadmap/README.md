@@ -18,4 +18,5 @@ Development phases for Keleusma.
 
 | Document | Description |
 |----------|-------------|
-| [PHASE_0_BOOTSTRAP.md](./PHASE_0_BOOTSTRAP.md) | Current phase: extraction and documentation |
+| [PHASE_0_BOOTSTRAP.md](./PHASE_0_BOOTSTRAP.md) | V0.0 bootstrap phase: extraction and documentation |
+| [V0_3_0_SELF_HOSTING.md](./V0_3_0_SELF_HOSTING.md) | V0.3.0 strategy: self-hosted compiler as a pipeline of stream-processor stages |
