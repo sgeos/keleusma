@@ -14,7 +14,8 @@
 //!
 //! # Quick start
 //!
-//! ```no_run
+//! ```ignore
+//! // Requires the `compile` cargo feature (default on).
 //! use keleusma::compiler::compile;
 //! use keleusma::lexer::tokenize;
 //! use keleusma::parser::parse;
