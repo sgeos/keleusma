@@ -9,64 +9,41 @@ AI to Human communication channel.
 ## Last Updated
 
 **Date**: 2026-05-21
-**Status**: WCET table generated on real STM32N6570-DK hardware. The `bench_n6` binary flashed to the connected board via probe-rs, enabled DWT_CYCCNT, ran all 17 OPCODE_SPECS, and emitted measurements via defmt RTT. Captured log parsed through `keleusma-bench --from-log`; fragment committed at `keleusma-bench/measured_cost_models/thumbv8m_main_none_eabihf.rs`. The bench had to be re-configured for embedded memory budgets (200 repetitions and 8 KB arena rather than 1000 repetitions and 64 KB arena) after the first run triggered a heap fragmentation panic at the 6th spec.
+**Status**: `keleusma-bench` gains a `--cpu-hz <Hz>` CLI flag. The flag takes precedence over `KELEUSMA_BENCH_CPU_HZ` and works on both the host-bench path (scaling counter ticks to CPU cycles) and the `--from-log` path (overriding the `BENCH_DONE`-reported value in the emitted fragment header).
 
 ## Completed in this session round
 
 | Directive | Resolution |
 |-----------|------------|
-| Generate the N6-DK WCET table by running the bench on hardware | Done. The N6 was reachable via probe-rs (`probe-rs run --chip STM32N657`). First run with the original `BenchConfig::embedded_default` (1,000 reps, 64 KB arena) reached spec 6 then panicked: the linked-list allocator could not satisfy a fresh 64 KB arena allocation after five iterations of allocate-then-free cycles. Diagnosis: the bench's per-spec memory footprint (~100 KB) was too large relative to the 128 KB heap, and the `ZeroSizeOk` allocator wrapper does not defragment between iterations. Fix: added an `arena_capacity` field to `BenchConfig` and lowered both embedded defaults to 200 repetitions and 8 KB arena. The bench's runtime working set is tiny (patterns leave the operand stack near empty); 8 KB is comfortable. At DWT_CYCCNT's single-CPU-cycle resolution and 800 MHz clock, 200 repetitions of patterns costing 3,000 to 13,000 cycles each produce hundreds of thousands of cycles per measurement pass with ample resolution. Second run completed cleanly: all 17 measurements in 8.14 seconds wall time. The captured log was parsed through `keleusma-bench --from-log` into the committed fragment. |
-
-## N6 measured per-category cost
-
-| Category | M1 Max (host) | N6 (Cortex-M55) | Ratio |
-|---|---|---|---|
-| Data movement | 87 | 6070 | 70x |
-| Control marker (scaled nominal) | 87 | 6070 | 70x |
-| Arithmetic, comparison, bitwise, casts | 164 | 10079 | 61x |
-| Division, field lookup, type checks | 140 | 9164 | 65x |
-| Composite construction | 338 | 13540 | 40x |
-| Function call (scaled nominal) | 870 | 60700 | 70x |
-
-The ratios are consistent with the architectural difference between an out-of-order superscalar with deep caches running at 3.228 GHz (M1 Max) and an in-order Cortex-M55 running from flash at 800 MHz. The N6's per-CPU-cycle cost is dominated by VM dispatch (no branch prediction to speak of, simpler instruction-cache hierarchy); the M1 Max's measured cost is dominated by data-cache and branch-prediction effects that have already absorbed most of the dispatch overhead.
+| Add a command-line parameter to specify CPU speed | New `--cpu-hz <Hz>` flag in `keleusma-bench` CLI. Validates the value is a positive finite f64, then sets the `KELEUSMA_BENCH_CPU_HZ` environment variable for the rest of the process (via `unsafe { env::set_var(...) }` because the 2024 edition marks `set_var` unsafe; the bench main is single-threaded at this point so the unsafe block is justified). Counter implementations read `assumed_cpu_hz()` lazily inside `cpu_cycles_per_count`, so the override applies uniformly to host-bench measurements without further plumbing. In `--from-log` mode the override is threaded through `run_from_log` and replaces the `BENCH_DONE`-reported `cpu_hz` value in the emitted fragment header; this matters for embedded captures where DWT_CYCCNT cycle counts are correct regardless of CPU clock but the documentation should reflect the operator's actual hardware. Banner now reports the source of the assumption (`--cpu-hz override`, `KELEUSMA_BENCH_CPU_HZ env var`, or `DEFAULT_ASSUMED_CPU_HZ`). READMEs updated. End-to-end test confirms both paths honor the flag: host-bench scale changes from 134.5 to 125.0 when overriding 3.228 GHz to 3.0 GHz; from-log fragment header shows 400 MHz instead of 800 MHz when overriding the N6 log. |
 
 ## Verification matrix
 
 ```bash
-# Cross-compile and flash via probe-rs
-cd examples/rtos
-cargo run --release --bin bench_n6 \
-    --target thumbv8m.main-none-eabihf \
-    --no-default-features --features stm32n6570dk-platform \
-    > /tmp/bench_n6.log 2>&1                                       # ran for 8.14 s,
-                                                                   # all 17 BENCH lines
-                                                                   # plus BENCH_DONE
-                                                                   # captured
+# Host bench with --cpu-hz override
+./target/release/keleusma-bench --cpu-hz 3000000000
+# Output: assumed CPU clock: 3000000000 Hz (3.000 GHz) (source: --cpu-hz override)
+#         scale (CPU cycles per counter tick): 125.000
 
-# Generate fragment from captured log
-cargo run --release -p keleusma-bench -- \
-    --from-log /tmp/bench_n6.log \
-    --output keleusma-bench/measured_cost_models/thumbv8m_main_none_eabihf.rs
-                                                                   # 17 measurements
-                                                                   # parsed, fragment
-                                                                   # written
+# from-log with --cpu-hz override
+./target/release/keleusma-bench --from-log /tmp/bench_n6.log \
+    --cpu-hz 400000000 --output /tmp/test_override.rs
+# Output: cpu_hz: 400000000 Hz (source: --cpu-hz override)
+# Fragment header: Assumed CPU clock: 400000000 Hz (0.400 GHz)
 
-# Fragment compiles as include! target
-probe project including thumbv8m_main_none_eabihf.rs               # builds clean;
-                                                                   # per-category
-                                                                   # values 6070,
-                                                                   # 10079, 9164,
-                                                                   # 13540, 60700,
-                                                                   # 6070
+# Precedence: --cpu-hz wins over env var
+KELEUSMA_BENCH_CPU_HZ=5000000000 ./target/release/keleusma-bench --cpu-hz 4000000000
+# Output: assumed CPU clock: 4000000000 Hz (4.000 GHz) (source: --cpu-hz override)
+
+# All 6 unit tests pass
+cargo test --release -p keleusma-bench
 ```
 
 ## Open concerns
 
-1. **`Yield` and `Call` still use scaled nominal fallback on the N6.** Same limitation as the dev-host fragment: the bench harness cannot exercise these opcodes in isolation (Yield needs a Stream chunk; Call needs a multi-chunk module). The fallback at the N6 scale factor (~70x) yields a Call cost of 60700 cycles, which is consistent with an embedded VM dispatch into a callee, but is an extrapolation not a measurement. Future work would add multi-chunk and Stream-chunk spec types.
+1. **The embedded `bench_n6.rs` still hardcodes 800 MHz** in `N6_CPU_HZ`. The override applies at the `--from-log` parse step, so the operator can correct the documentation after capture, but the embedded binary itself prints 800 MHz in its boot banner and `BENCH_DONE` marker. A future revision could read the constant from `option_env!("KELEUSMA_BENCH_CPU_HZ")` at compile time, or read the actual CPU clock from the RCC peripheral at runtime. The latter is the proper fix and is recorded as a backlog candidate.
 
-2. **800 MHz CPU clock is hardcoded in `bench_n6.rs`.** The N6's actual instantaneous clock depends on the bootloader's PLL configuration and any runtime power-management decisions. The current value matches the documented nominal P-core clock. If the actual clock differs, cycle counts are off proportionally. A future revision could read the clock from the RCC peripheral at runtime.
-
-3. **Linked-list allocator fragmentation forced a smaller embedded config.** The bench now uses 200 repetitions and an 8 KB arena per spec. Resolution remains good because DWT_CYCCNT counts CPU cycles directly, but the smaller working set means each measurement covers fewer total cycles than the host equivalent. If a future use case demands tighter measurements, switching to a slab or bump allocator on the N6 would allow restoring larger repetition counts.
+2. **`env::set_var` is unsafe in the 2024 edition** because of thread-safety concerns. The bench main is single-threaded at the point of the call, well before any counter or VM construction, so the unsafe block is justified and documented inline. A future refactor could thread an explicit `cpu_hz` value through the counter constructors instead, removing the env-var trampoline.
 
 ## Backlog summary
 
@@ -84,12 +61,15 @@ probe project including thumbv8m_main_none_eabihf.rs               # builds clea
 | (candidate) | Multi-chunk and Stream-chunk bench specs to remove `Yield` and `Call` nominal fallback | Deferred |
 | (candidate) | Read N6 CPU clock from RCC at runtime instead of hardcoding 800 MHz | Deferred |
 | (candidate) | Slab or bump allocator on the N6 to restore larger bench repetition counts | Deferred |
+| (candidate) | Embedded bench reads `KELEUSMA_BENCH_CPU_HZ` via `option_env!` at compile time | Deferred |
+| (candidate) | Thread explicit `cpu_hz` through counter constructors so `env::set_var` is no longer required | Deferred |
 
 ## Intended Next Step
 
-Both supported host architectures now ship measured cost-model fragments in `keleusma-bench/measured_cost_models/`. The natural next step is one of:
+The bench tooling is now fully configurable for arbitrary host CPU clocks. The natural next step is one of:
 
-- Generate cost-model fragments for additional host architectures (x86_64-unknown-linux-gnu would be the most common third target).
+- Generate cost-model fragments for additional host architectures.
 - Resume V0.3.0 self-hosting implementation (Lexer migration first per the incremental ordering).
+- Read the N6 CPU clock from RCC at runtime to remove the hardcoded assumption.
 - B15 follow-on: remove `Type::Unknown` entirely.
 - Operator selection of a different directive.

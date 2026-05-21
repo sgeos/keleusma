@@ -16,6 +16,22 @@ cargo run --release --bin keleusma-bench -- --output measured_cost_model.rs
 
 The output file is a Rust source fragment that the host can `include!` into its build, exposing a `measured_op_cycles` function and a `MEASURED_COST_MODEL` constant. Replace the nominal model in your VM construction:
 
+### CPU-clock override
+
+The bench's counter-to-CPU-cycle scaling for AArch64 (CNTVCT_EL0 at 24 MHz) and the `Instant` fallback depends on an assumed CPU clock. The default is set in `src/counter.rs` (`DEFAULT_ASSUMED_CPU_HZ`, currently Apple M1 Max P-core nominal at 3.228 GHz). Override per invocation with either:
+
+```sh
+keleusma-bench --cpu-hz 3500000000 --output measured.rs
+```
+
+or:
+
+```sh
+KELEUSMA_BENCH_CPU_HZ=3500000000 keleusma-bench --output measured.rs
+```
+
+`--cpu-hz` takes precedence over the environment variable. The same flag is honored on the `--from-log` path; it overrides the `BENCH_DONE`-reported `cpu_hz` field in the emitted fragment header so operators can correct documentation after capture without rebuilding the embedded binary.
+
 ```rust
 use keleusma::{CostModel, VALUE_SLOT_SIZE_BYTES};
 

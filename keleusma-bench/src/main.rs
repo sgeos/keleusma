@@ -47,6 +47,7 @@ fn main() -> ExitCode {
     let args: Vec<String> = env::args().collect();
     let mut output_path: Option<PathBuf> = None;
     let mut from_log: Option<PathBuf> = None;
+    let mut cpu_hz_override: Option<f64> = None;
     let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {
@@ -66,6 +67,25 @@ fn main() -> ExitCode {
                 from_log = Some(PathBuf::from(&args[i + 1]));
                 i += 2;
             }
+            "--cpu-hz" => {
+                if i + 1 >= args.len() {
+                    eprintln!("error: --cpu-hz requires a value in Hz");
+                    return ExitCode::FAILURE;
+                }
+                match args[i + 1].parse::<f64>() {
+                    Ok(hz) if hz.is_finite() && hz > 0.0 => {
+                        cpu_hz_override = Some(hz);
+                    }
+                    _ => {
+                        eprintln!(
+                            "error: --cpu-hz expects a positive finite number in Hz, got `{}`",
+                            args[i + 1]
+                        );
+                        return ExitCode::FAILURE;
+                    }
+                }
+                i += 2;
+            }
             "--help" | "-h" => {
                 print_help();
                 return ExitCode::SUCCESS;
@@ -78,13 +98,37 @@ fn main() -> ExitCode {
         }
     }
 
+    // `--cpu-hz` overrides the `KELEUSMA_BENCH_CPU_HZ` environment
+    // variable for the rest of this process. The override is set
+    // before `default_counter()` constructs any counter so the
+    // counter's `cpu_cycles_per_count` reads the new value.
+    //
+    // SAFETY: `set_var` is marked unsafe in the 2024 edition because
+    // it is not thread-safe. The bench tool is single-threaded at
+    // this point in main; no other thread reads env vars
+    // concurrently. The change is intentional and is the supported
+    // mechanism for per-invocation calibration on x86_64 and AArch64
+    // hosts whose counter rate differs from CPU clock.
+    if let Some(hz) = cpu_hz_override {
+        unsafe {
+            env::set_var("KELEUSMA_BENCH_CPU_HZ", format!("{}", hz));
+        }
+    }
+
     if let Some(log) = from_log {
-        return run_from_log(log, output_path);
+        return run_from_log(log, output_path, cpu_hz_override);
     }
 
     let counter = default_counter();
     let counter_frequency_hz = counter.frequency_hz();
     let cpu_hz = assumed_cpu_hz();
+    let cpu_hz_origin = if cpu_hz_override.is_some() {
+        "--cpu-hz override"
+    } else if env::var("KELEUSMA_BENCH_CPU_HZ").is_ok() {
+        "KELEUSMA_BENCH_CPU_HZ env var"
+    } else {
+        "DEFAULT_ASSUMED_CPU_HZ"
+    };
     eprintln!("counter: {}", counter.name());
     eprintln!(
         "counter tick frequency: {} Hz ({:.3} MHz)",
@@ -92,9 +136,10 @@ fn main() -> ExitCode {
         counter_frequency_hz as f64 / 1_000_000.0
     );
     eprintln!(
-        "assumed CPU clock:      {:.0} Hz ({:.3} GHz) (override with KELEUSMA_BENCH_CPU_HZ)",
+        "assumed CPU clock:      {:.0} Hz ({:.3} GHz) (source: {})",
         cpu_hz,
-        cpu_hz / 1_000_000_000.0
+        cpu_hz / 1_000_000_000.0,
+        cpu_hz_origin
     );
     eprintln!(
         "scale (CPU cycles per counter tick): {:.3}",
@@ -150,11 +195,21 @@ fn print_help() {
     eprintln!("keleusma-bench: Keleusma cost-model calibration tool");
     eprintln!();
     eprintln!("Usage:");
-    eprintln!("  keleusma-bench [--output <path>]");
-    eprintln!("  keleusma-bench --from-log <path> [--output <path>]");
+    eprintln!("  keleusma-bench [--cpu-hz <Hz>] [--output <path>]");
+    eprintln!("  keleusma-bench --from-log <path> [--cpu-hz <Hz>] [--output <path>]");
     eprintln!();
     eprintln!("Options:");
     eprintln!("  -o, --output <path>   Write generated source to file (default: stdout)");
+    eprintln!("      --cpu-hz <Hz>     Override the assumed CPU clock for this invocation.");
+    eprintln!("                        Takes precedence over the KELEUSMA_BENCH_CPU_HZ");
+    eprintln!("                        environment variable. In host-bench mode, scales");
+    eprintln!("                        counter ticks to CPU cycles for counters that run");
+    eprintln!("                        below CPU clock (AArch64 CNTVCT_EL0, Instant");
+    eprintln!("                        fallback). In --from-log mode, overrides the");
+    eprintln!("                        BENCH_DONE marker's cpu_hz field in the emitted");
+    eprintln!("                        fragment header so operators on Cortex-M whose");
+    eprintln!("                        actual clock differs from the hardcoded 800 MHz");
+    eprintln!("                        can correct the documentation after capture.");
     eprintln!("      --from-log <path> Parse a captured N6 bench defmt log instead of");
     eprintln!("                        running the host bench. The log is a text file");
     eprintln!("                        containing the defmt RTT output of the embedded");
@@ -181,7 +236,11 @@ fn print_help() {
 /// fragment. The log is expected to contain one `BENCH idx=I/N
 /// name=NAME bits=BITS per_op=COST` line per spec, followed by a
 /// single `BENCH_DONE cpu_hz=HZ counter_hz=HZ` line.
-fn run_from_log(log_path: PathBuf, output_path: Option<PathBuf>) -> ExitCode {
+fn run_from_log(
+    log_path: PathBuf,
+    output_path: Option<PathBuf>,
+    cpu_hz_override: Option<f64>,
+) -> ExitCode {
     let contents = match fs::read_to_string(&log_path) {
         Ok(s) => s,
         Err(e) => {
@@ -262,10 +321,19 @@ fn run_from_log(log_path: PathBuf, output_path: Option<PathBuf>) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let cpu_hz_f = match cpu_hz {
-        Some(hz) => hz as f64,
-        None => {
-            eprintln!("error: BENCH_DONE marker not found or missing cpu_hz");
+    // `--cpu-hz` on the CLI overrides the BENCH_DONE-reported value.
+    // The override is the operator's stated assumption about the
+    // device's actual CPU clock; the BENCH_DONE value is what the
+    // embedded binary hardcoded. Either may be correct; the
+    // override wins because the operator has fresher information.
+    let (cpu_hz_f, cpu_hz_origin) = match (cpu_hz_override, cpu_hz) {
+        (Some(hz), _) => (hz, "--cpu-hz override"),
+        (None, Some(hz)) => (hz as f64, "BENCH_DONE marker"),
+        (None, None) => {
+            eprintln!(
+                "error: BENCH_DONE marker not found or missing cpu_hz; \
+                 pass --cpu-hz <Hz> to supply the value explicitly"
+            );
             return ExitCode::FAILURE;
         }
     };
@@ -279,7 +347,7 @@ fn run_from_log(log_path: PathBuf, output_path: Option<PathBuf>) -> ExitCode {
         "counter: {} ({} Hz)",
         counter_name, counter_hz
     );
-    eprintln!("cpu_hz: {} Hz", cpu_hz_f);
+    eprintln!("cpu_hz: {} Hz (source: {})", cpu_hz_f, cpu_hz_origin);
 
     let source = emit_cost_model_source(&measurements, &counter_name, counter_hz, cpu_hz_f);
 

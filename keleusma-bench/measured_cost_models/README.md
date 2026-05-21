@@ -21,15 +21,28 @@ Procedure with the N6-DK connected via probe-rs:
 
 ```bash
 # Flash and capture. The board halts after BENCH_DONE; the operator
-# stops probe-rs once the marker line appears in stdout.
-cargo run --release --manifest-path examples/rtos/Cargo.toml \
-    --bin bench_n6 --target thumbv8m.main-none-eabihf \
+# stops probe-rs once the marker line appears in stdout. Note: must
+# be invoked from inside examples/rtos so the probe-rs runner config
+# in .cargo/config.toml is picked up.
+cd examples/rtos
+cargo run --release --bin bench_n6 \
+    --target thumbv8m.main-none-eabihf \
     --no-default-features --features stm32n6570dk-platform \
     2>&1 | tee /tmp/bench_n6.log
+cd -
 
 # Convert the captured log into a fragment.
 cargo run --release -p keleusma-bench -- \
     --from-log /tmp/bench_n6.log \
+    --output keleusma-bench/measured_cost_models/thumbv8m_main_none_eabihf.rs
+```
+
+The embedded bench hardcodes the N6's nominal 800 MHz CPU clock in `examples/rtos/src/bin/bench_n6.rs` and emits it through the `BENCH_DONE cpu_hz=...` marker. If the actual clock differs (the bootloader configured the PLL differently, thermal conditions, or operator-selected power profile), pass `--cpu-hz <Hz>` to `keleusma-bench --from-log` to override the value recorded in the fragment header. The measured cycle counts themselves do not depend on the assumption because DWT_CYCCNT ticks at the actual CPU clock by construction; only the header documentation is affected.
+
+```bash
+cargo run --release -p keleusma-bench -- \
+    --from-log /tmp/bench_n6.log \
+    --cpu-hz 400000000 \
     --output keleusma-bench/measured_cost_models/thumbv8m_main_none_eabihf.rs
 ```
 
