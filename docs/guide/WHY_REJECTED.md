@@ -229,7 +229,7 @@ The conservative-verification stance accepts that the surface language is broade
 The standard response is to rewrite the program. The alternative responses are these.
 
 - Use `Vm::new_unchecked` and accept the unbounded risk explicitly. This is intentional misuse outside the WCET contract and is documented as such.
-- Wait for a future verifier improvement. The B3 closure entry in [BACKLOG.md](../decisions/BACKLOG.md) tracks the closure-related extensions.
+- Wait for a future verifier improvement. [BACKLOG.md](../decisions/BACKLOG.md) tracks pending verifier extensions; B3 closures and B14 CallIndirect flow analysis are V0.1-era entries that V0.2.0 Phase 4 superseded by removing the closure surface entirely.
 - File an issue with the rejected program if you believe the analysis should admit it. Worked examples are valuable for prioritizing analysis improvements.
 
 ## Cross-References

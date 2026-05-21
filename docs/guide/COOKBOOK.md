@@ -313,13 +313,12 @@ On a `NarrowVm`, the script-side `i16` argument widens to `i64` for the host clo
 
 ### Standard library bundles work on narrow runtimes
 
-All four `stddsl` bundles implement `Library<W, A, F>` universally and register on any admissible runtime shape. `Math` and `Audio` carry their inner closures in `f64`; on a runtime whose `F` is `f32`, every closure argument and return value passes through `Float::from_f64` and `Float::to_f64` at the marshall boundary, narrowing intermediates and constants. The narrowing is mathematically defined and silent. `Text` and `Shell` have no floating-point surface and so quantify over `F` without precision implications.
+The three `stddsl` bundles implement `Library<W, A, F>` universally and register on any admissible runtime shape. `Math` and `Audio` carry their inner closures in `f64`; on a runtime whose `F` is `f32`, every closure argument and return value passes through `Float::from_f64` and `Float::to_f64` at the marshall boundary, narrowing intermediates and constants. The narrowing is mathematically defined and silent. `Shell` has no floating-point surface and so quantifies over `F` without precision implications.
 
 ```rust
 let mut vm: NarrowVm<'_, '_> = NarrowVm::new(module, &arena).expect("verify");
 vm.register_library(keleusma::stddsl::Math);
 vm.register_library(keleusma::stddsl::Audio);
-vm.register_library(keleusma::stddsl::Text);
 ```
 
 Programs that require full `f64` precision should declare a runtime whose `F` is `f64` rather than relying on the silent narrowing. The narrow-float runtime is the appropriate choice when the target's FPU is single-precision and the script does not need the extra mantissa.

@@ -48,7 +48,7 @@ The unified slot index space partitions into shared slots `[0, shared_count)` an
 | SetData | u16 slot | 1 | Pop value and store into data segment slot. |
 | GetDataIndexed | u16 base, u16 len | 2 | Pop array index, bounds-check against `len`, push the value at `base + index`. |
 | SetDataIndexed | u16 base, u16 len | 2 | Pop array index then pop value, bounds-check against `len`, store into the slot at `base + index`. |
-| BoundsCheck | u16 bound | 1 | Peek the top of the stack as an `Int`, trap if outside `[0, bound)`. Emitted by the compiler between levels of a multi-dimensional indexed access. |
+| BoundsCheck | u16 bound | 2 | Peek the top of the stack as an `Int`, trap if outside `[0, bound)`. Emitted by the compiler between levels of a multi-dimensional indexed access. |
 
 ## Arithmetic
 
@@ -60,16 +60,16 @@ The wrapping arithmetic opcodes `Add`, `Sub`, `Mul`, and `Neg` remain in the ins
 
 | Instruction | Operands | Cost | Description |
 |-------------|----------|------|-------------|
-| CheckedAdd | none | 3 | Pop two `Int` operands; push `(low, high, flag)`. |
-| CheckedSub | none | 3 | Pop two `Int` operands; push `(low, high, flag)`. |
-| CheckedMul | none | 4 | Pop two `Int` operands; push the full 128-bit product split into `(low, high, flag)`. The high half is the load-bearing value for big-number multiplication. |
-| CheckedNeg | none | 2 | Pop one `Int` operand; push `(low, high, flag)`. The only overflow case is `-i64::MIN`. |
-| CheckedDiv | none | 4 | Pop two `Int` operands; push `(low, high, flag)`. Traps on divide-by-zero. The only overflow case is `i64::MIN / -1`. |
-| CheckedMod | none | 4 | Pop two `Int` operands; push `(low, high, flag)`. Traps on divide-by-zero. The only overflow case is `i64::MIN % -1`. |
+| CheckedAdd | none | 2 | Pop two `Int` operands; push `(low, high, flag)`. The `flag` and `high` halves report at the bytecode-declared word width through the shared `vm::checked_arith_outputs` helper. |
+| CheckedSub | none | 2 | Pop two `Int` operands; push `(low, high, flag)`. |
+| CheckedMul | none | 2 | Pop two `Int` operands; push the full 128-bit product split into `(low, high, flag)`. The high half is the load-bearing value for big-number multiplication. |
+| CheckedNeg | none | 2 | Pop one `Int` operand; push `(low, high, flag)`. The only overflow case under the default 64-bit declared width is `-i64::MIN`. |
+| CheckedDiv | none | 2 | Pop two `Int` operands; push `(low, high, flag)`. Traps on divide-by-zero. The only overflow case under the default 64-bit declared width is `i64::MIN / -1`. |
+| CheckedMod | none | 2 | Pop two `Int` operands; push `(low, high, flag)`. Traps on divide-by-zero. The only overflow case under the default 64-bit declared width is `i64::MIN % -1`. |
 | Add | none | 2 | Pop two operands of type `Byte`, `Fixed`, or `Float`; push the wrapping or IEEE 754 sum. The `Int` operand position is excluded; the compiler routes `Int + Int` through `CheckedAdd; PopN(2)`. |
 | Sub | none | 2 | Pop two operands of type `Byte`, `Fixed`, or `Float`; push the wrapping or IEEE 754 difference. The `Int` operand position is excluded. |
 | Mul | none | 2 | Pop two operands of type `Byte` or `Float`; push the wrapping or IEEE 754 product. `Fixed` multiplication uses `FixedMul(n)`; the `Int` operand position is excluded. |
-| Neg | none | 1 | Pop one operand of type `Byte`, `Fixed`, or `Float`; push the wrapping or IEEE 754 negation. The `Int` operand position is excluded. |
+| Neg | none | 2 | Pop one operand of type `Byte`, `Fixed`, or `Float`; push the wrapping or IEEE 754 negation. The `Int` operand position is excluded. |
 | Div | none | 3 | Pop two values; push quotient. Traps on divide-by-zero. No overflow flag. |
 | Mod | none | 3 | Pop two values; push remainder. Traps on divide-by-zero. No overflow flag. |
 
@@ -108,13 +108,13 @@ Block-structured control flow opcodes carry `u16` jump targets. A chunk's opcode
 
 | Instruction | Operands | Cost | Description |
 |-------------|----------|------|-------------|
-| If | u16 offset | 2 | Pop boolean. If false, skip forward to matching Else or EndIf. |
+| If | u16 offset | 1 | Pop boolean. If false, skip forward to matching Else or EndIf. |
 | Else | u16 offset | 1 | Unconditional skip forward to matching EndIf. |
 | EndIf | none | 1 | End of if or if-else block. No-op. |
 | Loop | u16 offset | 1 | Start of loop block. Offset is distance to matching EndLoop. |
 | EndLoop | u16 offset | 1 | Unconditional jump backward to matching Loop. |
 | Break | u16 depth | 1 | Exit enclosing loop at the given nesting depth. |
-| BreakIf | u16 depth | 2 | Pop boolean. If true, exit enclosing loop at the given nesting depth. |
+| BreakIf | u16 depth | 1 | Pop boolean. If true, exit enclosing loop at the given nesting depth. |
 
 ## Function Calls
 
@@ -131,9 +131,9 @@ The `max_invocations_per_iteration` attestation on external natives is recorded 
 
 | Instruction | Operands | Cost | Description |
 |-------------|----------|------|-------------|
-| Call | u16 chunk_idx, u8 argc | 5 | Direct call to a compiled chunk by index with `argc` arguments. |
-| CallVerifiedNative | u16 native_idx, u8 argc | 5 | Call a verified native function. Cost folds into the iteration budget per host attestation. |
-| CallExternalNative | u16 native_idx, u8 argc | 5 | Call an external native function. Iteration cost budget pauses during the call; the verifier tracks invocation count per iteration. |
+| Call | u16 chunk_idx, u8 argc | 10 | Direct call to a compiled chunk by index with `argc` arguments. |
+| CallVerifiedNative | u16 native_idx, u8 argc | 10 | Call a verified native function. Cost folds into the iteration budget per host attestation. |
+| CallExternalNative | u16 native_idx, u8 argc | 10 | Call an external native function. Iteration cost budget pauses during the call; the verifier tracks invocation count per iteration. |
 | Return | none | 2 | Return from the current chunk. |
 
 The closure-construction and indirect-dispatch opcodes (`PushFunc`, `MakeClosure`, `MakeRecursiveClosure`, `CallIndirect`) are not present in the ISA. Closure-shaped surface expressions are rejected at the type-checker stage with a diagnostic that names the construct; first-class function values are likewise rejected. The `Value::Func` runtime variant was retired alongside the opcodes in V0.2.0 Phase 4. Surface programs that previously used closures must be rewritten as top-level `fn` definitions or trait methods.
@@ -142,9 +142,9 @@ The closure-construction and indirect-dispatch opcodes (`PushFunc`, `MakeClosure
 
 | Instruction | Operands | Cost | Description |
 |-------------|----------|------|-------------|
-| Yield | none | 5 | Pop output value and suspend. On resume, the host's input value is pushed onto the stack. |
+| Yield | none | 1 | Pop output value and suspend. On resume, the host's input value is pushed onto the stack. |
 | Stream | none | 1 | Entry of the streaming region. Only `Reset` may target it. |
-| Reset | none | 4 | Clear the arena's top region, activate hot swap if scheduled, jump to the matching `Stream`. |
+| Reset | none | 1 | Clear the arena's top region, activate hot swap if scheduled, jump to the matching `Stream`. |
 
 ## Stack
 
@@ -157,10 +157,10 @@ The closure-construction and indirect-dispatch opcodes (`PushFunc`, `MakeClosure
 
 | Instruction | Operands | Cost | Description |
 |-------------|----------|------|-------------|
-| NewStruct | u16 template | 3 | Pop field values, create struct from template. |
-| NewEnum | u16 type, u16 variant, u8 fields | 3 | Pop field values, create enum variant. |
-| NewArray | u16 length | 3 | Pop N values, create array. |
-| NewTuple | u8 length | 3 | Pop N values, create tuple. |
+| NewStruct | u16 template | 5 | Pop field values, create struct from template. |
+| NewEnum | u16 type, u16 variant, u8 fields | 5 | Pop field values, create enum variant. |
+| NewArray | u16 length | 5 | Pop N values, create array. |
+| NewTuple | u8 length | 5 | Pop N values, create tuple. |
 
 The `Option::None` sentinel and `Option::Some` wrap are handled through `PushImmediate(3)` and the natural representation of the wrapped value, respectively; there are no dedicated `PushNone` or `WrapSome` opcodes.
 
@@ -168,8 +168,8 @@ The `Option::None` sentinel and `Option::Some` wrap are handled through `PushImm
 
 | Instruction | Operands | Cost | Description |
 |-------------|----------|------|-------------|
-| GetField | u16 name index | 2 | Pop struct, push named field value. |
-| GetIndex | none | 3 | Pop index and array, push element. |
+| GetField | u16 name index | 3 | Pop struct, push named field value. |
+| GetIndex | none | 2 | Pop index and array, push element. |
 | GetTupleField | u8 index | 2 | Pop tuple, push element at index. |
 | GetEnumField | u8 index | 2 | Pop enum variant, push field at index. |
 | Len | none | 2 | Pop composite value (Array, Text, Tuple), push length as Int. |
@@ -178,8 +178,8 @@ The `Option::None` sentinel and `Option::Some` wrap are handled through `PushImm
 
 | Instruction | Operands | Cost | Description |
 |-------------|----------|------|-------------|
-| IsEnum | u16 type, u16 variant | 2 | Peek the top of the stack; push true if it matches the enum type and variant. |
-| IsStruct | u16 name | 2 | Peek the top of the stack; push true if it matches the struct type. |
+| IsEnum | u16 type, u16 variant | 3 | Peek the top of the stack; push true if it matches the enum type and variant. |
+| IsStruct | u16 name | 3 | Peek the top of the stack; push true if it matches the struct type. |
 
 ## Casting and Fixed-Point Arithmetic
 
@@ -187,12 +187,12 @@ The `Option::None` sentinel and `Option::Some` wrap are handled through `PushImm
 |-------------|----------|------|-------------|
 | IntToFloat | none | 2 | Pop Word, push as Float. Gated on the `floats` feature. |
 | FloatToInt | none | 2 | Pop Float, push as Word (truncates toward zero). Gated on the `floats` feature. |
-| WordToByte | none | 1 | Pop Word, push the low 8 bits as a Byte. |
-| ByteToWord | none | 1 | Pop Byte, zero-extend to Word. |
+| WordToByte | none | 2 | Pop Word, push the low 8 bits as a Byte. |
+| ByteToWord | none | 2 | Pop Byte, zero-extend to Word. |
 | WordToFixed | u8 frac_bits | 2 | Pop Word, push the corresponding Q-format Fixed value with the given fraction-bit count. |
 | FixedToWord | u8 frac_bits | 2 | Pop Fixed, push the integer portion as a Word; saturating. |
-| FixedMul | u8 frac_bits | 4 | Pop two Q-format Fixed values, push their product. Shifts the `i128` product right by the fraction-bit count and saturates. |
-| FixedDiv | u8 frac_bits | 4 | Pop two Q-format Fixed values, push their quotient. Left-shifts the dividend by the fraction-bit count before dividing and saturates. |
+| FixedMul | u8 frac_bits | 2 | Pop two Q-format Fixed values, push their product. Shifts the `i128` product right by the fraction-bit count and saturates. |
+| FixedDiv | u8 frac_bits | 2 | Pop two Q-format Fixed values, push their quotient. Left-shifts the dividend by the fraction-bit count before dividing and saturates. |
 
 ## Faults
 
@@ -202,48 +202,54 @@ The `Option::None` sentinel and `Option::Some` wrap are handled through `PushImm
 
 ## Opcode count and operand-shape inventory
 
-The instruction set contains 65 opcodes. Operand shapes:
+The instruction set contains 69 opcodes. Operand shapes:
 
 | Shape | Used by |
 |-------|---------|
-| None (zero-operand) | 38 opcodes (arithmetic, comparison, bit ops, type coercions, stack manipulation, streaming, coroutine, etc.) |
+| None (zero-operand) | 36 opcodes (arithmetic, comparison, bit ops, type coercions, stack manipulation, streaming, coroutine, etc.) |
 | `u8` | 9 opcodes (`PushImmediate`, `PopN`, `GetTupleField`, `GetEnumField`, `NewTuple`, `WordToFixed`, `FixedToWord`, `FixedMul`, `FixedDiv`) |
 | `u16` | 17 opcodes (`Const`, `GetLocal`, `SetLocal`, `GetData`, `SetData`, `GetField`, `IsStruct`, `NewStruct`, `NewArray`, `If`, `Else`, `Loop`, `EndLoop`, `Break`, `BreakIf`, `BoundsCheck`, `Trap`) |
 | `(u16, u8)` | 3 opcodes (`Call`, `CallVerifiedNative`, `CallExternalNative`) |
 | `(u16, u16)` | 3 opcodes (`GetDataIndexed`, `SetDataIndexed`, `IsEnum`) |
 | `(u16, u16, u8)` | 1 opcode (`NewEnum`) |
 
-58 of 65 opcodes carry their operand inline in the 4-byte opcode record; the 7 opcodes with compound operands reference the bytecode's operand pool. See [EXECUTION_MODEL.md](../architecture/EXECUTION_MODEL.md) for the wire format that encodes these shapes.
+65 of 69 opcodes carry their operand inline in the 4-byte opcode record. The 4 opcodes whose payload exceeds three bytes (`GetDataIndexed`, `SetDataIndexed`, `IsEnum` with `(u16, u16)` shape and `NewEnum` with `(u16, u16, u8)`) reference an entry in the operand pool by index. The `(u16, u8)` opcodes (`Call`, `CallVerifiedNative`, `CallExternalNative`) fit inline because the `u8` lands in byte 3 of the record. See [EXECUTION_MODEL.md](../architecture/EXECUTION_MODEL.md) and [WIRE_FORMAT.md](../architecture/WIRE_FORMAT.md) for the wire format that encodes these shapes.
 
 ## Cost Summary
 
+The cost groupings reproduce `bytecode::nominal_op_cycles`. Hosts that need wall-clock WCET supply a custom `CostModel` calibrated to the target.
+
 | Cost | Instructions |
 |------|-------------|
-| 1 | Const, PushImmediate, GetLocal, SetLocal, GetData, SetData, BoundsCheck, PopN, Dup, Not, If, Else, EndIf, Loop, EndLoop, Break, BreakIf, Stream, Trap, WordToByte, ByteToWord, BreakIf |
-| 2 | CheckedNeg, CmpEq, CmpNe, CmpLt, CmpGt, CmpLe, CmpGe, BitAnd, BitOr, BitXor, Shl, Shr, GetField, GetTupleField, GetEnumField, Len, IsEnum, IsStruct, IntToFloat, FloatToInt, WordToFixed, FixedToWord, GetDataIndexed, SetDataIndexed, Return, If, BreakIf |
-| 3 | CheckedAdd, CheckedSub, Div, Mod, GetIndex, NewStruct, NewEnum, NewArray, NewTuple |
-| 4 | CheckedMul, CheckedDiv, CheckedMod, FixedMul, FixedDiv, Reset |
-| 5 | Call, CallVerifiedNative, CallExternalNative, Yield |
+| 1 | Const, PushImmediate, GetLocal, SetLocal, GetData, SetData, Dup, Not, If, Else, EndIf, Loop, EndLoop, Break, BreakIf, Stream, Reset, Yield, Trap, PopN |
+| 2 | Add, Sub, Mul, Neg, CheckedAdd, CheckedSub, CheckedMul, CheckedNeg, CheckedDiv, CheckedMod, CmpEq, CmpNe, CmpLt, CmpGt, CmpLe, CmpGe, GetIndex, GetTupleField, GetEnumField, Len, IntToFloat, FloatToInt, WordToByte, ByteToWord, WordToFixed, FixedToWord, FixedMul, FixedDiv, Return, GetDataIndexed, SetDataIndexed, BoundsCheck, BitAnd, BitOr, BitXor, Shl, Shr |
+| 3 | Div, Mod, GetField, IsEnum, IsStruct |
+| 5 | NewStruct, NewEnum, NewArray, NewTuple |
+| 10 | Call, CallVerifiedNative, CallExternalNative |
 
 ## WCMU contributions
 
 WCMU costs are reported separately as stack slot growth, stack slot shrink, and heap allocation in bytes. The constant `VALUE_SLOT_SIZE_BYTES` converts slot counts to bytes; the parametric `Vm<W, A, F>` shape uses `size_of::<GenericValue<W, F>>()` directly. Computed by `wcmu_stream_iteration()` in `src/verify.rs`.
 
-### Stack growth (slots pushed during execution)
+### Stack growth (peak net delta during execution)
+
+The values reproduce `Op::stack_growth` in `src/bytecode.rs`. For multi-output opcodes the value is the net peak delta against the starting depth, not the raw push count: e.g. `CheckedAdd` pops two and pushes three, so the peak depth relative to the start is `+1`.
 
 | Growth | Instructions |
 |--------|--------------|
-| 0 | SetLocal, SetData, PopN, If, BreakIf, Else, EndIf, Loop, EndLoop, Break, Stream, Reset, Yield, Return, Not, CmpEq through CmpGe, BitAnd, BitOr, BitXor, Shl, Shr, GetField, GetIndex, GetTupleField, GetEnumField, Len, IsEnum, IsStruct, IntToFloat, FloatToInt, WordToByte, ByteToWord, WordToFixed, FixedToWord, Trap |
-| 1 | Const, PushImmediate, GetLocal, GetData, Dup, Call, CallVerifiedNative, CallExternalNative, NewStruct, NewEnum, NewArray, NewTuple |
-| 3 | CheckedAdd, CheckedSub, CheckedMul, CheckedNeg, CheckedDiv, CheckedMod (push `(high, low, flag)`) |
+| 0 | Not, Neg, Add, Sub, Mul, Div, Mod, CmpEq, CmpNe, CmpLt, CmpGt, CmpLe, CmpGe, SetLocal, SetData, SetDataIndexed, BoundsCheck, If, BreakIf, Else, EndIf, Loop, EndLoop, Break, Stream, Reset, Yield, Return, GetField, GetIndex, GetTupleField, GetEnumField, Len, IsEnum, IsStruct, IntToFloat, FloatToInt, WordToByte, ByteToWord, WordToFixed, FixedToWord, FixedMul, FixedDiv, Trap, PopN, BitAnd, BitOr, BitXor, Shl, Shr |
+| 1 | Const, PushImmediate, GetLocal, GetData, Dup, GetDataIndexed, CheckedAdd, CheckedSub, CheckedMul, CheckedDiv, CheckedMod, Call, CallVerifiedNative, CallExternalNative, NewStruct, NewEnum, NewArray, NewTuple |
+| 2 | CheckedNeg |
 
 ### Stack shrink (slots popped during execution)
 
+The values reproduce `Op::stack_shrink`. For opcodes whose net delta is non-negative (e.g. `CheckedAdd`, `CheckedNeg`) the shrink reads zero because the verifier accounts for the peak through `stack_growth` and there is no net pop.
+
 | Shrink | Instructions |
 |--------|--------------|
-| 0 | Const, PushImmediate, GetLocal, GetData, Dup, Else, EndIf, Loop, EndLoop, Break, Stream, Reset, Return, Not, NewStruct (template-driven), Len, IsEnum, IsStruct, IntToFloat, FloatToInt, WordToByte, ByteToWord, WordToFixed, FixedToWord, Trap |
-| 1 | SetLocal, SetData, If, BreakIf, Yield, CheckedNeg, CmpEq through CmpGe, BitAnd, BitOr, BitXor, Shl, Shr, GetField, GetIndex, GetTupleField, GetEnumField |
-| 2 | CheckedAdd, CheckedSub, CheckedMul, CheckedDiv, CheckedMod, Div, Mod, FixedMul, FixedDiv |
+| 0 | Const, PushImmediate, GetLocal, GetData, Dup, Not, Neg, CheckedAdd, CheckedSub, CheckedMul, CheckedNeg, CheckedDiv, CheckedMod, BoundsCheck, Else, EndIf, Loop, EndLoop, Break, Stream, Reset, Return, NewStruct (template-driven), Len, IsEnum, IsStruct, IntToFloat, FloatToInt, WordToByte, ByteToWord, WordToFixed, FixedToWord, FixedMul, FixedDiv, Trap |
+| 1 | Add, Sub, Mul, Div, Mod, CmpEq, CmpNe, CmpLt, CmpGt, CmpLe, CmpGe, SetLocal, SetData, GetDataIndexed, If, BreakIf, Yield, GetField, GetIndex, GetTupleField, GetEnumField, BitAnd, BitOr, BitXor, Shl, Shr |
+| 2 | SetDataIndexed |
 | n | PopN(n), Call(_, n), CallVerifiedNative(_, n), CallExternalNative(_, n), NewEnum(_, _, n), NewArray(n), NewTuple(n) |
 
 ### Heap allocation (bytes)

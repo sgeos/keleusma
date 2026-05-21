@@ -24,22 +24,23 @@ The compile pipeline (parse, type-check, monomorphize, hoist, emit) admits a bro
 - **Hot code swap** at RESET boundaries with persistent data segment.
 - **Hindley-Milner type inference** with generics, traits, and bounds.
 - **Compile-time monomorphization** of generic functions, structs, and enums.
-- **f-string interpolation** desugared at lex time to concat and to_string.
 - **Static marshalling** through `KeleusmaType` derive for ergonomic native registration.
 - **`no_std + alloc` compatible** with a minimal dependency set.
 
 ### Cargo features
 
-The runtime crate exposes three orthogonal feature gates so hosts can strip pipeline stages they do not need from the flash image.
+The runtime crate exposes orthogonal feature gates so hosts can strip pipeline stages they do not need from the flash image.
 
 | Feature | Default | What it adds | Drop to save flash when |
 |---------|:-------:|--------------|-------------------------|
 | `compile` | on | Lexer, parser, type checker, monomorphizer, compiler. The source-to-bytecode pipeline. | The host ships precompiled bytecode and loads through `Module::from_bytes` or `Vm::view_bytes_zero_copy`. |
 | `verify` | on | Structural verifier, WCET and WCMU resource-bounds pass. Used inside `Vm::new` at load time. | An equivalent verification ran at artefact-ingestion time; `Vm::new` then degrades to a trust-load equivalent to `Vm::new_unchecked`. |
-| `text` | on | Surface syntax for string literals and the `Text` type, f-string interpolation, the utility natives (`to_string`, `concat`, `slice`, `length`, `println`). The `Value::StaticStr` and `Value::KStr` runtime variants. | Scripts use only numeric arguments. Diagnostics route through registered host natives that take numeric event codes. |
 | `floats` | on | Surface syntax for the `Float` type and float literals, `Value::Float` and `ConstValue::Float` variants, `Op::IntToFloat` and `Op::FloatToInt` opcode bodies, the f64 arm in `Vm::binary_arith`, the `KeleusmaType` impl for `f64`, the `audio_natives` and `stddsl` bundles. | Scripts use only integer, byte, and fixed-point arithmetic. Dropping `floats` removes the soft-float `compiler_builtins` routines (`__divdf3`, `__adddf3`, `__muldf3`) from the runtime image; on the bare-metal STM32N6570-DK build this is roughly 12 KB. |
+| `shell` | off | The `stddsl::Shell` bundle, which forwards `println` and a handful of shell-style natives onto the host. | The host registers its own diagnostics natives. |
 
-The features compose freely. The `examples/rtos/` cooperative microkernel disables both `text` and `floats` and uses precompiled bytecode under either `keleusma-verify` only (157 KB `.text`) or trust-load (137 KB `.text`) on the STM32N6570-DK; see [`examples/rtos/MANUAL.md`](examples/rtos/MANUAL.md) for the measured flash-size table.
+Text support is unconditional in V0.2.0: `Value::StaticStr` literals and arena-resident `Value::KStr` strings are always available, and the surface syntax accepts the `Text` type. Dynamic-text composition (`to_string`, `concat`, `slice`, `length`) is the host's responsibility through `register_verified_native` or the `register_fn` marshalling layer. The bundled `register_utility_natives` registers `println` only.
+
+The features compose freely. The `examples/rtos/` cooperative microkernel disables `floats` and uses precompiled bytecode under either `keleusma-verify` only (157 KB `.text`) or trust-load (137 KB `.text`) on the STM32N6570-DK; see [`examples/rtos/MANUAL.md`](examples/rtos/MANUAL.md) for the measured flash-size table.
 
 ## Quick Start
 
@@ -92,7 +93,7 @@ fn clamp(val: i64, lo: i64, hi: i64) -> i64 {
 }
 
 // Non-atomic total. May yield, must eventually return.
-yield prompt(question: String) -> String {
+yield prompt(question: Text) -> Text {
     let answer = yield question;
     answer
 }
@@ -108,14 +109,16 @@ loop main(input: i64) -> i64 {
 ### Pattern matching and guard clauses
 
 ```
-fn classify(0) -> String { "zero" }
-fn classify(x: i64) -> String when x > 0 { "positive" }
-fn classify(x: i64) -> String { "negative" }
+fn classify(0) -> Text { "zero" }
+fn classify(x: i64) -> Text when x > 0 { "positive" }
+fn classify(x: i64) -> Text { "negative" }
 
-fn describe(msg: Message) -> String {
+use format
+
+fn describe(msg: Message) -> Text {
     match msg {
-        Message::Text(s) => s,
-        Message::Code(n) => to_string(n),
+        Message::Body(s) => s,
+        Message::Code(n) => format(n),
         _ => "unknown",
     }
 }
@@ -129,14 +132,6 @@ impl Doubler for i64 { fn double(x: i64) -> i64 { x + x } }
 
 fn use_doubler<T: Doubler>(x: T) -> i64 { x.double() }
 fn main() -> i64 { use_doubler(21) }
-```
-
-### f-string interpolation
-
-```
-fn greet(name: String) -> String {
-    f"hello, {name}!"
-}
 ```
 
 ### Coroutine yield and resume
@@ -205,20 +200,19 @@ Presets include `host`, `wasm32`, `embedded_32`, `embedded_16`, and `embedded_8`
 ## Compilation Pipeline
 
 ```
-Source Code -> tokenize -> parse -> typecheck -> monomorphize -> hoist -> emit -> Module
+Source Code -> tokenize -> parse -> typecheck -> monomorphize -> emit -> Module
 Module -> verify (structural + WCMU + WCET) -> Vm
 ```
 
 Stages:
 
-1. **Lexer** (`tokenize`). Source text to tokens with source locations. f-strings desugar at this layer.
+1. **Lexer** (`tokenize`). Source text to tokens with source locations.
 2. **Parser** (`parse`). Tokens to abstract syntax tree.
-3. **Type checker** (`typecheck::check`). Hindley-Milner inference with generics, traits, and bounds.
+3. **Type checker** (`typecheck::check`). Hindley-Milner inference with generics, traits, and bounds. Closure-shaped expressions and first-class function references are rejected here with a diagnostic that names the construct.
 4. **Monomorphization** (`monomorphize::monomorphize`). Specializes generic functions, structs, and enums per concrete instantiation.
-5. **Closure hoisting** (`hoist_closures`). Lifts closure literals to top-level synthetic chunks.
-6. **Emission** (`compile`). Lowers the AST to bytecode.
-7. **Verifier** (runs automatically in `Vm::new`). Structural verification, productivity check, WCMU and WCET bounds.
-8. **VM** (`call`, `resume`). Bytecode execution with the yield-and-resume protocol.
+5. **Emission** (`compile`). Lowers the AST to bytecode.
+6. **Verifier** (runs automatically in `Vm::new`). Structural verification, productivity check, WCMU and WCET bounds.
+7. **VM** (`call`, `resume`). Bytecode execution with the yield-and-resume protocol.
 
 ## Error Handling
 
@@ -226,7 +220,7 @@ Each pipeline stage produces typed errors with source locations.
 
 - `LexError` for tokenization failures.
 - `ParseError` for syntax errors.
-- `CompileError` for type-check, monomorphization, hoisting, and emission failures.
+- `CompileError` for type-check, monomorphization, and emission failures.
 - `VerifyError` for structural and resource-bound failures.
 - `VmError` for runtime errors during `call` and `resume`.
 

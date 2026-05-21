@@ -24,13 +24,15 @@ The following features were originally listed as out of scope and have since shi
 
 - Hindley-Milner type inference with Robinson unification, the occurs check, and a transitional `Type::Var` for inferred positions.
 - Generic type parameters with trait bounds, traits, impl blocks, and compile-time monomorphization with inference reach across literals, identifiers, function-call returns, method-call returns, casts, enum variants, struct constructions, tuple and array literals, if and match arms, field access, tuple-index, and array-index.
-- Closures with environment capture and transitive nested capture. Closures are rejected by the safe verifier under the conservative-verification stance because indirect dispatch through `Op::CallIndirect` cannot be statically bounded; programs that require definitive Worst-Case Execution Time and Worst-Case Memory Usage bounds restrict themselves to direct calls.
 - Hot code swap at the reset boundary of a `loop` script. Native registrations persist across the swap; the data segment is supplied fresh by the host.
-- String interpolation through f-strings (`f"text {expr}"`), which the lexer desugars to `concat` and `to_string` calls.
 
-The following remains explicitly out of scope.
+The following are explicitly out of scope.
+
+- Closures with environment capture, first-class function references, and indirect dispatch. The construct existed transitionally through V0.1 but is now rejected at the type-checker stage with a diagnostic that names the construct. Programs that require definitive Worst-Case Execution Time and Worst-Case Memory Usage bounds restrict themselves to direct calls and trait dispatch. The `Op::CallIndirect`, `Op::PushFunc`, `Op::MakeClosure`, and `Op::MakeRecursiveClosure` opcodes were retired in V0.2.0 Phase 4 alongside the `Value::Func` runtime variant.
+- F-string interpolation. The surface form `f"text {expr}"` was removed in V0.2.0 Phase 3.5. Programs compose dynamic text through host-registered natives such as a `format` function that returns `Value::KStr`.
 
 - Ownership, borrowing, or lifetime annotations at the surface language level. Rust's borrow checker is unnecessary because script values are conceptually immutable and the data segment is the sole mutable region.
+- Bundled standard-library text natives. The runtime ships `register_utility_natives` registering only `println`. Dynamic-text composition is the host's responsibility through verified natives.
 
 Structural verification at the bytecode level is implemented. See [TARGET_ISA.md](../reference/TARGET_ISA.md) for the verification specification. The conservative-verification stance is described in [LANGUAGE_DESIGN.md](../architecture/LANGUAGE_DESIGN.md#conservative-verification).
 
@@ -254,7 +256,7 @@ fn classify(c: Code) -> Word {
 
 The cast respects both implicit and explicit discriminants. The reverse direction (a `Word` cast back to an enum) is not currently admissible; construct enum values with the variant syntax.
 
-String conversion uses the `to_string` native function.
+Text conversion is the host's responsibility. The runtime does not bundle a `to_string` native; hosts register one (typically named `format` or `to_string`) through `register_verified_native` or the `register_fn` marshalling layer.
 
 ## 4. Expressions
 
@@ -531,7 +533,11 @@ yield handle(AudioCommand::ConfigureChannel(ch)) -> AudioAction {
 
 Multiple function definitions with the same name, arity, and category form a single logical function. The runtime dispatches to the first head whose pattern matches the arguments, evaluated top to bottom.
 
+The example below assumes the host has registered a `to_string` verified native (`Vm::register_verified_native("to_string", …)`) that converts a numeric argument to `Value::KStr`. Text composition through `+` allocates the result in the arena's top region.
+
 ````
+use to_string
+
 fn describe(Command::NoteOn(ch, note, vel)) -> Text {
   "Play note " + (note as Float |> to_string()) + " on channel " + (ch as Float |> to_string())
 }
@@ -932,7 +938,6 @@ field_access    = '.' lower_ident
 tuple_index     = '.' integer_lit
 array_index     = '[' expression ']'
 primary_expr    = literal
-                | fstring_lit
                 | lower_ident
                 | upper_ident '::' upper_ident [ '(' [ arg_list ] ')' ]
                 | upper_ident [ '{' field_init_list '}' ]
@@ -940,19 +945,18 @@ primary_expr    = literal
                 | yield_expr
                 | if_expr
                 | match_expr
-                | closure_expr
                 | '(' ')'
                 | '(' expression ')'
                 | '(' expression ',' expression { ',' expression } [ ',' ] ')'
                 | '[' [ arg_list ] ']'
                 | expression 'as' type_expr
 
-(* Closures. Body may be a single expression or a block. *)
-closure_expr    = '|' [ closure_params ] '|' [ '->' type_expr ] closure_body
-closure_params  = closure_param { ',' closure_param }
-closure_param   = lower_ident [ ':' type_expr ]
-closure_body    = expression
-                | '{' block '}'
+(* Closures, f-strings, and first-class function references are not
+   admitted in V0.2.0. Closure-shaped expressions and bare function
+   identifiers in non-call position are rejected at the type-checker
+   stage with a diagnostic that names the construct. F-string
+   interpolation was removed in V0.2.0 Phase 3.5; hosts compose
+   dynamic text through a registered `format` native. *)
 
 literal         = integer_lit | float_lit | string_lit | bool_lit
 qualified_name  = lower_ident { '::' lower_ident }
@@ -962,13 +966,6 @@ arg_list        = expression { ',' expression }
                 | '_' { ',' expression }
 field_init_list = field_init { ',' field_init }
 field_init      = lower_ident ':' expression
-
-(* F-strings. Lexer-level desugaring to a chain of `concat` and
-   `to_string` native calls. The literal segments are static strings;
-   the interpolated segments are arbitrary expressions. *)
-fstring_lit     = 'f"' { fstring_segment } '"'
-fstring_segment = fstring_text | '{' expression '}'
-fstring_text    = ? any character except '"' or '{' ?
 
 (* Yield *)
 yield_expr      = 'yield' expression
@@ -1017,7 +1014,7 @@ The grammar is descriptive, not normative. The reference implementation is the p
 
 The grammar describes the surface only. The verifier rejects programs whose Worst-Case Execution Time or Worst-Case Memory Usage cannot be statically bounded under the conservative-verification stance, and the type checker enforces additional constraints around generics, trait bounds, exhaustive match, and the data-segment fixed-size discipline. See [LANGUAGE_DESIGN.md](../architecture/LANGUAGE_DESIGN.md) for those layers.
 
-Closures parse but the safe verifier rejects programs that invoke them through `Op::CallIndirect`. This is a deliberate property of the conservative-verification stance, not a parser limitation. Programs that require definitive Worst-Case Execution Time and Worst-Case Memory Usage bounds restrict themselves to direct calls.
+The parser no longer accepts closure literals or first-class function references; both are rejected at the type-checker stage with a diagnostic that names the construct. The `Op::CallIndirect`, `Op::PushFunc`, `Op::MakeClosure`, and `Op::MakeRecursiveClosure` opcodes were retired in V0.2.0 Phase 4 alongside the `Value::Func` runtime variant. Programs that require definitive Worst-Case Execution Time and Worst-Case Memory Usage bounds restrict themselves to direct calls and trait dispatch.
 
 The pipeline operator `|>` requires parentheses on the right-hand call even when the call is nullary; `expr |> f` is a parse error, `expr |> f()` is correct.
 
@@ -1335,7 +1332,7 @@ The following questions from the initial specification have been resolved.
 
 | Question | Resolution |
 |----------|-----------|
-| String interpolation | Implemented as f-string desugaring. `f"text {expr}"` compiles to `concat` and `to_string` calls at lex time. |
+| String interpolation | Removed in V0.2.0 Phase 3.5. The f-string surface form (`f"text {expr}"`) and its lexer-level desugaring to `concat` / `to_string` calls were retired. Hosts compose dynamic text through a registered `format` native that returns `Value::KStr`. |
 | Array iteration | `for` loops iterate over arrays and bounded ranges. The compiler infers static array length from declared types and emits a `Const(N)` end bound for the strict-mode WCMU verifier. |
 | Error propagation | Implemented as the resume-value pattern (B7). The script declares a `Result`-shaped enum and pattern-matches on the resumed value. No `Result<T, E>` syntactic sugar at the `yield` site; the dialogue type is the script's own enum. |
 | Numeric literal suffixes | Supported. `42i64` and `3.14f64` are valid. |
@@ -1352,7 +1349,7 @@ The following questions from the initial specification have been resolved.
 | Hindley-Milner inference | Implemented (B1) with Robinson unification and the occurs check. `Type::Var` represents inferred positions; substitution applies at end of `check_function`. |
 | Generics with traits and bounds | Implemented (B2 / B2.3 / B2.4). Generic functions, structs, and enums with type parameters and trait bounds; impl-method registration with structural validation against the trait declaration. |
 | Compile-time monomorphization | Implemented (B2.4). Specialization across literals, identifiers, function-call returns, method-call returns, casts, enum variants, struct constructions, tuple and array literals, if and match arms, field access, tuple-index, and array-index. Generic functions with no specializations are retained for runtime tag dispatch on `Value` tags. |
-| Closures | Implemented (B3) with environment capture and transitive nested capture. Rejected by the safe verifier under the conservative-verification stance because indirect dispatch through `Op::CallIndirect` cannot be statically bounded. The construct exists in the language so the rejection can be precise rather than approximate. |
+| Closures | Removed in V0.2.0 Phase 4. Closure-shaped expressions and first-class function references are rejected at the type-checker stage with a diagnostic that names the construct. The `Op::CallIndirect`, `Op::PushFunc`, `Op::MakeClosure`, and `Op::MakeRecursiveClosure` opcodes and the `Value::Func` runtime variant were retired alongside the surface form. |
 | Hot code swap | Implemented at the reset boundary of a `loop` script through `Vm::replace_module`. Native registrations persist; the data segment is supplied fresh by the host. Dialogue type must remain stable across swaps. |
 | Error recovery model | `Vm::reset_after_error` clears volatile state (operand stack, frames, arena top) and preserves the data segment. Hosts call this after `Err` from `call` or `resume` to return the VM to a clean callable state. |
 | WCET unit | Pipelined cycles per Stream-to-Reset slice. The bundled `NOMINAL_COST_MODEL` is unmeasured and provides relative ordering only; hosts construct a calibrated `CostModel` whose `op_cycles` returns measured pipelined cycles for the target hardware (the `keleusma-bench` workspace member generates such tables). |

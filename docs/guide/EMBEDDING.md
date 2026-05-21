@@ -193,11 +193,10 @@ use keleusma::stddsl;
 let mut vm = Vm::new(module, &arena)?;
 vm.register_library(stddsl::Math);   // math::sqrt, math::floor, ...
 vm.register_library(stddsl::Audio);  // audio::midi_to_freq, ...
-vm.register_library(stddsl::Text);   // to_string, concat, slice, length, println
 vm.register_library(stddsl::Shell);  // shell::getenv, shell::run, shell::exit
 ````
 
-`stddsl::Text` requires the `text` cargo feature on the keleusma library. `stddsl::Shell` requires the `shell` feature, which adds a `std` dependency and is therefore incompatible with `no_std` builds. The `keleusma-cli` crate enables both features and registers all four bundles by default.
+`stddsl::Math` and `stddsl::Audio` require the `floats` cargo feature. `stddsl::Shell` requires the `shell` feature, which adds a `std` dependency and is therefore incompatible with `no_std` builds. The `keleusma-cli` crate enables both features and registers all three bundles by default. Hosts that want bundled text composition register a host-side `format` / `to_string` / `concat` native through `register_verified_native` (see the "Host-Defined String Helpers" section above) or implement their own `Library` bundle.
 
 Hosts that want to ship their own reusable bundles implement the `Library` trait on a host-side type. The trait is the extensibility surface; the bundled libraries are an example of the pattern, not a closed set.
 
@@ -396,10 +395,10 @@ This is intentional misuse if used to admit programs that would fail the safe ve
 - [`examples/wcmu_basic.rs`](../../examples/wcmu_basic.rs) shows the auto-sizing pattern end to end.
 - [`examples/wcmu_attestation.rs`](../../examples/wcmu_attestation.rs) shows native bound declaration.
 - [`examples/wcmu_rejection.rs`](../../examples/wcmu_rejection.rs) shows the verifier rejecting an undersized arena.
-- [`examples/string_ops.rs`](../../examples/string_ops.rs) shows string concatenation and slicing through utility natives.
+- [`examples/string_ops.rs`](../../examples/string_ops.rs) shows host-registered text concatenation and slicing natives.
 - [`examples/yield_error.rs`](../../examples/yield_error.rs) shows error propagation through yield with a script-defined `Result`-shaped enum.
 - [`examples/method_call.rs`](../../examples/method_call.rs) shows method dispatch through receiver-style syntax.
-- [`examples/piano_roll.rs`](../../examples/piano_roll.rs) is a feature-gated end-to-end SDL3 audio host. It exercises bounded-step execution under a real-time audio deadline, thread-safe handoff between the Keleusma main thread and the SDL3 audio callback, multi-voice control flow through the data segment, and hot code swap across a roster of precompiled songs (`piano_roll_<N>.kel`, currently `piano_roll_0.kel`, `piano_roll_1.kel`, and `piano_roll_2.kel`). Run with `cargo run --release --example piano_roll --features sdl3-example,text`. Press `s` to cycle to the next song, `r` to restart the current song, a digit to select a song by index, or Enter alone to quit. The long-form manual is [PIANO_ROLL.md](./PIANO_ROLL.md), which covers writing songs, lifting the host loop into another application, and using the example as an architectural reference for embedding Keleusma in other control-loop domains.
+- [`examples/piano_roll.rs`](../../examples/piano_roll.rs) is a feature-gated end-to-end SDL3 audio host. It exercises bounded-step execution under a real-time audio deadline, thread-safe handoff between the Keleusma main thread and the SDL3 audio callback, multi-voice control flow through the data segment, and hot code swap across a roster of precompiled songs (`piano_roll_<N>.kel`, currently `piano_roll_0.kel`, `piano_roll_1.kel`, and `piano_roll_2.kel`). Run with `cargo run --release --example piano_roll --features sdl3-example`. Press `s` to cycle to the next song, `r` to restart the current song, a digit to select a song by index, or Enter alone to quit. The long-form manual is [PIANO_ROLL.md](./PIANO_ROLL.md), which covers writing songs, lifting the host loop into another application, and using the example as an architectural reference for embedding Keleusma in other control-loop domains.
 - [LANGUAGE_DESIGN.md](../architecture/LANGUAGE_DESIGN.md) describes the language model.
 - [EXECUTION_MODEL.md](../architecture/EXECUTION_MODEL.md) describes the runtime model.
 - [WHY_REJECTED.md](./WHY_REJECTED.md) describes verifier rejection categories.

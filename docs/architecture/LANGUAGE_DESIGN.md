@@ -72,13 +72,13 @@ Keleusma provides five static guarantees about program behavior.
 
 Keleusma's surface language admits the description of programs that the verifier may reject. The separation between description and admission is intentional and is part of the language's contract. This property may seem alien to readers coming from programming paradigms where successfully compiling means the program is admitted at runtime.
 
-The compile pipeline admits a broader surface than the WCET and WCMU analyses can prove bounded. The pipeline includes the parser, the type checker, the monomorphizer, the closure-hoisting pass, and the bytecode emitter. The verifier runs at the safe constructors `Vm::new` and `Vm::load_bytes`. It rejects any program whose execution time or memory use cannot be statically bounded.
+The compile pipeline admits a broader surface than the WCET and WCMU analyses can prove bounded. The pipeline includes the parser, the type checker, the monomorphizer, and the bytecode emitter. The verifier runs at the safe constructors `Vm::new` and `Vm::load_bytes`. It rejects any program whose execution time or memory use cannot be statically bounded. Some constructs are rejected earlier than the verifier: V0.2.0 Phase 4 moved closure-shaped expressions and first-class function references into the type-checker stage, where they surface as a diagnostic that names the construct.
 
 Two categories of programs fall in the gap between the surface and the verifier's admittance set.
 
-**First category, provably unbounded constructs.** A program that demonstrably admits unbounded execution at runtime falls in this category. An example is a closure that dispatches to itself through indirect call. The language describes the construct so the verifier can definitively reject it. A future verifier with stronger analysis will not admit such programs because they are unbounded by construction.
+**First category, provably unbounded constructs.** A program that demonstrably admits unbounded execution at runtime falls in this category. The legacy example was a closure that dispatched to itself through indirect call. After V0.2.0 the language no longer describes closures, but the conservative-verification stance still applies to constructs the verifier cannot bound: recursive call graphs, unbounded loop iteration counts, and similar shapes are rejected.
 
-**Second category, bounded but not yet proven constructs.** A program whose execution is bounded in fact but whose proof has not yet been implemented also falls in this category. An example is a non-recursive closure invocation such as `let f = |x| x + 1; f(5)`. The runtime behavior is bounded, but the present verifier rejects the program because indirect dispatch through `Op::CallIndirect` requires a flow analysis that has not been implemented. Future analysis improvements can move such programs out of the rejection set without changing the surface language.
+**Second category, bounded but not yet proven constructs.** A program whose execution is bounded in fact but whose proof has not yet been implemented also falls in this category. Examples include programs that read a host-attested invocation-count bound through `register_external_native` whose chunk-level integration is forward-looking, and programs that depend on refinement-type elision passes that have not yet been generalised. Future analysis improvements can move such programs out of the rejection set without changing the surface language.
 
 This stance differs from the conventional pattern in most programming languages. There, programs that compile typically admit runtime execution, and analysis tools layer on top to flag potential issues. In Keleusma, the verifier is the source of truth. Programs that fail verification are rejected at the safe constructor regardless of whether they would have terminated in practice. The two categories above are coherent because the language treats rejection as the safety property: a program admitted by `Vm::new` is one whose bound is proved, not one whose bound exists.
 
@@ -94,13 +94,13 @@ The rejection-by-default stance is the dual of the conventional acceptance-by-de
 
 ### Worked examples
 
-`Op::CallIndirect` invocation is rejected as a second-category construct. The runtime behavior is bounded for non-recursive closure use, but the static bound is not yet computed. A future flow analysis would admit non-recursive closure programs while still rejecting recursive ones.
+Closure-shaped expressions and first-class function references are rejected by the **type checker** in V0.2.0 with a diagnostic that names the construct. The legacy verifier-stage rejection through `Op::CallIndirect` and `Op::MakeRecursiveClosure` is no longer the relevant path: those opcodes and the `Value::Func` runtime variant were retired in V0.2.0 Phase 4 along with the closure-hoisting compiler pass.
 
-`Op::MakeRecursiveClosure` construction is rejected as a first-category construct. Self-referential dispatch admits unbounded recursion within a single Stream-to-Reset slice by construction. No analysis admits such a program without an external attestation of recursion depth.
+Recursive call-graph cycles are rejected by the **compiler** with a diagnostic that names the cycle. Recursion is a first-category construct: a self-referential or mutually-referential call chain admits unbounded execution within a single Stream-to-Reset slice by construction.
 
-The pattern `apply(apply, x)` on a generic identity-applier is rejected as a first-category construct. The pattern admits unbounded recursion through indirect dispatch regardless of which closure-construction op produced the value.
+A `loop` function without a guaranteed `yield` on every cycle is rejected by the **verifier** as a productivity violation. The productivity rule keeps `loop` functions from spinning without progress.
 
-The closure feature in general is described in BACKLOG entry B3 as "Implemented; not WCET-safe". The implementation is complete in the language pipeline so that the verifier can reject the runtime invocation through `Op::CallIndirect` definitively. The construct exists in the language so that the rejection can be precise rather than approximate.
+A program whose declared WCET or WCMU exceeds the runtime's bound, or whose loop bound cannot be statically inferred, is rejected by the **verifier**'s resource-bounds pass. Hosts that have measured a bound out-of-band may convey it through the external-native attestation API or accept the program through `Vm::new_unchecked` (intentional misuse outside the WCET contract).
 
 ## Memory Model
 
@@ -190,7 +190,7 @@ Internal threading of the host-supplied cost model through the per-chunk WCMU co
 
 ### Limitations
 
-Pipelined cycles do not directly correspond to actual cycles or to wall-clock time. The conversion to actual cycles requires the platform's stall budget. The conversion to wall-clock time additionally requires the clock period. Industrial WCET analysis tools such as aiT [WC2] account for pipeline effects, cache behavior, and branch prediction on the target hardware to produce a tight actual-cycle bound. For safety-critical certification, a sound wall-clock bound requires either a time-predictable execution platform [WC5] or a validated mapping from pipelined cycles to physical time. Keleusma's pipelined-cycle bound is sufficient for relative comparison of programs and, multiplied by a deployment-specific calibration factor, sufficient for soft real-time and many embedded scheduling applications. See [RELATED_WORK.md](../reference/RELATED_WORK.md) Section 4 for the full discussion. Indirect-dispatch limitations and the rejection of recursive closures by the safe verifier are documented in [EXECUTION_MODEL.md](./EXECUTION_MODEL.md) under Structural Verification.
+Pipelined cycles do not directly correspond to actual cycles or to wall-clock time. The conversion to actual cycles requires the platform's stall budget. The conversion to wall-clock time additionally requires the clock period. Industrial WCET analysis tools such as aiT [WC2] account for pipeline effects, cache behavior, and branch prediction on the target hardware to produce a tight actual-cycle bound. For safety-critical certification, a sound wall-clock bound requires either a time-predictable execution platform [WC5] or a validated mapping from pipelined cycles to physical time. Keleusma's pipelined-cycle bound is sufficient for relative comparison of programs and, multiplied by a deployment-specific calibration factor, sufficient for soft real-time and many embedded scheduling applications. See [RELATED_WORK.md](../reference/RELATED_WORK.md) Section 4 for the full discussion.
 
 ## Turing Completeness and Temporal Domains
 
@@ -229,11 +229,10 @@ Features now implemented under V0.1.
 - Hindley-Milner type inference foundation. `Type::Var`, the substitution machinery, and Robinson unification with the occurs check. `Type::Unknown` remains as a transitional sentinel for runtime-only dispatch positions; removing it requires declaring native function signatures.
 - Generics. Generic functions, structs, and enums with type parameters. Trait declarations, trait bounds with `+` separator, and impl method registration with structural validation against the trait.
 - Compile-time monomorphization. Function, struct, and enum specialization. Inference reach across literals, identifiers, function-call returns, method-call returns, unary and binary operators, casts, enum variants, struct constructions, tuple and array literals, if and match arms, field access, tuple-index, and array-index expressions.
-- Closures and anonymous functions. The compile pipeline (parse, type-check, monomorphize, hoist, emit) supports first-class arguments, environment capture, transitive nested capture, and recursive let-bound closures. **Closures are not part of the WCET-safe surface.** The safe verifier rejects programs that invoke closures through `Op::CallIndirect` because indirect dispatch cannot be statically bounded. Programs that require definitive WCET and WCMU bounds must restrict themselves to direct calls. The valid form of unbounded execution is the top-level `loop` block enforced by the productivity rule. See the BACKLOG B3 entry and EXECUTION_MODEL for the rejection contract.
-- String interpolation. f-string syntax `f"text {expr} more"` desugars at lex time to a `concat`/`to_string` chain. String concatenation and slicing land as utility natives.
-
 Features explicitly excluded from the current design.
 
+- Closures, anonymous functions, and first-class function references. V0.2.0 Phase 4 retired the closure surface, the closure-hoisting compiler pass, the `Value::Func` runtime variant, and the `Op::CallIndirect`, `Op::PushFunc`, `Op::MakeClosure`, and `Op::MakeRecursiveClosure` opcodes. The type checker now rejects the construct directly with a diagnostic that names it. Programs that previously dispatched through closures restructure as top-level `fn` definitions or trait methods.
+- F-string interpolation and bundled text-composition natives. V0.2.0 Phase 3.5 removed the `f"text {expr}"` surface and the bundled `to_string` / `concat` / `slice` / `length` utility natives. Dynamic text composition is the host's responsibility through verified natives that allocate `Value::KStr` into the arena.
 - Ownership, borrowing, and lifetimes at the surface language level. Rust's borrow checker is unnecessary because script values are conceptually immutable and the data segment is the sole mutable region.
 - Recursion in `fn` and `yield` categories. Only `loop` functions admit cyclic execution, and only through the productive RESET cycle.
 - Variable-iteration loops without static bounds. The verifier rejects programs whose loop iteration count cannot be bounded statically.
@@ -275,9 +274,9 @@ Native function signatures admit labels in both parameter and return positions: 
 ## Cross-References
 
 - [GRAMMAR.md](../design/GRAMMAR.md) provides the formal EBNF grammar specification.
-- [EXECUTION_MODEL.md](./EXECUTION_MODEL.md) describes the target execution model with temporal domains, including the canonical specification of the conservative-verification rejection at `verify::module_wcmu` for `Op::CallIndirect` and `Op::MakeRecursiveClosure`.
+- [EXECUTION_MODEL.md](./EXECUTION_MODEL.md) describes the target execution model with temporal domains.
 - [TARGET_ISA.md](../reference/TARGET_ISA.md) describes the structural ISA specification.
-- [BACKLOG.md](../decisions/BACKLOG.md) records features that fall outside the verifier's current admittance set, including B3 closures.
+- [BACKLOG.md](../decisions/BACKLOG.md) records features that fall outside the verifier's current admittance set. B3 closures, B14 CallIndirect flow analysis, and related entries record V0.1-era investigations that V0.2.0 retired.
 - [RELATED_WORK.md](../reference/RELATED_WORK.md) positions Keleusma within the academic and industrial landscape.
 
 ## Citation Key

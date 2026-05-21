@@ -6,7 +6,7 @@
 
 Keleusma has no built-in standard library. All domain functionality is provided by host-registered native functions. The runtime crate ships several host-registerable bundles in the `keleusma::stddsl` module. Each bundle is a unit struct implementing the `Library` trait and is registered through `Vm::register_library`.
 
-The available bundles are `Math`, `Audio`, `Text`, and `Shell`. Bundle membership is partitioned by namespace. The `Math` bundle owns the `math::` namespace, and the `Audio` bundle owns the `audio::` namespace. A host script that needs both math and audio helpers should register both bundles.
+The available bundles are `Math`, `Audio`, and `Shell`. Bundle membership is partitioned by namespace. The `Math` bundle owns the `math::` namespace, and the `Audio` bundle owns the `audio::` namespace. A host script that needs both math and audio helpers should register both bundles. V0.2.0 retired the `Text` bundle; text composition is the host's responsibility through `register_fn` or `register_verified_native`.
 
 ## Registration API
 
@@ -14,7 +14,6 @@ The available bundles are `Math`, `Audio`, `Text`, and `Shell`. Bundle membershi
 use keleusma::stddsl;
 vm.register_library(stddsl::Math);
 vm.register_library(stddsl::Audio);
-vm.register_library(stddsl::Text);
 ```
 
 Individual native registration is also possible.
@@ -126,19 +125,15 @@ The `Audio` bundle registers entries under the `audio::` namespace. All routines
 |---|---|---|
 | `audio::pan_law` | `(Float) -> (Float, Float)` | Equal-power pan law. Position in the closed interval from negative one through positive one maps to a left-and-right gain pair whose sum of squares equals one. Out-of-range positions are clamped. Negative one returns full left, zero returns equal gains of one over the square root of two, positive one returns full right. |
 
-## Text Bundle
+## Bundled Text Natives
 
-The `Text` bundle registers utility natives for string handling. It depends on the `text` cargo feature and is a no-op when the feature is disabled.
+V0.2.0 retired the `stddsl::Text` bundle and the bundled text-composition natives (`to_string`, `length`, `concat`, `slice`). Dynamic-text composition is the host's responsibility. The runtime ships exactly one bundled text-adjacent native:
 
 | Function | Signature | Description |
 |---|---|---|
-| `to_string` | `(T) -> Text` | Render any value to its string representation. The result is allocated in the host arena's top region and becomes stale on the next reset. |
-| `length` | `(T) -> Word` | Length of an array, tuple, or string. String length is counted in Unicode code points. |
-| `concat` | `(Text, Text) -> Text` | Concatenate two strings. Result allocated in the arena. |
-| `slice` | `(Text, Word, Word) -> Text` | Extract a substring from `start` inclusive to `end` exclusive. Bounds are character indices. Result allocated in the arena. |
-| `println` | `(T) -> Unit` | Debug print. No-op in `no_std` builds; hosts may override through `register_native_closure` to obtain output. |
+| `println` | `(T) -> Unit` | Debug print, registered through `keleusma::utility_natives::register_utility_natives`. No-op in `no_std` builds; hosts may override through `register_native_closure` to obtain output. |
 
-The math routines that previously rode along with this bundle have been consolidated under the `Math` bundle. A host that registered `Text` historically and depended on `math::sqrt`, `math::floor`, `math::ceil`, `math::round`, or `math::log2` being present must now also register `Math`.
+Hosts that need text composition register their own natives through `register_verified_native` or the `register_fn` marshalling layer. A typical pattern declares a `format` native that produces an arena-resident `Value::KStr`. See [EMBEDDING.md](../guide/EMBEDDING.md) under "Host-Defined String Helpers" for the recommended shape.
 
 ## Shell Bundle
 

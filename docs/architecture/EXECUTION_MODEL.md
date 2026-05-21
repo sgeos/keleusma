@@ -135,33 +135,33 @@ Compiled modules can be loaded from any addressable byte slice. The runtime crat
 
 ### Wire Format
 
-The V0.3.0 wire format partitions the bytecode body into independently relocatable sections, each accessible through an offset and length in the framing header. The opcode stream is a fixed-size encoding for predictable decoding; the operand pool holds compound operands separately; the constant pool, chunk table, and data layout remain as their own sections. The format begins at `BYTECODE_VERSION = 1` with the V0.2.0 publication.
+The V0.2.0 wire format partitions the bytecode body into independently relocatable sections, each accessible through an offset and length in the framing header. The opcode stream is a fixed-size encoding for predictable decoding; the operand pool holds compound operands separately; the rkyv-archived auxiliary body carries chunk metadata, the constant pool, struct templates, native names, and the data layout. The format begins at `BYTECODE_VERSION = 1` with the V0.2.0 publication.
 
 #### Framing header
 
-The header is 64 bytes, multiple of eight so the body begins at an 8-byte-aligned offset. Followed by the body and a 4-byte little-endian CRC-32 trailer over the framed range.
+The header is exactly 64 bytes, a multiple of eight so the body begins at an 8-byte-aligned offset. The body is followed by a 4-byte little-endian CRC-32 trailer over the framed range. The canonical specification of every field lives in [WIRE_FORMAT.md](./WIRE_FORMAT.md); the layout below is reproduced for cross-reference.
 
 ```
 bytes 0..4    : magic ("KELE")
 bytes 4..6    : version (u16 little-endian, set to 1 for V0.2.0)
-bytes 6..10   : total framing length (u32 LE; includes header and trailer)
-bytes 10..11  : word_bits_log2 (u8; runtime word width as base-2 exponent)
-bytes 11..12  : addr_bits_log2 (u8; runtime address width)
-bytes 12..13  : float_bits_log2 (u8; runtime float width)
-bytes 13..14  : header_flags (u8)
-bytes 14..16  : reserved
+bytes 6..8    : header length (u16 little-endian, equals 64)
+bytes 8..12   : total length (u32 little-endian; includes header, sections, CRC trailer)
+bytes 12..13  : word_bits_log2 (u8; target word width as base-2 exponent)
+bytes 13..14  : addr_bits_log2 (u8; target address width)
+bytes 14..15  : float_bits_log2 (u8; target float width)
+bytes 15..16  : flags (u8)
 bytes 16..20  : declared WCET in pipelined cycles per Stream-to-Reset slice (u32 LE)
 bytes 20..24  : declared WCMU in bytes per Stream-to-Reset slice (u32 LE)
-bytes 24..28  : opcode_stream_offset (u32 LE, from start of body)
-bytes 28..32  : opcode_stream_length (u32 LE, in 4-byte records)
-bytes 32..36  : operand_pool_offset (u32 LE, from start of body)
-bytes 36..40  : operand_pool_length (u32 LE, in bytes; multiple of 8)
-bytes 40..44  : constant_pool_offset (u32 LE)
-bytes 44..48  : constant_pool_length (u32 LE, in bytes)
-bytes 48..52  : chunk_table_offset (u32 LE)
-bytes 52..56  : chunk_table_length (u32 LE, in entries)
-bytes 56..60  : data_layout_offset (u32 LE; 0 if no data segment)
-bytes 60..64  : data_layout_length (u32 LE; 0 if no data segment)
+bytes 24..28  : shared data bytes (u32 LE)
+bytes 28..32  : private data bytes (u32 LE)
+bytes 32..36  : opcode_stream_offset (u32 LE, from start of body)
+bytes 36..40  : opcode_stream_length (u32 LE, multiple of 4)
+bytes 40..44  : operand_pool_offset (u32 LE, from start of body)
+bytes 44..48  : operand_pool_length (u32 LE, multiple of 8)
+bytes 48..52  : auxiliary_body_offset (u32 LE)
+bytes 52..56  : auxiliary_body_length (u32 LE)
+bytes 56..60  : reserved (u32, zero)
+bytes 60..64  : reserved (u32, zero)
 ... body ...
 last 4 bytes  : CRC-32 trailer (over the entire framed range minus the trailer)
 ```
@@ -178,7 +178,7 @@ The opcode stream is an array of fixed-size 4-byte opcode records. Every opcode 
 
 | Bytes | Field | Notes |
 |-------|-------|-------|
-| 0 | `opcode_id` (u8) | The dispatch index. The low 7 bits select among the 65 opcodes; opcode values 0-64 are valid, values 65-127 are reserved. The high bit is a **parity bit** over bytes 0-3 of the record, supporting per-record integrity verification at decode time. |
+| 0 | `opcode_id` (u8) | The dispatch index. The low 7 bits select among the 69 opcodes; opcode values 0-68 are valid, values 69-127 are reserved. The high bit is a **parity bit** over bytes 0-3 of the record, supporting per-record integrity verification at decode time. |
 | 1-3 | `operand_field` (24 bits) | Interpreted per opcode class. See "Operand field encoding" below. |
 
 A chunk's opcode count is bounded by the operand width of the control-flow opcodes (`u16`, see [INSTRUCTION_SET.md](../reference/INSTRUCTION_SET.md)), which caps it at 65,535 ops per chunk. The compiler emits a soft warning at 80% of this limit. The cap encourages function-level decomposition, which is consistent with Keleusma's three function-category model (`fn`, `yield fn`, `loop fn`).
@@ -189,12 +189,13 @@ The 24-bit operand field of each opcode record is interpreted by the opcode's op
 
 | Opcode shape | Encoding |
 |--------------|----------|
-| Zero-operand | All 24 bits are a fixed sentinel pattern (`0x000000`). Deviation from the sentinel signals corruption. |
-| `u8` operand | Byte 1 holds the `u8` operand. Bytes 2-3 are the sentinel pattern. |
-| `u16` operand | Bytes 1-2 hold the `u16` operand (little-endian). Byte 3 is the sentinel pattern. |
-| Compound `(u16, u8)`, `(u16, u16)`, `(u16, u16, u8)` | Bytes 1-2 hold a `u16` index into the operand pool. Byte 3 is the sentinel pattern. |
+| Zero-operand | All 24 bits are zero. Deviation signals corruption. |
+| `u8` operand | Byte 1 holds the `u8` operand. Bytes 2-3 are zero. |
+| `u16` operand | Bytes 1-2 hold the `u16` operand (little-endian). Byte 3 is zero. |
+| `(u16, u8)` inline | Bytes 1-2 hold the `u16` (little-endian). Byte 3 holds the `u8`. Carried by `Call`, `CallVerifiedNative`, `CallExternalNative`. |
+| Compound `(u16, u16)`, `(u16, u16, u8)` | Bytes 1-3 hold a 24-bit little-endian index into the operand pool (up to `1 << 24` entries). Carried by `GetDataIndexed`, `SetDataIndexed`, `IsEnum`, `NewEnum`. |
 
-58 of 65 opcodes carry their operand inline in the 4-byte record; 7 opcodes reference the operand pool.
+65 of 69 opcodes carry their operand inline in the 4-byte record. Four opcodes — `GetDataIndexed`, `SetDataIndexed`, `IsEnum` (`(u16, u16)`), and `NewEnum` (`(u16, u16, u8)`) — reference the operand pool because their payload exceeds three bytes.
 
 #### Operand pool
 
@@ -202,7 +203,7 @@ The operand pool is an array of fixed-size 8-byte aligned entries, each holding 
 
 | Bytes | Field | Notes |
 |-------|-------|-------|
-| 0 | `entry_type` (u8) | One of three values: `1 = (u16, u8)`, `2 = (u16, u16)`, `3 = (u16, u16, u8)`. Other values signal corruption. |
+| 0 | `entry_type` (u8) | One of two values: `0x01 = (u16, u16)`, `0x02 = (u16, u16, u8)`. Other values signal corruption. The `(u16, u8)` shape lives inline in the opcode record rather than in the pool. |
 | 1 | `parity` (u8) | Parity over bytes 0-7 of the entry. |
 | 2-7 | `payload` (6 bytes) | The compound operand, type-tagged by `entry_type`. Unused bytes within the payload are zero. |
 

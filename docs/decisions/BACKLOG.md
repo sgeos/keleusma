@@ -54,7 +54,11 @@ Pruning policy. Generic functions whose specializations were generated are dropp
 
 Polymorphic recursion cycle detection. Two complementary bounds guard the fixed-point loop. The global `SPECIALIZATION_LIMIT` caps the total number of specializations. The `PER_FUNCTION_LIMIT` caps the number of specializations any single generic function may produce, which is the structural signature of polymorphic recursion. When the per-function bound is reached, the loop exits early and the remaining work is left unspecialized; subsequent compilation will surface the truncation through the bytecode chunk count limit, which produces a clearer error path than infinite expansion.
 
-## ~~B3. Closures and anonymous functions~~ (Implemented; not WCET-safe)
+## ~~B3. Closures and anonymous functions~~ (Removed in V0.2.0 Phase 4)
+
+**V0.2.0 status.** Closures are no longer part of the language. V0.2.0 Phase 4 retired the closure surface syntax, the closure-hoisting compiler pass, the `Value::Func` runtime variant, and the `Op::PushFunc`, `Op::MakeClosure`, `Op::MakeRecursiveClosure`, and `Op::CallIndirect` opcodes. The type checker now rejects `Expr::Closure` and first-class function references with a diagnostic naming the construct. The historical V0.1 implementation is described below for context; the present runtime no longer admits any of it.
+
+---
 
 Surface syntax `|args| body` and `|args| -> ret { body }` parses, type-checks, monomorphizes, and emits bytecode. The runtime supports first-class function values through `Op::PushFunc`, `Op::MakeClosure`, `Op::MakeRecursiveClosure`, and `Op::CallIndirect`.
 
@@ -85,7 +89,11 @@ Hot code swap is implemented through `Vm::replace_module`. The host calls it bet
 
 Structural verification is implemented. See R22 and R23 in [RESOLVED.md](./RESOLVED.md).
 
-## ~~B5b. Static string discipline extensions~~ (Resolved as utility natives)
+## ~~B5b. Static string discipline extensions~~ (Removed in V0.2.0 Phase 3.5)
+
+**V0.2.0 status.** The bundled `to_string`, `concat`, `slice`, and `length` utility natives are no longer registered by `register_utility_natives`. The `Value::DynStr` global-heap variant is gone; all dynamic strings live in the arena as `Value::KStr`. Dynamic-text composition is the host's responsibility through `register_verified_native` or the `register_fn` marshalling layer. The historical V0.1 implementation is described below for context.
+
+---
 
 String values use the two-string-type discipline of `Value::StaticStr` and `Value::DynStr` with the host-owned arena boundary type `Value::KStr` for stale-pointer detection.
 
@@ -100,7 +108,11 @@ Formatting beyond `to_string(value)` is provided through f-string interpolation,
 
 WCET and WCMU implications. Concat and slice produce dynamic strings whose worst-case output length is the sum of operand lengths (`concat`) or `end - start` (`slice`). The verifier treats native function allocations as the per-native attestation supplied through `Vm::set_native_bounds`. Hosts that rely on `verify_resource_bounds` for real-time embedding must declare heap bounds for the registered string natives before constructing the VM through the safe constructor. Without an attestation, the analysis treats the natives as zero-cost, which is unsound for unbounded inputs. This trade-off is consistent with the existing native-attestation contract.
 
-## ~~B6. String interpolation~~ (Resolved as f-string desugaring)
+## ~~B6. String interpolation~~ (Removed in V0.2.0 Phase 3.5)
+
+**V0.2.0 status.** The f-string interpolation surface (`f"text {expr}"`) is no longer part of the language. The lexer-level desugaring to `concat` / `to_string` calls is gone. Hosts compose dynamic text through a registered native (typically named `format`) that returns `Value::KStr`. The historical V0.1 implementation is described below for context.
+
+---
 
 f-string interpolation lands as a lex-time desugaring. The surface syntax `f"text {expr} more {expr2}"` produces a left-associative chain of `concat` and `to_string` calls.
 
