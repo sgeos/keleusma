@@ -27,16 +27,21 @@ This documentation is structured as a **knowledge graph** encoded in the file sy
 | A program rejected by the verifier | [guide/WHY_REJECTED.md](./guide/WHY_REJECTED.md) |
 | Surprises and rough edges in V0.1.x | [guide/FAQ.md](./guide/FAQ.md) |
 | Language overview | [architecture/LANGUAGE_DESIGN.md](./architecture/LANGUAGE_DESIGN.md) |
+| Execution model and two temporal domains | [architecture/EXECUTION_MODEL.md](./architecture/EXECUTION_MODEL.md) |
+| Compilation pipeline | [architecture/COMPILATION_PIPELINE.md](./architecture/COMPILATION_PIPELINE.md) |
+| Bytecode wire format | [architecture/WIRE_FORMAT.md](./architecture/WIRE_FORMAT.md) |
+| Sub-coroutine primitive (preliminary, V0.5.0-gated) | [architecture/SUB_COROUTINES.md](./architecture/SUB_COROUTINES.md) |
 | Formal grammar | [design/GRAMMAR.md](./design/GRAMMAR.md) |
 | Type system | [design/TYPE_SYSTEM.md](./design/TYPE_SYSTEM.md) |
 | Built-in functions | [design/STANDARD_LIBRARY.md](./design/STANDARD_LIBRARY.md) |
-| Compilation pipeline | [architecture/COMPILATION_PIPELINE.md](./architecture/COMPILATION_PIPELINE.md) |
-| Bytecode instructions | [reference/INSTRUCTION_SET.md](./reference/INSTRUCTION_SET.md) |
-| Design decisions | [decisions/RESOLVED.md](./decisions/RESOLVED.md) |
-| Open questions | [decisions/PRIORITY.md](./decisions/PRIORITY.md) |
-| Current task | [process/TASKLOG.md](./process/TASKLOG.md) |
+| Bytecode instruction reference | [reference/INSTRUCTION_SET.md](./reference/INSTRUCTION_SET.md) |
+| Structural ISA description | [reference/TARGET_ISA.md](./reference/TARGET_ISA.md) |
 | Terminology | [reference/GLOSSARY.md](./reference/GLOSSARY.md) |
 | Related work and citations | [reference/RELATED_WORK.md](./reference/RELATED_WORK.md) |
+| Design decisions | [decisions/RESOLVED.md](./decisions/RESOLVED.md) |
+| Open questions | [decisions/PRIORITY.md](./decisions/PRIORITY.md) |
+| Deferred items | [decisions/BACKLOG.md](./decisions/BACKLOG.md) |
+| Current task | [process/TASKLOG.md](./process/TASKLOG.md) |
 | Development roadmap | [roadmap/README.md](./roadmap/README.md) |
 | Standalone scripts to run | [`examples/scripts/`](../examples/scripts) |
 | Rust embedding examples | [`examples/`](../examples) |

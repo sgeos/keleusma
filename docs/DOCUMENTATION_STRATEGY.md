@@ -62,12 +62,26 @@ docs/
 ├── README.md                    # Master table of contents
 ├── DOCUMENTATION_STRATEGY.md    # This file
 │
-├── architecture/                # Language design and pipeline
+├── guide/                       # User-facing onboarding
+│   ├── README.md
+│   ├── GETTING_STARTED.md
+│   ├── EMBEDDING.md
+│   ├── PIANO_ROLL.md
+│   ├── ROGUE.md
+│   ├── WHY_REJECTED.md
+│   ├── FAQ.md
+│   ├── COOKBOOK.md
+│   └── BIG_NUMBERS.md
+│
+├── architecture/                # Narrative descriptions of the implemented system
 │   ├── README.md
 │   ├── LANGUAGE_DESIGN.md
-│   └── COMPILATION_PIPELINE.md
+│   ├── EXECUTION_MODEL.md
+│   ├── COMPILATION_PIPELINE.md
+│   ├── WIRE_FORMAT.md
+│   └── SUB_COROUTINES.md
 │
-├── design/                      # Language specification
+├── design/                      # Authoritative language specifications
 │   ├── README.md
 │   ├── GRAMMAR.md
 │   ├── TYPE_SYSTEM.md
@@ -95,11 +109,21 @@ docs/
 │   ├── RELATED_WORK.md
 │   └── TARGET_ISA.md
 │
-└── roadmap/                     # Development phases
+├── roadmap/                     # Development phases
+│   ├── README.md
+│   ├── V0_3_0_SELF_HOSTING.md
+│   ├── V0_4_0_NATIVE_CODEGEN.md
+│   └── V0_5_0_KELEUSMA_HOST.md
+│
+└── extras/                      # Supplementary specs for specific examples
     ├── README.md
-    ├── V0_3_0_SELF_HOSTING.md
-    ├── V0_4_0_NATIVE_CODEGEN.md
-    └── V0_5_0_KELEUSMA_HOST.md
+    ├── SONG_3_SPEC.md
+    ├── SONG_4_SPEC.md
+    ├── SONG_5_SPEC.md
+    ├── SONG_6_SPEC.md
+    ├── SONG_7_SPEC.md
+    ├── SONG_8_SPEC.md
+    └── SONG_9_SPEC.md
 ```
 
 ---
@@ -131,21 +155,32 @@ This section is a **meta-prompt** for AI agents working with this documentation.
 
 | If you need... | Start here |
 |----------------|------------|
+| First-time setup and a working example | `guide/GETTING_STARTED.md` |
+| Embedding Keleusma in a Rust host | `guide/EMBEDDING.md` |
+| Recipes for common embedding patterns | `guide/COOKBOOK.md` |
+| A program rejected by the verifier | `guide/WHY_REJECTED.md` |
+| Surprises and rough edges | `guide/FAQ.md` |
 | Language overview | `architecture/LANGUAGE_DESIGN.md` |
+| Execution model and two temporal domains | `architecture/EXECUTION_MODEL.md` |
+| Compilation pipeline | `architecture/COMPILATION_PIPELINE.md` |
+| Bytecode wire format | `architecture/WIRE_FORMAT.md` |
+| Sub-coroutine primitive (V0.5.0-gated) | `architecture/SUB_COROUTINES.md` |
 | Formal grammar | `design/GRAMMAR.md` |
 | Type system | `design/TYPE_SYSTEM.md` |
 | Built-in functions | `design/STANDARD_LIBRARY.md` |
-| Compilation pipeline | `architecture/COMPILATION_PIPELINE.md` |
-| Bytecode reference | `reference/INSTRUCTION_SET.md` |
-| Design decisions | `decisions/RESOLVED.md` |
+| Bytecode instruction reference | `reference/INSTRUCTION_SET.md` |
+| Structural ISA description | `reference/TARGET_ISA.md` |
+| Terminology | `reference/GLOSSARY.md` |
+| Related work and citations | `reference/RELATED_WORK.md` |
+| Design decisions, resolved | `decisions/RESOLVED.md` |
 | Open questions | `decisions/PRIORITY.md` |
+| Deferred items | `decisions/BACKLOG.md` |
 | Development process | `process/PROCESS_STRATEGY.md` |
 | Communication protocol | `process/COMMUNICATION.md` |
 | Current task | `process/TASKLOG.md` |
 | Git workflow | `process/GIT_STRATEGY.md` |
-| Terminology | `reference/GLOSSARY.md` |
-| Related work and citations | `reference/RELATED_WORK.md` |
-| Development roadmap | `roadmap/README.md` |
+| Development roadmap (V0.3 self-hosting, V0.4 native codegen, V0.5 Keleusma host) | `roadmap/README.md` |
+| Per-song specifications for the piano-roll example | `extras/README.md` |
 
 ### Verification Pattern
 
