@@ -819,6 +819,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "std")]
     fn benchmark_runs_to_completion() {
         // Quick smoke test: run a single small spec through the
         // benchmark engine and verify the result is finite and

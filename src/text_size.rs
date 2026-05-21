@@ -32,7 +32,7 @@
 //! V0.2.0 ships the lattice, the arithmetic primitives, and a
 //! conservative linear analysis ([`chunk_text_heap_alloc`]) that
 //! tracks text sizes through straight-line code. The analysis is
-//! integrated with [`crate::verify::compute_chunk_wcmu`] so that
+//! integrated with [`crate::verify::wcmu_stream_iteration`] so that
 //! programs whose text-producing opcodes exceed the arena's top
 //! region are rejected at the safe constructor under the default
 //! [`crate::vm::OverflowPolicy::Reject`].

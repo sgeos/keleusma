@@ -83,7 +83,7 @@ mod sealed {
 ///
 /// ## Implicit methods
 ///
-/// The sealed supertrait [`sealed::HostOpaqueTypeId`] supplies the
+/// The sealed supertrait `sealed::HostOpaqueTypeId` supplies the
 /// host's concrete `TypeId` through a blanket implementation. Hosts
 /// do not implement it directly; any `'static + Send + Sync` type
 /// that implements [`HostOpaque`] automatically participates.

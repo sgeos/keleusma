@@ -1,6 +1,6 @@
 [package]
 name = "keleusma-bench"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.88"
 description = "Cost-model calibration tool for Keleusma. Measures pipelined cycles per opcode on a host CPU and emits a CostModel implementation suitable for the runtime's WCET analysis."
@@ -29,7 +29,7 @@ floats = ["keleusma/floats"]
 # `default-features = false` keeps the bench crate consumable from
 # bare-metal binaries. The host CLI re-enables features through
 # the default `std` + `floats` feature on this crate.
-keleusma = { path = "..", version = "0.1", default-features = false }
+keleusma = { path = "..", version = "0.2", default-features = false }
 keleusma-arena = { path = "../keleusma-arena", version = "0.3" }
 # `libm` provides f64 math (ceil) under no_std. The host build also
 # uses libm rather than std::f64 so the implementation is identical

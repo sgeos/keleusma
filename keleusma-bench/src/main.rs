@@ -162,12 +162,8 @@ fn main() -> ExitCode {
     }
     eprintln!();
 
-    let source = emit_cost_model_source(
-        &measurements,
-        counter.name(),
-        counter_frequency_hz,
-        cpu_hz,
-    );
+    let source =
+        emit_cost_model_source(&measurements, counter.name(), counter_frequency_hz, cpu_hz);
 
     match output_path {
         Some(path) => match fs::File::create(&path) {
@@ -343,10 +339,7 @@ fn run_from_log(
         measurements.len(),
         log_path.display()
     );
-    eprintln!(
-        "counter: {} ({} Hz)",
-        counter_name, counter_hz
-    );
+    eprintln!("counter: {} ({} Hz)", counter_name, counter_hz);
     eprintln!("cpu_hz: {} Hz (source: {})", cpu_hz_f, cpu_hz_origin);
 
     let source = emit_cost_model_source(&measurements, &counter_name, counter_hz, cpu_hz_f);

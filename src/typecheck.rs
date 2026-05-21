@@ -114,7 +114,7 @@ pub enum Type {
     /// different names are not assignable to one another even when
     /// their underlying types match.
     /// Newtype reference by name. The authoritative underlying
-    /// type is stored in [`Ctx::newtypes`]; the type variant
+    /// type is stored in the checker's internal `Ctx::newtypes` map; the type variant
     /// itself carries only the nominal name because the unifier
     /// distinguishes newtypes by name alone.
     Newtype(String),
@@ -133,7 +133,7 @@ pub enum Type {
     /// set; a final pass applies the substitution and reports any
     /// unresolved variable as an inference failure. All
     /// unannotated positions produce a fresh `Type::Var` through
-    /// [`Ctx::fresh`].
+    /// the checker's internal `Ctx::fresh` allocator.
     Var(u32),
 }
 

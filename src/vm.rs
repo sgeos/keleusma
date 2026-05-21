@@ -249,7 +249,7 @@ struct CallFrame {
 
 /// Context passed to native functions that opt into arena access.
 ///
-/// Created freshly at each [`Op::CallNative`] dispatch with a borrow
+/// Created freshly at each [`crate::bytecode::Op::CallVerifiedNative`] or [`crate::bytecode::Op::CallExternalNative`] dispatch with a borrow
 /// of the host-owned arena. Native functions allocate dynamic strings
 /// through `KString::alloc(ctx.arena, s)` and return them as
 /// [`crate::bytecode::GenericValue::KStr`] for the bounded-memory path. Natives that do not

@@ -9,88 +9,80 @@ AI to Human communication channel.
 ## Last Updated
 
 **Date**: 2026-05-21
-**Status**: Measured cost-model fragments are now consumed by code, not just generated. Three closures land in one round: a cookbook recipe in `docs/guide/COOKBOOK.md`, a standalone example at `examples/measured_wcet.rs`, and per-task WCET reporting at boot in both RTOS demonstrator binaries (`three-task-std` on host, `three-task-n6` on the N6 hardware). The stale `GRAMMAR.md` note about AArch64 calibration was rewritten to reflect the resolved state. The std demonstrator on the dev host shows realistic 80-85x measured-vs-nominal ratios per task, consistent with the M1 Max measured cost model.
+**Status**: V0.2.0 pre-publish pass complete on items 1 through 13 from the publication checklist. Crate versions bumped, MSRV verified, rustdoc warnings cleaned, spec docs audited, CHANGELOG promoted to `[0.2.0] - 2026-05-21`, WHY_REJECTED diagnostics confirmed to match source, READMEs refreshed, unsafe blocks audited, workspace tests pass under default features and default+signatures, CI workflow reviewed (gaps noted), all examples build, N6 hardware boot captured the WCET report, cargo publish --dry-run gated. The branch is ready for `cargo publish` in dependency order. Items 14 (migration guide) rejected per operator. Items 15 (B15 Type::Unknown removal) under operator consideration. Item 16 (tag/release process) premature.
 
 ## Completed in this session round
 
-| Directive | Resolution |
-|-----------|------------|
-| Option A: documentation patch | Three doc updates. (1) New cookbook section "Calibrated WCET with a measured cost model" walks through the three-step wiring: obtain a fragment via `keleusma-bench`, include it under `cfg(target_arch = ...)`, pass the model to a `_with_cost_model` API variant. (2) Stale `docs/spec/GRAMMAR.md` § 17.2 note about "AArch64 produces degenerate one-cycle output" was rewritten to "resolved" with the current scaling described inline. (3) New `Calibrated WCET in CPU cycles` subsection in `docs/guide/EMBEDDING.md` cross-references the cookbook recipe, the standalone example, and the measured-model fragments. |
-| Option B: standalone example | New `examples/measured_wcet.rs` (registered in workspace `Cargo.toml`) compiles a small Stream-classified Keleusma program, computes per-iteration WCET under both `NOMINAL_COST_MODEL` and the included `MEASURED_COST_MODEL`, and prints the comparison. On the dev host: `NOMINAL 25 cycles, MEASURED 2145 cycles, ratio 85.80x`. |
-| Headline example wiring (rtos) | New `examples/rtos/src/cost_model.rs` exposes a target-dispatched `MEASURED_COST_MODEL`: M1 Max fragment for `aarch64-apple-darwin`, Cortex-M55 fragment for `thumbv8m.main-none-eabihf`, `NOMINAL_COST_MODEL` fallback elsewhere. The module gates on `feature = "keleusma-verify"` because the report logic depends on `keleusma::verify::wcet_stream_iteration_with_cost_model`. Two helper functions: `report_measured_wcet(bytecode)` for the precompiled path used by the N6 binary, and `report_measured_wcet_from_source(source)` for the source-compile path used by the std demonstrator. Both demonstrator binaries call into the helper under their respective feature gates and emit a per-task WCET report at boot. `setup::PRELUDE` promoted from private to `pub` so the binaries can prepend it when compiling task sources off-line. |
+| # | Item | Resolution |
+|---|------|------------|
+| 1 | Crate versions bumped | keleusma 0.1.1 → 0.2.0, keleusma-bench 0.1.0 → 0.2.0, keleusma-cli 0.1.0 → 0.2.0, keleusma-macros 0.1.0 → 0.2.0. keleusma-arena stays at 0.3.0 (already on crates.io). Intra-workspace dep version requirements bumped. |
+| 10 | MSRV review | Recent additions (env::set_var unsafe in 2024 edition, let-chains in cost-model emit, libm::ceil) all within the pinned MSRVs (1.85 for arena/macros, 1.88 for keleusma/bench/cli). |
+| 11 | cargo doc clean | Seven rustdoc warnings resolved (link path corrections, private-item references rendered as prose). Remaining warning is cargo #6313 (lib vs bin name collision); not actionable here. |
+| 7 | Spec docs freshness | Opcode count (69) matches Op enum; wire-format constants match; signature extension layout present; negative-IFC and signed surface present in GRAMMAR.md. |
+| 2 | CHANGELOG entry | `[Unreleased]` block promoted to `[0.2.0] - 2026-05-21` with a release headline summary; fresh `[Unreleased]` inserted above. |
+| 8 | WHY_REJECTED audit | Closure and first-class-function-reference diagnostic strings in WHY_REJECTED.md match the source. |
+| 9 | README accuracy | Top-level README Cargo dep example bumped to "0.2"; FAQ blurb softened. All 380+ markdown cross-references resolve. |
+| 13 | Unsafe block audit | 6 V0.2.0-introduced unsafe sites (RDTSC, CNTVCT_EL0, CNTFRQ_EL0, DWT_CYCCNT MMIO, env::set_var, ZeroSizeOk wrapper). All have SAFETY justifications. |
+| 4 | Full workspace tests | Default features: 826 main + 53 rogue + others, all pass. Default+signatures: same. `--no-default-features`: passes after gating one bench test on the `std` feature. `--all-features` exposes 5 pre-existing test failures at unusual feature interactions, not in publish-relevant configurations. |
+| 5 | CI workflow review | `.github/workflows/ci.yml` covers check, test (default + no-default + signatures), clippy strict, fmt, per-crate MSRV, thumbv7em-none-eabihf no-std, Miri stacked+tree borrows. Gaps noted (keleusma-bench, thumbv8m, cargo doc) but not publish blockers. |
+| 6 | Examples build | `cargo build --workspace --examples --release` clean; same with `--features sdl3-example`. |
+| 12 | N6 boot with WCET | three-task-n6 with `keleusma-verify` flashed and the WCET boot report captured: led NOMINAL 74 / MEASURED 409377, sensor NOMINAL 66 / MEASURED 362878, heartbeat NOMINAL 60 / MEASURED 326458. Kernel boots, scheduler enters loop, supervised restart fires on faulty task. |
+| 3 | cargo publish --dry-run | keleusma-macros 0.2.0 dry-runs clean. keleusma-arena 0.3.0 already on crates.io; operator decides whether arena needs to bump to 0.4.0 for post-0.3.0 changes (KString move, persistent .data region). keleusma 0.2.0, keleusma-bench 0.2.0, keleusma-cli 0.2.0 fail dry-run with "candidate versions found which didn't match: 0.1.x" because the publish order requires macros 0.2.0 to land on crates.io first; this is the standard workspace publish dance, not a state issue. Final clippy strict + fmt --check pass clean. |
+
+## What the operator still owns
+
+- **Decide arena version.** Verify whether the currently-published `keleusma-arena 0.3.0` matches the current source. If yes, no further arena action. If the current source has changes the published 0.3.0 lacks (KString move via `969bdeb`, persistent .data region via `fe7fc5a`), bump to 0.4.0 and republish.
+- **Publish in dependency order.** macros 0.2.0 → keleusma 0.2.0 → bench 0.2.0 + cli 0.2.0.
+- **Tag the release.** `git tag v0.2.0 && git push --tags`. Operator-owned.
+- **Decide B15.** Backlog "remove `Type::Unknown` entirely" is queued for consideration; recommendation was to defer.
 
 ## Verification matrix
 
 ```bash
-# Workspace build clean
-cargo build --release --workspace
+# Tests (publish-relevant configurations)
+cargo test --workspace --release                                   # 826 main + others
+cargo test --workspace --release --no-default-features             # passes
+cargo test -p keleusma --release --features signatures             # 826 main
 
-# Bench unit tests
-cargo test --release -p keleusma-bench                                # 6 passed
+# Clippy and fmt
+cargo clippy --workspace --all-targets --tests --release -- -D warnings  # clean
+cargo fmt --all -- --check                                         # clean
 
-# Standalone example
-cargo run --release --example measured_wcet                           # prints
-                                                                       # NOMINAL 25 cycles
-                                                                       # MEASURED 2145 cycles
-                                                                       # ratio 85.80x
+# Doc
+cargo doc --workspace --no-deps --all-features                     # 0 warnings (excluding cargo #6313)
 
-# RTOS std demonstrator (with keleusma-verify default)
-cargo run --release --manifest-path examples/rtos/Cargo.toml \
-    --bin three-task-std                                              # prints WCET report
-                                                                       # per task at boot:
-                                                                       # led 6214/74, sensor
-                                                                       # 5528/66, heartbeat
-                                                                       # 5006/60,
-                                                                       # event_listener
-                                                                       # 3102/38, faulty
-                                                                       # 5624/70
+# Examples
+cargo build --workspace --examples --release                       # clean
+cargo build --workspace --examples --release --features sdl3-example  # clean
 
-# RTOS N6 demonstrator (build with keleusma-verify)
+# Cross-compile
 cargo build --release --manifest-path examples/rtos/Cargo.toml \
     --bin three-task-n6 --target thumbv8m.main-none-eabihf \
-    --no-default-features --features stm32n6570dk-platform,keleusma-verify
-                                                                       # clean
+    --no-default-features --features stm32n6570dk-platform,keleusma-verify   # clean
 
-# RTOS N6 demonstrator without verify still builds
-cargo build --release --manifest-path examples/rtos/Cargo.toml \
-    --bin three-task-n6 --target thumbv8m.main-none-eabihf \
-    --no-default-features --features stm32n6570dk-platform           # clean (cost_model
-                                                                       # module is gated
-                                                                       # out)
+# Dry-run publish
+cargo publish -p keleusma-macros --dry-run --allow-dirty           # clean
+cargo publish -p keleusma-arena --dry-run --allow-dirty            # "already exists" warn
+cargo publish -p keleusma --dry-run --allow-dirty                  # fails on macros 0.2.0
+                                                                    # (publish-order dance)
 ```
 
 ## Open concerns
 
-1. **N6 hardware run with the WCET report is not captured yet.** The build with `--features stm32n6570dk-platform,keleusma-verify` is clean, but the runtime defmt output has not been captured against the connected board in this session. The defmt log format matches the std demonstrator's println; per-task lines would appear after the existing "Tasks:" banner.
-
-2. **Cost-model selection is per-arch, not per-host-CPU-model.** The `cfg(target_arch = "aarch64")` arm uses the M1 Max fragment for all aarch64-apple-darwin builds. Operators on different Apple Silicon variants (M2, M3, M4) consuming the rtos example get dev-host estimates rather than calibrated values. The committed fragment header records the CPU clock assumption (3.228 GHz); operators who care regenerate the fragment per host or use the `--cpu-hz` override at bench time.
-
-3. **The std demonstrator compiles task sources at boot to report WCET.** Compilation overhead is in milliseconds per task, paid once at startup. The N6 demonstrator uses the precompiled-bytecode path so the runtime image is unchanged.
+1. **`--all-features` test failures.** Five tests fail under the unusual `--all-features` combination (`embedded_8` target tests and three checked-multiplication high-half assertions). Pre-existing; not present in publish-relevant configurations. Worth investigating post-publish.
+2. **arena 0.3.0 status.** Already on crates.io, but the local source has changes since the publish (KString move, persistent .data region). Operator confirms whether the current source matches the published 0.3.0 or needs 0.4.0.
+3. **CI gaps.** keleusma-bench, thumbv8m target, cargo doc, examples build matrix. Not blockers but worth a follow-on CI pass.
 
 ## Backlog summary
 
-| ID | Title | Status |
-|----|-------|--------|
-| B13 | Refinement-type compile-time elision through range analysis | Deferred |
-| B14 | CallIndirect flow analysis for non-recursive closures | Closed |
-| B15 | Remove `Type::Unknown` entirely | Foundation in place; refactor pending |
-| B16 | Parametric `Vm<W, A, F>` for sub-64-bit native runtimes | Resolved |
-| B17 | Embassy feature trimming | Resolved as not actionable |
-| B18 | Big-number arithmetic worked example | Resolved |
-| B20 | V0.2.0 ISA and wire format implementation | Closed |
-| B21 | Value-side IFC negative labels via product lattice | Deferred |
-| B22 | Sub-coroutines as callable ephemeral loops | Now load-bearing for V0.5.0 |
-| (candidate) | Multi-chunk and Stream-chunk bench specs to remove `Yield` and `Call` nominal fallback | Deferred |
-| (candidate) | Read N6 CPU clock from RCC at runtime | Deferred |
-| (candidate) | Slab or bump allocator on the N6 to restore larger bench repetition counts | Deferred |
-| (candidate) | Capture N6 hardware run with WCET report appearing in defmt output | Deferred |
+Unchanged from prior session.
 
 ## Intended Next Step
 
-The measured cost-model artefacts are now integrated end-to-end: generation, documentation, standalone example, and headline-example wiring. The natural next step is one of:
+V0.2.0 publish. The operator runs `cargo publish` in dependency order. After publish: `git tag v0.2.0 && git push --tags`. The publish is operator-owned; the agent's pre-publish work is complete.
 
-- Capture N6 hardware run of the three-task demonstrator with the WCET boot report appearing in defmt RTT output.
-- Resume V0.3.0 self-hosting implementation (Lexer migration first per the incremental ordering).
-- B15 follow-on: remove `Type::Unknown` entirely.
-- Generate cost-model fragments for x86_64-unknown-linux-gnu or other host architectures.
+Alternatives:
+- Address `--all-features` test failures before publish.
+- Take up B15 (`Type::Unknown` removal) before publish.
+- Defer publish and address CI gaps.
 - Operator selection of a different directive.

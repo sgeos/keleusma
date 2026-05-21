@@ -319,7 +319,9 @@ impl CycleCounter for InstantFallback {
 /// On Cortex-M (`target_arch = "arm"`) the default counter is not
 /// supplied here because DWT_CYCCNT requires a CPU clock value that
 /// the bench binary knows at construction time; embedded callers
-/// construct [`DwtCycCnt`] directly.
+/// construct `DwtCycCnt` directly (the type is only in scope under
+/// `target_arch = "arm"`, so this docstring deliberately avoids a
+/// link form that would fail on host doc builds).
 #[cfg(feature = "std")]
 pub fn default_counter() -> Box<dyn CycleCounter> {
     #[cfg(target_arch = "x86_64")]

@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-05-21
+
+V0.2.0 is the first publicly released line. V0.1.x circulated as a pre-release. The headline additions are cryptographic module signing, the V0.2.0 ISA reset, information-flow labels including negative labels, calibrated WCET cost models from the new `keleusma-bench` crate, and a substantial documentation reorganization. The wire format is incompatible with V0.1.x; recompile artefacts. The release also retires closures, f-strings, and the `text` bundled DSL; programs that used those features need rewrites under host-registered natives. See the breaking-change subsections below for the migration surface; the V0.1.x line had narrow adoption so the discontinuity is acceptable.
+
 ### Cryptographic module signing (R42)
 
 V0.2.0 adds optional Ed25519 signing of compiled bytecode. The mechanism enforces origin authenticity and tamper resistance for modules delivered to embedded targets; the motivating use case is the mothership-to-daughtership UAV scenario where a mothership compiles per-mission scripts and a daughtership verifies them over a bandwidth-constrained link.

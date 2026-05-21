@@ -1225,7 +1225,7 @@ pub struct Chunk {
     /// array, option, opaque) record [`TypeTag::Composite`]
     /// which the runtime accepts without further checking.
     /// For Stream chunks, the single entry also serves as the
-    /// resume value's type (see [`Vm::resume`]).
+    /// resume value's type (see [`crate::vm::Vm::resume`]).
     pub param_types: Vec<TypeTag>,
 }
 
