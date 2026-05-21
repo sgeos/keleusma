@@ -17,6 +17,8 @@ keleusma run examples/scripts/<file>.kel
 | [`07_fstring.kel`](./07_fstring.kel) | String interpolation | `f"text {expr}"` desugaring |
 | [`08_method_dispatch.kel`](./08_method_dispatch.kel) | Traits and impls | Receiver-style method calls |
 | [`09_big_numbers.kel`](./09_big_numbers.kel) | Big-number arithmetic | Pattern-matched checked arms binding `(high, low)` halves of an `i128` intermediate |
+| [`10_multbyte.kel`](./10_multbyte.kel) | Byte-typed arithmetic | Multiplication on `Byte` operands |
+| [`11_signed.kel`](./11_signed.kel) | Signed compiled module | `signed` modifier on the entry function, Ed25519 signature flow through the CLI |
 
 All scripts in this directory's top level are atomic-total (`fn main`), so they run end to end through the CLI. For yield-driven and stream-driven examples, see the Rust embedding examples under [`examples/`](../).
 

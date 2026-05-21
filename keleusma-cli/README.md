@@ -54,7 +54,33 @@ The lexer skips a leading `#!` line in source. The bytecode loader strips a lead
 keleusma compile hello.kel -o hello.kel.bin
 ```
 
-The compiler runs the full compile pipeline including type checking, monomorphization, closure hoisting, and bytecode emission. The resulting bytecode is serialized through the standard wire format with framing, length, target widths, and CRC trailer. A host loading the bytecode through `Vm::load_bytes` validates the framing and re-runs structural verification.
+The compiler runs the full compile pipeline including type checking, monomorphization, and bytecode emission. The resulting bytecode is serialized through the standard wire format with framing, length, target widths, and CRC trailer. A host loading the bytecode through `Vm::load_bytes` validates the framing and re-runs structural verification.
+
+### Generate an Ed25519 keypair
+
+```sh
+keleusma keygen --seed key.seed --public key.pub
+```
+
+Writes a fresh 32-byte Ed25519 signing seed to one file and the matching 32-byte verifying key to another. On Unix the seed file is created with mode `0o600`. Existing files are not overwritten; the command refuses with a diagnostic naming the offending path so an accidental rerun cannot destroy a long-lived signing identity. The seed is the private secret; treat it as a credential. The verifying key is freely distributable and is the value consumers register on their runtime.
+
+### Sign a compiled module
+
+```sh
+keleusma compile hello.kel --signing-key key.seed -o hello.kel.bin
+```
+
+Produces signed bytecode when the source declares the entry function with the `signed` modifier (`signed fn main`, `signed yield main`, `signed loop main`). The compiler emits `FLAG_REQUIRES_SIGNATURE` in the header and the signer appends an Ed25519 signature. Without the `signed` modifier on the entry, the bytecode is unsigned even when `--signing-key` is supplied.
+
+### Verify and run a signed module
+
+```sh
+keleusma run hello.kel.bin --verifying-key key.pub
+```
+
+The `--verifying-key` flag is repeatable; each appearance adds a 32-byte Ed25519 public key to the runtime's trust matrix. Signed bytecode loads only when its signature verifies against at least one registered key. Loading unsigned bytecode with `--verifying-key` is an error to prevent silent acceptance of an unverified payload.
+
+See [`docs/guide/COOKBOOK.md`, *Distributing signed bytecode*](../docs/guide/COOKBOOK.md#distributing-signed-bytecode) for the end-to-end workflow and [`docs/decisions/RESOLVED.md`, R42](../docs/decisions/RESOLVED.md) for the design rationale.
 
 ### Start the REPL
 

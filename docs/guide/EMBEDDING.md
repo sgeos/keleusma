@@ -380,6 +380,45 @@ match vm.resume(input)? {
 
 The dialogue type, the yielded type and the resume type, must remain stable across swaps. The data segment may carry forward (pass current values), may be re-initialized to the new schema, or may be replaced by host migration code. Native function registrations live on the VM, not on the module, and persist across swaps. See [EXECUTION_MODEL.md](../architecture/EXECUTION_MODEL.md) for the full hot-swap specification, and [`examples/piano_roll.rs`](../../examples/piano_roll.rs) for a runnable end-to-end demonstration.
 
+## Signed Modules
+
+The optional `signatures` cargo feature enables Ed25519 signing of compiled bytecode. Source scripts declare the requirement with the `signed` modifier on the entry function (`signed fn main`, `signed yield main`, `signed loop main`); the compiler emits `FLAG_REQUIRES_SIGNATURE` in the framing header. The runtime refuses to load such a module unless its signature verifies against a trust matrix the host populates before the load.
+
+### Signing at build time
+
+The host (or a build pipeline) takes a 32-byte Ed25519 seed and uses `wire_format::module_to_signed_wire_bytes` to produce signed bytes. The CLI exposes this through `keleusma compile --signing-key seed.bin -o out.bin`. The `keleusma keygen --seed seed.bin --public pub.bin` subcommand generates a fresh keypair from the OS RNG; the seed file is written with `0o600` permissions on Unix and existing files are not overwritten.
+
+````rust
+let signing_key = ed25519_dalek::SigningKey::from_bytes(&seed_bytes);
+let signed = keleusma::wire_format::module_to_signed_wire_bytes(&module, &signing_key)?;
+std::fs::write("script.kel.bin", &signed)?;
+````
+
+### Verifying and loading
+
+The host loads a signed module through `Vm::load_signed_bytes(bytes, arena, &keys)`. The keys slice carries one or more public keys; the first matching key admits the module. An empty slice rejects every signed module with `LoadError::InvalidSignature`. The matrix is also copied onto the constructed VM so subsequent `Vm::replace_module_from_bytes` calls inherit the same keys.
+
+````rust
+let pub_bytes: [u8; 32] = std::fs::read("pub.bin")?.try_into().unwrap();
+let key = ed25519_dalek::VerifyingKey::from_bytes(&pub_bytes)?;
+let mut vm = Vm::load_signed_bytes(&signed, &arena, &[key])?;
+````
+
+Hosts that bootstrap from an unsigned baseline and only accept signed bytecode at hot-swap construct the VM normally, register keys post-construction, and hot-swap signed updates:
+
+````rust
+let mut vm = Vm::new(unsigned_baseline_module, &arena)?;
+vm.register_verifying_key(mothership_key);
+// ... later, after receiving a signed update over the comm link ...
+vm.replace_module_from_bytes(&update_bytes, initial_data)?;
+````
+
+`Vm::load_bytes` refuses signed modules with a diagnostic redirecting the caller to `Vm::load_signed_bytes`. Without the `signatures` feature, the variant returned is `LoadError::SignaturesUnsupported` so the operator sees that the build cannot verify, not just that the path is wrong.
+
+The signing message convention is the full framed buffer with the signature payload bytes and the CRC trailer bytes zeroed. The verifier reconstructs the same view by zeroing both regions on its private copy before the cryptographic operation. The CRC trailer covers the full file including the real signature, so framing-level tamper is caught by the CRC alone; signature mutation is caught by the cryptographic check after CRC repair.
+
+See `R42` in [`docs/decisions/RESOLVED.md`](../decisions/RESOLVED.md) for the design rationale and [`docs/architecture/WIRE_FORMAT.md`](../architecture/WIRE_FORMAT.md) for the header layout.
+
 ## Trust-Skip Construction
 
 Programs whose verification cost is paid at build time, not at every load, may use `Vm::new_unchecked` to skip the resource-bounds check. Structural verification still runs.
@@ -388,7 +427,7 @@ Programs whose verification cost is paid at build time, not at every load, may u
 let vm = unsafe { Vm::new_unchecked(module, &arena) };
 ````
 
-This is intentional misuse if used to admit programs that would fail the safe verifier. The intended use is precompiled bytecode that the host already verified once at build time. See [LANGUAGE_DESIGN.md](../architecture/LANGUAGE_DESIGN.md#conservative-verification) for the contract.
+This is intentional misuse if used to admit programs that would fail the safe verifier. The intended use is precompiled bytecode that the host already verified once at build time. See [LANGUAGE_DESIGN.md](../architecture/LANGUAGE_DESIGN.md#conservative-verification) for the contract. `Vm::new_unchecked` also skips the signed-module flag check; the caller attests that any signature verification was performed at build time.
 
 ## Cross-References
 

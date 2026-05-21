@@ -179,6 +179,16 @@ V0.2.0 Phase 4 retired the closure family: the `Op::PushFunc`, `Op::MakeClosure`
 
 The right-hand side of `|>` must be a function call with parentheses, even when the function takes no additional arguments. `expr |> f` is a parse error; `expr |> f()` is correct.
 
+### What does the `signed` modifier do?
+
+V0.2.0 introduces a `signed` modifier on the entry function declaration (`signed fn main`, `signed yield main`, `signed loop main`). It sets `FLAG_REQUIRES_SIGNATURE` in the framing header so the load-time runtime refuses the module unless a cryptographic signature is attached and verifies against the host's trust matrix.
+
+The signing operation itself is a toolchain step independent of the compiler. `keleusma compile script.kel --signing-key seed.bin` produces an Ed25519-signed bytecode file; the consumer registers the matching public key on the VM (`Vm::register_verifying_key`) and loads through `Vm::load_signed_bytes` or hot-swaps signed updates through `Vm::replace_module_from_bytes`. `Vm::load_bytes` refuses signed modules with a diagnostic that names the alternate entry point.
+
+The feature requires the `signatures` cargo feature, which is off by default and pulls in `ed25519-dalek`. Builds without the feature accept unsigned modules normally and reject signed modules with `LoadError::SignaturesUnsupported`. The `signed` surface keyword still parses without the feature so source files remain portable.
+
+Use case: multi-party module delivery to embedded targets. A mothership compiles per-mission scripts and signs them; a daughtership flashed with the mothership's public key verifies before loading. See the [Distributing signed bytecode](./COOKBOOK.md#distributing-signed-bytecode) cookbook recipe and `R42` in [RESOLVED.md](../decisions/RESOLVED.md).
+
 ### If-else at statement position requires a trailing semicolon
 
 The parser does not auto-insert semicolons. An `if-else` expression used as a statement (followed by another statement) requires `;` even though the expression evaluates to unit.

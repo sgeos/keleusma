@@ -43,7 +43,7 @@ Structural verification at the bytecode level is implemented. See [TARGET_ISA.md
 ````
 fn  yield  loop  break  let  for  in  if  else  match
 use  struct  enum  newtype  trait  impl  data  true  false  as  when
-not  and  or  pure  shared  private  const  ephemeral  where
+not  and  or  pure  shared  private  const  ephemeral  signed  where
 overflow  underflow  saturate_max  saturate_min
 ````
 
@@ -717,6 +717,27 @@ fn main() -> bool {
 }
 ````
 
+### Signed Entry Function
+
+````
+function_def    = { 'ephemeral' | 'signed' } (fn_def | yield_def | loop_def)
+````
+
+The `signed` modifier on the entry function declaration sets the wire-format flag `FLAG_REQUIRES_SIGNATURE = 0x02` in the module header. A host that loads the bytecode must verify the attached Ed25519 signature against a trust matrix populated through `Vm::register_verifying_key` before the module runs. The signing operation itself is a toolchain step independent of the compiler; the surface keyword expresses the requirement, the compiler emits the flag, and the runtime enforces it. Hosts loading signed modules use `Vm::load_signed_bytes(bytes, arena, &keys)` for the initial load or `Vm::replace_module_from_bytes` for hot-swap; `Vm::load_bytes` rejects signed modules with a diagnostic pointing at the correct entry point.
+
+The modifier is admissible on any of the three function categories (`fn`, `yield`, `loop`) and may combine with `ephemeral` in either order. The compiler rejects the modifier on any function other than the module's entry point. The signing scheme is Ed25519 in V0.2.0; the wire format carries a `scheme_id` byte for future scheme migrations without an ABI break. See `R42` in [`docs/decisions/RESOLVED.md`](../decisions/RESOLVED.md) for the design rationale and [`docs/architecture/WIRE_FORMAT.md`](../architecture/WIRE_FORMAT.md) for the header layout.
+
+Example:
+
+````
+signed loop main(input: Word) -> Word {
+    let next = yield input * 2;
+    next
+}
+````
+
+A daughtership loading this bytecode rejects the module unless the attached signature verifies against a public key the operator has registered.
+
 ## 8. Pattern Matching
 
 Patterns appear in function heads, `match` arms, and `let` bindings.
@@ -890,8 +911,11 @@ array_type      = '[' type_expr ';' integer_lit ']'
 option_type     = 'Option' '<' type_expr '>'
 
 (* Functions *)
-(* The `ephemeral` modifier is permitted only on the entry point. *)
-function_def    = [ 'ephemeral' ] (fn_def | yield_def | loop_def)
+(* The `ephemeral` and `signed` modifiers are permitted only on
+   the entry point. Either or both may appear in any order. The
+   compiler rejects the modifier on a non-entry function with a
+   diagnostic naming the offending declaration. *)
+function_def    = { 'ephemeral' | 'signed' } (fn_def | yield_def | loop_def)
 fn_def          = 'fn' lower_ident [ type_params ] '(' [ param_list ] ')' '->' type_expr
                   [ 'when' guard_expr ] '{' block '}'
 yield_def       = 'yield' lower_ident [ type_params ] '(' [ param_list ] ')' '->' type_expr

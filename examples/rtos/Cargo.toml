@@ -119,9 +119,12 @@ embedded-alloc = { version = "0.6", optional = true }
 keleusma = { path = "../..", default-features = false, features = [
     "compile",
     "verify",
-    "signatures",
 ] }
-ed25519-dalek = { version = "2", default-features = false, features = ["alloc"] }
+# Optional build-dep used by the boot-time signed-self-test
+# fixture emitter in `build.rs`. Activated by the
+# `keleusma-signatures` feature; absent otherwise so builds that
+# do not need signing do not pay the ed25519-dalek compile cost.
+ed25519-dalek = { version = "2", default-features = false, features = ["alloc"], optional = true }
 
 [features]
 default = ["std-platform", "keleusma-compile", "keleusma-verify"]

@@ -28,6 +28,7 @@ fn main() {
     emit_link_args();
     #[cfg(not(feature = "keleusma-compile"))]
     precompile_scripts();
+    #[cfg(feature = "keleusma-signatures")]
     emit_signed_self_test();
 }
 
@@ -42,11 +43,11 @@ fn main() {
 /// - `signed_self_test.kel.bin`: the signed bytecode.
 /// - `signed_self_test_pub.bin`: the 32-byte verifying key.
 ///
-/// The runtime image embeds both through `include_bytes!` when
-/// the `keleusma-signatures` feature is on and skips the
-/// embedding otherwise. The fixture is unconditionally generated
-/// at build time so flipping the feature does not require a
-/// recompile of build.rs.
+/// Gated on the `keleusma-signatures` cargo feature so builds
+/// without it pay no ed25519-dalek compile cost; the setup
+/// module's `include_bytes!` references are gated on the same
+/// feature.
+#[cfg(feature = "keleusma-signatures")]
 fn emit_signed_self_test() {
     use std::fs;
     use std::path::PathBuf;

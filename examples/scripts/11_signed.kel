@@ -1,0 +1,34 @@
+// Signed compiled module.
+//
+// The `signed` modifier on the entry function declaration sets
+// `FLAG_REQUIRES_SIGNATURE` in the bytecode header. A host that
+// loads the resulting bytecode must verify the attached Ed25519
+// signature against a trust matrix populated through
+// `Vm::register_verifying_key` before the module runs.
+//
+// The signing operation itself is a toolchain step. End-to-end
+// flow with the CLI:
+//
+//   keleusma keygen --seed seed.bin --public pub.bin
+//   keleusma compile examples/scripts/11_signed.kel \
+//       --signing-key seed.bin -o signed.kel.bin
+//   keleusma run signed.kel.bin --verifying-key pub.bin
+//
+// The third command prints `42` after verifying the signature
+// against `pub.bin`. Running without `--verifying-key`, or with
+// the wrong key, surfaces
+// `LoadError("bytecode signature did not verify against any
+// registered key")` and the module does not load.
+//
+// The `signed` modifier is admissible on any of the three
+// function categories (`fn`, `yield`, `loop`) and may combine
+// with `ephemeral` in either order. The modifier is permitted
+// only on the module's entry function; a `signed` modifier on a
+// helper function is a compile error.
+//
+// Requires the `signatures` cargo feature on the runtime build.
+// The default CLI binary has the feature enabled.
+
+signed fn main() -> Word {
+    21 + 21
+}

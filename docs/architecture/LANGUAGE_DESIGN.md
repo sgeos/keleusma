@@ -271,6 +271,14 @@ Labels propagate through every position of a composite type independently. Arith
 
 Native function signatures admit labels in both parameter and return positions: `use host::transmit(payload: Word@Open) -> Status` rejects calls that pass a labeled value without explicit declassification.
 
+### Signed Modules
+
+The entry function declaration accepts a `signed` modifier (`signed fn main`, `signed yield main`, `signed loop main`). When present, the compiler sets `FLAG_REQUIRES_SIGNATURE` in the framing header so the load-time runtime refuses the module unless its Ed25519 signature verifies against the host's trust matrix. The modifier is admissible only on the entry function and combines with `ephemeral` in either order. The signing operation is a toolchain step independent of the compiler.
+
+The motivating scenario is multi-party module delivery to embedded targets. A mothership compiles per-mission scripts and signs them with an operator-managed key; a daughtership flashed with the corresponding public key in its trust matrix verifies the script before loading. Modules without the modifier load through the existing unsigned path unchanged; the runtime's `Vm::load_signed_bytes` and `Vm::replace_module_from_bytes` paths consume signed bytes and consult the matrix populated via `Vm::register_verifying_key`. See `R42` in [`docs/decisions/RESOLVED.md`](../decisions/RESOLVED.md) for the design rationale and [`docs/architecture/WIRE_FORMAT.md`](./WIRE_FORMAT.md) for the wire-format layout.
+
+Ed25519 (`scheme_id = 1`) is the only V0.2.0 scheme. The wire format carries a `scheme_id: u8` byte so future migrations (ECDSA P-256/P-384, ML-DSA, LMS) do not require an ABI break.
+
 ## Cross-References
 
 - [GRAMMAR.md](../design/GRAMMAR.md) provides the formal EBNF grammar specification.

@@ -12,6 +12,7 @@ Recipes are working patterns for embedding Keleusma in larger systems. Each reci
 | [Auto-sizing the arena from the module](#auto-sizing-the-arena-from-the-module) | The host wants exact `WCMU`-bounded arena sizing instead of a hardcoded capacity. |
 | [The data-loader pattern](#the-data-loader-pattern) | The host needs read-only configuration data that benefits from script-side editing. |
 | [Narrow-runtime type alias](#narrow-runtime-type-alias) | The host targets a sub-64-bit native runtime (16-bit or 8-bit signed word). |
+| [Distributing signed bytecode](#distributing-signed-bytecode) | The host delivers compiled modules over an untrusted channel and needs origin authenticity. |
 
 ---
 
@@ -333,3 +334,57 @@ Script-side arithmetic on a narrow runtime wraps at the runtime's word boundary,
 - `tests/narrow_vm.rs` is the integration test that pins the pattern.
 - [`docs/decisions/BACKLOG.md`, B16](../decisions/BACKLOG.md) records the architectural rationale for the parametric shape.
 - The `Word`, `Address`, and `Float` traits live in `src/word.rs`, `src/address.rs`, and `src/float.rs`. Custom impls are admissible; the bundled impls cover the standard widths.
+
+---
+
+## Distributing signed bytecode
+
+### Problem
+
+The host application loads compiled bytecode that arrives from an untrusted source — over a comms link, from disk, from a content-delivery channel — and needs to refuse modules that were not produced by an authorised signer. The threat model is multi-party: one or more known mothership identities are trusted to sign modules; everything else is rejected.
+
+### Solution
+
+Three steps. The cargo feature `signatures` is off by default; turn it on for both the producer and the consumer.
+
+**One. Generate a keypair.** The `keleusma keygen --seed seed.bin --public pub.bin` subcommand writes a 32-byte Ed25519 seed and the matching public key to separate files. On Unix the seed file is mode `0o600`; existing files are not overwritten. Treat the seed as a long-lived secret kept on the signing system. The public key is freely distributable and is what the consumer trusts.
+
+**Two. Declare the requirement and sign.** The source script declares the signing requirement with the `signed` modifier on the entry function:
+
+```keleusma
+signed loop main(input: Word) -> Word {
+    let next = yield input * 2;
+    next
+}
+```
+
+`keleusma compile script.kel --signing-key seed.bin -o script.kel.bin` produces signed bytecode. The compiler emits `FLAG_REQUIRES_SIGNATURE` in the framing header and the signer appends an Ed25519 signature.
+
+**Three. Verify at the consumer.** The host populates a trust matrix with the public keys it accepts, then loads through the signature-aware entry points:
+
+```rust
+let key = ed25519_dalek::VerifyingKey::from_bytes(&public_key_bytes)?;
+let mut vm = Vm::load_signed_bytes(&signed_bytes, &arena, &[key])?;
+```
+
+For hot-swap delivery (mothership/daughtership pattern), the host constructs the VM from an unsigned baseline, registers the trust matrix, and accepts signed updates over the comm link:
+
+```rust
+let mut vm = Vm::new(baseline_module, &arena)?;
+vm.register_verifying_key(mothership_key);
+// later, after receiving an update over the wire:
+vm.replace_module_from_bytes(&update_bytes, initial_data)?;
+```
+
+The signature is verified before the new bytecode is decoded; an invalid signature rejects the swap and the current module continues to run.
+
+### Why this works for embedded targets
+
+The verification path uses `ed25519-dalek` under `no_std + alloc`. The `examples/rtos` demonstrator builds with `--features keleusma-signatures` and verifies a built-in signed fixture at boot before entering the scheduler loop. Ed25519 verification on a Cortex-M33 at 600 MHz runs in low milliseconds; the cost is paid at each module load or hot-swap, not at every yield.
+
+### Cross-references
+
+- `R42` in [`docs/decisions/RESOLVED.md`](../decisions/RESOLVED.md) is the design rationale.
+- [`docs/architecture/WIRE_FORMAT.md`](../architecture/WIRE_FORMAT.md) documents the header extension layout.
+- [`docs/guide/EMBEDDING.md`, Signed Modules](./EMBEDDING.md#signed-modules) covers the embedding-side API in more depth.
+- [`examples/scripts/11_signed.kel`](../../examples/scripts/11_signed.kel) is a worked signed script.

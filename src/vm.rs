@@ -8716,4 +8716,67 @@ mod tests {
             Ok(_) => panic!("expected LoadError, got Ok(_)"),
         }
     }
+
+    /// `Vm::load_bytes` must refuse signed input ahead of every
+    /// other check. The minimum-viable signed-looking buffer is
+    /// 16 bytes with `KELE` magic and the
+    /// `FLAG_REQUIRES_SIGNATURE` bit set in the flags byte;
+    /// `header_requires_signature` returns true on that and the
+    /// load path short-circuits before any framing or CRC
+    /// validation runs. The test fires in both feature
+    /// configurations and asserts the error message names the
+    /// signature contract.
+    #[test]
+    fn load_bytes_short_circuits_on_signed_flag() {
+        let mut bytes = [0u8; 16];
+        bytes[0..4].copy_from_slice(b"KELE");
+        bytes[15] = crate::wire_format::FLAG_REQUIRES_SIGNATURE;
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let result = Vm::load_bytes(&bytes, &arena);
+        match result {
+            Err(VmError::LoadError(msg)) => {
+                // Without `signatures`: the message names the
+                // unsupported feature. With `signatures` on: the
+                // message redirects the caller to
+                // `Vm::load_signed_bytes`. Both contain
+                // "signatures" or "signed"; the assertion is
+                // permissive but pins the contract.
+                assert!(
+                    msg.contains("signatures")
+                        || msg.contains("Vm::load_signed_bytes")
+                        || msg.contains("signed"),
+                    "expected signed-module rejection, got: {}",
+                    msg
+                );
+            }
+            Err(other) => panic!("expected LoadError, got: {:?}", other),
+            Ok(_) => panic!("expected error, got Ok(_)"),
+        }
+    }
+
+    /// In a build without the `signatures` feature, the same
+    /// path returns the dedicated
+    /// `LoadError::SignaturesUnsupported` variant rather than a
+    /// `Codec` redirect. The two cases produce distinguishable
+    /// error messages so operators can tell whether the
+    /// build supports verification or the call site is just
+    /// using the wrong API.
+    #[cfg(not(feature = "signatures"))]
+    #[test]
+    fn load_bytes_rejects_signed_with_signatures_unsupported() {
+        let mut bytes = [0u8; 16];
+        bytes[0..4].copy_from_slice(b"KELE");
+        bytes[15] = crate::wire_format::FLAG_REQUIRES_SIGNATURE;
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let result = Vm::load_bytes(&bytes, &arena);
+        match result {
+            Err(VmError::LoadError(msg)) => assert!(
+                msg.contains("does not include the `signatures` feature"),
+                "expected SignaturesUnsupported message, got: {}",
+                msg
+            ),
+            Err(other) => panic!("expected LoadError, got: {:?}", other),
+            Ok(_) => panic!("expected error, got Ok(_)"),
+        }
+    }
 }
