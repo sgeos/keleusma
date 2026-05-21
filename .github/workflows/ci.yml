@@ -14,7 +14,7 @@ jobs:
     name: Check
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo check --workspace --all-targets
 
@@ -22,7 +22,7 @@ jobs:
     name: Test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo test --workspace
 
@@ -30,7 +30,7 @@ jobs:
     name: Test (no default features)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo test -p keleusma --no-default-features
 
@@ -38,7 +38,7 @@ jobs:
     name: Test (signatures feature)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo test -p keleusma --features signatures
 
@@ -53,7 +53,7 @@ jobs:
     # feature set: defaults (compile + verify + floats) plus the
     # two non-default surfaces (signatures + shell).
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo test -p keleusma --features signatures,shell
 
@@ -61,7 +61,7 @@ jobs:
     name: Test (keleusma-bench)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
       - name: Default features
         run: cargo test -p keleusma-bench
@@ -72,7 +72,7 @@ jobs:
     name: Examples (SDL3 feature)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
       # The `sdl3` crate builds SDL3 from source via cmake under the
       # `build-from-source-static` feature. The cmake configure step
@@ -105,7 +105,7 @@ jobs:
     # docs per-crate against the same feature set that docs.rs
     # uses so the CI signal matches the published docs.
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
       - name: keleusma (docs.rs feature set)
         run: cargo doc -p keleusma --no-deps --features signatures,shell
@@ -122,7 +122,7 @@ jobs:
     name: Clippy
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
@@ -132,7 +132,7 @@ jobs:
     name: Format
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt
@@ -142,7 +142,7 @@ jobs:
     name: MSRV keleusma-arena (1.85)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@1.85
       - run: cargo check -p keleusma-arena
       - run: cargo check -p keleusma-arena --no-default-features
@@ -151,7 +151,7 @@ jobs:
     name: MSRV keleusma (1.88)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@1.88
       - run: cargo check -p keleusma
       - run: cargo check -p keleusma --no-default-features
@@ -162,7 +162,7 @@ jobs:
     name: no_std build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: thumbv7em-none-eabihf
@@ -173,7 +173,7 @@ jobs:
     name: RTOS demonstrator build (N6 / thumbv8m.main-none-eabihf)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: thumbv8m.main-none-eabihf
@@ -203,7 +203,7 @@ jobs:
     name: Miri
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@nightly
         with:
           components: miri

@@ -9,25 +9,31 @@ AI to Human communication channel.
 ## Last Updated
 
 **Date**: 2026-05-21
-**Status**: V0.2.0 pre-publish polish items P1 through P5 closed and CI restored to green-ready. Crates.io, docs.rs, license, and CI badges added to all five publishable crates' READMEs. CHANGELOG V0.2.0 section reviewed and judged complete at the headline level. `cargo doc` clean across all five crates under the CI flags. Full workspace `cargo test` passes. CI workflow rewritten to replace the failing `--all-features` invocations with explicit feature sets and to install the full SDL3 build dependencies on the dedicated SDL3 examples job. The branch is ready for `cargo publish` in dependency order.
+**Status**: V0.2.0 pre-publish polish items Q1 and D1 closed. Per-crate `CHANGELOG.md` files added to `keleusma-bench` and `keleusma-cli`. `actions/checkout@v4` bumped to `actions/checkout@v5` across all 15 use sites to resolve the Node.js 20 deprecation notice. CI run prior to this round was fully green (15/15). The branch is publish-ready.
 
 ## Completed in this session round
 
 | Item | Resolution |
 |------|------------|
-| P1 — top-level README badges | Crates.io, Docs.rs, License (0BSD), CI badges added to `README.md`. |
-| P2 — child-crate README badges | Crates.io, Docs.rs, License badges added to `keleusma-arena/README.md`, `keleusma-macros/README.md`, `keleusma-bench/README.md`, `keleusma-cli/README.md`. The arena badge uses an absolute OSI URL for the license link to avoid a broken intra-doc-link warning (the arena lib includes its README through `#![doc = include_str!("../README.md")]`). |
-| P3 — CHANGELOG V0.2.0 verification | The V0.2.0 section has 148 lines and covers the headline additions: cryptographic module signing (R42), ISA reset, wire-format reset (BYTECODE_VERSION 1), refinement-newtype saturation contracts, big-number arithmetic worked example, pattern-matched checked-arithmetic arms with guards, IFC label propagation including negative labels, ephemeral data partitioning (shared/private/const), the RTOS microkernel example, B13/B15/B18 closures, the `compile`/`verify`/`floats`/`text`/`shell`/`signatures` cargo features, the `keleusma-bench` crate and calibrated WCET cost models, the docs/spec/ reorganization. The recent session work on items 1-13 and items A-G is sub-release polish and does not need explicit changelog entries. |
-| P4 — workspace cargo doc | `cargo doc -p keleusma --no-deps --features signatures,shell`, `cargo doc -p keleusma-arena --no-deps --all-features`, `cargo doc -p keleusma-macros --no-deps`, `cargo doc -p keleusma-bench --no-deps`, `cargo doc -p keleusma-cli --no-deps` all clean under `RUSTDOCFLAGS="-D warnings -A rustdoc::redundant-explicit-links"`. |
-| P5 — workspace cargo test | `cargo test --workspace` passes end to end. Doctests pass. |
-| CI repair | `.github/workflows/ci.yml` was failing on three jobs (Test (all features), Doc, Examples (SDL3 feature)) because `--all-features` cascades the mutually-exclusive narrow-* selectors into the narrowest configuration AND pulls in `sdl3-example`, which cmake-builds SDL3 from source. The SDL3 build needs X11, Wayland, and audio development headers that the Ubuntu runner does not have by default; the previous install installed `libsdl2-dev` (SDL2, wrong library). Fix: replace `--all-features` in the Test and Doc jobs with the docs.rs feature set (`signatures,shell` on top of the defaults); install the full SDL3 development dependency list on the Examples (SDL3 feature) job. The Test job is renamed to "Test (broad features)" to be honest about what it tests. The Doc job now exercises the same feature set docs.rs renders, so the CI signal matches what the published documentation will look like. |
+| Q1 — per-crate CHANGELOGs | `keleusma-bench/CHANGELOG.md` and `keleusma-cli/CHANGELOG.md` created in Keep a Changelog 1.1.0 format matching the existing `keleusma-arena` and `keleusma-macros` style. Both V0.2.0 entries describe the crate's first-publicly-released surface. `cargo package --list` confirms both ship in the published tarballs. |
+| D1 — Node.js 20 deprecation | `actions/checkout@v4` bumped to `actions/checkout@v5` (Node.js 24) across all 15 use sites in `.github/workflows/ci.yml`. The `dtolnay/rust-toolchain` actions did not draw the deprecation notice and were left unchanged. |
+
+## V0.4.0 clarification (operator question)
+
+The strategy docs in `docs/process/` are:
+
+- `V0_3_0_SELF_HOSTING.md` — V0.3.0 self-hosting compiler bootstrap.
+- `V0_4_0_NATIVE_CODEGEN.md` — V0.4.0 native code generation.
+- `V0_5_0_KELEUSMA_HOST.md` — V0.5.0 Keleusma host for the compiler (sub-coroutines depend on this milestone).
+
+The prior pre-publish list described V0.5.0 work but omitted V0.4.0. This was an oversight in the enumeration, not a gap in the strategy. V0.4.0 (native codegen) is documented and tracked in its own strategy file.
 
 ## What the operator still owns
 
-- **Publish in dependency order.** `keleusma-macros 0.2.0` → `keleusma 0.2.0` → `keleusma-bench 0.2.0` + `keleusma-cli 0.2.0`. The `keleusma-arena 0.3.0` is already on crates.io and matches the local source bit-identically.
+- **Publish in dependency order.** `keleusma-macros 0.2.0` → `keleusma 0.2.0` → `keleusma-bench 0.2.0` + `keleusma-cli 0.2.0`. `keleusma-arena 0.3.0` is already on crates.io and matches the local source bit-identically.
 - **Tag the release.** `git tag v0.2.0 && git push --tags`.
 - **Decide B15.** Backlog "remove `Type::Unknown` entirely" remains under consideration. Recommendation: defer to V0.2.x or V0.3.0.
-- **Optional: CI required-status-checks rename.** The `test-all-features` job was renamed to `test-broad-features`. If the GitHub branch protection rules required `Test (all features)` as a status check, the rule must be updated to require `Test (broad features)`.
+- **Optional: CI required-status-checks rename.** The `test-all-features` job was renamed to `test-broad-features` in a prior round. If GitHub branch protection required the old name as a status check, update the rule to require `Test (broad features)`.
 
 ## Verification matrix
 
@@ -36,27 +42,30 @@ AI to Human communication channel.
 cargo test --workspace                                          # all pass
 cargo test -p keleusma --no-default-features                    # all pass
 cargo test -p keleusma --features signatures                    # all pass
-cargo test -p keleusma --features signatures,shell              # all pass (new broad CI job)
+cargo test -p keleusma --features signatures,shell              # all pass (CI broad-features job)
 cargo test -p keleusma-bench                                    # all pass
 
 # Format and clippy
 cargo fmt --all -- --check                                      # clean
 cargo clippy --workspace --all-targets -- -D warnings           # clean
 
-# Doc (per-crate, mirrors new CI)
+# Doc (per-crate, CI mirrors)
 RUSTDOCFLAGS="-D warnings -A rustdoc::redundant-explicit-links" \
   cargo doc -p keleusma --no-deps --features signatures,shell   # clean
   cargo doc -p keleusma-arena --no-deps --all-features          # clean
   cargo doc -p keleusma-macros --no-deps                        # clean
   cargo doc -p keleusma-bench --no-deps                         # clean
   cargo doc -p keleusma-cli --no-deps                           # clean
+
+# Package contents
+cargo package --list -p keleusma-bench --allow-dirty            # includes CHANGELOG.md
+cargo package --list -p keleusma-cli --allow-dirty              # includes CHANGELOG.md
 ```
 
 ## Open concerns
 
-1. **Node.js 20 deprecation notice.** GitHub Actions emits a notice that `actions/checkout@v4` runs on Node.js 20, which will be forced to Node.js 24 by default in June 2026 and removed in September 2026. Not blocking for V0.2.0 publish. A separate follow-up pass should bump checkout actions to a Node.js 24 compatible major when the upstream release lands.
-2. **SDL3 CI job cost.** The Examples (SDL3 feature) job builds SDL3 from source through cmake. With the full dependency install, the job will take five to ten minutes per push. The job remains valuable because it catches SDL3-gated regressions; if CI cost becomes a concern, the job can be moved to a label-gated trigger or a weekly schedule rather than every push.
-3. **arena 0.3.0 already on crates.io.** No action needed. Source matches.
+1. **SDL3 CI job cost.** The Examples (SDL3 feature) job builds SDL3 from source through cmake. The full dependency install lands the job at roughly 1m25s on the standard Ubuntu runner; not the 5-10 minutes initially expected. The job remains valuable because it catches SDL3-gated regressions.
+2. **arena 0.3.0 already on crates.io.** No action needed. Source matches.
 
 ## Backlog summary
 
@@ -68,5 +77,4 @@ V0.2.0 publish. The operator runs `cargo publish` in dependency order. After pub
 
 Alternatives:
 - Take up B15 (`Type::Unknown` removal) before publish. Recommendation: defer.
-- Defer publish and bump checkout actions to a Node.js 24 compatible major.
-- Operator selection of a different directive.
+- Defer publish; operator selection of a different directive.
