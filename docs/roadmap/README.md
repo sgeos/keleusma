@@ -2,21 +2,12 @@
 
 > **Navigation**: [Documentation Root](../README.md)
 
-Development phases for Keleusma.
-
-## Phase Overview
-
-| Phase | Name | Description | Status |
-|-------|------|-------------|--------|
-| V0.0 | Bootstrap | Crate extraction, documentation, standalone release | In Progress |
-| V0.1 | Language Completion | Type checker, for-in expressions, semantic analysis | Planned |
-| V0.2 | Tooling | Error formatting, REPL, language server protocol | Planned |
-| V0.3 | Structural ISA | Structural ISA, arena memory, structural verification | Complete |
-| V0.4 | Certification | WCET analysis, hot code swapping, safety-critical tooling. See [RELATED_WORK.md](../reference/RELATED_WORK.md) Section 7 for certification gap analysis | Planned |
+Development phases for Keleusma. Each strategy document below states its own status, gating, and scope.
 
 ## Contents
 
 | Document | Description |
 |----------|-------------|
-| [PHASE_0_BOOTSTRAP.md](./PHASE_0_BOOTSTRAP.md) | V0.0 bootstrap phase: extraction and documentation |
 | [V0_3_0_SELF_HOSTING.md](./V0_3_0_SELF_HOSTING.md) | V0.3.0 strategy: self-hosted compiler as a pipeline of stream-processor stages |
+| [V0_4_0_NATIVE_CODEGEN.md](./V0_4_0_NATIVE_CODEGEN.md) | V0.4.0 strategy: native code generation via LLVM; bytecode as verification IR, native as deployment shape; sub-coroutines lowered to LLVM coroutine intrinsics |
+| [V0_5_0_KELEUSMA_HOST.md](./V0_5_0_KELEUSMA_HOST.md) | V0.5.0 strategy (preliminary): Keleusma-hosted Keleusma; sub-coroutine primitive as the enabling runtime feature |

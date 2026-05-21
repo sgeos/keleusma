@@ -2,7 +2,7 @@
 
 > **Navigation**: [Roadmap](./README.md) | [Documentation Root](../README.md)
 
-**Status**: Strategy ready for implementation. Research pass complete; bootstrap procedure documented; inter-stage data shapes sketched; success criteria stated. Implementation not yet started.
+**Status**: Strategy ready for implementation. Research pass complete; bootstrap procedure documented; inter-stage data shapes sketched; incremental migration ordering recommended (Lexer → Parser → Compiler); success criteria stated. Implementation not yet started.
 
 ## Goal
 
@@ -14,7 +14,7 @@ This document is a strategy, not a milestone tracker. The architectural endpoint
 
 Self-hosting a language is the most credible demonstration that the language is expressive enough to write its own toolchain. The signal is twofold. First, it validates the surface language and the type system against a concrete, complex program of substantial size. Second, it removes a dependency: a self-hosted Keleusma can evolve without forcing every change through the Rust-hosted compiler maintainers. Defense and aerospace customers in particular value a toolchain whose dependency graph is short and auditable; a self-hosted compiler with no external compiler dependency is materially closer to a certifiable shape.
 
-For Keleusma specifically, the self-hosted compiler is a precondition for V0.4.0 (machine-code generation). The V0.4.0 plan compiles the self-hosted compiler to native code via LLVM and links it as a static library against a Rust host, removing the VM from the compilation path for hosts that prefer ahead-of-time compilation. Without the V0.3.0 self-hosted compiler, V0.4.0 has nothing to compile to native code.
+For Keleusma specifically, the self-hosted compiler is a precondition for V0.4.0 (native code generation; see [V0_4_0_NATIVE_CODEGEN.md](./V0_4_0_NATIVE_CODEGEN.md)). The V0.4.0 plan compiles the self-hosted compiler to native code via LLVM and links it as a static library against a Rust host, removing the VM from the compilation path for hosts that prefer ahead-of-time compilation. Without the V0.3.0 self-hosted compiler, V0.4.0 has nothing to compile to native code.
 
 ## Prior art
 
@@ -92,15 +92,37 @@ V0.3.0 documents this alternative but does not recommend it. The reason is that 
 
 If V0.3.0 implementation surfaces a real reason to prefer the integrated form (for example, the inter-stage buffering cost dominates the per-stage compilation cost, or the testability advantage of the pipeline turns out to be illusory), the design is on the shelf and the migration is straightforward: collapse the three `loop` functions into one, drop the inter-stage `yield` boundaries, and inline the staging.
 
+## Incremental migration ordering
+
+Reaching the all-Keleusma pipeline is a non-atomic transition. The recommended strategy is to migrate the stages one at a time, validating the regression corpus at each intermediate state. The Bootstrap procedure documented in the next section applies to the final migration step, not to each step.
+
+**Step 1. Replace the lexer.** Implement `compiler/lexer.kel`. Wire it into the existing Rust-hosted pipeline through a native interface: the Rust parser consumes tokens emitted by the Keleusma lexer. The token-value handoff crosses the native boundary either as values that match the existing Rust `Token` shape directly, or as a small wire format that the Rust parser deserialises. Validation: every program in the regression corpus compiles to byte-identical bytecode under the Keleusma-lexer-plus-Rust-parser-plus-Rust-compiler configuration as under the all-Rust baseline.
+
+**Step 2. Replace the parser.** Implement `compiler/parser.kel`. The Rust compiler now consumes `Declaration` values produced by the Keleusma parser, again across the native boundary. Validation: byte-identical bytecode under Keleusma-lexer-plus-Keleusma-parser-plus-Rust-compiler as under the all-Rust baseline.
+
+**Step 3. Replace the compiler.** Implement the compiler stage in Keleusma source (`compiler/codegen.kel` plus type-inference and monomorphization helpers as separate `fn` modules or sub-functions, as the architectural decomposition warrants). The full pipeline now exists in Keleusma. The Bootstrap procedure below applies: Phase A produces the initial bytecode under the Rust-hosted compiler, Phase B self-compiles, Phase C reaches the fixed point.
+
+This ordering has three properties that recommend it.
+
+First, it reduces risk per step. At each intermediate state, two of the three stages remain the proven Rust implementation. A bug in the migrated stage manifests against a known-good downstream consumer, isolating the failure.
+
+Second, it matches the natural complexity gradient. The lexer is the simplest stage: a finite-state byte scanner with a keyword table. The parser is middle complexity: recursive-descent over a context-free grammar, with the recursive-data-structures constraint discussed above. The compiler stage is the most complex: type inference, monomorphization, code generation, and verification interaction. Tackling the simplest first builds confidence in the cross-language boundary and the inter-stage data shapes before attacking the hardest stage.
+
+Third, it lets each migration step prove out a specific concern. Step 1 proves the byte-iteration story (the "missing or limited" surface-language feature identified above). Step 2 proves the recursive-data-walking discipline (explicit stacks or whatever resolution is chosen for the recursion question). Step 3 proves the Hindley-Milner inference scope and the monomorphization specialization-table bound. Concerns surface and resolve sequentially rather than all at once.
+
+Alternative orderings are possible but less attractive. A "compiler first" ordering would let the Keleusma compiler validate the upstream Rust stages by re-compiling them with itself, but it requires hand-authoring large `Declaration` test fixtures since no Keleusma parser exists yet to produce them from source. A "parser first" ordering inverts Steps 1 and 2 and faces the byte-iteration concern in a less isolated form (the parser depends on lexer output, so a Rust lexer driving a Keleusma parser still exposes the cross-language data-shape boundary at the same place). Neither alternative offers a compelling advantage over Lexer → Parser → Compiler.
+
+The user-facing CLI gains a per-step toggle, e.g. `--lexer keleusma`, `--parser keleusma`, `--compiler keleusma`, during the migration. After Step 3 ships, the toggles collapse into the single `--self-hosted` flag recorded in the success criteria.
+
 ## Bootstrap procedure
 
-Three phases. The pattern is canonical across Wirth's *Project Oberon*, LLVM, Rust, and Go.
+Three phases. The pattern is canonical across Wirth's *Project Oberon*, LLVM, Rust, and Go. The procedure applies to Step 3 of the Incremental migration ordering above, at the point when all three pipeline stages exist in Keleusma source.
 
-**Phase A. Cross-compile.** The self-hosted compiler is written in Keleusma source under `compiler/kelc.kel` (and supporting files, as the decomposition into lexer/parser/compiler suggests at least three files plus shared AST and bytecode-encoding helpers). The existing Rust-hosted compiler produces its bytecode. The output is a Keleusma bytecode artefact, call it `kelc.0.kel.bin`, that runs on the VM and accepts Keleusma source as input.
+**Phase A. Cross-compile.** The self-hosted compiler is written in Keleusma source under `compiler/lexer.kel`, `compiler/parser.kel`, `compiler/codegen.kel`, plus shared AST and bytecode-encoding helpers. The existing Rust-hosted compiler produces its bytecode. The output is a Keleusma bytecode artefact, call it `kelc.0.kel.bin`, that runs on the VM and accepts Keleusma source as input.
 
-**Phase B. Self-compile.** `kelc.0.kel.bin` is loaded into a VM instance and invoked against `compiler/kelc.kel` as its input. The output is `kelc.1.kel.bin`. If `kelc.0` is correct, `kelc.1` is byte-identical to `kelc.0` modulo non-essential ordering (map iteration order, etc.). Any divergence is a bug in `kelc.0`.
+**Phase B. Self-compile.** `kelc.0.kel.bin` is loaded into a VM instance and invoked against its own source files as its input. The output is `kelc.1.kel.bin`. If `kelc.0` is correct, `kelc.1` is byte-identical to `kelc.0` modulo non-essential ordering (map iteration order, etc.). Any divergence is a bug in `kelc.0`.
 
-**Phase C. Fixed point.** `kelc.1.kel.bin` is loaded into a VM instance and invoked against `compiler/kelc.kel`. The output is `kelc.2.kel.bin`. `kelc.2` must be byte-identical to `kelc.1`. Fixed-point reached.
+**Phase C. Fixed point.** `kelc.1.kel.bin` is loaded into a VM instance and invoked against the same source files. The output is `kelc.2.kel.bin`. `kelc.2` must be byte-identical to `kelc.1`. Fixed-point reached.
 
 Validation runs alongside Phases B and C: every test in the existing Rust-side regression corpus is recompiled under both the Rust-hosted compiler and `kelc.1`. The bytecode outputs must be byte-identical (modulo the same non-essential ordering). Divergence on the corpus is a bug in the self-hosted compiler.
 
@@ -192,13 +214,15 @@ The compiler-in-Keleusma needs the features below. The first group exists today 
 
 V0.3.0 is complete when:
 
-1. `compiler/kelc.kel` exists in the repository, structured as the three-stage pipeline (lexer, parser, compiler, plus shared AST and bytecode-encoding helpers).
-2. The Rust-hosted compiler produces `kelc.0.kel.bin` without error. The existing test suite continues to pass.
-3. Phase B fixed-point: `kelc.0.kel.bin` recompiles `compiler/kelc.kel` to produce `kelc.1.kel.bin`. `kelc.1` is byte-identical to `kelc.0` modulo non-essential ordering, formally documented.
-4. Phase C fixed-point: `kelc.1.kel.bin` recompiles `compiler/kelc.kel` to produce `kelc.2.kel.bin`, byte-identical to `kelc.1`.
-5. Regression corpus equivalence: every script in `examples/scripts/` and the workspace tests compiles to byte-identical bytecode under both the Rust-hosted compiler and `kelc.1`.
-6. The CLI gains a `--self-hosted` flag (or similar) that routes through `kelc.1` instead of the Rust-hosted compile path. Programs compile and run end-to-end.
-7. Documentation: `docs/architecture/`, `docs/guide/`, and the README acknowledge the self-hosted compiler as an alternative path. The Rust-hosted compiler continues to ship; V0.3.0 does not retire it.
+1. The compiler pipeline exists in Keleusma source: `compiler/lexer.kel`, `compiler/parser.kel`, `compiler/codegen.kel`, plus shared AST and bytecode-encoding helpers.
+2. **Step 1 intermediate validation**: every program in the regression corpus compiles to byte-identical bytecode under the Keleusma-lexer-plus-Rust-parser-plus-Rust-compiler configuration as under the all-Rust baseline.
+3. **Step 2 intermediate validation**: every program in the regression corpus compiles to byte-identical bytecode under the Keleusma-lexer-plus-Keleusma-parser-plus-Rust-compiler configuration as under the all-Rust baseline.
+4. The Rust-hosted compiler produces `kelc.0.kel.bin` from the full Keleusma source without error. The existing test suite continues to pass.
+5. Phase B fixed-point: `kelc.0.kel.bin` recompiles its own source to produce `kelc.1.kel.bin`. `kelc.1` is byte-identical to `kelc.0` modulo non-essential ordering, formally documented.
+6. Phase C fixed-point: `kelc.1.kel.bin` recompiles the same source to produce `kelc.2.kel.bin`, byte-identical to `kelc.1`.
+7. Regression corpus equivalence: every script in `examples/scripts/` and the workspace tests compiles to byte-identical bytecode under both the Rust-hosted compiler and `kelc.1`.
+8. The CLI gains a `--self-hosted` flag (or similar) that routes through `kelc.1` instead of the Rust-hosted compile path. Programs compile and run end-to-end. During the migration, per-stage toggles (`--lexer keleusma`, etc.) may exist; after Step 3, they collapse into the single `--self-hosted` flag.
+9. Documentation: `docs/architecture/`, `docs/guide/`, and the README acknowledge the self-hosted compiler as an alternative path. The Rust-hosted compiler continues to ship; V0.3.0 does not retire it.
 
 The dual-compiler period is intentional. The Rust-hosted compiler remains the reference implementation; the self-hosted compiler is the validation that the language admits its own toolchain.
 

@@ -97,7 +97,9 @@ docs/
 │
 └── roadmap/                     # Development phases
     ├── README.md
-    └── PHASE_0_BOOTSTRAP.md
+    ├── V0_3_0_SELF_HOSTING.md
+    ├── V0_4_0_NATIVE_CODEGEN.md
+    └── V0_5_0_KELEUSMA_HOST.md
 ```
 
 ---
