@@ -9,56 +9,64 @@ AI to Human communication channel.
 ## Last Updated
 
 **Date**: 2026-05-21
-**Status**: Embedded WCET infrastructure for the STM32N6570-DK lands. `keleusma-bench` lib is now no_std + alloc-compatible behind a `std` feature; new `BenchConfig` parametrises chunk size so embedded targets stay within RAM; new `DwtCycCnt` counter for Cortex-M reads DWT_CYCCNT at CPU clock; new `examples/rtos/src/bin/bench_n6.rs` boots embassy, enables DWT, runs the bench suite, and emits each measurement through defmt RTT. The host-side `keleusma-bench --from-log` parser converts a captured defmt log into a target fragment. Cross-compile to thumbv8m.main-none-eabihf is clean; the run-on-hardware step is deferred to the next session when the N6 is connected.
+**Status**: WCET table generated on real STM32N6570-DK hardware. The `bench_n6` binary flashed to the connected board via probe-rs, enabled DWT_CYCCNT, ran all 17 OPCODE_SPECS, and emitted measurements via defmt RTT. Captured log parsed through `keleusma-bench --from-log`; fragment committed at `keleusma-bench/measured_cost_models/thumbv8m_main_none_eabihf.rs`. The bench had to be re-configured for embedded memory budgets (200 repetitions and 8 KB arena rather than 1000 repetitions and 64 KB arena) after the first run triggered a heap fragmentation panic at the 6th spec.
 
 ## Completed in this session round
 
 | Directive | Resolution |
 |-----------|------------|
-| Generate WCET/WCMU tables for the N6-DK (Path A: build infrastructure now, run on hardware in follow-on) | Done. Three pieces of infrastructure. (1) `keleusma-bench` lib refactored to no_std + alloc. The `std` cargo feature gates the CLI bin and the `KELEUSMA_BENCH_CPU_HZ` env-var override; the measurement primitives are portable. `libm::ceil` replaces `f64::ceil` so the math works in both targets. (2) New `BenchConfig` struct with `embedded_default()` returning 1,000 pattern repetitions to keep the constructed chunk inside the N6's 384 KB RAM budget. New `benchmark_spec_with_config` and `measure_one_with_config` consume the config. (3) New `DwtCycCnt` counter in `keleusma-bench/src/counter.rs` reads DWT_CYCCNT via volatile MMIO at 0xE000_1004; `cpu_cycles_per_count` returns 1.0 because DWT_CYCCNT ticks at CPU clock. New `bench_n6.rs` binary in `examples/rtos/src/bin/` boots embassy, enables DWT via direct register pokes on DEMCR/DWT_CTRL, runs the spec suite, emits each `Measurement` as a `BENCH idx=I/N name=N bits=B per_op=C` defmt line, signals completion with `BENCH_DONE cpu_hz=H counter_hz=H`. Cross-compiles to thumbv8m.main-none-eabihf cleanly: text 128 KB, bss 132 KB. New host-side `keleusma-bench --from-log <path>` parses the captured defmt log and emits a fragment with the same shape as the host-bench path. Verified end-to-end against a synthetic 17-line log. Documentation in `keleusma-bench/README.md` and `keleusma-bench/measured_cost_models/README.md` covers the embedded path and the N6 capture workflow. |
-| WCMU for the N6 | Documented as a parametric-Vm-width choice rather than a measurement workflow. The runtime computes WCMU at compile time from `value_slot_bytes` and per-op stack/heap effects. For the default 64-bit runtime (which `examples/rtos` currently uses) `value_slot_bytes = 32`, identical to host. Operators that select a narrower parametric Vm for the N6 (sensible for a 32-bit Cortex-M55) get a smaller `value_slot_bytes` per the parametric type's choice. There is no per-host WCMU measurement to capture; the bench measures WCET only. |
+| Generate the N6-DK WCET table by running the bench on hardware | Done. The N6 was reachable via probe-rs (`probe-rs run --chip STM32N657`). First run with the original `BenchConfig::embedded_default` (1,000 reps, 64 KB arena) reached spec 6 then panicked: the linked-list allocator could not satisfy a fresh 64 KB arena allocation after five iterations of allocate-then-free cycles. Diagnosis: the bench's per-spec memory footprint (~100 KB) was too large relative to the 128 KB heap, and the `ZeroSizeOk` allocator wrapper does not defragment between iterations. Fix: added an `arena_capacity` field to `BenchConfig` and lowered both embedded defaults to 200 repetitions and 8 KB arena. The bench's runtime working set is tiny (patterns leave the operand stack near empty); 8 KB is comfortable. At DWT_CYCCNT's single-CPU-cycle resolution and 800 MHz clock, 200 repetitions of patterns costing 3,000 to 13,000 cycles each produce hundreds of thousands of cycles per measurement pass with ample resolution. Second run completed cleanly: all 17 measurements in 8.14 seconds wall time. The captured log was parsed through `keleusma-bench --from-log` into the committed fragment. |
+
+## N6 measured per-category cost
+
+| Category | M1 Max (host) | N6 (Cortex-M55) | Ratio |
+|---|---|---|---|
+| Data movement | 87 | 6070 | 70x |
+| Control marker (scaled nominal) | 87 | 6070 | 70x |
+| Arithmetic, comparison, bitwise, casts | 164 | 10079 | 61x |
+| Division, field lookup, type checks | 140 | 9164 | 65x |
+| Composite construction | 338 | 13540 | 40x |
+| Function call (scaled nominal) | 870 | 60700 | 70x |
+
+The ratios are consistent with the architectural difference between an out-of-order superscalar with deep caches running at 3.228 GHz (M1 Max) and an in-order Cortex-M55 running from flash at 800 MHz. The N6's per-CPU-cycle cost is dominated by VM dispatch (no branch prediction to speak of, simpler instruction-cache hierarchy); the M1 Max's measured cost is dominated by data-cache and branch-prediction effects that have already absorbed most of the dispatch overhead.
 
 ## Verification matrix
 
 ```bash
-# Host build and tests
-cargo build --release -p keleusma-bench                                # clean
-cargo test --release -p keleusma-bench                                 # 6 passed
+# Cross-compile and flash via probe-rs
+cd examples/rtos
+cargo run --release --bin bench_n6 \
+    --target thumbv8m.main-none-eabihf \
+    --no-default-features --features stm32n6570dk-platform \
+    > /tmp/bench_n6.log 2>&1                                       # ran for 8.14 s,
+                                                                   # all 17 BENCH lines
+                                                                   # plus BENCH_DONE
+                                                                   # captured
 
-# no_std build of bench lib alone
-cargo build --release -p keleusma-bench --no-default-features          # clean
+# Generate fragment from captured log
+cargo run --release -p keleusma-bench -- \
+    --from-log /tmp/bench_n6.log \
+    --output keleusma-bench/measured_cost_models/thumbv8m_main_none_eabihf.rs
+                                                                   # 17 measurements
+                                                                   # parsed, fragment
+                                                                   # written
 
-# Cross-compile bench_n6 for the N6 target
-cargo build --release --manifest-path examples/rtos/Cargo.toml \
-    --bin bench_n6 --target thumbv8m.main-none-eabihf \
-    --no-default-features --features stm32n6570dk-platform             # clean
-# ELF: text 128 KB, bss 132 KB, fits in 384 KB RAM
-
-# Host bench still produces the expected aarch64-darwin fragment
-./target/release/keleusma-bench --output /tmp/probe.rs                 # CPU-cycle values
-                                                                       # consistent with
-                                                                       # prior runs
-
-# --from-log parser against a synthetic 17-line log
-./target/release/keleusma-bench --from-log /tmp/synthetic.log \
-    --output /tmp/synthetic_fragment.rs                                # 17 parsed,
-                                                                       # fragment shape
-                                                                       # matches host-bench
-                                                                       # output, scale 1.000,
-                                                                       # function-call falls
-                                                                       # back to scaled
-                                                                       # nominal (870 cycles)
+# Fragment compiles as include! target
+probe project including thumbv8m_main_none_eabihf.rs               # builds clean;
+                                                                   # per-category
+                                                                   # values 6070,
+                                                                   # 10079, 9164,
+                                                                   # 13540, 60700,
+                                                                   # 6070
 ```
 
 ## Open concerns
 
-1. **Hardware run on the N6-DK is deferred.** The infrastructure is in place and the binary cross-compiles cleanly. The next session step is: connect the N6-DK via probe-rs, run `cargo run --release --manifest-path examples/rtos/Cargo.toml --bin bench_n6 --target thumbv8m.main-none-eabihf --no-default-features --features stm32n6570dk-platform 2>&1 | tee /tmp/bench_n6.log`, wait for the `BENCH_DONE` marker, then run `cargo run --release -p keleusma-bench -- --from-log /tmp/bench_n6.log --output keleusma-bench/measured_cost_models/thumbv8m_main_none_eabihf.rs`. The committed fragment then ships in the same shape as the dev-host fragment.
+1. **`Yield` and `Call` still use scaled nominal fallback on the N6.** Same limitation as the dev-host fragment: the bench harness cannot exercise these opcodes in isolation (Yield needs a Stream chunk; Call needs a multi-chunk module). The fallback at the N6 scale factor (~70x) yields a Call cost of 60700 cycles, which is consistent with an embedded VM dispatch into a callee, but is an extrapolation not a measurement. Future work would add multi-chunk and Stream-chunk spec types.
 
-2. **N6 CPU clock assumption is hardcoded at 800 MHz.** The `bench_n6.rs` binary constructs the counter with `DwtCycCnt::new(800_000_000)` matching the N6's nominal CPU clock after the bootloader configures the PLL. If the actual clock differs (the operator selects a different power profile, or thermal conditions alter the boost behaviour), the cycle counts are off proportionally. The current value matches the documented nominal; a future revision could read the clock from the RCC peripheral at runtime to remove the assumption.
+2. **800 MHz CPU clock is hardcoded in `bench_n6.rs`.** The N6's actual instantaneous clock depends on the bootloader's PLL configuration and any runtime power-management decisions. The current value matches the documented nominal P-core clock. If the actual clock differs, cycle counts are off proportionally. A future revision could read the clock from the RCC peripheral at runtime.
 
-3. **Embedded `BenchConfig` uses 1,000 repetitions versus host's 100,000.** Resolution at the N6's CPU-clock counter is fine because DWT_CYCCNT ticks at 800 MHz, so 1,000 repetitions of a few-cycle op still produce thousands of counter ticks. The chunk-size constraint is the binding limit (RAM, not resolution). Operators on devices with more RAM can lift the repetition count by passing a custom `BenchConfig`.
-
-4. **The `Yield` and `Call` opcodes still fall back to scaled nominal on both host and N6.** This is unchanged from the prior session and is documented in `measured_cost_models/README.md`. A future bench harness with multi-chunk and Stream-chunk spec types can replace the fallback with measurement; for both host and N6 the fallback is consistent.
+3. **Linked-list allocator fragmentation forced a smaller embedded config.** The bench now uses 200 repetitions and an 8 KB arena per spec. Resolution remains good because DWT_CYCCNT counts CPU cycles directly, but the smaller working set means each measurement covers fewer total cycles than the host equivalent. If a future use case demands tighter measurements, switching to a slab or bump allocator on the N6 would allow restoring larger repetition counts.
 
 ## Backlog summary
 
@@ -73,16 +81,15 @@ cargo build --release --manifest-path examples/rtos/Cargo.toml \
 | B20 | V0.2.0 ISA and wire format implementation | Closed |
 | B21 | Value-side IFC negative labels via product lattice | Deferred |
 | B22 | Sub-coroutines as callable ephemeral loops | Now load-bearing for V0.5.0 |
-| (candidate) | `keleusma-bench` multi-chunk and Stream-chunk specs to remove `Yield` and `Call` nominal fallback | Deferred |
+| (candidate) | Multi-chunk and Stream-chunk bench specs to remove `Yield` and `Call` nominal fallback | Deferred |
 | (candidate) | Read N6 CPU clock from RCC at runtime instead of hardcoding 800 MHz | Deferred |
+| (candidate) | Slab or bump allocator on the N6 to restore larger bench repetition counts | Deferred |
 
 ## Intended Next Step
 
-The infrastructure for embedded WCET measurement is in place and cross-compiles cleanly. The natural next step is to run the bench on a connected N6-DK and commit the resulting `thumbv8m_main_none_eabihf.rs` fragment. The procedure is documented in `keleusma-bench/measured_cost_models/README.md` under "N6 capture workflow."
+Both supported host architectures now ship measured cost-model fragments in `keleusma-bench/measured_cost_models/`. The natural next step is one of:
 
-Alternatives:
-
+- Generate cost-model fragments for additional host architectures (x86_64-unknown-linux-gnu would be the most common third target).
 - Resume V0.3.0 self-hosting implementation (Lexer migration first per the incremental ordering).
 - B15 follow-on: remove `Type::Unknown` entirely.
-- Generate cost-model fragments for other supported host architectures (x86_64-unknown-linux-gnu) before tackling N6 hardware run.
 - Operator selection of a different directive.

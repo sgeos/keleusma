@@ -117,6 +117,7 @@ pub struct BenchConfig {
     pub repetitions: u32,
     pub warmup_passes: u32,
     pub measurement_passes: u32,
+    pub arena_capacity: usize,
 }
 
 impl BenchConfig {
@@ -128,23 +129,33 @@ impl BenchConfig {
             repetitions: PATTERN_REPETITIONS,
             warmup_passes: WARMUP_PASSES,
             measurement_passes: MEASUREMENT_PASSES,
+            arena_capacity: DEFAULT_ARENA_CAPACITY,
         }
     }
 
     /// Configuration suitable for embedded targets, where the
     /// counter ticks at CPU clock (so coarse resolution is not a
-    /// problem) and the constructed chunk must fit in device RAM.
-    /// One thousand pattern repetitions keep the chunk under
-    /// 100 KB for the largest pattern at the current `Op` size,
-    /// well within the N6's 384 KB RAM budget after the heap
-    /// allocator's overhead. Warmup and measurement passes match
-    /// the host default; the loop runs in microseconds at the N6's
-    /// 800 MHz clock so the additional passes are inexpensive.
+    /// problem) and the constructed chunk plus the per-Vm arena
+    /// must fit in device RAM, with margin for the linked-list
+    /// allocator's fragmentation across the seventeen sequential
+    /// spec builds. Two hundred pattern repetitions keep the ops
+    /// vector under 5 KB; an 8 KB arena suffices because the bench
+    /// patterns leave the operand stack near empty between
+    /// iterations. The product of both reductions keeps each
+    /// spec's allocation footprint under 20 KB, comfortably within
+    /// the N6's heap budget even after fragmentation.
+    ///
+    /// Resolution is not a concern at this scale: at the N6's
+    /// 800 MHz CPU clock and per-pattern costs of one thousand to
+    /// ten thousand cycles, two hundred repetitions still cover
+    /// hundreds of thousands of cycles per measurement pass, which
+    /// the DWT_CYCCNT counter measures at single-cycle resolution.
     pub const fn embedded_default() -> Self {
         Self {
-            repetitions: 1_000,
+            repetitions: 200,
             warmup_passes: WARMUP_PASSES,
             measurement_passes: MEASUREMENT_PASSES,
+            arena_capacity: 8 * 1024,
         }
     }
 }
@@ -225,7 +236,7 @@ pub fn benchmark_spec_with_config(
         .collect();
 
     let module = build_benchmark_chunk(&pattern, &constants, config.repetitions);
-    let arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+    let arena = Arena::with_capacity(config.arena_capacity);
 
     // SAFETY: The bench tool deliberately uses the unchecked
     // constructor because the benchmark chunks are not
