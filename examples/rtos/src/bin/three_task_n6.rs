@@ -155,6 +155,38 @@ async fn main(_spawner: Spawner) {
     );
     info!("Tasks: led (500ms), sensor (100ms), heartbeat (5000ms)");
 
+    // Boot-time per-task WCET report. Computes the per-iteration
+    // cycle bound for each task under both the bundled
+    // `NOMINAL_COST_MODEL` (relative weights) and the
+    // target-specific `MEASURED_COST_MODEL` (CPU cycles on the
+    // Cortex-M55 at 800 MHz, from the keleusma-bench measurement on
+    // this exact hardware family). The numbers are reported in
+    // parallel so operators see both at boot; downstream scheduler
+    // decisions consume the measured value where the bench
+    // calibration is trustworthy and the nominal value where
+    // platform-portable ordering is wanted.
+    //
+    // Gated on `keleusma-verify` because the report calls
+    // `keleusma::verify::wcet_stream_iteration_with_cost_model`,
+    // which is only available when the verifier ships in the image.
+    #[cfg(feature = "keleusma-verify")]
+    {
+        info!("--- WCET (per iteration) ---");
+        for (name, bytecode) in [
+            ("led", keleusma_rtos::setup::BIN_LED),
+            ("sensor", keleusma_rtos::setup::BIN_SENSOR),
+            ("heartbeat", keleusma_rtos::setup::BIN_HEARTBEAT),
+        ] {
+            match keleusma_rtos::cost_model::report_measured_wcet(bytecode) {
+                Some((nominal, measured)) => info!(
+                    "task `{=str}`: NOMINAL {=u32} cycles  MEASURED {=u32} cycles",
+                    name, nominal, measured
+                ),
+                None => info!("task `{=str}`: no Stream chunk; WCET report skipped", name),
+            }
+        }
+    }
+
     // Boot-time signature self-test. Runs only when the
     // `keleusma-signatures` feature is on; otherwise the path is
     // compiled away. A failure here means the cryptographic

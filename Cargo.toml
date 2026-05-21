@@ -132,6 +132,10 @@ name = "string_ops"
 required-features = ["compile", "verify"]
 
 [[example]]
+name = "measured_wcet"
+required-features = ["compile", "verify"]
+
+[[example]]
 name = "opaque_rust_string"
 required-features = ["compile", "verify"]
 

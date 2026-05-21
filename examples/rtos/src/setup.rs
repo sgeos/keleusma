@@ -57,9 +57,12 @@ use crate::platform::Platform;
 /// Prelude prepended to every task source. Defines the
 /// `Status` and `StatusErrorCode` enums shared with the host's
 /// native surface. Kept here as a single source of truth so all
-/// tasks see identical declarations.
+/// tasks see identical declarations. `pub` so the demonstrator
+/// binaries can prepend the same text when computing per-task
+/// WCET reports off-line (the prelude declares the symbols every
+/// task script references, so compilation fails without it).
 #[cfg(feature = "keleusma-compile")]
-const PRELUDE: &str = include_str!("../scripts/prelude.kel");
+pub const PRELUDE: &str = include_str!("../scripts/prelude.kel");
 
 /// LED blinker task source.
 #[cfg(feature = "keleusma-compile")]

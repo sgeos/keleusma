@@ -13,6 +13,7 @@ Recipes are working patterns for embedding Keleusma in larger systems. Each reci
 | [The data-loader pattern](#the-data-loader-pattern) | The host needs read-only configuration data that benefits from script-side editing. |
 | [Narrow-runtime type alias](#narrow-runtime-type-alias) | The host targets a sub-64-bit native runtime (16-bit or 8-bit signed word). |
 | [Distributing signed bytecode](#distributing-signed-bytecode) | The host delivers compiled modules over an untrusted channel and needs origin authenticity. |
+| [Calibrated WCET with a measured cost model](#calibrated-wcet-with-a-measured-cost-model) | The host wants WCET estimates in actual CPU cycles for the deployment target instead of nominal relative weights. |
 
 ---
 
@@ -388,3 +389,91 @@ The verification path uses `ed25519-dalek` under `no_std + alloc`. The `examples
 - [`docs/spec/WIRE_FORMAT.md`](../spec/WIRE_FORMAT.md) documents the header extension layout.
 - [`docs/guide/EMBEDDING.md`, Signed Modules](./EMBEDDING.md#signed-modules) covers the embedding-side API in more depth.
 - [`examples/scripts/11_signed.kel`](../../examples/scripts/11_signed.kel) is a worked signed script.
+
+---
+
+## Calibrated WCET with a measured cost model
+
+### Problem
+
+The host wants WCET (worst-case execution time) estimates in actual CPU cycles for the deployment target, not the relative-weight estimates the bundled `NOMINAL_COST_MODEL` ships with. The nominal model assigns 1 to data movement, 2 to arithmetic, 3 to division, 5 to composite construction, 10 to function calls. These ratios are useful for ordering programs against each other on the same host, but the absolute scale is not pipelined CPU cycles for any specific hardware.
+
+Real WCET analysis for a deployment target wants measured numbers: data movement on a Cortex-M55 at 800 MHz runs hundreds of cycles per VM dispatch; the same workload on an Apple M1 Max P-core runs tens. The two are different units, and a host that wants to convert WCET to wall-clock time needs the right one.
+
+### Solution
+
+The `keleusma-bench` workspace member measures per-opcode pipelined cycles on a host CPU and emits a Rust source fragment defining a `MEASURED_COST_MODEL` constant. The host crate includes the fragment and passes the constant to the `_with_cost_model` variant of whichever WCET API it consumes.
+
+**One. Obtain a fragment.** The crate ships pre-generated fragments under [`keleusma-bench/measured_cost_models/`](../../keleusma-bench/measured_cost_models/) for the dev host and the STM32N6570-DK. For other hosts, regenerate:
+
+```bash
+# Host bench (writes a fragment for the running CPU)
+cargo run --release --bin keleusma-bench -- \
+    --cpu-hz 3500000000 \
+    --output keleusma-bench/measured_cost_models/<target-triple>.rs
+
+# Embedded bench (captures defmt RTT, parses to a fragment)
+cd examples/rtos
+cargo run --release --bin bench_n6 --target thumbv8m.main-none-eabihf \
+    --no-default-features --features stm32n6570dk-platform \
+    2>&1 | tee /tmp/bench.log
+cd -
+cargo run --release -p keleusma-bench -- \
+    --from-log /tmp/bench.log \
+    --output keleusma-bench/measured_cost_models/thumbv8m_main_none_eabihf.rs
+```
+
+`--cpu-hz` declares the host's CPU clock for the cycle calculation. The default is documented in `keleusma-bench/src/counter.rs` (`DEFAULT_ASSUMED_CPU_HZ`). See [`keleusma-bench/measured_cost_models/README.md`](../../keleusma-bench/measured_cost_models/README.md) for the capture workflow per target.
+
+**Two. Include the fragment in the host crate.** The fragment is plain Rust source that declares `MEASURED_COST_MODEL` and a backing `measured_op_cycles` function:
+
+```rust
+include!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/path/to/keleusma-bench/measured_cost_models/<fragment>.rs"
+));
+```
+
+Multiple fragments cohabit cleanly when gated by `cfg(target_arch = ...)`:
+
+```rust
+#[cfg(all(target_arch = "aarch64", target_os = "macos"))]
+include!(concat!(env!("CARGO_MANIFEST_DIR"),
+    "/keleusma-bench/measured_cost_models/aarch64_apple_darwin.rs"));
+
+#[cfg(target_arch = "arm")]
+include!(concat!(env!("CARGO_MANIFEST_DIR"),
+    "/keleusma-bench/measured_cost_models/thumbv8m_main_none_eabihf.rs"));
+```
+
+**Three. Pass the model to the verifier.** The `_with_cost_model` variants of the WCET APIs accept a `&CostModel`:
+
+```rust
+use keleusma::verify::wcet_stream_iteration_with_cost_model;
+
+for chunk in module.chunks.iter() {
+    if chunk.block_type != BlockType::Stream { continue; }
+    let cycles = wcet_stream_iteration_with_cost_model(chunk, &MEASURED_COST_MODEL)?;
+    println!("Chunk `{}`: {} CPU cycles per iteration", chunk.name, cycles);
+}
+```
+
+For resource-bound verification at load time, `verify::verify_resource_bounds_with_cost_model` takes the same `&CostModel` and threads it through both the WCET and WCMU paths.
+
+### Why this matters
+
+The bundled `NOMINAL_COST_MODEL` is honest about being relative-only. It cannot answer "how many microseconds per iteration." The measured model can, conditional on the bench's calibration assumptions (CPU clock, warm caches, predicted branches). For deployments where the WCET bound informs scheduler decisions, this conversion is the load-bearing step.
+
+### Failure modes
+
+- **The fragment was measured on a different host than the deployment target.** The cycle counts are then dev-host estimates, not calibrated for the executing CPU. The fragment header records the host and the assumed CPU clock; check both before using.
+- **The host CPU's actual clock differs from the bench's assumption.** Re-bench with `--cpu-hz <Hz>` set to the actual clock, or pass `--cpu-hz` to `keleusma-bench --from-log` to correct the documented value post-capture.
+- **The bench does not measure `Yield` or `Call` in isolation.** Both categories fall back to scaled nominal values. The scaled values are conservative for WCET but are extrapolations, not measurements. This is documented in the fragment header.
+
+### Cross-references
+
+- [`examples/measured_wcet.rs`](../../examples/measured_wcet.rs) is the minimal working example: compiles a small Stream-classified program, prints WCET under both nominal and measured models.
+- [`keleusma-bench/README.md`](../../keleusma-bench/README.md) documents the bench tool's methodology and CLI.
+- [`keleusma-bench/measured_cost_models/README.md`](../../keleusma-bench/measured_cost_models/README.md) catalogues the pre-generated fragments and the capture workflows.
+- [`docs/architecture/LANGUAGE_DESIGN.md` § Cost model](../architecture/LANGUAGE_DESIGN.md#cost-model) explains the `CostModel` contract and the host's role in calibration.
+- [`examples/rtos`](../../examples/rtos/) demonstrates the wiring in a headline example: each task logs its measured WCET per iteration at boot.

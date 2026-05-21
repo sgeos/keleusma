@@ -9,48 +9,70 @@ AI to Human communication channel.
 ## Last Updated
 
 **Date**: 2026-05-21
-**Status**: `keleusma-bench` gains a `--cpu-hz <Hz>` CLI flag. The flag takes precedence over `KELEUSMA_BENCH_CPU_HZ` and works on both the host-bench path (scaling counter ticks to CPU cycles) and the `--from-log` path (overriding the `BENCH_DONE`-reported value in the emitted fragment header).
+**Status**: Measured cost-model fragments are now consumed by code, not just generated. Three closures land in one round: a cookbook recipe in `docs/guide/COOKBOOK.md`, a standalone example at `examples/measured_wcet.rs`, and per-task WCET reporting at boot in both RTOS demonstrator binaries (`three-task-std` on host, `three-task-n6` on the N6 hardware). The stale `GRAMMAR.md` note about AArch64 calibration was rewritten to reflect the resolved state. The std demonstrator on the dev host shows realistic 80-85x measured-vs-nominal ratios per task, consistent with the M1 Max measured cost model.
 
 ## Completed in this session round
 
 | Directive | Resolution |
 |-----------|------------|
-| Add a command-line parameter to specify CPU speed | New `--cpu-hz <Hz>` flag in `keleusma-bench` CLI. Validates the value is a positive finite f64, then sets the `KELEUSMA_BENCH_CPU_HZ` environment variable for the rest of the process (via `unsafe { env::set_var(...) }` because the 2024 edition marks `set_var` unsafe; the bench main is single-threaded at this point so the unsafe block is justified). Counter implementations read `assumed_cpu_hz()` lazily inside `cpu_cycles_per_count`, so the override applies uniformly to host-bench measurements without further plumbing. In `--from-log` mode the override is threaded through `run_from_log` and replaces the `BENCH_DONE`-reported `cpu_hz` value in the emitted fragment header; this matters for embedded captures where DWT_CYCCNT cycle counts are correct regardless of CPU clock but the documentation should reflect the operator's actual hardware. Banner now reports the source of the assumption (`--cpu-hz override`, `KELEUSMA_BENCH_CPU_HZ env var`, or `DEFAULT_ASSUMED_CPU_HZ`). READMEs updated. End-to-end test confirms both paths honor the flag: host-bench scale changes from 134.5 to 125.0 when overriding 3.228 GHz to 3.0 GHz; from-log fragment header shows 400 MHz instead of 800 MHz when overriding the N6 log. |
+| Option A: documentation patch | Three doc updates. (1) New cookbook section "Calibrated WCET with a measured cost model" walks through the three-step wiring: obtain a fragment via `keleusma-bench`, include it under `cfg(target_arch = ...)`, pass the model to a `_with_cost_model` API variant. (2) Stale `docs/spec/GRAMMAR.md` § 17.2 note about "AArch64 produces degenerate one-cycle output" was rewritten to "resolved" with the current scaling described inline. (3) New `Calibrated WCET in CPU cycles` subsection in `docs/guide/EMBEDDING.md` cross-references the cookbook recipe, the standalone example, and the measured-model fragments. |
+| Option B: standalone example | New `examples/measured_wcet.rs` (registered in workspace `Cargo.toml`) compiles a small Stream-classified Keleusma program, computes per-iteration WCET under both `NOMINAL_COST_MODEL` and the included `MEASURED_COST_MODEL`, and prints the comparison. On the dev host: `NOMINAL 25 cycles, MEASURED 2145 cycles, ratio 85.80x`. |
+| Headline example wiring (rtos) | New `examples/rtos/src/cost_model.rs` exposes a target-dispatched `MEASURED_COST_MODEL`: M1 Max fragment for `aarch64-apple-darwin`, Cortex-M55 fragment for `thumbv8m.main-none-eabihf`, `NOMINAL_COST_MODEL` fallback elsewhere. The module gates on `feature = "keleusma-verify"` because the report logic depends on `keleusma::verify::wcet_stream_iteration_with_cost_model`. Two helper functions: `report_measured_wcet(bytecode)` for the precompiled path used by the N6 binary, and `report_measured_wcet_from_source(source)` for the source-compile path used by the std demonstrator. Both demonstrator binaries call into the helper under their respective feature gates and emit a per-task WCET report at boot. `setup::PRELUDE` promoted from private to `pub` so the binaries can prepend it when compiling task sources off-line. |
 
 ## Verification matrix
 
 ```bash
-# Host bench with --cpu-hz override
-./target/release/keleusma-bench --cpu-hz 3000000000
-# Output: assumed CPU clock: 3000000000 Hz (3.000 GHz) (source: --cpu-hz override)
-#         scale (CPU cycles per counter tick): 125.000
+# Workspace build clean
+cargo build --release --workspace
 
-# from-log with --cpu-hz override
-./target/release/keleusma-bench --from-log /tmp/bench_n6.log \
-    --cpu-hz 400000000 --output /tmp/test_override.rs
-# Output: cpu_hz: 400000000 Hz (source: --cpu-hz override)
-# Fragment header: Assumed CPU clock: 400000000 Hz (0.400 GHz)
+# Bench unit tests
+cargo test --release -p keleusma-bench                                # 6 passed
 
-# Precedence: --cpu-hz wins over env var
-KELEUSMA_BENCH_CPU_HZ=5000000000 ./target/release/keleusma-bench --cpu-hz 4000000000
-# Output: assumed CPU clock: 4000000000 Hz (4.000 GHz) (source: --cpu-hz override)
+# Standalone example
+cargo run --release --example measured_wcet                           # prints
+                                                                       # NOMINAL 25 cycles
+                                                                       # MEASURED 2145 cycles
+                                                                       # ratio 85.80x
 
-# All 6 unit tests pass
-cargo test --release -p keleusma-bench
+# RTOS std demonstrator (with keleusma-verify default)
+cargo run --release --manifest-path examples/rtos/Cargo.toml \
+    --bin three-task-std                                              # prints WCET report
+                                                                       # per task at boot:
+                                                                       # led 6214/74, sensor
+                                                                       # 5528/66, heartbeat
+                                                                       # 5006/60,
+                                                                       # event_listener
+                                                                       # 3102/38, faulty
+                                                                       # 5624/70
+
+# RTOS N6 demonstrator (build with keleusma-verify)
+cargo build --release --manifest-path examples/rtos/Cargo.toml \
+    --bin three-task-n6 --target thumbv8m.main-none-eabihf \
+    --no-default-features --features stm32n6570dk-platform,keleusma-verify
+                                                                       # clean
+
+# RTOS N6 demonstrator without verify still builds
+cargo build --release --manifest-path examples/rtos/Cargo.toml \
+    --bin three-task-n6 --target thumbv8m.main-none-eabihf \
+    --no-default-features --features stm32n6570dk-platform           # clean (cost_model
+                                                                       # module is gated
+                                                                       # out)
 ```
 
 ## Open concerns
 
-1. **The embedded `bench_n6.rs` still hardcodes 800 MHz** in `N6_CPU_HZ`. The override applies at the `--from-log` parse step, so the operator can correct the documentation after capture, but the embedded binary itself prints 800 MHz in its boot banner and `BENCH_DONE` marker. A future revision could read the constant from `option_env!("KELEUSMA_BENCH_CPU_HZ")` at compile time, or read the actual CPU clock from the RCC peripheral at runtime. The latter is the proper fix and is recorded as a backlog candidate.
+1. **N6 hardware run with the WCET report is not captured yet.** The build with `--features stm32n6570dk-platform,keleusma-verify` is clean, but the runtime defmt output has not been captured against the connected board in this session. The defmt log format matches the std demonstrator's println; per-task lines would appear after the existing "Tasks:" banner.
 
-2. **`env::set_var` is unsafe in the 2024 edition** because of thread-safety concerns. The bench main is single-threaded at the point of the call, well before any counter or VM construction, so the unsafe block is justified and documented inline. A future refactor could thread an explicit `cpu_hz` value through the counter constructors instead, removing the env-var trampoline.
+2. **Cost-model selection is per-arch, not per-host-CPU-model.** The `cfg(target_arch = "aarch64")` arm uses the M1 Max fragment for all aarch64-apple-darwin builds. Operators on different Apple Silicon variants (M2, M3, M4) consuming the rtos example get dev-host estimates rather than calibrated values. The committed fragment header records the CPU clock assumption (3.228 GHz); operators who care regenerate the fragment per host or use the `--cpu-hz` override at bench time.
+
+3. **The std demonstrator compiles task sources at boot to report WCET.** Compilation overhead is in milliseconds per task, paid once at startup. The N6 demonstrator uses the precompiled-bytecode path so the runtime image is unchanged.
 
 ## Backlog summary
 
 | ID | Title | Status |
 |----|-------|--------|
 | B13 | Refinement-type compile-time elision through range analysis | Deferred |
-| B14 | CallIndirect flow analysis for non-recursive closures | Closed as not-applicable |
+| B14 | CallIndirect flow analysis for non-recursive closures | Closed |
 | B15 | Remove `Type::Unknown` entirely | Foundation in place; refactor pending |
 | B16 | Parametric `Vm<W, A, F>` for sub-64-bit native runtimes | Resolved |
 | B17 | Embassy feature trimming | Resolved as not actionable |
@@ -59,17 +81,16 @@ cargo test --release -p keleusma-bench
 | B21 | Value-side IFC negative labels via product lattice | Deferred |
 | B22 | Sub-coroutines as callable ephemeral loops | Now load-bearing for V0.5.0 |
 | (candidate) | Multi-chunk and Stream-chunk bench specs to remove `Yield` and `Call` nominal fallback | Deferred |
-| (candidate) | Read N6 CPU clock from RCC at runtime instead of hardcoding 800 MHz | Deferred |
+| (candidate) | Read N6 CPU clock from RCC at runtime | Deferred |
 | (candidate) | Slab or bump allocator on the N6 to restore larger bench repetition counts | Deferred |
-| (candidate) | Embedded bench reads `KELEUSMA_BENCH_CPU_HZ` via `option_env!` at compile time | Deferred |
-| (candidate) | Thread explicit `cpu_hz` through counter constructors so `env::set_var` is no longer required | Deferred |
+| (candidate) | Capture N6 hardware run with WCET report appearing in defmt output | Deferred |
 
 ## Intended Next Step
 
-The bench tooling is now fully configurable for arbitrary host CPU clocks. The natural next step is one of:
+The measured cost-model artefacts are now integrated end-to-end: generation, documentation, standalone example, and headline-example wiring. The natural next step is one of:
 
-- Generate cost-model fragments for additional host architectures.
+- Capture N6 hardware run of the three-task demonstrator with the WCET boot report appearing in defmt RTT output.
 - Resume V0.3.0 self-hosting implementation (Lexer migration first per the incremental ordering).
-- Read the N6 CPU clock from RCC at runtime to remove the hardcoded assumption.
 - B15 follow-on: remove `Type::Unknown` entirely.
+- Generate cost-model fragments for x86_64-unknown-linux-gnu or other host architectures.
 - Operator selection of a different directive.

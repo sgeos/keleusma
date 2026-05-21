@@ -17,6 +17,12 @@
 
 extern crate alloc;
 
+// The cost-model demo depends on `keleusma::verify`, which is
+// itself gated on the `verify` feature. The rtos's `keleusma-verify`
+// feature passes through. With verify off, the demo is unavailable;
+// the kernel and the rest of the lib continue to build.
+#[cfg(feature = "keleusma-verify")]
+pub mod cost_model;
 pub mod kernel;
 pub mod natives;
 pub mod platform;
