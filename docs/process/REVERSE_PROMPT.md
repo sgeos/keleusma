@@ -9,70 +9,85 @@ AI to Human communication channel.
 ## Last Updated
 
 **Date**: 2026-05-21
-**Status**: V0.2.0 pre-publish polish: top-level `README.md` and every file in `docs/guide/` audited and corrected. All identified inaccuracies and gaps closed. Verification: `cargo fmt --all -- --check` clean; the README quick-start compiles and runs end to end emitting `result: Int(42)`. The branch is publish-ready.
+**Status**: V0.2.0 pre-publish polish: Tier 1 through Tier 4 documentation audit complete. All identified inaccuracies and gaps closed. The branch is publish-ready.
 
 ## Completed in this session round
 
-### Top-level `README.md`
+### Tier 1 (first impression on crates.io)
 
-| Fix | Detail |
-|-----|--------|
-| Broken pattern-matching example | The `describe` function used a non-existent `format` native. Rewrote it to match an `enum Message { Body(Text), Code(Word) }` exhaustively without text-composition natives. |
-| Cargo feature table omission | Added the `signatures` row (Ed25519 signing surface introduced in V0.2.0) and the `sdl3-example` row. |
-| Narrow-runtime selectors | Added a one-line note pointing at the seven mutually-exclusive `narrow-word-*` / `narrow-address-*` / `narrow-float-32` parametric features. |
-| BACKLOG B10 reference | Reframed to acknowledge that the portability foundation is in place; added a forward pointer to the `narrow-*` cargo features. |
-| Examples section | Added a pointer to the new `examples/README.md` overview. |
-| Quick Start | Verified end to end; emits `result: Int(42)`. No change needed. |
+| File | Action |
+|------|--------|
+| `keleusma-arena/README.md` | Audited; no changes. |
+| `keleusma-macros/README.md` | Audited; no changes. |
+| `keleusma-bench/README.md` | Audited; no changes. |
+| `keleusma-cli/README.md` | Three V0.1.x surface call sites updated to V0.2.0: shebang example `fn main() -> i64` → `Word`, REPL transcript `fn double(x: i64) -> i64` → `Word`, REPL try-types list `i64, f64, bool, String, ()` → `Word, Float, bool, Text, ()` (matches `REPL_RETURN_TYPES` constant in source). |
+| `examples/README.md` | Audited; no changes. |
 
-### `docs/guide/` files
+### Tier 2 (RTOS demonstrator and standalone scripts)
 
-| File | Fix |
-|------|-----|
-| `README.md` | Removed `,text` from piano-roll and rogue command lines. Reframed the FAQ row from V0.1.x to V0.2.0. |
-| `GETTING_STARTED.md` | Bumped the embedding `Cargo.toml` snippet to `keleusma = "0.2"` and `keleusma-arena = "0.3"`. Stripped `text` from the piano-roll Next Steps command. |
-| `EMBEDDING.md` | Corrected "four bundled libraries" to "three" (the V0.1.x `stddsl::Text` bundle was retired). Replaced the `set_native_bounds` invocations that used invalid Rust named-parameter syntax with positional `(name, wcet, wcmu_bytes)`. |
-| `FAQ.md` | Rewrote the "Opaque types compile but cannot cross the native boundary" section to reflect the V0.2.0 `HostOpaque` first-class support. Removed the stale "Bytecode 0.1.0 was yanked" entry that no longer applies to V0.2.0 readers. |
-| `BIG_NUMBERS.md` | Replaced the "Division and modulo route to a stamped-zero-flag path" caveat with the V0.2.0 reality: dedicated `Op::CheckedDiv` and `Op::CheckedMod` with the `(h, l, flag)` shape; both `i64::MIN / -1` and `i64::MIN % -1` corners flag through the overflow arm. |
-| `PIANO_ROLL.md` | Dropped the `text` feature from the build instruction. Added a sentence noting that static string literals are unconditional in V0.2.0. |
-| `ROGUE.md` | Same `text`-feature removal. |
-| `WHY_REJECTED.md` | Audited; no changes needed. |
-| `COOKBOOK.md` | Audited; no changes needed. The `text::*` host-registered natives use a `text::` namespace prefix that collides historically with the retired V0.1.x `stddsl::Text` bundle name, but the prose correctly distinguishes them. |
+| File | Action |
+|------|--------|
+| `examples/rtos/README.md` | Two stale figures corrected: `memory.x` description (was 640 KB FLASH / 384 KB RAM at the wrong offset; current is 768 KB / 256 KB at `0x341C0000`) and trust-load image size (was ~192 KB; current is ~140 KB). |
+| `examples/scripts/07_fstring.kel` | Deleted. F-strings were retired in V0.2.0; the lexer rejects them at lex time. The script no longer ran. |
+| `examples/scripts/07_refinement.kel` | New. Worked example of `newtype Counter = Word where nonneg;` with literal elision and runtime construction check. Verified end to end: outputs `100`. |
+| `examples/scripts/README.md` | Updated 07 row to the new refinement example and the 01_arithmetic feature column to `Word, Float, bool` (was `i64, f64, bool`). |
+| `examples/rtos/MANUAL.md` | Audited; no changes. |
+| `examples/rtos/SPEC.md` | Audited; no changes. |
 
-### `docs/README.md`
+### Tier 3 (architecture, spec, reference)
 
-| Fix | Detail |
-|-----|--------|
-| FAQ Quick Reference row | Reframed from V0.1.x to V0.2.0. |
+| File | Action |
+|------|--------|
+| `docs/architecture/LANGUAGE_DESIGN.md` | Hindley-Milner bullet claimed `Type::Unknown` "remains as a transitional sentinel"; V0.2.0 closed B15 and removed it. Updated to describe the V0.2.0 reality (fresh `Type::Var` at every unannotated position) and reframed the section heading. |
+| `docs/spec/GRAMMAR.md` | Same H-M correction. Two "Opaque type support is partial in V0.1.x" sections rewritten to describe the V0.2.0 `HostOpaque` first-class surface (`Value::Opaque(Arc<dyn HostOpaque>)`, `host_arc`, `downcast_ref`). |
+| `docs/architecture/EXECUTION_MODEL.md` | Audited; no changes. |
+| `docs/architecture/COMPILATION_PIPELINE.md` | Audited; no changes. |
+| `docs/architecture/SUB_COROUTINES.md` | Audited; preliminary by design, no changes. |
+| `docs/spec/TYPE_SYSTEM.md` | Audited; no changes. |
+| `docs/spec/INSTRUCTION_SET.md` | Audited; no changes. |
+| `docs/spec/WIRE_FORMAT.md` | Audited; no changes. |
+| `docs/spec/STRUCTURAL_ISA.md` | Audited; no changes. |
+| `docs/spec/STANDARD_LIBRARY.md` | Audited; no changes. |
+| `docs/reference/GLOSSARY.md` | Audited; no changes. |
+| `docs/reference/RELATED_WORK.md` | Audited; no changes. |
+
+### Tier 4 (decisions, process, roadmap, extras)
+
+| File | Action |
+|------|--------|
+| `docs/decisions/PRIORITY.md` | One present-tense statement claiming `Value::DynStr` "remains for natives that do not need arena allocation"; V0.2.0 removed the variant. Added an inline V0.2.0 update note. |
+| `docs/decisions/BACKLOG.md` | Audited; no changes. Already carries explicit "V0.2.0 status." headers on items whose situation changed. |
+| `docs/decisions/RESOLVED.md` | Audited; no changes. Intentionally historical record. |
+| `docs/process/*.md` | Audited; no changes. |
+| `docs/roadmap/*.md` | Audited; no changes. |
+| `docs/extras/*.md` | Audited; no changes. |
 
 ## What the operator still owns
 
-- **Publish in dependency order.** `keleusma-macros 0.2.0` → `keleusma 0.2.0` → `keleusma-bench 0.2.0` + `keleusma-cli 0.2.0`. The arena 0.3.0 is already on crates.io and matches the local source.
-- **Tag the release.** `git tag v0.2.0 && git push --tags`.
-- **Decide B15.** Backlog "remove `Type::Unknown` entirely" remains under consideration. Recommendation: defer.
+- **Publish in dependency order.** `keleusma-macros 0.2.0` → `keleusma 0.2.0` → `keleusma-bench 0.2.0` + `keleusma-cli 0.2.0`. Commands documented earlier this session.
+- **Tag the release.** `git tag -a v0.2.0` and `git push origin v0.2.0`.
+- **Decide B15.** Already resolved per the CHANGELOG and the typecheck source; the operator can remove the deferral note in REVERSE_PROMPT once confirmed.
 
-## Verification matrix
+## Verification
 
 ```bash
-# README quick-start runs end to end
+# Local quickstart (top-level README) runs end to end
 ( cd /tmp/keleusma_quickstart_test && cargo run )
 # -> result: Int(42)
 
-# All workspace tests
-cargo test --workspace                                          # all pass (from prior round)
+# Refinement example (the replacement for 07_fstring.kel) runs
+cargo run -p keleusma-cli --bin keleusma -- run examples/scripts/07_refinement.kel
+# -> 100
 
-# Per-crate cargo doc under CI flags
-RUSTDOCFLAGS="-D warnings -A rustdoc::redundant-explicit-links" \
-  cargo doc -p keleusma --no-deps --features signatures,shell   # clean
-
-# Format and clippy
-cargo fmt --all -- --check                                      # clean
-cargo clippy --workspace --all-targets -- -D warnings           # clean (from prior round)
+# Format
+cargo fmt --all -- --check
+# clean
 ```
 
 ## Open concerns
 
-None blocking publish. Remaining items are either operator-owned (publish, tag, branch protection) or deferred (B15).
+None blocking publish.
 
 ## Intended Next Step
 
-V0.2.0 publish. The operator runs `cargo publish` in dependency order. After publish: `git tag v0.2.0 && git push --tags`.
+V0.2.0 publish. Operator runs `cargo publish` in dependency order.
