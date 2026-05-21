@@ -328,7 +328,11 @@ The MVP landed: literal-argument refinement elision. When a refined newtype cons
 
 All open items in the B13 entry are now resolved. The refinement-elision pass admits literal-folded arguments, let-bound integer constants, arithmetic on the above, function-parameter ranges (including refined-newtype and primitive Byte natural ranges), function-call return ranges (computed through a fixed-point pass with widening), and match-arm narrowed bindings.
 
-## B14. CallIndirect flow analysis for non-recursive closure invocation
+## ~~B14. CallIndirect flow analysis for non-recursive closure invocation~~ (Closed; not applicable after V0.2.0 Phase 4)
+
+V0.2.0 Phase 4 retired the closure surface and the four closure opcodes (`Op::CallIndirect`, `Op::PushFunc`, `Op::MakeClosure`, `Op::MakeRecursiveClosure`) along with the `Value::Func` runtime variant. There is no `Op::CallIndirect` site left for a flow analysis to admit; closure-shaped expressions are rejected at the type-checker stage with a diagnostic that names the construct. The historical investigation is preserved below for context.
+
+---
 
 The structural verifier's conservative-verification stance rejects programs containing `Op::CallIndirect` because the dispatch target is not statically known. For closures whose call sites are reachable from a finite set of `Op::PushFunc` and `Op::MakeClosure` instructions, a flow analysis could lift the rejection by tracking the points-to set of every indirect-dispatch site.
 
@@ -342,8 +346,6 @@ The structural verifier's conservative-verification stance rejects programs cont
 
 - Recursive closures (`Op::MakeRecursiveClosure`). The first-category rejection (unbounded recursion through indirect dispatch) remains; the analysis cannot lift it without separate termination arguments.
 - Closure dispatch through data segments or yields. The MVP analyses purely intra-chunk flow; closures stored in data segments or passed across yields require an interprocedural extension.
-
-Deferred to V0.3 per the design pass.
 
 ## ~~B15. Remove `Type::Unknown` entirely~~ (Resolved)
 

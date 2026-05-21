@@ -244,7 +244,7 @@ Existing entries B9 and B10 in the backlog reference the precompiled-code questi
 
 V0.2.0 publishes a new bytecode ISA and a new wire format. The framing-header `version` field resets to `1`. V0.1.x and V0.2.0 bytecode are not mutually loadable; existing artefacts must be recompiled against the V0.2.0 toolchain. The reset is acceptable because the V0.1.x line has narrow adoption.
 
-The ISA consolidates 71 V0.1.x opcodes to 65 V0.2.0 opcodes through a combination of removals, additions, splits, and operand narrowings. The full per-opcode listing lives in [INSTRUCTION_SET.md](../reference/INSTRUCTION_SET.md). The notable changes:
+The ISA consolidates 71 V0.1.x opcodes to 69 V0.2.0 opcodes through a combination of removals, additions, splits, and operand narrowings. The audit's aspirational target of 65 opcodes was missed by 4 because Consolidation B narrowed `Add` / `Sub` / `Mul` / `Neg` to `Byte` / `Fixed` / `Float` operand types rather than removing them. The full per-opcode listing lives in [INSTRUCTION_SET.md](../reference/INSTRUCTION_SET.md). The notable changes:
 
 - `PushImmediate(u8)` replaces `PushTrue`, `PushFalse`, `PushUnit`, and `PushNone`, and additionally encodes `Int(0)` through `Int(15)` inline. Operand values 0..3 select sentinels; 4..19 select small integers; 20..255 are reserved and indicate corruption.
 - The unchecked arithmetic opcodes (`Add`, `Sub`, `Mul`, `Neg`) are removed. Wrapping arithmetic is synthesized as the checked variant followed by `PopN(2)` to discard the unused high and flag outputs.
@@ -258,10 +258,10 @@ The ISA consolidates 71 V0.1.x opcodes to 65 V0.2.0 opcodes through a combinatio
 The wire format partitions the bytecode body into independently relocatable sections, each addressed by an offset and length in the framing header:
 
 - **Opcode stream.** Array of fixed-size 4-byte opcode records. Byte 0 is the `opcode_id` (low 7 bits) with the high bit serving as a per-record parity bit. Bytes 1-3 are the operand field, interpreted by opcode class.
-- **Operand pool.** Array of 8-byte aligned entries holding compound operands `(u16, u8)`, `(u16, u16)`, `(u16, u16, u8)` for the 7 opcodes that exceed the 24-bit inline operand field. Each entry carries a type tag and parity byte.
-- **Constant pool**, **chunk table**, **data layout** retain their existing roles as independently addressable sections.
+- **Operand pool.** Array of 8-byte aligned entries holding compound operands `(u16, u16)` and `(u16, u16, u8)` for the 4 opcodes whose payload exceeds three bytes (`GetDataIndexed`, `SetDataIndexed`, `IsEnum`, `NewEnum`). Each entry carries a type tag and parity byte. The `(u16, u8)` shape used by `Call`, `CallVerifiedNative`, and `CallExternalNative` lands inline because the `u8` fits in byte 3 of the opcode record.
+- **Auxiliary body** (rkyv-archived) carries the constant pool, struct templates, native names, and data layout as an independently addressable section.
 
-58 of 65 opcodes carry their operand inline in the 4-byte record. 7 opcodes reference the operand pool. The framing header grows from 24 bytes to 64 bytes to carry the new section offsets and lengths. The rkyv-archived encoding from R39 survives as an internal mechanism for cross-process module transport, but the execution loop consumes the fixed-size opcode + operand pool layout described above.
+65 of 69 opcodes carry their operand inline in the 4-byte record. 4 opcodes reference the operand pool. The framing header grows from 24 bytes to 64 bytes to carry the new section offsets and lengths. The rkyv-archived encoding from R39 survives as the internal representation for the auxiliary body, but the execution loop consumes the fixed-size opcode + operand pool layout described above.
 
 See [INSTRUCTION_SET.md](../reference/INSTRUCTION_SET.md) for the per-opcode specification and [EXECUTION_MODEL.md](../architecture/EXECUTION_MODEL.md) for the wire format details.
 
