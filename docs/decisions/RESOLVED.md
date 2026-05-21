@@ -309,3 +309,38 @@ Cargo gate: the `signatures` feature is off by default. Builds without it accept
 CLI: `keleusma compile script.kel --signing-key seed.bin -o script.kel.bin` produces a signed module when the source declares `signed` on the entry function. `keleusma run script.kel.bin --verifying-key key.pub` (repeatable) populates the runtime trust matrix. Both key files are raw 32-byte Ed25519 seed and public-key bytes respectively; key management is the host's responsibility.
 
 Phase 4 deferred. The original proposal coupled signature verification to information-flow labels (a verified module would acquire a privileged label that constrained data flow at the type level). This coupling was deferred to V0.3 or later because it conflates the static IFC type system with a dynamic load-time trust check. The two mechanisms are kept separate in V0.2.0: IFC labels remain static, and signature verification is a load-time policy gate that admits or refuses the module wholesale. A future proposal may add a typed surface for signature-derived trust, but it will live alongside the existing static labels rather than overloading them.
+
+## R43. Negative information-flow labels at parameter and return positions
+
+V0.2.0 extends the information-flow label surface with a *negative* form: `T@!Label` and `T@{!N1, !N2}`. Negative labels are admissible only at function parameter and return type positions, including native `use` declarations and impl-method signatures. They express the boundary clause "no value carrying any of these labels may flow through this position." Mixed positive-and-negative sets are rejected at parse time.
+
+The motivating use case is multi-party module delivery to embedded targets. A native function that transmits to a downstream consumer wants to refuse Secret-tagged payloads without listing every other admissible label: `use host::log_open(payload: Word@!MissionSecret) -> ()` admits any label except MissionSecret. The existing positive-label rule (upper-bound semantics) cannot express this directly because the universe of labels is open.
+
+**Semantics.** A label set on a parameter or return type either lists positives (existing) or lists negatives (new). Negative labels split into two independent clauses:
+
+- The positive-label upper-bound rule is relaxed when negatives are present. A negative-label parameter or return position admits any source label not in the negative set.
+- The negative-disjoint clause runs at the boundary: `source.labels ∩ parameter.negative_labels = ∅`. A non-empty intersection rejects the boundary crossing with a diagnostic naming the offending label.
+
+The four boundary points where the rule fires are: function call argument check (call-site), function return statement (return-site), every `yield expr` inside the function body (yield-site), and every host-driven resume that re-enters the function (modeled by treating the parameter type's negatives as enforced at compile time on the resume value's static type, where the compile-time type system can reach the value). Inside the function body, negative labels do not propagate as a labelled type through the lattice; they are pure boundary clauses.
+
+**Surface forms.**
+
+- `T@Label` (existing): single positive label.
+- `T@{L1, L2}` (existing): multiple positive labels.
+- `T@!Label`: single negative label.
+- `T@{!N1, !N2}`: multiple negative labels.
+- `T@{L1, !N1}`: mixed; rejected at parse time.
+
+**Restricted positions.** V0.2.0 admits negative labels only at the top level of:
+
+- Function parameter type annotations (`fn`, `yield`, `loop`, and impl-method parameters).
+- Function return type annotations on the same.
+- `use` declaration parameter and return types for native signatures.
+
+Negative labels at any other position (let bindings, struct fields, enum payloads, tuple components, array elements, option payloads, `classify`/`declassify` expressions, generic argument positions) are rejected with a diagnostic naming the offending span.
+
+**Lattice composition.** The label lattice on values (positive labels propagated through arithmetic, branching, classify, and declassify) is unchanged. Negative labels are not carried by values; they live entirely in the type-checker's boundary-check layer. The product-lattice extension that would track absence guarantees on values is deferred (see B21).
+
+**Implementation.** AST gains `TypeExpr::NegativeLabelled(inner, labels, span)` parallel to `TypeExpr::Labelled`. The parser produces it for `T@!Label` and `T@{!N1, ...}` forms; mixed sets are rejected at parse time. The type checker extracts top-level negatives at signature collection (stored on `FnSig::param_negative_labels` and `FnSig::return_negative_labels`) and runs a validation walk that rejects `NegativeLabelled` at every other position. Boundary clauses are wired into the call-site path (regular and native), the function-body return check, and the `Expr::Yield` handler.
+
+**Cross-references.** `B21` records the value-side product-lattice extension as deferred future work. The mothership-to-daughtership scenario in `secret/MOTHERSHIP_DAUGHTERSHIP.md` is the strongest motivating use case for the eventual value-side extension; the V0.2.0 parameter-position form covers the immediate signing-related use cases.

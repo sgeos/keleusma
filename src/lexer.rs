@@ -285,12 +285,15 @@ impl<'a> Lexer<'a> {
                         span: self.span_from(start, start_line, start_col),
                     })
                 } else {
-                    Err(self.error(
-                        String::from("unexpected character '!'"),
-                        start,
-                        start_line,
-                        start_col,
-                    ))
+                    // Bare `!`. Admissible in V0.2.0 only as the
+                    // negative-label prefix inside information-flow
+                    // label sets at parameter and return type
+                    // positions. The parser rejects out-of-position
+                    // appearances; the lexer just emits the token.
+                    Ok(Token {
+                        kind: TokenKind::Bang,
+                        span: self.span_from(start, start_line, start_col),
+                    })
                 }
             }
 
@@ -1214,9 +1217,14 @@ mod tests {
     }
 
     #[test]
-    fn error_bare_bang() {
-        let result = tokenize("! foo");
-        assert!(result.is_err());
+    fn bare_bang_lexes_to_bang_token() {
+        // V0.2.0 admits bare `!` as a token (negative-label
+        // prefix in `T@!Label` and `T@{!N, ...}` syntax). The
+        // pre-V0.2.0 lexer rejected it; the test is rewritten to
+        // pin the new behaviour. Out-of-position appearances are
+        // rejected at the parser, not the lexer.
+        let tokens = tokenize("! foo").expect("lex");
+        assert!(matches!(tokens[0].kind, TokenKind::Bang));
     }
 
     #[test]

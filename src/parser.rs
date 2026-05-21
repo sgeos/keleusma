@@ -58,6 +58,14 @@ pub fn parse(tokens: &[Token]) -> Result<Program, ParseError> {
     parser.parse_program()
 }
 
+/// Result of parsing an information-flow label spec attached to
+/// a type expression. The two variants are exclusive: V0.2.0
+/// rejects mixed positive-and-negative sets at parse time.
+enum LabelSpec {
+    Positive(Vec<String>),
+    Negative(Vec<String>),
+}
+
 /// Recursive descent parser for Keleusma.
 struct Parser<'a> {
     tokens: &'a [Token],
@@ -1602,7 +1610,19 @@ impl<'a> Parser<'a> {
             self.bump();
             let value = self.parse_postfix_expr()?;
             self.expect(&TokenKind::At)?;
-            let labels = self.parse_label_spec()?;
+            let spec = self.parse_label_spec()?;
+            let labels = match spec {
+                LabelSpec::Positive(labels) => labels,
+                LabelSpec::Negative(_) => {
+                    return Err(self.error(
+                        if is_classify {
+                            "negative information-flow labels are not admitted in `classify` expressions; classify operates on positive labels only"
+                        } else {
+                            "negative information-flow labels are not admitted in `declassify` expressions; declassify operates on positive labels only"
+                        },
+                    ));
+                }
+            };
             let span = merge_spans(tok.span, self.prev_span());
             return if is_classify {
                 Ok(Expr::Classify {
@@ -2003,36 +2023,68 @@ impl<'a> Parser<'a> {
         self.leave_depth();
         let inner = result?;
         // Attach an information-flow label set when one is
-        // present. The surface form is `T@Label` for a single
-        // label or `T@{L1, L2, ...}` for multiple labels.
+        // present. Surface forms:
+        //   T@Label             — single positive label.
+        //   T@!Label            — single negative label.
+        //   T@{L1, L2, ...}     — multiple positive labels.
+        //   T@{!N1, !N2, ...}   — multiple negative labels.
+        //   T@{L1, !N1}         — mixed; rejected at parse time.
+        // Negative labels are admissible only at parameter and
+        // return type positions; the type checker enforces that
+        // restriction on the resulting AST node.
         if self.eat(&TokenKind::At) {
-            let labels = self.parse_label_spec()?;
+            let spec = self.parse_label_spec()?;
             let span = merge_spans(inner.span(), self.prev_span());
-            Ok(TypeExpr::Labelled(
-                alloc::boxed::Box::new(inner),
-                labels,
-                span,
-            ))
+            match spec {
+                LabelSpec::Positive(labels) => Ok(TypeExpr::Labelled(
+                    alloc::boxed::Box::new(inner),
+                    labels,
+                    span,
+                )),
+                LabelSpec::Negative(labels) => Ok(TypeExpr::NegativeLabelled(
+                    alloc::boxed::Box::new(inner),
+                    labels,
+                    span,
+                )),
+            }
         } else {
             Ok(inner)
         }
     }
 
-    fn parse_label_spec(&mut self) -> Result<Vec<String>, ParseError> {
+    fn parse_label_spec(&mut self) -> Result<LabelSpec, ParseError> {
         if self.eat(&TokenKind::LBrace) {
-            let mut labels = Vec::new();
+            let mut positives: Vec<String> = Vec::new();
+            let mut negatives: Vec<String> = Vec::new();
             while !self.at(&TokenKind::RBrace) {
-                let (name, _) = self.expect_upper_ident()?;
-                labels.push(name);
+                if self.eat(&TokenKind::Bang) {
+                    let (name, _) = self.expect_upper_ident()?;
+                    negatives.push(name);
+                } else {
+                    let (name, _) = self.expect_upper_ident()?;
+                    positives.push(name);
+                }
                 if !self.eat(&TokenKind::Comma) {
                     break;
                 }
             }
             self.expect(&TokenKind::RBrace)?;
-            Ok(labels)
+            if !positives.is_empty() && !negatives.is_empty() {
+                return Err(self.error(
+                    "mixed positive and negative information-flow labels in the same set are not admitted in V0.2.0; remove either the positives or the negatives",
+                ));
+            }
+            if !negatives.is_empty() {
+                Ok(LabelSpec::Negative(negatives))
+            } else {
+                Ok(LabelSpec::Positive(positives))
+            }
+        } else if self.eat(&TokenKind::Bang) {
+            let (name, _) = self.expect_upper_ident()?;
+            Ok(LabelSpec::Negative(alloc::vec![name]))
         } else {
             let (name, _) = self.expect_upper_ident()?;
-            Ok(alloc::vec![name])
+            Ok(LabelSpec::Positive(alloc::vec![name]))
         }
     }
 

@@ -254,6 +254,25 @@ impl Type {
                     }
                 }
             }
+            TypeExpr::NegativeLabelled(inner, _, _) => {
+                // Negative labels do not propagate as a labelled type
+                // through the lattice. They are a boundary clause
+                // enforced by the type checker at parameter, return,
+                // resume, and yield positions. At this conversion
+                // site we keep only the underlying type; the
+                // negative-label list is extracted by the
+                // function-signature collection pass and stored
+                // alongside the FnSig's params/return for later
+                // boundary checks. Out-of-position appearances of
+                // `NegativeLabelled` are caught by a separate
+                // validation walk.
+                Type::from_expr_with_params_and_frac(
+                    inner,
+                    defined_types,
+                    type_params,
+                    fixed_default_frac_bits,
+                )
+            }
         }
     }
 
@@ -548,6 +567,143 @@ fn strip_labels(t: Type) -> Type {
     }
 }
 
+/// Extract the top-level negative-label set from a [`TypeExpr`].
+/// Returns the set of labels declared via `T@!Label` or
+/// `T@{!N1, !N2}` at the outermost type position. Returns an
+/// empty set when the type expression has no top-level
+/// [`TypeExpr::NegativeLabelled`] wrapper.
+///
+/// Used at function-signature collection time to record per-
+/// parameter and per-return negative-label sets on the [`FnSig`].
+/// Negative labels at nested positions (inside `Tuple`, `Array`,
+/// `Option`, etc.) are not extracted here; they are detected and
+/// rejected by [`validate_no_nested_negative_labels`].
+fn top_level_negative_labels(t: &TypeExpr) -> BTreeSet<String> {
+    match t {
+        TypeExpr::NegativeLabelled(_, labels, _) => labels.iter().cloned().collect(),
+        _ => BTreeSet::new(),
+    }
+}
+
+/// Boundary check at a call site or return position: the
+/// argument or returned value must not carry any of the
+/// declared negative labels on the parameter or return type.
+/// The check intersects the value's positive label set with the
+/// declared negatives; a non-empty intersection rejects the
+/// boundary crossing with a diagnostic naming the offending
+/// labels.
+fn check_negative_labels_against_arg(
+    callee_name: &str,
+    param_index: usize,
+    arg_ty: &Type,
+    param_negative_labels: &[BTreeSet<String>],
+    span: Span,
+) -> Result<(), TypeError> {
+    let negatives = match param_negative_labels.get(param_index) {
+        Some(set) if !set.is_empty() => set,
+        _ => return Ok(()),
+    };
+    let arg_labels = labels_of(arg_ty);
+    let intersection: BTreeSet<String> = arg_labels.intersection(negatives).cloned().collect();
+    if !intersection.is_empty() {
+        let mut sorted: Vec<&String> = intersection.iter().collect();
+        sorted.sort();
+        let names: Vec<String> = sorted.iter().map(|s| s.to_string()).collect();
+        return Err(TypeError::new(
+            alloc::format!(
+                "argument {} to `{}` carries the label `{}` which the parameter's `!`-prefix declaration forbids",
+                param_index + 1,
+                callee_name,
+                names.join(", "),
+            ),
+            span,
+        ));
+    }
+    Ok(())
+}
+
+/// Boundary check at a return statement or yield expression: the
+/// value flowing out must not carry any of the function's
+/// declared return-type negative labels. Same semantics as
+/// [`check_negative_labels_against_arg`] applied at the outbound
+/// boundary.
+fn check_negative_labels_against_return(
+    context_description: &str,
+    value_ty: &Type,
+    return_negative_labels: &BTreeSet<String>,
+    span: Span,
+) -> Result<(), TypeError> {
+    if return_negative_labels.is_empty() {
+        return Ok(());
+    }
+    let value_labels = labels_of(value_ty);
+    let intersection: BTreeSet<String> = value_labels
+        .intersection(return_negative_labels)
+        .cloned()
+        .collect();
+    if !intersection.is_empty() {
+        let mut sorted: Vec<&String> = intersection.iter().collect();
+        sorted.sort();
+        let names: Vec<String> = sorted.iter().map(|s| s.to_string()).collect();
+        return Err(TypeError::new(
+            alloc::format!(
+                "{} carries the label `{}` which the function's return-type `!`-prefix declaration forbids",
+                context_description,
+                names.join(", "),
+            ),
+            span,
+        ));
+    }
+    Ok(())
+}
+
+/// Walk a [`TypeExpr`] tree and produce a diagnostic for any
+/// [`TypeExpr::NegativeLabelled`] wrapper found at a nested
+/// position. The caller supplies the outermost position so the
+/// helper can distinguish admissible top-level negatives at
+/// parameter and return types from inadmissible nested
+/// occurrences inside tuples, arrays, options, and named
+/// composites.
+///
+/// V0.2.0 admits negative labels only at top-level parameter and
+/// return type positions. Every other type position rejects them
+/// with a diagnostic naming the offending span.
+fn validate_no_nested_negative_labels(
+    t: &TypeExpr,
+    at_top_level_allowed_position: bool,
+) -> Result<(), TypeError> {
+    match t {
+        TypeExpr::NegativeLabelled(inner, _, span) => {
+            if !at_top_level_allowed_position {
+                return Err(TypeError {
+                    message: String::from(
+                        "negative information-flow labels (`!Label`) are admissible only at the top level of a function parameter or return type; nested or non-parameter positions reject them",
+                    ),
+                    span: *span,
+                });
+            }
+            validate_no_nested_negative_labels(inner, false)
+        }
+        TypeExpr::Labelled(inner, _, _) => validate_no_nested_negative_labels(inner, false),
+        TypeExpr::Tuple(items, _) => {
+            for item in items {
+                validate_no_nested_negative_labels(item, false)?;
+            }
+            Ok(())
+        }
+        TypeExpr::Array(elem, _, _) | TypeExpr::Option(elem, _) => {
+            validate_no_nested_negative_labels(elem, false)
+        }
+        TypeExpr::Named(_, args, _) => {
+            for arg in args {
+                validate_no_nested_negative_labels(arg, false)?;
+            }
+            Ok(())
+        }
+        TypeExpr::Prim(_, _) | TypeExpr::Unit(_) => Ok(()),
+    }
+}
+
 /// Return the label set carried by a type. The empty set is
 /// returned for types without a `Labelled` wrapper.
 fn labels_of(t: &Type) -> BTreeSet<String> {
@@ -624,6 +780,20 @@ struct FnSig {
     type_param_bounds: Vec<Vec<String>>,
     params: Vec<Type>,
     return_type: Type,
+    /// Negative information-flow labels at each parameter type,
+    /// indexed in the same order as [`Self::params`]. Each inner
+    /// `BTreeSet<String>` carries the labels declared via
+    /// `T@!Label` or `T@{!N1, !N2}` on that parameter. Empty set
+    /// when the parameter type declares no negatives. The type
+    /// checker rejects a call site whose argument's positive
+    /// labels intersect a parameter's negative-label set.
+    param_negative_labels: Vec<BTreeSet<String>>,
+    /// Negative information-flow labels at the return type. Same
+    /// semantics as [`Self::param_negative_labels`] applied at the
+    /// return boundary: every `return expr` and `yield expr` in
+    /// the function body whose value's positive labels intersect
+    /// this set is rejected.
+    return_negative_labels: BTreeSet<String>,
 }
 
 /// A type-check error with source location.
@@ -707,6 +877,13 @@ struct Ctx {
     locals: Vec<BTreeMap<String, Type>>,
     /// Return type of the function currently being checked.
     current_return: Option<Type>,
+    /// Return-side negative-label set of the function currently
+    /// being checked. Populated by `check_function` from the
+    /// active function's `FnSig::return_negative_labels` and
+    /// consulted by the body's tail-return check and by every
+    /// `Expr::Yield` visited inside the body. Empty between
+    /// function checks.
+    current_return_negative_labels: BTreeSet<String>,
     /// Fresh type variable allocator for the Hindley-Milner pipeline.
     vargen: VarGen,
     /// Active substitution accumulating constraints solved so far.
@@ -740,6 +917,7 @@ impl Ctx {
             data: BTreeMap::new(),
             locals: Vec::new(),
             current_return: None,
+            current_return_negative_labels: BTreeSet::new(),
             vargen: VarGen::default(),
             subst: Subst::new(),
             fixed_default_frac_bits: DEFAULT_FIXED_FRAC_BITS,
@@ -1004,7 +1182,24 @@ fn check_native_call_with_signature(
     }
     for (i, (arg, expected)) in args.iter_mut().zip(sig.params.iter()).enumerate() {
         let arg_ty = type_of_expr(ctx, arg)?;
-        if !types_compatible(ctx, &arg_ty, expected) {
+        let has_negatives = sig
+            .param_negative_labels
+            .get(i)
+            .map(|s| !s.is_empty())
+            .unwrap_or(false);
+        // When the parameter declares negative labels, the
+        // positive-label upper-bound rule is relaxed: the
+        // structural compatibility check ignores the argument's
+        // positive labels (which are admissible up to the
+        // negative-disjoint constraint checked separately
+        // below). When the parameter has no negative labels,
+        // the existing positive-label rule applies as-is.
+        let (structural_arg_ty, structural_expected) = if has_negatives {
+            (strip_labels(arg_ty.clone()), strip_labels(expected.clone()))
+        } else {
+            (arg_ty.clone(), expected.clone())
+        };
+        if !types_compatible(ctx, &structural_arg_ty, &structural_expected) {
             return Err(TypeError::new(
                 alloc::format!(
                     "native `{}` argument {} expects {}, got {}",
@@ -1016,6 +1211,13 @@ fn check_native_call_with_signature(
                 arg.span(),
             ));
         }
+        check_negative_labels_against_arg(
+            name,
+            i,
+            &arg_ty,
+            &sig.param_negative_labels,
+            arg.span(),
+        )?;
     }
     Ok(sig.return_type.clone())
 }
@@ -1188,6 +1390,13 @@ fn run_check(program: &mut Program, mut ctx: Ctx) -> Result<(), TypeError> {
                 full
             };
             if let Some(sig) = &use_decl.signature {
+                for p in &sig.params {
+                    validate_no_nested_negative_labels(p, true)?;
+                }
+                validate_no_nested_negative_labels(&sig.return_type, true)?;
+                let param_negative_labels: Vec<BTreeSet<String>> =
+                    sig.params.iter().map(top_level_negative_labels).collect();
+                let return_negative_labels = top_level_negative_labels(&sig.return_type);
                 let params: Vec<Type> = sig.params.iter().map(|t| ctx.resolve_type(t)).collect();
                 let return_type = ctx.resolve_type(&sig.return_type);
                 ctx.native_signatures.insert(
@@ -1198,6 +1407,8 @@ fn run_check(program: &mut Program, mut ctx: Ctx) -> Result<(), TypeError> {
                         type_param_bounds: Vec::new(),
                         params,
                         return_type,
+                        param_negative_labels,
+                        return_negative_labels,
                     },
                 );
             }
@@ -1226,6 +1437,25 @@ fn run_check(program: &mut Program, mut ctx: Ctx) -> Result<(), TypeError> {
             tp_names.push(tp.name.clone());
             tp_bounds.push(tp.bounds.clone());
         }
+        // Validate that no negative-label wrapper appears at a
+        // nested position inside the function's signature. Only
+        // the top-level wrapper on each parameter and on the
+        // return type is admissible in V0.2.0.
+        for p in &func.params {
+            if let Some(t) = &p.type_expr {
+                validate_no_nested_negative_labels(t, true)?;
+            }
+        }
+        validate_no_nested_negative_labels(&func.return_type, true)?;
+        let param_negative_labels: Vec<BTreeSet<String>> = func
+            .params
+            .iter()
+            .map(|p| match &p.type_expr {
+                Some(t) => top_level_negative_labels(t),
+                None => BTreeSet::new(),
+            })
+            .collect();
+        let return_negative_labels = top_level_negative_labels(&func.return_type);
         let params: Vec<Type> = func
             .params
             .iter()
@@ -1243,6 +1473,8 @@ fn run_check(program: &mut Program, mut ctx: Ctx) -> Result<(), TypeError> {
                 type_param_bounds: tp_bounds,
                 params,
                 return_type,
+                param_negative_labels,
+                return_negative_labels,
             },
         );
     }
@@ -1361,6 +1593,21 @@ fn run_check(program: &mut Program, mut ctx: Ctx) -> Result<(), TypeError> {
                 tp_names.push(tp.name.clone());
                 tp_bounds.push(tp.bounds.clone());
             }
+            for p in &method.params {
+                if let Some(t) = &p.type_expr {
+                    validate_no_nested_negative_labels(t, true)?;
+                }
+            }
+            validate_no_nested_negative_labels(&method.return_type, true)?;
+            let param_negative_labels: Vec<BTreeSet<String>> = method
+                .params
+                .iter()
+                .map(|p| match &p.type_expr {
+                    Some(t) => top_level_negative_labels(t),
+                    None => BTreeSet::new(),
+                })
+                .collect();
+            let return_negative_labels = top_level_negative_labels(&method.return_type);
             let params: Vec<Type> = method
                 .params
                 .iter()
@@ -1378,6 +1625,8 @@ fn run_check(program: &mut Program, mut ctx: Ctx) -> Result<(), TypeError> {
                     type_param_bounds: tp_bounds,
                     params,
                     return_type,
+                    param_negative_labels,
+                    return_negative_labels,
                 },
             );
         }
@@ -1574,13 +1823,38 @@ fn check_function(ctx: &mut Ctx, func: &mut FunctionDef) -> Result<(), TypeError
     // functions, an absent tail is admissible. The declared return
     // type is pushed as the expected type so refinement-driven
     // saturate keywords inside the tail can consult it.
+    // Stash the function's return-side negative-label set on the
+    // context so `Expr::Yield` and the body's tail return can
+    // consult it without re-resolving the function's name. The
+    // outer scope's value is restored on exit.
+    let prev_return_negatives = ctx.current_return_negative_labels.clone();
+    ctx.current_return_negative_labels = ctx
+        .functions
+        .get(&func.name)
+        .map(|s| s.return_negative_labels.clone())
+        .unwrap_or_default();
     ctx.push_expected(return_type.clone());
     let body_result = type_of_block(ctx, &mut func.body);
     ctx.pop_expected();
     let body_type = body_result?;
-    if !types_compatible(ctx, &body_type, &return_type) {
+    // When the function's return type declares negative labels,
+    // the positive-label upper-bound rule is relaxed: any
+    // positive labels on the body's return value are admissible
+    // up to the negative-disjoint clause checked separately
+    // below.
+    let has_return_negatives = !ctx.current_return_negative_labels.is_empty();
+    let (struct_body, struct_return) = if has_return_negatives {
+        (
+            strip_labels(body_type.clone()),
+            strip_labels(return_type.clone()),
+        )
+    } else {
+        (body_type.clone(), return_type.clone())
+    };
+    if !types_compatible(ctx, &struct_body, &struct_return) {
         ctx.pop_scope();
         ctx.current_return = None;
+        ctx.current_return_negative_labels = prev_return_negatives;
         // Display the body type with the latest substitution applied so
         // the user sees the most-resolved form.
         let body_resolved = body_type.apply(&ctx.subst);
@@ -1595,8 +1869,23 @@ fn check_function(ctx: &mut Ctx, func: &mut FunctionDef) -> Result<(), TypeError
             func.body.span,
         ));
     }
+    // Return-side negative-label boundary clause. The function's
+    // declared `return-type@!Label` set rejects body tails whose
+    // value carries any of those labels.
+    if let Err(e) = check_negative_labels_against_return(
+        &alloc::format!("function `{}` body return value", func.name),
+        &body_type,
+        &ctx.current_return_negative_labels,
+        func.body.span,
+    ) {
+        ctx.pop_scope();
+        ctx.current_return = None;
+        ctx.current_return_negative_labels = prev_return_negatives;
+        return Err(e);
+    }
     ctx.pop_scope();
     ctx.current_return = None;
+    ctx.current_return_negative_labels = prev_return_negatives;
     // Apply the substitution accumulated during this function check
     // back to the function's parameter types so the global FnSig
     // entry reflects any inference performed against unannotated
@@ -2126,6 +2415,14 @@ fn check_stmt(ctx: &mut Ctx, stmt: &mut Stmt) -> Result<(), TypeError> {
                 let pre_ty = ctx.vargen.fresh();
                 scope.insert(name.clone(), pre_ty);
             }
+            // Let-binding type annotations forbid the negative-
+            // label wrapper at any depth. Negatives are admissible
+            // only at the top level of function parameter and
+            // return type positions; a `let x: Word@!Secret = ...`
+            // is rejected at the annotation span.
+            if let Some(t) = &let_stmt.type_expr {
+                validate_no_nested_negative_labels(t, false)?;
+            }
             // Bidirectional check: if the binding has a type annotation,
             // resolve it and push onto the expected-type stack so that
             // refinement-driven keywords (saturate_max / saturate_min)
@@ -2580,9 +2877,24 @@ fn type_of_expr(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError> {
             // type variables before unifying with actual argument
             // types. For non-generic functions this is a no-op clone.
             let (inst_params, inst_return, fresh_vars) = instantiate_sig(ctx, &sig);
-            for (arg, param_ty) in args.iter_mut().zip(inst_params.iter()) {
+            for (i, (arg, param_ty)) in args.iter_mut().zip(inst_params.iter()).enumerate() {
                 let arg_ty = type_of_expr(ctx, arg)?;
-                if !types_compatible(ctx, &arg_ty, param_ty) {
+                let has_negatives = sig
+                    .param_negative_labels
+                    .get(i)
+                    .map(|s| !s.is_empty())
+                    .unwrap_or(false);
+                // When the parameter declares negative labels,
+                // the positive-label upper-bound rule is relaxed
+                // (any positive labels except the explicitly
+                // forbidden ones are admissible). The
+                // negative-disjoint clause runs separately below.
+                let (structural_arg, structural_param) = if has_negatives {
+                    (strip_labels(arg_ty.clone()), strip_labels(param_ty.clone()))
+                } else {
+                    (arg_ty.clone(), param_ty.clone())
+                };
+                if !types_compatible(ctx, &structural_arg, &structural_param) {
                     return Err(TypeError::new(
                         format!(
                             "argument to `{}` expects {}, got {}",
@@ -2593,6 +2905,16 @@ fn type_of_expr(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError> {
                         arg.span(),
                     ));
                 }
+                // Negative-label boundary clause. The parameter's
+                // declared `!Label` set forbids the argument from
+                // carrying any of those labels in its positive set.
+                check_negative_labels_against_arg(
+                    name,
+                    i,
+                    &arg_ty,
+                    &sig.param_negative_labels,
+                    arg.span(),
+                )?;
             }
             // Validate trait bounds on type parameters now that the
             // substitution has been recorded by argument unification.
@@ -2693,8 +3015,20 @@ fn type_of_expr(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError> {
                 ))
             }
         }
-        Expr::Yield { value, .. } => {
-            let _ = type_of_expr(ctx, value)?;
+        Expr::Yield { value, span } => {
+            let value_ty = type_of_expr(ctx, value)?;
+            // The yielded value crosses the script-to-host
+            // boundary as an output. The active function's
+            // return-side negative-label set applies: a yielded
+            // value cannot carry a label the function declares it
+            // never returns.
+            let return_negatives = ctx.current_return_negative_labels.clone();
+            check_negative_labels_against_return(
+                "yielded value",
+                &value_ty,
+                &return_negatives,
+                *span,
+            )?;
             // Yield's expression value (received from host on resume)
             // cannot be statically typed without dialogue annotations.
             Ok(ctx.fresh())
@@ -5229,5 +5563,152 @@ mod tests {
         // accepts; the verifier (in a later phase) will check the
         // ephemerality proof.
         check_src("ephemeral fn main() -> Word { 0 }").expect("typecheck accepts ephemeral main");
+    }
+
+    // --- Negative IFC labels (R43) -------------------------
+
+    #[test]
+    fn negative_label_single_shorthand_parses_and_admits_unlabelled_arg() {
+        // `Word@!Secret` on a native parameter admits any source
+        // labels except Secret. The bare `0` literal carries no
+        // labels and flows in cleanly.
+        check_src(
+            "use host::transmit(Word@!Secret) -> ()\n\
+             fn main() -> Word { host::transmit(0); 0 }",
+        )
+        .expect("unlabelled arg admitted by negative-label param");
+    }
+
+    #[test]
+    fn negative_label_braced_form_admits_unlabelled_arg() {
+        check_src(
+            "use host::transmit(Word@{!Secret}) -> ()\n\
+             fn main() -> Word { host::transmit(0); 0 }",
+        )
+        .expect("unlabelled arg admitted by negative-label param");
+    }
+
+    #[test]
+    fn negative_label_multi_braced_admits_unlabelled_arg() {
+        check_src(
+            "use host::transmit(Word@{!Secret, !Internal}) -> ()\n\
+             fn main() -> Word { host::transmit(0); 0 }",
+        )
+        .expect("unlabelled arg admitted by multi-negative param");
+    }
+
+    #[test]
+    fn negative_label_rejects_call_carrying_forbidden_label() {
+        // The argument is explicitly classified with `Secret`;
+        // the parameter forbids it.
+        let err = check_src(
+            "use host::transmit(Word@!Secret) -> ()\n\
+             fn main() -> Word { host::transmit(classify 0@Secret); 0 }",
+        )
+        .unwrap_err();
+        assert!(
+            err.message.contains("Secret") && err.message.contains("forbids"),
+            "expected negative-label rejection diagnostic, got: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn negative_label_admits_unrelated_label() {
+        // The parameter forbids Secret. An argument labelled
+        // `Open` (a different label) flows in cleanly.
+        check_src(
+            "use host::transmit(Word@!Secret) -> ()\n\
+             fn main() -> Word { host::transmit(classify 0@Open); 0 }",
+        )
+        .expect("unrelated label admitted by negative param");
+    }
+
+    #[test]
+    fn mixed_positive_and_negative_in_set_is_parse_error() {
+        let tokens = tokenize(
+            "use host::transmit(Word@{Signed, !Secret}) -> ()\n\
+             fn main() -> Word { host::transmit(0); 0 }",
+        )
+        .expect("lex");
+        let err = crate::parser::parse(&tokens).expect_err("mixed set must parse-fail");
+        assert!(
+            err.message.contains("mixed")
+                && err.message.contains("positive")
+                && err.message.contains("negative"),
+            "expected mixed-set diagnostic, got: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn negative_label_at_let_binding_position_rejected() {
+        // V0.2.0 admits negatives only at parameter and return
+        // top-level positions. A `let` binding with a
+        // negative-label annotation must be rejected.
+        let err = check_src("fn main() -> Word { let x: Word@!Secret = 0; x }").unwrap_err();
+        assert!(
+            err.message.contains("negative information-flow labels"),
+            "expected nested-negative rejection diagnostic, got: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn negative_label_inside_tuple_at_param_position_rejected() {
+        // A negative-label wrapper inside a tuple at a parameter
+        // position is rejected because the wrapper is nested.
+        let err = check_src(
+            "use host::pair_in((Word@!Secret, Word)) -> ()\n\
+             fn main() -> Word { host::pair_in((0, 0)); 0 }",
+        )
+        .unwrap_err();
+        assert!(
+            err.message.contains("negative information-flow labels"),
+            "expected nested-negative rejection diagnostic, got: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn negative_label_on_return_type_rejects_yielded_secret() {
+        // The function declares its return type as `!Secret`.
+        // Yielding a Secret-labelled value must be rejected at
+        // the yield site.
+        let err = check_src(
+            "loop main(input: Word) -> Word@!Secret {\n\
+                let _ = yield classify 0@Secret;\n\
+                0\n\
+             }",
+        )
+        .unwrap_err();
+        assert!(
+            err.message.contains("yielded value") && err.message.contains("forbids"),
+            "expected yield-side negative rejection, got: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn negative_label_on_return_type_rejects_returned_secret() {
+        // The function declares `-> Word@!Secret` and the body
+        // tail produces a Secret-labelled value.
+        let err = check_src("fn main() -> Word@!Secret { classify 0@Secret }").unwrap_err();
+        assert!(
+            err.message.contains("body return value") && err.message.contains("forbids"),
+            "expected return-side negative rejection, got: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn negative_label_in_classify_rejected_at_parse() {
+        let tokens = tokenize("fn main() -> Word { let x = classify 0@!Secret; x }").expect("lex");
+        let err = crate::parser::parse(&tokens).expect_err("classify+negative parse-rejected");
+        assert!(
+            err.message.contains("classify"),
+            "expected classify-rejection diagnostic, got: {}",
+            err.message
+        );
     }
 }

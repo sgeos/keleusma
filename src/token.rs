@@ -122,6 +122,15 @@ pub enum TokenKind {
     LtEq,
     GtEq,
 
+    /// `!` punctuation. Distinct from the `not` keyword
+    /// ([`TokenKind::Not`]) and from `!=` ([`TokenKind::NotEq`]).
+    /// V0.2.0 admits this token only as the negative-label prefix
+    /// inside information-flow label sets at parameter and return
+    /// type positions: `T@!Label` or `T@{!N1, !N2}`. The lexer
+    /// emits the token unconditionally; the parser rejects it
+    /// outside its admissible positions.
+    Bang,
+
     // Assignment
     Eq,
 

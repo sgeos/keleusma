@@ -782,6 +782,7 @@ fn type_arg_canonical(t: &TypeExpr) -> String {
         }
         TypeExpr::Option(inner, _) => format!("opt_{}", type_arg_canonical(inner)),
         TypeExpr::Labelled(inner, _, _) => type_arg_canonical(inner),
+        TypeExpr::NegativeLabelled(inner, _, _) => type_arg_canonical(inner),
     }
 }
 
@@ -987,6 +988,7 @@ fn type_head_for_impl(ty: &TypeExpr) -> String {
         TypeExpr::Array(_, _, _) => "array".to_string(),
         TypeExpr::Option(_, _) => "Option".to_string(),
         TypeExpr::Labelled(inner, _, _) => type_head_for_impl(inner),
+        TypeExpr::NegativeLabelled(inner, _, _) => type_head_for_impl(inner),
     }
 }
 
@@ -1020,6 +1022,11 @@ fn subst_type_expr(t: &TypeExpr, subst: &BTreeMap<String, TypeExpr>) -> TypeExpr
             TypeExpr::Option(Box::new(subst_type_expr(inner, subst)), *span)
         }
         TypeExpr::Labelled(inner, labels, span) => TypeExpr::Labelled(
+            Box::new(subst_type_expr(inner, subst)),
+            labels.clone(),
+            *span,
+        ),
+        TypeExpr::NegativeLabelled(inner, labels, span) => TypeExpr::NegativeLabelled(
             Box::new(subst_type_expr(inner, subst)),
             labels.clone(),
             *span,

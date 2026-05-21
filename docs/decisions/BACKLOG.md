@@ -630,3 +630,48 @@ The implementation lands as a sequence of commits on the V0.2.0 publication bran
 | 7b | `wire_format::module_to_wire_bytes` and `module_from_wire_bytes` round-trip an entire `Module` through the section-partitioned body (opcode stream + operand pool + rkyv-archived auxiliary body). New `WireChunk` and `WireAuxBody` types. Round-trip tests cover empty/minimal/branchy/pool-using/Stream programs plus BadMagic, BadChecksum, Truncated, and shebang paths. `Module::to_bytes` and `Module::from_bytes` continue to route through rkyv pending the Phase 7c cutover. | Done |
 | 7c | Default `Module::to_bytes` / `Module::from_bytes` / `Module::access_bytes` cut over to the wire-format codec; `access_bytes` returns `&ArchivedWireAuxBody`; VM zero-copy and ops-decode walk the section-partitioned body. `op_from_archived`, the legacy 32-byte framing header, and the legacy CRC residue constants retired. Golden bytes test refreshed to the V0.2.0 byte sequence; `zero_copy_demo.kel.bin` fixture regenerated. | Done |
 | 8 | Documentation alignment with the V0.2.0 ISA: FAQ and cookbook text section rewritten; closure entries in FAQ and WHY_REJECTED point at the type-checker rejection rather than the load-time verifier; bundled-natives surface updated to reflect `register_utility_natives` shrinking to `println`. `BYTECODE_VERSION` re-affirmed at 1. `Archive`, `Serialize`, `Deserialize` derives dropped from `Module`, `Chunk`, and `Op` now that the wire format owns serialization. Stale piano_roll `.kel.bin` fixtures removed from the repo. | Done |
+
+## B21. Value-side negative information-flow labels via product lattice
+
+V0.2.0 ships negative information-flow labels at function parameter and return type positions only (`R43` in [`RESOLVED.md`](./RESOLVED.md)). A negative label is a boundary clause: the type checker rejects values flowing across a parameter, return, or yield position that carry any of the listed labels. The clause is checked at the boundary; negative labels do not propagate through arithmetic, branching, or classify/declassify operations on values inside the function body.
+
+A natural extension makes negative labels propagate through the lattice on values themselves: a value of type `Word@!Secret` would carry the guarantee "this value's provenance is free of the Secret label" through every operation. The two values' guarantees combine compositionally under the lattice's join (intersection of negative sets: combining two values produces a value that retains only the negatives both already had) and meet (union of negative sets: the meet of two values' guarantees keeps every negative either had).
+
+**Mathematical formulation.** The label space becomes a product lattice:
+
+- Positive component: the existing lattice over subsets of label identifiers, ordered by ⊆, with join = ∪ and meet = ∩. Unchanged from V0.2.0.
+- Negative component: the dual lattice over subsets of label identifiers, ordered by ⊇, with join = ∩ (a value combined from two operands retains only the negatives both already had) and meet = ∪ (the meet of two guarantees keeps every negative either had). The dual ordering is correct because a stronger negative guarantee carries more labels.
+
+The flow rule at every position becomes:
+
+- Positive subset: `source.positive ⊆ target.positive` (existing).
+- Negative superset: `source.negative ⊇ target.negative` (new; the source guarantees at least every negative the target requires).
+
+The two clauses run independently. The product lattice composes algebraically.
+
+**Use cases.**
+
+1. **Sanitization audits.** A value that has gone through a `declassify` step can carry an explicit `!Secret` guarantee that the type system propagates compositionally. Without value-side negatives, the post-declassify guarantee is lost the moment the value participates in another operation.
+
+2. **Open-world reasoning.** Saying "no value derived from Secret may reach this sink" is currently expressible only by enumerating every alternative label. Value-side `!Secret` says the property directly. The label universe in Keleusma is open; enumerative expression is fragile against future label additions.
+
+3. **Compositional absence proofs.** Two values that both carry `!Secret` combine into a value that still carries `!Secret`. Static type checking propagates the guarantee through chains of operations.
+
+4. **Deep trust chains.** A von Neumann probe deployed many generations downstream of an originating mothership ought to carry compositional provenance: "this command value was never derived from a contaminated sensor reading," "this code segment's signature path never passed through a compromised intermediate." The product lattice expresses this directly; positive labels alone require enumeration.
+
+**Why deferred.** The V0.2.0 parameter-position form covers the immediate signing-and-sanitization use cases. The product-lattice extension adds doubled per-value state, more delicate declassify semantics (a `re-attest` operator that re-establishes a negative guarantee after declassify is its own surface question), and conceptual surface for regular programmers ("how does a value know what it doesn't have?"). The deferral keeps V0.2.0 minimal without preventing the eventual extension: value-side negatives are a strict superset of parameter-position negatives, so a V0.2.0 program will not need to change when the extension lands.
+
+**Forcing case.** Awaits a concrete customer use case. The von Neumann probe trust-chain scenario in `secret/MOTHERSHIP_DAUGHTERSHIP.md` is the strongest candidate; defense-grade certification audits that want compositional absence proofs would also qualify. Without a concrete forcing case, designing the value-side semantics risks committing to a model that the eventual case will need to revise.
+
+**Compatibility.** Value-side negatives can land as a backwards-compatible feature addition. Every V0.2.0 program parses unchanged; every existing test continues to pass; the AST gains an internal-only extension to `TypeExpr::NegativeLabelled` that the parser starts to produce at additional positions, and the type checker propagates the negative component through the lattice. No surface syntax changes are required.
+
+**Implementation sketch when forcing case appears.**
+
+1. Promote the AST `TypeExpr::NegativeLabelled` to admit nesting and combine with `TypeExpr::Labelled` at every type position.
+2. Extend the type-checker `Type` enum with `Type::Labelled(Box<Type>, BTreeSet<String>, BTreeSet<String>)` or a parallel `Type::DualLabelled` variant.
+3. Add the negative component to the lattice operations in arithmetic, branching, classify, and declassify.
+4. Introduce a `re-attest` operator that re-establishes a negative guarantee after a declassify step. The audit-point semantics is the same as the existing `declassify`.
+5. Update the boundary clauses to check both components.
+6. Documentation pass.
+
+The work is mechanical once the design endpoint is pinned by a real customer use case. The V0.2.0 parameter-position form does not prevent the eventual extension.

@@ -1379,6 +1379,7 @@ fn type_expr_carries_text(t: &TypeExpr) -> bool {
         TypeExpr::Array(elem, _, _) => type_expr_carries_text(elem),
         TypeExpr::Option(inner, _) => type_expr_carries_text(inner),
         TypeExpr::Labelled(inner, _, _) => type_expr_carries_text(inner),
+        TypeExpr::NegativeLabelled(inner, _, _) => type_expr_carries_text(inner),
         _ => false,
     }
 }
@@ -1403,6 +1404,7 @@ fn type_expr_head_name(t: &TypeExpr) -> String {
         TypeExpr::Array(_, _, _) => String::from("array"),
         TypeExpr::Option(_, _) => String::from("Option"),
         TypeExpr::Labelled(inner, _, _) => type_expr_head_name(inner),
+        TypeExpr::NegativeLabelled(inner, _, _) => type_expr_head_name(inner),
     }
 }
 
@@ -2038,6 +2040,12 @@ fn validate_data_field_type(
         TypeExpr::Array(elem, _len, _) => validate_data_field_type(elem, types, visiting),
         TypeExpr::Option(inner, _) => validate_data_field_type(inner, types, visiting),
         TypeExpr::Labelled(inner, _, _) => validate_data_field_type(inner, types, visiting),
+        TypeExpr::NegativeLabelled(_, _, span) => Err(CompileError {
+            message: String::from(
+                "negative information-flow labels (`!Label`) are not admitted on data field types; they are admissible only on function parameter and return types",
+            ),
+            span: *span,
+        }),
         TypeExpr::Named(name, _args, span) => {
             if visiting.contains(name) {
                 return Err(CompileError {
@@ -2637,6 +2645,7 @@ fn type_expr_head(ty: &TypeExpr) -> Option<String> {
         TypeExpr::Option(_, _) => Some("Option".to_string()),
         TypeExpr::Named(name, _, _) => Some(name.clone()),
         TypeExpr::Labelled(inner, _, _) => type_expr_head(inner),
+        TypeExpr::NegativeLabelled(inner, _, _) => type_expr_head(inner),
     }
 }
 
@@ -2999,6 +3008,7 @@ fn normalize_fixed_defaults(program: &mut Program, frac_bits: u8) {
                 }
             }
             TypeExpr::Labelled(inner, _, _) => fix_type(inner, frac_bits),
+            TypeExpr::NegativeLabelled(inner, _, _) => fix_type(inner, frac_bits),
         }
     }
     fn fix_opt(t: &mut Option<TypeExpr>, frac_bits: u8) {

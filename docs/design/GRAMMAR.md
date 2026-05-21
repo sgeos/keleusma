@@ -696,12 +696,17 @@ let result = x + y {
 
 ````
 labelled_type = type_expr_inner '@' label_spec
-label_spec    = upper_ident | '{' upper_ident { ',' upper_ident } '}'
-classify_expr = 'classify' postfix_expr '@' label_spec
-declassify_expr = 'declassify' postfix_expr '@' label_spec
+label_spec    = label_atom
+              | '{' label_atom { ',' label_atom } '}'
+label_atom    = upper_ident | '!' upper_ident
+classify_expr = 'classify' postfix_expr '@' positive_label_spec
+declassify_expr = 'declassify' postfix_expr '@' positive_label_spec
+positive_label_spec = upper_ident | '{' upper_ident { ',' upper_ident } '}'
 ````
 
-Types carry a set of user-defined information-flow labels written as `T@Label` for a single label or `T@{L1, L2}` for multiple. The empty label set is the pure state. The `classify` operator adds labels to a value; `declassify` removes them. Labels propagate through arithmetic operations, comparisons, conditional branches, and composite-type positions (tuple elements, array elements, option payloads). The label-flow rule at every position is `source.labels ⊆ target.labels`; violations are rejected at compile time. The mechanism is zero-cost at the bytecode layer.
+Types carry a set of user-defined information-flow labels written as `T@Label` for a single positive label or `T@{L1, L2}` for multiple. The empty label set is the pure state. The `classify` operator adds labels to a value; `declassify` removes them. Labels propagate through arithmetic operations, comparisons, conditional branches, and composite-type positions (tuple elements, array elements, option payloads). The label-flow rule at every position is `source.labels ⊆ target.labels`; violations are rejected at compile time. The mechanism is zero-cost at the bytecode layer.
+
+A label atom inside `@{ ... }` may be prefixed with `!` to denote a *negative* label: `T@!Label` and `T@{!N1, !N2}` admit the wrapper at function parameter and return type positions only. The negative-disjoint rule is a boundary clause: a value flowing across a parameter, return, or yield boundary may not carry any of the listed labels in its positive label set. The positive-label upper-bound rule is relaxed at boundaries with negative labels so the parameter or return type admits any unlisted label. Mixed positive-and-negative sets (e.g., `@{Open, !Secret}`) are rejected at parse time in V0.2.0. Negative labels do not appear in `classify` or `declassify` expressions because those operate on positive labels only. See `R43` in [`docs/decisions/RESOLVED.md`](../decisions/RESOLVED.md) for the design rationale and `B21` in [`docs/decisions/BACKLOG.md`](../decisions/BACKLOG.md) for the deferred value-side extension.
 
 Example:
 
@@ -714,6 +719,20 @@ fn main() -> bool {
     let pos: Word@MissionSecret = read_position();
     // host::transmit(pos);                       // type error: label leak
     host::transmit(declassify pos@MissionSecret)  // explicit audit point
+}
+````
+
+Example with a negative-label parameter at a native sink:
+
+````
+use host::log_open(payload: Word@!MissionSecret) -> ()
+
+fn produce_telemetry() -> Word@Telemetry { 42 }
+fn produce_classified() -> Word@MissionSecret { 99 }
+
+fn main() -> () {
+    host::log_open(produce_telemetry());        // ok: Telemetry != MissionSecret
+    // host::log_open(produce_classified());    // type error: parameter forbids MissionSecret
 }
 ````
 
