@@ -160,8 +160,14 @@ pub fn benchmark_spec(counter: &dyn CycleCounter, spec: &OpcodeSpec) -> f64 {
         .expect("benchmark module passes structural verification");
 
     // Warmup. Run the chunk a few times to warm caches and predictor.
+    // A non-Ok result indicates a stale or malformed spec; the bench
+    // surfaces the error to stderr so the operator can diagnose
+    // rather than silently reporting zero cycles.
     for _ in 0..WARMUP_PASSES {
-        let _ = vm.call(&[]);
+        if let Err(e) = vm.call(&[]) {
+            eprintln!("  warning: warmup vm.call returned Err({:?})", e);
+            return 0.0;
+        }
     }
 
     let mut min_per_pattern = f64::MAX;
@@ -191,16 +197,29 @@ pub struct Measurement {
 }
 
 /// Run the full benchmark suite and return per-opcode measurements.
+///
+/// The reported `cycles_per_op` is computed as `ceil(cycles_per_pattern)`,
+/// not `ceil(cycles_per_pattern / ops_per_pattern)`. The per-pattern
+/// quantity already approximates the marginal cost of executing one
+/// instance of the pattern (which exercises the target opcode plus
+/// minimal setup and cleanup). Dividing by the pattern's op count
+/// would distribute the cost across all ops in the pattern and
+/// would lose the relative ordering between opcodes when the per-op
+/// fractional value is below one architectural counter tick. A
+/// counter that runs at a fraction of CPU clock speed (such as
+/// AArch64's CNTVCT_EL0 at 24 MHz on Apple Silicon) makes that
+/// outcome the common case. Using `cycles_per_pattern` directly
+/// preserves the ordering at the cost of overstating per-op cost
+/// in absolute terms, which is conservative for WCET.
 pub fn measure_all(counter: &dyn CycleCounter) -> Vec<Measurement> {
     OPCODE_SPECS
         .iter()
         .map(|spec| {
             let cycles_per_pattern = benchmark_spec(counter, spec);
-            let raw = cycles_per_pattern / spec.ops_per_pattern as f64;
             // Round up and clamp to at least 1 so the cost model
             // never returns zero. A zero-cost opcode would let WCET
             // analysis claim free execution, which is unsound.
-            let cycles_per_op = raw.ceil().max(1.0) as u32;
+            let cycles_per_op = cycles_per_pattern.ceil().max(1.0) as u32;
             Measurement {
                 name: spec.name,
                 cycles_per_pattern,
@@ -230,23 +249,43 @@ pub fn emit_cost_model_source(measurements: &[Measurement], counter_name: &str) 
     // the representative spec names that contribute to its bound;
     // the category's reported cycle count is the maximum over those
     // contributors.
-    let categories: &[(&str, &[&str])] = &[
+    // Categories paired with the representative spec names that
+    // contribute to the category bound, plus a nominal-fallback
+    // opcode whose `nominal_op_cycles` value is used when no spec
+    // produced a measurement for the category. The fallback is
+    // conservative: an unmeasured category inherits its WCET
+    // estimate from the runtime's bundled nominal table rather
+    // than collapsing to one cycle.
+    let categories: &[(&str, &[&str], Op)] = &[
         (
             "data_movement",
             &["Const", "PushUnit", "GetLocal", "Pop", "Dup"],
+            Op::Const(0),
         ),
-        ("control_marker", &["Yield"]),
+        ("control_marker", &[], Op::Yield),
         (
             "arithmetic",
-            &["Add", "Sub", "Mul", "Neg", "CmpEq", "CmpLt"],
+            &[
+                "CheckedAdd",
+                "CheckedSub",
+                "CheckedMul",
+                "CheckedNeg",
+                "CmpEq",
+                "CmpLt",
+            ],
+            Op::CheckedAdd,
         ),
-        ("division", &["Div", "Mod"]),
-        ("composite_construction", &["NewArray", "NewTuple"]),
-        ("function_call", &["Call"]),
+        ("division", &["Div", "Mod"], Op::Div),
+        (
+            "composite_construction",
+            &["NewArray", "NewTuple"],
+            Op::NewArray(0),
+        ),
+        ("function_call", &[], Op::Call(0, 0)),
     ];
 
     let mut category_costs: BTreeMap<&str, u32> = BTreeMap::new();
-    for (cat, names) in categories {
+    for (cat, names, fallback_op) in categories {
         let mut max_cost: u32 = 0;
         for name in *names {
             if let Some(&c) = by_name.get(name)
@@ -256,7 +295,11 @@ pub fn emit_cost_model_source(measurements: &[Measurement], counter_name: &str) 
             }
         }
         if max_cost == 0 {
-            max_cost = 1;
+            // No measurement available for this category. Fall back
+            // to the runtime's nominal cost for the representative
+            // opcode so the generated model preserves the
+            // conservative bundled estimate.
+            max_cost = keleusma::bytecode::nominal_op_cycles(fallback_op);
         }
         category_costs.insert(cat, max_cost);
     }
@@ -322,13 +365,19 @@ pub fn emit_cost_model_source(measurements: &[Measurement], counter_name: &str) 
 
     let ar = cat("arithmetic");
     out.push_str(&format!(
-        "        // Arithmetic and comparison ({} cycles).\n",
+        "        // Arithmetic, comparison, bitwise, casts ({} cycles).\n",
         ar
     ));
     out.push_str("        Op::Add\n");
     out.push_str("        | Op::Sub\n");
     out.push_str("        | Op::Mul\n");
     out.push_str("        | Op::Neg\n");
+    out.push_str("        | Op::CheckedAdd\n");
+    out.push_str("        | Op::CheckedSub\n");
+    out.push_str("        | Op::CheckedMul\n");
+    out.push_str("        | Op::CheckedNeg\n");
+    out.push_str("        | Op::CheckedDiv\n");
+    out.push_str("        | Op::CheckedMod\n");
     out.push_str("        | Op::CmpEq\n");
     out.push_str("        | Op::CmpNe\n");
     out.push_str("        | Op::CmpLt\n");
@@ -341,6 +390,20 @@ pub fn emit_cost_model_source(measurements: &[Measurement], counter_name: &str) 
     out.push_str("        | Op::Len\n");
     out.push_str("        | Op::IntToFloat\n");
     out.push_str("        | Op::FloatToInt\n");
+    out.push_str("        | Op::WordToByte\n");
+    out.push_str("        | Op::ByteToWord\n");
+    out.push_str("        | Op::WordToFixed(_)\n");
+    out.push_str("        | Op::FixedToWord(_)\n");
+    out.push_str("        | Op::FixedMul(_)\n");
+    out.push_str("        | Op::FixedDiv(_)\n");
+    out.push_str("        | Op::BitAnd\n");
+    out.push_str("        | Op::BitOr\n");
+    out.push_str("        | Op::BitXor\n");
+    out.push_str("        | Op::Shl\n");
+    out.push_str("        | Op::Shr\n");
+    out.push_str("        | Op::BoundsCheck(_)\n");
+    out.push_str("        | Op::GetDataIndexed(_, _)\n");
+    out.push_str("        | Op::SetDataIndexed(_, _)\n");
     out.push_str("        | Op::Return => ");
     out.push_str(&format!("{},\n\n", ar));
 
@@ -436,21 +499,32 @@ pub const OPCODE_SPECS: &[OpcodeSpec] = &[
         constants: &[],
         ops_per_pattern: 4,
     },
+    // Integer arithmetic in V0.2.0 flows through the `CheckedXxx`
+    // opcodes. `Op::Add` / `Op::Sub` / `Op::Mul` / `Op::Neg` were
+    // narrowed in Consolidation B to `Byte` / `Fixed` / `Float`
+    // operands only; on `Int` operands they trap at runtime. The
+    // arithmetic specs below measure the `Int` path through the
+    // checked opcodes. Each `CheckedXxx` opcode pushes *three*
+    // values (low, high, flag), so the bench pattern uses `PopN(3)`
+    // to keep the stack balanced. The compiler's `Int + Int`
+    // synthesis is `CheckedAdd; PopN(2)` which discards the carry
+    // pair and leaves the low result; the bench discards all three
+    // so the per-pattern stack net is zero.
     OpcodeSpec {
-        name: "Add",
-        build: || vec![Op::Const(0), Op::Const(0), Op::Add, Op::PopN(1)],
+        name: "CheckedAdd",
+        build: || vec![Op::Const(0), Op::Const(0), Op::CheckedAdd, Op::PopN(3)],
         constants: &[ConstValueDescriptor::Int(7)],
         ops_per_pattern: 4,
     },
     OpcodeSpec {
-        name: "Sub",
-        build: || vec![Op::Const(0), Op::Const(0), Op::Sub, Op::PopN(1)],
+        name: "CheckedSub",
+        build: || vec![Op::Const(0), Op::Const(0), Op::CheckedSub, Op::PopN(3)],
         constants: &[ConstValueDescriptor::Int(7)],
         ops_per_pattern: 4,
     },
     OpcodeSpec {
-        name: "Mul",
-        build: || vec![Op::Const(0), Op::Const(0), Op::Mul, Op::PopN(1)],
+        name: "CheckedMul",
+        build: || vec![Op::Const(0), Op::Const(0), Op::CheckedMul, Op::PopN(3)],
         constants: &[ConstValueDescriptor::Int(7)],
         ops_per_pattern: 4,
     },
@@ -467,8 +541,8 @@ pub const OPCODE_SPECS: &[OpcodeSpec] = &[
         ops_per_pattern: 4,
     },
     OpcodeSpec {
-        name: "Neg",
-        build: || vec![Op::Const(0), Op::Neg, Op::PopN(1)],
+        name: "CheckedNeg",
+        build: || vec![Op::Const(0), Op::CheckedNeg, Op::PopN(3)],
         constants: &[ConstValueDescriptor::Int(7)],
         ops_per_pattern: 3,
     },
@@ -510,35 +584,16 @@ pub const OPCODE_SPECS: &[OpcodeSpec] = &[
         constants: &[ConstValueDescriptor::Int(0)],
         ops_per_pattern: 4,
     },
-    OpcodeSpec {
-        name: "Yield",
-        // Yield takes a value off the stack. Cannot be benchmarked
-        // inside a Func chunk because Func chunks reject yields.
-        // Substitute Pop+PushUnit as a control-flow-marker proxy.
-        // The category emitter treats this as the marker class.
-        build: || vec![Op::PushImmediate(0), Op::PopN(1)],
-        constants: &[],
-        ops_per_pattern: 2,
-    },
-    OpcodeSpec {
-        name: "Call",
-        // Direct call to a trivial function chunk. The benchmark
-        // module would need a callee chunk; for this simple version
-        // we measure a no-op pattern as a placeholder. A full version
-        // would construct a multi-chunk module with a trivial callee.
-        build: || vec![Op::PushImmediate(0), Op::PopN(1)],
-        constants: &[],
-        ops_per_pattern: 2,
-    },
-    OpcodeSpec {
-        name: "MakeClosure",
-        // MakeClosure requires a chunk index. The simple version
-        // measures a substitute pattern. A full version would
-        // construct a multi-chunk module with a closure target.
-        build: || vec![Op::PushImmediate(0), Op::PopN(1)],
-        constants: &[],
-        ops_per_pattern: 2,
-    },
+    // `Yield` and `Call` are intentionally not in the spec table.
+    // `Yield` is rejected by Func chunks; `Call` requires a
+    // multi-chunk module that this bench does not construct.
+    // Their categories (`control_marker` and `function_call`) fall
+    // through the emit logic to the `nominal_op_cycles` table so
+    // the generated cost model uses conservative nominal values
+    // for those categories rather than a misleadingly optimistic
+    // placeholder. Future work may add multi-chunk specs and real
+    // Yield measurement through a Stream chunk; until then nominal
+    // is the right default for these categories.
 ];
 
 #[cfg(test)]

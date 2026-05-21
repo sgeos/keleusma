@@ -27,6 +27,16 @@ let model = CostModel {
 };
 ```
 
+## Pre-generated fragments
+
+This crate also carries pre-generated cost-model fragments for common host architectures under [`measured_cost_models/`](./measured_cost_models/). Hosts running on those architectures can `include!` the committed fragment without regenerating. See [`measured_cost_models/README.md`](./measured_cost_models/README.md) for the list and usage details.
+
+## Methodology notes
+
+The benchmark constructs Func chunks whose opcode stream inlines the target pattern many times and times them end-to-end. The reported `cycles_per_op` is `ceil(cycles_per_pattern)`, not `ceil(cycles_per_pattern / ops_per_pattern)`. Dividing by the pattern's op count would distribute the measured cost across all ops in the pattern and collapse below-counter-tick fractional values to one cycle uniformly, losing the relative ordering between opcode categories. Using the per-pattern value directly preserves the ordering at the cost of overstating per-op cost in absolute terms; for WCET this is conservative.
+
+Categories whose opcodes cannot be exercised in isolation by this bench (`Yield` requires a Stream chunk; `Call` requires a multi-chunk module) fall back to the bundled `nominal_op_cycles` values rather than to a placeholder push-and-pop measurement. Without this fallback, those categories would report 1 cycle from the placeholder pattern, which is dangerously optimistic for a `Call` opcode whose nominal estimate is 10 cycles.
+
 ## Adding a New Target Architecture
 
 Each host architecture provides its own cycle counter. The `CycleCounter` trait abstracts the read primitive. Built-in implementations cover x86_64, AArch64, and a portable `Instant`-based fallback. To add a new architecture:
