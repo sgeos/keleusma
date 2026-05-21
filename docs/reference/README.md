@@ -2,13 +2,13 @@
 
 > **Navigation**: [Documentation Root](../README.md)
 
-Reference material for Keleusma.
+Non-spec lookup material for Keleusma. Terminology and citations.
+
+For authoritative specifications (grammar, type system, standard library, instruction set, structural ISA, wire format), see [spec/](../spec/README.md). For conceptual descriptions of the implemented system, see [architecture/](../architecture/README.md).
 
 ## Contents
 
 | Document | Description |
 |----------|-------------|
 | [GLOSSARY.md](./GLOSSARY.md) | Key terminology and definitions |
-| [INSTRUCTION_SET.md](./INSTRUCTION_SET.md) | Bytecode instruction set reference |
 | [RELATED_WORK.md](./RELATED_WORK.md) | Academic and industrial related work with formal bibliography |
-| [TARGET_ISA.md](./TARGET_ISA.md) | Target ISA design specification for structured control flow and block-based verification |

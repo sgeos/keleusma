@@ -1,6 +1,6 @@
 # Type System
 
-> **Navigation**: [Design](./README.md) | [Documentation Root](../README.md)
+> **Navigation**: [Spec](./README.md) | [Documentation Root](../README.md)
 
 ## Overview
 

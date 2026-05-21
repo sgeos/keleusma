@@ -59,7 +59,7 @@ Static strings live in the read-only data section and cost no allocation. A scri
 ### Cross-references
 
 - [FAQ.md, Strings](./FAQ.md#strings) covers the surface caveats and the static-string escape table.
-- [TYPE_SYSTEM.md, Text Types](../design/TYPE_SYSTEM.md#text-types) is the type-system specification.
+- [TYPE_SYSTEM.md, Text Types](../spec/TYPE_SYSTEM.md#text-types) is the type-system specification.
 - The rogue example's bestiary script returns monster names through this pattern.
 
 ---
@@ -385,6 +385,6 @@ The verification path uses `ed25519-dalek` under `no_std + alloc`. The `examples
 ### Cross-references
 
 - `R42` in [`docs/decisions/RESOLVED.md`](../decisions/RESOLVED.md) is the design rationale.
-- [`docs/architecture/WIRE_FORMAT.md`](../architecture/WIRE_FORMAT.md) documents the header extension layout.
+- [`docs/spec/WIRE_FORMAT.md`](../spec/WIRE_FORMAT.md) documents the header extension layout.
 - [`docs/guide/EMBEDDING.md`, Signed Modules](./EMBEDDING.md#signed-modules) covers the embedding-side API in more depth.
 - [`examples/scripts/11_signed.kel`](../../examples/scripts/11_signed.kel) is a worked signed script.

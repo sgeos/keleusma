@@ -1,6 +1,6 @@
 # Keleusma Language Grammar Specification
 
-> **Navigation**: [Design](./README.md) | [Documentation Root](../README.md)
+> **Navigation**: [Spec](./README.md) | [Documentation Root](../README.md)
 
 ## 1. Overview
 
@@ -34,7 +34,7 @@ The following are explicitly out of scope.
 - Ownership, borrowing, or lifetime annotations at the surface language level. Rust's borrow checker is unnecessary because script values are conceptually immutable and the data segment is the sole mutable region.
 - Bundled standard-library text natives. The runtime ships `register_utility_natives` registering only `println`. Dynamic-text composition is the host's responsibility through verified natives.
 
-Structural verification at the bytecode level is implemented. See [TARGET_ISA.md](../reference/TARGET_ISA.md) for the verification specification. The conservative-verification stance is described in [LANGUAGE_DESIGN.md](../architecture/LANGUAGE_DESIGN.md#conservative-verification).
+Structural verification at the bytecode level is implemented. See [STRUCTURAL_ISA.md](./STRUCTURAL_ISA.md) for the verification specification. The conservative-verification stance is described in [LANGUAGE_DESIGN.md](../architecture/LANGUAGE_DESIGN.md#conservative-verification).
 
 ## 2. Lexical Structure
 
@@ -744,7 +744,7 @@ function_def    = { 'ephemeral' | 'signed' } (fn_def | yield_def | loop_def)
 
 The `signed` modifier on the entry function declaration sets the wire-format flag `FLAG_REQUIRES_SIGNATURE = 0x02` in the module header. A host that loads the bytecode must verify the attached Ed25519 signature against a trust matrix populated through `Vm::register_verifying_key` before the module runs. The signing operation itself is a toolchain step independent of the compiler; the surface keyword expresses the requirement, the compiler emits the flag, and the runtime enforces it. Hosts loading signed modules use `Vm::load_signed_bytes(bytes, arena, &keys)` for the initial load or `Vm::replace_module_from_bytes` for hot-swap; `Vm::load_bytes` rejects signed modules with a diagnostic pointing at the correct entry point.
 
-The modifier is admissible on any of the three function categories (`fn`, `yield`, `loop`) and may combine with `ephemeral` in either order. The compiler rejects the modifier on any function other than the module's entry point. The signing scheme is Ed25519 in V0.2.0; the wire format carries a `scheme_id` byte for future scheme migrations without an ABI break. See `R42` in [`docs/decisions/RESOLVED.md`](../decisions/RESOLVED.md) for the design rationale and [`docs/architecture/WIRE_FORMAT.md`](../architecture/WIRE_FORMAT.md) for the header layout.
+The modifier is admissible on any of the three function categories (`fn`, `yield`, `loop`) and may combine with `ephemeral` in either order. The compiler rejects the modifier on any function other than the module's entry point. The signing scheme is Ed25519 in V0.2.0; the wire format carries a `scheme_id` byte for future scheme migrations without an ABI break. See `R42` in [`docs/decisions/RESOLVED.md`](../decisions/RESOLVED.md) for the design rationale and [`docs/spec/WIRE_FORMAT.md`](./WIRE_FORMAT.md) for the header layout.
 
 Example:
 

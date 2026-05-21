@@ -287,9 +287,9 @@ See [docs/README.md](docs/README.md) for the full documentation knowledge graph.
 - [Language Design](docs/architecture/LANGUAGE_DESIGN.md). Design philosophy, guarantees, conservative-verification stance, memory model.
 - [Execution Model](docs/architecture/EXECUTION_MODEL.md). Temporal domains, structural verification, indirect-dispatch rejection contract, hot code swap.
 - [Compilation Pipeline](docs/architecture/COMPILATION_PIPELINE.md). Stage-by-stage description.
-- [Grammar](docs/design/GRAMMAR.md). Formal EBNF grammar.
-- [Type System](docs/design/TYPE_SYSTEM.md). Static type discipline, data segment fixed-size constraint.
-- [Instruction Set](docs/reference/INSTRUCTION_SET.md). Bytecode reference with costs.
+- [Grammar](docs/spec/GRAMMAR.md). Formal EBNF grammar.
+- [Type System](docs/spec/TYPE_SYSTEM.md). Static type discipline, data segment fixed-size constraint.
+- [Instruction Set](docs/spec/INSTRUCTION_SET.md). Bytecode reference with costs.
 - [Related Work](docs/reference/RELATED_WORK.md). Academic and industrial context with citations.
 - [Decisions](docs/decisions/). Resolved, priority, and backlog decisions.
 

@@ -75,12 +75,14 @@ A knowledge graph is maintained in `docs/`. Start at [`docs/README.md`](docs/REA
 
 | Section | Path | Description |
 |---------|------|-------------|
-| Architecture | [`docs/architecture/`](docs/architecture/README.md) | Language design and compilation pipeline |
-| Design | [`docs/design/`](docs/design/README.md) | Grammar, type system, standard library |
+| Guide | [`docs/guide/`](docs/guide/README.md) | Onboarding for new users and embedders |
+| Architecture | [`docs/architecture/`](docs/architecture/README.md) | Narrative descriptions of the implemented system |
+| Spec | [`docs/spec/`](docs/spec/README.md) | Authoritative specifications: grammar, type system, standard library, instruction set, structural ISA, wire format |
 | Decisions | [`docs/decisions/`](docs/decisions/README.md) | Architectural and design decisions |
 | Process | [`docs/process/`](docs/process/README.md) | Development workflow and task tracking |
-| Reference | [`docs/reference/`](docs/reference/README.md) | Glossary, instruction set |
+| Reference | [`docs/reference/`](docs/reference/README.md) | Glossary and citations |
 | Roadmap | [`docs/roadmap/`](docs/roadmap/README.md) | Development phases |
+| Extras | [`docs/extras/`](docs/extras/README.md) | Supplementary references for specific examples |
 
 ## Development Process
 

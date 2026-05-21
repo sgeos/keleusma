@@ -1,12 +1,12 @@
 # Instruction Set
 
-> **Navigation**: [Reference](./README.md) | [Documentation Root](../README.md)
+> **Navigation**: [Spec](./README.md) | [Documentation Root](../README.md)
 
 The Keleusma VM executes a stack-based bytecode using block-structured control flow. All instructions operate on a value stack. This document lists every instruction with its operands, behavior, and cost contribution to the WCET (worst-case execution time) and WCMU (worst-case memory usage) analyses.
 
 Each instruction carries a relative integer cost. Costs are unitless relative weights, not cycle counts. Higher values indicate more expensive operations. The cost table is consulted by `wcet_stream_iteration()`; the per-instruction stack and heap effects are consulted by `wcmu_stream_iteration()`.
 
-For details on how bytecode is generated from source, see [COMPILATION_PIPELINE.md](../architecture/COMPILATION_PIPELINE.md). For the bytecode wire format including the framing header, opcode-stream encoding, and operand pool, see [EXECUTION_MODEL.md](../architecture/EXECUTION_MODEL.md). For the structural ISA specification including block hierarchy and verification rules, see [TARGET_ISA.md](./TARGET_ISA.md).
+For details on how bytecode is generated from source, see [COMPILATION_PIPELINE.md](../architecture/COMPILATION_PIPELINE.md). For the bytecode wire format including the framing header, opcode-stream encoding, and operand pool, see [EXECUTION_MODEL.md](../architecture/EXECUTION_MODEL.md). For the structural ISA specification including block hierarchy and verification rules, see [STRUCTURAL_ISA.md](./STRUCTURAL_ISA.md).
 
 ## Constants
 
@@ -213,7 +213,7 @@ The instruction set contains 69 opcodes. Operand shapes:
 | `(u16, u16)` | 3 opcodes (`GetDataIndexed`, `SetDataIndexed`, `IsEnum`) |
 | `(u16, u16, u8)` | 1 opcode (`NewEnum`) |
 
-65 of 69 opcodes carry their operand inline in the 4-byte opcode record. The 4 opcodes whose payload exceeds three bytes (`GetDataIndexed`, `SetDataIndexed`, `IsEnum` with `(u16, u16)` shape and `NewEnum` with `(u16, u16, u8)`) reference an entry in the operand pool by index. The `(u16, u8)` opcodes (`Call`, `CallVerifiedNative`, `CallExternalNative`) fit inline because the `u8` lands in byte 3 of the record. See [EXECUTION_MODEL.md](../architecture/EXECUTION_MODEL.md) and [WIRE_FORMAT.md](../architecture/WIRE_FORMAT.md) for the wire format that encodes these shapes.
+65 of 69 opcodes carry their operand inline in the 4-byte opcode record. The 4 opcodes whose payload exceeds three bytes (`GetDataIndexed`, `SetDataIndexed`, `IsEnum` with `(u16, u16)` shape and `NewEnum` with `(u16, u16, u8)`) reference an entry in the operand pool by index. The `(u16, u8)` opcodes (`Call`, `CallVerifiedNative`, `CallExternalNative`) fit inline because the `u8` lands in byte 3 of the record. See [EXECUTION_MODEL.md](../architecture/EXECUTION_MODEL.md) and [WIRE_FORMAT.md](./WIRE_FORMAT.md) for the wire format that encodes these shapes.
 
 ## Cost Summary
 

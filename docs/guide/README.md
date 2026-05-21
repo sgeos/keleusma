@@ -2,7 +2,7 @@
 
 > **Navigation**: [Documentation Root](../README.md)
 
-Onboarding-oriented documentation for new users and embedders. Where the [architecture](../architecture/README.md), [design](../design/README.md), and [reference](../reference/README.md) sections describe what Keleusma is, this section describes how to use it.
+Onboarding-oriented documentation for new users and embedders. Where the [architecture](../architecture/README.md), [design](../spec/README.md), and [reference](../reference/README.md) sections describe what Keleusma is, this section describes how to use it.
 
 ## Sequence
 
@@ -33,6 +33,6 @@ The guide assumes some familiarity with Keleusma's vocabulary. When a term is un
 
 - [GLOSSARY.md](../reference/GLOSSARY.md) defines core terms.
 - [LANGUAGE_DESIGN.md](../architecture/LANGUAGE_DESIGN.md) describes the function categories, the five guarantees, and the conservative-verification stance.
-- [GRAMMAR.md](../design/GRAMMAR.md) is the formal syntax reference.
-- [TYPE_SYSTEM.md](../design/TYPE_SYSTEM.md) describes primitive types, string discipline, and composite types.
-- [STANDARD_LIBRARY.md](../design/STANDARD_LIBRARY.md) lists the bundled native functions in the `audio::` and `math::` namespaces.
+- [GRAMMAR.md](../spec/GRAMMAR.md) is the formal syntax reference.
+- [TYPE_SYSTEM.md](../spec/TYPE_SYSTEM.md) describes primitive types, string discipline, and composite types.
+- [STANDARD_LIBRARY.md](../spec/STANDARD_LIBRARY.md) lists the bundled native functions in the `audio::` and `math::` namespaces.

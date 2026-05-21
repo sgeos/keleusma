@@ -139,7 +139,7 @@ The V0.2.0 wire format partitions the bytecode body into independently relocatab
 
 #### Framing header
 
-The header is exactly 64 bytes, a multiple of eight so the body begins at an 8-byte-aligned offset. The body is followed by a 4-byte little-endian CRC-32 trailer over the framed range. The canonical specification of every field lives in [WIRE_FORMAT.md](./WIRE_FORMAT.md); the layout below is reproduced for cross-reference.
+The header is exactly 64 bytes, a multiple of eight so the body begins at an 8-byte-aligned offset. The body is followed by a 4-byte little-endian CRC-32 trailer over the framed range. The canonical specification of every field lives in [WIRE_FORMAT.md](../spec/WIRE_FORMAT.md); the layout below is reproduced for cross-reference.
 
 ```
 bytes 0..4    : magic ("KELE")
@@ -181,11 +181,11 @@ The opcode stream is an array of fixed-size 4-byte opcode records. Every opcode 
 | 0 | `opcode_id` (u8) | The dispatch index. The low 7 bits select among the 69 opcodes; opcode values 0-68 are valid, values 69-127 are reserved. The high bit is a **parity bit** over bytes 0-3 of the record, supporting per-record integrity verification at decode time. |
 | 1-3 | `operand_field` (24 bits) | Interpreted per opcode class. See "Operand field encoding" below. |
 
-A chunk's opcode count is bounded by the operand width of the control-flow opcodes (`u16`, see [INSTRUCTION_SET.md](../reference/INSTRUCTION_SET.md)), which caps it at 65,535 ops per chunk. The compiler emits a soft warning at 80% of this limit. The cap encourages function-level decomposition, which is consistent with Keleusma's three function-category model (`fn`, `yield fn`, `loop fn`).
+A chunk's opcode count is bounded by the operand width of the control-flow opcodes (`u16`, see [INSTRUCTION_SET.md](../spec/INSTRUCTION_SET.md)), which caps it at 65,535 ops per chunk. The compiler emits a soft warning at 80% of this limit. The cap encourages function-level decomposition, which is consistent with Keleusma's three function-category model (`fn`, `yield fn`, `loop fn`).
 
 #### Operand field encoding
 
-The 24-bit operand field of each opcode record is interpreted by the opcode's operand shape (see [INSTRUCTION_SET.md](../reference/INSTRUCTION_SET.md) for the per-opcode shape):
+The 24-bit operand field of each opcode record is interpreted by the opcode's operand shape (see [INSTRUCTION_SET.md](../spec/INSTRUCTION_SET.md) for the per-opcode shape):
 
 | Opcode shape | Encoding |
 |--------------|----------|
@@ -325,12 +325,12 @@ The valid form of unbounded execution is the top-level `loop` block in the produ
 
 `Vm::new_unchecked` and `Vm::load_bytes_unchecked` exist for hosts that load precompiled bytecode whose resource bounds were validated during the build pipeline. They skip the resource-bounds check while preserving structural verification. Using these constructors to admit programs that would fail `verify_resource_bounds` is intentional misuse outside the language's WCET contract; programs that fail verification by construction should be rejected at the build pipeline level rather than admitted at load time. The unsafe constructors are not an escape hatch for unbounded programs.
 
-See [TARGET_ISA.md](../reference/TARGET_ISA.md) for the full structural ISA specification.
+See [STRUCTURAL_ISA.md](../spec/STRUCTURAL_ISA.md) for the full structural ISA specification.
 
 ## Cross-References
 
 - [LANGUAGE_DESIGN.md](./LANGUAGE_DESIGN.md) describes the language-level design goals and guarantees.
-- [TARGET_ISA.md](../reference/TARGET_ISA.md) specifies the structural ISA block types and verification rules.
+- [STRUCTURAL_ISA.md](../spec/STRUCTURAL_ISA.md) specifies the structural ISA block types and verification rules.
 - [COMPILATION_PIPELINE.md](./COMPILATION_PIPELINE.md) describes the current compilation pipeline.
 - [RELATED_WORK.md](../reference/RELATED_WORK.md) positions Keleusma within the academic and industrial landscape.
 

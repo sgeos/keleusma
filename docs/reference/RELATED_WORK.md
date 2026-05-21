@@ -148,8 +148,8 @@ The static marshalling approach has precedents in the typed embedded scripting t
 
 - [LANGUAGE_DESIGN.md](../architecture/LANGUAGE_DESIGN.md) describes the design goals and four guarantees.
 - [EXECUTION_MODEL.md](../architecture/EXECUTION_MODEL.md) describes the two temporal domains and structural verification.
-- [TARGET_ISA.md](./TARGET_ISA.md) specifies the structural ISA and verification rules.
-- [GRAMMAR.md](../design/GRAMMAR.md) Section 13 compares Keleusma to related languages.
+- [STRUCTURAL_ISA.md](../spec/STRUCTURAL_ISA.md) specifies the structural ISA and verification rules.
+- [GRAMMAR.md](../spec/GRAMMAR.md) Section 13 compares Keleusma to related languages.
 - [GLOSSARY.md](./GLOSSARY.md) defines key terminology.
 
 ## Bibliography

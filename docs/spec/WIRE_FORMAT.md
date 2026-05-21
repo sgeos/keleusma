@@ -1,6 +1,6 @@
 # Wire Format
 
-> **Navigation**: [Architecture](./README.md) | [Documentation Root](../README.md)
+> **Navigation**: [Spec](./README.md) | [Documentation Root](../README.md)
 
 This document specifies the V0.2.0 bytecode wire format. The format pairs a fixed-size 64-byte framing header with a section-partitioned body. The body partitions into a fixed-size opcode stream, a separately addressed operand pool for compound operands, and the in-place archived auxiliary data (chunk metadata, constant pool, struct templates, native names, data layout) that the existing rkyv path produces.
 

@@ -168,8 +168,8 @@ Native functions are registered via `Vm::register_fn` for the ergonomic typed re
 
 Hot code update is performed by calling `vm.replace_module(new_module, initial_data)` between a `VmState::Reset` and the next `call`. The new module is verified before replacement. The supplied data vector length must match the new module's declared slot count. After a successful swap, the host calls `call` to start the new module's entry point. The same mechanism supports rollback by replacing with an older module and an appropriate data instance.
 
-See [TARGET_ISA.md](../reference/TARGET_ISA.md) for the complete structural ISA specification and [EXECUTION_MODEL.md](./EXECUTION_MODEL.md) for the data segment specification.
+See [STRUCTURAL_ISA.md](../spec/STRUCTURAL_ISA.md) for the complete structural ISA specification and [EXECUTION_MODEL.md](./EXECUTION_MODEL.md) for the data segment specification.
 
 ## Cross-References
 
-- [INSTRUCTION_SET.md](../reference/INSTRUCTION_SET.md) provides the complete bytecode instruction reference.
+- [INSTRUCTION_SET.md](../spec/INSTRUCTION_SET.md) provides the complete bytecode instruction reference.

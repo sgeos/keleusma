@@ -53,7 +53,7 @@ The host owns the string-handling vocabulary; the script consumes it through `us
 ### Where text works
 
 - **Static string literals.** Compiled to `Value::StaticStr` and reside in the bytecode's constant pool. May flow anywhere admissible, including across the yield boundary in the dialogue type.
-- **Arena-resident dynamic strings.** Produced by host-registered native functions through the `KString::alloc` arena boundary. Carried as `Value::KStr` handles that resolve through the host-owned arena and become stale on the next arena reset. Subject to the cross-yield prohibition. See [TYPE_SYSTEM.md](../design/TYPE_SYSTEM.md) for the full text-type discipline.
+- **Arena-resident dynamic strings.** Produced by host-registered native functions through the `KString::alloc` arena boundary. Carried as `Value::KStr` handles that resolve through the host-owned arena and become stale on the next arena reset. Subject to the cross-yield prohibition. See [TYPE_SYSTEM.md](../spec/TYPE_SYSTEM.md) for the full text-type discipline.
 
 The `Value::DynStr` global-heap variant present in V0.1.x was removed in V0.2.0. All dynamic text is arena-resident.
 
@@ -204,7 +204,7 @@ state.rem1 = state.rem1 - 1;
 
 ### Opaque types compile but cannot cross the native boundary as themselves
 
-The type checker tracks opaque types correctly, but the marshalling layer in V0.1.x has no path for opaque host values to flow across the native function boundary as themselves. The recommended pattern is to pass opaque values through a primitive handle (typically `Word`) that the host translates to and from its real Rust type at the boundary. See [GRAMMAR.md §3](../design/GRAMMAR.md) and §9.
+The type checker tracks opaque types correctly, but the marshalling layer in V0.1.x has no path for opaque host values to flow across the native function boundary as themselves. The recommended pattern is to pass opaque values through a primitive handle (typically `Word`) that the host translates to and from its real Rust type at the boundary. See [GRAMMAR.md §3](../spec/GRAMMAR.md) and §9.
 
 ### Integer arithmetic wraps to the target word width
 
@@ -268,7 +268,7 @@ The construction and call surfaces were tightened in V0.2.0 so that several prev
 
 ## Where to look for more
 
-- The full language reference is [GRAMMAR.md](../design/GRAMMAR.md) (descriptive; the normative reference is the parser at `src/parser.rs`).
+- The full language reference is [GRAMMAR.md](../spec/GRAMMAR.md) (descriptive; the normative reference is the parser at `src/parser.rs`).
 - The verifier rejection catalog is [WHY_REJECTED.md](./WHY_REJECTED.md).
 - The embedding API surface is [EMBEDDING.md](./EMBEDDING.md).
 - The conservative-verification stance is in [LANGUAGE_DESIGN.md](../architecture/LANGUAGE_DESIGN.md#conservative-verification).

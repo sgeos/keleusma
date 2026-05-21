@@ -197,7 +197,7 @@ Persistent sub-coroutines may be quiescent for long periods between activations;
 - [V0_5_0_KELEUSMA_HOST.md](../roadmap/V0_5_0_KELEUSMA_HOST.md) for the V0.5.0 deployment context that motivates the primitive.
 - [LANGUAGE_DESIGN.md](./LANGUAGE_DESIGN.md) for the existing function categories and coroutine model.
 - [EXECUTION_MODEL.md](./EXECUTION_MODEL.md) for the arena memory model and the two temporal domains.
-- [WIRE_FORMAT.md](./WIRE_FORMAT.md) for the interface-fingerprint header field that hot replacement depends on.
+- [WIRE_FORMAT.md](../spec/WIRE_FORMAT.md) for the interface-fingerprint header field that hot replacement depends on.
 - Lua 5.x reference manual, chapter on coroutines, for the canonical asymmetric coroutine model.
 - Marlin and de Moura, "Revisiting Coroutines," *ACM TOPLAS*, 31(2), 2009, pp. 6:1-6:31. The reference treatment of asymmetric versus symmetric coroutines.
 - Joe Armstrong, *Programming Erlang: Software for a Concurrent World*, Pragmatic Bookshelf, second edition 2013. The Erlang spawn and process model, contrasted with the asymmetric coroutine model adopted here.

@@ -124,7 +124,7 @@ vm.register_fn("geom::midpoint", |a: Point, b: Point| -> Point {
 });
 ````
 
-The script must declare a structurally compatible type for the host's `Point` to flow correctly across the boundary. See [TYPE_SYSTEM.md](../design/TYPE_SYSTEM.md) for the admissible interop types.
+The script must declare a structurally compatible type for the host's `Point` to flow correctly across the boundary. See [TYPE_SYSTEM.md](../spec/TYPE_SYSTEM.md) for the admissible interop types.
 
 ### Lower-Level Registration
 
@@ -146,7 +146,7 @@ A boxed closure variant `register_native_closure` captures host state. A context
 V0.2.0 retired the script-side text-composition machinery (the `to_string`, `concat`, `slice`, `length` utility natives and the f-string interpolation surface). The runtime ships a small bundled set:
 
 - `keleusma::utility_natives::register_utility_natives` registers `println` (a debug primitive that is a no-op on `no_std` targets; hosts that want output override with a `register_native_closure`).
-- `keleusma::audio_natives::register_audio_natives` registers `audio::midi_to_freq`, `audio::freq_to_midi`, `audio::db_to_linear`, `audio::linear_to_db`, and the `math::*` functions enumerated in [STANDARD_LIBRARY.md](../design/STANDARD_LIBRARY.md).
+- `keleusma::audio_natives::register_audio_natives` registers `audio::midi_to_freq`, `audio::freq_to_midi`, `audio::db_to_linear`, `audio::linear_to_db`, and the `math::*` functions enumerated in [STANDARD_LIBRARY.md](../spec/STANDARD_LIBRARY.md).
 - `keleusma::stddsl::Math`, `Audio`, and `Shell` register through `Vm::register_library` (see the "Standard DSL Libraries" section below).
 
 All register through `register_fn` or `register_native` under the hood. Hosts can register all bundled natives, register a subset, or replace any function with their own implementation.
@@ -417,7 +417,7 @@ vm.replace_module_from_bytes(&update_bytes, initial_data)?;
 
 The signing message convention is the full framed buffer with the signature payload bytes and the CRC trailer bytes zeroed. The verifier reconstructs the same view by zeroing both regions on its private copy before the cryptographic operation. The CRC trailer covers the full file including the real signature, so framing-level tamper is caught by the CRC alone; signature mutation is caught by the cryptographic check after CRC repair.
 
-See `R42` in [`docs/decisions/RESOLVED.md`](../decisions/RESOLVED.md) for the design rationale and [`docs/architecture/WIRE_FORMAT.md`](../architecture/WIRE_FORMAT.md) for the header layout.
+See `R42` in [`docs/decisions/RESOLVED.md`](../decisions/RESOLVED.md) for the design rationale and [`docs/spec/WIRE_FORMAT.md`](../spec/WIRE_FORMAT.md) for the header layout.
 
 ## Trust-Skip Construction
 

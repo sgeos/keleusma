@@ -78,14 +78,16 @@ docs/
 │   ├── LANGUAGE_DESIGN.md
 │   ├── EXECUTION_MODEL.md
 │   ├── COMPILATION_PIPELINE.md
-│   ├── WIRE_FORMAT.md
 │   └── SUB_COROUTINES.md
 │
-├── design/                      # Authoritative language specifications
+├── spec/                        # Authoritative specifications
 │   ├── README.md
 │   ├── GRAMMAR.md
 │   ├── TYPE_SYSTEM.md
-│   └── STANDARD_LIBRARY.md
+│   ├── STANDARD_LIBRARY.md
+│   ├── INSTRUCTION_SET.md
+│   ├── STRUCTURAL_ISA.md
+│   └── WIRE_FORMAT.md
 │
 ├── decisions/                   # Decision lifecycle
 │   ├── README.md
@@ -102,12 +104,10 @@ docs/
 │   ├── PROMPT.md
 │   └── REVERSE_PROMPT.md
 │
-├── reference/                   # Reference material
+├── reference/                   # Non-spec lookup material
 │   ├── README.md
 │   ├── GLOSSARY.md
-│   ├── INSTRUCTION_SET.md
-│   ├── RELATED_WORK.md
-│   └── TARGET_ISA.md
+│   └── RELATED_WORK.md
 │
 ├── roadmap/                     # Development phases
 │   ├── README.md
@@ -163,13 +163,13 @@ This section is a **meta-prompt** for AI agents working with this documentation.
 | Language overview | `architecture/LANGUAGE_DESIGN.md` |
 | Execution model and two temporal domains | `architecture/EXECUTION_MODEL.md` |
 | Compilation pipeline | `architecture/COMPILATION_PIPELINE.md` |
-| Bytecode wire format | `architecture/WIRE_FORMAT.md` |
+| Bytecode wire format | `spec/WIRE_FORMAT.md` |
 | Sub-coroutine primitive (V0.5.0-gated) | `architecture/SUB_COROUTINES.md` |
-| Formal grammar | `design/GRAMMAR.md` |
-| Type system | `design/TYPE_SYSTEM.md` |
-| Built-in functions | `design/STANDARD_LIBRARY.md` |
-| Bytecode instruction reference | `reference/INSTRUCTION_SET.md` |
-| Structural ISA description | `reference/TARGET_ISA.md` |
+| Formal grammar | `spec/GRAMMAR.md` |
+| Type system | `spec/TYPE_SYSTEM.md` |
+| Built-in functions | `spec/STANDARD_LIBRARY.md` |
+| Bytecode instruction reference | `spec/INSTRUCTION_SET.md` |
+| Structural ISA description | `spec/STRUCTURAL_ISA.md` |
 | Terminology | `reference/GLOSSARY.md` |
 | Related work and citations | `reference/RELATED_WORK.md` |
 | Design decisions, resolved | `decisions/RESOLVED.md` |
@@ -187,7 +187,7 @@ This section is a **meta-prompt** for AI agents working with this documentation.
 When implementing a feature:
 
 1. Read the relevant **architecture** file for design context
-2. Read the relevant **design** file for specification constraints
+2. Read the relevant **spec** file for the authoritative definition
 3. Check **decisions/PRIORITY.md** for open questions
 4. Check **decisions/RESOLVED.md** for settled decisions
 5. Consult **reference/GLOSSARY.md** for terminology
@@ -200,7 +200,7 @@ When implementing a feature:
 
 Each section can be reviewed independently:
 
-- Approve `architecture/` without re-reading `design/`
+- Approve `architecture/` without re-reading `spec/`
 - Review `decisions/` changes without loading `roadmap/`
 - Focus on `process/` when evaluating workflow changes
 

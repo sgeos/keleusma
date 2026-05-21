@@ -85,7 +85,7 @@ The construct is not a substitute for an arbitrary-precision `BigInt` type. Mult
 
 ## Cross-references
 
-- [GRAMMAR.md, Section 7.5](../design/GRAMMAR.md) — the formal grammar of the numeric overflow construct.
+- [GRAMMAR.md, Section 7.5](../spec/GRAMMAR.md) — the formal grammar of the numeric overflow construct.
 - [LANGUAGE_DESIGN.md, "Numeric Overflow Construct"](../architecture/LANGUAGE_DESIGN.md) — the design rationale.
 - [`examples/scripts/09_big_numbers.kel`](../../examples/scripts/09_big_numbers.kel) — the worked example this guide walks through.
 - [`tests/big_number_arithmetic.rs`](../../tests/big_number_arithmetic.rs) — the integration test that compiles the example and verifies the result.

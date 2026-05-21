@@ -1,6 +1,6 @@
 # Structural ISA
 
-> **Navigation**: [Reference](./README.md) | [Documentation Root](../README.md)
+> **Navigation**: [Spec](./README.md) | [Documentation Root](../README.md)
 
 ## Overview
 
@@ -159,15 +159,15 @@ A WCET analysis function (`wcet_stream_iteration()`) computes the worst-case cos
 
 ### Soundness
 
-The correctness of the structural verifier has not been formally proven. The five verification passes are tested against positive and negative examples, but a soundness argument would require demonstrating that every program accepted by the verifier satisfies the productivity invariant and block nesting rules on all possible execution paths. Watt [W2] provides a model for mechanized verification of bytecode specifications, having formalized the WebAssembly type system in Isabelle/HOL. A similar mechanization of Keleusma's structural verification rules would strengthen confidence in the verifier's soundness and is identified as a certification gap in [RELATED_WORK.md](./RELATED_WORK.md) Section 7.
+The correctness of the structural verifier has not been formally proven. The five verification passes are tested against positive and negative examples, but a soundness argument would require demonstrating that every program accepted by the verifier satisfies the productivity invariant and block nesting rules on all possible execution paths. Watt [W2] provides a model for mechanized verification of bytecode specifications, having formalized the WebAssembly type system in Isabelle/HOL. A similar mechanization of Keleusma's structural verification rules would strengthen confidence in the verifier's soundness and is identified as a certification gap in [RELATED_WORK.md](../reference/RELATED_WORK.md) Section 7.
 
 ## Cross-References
 
 - [INSTRUCTION_SET.md](./INSTRUCTION_SET.md) provides the bytecode instruction reference.
 - [EXECUTION_MODEL.md](../architecture/EXECUTION_MODEL.md) describes the execution model and temporal domains.
 - [LANGUAGE_DESIGN.md](../architecture/LANGUAGE_DESIGN.md) describes the language-level design goals.
-- [RELATED_WORK.md](./RELATED_WORK.md) positions Keleusma within the academic and industrial landscape.
+- [RELATED_WORK.md](../reference/RELATED_WORK.md) positions Keleusma within the academic and industrial landscape.
 
 ## Citation Key
 
-Citations in this document use bracket notation (e.g., [W1], [W2]) referring to entries in the bibliography in [RELATED_WORK.md](./RELATED_WORK.md).
+Citations in this document use bracket notation (e.g., [W1], [W2]) referring to entries in the bibliography in [RELATED_WORK.md](../reference/RELATED_WORK.md).

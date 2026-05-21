@@ -244,7 +244,7 @@ Existing entries B9 and B10 in the backlog reference the precompiled-code questi
 
 V0.2.0 publishes a new bytecode ISA and a new wire format. The framing-header `version` field resets to `1`. V0.1.x and V0.2.0 bytecode are not mutually loadable; existing artefacts must be recompiled against the V0.2.0 toolchain. The reset is acceptable because the V0.1.x line has narrow adoption.
 
-The ISA consolidates 71 V0.1.x opcodes to 69 V0.2.0 opcodes through a combination of removals, additions, splits, and operand narrowings. The audit's aspirational target of 65 opcodes was missed by 4 because Consolidation B narrowed `Add` / `Sub` / `Mul` / `Neg` to `Byte` / `Fixed` / `Float` operand types rather than removing them. The full per-opcode listing lives in [INSTRUCTION_SET.md](../reference/INSTRUCTION_SET.md). The notable changes:
+The ISA consolidates 71 V0.1.x opcodes to 69 V0.2.0 opcodes through a combination of removals, additions, splits, and operand narrowings. The audit's aspirational target of 65 opcodes was missed by 4 because Consolidation B narrowed `Add` / `Sub` / `Mul` / `Neg` to `Byte` / `Fixed` / `Float` operand types rather than removing them. The full per-opcode listing lives in [INSTRUCTION_SET.md](../spec/INSTRUCTION_SET.md). The notable changes:
 
 - `PushImmediate(u8)` replaces `PushTrue`, `PushFalse`, `PushUnit`, and `PushNone`, and additionally encodes `Int(0)` through `Int(15)` inline. Operand values 0..3 select sentinels; 4..19 select small integers; 20..255 are reserved and indicate corruption.
 - The unchecked arithmetic opcodes (`Add`, `Sub`, `Mul`, `Neg`) are removed. Wrapping arithmetic is synthesized as the checked variant followed by `PopN(2)` to discard the unused high and flag outputs.
@@ -263,7 +263,7 @@ The wire format partitions the bytecode body into independently relocatable sect
 
 65 of 69 opcodes carry their operand inline in the 4-byte record. 4 opcodes reference the operand pool. The framing header grows from 24 bytes to 64 bytes to carry the new section offsets and lengths. The rkyv-archived encoding from R39 survives as the internal representation for the auxiliary body, but the execution loop consumes the fixed-size opcode + operand pool layout described above.
 
-See [INSTRUCTION_SET.md](../reference/INSTRUCTION_SET.md) for the per-opcode specification and [EXECUTION_MODEL.md](../architecture/EXECUTION_MODEL.md) for the wire format details.
+See [INSTRUCTION_SET.md](../spec/INSTRUCTION_SET.md) for the per-opcode specification and [EXECUTION_MODEL.md](../architecture/EXECUTION_MODEL.md) for the wire format details.
 
 ## R41. Five-opcode dynamic-string builder rejected
 

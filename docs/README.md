@@ -9,11 +9,11 @@ This documentation is structured as a **knowledge graph** encoded in the file sy
 | Section | Path | Description |
 |---------|------|-------------|
 | Guide | [guide/](./guide/README.md) | Onboarding for new users and embedders |
-| Architecture | [architecture/](./architecture/README.md) | Language design and compilation pipeline |
-| Design | [design/](./design/README.md) | Grammar, type system, standard library |
+| Architecture | [architecture/](./architecture/README.md) | Narrative descriptions of the implemented system |
+| Spec | [spec/](./spec/README.md) | Authoritative specifications: grammar, type system, standard library, instruction set, structural ISA, wire format |
 | Decisions | [decisions/](./decisions/README.md) | Resolved, priority, and backlog decisions |
 | Process | [process/](./process/README.md) | Development workflow and task tracking |
-| Reference | [reference/](./reference/README.md) | Glossary, instruction set |
+| Reference | [reference/](./reference/README.md) | Glossary and citations |
 | Roadmap | [roadmap/](./roadmap/README.md) | Development phases |
 | Extras | [extras/](./extras/README.md) | Supplementary references for specific examples |
 
@@ -29,13 +29,13 @@ This documentation is structured as a **knowledge graph** encoded in the file sy
 | Language overview | [architecture/LANGUAGE_DESIGN.md](./architecture/LANGUAGE_DESIGN.md) |
 | Execution model and two temporal domains | [architecture/EXECUTION_MODEL.md](./architecture/EXECUTION_MODEL.md) |
 | Compilation pipeline | [architecture/COMPILATION_PIPELINE.md](./architecture/COMPILATION_PIPELINE.md) |
-| Bytecode wire format | [architecture/WIRE_FORMAT.md](./architecture/WIRE_FORMAT.md) |
+| Bytecode wire format | [spec/WIRE_FORMAT.md](./spec/WIRE_FORMAT.md) |
 | Sub-coroutine primitive (preliminary, V0.5.0-gated) | [architecture/SUB_COROUTINES.md](./architecture/SUB_COROUTINES.md) |
-| Formal grammar | [design/GRAMMAR.md](./design/GRAMMAR.md) |
-| Type system | [design/TYPE_SYSTEM.md](./design/TYPE_SYSTEM.md) |
-| Built-in functions | [design/STANDARD_LIBRARY.md](./design/STANDARD_LIBRARY.md) |
-| Bytecode instruction reference | [reference/INSTRUCTION_SET.md](./reference/INSTRUCTION_SET.md) |
-| Structural ISA description | [reference/TARGET_ISA.md](./reference/TARGET_ISA.md) |
+| Formal grammar | [spec/GRAMMAR.md](./spec/GRAMMAR.md) |
+| Type system | [spec/TYPE_SYSTEM.md](./spec/TYPE_SYSTEM.md) |
+| Built-in functions | [spec/STANDARD_LIBRARY.md](./spec/STANDARD_LIBRARY.md) |
+| Bytecode instruction reference | [spec/INSTRUCTION_SET.md](./spec/INSTRUCTION_SET.md) |
+| Structural ISA description | [spec/STRUCTURAL_ISA.md](./spec/STRUCTURAL_ISA.md) |
 | Terminology | [reference/GLOSSARY.md](./reference/GLOSSARY.md) |
 | Related work and citations | [reference/RELATED_WORK.md](./reference/RELATED_WORK.md) |
 | Design decisions | [decisions/RESOLVED.md](./decisions/RESOLVED.md) |

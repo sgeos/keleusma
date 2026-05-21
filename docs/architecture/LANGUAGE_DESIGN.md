@@ -104,7 +104,7 @@ A program whose declared WCET or WCMU exceeds the runtime's bound, or whose loop
 
 ## Memory Model
 
-Surface-language semantics. Script-defined values are conceptually immutable. Local bindings, the operand stack, and the arena are not observable as mutable state at the surface. The data segment is the sole region of mutable state observable to the script that persists beyond a single function activation; scripts read and write it through a fixed schema declared in a `data` block. Strings divide into two surface kinds. Static strings reside in the rodata region and may flow anywhere admissible. Dynamic strings reside in the arena heap, are produced by native function calls, and may not cross the yield boundary. See [TYPE_SYSTEM.md](../design/TYPE_SYSTEM.md) for the full string discipline.
+Surface-language semantics. Script-defined values are conceptually immutable. Local bindings, the operand stack, and the arena are not observable as mutable state at the surface. The data segment is the sole region of mutable state observable to the script that persists beyond a single function activation; scripts read and write it through a fixed schema declared in a `data` block. Strings divide into two surface kinds. Static strings reside in the rodata region and may flow anywhere admissible. Dynamic strings reside in the arena heap, are produced by native function calls, and may not cross the yield boundary. See [TYPE_SYSTEM.md](../spec/TYPE_SYSTEM.md) for the full string discipline.
 
 Runtime layout. Memory is organized into four regions analogous to the System V ABI sections `.text`, `.rodata`, `.data`, and `.bss`, with the `.bss` region implemented as a dual-end bump-allocated arena. See [EXECUTION_MODEL.md](./EXECUTION_MODEL.md) for the canonical region table, the source-level implementation mapping, and memory bookkeeping. See [RELATED_WORK.md](../reference/RELATED_WORK.md) Section 8 for the academic and engineering precedents and citations [H1, H2, H3, SC1] for the persistent-state and mode-automaton lineage.
 
@@ -218,7 +218,7 @@ The host is responsible for verifying and certifying host functions. Native func
 
 ### KeleusmaType and Static Marshalling
 
-The `KeleusmaType` trait defines the static marshalling contract between Rust types and the runtime `Value` enum. Host structs and enums become implementations through `#[derive(KeleusmaType)]` from the `keleusma-macros` crate. The derive accepts named-field structs and enums whose variants may be unit, tuple-style, or struct-style. Field types compose admissible interop types per the rules in [TYPE_SYSTEM.md](../design/TYPE_SYSTEM.md).
+The `KeleusmaType` trait defines the static marshalling contract between Rust types and the runtime `Value` enum. Host structs and enums become implementations through `#[derive(KeleusmaType)]` from the `keleusma-macros` crate. The derive accepts named-field structs and enums whose variants may be unit, tuple-style, or struct-style. Field types compose admissible interop types per the rules in [TYPE_SYSTEM.md](../spec/TYPE_SYSTEM.md).
 
 The static marshalling approach contrasts with the dynamic approach of Rhai, which relies on `Box<dyn Any>` to carry arbitrary Rust types. Keleusma's discipline of fixed-size, fixed-layout interop types makes static dispatch sufficient and avoids the unsafe pointer manipulation and runtime type-erasure overhead of the dynamic approach. See [RELATED_WORK.md](../reference/RELATED_WORK.md) Section 9 for the full comparison.
 
@@ -237,7 +237,7 @@ Features explicitly excluded from the current design.
 - Recursion in `fn` and `yield` categories. Only `loop` functions admit cyclic execution, and only through the productive RESET cycle.
 - Variable-iteration loops without static bounds. The verifier rejects programs whose loop iteration count cannot be bounded statically.
 
-Hot code swapping at the bytecode level is part of the design and is described in [EXECUTION_MODEL.md](./EXECUTION_MODEL.md). Structural verification is implemented and described in [TARGET_ISA.md](../reference/TARGET_ISA.md).
+Hot code swapping at the bytecode level is part of the design and is described in [EXECUTION_MODEL.md](./EXECUTION_MODEL.md). Structural verification is implemented and described in [STRUCTURAL_ISA.md](../spec/STRUCTURAL_ISA.md).
 
 Keleusma's design choices are informed by synchronous reactive language principles and are favorable for eventual safety-critical certification, but current claims of suitability for safety-critical control systems are design aspirations, not certification status. See [RELATED_WORK.md](../reference/RELATED_WORK.md) Section 7 for a gap analysis between the current implementation and industrial certification readiness.
 
@@ -277,15 +277,15 @@ V0.2.0 also admits *negative* labels at function parameter and return type posit
 
 The entry function declaration accepts a `signed` modifier (`signed fn main`, `signed yield main`, `signed loop main`). When present, the compiler sets `FLAG_REQUIRES_SIGNATURE` in the framing header so the load-time runtime refuses the module unless its Ed25519 signature verifies against the host's trust matrix. The modifier is admissible only on the entry function and combines with `ephemeral` in either order. The signing operation is a toolchain step independent of the compiler.
 
-The motivating scenario is multi-party module delivery to embedded targets. A mothership compiles per-mission scripts and signs them with an operator-managed key; a daughtership flashed with the corresponding public key in its trust matrix verifies the script before loading. Modules without the modifier load through the existing unsigned path unchanged; the runtime's `Vm::load_signed_bytes` and `Vm::replace_module_from_bytes` paths consume signed bytes and consult the matrix populated via `Vm::register_verifying_key`. See `R42` in [`docs/decisions/RESOLVED.md`](../decisions/RESOLVED.md) for the design rationale and [`docs/architecture/WIRE_FORMAT.md`](./WIRE_FORMAT.md) for the wire-format layout.
+The motivating scenario is multi-party module delivery to embedded targets. A mothership compiles per-mission scripts and signs them with an operator-managed key; a daughtership flashed with the corresponding public key in its trust matrix verifies the script before loading. Modules without the modifier load through the existing unsigned path unchanged; the runtime's `Vm::load_signed_bytes` and `Vm::replace_module_from_bytes` paths consume signed bytes and consult the matrix populated via `Vm::register_verifying_key`. See `R42` in [`docs/decisions/RESOLVED.md`](../decisions/RESOLVED.md) for the design rationale and [`docs/spec/WIRE_FORMAT.md`](../spec/WIRE_FORMAT.md) for the wire-format layout.
 
 Ed25519 (`scheme_id = 1`) is the only V0.2.0 scheme. The wire format carries a `scheme_id: u8` byte so future migrations (ECDSA P-256/P-384, ML-DSA, LMS) do not require an ABI break.
 
 ## Cross-References
 
-- [GRAMMAR.md](../design/GRAMMAR.md) provides the formal EBNF grammar specification.
+- [GRAMMAR.md](../spec/GRAMMAR.md) provides the formal EBNF grammar specification.
 - [EXECUTION_MODEL.md](./EXECUTION_MODEL.md) describes the target execution model with temporal domains.
-- [TARGET_ISA.md](../reference/TARGET_ISA.md) describes the structural ISA specification.
+- [STRUCTURAL_ISA.md](../spec/STRUCTURAL_ISA.md) describes the structural ISA specification.
 - [BACKLOG.md](../decisions/BACKLOG.md) records features that fall outside the verifier's current admittance set. B3 closures, B14 CallIndirect flow analysis, and related entries record V0.1-era investigations that V0.2.0 retired.
 - [RELATED_WORK.md](../reference/RELATED_WORK.md) positions Keleusma within the academic and industrial landscape.
 
