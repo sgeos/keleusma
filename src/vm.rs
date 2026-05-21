@@ -1014,6 +1014,26 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
     /// an in-memory `Vec<u8>`, or a `&'static [u8]` placed in
     /// `.rodata`. Runs full verification including resource bounds.
     pub fn load_bytes(bytes: &[u8], arena: &'arena keleusma_arena::Arena) -> Result<Self, VmError> {
+        // Signed bytecode requires either the `signatures` cargo
+        // feature plus a trust matrix (use `Vm::load_signed_bytes`)
+        // or a build that explicitly skips verification (use
+        // `Vm::load_bytes_unchecked`). Without the feature, surface
+        // a dedicated `LoadError::SignaturesUnsupported` so the
+        // operator sees an actionable diagnostic instead of the
+        // generic "FLAG_REQUIRES_SIGNATURE" message that `Vm::new`
+        // would otherwise produce.
+        if crate::wire_format::header_requires_signature(bytes) {
+            #[cfg(not(feature = "signatures"))]
+            return Err(VmError::from(
+                crate::bytecode::LoadError::SignaturesUnsupported,
+            ));
+            #[cfg(feature = "signatures")]
+            return Err(VmError::from(crate::bytecode::LoadError::Codec(
+                String::from(
+                    "bytecode is signed; load through Vm::load_signed_bytes with a trust matrix",
+                ),
+            )));
+        }
         let module = Module::from_bytes(bytes)?;
         Self::new(module, arena)
     }

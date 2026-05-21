@@ -47,6 +47,10 @@ build = "build.rs"
 # the transitive soft-float compiler_builtins routines
 # (`__divdf3`, `__adddf3`, `__muldf3`).
 keleusma = { path = "../..", default-features = false }
+# Needed at runtime when `keleusma-signatures` is on so the
+# boot-time `setup::run_signed_self_test` path can construct a
+# `VerifyingKey` from the embedded 32-byte public-key fixture.
+ed25519-dalek = { version = "2", default-features = false, features = ["alloc"], optional = true }
 
 # --- N6 platform dependencies. All optional, all gated on the
 # `stm32n6570dk-platform` feature. ---
@@ -115,7 +119,9 @@ embedded-alloc = { version = "0.6", optional = true }
 keleusma = { path = "../..", default-features = false, features = [
     "compile",
     "verify",
+    "signatures",
 ] }
+ed25519-dalek = { version = "2", default-features = false, features = ["alloc"] }
 
 [features]
 default = ["std-platform", "keleusma-compile", "keleusma-verify"]
@@ -141,6 +147,17 @@ keleusma-compile = ["keleusma/compile"]
 # that verification was performed at build time. Off saves a
 # further chunk of flash on top of the precompile feature.
 keleusma-verify = ["keleusma/verify"]
+# Pass-through to keleusma's `signatures` feature. With this on,
+# the runtime image carries the Ed25519 verifier (sha2,
+# curve25519-dalek, zeroize, ed25519-dalek) and the daughtership
+# can verify signed scripts delivered over the comm link via
+# `Vm::register_verifying_key` and `Vm::replace_module_from_bytes`.
+# Off by default to keep the flash image lean; daughterships that
+# only trust-load unsigned baked-in bytecode leave this disabled.
+# Pulls the runtime dep on `ed25519-dalek` so the boot-time
+# self-test path in `setup::run_signed_self_test` can construct a
+# `VerifyingKey` from the embedded fixture.
+keleusma-signatures = ["keleusma/signatures", "dep:ed25519-dalek"]
 # The STM32N6570-DK platform implementation. Pulls in the embassy
 # stack, defmt, cortex-m runtime, and a heap allocator. Enabling
 # this feature on its own builds the no_std library against the

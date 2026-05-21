@@ -34,6 +34,14 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo test -p keleusma --no-default-features
 
+  test-signatures:
+    name: Test (signatures feature)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo test -p keleusma --features signatures
+
   clippy:
     name: Clippy
     runs-on: ubuntu-latest
@@ -71,6 +79,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.88
       - run: cargo check -p keleusma
       - run: cargo check -p keleusma --no-default-features
+      - run: cargo check -p keleusma --features signatures
       - run: cargo check -p keleusma --tests
 
   no-std:

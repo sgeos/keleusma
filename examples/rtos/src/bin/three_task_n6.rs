@@ -155,6 +155,24 @@ async fn main(_spawner: Spawner) {
     );
     info!("Tasks: led (500ms), sensor (100ms), heartbeat (5000ms)");
 
+    // Boot-time signature self-test. Runs only when the
+    // `keleusma-signatures` feature is on; otherwise the path is
+    // compiled away. A failure here means the cryptographic
+    // verifier links into the image but does not function on this
+    // target; the firmware refuses to enter the scheduler loop.
+    #[cfg(feature = "keleusma-signatures")]
+    {
+        match keleusma_rtos::setup::run_signed_self_test() {
+            Ok(()) => info!("signed self-test: verify_module_signature succeeded"),
+            Err(reason) => {
+                defmt::error!("signed self-test failed: {=str}", reason);
+                loop {
+                    embassy_time::Timer::after_millis(1000).await;
+                }
+            }
+        }
+    }
+
     let mut kernel =
         match three_task_kernel_with_arena_capacity::<Stm32N6570DkPlatform>(TASK_ARENA_CAPACITY) {
             Ok(k) => k,

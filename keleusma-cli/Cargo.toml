@@ -21,7 +21,8 @@ categories = ["command-line-utilities", "compilers"]
 # strings.
 keleusma = { path = "..", version = "0.1", features = ["shell", "signatures"] }
 keleusma-arena = { path = "../keleusma-arena", version = "0.3" }
-ed25519-dalek = { version = "2", default-features = false, features = ["alloc"] }
+ed25519-dalek = { version = "2", default-features = false, features = ["alloc", "rand_core"] }
+rand_core = { version = "0.6", default-features = false, features = ["getrandom"] }
 
 [[bin]]
 name = "keleusma"

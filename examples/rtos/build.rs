@@ -28,6 +28,54 @@ fn main() {
     emit_link_args();
     #[cfg(not(feature = "keleusma-compile"))]
     precompile_scripts();
+    emit_signed_self_test();
+}
+
+/// Generate a signed bytecode blob plus the matching public key
+/// at build time so the runtime image carries a deterministic
+/// fixture that exercises `wire_format::verify_module_signature`
+/// at boot. The seed is hardcoded (`[0xA5; 32]`); the test is
+/// strictly for hardware coverage of the cryptographic path and
+/// must not be reused for any operational signing identity.
+///
+/// Produces two files in `OUT_DIR`:
+/// - `signed_self_test.kel.bin`: the signed bytecode.
+/// - `signed_self_test_pub.bin`: the 32-byte verifying key.
+///
+/// The runtime image embeds both through `include_bytes!` when
+/// the `keleusma-signatures` feature is on and skips the
+/// embedding otherwise. The fixture is unconditionally generated
+/// at build time so flipping the feature does not require a
+/// recompile of build.rs.
+fn emit_signed_self_test() {
+    use std::fs;
+    use std::path::PathBuf;
+
+    use ed25519_dalek::SigningKey;
+    use keleusma::compiler::compile;
+    use keleusma::lexer::tokenize;
+    use keleusma::parser::parse;
+    use keleusma::wire_format::module_to_signed_wire_bytes;
+
+    let out_dir = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR"));
+
+    let src = "signed fn main() -> Word { 42 }";
+    let tokens = tokenize(src).expect("self-test: lex");
+    let program = parse(&tokens).expect("self-test: parse");
+    let module = compile(&program).expect("self-test: compile");
+
+    let seed: [u8; 32] = [0xA5; 32];
+    let signing_key = SigningKey::from_bytes(&seed);
+    let verifying_key = signing_key.verifying_key();
+    let bytes = module_to_signed_wire_bytes(&module, &signing_key).expect("self-test: sign");
+
+    fs::write(out_dir.join("signed_self_test.kel.bin"), &bytes)
+        .expect("self-test: write signed bytes");
+    fs::write(
+        out_dir.join("signed_self_test_pub.bin"),
+        verifying_key.to_bytes(),
+    )
+    .expect("self-test: write verifying key");
 }
 
 fn emit_link_args() {

@@ -42,6 +42,7 @@ fn main() -> ExitCode {
     match subcommand {
         "run" => run_subcommand(&args[2..]),
         "compile" => compile_subcommand(&args[2..]),
+        "keygen" => keygen_subcommand(&args[2..]),
         "repl" => repl_subcommand(&args[2..]),
         "--help" | "-h" | "help" => {
             print_help();
@@ -90,6 +91,14 @@ fn print_help() {
     println!("                                    `signed` modifier; otherwise the resulting");
     println!("                                    bytecode is unsigned and the toolchain");
     println!("                                    refuses the signing key argument silently.");
+    println!("  keygen --seed <out> --public <out>");
+    println!("                                    Generate a fresh Ed25519 keypair from the");
+    println!("                                    OS RNG. Writes the 32-byte signing seed to");
+    println!("                                    one file and the 32-byte verifying key to");
+    println!("                                    another. Treat the seed as a private");
+    println!("                                    secret; the verifying key may be");
+    println!("                                    distributed to hosts that load signed");
+    println!("                                    bytecode.");
     println!("  repl                              Start interactive REPL");
     println!("  help, --help, -h                  Show this help");
     println!("  version, --version, -V            Show version");
@@ -98,6 +107,7 @@ fn print_help() {
     println!("  keleusma run hello.kel");
     println!("  keleusma hello.kel");
     println!("  keleusma compile hello.kel -o hello.kel.bin");
+    println!("  keleusma keygen --seed key.seed --public key.pub");
     println!("  keleusma compile hello.kel --signing-key key.seed -o hello.kel.bin");
     println!("  keleusma run hello.kel.bin --verifying-key key.pub");
     println!("  keleusma repl");
@@ -277,6 +287,98 @@ fn compile_subcommand(args: &[String]) -> ExitCode {
 /// `SigningKey`. Returns an error message string suitable for
 /// CLI output if the file is missing, the wrong size, or
 /// unreadable.
+fn keygen_subcommand(args: &[String]) -> ExitCode {
+    let mut seed_path: Option<String> = None;
+    let mut pub_path: Option<String> = None;
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--seed" => {
+                if i + 1 >= args.len() {
+                    eprintln!("error: --seed requires a path");
+                    return ExitCode::FAILURE;
+                }
+                seed_path = Some(args[i + 1].clone());
+                i += 2;
+            }
+            "--public" | "--public-key" | "--verifying-key" => {
+                if i + 1 >= args.len() {
+                    eprintln!("error: --public requires a path");
+                    return ExitCode::FAILURE;
+                }
+                pub_path = Some(args[i + 1].clone());
+                i += 2;
+            }
+            other => {
+                eprintln!("error: unknown option `{}`", other);
+                return ExitCode::FAILURE;
+            }
+        }
+    }
+    let seed_path = match seed_path {
+        Some(p) => p,
+        None => {
+            eprintln!("error: keygen requires --seed <path>");
+            return ExitCode::FAILURE;
+        }
+    };
+    let pub_path = match pub_path {
+        Some(p) => p,
+        None => {
+            eprintln!("error: keygen requires --public <path>");
+            return ExitCode::FAILURE;
+        }
+    };
+    // Refuse to overwrite an existing seed file. The signing
+    // seed is a long-lived secret; silent overwrite is the kind
+    // of mistake that costs the host its signing identity.
+    if Path::new(&seed_path).exists() {
+        eprintln!(
+            "error: refusing to overwrite existing seed file {}; remove or rename first",
+            seed_path
+        );
+        return ExitCode::FAILURE;
+    }
+    if Path::new(&pub_path).exists() {
+        eprintln!(
+            "error: refusing to overwrite existing public-key file {}; remove or rename first",
+            pub_path
+        );
+        return ExitCode::FAILURE;
+    }
+    // Generate fresh Ed25519 keypair from the OS RNG.
+    let signing_key = ed25519_dalek::SigningKey::generate(&mut rand_core::OsRng);
+    let verifying_key = signing_key.verifying_key();
+    if let Err(e) = fs::write(&seed_path, signing_key.to_bytes()) {
+        eprintln!("error: writing seed file {}: {}", seed_path, e);
+        return ExitCode::FAILURE;
+    }
+    if let Err(e) = fs::write(&pub_path, verifying_key.to_bytes()) {
+        eprintln!("error: writing public-key file {}: {}", pub_path, e);
+        return ExitCode::FAILURE;
+    }
+    // Best-effort tighten permissions on the seed file. On Unix
+    // hosts, restrict to owner read/write. Failures are surfaced
+    // as warnings but do not abort because the seed file is
+    // already written.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Err(e) = fs::set_permissions(&seed_path, std::fs::Permissions::from_mode(0o600)) {
+            eprintln!(
+                "warning: could not tighten permissions on {}: {}",
+                seed_path, e
+            );
+        }
+    }
+    eprintln!("wrote seed to {} (32 bytes; keep secret)", seed_path);
+    eprintln!(
+        "wrote public key to {} (32 bytes; distribute to verifiers)",
+        pub_path
+    );
+    ExitCode::SUCCESS
+}
+
 fn read_signing_key(path: &str) -> Result<ed25519_dalek::SigningKey, String> {
     let bytes = fs::read(path).map_err(|e| format!("reading signing key {}: {}", path, e))?;
     if bytes.len() != 32 {
