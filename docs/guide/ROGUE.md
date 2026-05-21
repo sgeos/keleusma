@@ -66,10 +66,10 @@ None of these block normal play. The game is reachable from floor one to the flo
 ## Building and running
 
 ```bash
-cargo run --release --example rogue --features sdl3-example,text
+cargo run --release --example rogue --features sdl3-example
 ```
 
-The example requires both the `sdl3-example` and `text` Cargo features. The first pulls in the Simple DirectMedia Layer 3 dependency that powers the window and event loop. The second enables the script-side string surface that the item-message system relies on.
+The example requires the `sdl3-example` Cargo feature, which pulls in the Simple DirectMedia Layer 3 dependency that powers the window and event loop. Static string literals used by the item-message system are unconditional in V0.2.0; the retired V0.1.x `text` cargo feature is no longer present.
 
 The host opens a sixty-four-by-forty tile grid window. A two-row head-up display sits above the grid and a message row sits below. Each display tile is sixteen pixels square so the window is one thousand twenty-four by seven hundred and twelve pixels, which matches a sixteen-by-ten aspect ratio for the map area and fits comfortably on standard laptop displays. The procedural sprite art is authored at twenty-four pixels and downscaled to sixteen at copy time so the larger authoring size preserves the original sprite detail.
 

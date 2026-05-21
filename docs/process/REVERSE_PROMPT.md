@@ -9,72 +9,70 @@ AI to Human communication channel.
 ## Last Updated
 
 **Date**: 2026-05-21
-**Status**: V0.2.0 pre-publish polish items Q1 and D1 closed. Per-crate `CHANGELOG.md` files added to `keleusma-bench` and `keleusma-cli`. `actions/checkout@v4` bumped to `actions/checkout@v5` across all 15 use sites to resolve the Node.js 20 deprecation notice. CI run prior to this round was fully green (15/15). The branch is publish-ready.
+**Status**: V0.2.0 pre-publish polish: top-level `README.md` and every file in `docs/guide/` audited and corrected. All identified inaccuracies and gaps closed. Verification: `cargo fmt --all -- --check` clean; the README quick-start compiles and runs end to end emitting `result: Int(42)`. The branch is publish-ready.
 
 ## Completed in this session round
 
-| Item | Resolution |
-|------|------------|
-| Q1 — per-crate CHANGELOGs | `keleusma-bench/CHANGELOG.md` and `keleusma-cli/CHANGELOG.md` created in Keep a Changelog 1.1.0 format matching the existing `keleusma-arena` and `keleusma-macros` style. Both V0.2.0 entries describe the crate's first-publicly-released surface. `cargo package --list` confirms both ship in the published tarballs. |
-| D1 — Node.js 20 deprecation | `actions/checkout@v4` bumped to `actions/checkout@v5` (Node.js 24) across all 15 use sites in `.github/workflows/ci.yml`. The `dtolnay/rust-toolchain` actions did not draw the deprecation notice and were left unchanged. |
+### Top-level `README.md`
 
-## V0.4.0 clarification (operator question)
+| Fix | Detail |
+|-----|--------|
+| Broken pattern-matching example | The `describe` function used a non-existent `format` native. Rewrote it to match an `enum Message { Body(Text), Code(Word) }` exhaustively without text-composition natives. |
+| Cargo feature table omission | Added the `signatures` row (Ed25519 signing surface introduced in V0.2.0) and the `sdl3-example` row. |
+| Narrow-runtime selectors | Added a one-line note pointing at the seven mutually-exclusive `narrow-word-*` / `narrow-address-*` / `narrow-float-32` parametric features. |
+| BACKLOG B10 reference | Reframed to acknowledge that the portability foundation is in place; added a forward pointer to the `narrow-*` cargo features. |
+| Examples section | Added a pointer to the new `examples/README.md` overview. |
+| Quick Start | Verified end to end; emits `result: Int(42)`. No change needed. |
 
-The strategy docs in `docs/process/` are:
+### `docs/guide/` files
 
-- `V0_3_0_SELF_HOSTING.md` — V0.3.0 self-hosting compiler bootstrap.
-- `V0_4_0_NATIVE_CODEGEN.md` — V0.4.0 native code generation.
-- `V0_5_0_KELEUSMA_HOST.md` — V0.5.0 Keleusma host for the compiler (sub-coroutines depend on this milestone).
+| File | Fix |
+|------|-----|
+| `README.md` | Removed `,text` from piano-roll and rogue command lines. Reframed the FAQ row from V0.1.x to V0.2.0. |
+| `GETTING_STARTED.md` | Bumped the embedding `Cargo.toml` snippet to `keleusma = "0.2"` and `keleusma-arena = "0.3"`. Stripped `text` from the piano-roll Next Steps command. |
+| `EMBEDDING.md` | Corrected "four bundled libraries" to "three" (the V0.1.x `stddsl::Text` bundle was retired). Replaced the `set_native_bounds` invocations that used invalid Rust named-parameter syntax with positional `(name, wcet, wcmu_bytes)`. |
+| `FAQ.md` | Rewrote the "Opaque types compile but cannot cross the native boundary" section to reflect the V0.2.0 `HostOpaque` first-class support. Removed the stale "Bytecode 0.1.0 was yanked" entry that no longer applies to V0.2.0 readers. |
+| `BIG_NUMBERS.md` | Replaced the "Division and modulo route to a stamped-zero-flag path" caveat with the V0.2.0 reality: dedicated `Op::CheckedDiv` and `Op::CheckedMod` with the `(h, l, flag)` shape; both `i64::MIN / -1` and `i64::MIN % -1` corners flag through the overflow arm. |
+| `PIANO_ROLL.md` | Dropped the `text` feature from the build instruction. Added a sentence noting that static string literals are unconditional in V0.2.0. |
+| `ROGUE.md` | Same `text`-feature removal. |
+| `WHY_REJECTED.md` | Audited; no changes needed. |
+| `COOKBOOK.md` | Audited; no changes needed. The `text::*` host-registered natives use a `text::` namespace prefix that collides historically with the retired V0.1.x `stddsl::Text` bundle name, but the prose correctly distinguishes them. |
 
-The prior pre-publish list described V0.5.0 work but omitted V0.4.0. This was an oversight in the enumeration, not a gap in the strategy. V0.4.0 (native codegen) is documented and tracked in its own strategy file.
+### `docs/README.md`
+
+| Fix | Detail |
+|-----|--------|
+| FAQ Quick Reference row | Reframed from V0.1.x to V0.2.0. |
 
 ## What the operator still owns
 
-- **Publish in dependency order.** `keleusma-macros 0.2.0` → `keleusma 0.2.0` → `keleusma-bench 0.2.0` + `keleusma-cli 0.2.0`. `keleusma-arena 0.3.0` is already on crates.io and matches the local source bit-identically.
+- **Publish in dependency order.** `keleusma-macros 0.2.0` → `keleusma 0.2.0` → `keleusma-bench 0.2.0` + `keleusma-cli 0.2.0`. The arena 0.3.0 is already on crates.io and matches the local source.
 - **Tag the release.** `git tag v0.2.0 && git push --tags`.
-- **Decide B15.** Backlog "remove `Type::Unknown` entirely" remains under consideration. Recommendation: defer to V0.2.x or V0.3.0.
-- **Optional: CI required-status-checks rename.** The `test-all-features` job was renamed to `test-broad-features` in a prior round. If GitHub branch protection required the old name as a status check, update the rule to require `Test (broad features)`.
+- **Decide B15.** Backlog "remove `Type::Unknown` entirely" remains under consideration. Recommendation: defer.
 
 ## Verification matrix
 
 ```bash
-# Tests (CI mirrors these invocations)
-cargo test --workspace                                          # all pass
-cargo test -p keleusma --no-default-features                    # all pass
-cargo test -p keleusma --features signatures                    # all pass
-cargo test -p keleusma --features signatures,shell              # all pass (CI broad-features job)
-cargo test -p keleusma-bench                                    # all pass
+# README quick-start runs end to end
+( cd /tmp/keleusma_quickstart_test && cargo run )
+# -> result: Int(42)
+
+# All workspace tests
+cargo test --workspace                                          # all pass (from prior round)
+
+# Per-crate cargo doc under CI flags
+RUSTDOCFLAGS="-D warnings -A rustdoc::redundant-explicit-links" \
+  cargo doc -p keleusma --no-deps --features signatures,shell   # clean
 
 # Format and clippy
 cargo fmt --all -- --check                                      # clean
-cargo clippy --workspace --all-targets -- -D warnings           # clean
-
-# Doc (per-crate, CI mirrors)
-RUSTDOCFLAGS="-D warnings -A rustdoc::redundant-explicit-links" \
-  cargo doc -p keleusma --no-deps --features signatures,shell   # clean
-  cargo doc -p keleusma-arena --no-deps --all-features          # clean
-  cargo doc -p keleusma-macros --no-deps                        # clean
-  cargo doc -p keleusma-bench --no-deps                         # clean
-  cargo doc -p keleusma-cli --no-deps                           # clean
-
-# Package contents
-cargo package --list -p keleusma-bench --allow-dirty            # includes CHANGELOG.md
-cargo package --list -p keleusma-cli --allow-dirty              # includes CHANGELOG.md
+cargo clippy --workspace --all-targets -- -D warnings           # clean (from prior round)
 ```
 
 ## Open concerns
 
-1. **SDL3 CI job cost.** The Examples (SDL3 feature) job builds SDL3 from source through cmake. The full dependency install lands the job at roughly 1m25s on the standard Ubuntu runner; not the 5-10 minutes initially expected. The job remains valuable because it catches SDL3-gated regressions.
-2. **arena 0.3.0 already on crates.io.** No action needed. Source matches.
-
-## Backlog summary
-
-Unchanged from prior session.
+None blocking publish. Remaining items are either operator-owned (publish, tag, branch protection) or deferred (B15).
 
 ## Intended Next Step
 
-V0.2.0 publish. The operator runs `cargo publish` in dependency order. After publish: `git tag v0.2.0 && git push --tags`. The publish is operator-owned; the AI agent's pre-publish work is complete.
-
-Alternatives:
-- Take up B15 (`Type::Unknown` removal) before publish. Recommendation: defer.
-- Defer publish; operator selection of a different directive.
+V0.2.0 publish. The operator runs `cargo publish` in dependency order. After publish: `git tag v0.2.0 && git push --tags`.

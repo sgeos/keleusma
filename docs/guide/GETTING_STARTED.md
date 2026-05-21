@@ -95,8 +95,8 @@ Add Keleusma to `Cargo.toml`.
 
 ````
 [dependencies]
-keleusma = "0.1.1"
-keleusma-arena = "0.2.0"
+keleusma = "0.2"
+keleusma-arena = "0.3"
 ````
 
 Replace `src/main.rs` with the following.
@@ -150,4 +150,4 @@ The walkthrough above produces a running Keleusma host. Common next steps includ
 - Read [WHY_REJECTED.md](./WHY_REJECTED.md) when the verifier rejects a program. The document maps error messages to root causes and proposes rewrites.
 - Explore [`examples/scripts/`](../../examples/scripts) for short scripts demonstrating common language features. Each script runs through `keleusma run`.
 - Explore [`examples/`](../../examples) for Rust embedding examples that demonstrate WCMU computation, native attestation, error propagation through yield, and string interoperability.
-- Run [`examples/piano_roll.rs`](../../examples/piano_roll.rs) for a feature-gated end-to-end SDL3 audio demonstration. Eight voices with parameter-controlled waveform, envelope, vibrato, low-pass filter, and stereo per-speaker volume, sequenced by a Keleusma tick loop and rotating across a roster of precompiled songs through hot code swap. Run with `cargo run --release --example piano_roll --features sdl3-example,text`. See [PIANO_ROLL.md](./PIANO_ROLL.md) for the long-form manual covering song composition, host lifting, and architectural patterns for other control-loop domains.
+- Run [`examples/piano_roll.rs`](../../examples/piano_roll.rs) for a feature-gated end-to-end SDL3 audio demonstration. Eight voices with parameter-controlled waveform, envelope, vibrato, low-pass filter, and stereo per-speaker volume, sequenced by a Keleusma tick loop and rotating across a roster of precompiled songs through hot code swap. Run with `cargo run --release --example piano_roll --features sdl3-example`. See [PIANO_ROLL.md](./PIANO_ROLL.md) for the long-form manual covering song composition, host lifting, and architectural patterns for other control-loop domains.

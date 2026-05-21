@@ -112,9 +112,9 @@ Mid-project changes happen, however. A host author may need to add slots to supp
 
 ### Cargo feature requirements
 
-The piano-roll example requires two Cargo features to build. The `sdl3-example` feature pulls in the Simple DirectMedia Layer 3 dependency. The `text` feature enables string literals in Keleusma source, which the bundled songs rely on for the `host::song_name` call. Both features appear in the example's `required-features` declaration in `Cargo.toml`. The build command is therefore `cargo run --release --example piano_roll --features sdl3-example,text`.
+The piano-roll example requires the `sdl3-example` Cargo feature to build. The feature pulls in the Simple DirectMedia Layer 3 dependency and `cmake`-builds SDL3 from source. The example's `required-features` declaration in `Cargo.toml` lists `compile`, `verify`, and `sdl3-example`; the first two are on by default. The build command is therefore `cargo run --release --example piano_roll --features sdl3-example`.
 
-A host derived from the example may drop the `text` feature if its scripts do not pass strings to natives. A host with a different audio backend will replace the `sdl3-example` requirement with whatever its own backend needs.
+Static string literals (used by the bundled songs for the `host::song_name` call) are unconditional in V0.2.0. The retired V0.1.x `text` cargo feature is no longer present. A host derived from the example with a different audio backend replaces the `sdl3-example` requirement with whatever its own backend needs.
 
 ---
 

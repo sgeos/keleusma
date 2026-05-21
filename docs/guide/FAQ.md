@@ -202,9 +202,9 @@ if state.rem0 == 0 {
 state.rem1 = state.rem1 - 1;
 ````
 
-### Opaque types compile but cannot cross the native boundary as themselves
+### Opaque types flow through the native boundary as `Value::Opaque`
 
-The type checker tracks opaque types correctly, but the marshalling layer in V0.1.x has no path for opaque host values to flow across the native function boundary as themselves. The recommended pattern is to pass opaque values through a primitive handle (typically `Word`) that the host translates to and from its real Rust type at the boundary. See [GRAMMAR.md §3](../spec/GRAMMAR.md) and §9.
+V0.2.0 introduced first-class opaque type support through the `HostOpaque` trait in the `keleusma::opaque` module. The host implements the trait for a Rust newtype around the value it wants to expose; native functions produce opaque values through `host_arc(...)` and consume them by extracting a typed reference through `dyn HostOpaque::downcast_ref::<T>()`. The script declares the type by name in function signatures, and the type checker resolves the name as `Type::Opaque`. Opaque values are host-managed through `Arc`, have a lifetime independent of the arena, may cross the yield boundary, and contribute zero to the script-side WCMU bound. See the "Opaque Host Types" section of [EMBEDDING.md](./EMBEDDING.md) and the worked example in [`examples/opaque_rust_string.rs`](../../examples/opaque_rust_string.rs).
 
 ### Integer arithmetic wraps to the target word width
 
@@ -261,10 +261,6 @@ The construction and call surfaces were tightened in V0.2.0 so that several prev
 - **Modules without an entry point are now `VmError::VerifyError`.** A module compiled from source that omits `fn main`, `yield main`, or `loop main` previously surfaced as `VmError::InvalidBytecode("no entry point")` at the first `Vm::call`. The constructor `Vm::new` (and `Vm::new_unchecked`) now rejects the module with `module has no entry point` at the API boundary.
 - **Premature `Vm::resume` is now `VmError::NotSuspended`.** Calling `vm.resume(value)` before `vm.call(args)` previously surfaced as `VmError::InvalidBytecode("cannot resume: VM not suspended")`, which conflated API misuse with corrupt bytecode. The runtime now returns the dedicated `VmError::NotSuspended` variant.
 - **Structural-verification rejections now carry source spans.** Compile-pipeline rejections for `CallIndirect` and `MakeRecursiveClosure` used to attach `Span::default()`, which hid the offending source position. Each rejection now points at the originating function or closure declaration so editors can underline the construct.
-
-### Bytecode 0.1.0 was yanked
-
-`keleusma 0.1.0` was yanked from crates.io within hours of publication because its declared MSRV of 1.87 conflicted with let-chain syntax in the source that requires Rust 1.88. `keleusma 0.1.1` is the corrected initial release; `Cargo.lock` files referencing 0.1.0 continue to resolve but new `cargo add keleusma` invocations pick 0.1.1.
 
 ## Where to look for more
 

@@ -71,7 +71,7 @@ The `Word` type is signed `i64`. Treating it as an unsigned `u64` digit in multi
 
 2. For two operands whose sum needs more than 65 bits (impossible for `i64` addition but reachable through multiplication), the high half carries genuine bits 64-127. The multiplication example demonstrates this case directly.
 
-3. Division and modulo currently route to a stamped-zero-flag path: the construct produces `(high=0, low=result, flag=0)` for non-corner cases, and the `i64::MIN / -1` corner is left to the existing arithmetic. A dedicated `Op::CheckedDiv` / `Op::CheckedMod` family would close the corner; the project's backlog records the item but no consumer has demanded it yet.
+3. Division and modulo route through dedicated `Op::CheckedDiv` and `Op::CheckedMod` opcodes that compute the true result in `i128` and dispatch to the same `(h, l, flag)` shape as the other checked operations. The `i64::MIN / -1` corner (true result `2^63`, decomposed as `high=0, low=i64::MIN, flag=1`) routes to the overflow arm; the `i64::MIN % -1` corner (true result `0`, division step overflows) likewise flags through the overflow arm with `high=0, low=0`. Division by zero continues to trap with `VmError::DivisionByZero` because the opcode fails before arm dispatch runs.
 
 ## Where the pattern is and is not appropriate
 

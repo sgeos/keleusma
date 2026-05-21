@@ -41,9 +41,13 @@ The runtime crate exposes orthogonal feature gates so hosts can strip pipeline s
 | `compile` | on | Lexer, parser, type checker, monomorphizer, compiler. The source-to-bytecode pipeline. | The host ships precompiled bytecode and loads through `Module::from_bytes` or `Vm::view_bytes_zero_copy`. |
 | `verify` | on | Structural verifier, WCET and WCMU resource-bounds pass. Used inside `Vm::new` at load time. | An equivalent verification ran at artefact-ingestion time; `Vm::new` then degrades to a trust-load equivalent to `Vm::new_unchecked`. |
 | `floats` | on | Surface syntax for the `Float` type and float literals, `Value::Float` and `ConstValue::Float` variants, `Op::IntToFloat` and `Op::FloatToInt` opcode bodies, the f64 arm in `Vm::binary_arith`, the `KeleusmaType` impl for `f64`, the `audio_natives` and `stddsl` bundles. | Scripts use only integer, byte, and fixed-point arithmetic. Dropping `floats` removes the soft-float `compiler_builtins` routines (`__divdf3`, `__adddf3`, `__muldf3`) from the runtime image; on the bare-metal STM32N6570-DK build this is roughly 12 KB. |
+| `signatures` | off | Ed25519 module signing and load-time verification. Adds `ed25519-dalek` as a dependency. Enables `Vm::load_signed_bytes`, `Vm::register_verifying_key`, the `wire_format::module_to_signed_wire_bytes` and `wire_format::verify_module_signature` helpers, and the `signed` surface modifier on the entry function declaration. | The host does not need cryptographic origin authentication on loaded modules. The `signed` surface keyword still parses without the feature so source files remain portable across configurations. |
 | `shell` | off | The `stddsl::Shell` bundle, which forwards `println` and a handful of shell-style natives onto the host. | The host registers its own diagnostics natives. |
+| `sdl3-example` | off | The bundled SDL3 audio piano-roll example. Pulls in `sdl3` with `build-from-source-static`, which `cmake`-builds SDL3 from source. | Not running the piano-roll example. |
 
 Text support is unconditional in V0.2.0: `Value::StaticStr` literals and arena-resident `Value::KStr` strings are always available, and the surface syntax accepts the `Text` type. Dynamic-text composition (`to_string`, `concat`, `slice`, `length`) is the host's responsibility through `register_verified_native` or the `register_fn` marshalling layer. The bundled `register_utility_natives` registers `println` only.
+
+In addition, seven mutually-exclusive `narrow-word-*`, `narrow-address-*`, and `narrow-float-32` parametric-runtime selectors gate the framing-level upper bound on bytecode word, address, and float widths for hosts that ship only a sub-64-bit `GenericVm` instance. See the comments in `Cargo.toml` and the `Target` descriptor documentation; these features are advanced and rarely needed.
 
 The features compose freely. The `examples/rtos/` cooperative microkernel disables `floats` and uses precompiled bytecode under either `keleusma-verify` only (157 KB `.text`) or trust-load (137 KB `.text`) on the STM32N6570-DK; see [`examples/rtos/MANUAL.md`](examples/rtos/MANUAL.md) for the measured flash-size table.
 
@@ -118,13 +122,15 @@ fn classify(0) -> Text { "zero" }
 fn classify(x: Word) -> Text when x > 0 { "positive" }
 fn classify(x: Word) -> Text { "negative" }
 
-use format
+enum Message {
+    Body(Text),
+    Code(Word),
+}
 
 fn describe(msg: Message) -> Text {
     match msg {
         Message::Body(s) => s,
-        Message::Code(n) => format(n),
-        _ => "unknown",
+        Message::Code(_) => "code",
     }
 }
 ```
@@ -200,7 +206,7 @@ let module = compile_with_target(&program, &Target::embedded_16())
     .expect("compile");
 ```
 
-Presets include `host`, `wasm32`, `embedded_32`, `embedded_16`, and `embedded_8` (8-bit word with 16-bit address per the 6502 class). See `docs/decisions/BACKLOG.md` entry B10 for the portability story.
+Presets include `host`, `wasm32`, `embedded_32`, `embedded_16`, and `embedded_8` (8-bit word with 16-bit address per the 6502 class). The narrowing-feature framing-level rejection complements the per-Vm load-time check; see the `narrow-word-*` / `narrow-address-*` / `narrow-float-32` Cargo features. The original portability design history is recorded under `B10` in `docs/decisions/BACKLOG.md` (resolved, foundation in place).
 
 ## Compilation Pipeline
 
@@ -241,7 +247,7 @@ Five crates:
 
 ## Examples
 
-Rust embedding examples live under [`examples/`](examples). Run any of them with `cargo run --example <name>`.
+Rust embedding examples live under [`examples/`](examples). Run any of them with `cargo run --example <name>`. The [`examples/README.md`](examples/README.md) overview enumerates each one with a one-line description and points to the larger example crates and the standalone `.kel` scripts.
 
 A larger end-to-end example, [`piano_roll`](examples/piano_roll.rs), is a three-channel SDL3 audio host driven by a Keleusma tick-based control loop. It exercises the principal capabilities Keleusma is designed for: bounded-step execution under a real-time deadline (audio rendering), thread-safe handoff between the Keleusma main thread and the SDL3 audio callback, multi-voice control flow through the data segment, and hot code swap between two precompiled songs at the reset boundary.
 

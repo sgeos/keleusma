@@ -185,7 +185,7 @@ See [FAQ.md](./FAQ.md) for the broader framing on strings.
 
 ### Standard DSL Libraries
 
-The `keleusma::stddsl` module ships four bundled libraries that hosts register through a single call. Each bundle is a unit struct implementing the `Library` trait. The trait's `register` method installs the bundle's native functions on the VM.
+The `keleusma::stddsl` module ships three bundled libraries that hosts register through a single call. Each bundle is a unit struct implementing the `Library` trait. The trait's `register` method installs the bundle's native functions on the VM.
 
 ````rust
 use keleusma::stddsl;
@@ -279,11 +279,12 @@ See [`examples/opaque_rust_string.rs`](../../examples/opaque_rust_string.rs) for
 Native function calls participate in WCET and WCMU analysis. By default, native calls are attested as zero-cost in cycles and zero-bytes in heap. Hosts that need a sound bound declare per-native bounds before VM construction or, for already-constructed VMs, before calling `verify_resources`.
 
 ````rust
-vm.set_native_bounds("math::sin",      cycles_per_call: 25, heap_bytes: 0)?;
-vm.set_native_bounds("strings::upper", cycles_per_call: 100, heap_bytes: 256)?;
+// vm.set_native_bounds(name, wcet_cycles, wcmu_bytes)
+vm.set_native_bounds("math::sin",      25,  0)?;
+vm.set_native_bounds("strings::upper", 100, 256)?;
 ````
 
-The bounds are the host's promise. The verifier accepts the declared values without independent measurement. The host bears responsibility for accuracy, typically through measurement or bounded-loop analysis on the native function. See [`examples/wcmu_attestation.rs`](../../examples/wcmu_attestation.rs) for a complete walkthrough.
+The bounds are the host's promise: `wcet` is the worst-case pipelined-cycle count and `wcmu_bytes` is the worst-case arena heap allocation. The verifier accepts the declared values without independent measurement. The host bears responsibility for accuracy, typically through measurement or bounded-loop analysis on the native function. See [`examples/wcmu_attestation.rs`](../../examples/wcmu_attestation.rs) for a complete walkthrough.
 
 ### Calibrated WCET in CPU cycles
 
