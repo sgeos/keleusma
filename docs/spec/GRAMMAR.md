@@ -20,9 +20,9 @@ Without any host-plugged functions, Keleusma can only define pure functions that
 
 ### Scope Inclusions and Exclusions
 
-The following features were originally listed as out of scope and have since shipped under V0.1.
+The following features were originally listed as out of scope and have since shipped (V0.1 baseline, carried forward in V0.2.0).
 
-- Hindley-Milner type inference with Robinson unification, the occurs check, and a transitional `Type::Var` for inferred positions.
+- Hindley-Milner type inference with Robinson unification, the occurs check, and `Type::Var` for inferred positions. The transitional `Type::Unknown` sentinel was removed in V0.2.0 (B15 closed).
 - Generic type parameters with trait bounds, traits, impl blocks, and compile-time monomorphization with inference reach across literals, identifiers, function-call returns, method-call returns, casts, enum variants, struct constructions, tuple and array literals, if and match arms, field access, tuple-index, and array-index.
 - Hot code swap at the reset boundary of a `loop` script. Native registrations persist across the swap; the data segment is supplied fresh by the host.
 
@@ -222,13 +222,14 @@ let nothing: Option<Text> = Option::None;
 
 ### Opaque Types
 
-Type-system support is partial in V0.1.x. The type checker tracks an opaque type for every named type that is not declared as a struct or enum, so source code that mentions an opaque type compiles and type-checks. The runtime path is incomplete: there is no `Value::Opaque` variant and the `KeleusmaType` derive does not produce marshalling code for opaque types, so a host cannot pass a domain-specific Rust value through the native boundary as itself today. The intended pattern in V0.1.x is to pass opaque values through a primitive handle (typically `Word`) that the host translates to and from its real type at the native function boundary.
+V0.2.0 introduced first-class opaque type support. The host implements the `HostOpaque` marker trait on a Rust newtype around the value it wants to expose; the script declares the type by name in function signatures and the type checker resolves the name as `Type::Opaque`. Native functions produce opaque values through `host_arc(...)` (returning `Value::Opaque(Arc<dyn HostOpaque>)`) and consume them by extracting a typed reference through `dyn HostOpaque::downcast_ref::<T>()`. Opaque values are host-managed through `Arc`, have a lifetime independent of the arena, may cross the yield boundary in the dialogue type, and contribute zero to the script-side WCMU bound. Equality is by `Arc` pointer identity. See [`examples/opaque_rust_string.rs`](../../examples/opaque_rust_string.rs) for the worked end-to-end pattern.
 
 ````
-// ChannelHandle is documented as opaque at the type-system level.
-// In V0.1.x the host marshals the handle as Word across the native
-// boundary and translates internally.
-let ch: Word = audio::get_channel(0);
+// ChannelHandle is the host's opaque newtype, registered with the
+// VM through register_native. The script declares it by name; the
+// type checker resolves it as Type::Opaque and the native receives
+// Value::Opaque(Arc<dyn HostOpaque>).
+let ch: ChannelHandle = audio::get_channel(0);
 audio::set_frequency(ch, 440.0);
 ````
 
@@ -841,10 +842,10 @@ The compiler validates all native function calls against the registered set at c
 
 ### Opaque Types
 
-Opaque type support is partial in V0.1.x. The type checker tracks opaque types correctly and the compiler accepts them in parameter and return positions, but the marshalling layer does not yet have a path for opaque host values to flow across the native boundary as themselves. The recommended pattern for V0.1.x is to pass opaque host values through a primitive handle (typically `Word`) that the host translates to and from its real Rust type at the native function boundary.
+V0.2.0 introduced first-class opaque type support through the `HostOpaque` marker trait and the `Value::Opaque(Arc<dyn HostOpaque>)` runtime variant. The host registers a native that produces opaque values through `host_arc(...)`; native consumers extract a typed reference through `dyn HostOpaque::downcast_ref::<T>()`. The script declares the opaque type by name in function signatures and the type checker resolves the name as `Type::Opaque`. Opaque values are host-managed through `Arc`, have a lifetime independent of the arena, may cross the yield boundary in the dialogue type, and contribute zero to the script-side WCMU bound. See the "Opaque Host Types" section of [`docs/guide/EMBEDDING.md`](../guide/EMBEDDING.md) for the full host-side surface and [`examples/opaque_rust_string.rs`](../../examples/opaque_rust_string.rs) for a worked end-to-end example.
 
 ````
-let ch: Word = audio::get_channel(0);
+let ch: ChannelHandle = audio::get_channel(0);
 audio::set_frequency(ch, 440.0);
 ````
 

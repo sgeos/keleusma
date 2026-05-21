@@ -224,9 +224,9 @@ The static marshalling approach contrasts with the dynamic approach of Rhai, whi
 
 ## Scope Inclusions and Exclusions
 
-Features now implemented under V0.1.
+Features implemented.
 
-- Hindley-Milner type inference foundation. `Type::Var`, the substitution machinery, and Robinson unification with the occurs check. `Type::Unknown` remains as a transitional sentinel for runtime-only dispatch positions; removing it requires declaring native function signatures.
+- Hindley-Milner type inference foundation. `Type::Var`, the substitution machinery, and Robinson unification with the occurs check. The V0.1-era transitional `Type::Unknown` sentinel was removed in V0.2.0 (B15 closed); every unannotated position now produces a fresh `Type::Var` and inference proceeds uniformly through unification.
 - Generics. Generic functions, structs, and enums with type parameters. Trait declarations, trait bounds with `+` separator, and impl method registration with structural validation against the trait.
 - Compile-time monomorphization. Function, struct, and enum specialization. Inference reach across literals, identifiers, function-call returns, method-call returns, unary and binary operators, casts, enum variants, struct constructions, tuple and array literals, if and match arms, field access, tuple-index, and array-index expressions.
 Features explicitly excluded from the current design.
