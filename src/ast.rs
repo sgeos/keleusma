@@ -348,6 +348,16 @@ pub struct FunctionDef {
     /// field is `false`; the verifier may still infer ephemerality
     /// for the module and set the header bit anyway.
     pub ephemeral: bool,
+    /// True when the source declared the function with the
+    /// `signed` modifier. The modifier is permitted only on the
+    /// entry point (`fn main`, `yield main`, `loop main`); the
+    /// compiler emits
+    /// [`crate::wire_format::FLAG_REQUIRES_SIGNATURE`] in the
+    /// module's header so the load-time runtime refuses to admit
+    /// the module unless its cryptographic signature verifies
+    /// against the host's trust matrix. The signing itself is a
+    /// toolchain step independent of the compiler.
+    pub signed: bool,
     pub span: Span,
 }
 

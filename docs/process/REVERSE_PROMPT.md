@@ -9,29 +9,28 @@ AI to Human communication channel.
 ## Last Updated
 
 **Date**: 2026-05-20
-**Status**: Cross-architecture rkyv-decode regression on the STM32N6570-DK fixed and hardware-verified. The V0.2.0 ISA branch is now hardware-clean across both `--no-default-features --features stm32n6570dk-platform` and `--features stm32n6570dk-platform,keleusma-verify` configurations. The branch is ready for merge to `main`.
+**Status**: V0.2.0 signed-modules feature (R42) implemented end-to-end on the `feat-signed-modules` branch. Wire-format header extended through the existing `header_length: u16` field to carry an Ed25519 signature; a new `signed` surface keyword on the entry function emits `FLAG_REQUIRES_SIGNATURE`; the runtime carries a per-Vm trust matrix consulted at `load_signed_bytes` and `replace_module_from_bytes`. The migration matrix for future schemes (ECDSA, ML-DSA, LMS) lives in `secret/SIGNATURE_SCHEME_MIGRATION.md`. Ready for merge to `main`.
 
 ## Completed in this session round
 
 | Directive | Resolution |
 |-----------|------------|
-| Address the bare-metal rkyv-decode regression without reverting. | Root cause: V0.2.0 Phase 7c (593f541) cut `Module::from_bytes` over to `wire_format::module_from_wire_bytes` without porting the pre-cutover `AlignedVec<8>` copy step. `rkyv::from_bytes` calls `rkyv::access` internally, which requires the input buffer to be 8-byte aligned. The post-cutover code passed a raw `&[u8]` subslice from arbitrary input alignment; on x86_64 the host bin (`three-task-std`) uses the `keleusma-compile` runtime-compile path and never exercised the regression, so it was masked. On the N6 target (`include_bytes!` precompiled into the `.text` section, no compile-path), the aux-body subslice landed at a 4-byte boundary and rancor rejected the decode with the opaque "failed without error information" message. Fix: copy `aux_body_bytes` into a `rkyv::util::AlignedVec<8>` before calling `rkyv::from_bytes`, mirroring the legacy pattern. The owned-decode contract of `Module::from_bytes` and `Module::view_bytes` is now uniform: both tolerate arbitrarily aligned input. The zero-copy alignment contract is preserved by `Module::access_bytes` and `Vm::view_bytes_zero_copy`, which still check `aux_body.as_ptr() % 8 == 0` explicitly. Test `bytecode_view_bytes_rejects_unaligned_input` (which encoded the legacy reject-on-unaligned behaviour) is rewritten as `bytecode_view_bytes_handles_unaligned_input` asserting the new tolerance plus round-trip soundness. Verified on hardware: the N6 binary now boots, loads led/sensor/heartbeat/event_listener/faulty, enters the scheduler loop, and exercises the supervised-restart path on the faulty task across both no-verify and verify configurations. |
+| Add signed compiled modules to V0.2.0 before publishing. | New `signatures` cargo feature (off by default) brings `ed25519-dalek 2`. Wire format extends the framing header through the existing `header_length: u16` field: bytes 64..72 hold the signature metadata block (scheme_id, signature_length, reserved bytes) and bytes 72.. hold the raw signature payload. Ed25519 (scheme_id = 1) is the only V0.2.0 scheme; unknown scheme_ids reject at framing. The `signed` modifier on the entry function declaration (`signed fn main`, `signed yield main`, `signed loop main`) emits `FLAG_REQUIRES_SIGNATURE = 0x02` in the flags byte; the modifier is admissible only on the entry function (a `signed` modifier on a helper rejects at compile time). The signature message convention is the full framed buffer with signature payload bytes and CRC trailer zeroed; both signer and verifier reconstruct that view before the cryptographic operation. New `Vm::load_signed_bytes(bytes, arena, &keys)` performs verification + load. New `Vm::register_verifying_key` / `clear_verifying_keys` / `verifying_keys_len` manage the per-Vm trust matrix. New `Vm::replace_module_from_bytes(bytes, initial_data)` performs hot-swap with signature verification against the inherited trust matrix. `Vm::new` rejects modules carrying `FLAG_REQUIRES_SIGNATURE` directly (the signature info is lost when the Module is decoded) and directs callers to `load_signed_bytes` or hot-swap. CLI extensions: `keleusma compile --signing-key seed.bin` signs the output; `keleusma run --verifying-key key.pub` (repeatable) populates the runtime trust matrix. Migration plan for future schemes documented in `secret/SIGNATURE_SCHEME_MIGRATION.md`. R42 added to `docs/decisions/RESOLVED.md`; `docs/architecture/WIRE_FORMAT.md` updated with the extension layout. |
 
 ## Verification matrix
 
 ```bash
 cargo test --workspace                                                          # 956 tests across 16 suites, all green
+cargo test --workspace --features signatures                                    # 963 across 16, all green
 cargo clippy --tests --workspace --all-features -- -D warnings                  # clean
 cargo fmt --all -- --check                                                      # idempotent
-(cd examples/rtos && cargo build --release --bin three-task-n6 \
+keleusma compile signed.kel --signing-key seed.bin -o signed.kel.bin            # signed bytecode produced
+keleusma run signed.kel.bin --verifying-key correct.pub                         # loads + executes
+keleusma run signed.kel.bin --verifying-key wrong.pub                           # rejects: signature did not verify
+keleusma run signed.kel.bin                                                     # rejects: empty trust matrix
+(cd examples/rtos && cargo run --release --bin three-task-n6 \
     --target thumbv8m.main-none-eabihf --no-default-features \
-    --features stm32n6570dk-platform)                                          # clean
-(cd examples/rtos && cargo run  --release --bin three-task-n6 \
-    --target thumbv8m.main-none-eabihf --no-default-features \
-    --features stm32n6570dk-platform)                                          # boots, all tasks load, scheduler runs
-(cd examples/rtos && cargo run  --release --bin three-task-n6 \
-    --target thumbv8m.main-none-eabihf --no-default-features \
-    --features stm32n6570dk-platform,keleusma-verify)                          # boots, all tasks load+verify, scheduler runs
+    --features stm32n6570dk-platform)                                          # boots; unsigned-modules path unchanged
 ```
 
 ## Open concerns

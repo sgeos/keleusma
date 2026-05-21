@@ -1059,6 +1059,7 @@ fn specialize_function(
         guard: func.guard.clone(),
         body,
         ephemeral: func.ephemeral,
+        signed: func.signed,
         span: func.span,
     }
 }

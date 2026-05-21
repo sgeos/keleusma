@@ -82,6 +82,14 @@ pub enum TokenKind {
     /// verifier rule. The compile pipeline errors when the assertion
     /// does not hold.
     Ephemeral,
+    /// `signed` modifier on an entry-point function declaration.
+    /// Sets [`crate::wire_format::FLAG_REQUIRES_SIGNATURE`] on the
+    /// resulting module so the load-time runtime refuses to admit
+    /// the module unless its cryptographic signature verifies
+    /// against the host's trust matrix. The keyword is admissible
+    /// only on the entry function and on any of the three
+    /// function categories (`fn` / `yield` / `loop`).
+    Signed,
     Trait,
     Impl,
 
@@ -168,6 +176,7 @@ impl TokenKind {
             "underflow" => Some(TokenKind::Underflow),
             "saturate_max" => Some(TokenKind::SaturateMax),
             "saturate_min" => Some(TokenKind::SaturateMin),
+            "signed" => Some(TokenKind::Signed),
             // `classify` and `declassify` are intentionally NOT
             // reserved as keywords because they may also be used
             // as user-defined function names. The parser

@@ -254,7 +254,9 @@ impl<'a> Parser<'a> {
                 TokenKind::Fn | TokenKind::Yield | TokenKind::Loop | TokenKind::Pure => {
                     functions.push(self.parse_function_def()?);
                 }
-                TokenKind::Ephemeral => functions.push(self.parse_function_def()?),
+                TokenKind::Ephemeral | TokenKind::Signed => {
+                    functions.push(self.parse_function_def()?);
+                }
                 TokenKind::Trait => traits.push(self.parse_trait_def()?),
                 TokenKind::Impl => impls.push(self.parse_impl_block()?),
                 _ => {
@@ -944,13 +946,28 @@ impl<'a> Parser<'a> {
     fn parse_function_def(&mut self) -> Result<FunctionDef, ParseError> {
         let start = self.peek_span();
 
-        // Optional `ephemeral` modifier. Asserts that the function is
-        // the entry point and that the verifier can prove the module
-        // ephemeral. Permitted on `fn main`, `yield main`, and
-        // `loop main`. The type checker rejects the modifier on any
-        // non-entry function; the verifier rejects the program if the
-        // proof fails.
-        let ephemeral = self.eat(&TokenKind::Ephemeral);
+        // Optional `ephemeral` and `signed` modifiers. Both are
+        // entry-only assertions; either or both may precede the
+        // function category keyword in either order. The type
+        // checker rejects them on non-entry functions; the
+        // verifier rejects the program if the `ephemeral` proof
+        // fails. The `signed` modifier sets
+        // `FLAG_REQUIRES_SIGNATURE` on the module header so the
+        // load-time runtime refuses to admit the bytecode without
+        // a verified signature.
+        let mut ephemeral = false;
+        let mut signed = false;
+        loop {
+            if !ephemeral && self.eat(&TokenKind::Ephemeral) {
+                ephemeral = true;
+                continue;
+            }
+            if !signed && self.eat(&TokenKind::Signed) {
+                signed = true;
+                continue;
+            }
+            break;
+        }
 
         // Optional `pure` annotation.
         let _pure = self.eat(&TokenKind::Pure);
@@ -969,11 +986,13 @@ impl<'a> Parser<'a> {
                 FunctionCategory::Loop
             }
             _ => {
-                return Err(self.error(if ephemeral {
-                    "expected 'fn', 'yield', or 'loop' after 'ephemeral'"
-                } else {
-                    "expected 'fn', 'yield', or 'loop'"
-                }));
+                let expected_kw = match (ephemeral, signed) {
+                    (true, true) => "expected 'fn', 'yield', or 'loop' after 'ephemeral'/'signed'",
+                    (true, false) => "expected 'fn', 'yield', or 'loop' after 'ephemeral'",
+                    (false, true) => "expected 'fn', 'yield', or 'loop' after 'signed'",
+                    (false, false) => "expected 'fn', 'yield', or 'loop'",
+                };
+                return Err(self.error(expected_kw));
             }
         };
 
@@ -1033,6 +1052,7 @@ impl<'a> Parser<'a> {
             guard,
             body,
             ephemeral,
+            signed,
             span: merge_spans(start, end),
         })
     }

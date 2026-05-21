@@ -30,32 +30,53 @@ The audit considered an alternative variable-length encoding that placed compoun
 
 ## Framing header
 
-The framing header is exactly sixty-four bytes. Multiples of eight preserve alignment for the eight-byte operand pool entries that follow when the body starts at a header-aligned offset. The header carries the magic, version, total length, target widths, declared WCET and WCMU, the data segment sizes, and section offsets and lengths for the opcode stream, operand pool, and rkyv-archived auxiliary body.
+The framing header is at least sixty-four bytes for unsigned modules and grows to accommodate an optional signature-extension block for signed modules. Multiples of eight preserve alignment for the eight-byte operand pool entries that follow when the body starts at a header-aligned offset. The header carries the magic, version, total length, target widths, flags, declared WCET and WCMU, the data segment sizes, section offsets and lengths for the opcode stream, operand pool, and rkyv-archived auxiliary body, and (when present) the cryptographic signature.
 
 | Offset | Width | Field |
 |--------|-------|-------|
 | 0      | 4     | Magic `b"KELE"` |
 | 4      | 2     | Version (u16 little-endian) |
-| 6      | 2     | Header length (u16 little-endian, equals 64) |
+| 6      | 2     | Header length (u16 little-endian; 64 for unsigned, 64 + 8 + signature_length + padding-to-8 for signed) |
 | 8      | 4     | Total length (u32 little-endian, includes header, sections, CRC trailer) |
 | 12     | 1     | Target word bits log2 (u8) |
 | 13     | 1     | Target address bits log2 (u8) |
 | 14     | 1     | Target float bits log2 (u8) |
-| 15     | 1     | Flags (u8) |
+| 15     | 1     | Flags (u8). Bit 0 = `FLAG_EPHEMERAL`. Bit 1 = `FLAG_REQUIRES_SIGNATURE`. Other bits reserved. |
 | 16     | 4     | Declared WCET cycles (u32 little-endian) |
 | 20     | 4     | Declared WCMU bytes (u32 little-endian) |
 | 24     | 4     | Shared data bytes (u32 little-endian) |
 | 28     | 4     | Private data bytes (u32 little-endian) |
-| 32     | 4     | Opcode stream offset (u32 little-endian) |
+| 32     | 4     | Opcode stream offset (u32 little-endian, relative to start of file) |
 | 36     | 4     | Opcode stream length (u32 little-endian, multiple of 4) |
-| 40     | 4     | Operand pool offset (u32 little-endian) |
+| 40     | 4     | Operand pool offset (u32 little-endian, relative to start of file) |
 | 44     | 4     | Operand pool length (u32 little-endian, multiple of 8) |
-| 48     | 4     | Auxiliary body offset (u32 little-endian) |
+| 48     | 4     | Auxiliary body offset (u32 little-endian, relative to start of file) |
 | 52     | 4     | Auxiliary body length (u32 little-endian) |
 | 56     | 4     | Reserved (u32, zero) |
 | 60     | 4     | Reserved (u32, zero) |
 
-The reserved fields cover future section additions. A V0.2.x runtime that encounters non-zero reserved fields rejects the bytecode as `LoadError::InvalidFormat` to preserve forward-compatibility against future producers that adopt the same magic and version.
+The reserved fields cover future section additions. A V0.2.x runtime that encounters non-zero reserved fields rejects the bytecode as `LoadError::Codec` to preserve forward-compatibility against future producers that adopt the same magic and version.
+
+### Signature extension (optional)
+
+Signed modules append an eight-byte metadata block followed by the raw signature payload immediately after byte 64. The `header_length` field at bytes 6..8 encodes the total header size including the extension; section offsets later in the header point past the extension into the body.
+
+| Offset | Width | Field |
+|--------|-------|-------|
+| 64     | 1     | Scheme id (u8). `1` = Ed25519. `0` and other values reserved. |
+| 65     | 1     | Reserved (u8, zero) |
+| 66     | 2     | Signature length (u16 little-endian). For Ed25519: 64. |
+| 68     | 4     | Reserved (u32, zero) |
+| 72     | n     | Signature payload (n bytes, scheme-dependent) |
+| 72+n   | pad   | Zero padding to the next 8-byte boundary |
+
+For Ed25519, the signature payload is 64 bytes; total `header_length` = 64 + 8 + 64 = 136 bytes (already 8-aligned, no padding).
+
+A `FLAG_REQUIRES_SIGNATURE` bit in the flags byte indicates whether the loader must verify the signature. The decoder rejects inconsistent combinations: flag set without an extension, or extension present without the flag. V0.2.0 does not admit optional or audit-only signatures.
+
+The cryptographic message that the signature covers is the entire framed buffer with the signature payload bytes and the CRC trailer bytes zeroed. Both signer and verifier zero those two regions before computing the cryptographic operation. The CRC trailer covers everything including the real signature bytes, so the CRC catches corruption regardless of whether the signature itself was modified in transit.
+
+See `R42` in [`docs/decisions/RESOLVED.md`](../decisions/RESOLVED.md) for the design rationale and `secret/SIGNATURE_SCHEME_MIGRATION.md` (internal) for the future-scheme migration matrix.
 
 ## Opcode records
 

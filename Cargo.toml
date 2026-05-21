@@ -63,6 +63,18 @@ verify = []
 # leave this feature off; the Shell library is not compiled.
 shell = []
 
+# Enables compiled-module signing and signature verification at
+# load time. Adds `ed25519-dalek` as a dependency for the Ed25519
+# scheme (the only scheme V0.2.0 ships). With the feature off, the
+# `signed` surface keyword is still recognized by the parser (so
+# source files remain portable across feature configurations), but
+# the resulting flag is rejected at load time because no
+# verifier-side scheme is compiled in. Future scheme additions
+# extend the wire-format `scheme_id` byte without requiring an ABI
+# break; see `secret/SIGNATURE_SCHEME_MIGRATION.md` for the
+# planned migration matrix.
+signatures = ["dep:ed25519-dalek"]
+
 # Enables the SDL3 audio piano-roll example. Pulls in SDL3 (built
 # from source via CMake) and is therefore opt-in.
 sdl3-example = ["dep:sdl3"]
@@ -102,6 +114,13 @@ keleusma-macros = { path = "keleusma-macros", version = "0.1.0" }
 keleusma-arena = { version = "0.3", path = "keleusma-arena", features = ["alloc"] }
 allocator-api2 = { version = "0.4", default-features = false, features = ["alloc"] }
 rkyv = { version = "0.8", default-features = false, features = ["alloc", "bytecheck"] }
+# Ed25519 signing and verification for the optional `signatures`
+# feature. `no_std + alloc` configuration matches the rest of the
+# crate. `zeroize` is enabled so secret-bearing values clear their
+# memory on drop. `rand_core` is intentionally absent because the
+# crate consumes pre-existing signing keys rather than generating
+# them; key generation is host-side responsibility.
+ed25519-dalek = { version = "2", default-features = false, features = ["alloc", "zeroize"], optional = true }
 sdl3 = { version = "0.18", features = ["build-from-source-static"], optional = true }
 
 [[example]]

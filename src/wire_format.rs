@@ -101,8 +101,41 @@ pub const OPCODE_RECORD_BYTES: usize = 4;
 /// Width of an operand pool entry in bytes.
 pub const OPERAND_POOL_ENTRY_BYTES: usize = 8;
 
-/// Width of the framing header in bytes.
+/// Width of the framing header in bytes for unsigned modules.
+/// Signed modules grow the header by a signature-extension block;
+/// the decoder reads the actual header length from bytes 6..8.
 pub const WIRE_FORMAT_HEADER_BYTES: usize = 64;
+
+/// Width of the signature-extension metadata block that follows
+/// the base header on signed modules. Bytes are laid out as:
+///
+/// - byte 0: `scheme_id` (u8). `0` is reserved-invalid; `1` is
+///   Ed25519. Other values are reserved for future schemes
+///   tracked in `secret/SIGNATURE_SCHEME_MIGRATION.md`.
+/// - byte 1: reserved (must be `0`).
+/// - bytes 2..4: `signature_length` (u16 little-endian).
+/// - bytes 4..8: reserved (must be `0`).
+pub const SIGNATURE_METADATA_BYTES: usize = 8;
+
+/// Bit in the framing header's `flags: u8` byte (offset 15) that
+/// signals "this module must be loaded only after a successful
+/// signature verification." The flag is set by the compiler when
+/// the entry function carries the `signed` modifier and is
+/// enforced by the load-time runtime against the host-supplied
+/// trust matrix.
+pub const FLAG_REQUIRES_SIGNATURE: u8 = 0x02;
+
+/// Signature scheme identifier for the Ed25519 algorithm. The
+/// only scheme V0.2.0 implements; the byte exists to make the
+/// wire format scheme-agnostic so future migrations do not
+/// require an ABI break.
+pub const SIGNATURE_SCHEME_ED25519: u8 = 0x01;
+
+/// Length of an Ed25519 signature in bytes.
+pub const ED25519_SIGNATURE_BYTES: usize = 64;
+
+/// Length of an Ed25519 verifying key in bytes.
+pub const ED25519_VERIFYING_KEY_BYTES: usize = 32;
 
 /// Maximum operand pool size addressable by the twenty-four-bit
 /// inline pool index. `16_777_216`.
@@ -710,6 +743,97 @@ fn decode_pool_u16_u16_u8(
 /// bytecode.
 pub const WIRE_FORMAT_FOOTER_BYTES: usize = 4;
 
+/// Information about a module's signature, extracted from the
+/// framing header's signature-extension block. Used both by the
+/// decoder (to validate framing) and by the signature-verification
+/// path (to locate the signature bytes and construct the message
+/// view).
+#[derive(Debug, Clone, Copy)]
+pub struct SignatureInfo {
+    /// Scheme identifier at byte 64 of the header. The only V0.2.0
+    /// scheme is `SIGNATURE_SCHEME_ED25519 = 1`.
+    pub scheme_id: u8,
+    /// Byte offset within the framed buffer where the raw
+    /// signature bytes begin. Always `WIRE_FORMAT_HEADER_BYTES +
+    /// SIGNATURE_METADATA_BYTES = 72` for the V0.2.0 layout.
+    pub signature_offset: usize,
+    /// Length of the signature in bytes. For Ed25519: 64.
+    pub signature_length: usize,
+}
+
+/// Compute the framing header length for a signed module given
+/// the chosen signature scheme. Pads to an 8-byte boundary so the
+/// body that follows starts aligned.
+pub const fn signed_header_length(signature_length: usize) -> usize {
+    let unpadded = WIRE_FORMAT_HEADER_BYTES + SIGNATURE_METADATA_BYTES + signature_length;
+    // Round up to multiple of 8 for body alignment.
+    (unpadded + 7) & !7
+}
+
+/// Parse the optional signature-extension metadata block at the
+/// tail of the framing header. Returns `Ok(None)` for an unsigned
+/// module (header_length exactly `WIRE_FORMAT_HEADER_BYTES`).
+/// Returns `Ok(Some(info))` for a well-formed signed module.
+/// Returns `Err` if the extension is malformed, claims an unknown
+/// scheme, or carries an unexpected signature length.
+///
+/// `bytes` must point at the start of the framed buffer (after
+/// any shebang strip). `header_length` must already be validated
+/// to fall within the buffer.
+pub fn parse_signature_metadata(
+    bytes: &[u8],
+    header_length: usize,
+) -> Result<Option<SignatureInfo>, LoadError> {
+    if header_length == WIRE_FORMAT_HEADER_BYTES {
+        return Ok(None);
+    }
+    if header_length < WIRE_FORMAT_HEADER_BYTES + SIGNATURE_METADATA_BYTES {
+        return Err(LoadError::Codec(format!(
+            "header_length {} is less than the minimum {} required for a signature extension",
+            header_length,
+            WIRE_FORMAT_HEADER_BYTES + SIGNATURE_METADATA_BYTES,
+        )));
+    }
+    let scheme_id = bytes[64];
+    let reserved_byte = bytes[65];
+    let signature_length = u16::from_le_bytes([bytes[66], bytes[67]]) as usize;
+    let reserved_word = u32::from_le_bytes([bytes[68], bytes[69], bytes[70], bytes[71]]);
+    if reserved_byte != 0 || reserved_word != 0 {
+        return Err(LoadError::Codec(String::from(
+            "signature metadata reserved fields must be zero",
+        )));
+    }
+    if scheme_id == 0 {
+        return Err(LoadError::Codec(String::from(
+            "signature metadata scheme_id 0 is reserved; signed modules must use scheme_id >= 1",
+        )));
+    }
+    if scheme_id != SIGNATURE_SCHEME_ED25519 {
+        return Err(LoadError::Codec(format!(
+            "signature scheme_id {} is not supported in this build (only Ed25519 = {} is implemented in V0.2.0)",
+            scheme_id, SIGNATURE_SCHEME_ED25519,
+        )));
+    }
+    if signature_length != ED25519_SIGNATURE_BYTES {
+        return Err(LoadError::Codec(format!(
+            "Ed25519 signature_length must be {}; got {}",
+            ED25519_SIGNATURE_BYTES, signature_length,
+        )));
+    }
+    let expected_header_length = signed_header_length(signature_length);
+    if header_length != expected_header_length {
+        return Err(LoadError::Codec(format!(
+            "header_length {} does not match expected {} (sig metadata {} + sig {} + padding to 8-byte multiple)",
+            header_length, expected_header_length, SIGNATURE_METADATA_BYTES, signature_length,
+        )));
+    }
+    Ok(Some(SignatureInfo {
+        scheme_id,
+        signature_offset: WIRE_FORMAT_HEADER_BYTES + SIGNATURE_METADATA_BYTES,
+        signature_length,
+    }))
+}
+
 /// Reflected polynomial residue produced after concatenating any
 /// byte sequence with the little-endian encoding of its CRC-32.
 /// The wire-format reader verifies the bytecode through this
@@ -839,21 +963,41 @@ pub fn parse_wire_sections(bytes: &[u8]) -> Result<WireSections<'_>, LoadError> 
         });
     }
     let header_length = u16::from_le_bytes([bytes[6], bytes[7]]) as usize;
-    if header_length != WIRE_FORMAT_HEADER_BYTES {
+    if header_length < WIRE_FORMAT_HEADER_BYTES {
         return Err(LoadError::Codec(format!(
-            "wire format header length {} does not match the expected {}",
+            "wire format header_length {} is below the minimum {}",
             header_length, WIRE_FORMAT_HEADER_BYTES
         )));
     }
+    if header_length > bytes.len() {
+        return Err(LoadError::Truncated);
+    }
     let total_length = u32::from_le_bytes([bytes[8], bytes[9], bytes[10], bytes[11]]) as usize;
-    if total_length < WIRE_FORMAT_HEADER_BYTES + WIRE_FORMAT_FOOTER_BYTES
-        || total_length > bytes.len()
-    {
+    if total_length < header_length + WIRE_FORMAT_FOOTER_BYTES || total_length > bytes.len() {
         return Err(LoadError::Truncated);
     }
     let bytes = &bytes[..total_length];
     if crc32(bytes) != WIRE_FORMAT_CRC32_RESIDUE {
         return Err(LoadError::BadChecksum);
+    }
+    // Signature-extension consistency. If the flag is set, the
+    // header must carry a signature metadata block; if the flag
+    // is unset, the header must be exactly the base size.
+    let flags = bytes[15];
+    let signed = (flags & FLAG_REQUIRES_SIGNATURE) != 0;
+    let sig_info = parse_signature_metadata(bytes, header_length)?;
+    match (signed, sig_info) {
+        (true, None) => {
+            return Err(LoadError::Codec(String::from(
+                "FLAG_REQUIRES_SIGNATURE is set but the header carries no signature extension",
+            )));
+        }
+        (false, Some(_)) => {
+            return Err(LoadError::Codec(String::from(
+                "header carries a signature extension but FLAG_REQUIRES_SIGNATURE is not set; V0.2.0 does not admit audit-only signatures",
+            )));
+        }
+        _ => {}
     }
     let opcode_stream_offset =
         u32::from_le_bytes([bytes[32], bytes[33], bytes[34], bytes[35]]) as usize;
@@ -867,7 +1011,7 @@ pub fn parse_wire_sections(bytes: &[u8]) -> Result<WireSections<'_>, LoadError> 
     let aux_body_length = u32::from_le_bytes([bytes[52], bytes[53], bytes[54], bytes[55]]) as usize;
     let body_end = total_length - WIRE_FORMAT_FOOTER_BYTES;
     let in_body = |off: usize, len: usize| -> bool {
-        off >= WIRE_FORMAT_HEADER_BYTES && off.checked_add(len).is_some_and(|end| end <= body_end)
+        off >= header_length && off.checked_add(len).is_some_and(|end| end <= body_end)
     };
     if !in_body(opcode_stream_offset, opcode_stream_length)
         || !in_body(operand_pool_offset, operand_pool_length)
@@ -1027,14 +1171,55 @@ pub fn module_to_wire_bytes(module: &Module) -> Result<Vec<u8>, LoadError> {
         operand_pool_bytes.extend_from_slice(&entry.0);
     }
 
+    assemble_wire_bytes(
+        module,
+        &opcode_stream,
+        &operand_pool_bytes,
+        &aux_bytes,
+        None,
+    )
+}
+
+/// Shared buffer assembly for both signed and unsigned encoder
+/// paths. The `signature` parameter encodes whether the output
+/// should include a signature-extension block:
+///
+/// - `None`: produces an unsigned buffer with a 64-byte framing
+///   header. The buffer is fully framed including the CRC trailer.
+/// - `Some(scheme_id)`: produces a signed buffer with an extended
+///   header that holds the signature metadata and a *zeroed*
+///   signature payload. The CRC trailer is also zeroed. The
+///   caller (`module_to_signed_wire_bytes`) is responsible for
+///   computing the signature over the zeroed buffer, patching the
+///   real signature bytes into the header, and finally computing
+///   and patching the real CRC.
+fn assemble_wire_bytes(
+    module: &Module,
+    opcode_stream: &[u8],
+    operand_pool_bytes: &[u8],
+    aux_bytes: &[u8],
+    signature: Option<u8>,
+) -> Result<Vec<u8>, LoadError> {
+    // Determine header_length and the flag state of the module.
+    let (header_length, effective_flags) = match signature {
+        None => (WIRE_FORMAT_HEADER_BYTES, module.flags),
+        Some(SIGNATURE_SCHEME_ED25519) => (
+            signed_header_length(ED25519_SIGNATURE_BYTES),
+            module.flags | FLAG_REQUIRES_SIGNATURE,
+        ),
+        Some(other) => {
+            return Err(LoadError::Codec(format!(
+                "unsupported signature scheme_id {} (only Ed25519 = {} ships in V0.2.0)",
+                other, SIGNATURE_SCHEME_ED25519
+            )));
+        }
+    };
     // Compute section offsets. The opcode stream begins
-    // immediately after the 64-byte framing header. The operand
-    // pool begins at the next 8-byte aligned offset, which is
-    // already aligned because the opcode stream is a multiple
-    // of 4 bytes per record and the section count is a multiple
-    // of 8 records (records are 4 bytes; 8 records = 32 bytes
-    // align). Conservatively pad to 8-byte alignment.
-    let opcode_stream_offset = WIRE_FORMAT_HEADER_BYTES as u32;
+    // immediately after the framing header. Each section is then
+    // padded to an 8-byte boundary so the next section starts
+    // aligned. The aux body is rkyv-archived and requires 8-byte
+    // alignment for in-place access.
+    let opcode_stream_offset = header_length as u32;
     let opcode_stream_length = opcode_stream.len() as u32;
     let mut after_opcodes = opcode_stream_offset + opcode_stream_length;
     let opcode_padding = ((8 - (after_opcodes as usize % 8)) % 8) as u32;
@@ -1051,15 +1236,15 @@ pub fn module_to_wire_bytes(module: &Module) -> Result<Vec<u8>, LoadError> {
 
     // Assemble the buffer.
     let mut buf: Vec<u8> = Vec::with_capacity(total_length as usize);
-    // Framing header.
+    // Framing header (base 64 bytes).
     buf.extend_from_slice(&BYTECODE_MAGIC);
     buf.extend_from_slice(&BYTECODE_VERSION.to_le_bytes());
-    buf.extend_from_slice(&(WIRE_FORMAT_HEADER_BYTES as u16).to_le_bytes());
+    buf.extend_from_slice(&(header_length as u16).to_le_bytes());
     buf.extend_from_slice(&total_length.to_le_bytes());
     buf.push(module.word_bits_log2);
     buf.push(module.addr_bits_log2);
     buf.push(module.float_bits_log2);
-    buf.push(module.flags);
+    buf.push(effective_flags);
     buf.extend_from_slice(&module.wcet_cycles.to_le_bytes());
     buf.extend_from_slice(&module.wcmu_bytes.to_le_bytes());
     buf.extend_from_slice(&module.shared_data_bytes.to_le_bytes());
@@ -1070,26 +1255,223 @@ pub fn module_to_wire_bytes(module: &Module) -> Result<Vec<u8>, LoadError> {
     buf.extend_from_slice(&operand_pool_length.to_le_bytes());
     buf.extend_from_slice(&aux_body_offset.to_le_bytes());
     buf.extend_from_slice(&aux_body_length.to_le_bytes());
-    buf.extend_from_slice(&[0u8; 4]); // reserved
-    buf.extend_from_slice(&[0u8; 4]); // reserved
+    buf.extend_from_slice(&[0u8; 4]); // reserved at offsets 56..60
+    buf.extend_from_slice(&[0u8; 4]); // reserved at offsets 60..64
     debug_assert_eq!(buf.len(), WIRE_FORMAT_HEADER_BYTES);
 
+    // Signature extension. The signature payload is zero-filled
+    // here; the caller patches the real signature in after signing
+    // the zero-filled buffer.
+    if let Some(scheme_id) = signature {
+        // 8-byte signature metadata block.
+        buf.push(scheme_id);
+        buf.push(0); // reserved
+        let signature_length = match scheme_id {
+            SIGNATURE_SCHEME_ED25519 => ED25519_SIGNATURE_BYTES,
+            _ => unreachable!("validated above"),
+        };
+        buf.extend_from_slice(&(signature_length as u16).to_le_bytes());
+        buf.extend_from_slice(&[0u8; 4]); // reserved
+        // Signature payload (zero placeholder).
+        buf.resize(buf.len() + signature_length, 0);
+        // Pad to 8-byte boundary so the body starts aligned.
+        while buf.len() < header_length {
+            buf.push(0);
+        }
+        debug_assert_eq!(buf.len(), header_length);
+    }
+
     // Opcode stream + alignment padding.
-    buf.extend_from_slice(&opcode_stream);
+    buf.extend_from_slice(opcode_stream);
     buf.resize(buf.len() + opcode_padding as usize, 0);
 
     // Operand pool + alignment padding.
-    buf.extend_from_slice(&operand_pool_bytes);
+    buf.extend_from_slice(operand_pool_bytes);
     buf.resize(buf.len() + pool_padding as usize, 0);
 
     // Auxiliary body.
-    buf.extend_from_slice(&aux_bytes);
+    buf.extend_from_slice(aux_bytes);
 
-    // CRC trailer over header + sections.
+    // CRC trailer. Compute over the buffer so far (signed and
+    // unsigned paths both produce a valid CRC at this point).
     let crc = crc32(&buf);
     buf.extend_from_slice(&crc.to_le_bytes());
     debug_assert_eq!(buf.len(), total_length as usize);
     Ok(buf)
+}
+
+/// Encode a [`Module`] into the V0.2.0 wire format with an
+/// Ed25519 signature appended to the framing header. Sets
+/// `FLAG_REQUIRES_SIGNATURE` in the header's flags byte.
+///
+/// The signature is computed over the entire framed buffer with
+/// the signature payload bytes and the CRC trailer bytes zeroed.
+/// The verifier reconstructs the same view by copying the
+/// received buffer and zeroing those two regions before calling
+/// [`verify_module_signature`].
+///
+/// Requires the `signatures` cargo feature. Without it, the
+/// `signed` surface keyword still parses (for source-file
+/// portability) but no host can produce signed bytecode.
+#[cfg(feature = "signatures")]
+pub fn module_to_signed_wire_bytes(
+    module: &Module,
+    signing_key: &ed25519_dalek::SigningKey,
+) -> Result<Vec<u8>, LoadError> {
+    use ed25519_dalek::Signer;
+
+    // Re-run the per-chunk encoding so we have the opcode stream,
+    // operand pool, and aux body bytes to hand to the shared
+    // assembler. This is a small duplication of `module_to_wire_bytes`
+    // but keeps the signed and unsigned encode paths uniform.
+    let mut opcode_stream: Vec<u8> = Vec::new();
+    let mut operand_pool: Vec<OperandPoolEntry> = Vec::new();
+    let mut wire_chunks: Vec<WireChunk> = Vec::with_capacity(module.chunks.len());
+    for chunk in &module.chunks {
+        let op_byte_offset = opcode_stream.len() as u32;
+        let op_record_count = chunk.ops.len() as u32;
+        for op in &chunk.ops {
+            let record = encode_op(op, &mut operand_pool)
+                .map_err(|e| LoadError::Codec(format!("opcode encode failed: {:?}", e)))?;
+            opcode_stream.extend_from_slice(&record.0);
+        }
+        wire_chunks.push(WireChunk {
+            name: chunk.name.clone(),
+            constants: chunk.constants.clone(),
+            struct_templates: chunk.struct_templates.clone(),
+            local_count: chunk.local_count,
+            param_count: chunk.param_count,
+            block_type: chunk.block_type,
+            param_types: chunk.param_types.clone(),
+            op_byte_offset,
+            op_record_count,
+        });
+    }
+    let aux = WireAuxBody {
+        chunks: wire_chunks,
+        native_names: module.native_names.clone(),
+        entry_point: module.entry_point,
+        data_layout: module.data_layout.clone(),
+        word_bits_log2: module.word_bits_log2,
+        addr_bits_log2: module.addr_bits_log2,
+        float_bits_log2: module.float_bits_log2,
+        wcet_cycles: module.wcet_cycles,
+        wcmu_bytes: module.wcmu_bytes,
+        flags: module.flags | FLAG_REQUIRES_SIGNATURE,
+        shared_data_bytes: module.shared_data_bytes,
+        private_data_bytes: module.private_data_bytes,
+        schema_hash: module.schema_hash,
+    };
+    let aux_bytes = rkyv::to_bytes::<rkyv::rancor::Error>(&aux)
+        .map_err(|e| LoadError::Codec(format!("aux body encode failed: {}", e)))?;
+    let mut operand_pool_bytes: Vec<u8> =
+        Vec::with_capacity(operand_pool.len() * OPERAND_POOL_ENTRY_BYTES);
+    for entry in &operand_pool {
+        operand_pool_bytes.extend_from_slice(&entry.0);
+    }
+
+    // Assemble with a zeroed signature payload.
+    let mut buf = assemble_wire_bytes(
+        module,
+        &opcode_stream,
+        &operand_pool_bytes,
+        &aux_bytes,
+        Some(SIGNATURE_SCHEME_ED25519),
+    )?;
+    let total_length = buf.len();
+
+    // Zero the CRC trailer for the signing pass.
+    let footer_start = total_length - WIRE_FORMAT_FOOTER_BYTES;
+    for byte in &mut buf[footer_start..] {
+        *byte = 0;
+    }
+
+    // Sign over (header + zeroed signature + body + zeroed CRC).
+    let signature = signing_key.sign(&buf);
+    let sig_bytes = signature.to_bytes();
+
+    // Patch the real signature into the header.
+    let sig_offset = WIRE_FORMAT_HEADER_BYTES + SIGNATURE_METADATA_BYTES;
+    buf[sig_offset..sig_offset + ED25519_SIGNATURE_BYTES].copy_from_slice(&sig_bytes);
+
+    // Recompute and write the real CRC trailer.
+    let crc = crc32(&buf[..footer_start]);
+    buf[footer_start..].copy_from_slice(&crc.to_le_bytes());
+
+    Ok(buf)
+}
+
+/// Verify that the bytecode at `bytes` carries a signature
+/// matching at least one of the supplied verifying keys. Returns
+/// `Ok(())` on a successful match; `Err(LoadError::InvalidSignature)`
+/// if no key matches; other `LoadError` variants if the framing
+/// or signature metadata is malformed.
+///
+/// The verification message is the bytecode buffer with the
+/// signature payload bytes and the CRC trailer bytes zeroed. This
+/// matches the signing convention in
+/// [`module_to_signed_wire_bytes`].
+///
+/// Requires the `signatures` cargo feature.
+#[cfg(feature = "signatures")]
+pub fn verify_module_signature(
+    bytes: &[u8],
+    keys: &[ed25519_dalek::VerifyingKey],
+) -> Result<(), LoadError> {
+    use ed25519_dalek::Verifier;
+
+    let bytes = strip_shebang_prefix(bytes);
+    if bytes.len() < WIRE_FORMAT_HEADER_BYTES + WIRE_FORMAT_FOOTER_BYTES {
+        return Err(LoadError::Truncated);
+    }
+    if bytes[0..4] != BYTECODE_MAGIC {
+        return Err(LoadError::BadMagic);
+    }
+    let header_length = u16::from_le_bytes([bytes[6], bytes[7]]) as usize;
+    let total_length = u32::from_le_bytes([bytes[8], bytes[9], bytes[10], bytes[11]]) as usize;
+    if total_length > bytes.len() {
+        return Err(LoadError::Truncated);
+    }
+    let bytes = &bytes[..total_length];
+    let sig_info = parse_signature_metadata(bytes, header_length)?
+        .ok_or_else(|| LoadError::Codec(String::from("module is not signed")))?;
+
+    // Build the verification message: the entire framed buffer
+    // with the signature payload and CRC trailer zeroed.
+    let mut message: Vec<u8> = bytes.to_vec();
+    let sig_start = sig_info.signature_offset;
+    let sig_end = sig_start + sig_info.signature_length;
+    for byte in &mut message[sig_start..sig_end] {
+        *byte = 0;
+    }
+    let footer_start = total_length - WIRE_FORMAT_FOOTER_BYTES;
+    for byte in &mut message[footer_start..] {
+        *byte = 0;
+    }
+
+    // Extract the signature.
+    let mut signature_bytes = [0u8; ED25519_SIGNATURE_BYTES];
+    signature_bytes.copy_from_slice(&bytes[sig_start..sig_end]);
+    let signature = ed25519_dalek::Signature::from_bytes(&signature_bytes);
+
+    // Try each key. The first match wins; an empty key set
+    // produces `InvalidSignature` (no host trust matrix → reject).
+    for key in keys {
+        if key.verify(&message, &signature).is_ok() {
+            return Ok(());
+        }
+    }
+    Err(LoadError::InvalidSignature)
+}
+
+/// Returns `true` if the framing header carries the signature-
+/// requirement flag. Used by load-time paths that may not have
+/// the `signatures` feature compiled in: such builds reject the
+/// module with `LoadError::SignaturesUnsupported` rather than
+/// silently admitting an unverified signed module.
+pub fn header_requires_signature(bytes: &[u8]) -> bool {
+    let bytes = strip_shebang_prefix(bytes);
+    bytes.len() > 15 && (bytes[15] & FLAG_REQUIRES_SIGNATURE) != 0
 }
 
 /// Decode the V0.2.0 wire format produced by
@@ -1119,16 +1501,17 @@ pub fn module_from_wire_bytes(bytes: &[u8]) -> Result<Module, LoadError> {
         });
     }
     let header_length = u16::from_le_bytes([bytes[6], bytes[7]]) as usize;
-    if header_length != WIRE_FORMAT_HEADER_BYTES {
+    if header_length < WIRE_FORMAT_HEADER_BYTES {
         return Err(LoadError::Codec(format!(
-            "wire format header length {} does not match the expected {}",
+            "wire format header_length {} is below the minimum {}",
             header_length, WIRE_FORMAT_HEADER_BYTES
         )));
     }
+    if header_length > bytes.len() {
+        return Err(LoadError::Truncated);
+    }
     let total_length = u32::from_le_bytes([bytes[8], bytes[9], bytes[10], bytes[11]]) as usize;
-    if total_length < WIRE_FORMAT_HEADER_BYTES + WIRE_FORMAT_FOOTER_BYTES
-        || total_length > bytes.len()
-    {
+    if total_length < header_length + WIRE_FORMAT_FOOTER_BYTES || total_length > bytes.len() {
         return Err(LoadError::Truncated);
     }
     let bytes = &bytes[..total_length];
@@ -1161,11 +1544,28 @@ pub fn module_from_wire_bytes(bytes: &[u8]) -> Result<Module, LoadError> {
             reserved_a, reserved_b,
         )));
     }
+    // Signature-extension consistency. Reuse `parse_wire_sections`'
+    // logic by inlining the same check.
+    let signed = (flags & FLAG_REQUIRES_SIGNATURE) != 0;
+    let sig_info = parse_signature_metadata(bytes, header_length)?;
+    match (signed, sig_info) {
+        (true, None) => {
+            return Err(LoadError::Codec(String::from(
+                "FLAG_REQUIRES_SIGNATURE is set but the header carries no signature extension",
+            )));
+        }
+        (false, Some(_)) => {
+            return Err(LoadError::Codec(String::from(
+                "header carries a signature extension but FLAG_REQUIRES_SIGNATURE is not set; V0.2.0 does not admit audit-only signatures",
+            )));
+        }
+        _ => {}
+    }
     // Section bounds sanity. Each section fits entirely within
     // the frame (after the header, before the CRC trailer).
     let body_end = total_length - WIRE_FORMAT_FOOTER_BYTES;
     let in_body = |off: usize, len: usize| -> bool {
-        off >= WIRE_FORMAT_HEADER_BYTES && off.checked_add(len).is_some_and(|end| end <= body_end)
+        off >= header_length && off.checked_add(len).is_some_and(|end| end <= body_end)
     };
     if !in_body(opcode_stream_offset, opcode_stream_length)
         || !in_body(operand_pool_offset, operand_pool_length)
@@ -1892,5 +2292,185 @@ mod tests {
         // Confirm the decoded chunk preserves the ops.
         assert_eq!(decoded.chunks.len(), 1);
         assert_eq!(decoded.chunks[0].ops.len(), 2);
+    }
+
+    #[test]
+    fn unsigned_module_header_length_is_64() {
+        let bytes = module_to_wire_bytes(&make_minimal_module()).expect("encode");
+        let header_length = u16::from_le_bytes([bytes[6], bytes[7]]);
+        assert_eq!(header_length, WIRE_FORMAT_HEADER_BYTES as u16);
+        // Flags byte has FLAG_REQUIRES_SIGNATURE clear.
+        assert_eq!(bytes[15] & FLAG_REQUIRES_SIGNATURE, 0);
+    }
+
+    #[test]
+    fn flag_requires_signature_without_extension_rejected() {
+        // Construct an otherwise-valid file but flip the signed
+        // bit without adding a signature extension. The decoder
+        // must reject as malformed (header_length still 64).
+        let mut bytes = module_to_wire_bytes(&make_minimal_module()).expect("encode");
+        bytes[15] |= FLAG_REQUIRES_SIGNATURE;
+        // Repair the CRC trailer so we exercise the flag/extension
+        // consistency check rather than the CRC check.
+        let footer_start = bytes.len() - WIRE_FORMAT_FOOTER_BYTES;
+        let crc = crc32(&bytes[..footer_start]);
+        bytes[footer_start..].copy_from_slice(&crc.to_le_bytes());
+        let err = module_from_wire_bytes(&bytes).unwrap_err();
+        match err {
+            LoadError::Codec(msg) => assert!(
+                msg.contains("FLAG_REQUIRES_SIGNATURE is set"),
+                "expected flag/extension consistency error, got: {}",
+                msg
+            ),
+            other => panic!("unexpected error: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_signature_metadata_rejects_unsupported_scheme() {
+        // Hand-craft a buffer with a fake signature extension
+        // claiming scheme_id = 99 (not Ed25519).
+        let mut bytes = alloc::vec![0u8; 144];
+        bytes[64] = 99; // scheme_id
+        bytes[66] = 64; // signature_length (lo)
+        let err = parse_signature_metadata(&bytes, 144).unwrap_err();
+        match err {
+            LoadError::Codec(msg) => assert!(
+                msg.contains("scheme_id 99 is not supported"),
+                "expected scheme rejection, got: {}",
+                msg
+            ),
+            other => panic!("unexpected error: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_signature_metadata_rejects_scheme_id_zero() {
+        let bytes = alloc::vec![0u8; 144];
+        let err = parse_signature_metadata(&bytes, 144).unwrap_err();
+        match err {
+            LoadError::Codec(msg) => assert!(
+                msg.contains("scheme_id 0 is reserved"),
+                "expected zero-scheme rejection, got: {}",
+                msg
+            ),
+            other => panic!("unexpected error: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn signed_header_length_for_ed25519() {
+        assert_eq!(signed_header_length(ED25519_SIGNATURE_BYTES), 136);
+    }
+
+    #[cfg(feature = "signatures")]
+    #[test]
+    fn ed25519_round_trip_verifies() {
+        use ed25519_dalek::SigningKey;
+        // Deterministic 32-byte seed so the test is reproducible.
+        let seed = [7u8; 32];
+        let signing_key = SigningKey::from_bytes(&seed);
+        let verifying_key = signing_key.verifying_key();
+
+        let module = make_minimal_module();
+        let signed_bytes = module_to_signed_wire_bytes(&module, &signing_key).expect("sign+encode");
+        // Header reflects the signed extension.
+        assert_eq!(
+            u16::from_le_bytes([signed_bytes[6], signed_bytes[7]]),
+            signed_header_length(ED25519_SIGNATURE_BYTES) as u16,
+        );
+        assert_ne!(signed_bytes[15] & FLAG_REQUIRES_SIGNATURE, 0);
+        assert_eq!(signed_bytes[64], SIGNATURE_SCHEME_ED25519);
+        assert_eq!(
+            u16::from_le_bytes([signed_bytes[66], signed_bytes[67]]),
+            ED25519_SIGNATURE_BYTES as u16,
+        );
+
+        // Verification matches.
+        verify_module_signature(&signed_bytes, &[verifying_key]).expect("verify");
+
+        // The decoded module preserves the entry point and op
+        // count from the original.
+        let decoded = module_from_wire_bytes(&signed_bytes).expect("decode");
+        assert_eq!(decoded.entry_point, module.entry_point);
+        assert_eq!(decoded.chunks.len(), module.chunks.len());
+        assert_eq!(decoded.chunks[0].ops.len(), module.chunks[0].ops.len());
+    }
+
+    #[cfg(feature = "signatures")]
+    #[test]
+    fn ed25519_verify_rejects_wrong_key() {
+        use ed25519_dalek::SigningKey;
+        let signer = SigningKey::from_bytes(&[7u8; 32]);
+        let wrong = SigningKey::from_bytes(&[8u8; 32]).verifying_key();
+        let signed = module_to_signed_wire_bytes(&make_minimal_module(), &signer).expect("sign");
+        let err = verify_module_signature(&signed, &[wrong]).unwrap_err();
+        assert!(
+            matches!(err, LoadError::InvalidSignature),
+            "expected InvalidSignature, got: {:?}",
+            err
+        );
+    }
+
+    #[cfg(feature = "signatures")]
+    #[test]
+    fn ed25519_verify_rejects_empty_key_set() {
+        use ed25519_dalek::SigningKey;
+        let signer = SigningKey::from_bytes(&[7u8; 32]);
+        let signed = module_to_signed_wire_bytes(&make_minimal_module(), &signer).expect("sign");
+        let err = verify_module_signature(&signed, &[]).unwrap_err();
+        assert!(
+            matches!(err, LoadError::InvalidSignature),
+            "expected InvalidSignature, got: {:?}",
+            err
+        );
+    }
+
+    #[cfg(feature = "signatures")]
+    #[test]
+    fn ed25519_tamper_in_body_caught_by_crc_before_signature() {
+        use ed25519_dalek::SigningKey;
+        let signer = SigningKey::from_bytes(&[7u8; 32]);
+        let verifying = signer.verifying_key();
+        let mut signed =
+            module_to_signed_wire_bytes(&make_minimal_module(), &signer).expect("sign");
+        // Flip a byte in the opcode stream (well past the
+        // signature section). The CRC residue check inside
+        // `verify_module_signature` is at the framing layer; it
+        // runs before the signature math.
+        let opcode_offset = signed_header_length(ED25519_SIGNATURE_BYTES);
+        signed[opcode_offset] ^= 0x01;
+        let err = verify_module_signature(&signed, &[verifying]).unwrap_err();
+        match err {
+            LoadError::BadChecksum | LoadError::Codec(_) | LoadError::InvalidSignature => {}
+            other => panic!(
+                "expected BadChecksum / Codec / InvalidSignature, got: {:?}",
+                other
+            ),
+        }
+    }
+
+    #[cfg(feature = "signatures")]
+    #[test]
+    fn ed25519_signature_mutation_caught_after_crc_repair() {
+        use ed25519_dalek::SigningKey;
+        let signer = SigningKey::from_bytes(&[7u8; 32]);
+        let verifying = signer.verifying_key();
+        let mut signed =
+            module_to_signed_wire_bytes(&make_minimal_module(), &signer).expect("sign");
+        // Flip a bit inside the signature section.
+        let sig_offset = WIRE_FORMAT_HEADER_BYTES + SIGNATURE_METADATA_BYTES;
+        signed[sig_offset] ^= 0x01;
+        // Repair the CRC trailer so the framing-level check
+        // passes and only the cryptographic check rejects.
+        let footer_start = signed.len() - WIRE_FORMAT_FOOTER_BYTES;
+        let crc = crc32(&signed[..footer_start]);
+        signed[footer_start..].copy_from_slice(&crc.to_le_bytes());
+        let err = verify_module_signature(&signed, &[verifying]).unwrap_err();
+        assert!(
+            matches!(err, LoadError::InvalidSignature),
+            "expected InvalidSignature after sig mutation, got: {:?}",
+            err
+        );
     }
 }

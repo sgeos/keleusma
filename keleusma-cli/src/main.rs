@@ -59,7 +59,7 @@ fn main() -> ExitCode {
             // keleusma` line. If the file is missing, the error
             // surfaces in `run_file`.
             if std::path::Path::new(other).is_file() {
-                run_file(other)
+                run_file(other, &[])
             } else {
                 eprintln!("error: unknown subcommand or missing file `{}`", other);
                 print_help();
@@ -77,8 +77,19 @@ fn print_help() {
     println!("  keleusma <file>.kel               (shorthand for `run`)");
     println!();
     println!("Subcommands:");
-    println!("  run <file>                        Compile and execute a script");
-    println!("  compile <file> [-o <output>]      Compile to bytecode");
+    println!("  run <file> [--verifying-key <keyfile> ...]");
+    println!("                                    Compile and execute a script.");
+    println!("                                    Pass --verifying-key (repeatable) to verify");
+    println!("                                    signed compiled bytecode against the");
+    println!("                                    supplied 32-byte Ed25519 public-key files.");
+    println!("  compile <file> [-o <output>] [--signing-key <keyfile>]");
+    println!("                                    Compile to bytecode. With --signing-key,");
+    println!("                                    sign the output with the supplied 32-byte");
+    println!("                                    Ed25519 seed file. The source script must");
+    println!("                                    declare the entry function with the");
+    println!("                                    `signed` modifier; otherwise the resulting");
+    println!("                                    bytecode is unsigned and the toolchain");
+    println!("                                    refuses the signing key argument silently.");
     println!("  repl                              Start interactive REPL");
     println!("  help, --help, -h                  Show this help");
     println!("  version, --version, -V            Show version");
@@ -87,6 +98,8 @@ fn print_help() {
     println!("  keleusma run hello.kel");
     println!("  keleusma hello.kel");
     println!("  keleusma compile hello.kel -o hello.kel.bin");
+    println!("  keleusma compile hello.kel --signing-key key.seed -o hello.kel.bin");
+    println!("  keleusma run hello.kel.bin --verifying-key key.pub");
     println!("  keleusma repl");
 }
 
@@ -95,10 +108,37 @@ fn run_subcommand(args: &[String]) -> ExitCode {
         eprintln!("error: `run` requires a script path");
         return ExitCode::FAILURE;
     }
-    run_file(&args[0])
+    let path = &args[0];
+    let mut verifying_keys: Vec<ed25519_dalek::VerifyingKey> = Vec::new();
+    let mut i = 1;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--verifying-key" => {
+                if i + 1 >= args.len() {
+                    eprintln!(
+                        "error: --verifying-key requires a path to a 32-byte public-key file"
+                    );
+                    return ExitCode::FAILURE;
+                }
+                match read_verifying_key(&args[i + 1]) {
+                    Ok(k) => verifying_keys.push(k),
+                    Err(e) => {
+                        eprintln!("error: {}", e);
+                        return ExitCode::FAILURE;
+                    }
+                }
+                i += 2;
+            }
+            other => {
+                eprintln!("error: unknown option `{}`", other);
+                return ExitCode::FAILURE;
+            }
+        }
+    }
+    run_file(path, &verifying_keys)
 }
 
-fn run_file(path: &str) -> ExitCode {
+fn run_file(path: &str, verifying_keys: &[ed25519_dalek::VerifyingKey]) -> ExitCode {
     let bytes = match fs::read(path) {
         Ok(b) => b,
         Err(e) => {
@@ -110,8 +150,15 @@ fn run_file(path: &str) -> ExitCode {
     // a leading shebang line, so check both at offset 0 and after a
     // `#!...\n` envelope.
     let result = if looks_like_bytecode(&bytes) {
-        execute_bytecode(&bytes)
+        execute_bytecode(&bytes, verifying_keys)
     } else {
+        if !verifying_keys.is_empty() {
+            eprintln!(
+                "error: --verifying-key supplied but {} is source, not signed bytecode",
+                path
+            );
+            return ExitCode::FAILURE;
+        }
         let source = match core::str::from_utf8(&bytes) {
             Ok(s) => s,
             Err(_) => {
@@ -152,6 +199,7 @@ fn compile_subcommand(args: &[String]) -> ExitCode {
     }
     let input = &args[0];
     let mut output: Option<String> = None;
+    let mut signing_key_path: Option<String> = None;
     let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {
@@ -161,6 +209,14 @@ fn compile_subcommand(args: &[String]) -> ExitCode {
                     return ExitCode::FAILURE;
                 }
                 output = Some(args[i + 1].clone());
+                i += 2;
+            }
+            "--signing-key" => {
+                if i + 1 >= args.len() {
+                    eprintln!("error: --signing-key requires a path to a 32-byte seed file");
+                    return ExitCode::FAILURE;
+                }
+                signing_key_path = Some(args[i + 1].clone());
                 i += 2;
             }
             other => {
@@ -185,11 +241,28 @@ fn compile_subcommand(args: &[String]) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let bytes = match module.to_bytes() {
-        Ok(b) => b,
-        Err(e) => {
-            eprintln!("error: serializing bytecode: {:?}", e);
-            return ExitCode::FAILURE;
+    let bytes = if let Some(key_path) = signing_key_path {
+        let signing_key = match read_signing_key(&key_path) {
+            Ok(k) => k,
+            Err(e) => {
+                eprintln!("error: {}", e);
+                return ExitCode::FAILURE;
+            }
+        };
+        match keleusma::wire_format::module_to_signed_wire_bytes(&module, &signing_key) {
+            Ok(b) => b,
+            Err(e) => {
+                eprintln!("error: signing bytecode: {:?}", e);
+                return ExitCode::FAILURE;
+            }
+        }
+    } else {
+        match module.to_bytes() {
+            Ok(b) => b,
+            Err(e) => {
+                eprintln!("error: serializing bytecode: {:?}", e);
+                return ExitCode::FAILURE;
+            }
         }
     };
     if let Err(e) = fs::write(&output_path, &bytes) {
@@ -198,6 +271,45 @@ fn compile_subcommand(args: &[String]) -> ExitCode {
     }
     eprintln!("wrote {} ({} bytes)", output_path, bytes.len());
     ExitCode::SUCCESS
+}
+
+/// Read a raw 32-byte Ed25519 seed from `path` and construct a
+/// `SigningKey`. Returns an error message string suitable for
+/// CLI output if the file is missing, the wrong size, or
+/// unreadable.
+fn read_signing_key(path: &str) -> Result<ed25519_dalek::SigningKey, String> {
+    let bytes = fs::read(path).map_err(|e| format!("reading signing key {}: {}", path, e))?;
+    if bytes.len() != 32 {
+        return Err(format!(
+            "signing key file {} must be exactly 32 bytes (raw Ed25519 seed); got {} bytes",
+            path,
+            bytes.len()
+        ));
+    }
+    let mut seed = [0u8; 32];
+    seed.copy_from_slice(&bytes);
+    Ok(ed25519_dalek::SigningKey::from_bytes(&seed))
+}
+
+/// Read a raw 32-byte Ed25519 public key from `path` and
+/// construct a `VerifyingKey`.
+fn read_verifying_key(path: &str) -> Result<ed25519_dalek::VerifyingKey, String> {
+    let bytes = fs::read(path).map_err(|e| format!("reading verifying key {}: {}", path, e))?;
+    if bytes.len() != 32 {
+        return Err(format!(
+            "verifying key file {} must be exactly 32 bytes (raw Ed25519 public key); got {} bytes",
+            path,
+            bytes.len()
+        ));
+    }
+    let mut key_bytes = [0u8; 32];
+    key_bytes.copy_from_slice(&bytes);
+    ed25519_dalek::VerifyingKey::from_bytes(&key_bytes).map_err(|e| {
+        format!(
+            "verifying key {} is not a valid Ed25519 public key: {}",
+            path, e
+        )
+    })
 }
 
 fn default_output_path(input: &str) -> String {
@@ -409,9 +521,22 @@ fn execute_source(source: &str) -> Result<(), String> {
     drive_to_completion(&mut vm, &arena)
 }
 
-fn execute_bytecode(bytes: &[u8]) -> Result<(), String> {
+fn execute_bytecode(
+    bytes: &[u8],
+    verifying_keys: &[ed25519_dalek::VerifyingKey],
+) -> Result<(), String> {
     let arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
-    let mut vm = Vm::load_bytes(bytes, &arena).map_err(|e| format!("load_bytes: {:?}", e))?;
+    let mut vm = if keleusma::wire_format::header_requires_signature(bytes) {
+        Vm::load_signed_bytes(bytes, &arena, verifying_keys)
+            .map_err(|e| format!("load_signed_bytes: {:?}", e))?
+    } else {
+        if !verifying_keys.is_empty() {
+            return Err(String::from(
+                "--verifying-key supplied but the bytecode does not carry FLAG_REQUIRES_SIGNATURE",
+            ));
+        }
+        Vm::load_bytes(bytes, &arena).map_err(|e| format!("load_bytes: {:?}", e))?
+    };
     drive_to_completion(&mut vm, &arena)
 }
 

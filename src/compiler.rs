@@ -1330,6 +1330,40 @@ pub fn compile_with_warnings(
         }
     }
 
+    // Surface-level `signed` modifier on the entry function sets
+    // FLAG_REQUIRES_SIGNATURE on the module header. The flag is a
+    // contract with the load-time runtime: the module must be
+    // accompanied by a cryptographic signature that verifies
+    // against the host's trust matrix. Signing itself is a
+    // toolchain step independent of the compiler.
+    //
+    // The modifier is permitted only on the entry function. The
+    // compiler rejects `signed` on any helper function with a
+    // diagnostic that names the offending declaration.
+    {
+        let entry_name = "main";
+        for func in &program.functions {
+            if func.signed && func.name != entry_name {
+                return Err(CompileError {
+                    message: alloc::format!(
+                        "`signed` modifier on `{}` is invalid: the modifier is admissible only on the module's entry function (`main`)",
+                        func.name,
+                    ),
+                    span: func.span,
+                });
+            }
+        }
+        let entry_signed = program
+            .functions
+            .iter()
+            .find(|f| f.name == entry_name)
+            .map(|f| f.signed)
+            .unwrap_or(false);
+        if entry_signed {
+            module.flags |= crate::wire_format::FLAG_REQUIRES_SIGNATURE;
+        }
+    }
+
     Ok((module, warnings))
 }
 

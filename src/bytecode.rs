@@ -1652,6 +1652,16 @@ pub enum LoadError {
     WcmuOverflow,
     /// The body could not be encoded or decoded.
     Codec(String),
+    /// The bytecode's framing header carries `FLAG_REQUIRES_SIGNATURE`
+    /// but no key in the host's trust matrix verifies the attached
+    /// signature, or the signed-extension metadata is inconsistent.
+    /// Hosts respond by either refusing the module or registering an
+    /// additional [`crate::vm::Vm::register_verifying_key`] entry.
+    InvalidSignature,
+    /// The bytecode is signed but the runtime build does not include
+    /// the `signatures` cargo feature. The host has no way to verify
+    /// the signature, so loading is refused at framing time.
+    SignaturesUnsupported,
 }
 
 impl core::fmt::Display for LoadError {
@@ -1700,6 +1710,12 @@ impl core::fmt::Display for LoadError {
                 f.write_str("declared WCMU is u32::MAX (overflow); no representable bound")
             }
             LoadError::Codec(msg) => write!(f, "bytecode codec error: {}", msg),
+            LoadError::InvalidSignature => {
+                f.write_str("bytecode signature did not verify against any registered key")
+            }
+            LoadError::SignaturesUnsupported => f.write_str(
+                "bytecode is signed but the runtime build does not include the `signatures` feature",
+            ),
         }
     }
 }

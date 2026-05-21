@@ -623,6 +623,17 @@ pub struct GenericVm<
     /// Any `register_*` method or `replace_module` resets this
     /// field to `None`.
     native_classifications_verified: bool,
+    /// Host-supplied trust matrix for cryptographic module
+    /// signatures. Populated through
+    /// [`Self::register_verifying_key`] before the host hot-swaps
+    /// a signed module via
+    /// [`Self::replace_module_from_bytes`]. Empty by default; an
+    /// empty matrix rejects every signed module with
+    /// [`crate::bytecode::LoadError::InvalidSignature`]. Gated on
+    /// the `signatures` cargo feature; builds without it carry no
+    /// trust matrix at all.
+    #[cfg(feature = "signatures")]
+    verifying_keys: Vec<ed25519_dalek::VerifyingKey>,
 }
 
 /// Compute the arena persistent-capacity needed to back a
@@ -863,6 +874,18 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                 "module has no entry point: declare a `fn main`, `yield main`, or `loop main`",
             )));
         }
+        // Signed modules cannot be loaded through `Vm::new` because
+        // the Module representation has already lost the signature
+        // payload. Hosts use [`Vm::load_signed_bytes`] for an
+        // initial signed load, or hot-swap signed bytes onto an
+        // existing VM through
+        // [`Vm::replace_module_from_bytes`]. The `Vm::new_unchecked`
+        // path bypasses this check (and every other verification).
+        if (module.flags & crate::wire_format::FLAG_REQUIRES_SIGNATURE) != 0 {
+            return Err(VmError::VerifyError(String::from(
+                "module declares FLAG_REQUIRES_SIGNATURE; load through Vm::load_signed_bytes or hot-swap via Vm::replace_module_from_bytes",
+            )));
+        }
         if module.wcet_cycles == u32::MAX {
             let message = String::from(
                 "module declared WCET (cycles) overflowed to u32::MAX during compilation; the static analysis could not bound the cost",
@@ -993,6 +1016,56 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
     pub fn load_bytes(bytes: &[u8], arena: &'arena keleusma_arena::Arena) -> Result<Self, VmError> {
         let module = Module::from_bytes(bytes)?;
         Self::new(module, arena)
+    }
+
+    /// Load a signed module from serialized bytecode bytes,
+    /// verifying the cryptographic signature against the supplied
+    /// trust matrix before construction.
+    ///
+    /// Use this entry point for the initial load of a signed
+    /// module. Hosts that bootstrap from an unsigned stub and
+    /// later hot-swap to signed modules use
+    /// [`Self::register_verifying_key`] followed by
+    /// [`Self::replace_module_from_bytes`] instead.
+    ///
+    /// When the bytecode is unsigned, this function is equivalent
+    /// to [`Self::load_bytes`]; the trust matrix is ignored. When
+    /// the bytecode is signed, the signature is verified through
+    /// [`crate::wire_format::verify_module_signature`] against
+    /// every key in `verifying_keys`. The first matching key
+    /// admits the module; no match produces
+    /// [`crate::bytecode::LoadError::InvalidSignature`]. The
+    /// trust matrix is also copied onto the constructed VM so a
+    /// subsequent hot-swap through
+    /// [`Self::replace_module_from_bytes`] inherits the same
+    /// keys.
+    ///
+    /// Requires the `signatures` cargo feature.
+    #[cfg(feature = "signatures")]
+    pub fn load_signed_bytes(
+        bytes: &[u8],
+        arena: &'arena keleusma_arena::Arena,
+        verifying_keys: &[ed25519_dalek::VerifyingKey],
+    ) -> Result<Self, VmError> {
+        let signed = crate::wire_format::header_requires_signature(bytes);
+        if signed {
+            crate::wire_format::verify_module_signature(bytes, verifying_keys)
+                .map_err(VmError::from)?;
+        }
+        let mut module = Module::from_bytes(bytes).map_err(VmError::from)?;
+        // The signed-module gate in `Vm::new_with_options` would
+        // otherwise reject the verified module. Clear the flag
+        // before construction; the trust matrix on the VM
+        // perpetuates the host's policy for subsequent hot-swaps.
+        let was_signed = (module.flags & crate::wire_format::FLAG_REQUIRES_SIGNATURE) != 0;
+        if was_signed {
+            module.flags &= !crate::wire_format::FLAG_REQUIRES_SIGNATURE;
+        }
+        let mut vm = Self::new(module, arena)?;
+        for key in verifying_keys {
+            vm.verifying_keys.push(*key);
+        }
+        Ok(vm)
     }
 
     /// Load a module from a serialized byte slice and skip resource
@@ -1162,6 +1235,8 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
             arena,
             started: false,
             native_classifications_verified: false,
+            #[cfg(feature = "signatures")]
+            verifying_keys: Vec::new(),
         })
     }
 
@@ -1322,6 +1397,8 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
             arena,
             started: false,
             native_classifications_verified: false,
+            #[cfg(feature = "signatures")]
+            verifying_keys: Vec::new(),
         })
     }
 
@@ -1601,6 +1678,77 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         initial_data: Vec<crate::bytecode::GenericValue<W, F>>,
     ) -> Result<(), VmError> {
         self.replace_module_inner(new_module, initial_data)
+    }
+
+    /// Hot-swap to a new module loaded from its serialized
+    /// bytecode bytes, verifying the cryptographic signature
+    /// against the VM's host-supplied trust matrix before the
+    /// swap takes effect.
+    ///
+    /// When the bytecode's framing header carries
+    /// [`crate::wire_format::FLAG_REQUIRES_SIGNATURE`], the
+    /// signature is verified through
+    /// [`crate::wire_format::verify_module_signature`] against
+    /// every key the host has registered via
+    /// [`Self::register_verifying_key`]. The first matching key
+    /// admits the swap; an empty trust matrix or no matching key
+    /// produces [`crate::bytecode::LoadError::InvalidSignature`]
+    /// and the existing module continues to run.
+    ///
+    /// When the bytecode is unsigned, this method is equivalent
+    /// to decoding the bytes through [`Module::from_bytes`] and
+    /// calling [`Self::replace_module`].
+    ///
+    /// Requires the `signatures` cargo feature.
+    #[cfg(feature = "signatures")]
+    pub fn replace_module_from_bytes(
+        &mut self,
+        bytes: &[u8],
+        initial_data: Vec<crate::bytecode::GenericValue<W, F>>,
+    ) -> Result<(), VmError> {
+        if crate::wire_format::header_requires_signature(bytes) {
+            crate::wire_format::verify_module_signature(bytes, &self.verifying_keys)
+                .map_err(VmError::from)?;
+        }
+        let new_module = Module::from_bytes(bytes).map_err(VmError::from)?;
+        self.replace_module(new_module, initial_data)
+    }
+
+    /// Register a verifying key with the VM's trust matrix.
+    ///
+    /// Subsequent calls to [`Self::replace_module_from_bytes`]
+    /// consult the matrix when the incoming bytecode carries
+    /// [`crate::wire_format::FLAG_REQUIRES_SIGNATURE`]. The matrix
+    /// is additive; hosts that need to rotate trust call
+    /// [`Self::clear_verifying_keys`] first and re-register the
+    /// new key set.
+    ///
+    /// Requires the `signatures` cargo feature.
+    #[cfg(feature = "signatures")]
+    pub fn register_verifying_key(&mut self, key: ed25519_dalek::VerifyingKey) {
+        self.verifying_keys.push(key);
+    }
+
+    /// Clear every key from the VM's trust matrix. Subsequent
+    /// signed hot-swap attempts via
+    /// [`Self::replace_module_from_bytes`] are rejected with
+    /// [`crate::bytecode::LoadError::InvalidSignature`] until at
+    /// least one key is re-registered through
+    /// [`Self::register_verifying_key`].
+    ///
+    /// Requires the `signatures` cargo feature.
+    #[cfg(feature = "signatures")]
+    pub fn clear_verifying_keys(&mut self) {
+        self.verifying_keys.clear();
+    }
+
+    /// Number of verifying keys currently in the trust matrix.
+    /// Hosts use this for diagnostic logging at deployment time.
+    ///
+    /// Requires the `signatures` cargo feature.
+    #[cfg(feature = "signatures")]
+    pub fn verifying_keys_len(&self) -> usize {
+        self.verifying_keys.len()
     }
 
     fn replace_module_inner(
@@ -8413,5 +8561,139 @@ mod tests {
         let (low, high, _flag) = super::checked_arith_outputs::<i64>(true_value, 5);
         let reconstructed = ((high as i128) << 32) + (low as i128);
         assert_eq!(reconstructed, true_value);
+    }
+
+    #[test]
+    fn signed_keyword_parses_on_all_function_categories() {
+        let cases: &[(&str, &str)] = &[
+            ("signed fn", "signed fn main() -> Word { 42 }"),
+            (
+                "signed yield",
+                "signed yield main(_x: Word) -> Word { let _r = yield 0; 0 }",
+            ),
+            (
+                "signed loop",
+                "signed loop main(_x: Word) -> Word { let _r = yield 0; 0 }",
+            ),
+        ];
+        for (label, src) in cases {
+            let tokens = tokenize(src).unwrap_or_else(|e| panic!("{}: lex: {:?}", label, e));
+            let program = parse(&tokens).unwrap_or_else(|e| panic!("{}: parse: {:?}", label, e));
+            let main = program
+                .functions
+                .iter()
+                .find(|f| f.name == "main")
+                .expect("main");
+            assert!(main.signed, "{}: signed not recorded", label);
+        }
+    }
+
+    #[test]
+    fn signed_modifier_on_helper_is_rejected_at_compile_time() {
+        let src = "signed fn helper() -> Word { 0 }\nfn main() -> Word { helper() }";
+        let tokens = tokenize(src).expect("lex");
+        let program = parse(&tokens).expect("parse");
+        let err = compile(&program).expect_err("compile should reject");
+        assert!(
+            err.message.contains("`signed` modifier on `helper`"),
+            "expected entry-only diagnostic, got: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn signed_entry_sets_flag_requires_signature() {
+        let src = "signed fn main() -> Word { 42 }";
+        let tokens = tokenize(src).expect("lex");
+        let program = parse(&tokens).expect("parse");
+        let module = compile(&program).expect("compile");
+        assert_ne!(
+            module.flags & crate::wire_format::FLAG_REQUIRES_SIGNATURE,
+            0,
+            "FLAG_REQUIRES_SIGNATURE must be set on signed entry"
+        );
+    }
+
+    #[test]
+    fn unsigned_entry_does_not_set_flag_requires_signature() {
+        let src = "fn main() -> Word { 42 }";
+        let tokens = tokenize(src).expect("lex");
+        let program = parse(&tokens).expect("parse");
+        let module = compile(&program).expect("compile");
+        assert_eq!(
+            module.flags & crate::wire_format::FLAG_REQUIRES_SIGNATURE,
+            0,
+            "FLAG_REQUIRES_SIGNATURE must not be set on unsigned entry"
+        );
+    }
+
+    #[test]
+    fn vm_new_rejects_signed_module_directly() {
+        // Construct a module with the flag manually set and feed
+        // it to `Vm::new`. The constructor refuses because the
+        // signature info has already been stripped from the
+        // Module representation; the host must use
+        // `Vm::load_signed_bytes` or hot-swap instead.
+        let src = "signed fn main() -> Word { 42 }";
+        let tokens = tokenize(src).expect("lex");
+        let program = parse(&tokens).expect("parse");
+        let module = compile(&program).expect("compile");
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let result = Vm::new(module, &arena);
+        match result {
+            Err(VmError::VerifyError(msg)) => assert!(
+                msg.contains("FLAG_REQUIRES_SIGNATURE"),
+                "expected signed-module rejection, got: {}",
+                msg
+            ),
+            Err(other) => panic!("expected VerifyError, got: {:?}", other),
+            Ok(_) => panic!("expected VerifyError, got Ok(_)"),
+        }
+    }
+
+    #[cfg(feature = "signatures")]
+    #[test]
+    fn signed_module_loads_through_load_signed_bytes() {
+        use ed25519_dalek::SigningKey;
+        let signer = SigningKey::from_bytes(&[42u8; 32]);
+        let verifying = signer.verifying_key();
+        let src = "signed fn main() -> Word { 21 + 21 }";
+        let tokens = tokenize(src).expect("lex");
+        let program = parse(&tokens).expect("parse");
+        let module = compile(&program).expect("compile");
+        let bytes =
+            crate::wire_format::module_to_signed_wire_bytes(&module, &signer).expect("sign");
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let mut vm = Vm::load_signed_bytes(&bytes, &arena, &[verifying]).expect("load+verify");
+        assert_eq!(vm.verifying_keys_len(), 1);
+        match vm.call(&[]).unwrap() {
+            VmState::Finished(v) => assert_eq!(v, Value::Int(42)),
+            other => panic!("expected Finished(42), got {:?}", other),
+        }
+    }
+
+    #[cfg(feature = "signatures")]
+    #[test]
+    fn load_signed_bytes_rejects_wrong_key() {
+        use ed25519_dalek::SigningKey;
+        let signer = SigningKey::from_bytes(&[42u8; 32]);
+        let wrong = SigningKey::from_bytes(&[43u8; 32]).verifying_key();
+        let src = "signed fn main() -> Word { 0 }";
+        let tokens = tokenize(src).expect("lex");
+        let program = parse(&tokens).expect("parse");
+        let module = compile(&program).expect("compile");
+        let bytes =
+            crate::wire_format::module_to_signed_wire_bytes(&module, &signer).expect("sign");
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let result = Vm::load_signed_bytes(&bytes, &arena, &[wrong]);
+        match result {
+            Err(VmError::LoadError(msg)) => assert!(
+                msg.contains("signature did not verify") || msg.contains("InvalidSignature"),
+                "expected InvalidSignature, got: {}",
+                msg
+            ),
+            Err(other) => panic!("expected LoadError, got: {:?}", other),
+            Ok(_) => panic!("expected LoadError, got Ok(_)"),
+        }
     }
 }
