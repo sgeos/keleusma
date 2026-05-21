@@ -40,7 +40,7 @@ Both source and compiled bytecode can be Unix-executable through a shebang line.
 
 ```keleusma
 #!/usr/bin/env keleusma
-fn main() -> i64 { 42 }
+fn main() -> Word { 42 }
 ```
 
 Mark executable and invoke directly:
@@ -108,14 +108,14 @@ $ keleusma repl
 Keleusma REPL. Type :help for commands, :quit to exit.
 > 1 + 2
 3
-> fn double(x: i64) -> i64 { x + x }
+> fn double(x: Word) -> Word { x + x }
 defined: double
 > double(21)
 42
 > :quit
 ```
 
-The REPL wraps each expression input as `fn main() -> T { <expression> }` and tries common return types in order: `i64`, `f64`, `bool`, `String`, `()`. The first type that type-checks is used. For more complex return types, declare a function explicitly and call it.
+The REPL wraps each expression input as `fn main() -> T { <expression> }` and tries common return types in order: `Word`, `Float`, `bool`, `Text`, `()`. The first type that type-checks is used. For more complex return types, declare a function explicitly and call it.
 
 ## Limitations
 
