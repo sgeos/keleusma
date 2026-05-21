@@ -1,5 +1,15 @@
 /target/
-Cargo.lock
+
+# Cargo.lock at the workspace root is tracked so the binary crates
+# (`keleusma-cli` and the `examples/rtos` demonstrator) build
+# reproducibly from this commit. Library crates that resolve
+# against the workspace root's lockfile pin their dependency
+# versions for development; downstream library consumers continue
+# to resolve their own lockfile against their own constraints.
+# The `examples/rtos/Cargo.lock` remains gitignored because the
+# detached crate carries heavy bare-metal git dependencies whose
+# revisions are pinned through `rev = "..."` in the manifest.
+examples/rtos/Cargo.lock
 
 # Project-local scratch directories. The directories themselves are
 # committed via .gitkeep markers; their contents are ignored. Use

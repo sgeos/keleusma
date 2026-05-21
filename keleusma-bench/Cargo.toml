@@ -2,6 +2,7 @@
 name = "keleusma-bench"
 version = "0.2.0"
 edition = "2024"
+publish = ["crates-io"]
 rust-version = "1.88"
 description = "Cost-model calibration tool for Keleusma. Measures pipelined cycles per opcode on a host CPU and emits a CostModel implementation suitable for the runtime's WCET analysis."
 license = "0BSD"
@@ -11,6 +12,12 @@ documentation = "https://docs.rs/keleusma-bench"
 readme = "README.md"
 keywords = ["benchmark", "wcet", "cycle", "calibration", "bytecode"]
 categories = ["development-tools::profiling", "embedded"]
+
+[package.metadata.docs.rs]
+# Render docs.rs with the default `std + floats` configuration so
+# the host CLI surface and the f64-aware specs are visible.
+features = ["std", "floats"]
+rustdoc-args = ["--cfg", "docsrs"]
 
 [features]
 # The `std` feature gates the host-side CLI binary and the

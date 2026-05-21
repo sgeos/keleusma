@@ -61,8 +61,8 @@ use keleusma::vm::{DEFAULT_ARENA_CAPACITY, Vm, VmState};
 use keleusma::{Arena, Value};
 
 let source = r#"
-    fn double(x: i64) -> i64 { x * 2 }
-    fn main(n: i64) -> i64 { n |> double() }
+    fn double(x: Word) -> Word { x * 2 }
+    fn main(n: Word) -> Word { n |> double() }
 "#;
 
 let tokens = tokenize(source).expect("lex");
@@ -86,7 +86,7 @@ The `Vm` borrows a host-owned `Arena` for the operand stack, call frames, and dy
 
 ```
 // Atomic total. Must terminate, no yields, no recursion.
-fn clamp(val: i64, lo: i64, hi: i64) -> i64 {
+fn clamp(val: Word, lo: Word, hi: Word) -> Word {
     if val < lo { lo }
     else if val > hi { hi }
     else { val }
@@ -99,7 +99,7 @@ yield prompt(question: Text) -> Text {
 }
 
 // Productive divergent. Never returns, must yield every iteration.
-loop main(input: i64) -> i64 {
+loop main(input: Word) -> Word {
     let result = input * 2;
     let input = yield result;
     input
@@ -110,8 +110,8 @@ loop main(input: i64) -> i64 {
 
 ```
 fn classify(0) -> Text { "zero" }
-fn classify(x: i64) -> Text when x > 0 { "positive" }
-fn classify(x: i64) -> Text { "negative" }
+fn classify(x: Word) -> Text when x > 0 { "positive" }
+fn classify(x: Word) -> Text { "negative" }
 
 use format
 
@@ -127,17 +127,17 @@ fn describe(msg: Message) -> Text {
 ### Generics and traits
 
 ```
-trait Doubler { fn double(x: i64) -> i64; }
-impl Doubler for i64 { fn double(x: i64) -> i64 { x + x } }
+trait Doubler { fn double(x: Word) -> Word; }
+impl Doubler for Word { fn double(x: Word) -> Word { x + x } }
 
-fn use_doubler<T: Doubler>(x: T) -> i64 { x.double() }
-fn main() -> i64 { use_doubler(21) }
+fn use_doubler<T: Doubler>(x: T) -> Word { x.double() }
+fn main() -> Word { use_doubler(21) }
 ```
 
 ### Coroutine yield and resume
 
 ```
-loop audio_processor(sample: f64) -> f64 {
+loop audio_processor(sample: Float) -> Float {
     let output = sample * 0.5;
     let sample = yield output;
     sample
@@ -177,9 +177,9 @@ Scripts declare native usage with `use`:
 use square
 use scale
 
-fn main() -> f64 {
+fn main() -> Float {
     let n = square(5);
-    n as f64 |> scale()
+    n as Float |> scale()
 }
 ```
 

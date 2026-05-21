@@ -2,6 +2,7 @@
 name = "keleusma-cli"
 version = "0.2.0"
 edition = "2024"
+publish = ["crates-io"]
 rust-version = "1.88"
 description = "Standalone command-line frontend for Keleusma. Provides a script runner, a bytecode compiler, and an interactive REPL so users can work with Keleusma scripts without writing any Rust host code."
 license = "0BSD"
@@ -11,6 +12,11 @@ documentation = "https://docs.rs/keleusma-cli"
 readme = "README.md"
 keywords = ["scripting", "bytecode", "repl", "wcet", "embedded"]
 categories = ["command-line-utilities", "compilers"]
+
+[package.metadata.docs.rs]
+# The CLI is a binary; docs.rs renders only the lib surface if any.
+# The crate has no lib target, so docs.rs has minimal content here.
+rustdoc-args = ["--cfg", "docsrs"]
 
 [dependencies]
 # Enable the `text` feature on the runtime so the CLI can parse and
