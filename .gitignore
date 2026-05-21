@@ -1,5 +1,10 @@
 /target/
 
+# Claude Code agent runtime state. Contains session lock files that
+# carry the agent's process identifier and acquisition timestamp.
+# Local to each contributor's session; not project content.
+.claude/
+
 # Cargo.lock at the workspace root is tracked so the binary crates
 # (`keleusma-cli` and the `examples/rtos` demonstrator) build
 # reproducibly from this commit. Library crates that resolve
