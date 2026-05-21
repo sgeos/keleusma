@@ -13,7 +13,9 @@ use crate::token::Span;
 /// A compile-time error with a message and source location.
 #[derive(Debug, Clone)]
 pub struct CompileError {
+    /// Human-readable diagnostic message.
     pub message: String,
+    /// Source span of the offending construct.
     pub span: Span,
 }
 
@@ -3756,7 +3758,7 @@ fn block_tail_range(
 }
 
 /// The natural range of a value of the given type expressed as
-/// an [`IntervalSet`] over the i64 representation that the
+/// an [`IntervalSet`](crate::interval::IntervalSet) over the i64 representation that the
 /// runtime carries on the operand stack. Returns:
 ///
 /// - Byte: `[0, 255]` (the u8 domain lifted to i64).

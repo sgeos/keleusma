@@ -37,6 +37,10 @@ use crate::float::Float;
 use crate::vm::{GenericVm, VmError};
 use crate::word::Word;
 
+/// Register the shell-bundle natives (`shell::getenv`,
+/// `shell::has_env`, `shell::run`, `shell::run_checked`,
+/// `shell::exit`) on `vm`. Called by
+/// [`crate::stddsl::Shell::register`](super::Shell).
 pub fn register<'a, 'arena, W: Word, A: Address, F: Float>(
     vm: &mut GenericVm<'a, 'arena, W, A, F>,
 ) {

@@ -30,7 +30,7 @@
 //! ## Scope of the present implementation
 //!
 //! V0.2.0 ships the lattice, the arithmetic primitives, and a
-//! conservative linear analysis ([`chunk_text_heap_alloc`]) that
+//! conservative linear analysis (`chunk_text_heap_alloc`) that
 //! tracks text sizes through straight-line code. The analysis is
 //! integrated with [`crate::verify::wcmu_stream_iteration`] so that
 //! programs whose text-producing opcodes exceed the arena's top
@@ -291,7 +291,7 @@ pub fn analyze_chunk_text(chunk: &Chunk, callee_returns_text: &[bool]) -> ChunkT
     }
 }
 
-/// Internal abstract state for [`chunk_text_heap_alloc`].
+/// Internal abstract state for `chunk_text_heap_alloc`.
 ///
 /// Mirrors the operand stack and local-variable bindings as
 /// [`TextSize`] lattice values. Non-text values are tracked as

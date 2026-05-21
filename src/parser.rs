@@ -12,7 +12,9 @@ use crate::token::{Span, Token, TokenKind};
 /// A parse error with a message and source location.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ParseError {
+    /// Human-readable diagnostic message.
     pub message: String,
+    /// Source span of the offending construct.
     pub span: Span,
 }
 

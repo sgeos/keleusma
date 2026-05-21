@@ -4,7 +4,7 @@
 //!
 //! Two layers of abstraction:
 //!
-//! - [`Interval`]: a single closed signed range on `i64` with
+//! - [`Interval`](crate::interval::Interval): a single closed signed range on `i64` with
 //!   `None`-as-infinity bounds. Constructors `full`, `empty`,
 //!   `singleton`, `at_least`, `at_most`, `range`. Predicates
 //!   `is_empty`, `contains`, `is_subset_of`. Lattice operations
@@ -16,7 +16,7 @@
 //!   positive-singleton-divisor case tightly and widens
 //!   otherwise.
 //!
-//! - [`IntervalSet`]: a sorted list of disjoint non-empty
+//! - [`IntervalSet`](crate::interval::IntervalSet): a sorted list of disjoint non-empty
 //!   `Interval`s. Constructors `empty`, `full`, `singleton`,
 //!   `from_interval`, `from_intervals` (normalising). Predicates
 //!   `is_empty`, `contains`, `is_subset_of`. Lattice operations
@@ -39,7 +39,9 @@ use core::cmp::{Ordering, max, min};
 /// [`Interval::empty`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Interval {
+    /// Closed lower bound, or `None` for negative infinity.
     pub lo: Option<i64>,
+    /// Closed upper bound, or `None` for positive infinity.
     pub hi: Option<i64>,
 }
 

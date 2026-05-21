@@ -1,3 +1,15 @@
+// rkyv's `Archive` derive generates sibling `Archived{Name}` and
+// `{Name}Resolver` types adjacent to each derived item, along with
+// an `impl Archive` whose associated types and `resolve` method are
+// part of the public surface. The generated items inherit the
+// parent's `pub` visibility but do not pick up the parent's doc
+// comments, and rkyv 0.8's `attr(...)` forwarding does not cover
+// the resolver type or the impl-block methods. Allow missing docs
+// at the module level for these generated items; the source types
+// they mirror carry the authoritative documentation, which is what
+// a reader cares about.
+#![allow(missing_docs)]
+
 extern crate alloc;
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -22,7 +34,8 @@ use crate::kstring::KString;
 #[rkyv(
     serialize_bounds(__S: rkyv::ser::Writer + rkyv::ser::Allocator, __S::Error: rkyv::rancor::Source),
     deserialize_bounds(__D::Error: rkyv::rancor::Source),
-    bytecheck(bounds(__C: rkyv::validation::ArchiveContext, <__C as rkyv::rancor::Fallible>::Error: rkyv::rancor::Source))
+    bytecheck(bounds(__C: rkyv::validation::ArchiveContext, <__C as rkyv::rancor::Fallible>::Error: rkyv::rancor::Source)),
+    attr(allow(missing_docs))
 )]
 pub enum ConstValue {
     /// Unit value `()`.
@@ -52,14 +65,20 @@ pub enum ConstValue {
     Array(#[rkyv(omit_bounds)] Vec<ConstValue>),
     /// Named struct with ordered fields.
     Struct {
+        /// Name of the struct type.
         type_name: String,
+        /// Ordered (field-name, field-value) pairs.
         #[rkyv(omit_bounds)]
         fields: Vec<(String, ConstValue)>,
     },
     /// Enum variant with optional payload.
     Enum {
+        /// Name of the enum type.
         type_name: String,
+        /// Name of the variant.
         variant: String,
+        /// Positional payload values for tuple-variant constructions.
+        /// Empty for unit variants.
         #[rkyv(omit_bounds)]
         fields: Vec<ConstValue>,
     },
@@ -145,13 +164,19 @@ pub enum GenericValue<W: crate::word::Word, F: crate::float::Float> {
     Array(Vec<GenericValue<W, F>>),
     /// Named struct with ordered fields.
     Struct {
+        /// Name of the struct type.
         type_name: String,
+        /// Ordered (field-name, field-value) pairs.
         fields: Vec<(String, GenericValue<W, F>)>,
     },
     /// Enum variant with optional payload.
     Enum {
+        /// Name of the enum type.
         type_name: String,
+        /// Name of the variant.
         variant: String,
+        /// Positional payload values for tuple-variant constructions.
+        /// Empty for unit variants.
         fields: Vec<GenericValue<W, F>>,
     },
     /// Option::None.
@@ -1459,13 +1484,16 @@ pub const BYTECODE_VERSION: u16 = 1;
 /// B16 step 12 in `docs/decisions/BACKLOG.md` for the rationale.
 #[cfg(feature = "narrow-word-8")]
 pub const RUNTIME_WORD_BITS_LOG2: u8 = 3;
+/// Word size in bits assumed by this binary build (log2 form).
 #[cfg(all(feature = "narrow-word-16", not(feature = "narrow-word-8")))]
 pub const RUNTIME_WORD_BITS_LOG2: u8 = 4;
+/// Word size in bits assumed by this binary build (log2 form).
 #[cfg(all(
     feature = "narrow-word-32",
     not(any(feature = "narrow-word-8", feature = "narrow-word-16"))
 ))]
 pub const RUNTIME_WORD_BITS_LOG2: u8 = 5;
+/// Word size in bits assumed by this binary build (log2 form).
 #[cfg(not(any(
     feature = "narrow-word-8",
     feature = "narrow-word-16",
@@ -1481,13 +1509,16 @@ pub const RUNTIME_WORD_BITS_LOG2: u8 = 6;
 /// same narrowest-wins rule as `RUNTIME_WORD_BITS_LOG2`.
 #[cfg(feature = "narrow-address-8")]
 pub const RUNTIME_ADDRESS_BITS_LOG2: u8 = 3;
+/// Address size in bits assumed by this binary build (log2 form).
 #[cfg(all(feature = "narrow-address-16", not(feature = "narrow-address-8")))]
 pub const RUNTIME_ADDRESS_BITS_LOG2: u8 = 4;
+/// Address size in bits assumed by this binary build (log2 form).
 #[cfg(all(
     feature = "narrow-address-32",
     not(any(feature = "narrow-address-8", feature = "narrow-address-16"))
 ))]
 pub const RUNTIME_ADDRESS_BITS_LOG2: u8 = 5;
+/// Address size in bits assumed by this binary build (log2 form).
 #[cfg(not(any(
     feature = "narrow-address-8",
     feature = "narrow-address-16",
@@ -1502,6 +1533,7 @@ pub const RUNTIME_ADDRESS_BITS_LOG2: u8 = 6;
 /// rejecting f64 bytecode at the framing level.
 #[cfg(feature = "narrow-float-32")]
 pub const RUNTIME_FLOAT_BITS_LOG2: u8 = 5;
+/// Floating-point width in bits assumed by this binary build (log2 form).
 #[cfg(not(feature = "narrow-float-32"))]
 pub const RUNTIME_FLOAT_BITS_LOG2: u8 = 6;
 

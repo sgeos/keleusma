@@ -1,3 +1,4 @@
+#![deny(missing_docs)]
 //! Standalone command-line frontend for Keleusma.
 //!
 //! Provides three subcommands modeled after Rhai's CLI tooling:

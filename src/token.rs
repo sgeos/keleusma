@@ -17,7 +17,9 @@ pub struct Span {
 /// A token produced by the lexer.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Token {
+    /// The token's variant.
     pub kind: TokenKind,
+    /// Source location for error reporting.
     pub span: Span,
 }
 
@@ -25,41 +27,69 @@ pub struct Token {
 #[derive(Debug, Clone, PartialEq)]
 pub enum TokenKind {
     // Keywords
+    /// `fn` keyword.
     Fn,
+    /// `yield` keyword.
     Yield,
+    /// `loop` keyword.
     Loop,
+    /// `break` keyword.
     Break,
+    /// `let` keyword.
     Let,
+    /// `for` keyword.
     For,
+    /// `in` keyword.
     In,
+    /// `if` keyword.
     If,
+    /// `else` keyword.
     Else,
+    /// `match` keyword.
     Match,
+    /// `use` keyword (native function import).
     Use,
     /// `external` keyword as a modifier on a `use` declaration.
     /// Marks the import as an external native call whose iteration
     /// cost is tracked through a per-iteration invocation-count
     /// bound rather than a per-call WCET/WCMU attestation.
     External,
+    /// `struct` keyword.
     Struct,
+    /// `enum` keyword.
     Enum,
+    /// `newtype` keyword.
     Newtype,
+    /// `where` clause keyword (refinement predicate).
     Where,
+    /// `overflow` arm keyword in the numeric overflow construct.
     Overflow,
+    /// `underflow` arm keyword in the numeric overflow construct.
     Underflow,
+    /// `saturate_max` keyword inside an overflow arm.
     SaturateMax,
+    /// `saturate_min` keyword inside an underflow arm.
     SaturateMin,
     /// `@` separator for information-flow labels on types and
     /// `classify`/`declassify` operators.
     At,
+    /// `true` boolean literal.
     True,
+    /// `false` boolean literal.
     False,
+    /// `as` cast keyword.
     As,
+    /// `when` guard clause keyword.
     When,
+    /// `not` logical-negation keyword.
     Not,
+    /// `and` logical-and keyword.
     And,
+    /// `or` logical-or keyword.
     Or,
+    /// `pure` declaration modifier reserved for future use.
     Pure,
+    /// `data` block declaration keyword.
     Data,
     /// `shared` modifier on a `data` declaration. Shared data is
     /// host-visible through `Vm::set_data`/`Vm::get_data` and persists
@@ -90,7 +120,9 @@ pub enum TokenKind {
     /// only on the entry function and on any of the three
     /// function categories (`fn` / `yield` / `loop`).
     Signed,
+    /// `trait` declaration keyword.
     Trait,
+    /// `impl` block keyword.
     Impl,
 
     // Identifiers
@@ -108,18 +140,29 @@ pub enum TokenKind {
     StringLit(String),
 
     // Arithmetic operators
+    /// `+` arithmetic plus.
     Plus,
+    /// `-` arithmetic minus (binary and unary).
     Minus,
+    /// `*` arithmetic multiply.
     Star,
+    /// `/` arithmetic divide.
     Slash,
+    /// `%` arithmetic remainder.
     Percent,
 
     // Comparison operators
+    /// `==` equality test.
     EqEq,
+    /// `!=` inequality test.
     NotEq,
+    /// `<` strict-less-than test.
     Lt,
+    /// `>` strict-greater-than test.
     Gt,
+    /// `<=` less-than-or-equal test.
     LtEq,
+    /// `>=` greater-than-or-equal test.
     GtEq,
 
     /// `!` punctuation. Distinct from the `not` keyword
@@ -132,32 +175,51 @@ pub enum TokenKind {
     Bang,
 
     // Assignment
+    /// `=` assignment operator (data-segment write; let-binding initialiser).
     Eq,
 
     // Pipeline
+    /// `|>` pipeline operator (left-to-right composition).
     Pipe,
+    /// `|` bar token (match-arm alternation, IFC label set delimiter).
     Bar,
 
     // Punctuation
+    /// `.` field-access punctuation.
     Dot,
+    /// `..` exclusive-range punctuation.
     DotDot,
+    /// `::` path separator (enum variants, qualified native names).
     ColonColon,
+    /// `:` type-annotation punctuation.
     Colon,
+    /// `;` statement separator.
     Semicolon,
+    /// `,` list separator.
     Comma,
+    /// `->` return-type arrow.
     Arrow,
+    /// `=>` match-arm arrow.
     FatArrow,
+    /// `_` wildcard pattern / placeholder identifier.
     Underscore,
 
     // Delimiters
+    /// `(` left parenthesis.
     LParen,
+    /// `)` right parenthesis.
     RParen,
+    /// `{` left brace.
     LBrace,
+    /// `}` right brace.
     RBrace,
+    /// `[` left bracket.
     LBracket,
+    /// `]` right bracket.
     RBracket,
 
     // End of file
+    /// End of input.
     Eof,
 }
 

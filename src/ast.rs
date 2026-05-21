@@ -8,12 +8,19 @@ use crate::token::Span;
 /// A complete Keleusma program.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Program {
+    /// `use` import declarations.
     pub uses: Vec<UseDecl>,
+    /// Type declarations: structs, enums, newtypes.
     pub types: Vec<TypeDef>,
+    /// `data` block declarations.
     pub data_decls: Vec<DataDecl>,
+    /// Function definitions (every category, including the entry point).
     pub functions: Vec<FunctionDef>,
+    /// Trait declarations.
     pub traits: Vec<TraitDef>,
+    /// `impl Trait for Type` blocks.
     pub impls: Vec<ImplBlock>,
+    /// Span of the source file.
     pub span: Span,
 }
 
@@ -26,9 +33,13 @@ pub struct Program {
 /// the parameter to types that implement the named trait.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TraitDef {
+    /// Trait name.
     pub name: String,
+    /// Type parameters in declaration order.
     pub type_params: Vec<TypeParam>,
+    /// Method signatures the trait requires.
     pub methods: Vec<TraitMethodSig>,
+    /// Span of the trait declaration.
     pub span: Span,
 }
 
@@ -39,9 +50,14 @@ pub struct TraitDef {
 /// has type `Self` (the implementing type).
 #[derive(Debug, Clone, PartialEq)]
 pub struct TraitMethodSig {
+    /// Method name.
     pub name: String,
+    /// Parameter list in declaration order. The implicit `self`
+    /// parameter, when present, is the first entry.
     pub params: Vec<Param>,
+    /// Return type expression.
     pub return_type: TypeExpr,
+    /// Span of the signature.
     pub span: Span,
 }
 
@@ -53,6 +69,7 @@ pub struct TraitMethodSig {
 /// the (Trait, Type, method) triple at compile time.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ImplBlock {
+    /// Name of the trait being implemented.
     pub trait_name: String,
     /// Type parameters introduced by the impl block itself, allowing
     /// `impl Trait for Box<T>` style declarations. Empty for
@@ -61,7 +78,9 @@ pub struct ImplBlock {
     /// The implementing type expression. For nominal types this is
     /// typically `TypeExpr::Named(Type, args)`.
     pub for_type: TypeExpr,
+    /// Method bodies supplied by the impl block.
     pub methods: Vec<FunctionDef>,
+    /// Span of the impl block.
     pub span: Span,
 }
 
@@ -72,13 +91,16 @@ pub struct ImplBlock {
 /// Script code reads and writes fields via `name.field` syntax.
 #[derive(Debug, Clone, PartialEq)]
 pub struct DataDecl {
+    /// Data-block name.
     pub name: String,
+    /// Fields declared in the data block.
     pub fields: Vec<DataFieldDecl>,
     /// Visibility of the data block to the host. `Shared` is the
     /// default and matches today's behaviour. `Private` data lives in
     /// the arena's persistent region and is not exposed through the
     /// host API.
     pub visibility: DataVisibility,
+    /// Span of the data declaration.
     pub span: Span,
 }
 
@@ -101,13 +123,16 @@ pub enum DataVisibility {
 /// A field in a data block declaration.
 #[derive(Debug, Clone, PartialEq)]
 pub struct DataFieldDecl {
+    /// Field name.
     pub name: String,
+    /// Declared field type.
     pub type_expr: TypeExpr,
     /// Compile-time initializer. Required for fields of
     /// `const data` declarations; rejected on `shared` and
     /// `private` data declarations where the host or the script
     /// supplies values at runtime.
     pub initializer: Option<ConstInitializer>,
+    /// Span of the field declaration.
     pub span: Span,
 }
 
@@ -133,7 +158,9 @@ pub enum ConstInitializer {
     /// and types are validated against the declared struct type
     /// at compile time.
     Struct {
+        /// Name of the struct type being constructed.
         name: String,
+        /// Per-field initializer in source order.
         fields: Vec<(String, ConstInitializer)>,
     },
     /// Enum variant construction: `Enum::Variant` for unit
@@ -141,8 +168,12 @@ pub enum ConstInitializer {
     /// payloads. The enum name and variant are validated against
     /// the declared enum type at compile time.
     Enum {
+        /// Name of the enum type.
         enum_name: String,
+        /// Name of the variant being constructed.
         variant: String,
+        /// Positional payload initializers for tuple-variant
+        /// constructions. Empty for unit variants.
         args: Vec<ConstInitializer>,
     },
 }
@@ -150,7 +181,11 @@ pub enum ConstInitializer {
 /// A `use` import declaration.
 #[derive(Debug, Clone, PartialEq)]
 pub struct UseDecl {
+    /// Path segments leading to the import target, e.g.
+    /// `["audio"]` for `use audio::set_frequency`.
     pub path: Vec<String>,
+    /// What the `use` declaration imports (a specific name or a
+    /// wildcard).
     pub import: ImportItem,
     /// Optional declared signature for the imported native. When the
     /// surface form is `use host::name(T1, T2, ...) -> R`, the parser
@@ -169,6 +204,7 @@ pub struct UseDecl {
     /// registered with the wrong classification is rejected at
     /// load time.
     pub is_external: bool,
+    /// Span of the `use` declaration.
     pub span: Span,
 }
 
@@ -201,8 +237,11 @@ pub struct NativeSignature {
 /// A type definition (struct or enum).
 #[derive(Debug, Clone, PartialEq)]
 pub enum TypeDef {
+    /// Struct declaration.
     Struct(StructDef),
+    /// Enum declaration.
     Enum(EnumDef),
+    /// Newtype declaration (a distinct nominal wrapper).
     Newtype(NewtypeDef),
 }
 
@@ -223,7 +262,10 @@ pub enum TypeDef {
 /// emitted.
 #[derive(Debug, Clone, PartialEq)]
 pub struct NewtypeDef {
+    /// Newtype name (the new nominal wrapper).
     pub name: String,
+    /// The underlying type whose bytecode representation this
+    /// newtype shares.
     pub underlying: TypeExpr,
     /// Optional refinement predicate. When `Some(name)`, the
     /// compiler emits a call to the named atomic-total function at
@@ -247,6 +289,7 @@ pub struct NewtypeDef {
     /// Optional declared minimum saturation value. Same
     /// semantics as `saturate_max` for the minimum direction.
     pub saturate_min: Option<i64>,
+    /// Span of the newtype declaration.
     pub span: Span,
 }
 
@@ -259,17 +302,24 @@ pub struct NewtypeDef {
 /// same way generic functions do.
 #[derive(Debug, Clone, PartialEq)]
 pub struct StructDef {
+    /// Struct name.
     pub name: String,
+    /// Generic type parameters declared in `<T, U>` form.
     pub type_params: Vec<TypeParam>,
+    /// Declared fields in source order.
     pub fields: Vec<FieldDecl>,
+    /// Span of the struct declaration.
     pub span: Span,
 }
 
 /// A field in a struct definition.
 #[derive(Debug, Clone, PartialEq)]
 pub struct FieldDecl {
+    /// Field name.
     pub name: String,
+    /// Declared field type expression.
     pub type_expr: TypeExpr,
+    /// Span of the field declaration.
     pub span: Span,
 }
 
@@ -282,9 +332,13 @@ pub struct FieldDecl {
 /// variables.
 #[derive(Debug, Clone, PartialEq)]
 pub struct EnumDef {
+    /// Enum name.
     pub name: String,
+    /// Generic type parameters declared in `<T, U>` form.
     pub type_params: Vec<TypeParam>,
+    /// Declared variants in source order.
     pub variants: Vec<VariantDecl>,
+    /// Span of the enum declaration.
     pub span: Span,
 }
 
@@ -300,7 +354,10 @@ pub struct EnumDef {
 /// can tell the source-level intent apart from auto-assignment.
 #[derive(Debug, Clone, PartialEq)]
 pub struct VariantDecl {
+    /// Variant name.
     pub name: String,
+    /// Payload type expressions in declaration order. Empty for
+    /// unit variants.
     pub fields: Vec<TypeExpr>,
     /// Explicit `= N` clause from the source. `None` means the
     /// parser auto-filled `discriminant_value` from the preceding
@@ -310,6 +367,7 @@ pub struct VariantDecl {
     /// Equals `explicit_discriminant` when that is `Some`, else
     /// the auto-assigned value.
     pub discriminant_value: i64,
+    /// Span of the variant declaration.
     pub span: Span,
 }
 
@@ -327,16 +385,23 @@ pub enum FunctionCategory {
 /// A function definition.
 #[derive(Debug, Clone, PartialEq)]
 pub struct FunctionDef {
+    /// Function category (atomic total, non-atomic total, productive
+    /// divergent).
     pub category: FunctionCategory,
+    /// Function name.
     pub name: String,
     /// Generic type parameters declared in `<T, U>` form between the
     /// function name and the parameter list. Empty vector for
     /// non-generic functions. The order is significant for
     /// monomorphization: each call site instantiates these in order.
     pub type_params: Vec<TypeParam>,
+    /// Parameter list in declaration order.
     pub params: Vec<Param>,
+    /// Return type expression.
     pub return_type: TypeExpr,
+    /// Optional `when` guard expression on a multi-headed function.
     pub guard: Option<Box<Expr>>,
+    /// Function body.
     pub body: Block,
     /// True when the source declared the function with the
     /// `ephemeral` modifier. The modifier is permitted only on the
@@ -358,6 +423,7 @@ pub struct FunctionDef {
     /// against the host's trust matrix. The signing itself is a
     /// toolchain step independent of the compiler.
     pub signed: bool,
+    /// Span of the function declaration.
     pub span: Span,
 }
 
@@ -370,68 +436,101 @@ pub struct FunctionDef {
 /// an unconstrained parameter.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TypeParam {
+    /// Parameter name.
     pub name: String,
+    /// Trait bounds restricting the parameter. Empty for an
+    /// unconstrained parameter.
     pub bounds: Vec<String>,
+    /// Span of the parameter declaration.
     pub span: Span,
 }
 
 /// A function parameter.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Param {
+    /// Pattern bound by the parameter (typically a bare identifier
+    /// for `fn(x: T)`).
     pub pattern: Pattern,
+    /// Optional declared parameter type.
     pub type_expr: Option<TypeExpr>,
+    /// Span of the parameter declaration.
     pub span: Span,
 }
 
 /// A block of statements with an optional trailing expression.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Block {
+    /// Statements in the block.
     pub stmts: Vec<Stmt>,
+    /// Optional trailing expression producing the block's value.
     pub tail_expr: Option<Box<Expr>>,
+    /// Span of the block.
     pub span: Span,
 }
 
 /// A statement.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Stmt {
+    /// `let` binding statement.
     Let(LetStmt),
+    /// `for` loop statement.
     For(ForStmt),
+    /// `break` statement out of the nearest enclosing loop.
     Break(Span),
     /// Assignment to a data block field: `data_name.field = expr;`.
     DataFieldAssign {
+        /// Name of the data block being assigned into.
         data_name: String,
+        /// Field name being written.
         field: String,
+        /// Right-hand-side expression.
         value: Expr,
+        /// Span of the assignment statement.
         span: Span,
     },
     /// Indexed assignment into a data-segment array field:
     /// `data_name.field[i][j]... = expr;`. The indices are stored
     /// in source order (outermost first).
     DataFieldIndexAssign {
+        /// Name of the data block being assigned into.
         data_name: String,
+        /// Field name being written.
         field: String,
+        /// Index expressions in source order (outermost first).
         indices: Vec<Expr>,
+        /// Right-hand-side expression.
         value: Expr,
+        /// Span of the assignment statement.
         span: Span,
     },
+    /// Expression-statement (expression evaluated for side effects;
+    /// result discarded).
     Expr(Expr),
 }
 
 /// A `let` binding.
 #[derive(Debug, Clone, PartialEq)]
 pub struct LetStmt {
+    /// Pattern that receives the bound value.
     pub pattern: Pattern,
+    /// Optional declared binding type.
     pub type_expr: Option<TypeExpr>,
+    /// Right-hand-side expression producing the value.
     pub value: Expr,
+    /// Span of the let statement.
     pub span: Span,
 }
 
 /// A `for` loop.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ForStmt {
+    /// Loop variable name.
     pub var: String,
+    /// Iterable expression (range or array-shaped expression).
     pub iterable: Iterable,
+    /// Loop body.
     pub body: Block,
+    /// Span of the for statement.
     pub span: Span,
 }
 
@@ -446,6 +545,10 @@ pub enum Iterable {
 
 /// An expression.
 #[derive(Debug, Clone, PartialEq)]
+#[allow(missing_docs)] // The Expr variants mirror the grammar's
+// expression productions; the variant names and field names are
+// the documentation. Per-variant prose would duplicate the
+// grammar reference in `docs/spec/GRAMMAR.md`.
 pub enum Expr {
     /// Literal value.
     Literal { value: Literal, span: Span },
@@ -648,9 +751,14 @@ pub enum Expr {
 /// longer admitted; rewrite as two arms with the same body.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CheckedArm {
+    /// Outcome class plus destructuring patterns for this arm.
     pub kind: CheckedArmKind,
+    /// Optional `when` guard expression that further constrains the
+    /// arm.
     pub guard: Option<Expr>,
+    /// Body evaluated when the arm fires.
     pub body: Expr,
+    /// Span of the arm.
     pub span: Span,
 }
 
@@ -669,8 +777,14 @@ pub struct CheckedArm {
 ///   the same destructuring.
 #[derive(Debug, Clone, PartialEq)]
 pub enum CheckedArmKind {
+    /// `ok(p)`: in-range result; the single pattern matches the
+    /// result `Word`.
     Ok(Pattern),
+    /// `overflow(h, l)`: positive overflow; the patterns match the
+    /// high and low halves of the `i128` intermediate.
     Overflow(Pattern, Pattern),
+    /// `underflow(h, l)`: negative overflow; same destructuring as
+    /// `Overflow`.
     Underflow(Pattern, Pattern),
 }
 
@@ -712,9 +826,13 @@ impl Expr {
 /// A literal value.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Literal {
+    /// Integer literal.
     Int(i64),
+    /// Floating-point literal.
     Float(f64),
+    /// Text-string literal.
     String(String),
+    /// Boolean literal.
     Bool(bool),
     /// The unit literal `()`.
     Unit,
@@ -722,6 +840,9 @@ pub enum Literal {
 
 /// Binary operator.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(missing_docs)] // Binary operators match the grammar's
+// arithmetic, comparison, and logical operator productions; the
+// variant names are the documentation.
 pub enum BinOp {
     Add,
     Sub,
@@ -741,7 +862,9 @@ pub enum BinOp {
 /// Unary operator.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UnaryOp {
+    /// Arithmetic negation `-`.
     Neg,
+    /// Logical negation `not`.
     Not,
 }
 
@@ -754,17 +877,24 @@ pub enum UnaryOp {
 /// pattern shape.
 #[derive(Debug, Clone, PartialEq)]
 pub struct MatchArm {
+    /// Pattern matched against the scrutinee.
     pub pattern: Pattern,
+    /// Optional `when` guard expression.
     pub guard: Option<Expr>,
+    /// Body expression evaluated when the arm fires.
     pub expr: Expr,
+    /// Span of the arm.
     pub span: Span,
 }
 
 /// A field initializer in a struct expression.
 #[derive(Debug, Clone, PartialEq)]
 pub struct FieldInit {
+    /// Field name being initialized.
     pub name: String,
+    /// Initializer expression.
     pub value: Expr,
+    /// Span of the field initializer.
     pub span: Span,
 }
 
@@ -812,6 +942,7 @@ pub enum TypeExpr {
 }
 
 impl TypeExpr {
+    /// Return the span of this type expression.
     pub fn span(&self) -> Span {
         match self {
             TypeExpr::Prim(_, span)
@@ -882,6 +1013,7 @@ pub enum Pattern {
 }
 
 impl Pattern {
+    /// Return the span of this pattern.
     pub fn span(&self) -> Span {
         match self {
             Pattern::Literal(_, span)
@@ -897,8 +1029,13 @@ impl Pattern {
 /// A field pattern in struct destructuring.
 #[derive(Debug, Clone, PartialEq)]
 pub struct FieldPattern {
+    /// Field name being destructured.
     pub name: String,
+    /// Optional sub-pattern; absent means the field binds to a
+    /// local variable named the same as the field
+    /// (shorthand form).
     pub pattern: Option<Pattern>,
+    /// Span of the field pattern.
     pub span: Span,
 }
 

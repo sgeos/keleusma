@@ -267,11 +267,15 @@ pub type BoxedNativeFn<W, F> = alloc::boxed::Box<
 /// types. Use [`IntoFallibleNativeFn`] for functions that return
 /// `Result<R, VmError>`.
 pub trait IntoNativeFn<W: Word, F: Float, Args, R> {
+    /// Wrap `self` as a boxed native function pointer with
+    /// argument and return marshalling applied at the boundary.
     fn into_native_fn(self) -> BoxedNativeFn<W, F>;
 }
 
 /// A function-like value whose Rust return type is `Result<R, VmError>`.
 pub trait IntoFallibleNativeFn<W: Word, F: Float, Args, R> {
+    /// Wrap `self` as a boxed native function pointer. `Err` returns
+    /// from the wrapped function surface as [`VmError::NativeError`].
     fn into_native_fn(self) -> BoxedNativeFn<W, F>;
 }
 

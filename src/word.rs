@@ -17,7 +17,7 @@
 //!   type is auto-detected from the impl; users do not need to
 //!   pass a separate parameter for it.
 //!
-//! - [`WideWord`]: the twice-as-wide signed integer used as the
+//! - `WideWord`: the twice-as-wide signed integer used as the
 //!   multiplication intermediate. Implemented for `i16`, `i32`,
 //!   `i64`, and `i128`.
 //!

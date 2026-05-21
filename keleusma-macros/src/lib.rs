@@ -1,3 +1,4 @@
+#![deny(missing_docs)]
 //! Procedural macros for the Keleusma scripting language.
 //!
 //! This crate is the proc-macro backend for the

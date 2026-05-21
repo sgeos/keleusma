@@ -876,18 +876,39 @@ pub struct WireChunk {
 /// section).
 #[derive(Debug, Clone, Archive, Serialize, Deserialize)]
 pub struct WireAuxBody {
+    /// Chunk metadata for the module's chunks.
     pub chunks: Vec<WireChunk>,
+    /// Native function names referenced by the module.
     pub native_names: Vec<String>,
+    /// Entry-point chunk index, if the module declares one.
     pub entry_point: Option<usize>,
+    /// Data-segment layout, if the module declares any data fields.
     pub data_layout: Option<DataLayout>,
+    /// Runtime word width declared by the module, encoded as the
+    /// base-2 logarithm of the bit width.
     pub word_bits_log2: u8,
+    /// Runtime address width declared by the module, log2 form.
     pub addr_bits_log2: u8,
+    /// Runtime float width declared by the module, log2 form.
     pub float_bits_log2: u8,
+    /// Declared WCET in pipelined cycles per Stream-to-Reset slice.
+    /// `0` means auto; `u32::MAX` means overflow.
     pub wcet_cycles: u32,
+    /// Declared WCMU in bytes per Stream-to-Reset slice. `0` means
+    /// auto; `u32::MAX` means overflow.
     pub wcmu_bytes: u32,
+    /// Header flag byte (e.g. `FLAG_EPHEMERAL`, `FLAG_REQUIRES_SIGNATURE`).
     pub flags: u8,
+    /// Verifier-populated byte count for the shared partition of
+    /// the data segment.
     pub shared_data_bytes: u32,
+    /// Verifier-populated byte count for the private partition of
+    /// the data segment.
     pub private_data_bytes: u32,
+    /// CRC-32 of the canonical serialisation of
+    /// `(slot_name, visibility)` per slot in declaration order.
+    /// Used by `Vm::replace_module` to reject schema-incompatible
+    /// hot swaps.
     pub schema_hash: u32,
 }
 
@@ -927,13 +948,23 @@ pub struct WireSections<'a> {
 /// Header-mirrored fields exposed by [`read_header_fields`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct HeaderFields {
+    /// Declared word width, encoded as the base-2 logarithm of the
+    /// bit width.
     pub word_bits_log2: u8,
+    /// Declared address width, log2 form.
     pub addr_bits_log2: u8,
+    /// Declared float width, log2 form.
     pub float_bits_log2: u8,
+    /// Header flag byte.
     pub flags: u8,
+    /// Declared WCET in pipelined cycles. `0` means auto;
+    /// `u32::MAX` means overflow.
     pub wcet_cycles: u32,
+    /// Declared WCMU in bytes. Same convention as `wcet_cycles`.
     pub wcmu_bytes: u32,
+    /// Verifier-populated byte count for the shared data partition.
     pub shared_data_bytes: u32,
+    /// Verifier-populated byte count for the private data partition.
     pub private_data_bytes: u32,
 }
 

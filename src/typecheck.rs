@@ -30,11 +30,11 @@
 //!
 //! ## Hindley-Milner inference (B1)
 //!
-//! The pass uses Robinson-style unification through the [`unify`]
-//! function and the [`Subst`] type. Inferred positions allocate fresh
+//! The pass uses Robinson-style unification through the `unify`
+//! function and the `Subst` type. Inferred positions allocate fresh
 //! type variables through the internal context. Unannotated let bindings,
 //! unannotated function parameters, and recursive expression types
-//! receive [`Type::Var`] placeholders that are resolved through
+//! receive `Type::Var` placeholders that are resolved through
 //! constraint solving as the pass walks the program.
 //!
 //! Without generic type parameters (B2), inference is monomorphic.
@@ -143,7 +143,7 @@ impl Type {
     /// count.
     ///
     /// Names that match a key in `type_params` resolve to the mapped
-    /// [`Type`], typically a [`Type::Var`] allocated at signature
+    /// [`Type`], typically a `Type::Var` allocated at signature
     /// construction. Names that are not type parameters fall back to
     /// the existing struct/enum/opaque resolution.
     ///
@@ -401,14 +401,34 @@ impl Subst {
 pub enum UnifyError {
     /// Two types could not be unified because they have different
     /// outer constructors or carry incompatible payloads.
-    Mismatch { left: Type, right: Type },
+    Mismatch {
+        /// Left-hand side of the failed unification.
+        left: Type,
+        /// Right-hand side of the failed unification.
+        right: Type,
+    },
     /// A type variable would refer to itself through a chain of
     /// constraints, producing an infinite type.
-    OccursCheck { var: u32, ty: Type },
+    OccursCheck {
+        /// Index of the offending type variable.
+        var: u32,
+        /// Type that recursively references `var`.
+        ty: Type,
+    },
     /// Two arrays have different declared lengths.
-    ArrayLengthMismatch { left: i64, right: i64 },
+    ArrayLengthMismatch {
+        /// Left array's declared length.
+        left: i64,
+        /// Right array's declared length.
+        right: i64,
+    },
     /// Two tuples have different arity.
-    TupleArityMismatch { left: usize, right: usize },
+    TupleArityMismatch {
+        /// Left tuple's arity.
+        left: usize,
+        /// Right tuple's arity.
+        right: usize,
+    },
 }
 
 /// Unify two types under an existing substitution.
@@ -799,7 +819,9 @@ struct FnSig {
 /// A type-check error with source location.
 #[derive(Debug, Clone)]
 pub struct TypeError {
+    /// Human-readable diagnostic message.
     pub message: String,
+    /// Source span of the offending construct.
     pub span: Span,
 }
 
@@ -1222,6 +1244,10 @@ fn check_native_call_with_signature(
     Ok(sig.return_type.clone())
 }
 
+/// Type-check `program` against a fresh context and return the
+/// first error if any constraint is violated. On success the AST
+/// is updated in place with inferred types written back into
+/// originally unannotated positions.
 pub fn check(program: &mut Program) -> Result<(), TypeError> {
     let ctx = Ctx::new();
     run_check(program, ctx)

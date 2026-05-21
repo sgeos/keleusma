@@ -1,8 +1,8 @@
 //! Standard DSL libraries packaged as host-registerable bundles.
 //!
-//! Each bundle is a unit struct implementing the [`Library`]
-//! trait. Hosts register a bundle through
-//! [`crate::vm::Vm::register_library`]:
+//! Each bundle is a unit struct implementing the
+//! [`Library`](crate::stddsl::Library) trait. Hosts register a
+//! bundle through [`crate::vm::Vm::register_library`]:
 //!
 //! ```ignore
 //! use keleusma::stddsl;
@@ -12,16 +12,17 @@
 //!
 //! ## Available libraries
 //!
-//! - [`Math`] - pure floating-point math routines and named
-//!   constants under the `math::` namespace.
-//! - [`Audio`] - digital signal processing helpers under the
-//!   `audio::` namespace. The Audio bundle does not register
-//!   `math::` entries; a host script that needs both should
-//!   register Math and Audio.
-//! - [`Shell`] - shell-script utilities (`shell::getenv`,
-//!   `shell::run`, `shell::run_checked`, `shell::exit`). Requires
-//!   the `shell` cargo feature, which adds a `std` dependency.
-//!   `shell` is incompatible with the no_std build profile.
+//! - [`Math`](crate::stddsl::Math) - pure floating-point math
+//!   routines and named constants under the `math::` namespace.
+//! - [`Audio`](crate::stddsl::Audio) - digital signal processing
+//!   helpers under the `audio::` namespace. The Audio bundle does
+//!   not register `math::` entries; a host script that needs both
+//!   should register Math and Audio.
+//! - [`Shell`](crate::stddsl::Shell) - shell-script utilities
+//!   (`shell::getenv`, `shell::run`, `shell::run_checked`,
+//!   `shell::exit`). Requires the `shell` cargo feature, which adds
+//!   a `std` dependency. `shell` is incompatible with the no_std
+//!   build profile.
 //!
 //! ## Single-file scripts
 //!
@@ -30,11 +31,11 @@
 //! reuse is intentionally outside the scope of the V0.2 surface.
 //! If your application's needs grow to where you find yourself
 //! wishing for modularisation, the recommended path is to roll a
-//! custom DSL library: implement [`Library`] on a host-side unit
-//! struct that registers the natives your scripts call, and let
-//! every script consume the same vocabulary through `use`
-//! declarations. The host-side library is the unit of reuse,
-//! not the script.
+//! custom DSL library: implement
+//! [`Library`](crate::stddsl::Library) on a host-side unit struct
+//! that registers the natives your scripts call, and let every
+//! script consume the same vocabulary through `use` declarations.
+//! The host-side library is the unit of reuse, not the script.
 
 extern crate alloc;
 

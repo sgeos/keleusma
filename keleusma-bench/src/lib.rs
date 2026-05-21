@@ -1,3 +1,4 @@
+#![deny(missing_docs)]
 //! Calibration tool for the Keleusma cost model.
 //!
 //! Measures pipelined-cycle cost per opcode on a host CPU and emits
@@ -73,7 +74,9 @@ pub struct OpcodeSpec {
 /// chunk-construction time.
 #[derive(Clone, Copy)]
 pub enum ConstValueDescriptor {
+    /// Signed integer constant.
     Int(i64),
+    /// Boolean constant.
     Bool(bool),
 }
 
@@ -114,9 +117,20 @@ pub const WARMUP_PASSES: u32 = 4;
 /// so the constructed chunk fits in device RAM.
 #[derive(Clone, Copy, Debug)]
 pub struct BenchConfig {
+    /// Number of times the opcode pattern is inlined into the
+    /// benchmark chunk. Larger values amortise counter resolution
+    /// against pattern cost; smaller values fit device-RAM budgets.
     pub repetitions: u32,
+    /// Number of warmup passes before measurement begins. Warms
+    /// instruction and data caches and stabilises the branch
+    /// predictor.
     pub warmup_passes: u32,
+    /// Number of measured passes. The minimum across passes is
+    /// reported as the pipelined-cycle estimate.
     pub measurement_passes: u32,
+    /// Arena capacity in bytes for the constructed VM. Must be large
+    /// enough to hold the operand stack and call frames produced by
+    /// the inlined pattern.
     pub arena_capacity: usize,
 }
 
@@ -289,9 +303,16 @@ pub fn benchmark_spec_with_config(
 /// minimum reported value of 1 ensures the cost model never reports
 /// zero cycles, which would be unsound for use in WCET analysis.
 pub struct Measurement {
+    /// Static name identifying the opcode category measured.
     pub name: &'static str,
+    /// Raw per-pattern CPU-cycle measurement (the minimum across
+    /// `measurement_passes`).
     pub cycles_per_pattern: f64,
+    /// Number of opcodes the pattern executes.
     pub ops_per_pattern: u32,
+    /// Reported per-op cost, the ceiling of `cycles_per_pattern`
+    /// saturated to at least `1` so the emitted cost model never
+    /// reports a zero-cost opcode.
     pub cycles_per_op: u32,
 }
 

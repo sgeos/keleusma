@@ -8,7 +8,9 @@ use crate::token::{Span, Token, TokenKind};
 /// Lexer error with source location.
 #[derive(Debug, Clone, PartialEq)]
 pub struct LexError {
+    /// Human-readable diagnostic message.
     pub message: String,
+    /// Source span of the offending input.
     pub span: Span,
 }
 

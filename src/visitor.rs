@@ -2,12 +2,12 @@
 //!
 //! Two traits cover the practical need across the runtime crate:
 //!
-//! - [`MutVisitor`] takes `&mut` references and is used by passes
-//!   that mutate the AST in place. Examples: monomorphization
-//!   rewrites, closure hoisting.
-//! - [`Visitor`] takes `&` references and is used by passes that
-//!   only inspect the AST. Examples: free-variable collection,
-//!   target-feature validation.
+//! - [`MutVisitor`](crate::visitor::MutVisitor) takes `&mut`
+//!   references and is used by passes that mutate the AST in
+//!   place. Examples: monomorphization rewrites, closure hoisting.
+//! - [`Visitor`](crate::visitor::Visitor) takes `&` references and
+//!   is used by passes that only inspect the AST. Examples:
+//!   free-variable collection, target-feature validation.
 //!
 //! Each trait defines a `visit_*` hook for each AST node kind and a
 //! corresponding `walk_*` default method that recurses into the
@@ -29,19 +29,26 @@ use crate::ast::*;
 /// Mutable AST visitor. Implementors override the `visit_*` hooks
 /// they need; the `walk_*` defaults handle structural recursion.
 pub trait MutVisitor {
+    /// Visit a [`Block`]. Default: recurse through statements and
+    /// the optional tail expression.
     fn visit_block(&mut self, block: &mut Block) {
         self.walk_block(block);
     }
+    /// Visit a [`Stmt`]. Default: recurse into sub-expressions and
+    /// sub-blocks.
     fn visit_stmt(&mut self, stmt: &mut Stmt) {
         self.walk_stmt(stmt);
     }
+    /// Visit an [`Iterable`]. Default: recurse into sub-expressions.
     fn visit_iterable(&mut self, it: &mut Iterable) {
         self.walk_iterable(it);
     }
+    /// Visit an [`Expr`]. Default: recurse into sub-expressions.
     fn visit_expr(&mut self, expr: &mut Expr) {
         self.walk_expr(expr);
     }
 
+    /// Default-walk for [`Block`].
     fn walk_block(&mut self, block: &mut Block) {
         for stmt in block.stmts.iter_mut() {
             self.visit_stmt(stmt);
@@ -51,6 +58,7 @@ pub trait MutVisitor {
         }
     }
 
+    /// Default-walk for [`Stmt`].
     fn walk_stmt(&mut self, stmt: &mut Stmt) {
         match stmt {
             Stmt::Let(l) => self.visit_expr(&mut l.value),
@@ -70,6 +78,7 @@ pub trait MutVisitor {
         }
     }
 
+    /// Default-walk for [`Iterable`].
     fn walk_iterable(&mut self, it: &mut Iterable) {
         match it {
             Iterable::Range(s, e) => {
@@ -80,6 +89,7 @@ pub trait MutVisitor {
         }
     }
 
+    /// Default-walk for [`Expr`].
     fn walk_expr(&mut self, expr: &mut Expr) {
         match expr {
             Expr::Literal { .. }
@@ -184,22 +194,29 @@ pub trait MutVisitor {
     }
 }
 
-/// Immutable AST visitor. Same shape as [`MutVisitor`] but operates
+/// Immutable AST visitor. Same shape as [`MutVisitor`](crate::visitor::MutVisitor) but operates
 /// on `&` references, suitable for passes that only inspect the AST.
 pub trait Visitor {
+    /// Visit a [`Block`]. Default: recurse through statements and
+    /// the optional tail expression.
     fn visit_block(&mut self, block: &Block) {
         self.walk_block(block);
     }
+    /// Visit a [`Stmt`]. Default: recurse into sub-expressions and
+    /// sub-blocks.
     fn visit_stmt(&mut self, stmt: &Stmt) {
         self.walk_stmt(stmt);
     }
+    /// Visit an [`Iterable`]. Default: recurse into sub-expressions.
     fn visit_iterable(&mut self, it: &Iterable) {
         self.walk_iterable(it);
     }
+    /// Visit an [`Expr`]. Default: recurse into sub-expressions.
     fn visit_expr(&mut self, expr: &Expr) {
         self.walk_expr(expr);
     }
 
+    /// Default-walk for [`Block`].
     fn walk_block(&mut self, block: &Block) {
         for stmt in block.stmts.iter() {
             self.visit_stmt(stmt);
@@ -209,6 +226,7 @@ pub trait Visitor {
         }
     }
 
+    /// Default-walk for [`Stmt`].
     fn walk_stmt(&mut self, stmt: &Stmt) {
         match stmt {
             Stmt::Let(l) => self.visit_expr(&l.value),
@@ -228,6 +246,7 @@ pub trait Visitor {
         }
     }
 
+    /// Default-walk for [`Iterable`].
     fn walk_iterable(&mut self, it: &Iterable) {
         match it {
             Iterable::Range(s, e) => {
@@ -238,6 +257,7 @@ pub trait Visitor {
         }
     }
 
+    /// Default-walk for [`Expr`].
     fn walk_expr(&mut self, expr: &Expr) {
         match expr {
             Expr::Literal { .. }

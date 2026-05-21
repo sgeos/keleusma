@@ -572,6 +572,11 @@ impl<'a> BytecodeStore<'a> {
 /// local alias for ergonomic call sites.
 pub type Vm<'a, 'arena> = GenericVm<'a, 'arena, i64, u64, f64>;
 
+/// Parametric stack-based virtual machine. The type parameters
+/// model the runtime's word, address, and float widths so a host
+/// can construct a narrow-width runtime (`GenericVm<i16, u16, f32>`)
+/// for embedded targets. The default specialization
+/// (`GenericVm<i64, u64, f64>`) is the bundled [`Vm`] alias.
 pub struct GenericVm<
     'a,
     'arena,

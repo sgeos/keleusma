@@ -2,7 +2,7 @@
 //!
 //! After type checking and before compilation, this pass walks the
 //! program's call graph and generates a specialized
-//! [`FunctionDef`] per `(function, type_args)` pair encountered.
+//! [`FunctionDef`](crate::ast::FunctionDef) per `(function, type_args)` pair encountered.
 //! Each specialization clones the generic function's body and
 //! substitutes the abstract type-parameter names with the concrete
 //! types throughout. Call sites are rewritten to reference the
