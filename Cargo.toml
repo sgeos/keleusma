@@ -15,6 +15,22 @@ repository = "https://github.com/sgeos/keleusma"
 documentation = "https://docs.rs/keleusma"
 readme = "README.md"
 rust-version = "1.88"
+# Files and directories excluded from the published crates.io
+# tarball. Each entry is content that serves contributors or
+# maintainers rather than downstream embedders.
+#   - editors/ holds editor-specific syntax highlighters and
+#     file-type detection (vim, future vscode/sublime/emacs).
+#   - tools/ holds project-side development tooling such as the
+#     cloc language definition.
+#   - tmp/ and secret/ each carry only a `.gitkeep` marker so the
+#     directories remain present in fresh clones; the marker has
+#     no value to a consumer downloading the tarball.
+exclude = [
+    "editors/",
+    "tools/",
+    "tmp/",
+    "secret/",
+]
 
 [package.metadata.docs.rs]
 # Render docs.rs against the full feature surface so consumers see
