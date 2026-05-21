@@ -8,10 +8,26 @@
 //! Architecture extensibility lives in [`counter`]. Opcode coverage
 //! lives in the [`OPCODE_SPECS`] table here. Source emission lives in
 //! [`emit_cost_model_source`].
+//!
+//! The crate is `no_std + alloc`-compatible when the `std` feature is
+//! disabled. Under no_std, the env-variable override for the CPU
+//! clock assumption is unavailable; the host runner that calls this
+//! crate from std code retains the override. The embedded path
+//! consumes only the measurement primitives ([`OPCODE_SPECS`] and
+//! [`benchmark_spec`]) and reports raw measurements through the
+//! host's chosen transport (defmt RTT for Cortex-M).
+
+#![cfg_attr(not(feature = "std"), no_std)]
+
+extern crate alloc;
+
+use alloc::collections::BTreeMap;
+use alloc::format;
+use alloc::string::String;
+use alloc::vec;
+use alloc::vec::Vec;
 
 pub mod counter;
-
-use std::collections::BTreeMap;
 
 use keleusma::Arena;
 use keleusma::bytecode::{
@@ -70,13 +86,15 @@ impl ConstValueDescriptor {
     }
 }
 
-/// Number of times the opcode pattern is inlined into the benchmark
-/// chunk. Large values are required because architectural cycle
-/// counters such as AArch64's CNTVCT_EL0 run at rates well below the
-/// CPU clock (typically 24 MHz to 100 MHz). Short runs may not
-/// span enough counter ticks to produce useful resolution. The
-/// chunk size grows linearly with this value but has a fixed
-/// per-iteration cost in instruction-cache footprint.
+/// Default number of times the opcode pattern is inlined into the
+/// benchmark chunk on the host. Large values are required because
+/// architectural cycle counters such as AArch64's CNTVCT_EL0 run at
+/// rates well below the CPU clock (typically 24 MHz to 100 MHz);
+/// short runs may not span enough counter ticks to produce useful
+/// resolution. Embedded targets whose counter runs at CPU clock
+/// (Cortex-M DWT_CYCCNT) can use a much smaller value to keep the
+/// constructed chunk inside the device's RAM budget. See
+/// [`BenchConfig`].
 pub const PATTERN_REPETITIONS: u32 = 100_000;
 
 /// Number of measurement passes. The minimum across passes is taken
@@ -89,6 +107,53 @@ pub const MEASUREMENT_PASSES: u32 = 16;
 /// data caches and stabilizes the branch predictor before
 /// measurement begins.
 pub const WARMUP_PASSES: u32 = 4;
+
+/// Runtime configuration for the bench harness. The host CLI uses
+/// [`BenchConfig::host_default`]; embedded callers construct a
+/// smaller-repetition variant via [`BenchConfig::embedded_default`]
+/// so the constructed chunk fits in device RAM.
+#[derive(Clone, Copy, Debug)]
+pub struct BenchConfig {
+    pub repetitions: u32,
+    pub warmup_passes: u32,
+    pub measurement_passes: u32,
+}
+
+impl BenchConfig {
+    /// Configuration suitable for host benchmarking, where counter
+    /// resolution is the constraint and chunk-size growth is
+    /// acceptable.
+    pub const fn host_default() -> Self {
+        Self {
+            repetitions: PATTERN_REPETITIONS,
+            warmup_passes: WARMUP_PASSES,
+            measurement_passes: MEASUREMENT_PASSES,
+        }
+    }
+
+    /// Configuration suitable for embedded targets, where the
+    /// counter ticks at CPU clock (so coarse resolution is not a
+    /// problem) and the constructed chunk must fit in device RAM.
+    /// One thousand pattern repetitions keep the chunk under
+    /// 100 KB for the largest pattern at the current `Op` size,
+    /// well within the N6's 384 KB RAM budget after the heap
+    /// allocator's overhead. Warmup and measurement passes match
+    /// the host default; the loop runs in microseconds at the N6's
+    /// 800 MHz clock so the additional passes are inexpensive.
+    pub const fn embedded_default() -> Self {
+        Self {
+            repetitions: 1_000,
+            warmup_passes: WARMUP_PASSES,
+            measurement_passes: MEASUREMENT_PASSES,
+        }
+    }
+}
+
+impl Default for BenchConfig {
+    fn default() -> Self {
+        Self::host_default()
+    }
+}
 
 /// Builds a Func chunk that executes the given opcode pattern
 /// `repetitions` times. The chunk has a `Return` at the end so
@@ -141,6 +206,17 @@ fn build_benchmark_chunk(pattern: &[Op], constants: &[ConstValue], repetitions: 
 /// raw counter ticks per pattern is below one. The result is
 /// rounded to `u64` at the end.
 pub fn benchmark_spec(counter: &dyn CycleCounter, spec: &OpcodeSpec) -> f64 {
+    benchmark_spec_with_config(counter, spec, BenchConfig::host_default())
+}
+
+/// Same as [`benchmark_spec`] but with explicit configuration. Used
+/// by embedded callers that need a smaller chunk-size repetition
+/// count to fit in device RAM.
+pub fn benchmark_spec_with_config(
+    counter: &dyn CycleCounter,
+    spec: &OpcodeSpec,
+    config: BenchConfig,
+) -> f64 {
     let pattern = (spec.build)();
     let constants: Vec<ConstValue> = spec
         .constants
@@ -148,7 +224,7 @@ pub fn benchmark_spec(counter: &dyn CycleCounter, spec: &OpcodeSpec) -> f64 {
         .map(|c| c.into_const_value())
         .collect();
 
-    let module = build_benchmark_chunk(&pattern, &constants, PATTERN_REPETITIONS);
+    let module = build_benchmark_chunk(&pattern, &constants, config.repetitions);
     let arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
 
     // SAFETY: The bench tool deliberately uses the unchecked
@@ -161,20 +237,24 @@ pub fn benchmark_spec(counter: &dyn CycleCounter, spec: &OpcodeSpec) -> f64 {
 
     // Warmup. Run the chunk a few times to warm caches and predictor.
     // A non-Ok result indicates a stale or malformed spec; the bench
-    // surfaces the error to stderr so the operator can diagnose
-    // rather than silently reporting zero cycles.
-    for _ in 0..WARMUP_PASSES {
-        if let Err(e) = vm.call(&[]) {
-            eprintln!("  warning: warmup vm.call returned Err({:?})", e);
+    // surfaces the error to stderr (when `std` is available) so the
+    // operator can diagnose rather than silently reporting zero
+    // cycles. Under no_std the warmup failure short-circuits silently
+    // and returns zero; downstream callers see the zero and report
+    // it through their own channel.
+    for _ in 0..config.warmup_passes {
+        if let Err(_e) = vm.call(&[]) {
+            #[cfg(feature = "std")]
+            eprintln!("  warning: warmup vm.call returned Err({:?})", _e);
             return 0.0;
         }
     }
 
     let scale = counter.cpu_cycles_per_count();
     let mut min_per_pattern = f64::MAX;
-    for _ in 0..MEASUREMENT_PASSES {
+    for _ in 0..config.measurement_passes {
         let start = counter.read();
-        let _ = std::hint::black_box(vm.call(&[]));
+        let _ = core::hint::black_box(vm.call(&[]));
         let end = counter.read();
         // Convert raw counter delta to CPU cycles before dividing
         // across patterns. Counters that run below CPU clock speed
@@ -184,7 +264,7 @@ pub fn benchmark_spec(counter: &dyn CycleCounter, spec: &OpcodeSpec) -> f64 {
         // the counter's `cpu_cycles_per_count` method, which honors
         // the `KELEUSMA_BENCH_CPU_HZ` environment variable.
         let total_cpu_cycles = (end.wrapping_sub(start) as f64) * scale;
-        let per_pattern = total_cpu_cycles / PATTERN_REPETITIONS as f64;
+        let per_pattern = total_cpu_cycles / config.repetitions as f64;
         if per_pattern < min_per_pattern {
             min_per_pattern = per_pattern;
         }
@@ -202,6 +282,33 @@ pub struct Measurement {
     pub cycles_per_pattern: f64,
     pub ops_per_pattern: u32,
     pub cycles_per_op: u32,
+}
+
+/// Measure a single spec and return a [`Measurement`]. Used by the
+/// embedded path that emits each measurement through defmt rather
+/// than collecting the full table. The host CLI collects through
+/// [`measure_all`] instead.
+pub fn measure_one(counter: &dyn CycleCounter, spec: &OpcodeSpec) -> Measurement {
+    measure_one_with_config(counter, spec, BenchConfig::host_default())
+}
+
+/// Same as [`measure_one`] but with explicit configuration. The
+/// embedded `bench_n6` binary calls this with
+/// [`BenchConfig::embedded_default`] so the constructed chunk fits in
+/// device RAM.
+pub fn measure_one_with_config(
+    counter: &dyn CycleCounter,
+    spec: &OpcodeSpec,
+    config: BenchConfig,
+) -> Measurement {
+    let cycles_per_pattern = benchmark_spec_with_config(counter, spec, config);
+    let cycles_per_op = libm::ceil(cycles_per_pattern).max(1.0) as u32;
+    Measurement {
+        name: spec.name,
+        cycles_per_pattern,
+        ops_per_pattern: spec.ops_per_pattern,
+        cycles_per_op,
+    }
 }
 
 /// Run the full benchmark suite and return per-opcode measurements.
@@ -227,7 +334,7 @@ pub fn measure_all(counter: &dyn CycleCounter) -> Vec<Measurement> {
             // Round up and clamp to at least 1 so the cost model
             // never returns zero. A zero-cost opcode would let WCET
             // analysis claim free execution, which is unsound.
-            let cycles_per_op = cycles_per_pattern.ceil().max(1.0) as u32;
+            let cycles_per_op = libm::ceil(cycles_per_pattern).max(1.0) as u32;
             Measurement {
                 name: spec.name,
                 cycles_per_pattern,
@@ -344,7 +451,7 @@ pub fn emit_cost_model_source(
     };
     for (cat, fallback_op) in unmeasured {
         let nominal = keleusma::bytecode::nominal_op_cycles(fallback_op) as f64;
-        let scaled = (nominal * scale_factor).ceil().max(1.0) as u32;
+        let scaled = libm::ceil(nominal * scale_factor).max(1.0) as u32;
         category_costs.insert(cat, scaled);
     }
 

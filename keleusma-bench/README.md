@@ -41,13 +41,19 @@ Categories whose opcodes cannot be exercised in isolation by this bench (`Yield`
 
 ## Adding a New Target Architecture
 
-Each host architecture provides its own cycle counter. The `CycleCounter` trait abstracts the read primitive. Built-in implementations cover x86_64, AArch64, and a portable `Instant`-based fallback. To add a new architecture:
+Each host architecture provides its own cycle counter. The `CycleCounter` trait abstracts the read primitive. Built-in implementations cover x86_64 (RDTSC), AArch64 (CNTVCT_EL0), Cortex-M (DWT_CYCCNT under no_std), and a portable `Instant`-based fallback under `std`. To add a new architecture:
 
-1. Implement `CycleCounter` for the new architecture in `src/counter.rs`. The implementation reads the architecture's cycle-counter register and returns a `u64`.
-2. Add a `cfg` gate to `default_counter` selecting the new implementation when compiled for that target.
+1. Implement `CycleCounter` for the new architecture in `src/counter.rs`. The implementation reads the architecture's cycle-counter register and returns a `u64`. Implement `cpu_cycles_per_count` to convert from the counter's tick rate to CPU cycles, and `frequency_hz` to report the counter's nominal tick rate.
+2. Add a `cfg` gate to `default_counter` selecting the new implementation when compiled for that target. For embedded targets where the counter requires runtime parameters (such as a CPU clock supplied by the bootloader), the embedded binary may construct the counter directly rather than going through `default_counter`.
 3. Run the existing benchmark suite on the new architecture and verify the output is reasonable.
 
 The benchmark engine and the source emitter are architecture-independent. Only the counter primitive needs per-architecture work.
+
+## Embedded targets and the N6-DK
+
+The crate is `no_std + alloc`-compatible with `default-features = false`. The Cortex-M DWT_CYCCNT counter is available under `target_arch = "arm"`. An embedded bench binary lives at `examples/rtos/src/bin/bench_n6.rs` and demonstrates the pattern: boot embassy, enable DWT_CYCCNT, run [`BenchConfig::embedded_default`] (1,000 repetitions to fit in device RAM), emit each `Measurement` via defmt RTT, halt. The host-side runner captures the defmt log and feeds it to `keleusma-bench --from-log` to produce the fragment.
+
+See [`measured_cost_models/README.md`](./measured_cost_models/README.md) for the full N6 capture workflow.
 
 ## Adding a New Opcode
 

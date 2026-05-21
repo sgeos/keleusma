@@ -12,13 +12,34 @@ readme = "README.md"
 keywords = ["benchmark", "wcet", "cycle", "calibration", "bytecode"]
 categories = ["development-tools::profiling", "embedded"]
 
+[features]
+# The `std` feature gates the host-side CLI binary and the
+# environment-variable override for the CPU clock assumption.
+# When disabled, the crate is `no_std + alloc`-compatible and is
+# consumed by the Cortex-M bench binary at
+# `examples/rtos/src/bin/bench_n6.rs`. The default enables `std`
+# and pulls in `floats` on the underlying keleusma runtime, since
+# the host bench measures the full opcode surface including float
+# ops.
+default = ["std", "floats"]
+std = []
+floats = ["keleusma/floats"]
+
 [dependencies]
-keleusma = { path = "..", version = "0.1" }
+# `default-features = false` keeps the bench crate consumable from
+# bare-metal binaries. The host CLI re-enables features through
+# the default `std` + `floats` feature on this crate.
+keleusma = { path = "..", version = "0.1", default-features = false }
 keleusma-arena = { path = "../keleusma-arena", version = "0.3" }
+# `libm` provides f64 math (ceil) under no_std. The host build also
+# uses libm rather than std::f64 so the implementation is identical
+# across targets.
+libm = "0.2"
 
 [[bin]]
 name = "keleusma-bench"
 path = "src/main.rs"
+required-features = ["std"]
 
 [lib]
 path = "src/lib.rs"

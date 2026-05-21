@@ -47,6 +47,11 @@ build = "build.rs"
 # the transitive soft-float compiler_builtins routines
 # (`__divdf3`, `__adddf3`, `__muldf3`).
 keleusma = { path = "../..", default-features = false }
+# The bench harness. Default features off so the no_std + alloc
+# measurement primitives stay on the bare-metal target without
+# pulling in the host CLI. Used by `bin/bench_n6.rs` to run the
+# cost-model calibration on the N6's Cortex-M55 with DWT_CYCCNT.
+keleusma-bench = { path = "../../keleusma-bench", default-features = false }
 # Needed at runtime when `keleusma-signatures` is on so the
 # boot-time `setup::run_signed_self_test` path can construct a
 # `VerifyingKey` from the embedded 32-byte public-key fixture.

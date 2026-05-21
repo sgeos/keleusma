@@ -9,67 +9,80 @@ AI to Human communication channel.
 ## Last Updated
 
 **Date**: 2026-05-21
-**Status**: `keleusma-bench` counter-to-cycle scale fix landed. The bench was reporting raw CNTVCT_EL0 counter ticks as if they were CPU cycles; on Apple Silicon at 24 MHz counter rate and 3.228 GHz CPU clock, one tick is approximately 134 CPU cycles, so the values were understated by roughly two orders of magnitude. The bench now scales counter ticks to CPU cycles using a documented assumed CPU clock that the operator can override per host via the `KELEUSMA_BENCH_CPU_HZ` environment variable. The committed dev-host fragment now shows realistic VM-dispatch costs (data movement 87 cycles, arithmetic 164 cycles, composite construction 338 cycles, function call 870 cycles). All 6 bench unit tests pass.
+**Status**: Embedded WCET infrastructure for the STM32N6570-DK lands. `keleusma-bench` lib is now no_std + alloc-compatible behind a `std` feature; new `BenchConfig` parametrises chunk size so embedded targets stay within RAM; new `DwtCycCnt` counter for Cortex-M reads DWT_CYCCNT at CPU clock; new `examples/rtos/src/bin/bench_n6.rs` boots embassy, enables DWT, runs the bench suite, and emits each measurement through defmt RTT. The host-side `keleusma-bench --from-log` parser converts a captured defmt log into a target fragment. Cross-compile to thumbv8m.main-none-eabihf is clean; the run-on-hardware step is deferred to the next session when the N6 is connected.
 
 ## Completed in this session round
 
 | Directive | Resolution |
 |-----------|------------|
-| Operator flagged that VM opcodes reporting one pipelined cycle is implausible, and identified a scale mismatch between the profiling function and the WCET arithmetic | Diagnosis confirmed. On AArch64 the bench reads CNTVCT_EL0 which ticks at the architectural virtual counter frequency (24 MHz on Apple Silicon, confirmed by reading CNTFRQ_EL0 directly: 24,000,000 Hz). The CPU clock on the dev host (Apple M1 Max P-core nominal) is 3.228 GHz. One counter tick is therefore approximately 134 CPU cycles. The bench was reporting raw ticks as cycles, understating by approximately 2 orders of magnitude. Fix in three parts. (1) `CycleCounter` trait gained `cpu_cycles_per_count` and `frequency_hz` methods. `Rdtsc` returns 1.0 (invariant TSC counts CPU cycles directly). `CntvctEl0` reads CNTFRQ_EL0 at runtime and returns `assumed_cpu_hz / counter_hz`. `InstantFallback` returns `assumed_cpu_hz / 1_000_000_000`. (2) `benchmark_spec` multiplies the raw counter delta by `cpu_cycles_per_count` before dividing across pattern repetitions. (3) `DEFAULT_ASSUMED_CPU_HZ = 3.228e9` (M1 Max P-core nominal) with `KELEUSMA_BENCH_CPU_HZ` env var override. The emitted fragment header records the counter name, tick frequency, assumed CPU clock, and scale factor for transparency. Secondary fix: the nominal fallback for unmeasured categories (Yield, Call) was in nominal relative-weight units (1, 10) while measured categories were in CPU cycles (hundreds), producing an incoherent mixed-unit model. Fallback now scales the nominal value by the maximum measured-to-nominal ratio across measured categories (~87 on the dev host), keeping units consistent. Regenerated fragment committed at `keleusma-bench/measured_cost_models/aarch64_apple_darwin.rs`. |
+| Generate WCET/WCMU tables for the N6-DK (Path A: build infrastructure now, run on hardware in follow-on) | Done. Three pieces of infrastructure. (1) `keleusma-bench` lib refactored to no_std + alloc. The `std` cargo feature gates the CLI bin and the `KELEUSMA_BENCH_CPU_HZ` env-var override; the measurement primitives are portable. `libm::ceil` replaces `f64::ceil` so the math works in both targets. (2) New `BenchConfig` struct with `embedded_default()` returning 1,000 pattern repetitions to keep the constructed chunk inside the N6's 384 KB RAM budget. New `benchmark_spec_with_config` and `measure_one_with_config` consume the config. (3) New `DwtCycCnt` counter in `keleusma-bench/src/counter.rs` reads DWT_CYCCNT via volatile MMIO at 0xE000_1004; `cpu_cycles_per_count` returns 1.0 because DWT_CYCCNT ticks at CPU clock. New `bench_n6.rs` binary in `examples/rtos/src/bin/` boots embassy, enables DWT via direct register pokes on DEMCR/DWT_CTRL, runs the spec suite, emits each `Measurement` as a `BENCH idx=I/N name=N bits=B per_op=C` defmt line, signals completion with `BENCH_DONE cpu_hz=H counter_hz=H`. Cross-compiles to thumbv8m.main-none-eabihf cleanly: text 128 KB, bss 132 KB. New host-side `keleusma-bench --from-log <path>` parses the captured defmt log and emits a fragment with the same shape as the host-bench path. Verified end-to-end against a synthetic 17-line log. Documentation in `keleusma-bench/README.md` and `keleusma-bench/measured_cost_models/README.md` covers the embedded path and the N6 capture workflow. |
+| WCMU for the N6 | Documented as a parametric-Vm-width choice rather than a measurement workflow. The runtime computes WCMU at compile time from `value_slot_bytes` and per-op stack/heap effects. For the default 64-bit runtime (which `examples/rtos` currently uses) `value_slot_bytes = 32`, identical to host. Operators that select a narrower parametric Vm for the N6 (sensible for a 32-bit Cortex-M55) get a smaller `value_slot_bytes` per the parametric type's choice. There is no per-host WCMU measurement to capture; the bench measures WCET only. |
 
 ## Verification matrix
 
 ```bash
-# Bench unit tests
-cargo test --release -p keleusma-bench                                # 6 passed, 0 failed
+# Host build and tests
+cargo build --release -p keleusma-bench                                # clean
+cargo test --release -p keleusma-bench                                 # 6 passed
 
-# Counter frequency read independently from a probe matches CNTVCT_EL0
-sysctl hw.tbfrequency                                                 # 24000000 Hz
-sysctl machdep.cpu.brand_string                                       # Apple M1 Max
+# no_std build of bench lib alone
+cargo build --release -p keleusma-bench --no-default-features          # clean
 
-# Bench tool reports the scale factor and produces CPU-cycle values
-./target/release/keleusma-bench --output /tmp/probe.rs                # scale 134.500;
-                                                                      # per-op values
-                                                                      # 40-870 cycles
+# Cross-compile bench_n6 for the N6 target
+cargo build --release --manifest-path examples/rtos/Cargo.toml \
+    --bin bench_n6 --target thumbv8m.main-none-eabihf \
+    --no-default-features --features stm32n6570dk-platform             # clean
+# ELF: text 128 KB, bss 132 KB, fits in 384 KB RAM
 
-# Generated fragment compiles as include! target and returns expected values
-probe project including aarch64_apple_darwin.rs                       # Const 87, Dup 87,
-                                                                      # CheckedAdd 164,
-                                                                      # Div 140,
-                                                                      # NewArray 338,
-                                                                      # Call 870,
-                                                                      # Yield 87
+# Host bench still produces the expected aarch64-darwin fragment
+./target/release/keleusma-bench --output /tmp/probe.rs                 # CPU-cycle values
+                                                                       # consistent with
+                                                                       # prior runs
+
+# --from-log parser against a synthetic 17-line log
+./target/release/keleusma-bench --from-log /tmp/synthetic.log \
+    --output /tmp/synthetic_fragment.rs                                # 17 parsed,
+                                                                       # fragment shape
+                                                                       # matches host-bench
+                                                                       # output, scale 1.000,
+                                                                       # function-call falls
+                                                                       # back to scaled
+                                                                       # nominal (870 cycles)
 ```
 
 ## Open concerns
 
-1. **CPU clock assumption is per-host.** The `DEFAULT_ASSUMED_CPU_HZ` is set to Apple M1 Max P-core nominal (3.228 GHz). Operators on other Apple Silicon variants (M2, M3, M4) should override via `KELEUSMA_BENCH_CPU_HZ` before regenerating to obtain accurate CPU-cycle values for their host. Operators on x86_64 hosts where invariant TSC tracks the nominal frequency get correct values without override (`Rdtsc::cpu_cycles_per_count` returns 1.0).
+1. **Hardware run on the N6-DK is deferred.** The infrastructure is in place and the binary cross-compiles cleanly. The next session step is: connect the N6-DK via probe-rs, run `cargo run --release --manifest-path examples/rtos/Cargo.toml --bin bench_n6 --target thumbv8m.main-none-eabihf --no-default-features --features stm32n6570dk-platform 2>&1 | tee /tmp/bench_n6.log`, wait for the `BENCH_DONE` marker, then run `cargo run --release -p keleusma-bench -- --from-log /tmp/bench_n6.log --output keleusma-bench/measured_cost_models/thumbv8m_main_none_eabihf.rs`. The committed fragment then ships in the same shape as the dev-host fragment.
 
-2. **Yield and Call still use scaled nominal fallback.** The bench harness cannot exercise these opcodes in isolation. The fallback (~87× nominal, derived from the maximum measured-to-nominal ratio across measured categories on the dev host) is conservative for WCET but is an extrapolation rather than a direct measurement. Future work can add Stream-chunk and multi-chunk spec types to replace the fallback with real measurement.
+2. **N6 CPU clock assumption is hardcoded at 800 MHz.** The `bench_n6.rs` binary constructs the counter with `DwtCycCnt::new(800_000_000)` matching the N6's nominal CPU clock after the bootloader configures the PLL. If the actual clock differs (the operator selects a different power profile, or thermal conditions alter the boost behaviour), the cycle counts are off proportionally. The current value matches the documented nominal; a future revision could read the clock from the RCC peripheral at runtime to remove the assumption.
 
-3. **Frequency assumption does not track thermal throttling, P-core vs E-core differences, or frequency scaling.** The CPU-cycle values are calibrated against the assumed nominal clock; the actual instantaneous frequency during execution can vary. Operators who need wall-clock-time bounds should divide the reported cycle counts by the measured CPU clock under their workload's actual thermal conditions, not the nominal clock.
+3. **Embedded `BenchConfig` uses 1,000 repetitions versus host's 100,000.** Resolution at the N6's CPU-clock counter is fine because DWT_CYCCNT ticks at 800 MHz, so 1,000 repetitions of a few-cycle op still produce thousands of counter ticks. The chunk-size constraint is the binding limit (RAM, not resolution). Operators on devices with more RAM can lift the repetition count by passing a custom `BenchConfig`.
+
+4. **The `Yield` and `Call` opcodes still fall back to scaled nominal on both host and N6.** This is unchanged from the prior session and is documented in `measured_cost_models/README.md`. A future bench harness with multi-chunk and Stream-chunk spec types can replace the fallback with measurement; for both host and N6 the fallback is consistent.
 
 ## Backlog summary
 
 | ID | Title | Status |
 |----|-------|--------|
 | B13 | Refinement-type compile-time elision through range analysis | Deferred |
-| B14 | CallIndirect flow analysis for non-recursive closures | Closed as not-applicable (closures retired in Phase 4) |
+| B14 | CallIndirect flow analysis for non-recursive closures | Closed as not-applicable |
 | B15 | Remove `Type::Unknown` entirely | Foundation in place; refactor pending |
 | B16 | Parametric `Vm<W, A, F>` for sub-64-bit native runtimes | Resolved |
 | B17 | Embassy feature trimming | Resolved as not actionable |
 | B18 | Big-number arithmetic worked example | Resolved |
 | B20 | V0.2.0 ISA and wire format implementation | Closed |
 | B21 | Value-side IFC negative labels via product lattice | Deferred |
-| B22 | Sub-coroutines as callable ephemeral loops | Now load-bearing for V0.5.0; spec lives under `docs/architecture/SUB_COROUTINES.md` |
-| (new candidate) | `keleusma-bench` multi-chunk and Stream-chunk spec types so `Call` and `Yield` measure in isolation | Deferred; acknowledged in `measured_cost_models/README.md` |
+| B22 | Sub-coroutines as callable ephemeral loops | Now load-bearing for V0.5.0 |
+| (candidate) | `keleusma-bench` multi-chunk and Stream-chunk specs to remove `Yield` and `Call` nominal fallback | Deferred |
+| (candidate) | Read N6 CPU clock from RCC at runtime instead of hardcoding 800 MHz | Deferred |
 
 ## Intended Next Step
 
-The development host's measured cost model is committed in CPU-cycle units calibrated for the M1 Max P-core nominal frequency. The runtime defaults to `NOMINAL_COST_MODEL`; switching is an explicit host-side `CostModel` construction. The natural next step is one of:
+The infrastructure for embedded WCET measurement is in place and cross-compiles cleanly. The natural next step is to run the bench on a connected N6-DK and commit the resulting `thumbv8m_main_none_eabihf.rs` fragment. The procedure is documented in `keleusma-bench/measured_cost_models/README.md` under "N6 capture workflow."
 
-- Generate cost-model fragments for other supported host architectures, with operators setting `KELEUSMA_BENCH_CPU_HZ` per host.
-- Extend the bench harness with multi-chunk and Stream-chunk spec types so `Yield` and `Call` measure in isolation.
+Alternatives:
+
 - Resume V0.3.0 self-hosting implementation (Lexer migration first per the incremental ordering).
 - B15 follow-on: remove `Type::Unknown` entirely.
+- Generate cost-model fragments for other supported host architectures (x86_64-unknown-linux-gnu) before tackling N6 hardware run.
 - Operator selection of a different directive.
