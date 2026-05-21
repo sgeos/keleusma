@@ -148,11 +148,11 @@
 //! # Run
 //!
 //! ```text
-//! cargo run --release --example piano_roll --features sdl3-example,text
+//! cargo run --release --example piano_roll --features sdl3-example
 //! ```
 //!
-//! The `text` cargo feature is required because the bundled
-//! songs pass string literals (song names) to host natives.
+//! Static string literals are unconditional in V0.2.0; the
+//! retired V0.1.x `text` cargo feature is no longer present.
 //!
 //! SDL3 builds from source through the `build-from-source-static`
 //! feature on first build. CMake is required.
