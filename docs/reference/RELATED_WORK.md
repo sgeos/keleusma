@@ -2,7 +2,7 @@
 
 > **Navigation**: [Reference](./README.md) | [Documentation Root](../README.md)
 
-This document positions Keleusma within the established landscape of synchronous reactive languages, stream processing theory, verified bytecode formats, and industrial safety certification. Each section explains the relationship to Keleusma, identifies what the project adopts, adapts, or defers from prior work, and provides citations to the relevant literature. A formal bibliography appears at the end.
+This document positions Keleusma within the established landscape of synchronous reactive languages, stream processing theory, verified bytecode formats, industrial safety certification, and language-based information-flow security. Each section explains the relationship to Keleusma, identifies what the project adopts, adapts, or defers from prior work, and provides citations to the relevant literature. A formal bibliography appears at the end.
 
 ## 1. Synchronous Reactive Languages
 
@@ -144,6 +144,24 @@ Keleusma differs from wasm-bindgen in scope. Keleusma is a complete embedded scr
 
 The static marshalling approach has precedents in the typed embedded scripting tradition, including the Lua bindings used in Tarantool and the typed effects in Koka, but Keleusma's combination of synchronous reactive semantics with a typed marshalling layer is, to the author's knowledge, novel.
 
+## 10. Language-Based Information-Flow Security
+
+Keleusma's information-flow labels, added in V0.2.0, place it within the tradition of language-based information-flow security. This field studies how to constrain, by static or dynamic means, the way data of differing confidentiality may propagate through a program.
+
+The foundational model is Denning's lattice model of secure information flow [IF1], which represents security classes as a lattice and states the condition under which information may flow from one class to another. Denning and Denning followed with a certification mechanism that checks a program's information flows at compile time against the lattice ordering [IF2]. Volpano, Smith, and Irvine recast information-flow checking as a type system and gave the first proof that a well-typed program satisfies noninterference, the property that publicly observable outputs do not depend on confidential inputs [IF3].
+
+Two language realizations are the closest comparators. Jif extends Java with the decentralized label model of Myers and Liskov [IF4], in which labels name principals and the readers each principal permits, and the JFlow work showed that such checking can be performed mostly statically [IF5]. FlowCaml extends OCaml with information-flow types and full type inference over a lattice of security levels [IF6]. Sabelfeld and Myers surveyed the field and fixed its vocabulary, including the distinction between explicit flows through assignment and implicit flows through control structure, and the role of declassification as a controlled and audited escape from noninterference [IF7].
+
+Information-flow control is not confined to static type systems. LIO performs dynamic information-flow control in Haskell through a labeled IO monad that tracks a floating label at run time [IF8]. Perl's taint mode is the most widely deployed dynamic mechanism, marking data derived from external input as tainted and refusing tainted data at sensitive operations until it is laundered [IF10]. SecVerilog carries information-flow labels into hardware description and checks timing-sensitive flows in a Verilog-derived language at synthesis time [IF9].
+
+**Relationship to Keleusma.** Keleusma adopts the lattice model [IF1] and the type-system formulation [IF3]. Labels are user-defined names, the label set carried by a type is ordered by subset inclusion with set union as the join, and the empty set is the least restrictive class. The type checker enforces the subset rule at every position and rejects a program in which a source label set is not contained in the target label set. The `classify` and `declassify` operators correspond to the raising and the controlled declassification described in the survey literature [IF7]. Labels are erased after checking and impose no runtime representation, which places Keleusma with the static tradition of Jif and FlowCaml [IF5, IF6] rather than the dynamic tradition of LIO and taint mode [IF8, IF10].
+
+Keleusma differs from Jif and FlowCaml in scope. Both are general-purpose languages and neither is total or resource-bounded. Keleusma places the label lattice inside a total functional stream-processing language with static worst-case execution-time and memory bounds, targeting `no_std` plus `alloc` embedded hosts. The combination of information-flow labels with the synchronous, bounded-step execution model is, to the author's knowledge, not present in the prior languages. Keleusma also admits negative labels at parameter and return positions, a boundary clause that forbids named labels rather than bounding them from above. This is motivated by multi-party module delivery to embedded targets and is a narrower mechanism than the principal hierarchy of the decentralized label model [IF4].
+
+The guarantee Keleusma currently provides is narrower than noninterference. The analysis tracks explicit value flows. It propagates labels through arithmetic, unary operations, conditional and match expressions, and casts, and it applies the subset rule recursively at tuple, array, and option positions, so a value computed from a confidential value carries the confidential label. It does not currently track implicit flows that arise when a confidential condition selects between observable side effects, for example a branch that writes different values to the data segment or invokes different native functions. A program with no declassification therefore does not leak a confidential value through a tracked data flow, but whole-program noninterference is not claimed. Closing the implicit-flow gap would require a program-counter label in the sense of the survey [IF7] and is left to future work.
+
+Information-flow control should not be conflated with two adjacent disciplines. Object-capability security, realized in the language E, constrains which code holds the authority to invoke an operation [IF11]. Reference capabilities, realized in Pony, constrain aliasing and mutability to guarantee data-race freedom [IF12]. Both concern who may act on a value. Information-flow labels concern where a value may travel regardless of who holds a reference to it. The disciplines compose, but none subsumes another.
+
 ## Cross-References
 
 - [LANGUAGE_DESIGN.md](../architecture/LANGUAGE_DESIGN.md) describes the design goals and four guarantees.
@@ -235,3 +253,29 @@ The static marshalling approach has precedents in the typed embedded scripting t
 ### Embedded Scripting
 
 [E2] J. Lim and contributors. "Rhai: An Embedded Scripting Language for Rust." Open-source project. https://rhai.rs (accessed 2026).
+
+### Information-Flow Security
+
+[IF1] D. E. Denning. "A Lattice Model of Secure Information Flow." Communications of the ACM, 19(5):236-243, May 1976.
+
+[IF2] D. E. Denning and P. J. Denning. "Certification of Programs for Secure Information Flow." Communications of the ACM, 20(7):504-513, July 1977.
+
+[IF3] D. Volpano, C. Irvine, and G. Smith. "A Sound Type System for Secure Flow Analysis." Journal of Computer Security, 4(2-3):167-187, 1996.
+
+[IF4] A. C. Myers and B. Liskov. "A Decentralized Model for Information Flow Control." In Proceedings of the 16th ACM Symposium on Operating Systems Principles (SOSP), pages 129-142. ACM, 1997.
+
+[IF5] A. C. Myers. "JFlow: Practical Mostly-Static Information Flow Control." In Proceedings of the 26th ACM SIGPLAN-SIGACT Symposium on Principles of Programming Languages (POPL), pages 228-241. ACM, 1999.
+
+[IF6] F. Pottier and V. Simonet. "Information Flow Inference for ML." ACM Transactions on Programming Languages and Systems (TOPLAS), 25(1):117-158, 2003.
+
+[IF7] A. Sabelfeld and A. C. Myers. "Language-Based Information-Flow Security." IEEE Journal on Selected Areas in Communications, 21(1):5-19, January 2003.
+
+[IF8] D. Stefan, A. Russo, J. C. Mitchell, and D. Mazieres. "Flexible Dynamic Information Flow Control in Haskell." In Proceedings of the 4th ACM SIGPLAN Symposium on Haskell, pages 95-106. ACM, 2011.
+
+[IF9] D. Zhang, Y. Wang, G. E. Suh, and A. C. Myers. "A Hardware Design Language for Timing-Sensitive Information-Flow Security." In Proceedings of the 20th International Conference on Architectural Support for Programming Languages and Operating Systems (ASPLOS), pages 503-516. ACM, 2015.
+
+[IF10] L. Wall and contributors. "perlsec: Perl Security." Perl documentation. https://perldoc.perl.org/perlsec (accessed 2026).
+
+[IF11] M. S. Miller. "Robust Composition: Towards a Unified Approach to Access Control and Concurrency Control." PhD dissertation, Johns Hopkins University, 2006.
+
+[IF12] S. Clebsch, S. Drossopoulou, S. Blessing, and A. McNeil. "Deny Capabilities for Safe, Fast Actors." In Proceedings of the 5th International Workshop on Programming Based on Actors, Agents, and Decentralized Control (AGERE!), pages 1-12. ACM, 2015.
