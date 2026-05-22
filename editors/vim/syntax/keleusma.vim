@@ -8,6 +8,9 @@ if exists("b:current_syntax")
   finish
 endif
 
+" Shebang. Matches only at the very start of the file.
+syn match keleusmaShebang "\%^#!.*$"
+
 " Comments. Line comments and C-style block comments.
 syn keyword keleusmaTodo contained TODO FIXME NOTE XXX
 syn match   keleusmaLineComment  "//.*$"           contains=keleusmaTodo,@Spell
@@ -49,16 +52,23 @@ syn match keleusmaFloat "\<\d[0-9_]*\.\d[0-9_]*\>"
 syn region keleusmaString start=+"+ skip=+\\"+ end=+"+ contains=keleusmaEscape,@Spell
 syn match  keleusmaEscape contained "\\[ntr\"\\\\0]"
 
-" Pipeline, range, scope, return-arrow, and match-arrow operators.
-" The character classes after \v expect Vim 7.0+ very-magic mode.
-syn match keleusmaOperator "|>"
+" Pipeline operator. Promoted out of the generic Operator group so
+" the language's left-to-right composition syntax is visually
+" distinct from arithmetic operators.
+syn match keleusmaPipe "|>"
+
+" Range, scope, return-arrow, and match-arrow operators.
 syn match keleusmaOperator "->"
 syn match keleusmaOperator "=>"
 syn match keleusmaOperator "::"
 syn match keleusmaOperator "\.\."
 
-" Information-flow label separator.
-syn match keleusmaOperator "@"
+" Information-flow label annotations. The `@` separator and the
+" label name that follows are highlighted together so a labelled
+" type like `Word@Open` or `Word@{Read, Write}` stands out from
+" the underlying type. Negative labels (`@!Secret`) and brace
+" sets (`@{A, B}`, `@{!A, !B}`) are covered by the same rule.
+syn match keleusmaIFCLabel "@!\?\([A-Za-z_][A-Za-z0-9_]*\|{[^}]*}\)"
 
 " Identifiers. The order is significant: type-style identifiers
 " (uppercase initial) are highlighted as types; function-call
@@ -68,6 +78,9 @@ syn match keleusmaType     "\<[A-Z][A-Za-z0-9_]*\>"
 syn match keleusmaFunction "\<[a-z_][a-zA-Z0-9_]*\>\ze\s*("
 
 " Default-link the syntax groups to standard highlight categories.
+" Per-group overrides at the user's `vimrc` are the conventional
+" escape hatch (e.g. `hi link keleusmaIFCLabel WarningMsg`).
+hi def link keleusmaShebang      PreProc
 hi def link keleusmaTodo         Todo
 hi def link keleusmaLineComment  Comment
 hi def link keleusmaBlockComment Comment
@@ -80,6 +93,8 @@ hi def link keleusmaNumber       Number
 hi def link keleusmaFloat        Float
 hi def link keleusmaString       String
 hi def link keleusmaEscape       SpecialChar
+hi def link keleusmaPipe         Special
+hi def link keleusmaIFCLabel     Special
 hi def link keleusmaOperator     Operator
 hi def link keleusmaFunction     Function
 

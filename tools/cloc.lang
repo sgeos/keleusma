@@ -1,4 +1,5 @@
 Keleusma
+    filter remove_matches ^#!
     filter remove_matches ^\s*//
     filter call_regexp_common C
     extension kel
