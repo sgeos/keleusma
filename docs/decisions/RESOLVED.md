@@ -382,3 +382,87 @@ The 2026-05-21 research loop produced an implementation-order synthesis at [docs
 ## R48. Autonomous-research-loop process documented
 
 The 2026-05-21 research loop's process is documented at [docs/process/AUTONOMOUS_RESEARCH_LOOP.md](../process/AUTONOMOUS_RESEARCH_LOOP.md). The document distils lessons from one completed loop: empirical-verification budgets per firing, document length discipline, cross-document consistency checks, explicit confidence labels, and stopping discipline. Recommended for adoption before any subsequent autonomous-research session.
+
+## R49. Strict-mode enrolled-keys signing gate at the CLI
+
+V0.2.1 adds an opt-in CLI policy that requires bytecode execution to validate against a host-managed trust store. The mechanism extends the R42 Ed25519 signing infrastructure without changing the wire format or the runtime API; the new surface is entirely in `keleusma-cli`.
+
+**Activation paths.** Three knobs in order of precedence:
+
+1. `KELEUSMA_TRUSTED_KEYS_DIR` environment variable points at a directory of `*.pub` files. Each file holds a 32-byte Ed25519 verifying key.
+2. Platform-conventional directory: `/etc/keleusma/trusted_keys` on Unix-like systems, `%PROGRAMDATA%\keleusma\trusted_keys` on Windows.
+3. `KELEUSMA_REQUIRE_SIGNED=1` environment variable forces strict mode even with an empty trust store (fail-closed for everything).
+
+Strict signing mode activates when the trust store is non-empty or the force-strict variable is set.
+
+**Rejection rules under strict signing.**
+
+- Source files: rejected with `source execution disabled; compile and sign the source before running` diagnostic.
+- Unsigned bytecode: rejected with `unsigned bytecode disabled` diagnostic.
+- Signed bytecode whose signature does not validate against any enrolled key: rejected with `signature does not match any enrolled key` diagnostic. The diagnostic does not enumerate the trust list contents to prevent unprivileged callers from probing the enrolled set.
+- The `--verifying-key` command-line argument: rejected to prevent local operators from relaxing the policy.
+
+**Discovery discipline.** Fail-closed. A malformed key file (wrong size, invalid Ed25519 encoding) causes the CLI to refuse to start with a clear diagnostic. Permissive mode is the default when no trust-store directory is configured.
+
+**Composition.** The signing gate composes with the encryption gate (R50). Both gates are independent and may be active in any combination: neither, signing only, encryption only, or both.
+
+**Implementation.** Lives in `keleusma-cli/src/strict_mode.rs` with the `PolicyContext` struct and the discovery helpers. Threading through `run_subcommand`, `run_file`, and `execute_bytecode` in `keleusma-cli/src/main.rs`.
+
+**Cross-references.**
+
+- R42 (Ed25519 signing infrastructure).
+- R50 (encryption gate, the companion mechanism).
+- `tmp/enrolled_keys_execution.md` for the design spec.
+- `docs/guide/SECURITY_POLICY.md` for the operator-facing guide.
+
+## R50. Hybrid asymmetric encryption layer for compiled modules
+
+V0.2.1 adds an optional encryption layer for compiled bytecode artefacts. Each artefact is encrypted against a specific destination runtime's X25519 public key and continues to be signed with Ed25519 (R42). The signature covers the encrypted body so an adversary cannot strip the encryption and substitute cleartext while preserving signature validity. Per-recipient asymmetric keys give compromise containment: capture of one runtime reveals only that runtime's private key.
+
+**Cryptographic primitives.**
+
+- X25519 ECDH for asymmetric key agreement between the compiler and the destination runtime.
+- HKDF-SHA-256 for symmetric key derivation from the X25519 shared secret. Distinct info strings for the AES key and the AES-GCM nonce ensure domain separation.
+- AES-256-GCM for authenticated encryption of the body. The 16-byte GCM tag is appended to the ciphertext.
+- Ed25519 for the outer signature, unchanged from R42. The signature covers the encrypted artefact.
+
+**Wire format extension.**
+
+- New `FLAG_ENCRYPTED = 0x04` bit in the header flags byte.
+- 88-byte encryption metadata block appended to the signed header. Layout: scheme identifier (1 byte), reserved (1 byte), metadata length (2 bytes), ephemeral X25519 public key (32 bytes), recipient_key_id SHA-256 fingerprint (32 bytes), AES-GCM nonce (12 bytes), reserved padding (8 bytes).
+- `header_length` grows from 136 (signed) to 224 (signed-and-encrypted) bytes. The encrypted-signed header length is computed by `wire_format::encrypted_signed_header_length()`.
+- `BYTECODE_VERSION` remains 1. The combination of `FLAG_ENCRYPTED` and the extended header length disambiguates encrypted artefacts from V0.2.0 signed-only artefacts. V0.2.0 runtimes reject V0.2.1 encrypted artefacts cleanly because the header length check fails.
+
+**API surface.**
+
+- `wire_format::module_to_encrypted_signed_wire_bytes(module, signing_key, recipient_public_key, ephemeral_seed)` produces the on-disk encrypted-signed artefact.
+- `wire_format::decrypt_encrypted_signed_to_signed_bytes(bytes, verifying_keys, decryption_key)` verifies the signature, decrypts the body, and reconstructs a logically-equivalent signed-only buffer that the existing loader processes.
+- `Vm::load_encrypted_signed_bytes(bytes, arena, verifying_keys, decryption_key)` is the end-to-end runtime entry point that verifies, decrypts, parses, and constructs the VM.
+
+**Feature gating.** All encryption work is gated behind the `encryption` Cargo feature, off by default. Flash-constrained embedded hosts that do not need encrypted delivery pay no binary-size cost from the encryption crypto stack (`x25519-dalek`, `aes-gcm`, `hkdf`, `sha2`).
+
+**Strict-mode encryption gate** (companion to R49). The CLI supports a `KELEUSMA_DECRYPTION_KEYS_DIR` environment variable, a platform-conventional `/etc/keleusma/decryption_keys` directory, and a `KELEUSMA_REQUIRE_ENCRYPTED=1` force flag. When active, the gate rejects unencrypted bytecode and bytecode encrypted to non-enrolled recipients. The `--decryption-key` flag is rejected to prevent local policy relaxation.
+
+**CLI surface additions.**
+
+- `keleusma compile script.kel --signing-key ... --encryption-key recipient.pub -o script.kel.bin` produces the encrypted-and-signed artefact.
+- `keleusma run script.kel.bin --verifying-key ... --decryption-key host.seed` runs an encrypted artefact in permissive mode.
+- `keleusma keygen --kind encryption --seed host.seed --public host.pub` generates an X25519 keypair.
+
+**Threat model addressed.**
+
+- Stolen artefacts on the delivery channel: ciphertext is opaque.
+- Substituted artefacts: signature fails verification.
+- Cross-runtime compromise: per-runtime keys contain the blast radius.
+- Adversarial inspection: encrypted body resists reverse engineering.
+
+The remaining residual risk is that an adversary with memory access on the running runtime can recover the plaintext from RAM after decryption. Closing that gap requires hardware isolation, deferred to B24.
+
+**Cross-references.**
+
+- R42 (Ed25519 signing infrastructure, unchanged).
+- R43 (information-flow labels, operates on the decrypted plaintext, independent).
+- R49 (strict-mode signing gate, the companion mechanism).
+- B24 (hardware-isolation integration for Cortex-M targets, the next protective layer).
+- `tmp/encrypted_signed_modules.md` for the design spec.
+- `docs/guide/SECURITY_POLICY.md` for the operator-facing guide.

@@ -243,12 +243,35 @@ The execution wire format above is the canonical encoding for bytecode that runs
 | `Module::view_bytes(bytes)` | Validate through `access_bytes` and deserialize to owned `Module`. Skips the body copy that `from_bytes` performs. Requires alignment. |
 | `Vm::new(module)` | Construct the VM. Runs structural verification and resource bounds verification. |
 | `Vm::load_bytes(bytes)` | Convenience for `Vm::new(Module::from_bytes(bytes)?)`. Runs full verification. |
+| `Vm::load_signed_bytes(bytes, arena, &keys)` | Verify the Ed25519 signature, then load. Requires the `signatures` feature. |
+| `Vm::load_encrypted_signed_bytes(bytes, arena, &verifying_keys, &decryption_key)` | Verify the signature, decrypt the body with the supplied X25519 private key, then load. Requires both the `signatures` and `encryption` features. |
 | `Vm::view_bytes(bytes)` | Convenience for `Vm::new(Module::view_bytes(bytes)?)`. Skips the body copy. Requires alignment. |
 | `unsafe Vm::new_unchecked(module)` | Skip the resource bounds check. Structural verification still runs because the VM execution loop relies on its invariants for memory safety. |
 | `unsafe Vm::load_bytes_unchecked(bytes)` | Convenience for `unsafe Vm::new_unchecked(Module::from_bytes(bytes)?)`. |
 | `unsafe Vm::view_bytes_unchecked(bytes)` | Convenience for `unsafe Vm::new_unchecked(Module::view_bytes(bytes)?)`. Skips the body copy. Requires alignment. |
 
 The unchecked path is for hosts that load precompiled bytecode whose resource bounds were validated during the build pipeline. The unsafe marker captures the trust contract. The host attests that bytecode was previously verified or originates from a trusted compiler. The bounded-memory and bounded-step guarantees are weakened to host attestation under this path. Exceeding the bound at runtime produces an arena allocation failure rather than memory unsafety. See R39 for the full design rationale.
+
+#### Decryption step for encrypted artefacts
+
+When `FLAG_ENCRYPTED` is set in the framing header, the load-time pipeline runs an additional decryption step before structural verification. The full sequence:
+
+1. Strip the optional shebang prefix.
+2. Validate the framing header (magic, version, CRC, declared widths).
+3. Verify the Ed25519 signature against the encrypted form. The signature covers both the encryption metadata and the ciphertext, so authentication catches tampering at either layer.
+4. Parse the 88-byte encryption metadata block (scheme id, ephemeral public key, recipient_key_id, AES-GCM nonce).
+5. Compare the metadata's `recipient_key_id` against the SHA-256 fingerprint of the local X25519 public key. A mismatch returns the `WrongRecipient` diagnostic before any expensive crypto runs.
+6. Compute the X25519 shared secret from the metadata's ephemeral public key and the local X25519 private key.
+7. Derive the AES-256 key through HKDF-SHA-256 with the info string `"keleusma-v1-aes256-gcm-key"`. Derive the AES-GCM nonce with the info string `"keleusma-v1-aes256-gcm-nonce"` and cross-check against the metadata.
+8. Decrypt the body with AES-256-GCM. The crate verifies the authentication tag; failure indicates either tampering or wrong key.
+9. Reconstruct a logically-equivalent signed-only buffer with the encryption metadata removed and section offsets shifted accordingly. Pass to the existing `Module::from_bytes` deserializer.
+10. Run structural verification and resource-bounds verification on the plaintext module exactly as for unencrypted artefacts.
+
+The signature is verified BEFORE the decryption step. This authenticates the artefact's origin without spending CPU on decryption when the signature is going to be rejected. It also ensures the encryption metadata itself is signed; an adversary cannot substitute the ephemeral public key or the recipient_key_id to redirect the decryption.
+
+The encryption work is feature-gated on the `encryption` Cargo feature. Hosts built without the feature reject encrypted artefacts at the framing-level header-length check; the diagnostic is clear about the missing feature.
+
+See R49 and R50 in [`docs/decisions/RESOLVED.md`](../decisions/RESOLVED.md) for the design records, [`docs/spec/WIRE_FORMAT.md`](../spec/WIRE_FORMAT.md) for the encryption-metadata block layout, and [`docs/guide/SECURITY_POLICY.md`](../guide/SECURITY_POLICY.md) for the operator-facing guide.
 
 ## Error Recovery
 

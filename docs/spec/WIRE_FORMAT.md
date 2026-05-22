@@ -41,7 +41,7 @@ The framing header is at least sixty-four bytes for unsigned modules and grows t
 | 12     | 1     | Target word bits log2 (u8) |
 | 13     | 1     | Target address bits log2 (u8) |
 | 14     | 1     | Target float bits log2 (u8) |
-| 15     | 1     | Flags (u8). Bit 0 = `FLAG_EPHEMERAL`. Bit 1 = `FLAG_REQUIRES_SIGNATURE`. Other bits reserved. |
+| 15     | 1     | Flags (u8). Bit 0 = `FLAG_EPHEMERAL`. Bit 1 = `FLAG_REQUIRES_SIGNATURE`. Bit 2 = `FLAG_ENCRYPTED`. Other bits reserved. |
 | 16     | 4     | Declared WCET cycles (u32 little-endian) |
 | 20     | 4     | Declared WCMU bytes (u32 little-endian) |
 | 24     | 4     | Shared data bytes (u32 little-endian) |
@@ -76,7 +76,43 @@ A `FLAG_REQUIRES_SIGNATURE` bit in the flags byte indicates whether the loader m
 
 The cryptographic message that the signature covers is the entire framed buffer with the signature payload bytes and the CRC trailer bytes zeroed. Both signer and verifier zero those two regions before computing the cryptographic operation. The CRC trailer covers everything including the real signature bytes, so the CRC catches corruption regardless of whether the signature itself was modified in transit.
 
-See `R42` in [`docs/decisions/RESOLVED.md`](../decisions/RESOLVED.md) for the design rationale and `secret/SIGNATURE_SCHEME_MIGRATION.md` (internal) for the future-scheme migration matrix.
+See `R42` in [`docs/decisions/RESOLVED.md`](../decisions/RESOLVED.md) for the design rationale.
+
+### Encryption extension (optional, V0.2.1)
+
+Encrypted modules append an 88-byte encryption-metadata block after the signature extension. Encryption requires signing; the wire format does not admit unsigned encrypted modules because the signature is what authenticates the encrypted payload's origin.
+
+| Offset | Width | Field |
+|--------|-------|-------|
+| 136    | 1     | Encryption scheme id (u8). `1` = X25519 + AES-256-GCM + HKDF-SHA-256. Other values reserved. |
+| 137    | 1     | Reserved (u8, zero) |
+| 138    | 2     | Encryption metadata length (u16 little-endian; 88 for the V0.2.1 scheme) |
+| 140    | 32    | Ephemeral X25519 public key (32 bytes). The compiler's per-module ephemeral public key. The recipient combines this with its own private key to reconstruct the shared secret. |
+| 172    | 32    | recipient_key_id (32 bytes). SHA-256 fingerprint of the destination runtime's X25519 public key. The runtime checks this matches the SHA-256 of its own public key before attempting decryption. |
+| 204    | 12    | AES-GCM nonce (12 bytes). Included in the artefact so the recipient can verify the HKDF-derived nonce matches. |
+| 216    | 8     | Reserved (u64, zero, for 8-byte alignment) |
+
+The block is 88 bytes total. For Ed25519 + X25519 + AES-256-GCM, `header_length` = 64 + 8 + 64 + 88 = 224 bytes (already 8-aligned).
+
+The encrypted body replaces the cleartext body. The body region carries AES-256-GCM ciphertext immediately followed by the 16-byte authentication tag. The on-disk total length is `header_length + ciphertext_length + tag_length + 4` where `ciphertext_length` equals the plaintext body length and the trailing 4 bytes are the CRC.
+
+The signature covers the entire on-disk buffer (including the encryption metadata and the encrypted body) with the signature payload bytes and the CRC trailer bytes zeroed. This means the signature authenticates both the encryption metadata and the ciphertext; an adversary cannot strip the encryption layer and substitute cleartext bytecode while preserving signature validity.
+
+The runtime workflow for an encrypted artefact:
+
+1. Read the header. Confirm `FLAG_REQUIRES_SIGNATURE` and `FLAG_ENCRYPTED` are both set.
+2. Verify the Ed25519 signature against the encrypted form.
+3. Parse the encryption metadata block. Confirm `recipient_key_id` matches the SHA-256 of the local X25519 public key.
+4. Compute the X25519 shared secret from the metadata's ephemeral public key and the local X25519 private key.
+5. Derive the AES-256 key through HKDF-SHA-256 with the info string `"keleusma-v1-aes256-gcm-key"`. Derive the AES-GCM nonce with the info string `"keleusma-v1-aes256-gcm-nonce"`. Cross-check the derived nonce against the metadata.
+6. Decrypt the body with AES-256-GCM. The crate verifies the authentication tag; a failure indicates either tampering or wrong key.
+7. Run structural verification on the decrypted plaintext, then construct the VM.
+
+The `BYTECODE_VERSION` field remains 1. V0.2.0 runtimes reject V0.2.1 encrypted artefacts cleanly because the `header_length` check fails (V0.2.0 expects either 64 or 136; encrypted artefacts carry 224). The combination of `FLAG_ENCRYPTED` and the extended header length unambiguously identifies encrypted artefacts.
+
+The encryption work is feature-gated on the `encryption` Cargo feature, off by default. Hosts that do not need encrypted delivery pay no binary-size cost from the encryption crypto stack. Encrypted artefacts produced on a host with the feature on do not load on a host with the feature off; the loader returns a clear diagnostic.
+
+See `R50` in [`docs/decisions/RESOLVED.md`](../decisions/RESOLVED.md) for the design rationale, `R49` for the companion CLI policy gate, and `docs/guide/SECURITY_POLICY.md` for the operator-facing guide.
 
 ## Opcode records
 

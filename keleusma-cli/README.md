@@ -60,18 +60,22 @@ keleusma compile hello.kel -o hello.kel.bin
 
 The compiler runs the full compile pipeline including type checking, monomorphization, and bytecode emission. The resulting bytecode is serialized through the standard wire format with framing, length, target widths, and CRC trailer. A host loading the bytecode through `Vm::load_bytes` validates the framing and re-runs structural verification.
 
-### Generate an Ed25519 keypair
+### Generate a keypair
 
 ```sh
-keleusma keygen --seed key.seed --public key.pub
+# Ed25519 signing keypair (default).
+keleusma keygen --seed sign.seed --public sign.pub
+
+# X25519 encryption keypair.
+keleusma keygen --kind encryption --seed enc.seed --public enc.pub
 ```
 
-Writes a fresh 32-byte Ed25519 signing seed to one file and the matching 32-byte verifying key to another. On Unix the seed file is created with mode `0o600`. Existing files are not overwritten; the command refuses with a diagnostic naming the offending path so an accidental rerun cannot destroy a long-lived signing identity. The seed is the private secret; treat it as a credential. The verifying key is freely distributable and is the value consumers register on their runtime.
+Writes a fresh 32-byte seed to one file and the matching 32-byte public key to another. The `--kind` flag selects between `signing` (Ed25519, default) and `encryption` (X25519). On Unix the seed file is created with mode `0o600`. Existing files are not overwritten; the command refuses with a diagnostic naming the offending path so an accidental rerun cannot destroy a long-lived key identity. The seed is the private secret; treat it as a credential. The public key is freely distributable.
 
 ### Sign a compiled module
 
 ```sh
-keleusma compile hello.kel --signing-key key.seed -o hello.kel.bin
+keleusma compile hello.kel --signing-key sign.seed -o hello.kel.bin
 ```
 
 Produces signed bytecode when the source declares the entry function with the `signed` modifier (`signed fn main`, `signed yield main`, `signed loop main`). The compiler emits `FLAG_REQUIRES_SIGNATURE` in the header and the signer appends an Ed25519 signature. Without the `signed` modifier on the entry, the bytecode is unsigned even when `--signing-key` is supplied.
@@ -79,12 +83,53 @@ Produces signed bytecode when the source declares the entry function with the `s
 ### Verify and run a signed module
 
 ```sh
-keleusma run hello.kel.bin --verifying-key key.pub
+keleusma run hello.kel.bin --verifying-key sign.pub
 ```
 
 The `--verifying-key` flag is repeatable; each appearance adds a 32-byte Ed25519 public key to the runtime's trust matrix. Signed bytecode loads only when its signature verifies against at least one registered key. Loading unsigned bytecode with `--verifying-key` is an error to prevent silent acceptance of an unverified payload.
 
-See [`docs/guide/COOKBOOK.md`, *Distributing signed bytecode*](../docs/guide/COOKBOOK.md#distributing-signed-bytecode) for the end-to-end workflow and [`docs/decisions/RESOLVED.md`, R42](../docs/decisions/RESOLVED.md) for the design rationale.
+### Encrypt and run an encrypted module
+
+```sh
+# Compile, sign, AND encrypt to a specific destination workstation.
+keleusma compile hello.kel \
+    --signing-key sign.seed \
+    --encryption-key destination.pub \
+    -o hello.kel.bin
+
+# Run the encrypted artefact on the destination workstation.
+keleusma run hello.kel.bin \
+    --verifying-key sign.pub \
+    --decryption-key destination.seed
+```
+
+Encrypted artefacts use X25519 key agreement against the destination's public key, HKDF-SHA-256 key derivation, and AES-256-GCM authenticated encryption of the body. The Ed25519 signature covers the encrypted payload so an adversary cannot strip the encryption layer and substitute cleartext. Per-recipient asymmetric keys give compromise containment: a captured workstation reveals only its own private key.
+
+Encryption requires signing because the wire format ties the two together. The `--encryption-key` flag requires `--signing-key` to be supplied alongside.
+
+### Strict mode
+
+Two independent strict-mode policies enforce host-managed key stores. Either may be active in any combination.
+
+**Strict signing.** Place 32-byte Ed25519 public keys as `*.pub` files in one of the following:
+
+- The directory named by `KELEUSMA_TRUSTED_KEYS_DIR`.
+- `/etc/keleusma/trusted_keys` on Unix.
+- `%PROGRAMDATA%\keleusma\trusted_keys` on Windows.
+
+In strict signing mode, the CLI rejects source files, unsigned bytecode, and bytecode signed by keys not in the trust store. The `--verifying-key` argument is rejected. Set `KELEUSMA_REQUIRE_SIGNED=1` to force strict mode even with an empty trust store (fail-closed for everything).
+
+**Strict encryption.** Place 32-byte X25519 private keys as `*.seed` files in one of:
+
+- The directory named by `KELEUSMA_DECRYPTION_KEYS_DIR`.
+- `/etc/keleusma/decryption_keys` on Unix.
+- `%PROGRAMDATA%\keleusma\decryption_keys` on Windows.
+
+In strict encryption mode, the CLI rejects unencrypted bytecode and artefacts encrypted to non-enrolled recipients. The `--decryption-key` argument is rejected. Set `KELEUSMA_REQUIRE_ENCRYPTED=1` to force strict mode.
+
+The two policies are independent: neither, signing only, encryption only, or both may be active. See [`docs/guide/SECURITY_POLICY.md`](../docs/guide/SECURITY_POLICY.md) for the full operator guide and deployment scenarios.
+
+Reference design records: [R42 in RESOLVED.md](../docs/decisions/RESOLVED.md) (signing infrastructure), [R49](../docs/decisions/RESOLVED.md) (strict-mode signing gate), [R50](../docs/decisions/RESOLVED.md) (encryption layer).
 
 ### Start the REPL
 
@@ -116,6 +161,24 @@ defined: double
 ```
 
 The REPL wraps each expression input as `fn main() -> T { <expression> }` and tries common return types in order: `Word`, `Float`, `bool`, `Text`, `()`. The first type that type-checks is used. For more complex return types, declare a function explicitly and call it.
+
+## Example programs
+
+The Keleusma repository ships several embedded host examples that exercise the runtime through Rust applications. The CLI is a convenience for running standalone scripts; the example programs show what an embedder can build.
+
+**Rogue** is the headline example. A complete roguelike video game with SDL3 graphics, dungeon generation, eight artificial-intelligence archetypes for the monsters, combat resolution, and item-effect scripts. Nineteen Keleusma scripts drive the gameplay logic; the Rust host handles rendering, input, and audio. The example demonstrates how a non-trivial application is structured around the Keleusma scripting layer with hot code reloading. To run it:
+
+```sh
+cargo run --release --example rogue --features sdl3-example
+```
+
+See [`docs/guide/ROGUE.md`](../docs/guide/ROGUE.md) for the long-form companion manual covering gameplay rules, the host-and-twelve-script architecture, the dungeon generator, and the artificial-intelligence archetypes.
+
+Other notable examples:
+
+- **piano_roll** (`cargo run --release --example piano_roll --features sdl3-example`): an SDL3 audio synthesizer driven by Keleusma scripts. Hot-swaps songs across a roster while playback continues. Companion manual at [`docs/guide/PIANO_ROLL.md`](../docs/guide/PIANO_ROLL.md).
+- **rtos** (`cd examples/rtos && cargo run --release --bin three-task-std`): a cooperative real-time microkernel. Standalone host binary plus an STM32N6570-DK target for embedded execution. Companion manual at [`examples/rtos/MANUAL.md`](../examples/rtos/MANUAL.md).
+- Standalone `.kel` scripts under [`examples/scripts/`](../examples/scripts/) demonstrate the language features in isolation.
 
 ## Limitations
 
