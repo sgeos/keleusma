@@ -12,6 +12,15 @@
 //!
 //! As a shorthand, any first argument ending in `.kel` is treated as
 //! a `run` invocation, so `keleusma hello.kel` runs the script.
+//!
+//! The CLI gates bytecode execution through optional signing and
+//! encryption policies. Discovery of enrolled signing keys from a
+//! platform-conventional directory or the `KELEUSMA_TRUSTED_KEYS_DIR`
+//! environment variable activates strict signing mode. The strict
+//! mode rejects source files, unsigned bytecode, and bytecode signed
+//! by non-enrolled keys. See `strict_mode` for the policy mechanics.
+
+mod strict_mode;
 
 use std::env;
 use std::fs;
@@ -25,6 +34,8 @@ use keleusma::parser::parse;
 use keleusma::stddsl;
 use keleusma::vm::{DEFAULT_ARENA_CAPACITY, Vm, VmState};
 use keleusma::{Arena, Value};
+
+use strict_mode::{PolicyContext, build_policy_context};
 
 const REPL_BANNER: &str = "Keleusma REPL. Type :help for commands, :quit to exit.";
 
@@ -61,7 +72,14 @@ fn main() -> ExitCode {
             // keleusma` line. If the file is missing, the error
             // surfaces in `run_file`.
             if std::path::Path::new(other).is_file() {
-                run_file(other, &[])
+                let ctx = match build_policy_context() {
+                    Ok(c) => c,
+                    Err(e) => {
+                        eprintln!("error: {}", e);
+                        return ExitCode::FAILURE;
+                    }
+                };
+                run_file(other, &ctx.enrolled_keys, &ctx)
             } else {
                 eprintln!("error: unknown subcommand or missing file `{}`", other);
                 print_help();
@@ -112,6 +130,18 @@ fn print_help() {
     println!("  keleusma compile hello.kel --signing-key key.seed -o hello.kel.bin");
     println!("  keleusma run hello.kel.bin --verifying-key key.pub");
     println!("  keleusma repl");
+    println!();
+    println!("Strict-mode policy (signing):");
+    println!("  Place 32-byte Ed25519 public keys as `*.pub` files in");
+    println!("  /etc/keleusma/trusted_keys (Unix) or %PROGRAMDATA%\\keleusma\\trusted_keys");
+    println!("  (Windows), or in the directory named by");
+    println!("  KELEUSMA_TRUSTED_KEYS_DIR, to activate strict signing");
+    println!("  mode. In strict mode, the CLI refuses source files,");
+    println!("  unsigned bytecode, and bytecode signed by keys not in");
+    println!("  the trust store. The --verifying-key argument is");
+    println!("  rejected to prevent local policy relaxation.");
+    println!("  Set KELEUSMA_REQUIRE_SIGNED=1 to force strict mode even");
+    println!("  with an empty trust store (fail-closed for everything).");
 }
 
 fn run_subcommand(args: &[String]) -> ExitCode {
@@ -120,7 +150,19 @@ fn run_subcommand(args: &[String]) -> ExitCode {
         return ExitCode::FAILURE;
     }
     let path = &args[0];
-    let mut verifying_keys: Vec<ed25519_dalek::VerifyingKey> = Vec::new();
+
+    // Build the policy context at the start of every run invocation.
+    // Discovery is fail-closed; a malformed key file in the trust
+    // store causes the CLI to refuse to start.
+    let ctx = match build_policy_context() {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("error: {}", e);
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let mut command_line_keys: Vec<ed25519_dalek::VerifyingKey> = Vec::new();
     let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {
@@ -132,7 +174,7 @@ fn run_subcommand(args: &[String]) -> ExitCode {
                     return ExitCode::FAILURE;
                 }
                 match read_verifying_key(&args[i + 1]) {
-                    Ok(k) => verifying_keys.push(k),
+                    Ok(k) => command_line_keys.push(k),
                     Err(e) => {
                         eprintln!("error: {}", e);
                         return ExitCode::FAILURE;
@@ -146,10 +188,32 @@ fn run_subcommand(args: &[String]) -> ExitCode {
             }
         }
     }
-    run_file(path, &verifying_keys)
+
+    // In strict mode the trust store is system-managed. The
+    // --verifying-key flag is rejected so that an unprivileged
+    // operator cannot relax the policy by supplying their own keys
+    // at the command line.
+    if ctx.strict_signing && !command_line_keys.is_empty() {
+        eprintln!(
+            "error: strict mode: --verifying-key is rejected; the trust list is system-managed through KELEUSMA_TRUSTED_KEYS_DIR or the platform-conventional directory"
+        );
+        return ExitCode::FAILURE;
+    }
+
+    // Merge the enrolled trust list (used in strict mode) with the
+    // command-line keys (used in permissive mode). Only one of the
+    // two is non-empty after the rejection check above.
+    let mut verifying_keys = ctx.enrolled_keys.clone();
+    verifying_keys.extend(command_line_keys);
+
+    run_file(path, &verifying_keys, &ctx)
 }
 
-fn run_file(path: &str, verifying_keys: &[ed25519_dalek::VerifyingKey]) -> ExitCode {
+fn run_file(
+    path: &str,
+    verifying_keys: &[ed25519_dalek::VerifyingKey],
+    policy: &PolicyContext,
+) -> ExitCode {
     let bytes = match fs::read(path) {
         Ok(b) => b,
         Err(e) => {
@@ -161,15 +225,19 @@ fn run_file(path: &str, verifying_keys: &[ed25519_dalek::VerifyingKey]) -> ExitC
     // a leading shebang line, so check both at offset 0 and after a
     // `#!...\n` envelope.
     let result = if looks_like_bytecode(&bytes) {
-        execute_bytecode(&bytes, verifying_keys)
+        execute_bytecode(&bytes, verifying_keys, policy)
+    } else if policy.strict_signing {
+        eprintln!(
+            "error: strict mode: source execution disabled; compile and sign the source before running"
+        );
+        return ExitCode::FAILURE;
+    } else if !verifying_keys.is_empty() {
+        eprintln!(
+            "error: --verifying-key supplied but {} is source, not signed bytecode",
+            path
+        );
+        return ExitCode::FAILURE;
     } else {
-        if !verifying_keys.is_empty() {
-            eprintln!(
-                "error: --verifying-key supplied but {} is source, not signed bytecode",
-                path
-            );
-            return ExitCode::FAILURE;
-        }
         let source = match core::str::from_utf8(&bytes) {
             Ok(s) => s,
             Err(_) => {
@@ -627,11 +695,31 @@ fn execute_source(source: &str) -> Result<(), String> {
 fn execute_bytecode(
     bytes: &[u8],
     verifying_keys: &[ed25519_dalek::VerifyingKey],
+    policy: &PolicyContext,
 ) -> Result<(), String> {
     let arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
-    let mut vm = if keleusma::wire_format::header_requires_signature(bytes) {
-        Vm::load_signed_bytes(bytes, &arena, verifying_keys)
-            .map_err(|e| format!("load_signed_bytes: {:?}", e))?
+    let signed = keleusma::wire_format::header_requires_signature(bytes);
+
+    // In strict signing mode, unsigned bytecode is rejected
+    // regardless of how it would normally load.
+    if policy.strict_signing && !signed {
+        return Err(String::from("strict mode: unsigned bytecode disabled"));
+    }
+
+    let mut vm = if signed {
+        Vm::load_signed_bytes(bytes, &arena, verifying_keys).map_err(|e| {
+            if policy.strict_signing {
+                // Diagnostic does not enumerate enrolled keys to
+                // avoid disclosing trust-store contents to
+                // unprivileged callers.
+                format!(
+                    "strict mode: signature does not match any enrolled key ({:?})",
+                    e
+                )
+            } else {
+                format!("load_signed_bytes: {:?}", e)
+            }
+        })?
     } else {
         if !verifying_keys.is_empty() {
             return Err(String::from(
