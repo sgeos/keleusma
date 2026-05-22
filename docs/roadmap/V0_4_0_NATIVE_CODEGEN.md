@@ -55,13 +55,14 @@ LLVM introduced coroutine intrinsics in version 5.0 (2017) to support C++20 coro
 
 The model is stackless coroutines: each coroutine instance has a state-machine frame (typically heap-allocated by default, with custom-allocator hooks available) that records the coroutine's resumption point and local state. Resume and suspend operations transition the state machine. The compiler transforms the source-level coroutine into a set of ordinary functions plus the state-machine frame.
 
-LLVM offers three coroutine kinds:
+LLVM offers four coroutine ABI families distinguished by the `coro.id*` intrinsic invoked:
 
-- **Switched-resume.** General purpose; used by C++20 coroutines, Swift's async/await, Rust's async/await (via lowering). The kind V0.4.0 will use.
-- **Returned-continuation.** Specialised; the resume produces a new continuation closure each time.
-- **Retcon-once.** A simplified form for one-shot resumption.
+- **Switched-resume** (`@llvm.coro.id`). General purpose; used by C++20 coroutines and Rust's async/await (via lowering). The frame is heap-allocated by default; frontend-managed allocation can pass a "block of memory" to `coro.begin` but the intrinsic itself does not accept allocator function pointers.
+- **Returned-continuation** (`@llvm.coro.id.retcon`). Each suspend point returns yielded values plus a continuation pointer for resumption. The intrinsic explicitly accepts allocator and deallocator function pointer arguments, and the frame is maintained in a fixed-size buffer of statically-known size and alignment. **This is the family V0.4.0 uses.**
+- **Retcon-once** (`@llvm.coro.id.retcon.once`). A simplified one-shot form of returned-continuation.
+- **Async** (`@llvm.coro.id.async`). Swift's async-context model. Not appropriate for Keleusma's sub-coroutine design.
 
-The intrinsics are stable in LLVM 14 and later. The custom-allocator hook (`@llvm.coro.id.async`) admits arena-based frame allocation, which is the mechanism V0.4.0 will use to keep coroutine frames in the master arena rather than on the heap.
+The intrinsics are stable in LLVM 14 and later. The retcon family's documented fixed-size-buffer guarantee and explicit allocator hook are precisely the properties Keleusma's WCMU analysis requires. Earlier drafts of this strategy referenced `@llvm.coro.id.async` for the custom-allocator path; that was an error corrected in the 2026-05-21 research pass (see `tmp/research/WEB_RESEARCH_APPENDIX.md`).
 
 ### Cross-platform and embedded targets
 
@@ -113,30 +114,27 @@ The bytecode produced by V0.3.0 is the verification artefact. The LLVM IR genera
 
 ### Sub-coroutine lowering
 
-Each Keleusma `loop` sub-coroutine becomes an LLVM coroutine in the switched-resume kind. The mapping:
+Each Keleusma `loop` sub-coroutine becomes an LLVM coroutine in the returned-continuation kind. The mapping:
 
 | Keleusma sub-coroutine operation | LLVM coroutine intrinsic |
 |---|---|
-| Spawn (allocate slot, initialise state, return handle) | `@llvm.coro.id` + `@llvm.coro.begin` plus a custom allocator that draws from the master arena |
-| Resume (transfer control to coroutine, return yielded value or completion marker) | `@llvm.coro.resume` |
-| Yield (transfer control back to parent) | `@llvm.coro.suspend` with a yield value lowered via the return mechanism |
-| Release (release slot, invalidate handle) | `@llvm.coro.destroy` plus the custom allocator's release hook |
+| Spawn (allocate slot, initialise state, return handle) | `@llvm.coro.id.retcon` with Keleusma-provided allocator and deallocator function pointers + `@llvm.coro.begin` |
+| Resume (transfer control to coroutine, return yielded value or completion marker) | Indirect call through the current continuation pointer stored in the arena slot |
+| Yield (transfer control back to parent) | `@llvm.coro.suspend` returning the yielded value plus the next continuation pointer |
+| Release (release slot, invalidate handle) | Deallocator function pointer invocation; arena slot returned to free list |
 
-The coroutine handle from the [sub-coroutine specification](../architecture/SUB_COROUTINES.md) corresponds to an LLVM coroutine handle, which is an opaque pointer at the LLVM IR level. The Rust host receives the handle through the static-library ABI as an opaque pointer.
+Each resume returns a new continuation pointer alongside the yielded value. The arena slot holds the current continuation pointer so the Keleusma-level handle is stable across resumes; only the slot's interior changes. This indirection wraps the retcon mechanics behind a stable handle abstraction at the Keleusma surface.
+
+The coroutine handle from the [sub-coroutine specification](../architecture/SUB_COROUTINES.md) corresponds to a Keleusma-defined arena-slot pointer at the LLVM IR level. The Rust host receives the handle through the static-library ABI as an opaque pointer.
 
 ### Arena-resident coroutine frames
 
-The default LLVM coroutine allocation uses the C heap (`malloc` and `free`, or platform equivalent). Keleusma's bounded-resource discipline requires coroutine frames to live in the master arena, with their size accounted in the master WCMU sum.
+The retcon ABI was designed for the fixed-buffer, custom-allocator use case Keleusma needs. The V0.4.0 codegen emits IR that names two Keleusma-provided functions per coroutine: an allocator and a deallocator. Both are small native functions (likely Rust, possibly Keleusma `impure fn`) that:
 
-LLVM 14 and later support custom coroutine allocators via the `@llvm.coro.id.async` intrinsic family. The V0.4.0 codegen emits IR that names a Keleusma-provided allocator function. The allocator is a small native function (likely Rust, possibly Keleusma `impure fn`) that:
+- Allocator: reserves a region in the master arena sized per the coroutine's static bound, returns a pointer to the region. The size and alignment are statically determined at compile time and surface through `coro.id.retcon`'s size and align arguments.
+- Deallocator: returns the region to the arena's free list when the coroutine completes or is released.
 
-- Reserves a region in the master arena sized per the coroutine's static bound.
-- Returns a pointer to the region.
-- Frees the region back to the arena's free list when the coroutine is destroyed.
-
-This requires a research-confirmation step during V0.4.0 implementation. The custom-allocator API has been stable since LLVM 14, but the precise ergonomics (whether the allocator can return arena offsets, whether it must return raw pointers, whether alignment guarantees are configurable) need verification against the LLVM documentation and tests.
-
-A research-uncertainty flag: I have not personally exercised the LLVM coroutine custom-allocator path. Implementation should treat the first integration as a research spike rather than as routine engineering.
+R4.1 sketched a three-milestone validation plan (`tmp/research/r4_1_llvm_coroutine_allocator.md` plus the correction in `tmp/research/WEB_RESEARCH_APPENDIX.md`). M1 writes a minimal LLVM IR fragment using `coro.id.retcon` with a Keleusma-shaped allocator; M2 lowers it to native and links against a Rust harness exercising spawn/resume/release; M3 measures the per-coroutine overhead. The first milestone is the load-bearing technical risk in V0.4.0 and should be executed before the rest of the IR generator is built out.
 
 ### Module linkage
 
@@ -226,23 +224,63 @@ A V0.5.0 follow-on phase D will compile the V0.5.0 Keleusma host program through
 - **Profile-guided optimisation.** Out of scope; the bounded-resource discipline does not naturally compose with PGO.
 - **Link-time optimisation across the entire program.** LTO is permitted within a single hot-replacement boundary but suppressed across boundaries. The detail is documented per build mode.
 
+## Resolved design questions
+
+The strategy's open questions were addressed in a dedicated research loop (2026-05-21) with a post-hoc web-research verification pass. Each recommendation below is summarised; the full record lives under `tmp/research/r4_*.md` and `tmp/research/WEB_RESEARCH_APPENDIX.md`.
+
+### LLVM coroutine intrinsic family (R4.1, corrected)
+
+**Recommendation**. Returned-continuation (`@llvm.coro.id.retcon`). The intrinsic accepts allocator and deallocator function pointers and is documented for fixed-size buffer use, matching Keleusma's per-coroutine arena-slot design.
+
+**Correction history**. The original R4.1 recommendation specified switched-resume (`@llvm.coro.id`). Post-hoc web verification of LLVM's documentation surfaced that switched-resume does not accept allocator function pointers in the intrinsic itself; returned-continuation does. The intent of R4.1 (per-coroutine custom allocator with fixed-size buffer) maps directly onto retcon. See `tmp/research/WEB_RESEARCH_APPENDIX.md` for the correction.
+
+**Confidence**. High after correction. The intrinsic signatures are documented explicitly in the LLVM Coroutines reference.
+
+### LLVM version pin (R4.3, revised)
+
+**Recommendation**. Pin to LLVM 19 for V0.4.0. Upgrade through 20, 21, 22 in V0.4.x point releases as the ecosystem moves.
+
+**Revision history**. R4.3 originally recommended LLVM 17 based on a 2025 cutoff in the source documents. Post-hoc verification surfaced that LLVM 22.1 is the current stable as of May 2026. Pinning at LLVM 17 is now three releases behind. LLVM 19 balances maturity (two releases old, widely available in distributions, supported by inkwell 0.8+) with currency.
+
+**Confidence**. Medium. The choice between LLVM 18, 19, 20, or even 22 is a judgment call; the point is that 17 is too old.
+
+### Rust LLVM bindings (R4.4)
+
+**Recommendation**. Primary `inkwell` with the feature flag corresponding to the chosen LLVM version (for instance `llvm19-1` if pinning to LLVM 19). Escape hatch `llvm-sys` for intrinsics inkwell does not expose, concentrated in a small `coro_intrinsics.rs` module. `melior` (MLIR) deferred to long-term watch list.
+
+**Update**. inkwell 0.8.0 supports LLVM 11 through 22; inkwell 0.9.0 (April 2026) maintains active development. Whether inkwell exposes `coro.id.retcon` with a safe wrapper requires source-tree audit when implementation begins; if not, expect the `coro_intrinsics.rs` escape-hatch module to grow.
+
+**Confidence**. High for the broad recommendation; medium for the specific feature-flag name without source-tree confirmation.
+
+### Symbol mangling scheme (R4.2)
+
+**Recommendation**. Format `_K<v>_<purity><category>_<module_path>_<function_name>[_<typeargs>]`. Versioned at v=1. Purity P/I/T (pure, impure, transitive). Category F/Y/L (fn, yield, loop). Module path with `__` separator. Type arguments as 16-hex-digit SHA-256 truncation. ASCII-only, linker-compatible across V0.4.0 targets. Demangleable via a `keleusma demangle` tool.
+
+**Confidence**. High. The format meets all five mangling constraints (uniqueness, ASCII-only, stability across compiler versions, demangleability, reasonable compactness).
+
+### Cross-platform target order (R4.5)
+
+**Recommendation**.
+
+- **Tier 1 (V0.4.0 ship)**: x86-64 Linux, AArch64 Linux, macOS (both architectures).
+- **Tier 2 (V0.4.x)**: Windows MSVC, Cortex-M55 (`thumbv8m.main-none-eabihf`), Cortex-M4 (`thumbv7em-none-eabihf`).
+- **Tier 3 (V0.5+)**: RISC-V, Wasm, vintage CPUs.
+
+**Confidence**. High. Tier classification follows LLVM back-end maturity, defence-customer relevance, and the existing `examples/rtos/` infrastructure for the Cortex-M55 testbed.
+
 ## Open questions
 
-1. **LLVM version to pin.** Likely LLVM 17 or 18. The pin needs settling before implementation begins. Stability of the coroutine intrinsics and the custom-allocator API are the load-bearing concerns.
+These remain unresolved after the 2026-05-21 research pass.
 
-2. **Rust LLVM bindings.** Two candidates: `inkwell` (safe wrapper, lags LLVM upstream by months) or `llvm-sys` (direct FFI bindings, requires more care). The trade-off is ergonomics versus version flexibility.
+1. **Debug information generation.** DWARF on Linux and macOS, PDB on Windows. Whether V0.4.0 ships with full debug info, minimal debug info, or no debug info is a scope decision deferred to implementation.
 
-3. **Custom-allocator ergonomics for arena-resident coroutine frames.** Research spike required. The shape of the allocator API may force minor adjustments to how the master arena exposes its allocation interface.
+2. **Build-system integration.** Cargo is the natural choice for the Rust-host side. Whether the Keleusma-side build system is a Cargo extension, a separate tool invoked from Cargo, or a fully separate build system is a UX question.
 
-4. **Symbol mangling scheme.** Encoding choice for module path, function name, type arguments, purity mode. Stability across compiler versions is a key concern; once code is shipped with a given mangling, changing it is a compatibility-breaking event.
+3. **Retcon-once optimisation.** Whether any subset of sub-coroutines benefits from the `@llvm.coro.id.retcon.once` form (for one-shot coroutines that yield exactly once before completing) is an optimisation question. Profile-driven.
 
-5. **Debug information generation.** DWARF on Linux and macOS, PDB on Windows. Whether V0.4.0 ships with full debug info, minimal debug info, or no debug info is a scope decision.
+4. **R4.1 milestone M1 execution.** The empirical validation of the retcon allocator hook in a small standalone IR fragment has not been performed. This is the single highest-risk technical item in V0.4.0 and should be executed before broader IR generator implementation begins.
 
-6. **Cross-platform target order.** x86-64 Linux is the primary. macOS, Windows, AArch64 Linux, and Cortex-M are follow-ons. Order and inclusion in V0.4.0 versus V0.4.x is a scope decision.
-
-7. **Build-system integration.** Cargo is the natural choice for the Rust-host side. Whether the Keleusma-side build system is a Cargo extension, a separate tool invoked from Cargo, or a fully separate build system is a UX question.
-
-8. **Coroutine kind selection.** Switched-resume is the default. Whether any subset of sub-coroutines benefits from the retcon-once form (for one-shot coroutines that yield exactly once before completing) is an optimisation question. Profile-driven.
+5. **Native-side WCET cost models.** The bytecode WCET model in V0.2.0 does not translate to native execution. New cost models need calibration on each Tier 1 platform, analogous to what `keleusma-bench` did for the VM. Not in any R-doc; surfaced by `tmp/research/IMPLEMENTATION_ORDER.md`.
 
 ## How V0.4.0 research informs V0.5.0
 

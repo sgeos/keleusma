@@ -70,11 +70,15 @@ Turner argued that functional programming should be total rather than partial, r
 
 Agda [T2] is a dependently typed programming language where all computations must terminate, enforced through structural recursion checking. Idris [T3] integrates totality checking into its type system, allowing programmers to mark functions as `total` with compiler-verified termination for recursive definitions and productivity for corecursive definitions.
 
+Rocq (formerly Coq) [T4] is the most widely used proof assistant of the dependently-typed-total tradition. Rocq's `Fixpoint` mechanism admits structural recursion: a recursive call whose argument is syntactically smaller than the original parameter is accepted as a sound terminator. Rocq's `Function` and `Program Fixpoint` mechanisms generalise this to well-founded recursion with an explicit measure that strictly decreases. The `CoInductive` types and `cofix` corecursion handle the productive divergent case dually, with a `Guarded` discipline that enforces productivity. Rocq's combination of structural recursion plus coinductive productivity is the most rigorous treatment of the totality-versus-productivity distinction available in a production tool. Friedman and Eastlund's *The Little Prover* [T5] introduces the technique pedagogically in the ACL2 tradition that Rocq inherits.
+
 The class of primitive recursive functions (Skolem, 1923; Kleene, 1952) constitutes the canonical example of total computable functions. Every primitive recursive function is total by construction because the recursion scheme guarantees termination. Not all total computable functions are primitive recursive, but the restriction to primitive recursion provides a decidable and well-understood subclass.
 
 **Relationship to Keleusma.** Keleusma's three function categories map to Turner's data/codata distinction [T1]. The `fn` category corresponds to total (terminating) functions that operate on finite data. The `loop` category corresponds to productive corecursive definitions that produce infinite streams. The `yield` category bridges the two as non-atomic total functions that interact with the host but must eventually return.
 
-Keleusma enforces totality through simpler mechanisms than Agda or Idris. Rather than dependent types or structural recursion checking, Keleusma prohibits all recursion (R4) and restricts loops to bounded ranges (`for i in 0..n`). This reduces totality checking to a syntactic property: any well-typed `fn` function without recursion or unbounded loops must terminate, assuming all called native functions return. The trade-off is reduced expressiveness: algorithms that require recursion must be supplied by the host as native functions.
+Keleusma enforces totality through simpler mechanisms than Agda, Idris, or Rocq. Rather than dependent types or structural recursion checking, Keleusma prohibits all recursion (R4) and restricts loops to bounded ranges (`for i in 0..n`). This reduces totality checking to a syntactic property: any well-typed `fn` function without recursion or unbounded loops must terminate, assuming all called native functions return. The trade-off is reduced expressiveness: algorithms that require recursion must be supplied by the host as native functions.
+
+The blanket recursion prohibition is broader than strictly necessary for totality. A structural-recursion check in the Rocq tradition would admit recursion over statically-sized data without breaking Keleusma's worst-case execution time and worst-case memory usage analyses, because the depth bound is static. The prohibition is conservative because Keleusma's bounded-resource analysis is conservative, not because totality requires it. A future-direction relaxation in the Rocq style is recorded as B22 in [`BACKLOG.md`](../decisions/BACKLOG.md); the dual coinductive-productivity refinement is B23.
 
 The totality guarantee depends on an explicit trust boundary: host-registered native functions are assumed to be total (R9). If a native function diverges, the totality guarantee for any Keleusma function that calls it is invalidated. The documentation does not currently specify mitigation strategies for this trust boundary beyond declaring it.
 
@@ -143,6 +147,10 @@ Keleusma differs from Rhai in three specific ways. The interop value space is cl
 Keleusma differs from wasm-bindgen in scope. Keleusma is a complete embedded scripting runtime with its own bytecode and verifier. The marshalling layer is comparable in approach but operates within the closed `Value` representation rather than across a portable binary interface.
 
 The static marshalling approach has precedents in the typed embedded scripting tradition, including the Lua bindings used in Tarantool and the typed effects in Koka, but Keleusma's combination of synchronous reactive semantics with a typed marshalling layer is, to the author's knowledge, novel.
+
+Rex [E3] is the closest contemporary parallel to Keleusma's embedded-scripting framing. Both languages are pure functional, target embedding in Rust applications through host-injected native functions, use Hindley-Milner inference, and treat the native-function boundary as the single point where effects enter the system. The two designs diverge in three substantive ways. Rex targets scientific workflows and high-performance computing orchestration with implicit parallel execution via tokio; Keleusma targets embedded real-time and certification-adjacent use cases on `no_std + alloc` hosts with single-threaded execution. Rex has no worst-case execution time or worst-case memory usage bounds; Keleusma's bounded-resource discipline is its defining property. Rex treats LLM code-generation as an explicit first-class design goal with a published `LLMS.md` guidance document; Keleusma's [`LLM_USAGE.md`](../guide/LLM_USAGE.md) is the parallel artefact, added after operator-level conversations with the Rex maintainer surfaced the convention.
+
+Rex's `CallSite` mechanism, where every native invocation in `rex-engine/src/native_fn.rs::apply_at_site` carries an opaque token through the runtime, is a useful precedent for a future Keleusma per-call-site identifier (B-numbered backlog item; see `tmp/call_site_identifier.md` for the design spec). Both projects independently converged on the static-marshalling approach (Rex's `#[derive(Rex)]` mirrors Keleusma's `#[derive(KeleusmaType)]`) and on host-injected native functions as the unique effect boundary, suggesting the architectural pattern is broadly correct for pure-functional embedded scripting.
 
 ## 10. Language-Based Information-Flow Security
 
@@ -228,6 +236,10 @@ Information-flow control should not be conflated with two adjacent disciplines. 
 
 [T3] E. Brady. "Idris, a General-Purpose Dependently Typed Programming Language: Design and Implementation." Journal of Functional Programming, 23(5):552-593, 2013.
 
+[T4] The Coq Development Team. "The Coq Proof Assistant Reference Manual." Inria, 1989-present. The proof assistant was renamed Rocq in 2024. Reference manual available at https://coq.inria.fr/refman/ and https://rocq-prover.org/.
+
+[T5] D. P. Friedman and C. Eastlund. *The Little Prover*. MIT Press, 2015, ISBN 978-0-262-52795-8. Pedagogical introduction to structural-recursion termination proofs in the ACL2 tradition that Rocq inherits.
+
 ### Industrial Certification
 
 [IC1] RTCA. DO-178C: Software Considerations in Airborne Systems and Equipment Certification. RTCA, Inc., 2011.
@@ -253,6 +265,8 @@ Information-flow control should not be conflated with two adjacent disciplines. 
 ### Embedded Scripting
 
 [E2] J. Lim and contributors. "Rhai: An Embedded Scripting Language for Rust." Open-source project. https://rhai.rs (accessed 2026).
+
+[E3] P. Kelly and contributors. "Rex: A Strongly-Typed, Pure, Implicitly Parallel Functional Programming Language." Open-source project by QDX. https://github.com/peterkelly/rex (accessed 2026). Documentation at https://peterkelly.github.io/rex/.
 
 ### Information-Flow Security
 

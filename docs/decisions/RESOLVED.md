@@ -292,7 +292,7 @@ This rejection does not preclude a future revisit. If a real workload demonstrat
 
 ## R42. Compiled-module signing for V0.2.0
 
-The V0.2.0 wire format gains an optional cryptographic signature appended to the framing header. The mechanism enforces authentic origin and tamper resistance for compiled modules delivered to embedded targets. The use case that justifies the addition is the mothership-to-daughtership UAV scenario described in `secret/MOTHERSHIP_DAUGHTERSHIP.md`, where a mothership compiles per-mission scripts and delivers them to daughtership platforms over a bandwidth-constrained communications link.
+The V0.2.0 wire format gains an optional cryptographic signature appended to the framing header. The mechanism enforces authentic origin and tamper resistance for compiled modules delivered to embedded targets. The use case that justifies the addition is documented in the hierarchical control scenarios, where a higher-tier controller compiles per-mission scripts and delivers them to lower-tier platforms over a bandwidth-constrained communications link.
 
 **Design.** Surface syntax: the entry function declaration accepts an optional `signed` modifier (`signed fn main`, `signed yield main`, `signed loop main`). The modifier is admissible only on the entry function; a `signed` modifier on a helper function is a compile error. When present, the compiler sets `FLAG_REQUIRES_SIGNATURE = 0x02` in the module's framing header flags byte.
 
@@ -343,4 +343,42 @@ Negative labels at any other position (let bindings, struct fields, enum payload
 
 **Implementation.** AST gains `TypeExpr::NegativeLabelled(inner, labels, span)` parallel to `TypeExpr::Labelled`. The parser produces it for `T@!Label` and `T@{!N1, ...}` forms; mixed sets are rejected at parse time. The type checker extracts top-level negatives at signature collection (stored on `FnSig::param_negative_labels` and `FnSig::return_negative_labels`) and runs a validation walk that rejects `NegativeLabelled` at every other position. Boundary clauses are wired into the call-site path (regular and native), the function-body return check, and the `Expr::Yield` handler.
 
-**Cross-references.** `B21` records the value-side product-lattice extension as deferred future work. The mothership-to-daughtership scenario in `secret/MOTHERSHIP_DAUGHTERSHIP.md` is the strongest motivating use case for the eventual value-side extension; the V0.2.0 parameter-position form covers the immediate signing-related use cases.
+**Cross-references.** `B21` records the value-side product-lattice extension as deferred future work. The hierarchical control scenarios are the strongest motivating use case for the eventual value-side extension; the V0.2.0 parameter-position form covers the immediate signing-related use cases.
+
+## R44. V0.3.0 self-hosted compiler design questions resolved
+
+The five open questions from the V0.3.0 strategy document were addressed in the 2026-05-21 research loop. Resolutions are inlined in the [V0.3.0 strategy document](../roadmap/V0_3_0_SELF_HOSTING.md#resolved-design-questions). Full design records live under `tmp/research/r3_*.md`.
+
+- **R3.1 Recursion-to-iteration.** Work-stack pattern. No language-surface relaxation.
+- **R3.2 Symbol-table substrate.** String interner producing `Word` indices, sorted-array `WordMap<V>` for bulk tables, linear `LocalScope` for per-scope locals.
+- **R3.3 Byte iteration over `Text`.** Host passes source as `[Byte; N]`; three host-registered natives cover residual `Text` work. No surface change.
+- **R3.4 Hindley-Milner inference scope.** Per-function-body with declared bounds (1024 type variables, 4096 constraints, 16384 body nodes per function).
+- **R3.5 Self-validation.** Three-layered comparison (canonicalised byte-identical, logical equality diagnostic, behavioural equivalence over regression corpus).
+
+## R45. V0.4.0 native code generation design questions resolved
+
+The eight open questions from the V0.4.0 strategy document were addressed in the same research loop. Resolutions are inlined in the [V0.4.0 strategy document](../roadmap/V0_4_0_NATIVE_CODEGEN.md#resolved-design-questions). Full design records live under `tmp/research/r4_*.md`. The R4.1 and R4.3 recommendations were corrected by `tmp/research/WEB_RESEARCH_APPENDIX.md`.
+
+- **R4.1 LLVM coroutine intrinsic family.** Returned-continuation (`@llvm.coro.id.retcon`). Corrects the original switched-resume recommendation and the V0.4.0 strategy's earlier `@llvm.coro.id.async` reference.
+- **R4.2 Symbol mangling.** Format `_K<v>_<purity><category>_<module_path>_<function_name>[_<typeargs>]` with versioned v=1.
+- **R4.3 LLVM version pin.** LLVM 19 for V0.4.0 (revised from the original LLVM 17 recommendation after web-research surfaced LLVM 22.1 as current stable).
+- **R4.4 Rust LLVM bindings.** Primary `inkwell`, escape hatch `llvm-sys`.
+- **R4.5 Cross-platform target order.** Tier 1 V0.4.0: x86-64 Linux, AArch64 Linux, macOS. Tier 2 V0.4.x: Windows MSVC, Cortex-M55, Cortex-M4. Tier 3 V0.5+: RISC-V, Wasm, vintage CPUs.
+
+## R46. V0.5.0 Keleusma-hosted host design questions resolved
+
+The seven open questions from the V0.5.0 strategy document were addressed in the same research loop. Resolutions are inlined in the [V0.5.0 strategy document](../roadmap/V0_5_0_KELEUSMA_HOST.md#resolved-design-questions) and the [SUB_COROUTINES.md](../architecture/SUB_COROUTINES.md#surface-syntax-resolved-r51) sub-coroutine specification. Full design records live under `tmp/research/r5_*.md`.
+
+- **R5.1 Sub-coroutine surface syntax.** Keywords `spawn`, `resume`, `release`, `complete`. Signature clauses `yields T accepts R completes C`. Handle storage local-only.
+- **R5.2 Interface-fingerprint hash.** SHA-256 over section-tagged lexicographically-sorted canonical encoding. Wire-format header grows to 96 bytes.
+- **R5.3 Module file extension.** Implementation `.kel`, interface `.def.kel`.
+- **R5.4 Mutual exclusivity.** V0.5.0 simple-sum; V0.5.x interval-graph refinement.
+- **R5.5 Transitive purity edge cases.** Closure prohibition eliminates most cases; surface narrower than anticipated.
+
+## R47. Implementation order and timeline synthesis
+
+The 2026-05-21 research loop produced an implementation-order synthesis at [docs/roadmap/IMPLEMENTATION_ORDER.md](../roadmap/IMPLEMENTATION_ORDER.md). The synthesis sequences V0.3.0, V0.4.0, V0.5.0, and V0.5.x work, estimates wall-clock effort (one and a half to three years for a single developer), and identifies the sub-coroutine runtime as the critical-path workstream. The synthesis recommends starting the sub-coroutine runtime in parallel with V0.4.0 LLVM work to compress the schedule.
+
+## R48. Autonomous-research-loop process documented
+
+The 2026-05-21 research loop's process is documented at [docs/process/AUTONOMOUS_RESEARCH_LOOP.md](../process/AUTONOMOUS_RESEARCH_LOOP.md). The document distils lessons from one completed loop: empirical-verification budgets per firing, document length discipline, cross-document consistency checks, explicit confidence labels, and stopping discipline. Recommended for adoption before any subsequent autonomous-research session.

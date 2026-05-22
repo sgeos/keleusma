@@ -1,0 +1,58 @@
+# Keleusma
+
+> Keleusma is a Total Functional Stream Processor that compiles to bytecode and runs on a stack-based virtual machine. It targets `no_std + alloc` environments and is designed for definitive worst-case execution time and worst-case memory usage. Programs whose bounds cannot be statically computed are rejected by the safe verifier.
+
+The language admits only pure total functions and the productive divergent `loop` block at its core. All domain functionality is provided by native Rust functions registered by the host application. The conservative-verification stance rejects recursion, closures, `dyn Trait` dispatch, and other constructs that defeat the bounded-resource analyses.
+
+When generating code that consumes or extends Keleusma, prefer consulting the agent-onboarding file and the architecture description first, then confirm details in the spec.
+
+## Start Here
+
+- [AGENTS.md](https://github.com/sgeos/keleusma/blob/main/AGENTS.md): AI-assistant onboarding for any model.
+- [CLAUDE.md](https://github.com/sgeos/keleusma/blob/main/CLAUDE.md): Authoritative project context, coding conventions, per-session protocol.
+- [README](https://github.com/sgeos/keleusma/blob/main/README.md): Project overview and quick start.
+
+## Core Reference
+
+- [Architecture: Language Design](https://github.com/sgeos/keleusma/blob/main/docs/architecture/LANGUAGE_DESIGN.md): Why the design is what it is. Three function categories, conservative-verification stance, totality and productivity, information-flow labels.
+- [Architecture: Execution Model](https://github.com/sgeos/keleusma/blob/main/docs/architecture/EXECUTION_MODEL.md): Arena memory model, two temporal domains (yield and reset), stack machine execution.
+- [Architecture: Compilation Pipeline](https://github.com/sgeos/keleusma/blob/main/docs/architecture/COMPILATION_PIPELINE.md): Lexer through verifier.
+- [Architecture: Sub-Coroutines](https://github.com/sgeos/keleusma/blob/main/docs/architecture/SUB_COROUTINES.md): The V0.5.0 sub-coroutine primitive.
+- [Specification: Grammar](https://github.com/sgeos/keleusma/blob/main/docs/spec/GRAMMAR.md): Surface-language grammar.
+- [Specification: Type System](https://github.com/sgeos/keleusma/blob/main/docs/spec/TYPE_SYSTEM.md): Hindley-Milner with traits, generics, monomorphization, information-flow labels.
+- [Specification: Instruction Set](https://github.com/sgeos/keleusma/blob/main/docs/spec/INSTRUCTION_SET.md): The 69-opcode V0.2.0 ISA.
+- [Specification: Structural ISA](https://github.com/sgeos/keleusma/blob/main/docs/spec/STRUCTURAL_ISA.md): Block-structured verifier model.
+- [Specification: Wire Format](https://github.com/sgeos/keleusma/blob/main/docs/spec/WIRE_FORMAT.md): Bytecode framing, signing, fingerprints.
+- [Specification: Standard Library](https://github.com/sgeos/keleusma/blob/main/docs/spec/STANDARD_LIBRARY.md): Host-registered native function conventions.
+
+## Decisions
+
+- [Resolved Decisions](https://github.com/sgeos/keleusma/blob/main/docs/decisions/RESOLVED.md): Historical record of architectural and design decisions with rationale.
+- [Priority Decisions](https://github.com/sgeos/keleusma/blob/main/docs/decisions/PRIORITY.md): Active decisions under consideration.
+- [Backlog](https://github.com/sgeos/keleusma/blob/main/docs/decisions/BACKLOG.md): Deferred work items.
+
+## Roadmap
+
+- [V0.3.0: Self-Hosted Compiler](https://github.com/sgeos/keleusma/blob/main/docs/roadmap/V0_3_0_SELF_HOSTING.md): Strategy for a Keleusma compiler written in Keleusma.
+- [V0.4.0: Native Code Generation](https://github.com/sgeos/keleusma/blob/main/docs/roadmap/V0_4_0_NATIVE_CODEGEN.md): LLVM-based ahead-of-time compilation, sub-coroutines lowered to LLVM coroutine intrinsics.
+- [V0.5.0: Keleusma-Hosted Host](https://github.com/sgeos/keleusma/blob/main/docs/roadmap/V0_5_0_KELEUSMA_HOST.md): Replacing the Rust compiler driver with a Keleusma program; structured live code update.
+- [Implementation Order](https://github.com/sgeos/keleusma/blob/main/docs/roadmap/IMPLEMENTATION_ORDER.md): Sequenced plan with wall-clock estimates across V0.3.0 through V0.5.x.
+
+## Reference
+
+- [Glossary](https://github.com/sgeos/keleusma/blob/main/docs/reference/GLOSSARY.md): Vocabulary used throughout the project.
+- [Related Work](https://github.com/sgeos/keleusma/blob/main/docs/reference/RELATED_WORK.md): Prior art positioning against synchronous reactive languages, stream processing theory, verified bytecode formats, language-based information-flow security, and safety-critical certification standards.
+
+## Process
+
+- [Process Strategy](https://github.com/sgeos/keleusma/blob/main/docs/process/PROCESS_STRATEGY.md): Library-engineering approach and agentic development loop.
+- [Task Log](https://github.com/sgeos/keleusma/blob/main/docs/process/TASKLOG.md): Current sprint source of truth.
+- [Reverse Prompt](https://github.com/sgeos/keleusma/blob/main/docs/process/REVERSE_PROMPT.md): Latest AI-to-human handoff.
+- [Autonomous Research Loop](https://github.com/sgeos/keleusma/blob/main/docs/process/AUTONOMOUS_RESEARCH_LOOP.md): Process for autonomous research sessions.
+- [Git Strategy](https://github.com/sgeos/keleusma/blob/main/docs/process/GIT_STRATEGY.md): Trunk-based development with short-lived feature branches.
+
+## Optional
+
+- [Examples](https://github.com/sgeos/keleusma/tree/main/examples): Embedded host examples, RTOS demonstrator, standalone scripts.
+- [Cookbook](https://github.com/sgeos/keleusma/blob/main/docs/guide/COOKBOOK.md): Common patterns and recipes.
+- [FAQ](https://github.com/sgeos/keleusma/blob/main/docs/guide/FAQ.md): Frequently asked questions.

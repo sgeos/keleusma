@@ -200,15 +200,15 @@ The compiler-in-Keleusma needs the features below. The first group exists today 
 - **Hindley-Milner inference.** The compiler implements H-M; the compiler itself should be written with explicit type annotations so the compiler-checking-itself does not stress its own inference.
 - **Text type.** Keleusma's `Text` covers static strings and arena-allocated dynamic strings. The lexer needs byte-level inspection of the source. The current convention is for the host to register a native that exposes bytes; whether the self-hosted compiler can do this internally depends on the surface admitting byte iteration over text.
 
-**Missing or limited (may need V0.2.x work first):**
+**Resolved (no V0.2.x surface work required):**
 
-- **Map / dictionary data structure.** The compiler's symbol table needs a string-keyed lookup. Keleusma has arrays but no built-in Map type. Options: (a) linear scan over arrays of `(name, type)` pairs, acceptable for small programs; (b) sorted array with binary search, requires a sort helper that the surface does not currently provide; (c) host-registered native wrapping a Rust `BTreeMap`, but this defeats self-hosting; (d) a Keleusma-side balanced tree, which needs recursion or explicit-stack walking. The simplest V0.3.0 answer is (a) with a known scaling ceiling, escalating to (b) when measurement justifies it.
+- **Map / dictionary data structure.** Resolved by R3.2. A two-layered design: one string interner producing `Word` indices, plus sorted-array `WordMap<V>` for bulk tables (function table, type registry, specialisation table, use-table), plus linear `LocalScope` for per-scope locals. All structures implementable on the V0.2.0 surface directly with the work-stack pattern from R3.1 for any tree-shaped operations.
 
-- **Byte iteration over `Text`.** A lexer scanning source needs to read bytes one at a time. Static strings are opaque at the surface level; iterating over them by byte index is not currently expressible without a host native. V0.3.0 either grows the surface (add an indexable static-bytes type or a byte-iteration trait) or accepts a host shim. The shim is the simpler path.
+- **Byte iteration over `Text`.** Resolved by R3.3. The host passes source as `[Byte; N]`; the lexer uses array indexing directly. Three host-registered natives cover the residual `Text` work: `compiler::intern_bytes`, `compiler::text_from_bytes`, `compiler::text_concat`. No surface-language extension required.
 
-- **Persistent compiler state.** Generic-function specialization tables, trait `impl` registries, and similar cross-declaration state persist for the duration of a compilation. The compiler's `loop` function's data segment holds these. Keleusma's data segment is fine for this purpose; the WCMU bound on the data segment is the limit. A specialization table is small (the number of distinct specializations is typically dozens, not thousands), so the bound is generous.
+- **Persistent compiler state.** Confirmed as a `data` block of the compiler-loop. The specialisation table, trait-impl registry, and similar cross-declaration state are bounded by the declared limits in R3.4 plus the per-module specialisation table reset at module boundaries (R5.3 separate compilation).
 
-- **String building.** Diagnostic messages, mangled names, and emitted identifiers all need string building. Keleusma's V0.2.0 surface retired the bundled `concat` / `to_string` natives; hosts register them as needed. The self-hosted compiler should register a minimal text-composition native or use a fixed-capacity scratch buffer in the arena. The latter is more in keeping with the WCMU discipline.
+- **String building.** Provided by `compiler::text_concat` plus arena-resident scratch buffers. No new natives beyond the three R3.3 specifies.
 
 ## Success criteria
 
@@ -237,19 +237,71 @@ The dual-compiler period is intentional. The Rust-hosted compiler remains the re
 | The compiler's per-stage WCMU bound is too loose because of the fixup table or the symbol table | Bound the table sizes explicitly. Reject programs that exceed the declared bound at compile time. The bound is published as a documented limit; programs that need more compile through the Rust-hosted compiler. |
 | A required surface-language feature (Map, byte iteration over Text, etc.) is not yet ergonomic | Land the feature in a V0.2.x release before starting V0.3.0 implementation. The "Required surface-language features" section above is the candidate list. |
 
+## Resolved design questions
+
+The strategy's open questions were addressed in a dedicated research loop (2026-05-21). Each recommendation below is summarised; the full record lives under `tmp/research/r3_*.md` and `docs/decisions/RESOLVED.md`.
+
+### Recursion in the compiler (R3.1)
+
+**Recommendation**. The self-hosted compiler walks recursive data with explicit work-stacks. No relaxation of the recursion-prohibition rule.
+
+**Rationale**. The work-stack pattern translates any recursive walk into a `loop` function with a fixed-capacity stack in its `data` block. Three worked examples in R3.1 cover the recursion shapes the compiler needs: pre-order (free-variable collection), accumulating-fold (Robinson unification), and post-order (bytecode emitter). The pattern requires no language-surface change against V0.2.0.
+
+**Confidence**. High for the design. Medium for ergonomics until a sample is compiled and measured.
+
+### Hindley-Milner inference scope (R3.4)
+
+**Recommendation**. Per-function-body inference. The constraint worklist lives in the compiler-loop's `data` block, bounded by explicit declared limits.
+
+**Bounds**. `MAX_TYPE_VARS_PER_FUNCTION = 1024`. `MAX_CONSTRAINTS_PER_FUNCTION = 4096`. `MAX_FUNCTION_BODY_NODES = 16384`. Per-function transient memory approximately 130 KiB, plus persistent approximately 250 KiB.
+
+**Compiler-in-Keleusma annotation discipline**. The compiler's own source is fully annotated so the self-compilation step exercises the easy inference path. This matches the strategy's recommendation.
+
+**Confidence**. High. The bounds were derived from analysis of the Rust-hosted compiler's actual constraint-graph sizes.
+
+### Module-scale compilation (R5.3 informs)
+
+**Recommendation**. Modula-2-style separate compilation. Implementation files `foo.kel`, interface files `foo.def.kel`. Both files are Keleusma source. Per-module specialisation tables reset at module boundaries; cross-module specialisations land on the consumer side bounded by consumer complexity.
+
+**Confidence**. High for the file-naming convention. The cross-module monomorphisation mechanism remains a known gap (see "Open questions" below).
+
+### Diagnostic quality
+
+**Status**. Not explicitly resolved by the research loop. The strategy's "as good as the Rust-hosted compiler's, where possible" target stands. Single-pass compilers historically have brittle error recovery; some regression is expected in V0.3.0 with investment in V0.3.x.
+
+### Self-validation (R3.5)
+
+**Recommendation**. Three-layered validation integrating into `cargo test`.
+
+- **Layer 1**. Byte-identical comparison after canonicalisation (native-name table sorted lexicographically, constant pool sorted by encoded bytes, specialisation chunks sorted by mangled name, function-name to chunk-index map sorted by mangled name then specialisation key). SHA-256 over the canonical form provides a fast pass-or-fail signal.
+- **Layer 2**. Logical equality with diagnostic when Layer 1 fails: pretty-prints the bytecode and runs a structural diff against the Rust-hosted output. Surfaces semantic-equivalence-but-not-byte-identity for investigation.
+- **Layer 3**. Behavioural equivalence over the regression corpus: every program's runtime output matches between Rust-hosted and self-hosted compilation.
+
+**Confidence**. High. The canonicalisation rules were derived from inspection of the wire format.
+
+### Symbol-table substrate (R3.2)
+
+**Recommendation**. String interner producing `Word` indices, plus sorted-array `WordMap<V>` for bulk tables (function table, type registry, specialisation table, use-table), plus linear `LocalScope` for per-scope locals.
+
+**Surface**. No new language features required. Implementable on the V0.2.0 surface directly.
+
+**Confidence**. High. Sorted-array binary search with `Word` keys is well-understood and matches the persistent-data discipline of the compiler-loop's `data` block.
+
+### Byte iteration over `Text` (R3.3)
+
+**Recommendation**. No surface change. The host passes source as `[Byte; N]`. The lexer uses array indexing. Three host-registered natives handle the residual `Text` work: `compiler::intern_bytes` returns a `Word` interner index, `compiler::text_from_bytes` constructs a `Text` from a byte range for diagnostic messages, `compiler::text_concat` builds composite messages.
+
+**Confidence**. High. The pattern matches the existing host-native interface and adds no surface-language complexity.
+
 ## Open questions
 
-The following questions are deferred to implementation. They are not blockers for the strategy.
+These remain unresolved after the 2026-05-21 research pass. None are strategy blockers; each becomes a V0.3.x or implementation-time concern.
 
-1. **Recursion in the compiler.** Does the self-hosted compiler relax the recursion-prohibition rule for itself (treating compiler-internal recursion as a controlled exception), or does it walk recursive data with explicit stacks throughout? The Brinch Hansen tradition used explicit stacks; the Wirth tradition used recursive-descent and bounded recursion. Keleusma's existing prohibition is stricter than either.
+1. **Cross-module monomorphisation mechanism.** R5.3 settles the two-file shape but does not specify how generic functions specialise across module boundaries when modules are separately compiled. The shape of the per-module specialisation table and the cross-module instantiation protocol is open.
 
-2. **Hindley-Milner inference scope.** Per-declaration, per-function-body, or per-expression? The Rust-hosted compiler uses per-function. A streaming compiler may need a tighter bound.
+2. **Diagnostic quality regression bound.** How much diagnostic quality is acceptable to lose in V0.3.0 in exchange for the single-pass streaming architecture? The strategy's "as good as the Rust-hosted, where possible" target is qualitative.
 
-3. **Module-scale compilation.** Does V0.3.0 target single-file programs (every module compiled from scratch each time), or does it adopt a Modula-2-style separate compilation with precomputed module interfaces? The first is simpler; the second is closer to a production toolchain.
-
-4. **Diagnostic quality.** Single-pass compilers historically have brittle error recovery. The V0.3.0 compiler's diagnostic quality target is "as good as the Rust-hosted compiler's, where possible." Whether the streaming architecture forces a quality regression is an open question.
-
-5. **Self-validation.** The V0.3.0 compiler should be validated against the Rust-hosted compiler on a regression corpus: every test program in the existing test suite should produce equivalent bytecode under both compilers (modulo non-essential ordering). The mechanism is an integration test that runs both compilers and compares outputs.
+3. **V0.2.0 surface adequacy audit.** R3.1's universal-expressibility argument is sound in prose but unverified in code. Before V0.3.0 implementation begins, a sample exercise (Robinson unification, a recursive AST walker, a monomorphisation pass) should be compiled and measured against the V0.2.0 surface. If a load-bearing affordance is missing, the work-stack pattern needs supplementation.
 
 ## Out of scope
 

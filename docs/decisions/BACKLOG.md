@@ -661,7 +661,7 @@ The two clauses run independently. The product lattice composes algebraically.
 
 **Why deferred.** The V0.2.0 parameter-position form covers the immediate signing-and-sanitization use cases. The product-lattice extension adds doubled per-value state, more delicate declassify semantics (a `re-attest` operator that re-establishes a negative guarantee after declassify is its own surface question), and conceptual surface for regular programmers ("how does a value know what it doesn't have?"). The deferral keeps V0.2.0 minimal without preventing the eventual extension: value-side negatives are a strict superset of parameter-position negatives, so a V0.2.0 program will not need to change when the extension lands.
 
-**Forcing case.** Awaits a concrete customer use case. The von Neumann probe trust-chain scenario in `secret/MOTHERSHIP_DAUGHTERSHIP.md` is the strongest candidate; defense-grade certification audits that want compositional absence proofs would also qualify. Without a concrete forcing case, designing the value-side semantics risks committing to a model that the eventual case will need to revise.
+**Forcing case.** Awaits a concrete customer use case. The trust-chain aspects of the hierarchical control scenarios are the strongest candidate; certification audits that want compositional absence proofs would also qualify. Without a concrete forcing case, designing the value-side semantics risks committing to a model that the eventual case will need to revise.
 
 **Compatibility.** Value-side negatives can land as a backwards-compatible feature addition. Every V0.2.0 program parses unchanged; every existing test continues to pass; the AST gains an internal-only extension to `TypeExpr::NegativeLabelled` that the parser starts to produce at additional positions, and the type checker propagates the negative component through the lattice. No surface syntax changes are required.
 
@@ -675,3 +675,93 @@ The two clauses run independently. The product lattice composes algebraically.
 6. Documentation pass.
 
 The work is mechanical once the design endpoint is pinned by a real customer use case. The V0.2.0 parameter-position form does not prevent the eventual extension.
+
+## B22. Structural-recursion relaxation of the recursion prohibition
+
+R4 prohibits all recursion at compile time. The prohibition is broader than strictly necessary for totality. Rocq (formerly Coq) admits structural recursion via the `Fixpoint` mechanism: a recursive function whose recursive call passes a syntactically smaller argument is admitted as a sound terminator. Agda and Idris use the same mechanism. A structurally-recursive function over a statically-sized data type has a static depth bound (bounded by the size of the input structure) and would not break Keleusma's worst-case execution time and worst-case memory usage analyses.
+
+**Motivation.** The blanket prohibition forces operators to write explicit work-stack iteration (the R3.1 pattern) for cases where structural recursion would be ergonomically natural. Examples: walking a recursive abstract syntax tree, traversing a fixed-depth nested option, performing Robinson unification over a recursively-shaped type term. The work-stack pattern is correct but verbose; structural recursion would express the same algorithm more directly.
+
+**Scope of the relaxation.** Admit recursion that satisfies all of the following.
+
+1. The recursive call passes a strictly structurally-smaller argument of the same type. "Structurally smaller" means the argument is a sub-term of one of the original arguments, accessed through destructuring patterns (match arms over enum variants, fixed-index access into arrays of statically-known length, projection into tuple components).
+2. The recursive function operates over a type whose recursive depth is statically bounded. The depth bound is derived from the type definition; for example, `enum Tree { Leaf, Node(Box<Tree>, Box<Tree>) }` would NOT qualify (unbounded depth) but `enum Depth3 { A(Depth2), B }` would qualify (bounded at depth 3).
+3. The verifier extracts the depth bound from the type and folds it into the per-call worst-case execution time and worst-case memory usage analyses.
+
+**Effort estimate.** Moderate. Adding a structural-recursion checker to the call-graph verifier is a few hundred lines of Rust plus tests. The depth-bound extraction from types is the harder part because it requires the type system to recognise which types are recursively bounded.
+
+**Prior art.** Rocq's `Fixpoint` and `Function` mechanisms. Agda's termination checker. Idris's `total` keyword. The Coq Reference Manual's "Recursive Functions" chapter is the canonical reference. Friedman and Eastlund's *The Little Prover* introduces the technique pedagogically. See `docs/reference/RELATED_WORK.md` § 6 for the prior-art positioning.
+
+**Why deferred.** R3.1's work-stack pattern is adequate for the V0.3.0 self-hosted compiler. The structural-recursion relaxation is an ergonomic refinement, not a correctness or expressiveness requirement. Likely V0.3.x or V0.4.0 scope.
+
+**Forcing case.** A real Keleusma program where the work-stack pattern produces measurably worse code (more lines, more bugs in operator-authored versions, harder to read) than structural recursion would. The self-hosted compiler is the most likely forcing case; once V0.3.0 lands, the operators writing compiler stages may find specific algorithms (Robinson unification, structural pattern matching, syntactic decomposition) where the work-stack form is genuinely worse.
+
+**Compatibility.** Backwards-compatible feature addition. Programs that compile under the blanket prohibition continue to compile under the relaxed rule. The verifier rejection set strictly shrinks.
+
+## B23. Coinductive productivity formalism
+
+Keleusma's productivity rule (every `loop` iteration must yield) is currently a syntactic check. Rocq's `CoInductive` types and `cofix` corecursion provide a more rigorous formalism for productive divergent computation. Studying Rocq's machinery could refine Keleusma's productivity analysis for cases where data-dependent control flow makes the syntactic check too conservative.
+
+**Motivation.** The syntactic productivity rule rejects some programs that are provably productive but not syntactically obvious. Example: a `loop` that yields conditionally based on a data-driven decision, where the verifier cannot statically prove all paths reach a yield. Today these programs are rejected; under a coinductive analysis they might be admitted.
+
+**Scope.** Refine the productivity rule to accept programs whose productivity argument is coinductively sound but not syntactically obvious. Define the precise admission criteria; pin the analysis algorithm; document the trade-off against the syntactic check.
+
+**Effort estimate.** Substantial. Coinductive productivity proofs are an active research area; integrating them into Keleusma's verifier would require careful design. Probably weeks of design plus weeks of implementation. The analysis would need to walk the loop body's control flow under a coinductive abstract interpretation.
+
+**Prior art.** Rocq's `CoInductive` types, `cofix` corecursion, and the `Guarded` keyword for productivity proofs. Agda's `Codata` and `Coinductive` mechanisms. Idris's stream productivity rules. Turner's `Strict-Total` discipline. The Coq Reference Manual's "Inductive and Co-Inductive Types" chapter is the canonical reference. Abel and Pientka's "Well-founded Recursion with Copatterns and Sized Types" provides the formal foundation. See `docs/reference/RELATED_WORK.md` § 6 for the prior-art positioning.
+
+**Why deferred long-horizon.** The syntactic rule is conservative but correct; rejecting some provably-productive programs is preferable to admitting some non-productive ones. The coinductive refinement is a long-horizon item for cases where operator demand surfaces a real ergonomic gap.
+
+**Forcing case.** A V0.3.0-or-later customer program that gets rejected by the syntactic productivity check despite being provably productive under a more careful analysis. The case has not yet appeared; the V0.2.0 surface admits most natural productive-loop shapes.
+
+**Compatibility.** Backwards-compatible feature addition. Programs that pass the syntactic check continue to pass. The verifier rejection set strictly shrinks.
+
+## B24. Hardware-isolation integration for Cortex-M targets
+
+Keleusma's defense-adjacent posture combines four protective layers: cryptographically signed modules (R42), statically verified information flow (R43), encrypted artefacts (in-flight at `tmp/encrypted_signed_modules.md`), and hardware-isolated execution (this entry). The first three layers are language-level features; the fourth requires platform support that Cortex-M55 provides through TrustZone-M and ARMv8-M Memory Protection Units. This backlog entry documents the integration direction.
+
+**Scope: narrow integration only.** Keleusma provides primitives that the host can use to mark arena regions as secure-world only, configure the MPU for arena protection, and store decryption keys in secure flash. The runtime does not manage secure-world entry points itself; secure-world control remains the host's responsibility. The narrow scope keeps the work bounded and avoids substantial architectural changes to the runtime.
+
+The broad scope alternative, in which Keleusma manages secure-world execution directly and configures TrustZone-M as a first-class language feature, is out of scope. The broad scope would require redesign of the arena memory model, the dual-end stack-and-heap discipline, and the call frame layout to accommodate secure-world transitions. Substantial work with certification implications. Not contemplated.
+
+**Components of the narrow integration.**
+
+1. **Host-supplied secure-flash key storage.** The host stores the runtime's X25519 decryption private key (per the encrypted-modules spec) in secure flash, not in normal flash or RAM. The Keleusma runtime accesses the key only through a host-registered native function whose implementation enters secure-world for the actual key material. The bytecode never sees the key as a plaintext value.
+
+2. **MPU-configured arena protection.** The host configures the ARMv8-M MPU to mark the arena's memory region as accessible only to specific privilege levels. Keleusma runtime code executes at a known privilege level; host code at higher privilege. Bytecode-level attacks that escape the verifier (a hypothetical zero-day in the structural verifier, for example) cannot access memory outside the configured MPU regions.
+
+3. **Secure-world entry points for decryption.** The host's native function for module decryption is implemented in secure-world. The encrypted bytecode arrives in non-secure memory, the host transitions to secure-world via the standard SG (Secure Gateway) instruction, the secure-world routine decrypts the body, and the plaintext bytecode is placed in MPU-protected memory before transition back to non-secure execution.
+
+**Effort estimate.** Substantial. Each Cortex-M variant has distinct TrustZone-M and MPU configurations. The work splits into:
+
+- Host-side TrustZone-M plumbing: roughly two to four weeks per platform.
+- Secure-world routines: one to two weeks per cryptographic primitive (X25519 unwrap, AES decryption).
+- MPU configuration helpers: one week per platform.
+- Testing across the platform's certified Common Criteria evaluation if applicable: weeks to months depending on the certification level required.
+
+Total per-platform integration cost is therefore in the range of one to three months. Multiple platforms compound accordingly.
+
+**Prior art.** ARM's documentation for the Cortex-M55 TrustZone-M architecture is the canonical reference. The Keil RTX5 RTOS and the FreeRTOS-Plus-TrustZone integrations provide working open-source examples of secure-world entry-point design. Several embedded firmware vendors (NXP, ST, Renesas) ship platform-specific TrustZone-M templates. Defense-adjacent certifications (Common Criteria EAL4+ and above) typically require this kind of hardware isolation; specific requirements vary by evaluation scheme and protection profile.
+
+**Composition with existing infrastructure.** The four-layer posture composes cleanly:
+
+- Ed25519 signed modules authenticate the source.
+- X25519 hybrid encryption protects the artefact contents.
+- IFC labels statically verify data flow within the authenticated code.
+- TrustZone-M plus MPU isolate the execution from compromise via channels outside the runtime's awareness.
+
+Each layer addresses a distinct threat. The combination is materially stronger than any subset. The encrypted-modules spec at `tmp/encrypted_signed_modules.md` is the immediate predecessor in this chain; the hardware-isolation work is the natural successor.
+
+**Why deferred.** The first three layers, namely signed modules, IFC labels, and encrypted modules, are operational improvements that do not require platform-specific work. They land as V0.2.0 and V0.2.x. The hardware-isolation work is necessarily platform-specific, substantial in scope, and pre-requires the encrypted-modules infrastructure to exist. The natural sequencing is V0.4.x for initial Cortex-M55 integration, with other Cortex-M variants following based on operator demand.
+
+**Forcing case.** A concrete defense-adjacent customer use case that requires Common Criteria EAL4+ or equivalent certification. Without such a forcing case, the platform-specific engineering investment is hard to justify against the alternative of operator-managed hardware integration outside the Keleusma runtime.
+
+**Compatibility.** Backwards-compatible feature addition. The work extends the host-interface surface with optional native functions that hosts may register or ignore. Programs written without hardware-isolation awareness continue to run identically. Hosts that opt in gain the additional isolation layer.
+
+**Cross-references.**
+
+- R42 (Ed25519 module signing) is the first protective layer.
+- R43 (information-flow labels with negative variants) is the second.
+- `tmp/encrypted_signed_modules.md` (the in-flight spec) is the third.
+- R4.5 (cross-platform target order) places Cortex-M55 in Tier 2 of V0.4.x, which is the natural delivery window for the initial hardware-isolation integration.
+- The hierarchical control scenarios, together with the related perpetual operational scenarios, are the operational shape that the four-layer combination addresses end to end.

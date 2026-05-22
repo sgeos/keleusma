@@ -8,27 +8,49 @@ Current sprint source of truth.
 
 ## Current Phase
 
-**V0.1: First public release.**
+**V0.2.x: post-publication research and pre-implementation cleanup.** V0.2.0 published on crates.io. The V0.3.0, V0.4.0, V0.5.0 strategy documents now carry resolved-design-questions sections from the 2026-05-21 autonomous research pass. The R4.1 LLVM coroutine retcon design is empirically validated against LLVM 22.1.6 on arm64-apple-darwin (2026-05-22). Cross-document consistency audit complete with five correction banners applied to stale R-docs.
 
-- `keleusma-arena 0.2.0` published to crates.io on 2026-05-10.
-- `keleusma-macros 0.1.0` published to crates.io on 2026-05-10.
-- `keleusma 0.1.0` ready to publish (dry-run clean against the just-published dependencies).
+- `keleusma-arena 0.2.0`, `keleusma-macros 0.2.0`, `keleusma 0.2.0`, `keleusma-bench 0.2.0`, `keleusma-cli 0.2.0` are live on crates.io.
+- V0.3.0, V0.4.0, V0.5.0 strategy docs reflect resolved design questions with provenance pointers to `tmp/research/r3_*.md`, `r4_*.md`, `r5_*.md`.
+- `tmp/research/llvm_retcon_spike/` carries the empirical M1 validation of R4.1's corrected retcon design.
+- `tmp/research/CONSISTENCY_AUDIT.md` records the cross-document audit.
+- `tmp/enrolled_keys_execution.md` carries the spec for a V0.2.x strict-mode enrolled-keys execution feature; implementation not yet started.
 
 ## Active Milestone
 
-V0.1-M3 substantially complete. The runtime carries Hindley-Milner inference, generics with traits and bounds, compile-time monomorphization, closures (rejected by the safe verifier under the conservative-verification stance), f-string interpolation, target descriptors, hot code swap, the WCET pipelined-cycle and WCMU byte cost model, and the embedding ABI for native functions. Tooling, examples, onboarding documentation, and pre-publication polish passes are complete.
+V0.2.x. The research pass and integration work is complete. Three pre-implementation cleanup tasks just landed: R4.1 milestone M1 spike, cross-document consistency audit, this TASKLOG and REVERSE_PROMPT update. The next concrete implementation deliverable, per operator direction, is the strict-mode enrolled-keys execution feature specified in `tmp/enrolled_keys_execution.md`. V0.3.0 implementation is gated on operator decision; the V0.2.x prep work and the V0.3/V0.4/V0.5 sequencing are documented in `docs/roadmap/IMPLEMENTATION_ORDER.md`.
 
 ## Outstanding TODO
 
-The single remaining publication-side action is operator-driven.
+Active operator-decision items:
 
-- **Publish `keleusma 0.1.0` to crates.io.** The two dependencies (`keleusma-arena 0.2.0` and `keleusma-macros 0.1.0`) are live on the registry. `cargo publish -p keleusma --dry-run` succeeds against the registry-resolved dependencies; the package is 91 files, 1.3 MiB unpacked, 330.5 KiB compressed. The agent does not perform `cargo publish`; the operator runs `cargo publish -p keleusma` to complete the V0.1.0 release.
+- **Whether to begin V0.2.x strict-mode enrolled-keys implementation.** Spec at `tmp/enrolled_keys_execution.md`. Estimated effort one to two days. Cryptographic infrastructure exists; feature is a CLI policy layer.
+- **Whether to commit the research-pass integration.** Six modified docs (V0.3/V0.4/V0.5 strategies, SUB_COROUTINES.md, RESOLVED.md, roadmap/README.md) plus new docs (AUTONOMOUS_RESEARCH_LOOP.md, IMPLEMENTATION_ORDER.md, the M1 spike results, the consistency audit, the enrolled-keys spec) are uncommitted. Five R-doc correction banners are uncommitted.
+- **Whether to begin V0.3.0 implementation.** Effort estimate four to eight months for a single developer per `docs/roadmap/IMPLEMENTATION_ORDER.md`. Recommended V0.2.x prep work in step 0 of that document.
+- **Whether to disposition `tmp/research/`.** Two options: retain as historical provenance (correction banners point readers to canonical state) or sunset entirely (the strategy docs are authoritative; the R-docs are scratch).
 
-No development-side TODOs remain in this log. Future-work items belong in [BACKLOG.md](../decisions/BACKLOG.md) or [PRIORITY.md](../decisions/PRIORITY.md), where they are tracked alongside their architectural rationale.
+Long-horizon work tracked in `docs/decisions/BACKLOG.md` and `PRIORITY.md`.
 
 ## Task Breakdown
 
-### Recent: pre-publication and publication push (2026-05-10)
+### Recent: research-pass follow-on cleanup (2026-05-22)
+
+| ID | Description | Status | Verification |
+|----|-------------|--------|--------------|
+| V0.2.x-R-T03 | TASKLOG and REVERSE_PROMPT update | Complete | This entry. `docs/process/TASKLOG.md` Current Phase, Active Milestone, Outstanding TODO sections reflect the post-publication state. `docs/process/REVERSE_PROMPT.md` rewritten to summarise the research pass, the M1 spike, the consistency audit, and the open operator-decision items. |
+| V0.2.x-R-T02 | Cross-document consistency audit | Complete | `tmp/research/CONSISTENCY_AUDIT.md` records methodology, consistent claims, and five inconsistencies (R4.1 switched-resume vs retcon, R4.3 LLVM 17 vs LLVM 19, R4.4 stale LLVM references, R4.5 R4.3 cross-reference, RC.2 SNES claim). All five R-docs gained correction banners pointing to `tmp/research/WEB_RESEARCH_APPENDIX.md` and the canonical strategy doc. No load-bearing design conflict remains; the canonical state lives in the strategy docs. |
+| V0.2.x-R-T01 | R4.1 milestone M1 LLVM retcon spike | Complete | `tmp/research/llvm_retcon_spike/` carries two LLVM IR fragments (`retcon_spike.ll` with sufficient buffer, `retcon_overflow.ll` with deliberately undersized buffer), two C harnesses, and lowered object files. Both lower cleanly through `opt -passes='module(coro-early),cgscc(coro-split),module(coro-cleanup)'` and produce native object files via `llc -filetype=obj`. Harness runs verify: 32-byte buffer scenario yields 10/20/30 in sequence with allocator never called; 1-byte buffer scenario causes the custom allocator to fire once with size=8 (the actual frame requirement). The corrected R4.1 design is empirically validated against LLVM 22.1.6 on arm64-apple-darwin. Reproducibility commands in `tmp/research/llvm_retcon_spike/RESULTS.md`. |
+
+### Recent: research pass and strategy-doc integration (2026-05-21)
+
+| ID | Description | Status | Verification |
+|----|-------------|--------|--------------|
+| V0.2.x-R-T00d | Enrolled-keys execution spec | Complete | `tmp/enrolled_keys_execution.md` drafts a V0.2.x strict-mode policy layer for `keleusma-cli`. Trust-store discovery (compiled-in keys, env var, platform-conventional directory), fail-closed mode activation, run-path policy gate, compile-path warning. Implementation deferred pending operator decision. |
+| V0.2.x-R-T00c | Autonomous-research-loop process doc | Complete | `docs/process/AUTONOMOUS_RESEARCH_LOOP.md` v0.1 distils the experience: empirical-verification budget per firing, document length discipline, cross-document consistency check, explicit confidence labels, stopping discipline. Recommended for adoption before any subsequent autonomous-research session. |
+| V0.2.x-R-T00b | Strategy-doc integration of research findings | Complete | Inlined the R3.1-R3.5, R4.1-R4.5, R5.1-R5.5 resolutions into `docs/roadmap/V0_3_0_SELF_HOSTING.md`, `V0_4_0_NATIVE_CODEGEN.md`, `V0_5_0_KELEUSMA_HOST.md`, and `docs/architecture/SUB_COROUTINES.md`. R-doc cross-references added to `docs/decisions/RESOLVED.md` as R44-R48. `docs/roadmap/IMPLEMENTATION_ORDER.md` copied from `tmp/research/`. Open-questions lists reduced to identified gaps (cross-module monomorphisation, host upgrade path, sub-coroutine hot-swap interaction, debug info, build-system integration). |
+| V0.2.x-R-T00a | Autonomous research pass | Complete | Twenty firings over a single AFK session resolved V0.3.0 (R3.1 recursion-to-iteration, R3.2 symbol-table substrate, R3.3 byte iteration, R3.4 HM inference scope, R3.5 self-validation), V0.4.0 (R4.1 LLVM coroutine intrinsic family, R4.2 mangling, R4.3 LLVM version pin, R4.4 Rust bindings, R4.5 target order), V0.5.0 (R5.1 sub-coroutine syntax, R5.2 fingerprint, R5.3 module extension, R5.4 mutex exclusivity, R5.5 transitive purity), cross-cutting (RC.1 N6 testbed, RC.2 vintage homebrew, RC.3 defence framing). Post-hoc web research surfaced two material corrections (R4.1 retcon, RC.2 SNES) and two revisions (R4.3 LLVM 19, RC.1 probe-rs gap). Output: 18 R-docs, STATUS.md, WEB_RESEARCH_APPENDIX.md, IMPLEMENTATION_ORDER.md, N6 testbed Phase α scaffolding. |
+
+### Older: pre-publication and publication push (2026-05-10)
 
 | ID | Description | Status | Verification |
 |----|-------------|--------|--------------|

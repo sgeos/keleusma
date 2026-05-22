@@ -16,6 +16,7 @@ Onboarding-oriented documentation for new users and embedders. Where the [archit
 | [FAQ.md](./FAQ.md) | Anyone who hit a surprise | Common rough edges in V0.2.0, including string handling, escape sequences, the immutable-locals constraint, and migration notes from the V0.1.x pre-release line |
 | [COOKBOOK.md](./COOKBOOK.md) | Embedder reaching for a known-good pattern | Working recipes for embedding patterns. Starts with the data-loader pattern for shipping designer-editable configuration tables in script form |
 | [BIG_NUMBERS.md](./BIG_NUMBERS.md) | Author needing multi-digit arithmetic | Worked example for the V0.2 pattern-arm checked construct. Demonstrates full 64x64 -> 128-bit multiplication via the high half and addition with explicit carry-out propagation for chained multi-digit arithmetic |
+| [LLM_USAGE.md](./LLM_USAGE.md) | Operator using AI coding assistants | Patterns AI tools tend to get wrong, the read-AGENTS-first session protocol, prompt patterns that reduce iteration time |
 
 ## Companion Material
 

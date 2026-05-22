@@ -258,21 +258,61 @@ The following questions have been settled during V0.5.0 strategy refinement. The
 - **Sub-coroutine model.** Asymmetric, call-down and yield-up. Full specification in [SUB_COROUTINES.md](../architecture/SUB_COROUTINES.md).
 - **Arena slot reservation.** Arena slots are reserved for a sub-coroutine's entire life and cannot be reassigned mid-execution. Ephemeral and persistent sub-coroutines differ in what happens at completion, not during execution.
 
+## Resolved design questions
+
+The strategy's open questions were addressed in a dedicated research loop (2026-05-21). Each recommendation below is summarised; the full record lives under `tmp/research/r5_*.md` and `docs/decisions/RESOLVED.md`.
+
+### Mutual-exclusivity analysis (R5.4)
+
+**Recommendation**. V0.5.0 ships with simple-sum allocation only. The interval-graph refinement (covering statically-sequential phases such as compile-then-link or load-then-execute) lands in V0.5.x. The full interference-graph refinement is deferred indefinitely, lifting only when a concrete use case justifies the analysis cost.
+
+**Rationale**. The simple sum is sufficient for the compiler driver and for most V0.5.0 deployments. Interval-graph and interference-graph analyses are analogous to register allocation: each refinement reduces the arena bound at the cost of analysis complexity. Pool dormancy folds into the interval-graph tier as a special case.
+
+**Confidence**. High. The tiering matches the operational priority of V0.5.0 versus V0.5.x.
+
+### Sub-coroutine surface syntax (R5.1)
+
+**Recommendation**. Keywords `spawn`, `resume`, `release`, `complete`. Function signature clauses `yields T accepts R completes C`. Handle storage in local variables only. Status via built-in `alive(handle) -> bool` predicate. Atomic functions (`fn`) are not admitted as sub-coroutines in V0.5.0.
+
+**Full specification**. See [SUB_COROUTINES.md](../architecture/SUB_COROUTINES.md) for the recommendation in detail. The V0.3.0 compiler pipeline as three sub-coroutines pumped from an `impure fn main` is the worked example.
+
+**Confidence**. High for the keyword choice; medium for the handle storage rules until implementation surfaces edge cases.
+
+### Interface-fingerprint hash function (R5.2)
+
+**Recommendation**. SHA-256 over a section-tagged, lexicographically-sorted byte-level encoding of the module's interface declaration. Versioned format (currently v1). Wire-format header grows from 64 to 96 bytes to accommodate the 32-byte fingerprint plus version metadata.
+
+**Hot-swap acceptance**. Same fingerprint admits unconditionally. Different fingerprint plus an entry in a signed migration table admits. Different fingerprint plus no migration table entry is rejected.
+
+**Confidence**. High. SHA-256 is the standard primitive; the canonical encoding is straightforward to specify.
+
+### Module file extension (R5.3)
+
+**Recommendation**. Implementation in `foo.kel`, interface in `foo.def.kel`. Both files contain Keleusma source so existing editor tooling, linters, and formatters work unchanged. Two-file Modula-2 shape with same-extension-family files.
+
+**Confidence**. High. The choice is cosmetic but settled; subsequent implementation work need not reopen it.
+
+### Transitive purity edge cases (R5.5)
+
+**Recommendation**. The edge-case surface is narrower than the strategy anticipated because Keleusma's closure prohibition and first-class function reference prohibition eliminate most of the storage cases. Settled rules:
+
+- Values do not carry purity tags. Purity is a property of the call, not of the returned value.
+- Callback storage in `data` blocks is admissible. Each invocation site is its own purity check based on the current callback's purity.
+- Trait method purity cannot be weakened by impls.
+
+**Confidence**. High. The closure prohibition eliminates the cases the strategy worried about; the surface that remains has straightforward rules.
+
 ## Open questions
 
-1. **Mutual-exclusivity analysis in V0.5.0 versus V0.5.x.** Does V0.5.0 ship with the simple-sum allocation, or with the mutual-exclusivity refinement? The simple sum is sufficient for the compiler driver. Real-time and embedded applications likely need the refinement.
+These remain unresolved after the 2026-05-21 research pass.
 
-2. **Sub-coroutine surface syntax.** Multiple candidates documented in [SUB_COROUTINES.md](../architecture/SUB_COROUTINES.md). Choice deferred to that specification's settlement.
+1. **Arena partitioning unit-of-declaration.** Is a partition a module, a collection of modules, or a sub-unit of a module? The default is one-module-equals-one-partition, but a partition manifest may compose or subdivide. The manifest syntax needs specification.
 
-3. **Arena partitioning unit-of-declaration.** Is a partition a module, a collection of modules, or a sub-unit of a module? The default is "one module equals one partition," but a partition manifest may compose or subdivide. The manifest syntax needs specification.
+2. **Host upgrade path on the operator's machine.** If the Keleusma host program is itself a `.kel.bin` artefact, how is it signed and verified at load time? The existing `signed` modifier and verifying-key registration cover this case directly. If the host is statically linked native code, the host distribution channel is whatever the operator uses for signed executables. Documented case-by-case.
 
-4. **Host upgrade path on the operator's machine.** If the Keleusma host program is itself a `.kel.bin` artefact, how is it signed and verified at load time? The existing `signed` modifier and verifying-key registration cover this case directly. If the host is statically linked native code, the host distribution channel is whatever the operator uses for signed executables. Documented case-by-case.
+3. **Cross-module monomorphisation mechanism.** R5.3 settles the two-file shape but does not specify how generic functions specialise across module boundaries when modules are separately compiled. The shape of the per-module specialisation table and the cross-module instantiation protocol is open. Surfaced by `tmp/research/IMPLEMENTATION_ORDER.md`.
 
-5. **Interface-fingerprint hash function and stability.** What hash, what input encoding, what stability guarantees across toolchain versions? The choice affects whether hot swaps remain compatible across compiler updates. Likely SHA-256 over a canonical serialisation of the interface declaration; specification needed.
-
-6. **Module file extension and naming.** The implementation file and the interface file need stable extensions. Candidates include `.kel` plus `.def.kel`, `.kel` plus `.kdef`, or other shapes. The choice is cosmetic but should be settled before the V0.5.0 implementation begins to avoid churn.
-
-7. **Transitive purity edge cases.** When a `transitive` function returns a value that closes over its callback parameter, what is the purity of the returned value? Likely "the returned value carries the callback's purity," but the specification needs to cover the storage and re-invocation cases. The closure prohibition in the safe verifier limits the practical surface of this question; first-class function values are still admitted and need treatment.
+4. **Sub-coroutine and hot-swap interaction.** R5.2 introduced the migration table for incompatible interface fingerprints but did not specify what happens to a live sub-coroutine when its module is replaced. Cases include live sub-coroutine in resumable state, live sub-coroutine awaiting completion, parent already released the handle. Surfaced by `tmp/research/IMPLEMENTATION_ORDER.md`.
 
 ## Prior art
 

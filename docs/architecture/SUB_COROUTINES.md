@@ -89,28 +89,70 @@ Handle lifetime rules:
 
 The handle's type carries the coroutine's signature: input type, yield type, resume type, and completion type. The type system enforces correct typing of resume values and yielded values.
 
-## Surface syntax (preliminary, open)
+## Surface syntax (resolved, R5.1)
 
-The following are candidate syntaxes. The choice is open and is part of the next round of refinement.
+Resolved by R5.1 (`tmp/research/r5_1_sub_coroutine_surface_syntax.md`). Four keywords plus signature clauses on the `loop` declaration.
+
+### Spawn
 
 ```
-// Spawn (candidate forms)
 let handle = spawn lexer_loop(source_bytes);
-let handle = lexer_loop.spawn(source_bytes);
-
-// Resume (candidate forms)
-let yielded = handle.resume(next_value);
-match handle.resume(next_value) {
-    Yielded(token) => ...,
-    Completed(result) => ...,
-}
-
-// Release (candidate forms)
-handle.release();  // explicit early termination
-// implicit release on scope exit or parent completion
 ```
 
-The keyword `spawn` is a leading candidate but conflicts with concurrency connotations from Erlang, Go, and Rust. Alternatives include `call_loop`, `instantiate`, or treating `loop` invocation in expression position as an implicit spawn. The choice is deferred to implementation.
+The `spawn` keyword. The right-hand side is the coroutine being instantiated; the parenthesised arguments are the input type. The keyword conflicts with concurrency connotations from Erlang, Go, and Rust, but R5.1 affirmed `spawn` after considering alternatives because the asymmetric semantics are clarified by the surrounding syntax (handle locality, signature clauses).
+
+### Resume
+
+```
+let outcome = resume handle, next_value;
+
+match outcome {
+    yielded(token) => ...,
+    completed(result) => ...,
+}
+```
+
+`resume handle, value` returns a tagged outcome distinguishing yielded values from completion values. Pattern matching at the use site is the typical shape.
+
+### Release
+
+```
+release handle;
+```
+
+Explicit early termination. Implicit on scope exit or parent completion.
+
+### Status query
+
+```
+if alive(handle) { ... }
+```
+
+A built-in `alive(handle) -> bool` predicate. The handle remains a value after the sub-coroutine completes, but operations on a non-alive handle other than `alive` and `release` are rejected by the verifier.
+
+### Signature clauses
+
+A `loop` declaration intended for sub-coroutine use carries explicit type clauses:
+
+```
+loop lexer_loop(source: [Byte; N])
+    yields Token
+    accepts ResumeKind
+    completes Summary
+{
+    ...
+}
+```
+
+The four types (input, yield, resume, completion) are statically known at every spawn and resume site.
+
+### Handle storage
+
+Handles may live only in local variables. Storing a handle in a `data` block, returning it from a `fn`, or passing it across a yield boundary is rejected by the verifier. This rule ensures the handle does not escape the parent's scope.
+
+### Atomic functions are not sub-coroutines
+
+`fn` sub-coroutines are not admitted in V0.5.0. R5.1 considered the case and concluded that the use cases are sufficiently rare that the spec surface does not justify inclusion. Future releases may revisit.
 
 ## New opcodes
 
@@ -126,17 +168,19 @@ The yield opcode already exists; its semantics extend to "yield up the parent-ch
 
 ### Lowering to LLVM coroutine intrinsics in V0.4.0
 
-When the V0.4.0 native code generator processes bytecode that contains these opcodes, each opcode lowers to a corresponding LLVM coroutine intrinsic call. The mapping:
+When the V0.4.0 native code generator processes bytecode that contains these opcodes, each opcode lowers to a corresponding LLVM coroutine intrinsic call. The mapping uses the returned-continuation family (`@llvm.coro.id.retcon`) per R4.1's corrected recommendation; earlier drafts referenced the switched-resume family in error.
 
 | Bytecode opcode | LLVM coroutine intrinsic |
 |---|---|
-| `SpawnCoroutine` | `@llvm.coro.id` followed by `@llvm.coro.begin`, with a custom allocator function that reserves the slot from the master arena. |
-| `ResumeCoroutine` | `@llvm.coro.resume`. The yielded value or completion marker is returned through the coroutine's `@llvm.coro.suspend` return mechanism. |
-| `ReleaseCoroutine` | `@llvm.coro.destroy`, which invokes the custom allocator's release hook to return the slot to the arena's free list (for ephemeral pools) or to mark it dormant (for persistent slots). |
+| `SpawnCoroutine` | `@llvm.coro.id.retcon` with Keleusma-provided allocator and deallocator function pointers, followed by `@llvm.coro.begin`. The fixed-size buffer is the arena slot. |
+| `ResumeCoroutine` | Indirect call through the current continuation pointer stored in the arena slot. The yielded value is returned alongside the next continuation pointer. |
+| `ReleaseCoroutine` | The deallocator function pointer is invoked, returning the slot to the arena's free list (for ephemeral pools) or marking it dormant (for persistent slots). |
+
+The continuation pointer changes on each resume; the arena slot stores the current pointer so the Keleusma-level handle remains stable across resumes. This indirection wraps the retcon mechanics behind the stable handle abstraction at the Keleusma surface.
 
 The same surface syntax compiles to either bytecode opcodes (executed by the VM) or LLVM coroutine intrinsics (lowered to native code). Operators select the deployment shape per build; the sub-coroutine semantics are identical across shapes.
 
-A research-uncertainty flag: the LLVM custom-allocator API for coroutine frames has been stable since LLVM 14, but the precise ergonomics of arena-resident frame allocation need verification during V0.4.0 implementation. The bytecode-shape implementation is not affected.
+R4.1's milestone M1 (a minimal LLVM IR fragment using `coro.id.retcon` with a Keleusma-shaped allocator) is the load-bearing technical risk in V0.4.0. The bytecode-shape implementation is not affected.
 
 See [V0_4_0_NATIVE_CODEGEN.md](../roadmap/V0_4_0_NATIVE_CODEGEN.md) for the native lowering strategy in full.
 
@@ -182,15 +226,29 @@ Persistent sub-coroutines may be quiescent for long periods between activations;
 - **Reflection or introspection.** Programmatic inspection of a coroutine's state beyond its yielded values. Not contemplated.
 - **First-class continuations.** Capturing a coroutine's current state as a value and resuming it later from a different context. Not contemplated.
 
+## Resolved design questions
+
+The seven open questions from the preliminary specification were addressed in the 2026-05-21 research pass. Resolutions:
+
+1. **Surface syntax**. Resolved by R5.1. Keywords `spawn`, `resume`, `release`. Signature clauses on the `loop` declaration. See "Surface syntax" above for the worked specification.
+
+2. **Handle storage discipline**. Resolved by R5.1. Local variables only. Storage in `data` blocks, return from `fn`, or transfer across yield boundaries is rejected by the verifier.
+
+4. **`fn` sub-coroutines**. Resolved by R5.1. Not admitted in V0.5.0. Future releases may revisit.
+
+5. **Pool dormancy and mutual-exclusivity refinement**. Resolved by R5.4. V0.5.0 ships with simple-sum allocation. Interval-graph refinement lands in V0.5.x, with pool dormancy folded in as a special case.
+
+6. **Yield and resume value types**. Resolved by R5.1. The signature clauses (`yields T accepts R completes C`) provide distinct types for each direction. Tuples are admissible within each clause; the Lua-style multiple-value shape is the natural default.
+
+7. **Parent observation of completed sub-coroutines**. Resolved by R5.1. The built-in `alive(handle) -> bool` predicate answers the question without resuming.
+
 ## Open questions
 
-1. **Surface syntax for spawn, resume, and release.** Multiple candidates above; choice deferred.
-2. **Handle storage discipline.** Can a handle be stored in a struct field within the parent's arena? In a local variable only? The strictest answer is "local variable only"; the more flexible answer admits struct fields with lifetime analysis.
-3. **Maximum spawn depth.** Can a sub-coroutine spawn its own sub-coroutines, and if so, how deep can this go? The verifier needs a static bound. A natural answer is "as deep as the static call graph admits"; another is "fixed depth limit declared per program."
-4. **`fn` sub-coroutines.** Does the model admit `fn` invoked as a sub-coroutine, or only `loop`? A `fn` sub-coroutine is essentially a sandboxed terminating computation with its own arena. The use case is unclear; the model is consistent if admitted but adds spec surface.
-5. **Pool dormancy and mutual-exclusivity refinement.** When a pool is statically known to be dormant during a phase of execution, can its slots be reassigned to a different partition during that phase? This is the mutual-exclusivity refinement applied at sub-coroutine granularity.
-6. **Yield value type and resume value type.** Are they the same type, distinct types, or a tuple? Lua coroutines pass arbitrary tuples in both directions; Python generators send and receive single values. Keleusma's tuple syntax suggests the Lua-style answer is natural.
-7. **Parent observation of completed sub-coroutines.** When a sub-coroutine completes, the parent receives the completion value at the resume site. Is there also a query that asks "is the coroutine alive" without resuming? Probably yes; specification needed.
+These remain unresolved after the 2026-05-21 research pass.
+
+1. **Maximum spawn depth.** A sub-coroutine may spawn its own sub-coroutines; the verifier needs a static bound. A natural answer is "as deep as the static call graph admits"; another is "fixed depth limit declared per program." The spec surface for the bound is open.
+
+2. **Sub-coroutine and hot-swap interaction.** Surfaced by R5.2 and `tmp/research/IMPLEMENTATION_ORDER.md`. When a module hosting a live sub-coroutine is hot-replaced (matching fingerprint), the continuation pointer in the slot may reference invalidated code. The migration table semantics, the resumability of in-flight sub-coroutines after swap, and the parent's observation of the swap event need specification.
 
 ## References
 
