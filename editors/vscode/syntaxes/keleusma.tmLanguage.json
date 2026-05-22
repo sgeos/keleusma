@@ -1,0 +1,168 @@
+{
+    "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+    "name": "Keleusma",
+    "scopeName": "source.kel",
+    "fileTypes": ["kel"],
+    "patterns": [
+        { "include": "#shebang" },
+        { "include": "#comments" },
+        { "include": "#ifc_label" },
+        { "include": "#ifc_operator" },
+        { "include": "#strings" },
+        { "include": "#numbers" },
+        { "include": "#function_category" },
+        { "include": "#storage_class" },
+        { "include": "#conditional" },
+        { "include": "#repeat" },
+        { "include": "#checked_arm" },
+        { "include": "#boolean" },
+        { "include": "#keyword" },
+        { "include": "#primitive_type" },
+        { "include": "#pipeline" },
+        { "include": "#operator" },
+        { "include": "#type_identifier" },
+        { "include": "#function_call" }
+    ],
+    "repository": {
+        "shebang": {
+            "match": "\\A#!.*$",
+            "name": "comment.line.shebang.kel"
+        },
+        "comments": {
+            "patterns": [
+                {
+                    "name": "comment.line.double-slash.kel",
+                    "match": "//.*$"
+                },
+                {
+                    "name": "comment.block.kel",
+                    "begin": "/\\*",
+                    "end": "\\*/"
+                }
+            ]
+        },
+        "ifc_label": {
+            "comment": "Information-flow label annotations: @Label, @!Negative, @{A, B}, @{!A, !B}. Highlighted as a unit so labelled types stand out.",
+            "match": "@!?([A-Za-z_][A-Za-z0-9_]*|\\{[^}]*\\})",
+            "name": "support.other.ifc-label.kel"
+        },
+        "ifc_operator": {
+            "comment": "classify and declassify are context-sensitive in the grammar; we highlight all occurrences for simplicity. Convention is not to name user-defined functions classify or declassify.",
+            "match": "\\b(classify|declassify)\\b",
+            "name": "support.other.ifc-operator.kel"
+        },
+        "strings": {
+            "name": "string.quoted.double.kel",
+            "begin": "\"",
+            "end": "\"",
+            "patterns": [
+                {
+                    "name": "constant.character.escape.kel",
+                    "match": "\\\\[ntr\"\\\\0]"
+                }
+            ]
+        },
+        "numbers": {
+            "patterns": [
+                {
+                    "name": "constant.numeric.float.kel",
+                    "match": "\\b\\d[0-9_]*\\.\\d[0-9_]*(f64)?\\b"
+                },
+                {
+                    "name": "constant.numeric.hex.kel",
+                    "match": "\\b0x[0-9a-fA-F_]+\\b"
+                },
+                {
+                    "name": "constant.numeric.binary.kel",
+                    "match": "\\b0b[01_]+\\b"
+                },
+                {
+                    "name": "constant.numeric.integer.kel",
+                    "match": "\\b\\d[0-9_]*(i64)?\\b"
+                }
+            ]
+        },
+        "function_category": {
+            "comment": "Three function categories drive every verifier rule; promoted out of generic keywords so the reader recognises which category a definition declares.",
+            "match": "\\b(fn|yield|loop)\\b",
+            "name": "keyword.declaration.function-category.kel"
+        },
+        "storage_class": {
+            "comment": "V0.2.0 storage-discipline modifiers. Equivalent to C/Rust static, extern, const for highlight intent.",
+            "match": "\\b(signed|ephemeral|shared|private|const)\\b",
+            "name": "storage.modifier.kel"
+        },
+        "conditional": {
+            "match": "\\b(if|else|match|when)\\b",
+            "name": "keyword.control.conditional.kel"
+        },
+        "repeat": {
+            "match": "\\b(for|break)\\b",
+            "name": "keyword.control.repeat.kel"
+        },
+        "checked_arm": {
+            "comment": "Arm keywords of the numeric overflow construct: ok, overflow, underflow, saturate_max, saturate_min.",
+            "match": "\\b(ok|overflow|underflow|saturate_max|saturate_min)\\b",
+            "name": "support.other.checked-arm.kel"
+        },
+        "boolean": {
+            "match": "\\b(true|false)\\b",
+            "name": "constant.language.boolean.kel"
+        },
+        "keyword": {
+            "comment": "Reserved keywords that are neither function categories, storage modifiers, conditionals, nor checked-arithmetic arms.",
+            "match": "\\b(let|in|use|external|struct|enum|newtype|trait|impl|data|pure|where|as|not|and|or)\\b",
+            "name": "keyword.other.kel"
+        },
+        "primitive_type": {
+            "comment": "Primitive surface types per docs/spec/GRAMMAR.md Section 3. Note bool is lowercase.",
+            "match": "\\b(Byte|Word|Fixed|Float|bool|Text|Option)\\b",
+            "name": "support.type.primitive.kel"
+        },
+        "pipeline": {
+            "comment": "Pipeline operator promoted out of generic operators because stream-style left-to-right composition is a load-bearing idiom in Keleusma.",
+            "match": "\\|>",
+            "name": "keyword.operator.pipeline.kel"
+        },
+        "operator": {
+            "patterns": [
+                {
+                    "name": "keyword.operator.arrow.kel",
+                    "match": "->|=>"
+                },
+                {
+                    "name": "keyword.operator.path.kel",
+                    "match": "::"
+                },
+                {
+                    "name": "keyword.operator.range.kel",
+                    "match": "\\.\\."
+                },
+                {
+                    "name": "keyword.operator.comparison.kel",
+                    "match": "==|!=|<=|>=|<|>"
+                },
+                {
+                    "name": "keyword.operator.arithmetic.kel",
+                    "match": "[+\\-*/%]"
+                },
+                {
+                    "name": "keyword.operator.assignment.kel",
+                    "match": "="
+                }
+            ]
+        },
+        "type_identifier": {
+            "comment": "Type-style identifiers (uppercase initial). Matched last so the primitive-type list above takes priority.",
+            "match": "\\b[A-Z][A-Za-z0-9_]*\\b",
+            "name": "entity.name.type.kel"
+        },
+        "function_call": {
+            "comment": "Lowercase identifier immediately followed by `(`. Caught after all keyword rules.",
+            "match": "\\b([a-z_][a-zA-Z0-9_]*)\\b(?=\\s*\\()",
+            "captures": {
+                "1": { "name": "entity.name.function.kel" }
+            }
+        }
+    }
+}

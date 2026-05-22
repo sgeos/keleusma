@@ -1,0 +1,24 @@
+# Helix language definition for Keleusma.
+#
+# Drop this snippet into your Helix `languages.toml` (typically
+# `~/.config/helix/languages.toml`) to register the .kel extension.
+# A full syntax-highlighting integration requires a tree-sitter
+# grammar; see the README in this directory for the status of the
+# tree-sitter-keleusma project.
+
+[[language]]
+name = "keleusma"
+scope = "source.kel"
+file-types = ["kel"]
+comment-token = "//"
+block-comment-tokens = { start = "/*", end = "*/" }
+indent = { tab-width = 4, unit = "    " }
+roots = ["Cargo.toml", "keleusma.toml"]
+
+# Uncomment the [[grammar]] block below once the tree-sitter-keleusma
+# grammar is published. Helix runs `hx --grammar fetch` and
+# `hx --grammar build` against entries declared here.
+#
+# [[grammar]]
+# name = "keleusma"
+# source = { git = "https://github.com/sgeos/tree-sitter-keleusma", rev = "main" }

@@ -1,0 +1,36 @@
+{
+    "name": "keleusma",
+    "displayName": "Keleusma",
+    "description": "Syntax highlighting and file-type configuration for the Keleusma scripting language",
+    "version": "0.2.0",
+    "publisher": "sgeos",
+    "license": "0BSD",
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/sgeos/keleusma.git",
+        "directory": "editors/vscode"
+    },
+    "engines": {
+        "vscode": "^1.75.0"
+    },
+    "categories": [
+        "Programming Languages"
+    ],
+    "contributes": {
+        "languages": [
+            {
+                "id": "keleusma",
+                "aliases": ["Keleusma", "kel"],
+                "extensions": [".kel"],
+                "configuration": "./language-configuration.json"
+            }
+        ],
+        "grammars": [
+            {
+                "language": "keleusma",
+                "scopeName": "source.kel",
+                "path": "./syntaxes/keleusma.tmLanguage.json"
+            }
+        ]
+    }
+}
