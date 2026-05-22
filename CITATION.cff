@@ -1,0 +1,34 @@
+cff-version: 1.2.0
+message: "If you use Keleusma in academic work, please cite it as below."
+title: "Keleusma"
+abstract: >
+  A Total Functional Stream Processor that compiles to bytecode and
+  runs on a stack-based virtual machine. Targets no_std + alloc
+  embedded scripting with definitive worst-case execution time and
+  worst-case memory usage verification through a conservative safe
+  verifier. V0.2.0 adds Ed25519 module signing, information-flow
+  labels including negative labels, calibrated WCET cost models,
+  refinement types with where-clause predicates, and a cooperative
+  RTOS microkernel demonstrator on the STM32N6570-DK.
+authors:
+  - family-names: "Sechter"
+    given-names: "Brendan"
+    email: "sgeos@hotmail.com"
+url: "https://github.com/sgeos/keleusma"
+repository-code: "https://github.com/sgeos/keleusma"
+repository-artifact: "https://crates.io/crates/keleusma"
+version: "0.2.0"
+date-released: "2026-05-21"
+license: "0BSD"
+type: software
+keywords:
+  - "rust"
+  - "scripting"
+  - "bytecode"
+  - "wcet"
+  - "wcmu"
+  - "no-std"
+  - "embedded"
+  - "real-time"
+  - "verification"
+  - "information-flow"

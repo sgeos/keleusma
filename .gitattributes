@@ -1,0 +1,30 @@
+# Normalise line endings to LF for source files. The repository
+# follows the same convention as upstream Rust: text files in LF,
+# even on Windows clones.
+* text=auto eol=lf
+
+# Mark `.kel` files as Keleusma source for GitHub's linguist so
+# the repository's language statistics surface Keleusma rather
+# than reporting `.kel` as unknown.
+*.kel linguist-language=Keleusma
+*.kel linguist-detectable=true
+
+# Editor and dev-tooling integration files are auxiliary; do not
+# count them in the language statistics.
+editors/** linguist-vendored
+tools/** linguist-vendored
+
+# Documentation should not skew the language statistics either.
+docs/** linguist-documentation
+
+# Generated cost-model fragments: do not count as hand-authored
+# Rust source.
+keleusma-bench/measured_cost_models/*.rs linguist-generated
+
+# Binary precompiled-bytecode fixtures. The wire format is
+# self-describing; do not treat them as text.
+*.kel.bin binary
+
+# Git LFS hooks (no-op until/unless LFS is enabled, but documents
+# the intent).
+*.kel.bin filter=lfs diff=lfs merge=lfs -text

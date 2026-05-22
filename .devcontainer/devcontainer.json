@@ -1,0 +1,36 @@
+{
+    "$schema": "https://raw.githubusercontent.com/devcontainers/spec/main/schemas/devContainer.schema.json",
+    "name": "Keleusma development container",
+    "image": "mcr.microsoft.com/devcontainers/rust:1-bookworm",
+    "features": {
+        "ghcr.io/devcontainers/features/common-utils:2": {
+            "username": "vscode",
+            "installZsh": true
+        }
+    },
+    "postCreateCommand": "rustup toolchain install 1.88 --component clippy rustfmt --no-self-update && rustup target add thumbv7em-none-eabihf && cargo install --path keleusma-cli --bin keleusma --locked",
+    "customizations": {
+        "vscode": {
+            "extensions": [
+                "rust-lang.rust-analyzer",
+                "tamasfe.even-better-toml",
+                "vadimcn.vscode-lldb",
+                "serayuzgur.crates",
+                "EditorConfig.EditorConfig"
+            ],
+            "settings": {
+                "rust-analyzer.cargo.allTargets": true,
+                "rust-analyzer.check.command": "clippy",
+                "editor.formatOnSave": true,
+                "[rust]": {
+                    "editor.defaultFormatter": "rust-lang.rust-analyzer"
+                },
+                "files.associations": {
+                    "*.kel": "keleusma"
+                }
+            }
+        }
+    },
+    "mounts": [],
+    "remoteUser": "vscode"
+}
