@@ -346,6 +346,7 @@ dependencies = [
  "keleusma",
  "keleusma-arena",
  "rand_core",
+ "x25519-dalek",
 ]
 
 [[package]]

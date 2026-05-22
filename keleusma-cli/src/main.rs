@@ -35,7 +35,7 @@ use keleusma::stddsl;
 use keleusma::vm::{DEFAULT_ARENA_CAPACITY, Vm, VmState};
 use keleusma::{Arena, Value};
 
-use strict_mode::{PolicyContext, build_policy_context};
+use strict_mode::{PolicyContext, X25519_PRIVATE_KEY_LEN, build_policy_context};
 
 const REPL_BANNER: &str = "Keleusma REPL. Type :help for commands, :quit to exit.";
 
@@ -79,7 +79,9 @@ fn main() -> ExitCode {
                         return ExitCode::FAILURE;
                     }
                 };
-                run_file(other, &ctx.enrolled_keys, &ctx)
+                let verifying = ctx.enrolled_keys.clone();
+                let decrypting = ctx.decryption_keys.clone();
+                run_file(other, &verifying, &decrypting, &ctx)
             } else {
                 eprintln!("error: unknown subcommand or missing file `{}`", other);
                 print_help();
@@ -131,17 +133,35 @@ fn print_help() {
     println!("  keleusma run hello.kel.bin --verifying-key key.pub");
     println!("  keleusma repl");
     println!();
-    println!("Strict-mode policy (signing):");
-    println!("  Place 32-byte Ed25519 public keys as `*.pub` files in");
-    println!("  /etc/keleusma/trusted_keys (Unix) or %PROGRAMDATA%\\keleusma\\trusted_keys");
-    println!("  (Windows), or in the directory named by");
-    println!("  KELEUSMA_TRUSTED_KEYS_DIR, to activate strict signing");
-    println!("  mode. In strict mode, the CLI refuses source files,");
-    println!("  unsigned bytecode, and bytecode signed by keys not in");
-    println!("  the trust store. The --verifying-key argument is");
-    println!("  rejected to prevent local policy relaxation.");
-    println!("  Set KELEUSMA_REQUIRE_SIGNED=1 to force strict mode even");
-    println!("  with an empty trust store (fail-closed for everything).");
+    println!("Strict-mode policies (signing and encryption):");
+    println!("  Signing: place 32-byte Ed25519 public keys as `*.pub`");
+    println!("  files in /etc/keleusma/trusted_keys (Unix) or");
+    println!("  %PROGRAMDATA%\\keleusma\\trusted_keys (Windows), or in");
+    println!("  the directory named by KELEUSMA_TRUSTED_KEYS_DIR. The");
+    println!("  CLI refuses source files, unsigned bytecode, and");
+    println!("  bytecode signed by keys not in the trust store. The");
+    println!("  --verifying-key argument is rejected. Set");
+    println!("  KELEUSMA_REQUIRE_SIGNED=1 to force strict signing mode");
+    println!("  even with an empty trust store.");
+    println!();
+    println!("  Encryption: place 32-byte X25519 private keys as");
+    println!("  `*.seed` files in /etc/keleusma/decryption_keys (Unix)");
+    println!("  or the equivalent Windows path, or in the directory");
+    println!("  named by KELEUSMA_DECRYPTION_KEYS_DIR. The CLI refuses");
+    println!("  unencrypted bytecode and bytecode encrypted to a key");
+    println!("  not in the decryption-key store. The --decryption-key");
+    println!("  argument is rejected. Set KELEUSMA_REQUIRE_ENCRYPTED=1");
+    println!("  to force strict encryption mode.");
+    println!();
+    println!("  The two policies are independent: neither, signing");
+    println!("  only, encryption only, or both may be active.");
+    println!();
+    println!("Examples (encryption):");
+    println!("  keleusma keygen --kind encryption --seed dest.seed --public dest.pub");
+    println!("  keleusma compile script.kel --signing-key sign.seed \\");
+    println!("           --encryption-key dest.pub -o script.kel.bin");
+    println!("  keleusma run script.kel.bin --verifying-key sign.pub \\");
+    println!("           --decryption-key dest.seed");
 }
 
 fn run_subcommand(args: &[String]) -> ExitCode {
@@ -152,8 +172,9 @@ fn run_subcommand(args: &[String]) -> ExitCode {
     let path = &args[0];
 
     // Build the policy context at the start of every run invocation.
-    // Discovery is fail-closed; a malformed key file in the trust
-    // store causes the CLI to refuse to start.
+    // Discovery is fail-closed; a malformed key file in either the
+    // signing trust store or the decryption-key store causes the
+    // CLI to refuse to start.
     let ctx = match build_policy_context() {
         Ok(c) => c,
         Err(e) => {
@@ -163,6 +184,7 @@ fn run_subcommand(args: &[String]) -> ExitCode {
     };
 
     let mut command_line_keys: Vec<ed25519_dalek::VerifyingKey> = Vec::new();
+    let mut command_line_decryption_keys: Vec<[u8; X25519_PRIVATE_KEY_LEN]> = Vec::new();
     let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {
@@ -182,6 +204,22 @@ fn run_subcommand(args: &[String]) -> ExitCode {
                 }
                 i += 2;
             }
+            "--decryption-key" => {
+                if i + 1 >= args.len() {
+                    eprintln!(
+                        "error: --decryption-key requires a path to a 32-byte X25519 seed file"
+                    );
+                    return ExitCode::FAILURE;
+                }
+                match read_x25519_private_key(&args[i + 1]) {
+                    Ok(k) => command_line_decryption_keys.push(k),
+                    Err(e) => {
+                        eprintln!("error: {}", e);
+                        return ExitCode::FAILURE;
+                    }
+                }
+                i += 2;
+            }
             other => {
                 eprintln!("error: unknown option `{}`", other);
                 return ExitCode::FAILURE;
@@ -189,13 +227,22 @@ fn run_subcommand(args: &[String]) -> ExitCode {
         }
     }
 
-    // In strict mode the trust store is system-managed. The
-    // --verifying-key flag is rejected so that an unprivileged
-    // operator cannot relax the policy by supplying their own keys
-    // at the command line.
+    // In strict signing mode the trust store is system-managed.
+    // The --verifying-key flag is rejected so an unprivileged
+    // operator cannot relax the policy at the command line.
     if ctx.strict_signing && !command_line_keys.is_empty() {
         eprintln!(
             "error: strict mode: --verifying-key is rejected; the trust list is system-managed through KELEUSMA_TRUSTED_KEYS_DIR or the platform-conventional directory"
+        );
+        return ExitCode::FAILURE;
+    }
+
+    // In strict encryption mode the decryption-key store is
+    // system-managed. The --decryption-key flag is rejected for the
+    // same reason as --verifying-key.
+    if ctx.strict_encryption && !command_line_decryption_keys.is_empty() {
+        eprintln!(
+            "error: strict mode: --decryption-key is rejected; the decryption-key store is system-managed through KELEUSMA_DECRYPTION_KEYS_DIR or the platform-conventional directory"
         );
         return ExitCode::FAILURE;
     }
@@ -205,13 +252,16 @@ fn run_subcommand(args: &[String]) -> ExitCode {
     // two is non-empty after the rejection check above.
     let mut verifying_keys = ctx.enrolled_keys.clone();
     verifying_keys.extend(command_line_keys);
+    let mut decryption_keys = ctx.decryption_keys.clone();
+    decryption_keys.extend(command_line_decryption_keys);
 
-    run_file(path, &verifying_keys, &ctx)
+    run_file(path, &verifying_keys, &decryption_keys, &ctx)
 }
 
 fn run_file(
     path: &str,
     verifying_keys: &[ed25519_dalek::VerifyingKey],
+    decryption_keys: &[[u8; X25519_PRIVATE_KEY_LEN]],
     policy: &PolicyContext,
 ) -> ExitCode {
     let bytes = match fs::read(path) {
@@ -225,15 +275,20 @@ fn run_file(
     // a leading shebang line, so check both at offset 0 and after a
     // `#!...\n` envelope.
     let result = if looks_like_bytecode(&bytes) {
-        execute_bytecode(&bytes, verifying_keys, policy)
-    } else if policy.strict_signing {
+        execute_bytecode(&bytes, verifying_keys, decryption_keys, policy)
+    } else if policy.strict_signing || policy.strict_encryption {
         eprintln!(
-            "error: strict mode: source execution disabled; compile and sign the source before running"
+            "error: strict mode: source execution disabled; compile{} the source before running",
+            if policy.strict_encryption {
+                ", sign, and encrypt"
+            } else {
+                " and sign"
+            }
         );
         return ExitCode::FAILURE;
-    } else if !verifying_keys.is_empty() {
+    } else if !verifying_keys.is_empty() || !decryption_keys.is_empty() {
         eprintln!(
-            "error: --verifying-key supplied but {} is source, not signed bytecode",
+            "error: --verifying-key or --decryption-key supplied but {} is source, not bytecode",
             path
         );
         return ExitCode::FAILURE;
@@ -279,6 +334,7 @@ fn compile_subcommand(args: &[String]) -> ExitCode {
     let input = &args[0];
     let mut output: Option<String> = None;
     let mut signing_key_path: Option<String> = None;
+    let mut encryption_key_path: Option<String> = None;
     let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {
@@ -298,6 +354,16 @@ fn compile_subcommand(args: &[String]) -> ExitCode {
                 signing_key_path = Some(args[i + 1].clone());
                 i += 2;
             }
+            "--encryption-key" => {
+                if i + 1 >= args.len() {
+                    eprintln!(
+                        "error: --encryption-key requires a path to a 32-byte X25519 public-key file"
+                    );
+                    return ExitCode::FAILURE;
+                }
+                encryption_key_path = Some(args[i + 1].clone());
+                i += 2;
+            }
             other => {
                 eprintln!("error: unknown option `{}`", other);
                 return ExitCode::FAILURE;
@@ -305,6 +371,16 @@ fn compile_subcommand(args: &[String]) -> ExitCode {
         }
     }
     let output_path = output.unwrap_or_else(|| default_output_path(input));
+
+    // Encryption requires signing because the wire format ties the
+    // two together. The signature covers the encrypted body so an
+    // adversary cannot strip the encryption layer.
+    if encryption_key_path.is_some() && signing_key_path.is_none() {
+        eprintln!(
+            "error: --encryption-key requires --signing-key; encrypted artefacts must be signed"
+        );
+        return ExitCode::FAILURE;
+    }
 
     let source = match fs::read_to_string(input) {
         Ok(s) => s,
@@ -320,27 +396,68 @@ fn compile_subcommand(args: &[String]) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let bytes = if let Some(key_path) = signing_key_path {
-        let signing_key = match read_signing_key(&key_path) {
-            Ok(k) => k,
-            Err(e) => {
-                eprintln!("error: {}", e);
-                return ExitCode::FAILURE;
-            }
-        };
-        match keleusma::wire_format::module_to_signed_wire_bytes(&module, &signing_key) {
-            Ok(b) => b,
-            Err(e) => {
-                eprintln!("error: signing bytecode: {:?}", e);
-                return ExitCode::FAILURE;
+    let bytes = match (signing_key_path, encryption_key_path) {
+        (Some(sign_path), Some(enc_path)) => {
+            // Signed-and-encrypted path.
+            let signing_key = match read_signing_key(&sign_path) {
+                Ok(k) => k,
+                Err(e) => {
+                    eprintln!("error: {}", e);
+                    return ExitCode::FAILURE;
+                }
+            };
+            let recipient_pk = match read_x25519_public_key(&enc_path) {
+                Ok(k) => k,
+                Err(e) => {
+                    eprintln!("error: {}", e);
+                    return ExitCode::FAILURE;
+                }
+            };
+            // Generate a fresh ephemeral X25519 seed from the OS RNG
+            // for this module. The ephemeral private key is consumed
+            // by the encryption operation and discarded; only the
+            // ephemeral public key persists in the artefact.
+            let mut ephemeral_seed = [0u8; X25519_PRIVATE_KEY_LEN];
+            use rand_core::RngCore;
+            rand_core::OsRng.fill_bytes(&mut ephemeral_seed);
+            match keleusma::wire_format::module_to_encrypted_signed_wire_bytes(
+                &module,
+                &signing_key,
+                &recipient_pk,
+                &ephemeral_seed,
+            ) {
+                Ok(b) => b,
+                Err(e) => {
+                    eprintln!("error: encrypting and signing bytecode: {:?}", e);
+                    return ExitCode::FAILURE;
+                }
             }
         }
-    } else {
-        match module.to_bytes() {
-            Ok(b) => b,
-            Err(e) => {
-                eprintln!("error: serializing bytecode: {:?}", e);
-                return ExitCode::FAILURE;
+        (Some(sign_path), None) => {
+            // Signed-only path (existing behavior).
+            let signing_key = match read_signing_key(&sign_path) {
+                Ok(k) => k,
+                Err(e) => {
+                    eprintln!("error: {}", e);
+                    return ExitCode::FAILURE;
+                }
+            };
+            match keleusma::wire_format::module_to_signed_wire_bytes(&module, &signing_key) {
+                Ok(b) => b,
+                Err(e) => {
+                    eprintln!("error: signing bytecode: {:?}", e);
+                    return ExitCode::FAILURE;
+                }
+            }
+        }
+        (None, _) => {
+            // Unsigned, unencrypted (existing default).
+            match module.to_bytes() {
+                Ok(b) => b,
+                Err(e) => {
+                    eprintln!("error: serializing bytecode: {:?}", e);
+                    return ExitCode::FAILURE;
+                }
             }
         }
     };
@@ -352,13 +469,15 @@ fn compile_subcommand(args: &[String]) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-/// Read a raw 32-byte Ed25519 seed from `path` and construct a
-/// `SigningKey`. Returns an error message string suitable for
-/// CLI output if the file is missing, the wrong size, or
-/// unreadable.
+/// Generate a fresh keypair for either signing (Ed25519) or
+/// encryption (X25519). The two key kinds are not interchangeable:
+/// signing keys authenticate code provenance; encryption keys
+/// receive encrypted code. Operators typically generate both for
+/// any host that participates in the encrypted delivery flow.
 fn keygen_subcommand(args: &[String]) -> ExitCode {
     let mut seed_path: Option<String> = None;
     let mut pub_path: Option<String> = None;
+    let mut kind = KeyKind::Signing;
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
@@ -376,6 +495,24 @@ fn keygen_subcommand(args: &[String]) -> ExitCode {
                     return ExitCode::FAILURE;
                 }
                 pub_path = Some(args[i + 1].clone());
+                i += 2;
+            }
+            "--kind" => {
+                if i + 1 >= args.len() {
+                    eprintln!("error: --kind requires either 'signing' or 'encryption'");
+                    return ExitCode::FAILURE;
+                }
+                kind = match args[i + 1].as_str() {
+                    "signing" => KeyKind::Signing,
+                    "encryption" => KeyKind::Encryption,
+                    other => {
+                        eprintln!(
+                            "error: --kind must be 'signing' or 'encryption'; got '{}'",
+                            other
+                        );
+                        return ExitCode::FAILURE;
+                    }
+                };
                 i += 2;
             }
             other => {
@@ -398,9 +535,6 @@ fn keygen_subcommand(args: &[String]) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    // Refuse to overwrite an existing seed file. The signing
-    // seed is a long-lived secret; silent overwrite is the kind
-    // of mistake that costs the host its signing identity.
     if Path::new(&seed_path).exists() {
         eprintln!(
             "error: refusing to overwrite existing seed file {}; remove or rename first",
@@ -415,21 +549,31 @@ fn keygen_subcommand(args: &[String]) -> ExitCode {
         );
         return ExitCode::FAILURE;
     }
-    // Generate fresh Ed25519 keypair from the OS RNG.
-    let signing_key = ed25519_dalek::SigningKey::generate(&mut rand_core::OsRng);
-    let verifying_key = signing_key.verifying_key();
-    if let Err(e) = fs::write(&seed_path, signing_key.to_bytes()) {
+    let (seed_bytes, public_bytes, kind_label) = match kind {
+        KeyKind::Signing => {
+            let signing_key = ed25519_dalek::SigningKey::generate(&mut rand_core::OsRng);
+            let verifying_key = signing_key.verifying_key();
+            (signing_key.to_bytes(), verifying_key.to_bytes(), "Ed25519")
+        }
+        KeyKind::Encryption => {
+            // X25519 private keys can be any 32 bytes; the StaticSecret
+            // constructor clamps internally per the X25519 specification.
+            // We generate raw bytes from the OS RNG.
+            use rand_core::RngCore;
+            let mut seed = [0u8; X25519_PRIVATE_KEY_LEN];
+            rand_core::OsRng.fill_bytes(&mut seed);
+            let public = keleusma::encryption::public_key_from_private(&seed);
+            (seed, public, "X25519")
+        }
+    };
+    if let Err(e) = fs::write(&seed_path, seed_bytes) {
         eprintln!("error: writing seed file {}: {}", seed_path, e);
         return ExitCode::FAILURE;
     }
-    if let Err(e) = fs::write(&pub_path, verifying_key.to_bytes()) {
+    if let Err(e) = fs::write(&pub_path, public_bytes) {
         eprintln!("error: writing public-key file {}: {}", pub_path, e);
         return ExitCode::FAILURE;
     }
-    // Best-effort tighten permissions on the seed file. On Unix
-    // hosts, restrict to owner read/write. Failures are surfaced
-    // as warnings but do not abort because the seed file is
-    // already written.
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -440,14 +584,34 @@ fn keygen_subcommand(args: &[String]) -> ExitCode {
             );
         }
     }
-    eprintln!("wrote seed to {} (32 bytes; keep secret)", seed_path);
     eprintln!(
-        "wrote public key to {} (32 bytes; distribute to verifiers)",
-        pub_path
+        "wrote {} seed to {} (32 bytes; keep secret)",
+        kind_label, seed_path
+    );
+    let public_role = match kind {
+        KeyKind::Signing => "distribute to verifiers",
+        KeyKind::Encryption => "distribute to compilers producing artefacts for this host",
+    };
+    eprintln!(
+        "wrote {} public key to {} (32 bytes; {})",
+        kind_label, pub_path, public_role
     );
     ExitCode::SUCCESS
 }
 
+/// Selects the cryptographic primitive family for the `keygen`
+/// subcommand. Signing produces Ed25519 keypairs; encryption
+/// produces X25519 keypairs.
+#[derive(Debug, Clone, Copy)]
+enum KeyKind {
+    Signing,
+    Encryption,
+}
+
+/// Read a raw 32-byte Ed25519 seed from `path` and construct a
+/// `SigningKey`. Returns an error message string suitable for
+/// CLI output if the file is missing, the wrong size, or
+/// unreadable.
 fn read_signing_key(path: &str) -> Result<ed25519_dalek::SigningKey, String> {
     let bytes = fs::read(path).map_err(|e| format!("reading signing key {}: {}", path, e))?;
     if bytes.len() != 32 {
@@ -460,6 +624,42 @@ fn read_signing_key(path: &str) -> Result<ed25519_dalek::SigningKey, String> {
     let mut seed = [0u8; 32];
     seed.copy_from_slice(&bytes);
     Ok(ed25519_dalek::SigningKey::from_bytes(&seed))
+}
+
+/// Read a raw 32-byte X25519 private key (seed) from `path`.
+/// Used by the run subcommand's `--decryption-key` flag and by
+/// the strict-mode decryption-key store discovery.
+fn read_x25519_private_key(path: &str) -> Result<[u8; X25519_PRIVATE_KEY_LEN], String> {
+    let bytes = fs::read(path).map_err(|e| format!("reading decryption key {}: {}", path, e))?;
+    if bytes.len() != X25519_PRIVATE_KEY_LEN {
+        return Err(format!(
+            "decryption key file {} must be exactly {} bytes (raw X25519 seed); got {} bytes",
+            path,
+            X25519_PRIVATE_KEY_LEN,
+            bytes.len()
+        ));
+    }
+    let mut seed = [0u8; X25519_PRIVATE_KEY_LEN];
+    seed.copy_from_slice(&bytes);
+    Ok(seed)
+}
+
+/// Read a raw 32-byte X25519 public key from `path`. Used by the
+/// compile subcommand's `--encryption-key` flag where the operator
+/// supplies the destination workstation's public key.
+fn read_x25519_public_key(path: &str) -> Result<[u8; X25519_PRIVATE_KEY_LEN], String> {
+    let bytes = fs::read(path).map_err(|e| format!("reading encryption key {}: {}", path, e))?;
+    if bytes.len() != X25519_PRIVATE_KEY_LEN {
+        return Err(format!(
+            "encryption key file {} must be exactly {} bytes (raw X25519 public key); got {} bytes",
+            path,
+            X25519_PRIVATE_KEY_LEN,
+            bytes.len()
+        ));
+    }
+    let mut key = [0u8; X25519_PRIVATE_KEY_LEN];
+    key.copy_from_slice(&bytes);
+    Ok(key)
 }
 
 /// Read a raw 32-byte Ed25519 public key from `path` and
@@ -695,10 +895,12 @@ fn execute_source(source: &str) -> Result<(), String> {
 fn execute_bytecode(
     bytes: &[u8],
     verifying_keys: &[ed25519_dalek::VerifyingKey],
+    decryption_keys: &[[u8; X25519_PRIVATE_KEY_LEN]],
     policy: &PolicyContext,
 ) -> Result<(), String> {
     let arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
     let signed = keleusma::wire_format::header_requires_signature(bytes);
+    let encrypted = keleusma::wire_format::header_requires_encryption(bytes);
 
     // In strict signing mode, unsigned bytecode is rejected
     // regardless of how it would normally load.
@@ -706,7 +908,50 @@ fn execute_bytecode(
         return Err(String::from("strict mode: unsigned bytecode disabled"));
     }
 
-    let mut vm = if signed {
+    // In strict encryption mode, unencrypted bytecode is rejected
+    // regardless of how it would normally load.
+    if policy.strict_encryption && !encrypted {
+        return Err(String::from("strict mode: unencrypted bytecode disabled"));
+    }
+
+    let mut vm = if encrypted {
+        // Encrypted bytecode requires at least one decryption key.
+        if decryption_keys.is_empty() {
+            return Err(String::from(
+                "encrypted bytecode requires --decryption-key or an enrolled decryption-key store",
+            ));
+        }
+        // Try each decryption key in order. The right key matches the
+        // recipient_key_id in the encryption metadata; mismatched keys
+        // produce a WrongRecipient error that we treat as a try-next
+        // signal. Other failures (signature mismatch, tampered
+        // ciphertext) are terminal.
+        let mut last_err: Option<keleusma::vm::VmError> = None;
+        let mut loaded: Option<Vm> = None;
+        for key in decryption_keys {
+            match Vm::load_encrypted_signed_bytes(bytes, &arena, verifying_keys, key) {
+                Ok(vm) => {
+                    loaded = Some(vm);
+                    break;
+                }
+                Err(e) => last_err = Some(e),
+            }
+        }
+        match loaded {
+            Some(vm) => vm,
+            None => {
+                let err = last_err.expect("at least one key attempted");
+                return Err(if policy.strict_encryption {
+                    format!(
+                        "strict mode: no enrolled decryption key matches the artefact ({:?})",
+                        err
+                    )
+                } else {
+                    format!("load_encrypted_signed_bytes: {:?}", err)
+                });
+            }
+        }
+    } else if signed {
         Vm::load_signed_bytes(bytes, &arena, verifying_keys).map_err(|e| {
             if policy.strict_signing {
                 // Diagnostic does not enumerate enrolled keys to
@@ -724,6 +969,11 @@ fn execute_bytecode(
         if !verifying_keys.is_empty() {
             return Err(String::from(
                 "--verifying-key supplied but the bytecode does not carry FLAG_REQUIRES_SIGNATURE",
+            ));
+        }
+        if !decryption_keys.is_empty() {
+            return Err(String::from(
+                "--decryption-key supplied but the bytecode does not carry FLAG_ENCRYPTED",
             ));
         }
         Vm::load_bytes(bytes, &arena).map_err(|e| format!("load_bytes: {:?}", e))?
