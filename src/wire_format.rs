@@ -125,6 +125,16 @@ pub const SIGNATURE_METADATA_BYTES: usize = 8;
 /// trust matrix.
 pub const FLAG_REQUIRES_SIGNATURE: u8 = 0x02;
 
+/// Bit in the framing header's `flags: u8` byte (offset 15) that
+/// signals "this module's body is encrypted." The flag is set by
+/// the compiler when producing an encrypted artefact and is
+/// enforced by the load-time runtime which decrypts the body
+/// before structural verification. Encrypted modules are also
+/// signed because the signature covers the encrypted body and is
+/// what authenticates the artefact's origin against tampering on
+/// the delivery channel.
+pub const FLAG_ENCRYPTED: u8 = 0x04;
+
 /// Signature scheme identifier for the Ed25519 algorithm. The
 /// only scheme V0.2.0 implements; the byte exists to make the
 /// wire format scheme-agnostic so future migrations do not
@@ -136,6 +146,15 @@ pub const ED25519_SIGNATURE_BYTES: usize = 64;
 
 /// Length of an Ed25519 verifying key in bytes.
 pub const ED25519_VERIFYING_KEY_BYTES: usize = 32;
+
+/// Width of the encryption-metadata block appended after the
+/// signature extension on encrypted modules. The layout is
+/// documented in [`crate::encryption::EncryptionMetadata`] and in
+/// `tmp/encrypted_signed_modules.md`. Always 88 bytes for the
+/// V0.2.1 X25519+AES-256-GCM scheme; future schemes may use the
+/// same constant or extend it through a scheme-specific
+/// negotiation.
+pub const ENCRYPTION_METADATA_BYTES: usize = 88;
 
 /// Maximum operand pool size addressable by the twenty-four-bit
 /// inline pool index. `16_777_216`.
@@ -821,10 +840,30 @@ pub fn parse_signature_metadata(
         )));
     }
     let expected_header_length = signed_header_length(signature_length);
-    if header_length != expected_header_length {
+    let expected_encrypted_header_length = expected_header_length + ENCRYPTION_METADATA_BYTES;
+    let encrypted = bytes[15] & FLAG_ENCRYPTED != 0;
+    let acceptable = if encrypted {
+        header_length == expected_encrypted_header_length
+    } else {
+        header_length == expected_header_length
+    };
+    if !acceptable {
+        let expected = if encrypted {
+            expected_encrypted_header_length
+        } else {
+            expected_header_length
+        };
         return Err(LoadError::Codec(format!(
-            "header_length {} does not match expected {} (sig metadata {} + sig {} + padding to 8-byte multiple)",
-            header_length, expected_header_length, SIGNATURE_METADATA_BYTES, signature_length,
+            "header_length {} does not match expected {} (sig metadata {} + sig {}{} + padding to 8-byte multiple)",
+            header_length,
+            expected,
+            SIGNATURE_METADATA_BYTES,
+            signature_length,
+            if encrypted {
+                " + encryption metadata"
+            } else {
+                ""
+            },
         )));
     }
     Ok(Some(SignatureInfo {
@@ -1503,6 +1542,338 @@ pub fn verify_module_signature(
 pub fn header_requires_signature(bytes: &[u8]) -> bool {
     let bytes = strip_shebang_prefix(bytes);
     bytes.len() > 15 && (bytes[15] & FLAG_REQUIRES_SIGNATURE) != 0
+}
+
+/// Returns `true` if the framing header carries the encryption
+/// flag. Used by load-time paths that may not have the
+/// `encryption` feature compiled in: such builds reject the
+/// module with `LoadError::EncryptionUnsupported` rather than
+/// silently admitting an encrypted module that the runtime
+/// cannot decrypt.
+pub fn header_requires_encryption(bytes: &[u8]) -> bool {
+    let bytes = strip_shebang_prefix(bytes);
+    bytes.len() > 15 && (bytes[15] & FLAG_ENCRYPTED) != 0
+}
+
+/// Compute the framing header length for a signed-and-encrypted
+/// module using the Ed25519+X25519+AES-256-GCM scheme. The header
+/// extends the signed header by an 88-byte encryption-metadata
+/// block. The result is the offset at which the encrypted body
+/// (ciphertext + AES-GCM tag) begins.
+pub const fn encrypted_signed_header_length() -> usize {
+    let signed_part = signed_header_length(ED25519_SIGNATURE_BYTES);
+    // 88 bytes is already 8-byte aligned; no extra padding needed.
+    signed_part + ENCRYPTION_METADATA_BYTES
+}
+
+/// Encode a [`Module`] into the V0.2.1 wire format with both an
+/// Ed25519 signature and X25519+AES-256-GCM body encryption. Sets
+/// both `FLAG_REQUIRES_SIGNATURE` and `FLAG_ENCRYPTED` in the
+/// header's flags byte.
+///
+/// The body bytes (opcode stream + operand pool + aux body, with
+/// alignment padding) are encrypted with a per-module AES-256
+/// key derived from an X25519 Diffie-Hellman against the
+/// destination runtime's public key. The encryption metadata
+/// block (ephemeral public key, recipient_key_id, AES-GCM nonce)
+/// is appended to the framing header.
+///
+/// The signature covers the entire on-disk framed buffer with
+/// the signature payload bytes and the CRC trailer bytes zeroed.
+/// This means the signature authenticates both the encryption
+/// metadata and the ciphertext, so an adversary cannot strip the
+/// encryption layer and substitute cleartext bytecode while
+/// preserving signature validity.
+///
+/// Requires both the `signatures` and `encryption` cargo features.
+///
+/// # Parameters
+///
+/// - `module`: the compiled module to encrypt and sign.
+/// - `signing_key`: the Ed25519 signing key (typically the head
+///   office's release key). Held by the compiler.
+/// - `recipient_public_key`: the destination runtime's X25519
+///   public key. Encryption is against this key; only the
+///   matching private key on the destination runtime can decrypt.
+/// - `ephemeral_seed`: 32 bytes of cryptographic randomness for
+///   the per-module ephemeral X25519 key. The caller is
+///   responsible for sourcing this from the OS RNG.
+#[cfg(all(feature = "signatures", feature = "encryption"))]
+pub fn module_to_encrypted_signed_wire_bytes(
+    module: &Module,
+    signing_key: &ed25519_dalek::SigningKey,
+    recipient_public_key: &[u8; crate::encryption::X25519_PUBLIC_KEY_LEN],
+    ephemeral_seed: &[u8; crate::encryption::X25519_PRIVATE_KEY_LEN],
+) -> Result<Vec<u8>, LoadError> {
+    use crate::encryption::{AES_GCM_TAG_LEN, encrypt_to_recipient};
+    use ed25519_dalek::Signer;
+
+    // Reuse the signed-encode flow to produce the "virtual"
+    // unencrypted-signed wire bytes. Then encrypt the body in
+    // place and patch the header to advertise the encryption.
+
+    // Step 1. Build the signed (but unencrypted) wire bytes.
+    let signed_bytes = module_to_signed_wire_bytes(module, signing_key)?;
+
+    // The body in the signed_bytes occupies the range
+    // [signed_header_length, signed_bytes.len() - WIRE_FORMAT_FOOTER_BYTES).
+    let signed_header_len = signed_header_length(ED25519_SIGNATURE_BYTES);
+    let plaintext_body_start = signed_header_len;
+    let plaintext_body_end = signed_bytes.len() - WIRE_FORMAT_FOOTER_BYTES;
+    let plaintext_body = &signed_bytes[plaintext_body_start..plaintext_body_end];
+
+    // Step 2. Encrypt the body. The ciphertext returned by AES-GCM
+    // is the encrypted bytes plus a 16-byte authentication tag.
+    let (encryption_metadata, ciphertext_with_tag) =
+        encrypt_to_recipient(plaintext_body, recipient_public_key, ephemeral_seed)
+            .map_err(|e| LoadError::Codec(format!("encryption failed: {}", e)))?;
+    debug_assert_eq!(
+        ciphertext_with_tag.len(),
+        plaintext_body.len() + AES_GCM_TAG_LEN
+    );
+
+    // Step 3. Assemble the encrypted-signed buffer.
+    //
+    // Layout:
+    // - bytes 0..64:                     base framing header
+    // - bytes 64..72:                    signature metadata block
+    // - bytes 72..136:                   Ed25519 signature (placeholder zero for now)
+    // - bytes 136..224:                  encryption metadata block (88 bytes)
+    // - bytes 224..(224+ciphertext_len): ciphertext + AES-GCM tag
+    // - last 4 bytes:                    CRC trailer
+    let encrypted_header_len = encrypted_signed_header_length();
+    let on_disk_total = encrypted_header_len + ciphertext_with_tag.len() + WIRE_FORMAT_FOOTER_BYTES;
+
+    let mut buf: Vec<u8> = Vec::with_capacity(on_disk_total);
+
+    // Copy the base header from the signed buffer, then patch the
+    // flags, header_length, total_length, and section offsets.
+    buf.extend_from_slice(&signed_bytes[..WIRE_FORMAT_HEADER_BYTES]);
+
+    // Patch flags to include FLAG_ENCRYPTED.
+    buf[15] |= FLAG_ENCRYPTED;
+
+    // Patch header_length to the encrypted-signed value.
+    buf[6..8].copy_from_slice(&(encrypted_header_len as u16).to_le_bytes());
+
+    // Patch total_length to the on-disk file size.
+    buf[8..12].copy_from_slice(&(on_disk_total as u32).to_le_bytes());
+
+    // Patch section offsets to point at the locations where the
+    // sections will live in the reconstructed plaintext view after
+    // decryption. Each section offset in the original signed
+    // buffer pointed at signed_header_len + section_offset_within_body.
+    // In the reconstructed plaintext buffer the same sections will
+    // be at encrypted_header_len + section_offset_within_body.
+    // So shift each offset by (encrypted_header_len - signed_header_len) = 88.
+    let shift = encrypted_header_len - signed_header_len;
+    patch_section_offsets(&mut buf, shift);
+
+    // Copy the signature metadata block and the signature.
+    buf.extend_from_slice(&signed_bytes[WIRE_FORMAT_HEADER_BYTES..signed_header_len]);
+
+    // Append the encryption metadata block.
+    buf.extend_from_slice(&encryption_metadata.to_bytes());
+    debug_assert_eq!(buf.len(), encrypted_header_len);
+
+    // Append ciphertext + tag.
+    buf.extend_from_slice(&ciphertext_with_tag);
+
+    // Append zeroed CRC trailer placeholder.
+    buf.extend_from_slice(&[0u8; WIRE_FORMAT_FOOTER_BYTES]);
+    debug_assert_eq!(buf.len(), on_disk_total);
+
+    // Re-sign over the new buffer (with signature payload and CRC
+    // zeroed; both already zero in the assembled buffer at this
+    // point because the signature was copied from the original
+    // signed buffer and then the encryption metadata + ciphertext
+    // + tag were appended, changing what the signature should
+    // cover. Zero out the signature payload before re-signing.)
+    let sig_offset = WIRE_FORMAT_HEADER_BYTES + SIGNATURE_METADATA_BYTES;
+    for byte in &mut buf[sig_offset..sig_offset + ED25519_SIGNATURE_BYTES] {
+        *byte = 0;
+    }
+    let signature = signing_key.sign(&buf);
+    let sig_bytes = signature.to_bytes();
+    buf[sig_offset..sig_offset + ED25519_SIGNATURE_BYTES].copy_from_slice(&sig_bytes);
+
+    // Compute and patch the real CRC.
+    let crc_offset = on_disk_total - WIRE_FORMAT_FOOTER_BYTES;
+    let crc = crc32(&buf[..crc_offset]);
+    buf[crc_offset..].copy_from_slice(&crc.to_le_bytes());
+
+    Ok(buf)
+}
+
+/// Patch the section-offset fields in the framing header by adding
+/// `shift` to each. Used by the encryption assembler to shift
+/// section offsets from "signed header" positions (header_length =
+/// 136) to "encrypted-signed header" positions (header_length =
+/// 224). The body sections move 88 bytes forward in the file.
+///
+/// Header field offsets being patched:
+/// - bytes 32..36: opcode_stream_offset (u32 LE)
+/// - bytes 40..44: operand_pool_offset (u32 LE)
+/// - bytes 48..52: aux_body_offset (u32 LE)
+#[cfg(all(feature = "signatures", feature = "encryption"))]
+fn patch_section_offsets(buf: &mut [u8], shift: usize) {
+    let shift = shift as u32;
+    for offset in [32, 40, 48] {
+        let mut bytes = [0u8; 4];
+        bytes.copy_from_slice(&buf[offset..offset + 4]);
+        let old = u32::from_le_bytes(bytes);
+        let new = old + shift;
+        buf[offset..offset + 4].copy_from_slice(&new.to_le_bytes());
+    }
+}
+
+/// Decrypt an encrypted-signed module and reconstruct a buffer
+/// equivalent to an unencrypted-signed module of the same content.
+/// The reconstructed buffer has the same shape an `unencrypted
+/// signed` wire-format buffer would have, so the existing
+/// signature-verifying load path can process it without further
+/// modification.
+///
+/// Verifies the signature over the encrypted form FIRST (to
+/// authenticate origin before doing any decryption work), then
+/// decrypts the body, then constructs the plaintext view with
+/// FLAG_ENCRYPTED cleared and section offsets adjusted.
+///
+/// Requires both the `signatures` and `encryption` cargo features.
+///
+/// # Parameters
+///
+/// - `bytes`: the on-disk encrypted-signed bytecode buffer.
+/// - `verifying_keys`: the host's trust matrix for signature
+///   verification. The signature must validate against at least
+///   one of these.
+/// - `local_private_key`: the host's X25519 private key. Used to
+///   decrypt the body. The corresponding public key must match
+///   the `recipient_key_id` in the encryption metadata.
+#[cfg(all(feature = "signatures", feature = "encryption"))]
+pub fn decrypt_encrypted_signed_to_signed_bytes(
+    bytes: &[u8],
+    verifying_keys: &[ed25519_dalek::VerifyingKey],
+    local_private_key: &[u8; crate::encryption::X25519_PRIVATE_KEY_LEN],
+) -> Result<Vec<u8>, LoadError> {
+    use crate::encryption::{AES_GCM_TAG_LEN, EncryptionMetadata, decrypt_from_metadata};
+
+    let bytes = strip_shebang_prefix(bytes);
+
+    // Step 1. Basic framing validation.
+    if bytes.len() < encrypted_signed_header_length() + WIRE_FORMAT_FOOTER_BYTES {
+        return Err(LoadError::Truncated);
+    }
+    if bytes[0..4] != BYTECODE_MAGIC[..] {
+        return Err(LoadError::BadMagic);
+    }
+    let flags = bytes[15];
+    if flags & FLAG_ENCRYPTED == 0 {
+        return Err(LoadError::Codec(String::from(
+            "decrypt_encrypted_signed_to_signed_bytes called on bytes without FLAG_ENCRYPTED",
+        )));
+    }
+    if flags & FLAG_REQUIRES_SIGNATURE == 0 {
+        return Err(LoadError::Codec(String::from(
+            "FLAG_ENCRYPTED requires FLAG_REQUIRES_SIGNATURE; encrypted modules must be signed",
+        )));
+    }
+
+    // Step 2. Verify the signature against the encrypted form.
+    // This authenticates origin before any decryption work runs,
+    // and ensures the encryption metadata has not been tampered
+    // with.
+    verify_module_signature(bytes, verifying_keys)?;
+
+    // Step 3. Parse the encryption metadata.
+    let encrypted_header_len = encrypted_signed_header_length();
+    let signed_header_len = signed_header_length(ED25519_SIGNATURE_BYTES);
+    let metadata_offset = signed_header_len;
+    let metadata_bytes = &bytes[metadata_offset..metadata_offset + ENCRYPTION_METADATA_BYTES];
+    let metadata = EncryptionMetadata::from_bytes(metadata_bytes).ok_or_else(|| {
+        LoadError::Codec(String::from(
+            "encryption metadata malformed or scheme unsupported",
+        ))
+    })?;
+
+    // Step 4. Extract ciphertext + tag from the body region.
+    let body_start = encrypted_header_len;
+    let body_end = bytes.len() - WIRE_FORMAT_FOOTER_BYTES;
+    if body_end <= body_start || body_end - body_start < AES_GCM_TAG_LEN {
+        return Err(LoadError::Truncated);
+    }
+    let ciphertext_with_tag = &bytes[body_start..body_end];
+
+    // Step 5. Decrypt.
+    let plaintext = decrypt_from_metadata(&metadata, ciphertext_with_tag, local_private_key)
+        .map_err(|e| LoadError::Codec(format!("decryption failed: {}", e)))?;
+
+    // Step 6. Reconstruct an equivalent unencrypted-signed buffer.
+    // Layout:
+    // - bytes 0..64:                  base header (modified)
+    // - bytes 64..72:                 signature metadata (copied)
+    // - bytes 72..136:                signature (copied)
+    // - bytes 136..(136+plaintext):   plaintext body
+    // - last 4 bytes:                 fresh CRC
+    let reconstructed_total = signed_header_len + plaintext.len() + WIRE_FORMAT_FOOTER_BYTES;
+    let mut buf: Vec<u8> = Vec::with_capacity(reconstructed_total);
+
+    // Copy base header from the encrypted form, then patch.
+    buf.extend_from_slice(&bytes[..WIRE_FORMAT_HEADER_BYTES]);
+
+    // Clear FLAG_ENCRYPTED.
+    buf[15] &= !FLAG_ENCRYPTED;
+
+    // Patch header_length back to signed-only value.
+    buf[6..8].copy_from_slice(&(signed_header_len as u16).to_le_bytes());
+
+    // Patch total_length to the reconstructed size.
+    buf[8..12].copy_from_slice(&(reconstructed_total as u32).to_le_bytes());
+
+    // Shift section offsets back by 88 (encryption_metadata block
+    // is gone in the reconstructed form).
+    let shift = encrypted_header_len - signed_header_len;
+    patch_section_offsets_subtract(&mut buf, shift);
+
+    // Copy signature metadata and signature bytes.
+    buf.extend_from_slice(&bytes[WIRE_FORMAT_HEADER_BYTES..signed_header_len]);
+
+    // Append plaintext body.
+    buf.extend_from_slice(&plaintext);
+
+    // Compute and append fresh CRC. The CRC range excludes the
+    // last 4 bytes (the CRC itself).
+    let crc_offset = reconstructed_total - WIRE_FORMAT_FOOTER_BYTES;
+    let crc = crc32(&buf[..crc_offset]);
+    buf.extend_from_slice(&crc.to_le_bytes());
+    debug_assert_eq!(buf.len(), reconstructed_total);
+
+    // The signature in the reconstructed buffer was valid for the
+    // encrypted form, but is no longer valid for the reconstructed
+    // (decrypted) form. Callers must not re-verify the signature
+    // on the reconstructed buffer; they should verify against the
+    // original encrypted bytes (already done in step 2 above).
+    //
+    // The reconstructed buffer is intended to be passed directly to
+    // a deserializer that does NOT re-verify the signature. The
+    // simplest way to communicate this is by having the runtime
+    // route this through a different entry point that skips the
+    // signature check.
+    Ok(buf)
+}
+
+/// Patch the section-offset fields in the framing header by
+/// subtracting `shift` from each. Inverse of [`patch_section_offsets`].
+#[cfg(all(feature = "signatures", feature = "encryption"))]
+fn patch_section_offsets_subtract(buf: &mut [u8], shift: usize) {
+    let shift = shift as u32;
+    for offset in [32, 40, 48] {
+        let mut bytes = [0u8; 4];
+        bytes.copy_from_slice(&buf[offset..offset + 4]);
+        let old = u32::from_le_bytes(bytes);
+        let new = old.saturating_sub(shift);
+        buf[offset..offset + 4].copy_from_slice(&new.to_le_bytes());
+    }
 }
 
 /// Decode the V0.2.0 wire format produced by
@@ -2503,5 +2874,167 @@ mod tests {
             "expected InvalidSignature after sig mutation, got: {:?}",
             err
         );
+    }
+
+    #[cfg(all(feature = "signatures", feature = "encryption"))]
+    #[test]
+    fn encrypted_signed_wire_round_trip() {
+        use crate::encryption::public_key_from_private;
+        use ed25519_dalek::SigningKey;
+
+        let signer = SigningKey::from_bytes(&[0xa1; 32]);
+        let verifying = signer.verifying_key();
+
+        // Recipient X25519 keypair.
+        let recipient_sk = [0xb2u8; 32];
+        let recipient_pk = public_key_from_private(&recipient_sk);
+
+        // Ephemeral seed for this module.
+        let ephemeral_seed = [0xc3u8; 32];
+
+        let module = make_minimal_module();
+
+        // Encrypt and sign.
+        let encrypted =
+            module_to_encrypted_signed_wire_bytes(&module, &signer, &recipient_pk, &ephemeral_seed)
+                .expect("encrypt+sign");
+
+        // Header flags should advertise both signing and encryption.
+        assert_ne!(encrypted[15] & FLAG_REQUIRES_SIGNATURE, 0);
+        assert_ne!(encrypted[15] & FLAG_ENCRYPTED, 0);
+
+        // header_length should equal encrypted_signed_header_length.
+        let hl = u16::from_le_bytes([encrypted[6], encrypted[7]]) as usize;
+        assert_eq!(hl, encrypted_signed_header_length());
+
+        // Decrypt back to signed-only form.
+        let reconstructed =
+            decrypt_encrypted_signed_to_signed_bytes(&encrypted, &[verifying], &recipient_sk)
+                .expect("decrypt");
+
+        // The reconstructed buffer should NOT have FLAG_ENCRYPTED.
+        assert_eq!(reconstructed[15] & FLAG_ENCRYPTED, 0);
+        // But should still carry FLAG_REQUIRES_SIGNATURE.
+        assert_ne!(reconstructed[15] & FLAG_REQUIRES_SIGNATURE, 0);
+
+        // The reconstructed buffer should parse back to the same
+        // module as the original. Round-trip through
+        // module_from_wire_bytes gives us a Module value to compare.
+        let decoded = module_from_wire_bytes(&reconstructed).expect("parse reconstructed");
+        assert_eq!(decoded.chunks.len(), module.chunks.len());
+        assert_eq!(decoded.chunks[0].ops, module.chunks[0].ops);
+    }
+
+    #[cfg(all(feature = "signatures", feature = "encryption"))]
+    #[test]
+    fn encrypted_signed_wrong_recipient_rejected() {
+        use crate::encryption::public_key_from_private;
+        use ed25519_dalek::SigningKey;
+
+        let signer = SigningKey::from_bytes(&[0xa2; 32]);
+        let verifying = signer.verifying_key();
+
+        let alice_sk = [0x11u8; 32];
+        let alice_pk = public_key_from_private(&alice_sk);
+        let bob_sk = [0x22u8; 32];
+
+        let ephemeral_seed = [0x33u8; 32];
+
+        let encrypted = module_to_encrypted_signed_wire_bytes(
+            &make_minimal_module(),
+            &signer,
+            &alice_pk,
+            &ephemeral_seed,
+        )
+        .expect("encrypt+sign");
+
+        let result = decrypt_encrypted_signed_to_signed_bytes(&encrypted, &[verifying], &bob_sk);
+        assert!(result.is_err(), "expected error decrypting as bob");
+    }
+
+    #[cfg(all(feature = "signatures", feature = "encryption"))]
+    #[test]
+    fn encrypted_signed_wrong_signer_rejected() {
+        use crate::encryption::public_key_from_private;
+        use ed25519_dalek::SigningKey;
+
+        let real_signer = SigningKey::from_bytes(&[0xa3; 32]);
+        let other_signer = SigningKey::from_bytes(&[0xa4; 32]);
+        let other_verifying = other_signer.verifying_key();
+
+        let recipient_sk = [0x55u8; 32];
+        let recipient_pk = public_key_from_private(&recipient_sk);
+
+        let ephemeral_seed = [0x66u8; 32];
+
+        let encrypted = module_to_encrypted_signed_wire_bytes(
+            &make_minimal_module(),
+            &real_signer,
+            &recipient_pk,
+            &ephemeral_seed,
+        )
+        .expect("encrypt+sign");
+
+        // Try to verify with a different signer's key.
+        let result =
+            decrypt_encrypted_signed_to_signed_bytes(&encrypted, &[other_verifying], &recipient_sk);
+        match result {
+            Err(LoadError::InvalidSignature) => (),
+            other => panic!(
+                "expected InvalidSignature when verifying with wrong key, got: {:?}",
+                other
+            ),
+        }
+    }
+
+    #[cfg(all(feature = "signatures", feature = "encryption"))]
+    #[test]
+    fn encrypted_signed_tampered_ciphertext_rejected() {
+        use crate::encryption::public_key_from_private;
+        use ed25519_dalek::SigningKey;
+
+        let signer = SigningKey::from_bytes(&[0xa5; 32]);
+        let verifying = signer.verifying_key();
+
+        let recipient_sk = [0x77u8; 32];
+        let recipient_pk = public_key_from_private(&recipient_sk);
+
+        let ephemeral_seed = [0x88u8; 32];
+
+        let mut encrypted = module_to_encrypted_signed_wire_bytes(
+            &make_minimal_module(),
+            &signer,
+            &recipient_pk,
+            &ephemeral_seed,
+        )
+        .expect("encrypt+sign");
+
+        // Flip a byte in the ciphertext region. Then repair the
+        // CRC so framing validation passes but the signature or
+        // decryption fails as the substantive check.
+        let body_start = encrypted_signed_header_length();
+        encrypted[body_start + 4] ^= 0x01;
+        let footer_start = encrypted.len() - WIRE_FORMAT_FOOTER_BYTES;
+        let crc = crc32(&encrypted[..footer_start]);
+        encrypted[footer_start..].copy_from_slice(&crc.to_le_bytes());
+
+        let result =
+            decrypt_encrypted_signed_to_signed_bytes(&encrypted, &[verifying], &recipient_sk);
+        assert!(
+            result.is_err(),
+            "expected rejection on tampered ciphertext after CRC repair"
+        );
+    }
+
+    #[test]
+    fn header_requires_encryption_detects_flag() {
+        let mut bytes: Vec<u8> = alloc::vec![0u8; 20];
+        bytes[0..4].copy_from_slice(&BYTECODE_MAGIC[..]);
+        assert!(!header_requires_encryption(&bytes));
+        bytes[15] = FLAG_ENCRYPTED;
+        assert!(header_requires_encryption(&bytes));
+        bytes[15] = FLAG_REQUIRES_SIGNATURE | FLAG_ENCRYPTED;
+        assert!(header_requires_encryption(&bytes));
+        assert!(header_requires_signature(&bytes));
     }
 }

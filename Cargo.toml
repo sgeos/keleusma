@@ -97,9 +97,21 @@ shell = []
 # the resulting flag is rejected at load time because no
 # verifier-side scheme is compiled in. Future scheme additions
 # extend the wire-format `scheme_id` byte without requiring an ABI
-# break; see `secret/SIGNATURE_SCHEME_MIGRATION.md` for the
-# planned migration matrix.
+# break.
 signatures = ["dep:ed25519-dalek"]
+
+# Enables compiled-module encryption and decryption at load time.
+# Adds `x25519-dalek` for asymmetric key agreement, `aes-gcm` for
+# authenticated encryption, `hkdf` for symmetric key derivation,
+# and `sha2` for the recipient-key fingerprint. The feature is
+# additive on top of `signatures`: encrypted modules are also
+# signed because the signature covers the encrypted body and is
+# what authenticates the artefact's origin. With the feature off,
+# encrypted bytecode is rejected at load time with a clear
+# diagnostic. Default off because the encryption crypto stack adds
+# meaningful binary footprint that flash-constrained embedded hosts
+# do not need unless they actually require encrypted delivery.
+encryption = ["signatures", "dep:x25519-dalek", "dep:aes-gcm", "dep:hkdf", "dep:sha2"]
 
 # Enables the SDL3 audio piano-roll example. Pulls in SDL3 (built
 # from source via CMake) and is therefore opt-in.
@@ -147,6 +159,23 @@ rkyv = { version = "0.8", default-features = false, features = ["alloc", "bytech
 # crate consumes pre-existing signing keys rather than generating
 # them; key generation is host-side responsibility.
 ed25519-dalek = { version = "2", default-features = false, features = ["alloc", "zeroize"], optional = true }
+# X25519 elliptic-curve Diffie-Hellman for the optional `encryption`
+# feature. Companion to `ed25519-dalek` in the same dalek crate
+# family. `static_secrets` exposes the static-private-key constructor
+# the runtime needs to load the host's stable decryption key.
+# `zeroize` clears the shared-secret material on drop.
+x25519-dalek = { version = "2", default-features = false, features = ["alloc", "zeroize", "static_secrets"], optional = true }
+# AES-256-GCM authenticated encryption for the body cipher. `no_std`
+# compatible with the `alloc` feature; pure-Rust implementation
+# acceptable for the targets V0.2.x supports.
+aes-gcm = { version = "0.10", default-features = false, features = ["alloc", "aes"], optional = true }
+# HKDF-SHA-256 derivation of the AES key and nonce from the X25519
+# shared secret. The `hkdf` crate is no_std-compatible and pulls in
+# `sha2` transitively.
+hkdf = { version = "0.12", default-features = false, optional = true }
+# SHA-256 for the recipient-key fingerprint and for HKDF. Pure-Rust
+# implementation suitable for no_std + alloc.
+sha2 = { version = "0.10", default-features = false, optional = true }
 sdl3 = { version = "0.18", features = ["build-from-source-static"], optional = true }
 
 [[example]]

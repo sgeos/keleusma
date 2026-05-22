@@ -81,6 +81,13 @@ pub mod address;
 /// Runtime values, instructions, the [`Module`] type, and the cost
 /// model.
 pub mod bytecode;
+/// Authenticated encryption of compiled [`Module`]s under the
+/// optional `encryption` feature. Implements the V0.2.1 hybrid
+/// asymmetric key wrapping (X25519 ECDH plus HKDF-SHA-256 plus
+/// AES-256-GCM). Feature-gated because the crypto stack adds
+/// meaningful binary footprint for hosts that do not need it.
+#[cfg(feature = "encryption")]
+pub mod encryption;
 /// Arena-resident dynamic strings ([`KString`]) at the host-VM
 /// boundary.
 pub mod kstring;

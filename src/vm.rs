@@ -1093,6 +1093,69 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         Ok(vm)
     }
 
+    /// Load a signed-and-encrypted module from a serialized byte
+    /// slice. Verifies the Ed25519 signature, decrypts the body
+    /// using the supplied X25519 private key, runs structural and
+    /// resource-bounds verification on the decrypted plaintext,
+    /// and constructs the VM.
+    ///
+    /// The signature is verified BEFORE decryption to authenticate
+    /// origin before any decryption work runs. The signature
+    /// covers the encrypted body, so an adversary cannot strip
+    /// encryption and substitute cleartext while preserving
+    /// signature validity.
+    ///
+    /// The `recipient_key_id` in the encryption metadata is checked
+    /// against the SHA-256 of the local public key. Artefacts
+    /// intended for a different recipient are rejected before
+    /// expensive cryptographic operations.
+    ///
+    /// The trust matrix is also copied onto the constructed VM so
+    /// a subsequent hot-swap through
+    /// [`Self::replace_module_from_bytes`] inherits the same keys.
+    ///
+    /// Requires both the `signatures` and `encryption` cargo features.
+    #[cfg(all(feature = "signatures", feature = "encryption"))]
+    pub fn load_encrypted_signed_bytes(
+        bytes: &[u8],
+        arena: &'arena keleusma_arena::Arena,
+        verifying_keys: &[ed25519_dalek::VerifyingKey],
+        decryption_key: &[u8; crate::encryption::X25519_PRIVATE_KEY_LEN],
+    ) -> Result<Self, VmError> {
+        let encrypted = crate::wire_format::header_requires_encryption(bytes);
+        if !encrypted {
+            return Err(VmError::from(crate::bytecode::LoadError::Codec(
+                alloc::string::String::from(
+                    "load_encrypted_signed_bytes called on bytes without FLAG_ENCRYPTED",
+                ),
+            )));
+        }
+        // Decrypt to a reconstructed signed-only buffer. This
+        // function verifies the signature internally before
+        // attempting decryption, so the caller does not need to
+        // call verify_module_signature separately.
+        let signed_buf = crate::wire_format::decrypt_encrypted_signed_to_signed_bytes(
+            bytes,
+            verifying_keys,
+            decryption_key,
+        )
+        .map_err(VmError::from)?;
+        // The reconstructed buffer has the signed-only flag still
+        // set but is functionally equivalent to a never-encrypted
+        // signed module. Parse and load through the existing path
+        // which clears the signed-only flag before construction.
+        let mut module = Module::from_bytes(&signed_buf).map_err(VmError::from)?;
+        let was_signed = (module.flags & crate::wire_format::FLAG_REQUIRES_SIGNATURE) != 0;
+        if was_signed {
+            module.flags &= !crate::wire_format::FLAG_REQUIRES_SIGNATURE;
+        }
+        let mut vm = Self::new(module, arena)?;
+        for key in verifying_keys {
+            vm.verifying_keys.push(*key);
+        }
+        Ok(vm)
+    }
+
     /// Load a module from a serialized byte slice and skip resource
     /// bounds verification.
     ///
@@ -8717,6 +8780,82 @@ mod tests {
             VmState::Finished(v) => assert_eq!(v, Value::Int(42)),
             other => panic!("expected Finished(42), got {:?}", other),
         }
+    }
+
+    #[cfg(all(feature = "signatures", feature = "encryption"))]
+    #[test]
+    fn load_encrypted_signed_bytes_executes_decrypted_module() {
+        use ed25519_dalek::SigningKey;
+
+        let signer = SigningKey::from_bytes(&[101u8; 32]);
+        let verifying = signer.verifying_key();
+
+        // Recipient X25519 keypair.
+        let recipient_sk = [0xb0u8; 32];
+        let recipient_pk = crate::encryption::public_key_from_private(&recipient_sk);
+
+        let ephemeral_seed = [0xc0u8; 32];
+
+        // Compile a simple module that returns 99.
+        let src = "signed fn main() -> Word { 99 }";
+        let tokens = tokenize(src).expect("lex");
+        let program = parse(&tokens).expect("parse");
+        let module = compile(&program).expect("compile");
+
+        // Encrypt and sign.
+        let bytes = crate::wire_format::module_to_encrypted_signed_wire_bytes(
+            &module,
+            &signer,
+            &recipient_pk,
+            &ephemeral_seed,
+        )
+        .expect("encrypt+sign");
+
+        // Load through the VM. End-to-end verifies the signature,
+        // decrypts the body, parses the plaintext, runs structural
+        // verification, and constructs the VM.
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let mut vm = Vm::load_encrypted_signed_bytes(&bytes, &arena, &[verifying], &recipient_sk)
+            .expect("load+decrypt+verify");
+
+        match vm.call(&[]).expect("execute") {
+            VmState::Finished(Value::Int(99)) => (),
+            other => panic!("expected Finished(99), got {:?}", other),
+        }
+    }
+
+    #[cfg(all(feature = "signatures", feature = "encryption"))]
+    #[test]
+    fn load_encrypted_signed_bytes_rejects_wrong_decryption_key() {
+        use ed25519_dalek::SigningKey;
+
+        let signer = SigningKey::from_bytes(&[102u8; 32]);
+        let verifying = signer.verifying_key();
+
+        let alice_sk = [0xd1u8; 32];
+        let alice_pk = crate::encryption::public_key_from_private(&alice_sk);
+        let bob_sk = [0xd2u8; 32];
+
+        let ephemeral_seed = [0xc1u8; 32];
+
+        let src = "signed fn main() -> Word { 7 }";
+        let tokens = tokenize(src).expect("lex");
+        let program = parse(&tokens).expect("parse");
+        let module = compile(&program).expect("compile");
+
+        // Encrypt to Alice.
+        let bytes = crate::wire_format::module_to_encrypted_signed_wire_bytes(
+            &module,
+            &signer,
+            &alice_pk,
+            &ephemeral_seed,
+        )
+        .expect("encrypt+sign");
+
+        // Bob tries to load. Should fail at recipient_key_id check.
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let result = Vm::load_encrypted_signed_bytes(&bytes, &arena, &[verifying], &bob_sk);
+        assert!(result.is_err(), "expected wrong-recipient rejection");
     }
 
     #[cfg(feature = "signatures")]
