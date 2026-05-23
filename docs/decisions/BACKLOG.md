@@ -842,3 +842,83 @@ The work is mechanical once the forcing case pins the design endpoint. The V0.2.
 - B21 (value-side negative labels via product lattice) is the larger generalisation. B25 is strictly narrower; it remains a boundary clause rather than a value-side property.
 - `RA.14` in `tmp/research/rtos_api/ra_14_ifc_labels.md` outlines the RTOS-level IFC discipline this entry would compose with.
 - The hierarchical control scenarios are the operational shape whose audit and hot-swap concerns this entry would address.
+
+## B26. Arena-resident persistent region for composite data values
+
+V0.2.x stores `.data` slot values as `GenericValue<W, F>` enum instances inline in the arena's persistent region. The enum's variant payload for composite types (`Tuple(Vec<Value>)`, `Array(Vec<Value>)`, `Struct { fields: Vec<(String, Value)> }`, `Enum { fields: Vec<Value> }`) holds a heap-allocated `Vec` whose body lives on the global allocator's heap, not in the arena. The slot's bytes contain the `Vec`'s `(ptr, len, cap)` triple; the elements live elsewhere. The KString machinery resolves the same problem for variable-length strings (`Value::KStr` is arena-backed via `ArenaHandle<str>`), but no analogous machinery exists for the composite variants.
+
+This implementation choice creates a mismatch between the language guarantee and the runtime reality. The language admits only fixed-size types in `.data` fields and forbids references at any source position. The runtime nevertheless places heap pointers in `.data` slots for any composite-typed field. Operators reading the language design correctly expect "fixed size, no references, byte-portable storage" and reach for byte-snapshot patterns that the runtime does not support without additional plumbing.
+
+**Immediate manifestation: REPL persistence.**
+
+The 2026-05-23 REPL persistence work (commit `92b994c`) snapshots `shared data` slots through the per-slot `Vm::set_data` and `Vm::get_data` Value-clone API, which works because shared slots are host-visible and `Value::clone()` deep-clones the heap data. Private data slots have no equivalent host-side API and the persistent region's byte content includes the heap pointers, so byte-snapshot of the private region is unsound. Private data persistence in the REPL is therefore deferred. A scalar-only allowlist (Word, Float, Bool, Byte, Fixed) is the tactical workaround; a representation that places composite bodies in the arena rather than the global heap is the structural fix.
+
+**Future manifestation: live migration and cross-process state transfer.**
+
+A V0.4.x or V0.5.x feature that wants to migrate a Vm's persistent state across processes (mothership-to-daughtership update delivery, checkpoint-resume on embedded targets with battery-backed RAM, hot-swap onto a new module via an opaque blob) would hit the same heap-pointer problem. Today these features require per-Value serialisation walks. A persistent region whose every byte is self-contained would let the feature treat the region as a flat opaque byte buffer.
+
+**Design space.**
+
+Three paths solve the problem with different trade-offs.
+
+**Path A: inline representation per slot type.** The persistent region's layout becomes per-slot-type-sized rather than uniform `size_of::<Value>()` per slot. A `Word` slot is 8 bytes, a `(Word, Word)` slot is 16 bytes, a `[Word; 8]` slot is 64 bytes. The `Op::GetData(slot)` opcode reads the slot's typed bytes and constructs a `Value` view on the operand stack; `Op::SetData(slot)` takes a `Value` and packs the bytes into the slot. The `DataSlot` layout grows to carry a type hint; the bytecode compiler emits the hint at codegen time; `required_persistent_capacity_for` becomes a per-slot sum.
+
+This is the architecturally cleanest answer. Byte-snapshot becomes sound trivially because the bytes are self-contained for every admissible field type. Embedded targets without a global allocator can host arbitrary admissible data without any global-heap traffic. WCMU accounting becomes more precise because the persistent region's per-slot footprint is exactly what the slot's type requires.
+
+The cost is a non-trivial refactor: data layout extension, compiler emit change, opcode handler rewrite for `GetData`/`SetData`, WCMU accounting adjustment, migration of existing tests that assume slot uniformity, and a documentation pass. Estimated one to two weeks of focused work. Operand-stack hot path is unchanged because the `Vec`-based `Value` shape remains for transient values.
+
+**Path B: parameterise `Value`'s composite variants over an allocator (the `allocator-api2` approach).** Rust admits parameterised collections through the `Allocator` trait, polyfilled in stable Rust by the `allocator-api2` crate that the workspace already depends on for `keleusma-arena`. The composite variants become `Tuple(Vec<Value, ArenaAllocator>)`, `Array(Vec<Value, ArenaAllocator>)`, et cetera. The arena exposes an `Allocator` impl; allocations happen in the arena rather than the global heap.
+
+This is a less invasive code-level change because `Vec` and `String` shape are preserved and only the allocator parameter changes. The persistent region's bytes still contain a `(ptr, len, cap)` triple, but the `ptr` now points into the arena rather than the global heap. For byte-snapshot purposes this does not directly help: the `ptr` is an absolute address, and copying the persistent bytes into a `Vec<u8>` captures an absolute pointer that becomes stale once the source arena is dropped, just like the heap-pointer case. The byte-snapshot pattern would additionally need an offset-based pointer encoding (relocate the inner pointers relative to the arena base) and a relocation pass on restore.
+
+Compared with Path A, Path B keeps the operand-stack and persistent-region representations uniform (still `Vec`-shaped) but introduces arena-relative pointer encoding. The implementation cost is comparable; the architectural cleanliness is lower because composite layouts retain a level of indirection that the language did not require. Path B does have one operational advantage: embedded targets with no global allocator can use the arena as the sole allocator without changing operand-stack representations or hot-path code.
+
+**Path C: hybrid.** Persistent region uses Path A's inline layout; operand stack continues to use the `Vec`-backed `Value` shape. `Op::GetData` materialises the inline bytes to a heap-Vec-backed `Value` for the stack; `Op::SetData` packs the stack's heap-Vec back into the inline slot. The boundary between persistent and transient representations is at the data-segment opcodes. Operand-stack hot path is unchanged. Persistent-region byte-snapshot is sound. Estimated cost is one to two weeks, same as Path A.
+
+This is the recommended path. It captures Path A's architectural benefit at the persistent region and Path B's hot-path preservation at the operand stack.
+
+**Path D: keep current design; add a deep-clone API for private slots.** `Vm::private_data_snapshot(&self) -> Vec<Value>` and `Vm::private_data_restore(&mut self, values: Vec<Value>) -> Result<(), VmError>` walk the persistent region slot by slot, cloning each `Value` (whose `Clone` impl deep-clones the heap-resident bodies). The host snapshots the resulting `Vec<Value>` rather than the raw bytes. Byte-snapshot remains unsound; per-slot Value-snapshot is the supported pattern.
+
+This is the smallest change. It does not align the runtime with the language guarantee; it just adds a typed-clone API for private slots equivalent to what shared slots already have through `set_data`/`get_data`. Estimated cost is a few hours. Suitable as a stopgap if Path C is not pursued in V0.2.x.
+
+**Why deferred from V0.2.x.**
+
+The REPL persistence work covers the operationally relevant case (shared data with `set_data`/`get_data`) through Path D's already-existing shared-slot equivalent. Private data REPL persistence is restricted to scalar types as a tactical workaround. No live migration or cross-process checkpoint feature is in V0.2.x scope. The forcing case for Path C is a concrete need to checkpoint or migrate a Vm's full persistent state across processes, or a concrete embedded-target deployment without a global allocator that needs composite data field support.
+
+**Forcing case.**
+
+A V0.4.x or V0.5.x feature that requires opaque-buffer persistent-state transfer. Candidates include hot-swap blob delivery, multi-tier update propagation in the hierarchical control scenarios, embedded-target battery-backed RAM checkpoints, or a generated codebase that produces many module variants whose persistent state must round-trip without a typed walk.
+
+**Compatibility.**
+
+Path C is a breaking change at the bytecode-version level. The `DataSlot` layout grows; `required_persistent_capacity_for` returns different values for composite-bearing modules. Modules compiled under V0.2.x would not load on a runtime that implements Path C, and vice versa, unless a compatibility shim is added. The `BYTECODE_VERSION` constant would advance.
+
+Path D is a backwards-compatible API addition. No version change required.
+
+**Implementation sketch when forcing case appears (Path C).**
+
+1. `DataSlot` gains a `type_hint: TypeRepr` field where `TypeRepr` is a stable bytecode-friendly enum (`Word`, `Float`, `Bool`, `Byte`, `Fixed(u8)`, `Tuple(Vec<TypeRepr>)`, `Array(Box<TypeRepr>, u32)`, `Option(Box<TypeRepr>)`, `Struct(Vec<TypeRepr>)`, `Enum { variants: Vec<Vec<TypeRepr>> }`). The compiler emits this from the resolved type at codegen time.
+
+2. `required_persistent_capacity_for` walks the layout, summing per-slot bytes via a `TypeRepr::byte_size()` recursive computation.
+
+3. `Op::GetData(slot)` reads the slot's inline bytes through a `TypeRepr::decode_inline_bytes()` routine that returns a `Value`. The returned `Value` uses the existing `Vec`-backed composite variants for the operand stack.
+
+4. `Op::SetData(slot)` takes a `Value` from the operand stack and encodes it through a `TypeRepr::encode_inline_bytes()` routine that writes the slot's inline bytes.
+
+5. The arena's `persistent_ptr()` exposure remains unchanged. The persistent region's byte semantics become "POD bytes, no pointers, byte-snapshot-portable".
+
+6. WCMU accounting in `verify::wcmu_stream_iteration` adjusts per-slot per-type rather than per-slot-uniform.
+
+7. `BYTECODE_VERSION` advances by one. The wire format documentation records the layout change.
+
+8. Tests: per-`TypeRepr` round-trip (encode then decode produces the original `Value`), byte-snapshot round-trip across Vm boundaries for every admissible composite type, WCMU accuracy regression against the prior uniform-size accounting.
+
+The work is mechanical once the design decision is locked in. The forcing case determines whether V0.2.x scope absorbs it or whether it lives in V0.3.x or beyond.
+
+**Cross-references.**
+
+- R32 (dual-end arena, established the persistent versus transient split).
+- R29 (hot code swap, the precedent for cross-Vm data transfer; currently uses Value-walking and would benefit from inline storage).
+- B16 (parametric Vm for sub-64-bit native runtimes; intersects with the `TypeRepr` design because byte-size computation depends on the target's word and float widths).
+- The 2026-05-23 commit `92b994c` (REPL shared data persistence) is the operational use case that surfaced the mismatch.
+- `keleusma-arena` already depends on `allocator-api2`, so Path B's plumbing prerequisite is already in place if the project pursues that route instead.
