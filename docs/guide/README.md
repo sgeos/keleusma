@@ -18,6 +18,8 @@ Onboarding-oriented documentation for new users and embedders. Where the [archit
 | [BIG_NUMBERS.md](./BIG_NUMBERS.md) | Author needing multi-digit arithmetic | Worked example for the V0.2 pattern-arm checked construct. Demonstrates full 64x64 -> 128-bit multiplication via the high half and addition with explicit carry-out propagation for chained multi-digit arithmetic |
 | [LLM_USAGE.md](./LLM_USAGE.md) | Operator using AI coding assistants | Patterns AI tools tend to get wrong, the read-AGENTS-first session protocol, prompt patterns that reduce iteration time |
 | [SECURITY_POLICY.md](./SECURITY_POLICY.md) | Operator deploying the CLI in cryptographically-gated environments | Strict-mode signing and encryption setup, key generation, the four policy states, deployment scenarios including air-gapped office, production fleet, regulated workflow execution, and kiosk |
+| [METRICS.md](./METRICS.md) | Operator planning embedded or constrained deployments | Binary size, RSS, peak memory footprint, CPU cycles, comparison to bash, Lua, Python, Ruby, Node.js |
+| [SHELL_AUDIT.md](./SHELL_AUDIT.md) | Operator evaluating whether StdDSL::Shell is rich enough for a planned daemon | Present capabilities of the bundle, missing capabilities, prioritised recommendations for V0.2.x additions |
 
 ## Companion Material
 

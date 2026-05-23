@@ -243,7 +243,7 @@ Five crates:
 - `keleusma-macros`. Compile-time proc macro for `#[derive(KeleusmaType)]`.
 - `keleusma-arena`. Standalone dual-end bump allocator. Published on crates.io as `keleusma-arena`.
 - `keleusma-bench`. Cost-model calibration tool that emits a measured `CostModel` for the host CPU.
-- `keleusma-cli`. Standalone command-line frontend providing `run`, `compile`, and `repl` subcommands.
+- `keleusma-cli`. Standalone command-line frontend providing `run`, `compile`, `keygen`, and `repl` subcommands. If the CLI runner does not do what you need, write your own host; the runtime library is the product and the CLI is one example of how to embed it.
 
 ## Examples
 

@@ -6,6 +6,8 @@
 
 Standalone command-line frontend for Keleusma. Provides a script runner, a bytecode compiler, and an interactive REPL so users can work with Keleusma scripts without writing any Rust host code.
 
+If the CLI runner does not do what you need, write your own host using the `keleusma` library directly. The runtime is the product; this CLI is one example of how to embed it. The library API is stable and well-documented; a custom host can constrain or extend any aspect of the CLI's behaviour (signing policy, encryption gates, native function registration, loop runner semantics, deployment shape).
+
 ## Installation
 
 ```sh

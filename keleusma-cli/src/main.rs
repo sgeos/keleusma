@@ -382,6 +382,35 @@ fn compile_subcommand(args: &[String]) -> ExitCode {
         return ExitCode::FAILURE;
     }
 
+    // Compile-time strict-mode warning. If the local host runs
+    // strict signing or strict encryption mode, warn the operator
+    // when the compile would produce an artefact that the local
+    // host would not accept. The warning does not fail the compile;
+    // operators may legitimately produce artefacts for other hosts.
+    if let Ok(policy) = build_policy_context() {
+        if policy.strict_signing && signing_key_path.is_none() {
+            eprintln!(
+                "warning: local host runs strict signing mode; the produced artefact will be unsigned and will not run on this host"
+            );
+        }
+        if policy.strict_signing
+            && let Some(ref sign_path) = signing_key_path
+            && let Ok(signing_key) = read_signing_key(sign_path)
+        {
+            let verifying = signing_key.verifying_key();
+            if !policy.enrolled_keys.contains(&verifying) {
+                eprintln!(
+                    "warning: the signing key's verifying counterpart is not in this host's trust list; the produced artefact will not run on this host"
+                );
+            }
+        }
+        if policy.strict_encryption && encryption_key_path.is_none() {
+            eprintln!(
+                "warning: local host runs strict encryption mode; the produced artefact will be unencrypted and will not run on this host"
+            );
+        }
+    }
+
     let source = match fs::read_to_string(input) {
         Ok(s) => s,
         Err(e) => {
@@ -887,9 +916,17 @@ fn compile_source(source: &str) -> Result<keleusma::bytecode::Module, String> {
 /// `math::*` family without explicit registration.
 fn execute_source(source: &str) -> Result<(), String> {
     let module = compile_source(source)?;
-    let arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+    let entry_kind = detect_entry_kind(&module)?;
+    let persistent_bytes = keleusma::vm::required_persistent_capacity_for(&module);
+    let transient_bytes =
+        keleusma::vm::auto_arena_capacity_for(&module, &[]).unwrap_or(DEFAULT_ARENA_CAPACITY);
+    let total = (persistent_bytes + transient_bytes).max(DEFAULT_ARENA_CAPACITY);
+    let mut arena = Arena::with_capacity(total);
+    arena
+        .resize_persistent(persistent_bytes)
+        .map_err(|e| format!("arena: resize_persistent: {:?}", e))?;
     let mut vm = Vm::new(module, &arena).map_err(|e| format!("verify: {:?}", e))?;
-    drive_to_completion(&mut vm, &arena)
+    drive_to_completion(&mut vm, &arena, entry_kind)
 }
 
 fn execute_bytecode(
@@ -898,7 +935,6 @@ fn execute_bytecode(
     decryption_keys: &[[u8; X25519_PRIVATE_KEY_LEN]],
     policy: &PolicyContext,
 ) -> Result<(), String> {
-    let arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
     let signed = keleusma::wire_format::header_requires_signature(bytes);
     let encrypted = keleusma::wire_format::header_requires_encryption(bytes);
 
@@ -914,57 +950,158 @@ fn execute_bytecode(
         return Err(String::from("strict mode: unencrypted bytecode disabled"));
     }
 
-    let mut vm = if encrypted {
-        // Encrypted bytecode requires at least one decryption key.
+    // Parse the Module first so we can inspect the entry chunk's
+    // block type. This allows the runner to choose between the
+    // atomic-fn-main path and the productive-divergent loop-main
+    // path based on the script's signature.
+    let module = load_module(bytes, verifying_keys, decryption_keys, policy)?;
+
+    // Auto-size the arena based on the module's declared bounds.
+    // The persistent portion holds the script's `.data` section;
+    // the transient portion is sized to the worst-case stream-
+    // iteration usage. Fall back to DEFAULT_ARENA_CAPACITY for
+    // trivial modules to ensure a working minimum.
+    let persistent_bytes = keleusma::vm::required_persistent_capacity_for(&module);
+    let transient_bytes =
+        keleusma::vm::auto_arena_capacity_for(&module, &[]).unwrap_or(DEFAULT_ARENA_CAPACITY);
+    let total = (persistent_bytes + transient_bytes).max(DEFAULT_ARENA_CAPACITY);
+    let mut arena = Arena::with_capacity(total);
+    arena
+        .resize_persistent(persistent_bytes)
+        .map_err(|e| format!("arena: resize_persistent: {:?}", e))?;
+
+    // Determine the script's entry-block kind. Loop main is driven
+    // through the tick-counter convention; atomic fn main runs to
+    // completion in a single call.
+    let entry_kind = detect_entry_kind(&module)?;
+
+    // Construct the VM. The module was parsed with the policy
+    // checks already applied; signature verification (if signed)
+    // happened during load_module. The flag is cleared in
+    // load_module so Vm::new accepts the module without further
+    // checks.
+    let mut vm = Vm::new(module, &arena).map_err(|e| format!("verify: {:?}", e))?;
+    for key in verifying_keys {
+        vm.register_verifying_key(*key);
+    }
+
+    drive_to_completion(&mut vm, &arena, entry_kind)
+}
+
+/// Outcome of inspecting the loaded module's entry chunk. Drives
+/// the dispatch between the atomic-fn-main runner and the
+/// productive-divergent loop-main runner.
+#[derive(Debug, Clone, Copy)]
+enum EntryKind {
+    /// Atomic total function. Runs to completion in a single
+    /// `vm.call(&[])` invocation. Returns a `Value::Finished`.
+    AtomicFn,
+    /// Productive divergent loop. Driven by the tick-counter
+    /// convention. Terminates only on `shell::exit(code)` or
+    /// SIGINT.
+    LoopMain,
+}
+
+fn detect_entry_kind(module: &keleusma::bytecode::Module) -> Result<EntryKind, String> {
+    let entry_idx = module
+        .entry_point
+        .ok_or_else(|| String::from("module has no entry point; cannot determine entry kind"))?;
+    let entry = module
+        .chunks
+        .get(entry_idx)
+        .ok_or_else(|| format!("entry_point {} out of bounds", entry_idx))?;
+    use keleusma::bytecode::BlockType;
+    match entry.block_type {
+        BlockType::Func => {
+            if entry.param_count != 0 {
+                return Err(format!(
+                    "fn main: CLI runner expects zero parameters; got {}",
+                    entry.param_count
+                ));
+            }
+            Ok(EntryKind::AtomicFn)
+        }
+        BlockType::Stream => {
+            if entry.param_count != 1 {
+                return Err(format!(
+                    "loop main: CLI runner expects exactly one parameter (tick: Word); got {}",
+                    entry.param_count
+                ));
+            }
+            Ok(EntryKind::LoopMain)
+        }
+        BlockType::Reentrant => Err(String::from(
+            "yield main: the CLI runner does not drive yield-shaped entry functions; \
+             use fn main or loop main",
+        )),
+    }
+}
+
+/// Parse a Module from the on-disk bytes, applying the policy
+/// gates for signature verification and decryption. Returns the
+/// Module with the FLAG_REQUIRES_SIGNATURE flag cleared so the
+/// caller can construct a Vm without the signed-module gate
+/// triggering.
+fn load_module(
+    bytes: &[u8],
+    verifying_keys: &[ed25519_dalek::VerifyingKey],
+    decryption_keys: &[[u8; X25519_PRIVATE_KEY_LEN]],
+    policy: &PolicyContext,
+) -> Result<keleusma::bytecode::Module, String> {
+    let signed = keleusma::wire_format::header_requires_signature(bytes);
+    let encrypted = keleusma::wire_format::header_requires_encryption(bytes);
+
+    if encrypted {
         if decryption_keys.is_empty() {
             return Err(String::from(
                 "encrypted bytecode requires --decryption-key or an enrolled decryption-key store",
             ));
         }
-        // Try each decryption key in order. The right key matches the
-        // recipient_key_id in the encryption metadata; mismatched keys
-        // produce a WrongRecipient error that we treat as a try-next
-        // signal. Other failures (signature mismatch, tampered
-        // ciphertext) are terminal.
-        let mut last_err: Option<keleusma::vm::VmError> = None;
-        let mut loaded: Option<Vm> = None;
+        // Try each decryption key. The right key matches the
+        // recipient_key_id; mismatched keys produce WrongRecipient.
+        let mut last_err: Option<keleusma::bytecode::LoadError> = None;
         for key in decryption_keys {
-            match Vm::load_encrypted_signed_bytes(bytes, &arena, verifying_keys, key) {
-                Ok(vm) => {
-                    loaded = Some(vm);
-                    break;
+            match keleusma::wire_format::decrypt_encrypted_signed_to_signed_bytes(
+                bytes,
+                verifying_keys,
+                key,
+            ) {
+                Ok(plaintext) => {
+                    let mut module = keleusma::bytecode::Module::from_bytes(&plaintext)
+                        .map_err(|e| format!("decoded module: {:?}", e))?;
+                    // Clear the signed flag so Vm::new accepts the
+                    // module; signature verification already
+                    // happened inside decrypt_encrypted_signed_to_signed_bytes.
+                    module.flags &= !keleusma::wire_format::FLAG_REQUIRES_SIGNATURE;
+                    return Ok(module);
                 }
                 Err(e) => last_err = Some(e),
             }
         }
-        match loaded {
-            Some(vm) => vm,
-            None => {
-                let err = last_err.expect("at least one key attempted");
-                return Err(if policy.strict_encryption {
-                    format!(
-                        "strict mode: no enrolled decryption key matches the artefact ({:?})",
-                        err
-                    )
-                } else {
-                    format!("load_encrypted_signed_bytes: {:?}", err)
-                });
-            }
-        }
+        let err = last_err.expect("at least one key attempted");
+        Err(if policy.strict_encryption {
+            format!(
+                "strict mode: no enrolled decryption key matches the artefact ({:?})",
+                err
+            )
+        } else {
+            format!("decrypt_encrypted_signed_to_signed_bytes: {:?}", err)
+        })
     } else if signed {
-        Vm::load_signed_bytes(bytes, &arena, verifying_keys).map_err(|e| {
+        keleusma::wire_format::verify_module_signature(bytes, verifying_keys).map_err(|e| {
             if policy.strict_signing {
-                // Diagnostic does not enumerate enrolled keys to
-                // avoid disclosing trust-store contents to
-                // unprivileged callers.
                 format!(
                     "strict mode: signature does not match any enrolled key ({:?})",
                     e
                 )
             } else {
-                format!("load_signed_bytes: {:?}", e)
+                format!("verify_module_signature: {:?}", e)
             }
-        })?
+        })?;
+        let mut module = keleusma::bytecode::Module::from_bytes(bytes)
+            .map_err(|e| format!("module: {:?}", e))?;
+        module.flags &= !keleusma::wire_format::FLAG_REQUIRES_SIGNATURE;
+        Ok(module)
     } else {
         if !verifying_keys.is_empty() {
             return Err(String::from(
@@ -976,32 +1113,114 @@ fn execute_bytecode(
                 "--decryption-key supplied but the bytecode does not carry FLAG_ENCRYPTED",
             ));
         }
-        Vm::load_bytes(bytes, &arena).map_err(|e| format!("load_bytes: {:?}", e))?
-    };
-    drive_to_completion(&mut vm, &arena)
+        keleusma::bytecode::Module::from_bytes(bytes).map_err(|e| format!("module: {:?}", e))
+    }
 }
 
-fn drive_to_completion(vm: &mut Vm, arena: &Arena) -> Result<(), String> {
-    // Register the four standard DSL bundles on every CLI-driven
-    // script. Hosts that embed the library directly choose which
-    // libraries to register; the CLI registers all of them so
-    // scripts run from the command line have access to math,
-    // audio, text, and shell utilities by default.
+fn drive_to_completion(vm: &mut Vm, arena: &Arena, entry_kind: EntryKind) -> Result<(), String> {
+    // Register the standard DSL bundles on every CLI-driven script.
+    // Hosts that embed the library directly choose which libraries
+    // to register; the CLI registers all of them so scripts run
+    // from the command line have access to math, audio, shell, and
+    // the bundled utility natives by default.
+    keleusma::utility_natives::register_utility_natives(vm);
+    // Override the bundled println with one that writes to stdout.
+    // The library default is a no-op suitable for no_std hosts; the
+    // CLI is std-only and benefits from real output.
+    vm.register_native_closure("println", |args| {
+        if let Some(arg) = args.first() {
+            print_value_inline(arg);
+        }
+        println!();
+        Ok(Value::Unit)
+    });
     vm.register_library(stddsl::Math);
     vm.register_library(stddsl::Audio);
     vm.register_library(stddsl::Shell);
+
+    match entry_kind {
+        EntryKind::AtomicFn => drive_atomic_fn(vm, arena),
+        EntryKind::LoopMain => drive_loop_main(vm, arena),
+    }
+}
+
+/// Drive an `fn main()` to completion in a single call. Prints the
+/// returned value and returns. Yielded or Reset states from an
+/// atomic fn are unexpected and produce an error.
+fn drive_atomic_fn(vm: &mut Vm, arena: &Arena) -> Result<(), String> {
     match vm.call(&[]).map_err(|e| format!("vm: {:?}", e))? {
         VmState::Finished(v) => {
             print_value(&v, arena);
             Ok(())
         }
         VmState::Yielded(v) => Err(format!(
-            "script yielded but the CLI runner does not yet drive resume: {:?}",
+            "fn main yielded unexpectedly (atomic fn should run to completion): {:?}",
             v
         )),
         VmState::Reset => Err(String::from(
-            "script reset but the CLI runner does not yet drive stream cycles",
+            "fn main reset unexpectedly (atomic fn should run to completion)",
         )),
+    }
+}
+
+/// Drive a `loop main(tick: Word) -> Word` indefinitely. Termination
+/// happens only when the script calls `shell::exit(code)` (which
+/// terminates the process via `std::process::exit`) or when the OS
+/// delivers SIGINT (which terminates the process via the default
+/// signal disposition).
+///
+/// Tick mechanics per the V0.2.1 convention:
+/// - Initial call passes tick = 1.
+/// - Script yields a `Word` value.
+/// - Host computes `next_tick = yielded_value.wrapping_add(1)`.
+/// - Host resumes with `Value::Int(next_tick)`.
+/// - Yield value 0 produces next_tick 1 (reset-equivalent).
+/// - Yield value `Word::MAX` produces next_tick 0 (overflow indicator).
+///
+/// Reset events (script triggers `Op::Reset`) are transparent to
+/// the tick mechanism. The arena is cleared by the VM; the host
+/// continues to the next iteration with the current tick state
+/// preserved.
+fn drive_loop_main(vm: &mut Vm, _arena: &Arena) -> Result<(), String> {
+    let mut tick: i64 = 1;
+    let mut state = vm
+        .call(&[Value::Int(tick)])
+        .map_err(|e| format!("vm: {:?}", e))?;
+    loop {
+        match state {
+            VmState::Finished(v) => {
+                return Err(format!(
+                    "loop main finished unexpectedly (productive divergent loops should never return): {:?}",
+                    v
+                ));
+            }
+            VmState::Yielded(v) => {
+                // The yielded value must be a Word per the loop
+                // main signature. Anything else is an error.
+                let yielded = match v {
+                    Value::Int(n) => n,
+                    other => {
+                        return Err(format!(
+                            "loop main yielded a non-Word value (signature requires Word): {:?}",
+                            other
+                        ));
+                    }
+                };
+                tick = yielded.wrapping_add(1);
+                state = vm
+                    .resume(Value::Int(tick))
+                    .map_err(|e| format!("vm: {:?}", e))?;
+            }
+            VmState::Reset => {
+                // The script triggered a Reset (Op::Reset). The VM
+                // has cleared the transient arena region; the
+                // persistent .data section is preserved. Continue
+                // the loop with the current tick state.
+                state = vm
+                    .resume(Value::Int(tick))
+                    .map_err(|e| format!("vm: {:?}", e))?;
+            }
+        }
     }
 }
 
@@ -1010,6 +1229,21 @@ fn format_err(stage: &str, msg: &str, span: keleusma::token::Span) -> String {
         format!("{}: {}", stage, msg)
     } else {
         format!("{}: {}:{}: {}", stage, span.line, span.column, msg)
+    }
+}
+
+/// Print a value to stdout without a trailing newline. Used by the
+/// CLI's `println` override. The full `print_value` variant adds the
+/// trailing newline.
+fn print_value_inline(v: &Value) {
+    match v {
+        Value::Int(n) => print!("{}", n),
+        Value::Float(f) => print!("{}", f),
+        Value::Bool(b) => print!("{}", b),
+        Value::StaticStr(s) => print!("{}", s),
+        Value::Unit => print!("()"),
+        Value::None => print!("None"),
+        other => print!("{:?}", other),
     }
 }
 
