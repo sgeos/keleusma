@@ -233,15 +233,17 @@ Other notable examples:
 
 ## Limitations
 
-The first iteration of the CLI has the following limitations.
+The current CLI has the following limitations.
 
-The runner does not yet drive `yield` and `resume` interactively. Stream-classified `main` functions are not directly runnable through the CLI. Use `fn main() -> T { ... }` for atomic-total entry points.
+The runner supports two entry shapes. The atomic-total form `fn main() -> T { ... }` runs to completion in a single call. The productive-divergent form `loop main(tick: Word) -> Word { ... }` is driven through the tick-counter convention with optional rate limiting via `--tick-interval`. The third shape, `yield main(...)`, which models a finite stream that terminates on its own through an explicit return, is not yet driven by the CLI. Embedders who need that shape can construct their own runner against the library.
 
 The REPL session prefix accumulates declarations across the session but does not persist data segment values. Any `data` block declared in the prefix is allocated freshly on each evaluation. Persistent state across REPL evaluations is future work.
 
 The REPL's return-type inference tries a fixed list of types. Expressions whose type is outside the list (custom enums, structs, tuples) require explicit function wrapping. Inference of the expression type prior to wrapping is future work.
 
 The compiler does not yet expose `Target` selection at the CLI level. All compiled output uses the host runtime's target. Cross-target compilation is future work.
+
+The `stddsl::Shell` bundle is adequate for one-shot scripts but missing three capabilities that recur in daemon-shaped workloads: a non-spawning sleep, a current-time reading, and direct file input and output. See [`docs/guide/SHELL_AUDIT.md`](../docs/guide/SHELL_AUDIT.md) for the gap analysis and the priority-ordered recommendations.
 
 ## File Extensions
 
