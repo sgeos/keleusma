@@ -359,13 +359,204 @@ The scheduler emits structured stderr lines for operational visibility. Tasks' o
 
 The `--quiet` flag suppresses every `[scheduler]` line except errors.
 
+## Memory residency and allocation discipline
+
+The runner is designed to be memory-resident for its operational lifetime. Two properties make this load-bearing for critical-hardware deployments.
+
+**Single-process design**. One operating-system process holds every task. The resident set is sized at startup from the sum of per-task arena capacities plus the scheduler's fixed-capacity event queue plus a small constant for the scheduler state. Adding tasks adds arena slots; the process is not multiplied. An N-task deployment has approximately the resident set of one `keleusma run` plus N times the per-task arena, not N times a full process.
+
+**Steady-state allocation discipline**. After startup, the scheduler does not call the allocator during dispatch. Per-task arenas are allocated once at task admission. The event queue is a fixed-capacity ring buffer; `kernel::post_event` writes into a pre-allocated slot. The wakeup-reason value passed to a task is a stack-allocated `Value::Int`. The yielded tuple a task returns is allocated in the task's own arena. Task restarts reuse the existing arena rather than allocating a fresh one; the supervised-restart path resets the arena's transient region and re-instantiates the VM in-place. No path through the scheduler's main loop invokes the heap.
+
+Consequence: a deployment that admitted all its tasks at startup remains scheduled even when the kernel's memory subsystem cannot satisfy new allocations from any process. This is the property [`docs/guide/SECURITY_POLICY.md`](../guide/SECURITY_POLICY.md#memory-residency-as-a-feature) calls out for the single-task case; `run-tasks` extends it to multi-task deployments. Operators running diagnostic, recovery, or watchdog workloads on critical hardware can rely on the runner to stay scheduled and available regardless of system-wide memory pressure.
+
+A long-period task (`period = "1h"` or `period = "1d"`) consumes zero CPU between deadlines because the scheduler issues a blocking `sleep_until` against the earliest task deadline and is woken by the kernel's timer. Operators can deploy multi-task daemons that are operationally near-idle while remaining resident and ready to act on events.
+
+## Deployment under operating-system service supervision
+
+The runner is designed to deploy under any reasonable operating-system service supervisor. Two principles govern the contract.
+
+**Operating-system-agnostic core**. The runner does not depend on any specific service framework. It is a long-running process with documented exit-code, signal, and stream conventions. Any supervisor that can launch a process, monitor it, and restart it on exit can host the runner.
+
+**Optional supervisor-specific extensions**. When the operating system's supervisor provides a richer integration mechanism (notification protocols, watchdog handshakes, control sockets), the runner detects and uses it without making it mandatory.
+
+### Generic process contract
+
+The runner respects the following contract regardless of which supervisor is in charge.
+
+| Element | Contract |
+|---------|----------|
+| Exit code 0 | Normal shutdown completed within the manifest's `shutdown_grace` window. |
+| Exit code 1 | Manifest validation failed or a task failed to load. |
+| Exit code 2 | An admitted task failed its restart-rate-limit window and the runner chose to exit rather than continue with a disabled task. (Configurable; default is to continue.) |
+| Exit code 130 | SIGINT received and shutdown drained cleanly. (Conventional 128+SIGINT for POSIX.) |
+| Exit code 143 | SIGTERM received and shutdown drained cleanly. (Conventional 128+SIGTERM.) |
+| Standard output | Per-task script output (`println`, `shell::write`). |
+| Standard error | Per-task script `shell::write_err`, plus scheduler stderr lines per "Output format" above. |
+| Working directory | Inherited from the supervisor. Tasks that need a specific working directory should `shell::cd` explicitly. |
+| No daemonization | The runner does not `fork(2)` or detach. The supervisor controls process lifecycle. |
+| No PID file | The supervisor records the process id through its own mechanism. The runner does not write a PID file. |
+
+### Notification-protocol detection
+
+The runner detects the systemd-style notification protocol through the `NOTIFY_SOCKET` environment variable. When set, the runner sends `READY=1` to the socket after every task has been admitted and the scheduler has entered its main loop. It sends `STATUS=...` messages on significant scheduler events (task restart, task disabled, shutdown begun) and `STOPPING=1` at the start of shutdown.
+
+The protocol is a simple UDP-or-Unix-socket write with a small text format. It is well-documented and not Linux-specific in its mechanics; supervisors on other operating systems can adopt the same convention. When `NOTIFY_SOCKET` is unset, the runner emits no notifications and proceeds as a plain process.
+
+### Linux
+
+Modern Linux deployments use systemd. A representative unit file.
+
+```ini
+[Unit]
+Description=Keleusma multi-task runner
+After=network.target
+
+[Service]
+Type=notify
+ExecStart=/usr/local/bin/keleusma run-tasks /etc/keleusma/tasks.toml
+WatchdogSec=30s
+Restart=on-failure
+RestartSec=5s
+NotifyAccess=main
+User=root
+Group=root
+
+[Install]
+WantedBy=multi-user.target
+```
+
+The `Type=notify` directive activates the `NOTIFY_SOCKET` integration. `WatchdogSec=30s` requires the runner to emit `WATCHDOG=1` at least every fifteen seconds; the runner does this from its scheduler loop unconditionally when the variable is set. `Restart=on-failure` lets the outer supervisor restart the whole process if the runner exits non-zero; the inner per-task restart policy remains responsible for in-process recovery.
+
+OpenRC, runit, and s6 are common alternatives on Linux. Each treats the runner as a plain `Type=simple` process. The notification protocol may or may not be supported by the supervisor; the runner falls back to plain process semantics when unsupported.
+
+### FreeBSD
+
+FreeBSD's `rc.d` framework wraps the runner through `daemon(8)` or a custom rc script. A representative `/usr/local/etc/rc.d/keleusma_runtasks`:
+
+```sh
+#!/bin/sh
+# PROVIDE: keleusma_runtasks
+# REQUIRE: NETWORKING
+# KEYWORD: shutdown
+
+. /etc/rc.subr
+
+name="keleusma_runtasks"
+rcvar="keleusma_runtasks_enable"
+command="/usr/local/bin/keleusma"
+command_args="run-tasks /usr/local/etc/keleusma/tasks.toml"
+pidfile="/var/run/${name}.pid"
+keleusma_runtasks_user="root"
+
+load_rc_config $name
+: ${keleusma_runtasks_enable:=NO}
+
+run_rc_command "$1"
+```
+
+`rc.subr` provides start, stop, restart, status, and reload commands. The reload command sends SIGHUP, which the runner reserves for future configuration reload (see the open questions section). FreeBSD's `daemon(8)` can wrap the runner to write a PID file the rc framework expects, with `-P /var/run/keleusma_runtasks.pid`.
+
+FreeBSD does not provide a notification-protocol equivalent in the base system. The runner runs without the integration; the rc framework relies on exit codes and signal handling alone.
+
+### OpenBSD
+
+OpenBSD's `rc.d` framework is simpler than FreeBSD's but follows the same pattern. A representative `/etc/rc.d/keleusma_runtasks`:
+
+```sh
+#!/bin/ksh
+daemon="/usr/local/bin/keleusma"
+daemon_flags="run-tasks /etc/keleusma/tasks.toml"
+daemon_user="root"
+
+. /etc/rc.d/rc.subr
+
+rc_bg=YES
+rc_reload=NO
+
+rc_cmd $1
+```
+
+The `rc_bg=YES` directive lets `rc.subr` background the runner. OpenBSD's `rc.subr` is significantly leaner than FreeBSD's; reload is disabled by default. Operators wanting reload should send SIGHUP through `kill -HUP $(cat /var/run/keleusma_runtasks.pid)`.
+
+OpenBSD does not provide a notification-protocol equivalent in the base system.
+
+### macOS
+
+macOS uses `launchd`. A representative `/Library/LaunchDaemons/keleusma.runtasks.plist`:
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>keleusma.runtasks</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/bin/keleusma</string>
+        <string>run-tasks</string>
+        <string>/Library/Application Support/Keleusma/tasks.toml</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+    <key>UserName</key>
+    <string>root</string>
+    <key>StandardOutPath</key>
+    <string>/var/log/keleusma.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/var/log/keleusma.err.log</string>
+</dict>
+</plist>
+```
+
+`KeepAlive` with `SuccessfulExit=false` requests `launchd` to restart the runner on non-zero exit. macOS does not provide a notification-protocol equivalent in the base system. The runner runs without the integration.
+
+### Windows
+
+Windows does not have POSIX signals in the Unix sense. SIGINT is delivered through Ctrl-C and Ctrl-Break in console contexts; SIGTERM and SIGHUP do not exist. Service stop dispatches through the Service Control Manager, which calls into the service binary through a documented API.
+
+Two options exist for Windows deployment.
+
+The first is to run the runner under a service wrapper such as NSSM (Non-Sucking Service Manager) or `winsw`. The wrapper handles the Service Control Manager protocol and translates service stop into a graceful console-control-event the runner can respond to. This is the common deployment path on Windows for non-native services.
+
+The second is to extend the runner with a native Windows-service mode in a future commit. This is operator-specific and is not in the initial design. When implemented, it would add a `--service` flag that, when set, has the runner register itself with the Service Control Manager and respond to the service-control dispatch directly.
+
+The notification protocol is not used on Windows.
+
 ## Stop and signal semantics
 
-The scheduler installs handlers for `SIGINT` and `SIGTERM`. On signal, it posts an `event_id = shutdown_requested` (id 99 by convention; manifest can override) and starts the shutdown grace period.
+The scheduler installs handlers for the conventional Unix signals. The behaviour is uniform across Linux, FreeBSD, OpenBSD, and macOS. Windows behaviour is documented separately at the end of this section.
+
+### Unix-like operating systems
+
+| Signal | Behaviour |
+|--------|-----------|
+| `SIGINT` | Posts `event_id = shutdown_requested` (id 99 by convention; manifest can override). Starts the shutdown grace period. Exit code 130 on clean drain. |
+| `SIGTERM` | Same as `SIGINT`. Exit code 143 on clean drain. |
+| `SIGHUP` | Posts `event_id = reload_requested` (id 98 by convention). Reserved for future configuration-reload work; the initial implementation installs the handler so operators are not surprised by a Default-Action termination, but the handler is otherwise a no-op (logs an info line, takes no action). Tasks that want to react to reload can EventWait on the reload event. |
+| `SIGUSR1`, `SIGUSR2` | Reserved for operator-defined events the manifest may bind. Not handled in the initial implementation; the runner does not install handlers, so the OS default applies (which is process termination on most platforms). A future iteration may add manifest-bound user-signal events. |
 
 During the grace period, the scheduler keeps dispatching tasks normally so they can finish in-flight work. Tasks that want to participate in graceful shutdown should EventWait on the shutdown event and exit cleanly. After the grace period elapses, any remaining tasks are forcibly terminated through `Vm::halt` and the process exits.
 
-A task that calls `shell::exit(code)` terminates the entire process immediately, as in the existing CLI behaviour.
+A task that calls `shell::exit(code)` terminates the entire process immediately with the supplied exit code, as in the existing CLI behaviour.
+
+### Windows
+
+Windows does not deliver POSIX signals natively. The runner reacts to console control events as follows when run from a console.
+
+| Console event | Behaviour |
+|---------------|-----------|
+| `Ctrl-C` (CTRL_C_EVENT) | Equivalent to SIGINT on Unix. Posts the shutdown event and drains. |
+| `Ctrl-Break` (CTRL_BREAK_EVENT) | Equivalent to SIGTERM on Unix. Posts the shutdown event and drains. |
+| Console close (CTRL_CLOSE_EVENT) | The operating system grants a short grace window before forcibly terminating; the runner attempts to drain but may not complete. |
+| Logoff or shutdown | Operating-system policy governs; the runner drains best-effort. |
+
+There is no Windows equivalent to `SIGHUP`. Reload-style operations under a Windows service wrapper would typically be expressed through a service control code (such as the user-defined `SERVICE_CONTROL_PARAMCHANGE`) that the wrapper translates into a control event the runner handles. The initial implementation does not include native Service Control Manager integration; see the Windows subsection above for the recommended NSSM-wrapped deployment.
 
 ## Relationship to `examples/rtos/`
 
@@ -391,13 +582,15 @@ A future refactor might lift the scheduler core into a shared crate consumed by 
 These are explicit deferrals worth tracking but not blocking V0.2.x landing.
 
 1. **Manifest signing**. The manifest itself is currently filesystem-trusted. A future iteration may add Ed25519 signing under the same scheme used for bytecode.
-2. **Per-task isolation**. Tasks share the process and address space. Operators needing memory isolation between tasks should run separate processes. A future iteration may add `unshare`-style isolation on platforms that support it.
+2. **Per-task isolation**. Tasks share the process and address space. Operators needing memory isolation between tasks should run separate processes. A future iteration may add per-task isolation through operating-system mechanisms where available (`unshare`-style namespaces on Linux, jails on FreeBSD, equivalent primitives elsewhere). Such isolation would interact with the memory-residency property documented above and would need careful design to preserve it.
 3. **Dynamic task addition**. The initial implementation reads the manifest at startup and does not support adding or removing tasks at runtime. A future iteration may add a control socket or a `kernel::add_task` native.
-4. **Hot reload**. A signal-driven manifest reload that brings up new tasks and tears down removed tasks is on the wishlist. Initial implementation does not include it.
+4. **Hot reload via SIGHUP**. The signal handler is installed in the initial implementation but performs no action beyond logging. A future iteration may implement manifest re-reading, task admission for newly-added tasks, and graceful teardown for removed tasks. The interaction with the memory-residency property is the load-bearing constraint: a hot-reload implementation that allocates fresh arenas defeats the single-process steady-state-allocation-free guarantee.
 5. **Priority levels and preemption**. The cooperative model is non-preemptive. Operators needing preemption should write their own host.
 6. **Per-task resource caps beyond WCMU**. The arena capacity is bounded; the cooperative scheduler also bounds wall-clock through the per-iteration deadline. A misbehaving task that takes longer than its WCET bound predicted is dispatched to completion before the scheduler advances. A future iteration may add a soft cap that kills runaway tasks.
 7. **Event payload typing**. Events currently carry a single `Word` payload. A future iteration may broaden to typed payloads through a manifest-declared event schema.
 8. **Task-to-task ABI compatibility checking**. Tasks declare events by numeric id in the manifest; if two manifests disagree on the id-to-name mapping, the system silently misbehaves. A future iteration may add a manifest-shared event schema with versioning.
+9. **Native Windows Service Control Manager integration**. The initial design recommends deploying through a service wrapper such as NSSM. A future iteration may add a `--service` mode in which the runner registers itself with the SCM directly and dispatches service-control codes natively.
+10. **Notification protocol on non-systemd supervisors**. The runner detects `NOTIFY_SOCKET` and emits the systemd-style protocol. No equivalent is defined for FreeBSD's rc framework, OpenBSD's rc, or macOS's launchd in the base systems. If a community convention emerges for any of these, the runner can adopt it without breaking the protocol-absent fallback.
 
 ## Cross-references
 
