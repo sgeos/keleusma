@@ -765,3 +765,79 @@ Each layer addresses a distinct threat. The combination is materially stronger t
 - `tmp/encrypted_signed_modules.md` (the in-flight spec) is the third.
 - R4.5 (cross-platform target order) places Cortex-M55 in Tier 2 of V0.4.x, which is the natural delivery window for the initial hardware-isolation integration.
 - The hierarchical control scenarios, together with the related perpetual operational scenarios, are the operational shape that the four-layer combination addresses end to end.
+
+## B25. Directional information-flow labels on data field types
+
+V0.2.x admits negative information-flow labels at three boundary-position categories: function parameters and returns, `shared` data field types, and `private` data field types. The data-field cases landed in the 2026-05-23 IFC extension after the operator's observation that shared and private data sections are return values and inputs masquerading as storage. Each field carries one label set that governs both directions: a positive label propagates from writes to reads, while a negative label is checked at writes and cleared at reads. This single-set design works but conflates two genuinely distinct flows.
+
+A data field has two boundary characters in tension. A `shared` field is simultaneously a sink for inbound writes and a source for outbound reads; a `private` field plays both roles across the yield-resume boundary. A richer model would admit *directional* labels: a separate label set for each direction.
+
+**Surface form (proposed).**
+
+```keleusma
+shared data state {
+    sanitised_command: T @ in: {Untrusted, !Secret}, out: Trusted,
+}
+```
+
+Reading: the host writes values that may carry the `Untrusted` label and must not carry `Secret`; the script reads values typed as `T @ Trusted`. The storage acts as an explicit classifier at the boundary, audit-tracked the same way a `declassify` operator is.
+
+The four directional combinations the model would enable:
+
+| Pattern | Inbound label | Outbound label | Use case |
+|---------|---------------|----------------|----------|
+| Sanitiser-by-storage | `Untrusted` | `Trusted` | Network bytes verified by an intermediate sanitiser land in this field; downstream code reads them as trusted |
+| Classifier-by-storage | `Trusted` | `Untrusted` | Internal data is intentionally declassified by the act of writing to a public-output field |
+| Symmetric | `Label` | `Label` | The field carries a single label in both directions; current V0.2.x form `T @ Label` already expresses this |
+| Asymmetric exclusion | `!Label` | (any) | The field rejects values carrying `Label` on writes; reads produce values with no labels. Current V0.2.x form `T @ !Label` expresses this for the in-strict, out-loose case |
+
+The mixed positive-and-negative parse-time rejection from V0.2.0 remains for each direction independently. Mixed sets within one direction are redundant under the same analysis that applies to function parameters and returns.
+
+**Mathematical formulation.**
+
+The label declaration becomes a pair `(in_set, out_set)`. The check rules:
+
+- At every write: `source.labels ⊆ in_set.positive` AND `source.labels ∩ in_set.negative = ∅`.
+- At every read: the value is typed as `T @ out_set.positive`; negative labels in `out_set` clear at the boundary (read returns the inner type with the positive labels).
+
+The two directions are independent. The current single-set semantics is the special case where `in_set = out_set`.
+
+**Use cases.**
+
+1. **Audit clarity at trust transitions.** A signed-update channel that lands in a specific `shared data` field. The directional form makes the trust transition visible at the field declaration rather than at scattered `classify` call sites.
+
+2. **Hot-swap robustness on trust transitions.** A hot-swap that changes a verifier function cannot accidentally bypass classification if the field's `out:` label is statically declared. The trust elevation is bound to the storage, not to a code path.
+
+3. **Source-level density at verify-then-store boundaries.** Applications with many ingress channels (multi-tier cross-link, multi-sensor types, multi-operator-update channels) repeat the verify-classify-store pattern. Directional labels collapse three operations to one declaration. The benefit compounds with the number of trust transitions.
+
+4. **Storage-boundary sanitisers and classifiers.** The two unexpressible cases under V0.2.x (sanitiser-by-storage and classifier-by-storage) become directly expressible. Today both have function-based equivalents via `verify` plus `classify`/`declassify`, but those are scattered across call sites rather than declared at the boundary.
+
+**Why deferred.**
+
+The function-based sanitiser and classifier pattern (verify-then-classify; declassify-then-store) works today for every probe-application scenario examined. The expressiveness gap is genuine but its load-bearing weight is low. The cost-benefit assessment for a probe codebase, where IFC discipline is enforceable through code review, is "modest ergonomic improvement, modest audit clarity, no new capability". For a generalist embedded RTOS API (RA.14 in the rtos_api research loop) the value is higher because operators of those systems may not adopt the function-discipline rigorously. For a single-team-owned codebase the discipline is enforceable at code review and the language-level extension is correspondingly less urgent.
+
+The forcing case is a concrete application with many verify-then-store boundaries (a generated or transformed codebase, a high-IFC-density application with dozens of cross-tier links, or an audit regime that prefers storage-boundary trust transitions over code-path ones).
+
+**Compatibility.**
+
+Backwards-compatible feature addition. Every V0.2.x program parses unchanged; the existing single-set form `T @ Label` is the special case `in: Label, out: Label`. The parser gains an alternative form when a `@` is followed by `in:` or `out:`; the type checker tracks the directional pair instead of a single set. Existing tests continue to pass.
+
+**Implementation sketch when forcing case appears.**
+
+1. Extend the AST `TypeExpr::Labelled` and `TypeExpr::NegativeLabelled` with optional directional tags, or add a third variant `TypeExpr::DirectionalLabelled(Box<TypeExpr>, in: LabelSet, out: LabelSet, Span)`.
+2. Parser admits `@ in: {...}, out: {...}` syntax in addition to the existing `@ Label`, `@ {Labels}`, `@ !Label`, `@ {!Labels}` forms.
+3. Type checker stores per-field `in_set` and `out_set` separately in `Ctx::data_negative_labels` (rename or split as appropriate).
+4. Boundary check at writes uses the field's `in_set`. The `check_negative_labels_against_data_write` helper extends with the positive-subset check on the in direction.
+5. Reads produce a value typed as `inner @ out_set.positive`; the existing resolve_type call grows a parallel "outbound" path.
+6. Documentation passes in `docs/architecture/LANGUAGE_DESIGN.md`, `docs/spec/GRAMMAR.md`, and the `TypeExpr` AST comment.
+7. Unit tests for accept and reject paths in each of the four directional combinations.
+
+The work is mechanical once the forcing case pins the design endpoint. The V0.2.x single-set form does not prevent the eventual extension.
+
+**Cross-references.**
+
+- R43 (information-flow labels with negative variants) defines the positive and negative semantics this entry generalises.
+- The 2026-05-23 commit `0262634` (data-field negative labels) is the immediate predecessor.
+- B21 (value-side negative labels via product lattice) is the larger generalisation. B25 is strictly narrower; it remains a boundary clause rather than a value-side property.
+- `RA.14` in `tmp/research/rtos_api/ra_14_ifc_labels.md` outlines the RTOS-level IFC discipline this entry would compose with.
+- The hierarchical control scenarios are the operational shape whose audit and hot-swap concerns this entry would address.
