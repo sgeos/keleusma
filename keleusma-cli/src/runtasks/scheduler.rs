@@ -78,6 +78,28 @@ impl RunOutcome {
     }
 }
 
+/// Atomic handles a task shares with its native closures. The
+/// scheduler writes the values immediately before an event-fired
+/// dispatch; the `kernel::last_event_id` and
+/// `kernel::last_event_payload` natives read them. Held on the
+/// Task struct so they survive a restart (the same Arcs are
+/// reused; only the VM and its closure registrations are
+/// reconstructed).
+#[derive(Clone)]
+struct EventAtomics {
+    id: Arc<AtomicU64>,
+    payload: Arc<AtomicU64>,
+}
+
+impl EventAtomics {
+    fn new() -> Self {
+        Self {
+            id: Arc::new(AtomicU64::new(0)),
+            payload: Arc::new(AtomicU64::new(0)),
+        }
+    }
+}
+
 /// Per-task scheduler state.
 struct Task {
     cfg: TaskConfig,
@@ -85,13 +107,18 @@ struct Task {
     vm: Vm<'static, 'static>,
     state: TaskState,
     last_wakeup_reason: i64,
-    last_event_id: u8,
-    last_event_payload: i64,
-    #[allow(dead_code)]
     task_id: u32,
     restart_history: VecDeque<Instant>,
     disabled: bool,
     module: Module,
+    /// Atomics shared with the native closures. Cloned again on
+    /// every restart so the new VM's natives observe the same
+    /// values.
+    event_atomics: EventAtomics,
+    /// Kernel-state handle retained so the restart path can re-
+    /// register natives without threading the Arc through every
+    /// caller.
+    kernel_state: Arc<std::sync::Mutex<KernelState>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -274,8 +301,16 @@ fn load_task(
         }
     }
 
+    // Size the arena from the persistent .data section plus the
+    // transient bound. The operator's `arena_capacity` is the floor;
+    // when the module's auto-computed WCMU exceeds it, the auto bound
+    // wins so the task admits cleanly without forcing operators to
+    // tune per-task capacities by hand.
     let persistent_bytes = keleusma::vm::required_persistent_capacity_for(&module);
-    let total = persistent_bytes + cfg.arena_capacity;
+    let auto_transient =
+        keleusma::vm::auto_arena_capacity_for(&module, &[]).unwrap_or(cfg.arena_capacity);
+    let transient = cfg.arena_capacity.max(auto_transient);
+    let total = persistent_bytes + transient;
     let mut arena = Arena::with_capacity(total);
     arena
         .resize_persistent(persistent_bytes)
@@ -295,9 +330,14 @@ fn load_task(
     let mut vm = Vm::new(module.clone(), arena_ref)
         .map_err(|e| format!("task {}: verify: {:?}", cfg.name, e))?;
 
-    // Register the same set of natives the standard CLI registers
-    // for `keleusma run`, plus the run-tasks kernel natives.
-    register_runtime_natives(&mut vm, task_id, cfg.name.clone(), kernel_state);
+    let event_atomics = EventAtomics::new();
+    register_runtime_natives(
+        &mut vm,
+        task_id,
+        cfg.name.clone(),
+        kernel_state.clone(),
+        event_atomics.clone(),
+    );
 
     Ok(Task {
         cfg: cfg.clone_owned(),
@@ -305,23 +345,29 @@ fn load_task(
         vm,
         state: TaskState::NotStarted,
         last_wakeup_reason: WAKEUP_FIRST,
-        last_event_id: 0,
-        last_event_payload: 0,
         task_id,
         restart_history: VecDeque::new(),
         disabled: false,
         module,
+        event_atomics,
+        kernel_state,
     })
 }
 
 /// Register the natives the runner exposes to every task. This is the
 /// union of the standard CLI register set (utility natives, math,
 /// audio, shell) plus the runtasks-specific kernel natives.
-fn register_runtime_natives<'a, 'arena>(
-    vm: &mut Vm<'a, 'arena>,
+///
+/// Called both at task load and after each restart. The closures are
+/// Fn + 'static and capture cloned Arc handles; restart is just a
+/// matter of constructing a fresh Vm and calling this function again
+/// with the same atomics and the same kernel-state Arc.
+fn register_runtime_natives(
+    vm: &mut Vm<'_, '_>,
     task_id: u32,
     task_name: String,
     kernel_state: Arc<std::sync::Mutex<KernelState>>,
+    event_atomics: EventAtomics,
 ) {
     // println override: per-task prefixed output so multi-task
     // stdout remains parseable by the operator.
@@ -358,7 +404,7 @@ fn register_runtime_natives<'a, 'arena>(
         Ok(Value::Unit)
     });
 
-    let ks_now = kernel_state.clone();
+    let ks_now = kernel_state;
     vm.register_native_closure("kernel::now_ms", move |_args| {
         let state = ks_now.lock().unwrap();
         let start = state.start_time.expect("scheduler start time initialised");
@@ -368,36 +414,24 @@ fn register_runtime_natives<'a, 'arena>(
     vm.register_native_closure("kernel::task_id", move |_args| {
         Ok(Value::Int(task_id as i64))
     });
-    let name_for_native = task_name.clone();
+    let name_for_native = task_name;
     vm.register_native_closure("kernel::task_name", move |_args| {
         Ok(Value::StaticStr(name_for_native.clone()))
     });
 
-    // The last_event natives close over the scheduler's per-task
-    // wakeup metadata. The scheduler updates these slots immediately
-    // before each dispatch through the task's own atomic-stored
-    // values. We model the storage as two AtomicU64 leaked into the
-    // closures via Arc; the scheduler updates them via the same
-    // handles before each dispatch.
-    let last_event_id = Arc::new(AtomicU64::new(0));
-    let last_event_payload = Arc::new(AtomicU64::new(0));
-    let leid = last_event_id.clone();
+    // The scheduler writes to these atomics before each event-fired
+    // dispatch; the natives read them out. The Arcs survive restarts
+    // because they live on the Task struct (see EventAtomics).
+    let id_handle = event_atomics.id;
     vm.register_native_closure("kernel::last_event_id", move |_args| {
-        Ok(Value::Int(leid.load(Ordering::Relaxed) as i64))
+        Ok(Value::Int(id_handle.load(Ordering::Relaxed) as i64))
     });
-    let lep = last_event_payload.clone();
+    let payload_handle = event_atomics.payload;
     vm.register_native_closure("kernel::last_event_payload", move |_args| {
-        Ok(Value::Int(lep.load(Ordering::Relaxed) as i64))
+        // The payload is stored as a u64 bit pattern so the i64
+        // round-trip preserves sign across the boundary.
+        Ok(Value::Int(payload_handle.load(Ordering::Relaxed) as i64))
     });
-    // We cannot reach back into these from the scheduler's per-task
-    // dispatch without storing the Arcs in the Task struct. The
-    // simpler design path is to pass the wakeup metadata through the
-    // resume payload itself, which we already do. The last_event
-    // natives in the initial implementation return 0; tasks that need
-    // event metadata can read it from the resume parameter encoding
-    // the scheduler chose for this iteration (see scheduler::dispatch).
-    let _ = last_event_id;
-    let _ = last_event_payload;
 }
 
 fn read_word(args: &[Value], idx: usize, ctx: &str) -> Result<i64, VmError> {
@@ -517,8 +551,13 @@ fn dispatch_loop(
                 {
                     task.state = TaskState::Ready;
                     task.last_wakeup_reason = WAKEUP_EVENT;
-                    task.last_event_id = ev.id;
-                    task.last_event_payload = ev.payload;
+                    // Write into the atomics the task's natives read.
+                    // Cast the i64 payload through u64 so the bit
+                    // pattern survives the round-trip.
+                    task.event_atomics.id.store(ev.id as u64, Ordering::Relaxed);
+                    task.event_atomics
+                        .payload
+                        .store(ev.payload as u64, Ordering::Relaxed);
                 }
             }
         }
@@ -699,24 +738,30 @@ fn on_task_exit(task: &mut Task, was_error: bool, quiet: bool) {
     }
     let arena_ref: &'static Arena = unsafe { std::mem::transmute(&task.arena) };
     match Vm::new(task.module.clone(), arena_ref) {
-        Ok(vm) => {
-            task.vm = vm;
-            // Re-register natives. Since the closures captured cloned
-            // Arcs at original load time, re-registration is required
-            // to point the new VM at the same kernel state. The
-            // simplest path for this initial implementation is to
-            // disable the task on restart; a follow-on commit can
-            // properly re-register natives.
-            //
-            // TODO: re-register natives on the new VM. For now, mark
-            // disabled to avoid running a half-configured task.
-            eprintln!(
-                "[scheduler] task {} restart: native re-registration not yet implemented; \
-                 disabling",
-                task.cfg.name
+        Ok(mut vm) => {
+            // Re-register the natives against the new Vm. The same
+            // EventAtomics Arcs and kernel-state Arc are reused, so
+            // the new closures observe the same shared state the old
+            // ones did. The script's persistent .data is reset by
+            // the arena reset above; tasks that need cross-restart
+            // state should use const data or the host filesystem.
+            register_runtime_natives(
+                &mut vm,
+                task.task_id,
+                task.cfg.name.clone(),
+                task.kernel_state.clone(),
+                task.event_atomics.clone(),
             );
-            task.disabled = true;
-            task.state = TaskState::Finished;
+            task.vm = vm;
+            task.state = TaskState::Ready;
+            task.last_wakeup_reason = WAKEUP_FIRST;
+            if !quiet {
+                eprintln!(
+                    "[scheduler] task {} restarted ({} restart(s) in window)",
+                    task.cfg.name,
+                    task.restart_history.len()
+                );
+            }
         }
         Err(e) => {
             eprintln!(

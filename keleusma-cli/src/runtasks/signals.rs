@@ -1,7 +1,7 @@
 //! Signal handling and notification-protocol detection for
 //! `keleusma run-tasks`.
 //!
-//! The scheduler reads three atomic flags set from signal handlers
+//! The scheduler reads two atomic flags set from signal handlers
 //! installed at startup. On Unix-like operating systems
 //! (Linux, FreeBSD, OpenBSD, macOS) the handlers cover SIGINT,
 //! SIGTERM, and SIGHUP. On Windows the handlers cover the Ctrl-C and
@@ -98,12 +98,6 @@ impl NotifySocket {
         let Some(ref path) = self.socket_path else {
             return;
         };
-        // The protocol supports both abstract (Linux-only, leading
-        // null byte) and filesystem-path socket addresses. Fall back
-        // to the filesystem-path form on platforms that do not
-        // support the abstract form; the protocol is rare on
-        // non-Linux supervisors and the filesystem form is the
-        // portable subset.
         match Self::send_to(path, msg) {
             Ok(()) => {}
             Err(e) => {
@@ -119,24 +113,19 @@ impl NotifySocket {
 
     #[cfg(unix)]
     fn send_to(path: &Path, msg: &str) -> std::io::Result<()> {
-        let socket = UnixDatagram::unbound()?;
-        // Linux abstract namespace: path begins with a `@` in the env
-        // variable and the actual address uses a leading null byte.
         let path_str = path.to_string_lossy();
+        // Linux abstract namespace: the env variable begins with a
+        // `@` and the actual socket address starts with a null byte.
+        // The std library exposes this through
+        // `std::os::linux::net::SocketAddrExt::from_abstract_name`
+        // on Linux; on other Unix-likes (FreeBSD, OpenBSD, macOS) the
+        // abstract namespace does not exist, so fall through to the
+        // filesystem-path form. Operators on those platforms should
+        // configure their supervisor to use a filesystem path.
         if let Some(stripped) = path_str.strip_prefix('@') {
-            let mut bytes = Vec::with_capacity(stripped.len() + 1);
-            bytes.push(0u8);
-            bytes.extend_from_slice(stripped.as_bytes());
-            // Abstract sockets are Linux-only; the std library API
-            // does not expose them directly. Drop the abstract case
-            // here; operators on Linux will see the protocol go to
-            // /dev/null but the scheduler still functions.
-            let _ = bytes;
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::Unsupported,
-                "abstract NOTIFY_SOCKET addresses not yet supported",
-            ));
+            return send_to_abstract(stripped, msg);
         }
+        let socket = UnixDatagram::unbound()?;
         socket.connect(path)?;
         socket.send(msg.as_bytes())?;
         Ok(())
@@ -172,6 +161,35 @@ impl NotifySocket {
     pub fn notify_watchdog(&self) {
         self.send("WATCHDOG=1\n");
     }
+}
+
+/// Connect to an abstract-namespace Unix socket on Linux. Only Linux
+/// supports the abstract namespace.
+#[cfg(target_os = "linux")]
+fn send_to_abstract(name: &str, msg: &str) -> std::io::Result<()> {
+    use std::os::linux::net::SocketAddrExt;
+    let addr = std::os::unix::net::SocketAddr::from_abstract_name(name.as_bytes())?;
+    let socket = UnixDatagram::unbound()?;
+    socket.connect_addr(&addr)?;
+    socket.send(msg.as_bytes())?;
+    Ok(())
+}
+
+/// Non-Linux Unix platforms (FreeBSD, OpenBSD, macOS) do not have
+/// the abstract namespace; reject the call rather than fall back to
+/// a misleading filesystem path.
+#[cfg(all(unix, not(target_os = "linux")))]
+fn send_to_abstract(_name: &str, _msg: &str) -> std::io::Result<()> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "abstract NOTIFY_SOCKET addresses are Linux-only; configure the supervisor to use a filesystem-path socket",
+    ))
+}
+
+#[cfg(not(unix))]
+#[allow(dead_code)]
+fn send_to_abstract(_name: &str, _msg: &str) -> std::io::Result<()> {
+    Ok(())
 }
 
 /// Parse the WATCHDOG_USEC environment variable if present. The
