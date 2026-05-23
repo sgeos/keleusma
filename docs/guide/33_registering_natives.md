@@ -53,23 +53,20 @@ struct Point { x: f64, y: f64 }
 
 `register_fn` cannot capture host state, because its argument is a plain
 function shape. When a native must read or write state the host owns, use
-`register_native_closure`. It takes a boxed closure that receives the raw
+`register_native_closure`. It takes a closure that receives the raw
 `&[Value]` arguments and returns `Result<Value, VmError>`:
 
 ````rust
 let voices = shared_voices.clone();
-vm.register_native_closure(
-    "host::silence",
-    Box::new(move |args: &[Value]| -> Result<Value, VmError> {
-        let channel = match args[0] {
-            Value::Int(n) => n as usize,
-            ref other => return Err(VmError::TypeError(
-                format!("expected Int, got {:?}", other))),
-        };
-        voices.lock().unwrap()[channel].gate = false;
-        Ok(Value::Unit)
-    }),
-);
+vm.register_native_closure("host::silence", move |args: &[Value]| {
+    let channel = match args[0] {
+        Value::Int(n) => n as usize,
+        ref other => return Err(VmError::TypeError(
+            format!("expected Int, got {:?}", other))),
+    };
+    voices.lock().unwrap()[channel].gate = false;
+    Ok(Value::Unit)
+});
 ````
 
 This is the route the piano roll uses for every one of its natives,
@@ -86,11 +83,24 @@ in one call each:
 ````rust
 vm.register_library(stddsl::Math);   // math::sqrt, math::pow, ...
 vm.register_library(stddsl::Audio);  // audio::midi_to_freq, ...
-vm.register_library(stddsl::Shell);  // shell::getenv, shell::run, ...
+vm.register_library(stddsl::Shell);  // shell::getenv, shell::run, shell::sleep_ms,
+                                      // shell::read_file, shell::write_file, ...
 ````
 
-A host can register a bundle, register a subset of its own natives, or
-implement the `Library` trait on its own type to ship a reusable bundle.
+The Shell bundle in V0.2.1 covers environment access (`getenv`,
+`has_env`, `setenv`), subprocess execution (`run`, `run_checked`,
+`run_timeout`), process termination (`exit`), timing (`sleep_ms`,
+`now_unix_ms`), file I/O (`read_file`, `write_file`, `append_file`,
+`file_exists`), stderr output (`write_err`, `writeln_err`), and host
+metadata (`pid`, `hostname`, `arg_count`, `arg`, `pwd`, `cd`). See
+[`STANDARD_LIBRARY.md`](../spec/STANDARD_LIBRARY.md) for the full list.
+
+Each bundle exposes a public `SIGNATURES` constant containing
+source-form `use` declarations. Hosts that want compile-time type and
+arity validation prepend the constant to the script source before
+parsing; the bundled `keleusma-cli` does this for all three bundles. A
+custom bundle can implement the `Library` trait and expose a parallel
+`SIGNATURES` constant to participate in the same validation flow.
 
 ## What you now know
 

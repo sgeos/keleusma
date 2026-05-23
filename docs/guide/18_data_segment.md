@@ -67,17 +67,26 @@ A data block may be marked with its visibility.
 
 Shared is the common case and the one to start with.
 
-## Checking the program
+## Running the program
 
-Save the program as `counters.kel` and check it:
+Save the program as `counters.kel` and run it:
+
+````
+keleusma run counters.kel --tick-interval 1s
+````
+
+The program yields once per second, and on each cycle the data segment
+preserves its state from the previous cycle. Press Control-C to stop.
+
+The program can also be compiled to a bytecode file:
 
 ````
 keleusma compile counters.kel -o counters.bin
 ````
 
-The tool prints a line such as `wrote counters.bin (532 bytes)`. As in
-the previous two chapters, running it for real needs a host, and Part VIII
-runs one.
+The tool prints a line such as `wrote counters.bin (532 bytes)`. Part
+VIII runs a more elaborate program that uses the data segment, a song,
+inside the piano roll.
 
 ## What you now know
 

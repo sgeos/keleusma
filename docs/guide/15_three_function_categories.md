@@ -86,11 +86,18 @@ promises to make the guarantees of Chapter 1.
 
 ## Running yield and loop programs
 
-The two programs above were shown but not run. A `yield` or `loop`
-program talks to a host, and `keleusma run` does not play the part of the
-host. Chapters 16 through 18 show how to check such a program with
-`keleusma compile`, and Part VIII runs a real `loop` program, a song,
-inside the piano roll.
+The two programs above were shown but not yet run. The `keleusma`
+command-line tool drives all three function kinds. For `fn main` the
+tool calls the function and prints the returned value. For `yield main`
+and `loop main` the tool drives a tick-counter protocol: it calls the
+script with `tick = 1`, accepts a yielded `Word`, and resumes with the
+next tick number. A `yield main` script terminates when control returns
+from the function; a `loop main` script runs until the script calls
+`shell::exit(code)` or the operator interrupts the process. The
+`--tick-interval <duration>` flag rate-limits the loop with humanized
+durations such as `100ms`, `1s`, `1h`, or `1d`. Chapters 16 and 17 use
+these driver shapes directly. Part VIII runs a real `loop` program, a
+song, inside the piano roll.
 
 ## What you now know
 

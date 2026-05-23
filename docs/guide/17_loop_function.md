@@ -59,18 +59,32 @@ rule is the language refusing to let that happen.
 A program has at most one `loop` function, and when it has one, that
 function is the entry point. The piece has one groove at its center.
 
-## Checking a loop program
+## Running a loop program
 
-Save the program above as `pulse.kel`. Like a `yield` program, it cannot
-be run by `keleusma run`, which does not play the host. Check it instead:
+Save the program above as `pulse.kel` and run it:
+
+````
+keleusma run pulse.kel --tick-interval 1s
+````
+
+The command-line tool drives the loop through the same tick-counter
+protocol as a `yield` program, except that a `loop` never finishes. The
+tool calls the script with `tick = 1`, accepts each yielded `Word`,
+sleeps until the next tick interval, and resumes the script with the
+next tick number. The `--tick-interval` flag accepts humanized durations
+such as `100ms`, `1s`, `1m`, `1h`, `1d`, or `1w`. Without the flag the
+loop runs as fast as the script yields. To stop a running loop press
+Control-C. A loop can also stop itself by calling `shell::exit(code)`.
+
+The same program can be compiled to a bytecode file for later execution:
 
 ````
 keleusma compile pulse.kel -o pulse.bin
 ````
 
-The tool prints a line such as `wrote pulse.bin (244 bytes)`, confirming
-the program is valid. Part VIII runs a real `loop` program inside the
-piano roll.
+The tool prints `wrote pulse.bin (244 bytes)` confirming the program is
+valid. Part VIII runs a more elaborate `loop` program, a song, inside
+the piano roll.
 
 ## What you now know
 

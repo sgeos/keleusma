@@ -57,27 +57,38 @@ program's dialogue with the host, the agreed shape of the conversation.
 In the program above both are `Word`: the program yields a `Word` and is
 resumed with a `Word`.
 
-## Checking a yielding program
+## Running a yielding program
 
-Save the program above as `echo.kel`. It cannot be run with `keleusma
-run`, because `keleusma run` does not play the host's part, and there is
-no one to resume the program after it yields. What you can do is check
-that the program is valid:
+Save the program above as `echo.kel` and run it:
+
+````
+keleusma run echo.kel
+````
+
+The output is:
+
+````
+1
+````
+
+The command-line tool drives a yielding program through a tick-counter
+protocol. It calls the script with `tick = 1`, the script yields `input`
+which is `1`, the host resumes with the next tick which is `2`, and the
+script returns the resumed value. The tool prints the returned value and
+the program ends. A `yield` program may pause and resume many times
+before finishing. Part VIII runs a more elaborate one, a song, inside
+the piano roll.
+
+The same program can also be compiled to a bytecode file for later
+execution:
 
 ````
 keleusma compile echo.kel -o echo.bin
 ````
 
-The tool prints a line such as:
-
-````
-wrote echo.bin (204 bytes)
-````
-
-That line means the program lexed, parsed, type-checked, and passed the
-structural verifier. It is a correct Keleusma program. Running a yielding
-program for real needs a host, and Part VIII runs one, a song, inside the
-piano roll.
+The tool prints a line such as `wrote echo.bin (204 bytes)`. That line
+means the program lexed, parsed, type-checked, and passed the structural
+verifier.
 
 ## What you now know
 
@@ -86,7 +97,9 @@ piano roll.
 - When the host resumes, the value it hands back is the result of the
   `yield` expression.
 - The pair of types, yielded out and resumed in, is the dialogue.
-- `keleusma compile` checks that a yielding program is valid, since
-  `keleusma run` cannot drive it.
+- The command-line tool drives `yield main` programs through a
+  tick-counter protocol; the program finishes when control returns from
+  the entry function.
+- `keleusma compile` produces a bytecode file for later execution.
 
 The next chapter turns to the function that never finishes: `loop`.

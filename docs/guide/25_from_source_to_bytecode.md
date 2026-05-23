@@ -78,6 +78,21 @@ the program starts at once, with no compile step first. Bytecode is the
 finished, engraved score, ready to hand to a player, as distinct from the
 working manuscript that the source is.
 
+## Selecting a target
+
+The default compile targets the same machine running the compiler. To
+build a bytecode artefact for a different machine, pass `--target`:
+
+````
+keleusma compile tune.kel --target embedded_16 -o tune.kel.bin
+````
+
+The recognised target names are `host` (the default), `wasm32`,
+`embedded_32`, `embedded_16`, and `embedded_8`. The chosen target
+controls word, address, and float widths and validates the program
+against the configuration. A program that uses literals or constants
+outside the target's representable range is rejected at compile time.
+
 ## What you now know
 
 - Source is the text you write; bytecode is the compact form the runtime
