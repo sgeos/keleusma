@@ -88,6 +88,11 @@ pub mod bytecode;
 /// meaningful binary footprint for hosts that do not need it.
 #[cfg(feature = "encryption")]
 pub mod encryption;
+/// Flat-byte composite representation helpers and the
+/// [`flat_value::FlatComposite`] container. Parallel
+/// infrastructure for B28's runtime composite-value
+/// representation refactor. Not yet consumed by the runtime.
+pub mod flat_value;
 /// Arena-resident dynamic strings ([`KString`]) at the host-VM
 /// boundary.
 pub mod kstring;
@@ -101,6 +106,10 @@ pub mod opaque;
 /// Bundled utility natives. V0.2.0 ships only `println` here; other
 /// utilities are host-registered.
 pub mod utility_natives;
+/// Layout descriptors for composite Keleusma values. Parallel
+/// infrastructure for B28's runtime composite-value
+/// representation refactor. Not yet consumed by the runtime.
+pub mod value_layout;
 /// The stack-based virtual machine and its coroutine driver.
 pub mod vm;
 /// Wire-format encoding and decoding of compiled [`Module`]s.
