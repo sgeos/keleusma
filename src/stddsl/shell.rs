@@ -47,12 +47,34 @@
 //!   stderr without a trailing newline.
 //! - `shell::writeln_err(text: Text) -> ()` — writes `text` to
 //!   stderr with a trailing newline.
+//! - `shell::pid() -> Word` — returns the current process
+//!   identifier.
+//! - `shell::hostname() -> Text` — returns the host name reported
+//!   by the operating system. Traps when the host name cannot be
+//!   retrieved (no platform fallback).
+//! - `shell::arg_count() -> Word` — returns the number of command
+//!   line arguments visible to the host process.
+//! - `shell::arg(index: Word) -> Option<Text>` — returns the
+//!   command line argument at `index`. `Option::None` when out
+//!   of range. Argument zero is the host executable path.
+//! - `shell::setenv(name: Text, value: Text) -> ()` — sets an
+//!   environment variable in the host process for subsequent
+//!   subprocesses spawned through `shell::run`. The change is
+//!   process local.
+//! - `shell::pwd() -> Text` — returns the current working
+//!   directory. Traps when the directory cannot be read.
+//! - `shell::cd(path: Text) -> ()` — changes the current working
+//!   directory. Traps on failure.
+//! - `shell::run_timeout(cmd: Text, ms: Word) -> (Word, Text)` —
+//!   executes `cmd` through `sh -c` with a wall-clock deadline.
+//!   Returns `(exit_code, stdout)` on completion; traps on timeout
+//!   after killing the subprocess.
 
 extern crate std;
 
 use std::io::Write;
 use std::process::Command;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::address::Address;
 use crate::bytecode::GenericValue;
@@ -84,6 +106,14 @@ pub fn register<'a, 'arena, W: Word, A: Address, F: Float>(
     vm.register_native("shell::file_exists", file_exists_native::<W, F>);
     vm.register_native("shell::write_err", write_err_native::<W, F>);
     vm.register_native("shell::writeln_err", writeln_err_native::<W, F>);
+    vm.register_native("shell::pid", pid_native::<W, F>);
+    vm.register_native("shell::hostname", hostname_native::<W, F>);
+    vm.register_native("shell::arg_count", arg_count_native::<W, F>);
+    vm.register_native("shell::arg", arg_native::<W, F>);
+    vm.register_native("shell::setenv", setenv_native::<W, F>);
+    vm.register_native("shell::pwd", pwd_native::<W, F>);
+    vm.register_native("shell::cd", cd_native::<W, F>);
+    vm.register_native("shell::run_timeout", run_timeout_native::<W, F>);
 }
 
 fn has_env_native<W: Word, F: Float>(
@@ -403,6 +433,237 @@ fn writeln_err_native<W: Word, F: Float>(
     writeln!(handle, "{}", text)
         .map_err(|e| VmError::NativeError(std::format!("shell::writeln_err: {}", e)))?;
     Ok(GenericValue::Unit)
+}
+
+fn pid_native<W: Word, F: Float>(
+    args: &[GenericValue<W, F>],
+) -> Result<GenericValue<W, F>, VmError> {
+    if !args.is_empty() {
+        return Err(VmError::NativeError(std::string::String::from(
+            "shell::pid: expected zero arguments",
+        )));
+    }
+    Ok(GenericValue::Int(W::from_i64_wrap(
+        std::process::id() as i64
+    )))
+}
+
+fn hostname_native<W: Word, F: Float>(
+    args: &[GenericValue<W, F>],
+) -> Result<GenericValue<W, F>, VmError> {
+    if !args.is_empty() {
+        return Err(VmError::NativeError(std::string::String::from(
+            "shell::hostname: expected zero arguments",
+        )));
+    }
+    // The Rust standard library does not expose a portable
+    // hostname accessor. Use the platform-conventional `hostname`
+    // command. Traps when the command is unavailable.
+    let output = Command::new("hostname").output().map_err(|e| {
+        VmError::NativeError(std::format!(
+            "shell::hostname: failed to spawn hostname: {}",
+            e
+        ))
+    })?;
+    if !output.status.success() {
+        return Err(VmError::NativeError(std::format!(
+            "shell::hostname: hostname command exited with code {}",
+            output.status.code().unwrap_or(-1)
+        )));
+    }
+    let stdout = std::string::String::from_utf8_lossy(&output.stdout);
+    let trimmed = stdout.trim_end_matches(['\n', '\r']);
+    Ok(GenericValue::StaticStr(std::string::String::from(trimmed)))
+}
+
+fn arg_count_native<W: Word, F: Float>(
+    args: &[GenericValue<W, F>],
+) -> Result<GenericValue<W, F>, VmError> {
+    if !args.is_empty() {
+        return Err(VmError::NativeError(std::string::String::from(
+            "shell::arg_count: expected zero arguments",
+        )));
+    }
+    let n = std::env::args().count() as i64;
+    Ok(GenericValue::Int(W::from_i64_wrap(n)))
+}
+
+fn arg_native<W: Word, F: Float>(
+    args: &[GenericValue<W, F>],
+) -> Result<GenericValue<W, F>, VmError> {
+    if args.len() != 1 {
+        return Err(VmError::NativeError(std::string::String::from(
+            "shell::arg: expected exactly one argument",
+        )));
+    }
+    let index = match args[0] {
+        GenericValue::Int(n) => W::to_i64(n),
+        ref v => {
+            return Err(VmError::TypeError(std::format!(
+                "shell::arg: expected Word, got {}",
+                v.type_name()
+            )));
+        }
+    };
+    if index < 0 {
+        return Ok(GenericValue::None);
+    }
+    let mut iter = std::env::args();
+    let value = iter.nth(index as usize);
+    match value {
+        Some(v) => Ok(GenericValue::Enum {
+            type_name: std::string::String::from("Option"),
+            variant: std::string::String::from("Some"),
+            fields: std::vec![GenericValue::StaticStr(v)],
+        }),
+        None => Ok(GenericValue::None),
+    }
+}
+
+fn setenv_native<W: Word, F: Float>(
+    args: &[GenericValue<W, F>],
+) -> Result<GenericValue<W, F>, VmError> {
+    if args.len() != 2 {
+        return Err(VmError::NativeError(std::string::String::from(
+            "shell::setenv: expected exactly two arguments",
+        )));
+    }
+    let name: &str = args[0].as_str().ok_or_else(|| {
+        VmError::TypeError(std::format!(
+            "shell::setenv: expected Text for name, got {}",
+            args[0].type_name()
+        ))
+    })?;
+    let value: &str = args[1].as_str().ok_or_else(|| {
+        VmError::TypeError(std::format!(
+            "shell::setenv: expected Text for value, got {}",
+            args[1].type_name()
+        ))
+    })?;
+    // SAFETY: set_var is marked unsafe in the 2024 edition
+    // because concurrent modification of the process environment
+    // is unsound on some platforms. The Keleusma VM is
+    // single-threaded; native invocations cannot race with one
+    // another or with the host. The script-driven environment
+    // change is intentional and operator-trusted (strict signing
+    // gates the bytecode source).
+    unsafe {
+        std::env::set_var(name, value);
+    }
+    Ok(GenericValue::Unit)
+}
+
+fn pwd_native<W: Word, F: Float>(
+    args: &[GenericValue<W, F>],
+) -> Result<GenericValue<W, F>, VmError> {
+    if !args.is_empty() {
+        return Err(VmError::NativeError(std::string::String::from(
+            "shell::pwd: expected zero arguments",
+        )));
+    }
+    let cwd = std::env::current_dir()
+        .map_err(|e| VmError::NativeError(std::format!("shell::pwd: {}", e)))?;
+    let s = cwd.to_string_lossy().into_owned();
+    Ok(GenericValue::StaticStr(s))
+}
+
+fn cd_native<W: Word, F: Float>(
+    args: &[GenericValue<W, F>],
+) -> Result<GenericValue<W, F>, VmError> {
+    if args.len() != 1 {
+        return Err(VmError::NativeError(std::string::String::from(
+            "shell::cd: expected exactly one argument",
+        )));
+    }
+    let path: &str = args[0].as_str().ok_or_else(|| {
+        VmError::TypeError(std::format!(
+            "shell::cd: expected Text, got {}",
+            args[0].type_name()
+        ))
+    })?;
+    std::env::set_current_dir(path)
+        .map_err(|e| VmError::NativeError(std::format!("shell::cd: {}: {}", path, e)))?;
+    Ok(GenericValue::Unit)
+}
+
+fn run_timeout_native<W: Word, F: Float>(
+    args: &[GenericValue<W, F>],
+) -> Result<GenericValue<W, F>, VmError> {
+    if args.len() != 2 {
+        return Err(VmError::NativeError(std::string::String::from(
+            "shell::run_timeout: expected exactly two arguments",
+        )));
+    }
+    let cmd: &str = args[0].as_str().ok_or_else(|| {
+        VmError::TypeError(std::format!(
+            "shell::run_timeout: expected Text for cmd, got {}",
+            args[0].type_name()
+        ))
+    })?;
+    let ms = match args[1] {
+        GenericValue::Int(n) => W::to_i64(n),
+        ref v => {
+            return Err(VmError::TypeError(std::format!(
+                "shell::run_timeout: expected Word for ms, got {}",
+                v.type_name()
+            )));
+        }
+    };
+    if ms <= 0 {
+        return Err(VmError::NativeError(std::format!(
+            "shell::run_timeout: timeout must be positive, got {}",
+            ms
+        )));
+    }
+    let timeout = Duration::from_millis(ms as u64);
+    let mut child = Command::new("sh")
+        .arg("-c")
+        .arg(cmd)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| {
+            VmError::NativeError(std::format!(
+                "shell::run_timeout: failed to spawn sh: {}",
+                e
+            ))
+        })?;
+    let start = Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                let output = child.wait_with_output().map_err(|e| {
+                    VmError::NativeError(std::format!(
+                        "shell::run_timeout: failed to collect output: {}",
+                        e
+                    ))
+                })?;
+                let exit_code = status.code().unwrap_or(-1) as i64;
+                let stdout = std::string::String::from_utf8_lossy(&output.stdout).into_owned();
+                return Ok(GenericValue::Tuple(std::vec![
+                    GenericValue::Int(W::from_i64_wrap(exit_code)),
+                    GenericValue::StaticStr(stdout),
+                ]));
+            }
+            Ok(None) => {
+                if start.elapsed() >= timeout {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(VmError::NativeError(std::format!(
+                        "shell::run_timeout: command exceeded timeout of {}ms",
+                        ms
+                    )));
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            Err(e) => {
+                return Err(VmError::NativeError(std::format!(
+                    "shell::run_timeout: wait failed: {}",
+                    e
+                )));
+            }
+        }
+    }
 }
 
 #[cfg(test)]

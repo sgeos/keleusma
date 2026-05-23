@@ -123,6 +123,25 @@ keleusma keygen --kind encryption --seed enc.seed --public enc.pub
 
 Writes a fresh 32-byte seed to one file and the matching 32-byte public key to another. The `--kind` flag selects between `signing` (Ed25519, default) and `encryption` (X25519). On Unix the seed file is created with mode `0o600`. Existing files are not overwritten; the command refuses with a diagnostic naming the offending path so an accidental rerun cannot destroy a long-lived key identity. The seed is the private secret; treat it as a credential. The public key is freely distributable.
 
+### Cross-target compilation
+
+The `compile` subcommand accepts `--target <name>` to compile against a specific target descriptor rather than the host runtime's default. The target controls word, address, and float widths and validates the program against the chosen configuration.
+
+| Name | Word | Address | Float |
+|------|------|---------|-------|
+| `host` (default) | 64-bit | 64-bit | binary64 |
+| `wasm32` | 32-bit | 32-bit | binary64 |
+| `embedded_32` | 32-bit | 32-bit | binary32 |
+| `embedded_16` | 16-bit | 16-bit | binary32 |
+| `embedded_8` | 8-bit | 16-bit | binary32 |
+
+```sh
+# Build for a 16-bit microcontroller target.
+keleusma compile sensor.kel --target embedded_16 -o sensor.kel.bin
+```
+
+Programs that use literals or constants outside the target's representable range are rejected at compile time. The validation runs before bytecode emission so the resulting artefact is guaranteed loadable on a runtime built for the same target.
+
 ### Sign a compiled module
 
 ```sh
@@ -241,9 +260,7 @@ The REPL session prefix accumulates declarations across the session but does not
 
 The REPL's return-type inference tries a fixed list of types. Expressions whose type is outside the list (custom enums, structs, tuples) require explicit function wrapping. Inference of the expression type prior to wrapping is future work.
 
-The compiler does not yet expose `Target` selection at the CLI level. All compiled output uses the host runtime's target. Cross-target compilation is future work.
-
-The CLI prepends a fixed preamble of `use` declarations to every compiled source so the Shell bundle's natives and the CLI-specific tick-interval natives are validated at compile time. The preamble currently runs sixteen lines. As a consequence, compile-time error spans are offset by the preamble's line count: an error reported at line N in the CLI corresponds to line N minus the preamble length in the user-visible source. Until span-offset correction lands, operators should subtract the preamble length when correlating compile errors to source positions. The Math and Audio bundles are not yet covered by the preamble because their auto-widening behaviour at the native boundary conflicts with strict signature checking; calls into `math::*` and `audio::*` retain the existing untyped behaviour.
+The CLI prepends a fixed preamble of `use` declarations to every compiled source so the Shell bundle's natives and the CLI-specific tick-interval natives are validated at compile time. The preamble's line count is subtracted from reported error positions so operators see line numbers in the user-visible source. Errors that fall inside the preamble window are reported with a `[preamble line N]` marker. The Math and Audio bundles are not yet covered by the preamble because their auto-widening behaviour at the native boundary conflicts with strict signature checking; calls into `math::*` and `audio::*` retain the existing untyped behaviour.
 
 ## File Extensions
 

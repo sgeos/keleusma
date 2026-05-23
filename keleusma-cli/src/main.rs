@@ -124,6 +124,7 @@ fn print_help() {
     println!("                                    that fires when an iteration exceeds the");
     println!("                                    configured interval.");
     println!("  compile <file> [-o <output>] [--signing-key <keyfile>]");
+    println!("                 [--encryption-key <keyfile>] [--target <name>]");
     println!("                                    Compile to bytecode. With --signing-key,");
     println!("                                    sign the output with the supplied 32-byte");
     println!("                                    Ed25519 seed file. The source script must");
@@ -131,6 +132,11 @@ fn print_help() {
     println!("                                    `signed` modifier; otherwise the resulting");
     println!("                                    bytecode is unsigned and the toolchain");
     println!("                                    refuses the signing key argument silently.");
+    println!("                                    --target selects the target descriptor:");
+    println!("                                    host (default), wasm32, embedded_32,");
+    println!("                                    embedded_16, embedded_8. Programs are");
+    println!("                                    validated against the selected target's");
+    println!("                                    word, address, and float widths.");
     println!("  keygen --seed <out> --public <out>");
     println!("                                    Generate a fresh Ed25519 keypair from the");
     println!("                                    OS RNG. Writes the 32-byte signing seed to");
@@ -380,6 +386,7 @@ fn compile_subcommand(args: &[String]) -> ExitCode {
     let mut output: Option<String> = None;
     let mut signing_key_path: Option<String> = None;
     let mut encryption_key_path: Option<String> = None;
+    let mut target: Option<keleusma::target::Target> = None;
     let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {
@@ -407,6 +414,22 @@ fn compile_subcommand(args: &[String]) -> ExitCode {
                     return ExitCode::FAILURE;
                 }
                 encryption_key_path = Some(args[i + 1].clone());
+                i += 2;
+            }
+            "--target" => {
+                if i + 1 >= args.len() {
+                    eprintln!(
+                        "error: --target requires a target name (host, wasm32, embedded_32, embedded_16, embedded_8)"
+                    );
+                    return ExitCode::FAILURE;
+                }
+                match parse_target_name(&args[i + 1]) {
+                    Ok(t) => target = Some(t),
+                    Err(e) => {
+                        eprintln!("error: {}", e);
+                        return ExitCode::FAILURE;
+                    }
+                }
                 i += 2;
             }
             other => {
@@ -463,7 +486,7 @@ fn compile_subcommand(args: &[String]) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let module = match compile_source(&source) {
+    let module = match compile_source_with_target(&source, target.as_ref()) {
         Ok(m) => m,
         Err(e) => {
             eprintln!("error: {}", e);
@@ -971,13 +994,56 @@ fn build_preamble() -> String {
     s
 }
 
+/// Count the lines occupied by the preamble. Used by
+/// [`format_err`] to subtract the preamble's contribution to
+/// error line numbers so operators see line positions in the
+/// user-visible source rather than the combined post-preamble
+/// source.
+fn preamble_line_count() -> u32 {
+    build_preamble().bytes().filter(|b| *b == b'\n').count() as u32
+}
+
 fn compile_source(source: &str) -> Result<keleusma::bytecode::Module, String> {
+    compile_source_with_target(source, None)
+}
+
+/// Compile the source through the standard pipeline, routing
+/// through [`compile_with_target`] when an explicit target is
+/// provided so the compiler validates the program against the
+/// target's word, address, and float widths before emitting.
+fn compile_source_with_target(
+    source: &str,
+    target: Option<&keleusma::target::Target>,
+) -> Result<keleusma::bytecode::Module, String> {
     let mut combined = build_preamble();
     combined.push_str(source);
-    let tokens = tokenize(&combined).map_err(|e| format_err("lex", &e.message, e.span))?;
-    let program = parse(&tokens).map_err(|e| format_err("parse", &e.message, e.span))?;
-    let module = compile(&program).map_err(|e| format_err("compile", &e.message, e.span))?;
+    let preamble_lines = preamble_line_count();
+    let tokens = tokenize(&combined)
+        .map_err(|e| format_err_with_offset("lex", &e.message, e.span, preamble_lines))?;
+    let program = parse(&tokens)
+        .map_err(|e| format_err_with_offset("parse", &e.message, e.span, preamble_lines))?;
+    let module = match target {
+        Some(t) => keleusma::compiler::compile_with_target(&program, t)
+            .map_err(|e| format_err_with_offset("compile", &e.message, e.span, preamble_lines))?,
+        None => compile(&program)
+            .map_err(|e| format_err_with_offset("compile", &e.message, e.span, preamble_lines))?,
+    };
     Ok(module)
+}
+
+/// Resolve a CLI `--target` argument to a [`Target`] preset.
+fn parse_target_name(name: &str) -> Result<keleusma::target::Target, String> {
+    match name {
+        "host" => Ok(keleusma::target::Target::host()),
+        "wasm32" => Ok(keleusma::target::Target::wasm32()),
+        "embedded_32" => Ok(keleusma::target::Target::embedded_32()),
+        "embedded_16" => Ok(keleusma::target::Target::embedded_16()),
+        "embedded_8" => Ok(keleusma::target::Target::embedded_8()),
+        other => Err(format!(
+            "unknown target `{}`; expected one of: host, wasm32, embedded_32, embedded_16, embedded_8",
+            other
+        )),
+    }
 }
 
 /// Run a source program through compile and execute. The runner
@@ -1460,12 +1526,30 @@ fn apply_tick_interval(elapsed: Duration, config: &LoopRunnerConfig) {
     std::thread::sleep(interval - elapsed);
 }
 
-fn format_err(stage: &str, msg: &str, span: keleusma::token::Span) -> String {
+/// Format a compile-pipeline error with span information.
+/// Subtracts the preamble line count so the reported line points
+/// at the user-visible source rather than the combined
+/// post-preamble source. Errors whose original line falls inside
+/// the preamble window are reported with a `[preamble line N]`
+/// marker so bundle-side mistakes are not silently attributed to
+/// user code.
+fn format_err_with_offset(
+    stage: &str,
+    msg: &str,
+    span: keleusma::token::Span,
+    preamble_lines: u32,
+) -> String {
     if span.line == 0 && span.column == 0 {
-        format!("{}: {}", stage, msg)
-    } else {
-        format!("{}: {}:{}: {}", stage, span.line, span.column, msg)
+        return format!("{}: {}", stage, msg);
     }
+    if span.line <= preamble_lines {
+        return format!(
+            "{}: [preamble line {}:{}] {}",
+            stage, span.line, span.column, msg
+        );
+    }
+    let adjusted_line = span.line - preamble_lines;
+    format!("{}: {}:{}: {}", stage, adjusted_line, span.column, msg)
 }
 
 /// Print a value to stdout without a trailing newline. Used by the

@@ -307,6 +307,14 @@ impl Shell {
         "use shell::file_exists(Text) -> bool\n",
         "use shell::write_err(Text) -> ()\n",
         "use shell::writeln_err(Text) -> ()\n",
+        "use shell::pid() -> Word\n",
+        "use shell::hostname() -> Text\n",
+        "use shell::arg_count() -> Word\n",
+        "use shell::arg(Word) -> Option<Text>\n",
+        "use shell::setenv(Text, Text) -> ()\n",
+        "use shell::pwd() -> Text\n",
+        "use shell::cd(Text) -> ()\n",
+        "use shell::run_timeout(Text, Word) -> (Word, Text)\n",
     );
 }
 
