@@ -142,9 +142,18 @@ The `Shell` bundle registers shell-script utilities. It depends on the `shell` c
 | Function | Signature | Description |
 |---|---|---|
 | `shell::getenv` | `(Text) -> Option<Text>` | Read an environment variable. |
+| `shell::has_env` | `(Text) -> bool` | Test whether an environment variable is set. |
 | `shell::run` | `(Text) -> (Word, Text)` | Execute a command, returning exit code and combined output. |
 | `shell::run_checked` | `(Text) -> Text` | Execute a command. Traps on a non-zero exit. |
 | `shell::exit` | `(Word) -> Unit` | Terminate the host process with the given exit code. |
+| `shell::sleep_ms` | `(Word) -> Unit` | Sleep the current thread for the requested duration in milliseconds. Negative or zero inputs return immediately. |
+| `shell::now_unix_ms` | `() -> Word` | Return the current Unix timestamp in milliseconds. Clamped to the Word range. |
+| `shell::read_file` | `(Text) -> Text` | Read the file at the given path and return its contents. Traps on any I/O failure or non-UTF-8 content. |
+| `shell::write_file` | `(Text, Text) -> Unit` | Write the second argument to the path given by the first, replacing any existing file. Traps on I/O failure. |
+| `shell::append_file` | `(Text, Text) -> Unit` | Append the second argument to the path given by the first, creating the file when absent. Traps on I/O failure. |
+| `shell::file_exists` | `(Text) -> bool` | Test whether a filesystem entry exists at the given path. Symlinks are followed. |
+| `shell::write_err` | `(Text) -> Unit` | Write to stderr without a trailing newline. |
+| `shell::writeln_err` | `(Text) -> Unit` | Write to stderr with a trailing newline. |
 
 ## Type Flexibility
 

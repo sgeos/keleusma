@@ -274,6 +274,42 @@ mod math {
 #[cfg(feature = "shell")]
 pub mod shell;
 
+#[cfg(feature = "shell")]
+impl Shell {
+    /// Source-form signature declarations for the Shell bundle's
+    /// natives. Hosts that want compile-time signature validation
+    /// prepend this string to the script source before invoking
+    /// the parser; the bundled `use` declarations populate the
+    /// type checker's native-signature map so qualified call sites
+    /// such as `shell::exit(code)` are checked against the
+    /// declared parameter and return types.
+    ///
+    /// The constant is plain source text rather than a structured
+    /// list because the existing parser already handles the `use
+    /// path::name(params) -> return` syntax. The bundle author
+    /// writes signatures in the same syntax a script author would.
+    ///
+    /// Embedders that register a subset of the bundle should
+    /// either prepend only the relevant lines or accept that
+    /// unused signatures will register harmlessly into the type
+    /// checker's native map.
+    pub const SIGNATURES: &'static str = concat!(
+        "use shell::getenv(Text) -> Option<Text>\n",
+        "use shell::has_env(Text) -> bool\n",
+        "use shell::run(Text) -> (Word, Text)\n",
+        "use shell::run_checked(Text) -> Text\n",
+        "use shell::exit(Word) -> ()\n",
+        "use shell::sleep_ms(Word) -> ()\n",
+        "use shell::now_unix_ms() -> Word\n",
+        "use shell::read_file(Text) -> Text\n",
+        "use shell::write_file(Text, Text) -> ()\n",
+        "use shell::append_file(Text, Text) -> ()\n",
+        "use shell::file_exists(Text) -> bool\n",
+        "use shell::write_err(Text) -> ()\n",
+        "use shell::writeln_err(Text) -> ()\n",
+    );
+}
+
 #[cfg(all(test, feature = "compile", feature = "verify"))]
 mod tests {
     use super::*;

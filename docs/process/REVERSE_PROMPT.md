@@ -9,59 +9,59 @@ AI to Human communication channel.
 ## Last Updated
 
 **Date**: 2026-05-22
-**Status**: V0.2.1 CLI tick-interval feature complete. The productive-divergent loop runner now supports drift-compensated rate limiting through three coordinated surfaces (CLI flag, script-side setter native, getter native). Loop runner enhancements ready for commit alongside the prior V0.2.1 signing-and-encryption work.
+**Status**: V0.2.1 CLI follow-on complete. Three coordinated additions land alongside the prior tick-interval work. The branch carries one commit pending.
 
 ## Summary of work this session
 
-The session implemented the tick-interval feature for the CLI loop runner.
+Three CLI items from the prior session's deferred-work audit are addressed in a single commit.
 
-### Implementation
+### Yield-main runner
 
-Three coordinated surfaces share the same `Arc<AtomicU64>` for the tick-interval nanoseconds.
+The CLI's loop runner gains a third entry shape, `yield main(tick: Word) -> Word`. The new `drive_yield_main` shares the tick-counter protocol with `drive_loop_main`. The distinction is termination: a yield-main script eventually returns instead of yielding, at which point the runner terminates cleanly and prints the returned value when non-Unit. The `--tick-interval` flag applies to yield-main entries too.
 
-1. **CLI flags**. `--tick-interval <duration>` and `--quiet` added to the `run` subcommand. The duration string is parsed through the new `keleusma-cli/src/duration.rs` module, which accepts humanized formats (`Nms`, `Ns`, `Nm`, `Nh`, `Nd`, `Nw`) with a four-week maximum and rejects composite forms such as `1h30m`. The flag value is stored on a `LoopRunnerConfig` struct that flows from `run_subcommand` through `run_file` to `execute_bytecode` and `execute_source`.
+### Shell-audit critical natives
 
-2. **Script-side natives**. `shell::set_tick_interval(duration: Text) -> ()` and `shell::tick_interval() -> Text` registered through `vm.register_native_closure` inside `drive_to_completion`. Both natives capture the same `Arc<AtomicU64>` as the CLI flag. The setter routes through the same duration parser; a parse error surfaces as `VmError::NativeError` so a daemon that calls the setter at the top of the loop body fails fast.
+Eight new natives in `stddsl::Shell`:
 
-3. **Drift compensation**. `drive_loop_main` now measures iteration time with `Instant::now()` and sleeps for `max(0, interval - elapsed)` after each yield or reset transition. When elapsed exceeds the interval, the runner emits a stderr warning naming both values and resumes immediately. The `--quiet` flag suppresses the warning. The zero-interval default preserves the prior spin-as-fast-as-possible behaviour.
+| Native | Signature |
+|--------|-----------|
+| `shell::sleep_ms` | `(Word) -> ()` |
+| `shell::now_unix_ms` | `() -> Word` |
+| `shell::read_file` | `(Text) -> Text` |
+| `shell::write_file` | `(Text, Text) -> ()` |
+| `shell::append_file` | `(Text, Text) -> ()` |
+| `shell::file_exists` | `(Text) -> bool` |
+| `shell::write_err` | `(Text) -> ()` |
+| `shell::writeln_err` | `(Text) -> ()` |
 
-### REPL fix
+All file I/O traps on failure via `VmError::NativeError`, matching the existing `shell::run_checked` convention. Introducing a generic `Result<T, E>` type was rejected on scope grounds. Ten new unit tests cover the no-side-effect natives and a write-read-append round trip against a tempdir.
 
-`execute_source_repl` was promoted to a dedicated path that uses `DEFAULT_ARENA_CAPACITY` directly. The prior call site routed through `execute_source`, which auto-sized the arena per expression. Auto-sizing was the wrong behaviour for the REPL because ad-hoc expressions have no meaningful WCMU bound.
+### Compile-time signature validation
+
+The `stddsl::Shell::SIGNATURES` constant carries source-form `use` declarations for the thirteen bundle natives. The CLI's `CLI_NATIVE_SIGNATURES` adds two more for `shell::set_tick_interval` and `shell::tick_interval`. The CLI prepends both to every script source before parsing, so call-site type and arity mismatches surface at compile time rather than runtime.
+
+Math and Audio bundle signatures are deferred because the auto-widening behaviour at the native boundary conflicts with strict signature checking. A script that writes `math::sin(1)` (Word literal) currently runs at runtime via auto-widening; introducing the signature `(Float) -> Float` would reject the call at compile time. Resolving the conflict is a language-design question rather than a bundle-design one.
 
 ### Verification
 
-Three smoke tests exercised the feature end to end.
+End-to-end integration test exercises all three features in concert: a yield-main script that calls six of the new shell natives runs cleanly under signature validation, with the runtime printing the terminal return value.
 
-1. Script-side `shell::set_tick_interval("50ms")` over three iterations with `shell::tick_interval()` printing the value: ran in 224ms wall clock (150ms of sleep plus startup).
-2. CLI flag `--tick-interval 100ms` over three iterations: ran in 420ms wall clock (300ms of sleep plus startup).
-3. Intentional overrun via `shell::run_checked("sleep 0.1")` at `--tick-interval 10ms`: stderr warning fired naming `108ms` and `10ms`; `--quiet` suppressed the warning.
-
-Composite duration rejected with a clear diagnostic. Over-limit interval `5w` rejected with a clear diagnostic pointing at cron or noop yield cycles for longer cadences.
-
-### Documentation
-
-- `keleusma-cli/README.md` gains a "Productive-divergent loop runner" section with the unit table, the `--tick-interval` and `--quiet` flag descriptions, and a worked script example.
-- `docs/guide/SECURITY_POLICY.md` gains a "Daemon deployments and tick-interval cadences" section covering fail-fast setter placement, memory residency as a feature, and the cron-or-noop-cycles pattern for cadences longer than four weeks.
-- `docs/guide/METRICS.md` gains a "Steady-state at sleep cadence" subsection in the Loop daemon workload section.
-- `print_help` output in `keleusma-cli/src/main.rs` lists the new flags.
-
-## Verification
-
-- `cargo test --workspace`: 843 + 2 + 17 + 17 + 17 + 3 + 53 + 37 + 6 + 20 + 7 = 1022 tests across the workspace passing. The 11 new duration parser tests are part of the 20-test keleusma-cli suite.
+- `cargo test --workspace`: 853 main lib tests passing (10 new), 1032 across the workspace.
 - `cargo clippy --workspace --tests -- -D warnings`: clean.
 - `cargo fmt --all -- --check`: clean.
 
-## Outstanding concerns
+## Known limitations
 
-None blocking. Two observations for future operator attention.
+The compile-error line offset is the largest rough edge. Because the CLI prepends a sixteen-line preamble to every source, compile errors at line N in the CLI correspond to line N minus the preamble length in the user-visible source. Operators correlate by hand until span-offset correction lands. Documented in the CLI README.
 
-1. The duration parser supports only single-unit forms. Operators who want composite forms must rewrite (`1h30m` becomes `90m`). The diagnostic is clear and points at the rewrite, but operators new to the CLI may take a moment to recognise the constraint.
+The yield-main runner reuses the loop-main tick semantics. Scripts that want multiple yields express them inline with separate `yield` expressions in the body rather than through a tick-driven loop. The tick parameter carries the host-side counter; the script can ignore it or use it.
 
-2. The CLI-side natives bypass the type checker's static signature validation because they are not declared with a parenthesised signature in the `use` statement. The script writer must invoke them through the qualified path (`shell::set_tick_interval(...)`) rather than the unqualified name because the typechecker's lookup is exact. This is consistent with how `shell::exit` works today and is documented inline in the worked example.
+The signature preamble covers Shell and CLI tick-interval natives only. Math and Audio bundle natives retain the existing untyped behaviour because of the auto-widening conflict described above.
 
 ## Recommended next step
 
-The session's code and documentation are ready for commit. Commit alongside the prior V0.2.1 signing-and-encryption layers under a single feature commit, then push.
+The work is ready for commit. The three pieces compose into a single feature commit because they share both the test surface and the operator-facing release note.
 
-If the operator wants a longer-running session, the next adjacent piece is the SHELL_AUDIT.md recommendations: `shell::sleep_ms`, `shell::now_unix_ms`, `shell::read_file` / `shell::write_file` / `shell::append_file`. Sleep and time are the highest-value additions because they reduce the operational overhead of the loop daemon pattern.
+If the operator wants a longer-running session, the next adjacent piece is span-offset correction for the preamble. The mechanism would be a new lexer entry point that takes a (line, column) offset and applies it to every token's span, plus a corresponding adjustment in the error formatter. Approximately half a day's work; not on the critical path because operators can subtract the preamble length by inspection.
+
+A second adjacent piece is the Math and Auto bundle signatures with a softer matching mode that admits Word where Float is expected at native call boundaries. This would close the last untyped corner of the standard library.

@@ -235,7 +235,7 @@ Other notable examples:
 
 The current CLI has the following limitations.
 
-The runner supports two entry shapes. The atomic-total form `fn main() -> T { ... }` runs to completion in a single call. The productive-divergent form `loop main(tick: Word) -> Word { ... }` is driven through the tick-counter convention with optional rate limiting via `--tick-interval`. The third shape, `yield main(...)`, which models a finite stream that terminates on its own through an explicit return, is not yet driven by the CLI. Embedders who need that shape can construct their own runner against the library.
+The runner supports all three entry shapes. The atomic-total form `fn main() -> T { ... }` runs to completion in a single call. The non-atomic total form `yield main(tick: Word) -> Word { ... }` and the productive-divergent form `loop main(tick: Word) -> Word { ... }` are both driven through the tick-counter convention with optional rate limiting via `--tick-interval`. The distinction is termination: a `yield main` script eventually returns instead of yielding, at which point the runner terminates cleanly and prints the returned value when non-Unit; a `loop main` script never returns, and the runner only stops on `shell::exit(code)` or `SIGINT`.
 
 The REPL session prefix accumulates declarations across the session but does not persist data segment values. Any `data` block declared in the prefix is allocated freshly on each evaluation. Persistent state across REPL evaluations is future work.
 
@@ -243,7 +243,7 @@ The REPL's return-type inference tries a fixed list of types. Expressions whose 
 
 The compiler does not yet expose `Target` selection at the CLI level. All compiled output uses the host runtime's target. Cross-target compilation is future work.
 
-The `stddsl::Shell` bundle is adequate for one-shot scripts but missing three capabilities that recur in daemon-shaped workloads: a non-spawning sleep, a current-time reading, and direct file input and output. See [`docs/guide/SHELL_AUDIT.md`](../docs/guide/SHELL_AUDIT.md) for the gap analysis and the priority-ordered recommendations.
+The CLI prepends a fixed preamble of `use` declarations to every compiled source so the Shell bundle's natives and the CLI-specific tick-interval natives are validated at compile time. The preamble currently runs sixteen lines. As a consequence, compile-time error spans are offset by the preamble's line count: an error reported at line N in the CLI corresponds to line N minus the preamble length in the user-visible source. Until span-offset correction lands, operators should subtract the preamble length when correlating compile errors to source positions. The Math and Audio bundles are not yet covered by the preamble because their auto-widening behaviour at the native boundary conflicts with strict signature checking; calls into `math::*` and `audio::*` retain the existing untyped behaviour.
 
 ## File Extensions
 

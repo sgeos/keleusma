@@ -948,8 +948,33 @@ fn extract_decl_name(line: &str) -> Option<String> {
 /// Compile a complete source program through the standard pipeline,
 /// returning either the resulting `Module` or a stringified error
 /// with location information.
+/// Native signatures the CLI registers on the VM beyond the
+/// bundled libraries. Composed with `stddsl::Shell::SIGNATURES`
+/// to form the full preamble prepended to every script source
+/// before parsing. The names match the closures registered in
+/// `drive_to_completion`.
+const CLI_NATIVE_SIGNATURES: &str = concat!(
+    "use shell::set_tick_interval(Text) -> ()\n",
+    "use shell::tick_interval() -> Text\n",
+);
+
+/// Concatenate the source-form signature preambles the CLI
+/// always installs (Shell bundle plus the CLI-specific
+/// tick-interval natives) ahead of the user-supplied source. The
+/// prepended `use` declarations register native signatures in the
+/// type checker so qualified call sites such as
+/// `shell::sleep_ms(500)` are validated at compile time.
+fn build_preamble() -> String {
+    let mut s = String::new();
+    s.push_str(stddsl::Shell::SIGNATURES);
+    s.push_str(CLI_NATIVE_SIGNATURES);
+    s
+}
+
 fn compile_source(source: &str) -> Result<keleusma::bytecode::Module, String> {
-    let tokens = tokenize(source).map_err(|e| format_err("lex", &e.message, e.span))?;
+    let mut combined = build_preamble();
+    combined.push_str(source);
+    let tokens = tokenize(&combined).map_err(|e| format_err("lex", &e.message, e.span))?;
     let program = parse(&tokens).map_err(|e| format_err("parse", &e.message, e.span))?;
     let module = compile(&program).map_err(|e| format_err("compile", &e.message, e.span))?;
     Ok(module)
@@ -1067,13 +1092,16 @@ struct LoopRunnerConfig {
 }
 
 /// Outcome of inspecting the loaded module's entry chunk. Drives
-/// the dispatch between the atomic-fn-main runner and the
-/// productive-divergent loop-main runner.
+/// the dispatch between the three runner shapes.
 #[derive(Debug, Clone, Copy)]
 enum EntryKind {
     /// Atomic total function. Runs to completion in a single
     /// `vm.call(&[])` invocation. Returns a `Value::Finished`.
     AtomicFn,
+    /// Non-atomic total function (`yield main`). Driven by the
+    /// tick-counter convention. Terminates when the function
+    /// returns (`VmState::Finished`) rather than yielding.
+    YieldMain,
     /// Productive divergent loop. Driven by the tick-counter
     /// convention. Terminates only on `shell::exit(code)` or
     /// SIGINT.
@@ -1108,10 +1136,15 @@ fn detect_entry_kind(module: &keleusma::bytecode::Module) -> Result<EntryKind, S
             }
             Ok(EntryKind::LoopMain)
         }
-        BlockType::Reentrant => Err(String::from(
-            "yield main: the CLI runner does not drive yield-shaped entry functions; \
-             use fn main or loop main",
-        )),
+        BlockType::Reentrant => {
+            if entry.param_count != 1 {
+                return Err(format!(
+                    "yield main: CLI runner expects exactly one parameter (tick: Word); got {}",
+                    entry.param_count
+                ));
+            }
+            Ok(EntryKind::YieldMain)
+        }
     }
 }
 
@@ -1255,6 +1288,7 @@ fn drive_to_completion(
 
     match entry_kind {
         EntryKind::AtomicFn => drive_atomic_fn(vm, arena),
+        EntryKind::YieldMain => drive_yield_main(vm, arena, config),
         EntryKind::LoopMain => drive_loop_main(vm, arena, config),
     }
 }
@@ -1337,6 +1371,60 @@ fn drive_loop_main(vm: &mut Vm, _arena: &Arena, config: &LoopRunnerConfig) -> Re
                 // the loop with the current tick state. Apply the
                 // tick interval here too so the rate-limiter
                 // covers both yield and reset transitions.
+                let elapsed = iteration_start.elapsed();
+                apply_tick_interval(elapsed, config);
+                iteration_start = Instant::now();
+                state = vm
+                    .resume(Value::Int(tick))
+                    .map_err(|e| format!("vm: {:?}", e))?;
+            }
+        }
+    }
+}
+
+/// Drive a `yield main(tick: Word) -> Word` finite-stream entry
+/// point. Shares the tick-counter convention with `loop main`. The
+/// distinction is termination: a yield-main script eventually
+/// returns instead of yielding, at which point the runner
+/// terminates cleanly. The final returned value is printed if
+/// non-Unit so the script can communicate its outcome to the
+/// operator.
+fn drive_yield_main(vm: &mut Vm, _arena: &Arena, config: &LoopRunnerConfig) -> Result<(), String> {
+    let mut tick: i64 = 1;
+    let mut iteration_start = Instant::now();
+    let mut state = vm
+        .call(&[Value::Int(tick)])
+        .map_err(|e| format!("vm: {:?}", e))?;
+    loop {
+        match state {
+            VmState::Finished(v) => {
+                // Normal termination for a yield-main script. Print
+                // the final value when it carries information.
+                match v {
+                    Value::Unit => {}
+                    other => println!("{:?}", other),
+                }
+                return Ok(());
+            }
+            VmState::Yielded(v) => {
+                let elapsed = iteration_start.elapsed();
+                let yielded = match v {
+                    Value::Int(n) => n,
+                    other => {
+                        return Err(format!(
+                            "yield main yielded a non-Word value (signature requires Word): {:?}",
+                            other
+                        ));
+                    }
+                };
+                tick = yielded.wrapping_add(1);
+                apply_tick_interval(elapsed, config);
+                iteration_start = Instant::now();
+                state = vm
+                    .resume(Value::Int(tick))
+                    .map_err(|e| format!("vm: {:?}", e))?;
+            }
+            VmState::Reset => {
                 let elapsed = iteration_start.elapsed();
                 apply_tick_interval(elapsed, config);
                 iteration_start = Instant::now();
