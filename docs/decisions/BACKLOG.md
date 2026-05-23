@@ -1136,7 +1136,7 @@ The general pattern: the compiler emits debug-info opcodes inline in the op stre
 
 **BYTECODE_VERSION stays at 1.** Keleusma has no production traction; backward-compatibility is not a constraint. The new opcodes and the chunk-level debug pool field are introduced without a version bump. Bytecode produced before B28 and B29 has no debug opcodes and an absent debug pool; bytecode produced after carries both. Runtimes built after the change handle both; runtimes built before will reject the new opcodes, but no such runtimes exist in production.
 
-Four invariants the design preserves:
+Five invariants the design preserves:
 
 1. **Strippability is a property of the opcode, not the op-stream position.** Each opcode in the ISA carries a `strippable: bool` flag in its definition. The stripper tool reads this flag and decides what to keep.
 
@@ -1145,6 +1145,8 @@ Four invariants the design preserves:
 3. **Strippable opcodes do not consume operand stack.** They are pure annotations on the op stream; they neither push nor pop. The verifier's stack-effect analysis treats them as no-ops; the WCMU computation treats them as zero-cost. This keeps the verifier's existing CFG analysis valid regardless of strip state.
 
 4. **Debug content adds to and subtracts from the release format cleanly.** Producing debug bytecode from release bytecode is purely additive: introduce strippable opcodes interleaved with the existing op stream and append a `debug_pool` field to each chunk. Producing release bytecode from debug bytecode is the exact inverse: remove the strippable opcodes and drop the `debug_pool` field. No non-debug byte changes in either direction. Release format and debug format share an identical underlying program; they differ only in the presence or absence of annotations and addendum. This invariant is what makes `strip` a verifiable operation rather than a lossy transformation.
+
+5. **Strip is byte-deterministic and order-preserving.** Given the same unstripped input, the strip tool produces byte-identical stripped output across runs, machines, and tool versions. Non-debug opcodes appear in the same relative order in both versions; strip is a filter, not a transform. This invariant is what makes reproducible builds possible and what lets external tooling correlate a position in the stripped artefact back to the corresponding position in the unstripped artefact without ambiguity. The strip implementation must walk the op stream in a fixed order, apply a fixed strippable-opcode filter, and emit the result without any version-dependent or environment-dependent variation.
 
 **Chosen format: chunk-local `debug_pool` field (Shape B)**
 
@@ -1190,11 +1192,24 @@ The following opcodes are candidates. Each is sized by its expected operational 
 | `VariableName` | Per-local-slot human-readable name. Lets debuggers display `count` rather than `local_3` | Local-slot index plus name index in the constant pool | Stripping makes debugger variable inspection numeric-only |
 | `TypeAnnotation` | Per-stack-position type for debugger introspection | Stack offset plus compact type representation | Stripping makes type inspection reliant on inferred types |
 | `AssertionContext` | Structured info for assertion failures: which assertion fired, source location, message | Assertion id plus source span | Stripping makes assertion errors generic ("assertion failed") rather than specific |
+| `Breakpoint` | Developer-controlled execution halt at a designated position. The VM checks a runtime-resident enable-set when dispatching this opcode; if the id is enabled, the VM yields with a `BreakpointHit { id }` reason. The compiler emits these at statement boundaries by default; coarser (function-entry) and finer (operator) granularity are configurable through a compile-time flag | Breakpoint id (u16) plus span pool index for the corresponding source position | Stripping removes all `Breakpoint` opcodes; arbitrary-position bytecode-level debugging uses the VM's position-list mechanism instead |
 | `GenericInstantiation` | Marker noting which monomorphisation this chunk was generated from. Lets debuggers show `Vec<Word>` rather than `Vec_Word__instance_7` | Source generic identifier plus instantiation arguments | Stripping makes monomorphised functions appear anonymous |
 | `IfcLabelAnnotation` | Per-position IFC label info beyond what the type system already carries. Strictly compile-time today, but the annotation creates an audit trail | Position plus label set | Stripping reduces IFC audit trail granularity |
 | `WCETMarker` | Per-block WCET annotation from the cost model. Lets runtime telemetry compare measured against declared bounds | Block id plus declared cycle count | Stripping disables runtime WCET telemetry |
 | `OptimisationMarker` | Records which optimisations the compiler applied to a region. Pure provenance | Optimisation identifier | Stripping erases optimisation history |
 | `VerifierWitness` | Trace of why the verifier accepted (or rejected) certain constructs. Audit-grade info for certification reviewers | Witness identifier plus structured payload | Stripping reduces audit trail for certification artefacts |
+
+**Breakpoint mechanism**
+
+Breakpoints in Keleusma combine two complementary mechanisms. The strippable `Breakpoint(id)` opcode handles the surface-language case where developers set breakpoints at source-level positions. The VM's position-list mechanism handles the bytecode-level case where the debugger needs to break at arbitrary positions.
+
+*Surface-language breakpoints (strippable opcode).* The compiler emits `Breakpoint(id)` opcodes at statement boundaries by default. Coarser granularity (function-entry only) and finer granularity (per operator) are selectable through a compile-time flag. The id is a chunk-local u16 that the debug operand pool's span sub-pool indexes to the corresponding source position. The VM holds an `enabled_breakpoints` set as part of its runtime state, separate from the bytecode. When the VM dispatches a `Breakpoint(id)`, it checks whether `id` is in the set; if yes, the VM yields with a `BreakpointHit { id }` reason; if no, the VM advances. The check is constant-cost per `Breakpoint` dispatch and zero-cost between dispatches. The host populates and queries the set through a debug API. The set is mutable runtime state; the bytecode is never modified, which preserves signing, encryption, and verification invariants.
+
+*Bytecode-level breakpoints (VM position list).* For arbitrary-position breakpoints that the compiler did not emit (and that are necessary for direct bytecode debugging, post-strip inspection, or low-level investigation), the VM additionally supports a `breakpoint_positions: Vec<(ChunkId, OpOffset)>` list as part of its runtime state. Before each op dispatch, the VM checks whether the current position appears in the list; if yes, it yields with a `BreakpointHit { position }` reason. The cost is one branch per op dispatch when the position list is non-empty; the branch becomes a constant-folded zero when the list is empty (an `is_empty` check that the compiler hoists). This mechanism does not require any bytecode change and works on stripped artefacts. Surface-language users never populate the list and pay no cost.
+
+*Composition with the hardware debug pattern.* Both mechanisms compose with hardware breakpoints driven by an external debugger that sits outside the VM's address space. The external debugger maps user-level breakpoint requests to silicon-level breakpoint addresses through the loaded debug bytecode's source-span pool, sets silicon breakpoints through the chip's debug interface, and observes hits without VM involvement. Production hardware has zero breakpoint-related overhead in this case.
+
+*Granularity rationale.* Statement-level is the default because most users interact through the surface language and expect statement-level breakpoints from conventional debuggers. Function-entry is appropriate for very dense code where statement-level emission would balloon the debug build. Operator-level is for fine-grained investigation of complex expressions and is the right granularity for users who think in opcodes rather than statements. The choice is per-build, not per-script, so a project can carry both a statement-level debug build for casual debugging and an operator-level debug build for deep investigation without changing the source.
 
 **The `keleusma strip` subcommand**
 
