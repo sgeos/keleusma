@@ -924,20 +924,25 @@ pub enum TypeExpr {
     /// passing check `source.labels ⊆ target.labels`.
     Labelled(Box<TypeExpr>, Vec<String>, Span),
     /// Type with a *negative* information-flow label set. Surface
-    /// form is `T@!Label` or `T@{!N1, !N2}`. V0.2.0 admits this
-    /// wrapper only at parameter and return type positions of
-    /// function declarations (including `use` natives). The type
-    /// checker treats the negatives as a boundary clause checked
-    /// at every call site, every resume, every return statement,
-    /// and every yield expression: the value flowing through the
-    /// boundary must not carry any of the listed labels. Inside
-    /// the function body the parameter (or return-bound expression)
-    /// is typed as the underlying type without label tracking; the
-    /// negative constraint does not propagate as a labelled type
-    /// through the lattice. Mixed positive/negative sets are
-    /// rejected at parse time; value-side negative labels (the
-    /// product-lattice extension) are out of V0.2.0 scope and are
-    /// recorded in `docs/decisions/BACKLOG.md` (B21).
+    /// form is `T@!Label` or `T@{!N1, !N2}`. V0.2.x admits this
+    /// wrapper at three boundary-position categories: function
+    /// parameter and return types (including `use` natives),
+    /// `shared` data field types (the host-script boundary), and
+    /// `private` data field types (the yield-resume boundary).
+    /// The type checker treats the negatives as a boundary clause
+    /// checked at every call site, every resume, every return
+    /// statement, every yield expression, and every script-side
+    /// data field write: the value flowing through the boundary
+    /// must not carry any of the listed labels. Inside the
+    /// function body the parameter (or return-bound expression)
+    /// is typed as the underlying type without label tracking;
+    /// similarly, a data field read produces a value of the inner
+    /// type with no labels. The negative constraint does not
+    /// propagate as a labelled type through the lattice. Mixed
+    /// positive/negative sets are rejected at parse time;
+    /// value-side negative labels (the product-lattice extension)
+    /// are out of V0.2.x scope and are recorded in
+    /// `docs/decisions/BACKLOG.md` (B21).
     NegativeLabelled(Box<TypeExpr>, Vec<String>, Span),
 }
 

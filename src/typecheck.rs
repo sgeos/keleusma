@@ -642,6 +642,47 @@ fn check_negative_labels_against_arg(
     Ok(())
 }
 
+/// Boundary check at a script-side write to a data field. The
+/// value being assigned must not carry any of the labels in the
+/// field's declared negative-label set. Mirrors
+/// [`check_negative_labels_against_arg`] for the data-block
+/// channel: a `shared` data field is the host-script boundary, a
+/// `private` data field is the yield-resume boundary; both
+/// admit a negative-label clause expressing "values flowing into
+/// this storage must not carry these labels", and the check fires
+/// at every assignment.
+fn check_negative_labels_against_data_write(
+    data_name: &str,
+    field: &str,
+    value_ty: &Type,
+    field_negative_labels: &BTreeSet<String>,
+    span: Span,
+) -> Result<(), TypeError> {
+    if field_negative_labels.is_empty() {
+        return Ok(());
+    }
+    let value_labels = labels_of(value_ty);
+    let intersection: BTreeSet<String> = value_labels
+        .intersection(field_negative_labels)
+        .cloned()
+        .collect();
+    if !intersection.is_empty() {
+        let mut sorted: Vec<&String> = intersection.iter().collect();
+        sorted.sort();
+        let names: Vec<String> = sorted.iter().map(|s| s.to_string()).collect();
+        return Err(TypeError::new(
+            alloc::format!(
+                "assignment to `{}.{}` carries the label `{}` which the field's `!`-prefix declaration forbids",
+                data_name,
+                field,
+                names.join(", "),
+            ),
+            span,
+        ));
+    }
+    Ok(())
+}
+
 /// Boundary check at a return statement or yield expression: the
 /// value flowing out must not carry any of the function's
 /// declared return-type negative labels. Same semantics as
@@ -697,7 +738,7 @@ fn validate_no_nested_negative_labels(
             if !at_top_level_allowed_position {
                 return Err(TypeError {
                     message: String::from(
-                        "negative information-flow labels (`!Label`) are admissible only at the top level of a function parameter or return type; nested or non-parameter positions reject them",
+                        "negative information-flow labels (`!Label`) are admissible only at the top level of a boundary position: function parameter or return type, or data field type. Nested positions inside tuples, arrays, options, or other composite types reject them",
                     ),
                     span: *span,
                 });
@@ -895,6 +936,17 @@ struct Ctx {
     native_signatures: BTreeMap<String, FnSig>,
     /// Data block field types, keyed by data name then field name.
     data: BTreeMap<String, BTreeMap<String, Type>>,
+    /// Per-field negative-label set on data block fields, keyed by
+    /// data name then field name. Populated from the field's
+    /// `TypeExpr::NegativeLabelled` wrapper at data-decl-pass time.
+    /// A field with no negative-label wrapper carries an empty set.
+    /// Consulted at every script-side write to the field (assignment
+    /// or indexed assignment): the source value's positive labels
+    /// must be disjoint from the field's negative set, mirroring the
+    /// existing parameter and return negative-label discipline.
+    /// Script-side reads return the inner type with no labels; the
+    /// negative wrapper does not propagate through the value lattice.
+    data_negative_labels: BTreeMap<String, BTreeMap<String, BTreeSet<String>>>,
     /// Stack of local variable scopes. Inner scopes shadow outer.
     locals: Vec<BTreeMap<String, Type>>,
     /// Return type of the function currently being checked.
@@ -937,6 +989,7 @@ impl Ctx {
             newtype_saturate_min: BTreeMap::new(),
             expected_type_stack: Vec::new(),
             data: BTreeMap::new(),
+            data_negative_labels: BTreeMap::new(),
             locals: Vec::new(),
             current_return: None,
             current_return_negative_labels: BTreeSet::new(),
@@ -1397,10 +1450,22 @@ fn run_check(program: &mut Program, mut ctx: Ctx) -> Result<(), TypeError> {
 
     for data in &program.data_decls {
         let mut fields = BTreeMap::new();
+        let mut field_negatives: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
         for f in &data.fields {
+            // Reject nested negative labels (positions deeper than
+            // the top-level wrapper). The top-level wrapper itself
+            // is admissible on data field types per the boundary
+            // semantics: a `shared` data field is the host-script
+            // channel; a `private` data field crosses the
+            // yield-resume boundary. Both are boundary positions in
+            // the same sense as a function parameter.
+            validate_no_nested_negative_labels(&f.type_expr, true)?;
+            field_negatives.insert(f.name.clone(), top_level_negative_labels(&f.type_expr));
             fields.insert(f.name.clone(), ctx.resolve_type(&f.type_expr));
         }
         ctx.data.insert(data.name.clone(), fields);
+        ctx.data_negative_labels
+            .insert(data.name.clone(), field_negatives);
     }
 
     // Pass 1c0. Collect native names from `use` declarations.
@@ -2545,6 +2610,12 @@ fn check_stmt(ctx: &mut Ctx, stmt: &mut Stmt) -> Result<(), TypeError> {
                 )
             })?;
             let declared = declared.clone();
+            let negatives = ctx
+                .data_negative_labels
+                .get(data_name)
+                .and_then(|m| m.get(field))
+                .cloned()
+                .unwrap_or_default();
             let value_ty = type_of_expr(ctx, value)?;
             if !types_compatible(ctx, &declared, &value_ty) {
                 return Err(TypeError::new(
@@ -2558,6 +2629,9 @@ fn check_stmt(ctx: &mut Ctx, stmt: &mut Stmt) -> Result<(), TypeError> {
                     *span,
                 ));
             }
+            check_negative_labels_against_data_write(
+                data_name, field, &value_ty, &negatives, *span,
+            )?;
             Ok(())
         }
         Stmt::DataFieldIndexAssign {
@@ -2628,6 +2702,20 @@ fn check_stmt(ctx: &mut Ctx, stmt: &mut Stmt) -> Result<(), TypeError> {
                     *span,
                 ));
             }
+            // Negative-label boundary check at the indexed-write
+            // site. The field's negative-label set is declared on
+            // the outer array type; per the no-nested-negative-
+            // labels rule it cannot appear on inner array element
+            // positions, so the check uses the field-level set.
+            let negatives = ctx
+                .data_negative_labels
+                .get(data_name)
+                .and_then(|m| m.get(field))
+                .cloned()
+                .unwrap_or_default();
+            check_negative_labels_against_data_write(
+                data_name, field, &value_ty, &negatives, *span,
+            )?;
             Ok(())
         }
         Stmt::Expr(e) => {
@@ -5746,5 +5834,106 @@ mod tests {
             "expected classify-rejection diagnostic, got: {}",
             err.message
         );
+    }
+
+    /// Negative labels on `shared data` fields are admitted. An
+    /// unlabelled write into a `!Secret` field type-checks.
+    #[test]
+    fn negative_label_on_shared_data_admits_unlabelled_write() {
+        let src = "
+            shared data state { forbidden: Word @ !Secret }
+            fn main() -> Word { state.forbidden = 42; state.forbidden }
+        ";
+        let tokens = tokenize(src).expect("lex");
+        let mut program = crate::parser::parse(&tokens).expect("parse");
+        check(&mut program).expect("typecheck accepts unlabelled write");
+    }
+
+    /// Negative labels on `private data` fields are admitted. The
+    /// yield-resume boundary is the negative-label clause's scope
+    /// for private fields.
+    #[test]
+    fn negative_label_on_private_data_admits_unlabelled_write() {
+        let src = "
+            private data state { forbidden: Word @ !Secret }
+            fn main() -> Word { state.forbidden = 42; state.forbidden }
+        ";
+        let tokens = tokenize(src).expect("lex");
+        let mut program = crate::parser::parse(&tokens).expect("parse");
+        check(&mut program).expect("typecheck accepts unlabelled write");
+    }
+
+    /// Assigning a labelled value into a `!Label` data field
+    /// rejects with the boundary-violation diagnostic.
+    #[test]
+    fn negative_label_on_data_rejects_labelled_write() {
+        let src = "
+            shared data state { forbidden: Word @ !Secret }
+            fn mk() -> Word @ Secret { classify 1 @ Secret }
+            fn main() -> Word { state.forbidden = mk(); state.forbidden }
+        ";
+        let tokens = tokenize(src).expect("lex");
+        let mut program = crate::parser::parse(&tokens).expect("parse");
+        let err = check(&mut program).expect_err("typecheck rejects labelled write");
+        assert!(
+            err.message.contains("forbidden")
+                && err.message.contains("Secret")
+                && err.message.contains("`!`-prefix declaration forbids"),
+            "expected boundary-violation diagnostic on data field, got: {}",
+            err.message
+        );
+    }
+
+    /// Negative labels at nested positions on data fields (inside
+    /// a tuple, array, or option) are rejected. The boundary
+    /// clause is a top-level-only construct.
+    #[test]
+    fn negative_label_nested_on_data_field_rejected() {
+        let src = "
+            shared data state { nested: (Word, Word @ !Secret) }
+            fn main() -> Word { state.nested.0 }
+        ";
+        let tokens = tokenize(src).expect("lex");
+        let mut program = crate::parser::parse(&tokens).expect("parse");
+        let err = check(&mut program).expect_err("nested negative label on data field rejected");
+        assert!(
+            err.message.contains("admissible only at the top level"),
+            "expected nested-position rejection, got: {}",
+            err.message
+        );
+    }
+
+    /// Reading a `!Label` data field produces a value of the
+    /// inner type with no labels. The boundary clause does not
+    /// propagate as a value-side label, so the read result can
+    /// flow into any context that accepts the inner type
+    /// regardless of label discipline.
+    #[test]
+    fn negative_label_on_data_read_is_inner_type() {
+        let src = "
+            shared data state { forbidden: Word @ !Secret }
+            fn requires_secret(x: Word @ Secret) -> Word { declassify x @ Secret }
+            fn main() -> Word {
+                let raw: Word = state.forbidden;
+                requires_secret(classify raw @ Secret)
+            }
+        ";
+        let tokens = tokenize(src).expect("lex");
+        let mut program = crate::parser::parse(&tokens).expect("parse");
+        check(&mut program).expect("read produces inner type with no labels");
+    }
+
+    /// `const data` fields admit negative labels too. The
+    /// initialiser literal carries no labels and satisfies the
+    /// boundary.
+    #[test]
+    fn negative_label_on_const_data_admits_unlabelled_initialiser() {
+        let src = "
+            const data state { forbidden: Word @ !Secret = 7 }
+            fn main() -> Word { state.forbidden }
+        ";
+        let tokens = tokenize(src).expect("lex");
+        let mut program = crate::parser::parse(&tokens).expect("parse");
+        check(&mut program).expect("const data with negative label compiles");
     }
 }

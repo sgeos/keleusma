@@ -2042,12 +2042,17 @@ fn validate_data_field_type(
         TypeExpr::Array(elem, _len, _) => validate_data_field_type(elem, types, visiting),
         TypeExpr::Option(inner, _) => validate_data_field_type(inner, types, visiting),
         TypeExpr::Labelled(inner, _, _) => validate_data_field_type(inner, types, visiting),
-        TypeExpr::NegativeLabelled(_, _, span) => Err(CompileError {
-            message: String::from(
-                "negative information-flow labels (`!Label`) are not admitted on data field types; they are admissible only on function parameter and return types",
-            ),
-            span: *span,
-        }),
+        // Negative information-flow labels are admissible on data
+        // field types. A `shared data` field is the host-script
+        // boundary; a `private data` field is the yield-resume
+        // boundary. Both are boundary positions in the same sense
+        // as a function parameter or return position. The
+        // boundary check fires at every script-side write through
+        // the type checker's `check_negative_labels_against_data_write`.
+        // The top-level-only rule is enforced by the type
+        // checker's `validate_no_nested_negative_labels` invoked
+        // on each field's type expression at the data-decl pass.
+        TypeExpr::NegativeLabelled(inner, _, _) => validate_data_field_type(inner, types, visiting),
         TypeExpr::Named(name, _args, span) => {
             if visiting.contains(name) {
                 return Err(CompileError {
