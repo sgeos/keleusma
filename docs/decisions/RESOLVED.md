@@ -314,6 +314,8 @@ Phase 4 deferred. The original proposal coupled signature verification to inform
 
 V0.2.0 extends the information-flow label surface with a *negative* form: `T@!Label` and `T@{!N1, !N2}`. Negative labels are admissible only at function parameter and return type positions, including native `use` declarations and impl-method signatures. They express the boundary clause "no value carrying any of these labels may flow through this position." Mixed positive-and-negative sets are rejected at parse time.
 
+> **V0.2.x update**: R51 extends this entry's admissibility to `shared` and `private` data field types. The semantics, surface forms, and parse-time mixed-rejection rule are unchanged; only the set of admissible positions is widened. See R51 for the extension's rationale and implementation.
+
 The motivating use case is multi-party module delivery to embedded targets. A native function that transmits to a downstream consumer wants to refuse Secret-tagged payloads without listing every other admissible label: `use host::log_open(payload: Word@!MissionSecret) -> ()` admits any label except MissionSecret. The existing positive-label rule (upper-bound semantics) cannot express this directly because the universe of labels is open.
 
 **Semantics.** A label set on a parameter or return type either lists positives (existing) or lists negatives (new). Negative labels split into two independent clauses:
@@ -466,3 +468,35 @@ The remaining residual risk is that an adversary with memory access on the runni
 - B24 (hardware-isolation integration for Cortex-M targets, the next protective layer).
 - `tmp/encrypted_signed_modules.md` for the design spec.
 - `docs/guide/SECURITY_POLICY.md` for the operator-facing guide.
+
+## R51. Negative information-flow labels on data field types
+
+V0.2.x extends R43 by admitting negative labels at two additional boundary-position categories: `shared` data field types and `private` data field types. The extension lands after the observation that `.data` sections are not mere storage but bidirectional channels: a `shared` field crosses the host-script boundary on every read and write, and a `private` field crosses the yield-resume boundary every iteration. Both are boundary positions in the same sense as a function parameter or return position; the V0.2.0 hard-rejection of negative labels on data field types was over-broad.
+
+**Motivating use case.** A `shared data` field that receives values from an untrusted source (host-side network input, raw sensor data) and ought to enforce that the host never writes a value carrying the `Audit` label. With R43's parameter-only form, the operator could enforce the constraint only at every function that touches the field, scattered across the codebase. With R51, the field itself declares the negative boundary clause and the type checker enforces it uniformly at every assignment.
+
+**Semantics.** The negative-label set on a data field follows the same disjointness rule as on a function parameter:
+
+- **Script-side write** to `state.field`: the source expression's positive label set must be disjoint from the field's declared negative set. The check fires in `check_negative_labels_against_data_write` at every `DataFieldAssign` and `DataFieldIndexAssign` statement.
+- **Script-side read** of `state.field`: produces a value of the inner type with no labels. The negative wrapper is a boundary clause that clears on read, mirroring the parameter-side semantics where the function body sees the parameter as the inner type.
+- **Host-side write** through `Vm::set_data`: operator-trusted in V0.2.x. The host is presumed to honour the field's declared negative clause; no runtime check is added. A future iteration could add a runtime check at the host API if a use case calls for it.
+- **Host-side read** through `Vm::get_data`: no check. The host receives the inner type's representation.
+
+**Nested positions remain rejected.** The negative wrapper is admissible only at the top level of a data field type. Nested positions inside tuples, arrays, or options reject it, matching the parameter-side rule. The diagnostic now names the three admissible categories (function parameter or return type; data field type).
+
+**Surface forms.** Same as R43:
+
+- `T@!Label` (single negative).
+- `T@{!N1, !N2}` (multiple negatives).
+- `T@{L1, !N1}` (mixed) still rejected at parse time. The mixed-rejection analysis is the same as on function parameters: the parse-time disjointness check makes the negative clause redundant whenever a positive clause is present.
+
+**Bidirectional nature.** The label set on a `shared` field applies in both directions (positive labels propagate to reads; negative labels clear on reads). Directional labels — separate sets for the in and out directions — are filed as B25 in BACKLOG.md. The V0.2.x single-set form is the special case where the in and out sets are identical. The function-based sanitiser and classifier pattern (`verify` plus `classify`/`declassify`) covers every probe-application scenario without requiring directional storage labels.
+
+**Implementation.** The `Ctx::data_negative_labels` map collects each field's top-level negative-label set at the data-decl pass through `top_level_negative_labels` (existing helper from R43). The new `check_negative_labels_against_data_write` helper, modeled on `check_negative_labels_against_arg`, runs at every script-side write. The compiler's `validate_data_field_type` walk in `src/compiler.rs` recurses through `TypeExpr::NegativeLabelled` instead of rejecting it; the type checker's existing nested-position rejection in `validate_no_nested_negative_labels` already enforces the top-level-only rule. Six new unit tests cover accept and reject paths for `shared` data, `private` data, `const` data, labelled-write rejection, nested-position rejection, and read-produces-inner-type.
+
+**Cross-references.**
+
+- R43 (the negative-label foundation; this entry extends its admissibility positions).
+- B25 (directional labels on data field types; the proposed follow-on for sanitiser-by-storage and classifier-by-storage patterns).
+- B21 (value-side negative labels through the product lattice; R51 is strictly narrower).
+- 2026-05-23 commit `0262634` (the implementation landing).

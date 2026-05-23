@@ -837,7 +837,8 @@ The work is mechanical once the forcing case pins the design endpoint. The V0.2.
 **Cross-references.**
 
 - R43 (information-flow labels with negative variants) defines the positive and negative semantics this entry generalises.
-- The 2026-05-23 commit `0262634` (data-field negative labels) is the immediate predecessor.
+- R51 (negative labels on data field types) is the immediate predecessor in V0.2.x; B25 generalises its single-set form to a directional pair.
+- The 2026-05-23 commit `0262634` (data-field negative labels) is the implementation landing of R51.
 - B21 (value-side negative labels via product lattice) is the larger generalisation. B25 is strictly narrower; it remains a boundary clause rather than a value-side property.
 - `RA.14` in `tmp/research/rtos_api/ra_14_ifc_labels.md` outlines the RTOS-level IFC discipline this entry would compose with.
 - The hierarchical control scenarios are the operational shape whose audit and hot-swap concerns this entry would address.
