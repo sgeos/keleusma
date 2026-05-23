@@ -118,6 +118,42 @@ impl ScalarKind {
             Self::Opaque => word_bytes,
         }
     }
+
+    /// Encode this scalar kind as a single byte suitable for the
+    /// wire-format operand byte of a `ReadScalarAt`,
+    /// `WriteScalarAt`, `ReadDataField`, or `WriteDataField`
+    /// opcode. The encoding is stable for the V0.2.x ISA reset.
+    pub fn to_u8(&self) -> u8 {
+        match self {
+            Self::Unit => 0,
+            Self::Bool => 1,
+            Self::Byte => 2,
+            Self::Int => 3,
+            Self::Fixed => 4,
+            #[cfg(feature = "floats")]
+            Self::Float => 5,
+            Self::Text => 6,
+            Self::Opaque => 7,
+        }
+    }
+
+    /// Decode a single byte back into a scalar kind. Returns
+    /// `None` for any unrecognised tag (including the `Float`
+    /// tag when the `floats` feature is disabled).
+    pub fn from_u8(b: u8) -> Option<Self> {
+        match b {
+            0 => Some(Self::Unit),
+            1 => Some(Self::Bool),
+            2 => Some(Self::Byte),
+            3 => Some(Self::Int),
+            4 => Some(Self::Fixed),
+            #[cfg(feature = "floats")]
+            5 => Some(Self::Float),
+            6 => Some(Self::Text),
+            7 => Some(Self::Opaque),
+            _ => None,
+        }
+    }
 }
 
 /// Byte-level layout descriptor for a Keleusma composite type.

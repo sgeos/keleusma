@@ -124,6 +124,16 @@ pub fn measured_op_cycles(op: &keleusma::bytecode::Op) -> u32 {
         Op::Call(_, _)
         | Op::CallVerifiedNative(_, _)
         | Op::CallExternalNative(_, _) => 870,
+
+        // B28 P2 consolidated composite opcodes. Costs are
+        // estimates pending P7 cost-model recalibration.
+        Op::AllocTransient(_) => 338,
+        Op::WriteScalarAt(_, _)
+        | Op::ReadScalarAt(_, _)
+        | Op::WriteCompositeAt(_, _)
+        | Op::ReadCompositeAt(_, _)
+        | Op::ReadDataField(_, _, _)
+        | Op::WriteDataField(_, _, _) => 5,
     }
 }
 

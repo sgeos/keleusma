@@ -70,6 +70,15 @@ pub enum WireFormatError {
     /// entries which is well beyond any observed program; the
     /// producer rejects such modules at encode time.
     OperandPoolIndexOverflow,
+    /// The scalar-kind tag encoded in an opcode record (or in
+    /// the operand pool entry of a `ReadDataField` /
+    /// `WriteDataField` opcode) did not match any known
+    /// [`crate::value_layout::ScalarKind`] variant. Either the
+    /// producer wrote an invalid tag, the tag's bit was
+    /// corrupted, or the consumer was built without the
+    /// `floats` feature and the producer emitted
+    /// `ScalarKind::Float` (tag `5`).
+    InvalidScalarKind(u8),
 }
 
 /// Opcode identifier as it appears in the seven low bits of byte
@@ -408,6 +417,14 @@ const OPCODE_ID_TABLE: &[(&str, u8)] = &[
     ("Shr", 66),
     ("CallVerifiedNative", 67),
     ("CallExternalNative", 68),
+    // B28 P2 consolidated composite opcodes.
+    ("AllocTransient", 69),
+    ("WriteScalarAt", 70),
+    ("ReadScalarAt", 71),
+    ("WriteCompositeAt", 72),
+    ("ReadCompositeAt", 73),
+    ("ReadDataField", 74),
+    ("WriteDataField", 75),
 ];
 
 /// Return the wire-format identifier for an `Op` variant.
@@ -482,6 +499,14 @@ pub fn opcode_id_of(op: &Op) -> OpcodeId {
         Op::Shr => 66,
         Op::CallVerifiedNative(_, _) => 67,
         Op::CallExternalNative(_, _) => 68,
+        // B28 P2 consolidated composite opcodes.
+        Op::AllocTransient(_) => 69,
+        Op::WriteScalarAt(_, _) => 70,
+        Op::ReadScalarAt(_, _) => 71,
+        Op::WriteCompositeAt(_, _) => 72,
+        Op::ReadCompositeAt(_, _) => 73,
+        Op::ReadDataField(_, _, _) => 74,
+        Op::WriteDataField(_, _, _) => 75,
     };
     OpcodeId(id)
 }
@@ -606,6 +631,48 @@ pub fn encode_op(
             let idx_bytes = (idx as u32).to_le_bytes();
             [idx_bytes[0], idx_bytes[1], idx_bytes[2]]
         }
+
+        // B28 P2 consolidated composite opcodes.
+        // AllocTransient(u16) fits inline.
+        Op::AllocTransient(byte_size) => {
+            let b = byte_size.to_le_bytes();
+            [b[0], b[1], 0]
+        }
+        // WriteScalarAt(u16, ScalarKind) and ReadScalarAt(u16,
+        // ScalarKind) fit inline: u16 in bytes one and two, u8
+        // scalar kind tag in byte three.
+        Op::WriteScalarAt(offset, kind) | Op::ReadScalarAt(offset, kind) => {
+            let b = offset.to_le_bytes();
+            [b[0], b[1], kind.to_u8()]
+        }
+        // WriteCompositeAt(u16, u16) and ReadCompositeAt(u16,
+        // u16) use the operand pool because both u16 operands
+        // exceed the three-byte inline budget.
+        Op::WriteCompositeAt(a, b) | Op::ReadCompositeAt(a, b) => {
+            let idx = pool.len();
+            if idx >= MAX_POOL_ENTRIES {
+                return Err(WireFormatError::OperandPoolIndexOverflow);
+            }
+            pool.push(OperandPoolEntry::from_u16_u16(*a, *b));
+            let idx_bytes = (idx as u32).to_le_bytes();
+            [idx_bytes[0], idx_bytes[1], idx_bytes[2]]
+        }
+        // ReadDataField(u16, u16, ScalarKind) and
+        // WriteDataField(u16, u16, ScalarKind) use the operand
+        // pool: u16 slot, u16 offset, u8 kind tag.
+        Op::ReadDataField(slot, offset, kind) | Op::WriteDataField(slot, offset, kind) => {
+            let idx = pool.len();
+            if idx >= MAX_POOL_ENTRIES {
+                return Err(WireFormatError::OperandPoolIndexOverflow);
+            }
+            pool.push(OperandPoolEntry::from_u16_u16_u8(
+                *slot,
+                *offset,
+                kind.to_u8(),
+            ));
+            let idx_bytes = (idx as u32).to_le_bytes();
+            [idx_bytes[0], idx_bytes[1], idx_bytes[2]]
+        }
     };
     Ok(OpcodeRecord::from_id_and_operand(id, operand))
 }
@@ -709,6 +776,40 @@ pub fn decode_op(record: OpcodeRecord, pool: &[OperandPoolEntry]) -> Result<Op, 
         68 => {
             let (c, n) = record.operand_u16_u8();
             Op::CallExternalNative(c, n)
+        }
+        // B28 P2 consolidated composite opcodes.
+        69 => Op::AllocTransient(record.operand_u16()),
+        70 => {
+            let (offset, kind_tag) = record.operand_u16_u8();
+            let kind = crate::value_layout::ScalarKind::from_u8(kind_tag)
+                .ok_or(WireFormatError::InvalidScalarKind(kind_tag))?;
+            Op::WriteScalarAt(offset, kind)
+        }
+        71 => {
+            let (offset, kind_tag) = record.operand_u16_u8();
+            let kind = crate::value_layout::ScalarKind::from_u8(kind_tag)
+                .ok_or(WireFormatError::InvalidScalarKind(kind_tag))?;
+            Op::ReadScalarAt(offset, kind)
+        }
+        72 => {
+            let (offset, byte_size) = decode_pool_u16_u16(record, pool)?;
+            Op::WriteCompositeAt(offset, byte_size)
+        }
+        73 => {
+            let (offset, byte_size) = decode_pool_u16_u16(record, pool)?;
+            Op::ReadCompositeAt(offset, byte_size)
+        }
+        74 => {
+            let (slot, offset, kind_tag) = decode_pool_u16_u16_u8(record, pool)?;
+            let kind = crate::value_layout::ScalarKind::from_u8(kind_tag)
+                .ok_or(WireFormatError::InvalidScalarKind(kind_tag))?;
+            Op::ReadDataField(slot, offset, kind)
+        }
+        75 => {
+            let (slot, offset, kind_tag) = decode_pool_u16_u16_u8(record, pool)?;
+            let kind = crate::value_layout::ScalarKind::from_u8(kind_tag)
+                .ok_or(WireFormatError::InvalidScalarKind(kind_tag))?;
+            Op::WriteDataField(slot, offset, kind)
         }
         other => return Err(WireFormatError::UnknownOpcodeId(other)),
     };
@@ -2232,6 +2333,25 @@ mod tests {
             (Op::Shr, 66),
             (Op::CallVerifiedNative(0, 0), 67),
             (Op::CallExternalNative(0, 0), 68),
+            (Op::AllocTransient(0), 69),
+            (
+                Op::WriteScalarAt(0, crate::value_layout::ScalarKind::Int),
+                70,
+            ),
+            (
+                Op::ReadScalarAt(0, crate::value_layout::ScalarKind::Int),
+                71,
+            ),
+            (Op::WriteCompositeAt(0, 0), 72),
+            (Op::ReadCompositeAt(0, 0), 73),
+            (
+                Op::ReadDataField(0, 0, crate::value_layout::ScalarKind::Int),
+                74,
+            ),
+            (
+                Op::WriteDataField(0, 0, crate::value_layout::ScalarKind::Int),
+                75,
+            ),
         ];
         for (op, expected) in cases {
             assert_eq!(
@@ -2364,6 +2484,79 @@ mod tests {
             Op::NewEnum(1, 2, 3),
         ] {
             roundtrip(op);
+        }
+    }
+
+    #[test]
+    fn alloc_transient_roundtrip() {
+        roundtrip(Op::AllocTransient(0));
+        roundtrip(Op::AllocTransient(16));
+        roundtrip(Op::AllocTransient(65535));
+    }
+
+    #[test]
+    fn write_scalar_at_roundtrip_each_kind() {
+        use crate::value_layout::ScalarKind;
+        for kind in [
+            ScalarKind::Unit,
+            ScalarKind::Bool,
+            ScalarKind::Byte,
+            ScalarKind::Int,
+            ScalarKind::Fixed,
+            #[cfg(feature = "floats")]
+            ScalarKind::Float,
+            ScalarKind::Text,
+            ScalarKind::Opaque,
+        ] {
+            roundtrip(Op::WriteScalarAt(0, kind));
+            roundtrip(Op::WriteScalarAt(65535, kind));
+        }
+    }
+
+    #[test]
+    fn read_scalar_at_roundtrip_each_kind() {
+        use crate::value_layout::ScalarKind;
+        for kind in [
+            ScalarKind::Unit,
+            ScalarKind::Bool,
+            ScalarKind::Byte,
+            ScalarKind::Int,
+            ScalarKind::Fixed,
+            #[cfg(feature = "floats")]
+            ScalarKind::Float,
+            ScalarKind::Text,
+            ScalarKind::Opaque,
+        ] {
+            roundtrip(Op::ReadScalarAt(0, kind));
+            roundtrip(Op::ReadScalarAt(65535, kind));
+        }
+    }
+
+    #[test]
+    fn composite_at_roundtrip() {
+        roundtrip(Op::WriteCompositeAt(0, 0));
+        roundtrip(Op::WriteCompositeAt(8, 16));
+        roundtrip(Op::WriteCompositeAt(65535, 65535));
+        roundtrip(Op::ReadCompositeAt(0, 0));
+        roundtrip(Op::ReadCompositeAt(8, 16));
+        roundtrip(Op::ReadCompositeAt(65535, 65535));
+    }
+
+    #[test]
+    fn data_field_roundtrip_each_kind() {
+        use crate::value_layout::ScalarKind;
+        for kind in [
+            ScalarKind::Bool,
+            ScalarKind::Byte,
+            ScalarKind::Int,
+            ScalarKind::Fixed,
+            #[cfg(feature = "floats")]
+            ScalarKind::Float,
+        ] {
+            roundtrip(Op::ReadDataField(0, 0, kind));
+            roundtrip(Op::ReadDataField(7, 16, kind));
+            roundtrip(Op::WriteDataField(0, 0, kind));
+            roundtrip(Op::WriteDataField(7, 16, kind));
         }
     }
 
