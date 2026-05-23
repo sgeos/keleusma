@@ -22,9 +22,14 @@ use std::sync::atomic::AtomicBool;
 use std::os::unix::net::UnixDatagram;
 
 /// Atomic flags written by signal handlers and read by the scheduler.
+/// SIGINT and SIGTERM are tracked separately so the runner can return
+/// the conventional POSIX exit code (128 + signal number) after a
+/// clean drain. SIGHUP is reserved for future configuration-reload
+/// work.
 #[derive(Debug, Clone, Default)]
 pub struct SignalFlags {
-    pub shutdown_requested: Arc<AtomicBool>,
+    pub sigint_requested: Arc<AtomicBool>,
+    pub sigterm_requested: Arc<AtomicBool>,
     pub reload_requested: Arc<AtomicBool>,
 }
 
@@ -41,9 +46,9 @@ impl SignalFlags {
         {
             use signal_hook::consts::signal::{SIGHUP, SIGINT, SIGTERM};
             use signal_hook::flag;
-            flag::register(SIGINT, self.shutdown_requested.clone())
+            flag::register(SIGINT, self.sigint_requested.clone())
                 .map_err(|e| format!("install SIGINT handler: {}", e))?;
-            flag::register(SIGTERM, self.shutdown_requested.clone())
+            flag::register(SIGTERM, self.sigterm_requested.clone())
                 .map_err(|e| format!("install SIGTERM handler: {}", e))?;
             flag::register(SIGHUP, self.reload_requested.clone())
                 .map_err(|e| format!("install SIGHUP handler: {}", e))?;
@@ -52,12 +57,12 @@ impl SignalFlags {
         {
             use signal_hook::consts::signal::{SIGINT, SIGTERM};
             use signal_hook::flag;
-            flag::register(SIGINT, self.shutdown_requested.clone())
+            flag::register(SIGINT, self.sigint_requested.clone())
                 .map_err(|e| format!("install SIGINT handler: {}", e))?;
             // SIGTERM on Windows is delivered for Ctrl-Break in the
             // signal-hook crate's mapping. SIGHUP does not exist on
             // Windows; the reload_requested flag remains untouched.
-            flag::register(SIGTERM, self.shutdown_requested.clone())
+            flag::register(SIGTERM, self.sigterm_requested.clone())
                 .map_err(|e| format!("install SIGTERM handler: {}", e))?;
         }
         Ok(())

@@ -44,11 +44,20 @@ const DEFAULT_SHUTDOWN_EVENT_ID: u8 = 99;
 /// Convention for the reload event id (SIGHUP-triggered).
 const DEFAULT_RELOAD_EVENT_ID: u8 = 98;
 
+/// POSIX signal numbers used in the exit-code arithmetic (128 +
+/// signal). Defined explicitly here to avoid pulling in the libc
+/// crate just for two constants; the values are the same on every
+/// platform the runner targets.
+const SIGINT_NUMBER: u8 = 2;
+const SIGTERM_NUMBER: u8 = 15;
+
 /// Outcome the runner reports back to the CLI dispatcher.
 #[derive(Debug)]
 pub enum RunOutcome {
-    /// Normal shutdown completed within the grace period.
-    Shutdown,
+    /// Clean shutdown. `triggering_signal` is the POSIX signal
+    /// number when shutdown was driven by SIGINT or SIGTERM, or
+    /// None for a natural termination (every task finished).
+    Shutdown { triggering_signal: Option<u8> },
     /// Manifest validation failed.
     ManifestError(ManifestError),
     /// A task failed to load (signature, encryption, or VM
@@ -59,9 +68,16 @@ pub enum RunOutcome {
 }
 
 impl RunOutcome {
+    /// Convert the outcome into the POSIX-conventional exit code
+    /// per the design doc. SIGINT-driven shutdown returns 130
+    /// (128 + 2), SIGTERM returns 143 (128 + 15), natural shutdown
+    /// returns 0, manifest or task-load errors return 1.
     pub fn into_exit_code(self) -> ExitCode {
         match self {
-            Self::Shutdown => ExitCode::SUCCESS,
+            Self::Shutdown { triggering_signal } => match triggering_signal {
+                Some(sig) => ExitCode::from(128u8.saturating_add(sig)),
+                None => ExitCode::SUCCESS,
+            },
             Self::ManifestError(e) => {
                 eprintln!("error: {}", e);
                 ExitCode::FAILURE
@@ -211,6 +227,25 @@ pub fn run(manifest_path: &Path, quiet: bool) -> RunOutcome {
                 "[scheduler] task {} loaded (arena {} bytes, restart {:?})",
                 t.cfg.name, t.cfg.arena_capacity, t.cfg.restart
             );
+            // Verifier-computed WCET (cycles) and WCMU (bytes) for
+            // the task's loop body. The bounds are the certification
+            // evidence the design doc calls out; operators copying
+            // these into deployment records get them straight from
+            // the runner's load step.
+            if let Some(idx) = t.module.entry_point
+                && let Some(chunk) = t.module.chunks.get(idx)
+            {
+                let wcet = keleusma::verify::wcet_stream_iteration(chunk)
+                    .map(|c| c.to_string())
+                    .unwrap_or_else(|_| String::from("unbounded"));
+                let wcmu = keleusma::verify::wcmu_stream_iteration(chunk)
+                    .map(|(transient, _persistent)| transient.to_string())
+                    .unwrap_or_else(|_| String::from("unbounded"));
+                eprintln!(
+                    "[scheduler] task {} WCET {} cycles WCMU {} bytes",
+                    t.cfg.name, wcet, wcmu
+                );
+            }
         }
     }
 
@@ -472,6 +507,7 @@ fn dispatch_loop(
         .unwrap_or(DEFAULT_RELOAD_EVENT_ID);
 
     let mut shutdown_deadline: Option<u64> = None;
+    let mut triggering_signal: Option<u8> = None;
     let mut last_watchdog_ms: u64 = 0;
 
     loop {
@@ -485,11 +521,24 @@ fn dispatch_loop(
             last_watchdog_ms = now_ms;
         }
 
-        // Translate signal flags into events.
-        if signals.shutdown_requested.swap(false, Ordering::SeqCst) && shutdown_deadline.is_none() {
+        // Translate signal flags into events. SIGINT and SIGTERM
+        // are tracked separately so the runner can report the
+        // POSIX-conventional exit code (130 for SIGINT, 143 for
+        // SIGTERM) after a clean drain.
+        let sigint = signals.sigint_requested.swap(false, Ordering::SeqCst);
+        let sigterm = signals.sigterm_requested.swap(false, Ordering::SeqCst);
+        if (sigint || sigterm) && shutdown_deadline.is_none() {
             if !quiet {
-                eprintln!("[scheduler] shutdown requested, draining tasks");
+                eprintln!(
+                    "[scheduler] {} received, draining tasks",
+                    if sigint { "SIGINT" } else { "SIGTERM" }
+                );
             }
+            triggering_signal = if sigint {
+                Some(SIGINT_NUMBER)
+            } else {
+                Some(SIGTERM_NUMBER)
+            };
             {
                 let mut s = kernel_state.lock().unwrap();
                 if s.event_queue.len() < MAX_EVENT_QUEUE {
@@ -526,7 +575,7 @@ fn dispatch_loop(
             if !quiet {
                 eprintln!("[scheduler] shutdown grace period elapsed; exiting");
             }
-            return RunOutcome::Shutdown;
+            return RunOutcome::Shutdown { triggering_signal };
         }
 
         // Refresh ready set: wake any task whose deadline has elapsed.
@@ -602,7 +651,7 @@ fn dispatch_loop(
                     if !quiet {
                         eprintln!("[scheduler] all tasks finished; exiting");
                     }
-                    return RunOutcome::Shutdown;
+                    return RunOutcome::Shutdown { triggering_signal };
                 }
                 std::thread::sleep(Duration::from_millis(sleep_ms));
             }

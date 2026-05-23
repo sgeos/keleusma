@@ -8,49 +8,75 @@ AI to Human communication channel.
 
 ## Last Updated
 
-**Date**: 2026-05-22
-**Status**: V0.2.1 deferred-work clear-out complete across three batches. The branch carries three new commits.
+**Date**: 2026-05-23
+**Status**: V0.2.1 multi-script runner complete. Six commits land the design proposal, the implementation, the limitation closures, and the documentation. No open contract gaps remain.
 
-## Summary of work this session
+## Summary of work since the last reverse-prompt update
 
-Three batches addressing the remaining items in the post-V0.2.1 deferred-work audit. Each batch lands as a separate commit so the operator can redirect between batches without context loss.
+Six commits across two days delivered `keleusma run-tasks <manifest.toml>`. Each commit was reviewable independently so the operator could redirect between them.
 
-### Batch 1: quick wins (commit e726577)
+### `93b0173` design proposal
 
-Eight new shell natives covering the convenience use cases identified in the SHELL_AUDIT recommendations: `shell::pid`, `shell::hostname`, `shell::arg_count`, `shell::arg(i)`, `shell::setenv`, `shell::pwd`, `shell::cd`, `shell::run_timeout(cmd, ms)`. The `hostname` implementation routes through the platform `hostname` command because Rust's standard library does not expose a portable accessor. The `setenv` implementation uses the 2024-edition `unsafe std::env::set_var(...)` with a SAFETY comment noting the single-threaded VM guarantee. The `run_timeout` implementation polls `try_wait` and kills the child on timeout.
+`docs/architecture/RUN_TASKS.md` as the agreed contract. TOML manifest schema, cooperative scheduler model lifted from `examples/rtos/`, RTOS-shape task entry with the four yield reasons (Wait, EventWait, Yield, Periodic), fixed-capacity event queue, supervised restart with sliding-window rate limit, per-task signing and encryption policy, eight open questions deferred.
 
-Compile-error span-offset correction. The CLI preamble's line count is now subtracted from reported error positions so operators see line numbers in the user-visible source rather than the post-preamble combined source. Errors that fall inside the preamble window are reported with a `[preamble line N]` marker so bundle-side mistakes are not silently attributed to user code.
+### `67c1f9a` memory residency and OS-portable deployment
 
-CLI `--target <name>` flag on the `compile` subcommand. Five presets recognised: host (default), wasm32, embedded_32, embedded_16, embedded_8. The selected target controls word, address, and float widths and validates the program against the configuration before bytecode emission.
+Three additions covering the deployment shape the operator stated. Memory residency and allocation discipline called out as load-bearing properties for root deployments on critical hardware. Operating-system-agnostic process contract plus per-platform recipes for Linux (systemd, OpenRC, runit, s6), FreeBSD (rc.d), OpenBSD (rc.d), macOS (launchd), and Windows (NSSM wrapper). Stop and signal semantics expanded to cover SIGHUP and Windows console control events.
 
-### Batch 2: Math and Audio signatures (commit fbe6c4f)
+### `f53b988` initial implementation
 
-Typechecker change to admit Word arguments where Float parameters are declared at the native call boundary. The runtime auto-widening behaviour was already in place; the typechecker was the missing piece. The widening applies only at top level; nested positions inside composite types are not coerced because the marshalling layer does not reach into them.
+`keleusma-cli/src/runtasks/` module with three files. Manifest parser with 11 unit tests. Cooperative scheduler with monotonic-clock dispatch, event queue, restart policy. Cross-platform signal handling via `signal-hook`. NOTIFY_SOCKET protocol detection with READY=1, STATUS, STOPPING=1, WATCHDOG=1 emission. Six kernel natives registered per task. CLI wiring through a new `run-tasks` subcommand. Two new dependencies: `toml 0.8` and `signal-hook 0.3`. End-to-end smoke tests of single-task, two-task with event coordination, and three manifest-rejection paths.
 
-New `Math::SIGNATURES` and `Audio::SIGNATURES` constants. Math covers thirty-one natives across algebraic, trigonometric, exponential, and named-constant categories. Audio covers thirteen natives across pitch, amplitude, time, filter, and spatial categories. The CLI preamble now installs all four bundle signature sets so the entire bundled standard library participates in compile-time validation.
+### `4a5ed96` close three known limitations
 
-### Batch 3: REPL improvements (this commit)
+Native re-registration on restart now works through a new `EventAtomics` struct held on the Task struct; the same Arcs survive restart and the new VM's natives observe the same shared state. The `kernel::last_event_id` and `kernel::last_event_payload` natives now return real values by writing into per-task atomics in the scheduler's event-fired path. Linux abstract NOTIFY_SOCKET addresses now work through `std::os::linux::net::SocketAddrExt::from_abstract_name`. Adjacent fix: arena auto-sizing now takes the max of the operator's `arena_capacity` and the module's auto-computed WCMU bound, so scripts with higher WCMU than the manifest default admit cleanly.
 
-The REPL's fixed-list return-type strategy is retired in favour of a single path: every expression input is wrapped as `fn main() -> Word { let _ = println(<expr>); 0 }`, and the `println` native routes through the CLI's recursive value formatter. The new `execute_source_repl_silent` path suppresses the wrapper's sentinel `0` return so only the value the operator typed appears in the output.
+### Present commit: contract gaps and documentation
 
-New `format_value` helper recursively formats Option, tuples, enum variants, and structs. The bundled `print_value` and `print_value_inline` now delegate to it. Output for `Some(99)` reads as `Some(99)` rather than the underlying `Enum { type_name: "Option", variant: "Some", fields: [Int(99)] }`. Tuples render as `(1, 2, 3)` rather than `Tuple([Int(1), Int(2), Int(3)])`.
+Three gaps against the design contract closed.
 
-`is_declaration` extended to recognise `shared/private/const data`, `signed/ephemeral fn/yield/loop`, and `newtype` so the REPL admits the full set of top-level declaration forms.
-
-`const data` declarations persist across REPL evaluations because their values are baked into the bytecode. Mutable `shared data` and `private data` blocks re-initialise on each evaluation. Persisting in-flight mutations across evaluations would require arena snapshot-and-restore between compiles and is deferred. This is the only remaining item on the CLI deferred-work audit.
+- WCET and WCMU bounds printed per task at load. The verifier-computed bounds are the certification evidence operators copying into deployment records expect to see at startup.
+- POSIX-conventional exit codes. SIGINT and SIGTERM are tracked through separate atomic flags; clean drain returns 130 or 143 respectively. Natural shutdown returns 0. Manifest validation and task-load failures return 1.
+- CLI README documents the run-tasks subcommand with a minimal-manifest example, a three-task production manifest, the signal contract, and a pointer to the architecture document for per-platform recipes.
 
 ## Verification
 
-- `cargo test --workspace`: 1032 tests passing across all batches.
+- `cargo test --workspace`: 1032+ tests passing.
 - `cargo clippy --workspace --tests -- -D warnings`: clean.
 - `cargo fmt --all -- --check`: clean.
-- Manual REPL session covering Word, Float, bool, Text, tuple, Option::Some, enum variants, and `math::sin(1)` (Word literal flowing through Word-to-Float widening) all render correctly with the new formatter.
+- End-to-end manual tests:
+  - Single-task daemon under `--tick-interval`-style periodic cadence drains cleanly on SIGINT with exit code 130, on SIGTERM with exit code 143.
+  - Two-task producer plus consumer coordination via `kernel::post_event` and EventWait yield reason; consumer observes correct event metadata through the natives.
+  - Crash-restart loop with `restart_limit = 3`: scheduler restarts three times then disables the task; subsequent dispatches skip the disabled task and the scheduler exits when nothing remains.
+  - Manifest validation rejection paths return exit code 1 with clean diagnostics.
+
+## Deferred work
+
+Ten items remain in `docs/architecture/RUN_TASKS.md` section "Open questions and future work". None blocks V0.2.1 landing; each was explicitly marked deferred in the design proposal.
+
+| # | Item | Notes |
+|---|------|-------|
+| 1 | Manifest signing | Substantial; needs an Ed25519 signing scheme for the TOML itself. |
+| 2 | Per-task isolation | Requires per-OS work (Linux namespaces, FreeBSD jails, equivalents). |
+| 3 | Dynamic task addition | Control socket or new `kernel::add_task` native. |
+| 4 | Hot reload via SIGHUP | Signal handler is installed but performs no action; manifest re-read and graceful teardown are the open work. |
+| 5 | Priority levels and preemption | Out of scope by design; operators needing preemption write their own host. |
+| 6 | Soft resource caps beyond WCMU | The arena and cooperative model already bound resources; a kill-runaway-task cap is the open work. |
+| 7 | Typed event payloads | Events currently carry a single `Word`; a manifest-declared event schema is the open work. |
+| 8 | Task-to-task ABI compatibility checking | Tasks declare event ids by number; schema versioning would catch mismatches. |
+| 9 | Native Windows Service Control Manager integration | The NSSM wrapper path works today; native integration is a separate effort. |
+| 10 | Notification-protocol convention on non-systemd supervisors | `NOTIFY_SOCKET` works on Linux systemd; other supervisors do not define an equivalent. |
+
+Other CLI deferred items not specific to `run-tasks`:
+
+- Mutable `shared`/`private data` persistence across REPL evaluations. Requires arena snapshot-and-restore in the VM or incremental module loading.
+- Generic `Result<T, E>` type. Language-design question deferred deliberately; the trap-on-error pattern works for the bundled shell natives.
+- `shell::read_lines`. Contingent on a dynamic-length Array type or equivalent.
 
 ## Recommended next step
 
-The work is ready for commit. With Batch 3 the only remaining item from the deferred-work audit is arena snapshot-and-restore for mutable data persistence in the REPL. That is genuinely a bigger feature; it would touch the arena API and require either a snapshot-write-back protocol or true incremental module loading in the VM. Both options are larger than the quick-wins shape of this session.
+The V0.2.1 CLI surface is feature-complete against every documented contract and the operator's stated deployment shape. No open contract gaps. The ten run-tasks deferrals and the three broader CLI deferrals are individually substantial and individually scoped; any one of them is an appropriate next session if the operator's workload concretely calls for it.
 
-For follow-on work, the natural next pieces are:
-- Arena snapshot-and-restore for REPL data persistence (multi-day work).
-- Generic `Result<T, E>` type so file I/O and other host operations can return structured errors instead of trapping. The audit noted this was rejected on scope grounds; the call may be worth revisiting if operator workflows hit the trap-on-error pattern often.
-- A `read_lines(path: Text) -> Array<Text>` native, contingent on adding a dynamic Array type or an Array<T, N> dynamic-length form.
+If the operator wants to keep advancing the CLI surface, the highest-leverage remaining items are probably hot reload via SIGHUP (#4 in the run-tasks list) and the generic `Result<T, E>` type (broader CLI list). Both have load-bearing implications for the design but neither is on the critical path for V0.2.1.
+
+If the operator wants to look further, V0.3.0 self-hosting (per `docs/roadmap/V0_3_0_SELF_HOSTING.md`) is the next planned major work, with the NES-6502 research material (`tmp/research/nes-6502/`) waiting to inform the V0.5+ language extensions.

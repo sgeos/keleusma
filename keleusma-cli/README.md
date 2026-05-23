@@ -85,6 +85,58 @@ loop main(tick: Word) -> Word {
 
 The runner does not enforce a minimum interval. Operators who need spin-wait semantics (zero sleep between iterations) should write their own host using the `keleusma` library directly. The default zero-interval behaviour spins the loop as fast as the script yields, which is appropriate for batch-shaped workloads but not for long-lived daemons. The CLI loop runner is one example of an embedding; bespoke deployments often want their own scheduler integration.
 
+### Multi-script runner
+
+The `run-tasks` subcommand drives several scripts under one cooperative scheduler from a TOML manifest. Use when the deployment is a multi-daemon workload (sensor poller plus log writer plus watchdog) and the operator wants shared state, supervised restart, and an event queue without writing a custom Rust host.
+
+```sh
+keleusma run-tasks /etc/keleusma/tasks.toml [--quiet]
+```
+
+Each task is a `loop main(wakeup_reason: Word) -> (Word, Word)` script that yields a `(reason, payload)` tuple. The reason codes are `0` Wait until milliseconds, `1` EventWait on an id, `2` voluntary Yield, `3` Periodic (cadence from the manifest). On resume the task receives a wakeup-reason word identifying why it woke (first call, deadline, event, or voluntary yield).
+
+The scheduler registers six kernel natives on every task: `kernel::post_event(id, payload)` (post into the shared event queue), `kernel::last_event_id` and `kernel::last_event_payload` (read the metadata of the event that woke this task), `kernel::now_ms` (monotonic clock from scheduler start), `kernel::task_id` and `kernel::task_name` (identification). The standard `println`, Math, Audio, and Shell bundles are also registered.
+
+A minimal manifest declares one task and accepts defaults for everything else.
+
+```toml
+[[task]]
+name = "hello"
+bytecode = "hello.kel.bin"
+period = "1s"
+restart = "on_error"
+```
+
+A representative production manifest declares the scheduler-wide knobs, multiple tasks with per-task policy, and named events the manifest binds to numeric ids.
+
+```toml
+[scheduler]
+tick_interval = "10ms"
+shutdown_grace = "5s"
+
+[events]
+data_ready = 1
+shutdown_requested = 99
+
+[[task]]
+name = "sensor_poller"
+bytecode = "tasks/sensor_poller.kel.bin"
+period = "100ms"
+restart = "on_error"
+
+[[task]]
+name = "log_writer"
+bytecode = "tasks/log_writer.kel.bin"
+restart = "always"
+# No period; the script waits on the data_ready event via `yield (1, 1)`.
+```
+
+The runner prints WCET and WCMU bounds for each task at startup so operators have certification evidence in the deployment log without an extra step. Signing and encryption gates apply per task; each bytecode artefact passes through the same policy checks as `keleusma run`.
+
+POSIX signals are honoured: SIGINT and SIGTERM begin a graceful drain with the manifest's `shutdown_grace` window, SIGHUP is reserved for future configuration reload. The runner returns conventional exit codes: 0 for natural shutdown, 130 for SIGINT clean drain, 143 for SIGTERM clean drain, 1 for manifest or task-load failure.
+
+Designed for deployment by root on critical hardware where persistent memory residence is a feature. One process holds every task; per-task arenas are sized at startup and never re-allocated; the scheduler's main loop calls no heap allocator during steady state. Operators deploying under systemd, OpenRC, runit, FreeBSD rc.d, OpenBSD rc.d, launchd, or NSSM on Windows should consult [`docs/architecture/RUN_TASKS.md`](../docs/architecture/RUN_TASKS.md) for per-platform recipes including the `NOTIFY_SOCKET` integration the runner detects automatically.
+
 ### Shebang scripts
 
 Both source and compiled bytecode can be Unix-executable through a shebang line.
