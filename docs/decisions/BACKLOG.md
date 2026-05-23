@@ -1057,7 +1057,11 @@ B26 and B27 are local fixes for two symptoms of this defect (persistent region b
 
 Field-name-to-byte-offset mapping for structs and tuples is derived at chunk-load time by walking each struct template and assigning offsets based on field order and per-field byte size. No additional wire-format bytes are required for this; the runtime computes the layout once at load.
 
-Per-slot type information for data segment slots is the one place where the current bytecode does not carry enough information for the runtime to size the flat-byte storage. The compiler must emit a per-slot type reference (or the existing `data_layout` structure must be extended with a small per-slot type field). This is an additive wire-format extension: bytecode that carries the field gets the flat representation; bytecode that does not falls back to the Vec-based representation. Old V0.2.x bytecode loads under the fallback. The `BYTECODE_VERSION` does not bump immediately; once all production bytecode carries the field, a future version can make it mandatory.
+Per-slot type information for data segment slots is the one place where the current bytecode does not carry enough information for the runtime to size the flat-byte storage. The cleanest path is a new strippable debug opcode in the ISA — call it `DataSlotAnnotation` for now — that the compiler emits at the start of each chunk for every data slot the chunk touches. The opcode carries the slot index and a compact type representation. The runtime reads the annotation at chunk-load time, builds the per-slot offset table, and proceeds with the flat representation. A bytecode-stripping tool can remove the annotations to reduce on-disk size for production deployments; in that case the runtime falls back to the V0.2.x Vec-based representation for `.data` slots that lack annotations.
+
+This approach is strictly additive: existing V0.2.x bytecode contains no `DataSlotAnnotation` opcodes and loads under the Vec-based fallback. New bytecode produced under the corrected toolchain emits the annotations and gets the flat representation. The op set grows by one opcode; the wire format framing is unchanged.
+
+The same mechanism extends naturally to other compiler-emitted debug info. The audit of additional strippable debug opcodes (call sites, source line numbers, variable names, type annotations on operand-stack positions, et cetera) is captured in B29.
 
 **Operational consequences.**
 
@@ -1121,3 +1125,76 @@ B26 and B27 stay in the backlog as documentary captures of the symptom-level fix
 - B24 (hardware-isolation for Cortex-M) is the deployment family that benefits from arena-as-sole-allocator and from precise WCMU bounds.
 - The hierarchical control scenarios are the operational shape that benefits most from the deterministic-allocator property and the certification-grade WCMU precision.
 - V0.2.0's WCMU calculation imprecision is the operational artefact of this defect; corrected runtime produces corrected numbers without bytecode-format changes.
+
+## B29. Strippable debug opcodes in the ISA
+
+B28 introduces one new ISA opcode (`DataSlotAnnotation`) that carries debug-grade type info for data segment slots and that a `keleusma strip` tool can remove without affecting execution semantics. The same mechanism scales to other compiler-emitted debug info that is useful to ship in development bytecode and useful to strip from production bytecode. This entry catalogues the candidate strippable debug opcodes, names the stripper tool, and pins the wire-format invariants the design must preserve.
+
+The general pattern: the compiler emits debug-info opcodes inline in the op stream. The runtime reads them at chunk-load time (or at execution time, depending on the opcode's purpose), uses the info to enrich its operation, and tolerates absence by falling back to the V0.2.x behaviour. A `keleusma strip` subcommand walks the op stream of an existing bytecode artefact and removes opcodes tagged strippable. The stripped artefact has identical execution semantics; only debug-grade properties degrade.
+
+Three invariants the design preserves:
+
+1. **Strippability is a property of the opcode, not the op-stream position.** Each opcode in the ISA carries a `strippable: bool` flag in its definition. The stripper tool reads this flag and decides what to keep.
+
+2. **Stripped and unstripped bytecode produce the same execution behaviour.** A program that compiles, signs, encrypts, and runs successfully should produce identical observable outputs whether or not it was stripped before execution. The strip step is purely byte-reduction and debug-grade information loss.
+
+3. **Strippable opcodes do not consume operand stack.** They are pure annotations on the op stream; they neither push nor pop. The verifier's stack-effect analysis treats them as no-ops; the WCMU computation treats them as zero-cost. This keeps the verifier's existing CFG analysis valid regardless of strip state.
+
+**Candidate strippable debug opcodes**
+
+The following opcodes are candidates. Each is sized by its expected operational benefit against the runtime cost. The first three are the strongest candidates because their benefits are visible in operational artefacts that operators routinely consume (stack traces, debugger sessions, error messages with source positions). The remainder are nice-to-have for richer development experience.
+
+| Opcode | Purpose | Operands | Strip impact |
+|--------|---------|----------|--------------|
+| `DataSlotAnnotation` | Per-data-slot type info that enables the flat-byte representation in B28 | Slot index + compact type representation | Stripping reverts to Vec-based representation for that slot |
+| `CallSite` | Per-call-site source position for stack traces. The proposal model is whatever shape `Rex` uses for the same purpose | Source file index plus source span (byte offset, byte length) | Stripping makes runtime stack traces position-free; error messages report function name only |
+| `SourceSpan` | Per-op source position. Finer-grained than `CallSite`; allows debugger to highlight the exact op responsible for a fault | Source file index plus source span | Stripping makes per-op debugger highlighting unavailable |
+| `LineNumber` | Per-op source line. Coarser than `SourceSpan` but cheaper to emit | Line number (u16 or u32) | Stripping disables line-precise debugging |
+| `VariableName` | Per-local-slot human-readable name. Lets debuggers display `count` rather than `local_3` | Local-slot index plus name index in the constant pool | Stripping makes debugger variable inspection numeric-only |
+| `TypeAnnotation` | Per-stack-position type for debugger introspection | Stack offset plus compact type representation | Stripping makes type inspection reliant on inferred types |
+| `AssertionContext` | Structured info for assertion failures: which assertion fired, source location, message | Assertion id plus source span | Stripping makes assertion errors generic ("assertion failed") rather than specific |
+| `GenericInstantiation` | Marker noting which monomorphisation this chunk was generated from. Lets debuggers show `Vec<Word>` rather than `Vec_Word__instance_7` | Source generic identifier plus instantiation arguments | Stripping makes monomorphised functions appear anonymous |
+| `IfcLabelAnnotation` | Per-position IFC label info beyond what the type system already carries. Strictly compile-time today, but the annotation creates an audit trail | Position plus label set | Stripping reduces IFC audit trail granularity |
+| `WCETMarker` | Per-block WCET annotation from the cost model. Lets runtime telemetry compare measured against declared bounds | Block id plus declared cycle count | Stripping disables runtime WCET telemetry |
+| `OptimisationMarker` | Records which optimisations the compiler applied to a region. Pure provenance | Optimisation identifier | Stripping erases optimisation history |
+| `VerifierWitness` | Trace of why the verifier accepted (or rejected) certain constructs. Audit-grade info for certification reviewers | Witness identifier plus structured payload | Stripping reduces audit trail for certification artefacts |
+
+**The `keleusma strip` subcommand**
+
+The stripper is a thin tool that opens a bytecode file, walks the op stream, removes strippable opcodes, recomputes the chunk and module sizes, regenerates the CRC trailer, and writes the result. The flow is identical to `keleusma compile -o <out>` except that the input is already-compiled bytecode and the output is a debug-info-reduced version. The strip operation preserves Ed25519 signatures only when the input was unsigned; signed artefacts cannot be re-signed by the stripper because it does not have the private key. The natural workflow is therefore "compile, strip, sign" rather than "compile, sign, strip" — the strip step runs before the signing step.
+
+A `--keep <opcode-name>` flag lets operators selectively retain specific opcodes. The default strips all strippable opcodes. The selective form is useful for operators who want call-site info preserved for error reports but not per-op source spans.
+
+**Implementation cost**
+
+| Phase | Effort |
+|-------|--------|
+| ISA extension: add the `strippable: bool` flag to the opcode definition table; encode strippable opcodes in the op stream | Two to three days |
+| Compiler emits `DataSlotAnnotation` (the B28-load-bearing case) | Two to three days |
+| Compiler emits `CallSite`, `SourceSpan`, `LineNumber` (the next-most-useful set) | Three to five days |
+| Compiler emits the remaining candidates above | Five to ten days total across the remaining opcodes |
+| Runtime consumes the debug opcodes (chunk-load layout pass for `DataSlotAnnotation`; pass-through for others) | Three to five days |
+| `keleusma strip` subcommand | Three to five days |
+| Tests for stripped/unstripped equivalence | Two to four days |
+| Documentation: ISA reference update, CLI README, wire format spec | Two to three days |
+
+Total estimated effort: three to five weeks for the full catalogue. The strippability mechanism itself is small; the volume is in emitting and consuming the individual opcodes.
+
+A reduced first commit could land just `DataSlotAnnotation` plus the strip mechanism, then add `CallSite`/`SourceSpan`/`LineNumber` in follow-on commits as B28 lands and stack-trace quality becomes visible.
+
+**Compatibility**
+
+Backwards-compatible. Old V0.2.x bytecode has none of these opcodes; the runtime tolerates absence. New bytecode emits them; an old runtime would reject the unknown opcodes unless we additionally make unknown opcodes a soft-reject path (currently unknown opcodes are likely a hard reject in the verifier). The decision point: do we want the new opcodes to load on V0.2.x runtimes (in which case old runtimes need a "skip unknown opcode" path) or do we want them to be V0.2.x-incompatible (in which case `BYTECODE_VERSION` advances)?
+
+The natural choice is V0.2.x-incompatible: the new opcodes are part of the V0.2.y or V0.3 ISA; old runtimes reject them as unknown; new runtimes know how to interpret them. `BYTECODE_VERSION` advances by one. The wire format framing is unchanged.
+
+**Forcing case**
+
+B28's landing forces `DataSlotAnnotation`. The remaining catalogue is forced by debugger quality, certification artefacts, or richer error reports — each of which can become operationally important when the V0.4.x or V0.5+ ecosystem matures.
+
+**Cross-references**
+
+- B28 (runtime composite Value representation aligned with the language guarantee) is the immediate driver; `DataSlotAnnotation` is the load-bearing opcode B28 needs.
+- The wire format specification gains an "Optional debug opcodes" section listing the catalogue.
+- The CLI README's `compile` and `run` sections get a note about the strip workflow.
+- `Rex` is the cited prior art for `CallSite`'s shape; the specific mechanism it uses is the basis for this entry's `CallSite` design.
