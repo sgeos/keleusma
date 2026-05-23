@@ -176,6 +176,55 @@ export KELEUSMA_REQUIRE_ENCRYPTED=1
 
 Combine with an enrolled key store to allow specific signed and encrypted bytecode while keeping the strict-mode posture.
 
+## Daemon deployments and tick-interval cadences
+
+The CLI's productive-divergent loop runner is the primary path for long-lived signed-and-encrypted daemon workloads. The `--tick-interval <duration>` flag rate-limits the loop. See the [CLI README](../../keleusma-cli/README.md) for the flag reference and the script-side natives `shell::set_tick_interval` and `shell::tick_interval`.
+
+### Fail-fast configuration
+
+The setter native can fail at runtime if the supplied string is not a valid humanized duration. Call `shell::set_tick_interval` at the top of the loop body so a malformed argument surfaces on the first iteration and the daemon terminates before any operational state is built up. The recommended pattern is:
+
+```keleusma
+loop main(tick: Word) -> Word {
+    let _ = shell::set_tick_interval("1s");
+    // Operational logic from here.
+    ...
+}
+```
+
+A daemon that calls the setter mid-loop based on a runtime decision can mask a configuration error for an extended period. Operators should treat the interval as a static configuration knob.
+
+### Memory residency as a feature
+
+Deliberately keeping a Keleusma loop daemon in memory addresses a class of operational scenarios where allocation failures are expected. When the host is under memory pressure such that fresh process launches fail, an already-resident daemon retains its mapped pages and continues to execute. This is a documented use case for the CLI loop runner.
+
+Pattern: run a Keleusma loop daemon with a small footprint (single-digit megabytes of resident set size; see [`METRICS.md`](./METRICS.md)) and a long tick interval. The daemon remains scheduled even when the system cannot launch new processes, and is available for diagnostic or recovery work that requires already-loaded code.
+
+The default zero-interval behaviour spins as fast as the script yields, which is appropriate for batch processing but not for memory-resident-on-call deployments. Set an explicit interval (`--tick-interval 30s`, `--tick-interval 5m`, depending on cadence needs) when running as a memory-resident daemon.
+
+### Cadences longer than four weeks
+
+The `--tick-interval` flag rejects intervals longer than four weeks. Operators with monthly or quarterly cadences have two options.
+
+**External scheduler**. Use cron, systemd timers, or the equivalent on the deployment platform to invoke a one-shot Keleusma script at the desired cadence. This approach is appropriate when the only requirement is timing.
+
+**Noop yield cycles**. Run a Keleusma loop daemon with a shorter interval (one hour, one day) and count internal ticks against the desired cadence. Most iterations do nothing but yield. Periodic iterations perform the actual work.
+
+```keleusma
+loop main(tick: Word) -> Word {
+    let _ = shell::set_tick_interval("1d");
+    // Tick counts days. Real work runs every thirtieth day.
+    let _ = if tick % 30 == 0 {
+        // Operational logic.
+        ...;
+    };
+    let _ = yield tick;
+    tick
+}
+```
+
+This approach is appropriate when memory residency is part of the requirement (see above). It also preserves the signed-and-encrypted delivery model end-to-end; the script never exits and is never relaunched.
+
 ## Trust model
 
 **Trusted components**:

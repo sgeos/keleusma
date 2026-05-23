@@ -20,6 +20,7 @@
 //! mode rejects source files, unsigned bytecode, and bytecode signed
 //! by non-enrolled keys. See `strict_mode` for the policy mechanics.
 
+mod duration;
 mod strict_mode;
 
 use std::env;
@@ -27,6 +28,9 @@ use std::fs;
 use std::io::{self, BufRead, Write};
 use std::path::Path;
 use std::process::ExitCode;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, Instant};
 
 use keleusma::compiler::compile;
 use keleusma::lexer::tokenize;
@@ -81,7 +85,13 @@ fn main() -> ExitCode {
                 };
                 let verifying = ctx.enrolled_keys.clone();
                 let decrypting = ctx.decryption_keys.clone();
-                run_file(other, &verifying, &decrypting, &ctx)
+                run_file(
+                    other,
+                    &verifying,
+                    &decrypting,
+                    &ctx,
+                    &LoopRunnerConfig::default(),
+                )
             } else {
                 eprintln!("error: unknown subcommand or missing file `{}`", other);
                 print_help();
@@ -100,10 +110,19 @@ fn print_help() {
     println!();
     println!("Subcommands:");
     println!("  run <file> [--verifying-key <keyfile> ...]");
+    println!("             [--decryption-key <keyfile> ...]");
+    println!("             [--tick-interval <duration>] [--quiet]");
     println!("                                    Compile and execute a script.");
     println!("                                    Pass --verifying-key (repeatable) to verify");
     println!("                                    signed compiled bytecode against the");
     println!("                                    supplied 32-byte Ed25519 public-key files.");
+    println!("                                    Pass --tick-interval to rate-limit a");
+    println!("                                    productive-divergent `loop main` entry");
+    println!("                                    point. Accepts humanized durations such as");
+    println!("                                    100ms, 1s, 1m, 1h, 1d, 1w. Maximum four");
+    println!("                                    weeks. --quiet suppresses the stderr warning");
+    println!("                                    that fires when an iteration exceeds the");
+    println!("                                    configured interval.");
     println!("  compile <file> [-o <output>] [--signing-key <keyfile>]");
     println!("                                    Compile to bytecode. With --signing-key,");
     println!("                                    sign the output with the supplied 32-byte");
@@ -185,6 +204,7 @@ fn run_subcommand(args: &[String]) -> ExitCode {
 
     let mut command_line_keys: Vec<ed25519_dalek::VerifyingKey> = Vec::new();
     let mut command_line_decryption_keys: Vec<[u8; X25519_PRIVATE_KEY_LEN]> = Vec::new();
+    let mut loop_config = LoopRunnerConfig::default();
     let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {
@@ -219,6 +239,30 @@ fn run_subcommand(args: &[String]) -> ExitCode {
                     }
                 }
                 i += 2;
+            }
+            "--tick-interval" => {
+                if i + 1 >= args.len() {
+                    eprintln!(
+                        "error: --tick-interval requires a humanized duration (for example 100ms, 1s, 1m, 1h, 1d, 1w)"
+                    );
+                    return ExitCode::FAILURE;
+                }
+                match duration::parse(&args[i + 1]) {
+                    Ok(d) => {
+                        loop_config
+                            .tick_interval_nanos
+                            .store(d.as_nanos() as u64, Ordering::Relaxed);
+                    }
+                    Err(e) => {
+                        eprintln!("error: {}", e);
+                        return ExitCode::FAILURE;
+                    }
+                }
+                i += 2;
+            }
+            "--quiet" => {
+                loop_config.quiet = true;
+                i += 1;
             }
             other => {
                 eprintln!("error: unknown option `{}`", other);
@@ -255,7 +299,7 @@ fn run_subcommand(args: &[String]) -> ExitCode {
     let mut decryption_keys = ctx.decryption_keys.clone();
     decryption_keys.extend(command_line_decryption_keys);
 
-    run_file(path, &verifying_keys, &decryption_keys, &ctx)
+    run_file(path, &verifying_keys, &decryption_keys, &ctx, &loop_config)
 }
 
 fn run_file(
@@ -263,6 +307,7 @@ fn run_file(
     verifying_keys: &[ed25519_dalek::VerifyingKey],
     decryption_keys: &[[u8; X25519_PRIVATE_KEY_LEN]],
     policy: &PolicyContext,
+    loop_config: &LoopRunnerConfig,
 ) -> ExitCode {
     let bytes = match fs::read(path) {
         Ok(b) => b,
@@ -275,7 +320,7 @@ fn run_file(
     // a leading shebang line, so check both at offset 0 and after a
     // `#!...\n` envelope.
     let result = if looks_like_bytecode(&bytes) {
-        execute_bytecode(&bytes, verifying_keys, decryption_keys, policy)
+        execute_bytecode(&bytes, verifying_keys, decryption_keys, policy, loop_config)
     } else if policy.strict_signing || policy.strict_encryption {
         eprintln!(
             "error: strict mode: source execution disabled; compile{} the source before running",
@@ -303,7 +348,7 @@ fn run_file(
                 return ExitCode::FAILURE;
             }
         };
-        execute_source(source)
+        execute_source(source, loop_config)
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -842,7 +887,7 @@ fn evaluate_repl_input(prefix: &mut String, line: &str) {
             return_type,
             body
         );
-        if execute_source(&program).is_ok() {
+        if execute_source_repl(&program).is_ok() {
             return;
         }
     }
@@ -853,7 +898,7 @@ fn evaluate_repl_input(prefix: &mut String, line: &str) {
         prefix.trim_end(),
         line
     );
-    if let Err(e) = execute_source(&program) {
+    if let Err(e) = execute_source_repl(&program) {
         eprintln!("error: {}", e);
     }
 }
@@ -914,7 +959,7 @@ fn compile_source(source: &str) -> Result<keleusma::bytecode::Module, String> {
 /// pre-registers utility and math natives so scripts can use
 /// `to_string`, `length`, `concat`, `slice`, `println`, and the
 /// `math::*` family without explicit registration.
-fn execute_source(source: &str) -> Result<(), String> {
+fn execute_source(source: &str, loop_config: &LoopRunnerConfig) -> Result<(), String> {
     let module = compile_source(source)?;
     let entry_kind = detect_entry_kind(&module)?;
     let persistent_bytes = keleusma::vm::required_persistent_capacity_for(&module);
@@ -926,7 +971,21 @@ fn execute_source(source: &str) -> Result<(), String> {
         .resize_persistent(persistent_bytes)
         .map_err(|e| format!("arena: resize_persistent: {:?}", e))?;
     let mut vm = Vm::new(module, &arena).map_err(|e| format!("verify: {:?}", e))?;
-    drive_to_completion(&mut vm, &arena, entry_kind)
+    drive_to_completion(&mut vm, &arena, entry_kind, loop_config)
+}
+
+/// REPL-specific source execution that uses the fixed
+/// [`DEFAULT_ARENA_CAPACITY`] instead of auto-sizing per
+/// expression. The REPL evaluates ad-hoc expressions whose WCMU
+/// bounds are meaningless; auto-sizing would resize the arena on
+/// every input. The fixed capacity is the right behaviour for
+/// interactive use.
+fn execute_source_repl(source: &str) -> Result<(), String> {
+    let module = compile_source(source)?;
+    let entry_kind = detect_entry_kind(&module)?;
+    let arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+    let mut vm = Vm::new(module, &arena).map_err(|e| format!("verify: {:?}", e))?;
+    drive_to_completion(&mut vm, &arena, entry_kind, &LoopRunnerConfig::default())
 }
 
 fn execute_bytecode(
@@ -934,6 +993,7 @@ fn execute_bytecode(
     verifying_keys: &[ed25519_dalek::VerifyingKey],
     decryption_keys: &[[u8; X25519_PRIVATE_KEY_LEN]],
     policy: &PolicyContext,
+    loop_config: &LoopRunnerConfig,
 ) -> Result<(), String> {
     let signed = keleusma::wire_format::header_requires_signature(bytes);
     let encrypted = keleusma::wire_format::header_requires_encryption(bytes);
@@ -985,7 +1045,25 @@ fn execute_bytecode(
         vm.register_verifying_key(*key);
     }
 
-    drive_to_completion(&mut vm, &arena, entry_kind)
+    drive_to_completion(&mut vm, &arena, entry_kind, loop_config)
+}
+
+/// Configuration for the productive-divergent loop runner.
+/// `tick_interval_nanos` zero means "no sleep between iterations"
+/// (default). Non-zero values activate the rate-limiter with
+/// drift compensation. `quiet` suppresses the stderr warning that
+/// fires when an iteration exceeds the configured interval.
+#[derive(Debug, Clone, Default)]
+struct LoopRunnerConfig {
+    /// Tick interval, shared with the `shell::set_tick_interval`
+    /// and `shell::tick_interval` natives via `Arc<AtomicU64>`.
+    /// Stored as nanoseconds. Zero means "no sleep between
+    /// iterations" (current default behaviour).
+    tick_interval_nanos: Arc<AtomicU64>,
+    /// Suppress the stderr warning that fires when an iteration
+    /// exceeds the configured interval. Default false (warnings
+    /// emitted).
+    quiet: bool,
 }
 
 /// Outcome of inspecting the loaded module's entry chunk. Drives
@@ -1117,7 +1195,12 @@ fn load_module(
     }
 }
 
-fn drive_to_completion(vm: &mut Vm, arena: &Arena, entry_kind: EntryKind) -> Result<(), String> {
+fn drive_to_completion(
+    vm: &mut Vm,
+    arena: &Arena,
+    entry_kind: EntryKind,
+    config: &LoopRunnerConfig,
+) -> Result<(), String> {
     // Register the standard DSL bundles on every CLI-driven script.
     // Hosts that embed the library directly choose which libraries
     // to register; the CLI registers all of them so scripts run
@@ -1138,9 +1221,41 @@ fn drive_to_completion(vm: &mut Vm, arena: &Arena, entry_kind: EntryKind) -> Res
     vm.register_library(stddsl::Audio);
     vm.register_library(stddsl::Shell);
 
+    // CLI-specific tick-interval natives sharing the host-side
+    // atomic. Registered after the Shell library so the names
+    // (shell::set_tick_interval and shell::tick_interval) are
+    // logical extensions of the Shell namespace. The atomic is
+    // cloned into each closure.
+    let interval_for_set = config.tick_interval_nanos.clone();
+    vm.register_native_closure("shell::set_tick_interval", move |args| {
+        let arg = args.first().ok_or_else(|| {
+            keleusma::vm::VmError::NativeError(String::from(
+                "shell::set_tick_interval: expected one Text argument",
+            ))
+        })?;
+        let s: &str = match arg {
+            Value::StaticStr(s) => s.as_str(),
+            other => {
+                return Err(keleusma::vm::VmError::TypeError(format!(
+                    "shell::set_tick_interval: expected Text, got {:?}",
+                    other
+                )));
+            }
+        };
+        let dur = duration::parse(s).map_err(keleusma::vm::VmError::NativeError)?;
+        interval_for_set.store(dur.as_nanos() as u64, Ordering::Relaxed);
+        Ok(Value::Unit)
+    });
+    let interval_for_get = config.tick_interval_nanos.clone();
+    vm.register_native_closure("shell::tick_interval", move |_args| {
+        let nanos = interval_for_get.load(Ordering::Relaxed);
+        let dur = Duration::from_nanos(nanos);
+        Ok(Value::StaticStr(duration::format(dur)))
+    });
+
     match entry_kind {
         EntryKind::AtomicFn => drive_atomic_fn(vm, arena),
-        EntryKind::LoopMain => drive_loop_main(vm, arena),
+        EntryKind::LoopMain => drive_loop_main(vm, arena, config),
     }
 }
 
@@ -1181,8 +1296,9 @@ fn drive_atomic_fn(vm: &mut Vm, arena: &Arena) -> Result<(), String> {
 /// the tick mechanism. The arena is cleared by the VM; the host
 /// continues to the next iteration with the current tick state
 /// preserved.
-fn drive_loop_main(vm: &mut Vm, _arena: &Arena) -> Result<(), String> {
+fn drive_loop_main(vm: &mut Vm, _arena: &Arena, config: &LoopRunnerConfig) -> Result<(), String> {
     let mut tick: i64 = 1;
+    let mut iteration_start = Instant::now();
     let mut state = vm
         .call(&[Value::Int(tick)])
         .map_err(|e| format!("vm: {:?}", e))?;
@@ -1195,6 +1311,7 @@ fn drive_loop_main(vm: &mut Vm, _arena: &Arena) -> Result<(), String> {
                 ));
             }
             VmState::Yielded(v) => {
+                let elapsed = iteration_start.elapsed();
                 // The yielded value must be a Word per the loop
                 // main signature. Anything else is an error.
                 let yielded = match v {
@@ -1207,6 +1324,8 @@ fn drive_loop_main(vm: &mut Vm, _arena: &Arena) -> Result<(), String> {
                     }
                 };
                 tick = yielded.wrapping_add(1);
+                apply_tick_interval(elapsed, config);
+                iteration_start = Instant::now();
                 state = vm
                     .resume(Value::Int(tick))
                     .map_err(|e| format!("vm: {:?}", e))?;
@@ -1215,13 +1334,42 @@ fn drive_loop_main(vm: &mut Vm, _arena: &Arena) -> Result<(), String> {
                 // The script triggered a Reset (Op::Reset). The VM
                 // has cleared the transient arena region; the
                 // persistent .data section is preserved. Continue
-                // the loop with the current tick state.
+                // the loop with the current tick state. Apply the
+                // tick interval here too so the rate-limiter
+                // covers both yield and reset transitions.
+                let elapsed = iteration_start.elapsed();
+                apply_tick_interval(elapsed, config);
+                iteration_start = Instant::now();
                 state = vm
                     .resume(Value::Int(tick))
                     .map_err(|e| format!("vm: {:?}", e))?;
             }
         }
     }
+}
+
+/// Apply the configured tick interval after an iteration. Sleeps
+/// for `interval - elapsed` when positive; emits a stderr warning
+/// when elapsed exceeds the interval (unless `quiet`). A zero
+/// interval (the default) is a no-op; the runner spins as fast as
+/// the script yields.
+fn apply_tick_interval(elapsed: Duration, config: &LoopRunnerConfig) {
+    let nanos = config.tick_interval_nanos.load(Ordering::Relaxed);
+    if nanos == 0 {
+        return;
+    }
+    let interval = Duration::from_nanos(nanos);
+    if elapsed >= interval {
+        if !config.quiet {
+            eprintln!(
+                "warning: iteration time ({}) exceeded tick interval ({}); resuming immediately without sleep",
+                duration::format(elapsed),
+                duration::format(interval),
+            );
+        }
+        return;
+    }
+    std::thread::sleep(interval - elapsed);
 }
 
 fn format_err(stage: &str, msg: &str, span: keleusma::token::Span) -> String {

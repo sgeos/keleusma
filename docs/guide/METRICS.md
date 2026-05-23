@@ -75,6 +75,12 @@ Running an indefinite `loop main` at one iteration per millisecond for one minut
 
 Comparable steady-state daemon behaviour in Python or Ruby runs at 15 to 30 MB RSS with comparable or higher CPU usage for an empty loop body. The advantage compounds as the daemon's runtime extends.
 
+### Steady-state at sleep cadence
+
+At one tick per second under `--tick-interval 1s`, the daemon's CPU drops to effectively zero (microseconds of compute per iteration, ~999.9 ms idle in the rate-limiter's sleep). The RSS is unchanged from the high-rate workload because the arena is sized at startup and reused. The drift-compensated sleep reduces cumulative drift to under one percent over a typical operating period.
+
+For long-cadence daemons (`--tick-interval 1h`, `--tick-interval 1d`), CPU usage is dominated by the OS scheduler's wakeup mechanism rather than Keleusma itself. The runtime is genuinely idle between iterations. A memory-resident-on-call daemon at one tick per hour consumes operationally the same resources as a 2.9 MB resident memory mapping; the cost is page-fault avoidance, not computation. See [`SECURITY_POLICY.md`](./SECURITY_POLICY.md#daemon-deployments-and-tick-interval-cadences) for the operator guide to memory-resident deployments.
+
 ## Notes on the comparison
 
 The comparison is intentionally selective. Each runner has different design goals; direct feature comparisons are unfair.

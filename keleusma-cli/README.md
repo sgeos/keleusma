@@ -36,6 +36,55 @@ keleusma hello.kel
 
 The runner detects whether the file is source or compiled bytecode by inspecting the first bytes (after any shebang envelope). Source files are parsed, compiled, verified, and executed through the default safe constructor. Bytecode files load through `Vm::load_bytes`. Utility and math natives are pre-registered. The script's `main` function is called with no arguments. If `main` returns a value, the value is printed.
 
+### Productive-divergent loop runner
+
+When the entry point is declared as `loop main(tick: Word) -> Word`, the runner drives the script through the tick-counter convention. The host passes `tick = 1` on first call. The script yields a `Word` value each iteration. The host computes the next tick as `yielded.wrapping_add(1)` and resumes. Yield `0` produces next tick `1` (a reset convention). Yield `Word::MAX` wraps to `Word::MIN` (overflow indicator under signed arithmetic). Termination occurs through `shell::exit(code)` or `SIGINT`.
+
+The `--tick-interval <duration>` flag rate-limits the loop. The flag accepts humanized durations:
+
+| Form | Meaning |
+|------|---------|
+| `Nms` | milliseconds |
+| `Ns`  | seconds |
+| `Nm`  | minutes |
+| `Nh`  | hours |
+| `Nd`  | days |
+| `Nw`  | weeks |
+
+Composite forms such as `1h30m` are not accepted. Operators should express composite durations as a single unit (express `1h30m` as `90m`). Maximum admitted interval is four weeks. Longer cadences should use an external scheduler (cron, systemd timers) or noop yield cycles in the script that count internal ticks against the longer interval.
+
+Drift is compensated. After each iteration the runner sleeps for `max(0, interval - iteration_elapsed)` so the average cadence approaches the configured interval. When an iteration exceeds the interval, the runner emits a warning on stderr naming both values and resumes immediately without sleep. The `--quiet` flag suppresses the warning.
+
+```sh
+# Run a loop daemon at one tick per second.
+keleusma run watchdog.kel --tick-interval 1s
+
+# Run a daily-cadence cleanup script; suppress overrun warnings.
+keleusma run nightly.kel --tick-interval 1d --quiet
+```
+
+A script may set the interval from inside the loop through the `shell::set_tick_interval(duration: Text) -> ()` native. The complementary `shell::tick_interval() -> Text` getter returns the current value as a humanized string. Both natives share state with the CLI flag; either path drives the same atomic.
+
+```keleusma
+use shell::set_tick_interval
+use shell::tick_interval
+use shell::exit
+use println
+
+loop main(tick: Word) -> Word {
+    // Set the cadence at the top of the script so a malformed
+    // duration fails fast at the first iteration. A failure
+    // surfaces as a runtime error and terminates the daemon.
+    let _ = shell::set_tick_interval("100ms");
+    println(shell::tick_interval());
+    let _ = if tick >= 10 { shell::exit(0); };
+    let _ = yield tick;
+    tick
+}
+```
+
+The runner does not enforce a minimum interval. Operators who need spin-wait semantics (zero sleep between iterations) should write their own host using the `keleusma` library directly. The default zero-interval behaviour spins the loop as fast as the script yields, which is appropriate for batch-shaped workloads but not for long-lived daemons. The CLI loop runner is one example of an embedding; bespoke deployments often want their own scheduler integration.
+
 ### Shebang scripts
 
 Both source and compiled bytecode can be Unix-executable through a shebang line.
