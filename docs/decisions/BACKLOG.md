@@ -936,5 +936,96 @@ The work is mechanical once the design decision is locked in. The forcing case d
 - R32 (dual-end arena, established the persistent versus transient split).
 - R29 (hot code swap, the precedent for cross-Vm data transfer; currently uses Value-walking and would benefit from inline storage).
 - B16 (parametric Vm for sub-64-bit native runtimes; intersects with the `TypeRepr` design because byte-size computation depends on the target's word and float widths).
+- B27 (arena-resident transient region for composite Value bodies) is the complementary entry for non-`.data` composite values.
 - The 2026-05-23 commit `92b994c` (REPL shared data persistence) is the operational use case that surfaced the mismatch.
 - `keleusma-arena` already depends on `allocator-api2`, so Path B's plumbing prerequisite is already in place if the project pursues that route instead.
+
+## B27. Arena-resident transient region for composite Value bodies
+
+The persistent counterpart to this entry is B26. The architectural intent that motivates both: the arena is the sole allocator the Keleusma runtime uses; the global allocator is unused. The persistent region (B26) holds `.data` values inline; the transient region (this entry) holds ephemeral composite Value bodies via arena-backed `Vec` and `String` rather than the std-global-allocator counterparts.
+
+**Current state.** The composite `Value` variants (`Tuple(Vec<Value>)`, `Array(Vec<Value>)`, `Struct { fields: Vec<(String, Value)> }`, `Enum { type_name: String, variant: String, fields: Vec<Value> }`) use std `Vec` and `String` with the global allocator. A script that constructs a tuple in expression position allocates the tuple's body from the global heap. The body is dropped when the operand stack pops the value or when the iteration ends. WCMU's `body_heap` counter in `wcmu_stream_iteration().1` accounts for the bytes correctly. The mechanism is functionally fine. The locational fact (global heap rather than arena transient region) is the gap.
+
+**Operational consequences of the gap.**
+
+1. **Embedded targets without a global allocator are blocked.** Cortex-M targets that disable `alloc::alloc::GlobalAlloc` or configure a fixed-size heap separate from the Keleusma arena cannot run scripts that build composite values. The arena is sized to bound the script; the global allocator is separate and either absent or independently sized. This is a real obstacle to V0.4.x cross-target deployment for any script touching composite types.
+
+2. **WCMU bounds are not equivalent to the arena's bound.** A script's WCMU report says "this iteration peaks at N bytes of operand stack and M bytes of heap". The arena's `with_capacity(total)` is sized to satisfy operand-stack peak plus persistent region. The M bytes of `body_heap` come from the global allocator. An operator certifying the script's memory bound must add the global-heap quota to the arena bound. The two-allocator accounting is correct but awkward.
+
+3. **Allocator behaviour bleeds in.** Global allocators on different platforms have different fragmentation behaviour, different time-to-allocate, different failure modes. A Keleusma script's runtime behaviour gains a dependency on the host platform's allocator even though every per-op cost is bounded. The arena's bump allocator is statically predictable; the global allocator is not.
+
+4. **The persistent versus transient split is half-arena, half-global.** R32 established the dual-end arena to handle both ends of the memory lifetime spectrum with one allocator. Composite bodies leak past this design by going to the global allocator. The arena-as-sole-allocator property R32 implicitly promises is not actually delivered.
+
+**Proposed change.**
+
+The composite `Value` variants become parameterised over an allocator:
+
+```rust
+Tuple(Vec<GenericValue<W, F>, ArenaAllocator>)
+Array(Vec<GenericValue<W, F>, ArenaAllocator>)
+Struct {
+    type_name: String<ArenaAllocator>,
+    fields: Vec<(String<ArenaAllocator>, GenericValue<W, F>), ArenaAllocator>,
+}
+Enum {
+    type_name: String<ArenaAllocator>,
+    variant: String<ArenaAllocator>,
+    fields: Vec<GenericValue<W, F>, ArenaAllocator>,
+}
+```
+
+`ArenaAllocator` is a wrapper around the arena's transient bump allocator implementing the `Allocator` trait from `allocator-api2` (which the workspace already depends on). Allocations in the transient region are bump-only and freed wholesale on RESET; the `Drop` impl for `Vec<T, ArenaAllocator>` is a no-op because the underlying memory is reclaimed by the arena's RESET, not by the collection.
+
+The arena exposes an `Allocator` impl scoped to its transient region. The operand stack and other transient working memory continue to use the arena's existing dual-end bump regions; composite Value bodies now share the same region.
+
+**Compatibility with B26.**
+
+B26 covers the persistent region (inline storage, no pointers, byte-snapshot-portable). B27 covers the transient region (arena-backed Vec and String, absolute pointers into the arena's transient bytes, no byte-snapshot requirement because transient is cleared on RESET).
+
+Both land independently. Order is flexible. Landing B27 alone gives the embedded-target benefit but leaves the persistent region's heap-pointer issue unresolved for cross-Vm checkpoint patterns. Landing B26 alone gives the byte-snapshot property but leaves composite-construction allocations on the global heap. Landing both gives the architecturally complete picture: the arena holds everything; the global allocator is unused; WCMU's persistent and transient bytes sum to the arena's total capacity.
+
+**Trade-offs.**
+
+| Property | Current | After B27 |
+|----------|---------|-----------|
+| Operand-stack composite allocation source | Global allocator | Arena transient region |
+| Embedded target with no global allocator | Blocked | Supported |
+| RESET behaviour | Composite bodies dropped individually via `Drop` | All composite bodies released together with the arena's transient reset |
+| Allocation cost per composite | Allocator-dependent (varies by platform) | Bump allocator, one pointer increment |
+| Fragmentation hazard | Yes (allocator-dependent) | No (bump allocator is fragmentation-free) |
+| WCMU accounting | `body_heap` counter, global-heap bytes | `body_heap` counter, arena-transient bytes (same number, different location) |
+| `Vec<T, A>` API ergonomics in runtime code | Standard `Vec<T>` | `Vec<T, ArenaAllocator>` (requires `allocator-api2` syntax everywhere) |
+
+**Effort estimate.**
+
+Moderate. Smaller than B26 because the bytecode layout does not change. The work splits into:
+
+1. **Define `ArenaAllocator`** as a wrapper around the arena's transient bump allocator implementing `allocator_api2::Allocator`. Roughly one to two days.
+
+2. **Migrate `GenericValue` composite variants** to use `Vec<T, ArenaAllocator>` and `String<ArenaAllocator>`. Touches every site that constructs or consumes a composite Value. Ripple through the VM's instruction handlers (`NewArray`, `NewTuple`, `NewStruct`, `NewEnum`, `GetField`, et cetera) and the native-marshalling layer. Two to four days for the core migration; longer if `KeleusmaType` derive needs extending.
+
+3. **Update WCMU accounting** to record bytes against the arena's transient region rather than the global heap. The numerical accounting does not change; only the location label does. One day including tests.
+
+4. **Test all admissible composite expressions** under the new representation. Ensure RESET correctly releases all composite bodies. One to two days.
+
+5. **Documentation pass**: update R32 to note that the transient region now hosts composite bodies; update the architecture narrative for the "arena is the sole allocator" property. Half a day.
+
+Total: one to two weeks.
+
+**Compatibility.**
+
+Backwards-compatible at the bytecode level. The compiled bytecode is unchanged; only the runtime's memory layout changes. Programs do not need recompilation. The `BYTECODE_VERSION` constant does not advance.
+
+The Rust API for embedders changes if they construct `Value::Tuple` or similar directly. Embedders that use the `KeleusmaType` derive and `register_fn` ergonomics are insulated from the change. Embedders constructing `Value` enum variants by hand (rare) must update to the `Vec<T, ArenaAllocator>` shape.
+
+**Forcing case.**
+
+A V0.4.x or V0.5.x deployment to an embedded target with no global allocator (or a deliberately-undersized global allocator) and a script that constructs composite values. The STM32N6570-DK reference platform from the RTOS work and the perpetual-operational deployable-platform scenarios are the natural candidates. Without such a forcing case the global-allocator path continues to work on hosted targets and the V0.2.x scope does not require this change.
+
+**Cross-references.**
+
+- B26 (arena-resident persistent region for composite data values) is the complementary entry. B26 covers `.data` slots; B27 covers non-`.data` composite values.
+- R32 (dual-end arena) is the prior decision that B27 completes.
+- B24 (hardware-isolation integration for Cortex-M targets) is the deployment family that benefits from arena-as-sole-allocator.
+- `keleusma-arena` already implements an `Allocator` shape for KString; B27 generalises the same mechanism to composite Vec and String bodies.
+- The hierarchical control scenarios are the operational shape that benefits from the deterministic-allocator property.
