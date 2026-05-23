@@ -1034,73 +1034,122 @@ A V0.4.x or V0.5.x deployment to an embedded target with no global allocator (or
 
 The language admits only fixed-size types in composite positions. The verifier proves WCMU bounds assuming fixed sizes. The runtime contradicts the guarantee at the storage layer: `Value::Tuple(Vec<Value>)`, `Value::Array(Vec<Value>)`, `Value::Struct { fields: Vec<(String, Value)> }`, and `Value::Enum { type_name: String, variant: String, fields: Vec<Value> }` use heap-allocated `Vec` and `String` indirection. The script's promise is "fixed size, no references"; the runtime's reality is "heap pointer to dynamically-sized backing, plus string keys for structs".
 
-This is a runtime defect, not a language or bytecode design issue. The ISA, the wire format, and the existing bytecode shapes do not need to change. The runtime's interpretation of composite values needs to be corrected to match the language model. Recompiling under the corrected runtime produces different WCMU numbers (smaller and more precise because the runtime no longer pays `Vec` and `String` overhead the language does not require) and may use different optional opcode parameters (a per-slot type hint that the compiler now emits and the runtime now uses to size flat-byte storage), but the bytecode wire-format shape and the opcode set are preserved.
+This is a runtime and ISA defect that needs holistic correction. The runtime's interpretation of composite values needs to align with the language model, and the opcode set should consolidate around a flat-byte representation rather than the variant-per-composite-type shape inherited from earlier prototypes. The compiler knows every type's byte size at compile time; the runtime should rely on that compile-time knowledge rather than performing layout inference at dispatch time. B28 corrects both surfaces in one coherent refactor.
 
 B26 and B27 are local fixes for two symptoms of this defect (persistent region byte portability, transient bodies on the global heap). B28 fixes the root cause and subsumes both.
 
+**Design model: ASM section layout.**
+
+The runtime memory layout mirrors the section model that an ASM file (or any ELF binary, or an NES ROM) uses:
+
+- `.text` analogue: bytecode in `Module::chunks[].ops`. Read-only at runtime.
+- `.rodata` analogue: the constant pool in `Module::constants`, the `const data` section declarations, and static string bodies. Read-only. The compiler may emit a warning when a `private data` section is never mutated within the program, suggesting the operator move it to `const data` for `.rodata` placement.
+- `.data` analogue (mutable storage):
+  - `private data` sections are materialised in the arena's persistent region. The persistent region survives RESET.
+  - `shared data` sections are materialised in a host-passed struct external to the arena. The host owns the storage; the VM reads and writes through host-supplied APIs.
+- Arena ephemeral region (no direct ASM analogue; functionally similar to the .data plus stack plus heap of a running process): two bump heads sharing one middle region.
+  - Bottom head (currently used as the "stack"): operand stack vectors (`StackVec<'arena, T>` in `src/vm.rs:21`). Grows up from the boundary with the persistent region.
+  - Top head (currently used as the "heap"): dynamic string bodies (`KString::alloc` in `src/kstring.rs:39`). Grows down from the arena's capacity boundary. Under B28, composite bodies and additional dynamic content join the top head.
+  - Cleared on RESET. Cleared again on every reset issued by the host.
+- Heap (global allocator): not used by the runtime for composite or string storage. Opaque values are the one exception because they are host-managed `Arc<dyn HostOpaque>` references.
+
+The bottom-versus-top assignment of stack and heap is a convention that the existing consumer code established. Both heads are interchangeable bump allocators from the arena's perspective. The WCMU bound is the sum of the high watermarks of both heads plus the persistent-region capacity, so the bottom-versus-top split does not affect the bound itself.
+
+Every value has a fixed byte size known at compile time. Scalars are inlined into their slot bytes. Strings, opaque references, and nested composites occupy fixed-size slots whose bytes are either inline (the scalar case) or a handle pointing to bytes elsewhere (the reference case).
+
+**RESET semantics.**
+
+RESET clears both ephemeral heads and increments the arena's epoch counter. The persistent region is untouched. The Keleusma `loop main(...) -> ReturnType { ... }` construct pairs each iteration with a RESET at the closing brace of the loop body. This is the structural source of the productive-divergent loop's bounded memory profile: within one iteration the ephemeral region accumulates up to its high watermark, then RESET releases all of it at the iteration boundary. WCMU is computed over the single-iteration high watermark, not the cumulative usage across iterations.
+
+**Fixed byte size by type.**
+
+| Type | Byte representation |
+|------|---------------------|
+| Unit | 0 bytes |
+| Bool | 1 byte |
+| Byte | 1 byte |
+| Int | word_bytes (8 by default, 4/2/1 for narrow runtimes) |
+| Fixed | word_bytes |
+| Float | float_bytes (8 for f64, 4 for f32) |
+| StaticStr | fixed-size reference into `.rodata` (rodata offset plus length, or pointer plus length) |
+| KStr | fixed-size arena handle (pointer plus epoch in V0.2.x; a tighter packed form is a future optimisation) |
+| Opaque | fixed-size `Arc<dyn HostOpaque>` pointer |
+| Tuple, Array, Struct, Enum | arithmetic sum of constituent byte sizes (compile-time computed) |
+
+Composites are byte-sums of their fields. A `(Word, Word)` tuple is `2 * word_bytes`. A `struct Point { x: Word, y: Word, name: Text }` is `2 * word_bytes + sizeof(StaticStr_or_KStr_handle)`. An `[Word; 8]` array is `8 * word_bytes`. An `enum Color { Red, Green, Blue }` is `1` (discriminant byte) plus `0` (largest variant payload). An `enum Maybe<Word> { None, Some(Word) }` is `1 + word_bytes`.
+
+**Opcode consolidation.**
+
+The ISA collapses the four "new composite" opcodes (`NewTuple`, `NewArray`, `NewStruct`, `NewEnum`) plus the field-access family (`GetField`, `GetTupleField`, `GetEnumField`, `SetField`) into a smaller, regular set:
+
+- `Op::AllocTransient(byte_size: u16)`: bump-allocate `byte_size` bytes in the arena's transient region; push a handle to the byte range onto the operand stack. Replaces the four `New*` composite opcodes; also serves scalar materialisation when the compiler wants explicit allocation (rather than carrying the scalar in the operand stack slot directly).
+- `Op::WriteScalarAt(offset: u16, kind: ScalarKind)`: pop a scalar from the operand stack; write its bytes at `offset` within the top-of-stack composite handle.
+- `Op::ReadScalarAt(offset: u16, kind: ScalarKind)`: read a scalar of `kind` from `offset` within the top-of-stack composite handle; push it onto the operand stack.
+- `Op::WriteCompositeAt(offset: u16, byte_size: u16)`: pop a nested composite handle; copy its bytes into the parent composite at `offset`.
+- `Op::ReadCompositeAt(offset: u16, byte_size: u16)`: copy `byte_size` bytes from `offset` within the top-of-stack composite into a new transient allocation; push the new handle.
+
+Multi-allocation coalescing (a single `AllocTransient` for several adjacent locals declared in the same scope) is a peephole optimisation that lands later. The default emission style is one `AllocTransient` per composite construction.
+
+The `Op::GetData(slot)` and `Op::SetData(slot)` opcodes for `.data` sections gain `byte_offset` and `scalar_kind` operands and become `Op::ReadDataField(slot, offset, kind)` and `Op::WriteDataField(slot, offset, kind)`. The compiler resolves field paths to byte offsets at compile time; the runtime never sees field names.
+
 **What stays unchanged.**
 
-- The opcode set (numeric encoding, opcode names, semantic contracts) is preserved. `Op::NewTuple(count)`, `Op::NewArray(count)`, `Op::NewStruct(template_idx)`, `Op::NewEnum(...)`, `Op::GetField(name_const)`, `Op::SetField`, `Op::GetData(slot)`, `Op::SetData(slot)` all keep their existing signatures.
-- The wire-format framing (magic, version field, signed and encrypted headers, CRC trailer) is preserved. `BYTECODE_VERSION` does not advance; existing V0.2.x bytecode loads under the corrected runtime.
-- The public `Value` enum variants visible at the host API are preserved. `Value::Tuple`, `Value::Array`, `Value::Struct`, `Value::Enum` still exist as enum variants from the host's perspective. The `KeleusmaType` derive sees the Value enum as before.
-- Existing scripts compile, link, and run unchanged. Same source produces functionally equivalent behaviour. Differences are limited to the WCMU header field (smaller and more precise) and the internal memory layout (flat bytes rather than `Vec` indirection).
+- The wire-format framing (magic, version field, signed and encrypted headers, CRC trailer) is preserved. The opcode numeric encodings shift because opcodes are added and retired, but `BYTECODE_VERSION` stays at 1 per the operator decision (no production traction; backward compatibility is not a constraint).
+- The public `Value` enum variants visible at the host API are preserved at the marshalling boundary. The `KeleusmaType` derive sees the same `Tuple`, `Array`, `Struct`, `Enum` shapes from the host's perspective. Internally, all composite variants collapse into a single `Value::Composite { handle, byte_size }` representation; the marshall layer translates between the host's typed view and the runtime's flat-byte view.
+- Existing source-level programs compile and run unchanged. The surface language and semantics are unaffected. Differences are limited to WCMU and WCET numbers (smaller and more precise) and the internal memory layout.
 
-**What changes in the runtime.**
+**What changes.**
 
-- Composite `Value` internal representation: flat byte storage replaces `Vec<Value>` and `String` indirection. A `(Word, Word)` tuple's bytes are `[i64::to_le_bytes; 2]` packed inline; an `[Word; 8]` array's bytes are eight Words packed inline; a `struct Point { x: Word, y: Word }` is sixteen bytes packed with statically-known field offsets; an `enum Color { Red, Green, Blue }` is one discriminant byte plus the largest variant's payload bytes.
-- Operand stack: the simpler path keeps the operand stack's shape (still a `Vec<GenericValue<W, F>>` from the runtime's perspective) but changes each composite variant's internal payload to flat bytes. The operand-stack hot path is unchanged at the call-site level; the bytes a `Value::Tuple` pushes carry no heap allocation.
-- Op handlers update to produce and consume the flat byte representation. The opcode parameters and stack effects are unchanged; only the runtime interpretation changes.
-- WCMU calculation in the verifier: numerical results change because the representation is correct now. The verifier walks the same ops in the same order; the per-op byte cost reflects the actual representation rather than the V0.2.0 over-approximation that included `Vec` headers, `String` keys, and per-element indirection.
-- `body_heap` in `wcmu_stream_iteration` drops to zero for composite construction because composites no longer allocate on the global heap. The bytes shift into the operand-stack count where they belong. `KStr` continues to be the one variant that legitimately uses heap (specifically, arena-resident) storage; the existing accounting for KStr survives.
+- **Compiler.** Walks every composite type at type-check time and computes its byte size and field offsets. Emits `AllocTransient(byte_size)` for composite construction. Emits `WriteScalarAt(offset, kind)` and `ReadScalarAt(offset, kind)` for field access. Resolves field names to byte offsets at emission time.
+- **Bytecode.** Opcode set consolidates as described above. Opcode numeric encodings shift. `BYTECODE_VERSION` stays at 1.
+- **Runtime.** The composite Value variants collapse into a single `Value::Composite { handle: TransientHandle, byte_size: u16 }` (or similar). Op handlers for the consolidated opcodes are mechanical: read or write at the supplied offset and scalar kind.
+- **Operand stack.** Each slot remains fixed-size. For scalars, the bytes are inline. For composites, the slot holds the arena handle plus byte size. The operand stack continues to live on the bottom ephemeral head; allocation pattern is unchanged at the `StackVec` level.
+- **Composite and dynamic string storage.** Composite bodies join dynamic string bodies on the top ephemeral head. Bump-allocated; mark-based reclamation at scope boundaries (function entry sets a frame mark; function return resets to it). Composite bodies are immutable once written; mutations to composite locals create fresh bodies at the next bump position. The high-water mark on each head accumulates within a single `loop main()` iteration and is reset to the head's frame-entry position at the loop's closing brace.
+- **WCMU calculation.** Numbers update because the representation is precise. The verifier walks each `AllocTransient` opcode, sums the requested byte sizes within each scope, and produces a precise high-water-mark bound for each ephemeral head. The total WCMU is the sum of the persistent region capacity plus the bottom head's high watermark plus the top head's high watermark across a single `loop main()` iteration. The V0.2.0 over-approximations (Vec headers, String keys, per-element indirection) disappear.
+- **WCET calculation.** Per-op cost shifts for the consolidated opcodes. `AllocTransient` is constant-cost (pointer increment plus bounds check). `WriteScalarAt` and `ReadScalarAt` are constant-cost (single byte-range copy). The cost-model calibration (the `keleusma-bench` crate's responsibility) needs to re-measure these.
 
-**Information the runtime needs.**
+**Information the compiler computes.**
 
-Field-name-to-byte-offset mapping for structs and tuples is derived at chunk-load time by walking each struct template and assigning offsets based on field order and per-field byte size. No additional wire-format bytes are required for this; the runtime computes the layout once at load.
+The compiler walks every Keleusma type at type-check time and produces a `LayoutDescriptor` describing its byte size and field offsets (see `src/value_layout.rs`, landed in P0). The descriptor is a compile-time data structure; it does not appear at runtime. The compiler uses it to emit opcodes with the right byte sizes and offsets.
 
-Per-slot type information for data segment slots is the one place where the current bytecode does not carry enough information for the runtime to size the flat-byte storage. The cleanest path is a new strippable debug opcode in the ISA — call it `DataSlotAnnotation` for now — that the compiler emits at the start of each chunk for every data slot the chunk touches. The opcode carries the slot index and a compact type representation. The runtime reads the annotation at chunk-load time, builds the per-slot offset table, and proceeds with the flat representation. A bytecode-stripping tool can remove the annotations to reduce on-disk size for production deployments; in that case the runtime falls back to the V0.2.x Vec-based representation for `.data` slots that lack annotations.
-
-This approach is strictly additive: existing V0.2.x bytecode contains no `DataSlotAnnotation` opcodes and loads under the Vec-based fallback. New bytecode produced under the corrected toolchain emits the annotations and gets the flat representation. The op set grows by one opcode; the wire format framing is unchanged.
-
-The same mechanism extends naturally to other compiler-emitted debug info. The audit of additional strippable debug opcodes (call sites, source line numbers, variable names, type annotations on operand-stack positions, et cetera) is captured in B29.
+For `.data` sections, the compiler emits the `DataSlotAnnotation` strippable debug opcode (B29) carrying the per-slot type representation. The runtime reads the annotation at chunk-load time to know each slot's byte layout. Stripped bytecode falls back to whatever default the runtime supplies (likely a `[u8; ...]` zero-filled buffer that the runtime treats opaquely).
 
 **Operational consequences.**
 
 | Property | V0.2.x (current) | After B28 |
 |----------|------------------|-----------|
-| Composite construction cost | One `Vec` allocation plus N pushes; struct adds per-field `String` clone | Stack-pointer increment, one contiguous byte write |
-| Heap allocation per composite | Yes (multiple `Vec` and `String` allocations) | Zero (for non-KStr composites) |
+| Composite construction cost | One `Vec` allocation plus N pushes; struct adds per-field `String` clone | Bump pointer increment plus N byte writes; no allocation |
+| Heap allocation per composite | Yes (multiple `Vec` and `String` allocations) | Zero. Composites live in the arena's transient region |
 | Embedded target without global allocator | Blocked | Supported |
 | Byte-snapshot of persistent region | Captures stale pointers | Captures self-contained bytes (subsumes B26's Path C) |
 | Arena-as-sole-allocator (R32's implicit promise) | Not delivered | Delivered (subsumes B27) |
 | WCMU bound precision | Imprecise (over-approximates by `Vec`/`String` overhead the language does not require) | Precise (reflects the language's fixed-size guarantee) |
 | Cache locality | One indirection per composite access plus another for elements | Locality follows source-level structure; LLVM register-allocation under V0.4.x lowering can see individual fields |
 | Hot code swap migration | Walk `Value` trees, rebuild composites | Migration table maps offset-to-offset; flat-byte transfer |
+| Opcode set size | Four `New*` opcodes plus four `Get/Set` field opcodes for composites | One `AllocTransient` plus four offset-and-kind read/write opcodes |
 
-**Effort estimate.**
+**Phased implementation plan.**
 
-Larger than B26 or B27 individually but smaller than the sum of B26 plus B27 because B28 absorbs both. Estimated four to six weeks of focused work, split:
+Estimated five to seven weeks of focused work, split:
 
-1. **Composite Value internal representation refactor.** Replace `Vec<Value>` and `String` payload fields with flat-byte buffers. One to two weeks. Touches the Value type definition, every constructor, every accessor, every Drop impl.
+| Phase | Scope | Deliverable | Effort |
+|-------|-------|-------------|--------|
+| P0 | `LayoutDescriptor` and `FlatComposite` infrastructure | `src/value_layout.rs` and `src/flat_value.rs` modules; no behaviour change | Complete (2-3 days, landed in commit `45df5bf`) |
+| P1 | Compile-time layout pass | Compiler walks every Keleusma type and computes byte sizes plus field offsets using `LayoutDescriptor`. Used in subsequent phases by the emission code. No opcode emission changes yet. | 3-5 days |
+| P2 | New opcode set | Define `AllocTransient`, `WriteScalarAt`, `ReadScalarAt`, `WriteCompositeAt`, `ReadCompositeAt`, `ReadDataField`, `WriteDataField`. Old composite opcodes marked deprecated but still functional. Op handlers for new opcodes implemented. | 5-7 days |
+| P3 | Compiler emission migration | Compiler emits new opcodes for composite construction and field access. Old opcodes still supported by the runtime for now. Both code paths exist in parallel; tests pass under both. | 5-7 days |
+| P4 | Top-head arena integration for composite bodies | Composite bodies allocate from the arena's top ephemeral head, alongside existing KString bodies. Marks set on function entry and reset on return. Composite handles are arena handles (analogous to `KString`). Mark-based reclamation tested. RESET at `loop main()` closing brace clears both heads. | 4-6 days |
+| P5 | Runtime composite representation collapse | `Value::Tuple`, `Value::Array`, `Value::Struct`, `Value::Enum` collapse into `Value::Composite`. The host marshalling layer translates at the API boundary. Old composite opcodes retired. | 5-7 days |
+| P6 | Strippable `DataSlotAnnotation` opcode and `debug_pool` field per B29 | Compiler emits `DataSlotAnnotation` for each `.data` slot; runtime reads at chunk-load and builds per-slot layouts. The chunk-local `debug_pool` wire-format addition lands here. | 4-5 days |
+| P7 | WCMU and WCET correction | Verifier updates byte-cost computation. Cost model re-calibration via `keleusma-bench`. Golden WCMU numbers update in tests. | 3-5 days |
+| P8 | Native marshalling preservation and hot-code-swap migration | `KeleusmaType` derive preserves typed conversions across the new representation. R29 hot-swap migration uses flat-byte transfer. | 4-6 days |
+| P9 | Documentation pass and B28 closure | Wire format spec, instruction set spec, language design narrative, R32, R29 architecture overview all update. B26 and B27 transition to "resolved through B28". B28 itself moves to RESOLVED. | 2-3 days |
 
-2. **Layout descriptor table.** Per-chunk struct template extension to carry field offsets and byte sizes; per-module data layout extension to carry per-slot type references. The compiler emits this; the runtime consumes it. Three to five days.
-
-3. **Op handler updates.** Every composite-touching op (NewTuple, NewArray, NewStruct, NewEnum, GetField, SetField, GetData, SetData) updated to use the flat representation. The opcode signatures and stack effects are unchanged. Three to five days.
-
-4. **WCMU calculation correction.** Verifier's per-op byte cost adjusted to match the new representation. The accounting code is small; the bulk of the work is updating golden-number tests that pinned the old WCMU numbers. Two to four days.
-
-5. **Native marshalling preservation.** Ensure the `KeleusmaType` derive and the public Value enum API remain stable across the change. Two to three days.
-
-6. **Hot code swap update.** R29's migration path uses Value-tree walking; B28 changes the Value tree's internal shape. Update the migration to use flat-byte transfer where possible. Three to five days.
-
-7. **Test sweep.** Every test that asserts a WCMU number, a composite byte size, or a Value internal shape needs revisiting. Three to five days.
-
-8. **Documentation pass.** R32, R29, the language design narrative, the wire format spec (noting the optional data-slot type extension), the architecture overview. Two to three days.
+The wire format extension under this plan includes the opcode-set shift (P2 lands new opcodes; P5 retires old ones) plus the B29 `debug_pool` field and `DataSlotAnnotation` opcode (P6). `BYTECODE_VERSION` stays at 1 throughout.
 
 **Compatibility.**
 
-Backwards-compatible at the bytecode level. V0.2.x bytecode loads under the corrected runtime with limited functionality (Vec-based fallback for composites in `.data` slots whose type cannot be inferred). New bytecode compiled under the corrected toolchain uses the flat representation and the optional per-slot type hint.
-
-The corrected runtime produces different WCMU numbers for the same source. Tools that consume WCMU should expect smaller (more precise) values after recompilation. The wire-format `wcmu_stream_iteration` field carries the new numbers; nothing about the framing changes.
+V0.2.x bytecode does not load under the post-B28 runtime because the opcode numeric encodings shift. This is acceptable per the operator decision that Keleusma has no production traction; backward compatibility is not a constraint. Source-level programs recompile under the new toolchain to produce post-B28 bytecode. The corrected runtime produces different WCMU numbers for the same source (smaller and more precise); tools that consume WCMU should expect this.
 
 **Forcing case.**
 
@@ -1110,21 +1159,22 @@ V0.4.x cross-target deployment, particularly to embedded targets without a globa
 
 B28 supersedes both. After B28 lands:
 
-- The persistent region naturally holds composite bodies inline because the entire composite is flat bytes. B26's Path C is the natural outcome of B28; the work in B26 is absorbed.
-- The transient region naturally uses arena bytes because composite construction is stack-pointer arithmetic, not allocation. B27's allocator parameterisation is moot; there is no `Vec` to parameterise.
+- The persistent region naturally holds `private data` composites inline because the entire composite is flat bytes. B26's Path C is the natural outcome of B28; the work in B26 is absorbed.
+- The top ephemeral head naturally holds composite bodies because composite construction is bump-allocator-style and reclamation is mark-based. B27's allocator parameterisation is moot; there is no `Vec` to parameterise.
 
-B26 and B27 stay in the backlog as documentary captures of the symptom-level fixes that were considered. If B28 lands, B26 and B27 transition to "resolved through B28" status. If B28 stays deferred indefinitely, B26 and B27 deliver the operational benefits within the existing representation.
+B26 and B27 stay in the backlog as documentary captures of the symptom-level fixes that were considered. When B28 lands, B26 and B27 transition to "resolved through B28" status.
 
 **Cross-references.**
 
 - B26 (arena-resident persistent region for composite data values) is a symptom-level fix that B28 subsumes.
 - B27 (arena-resident transient region for composite Value bodies) is a symptom-level fix that B28 subsumes.
+- B29 (strippable debug opcodes) carries the `DataSlotAnnotation` opcode that B28 needs in P6. The wire-format `debug_pool` field also lands in B28 P6.
 - R32 (dual-end arena) is the prior decision; B28 delivers the arena-as-sole-allocator property R32 implicitly promised but did not achieve.
 - R29 (hot code swap) interacts: the migration path needs updating because the Value tree's internal shape changes.
-- B16 (parametric Vm for sub-64-bit native runtimes) intersects: byte-size computation depends on the target's word and float widths.
+- B16 (parametric Vm for sub-64-bit native runtimes) intersects: byte-size computation depends on the target's word and float widths. `LayoutDescriptor` is parameterised over those widths from P0.
 - B24 (hardware-isolation for Cortex-M) is the deployment family that benefits from arena-as-sole-allocator and from precise WCMU bounds.
 - The hierarchical control scenarios are the operational shape that benefits most from the deterministic-allocator property and the certification-grade WCMU precision.
-- V0.2.0's WCMU calculation imprecision is the operational artefact of this defect; corrected runtime produces corrected numbers without bytecode-format changes.
+- V0.2.0's WCMU calculation imprecision is the operational artefact of this defect; corrected runtime produces corrected numbers.
 
 ## B29. Strippable debug opcodes in the ISA
 
