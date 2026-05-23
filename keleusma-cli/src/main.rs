@@ -21,6 +21,7 @@
 //! by non-enrolled keys. See `strict_mode` for the policy mechanics.
 
 mod duration;
+mod runtasks;
 mod strict_mode;
 
 use std::env;
@@ -55,6 +56,7 @@ fn main() -> ExitCode {
 
     match subcommand {
         "run" => run_subcommand(&args[2..]),
+        "run-tasks" => run_tasks_subcommand(&args[2..]),
         "compile" => compile_subcommand(&args[2..]),
         "keygen" => keygen_subcommand(&args[2..]),
         "repl" => repl_subcommand(&args[2..]),
@@ -143,6 +145,13 @@ fn print_help() {
     println!("                                    secret; the verifying key may be");
     println!("                                    distributed to hosts that load signed");
     println!("                                    bytecode.");
+    println!("  run-tasks <manifest.toml> [--quiet]");
+    println!("                                    Multi-script runner. Loads tasks from a");
+    println!("                                    TOML manifest and drives them through a");
+    println!("                                    cooperative scheduler with event queue,");
+    println!("                                    supervised restart, and per-task signing");
+    println!("                                    and encryption policy. See");
+    println!("                                    docs/architecture/RUN_TASKS.md.");
     println!("  repl                              Start interactive REPL");
     println!("  help, --help, -h                  Show this help");
     println!("  version, --version, -V            Show version");
@@ -373,6 +382,33 @@ fn looks_like_bytecode(bytes: &[u8]) -> bool {
         bytes
     };
     after_shebang.starts_with(b"KELE")
+}
+
+/// `run-tasks <manifest.toml> [--quiet]`. Multi-script runner per
+/// `docs/architecture/RUN_TASKS.md`. The manifest argument is
+/// required; the `--quiet` flag suppresses scheduler stderr.
+fn run_tasks_subcommand(args: &[String]) -> ExitCode {
+    if args.is_empty() {
+        eprintln!("error: `run-tasks` requires a manifest path");
+        return ExitCode::FAILURE;
+    }
+    let manifest_path = &args[0];
+    let mut quiet = false;
+    let mut i = 1;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--quiet" => {
+                quiet = true;
+                i += 1;
+            }
+            other => {
+                eprintln!("error: unknown option `{}`", other);
+                return ExitCode::FAILURE;
+            }
+        }
+    }
+    let outcome = runtasks::run(std::path::Path::new(manifest_path), quiet);
+    outcome.into_exit_code()
 }
 
 fn compile_subcommand(args: &[String]) -> ExitCode {
@@ -1291,7 +1327,7 @@ fn detect_entry_kind(module: &keleusma::bytecode::Module) -> Result<EntryKind, S
 /// Module with the FLAG_REQUIRES_SIGNATURE flag cleared so the
 /// caller can construct a Vm without the signed-module gate
 /// triggering.
-fn load_module(
+pub(crate) fn load_module(
     bytes: &[u8],
     verifying_keys: &[ed25519_dalek::VerifyingKey],
     decryption_keys: &[[u8; X25519_PRIVATE_KEY_LEN]],
@@ -1627,7 +1663,7 @@ fn format_err_with_offset(
 /// Format a value as a human-readable string. Recursively
 /// formats composite values so REPL and `println` output is
 /// readable without the `Debug` impl's wrapper noise.
-fn format_value(v: &Value) -> String {
+pub(crate) fn format_value(v: &Value) -> String {
     match v {
         Value::Int(n) => n.to_string(),
         Value::Float(f) => f.to_string(),

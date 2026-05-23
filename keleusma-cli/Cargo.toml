@@ -35,6 +35,17 @@ ed25519-dalek = { version = "2", default-features = false, features = ["alloc", 
 # time using a host-managed decryption-key store.
 x25519-dalek = { version = "2", default-features = false, features = ["alloc", "static_secrets"] }
 rand_core = { version = "0.6", default-features = false, features = ["getrandom"] }
+# TOML parsing for the run-tasks manifest. Serde is used only for
+# deserialisation of the structured manifest schema; no compile-time
+# code generation beyond what `serde_derive` already produces.
+toml = { version = "0.8", default-features = false, features = ["parse"] }
+serde = { version = "1", default-features = false, features = ["std", "derive"] }
+# Cross-platform signal handling for the run-tasks scheduler. The
+# crate is a thin layer over each platform's native facility:
+# sigaction(2) on Unix-likes (Linux, FreeBSD, OpenBSD, macOS) and
+# SetConsoleCtrlHandler on Windows. The runner uses it for SIGINT,
+# SIGTERM, and SIGHUP; on Windows the Unix-only signals are stubbed.
+signal-hook = { version = "0.3", default-features = false }
 
 [[bin]]
 name = "keleusma"
