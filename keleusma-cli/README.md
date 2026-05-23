@@ -260,7 +260,7 @@ The REPL session prefix accumulates declarations across the session but does not
 
 The REPL's return-type inference tries a fixed list of types. Expressions whose type is outside the list (custom enums, structs, tuples) require explicit function wrapping. Inference of the expression type prior to wrapping is future work.
 
-The CLI prepends a fixed preamble of `use` declarations to every compiled source so the Shell bundle's natives and the CLI-specific tick-interval natives are validated at compile time. The preamble's line count is subtracted from reported error positions so operators see line numbers in the user-visible source. Errors that fall inside the preamble window are reported with a `[preamble line N]` marker. The Math and Audio bundles are not yet covered by the preamble because their auto-widening behaviour at the native boundary conflicts with strict signature checking; calls into `math::*` and `audio::*` retain the existing untyped behaviour.
+The CLI prepends a fixed preamble of `use` declarations to every compiled source so the Math, Audio, and Shell bundles, plus the CLI-specific tick-interval natives, are validated at compile time. The preamble's line count is subtracted from reported error positions so operators see line numbers in the user-visible source. Errors that fall inside the preamble window are reported with a `[preamble line N]` marker. Word arguments unify with Float parameters at native call boundaries, so `math::sin(1)` works even though the signature is `(Float) -> Float`.
 
 ## File Extensions
 

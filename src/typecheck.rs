@@ -1221,7 +1221,17 @@ fn check_native_call_with_signature(
         } else {
             (arg_ty.clone(), expected.clone())
         };
-        if !types_compatible(ctx, &structural_arg_ty, &structural_expected) {
+        // The runtime auto-widens a Word argument to Float at the
+        // native call boundary, so the typechecker accepts Word
+        // where the signature declares Float. The widening is
+        // top-level only; nested positions inside composite types
+        // are not coerced because the marshalling layer does not
+        // reach into them.
+        let widened_compatible = matches!(
+            (&structural_arg_ty, &structural_expected),
+            (Type::Word, Type::Float)
+        );
+        if !widened_compatible && !types_compatible(ctx, &structural_arg_ty, &structural_expected) {
             return Err(TypeError::new(
                 alloc::format!(
                     "native `{}` argument {} expects {}, got {}",

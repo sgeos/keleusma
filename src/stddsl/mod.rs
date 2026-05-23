@@ -124,6 +124,80 @@ pub struct Audio;
 /// `shell` feature enabled.
 pub struct Shell;
 
+impl Math {
+    /// Source-form signature declarations for the Math bundle.
+    /// Hosts that want compile-time signature validation prepend
+    /// this string to the script source before parsing.
+    ///
+    /// All math functions declare `Float` parameters. The
+    /// typechecker allows a `Word` argument where a `Float`
+    /// parameter is declared at the native call boundary; the
+    /// runtime auto-widens the value. Scripts can therefore write
+    /// `math::sin(1)` even though the signature is `(Float) -> Float`.
+    pub const SIGNATURES: &'static str = concat!(
+        // Algebraic and rounding.
+        "use math::sqrt(Float) -> Float\n",
+        "use math::pow(Float, Float) -> Float\n",
+        "use math::abs(Float) -> Float\n",
+        "use math::sign(Float) -> Float\n",
+        "use math::floor(Float) -> Float\n",
+        "use math::ceil(Float) -> Float\n",
+        "use math::round(Float) -> Float\n",
+        "use math::trunc(Float) -> Float\n",
+        "use math::fmod(Float, Float) -> Float\n",
+        "use math::hypot(Float, Float) -> Float\n",
+        "use math::min(Float, Float) -> Float\n",
+        "use math::max(Float, Float) -> Float\n",
+        "use math::clamp(Float, Float, Float) -> Float\n",
+        "use math::lerp(Float, Float, Float) -> Float\n",
+        // Trigonometric.
+        "use math::sin(Float) -> Float\n",
+        "use math::cos(Float) -> Float\n",
+        "use math::tan(Float) -> Float\n",
+        "use math::asin(Float) -> Float\n",
+        "use math::acos(Float) -> Float\n",
+        "use math::atan(Float) -> Float\n",
+        "use math::atan2(Float, Float) -> Float\n",
+        "use math::tanh(Float) -> Float\n",
+        // Exponential and logarithmic.
+        "use math::exp(Float) -> Float\n",
+        "use math::ln(Float) -> Float\n",
+        "use math::log10(Float) -> Float\n",
+        "use math::log2(Float) -> Float\n",
+        // Named constants.
+        "use math::pi() -> Float\n",
+        "use math::tau() -> Float\n",
+        "use math::e() -> Float\n",
+        "use math::sqrt_2() -> Float\n",
+        "use math::ln_2() -> Float\n",
+        "use math::ln_10() -> Float\n",
+    );
+}
+
+impl Audio {
+    /// Source-form signature declarations for the Audio bundle.
+    /// Hosts that want compile-time signature validation prepend
+    /// this string to the script source before parsing.
+    ///
+    /// As with Math, `Float` parameters accept `Word` arguments
+    /// through the native-boundary auto-widening rule.
+    pub const SIGNATURES: &'static str = concat!(
+        "use audio::midi_to_freq(Word) -> Float\n",
+        "use audio::freq_to_midi(Float) -> Word\n",
+        "use audio::cents_to_ratio(Float) -> Float\n",
+        "use audio::ratio_to_cents(Float) -> Float\n",
+        "use audio::semitones_to_ratio(Float) -> Float\n",
+        "use audio::ratio_to_semitones(Float) -> Float\n",
+        "use audio::db_to_linear(Float) -> Float\n",
+        "use audio::linear_to_db(Float) -> Float\n",
+        "use audio::ms_to_samples(Float, Float) -> Float\n",
+        "use audio::samples_to_ms(Float, Float) -> Float\n",
+        "use audio::onepole_lpf_alpha(Float, Float) -> Float\n",
+        "use audio::onepole_hpf_alpha(Float, Float) -> Float\n",
+        "use audio::pan_law(Float) -> (Float, Float)\n",
+    );
+}
+
 impl<W: Word, A: Address, F: Float> Library<W, A, F> for Math {
     fn register<'a, 'arena>(self, vm: &mut GenericVm<'a, 'arena, W, A, F>) {
         math::register(vm);

@@ -989,6 +989,8 @@ const CLI_NATIVE_SIGNATURES: &str = concat!(
 /// `shell::sleep_ms(500)` are validated at compile time.
 fn build_preamble() -> String {
     let mut s = String::new();
+    s.push_str(stddsl::Math::SIGNATURES);
+    s.push_str(stddsl::Audio::SIGNATURES);
     s.push_str(stddsl::Shell::SIGNATURES);
     s.push_str(CLI_NATIVE_SIGNATURES);
     s
