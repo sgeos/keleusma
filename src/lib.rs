@@ -156,6 +156,12 @@ pub mod compiler;
 /// checker and the refinement-elision pass.
 #[cfg(feature = "compile")]
 pub mod interval;
+/// Compile-time layout pass. Bridges AST type expressions to
+/// the [`value_layout::LayoutDescriptor`] byte-layout
+/// descriptors used by subsequent B28 phases for composite
+/// allocation and field access.
+#[cfg(feature = "compile")]
+pub mod layout_pass;
 /// Source-text tokenisation (lexer).
 #[cfg(feature = "compile")]
 pub mod lexer;

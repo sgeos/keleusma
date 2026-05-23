@@ -44,11 +44,18 @@ use alloc::vec::Vec;
 /// Tag enum identifying the fixed-size primitive types Keleusma
 /// admits in composite positions.
 ///
-/// String types ([`crate::bytecode::GenericValue::StaticStr`] and
-/// [`crate::bytecode::GenericValue::KStr`]) are not represented
-/// here because they are not fixed-size primitives in the
-/// flat-byte sense. They carry references into rodata or arena
-/// memory and have their own representation.
+/// The surface-language `Text` type is represented as a fixed-
+/// size handle (`Text` variant) regardless of whether the
+/// underlying value is a [`crate::bytecode::GenericValue::StaticStr`]
+/// (rodata-resident) or [`crate::bytecode::GenericValue::KStr`]
+/// (arena-resident). The handle size is `2 * word_bytes` (a
+/// pointer-or-offset plus a length or epoch field). The runtime
+/// distinguishes the two cases through a discriminant in the
+/// handle; the layout pass treats both as the same scalar shape.
+///
+/// Opaque host references ([`crate::bytecode::GenericValue::Opaque`])
+/// are represented as a fixed-size single-pointer handle
+/// (`Opaque` variant). The byte size is `word_bytes`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ScalarKind {
     /// The unit type `()`. Zero bytes. Carries no information.
@@ -75,6 +82,17 @@ pub enum ScalarKind {
     /// surface.
     #[cfg(feature = "floats")]
     Float,
+    /// Text reference. Fixed-size handle that carries either a
+    /// rodata offset and length (for static strings) or an arena
+    /// handle and epoch (for dynamic strings). Byte size is
+    /// `2 * word_bytes`. The runtime distinguishes the two
+    /// underlying representations through a discriminant in the
+    /// handle; the layout pass treats both uniformly.
+    Text,
+    /// Opaque host reference. Fixed-size single-pointer handle
+    /// to a host-managed `Arc<dyn HostOpaque>`. Byte size is
+    /// `word_bytes`.
+    Opaque,
 }
 
 impl ScalarKind {
@@ -96,6 +114,8 @@ impl ScalarKind {
             Self::Fixed => word_bytes,
             #[cfg(feature = "floats")]
             Self::Float => float_bytes,
+            Self::Text => 2 * word_bytes,
+            Self::Opaque => word_bytes,
         }
     }
 }
@@ -332,6 +352,21 @@ mod tests {
     fn scalar_float_follows_float_width() {
         assert_eq!(ScalarKind::Float.size_in_bytes(I64_BYTES, F64_BYTES), 8);
         assert_eq!(ScalarKind::Float.size_in_bytes(I32_BYTES, F32_BYTES), 4);
+    }
+
+    #[test]
+    fn scalar_text_is_two_words() {
+        assert_eq!(ScalarKind::Text.size_in_bytes(I64_BYTES, F64_BYTES), 16);
+        assert_eq!(ScalarKind::Text.size_in_bytes(I32_BYTES, F32_BYTES), 8);
+        assert_eq!(ScalarKind::Text.size_in_bytes(2, F32_BYTES), 4);
+        assert_eq!(ScalarKind::Text.size_in_bytes(1, F32_BYTES), 2);
+    }
+
+    #[test]
+    fn scalar_opaque_is_one_word() {
+        assert_eq!(ScalarKind::Opaque.size_in_bytes(I64_BYTES, F64_BYTES), 8);
+        assert_eq!(ScalarKind::Opaque.size_in_bytes(I32_BYTES, F32_BYTES), 4);
+        assert_eq!(ScalarKind::Opaque.size_in_bytes(2, F32_BYTES), 2);
     }
 
     #[test]

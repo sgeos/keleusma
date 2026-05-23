@@ -9,76 +9,79 @@ AI to Human communication channel.
 ## Last Updated
 
 **Date**: 2026-05-23
-**Status**: B28 design revised. The earlier "preserve the opcode set" framing was wrong; the cleaner design consolidates the composite-construction and field-access opcodes around a single `AllocTransient(byte_size)` plus offset-and-kind read/write opcodes, with the compiler computing byte sizes and field offsets at compile time. P0 infrastructure (`LayoutDescriptor`, `FlatComposite`) remains useful. The phased plan was rewritten to reflect the consolidation. P1 in the original plan ("migrate Value::Tuple to flat-byte") is replaced by P1 in the revised plan ("compile-time layout pass"). No code changes since the P0 commit `45df5bf`; this revision is documentation only.
+**Status**: B28 P1 complete. Compile-time layout pass landed in new `src/layout_pass.rs` module. `LayoutContext::layout_for` recursively walks AST type expressions and produces `LayoutDescriptor` byte-layout descriptors. `ScalarKind` gained `Text` and `Opaque` variants. 930 lib tests passing (up from 907). All workspace test suites green across default, default-minus-floats, and all-features matrices. Clippy and rustfmt clean. No pipeline integration yet; P2 wires the pass into op emission.
 
 ## Summary of work since the last reverse-prompt update
 
-### B28 redesign
+### `src/layout_pass.rs`
 
-The operator pointed out that the V0.2.0 framing of "preserve the opcode set, change only the runtime" was unnecessarily constraining. The cleaner design is:
+`LayoutContext<'a>` borrows the struct and enum tables for the duration of layout computation. Constructor takes `word_bytes` and `float_bytes` matching the target descriptor.
 
-1. The compiler computes every type's byte size and field offsets at compile time using `LayoutDescriptor` (already landed in P0).
-2. The opcode set consolidates. `NewTuple`, `NewArray`, `NewStruct`, `NewEnum` collapse into `AllocTransient(byte_size)`. `GetField`, `GetTupleField`, `GetEnumField`, `SetField` collapse into `ReadScalarAt(offset, kind)` / `WriteScalarAt(offset, kind)` / `ReadCompositeAt(offset, byte_size)` / `WriteCompositeAt(offset, byte_size)`. `GetData(slot)` / `SetData(slot)` gain offset and kind operands and become `ReadDataField(slot, offset, kind)` / `WriteDataField(slot, offset, kind)`.
-3. All memory lives in the arena. The persistent region holds `private data`. The ephemeral region has two bump heads (bottom = stack, top = heap) that grow toward each other and reset together at the closing brace of `loop main()`. `shared data` is host-passed and external to the arena. `const data` lives in `.rodata` (the constant pool).
-4. Composite bodies are immutable in the ephemeral region; mutations create fresh bodies at the next bump position. Mark-based reclamation at scope boundaries.
+`LayoutContext::layout_for(&TypeExpr) -> Result<LayoutDescriptor, LayoutError>` recursively computes layouts:
 
-`BYTECODE_VERSION` stays at 1 throughout. Opcode numeric encodings shift, but the operator decision that Keleusma has no production traction means backward compatibility is not a constraint.
+- `Unit` → `Scalar(Unit)`
+- `Prim(PrimType, _)` → `Scalar(kind_for_prim)` where `Byte → Byte`, `Word → Int`, `Fixed(_) → Fixed`, `Float → Float`, `Bool → Bool`, `Text → Text`.
+- `Tuple(elems, _)` → `Tuple(layout_for each elem)`
+- `Array(elem, count, _)` → `Array { element, count as usize }` with `InvalidArraySize` if count is negative
+- `Option(inner, _)` → `Enum { type_name: "Option", variants: [(None, []), (Some, [layout_for inner])] }`
+- `Labelled(inner, _, _)` → transparently descends to `layout_for(inner)`
+- `NegativeLabelled(inner, _, _)` → transparently descends to `layout_for(inner)`
+- `Named(name, args, _)`:
+  - If `args` is non-empty → `UnresolvedGeneric` (post-monomorphization input expected)
+  - Look up in struct table → `Struct { type_name, fields: [(name, layout_for type_expr)] }`
+  - Look up in enum table → `Enum { type_name, variants: [(name, [layout_for each payload])] }`
+  - Otherwise → `UnknownType`
 
-### Memory model verification
+`LayoutError`: `UnknownType(String)`, `UnresolvedGeneric(String)`, `InvalidArraySize(i64)`, `UnsupportedType(String)`.
 
-Verified from the existing `keleusma-arena` and `src/vm.rs` / `src/kstring.rs` code:
+Convenience: `LayoutContext::size_in_bytes(&TypeExpr) -> Result<usize, LayoutError>` returns the total byte size in one call.
 
-- Bottom head: stack. Operand-stack vectors use `BottomHandle` (`src/vm.rs:21`).
-- Top head: heap. KString bodies allocate via `alloc_top_bytes` (`src/kstring.rs:39`).
-- Both ephemeral heads grow toward each other in the shared middle of the ephemeral region.
-- The persistent region survives RESET; both ephemeral heads are cleared on RESET.
-- RESET is paired with the closing brace of `loop main()`.
+### `src/value_layout.rs` extensions
 
-### Phased plan revised
+`ScalarKind` gained two new variants to cover types that did not previously have a scalar representation:
 
-| Phase | Scope | Status |
-|-------|-------|--------|
-| P0 | `LayoutDescriptor` and `FlatComposite` parallel infrastructure | Complete (`45df5bf`) |
-| P1 | Compile-time layout pass; compiler walks every Keleusma type and computes byte sizes and field offsets | Next |
-| P2 | New consolidated opcode set defined; op handlers implemented; old opcodes deprecated but functional | |
-| P3 | Compiler emission migrates to new opcodes; both code paths exist in parallel | |
-| P4 | Composite bodies join the arena's top ephemeral head; mark-based reclamation tested | |
-| P5 | Runtime composite Value variant collapse; old opcodes retired | |
-| P6 | Strippable `DataSlotAnnotation` and chunk-local `debug_pool` field per B29 | |
-| P7 | WCMU and WCET correction; cost model re-calibration | |
-| P8 | Native marshalling preservation; R29 hot-code-swap migration update | |
-| P9 | Documentation pass; B28 moves to RESOLVED; B26 and B27 transition to "resolved through B28" | |
+- `Text` (2 word bytes): static-string offset plus length, or arena handle plus epoch. The runtime distinguishes the underlying representation; the layout pass treats them uniformly.
+- `Opaque` (1 word byte): `Arc<dyn HostOpaque>` pointer.
+
+`ScalarKind::size_in_bytes` updated to return `2 * word_bytes` for `Text` and `word_bytes` for `Opaque`.
+
+### Module registration
+
+`src/lib.rs` declares `layout_pass` as a top-level `pub mod` gated behind the `compile` feature (parallel to `compiler`, `monomorphize`, etc.). Module docs explicitly note that P1's deliverable is callable infrastructure, not pipeline integration.
 
 ## Verification
 
-- `cargo test --workspace`: not re-run (documentation-only change since the P0 commit).
-- BACKLOG.md modifications affect only the B28 entry. B29, B30, B31 unchanged.
-- The revised B28 entry preserves the operational consequences table, the forcing case, and the cross-references.
+- `cargo test --workspace`: 930 lib tests passing (up from 907). 23 new tests across the layout_pass module and the two new ScalarKind variants.
+- `cargo test -p keleusma --no-default-features --features compile,verify`: 806 tests pass (floats-gated tests skipped as expected).
+- `cargo test -p keleusma --all-features`: 909 tests pass.
+- `cargo clippy --workspace --tests -- -D warnings`: clean.
+- `cargo fmt --all -- --check`: clean.
 
 ## Open questions
 
-None at the design layer. The revised B28 is internally consistent and grounded in verified facts about the arena and the existing consumer code.
+None. P1 is callable parallel infrastructure with clear inputs and outputs.
 
 ## Recommended next step
 
-Begin revised P1: compile-time layout pass.
+Begin P2: define the new consolidated opcode set and implement op handlers.
 
-P1 scope:
+P2 scope:
 
-1. Extend the compiler's type-handling code to compute a `LayoutDescriptor` for every concrete Keleusma type encountered during compilation. The layout uses `src/value_layout.rs` from P0.
-2. Cache the layout in the appropriate compiler data structure (likely a `BTreeMap<TypeKey, Arc<LayoutDescriptor>>` keyed by the type's canonical representation).
-3. Validate the byte sizes against the existing struct templates and tuple type expressions.
-4. No opcode emission changes yet. The layout pass is read-only from the perspective of the bytecode; it just establishes the compile-time data structure that P2 onward will consume.
+1. New opcode variants in `Op` enum: `AllocTransient(byte_size: u16)`, `WriteScalarAt(offset: u16, kind: ScalarKind)`, `ReadScalarAt(offset: u16, kind: ScalarKind)`, `WriteCompositeAt(offset: u16, byte_size: u16)`, `ReadCompositeAt(offset: u16, byte_size: u16)`, `ReadDataField(slot: u16, offset: u16, kind: ScalarKind)`, `WriteDataField(slot: u16, offset: u16, kind: ScalarKind)`.
+2. Wire-format encoding for the new opcodes (numeric IDs, operand serialisation).
+3. Op handlers in `src/vm.rs` for each new opcode. The handlers operate on a new internal composite-value representation that holds a transient-region handle plus byte size.
+4. Old composite opcodes (`NewTuple`, `NewArray`, `NewStruct`, `NewEnum`, `GetField`, `GetTupleField`, `GetEnumField`, `SetField`, `GetData`, `SetData`) marked deprecated but still functional. Both code paths exist in parallel; tests pass under both.
+5. New transient-region handle type that wraps an arena `TopHandle<'arena>` with a byte size and a layout (or layout reference). Living alongside the existing `Value::Tuple(Vec<...>)` etc.
+6. Unit tests covering each new opcode in isolation (allocate, write scalar, read scalar, write composite, read composite, read data field, write data field).
 
-P1 effort: 3-5 days.
+P2 estimated effort: 5-7 days. P2 is the most invasive phase because the new op handlers must integrate with the arena and the operand stack.
 
-Awaiting operator confirmation to proceed with P1.
+The wire format extension under P2 includes the new opcode numeric encodings. `BYTECODE_VERSION` stays at 1.
 
 ## Reference
 
-- `docs/decisions/BACKLOG.md` B28 (revised), B29, B30, B31.
-- `src/value_layout.rs` from P0 (`45df5bf`).
-- `src/flat_value.rs` from P0 (`45df5bf`).
-- `src/vm.rs:21` for the operand-stack-on-bottom-head convention.
-- `src/kstring.rs:39` for the KString-on-top-head convention.
-- `keleusma-arena/src/lib.rs` for the dual-head arena structure.
+- `src/layout_pass.rs` defines `LayoutContext` and `LayoutError`.
+- `src/value_layout.rs` defines `LayoutDescriptor` and `ScalarKind` (now with `Text` and `Opaque`).
+- `src/flat_value.rs` defines the scalar byte helpers and `FlatComposite`.
+- B28 entry in `docs/decisions/BACKLOG.md` covers the revised phased implementation plan.
+- B29 entry in `docs/decisions/BACKLOG.md` covers the strippable debug opcodes that P6 will land alongside the chunk-local `debug_pool` field.
