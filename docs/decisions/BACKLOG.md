@@ -1130,15 +1130,52 @@ B26 and B27 stay in the backlog as documentary captures of the symptom-level fix
 
 B28 introduces one new ISA opcode (`DataSlotAnnotation`) that carries debug-grade type info for data segment slots and that a `keleusma strip` tool can remove without affecting execution semantics. The same mechanism scales to other compiler-emitted debug info that is useful to ship in development bytecode and useful to strip from production bytecode. This entry catalogues the candidate strippable debug opcodes, names the stripper tool, and pins the wire-format invariants the design must preserve.
 
-The general pattern: the compiler emits debug-info opcodes inline in the op stream. The runtime reads them at chunk-load time (or at execution time, depending on the opcode's purpose), uses the info to enrich its operation, and tolerates absence by falling back to the V0.2.x behaviour. A `keleusma strip` subcommand walks the op stream of an existing bytecode artefact and removes opcodes tagged strippable. The stripped artefact has identical execution semantics; only debug-grade properties degrade.
+The general pattern: the compiler emits debug-info opcodes inline in the op stream alongside a chunk-local debug operand pool that holds the variable-length data the opcodes reference (strings, source spans, type representations). The runtime reads the opcodes at chunk-load time or at execution time depending on the opcode's purpose, uses the info to enrich its operation, and tolerates absence by falling back to the V0.2.x behaviour. A `keleusma strip` subcommand walks the op stream and removes opcodes tagged strippable, then sets the chunk's debug pool to absent. The stripped artefact has identical execution semantics; only debug-grade properties degrade.
 
-Three invariants the design preserves:
+**Design metaphor.** Debug opcodes are a highlighter and annotations on a piece of paper. The detailed notes (variable names, IFC labels, source spans, type representations) live in an addendum. The paper itself is the release-format op stream and is unchanged by the presence or absence of marks and addendum. `keleusma strip` removes the highlighter marks and tears out the addendum, restoring the paper to its release-format shape. The inverse operation (compile with debug info on) adds marks and addendum to the same paper without modifying any of the underlying text.
+
+**BYTECODE_VERSION stays at 1.** Keleusma has no production traction; backward-compatibility is not a constraint. The new opcodes and the chunk-level debug pool field are introduced without a version bump. Bytecode produced before B28 and B29 has no debug opcodes and an absent debug pool; bytecode produced after carries both. Runtimes built after the change handle both; runtimes built before will reject the new opcodes, but no such runtimes exist in production.
+
+Four invariants the design preserves:
 
 1. **Strippability is a property of the opcode, not the op-stream position.** Each opcode in the ISA carries a `strippable: bool` flag in its definition. The stripper tool reads this flag and decides what to keep.
 
 2. **Stripped and unstripped bytecode produce the same execution behaviour.** A program that compiles, signs, encrypts, and runs successfully should produce identical observable outputs whether or not it was stripped before execution. The strip step is purely byte-reduction and debug-grade information loss.
 
 3. **Strippable opcodes do not consume operand stack.** They are pure annotations on the op stream; they neither push nor pop. The verifier's stack-effect analysis treats them as no-ops; the WCMU computation treats them as zero-cost. This keeps the verifier's existing CFG analysis valid regardless of strip state.
+
+4. **Debug content adds to and subtracts from the release format cleanly.** Producing debug bytecode from release bytecode is purely additive: introduce strippable opcodes interleaved with the existing op stream and append a `debug_pool` field to each chunk. Producing release bytecode from debug bytecode is the exact inverse: remove the strippable opcodes and drop the `debug_pool` field. No non-debug byte changes in either direction. Release format and debug format share an identical underlying program; they differ only in the presence or absence of annotations and addendum. This invariant is what makes `strip` a verifiable operation rather than a lossy transformation.
+
+**Chosen format: chunk-local `debug_pool` field (Shape B)**
+
+The variable-length data that strippable debug opcodes reference (variable names, source spans, type representations, IFC label sets) lives in a chunk-local `debug_pool: Option<Vec<u8>>` field that the wire format gains alongside the existing per-chunk fields (`constants`, `struct_templates`). The field is optional and length-prefixed, following the existing wire-format conventions for per-chunk optional sections. Bytecode without debug info omits the field entirely; bytecode with debug info carries the pool.
+
+The pool is structured as three concatenated sub-pools:
+
+```
+debug_pool = {
+    string_pool_length: u32,
+    string_pool: Vec<String>,            // length-prefixed UTF-8 strings
+    span_pool_length: u32,
+    span_pool: Vec<(u16, u32, u32)>,     // (file_string_idx, byte_offset, byte_length)
+    type_pool_length: u32,
+    type_pool: Vec<TypeRepr>,            // compact type representations for DataSlotAnnotation
+}
+```
+
+Debug opcodes carry small u16 indices into these sub-pools rather than inline payloads. Fixed-size opcode records survive intact per the V0.2.0 ISA discipline.
+
+`keleusma strip` is a two-step pass per chunk: walk the op stream removing opcodes tagged strippable, then set the chunk's `debug_pool` field to absent. Both steps preserve every other chunk invariant.
+
+This design directly realises the highlighter-and-addendum metaphor. The op stream is the paper. The strippable opcodes are highlighter marks placed on the paper. The `debug_pool` field is the addendum attached to the document. Stripping removes the marks and detaches the addendum; the paper is byte-identical to a release build that was compiled without debug info in the first place.
+
+**Alternatives considered and rejected**
+
+| Shape | Description | Reason rejected |
+|-------|-------------|-----------------|
+| A: Opcode-introduced inline pool | A `DebugPoolBegin(length)` opcode introduces a length-prefixed payload of raw bytes within the op stream. Debug opcodes that follow reference offsets into the pool. | The addendum bytes live inside the paper rather than alongside it. Stripping requires excising a region of the op stream, not detaching a separate field. Violates the analogy's separation between paper and addendum. The runtime op-stream walker needs a special case for the inline payload. |
+| C: Module-level debug pool | A single `debug_pool` field at the module level holds debug operand data for all chunks. Debug opcodes carry module-level offsets. | Per-chunk pools mirror the natural compilation unit; module-level pools force cross-chunk reference resolution at load time. The deduplication benefit is small for typical programs because most identifier strings are local to their declaring chunk. Per-chunk pools also let the loader stream chunk loads without pre-reading a global addendum. |
+| D: Reuse existing constants pool | Debug opcodes reference indices in the chunk's existing constants pool; the stripper garbage-collects unreferenced constants. | Renumbering live constants after strip is invasive: every opcode in the chunk that references a moved constant must be rewritten. The release-format op stream of a stripped artefact differs from a freshly-compiled release artefact in constant indices, violating the symmetric add/subtract invariant. |
 
 **Candidate strippable debug opcodes**
 
@@ -1184,9 +1221,9 @@ A reduced first commit could land just `DataSlotAnnotation` plus the strip mecha
 
 **Compatibility**
 
-Backwards-compatible. Old V0.2.x bytecode has none of these opcodes; the runtime tolerates absence. New bytecode emits them; an old runtime would reject the unknown opcodes unless we additionally make unknown opcodes a soft-reject path (currently unknown opcodes are likely a hard reject in the verifier). The decision point: do we want the new opcodes to load on V0.2.x runtimes (in which case old runtimes need a "skip unknown opcode" path) or do we want them to be V0.2.x-incompatible (in which case `BYTECODE_VERSION` advances)?
+`BYTECODE_VERSION` stays at 1. Keleusma has no production traction, so backward-compatibility is not a constraint and the version-bump cost is unjustified. The new opcodes and the chunk-local `debug_pool` field land as a V0.2.y or V0.3 ISA change without a version bump. Bytecode produced before this entry has no debug opcodes and an absent debug pool; bytecode produced after carries both. Runtimes built before this entry will reject the new opcodes as unknown, but no such runtimes exist in production, so the failure mode is theoretical.
 
-The natural choice is V0.2.x-incompatible: the new opcodes are part of the V0.2.y or V0.3 ISA; old runtimes reject them as unknown; new runtimes know how to interpret them. `BYTECODE_VERSION` advances by one. The wire format framing is unchanged.
+The wire format framing is unchanged. The chunk-level `debug_pool` field is a new optional length-prefixed section that follows the existing per-chunk optional-section convention. A chunk without debug info serialises identically to today's chunk format; a chunk with debug info appends the additional section.
 
 **Forcing case**
 
@@ -1195,6 +1232,47 @@ B28's landing forces `DataSlotAnnotation`. The remaining catalogue is forced by 
 **Cross-references**
 
 - B28 (runtime composite Value representation aligned with the language guarantee) is the immediate driver; `DataSlotAnnotation` is the load-bearing opcode B28 needs.
-- The wire format specification gains an "Optional debug opcodes" section listing the catalogue.
-- The CLI README's `compile` and `run` sections get a note about the strip workflow.
+- `docs/spec/WIRE_FORMAT.md` gains a new section documenting the optional per-chunk `debug_pool` field, its sub-pool layout, and the `Optional debug opcodes` catalogue when this entry is implemented.
+- `docs/spec/INSTRUCTION_SET.md` and `docs/spec/STRUCTURAL_ISA.md` gain a `strippable` column on the opcode table to mark each opcode's strip eligibility.
+- The CLI README's `compile` and `run` sections get a note about the strip workflow; a new `keleusma strip` subcommand is added.
 - `Rex` is the cited prior art for `CallSite`'s shape; the specific mechanism it uses is the basis for this entry's `CallSite` design.
+
+## B30. CLI runner deferred work
+
+Three items deferred during the V0.2.1 CLI runner work that are not specific to the `run-tasks` multirunner. Each is individually substantial and individually scoped. None blocks any V0.2.x release; each becomes load-bearing when a concrete operator workload calls for it. This entry consolidates the items from `docs/process/REVERSE_PROMPT.md` (which is overwritten each session) into a durable backlog record.
+
+| # | Item | Description | Forcing case |
+|---|------|-------------|--------------|
+| 1 | Mutable `shared`/`private data` REPL persistence beyond scalars | The V0.2.x REPL persists shared data through the host-visible `Vm::set_data` and `Vm::get_data` Value-clone API. Scalar types round-trip correctly. Composite types (Tuple, Array, Struct, Enum) clone correctly across evaluations through the existing API. Private data slots have no equivalent host API; private data persistence requires either an arena snapshot-and-restore mechanism in the VM or incremental module loading that preserves state across recompiles. The structural fix is B28's flat-byte composite representation, which makes byte-snapshot of the persistent region sound. | Operators who want their REPL session state to survive a private-data declaration would feel this most. |
+| 2 | Generic `Result<T, E>` type | A language-design question deferred deliberately. The V0.2.x bundled shell natives use the trap-on-error pattern (errors surface as `VmError::NativeError` and halt execution) rather than returning a `Result` that the script-side code unwraps. Adding `Result<T, E>` adds a sum-type pattern that the language does not currently provide; the choice between trap-on-error and explicit-Result has implications for total-functional reasoning, WCET analysis, and the certification narrative. | Operators who want to write recoverable shell pipelines rather than trap-on-first-failure would feel this most. The host-native error-handling boundary is the natural location for it. |
+| 3 | `shell::read_lines` native | Returns the lines of a text file as a script-visible collection. Contingent on a dynamic-length Array type or equivalent. The V0.2.x `shell::read_string` returns the entire file contents as a single Text; line-by-line iteration in script-side code requires splitting the string, which the bundled natives do not currently provide. | Operators who want to process line-delimited inputs (logs, CSV, configuration files) inside a Keleusma script without a host-side preprocessor. |
+
+**Cross-references**
+
+- B28 (runtime composite Value representation aligned with the language guarantee) is the structural fix for item 1's deeper case (private-data byte snapshot).
+- The Generic `Result<T, E>` decision is in the V0.3.x language-extension territory; it interacts with monomorphisation and with the host-native marshalling surface.
+- The `shell::read_lines` decision is contingent on a dynamic-length Array type or a script-side string-splitting native; either is a separate decision.
+
+## B31. run-tasks deferred work
+
+Ten items deferred during the V0.2.1 `keleusma run-tasks <manifest.toml>` implementation. Each was explicitly marked deferred in the design proposal (`docs/architecture/RUN_TASKS.md`) and none blocks V0.2.1 landing. This entry consolidates the items into a durable backlog record and gives each a tracking row that survives REVERSE_PROMPT rewrites.
+
+| # | Item | Description | Forcing case |
+|---|------|-------------|--------------|
+| 1 | Manifest signing | The TOML manifest itself is unsigned. Tasks declared in the manifest reference per-task bytecode artefacts that can be independently signed and verified, but the manifest's task list, restart limits, and per-task policy is plain text. A manifest signing scheme would Ed25519-sign the manifest body and require the runner to verify before scheduling tasks. | Operators deploying to environments where the manifest itself is a tamper target. |
+| 2 | Per-task isolation through OS primitives | Tasks share the runner process's address space, file descriptors, and OS-level permissions. Per-OS isolation primitives (Linux namespaces, FreeBSD jails, OpenBSD `pledge`/`unveil`, macOS sandbox profiles, Windows job objects) would scope a task's OS-visible side effects. Substantial per-OS work because each platform's primitive set has different semantics. | Operators running mixed-trust task sets in a single runner. |
+| 3 | Dynamic task addition | Tasks are declared statically in the manifest and the manifest is read once at startup. A control socket or a `kernel::add_task` native would let a running task add new tasks at runtime. | Operators whose workload shape includes spawning sub-tasks in response to events. |
+| 4 | Hot reload via SIGHUP | A SIGHUP handler is installed but performs no action. Hot reload would re-read the manifest, gracefully drain removed tasks, and start added tasks without restarting the runner process. Highest-leverage item in this list per the V0.2.1 close-out assessment. | Operators who want to update task configuration without process restart. |
+| 5 | Priority levels and preemption | The cooperative scheduler treats all tasks as equal-priority and runs each dispatch to completion (or to a yield). Priority levels with preemption would let a high-priority task interrupt a low-priority task. Out of scope by design for the cooperative model; operators needing preemption write their own host. | Operators whose workload includes hard-real-time tasks alongside best-effort tasks. |
+| 6 | Soft resource caps beyond WCMU | The arena bounds per-task memory and the cooperative model bounds per-dispatch CPU. Neither bounds wall-clock task lifetime, cumulative output volume, or other operational ceilings. A kill-runaway-task cap would terminate a task that exceeds a declared lifetime budget. | Operators running untrusted task sets who want to prevent a misbehaving task from monopolising the runner. |
+| 7 | Typed event payloads | Events currently carry a single `Word` payload. A manifest-declared event schema would let tasks declare typed payloads (structs, tuples, enums) and have the kernel validate payload conformance at `post_event` time. | Operators with rich inter-task communication patterns. |
+| 8 | Task-to-task ABI compatibility checking | Tasks declare event ids by number; mismatches between producer-side and consumer-side event id assignments are silently miscommunicated rather than rejected. Schema versioning would attach a version stamp to each event id and reject cross-version mismatches at task load. | Operators whose task set evolves over time and where event-id renumbering is a real maintenance risk. |
+| 9 | Native Windows Service Control Manager integration | The current Windows deployment path uses NSSM or winsw as a wrapper that runs the runner as a service. Native SCM integration would implement the SCM protocol directly so the runner can be installed as a first-class Windows service without a wrapper. | Operators deploying to Windows production environments who want first-class SCM tooling. |
+| 10 | Notification-protocol conventions on non-systemd supervisors | The runner emits `NOTIFY_SOCKET` messages for Linux systemd integration. Other supervisors (OpenRC, runit, s6, launchd, FreeBSD rc.d, OpenBSD rc.d, Windows service) do not define an equivalent ready/status/stopping/watchdog protocol; the runner currently emits nothing to them. A per-supervisor convention would specify what each emits and how the supervisor consumes it. | Operators on non-systemd hosts who want runtime status visibility through their supervisor's native channel. |
+
+**Cross-references**
+
+- `docs/architecture/RUN_TASKS.md` is the design doc that originally captured each item under "Open questions and future work".
+- Item 4 (hot reload) and B30 item 2 (`Result<T, E>`) were called out as highest-leverage in the V0.2.1 close-out assessment.
+- Item 7 (typed event payloads) and item 8 (ABI compatibility) compose: typed payloads make ABI checking meaningful.
+- Item 5 (preemption) is intentionally excluded from the cooperative model. The forcing case is a deployment shape that needs preemption; the response is "use a different host" rather than "extend the runner".
