@@ -877,6 +877,22 @@ Compared with Path A, Path B keeps the operand-stack and persistent-region repre
 
 This is the recommended path. It captures Path A's architectural benefit at the persistent region and Path B's hot-path preservation at the operand stack.
 
+**Required properties any path must satisfy.**
+
+The operator's design intent is that all private data lives in and fits in the persistent region such that an opaque byte snapshot can be taken and restored. Five concrete properties follow:
+
+1. **No pointers in the persistent region's bytes.** Either inline storage (Path A or C) or offset-relative pointers (a refinement of Path B that replaces `Vec<T, A>`'s absolute `NonNull<T>` with arena-base-relative offsets). The current `Vec<T>`-with-global-heap and the straightforward `Vec<T, ArenaAllocator>` both fail this property because both use absolute pointers.
+
+2. **The persistent region is sized to hold all private values including composite bodies.** `required_persistent_capacity_for(&module)` walks the type info and sums per-slot bytes (`Word` = 8, `Float` = 8, `Bool` = 1 padded, `(Word, Word)` = 16, `[Word; 8]` = 64, `struct Point { x: Word, y: Word }` = 16, et cetera). The current `slot_count * size_of::<Value>` formula is replaced.
+
+3. **WCMU accounting integrates the persistent size.** `wcmu_stream_iteration` continues to return per-iteration `(stack_bytes, body_heap)`. The persistent footprint becomes a separate, statically-knowable quantity: `required_persistent_capacity_for(&module)` reports the total persistent bytes the module requires, computed from the per-slot type info. The host adds the two: `total_wcmu = persistent_bytes + max(stack_bytes, body_heap_in_transient_region)`. The composite-body bytes currently counted under `body_heap` (when those bodies live on the global heap) shift into the persistent count instead, because those bodies now live in the persistent region and persist across iterations.
+
+4. **The arena allocator is given both numbers.** Already true via `Arena::with_capacity(total)` plus `Arena::resize_persistent(persistent_bytes)`. The contract does not change; only the per-slot byte sum that feeds the persistent number grows from `slot_count * size_of::<Value>` to a per-type sum.
+
+5. **Opaque byte snapshot of the persistent region is sufficient to restore.** A `Vec<u8>` snapshot from `arena.persistent_ptr()` of `persistent_capacity()` bytes captures everything needed to reconstruct the private data. Restoring on a fresh arena of the same persistent size makes the new Vm observe identical private state. This property follows directly from property 1.
+
+Path A and Path C satisfy all five properties directly. Path B as documented in this entry satisfies properties 2 through 4 but fails property 1 (absolute pointers) and therefore property 5; closing the gap requires the offset-relative-pointer refinement, which is more work than Path C's inline approach. Path D (Vm-side deep-clone API) does not satisfy property 1 or 5 by design; it provides a typed alternative to byte-snapshot rather than enabling byte-snapshot.
+
 **Path D: keep current design; add a deep-clone API for private slots.** `Vm::private_data_snapshot(&self) -> Vec<Value>` and `Vm::private_data_restore(&mut self, values: Vec<Value>) -> Result<(), VmError>` walk the persistent region slot by slot, cloning each `Value` (whose `Clone` impl deep-clones the heap-resident bodies). The host snapshots the resulting `Vec<Value>` rather than the raw bytes. Byte-snapshot remains unsound; per-slot Value-snapshot is the supported pattern.
 
 This is the smallest change. It does not align the runtime with the language guarantee; it just adds a typed-clone API for private slots equivalent to what shared slots already have through `set_data`/`get_data`. Estimated cost is a few hours. Suitable as a stopgap if Path C is not pursued in V0.2.x.
