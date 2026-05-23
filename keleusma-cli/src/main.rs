@@ -43,8 +43,6 @@ use strict_mode::{PolicyContext, X25519_PRIVATE_KEY_LEN, build_policy_context};
 
 const REPL_BANNER: &str = "Keleusma REPL. Type :help for commands, :quit to exit.";
 
-const REPL_RETURN_TYPES: &[&str] = &["Word", "Float", "bool", "Text", "()"];
-
 fn main() -> ExitCode {
     let args: Vec<String> = env::args().collect();
     let subcommand = match args.get(1) {
@@ -862,7 +860,25 @@ fn print_repl_help() {
 /// or an expression (evaluated against the prefix).
 fn is_declaration(line: &str) -> bool {
     let starters = [
-        "fn ", "yield ", "loop ", "struct ", "enum ", "trait ", "impl ", "use ", "data ",
+        "fn ",
+        "yield ",
+        "loop ",
+        "struct ",
+        "enum ",
+        "trait ",
+        "impl ",
+        "use ",
+        "data ",
+        "shared data ",
+        "private data ",
+        "const data ",
+        "signed fn ",
+        "signed yield ",
+        "signed loop ",
+        "ephemeral fn ",
+        "ephemeral yield ",
+        "ephemeral loop ",
+        "newtype ",
     ];
     starters.iter().any(|s| line.starts_with(s))
 }
@@ -896,32 +912,21 @@ fn evaluate_repl_input(prefix: &mut String, line: &str) {
         return;
     }
 
-    // Expression. Try wrapping with each candidate return type until
-    // one type-checks. Run the first that compiles.
-    for return_type in REPL_RETURN_TYPES {
-        let body = if *return_type == "()" {
-            format!("{}; ()", line)
-        } else {
-            line.to_string()
-        };
-        let program = format!(
-            "{}\n\nfn main() -> {} {{ {} }}\n",
-            prefix.trim_end(),
-            return_type,
-            body
-        );
-        if execute_source_repl(&program).is_ok() {
-            return;
-        }
-    }
-    // None of the types worked. Run with i64 to surface the actual
-    // error message to the user.
+    // Expression. Wrap the expression in `println(expr)` so the
+    // value is rendered through the CLI's recursive value
+    // formatter regardless of its type. The `println` native
+    // accepts any type at the boundary; it routes through
+    // `format_value` for composite types, giving readable output
+    // for `Some(...)`, tuples, enum variants, and structs without
+    // requiring the REPL to predict the expression's type. The
+    // older fixed-list-of-return-types strategy is retired; the
+    // new path handles all expression types uniformly.
     let program = format!(
-        "{}\n\nfn main() -> Word {{ {} }}\n",
+        "use println\n{}\n\nfn main() -> Word {{\n    let _ = println({});\n    0\n}}\n",
         prefix.trim_end(),
         line
     );
-    if let Err(e) = execute_source_repl(&program) {
+    if let Err(e) = execute_source_repl_silent(&program) {
         eprintln!("error: {}", e);
     }
 }
@@ -1073,12 +1078,77 @@ fn execute_source(source: &str, loop_config: &LoopRunnerConfig) -> Result<(), St
 /// bounds are meaningless; auto-sizing would resize the arena on
 /// every input. The fixed capacity is the right behaviour for
 /// interactive use.
-fn execute_source_repl(source: &str) -> Result<(), String> {
+/// REPL expression execution. Suppresses the printing of the
+/// wrapper's terminal return value because the REPL wrapper
+/// returns a sentinel `Word 0` purely to satisfy the entry-point
+/// signature; the actual value the operator wants to see is
+/// printed earlier by the wrapper's call to `println(expr)`.
+fn execute_source_repl_silent(source: &str) -> Result<(), String> {
     let module = compile_source(source)?;
     let entry_kind = detect_entry_kind(&module)?;
+    if !matches!(entry_kind, EntryKind::AtomicFn) {
+        // Non-atomic entries are user declarations, not REPL
+        // expressions; fall back to the printing path so the
+        // operator sees whatever the script produces.
+        let arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let mut vm = Vm::new(module, &arena).map_err(|e| format!("verify: {:?}", e))?;
+        return drive_to_completion(&mut vm, &arena, entry_kind, &LoopRunnerConfig::default());
+    }
     let arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
     let mut vm = Vm::new(module, &arena).map_err(|e| format!("verify: {:?}", e))?;
-    drive_to_completion(&mut vm, &arena, entry_kind, &LoopRunnerConfig::default())
+    register_repl_natives(&mut vm);
+    match vm.call(&[]).map_err(|e| format!("vm: {:?}", e))? {
+        VmState::Finished(_) => Ok(()),
+        VmState::Yielded(v) => Err(format!("REPL wrapper yielded unexpectedly: {:?}", v)),
+        VmState::Reset => Err(String::from("REPL wrapper reset unexpectedly")),
+    }
+}
+
+/// Register the same natives that `drive_to_completion` would
+/// register, omitting the loop-runner-only `shell::set_tick_interval`
+/// and `shell::tick_interval` natives since REPL expressions do
+/// not need them.
+fn register_repl_natives<'a, 'arena>(vm: &mut Vm<'a, 'arena>) {
+    vm.register_native_closure("println", |args| {
+        if let Some(arg) = args.first() {
+            print_value_inline(arg);
+        }
+        println!();
+        Ok(Value::Unit)
+    });
+    vm.register_library(stddsl::Math);
+    vm.register_library(stddsl::Audio);
+    vm.register_library(stddsl::Shell);
+    // Tick-interval natives are still registered as no-op stubs
+    // so REPL expressions that mention them by qualified path do
+    // not trap at runtime.
+    let stub_interval: Arc<AtomicU64> = Arc::new(AtomicU64::new(0));
+    let s1 = stub_interval.clone();
+    vm.register_native_closure("shell::set_tick_interval", move |args| {
+        let arg = args.first().ok_or_else(|| {
+            keleusma::vm::VmError::NativeError(String::from(
+                "shell::set_tick_interval: expected one Text argument",
+            ))
+        })?;
+        let s: &str = match arg {
+            Value::StaticStr(s) => s.as_str(),
+            other => {
+                return Err(keleusma::vm::VmError::TypeError(format!(
+                    "shell::set_tick_interval: expected Text, got {:?}",
+                    other
+                )));
+            }
+        };
+        let dur = duration::parse(s).map_err(keleusma::vm::VmError::NativeError)?;
+        s1.store(dur.as_nanos() as u64, Ordering::Relaxed);
+        Ok(Value::Unit)
+    });
+    let s2 = stub_interval;
+    vm.register_native_closure("shell::tick_interval", move |_args| {
+        let nanos = s2.load(Ordering::Relaxed);
+        let dur = Duration::from_nanos(nanos);
+        Ok(Value::StaticStr(duration::format(dur)))
+    });
 }
 
 fn execute_bytecode(
@@ -1554,33 +1624,68 @@ fn format_err_with_offset(
     format!("{}: {}:{}: {}", stage, adjusted_line, span.column, msg)
 }
 
+/// Format a value as a human-readable string. Recursively
+/// formats composite values so REPL and `println` output is
+/// readable without the `Debug` impl's wrapper noise.
+fn format_value(v: &Value) -> String {
+    match v {
+        Value::Int(n) => n.to_string(),
+        Value::Float(f) => f.to_string(),
+        Value::Bool(b) => b.to_string(),
+        Value::StaticStr(s) => s.clone(),
+        Value::Unit => "()".to_string(),
+        Value::None => "None".to_string(),
+        Value::Tuple(items) => {
+            let parts: Vec<String> = items.iter().map(format_value).collect();
+            format!("({})", parts.join(", "))
+        }
+        Value::Array(items) => {
+            let parts: Vec<String> = items.iter().map(format_value).collect();
+            format!("[{}]", parts.join(", "))
+        }
+        Value::Enum {
+            type_name,
+            variant,
+            fields,
+            ..
+        } => {
+            if type_name == "Option" && variant == "Some" {
+                if let Some(f) = fields.first() {
+                    format!("Some({})", format_value(f))
+                } else {
+                    "Some".to_string()
+                }
+            } else if fields.is_empty() {
+                variant.clone()
+            } else {
+                let parts: Vec<String> = fields.iter().map(format_value).collect();
+                format!("{}({})", variant, parts.join(", "))
+            }
+        }
+        Value::Struct { type_name, fields } => {
+            let parts: Vec<String> = fields
+                .iter()
+                .map(|(k, v)| format!("{}: {}", k, format_value(v)))
+                .collect();
+            format!("{} {{ {} }}", type_name, parts.join(", "))
+        }
+        other => format!("{:?}", other),
+    }
+}
+
 /// Print a value to stdout without a trailing newline. Used by the
 /// CLI's `println` override. The full `print_value` variant adds the
 /// trailing newline.
 fn print_value_inline(v: &Value) {
-    match v {
-        Value::Int(n) => print!("{}", n),
-        Value::Float(f) => print!("{}", f),
-        Value::Bool(b) => print!("{}", b),
-        Value::StaticStr(s) => print!("{}", s),
-        Value::Unit => print!("()"),
-        Value::None => print!("None"),
-        other => print!("{:?}", other),
-    }
+    print!("{}", format_value(v));
 }
 
 fn print_value(v: &Value, arena: &Arena) {
     match v {
-        Value::Int(n) => println!("{}", n),
-        Value::Float(f) => println!("{}", f),
-        Value::Bool(b) => println!("{}", b),
-        Value::StaticStr(s) => println!("{}", s),
         Value::KStr(h) => match h.get(arena) {
             Ok(s) => println!("{}", s),
             Err(_) => println!("<stale KStr>"),
         },
-        Value::Unit => println!("()"),
-        Value::None => println!("None"),
-        other => println!("{:?}", other),
+        other => println!("{}", format_value(other)),
     }
 }

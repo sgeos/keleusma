@@ -9,59 +9,48 @@ AI to Human communication channel.
 ## Last Updated
 
 **Date**: 2026-05-22
-**Status**: V0.2.1 CLI follow-on complete. Three coordinated additions land alongside the prior tick-interval work. The branch carries one commit pending.
+**Status**: V0.2.1 deferred-work clear-out complete across three batches. The branch carries three new commits.
 
 ## Summary of work this session
 
-Three CLI items from the prior session's deferred-work audit are addressed in a single commit.
+Three batches addressing the remaining items in the post-V0.2.1 deferred-work audit. Each batch lands as a separate commit so the operator can redirect between batches without context loss.
 
-### Yield-main runner
+### Batch 1: quick wins (commit e726577)
 
-The CLI's loop runner gains a third entry shape, `yield main(tick: Word) -> Word`. The new `drive_yield_main` shares the tick-counter protocol with `drive_loop_main`. The distinction is termination: a yield-main script eventually returns instead of yielding, at which point the runner terminates cleanly and prints the returned value when non-Unit. The `--tick-interval` flag applies to yield-main entries too.
+Eight new shell natives covering the convenience use cases identified in the SHELL_AUDIT recommendations: `shell::pid`, `shell::hostname`, `shell::arg_count`, `shell::arg(i)`, `shell::setenv`, `shell::pwd`, `shell::cd`, `shell::run_timeout(cmd, ms)`. The `hostname` implementation routes through the platform `hostname` command because Rust's standard library does not expose a portable accessor. The `setenv` implementation uses the 2024-edition `unsafe std::env::set_var(...)` with a SAFETY comment noting the single-threaded VM guarantee. The `run_timeout` implementation polls `try_wait` and kills the child on timeout.
 
-### Shell-audit critical natives
+Compile-error span-offset correction. The CLI preamble's line count is now subtracted from reported error positions so operators see line numbers in the user-visible source rather than the post-preamble combined source. Errors that fall inside the preamble window are reported with a `[preamble line N]` marker so bundle-side mistakes are not silently attributed to user code.
 
-Eight new natives in `stddsl::Shell`:
+CLI `--target <name>` flag on the `compile` subcommand. Five presets recognised: host (default), wasm32, embedded_32, embedded_16, embedded_8. The selected target controls word, address, and float widths and validates the program against the configuration before bytecode emission.
 
-| Native | Signature |
-|--------|-----------|
-| `shell::sleep_ms` | `(Word) -> ()` |
-| `shell::now_unix_ms` | `() -> Word` |
-| `shell::read_file` | `(Text) -> Text` |
-| `shell::write_file` | `(Text, Text) -> ()` |
-| `shell::append_file` | `(Text, Text) -> ()` |
-| `shell::file_exists` | `(Text) -> bool` |
-| `shell::write_err` | `(Text) -> ()` |
-| `shell::writeln_err` | `(Text) -> ()` |
+### Batch 2: Math and Audio signatures (commit fbe6c4f)
 
-All file I/O traps on failure via `VmError::NativeError`, matching the existing `shell::run_checked` convention. Introducing a generic `Result<T, E>` type was rejected on scope grounds. Ten new unit tests cover the no-side-effect natives and a write-read-append round trip against a tempdir.
+Typechecker change to admit Word arguments where Float parameters are declared at the native call boundary. The runtime auto-widening behaviour was already in place; the typechecker was the missing piece. The widening applies only at top level; nested positions inside composite types are not coerced because the marshalling layer does not reach into them.
 
-### Compile-time signature validation
+New `Math::SIGNATURES` and `Audio::SIGNATURES` constants. Math covers thirty-one natives across algebraic, trigonometric, exponential, and named-constant categories. Audio covers thirteen natives across pitch, amplitude, time, filter, and spatial categories. The CLI preamble now installs all four bundle signature sets so the entire bundled standard library participates in compile-time validation.
 
-The `stddsl::Shell::SIGNATURES` constant carries source-form `use` declarations for the thirteen bundle natives. The CLI's `CLI_NATIVE_SIGNATURES` adds two more for `shell::set_tick_interval` and `shell::tick_interval`. The CLI prepends both to every script source before parsing, so call-site type and arity mismatches surface at compile time rather than runtime.
+### Batch 3: REPL improvements (this commit)
 
-Math and Audio bundle signatures are deferred because the auto-widening behaviour at the native boundary conflicts with strict signature checking. A script that writes `math::sin(1)` (Word literal) currently runs at runtime via auto-widening; introducing the signature `(Float) -> Float` would reject the call at compile time. Resolving the conflict is a language-design question rather than a bundle-design one.
+The REPL's fixed-list return-type strategy is retired in favour of a single path: every expression input is wrapped as `fn main() -> Word { let _ = println(<expr>); 0 }`, and the `println` native routes through the CLI's recursive value formatter. The new `execute_source_repl_silent` path suppresses the wrapper's sentinel `0` return so only the value the operator typed appears in the output.
 
-### Verification
+New `format_value` helper recursively formats Option, tuples, enum variants, and structs. The bundled `print_value` and `print_value_inline` now delegate to it. Output for `Some(99)` reads as `Some(99)` rather than the underlying `Enum { type_name: "Option", variant: "Some", fields: [Int(99)] }`. Tuples render as `(1, 2, 3)` rather than `Tuple([Int(1), Int(2), Int(3)])`.
 
-End-to-end integration test exercises all three features in concert: a yield-main script that calls six of the new shell natives runs cleanly under signature validation, with the runtime printing the terminal return value.
+`is_declaration` extended to recognise `shared/private/const data`, `signed/ephemeral fn/yield/loop`, and `newtype` so the REPL admits the full set of top-level declaration forms.
 
-- `cargo test --workspace`: 853 main lib tests passing (10 new), 1032 across the workspace.
+`const data` declarations persist across REPL evaluations because their values are baked into the bytecode. Mutable `shared data` and `private data` blocks re-initialise on each evaluation. Persisting in-flight mutations across evaluations would require arena snapshot-and-restore between compiles and is deferred. This is the only remaining item on the CLI deferred-work audit.
+
+## Verification
+
+- `cargo test --workspace`: 1032 tests passing across all batches.
 - `cargo clippy --workspace --tests -- -D warnings`: clean.
 - `cargo fmt --all -- --check`: clean.
-
-## Known limitations
-
-The compile-error line offset is the largest rough edge. Because the CLI prepends a sixteen-line preamble to every source, compile errors at line N in the CLI correspond to line N minus the preamble length in the user-visible source. Operators correlate by hand until span-offset correction lands. Documented in the CLI README.
-
-The yield-main runner reuses the loop-main tick semantics. Scripts that want multiple yields express them inline with separate `yield` expressions in the body rather than through a tick-driven loop. The tick parameter carries the host-side counter; the script can ignore it or use it.
-
-The signature preamble covers Shell and CLI tick-interval natives only. Math and Audio bundle natives retain the existing untyped behaviour because of the auto-widening conflict described above.
+- Manual REPL session covering Word, Float, bool, Text, tuple, Option::Some, enum variants, and `math::sin(1)` (Word literal flowing through Word-to-Float widening) all render correctly with the new formatter.
 
 ## Recommended next step
 
-The work is ready for commit. The three pieces compose into a single feature commit because they share both the test surface and the operator-facing release note.
+The work is ready for commit. With Batch 3 the only remaining item from the deferred-work audit is arena snapshot-and-restore for mutable data persistence in the REPL. That is genuinely a bigger feature; it would touch the arena API and require either a snapshot-write-back protocol or true incremental module loading in the VM. Both options are larger than the quick-wins shape of this session.
 
-If the operator wants a longer-running session, the next adjacent piece is span-offset correction for the preamble. The mechanism would be a new lexer entry point that takes a (line, column) offset and applies it to every token's span, plus a corresponding adjustment in the error formatter. Approximately half a day's work; not on the critical path because operators can subtract the preamble length by inspection.
-
-A second adjacent piece is the Math and Auto bundle signatures with a softer matching mode that admits Word where Float is expected at native call boundaries. This would close the last untyped corner of the standard library.
+For follow-on work, the natural next pieces are:
+- Arena snapshot-and-restore for REPL data persistence (multi-day work).
+- Generic `Result<T, E>` type so file I/O and other host operations can return structured errors instead of trapping. The audit noted this was rejected on scope grounds; the call may be worth revisiting if operator workflows hit the trap-on-error pattern often.
+- A `read_lines(path: Text) -> Array<Text>` native, contingent on adding a dynamic Array type or an Array<T, N> dynamic-length form.

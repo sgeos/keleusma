@@ -230,7 +230,7 @@ defined: double
 > :quit
 ```
 
-The REPL wraps each expression input as `fn main() -> T { <expression> }` and tries common return types in order: `Word`, `Float`, `bool`, `Text`, `()`. The first type that type-checks is used. For more complex return types, declare a function explicitly and call it.
+The REPL wraps each expression input through the bundled `println` native so the value renders through the CLI's recursive value formatter. Primitives print as themselves (`42`, `1.5`, `true`, `"hello"`). Composite values format readably without the underlying `Debug` impl's wrapper noise: `Some(99)` instead of `Enum { type_name: "Option", variant: "Some", fields: [Int(99)] }`, `(1, 2, 3)` instead of `Tuple([Int(1), Int(2), Int(3)])`, `Red` instead of the enum-with-variant noise. Any type the bundled natives can produce will render through the formatter.
 
 ## Example programs
 
@@ -256,9 +256,7 @@ The current CLI has the following limitations.
 
 The runner supports all three entry shapes. The atomic-total form `fn main() -> T { ... }` runs to completion in a single call. The non-atomic total form `yield main(tick: Word) -> Word { ... }` and the productive-divergent form `loop main(tick: Word) -> Word { ... }` are both driven through the tick-counter convention with optional rate limiting via `--tick-interval`. The distinction is termination: a `yield main` script eventually returns instead of yielding, at which point the runner terminates cleanly and prints the returned value when non-Unit; a `loop main` script never returns, and the runner only stops on `shell::exit(code)` or `SIGINT`.
 
-The REPL session prefix accumulates declarations across the session but does not persist data segment values. Any `data` block declared in the prefix is allocated freshly on each evaluation. Persistent state across REPL evaluations is future work.
-
-The REPL's return-type inference tries a fixed list of types. Expressions whose type is outside the list (custom enums, structs, tuples) require explicit function wrapping. Inference of the expression type prior to wrapping is future work.
+The REPL handles arbitrary expression types through a `println` wrapper that routes the value through the CLI's recursive formatter. Primitives print directly (`42`, `1.5`, `true`); composite types format readably (`Some(99)`, `(1, 2, 3)`, `Red`). `const data` declarations persist across evaluations because their values are baked into the bytecode. Mutable `shared data` and `private data` blocks are re-initialised to their default values on each evaluation; persisting in-flight mutations across REPL evaluations would require arena snapshot and restore between compiles and is deferred to a future iteration.
 
 The CLI prepends a fixed preamble of `use` declarations to every compiled source so the Math, Audio, and Shell bundles, plus the CLI-specific tick-interval natives, are validated at compile time. The preamble's line count is subtracted from reported error positions so operators see line numbers in the user-visible source. Errors that fall inside the preamble window are reported with a `[preamble line N]` marker. Word arguments unify with Float parameters at native call boundaries, so `math::sin(1)` works even though the signature is `(Float) -> Float`.
 
