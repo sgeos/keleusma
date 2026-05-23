@@ -9,6 +9,7 @@ Development workflow, communication protocol, and task tracking for Keleusma.
 | Document | Description |
 |----------|-------------|
 | [PROCESS_STRATEGY.md](./PROCESS_STRATEGY.md) | Library engineering approach and agentic development loop |
+| [AUTONOMOUS_RESEARCH_LOOP.md](./AUTONOMOUS_RESEARCH_LOOP.md) | Self-firing research loop protocol for unattended AI sessions |
 | [COMMUNICATION.md](./COMMUNICATION.md) | Bidirectional human-AI communication protocol |
 | [GIT_STRATEGY.md](./GIT_STRATEGY.md) | Version control conventions |
 | [TASKLOG.md](./TASKLOG.md) | Current sprint source of truth (working document) |
