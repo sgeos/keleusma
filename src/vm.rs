@@ -677,6 +677,26 @@ pub fn required_persistent_capacity_for_generic<W: crate::word::Word, F: crate::
     private_count * core::mem::size_of::<crate::bytecode::GenericValue<W, F>>()
 }
 
+/// Number of shared `.data` slots declared in `module`. The shared
+/// region lives inside the [`GenericVm`] itself as a
+/// `Vec<GenericValue>`, not in the arena; hosts read and write
+/// individual slots through [`GenericVm::set_data`] and
+/// [`GenericVm::get_data`]. This helper exposes the slot count so an
+/// embedder can pre-size a per-slot checkpoint buffer (for example
+/// the REPL's session-state buffer) without constructing the VM
+/// first.
+///
+/// The count matches `Self::shared_slot_count` after the VM is
+/// built from the same module.
+pub fn shared_slot_count_for(module: &crate::bytecode::Module) -> usize {
+    module.data_layout.as_ref().map_or(0, |dl| {
+        dl.slots
+            .iter()
+            .filter(|s| matches!(s.visibility, crate::bytecode::SlotVisibility::Shared))
+            .count()
+    })
+}
+
 impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::float::Float> Drop
     for GenericVm<'a, 'arena, W, A, F>
 {
@@ -1531,6 +1551,17 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                 *base.add(private_idx) = value;
             }
         }
+    }
+
+    /// Number of shared data slots declared in the loaded module.
+    /// Slot indices `0..shared_slot_count` are host-accessible
+    /// through [`Self::set_data`] and [`Self::get_data`]; slot
+    /// indices beyond that range are private and reject host access.
+    /// Use this to size a host-side checkpoint buffer (for example
+    /// a REPL's per-evaluation persistence buffer) without keeping a
+    /// reference to the source module.
+    pub fn shared_slot_count(&self) -> usize {
+        self.shared_slot_count as usize
     }
 
     /// Set a data segment slot to an initial value.
@@ -7836,6 +7867,47 @@ mod tests {
         let module = compile(&program).expect("compile");
         assert_eq!(module.shared_data_bytes, 0);
         assert_eq!(module.private_data_bytes, 32);
+    }
+
+    #[test]
+    fn shared_slot_count_for_returns_module_count() {
+        let src = "\
+            data ctx { a: Word, b: Word, c: Word }\n\
+            fn main() -> Word { ctx.a }";
+        let tokens = tokenize(src).expect("lex");
+        let program = parse(&tokens).expect("parse");
+        let module = compile(&program).expect("compile");
+        assert_eq!(shared_slot_count_for(&module), 3);
+    }
+
+    #[test]
+    fn shared_slot_count_excludes_private_slots() {
+        let src = "\
+            data sh { a: Word, b: Word }\n\
+            private data pv { x: Word, y: Word, z: Word }\n\
+            fn main() -> Word { pv.x = 1; pv.y = 2; pv.z = 3; sh.a + pv.x }";
+        let tokens = tokenize(src).expect("lex");
+        let program = parse(&tokens).expect("parse");
+        let module = compile(&program).expect("compile");
+        assert_eq!(shared_slot_count_for(&module), 2);
+    }
+
+    #[test]
+    fn vm_shared_slot_count_matches_module_helper() {
+        let src = "\
+            data ctx { a: Word, b: Word, c: Word, d: Word }\n\
+            fn main() -> Word { ctx.a }";
+        let tokens = tokenize(src).expect("lex");
+        let program = parse(&tokens).expect("parse");
+        let module = compile(&program).expect("compile");
+        let expected = shared_slot_count_for(&module);
+        let mut arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        arena
+            .resize_persistent(required_persistent_capacity_for(&module))
+            .expect("resize persistent");
+        let vm = Vm::new(module, &arena).expect("verify");
+        assert_eq!(vm.shared_slot_count(), expected);
+        assert_eq!(vm.shared_slot_count(), 4);
     }
 
     #[test]

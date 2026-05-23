@@ -829,6 +829,26 @@ fn repl_subcommand(_args: &[String]) -> ExitCode {
     let stdout = io::stdout();
     let mut prefix = String::new();
     let mut input = String::new();
+    // Per-session shared `.data` slot values. The REPL keeps these
+    // across evaluations so a script that declares `shared data
+    // state { count: Word }` and writes `state.count = state.count
+    // + 1` observes the accumulated value on each invocation. The
+    // slot indices are stable across evals because the REPL prefix
+    // is append-only.
+    //
+    // KString variants are materialised to StaticStr before
+    // snapshotting so the saved values do not carry stale arena
+    // references after the source Vm is dropped.
+    //
+    // Private `.data` is not persisted here. The persistent region
+    // stores `GenericValue` enum instances inline, but those
+    // variants contain heap pointers (String for StaticStr, Vec for
+    // Tuple, etc.) that a raw byte-copy would alias rather than
+    // own. A deep-clone of the private region would require API the
+    // VM does not yet expose. The REPL therefore documents private
+    // data as eval-local; users wanting persistent state should
+    // declare a `shared data` block.
+    let mut shared_state: Vec<Value> = Vec::new();
 
     loop {
         {
@@ -859,7 +879,8 @@ fn repl_subcommand(_args: &[String]) -> ExitCode {
                 "help" | "h" => print_repl_help(),
                 "reset" => {
                     prefix.clear();
-                    println!("session prefix cleared");
+                    shared_state.clear();
+                    println!("session prefix and shared data cleared");
                 }
                 "show" => {
                     if prefix.is_empty() {
@@ -874,7 +895,7 @@ fn repl_subcommand(_args: &[String]) -> ExitCode {
             }
             continue;
         }
-        evaluate_repl_input(&mut prefix, line);
+        evaluate_repl_input(&mut prefix, &mut shared_state, line);
     }
 }
 
@@ -919,7 +940,7 @@ fn is_declaration(line: &str) -> bool {
     starters.iter().any(|s| line.starts_with(s))
 }
 
-fn evaluate_repl_input(prefix: &mut String, line: &str) {
+fn evaluate_repl_input(prefix: &mut String, shared_state: &mut Vec<Value>, line: &str) {
     if is_declaration(line) {
         // Tentatively append; verify it parses and compiles within
         // the prefix before committing.
@@ -948,22 +969,39 @@ fn evaluate_repl_input(prefix: &mut String, line: &str) {
         return;
     }
 
-    // Expression. Wrap the expression in `println(expr)` so the
-    // value is rendered through the CLI's recursive value
-    // formatter regardless of its type. The `println` native
-    // accepts any type at the boundary; it routes through
-    // `format_value` for composite types, giving readable output
-    // for `Some(...)`, tuples, enum variants, and structs without
-    // requiring the REPL to predict the expression's type. The
-    // older fixed-list-of-return-types strategy is retired; the
-    // new path handles all expression types uniformly.
-    let program = format!(
+    // Try two wrapper shapes in order. The expression wrapper
+    // routes the line through `println` so any expression value
+    // renders through the CLI's recursive value formatter. The
+    // statement wrapper drops the line into a function body
+    // verbatim, terminated by `; 0`, so statement-shaped input
+    // (mutating `shared data` fields, calling void-returning
+    // natives, and so on) executes without forcing a parseable
+    // expression position. The expression wrapper is preferred
+    // because it auto-prints; the statement wrapper is the
+    // fallback for input the expression wrapper cannot parse.
+    let expr_form = format!(
         "use println\n{}\n\nfn main() -> Word {{\n    let _ = println({});\n    0\n}}\n",
         prefix.trim_end(),
         line
     );
-    if let Err(e) = execute_source_repl_silent(&program) {
-        eprintln!("error: {}", e);
+    match execute_source_repl_silent(&expr_form, shared_state) {
+        Ok(()) => {}
+        Err(expr_err) => {
+            let stmt_form = format!(
+                "{}\n\nfn main() -> Word {{\n    {};\n    0\n}}\n",
+                prefix.trim_end(),
+                line
+            );
+            match execute_source_repl_silent(&stmt_form, shared_state) {
+                Ok(()) => {}
+                Err(_) => {
+                    // Both wrappers failed. Surface the expression
+                    // wrapper's error because it gives a better
+                    // diagnostic for typical REPL input.
+                    eprintln!("error: {}", expr_err);
+                }
+            }
+        }
     }
 }
 
@@ -1119,13 +1157,15 @@ fn execute_source(source: &str, loop_config: &LoopRunnerConfig) -> Result<(), St
 /// returns a sentinel `Word 0` purely to satisfy the entry-point
 /// signature; the actual value the operator wants to see is
 /// printed earlier by the wrapper's call to `println(expr)`.
-fn execute_source_repl_silent(source: &str) -> Result<(), String> {
+fn execute_source_repl_silent(source: &str, shared_state: &mut Vec<Value>) -> Result<(), String> {
     let module = compile_source(source)?;
     let entry_kind = detect_entry_kind(&module)?;
     if !matches!(entry_kind, EntryKind::AtomicFn) {
         // Non-atomic entries are user declarations, not REPL
         // expressions; fall back to the printing path so the
-        // operator sees whatever the script produces.
+        // operator sees whatever the script produces. No shared-
+        // data restore here because the REPL only persists state
+        // through the atomic-fn-main expression path.
         let arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
         let mut vm = Vm::new(module, &arena).map_err(|e| format!("verify: {:?}", e))?;
         return drive_to_completion(&mut vm, &arena, entry_kind, &LoopRunnerConfig::default());
@@ -1133,7 +1173,35 @@ fn execute_source_repl_silent(source: &str) -> Result<(), String> {
     let arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
     let mut vm = Vm::new(module, &arena).map_err(|e| format!("verify: {:?}", e))?;
     register_repl_natives(&mut vm);
-    match vm.call(&[]).map_err(|e| format!("vm: {:?}", e))? {
+
+    // Restore prior shared-data values before the expression runs.
+    // The REPL prefix is append-only, so slot indices in
+    // `0..min(prior, current)` are stable across evaluations. New
+    // slots added by the latest declaration keep their default
+    // initial values from `Vm::new`.
+    let current_shared = vm.shared_slot_count();
+    let restore_count = shared_state.len().min(current_shared);
+    for (i, value) in shared_state.iter().take(restore_count).enumerate() {
+        vm.set_data(i, value.clone())
+            .map_err(|e| format!("restoring shared slot {} from prior REPL state: {:?}", i, e))?;
+    }
+
+    let result = vm.call(&[]).map_err(|e| format!("vm: {:?}", e))?;
+
+    // Snapshot the current shared-data values for the next round.
+    // Materialise KString variants into StaticStr so the snapshot
+    // does not retain arena handles that go stale when the source
+    // Vm is dropped after this function returns.
+    let mut next_state: Vec<Value> = Vec::with_capacity(current_shared);
+    for i in 0..current_shared {
+        let value = vm
+            .get_data(i)
+            .map_err(|e| format!("snapshotting shared slot {} after eval: {:?}", i, e))?;
+        next_state.push(value.materialise_kstrings(&arena));
+    }
+    *shared_state = next_state;
+
+    match result {
         VmState::Finished(_) => Ok(()),
         VmState::Yielded(v) => Err(format!("REPL wrapper yielded unexpectedly: {:?}", v)),
         VmState::Reset => Err(String::from("REPL wrapper reset unexpectedly")),

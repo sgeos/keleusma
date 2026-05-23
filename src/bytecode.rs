@@ -265,6 +265,65 @@ impl<W: crate::word::Word, F: crate::float::Float> PartialEq for GenericValue<W,
 }
 
 impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
+    /// Walk the value recursively and replace every `KStr` variant
+    /// with an equivalent `StaticStr` whose contents come from the
+    /// supplied arena. Use this when transporting a value across a
+    /// Vm boundary: `KStr` handles reference the original arena
+    /// through an epoch-tagged pointer, so a value snapshotted from
+    /// one Vm and restored into a Vm backed by a different arena
+    /// would carry a stale handle. Materialising to `StaticStr`
+    /// breaks the arena dependency so the value is portable.
+    ///
+    /// Composite variants (`Tuple`, `Array`, `Struct`, `Enum`) are
+    /// walked recursively. Scalar variants are cloned unchanged.
+    /// `Opaque` values are cloned by `Arc` increment as usual; the
+    /// `HostOpaque` trait makes no assumption about arena residency.
+    ///
+    /// Stale `KStr` handles produce an empty `StaticStr`. A stale
+    /// handle here means the original arena was already dropped
+    /// between snapshot and materialisation, which should not happen
+    /// in the documented REPL pattern but is handled defensively.
+    pub fn materialise_kstrings(&self, arena: &keleusma_arena::Arena) -> Self {
+        match self {
+            Self::KStr(handle) => match handle.get(arena) {
+                Ok(s) => Self::StaticStr(alloc::string::String::from(s)),
+                Err(_) => Self::StaticStr(alloc::string::String::new()),
+            },
+            Self::Tuple(items) => Self::Tuple(
+                items
+                    .iter()
+                    .map(|v| v.materialise_kstrings(arena))
+                    .collect(),
+            ),
+            Self::Array(items) => Self::Array(
+                items
+                    .iter()
+                    .map(|v| v.materialise_kstrings(arena))
+                    .collect(),
+            ),
+            Self::Struct { type_name, fields } => Self::Struct {
+                type_name: type_name.clone(),
+                fields: fields
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.materialise_kstrings(arena)))
+                    .collect(),
+            },
+            Self::Enum {
+                type_name,
+                variant,
+                fields,
+            } => Self::Enum {
+                type_name: type_name.clone(),
+                variant: variant.clone(),
+                fields: fields
+                    .iter()
+                    .map(|v| v.materialise_kstrings(arena))
+                    .collect(),
+            },
+            other => other.clone(),
+        }
+    }
+
     /// Return a human-readable type name for error messages.
     pub fn type_name(&self) -> &'static str {
         match self {
@@ -2310,5 +2369,112 @@ mod cost_model_tests {
             param_types: alloc::vec::Vec::new(),
         };
         assert_eq!(NOMINAL_COST_MODEL.heap_alloc_bytes(&Op::Add, &chunk), 0);
+    }
+}
+
+#[cfg(test)]
+mod materialise_kstrings_tests {
+    use super::*;
+    use crate::kstring::KString;
+
+    type V = Value;
+
+    fn make_arena() -> keleusma_arena::Arena {
+        keleusma_arena::Arena::with_capacity(1024)
+    }
+
+    #[test]
+    fn scalar_values_are_cloned_unchanged() {
+        let arena = make_arena();
+        assert_eq!(V::Int(42).materialise_kstrings(&arena), V::Int(42));
+        assert_eq!(V::Bool(true).materialise_kstrings(&arena), V::Bool(true));
+        assert_eq!(V::Unit.materialise_kstrings(&arena), V::Unit);
+        assert_eq!(V::None.materialise_kstrings(&arena), V::None);
+    }
+
+    #[test]
+    fn staticstr_is_cloned_unchanged() {
+        let arena = make_arena();
+        let v = V::StaticStr(alloc::string::String::from("hello"));
+        assert_eq!(v.materialise_kstrings(&arena), v);
+    }
+
+    #[test]
+    fn kstr_becomes_staticstr_with_arena_contents() {
+        let arena = make_arena();
+        let handle = KString::alloc(&arena, "the original bytes").expect("alloc");
+        let v: V = V::KStr(handle);
+        let materialised = v.materialise_kstrings(&arena);
+        match materialised {
+            V::StaticStr(s) => assert_eq!(s, "the original bytes"),
+            other => panic!("expected StaticStr, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn tuple_walks_recursively() {
+        let arena = make_arena();
+        let handle = KString::alloc(&arena, "inner").expect("alloc");
+        let v = V::Tuple(alloc::vec![V::Int(1), V::KStr(handle), V::Bool(false),]);
+        let materialised = v.materialise_kstrings(&arena);
+        match materialised {
+            V::Tuple(items) => {
+                assert_eq!(items.len(), 3);
+                assert_eq!(items[0], V::Int(1));
+                match &items[1] {
+                    V::StaticStr(s) => assert_eq!(s, "inner"),
+                    other => panic!("expected StaticStr inside tuple, got {:?}", other),
+                }
+                assert_eq!(items[2], V::Bool(false));
+            }
+            other => panic!("expected Tuple, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn enum_with_kstr_payload_walks_recursively() {
+        let arena = make_arena();
+        let handle = KString::alloc(&arena, "payload").expect("alloc");
+        let v = V::Enum {
+            type_name: alloc::string::String::from("Option"),
+            variant: alloc::string::String::from("Some"),
+            fields: alloc::vec![V::KStr(handle)],
+        };
+        let materialised = v.materialise_kstrings(&arena);
+        match materialised {
+            V::Enum { fields, .. } => {
+                assert_eq!(fields.len(), 1);
+                match &fields[0] {
+                    V::StaticStr(s) => assert_eq!(s, "payload"),
+                    other => panic!("expected StaticStr inside enum, got {:?}", other),
+                }
+            }
+            other => panic!("expected Enum, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn struct_walks_recursively() {
+        let arena = make_arena();
+        let handle = KString::alloc(&arena, "field-value").expect("alloc");
+        let v = V::Struct {
+            type_name: alloc::string::String::from("Point"),
+            fields: alloc::vec![
+                (alloc::string::String::from("x"), V::Int(7)),
+                (alloc::string::String::from("name"), V::KStr(handle)),
+            ],
+        };
+        let materialised = v.materialise_kstrings(&arena);
+        match materialised {
+            V::Struct { fields, .. } => {
+                assert_eq!(fields.len(), 2);
+                assert_eq!(fields[0].1, V::Int(7));
+                match &fields[1].1 {
+                    V::StaticStr(s) => assert_eq!(s, "field-value"),
+                    other => panic!("expected StaticStr inside struct, got {:?}", other),
+                }
+            }
+            other => panic!("expected Struct, got {:?}", other),
+        }
     }
 }
