@@ -3,7 +3,7 @@ members = ["keleusma-macros", "keleusma-arena", "keleusma-bench", "keleusma-cli"
 
 [package]
 name = "keleusma"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
 publish = ["crates-io"]
 description = "Total Functional Stream Processor with definitive WCET and WCMU verification, targeting no_std + alloc embedded scripting"
@@ -148,7 +148,7 @@ narrow-float-32 = []
 
 [dependencies]
 libm = "0.2"
-keleusma-macros = { path = "keleusma-macros", version = "0.2.0" }
+keleusma-macros = { path = "keleusma-macros", version = "0.2.1" }
 keleusma-arena = { version = "0.3", path = "keleusma-arena", features = ["alloc"] }
 allocator-api2 = { version = "0.4", default-features = false, features = ["alloc"] }
 rkyv = { version = "0.8", default-features = false, features = ["alloc", "bytecheck"] }
