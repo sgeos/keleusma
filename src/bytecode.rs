@@ -16,7 +16,6 @@ use alloc::vec::Vec;
 use rkyv::{Archive, Deserialize, Serialize};
 
 use crate::kstring::KString;
-use crate::value_layout::ScalarKind;
 
 /// A compile-time constant, the variant of [`Value`] that the compiler
 /// emits into the bytecode's constant pool.
@@ -201,18 +200,6 @@ pub enum GenericValue<W: crate::word::Word, F: crate::float::Float> {
     /// [`crate::vm::Vm::set_native_bounds`].
     Opaque(alloc::sync::Arc<dyn crate::opaque::HostOpaque>),
 
-    /// B28 flat-byte composite body. Holds a byte buffer that
-    /// the bytecode interprets through `ReadScalarAt` and
-    /// `WriteScalarAt` opcodes at compile-time-known offsets.
-    /// The layout descriptor is not carried in the value; the
-    /// compiler emits the offsets and scalar kinds so the runtime
-    /// treats this variant as an opaque byte sequence.
-    ///
-    /// In B28 P2, the bytes are heap-allocated via `Vec<u8>`.
-    /// Subsequent phases (P4 onwards) move the allocation to
-    /// the arena's top ephemeral region.
-    Composite(Vec<u8>),
-
     /// Phantom variant kept only when the `floats` feature is
     /// disabled, so the `F` type parameter is referenced non-
     /// recursively. Never constructed at runtime; pattern
@@ -360,7 +347,6 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
             // host's specific name read it through
             // [`GenericValue::opaque_type_name`].
             Self::Opaque(_) => "Opaque",
-            Self::Composite(_) => "Composite",
             #[cfg(not(feature = "floats"))]
             Self::_PhantomFloat(_) => unreachable!("_PhantomFloat is never constructed"),
         }
@@ -740,70 +726,6 @@ pub enum Op {
     /// `register_verified_native` referenced here is rejected at
     /// load time.
     CallExternalNative(u16, u8),
-
-    // B28 P2 consolidated composite opcodes. These opcodes
-    // replace the V0.2.0 `NewTuple`, `NewArray`, `NewStruct`,
-    // `NewEnum`, `GetField`, `GetTupleField`, `GetEnumField`,
-    // `SetField`, `GetData`, and `SetData` opcodes for composite
-    // construction and field access. The old opcodes coexist
-    // through B28 P5; both code paths produce equivalent
-    // observable behaviour. The new opcodes use compile-time
-    // byte sizes and byte offsets that the layout pass
-    // (`src/layout_pass.rs`) computes.
-    /// Bump-allocate `byte_size` bytes of transient composite
-    /// storage; push a handle to the new byte range onto the
-    /// operand stack. The bytes are zero-initialised. The
-    /// allocation lives in the arena's top ephemeral region in
-    /// B28 P4 onwards; in P2 the bytes are heap-allocated as a
-    /// `Vec<u8>` carried by `Value::Composite`. Stack effect:
-    /// `+1` (pushes the composite handle).
-    AllocTransient(u16),
-
-    /// Pop a scalar from the operand stack; write its bytes at
-    /// `offset` within the composite handle that is now top-of-
-    /// stack. The composite stays on the stack so subsequent
-    /// `WriteScalarAt` calls can populate the remaining fields.
-    /// Stack effect: `-1` (pops the scalar; composite remains).
-    WriteScalarAt(u16, ScalarKind),
-
-    /// Pop the composite handle from the operand stack; read a
-    /// scalar of the indicated kind from byte `offset` within it;
-    /// push the scalar onto the operand stack. The composite is
-    /// discarded; callers that need multiple reads emit
-    /// `Op::Dup` before each `ReadScalarAt`. Stack effect: `0`
-    /// (pop composite, push scalar).
-    ReadScalarAt(u16, ScalarKind),
-
-    /// Pop a nested composite handle from the operand stack; copy
-    /// its `byte_size` bytes into the composite handle that is
-    /// now top-of-stack at `offset`. The parent composite stays
-    /// on the stack. The operands `(offset, byte_size)` are
-    /// carried in the operand pool because they exceed the
-    /// inline operand budget. Stack effect: `-1` (pops nested,
-    /// parent remains).
-    WriteCompositeAt(u16, u16),
-
-    /// Pop the composite handle from the operand stack; copy
-    /// `byte_size` bytes from `offset` within it into a fresh
-    /// transient allocation; push the new composite handle. The
-    /// original composite is discarded. The operands carried in
-    /// the operand pool. Stack effect: `0` (pop composite, push
-    /// copy).
-    ReadCompositeAt(u16, u16),
-
-    /// Read a scalar of the indicated kind from byte `offset`
-    /// within data slot `slot`; push the scalar onto the operand
-    /// stack. The slot is interpreted as a flat byte buffer; the
-    /// compiler resolves field-name paths to byte offsets at
-    /// compile time. Replaces `Op::GetData(slot)`. Operands in
-    /// the operand pool. Stack effect: `+1` (push scalar).
-    ReadDataField(u16, u16, ScalarKind),
-
-    /// Pop a scalar from the operand stack; write its bytes at
-    /// byte `offset` within data slot `slot`. Replaces
-    /// `Op::SetData(slot)`. Operands in the operand pool. Stack
-    /// effect: `-1` (pops scalar).
-    WriteDataField(u16, u16, ScalarKind),
 }
 
 /// Size in bytes of one operand-stack slot, namely the size of `Value` on
@@ -1093,17 +1015,6 @@ pub fn nominal_op_cycles(op: &Op) -> u32 {
         Op::PushImmediate(_) | Op::PopN(_) => 1,
         Op::BitAnd | Op::BitOr | Op::BitXor | Op::Shl | Op::Shr => 2,
         Op::CallVerifiedNative(_, _) | Op::CallExternalNative(_, _) => 10,
-
-        // B28 P2 consolidated composite opcodes. Costs are
-        // estimates pending measurement in P7. Allocation is
-        // pointer increment plus zero-fill of the requested
-        // byte size; scalar reads and writes are constant-cost
-        // memory operations; composite copies cost scales with
-        // the byte size copied.
-        Op::AllocTransient(_) => 5,
-        Op::WriteScalarAt(_, _) | Op::ReadScalarAt(_, _) => 1,
-        Op::WriteCompositeAt(_, _) | Op::ReadCompositeAt(_, _) => 3,
-        Op::ReadDataField(_, _, _) | Op::WriteDataField(_, _, _) => 2,
     }
 }
 
@@ -1208,23 +1119,6 @@ impl Op {
             Op::PopN(_) => 0,
             Op::BitAnd | Op::BitOr | Op::BitXor | Op::Shl | Op::Shr => 0,
             Op::CallVerifiedNative(_, _) | Op::CallExternalNative(_, _) => 1,
-
-            // B28 P2 consolidated composite opcodes. AllocTransient
-            // pushes a handle (+1). WriteScalarAt pops the scalar
-            // but leaves the composite (0 growth, 1 shrink).
-            // ReadScalarAt pops the composite and pushes a scalar
-            // (1 growth, 1 shrink, net 0). WriteCompositeAt pops a
-            // nested composite (0 growth, 1 shrink). ReadCompositeAt
-            // pops the parent and pushes a copy (1 growth, 1 shrink).
-            // ReadDataField pushes a scalar (+1). WriteDataField
-            // pops the scalar (0 growth, 1 shrink).
-            Op::AllocTransient(_) => 1,
-            Op::WriteScalarAt(_, _) => 0,
-            Op::ReadScalarAt(_, _) => 1,
-            Op::WriteCompositeAt(_, _) => 0,
-            Op::ReadCompositeAt(_, _) => 1,
-            Op::ReadDataField(_, _, _) => 1,
-            Op::WriteDataField(_, _, _) => 0,
         }
     }
 
@@ -1302,16 +1196,6 @@ impl Op {
             // convention as `Add` etc.
             Op::BitAnd | Op::BitOr | Op::BitXor | Op::Shl | Op::Shr => 1,
             Op::CallVerifiedNative(_, n) | Op::CallExternalNative(_, n) => *n as u32,
-
-            // B28 P2 consolidated composite opcodes. See stack_growth
-            // for the rationale of each shape.
-            Op::AllocTransient(_) => 0,
-            Op::WriteScalarAt(_, _) => 1,
-            Op::ReadScalarAt(_, _) => 1,
-            Op::WriteCompositeAt(_, _) => 1,
-            Op::ReadCompositeAt(_, _) => 1,
-            Op::ReadDataField(_, _, _) => 0,
-            Op::WriteDataField(_, _, _) => 1,
         }
     }
 
@@ -2101,7 +1985,6 @@ impl ConstValue {
             Value::StaticStr(s) => Ok(ConstValue::StaticStr(s)),
             Value::KStr(_) => Err("KStr cannot be a compile-time constant"),
             Value::Opaque(_) => Err("Opaque cannot be a compile-time constant"),
-            Value::Composite(_) => Err("Composite cannot be a compile-time constant"),
             Value::Tuple(items) => items
                 .into_iter()
                 .map(ConstValue::try_from_value)
