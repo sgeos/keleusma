@@ -1336,3 +1336,208 @@ Ten items deferred during the V0.2.1 `keleusma run-tasks <manifest.toml>` implem
 - Item 4 (hot reload) and B30 item 2 (`Result<T, E>`) were called out as highest-leverage in the V0.2.1 close-out assessment.
 - Item 7 (typed event payloads) and item 8 (ABI compatibility) compose: typed payloads make ABI checking meaningful.
 - Item 5 (preemption) is intentionally excluded from the cooperative model. The forcing case is a deployment shape that needs preemption; the response is "use a different host" rather than "extend the runner".
+
+## B32. Arena bytes-builder feature in keleusma-arena
+
+The `keleusma-arena` crate exposes raw byte allocation through `Arena::alloc_top_bytes(n) -> Result<NonNull<[u8]>, AllocError>` and typed read-only handles through `ArenaHandle<str>` (used by `KString` for arena-resident strings). It does not expose a safe builder for arena-resident byte buffers that consumers can write to during construction and read from afterwards. Consumers of B28's flat-byte composite-Value representation need exactly that: a bounds-checked region of flat memory that the arena manages, suitable for packing scalar field bytes into a composite body. This entry adds the missing API.
+
+**Design.**
+
+A builder pattern that allocates a zeroed byte buffer in the arena's top ephemeral region, exposes bounds-checked write methods during construction, and yields a `Copy` read-only handle on finish. The handle pattern matches `KString` (epoch-tagged stale detection through `ArenaHandle<[u8]>`); the builder pattern is new.
+
+```rust
+impl Arena {
+    /// Allocate `n` zeroed bytes in the top ephemeral region and
+    /// return a builder for bounds-checked writes. The builder
+    /// retains exclusive write access until `finish()` is called.
+    pub fn alloc_top_bytes_builder(&self, n: usize) -> Result<ArenaBytesBuilder<'_>, AllocError>;
+
+    /// Symmetric bottom-region allocator. Same shape; the bytes
+    /// live in the bottom ephemeral region.
+    pub fn alloc_bottom_bytes_builder(&self, n: usize) -> Result<ArenaBytesBuilder<'_>, AllocError>;
+}
+
+pub struct ArenaBytesBuilder<'arena> { /* opaque */ }
+
+impl<'arena> ArenaBytesBuilder<'arena> {
+    /// Bounds-checked write of `bytes` at `offset`. Returns
+    /// `BoundsError` if the write would exceed the allocated
+    /// region.
+    pub fn write_at(&mut self, offset: usize, bytes: &[u8]) -> Result<(), BoundsError>;
+
+    /// Convenience: bounds-checked write of a single byte.
+    pub fn write_byte_at(&mut self, offset: usize, value: u8) -> Result<(), BoundsError>;
+
+    /// Capacity of the buffer (the `n` passed to the builder
+    /// constructor).
+    pub fn capacity(&self) -> usize;
+
+    /// Convert the builder to a `Copy` read-only handle. The
+    /// builder is consumed; subsequent writes are not possible
+    /// through this API surface.
+    pub fn finish(self) -> ArenaBytes;
+}
+
+#[derive(Copy, Clone)]
+pub struct ArenaBytes(ArenaHandle<[u8]>);
+
+impl ArenaBytes {
+    /// Resolve the handle against the arena that produced it.
+    /// Returns `Stale` if the arena has been reset since the
+    /// handle was issued.
+    pub fn get<'a>(&self, arena: &'a Arena) -> Result<&'a [u8], Stale>;
+
+    /// Epoch captured when the handle was issued. Useful for
+    /// debugging and for consumers that want to verify
+    /// freshness without dereferencing.
+    pub fn epoch(&self) -> u64;
+}
+```
+
+The builder's internal storage is the raw pointer returned by `alloc_top_bytes`. The `write_at` method validates `offset + bytes.len() <= capacity` and then performs a safe slice copy through the validated bounds. The `finish` method constructs `ArenaHandle::from_raw_parts(ptr, arena.epoch())` (which is the existing unsafe constructor, used safely inside the builder because the builder owned the allocation).
+
+**Usage limitations (documented).**
+
+The byte buffer is POD only. Storing Drop-bearing types (`Arc`, `Box`, `String`, etc.) requires consumer-managed Drop semantics; this feature does not provide them. The arena reset reclaims the bytes without running any Drop. Consumers that need Drop for individual values must store such values outside the arena byte buffer (in side tables, in the operand stack's `Value` enum directly, in the host's storage, etc.). See B33 for the opaque-value pattern that uses indices into VM-resident Vecs to handle Arc-bearing references in a POD-shaped runtime representation.
+
+**Effort estimate.**
+
+One to two days of focused work. The implementation is mostly an API and tests around the existing `alloc_top_bytes` and `ArenaHandle::from_raw_parts` primitives. Tests cover the round-trip (write through builder, read through handle), bounds checking, stale-handle detection across arena reset, symmetric bottom-region builder, and the documented POD-only usage limitation.
+
+**Forcing case.**
+
+B28 P2 onwards needs this feature to migrate composite Value internal storage from `Vec<GenericValue>` to flat bytes in the arena. The feature also benefits the broader arena-consumer audience that wants to build fixed-size byte buffers safely.
+
+**Cross-references.**
+
+- B28 (runtime composite Value representation aligned with the language guarantee) is the immediate consumer. The Flat path in `GenericTuple`, `GenericArray`, `GenericStruct`, `GenericEnum` uses this feature for the byte buffer.
+- B33 (opaque values as indices) complements this feature for the Arc-bearing case.
+- The existing `KString` API in `keleusma::kstring` is the prior art for the handle pattern; the builder pattern is new.
+
+## B33. Opaque values stored as indices into per-VM Vecs
+
+`Value::Opaque(Arc<dyn HostOpaque>)` carries a fat `Arc` pointer (16 bytes on 64-bit). The `Arc` is Drop-bearing; dropping it decrements the host object's refcount. This prevents Opaque fields from being stored in arena byte buffers (B32) because the arena reset reclaims the bytes without running any Drop, leaking the refcount. For B28's "everything in arena" property to hold across all composite Value variants, Opaque needs a POD-shaped runtime representation that the arena can hold safely.
+
+**Design.**
+
+The VM gains two opaque registries:
+
+```rust
+pub struct GenericVm<...> {
+    // ...existing fields
+    ephemeral_opaques: Vec<Arc<dyn HostOpaque>>,
+    persistent_opaques: Vec<Arc<dyn HostOpaque>>,
+}
+```
+
+The runtime represents an opaque reference as a small index plus a tag identifying which registry it indexes:
+
+```rust
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum OpaqueRef {
+    /// Index into the VM's `ephemeral_opaques` Vec. Cleared on
+    /// arena RESET. Used by opaque values living on the operand
+    /// stack, in arena ephemeral bytes (tuple, array, struct,
+    /// enum bodies), and in any other transient storage.
+    Ephemeral(u32),
+    /// Index into the VM's `persistent_opaques` Vec. Cleared on
+    /// VM drop only. Used by opaque values held in `private data`
+    /// fields and any other persistent storage.
+    Persistent(u32),
+}
+```
+
+`OpaqueRef` is `Copy`, POD-shaped (5 bytes plus padding to 8 bytes on 64-bit alignment), and safe to store in arena byte buffers (B32).
+
+**Storage by context.**
+
+| Context | Storage | Lifetime |
+|---------|---------|----------|
+| Operand stack | `Value::Opaque(OpaqueRef)` (internal runtime form) | Until RESET (ephemeral) or VM drop (persistent) |
+| Arena ephemeral bytes (composite bodies) | `OpaqueRef::Ephemeral(u32)` inline | Until RESET |
+| Arena persistent bytes (private data) | `OpaqueRef::Persistent(u32)` inline | Until VM drop |
+| Yielded value crossing into host | `Value::Opaque(Arc<dyn HostOpaque>)` (materialised) | Host-managed |
+| Native function argument | `Arc<dyn HostOpaque>` (materialised from index at call site) | Native-call duration |
+
+**Lifecycle.**
+
+- Native function returns an `Arc<dyn HostOpaque>`: the VM pushes it to `ephemeral_opaques`, returns `OpaqueRef::Ephemeral(index)` to the script.
+- Native function takes an opaque argument: the VM looks up the indexed `Arc` and clones it for the native call. The clone bumps the refcount during the call; the call's drop on the cloned Arc decrements.
+- Arena RESET: clears `ephemeral_opaques`. All ephemeral Arcs drop; refcounts decrement. Anything still referenced from `persistent_opaques` or by the host survives. The persistent Vec is untouched.
+- Private data field write of an opaque: the VM moves the Arc from `ephemeral_opaques` to `persistent_opaques` (or duplicates if shared) and rewrites the `OpaqueRef` tag accordingly. The ephemeral index slot becomes vacant; it may be reclaimed by subsequent allocations or left vacant until RESET.
+- VM drop: drops both Vecs, dropping all remaining Arcs.
+- Yield boundary: the runtime walks the yielded value tree (analogous to `materialise_kstrings`) and replaces every `OpaqueRef` with the `Arc::clone(...)` from the indexed Vec. The yielded `Value` carries `Arc<dyn HostOpaque>` as today. Host code is unaffected by the internal indexed representation.
+- Hot code swap: ephemeral opaques are gone (the swap restarts the iteration). Persistent opaques survive because their Vec is part of persistent state. The new module's references continue to work.
+
+**Public API.**
+
+The host marshalling boundary continues to use `Value::Opaque(Arc<dyn HostOpaque>)` as the public surface. Host code that pattern-matches on `Value::Opaque` is unaffected. The `OpaqueRef`-indexed form is an internal runtime representation that surfaces only on the operand stack and inside arena byte buffers. The marshall layer handles the index-to-Arc translation when crossing the host boundary; the `KeleusmaType` derive macro is updated to do the translation at native-call argument and return positions.
+
+**Effort estimate.**
+
+Three to five days of focused work. Touches:
+
+- `Value` enum definition (the `Opaque` variant's payload changes internally; the public marshalling surface is preserved).
+- VM construction (`Vm::new`) to initialise the two Vecs.
+- VM op handlers that touch Opaque values (native call paths, equality, type predicates).
+- Marshall layer to translate at host boundary.
+- Yield-boundary materialisation, analogous to `materialise_kstrings`.
+- Tests covering ephemeral/persistent isolation, RESET behaviour, yield materialisation, private-data write that moves opaque from ephemeral to persistent, VM drop drops all Arcs.
+
+**Forcing case.**
+
+B28 P2 onwards. Without this feature, B28 must use a hybrid Flat-plus-Boxed representation for composite Values, with Opaque-containing composites falling back to the heap-resident `Vec<Value>` form. With this feature, the Flat path applies uniformly, and the "everything in arena" property holds.
+
+**Cross-references.**
+
+- B28 (runtime composite Value representation aligned with the language guarantee) is the immediate consumer.
+- B32 (arena bytes-builder) is the complement: B32 provides the byte buffer; B33 provides the POD opaque representation that fits in it.
+
+## B34. keleusma-macros extension for shared-data flat-byte layout
+
+`#[derive(KeleusmaType)]` in `keleusma-macros` generates `impl KeleusmaType for T` blocks that marshall between host Rust types and the heap-allocated `Value` enum. Under B28's flat-byte composite-Value representation, the VM accesses host structs backing `shared data` declarations through byte offsets rather than through `Value` round-trips. The derive macro needs to additionally generate byte-layout information so the VM can read and write fields directly at the right offsets.
+
+**Design.**
+
+Extend `#[derive(KeleusmaType)]` to also emit, for struct and enum types:
+
+1. **A compile-time byte-layout descriptor.** A `const SHARED_DATA_LAYOUT: LayoutDescriptor` (or equivalent) declaring field byte offsets, scalar kinds, byte sizes, and total struct bytes. The descriptor matches the runtime's [`crate::value_layout::LayoutDescriptor`] shape so consistency checks at VM construction time are straightforward.
+
+2. **Direct byte-level accessor functions.** Generated methods that read or write a field at a known byte offset and scalar kind. For example, for a struct `Sensor { temperature: Float, pressure: Float, count: Word }`, the macro emits:
+
+```rust
+impl Sensor {
+    pub fn get_field_at_offset(&self, offset: usize, kind: ScalarKind) -> Value { ... }
+    pub fn set_field_at_offset(&mut self, offset: usize, kind: ScalarKind, value: Value) { ... }
+}
+```
+
+The VM uses these accessors at every `Op::GetData(slot)` or `Op::SetData(slot)` dispatch when the slot indexes a shared-data field, avoiding the round-trip through `Value`'s heap-allocated form.
+
+3. **A layout-consistency check.** A `validate_against_keleusma_layout(layout: &LayoutDescriptor) -> Result<(), LayoutMismatch>` method that compares the host struct's byte layout against the Keleusma script's declared shared-data layout. Called at `Vm::new` to surface mismatches as a `VerifyError` rather than at runtime.
+
+**Constraints on the host struct.**
+
+The macro requires the host struct to use `#[repr(C)]` or an explicit field-ordering attribute so the byte layout is stable and matches Rust's well-defined struct layout rules. Hosts that use the default Rust layout (which is unspecified) get a compile-time error from the macro pointing them at the constraint.
+
+The macro emits a `static_assertions`-style compile-time check that the struct's size and field offsets match what the macro computed, guarding against silent drift if the struct is edited.
+
+**Effort estimate.**
+
+Four to six days of focused work. Touches:
+
+- `keleusma-macros` derive implementation (most of the work; the macro grows by roughly a factor of two).
+- A new `LayoutDescriptor` type in the runtime that matches the macro's emitted form, if not already a fit with `crate::value_layout::LayoutDescriptor`.
+- A new `validate_against_keleusma_layout` check site in `Vm::new`.
+- Tests for the generated code on representative structs (scalar-only, mixed-scalar, with Text fields, with Opaque fields under B33's representation).
+- Documentation update for the `KeleusmaType` derive's expanded contract.
+
+**Forcing case.**
+
+B28 P5 or P6, when shared `data` access integrates with the flat-byte runtime. Until then, shared data continues to use the V0.2.x `Vec<Value>` round-trip through `Vm::set_data` and `Vm::get_data`. The macro extension is not on the critical path for P2 through P4 (which migrate tuple, array, struct, and enum to flat-byte storage for in-arena composites, not for shared data).
+
+**Cross-references.**
+
+- B28 (runtime composite Value representation aligned with the language guarantee) is the immediate consumer.
+- The existing `keleusma-macros` crate is the implementation site.
+- The `#[derive(KeleusmaType)]` macro's current shape lives in `keleusma-macros/src/lib.rs`.
