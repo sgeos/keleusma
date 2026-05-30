@@ -108,7 +108,7 @@ jobs:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
       - name: keleusma (docs.rs feature set)
-        run: cargo doc -p keleusma --no-deps --features signatures,shell
+        run: cargo doc -p keleusma --no-deps --features signatures,encryption,shell
       - name: keleusma-arena (all features)
         run: cargo doc -p keleusma-arena --no-deps --all-features
       - name: keleusma-macros

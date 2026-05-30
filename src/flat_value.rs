@@ -3,8 +3,9 @@
 //! This module is parallel infrastructure introduced in B28 P0
 //! (see [`docs/decisions/BACKLOG.md`](../../docs/decisions/BACKLOG.md)).
 //! It defines the byte-level read and write helpers for fixed-
-//! size primitive types and the [`FlatComposite`] container that
-//! pairs a byte buffer with a [`LayoutDescriptor`].
+//! size primitive types and the [`crate::flat_value::FlatComposite`]
+//! container that pairs a byte buffer with a
+//! [`crate::value_layout::LayoutDescriptor`].
 //!
 //! The helpers are little-endian throughout. Keleusma's wire
 //! format is little-endian (see [`crate::wire_format`]); the

@@ -34,14 +34,16 @@ exclude = [
 
 [package.metadata.docs.rs]
 # Render docs.rs against the full feature surface so consumers see
-# the `signatures` and `shell` doc surface alongside the defaults.
-# The `narrow-word-*` / `narrow-address-*` / `narrow-float-32`
+# the `signatures`, `encryption`, and `shell` doc surface alongside
+# the defaults. `encryption` is additive on `signatures` and carries
+# the V0.2.1 `crate::encryption` module that the wire-format docs
+# link to. The `narrow-word-*` / `narrow-address-*` / `narrow-float-32`
 # features are mutually-exclusive parametric-runtime selectors; do
 # not enable them at the docs.rs build (they conflict with each
 # other and with the default 64-bit runtime that the public APIs
 # document).
 all-features = false
-features = ["compile", "verify", "floats", "signatures", "shell"]
+features = ["compile", "verify", "floats", "signatures", "encryption", "shell"]
 rustdoc-args = ["--cfg", "docsrs"]
 
 [features]

@@ -12,11 +12,13 @@
 //! does not require. B28 corrects the runtime to a flat-byte
 //! representation aligned with the language guarantee.
 //!
-//! [`LayoutDescriptor`] describes the byte-level layout of a
-//! composite type. Its [`LayoutDescriptor::size_in_bytes`],
-//! [`LayoutDescriptor::field_offset`],
-//! [`LayoutDescriptor::field_layout`], and
-//! [`LayoutDescriptor::struct_field_offset`] methods compute the
+//! [`crate::value_layout::LayoutDescriptor`] describes the
+//! byte-level layout of a composite type. Its
+//! [`crate::value_layout::LayoutDescriptor::size_in_bytes`],
+//! [`crate::value_layout::LayoutDescriptor::field_offset`],
+//! [`crate::value_layout::LayoutDescriptor::field_layout`], and
+//! [`crate::value_layout::LayoutDescriptor::struct_field_offset`]
+//! methods compute the
 //! layout information that subsequent B28 phases need to read
 //! and write composite values through the flat-byte
 //! representation.

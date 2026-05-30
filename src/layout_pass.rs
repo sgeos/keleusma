@@ -10,11 +10,11 @@
 //! The pass operates on the post-monomorphization program where
 //! every type expression is concrete. Generic type parameters
 //! must have been substituted with concrete types before the
-//! layout pass runs; an unsubstituted [`TypeExpr::Named`] with
-//! generic arguments is treated as an unresolved error.
+//! layout pass runs; an unsubstituted [`crate::ast::TypeExpr::Named`]
+//! with generic arguments is treated as an unresolved error.
 //!
-//! Labels ([`TypeExpr::Labelled`] and
-//! [`TypeExpr::NegativeLabelled`]) do not affect byte layout;
+//! Labels ([`crate::ast::TypeExpr::Labelled`] and
+//! [`crate::ast::TypeExpr::NegativeLabelled`]) do not affect byte layout;
 //! the pass transparently descends through them to the underlying
 //! type.
 //!
