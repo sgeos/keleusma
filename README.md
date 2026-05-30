@@ -1,5 +1,9 @@
 # Keleusma
 
+<p align="center">
+  <img src="assets/Keleusma_Icon.png" alt="Keleusma icon" width="480">
+</p>
+
 [![Crates.io](https://img.shields.io/crates/v/keleusma.svg)](https://crates.io/crates/keleusma)
 [![Docs.rs](https://docs.rs/keleusma/badge.svg)](https://docs.rs/keleusma)
 [![License: 0BSD](https://img.shields.io/badge/license-0BSD-blue.svg)](LICENSE)
