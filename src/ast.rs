@@ -830,6 +830,18 @@ pub enum Literal {
     Int(i64),
     /// Floating-point literal.
     Float(f64),
+    /// Byte literal from a `Byte` suffix, e.g. `42Byte`. The lexer
+    /// range-checks the value to `0..=255`.
+    Byte(u8),
+    /// Fixed-point literal from a `Fixed<N>` suffix, e.g.
+    /// `42Fixed<16>` or `3.14Fixed<16>`. `raw` holds the Q-format
+    /// bit pattern; `frac_bits` is `N`, the fraction-bit count.
+    Fixed {
+        /// Q-format raw bit pattern.
+        raw: i64,
+        /// Fraction-bit count `N`.
+        frac_bits: u8,
+    },
     /// Text-string literal.
     String(String),
     /// Boolean literal.

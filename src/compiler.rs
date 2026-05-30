@@ -1555,6 +1555,8 @@ fn const_value_any(init: &ConstInitializer) -> crate::bytecode::ConstValue {
     use crate::bytecode::ConstValue;
     match init {
         ConstInitializer::Scalar(Literal::Int(n)) => ConstValue::Int(*n),
+        ConstInitializer::Scalar(Literal::Byte(b)) => ConstValue::Byte(*b),
+        ConstInitializer::Scalar(Literal::Fixed { raw, .. }) => ConstValue::Fixed(*raw),
         #[cfg(feature = "floats")]
         ConstInitializer::Scalar(Literal::Float(f)) => ConstValue::Float(*f),
         #[cfg(not(feature = "floats"))]
@@ -2595,6 +2597,10 @@ fn infer_expr_type(fc: &FuncCompiler, expr: &Expr) -> Option<TypeExpr> {
         Expr::Literal { value, span } => Some(match value {
             Literal::Int(_) => TypeExpr::Prim(PrimType::Word, *span),
             Literal::Float(_) => TypeExpr::Prim(PrimType::Float, *span),
+            Literal::Byte(_) => TypeExpr::Prim(PrimType::Byte, *span),
+            Literal::Fixed { frac_bits, .. } => {
+                TypeExpr::Prim(PrimType::Fixed(Some(*frac_bits)), *span)
+            }
             Literal::Bool(_) => TypeExpr::Prim(PrimType::Bool, *span),
             Literal::String(_) => TypeExpr::Prim(PrimType::Text, *span),
             Literal::Unit => TypeExpr::Unit(*span),
@@ -3901,6 +3907,14 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
                 let idx = fc.add_constant(Value::Int(*v));
                 fc.emit(Op::Const(idx));
             }
+            Literal::Byte(v) => {
+                let idx = fc.add_constant(Value::Byte(*v));
+                fc.emit(Op::Const(idx));
+            }
+            Literal::Fixed { raw, .. } => {
+                let idx = fc.add_constant(Value::Fixed(*raw));
+                fc.emit(Op::Const(idx));
+            }
             #[cfg(feature = "floats")]
             Literal::Float(v) => {
                 let idx = fc.add_constant(Value::Float(*v));
@@ -5036,6 +5050,14 @@ fn compile_pattern_test(
             match lit {
                 Literal::Int(v) => {
                     let idx = fc.add_constant(Value::Int(*v));
+                    fc.emit(Op::Const(idx));
+                }
+                Literal::Byte(v) => {
+                    let idx = fc.add_constant(Value::Byte(*v));
+                    fc.emit(Op::Const(idx));
+                }
+                Literal::Fixed { raw, .. } => {
+                    let idx = fc.add_constant(Value::Fixed(*raw));
                     fc.emit(Op::Const(idx));
                 }
                 #[cfg(feature = "floats")]

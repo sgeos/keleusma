@@ -66,7 +66,7 @@
             "patterns": [
                 {
                     "name": "constant.numeric.float.kel",
-                    "match": "\\b\\d[0-9_]*\\.\\d[0-9_]*(f64)?\\b"
+                    "match": "\\b\\d[0-9_]*\\.\\d[0-9_]*(Float|Fixed<\\d+>)?"
                 },
                 {
                     "name": "constant.numeric.hex.kel",
@@ -78,7 +78,7 @@
                 },
                 {
                     "name": "constant.numeric.integer.kel",
-                    "match": "\\b\\d[0-9_]*(i64)?\\b"
+                    "match": "\\b\\d[0-9_]*(Word|Byte|Float|Fixed<\\d+>)?"
                 }
             ]
         },

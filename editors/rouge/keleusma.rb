@@ -83,10 +83,14 @@ module Rouge
         rule %r/@!?(?:[A-Za-z_]\w*|\{[^}]*\})/, Name::Decorator
 
         # Numeric literals. Float, hex, and binary precede integer.
-        rule %r/\b\d[0-9_]*\.\d[0-9_]*(?:f64)?\b/, Num::Float
+        # Type suffixes: fractional literals take `Float` or
+        # `Fixed<N>`; integer literals take `Word`, `Byte`, `Float`,
+        # or `Fixed<N>`. The suffix is highlighted as part of the
+        # numeric token.
+        rule %r/\b\d[0-9_]*\.\d[0-9_]*(?:Float|Fixed<\d+>)?/, Num::Float
         rule %r/\b0x[0-9a-fA-F_]+\b/, Num::Hex
         rule %r/\b0b[01_]+\b/, Num::Bin
-        rule %r/\b\d[0-9_]*(?:i64)?\b/, Num::Integer
+        rule %r/\b\d[0-9_]*(?:Word|Byte|Float|Fixed<\d+>)?/, Num::Integer
 
         # Identifier-shaped tokens routed by keyword class.
         rule %r/[a-z_]\w*/ do |m|

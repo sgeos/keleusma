@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Numeric literal type suffixes now use type names.** A numeric literal may carry a type suffix that sets and checks the literal's type. Integer-form literals admit `Word`, `Byte`, `Float`, and `Fixed<N>` (for example `42Word`, `42Byte`, `42Float`, `42Fixed<16>`); fractional literals admit only the real-valued `Float` and `Fixed<N>` (for example `3.14Float`, `3.14Fixed<16>`). A `Byte` suffix is range-checked to `0..=255` at lex time, and a `Fixed<N>` suffix requires the fraction-bit count `N` in `[0, 62]`, mirroring the `Fixed<N>` type syntax. The suffix pins the literal's type, so it is a type error to use a suffixed literal where an incompatible type is expected. New `Literal::Byte` and `Literal::Fixed` AST variants and `TokenKind::ByteLit` / `TokenKind::FixedLit` token kinds back the feature.
+
+### Removed
+
+- **The `i64` and `f64` numeric literal suffixes are removed.** They were inconsistent with the V0.2.0 type rename (the integer type is `Word`, not `i64`) and conveyed no type information because the lexer discarded them. A bare `i64` or `f64` immediately following a numeral now lexes as a separate identifier rather than a suffix. Rewrite `42i64` as `42` or `42Word`, and `3.14f64` as `3.14` or `3.14Float`.
+
 ## [0.2.0] - 2026-05-21
 
 V0.2.0 is the first publicly released line. V0.1.x circulated as a pre-release. The headline additions are cryptographic module signing, the V0.2.0 ISA reset, information-flow labels including negative labels, calibrated WCET cost models from the new `keleusma-bench` crate, and a substantial documentation reorganization. The wire format is incompatible with V0.1.x; recompile artefacts. The release also retires closures, f-strings, and the `text` bundled DSL; programs that used those features need rewrites under host-registered natives. See the breaking-change subsections below for the migration surface; the V0.1.x line had narrow adoption so the discontinuity is acceptable.

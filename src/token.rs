@@ -136,6 +136,14 @@ pub enum TokenKind {
     IntLit(i64),
     /// Floating-point literal.
     FloatLit(f64),
+    /// Byte literal from a `Byte`-suffixed integer literal, e.g.
+    /// `42Byte`. The lexer range-checks the value to `0..=255`.
+    ByteLit(u8),
+    /// Fixed-point literal from a `Fixed<N>`-suffixed numeric
+    /// literal, e.g. `42Fixed<16>` or `3.14Fixed<16>`. The first
+    /// field is the Q-format raw bit pattern computed by the lexer;
+    /// the second is the fraction-bit count `N`.
+    FixedLit(i64, u8),
     /// String literal (escape sequences resolved).
     StringLit(String),
 

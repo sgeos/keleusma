@@ -2168,6 +2168,8 @@ fn check_pattern_against_type(
             let lit_ty = match lit {
                 Literal::Int(_) => Type::Word,
                 Literal::Float(_) => Type::Float,
+                Literal::Byte(_) => Type::Byte,
+                Literal::Fixed { frac_bits, .. } => Type::Fixed(*frac_bits),
                 Literal::String(_) => Type::Str,
                 Literal::Bool(_) => Type::Bool,
                 Literal::Unit => Type::Unit,
@@ -2730,6 +2732,8 @@ fn type_of_expr(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError> {
         Expr::Literal { value, .. } => Ok(match value {
             Literal::Int(_) => Type::Word,
             Literal::Float(_) => Type::Float,
+            Literal::Byte(_) => Type::Byte,
+            Literal::Fixed { frac_bits, .. } => Type::Fixed(*frac_bits),
             Literal::String(_) => Type::Str,
             Literal::Bool(_) => Type::Bool,
             Literal::Unit => Type::Unit,
@@ -4685,6 +4689,31 @@ mod tests {
     #[test]
     fn let_binding_inferred_from_value() {
         check_src("fn main() -> Word { let x = 1; x + 1 }").unwrap();
+    }
+
+    #[test]
+    fn numeric_suffix_word_typechecks() {
+        check_src("fn main() -> Word { 5Word }").unwrap();
+    }
+
+    #[test]
+    fn numeric_suffix_byte_checked_against_expected_type() {
+        // The `Byte` suffix pins the literal's type, so using it where
+        // a `Word` is expected is a type error.
+        let err = check_src("fn main() -> Word { let x: Word = 5Byte; x }").unwrap_err();
+        assert!(
+            err.message.contains("Word") && err.message.contains("Byte"),
+            "{}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn numeric_suffix_fixed_carries_fraction_bits_in_type() {
+        // `Fixed<16>` and `Fixed<32>` are distinct types, so a
+        // `Fixed<16>` literal does not satisfy a `Fixed<32>` binding.
+        let err = check_src("fn main() -> Word { let x: Fixed<32> = 1Fixed<16>; 0 }").unwrap_err();
+        assert!(err.message.contains("Fixed"), "{}", err.message);
     }
 
     #[test]

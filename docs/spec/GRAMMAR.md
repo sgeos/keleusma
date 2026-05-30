@@ -64,15 +64,18 @@ Variable names, function names, and field names use `lower_ident`. Type names, s
 
 ````
 integer_lit   = [0-9]+ [ int_suffix ] | 0x[0-9a-fA-F]+ | 0b[01]+
-float_lit     = [0-9]+ '.' [0-9]+ [ float_suffix ]
-int_suffix    = 'i64'
-float_suffix  = 'f64'
+float_lit     = [0-9]+ '.' [0-9]+ [ real_suffix ]
+int_suffix    = 'Word' | 'Byte' | 'Float' | fixed_suffix
+real_suffix   = 'Float' | fixed_suffix
+fixed_suffix  = 'Fixed' '<' [0-9]+ '>'
 string_lit    = '"' ( [^"\\] | '\\' escape_char )* '"'
 bool_lit      = 'true' | 'false'
 escape_char   = 'n' | 't' | 'r' | '\\' | '"' | '0'
 ````
 
-Integer literals support decimal, hexadecimal, and binary notation. Float literals require digits on both sides of the decimal point. String literals use double quotes with backslash escape sequences. Numeric literal suffixes (`42i64`, `3.14f64`) are supported for explicit typing.
+Integer literals support decimal, hexadecimal, and binary notation. Float literals require digits on both sides of the decimal point. String literals use double quotes with backslash escape sequences.
+
+A numeric literal may carry a type suffix that sets and checks the literal's type. Integer-form literals admit `Word`, `Byte`, `Float`, and `Fixed<N>`, for example `42Word`, `42Byte`, `42Float`, and `42Fixed<16>`. Fractional literals admit only the real-valued suffixes `Float` and `Fixed<N>`, for example `3.14Float` and `3.14Fixed<16>`; an integer type suffix on a fractional literal is rejected. A `Byte` suffix is range-checked to `0..=255` at lex time, and a `Fixed<N>` suffix requires the fraction-bit count `N` in the range `[0, 62]`. The `Fixed<N>` suffix mirrors the `Fixed<N>` type syntax, so `42Fixed<16>` encodes the Q-format value `42 << 16` and `3.14Fixed<16>` encodes `round(3.14 * 2^16)`. The earlier `i64` and `f64` suffixes are removed; a bare `i64` or `f64` immediately following a numeral now lexes as a separate identifier.
 
 ### Operators
 
@@ -524,7 +527,7 @@ yield handle(AudioCommand::ConfigureChannel(ch)) -> AudioAction {
 
   // Apply initial modulation routing.
   for i in 0..8 {
-    audio::set_mod_depth(ch, i, 0.5f64);
+    audio::set_mod_depth(ch, i, 0.5Float);
   }
   AudioAction::SetChannelParam(ch, "ready", 1.0)
 }
@@ -1109,7 +1112,7 @@ yield process(AudioCommand::ConfigureChannel(ch)) -> AudioAction {
 
   // Apply initial modulation routing.
   for i in 0..8 {
-    audio::set_mod_depth(ch, i, 0.5f64);
+    audio::set_mod_depth(ch, i, 0.5Float);
   }
   AudioAction::SetChannelParam(ch, "ready", 1.0)
 }
@@ -1168,14 +1171,14 @@ loop main(event: GameEvent) -> ScriptAction {
 }
 
 yield handle(GameEvent::TurnStart(turn, turn_type)) -> ScriptAction {
-  if turn == 1i64 {
+  if turn == 1Word {
     ScriptAction::DisplayMessage("Narrator", "Welcome aboard the generation ship.")
   } else {
     ScriptAction::NoAction
   }
 }
 
-yield handle(GameEvent::DeploymentWarning(turns_until)) -> ScriptAction when turns_until <= 3i64 {
+yield handle(GameEvent::DeploymentWarning(turns_until)) -> ScriptAction when turns_until <= 3Word {
   ScriptAction::DisplayMessage("Commander", "Deployment imminent. Prepare for combat.")
 }
 
@@ -1184,7 +1187,7 @@ yield handle(GameEvent::DeploymentWarning(turns_until)) -> ScriptAction {
 }
 
 yield handle(GameEvent::CharacterDeath(char_id, name)) -> ScriptAction {
-  let relationship = game::get_friendliness(0i64, char_id);
+  let relationship = game::get_friendliness(0Word, char_id);
   if relationship > 50.0 {
     ScriptAction::DisplayMessage("Narrator", name + " is gone. You feel the loss deeply.")
   } else {
@@ -1379,7 +1382,7 @@ The following questions from the initial specification have been resolved.
 | String interpolation | Removed in V0.2.0 Phase 3.5. The f-string surface form (`f"text {expr}"`) and its lexer-level desugaring to `concat` / `to_string` calls were retired. Hosts compose dynamic text through a registered `format` native that returns `Value::KStr`. |
 | Array iteration | `for` loops iterate over arrays and bounded ranges. The compiler infers static array length from declared types and emits a `Const(N)` end bound for the strict-mode WCMU verifier. |
 | Error propagation | Implemented as the resume-value pattern (B7). The script declares a `Result`-shaped enum and pattern-matches on the resumed value. No `Result<T, E>` syntactic sugar at the `yield` site; the dialogue type is the script's own enum. |
-| Numeric literal suffixes | Supported. `42i64` and `3.14f64` are valid. |
+| Numeric literal type suffixes | Supported. `42Word`, `42Byte`, `42Float`, `42Fixed<16>`, `3.14Float`, and `3.14Fixed<16>` are valid; the `Byte` suffix is range-checked and `Fixed<N>` requires the fraction-bit count. The earlier `i64`/`f64` suffixes are removed. |
 | Nested yield | Yield-propagating functions must share the caller's yield contract (same input and output types). Enforced via the `yield` function category keyword. |
 | Block delimiters | Curly braces. Consistent with Rust host language. |
 | Function categories | Three categories. `loop` for productive divergent, `yield` for non-atomic total, `fn` for atomic total. |

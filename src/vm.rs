@@ -5083,6 +5083,39 @@ mod tests {
     }
 
     #[test]
+    fn numeric_suffix_word_is_plain_int() {
+        let val = run_expect("fn main() -> Word { 7Word }", &[]);
+        assert_eq!(val, Value::Int(7));
+    }
+
+    #[test]
+    fn numeric_suffix_byte_produces_byte() {
+        let val = run_expect("fn main() -> Byte { 42Byte }", &[]);
+        assert_eq!(val, Value::Byte(42));
+    }
+
+    #[test]
+    fn numeric_suffix_fixed_integer_form_encodes_q_format() {
+        // `42Fixed<16>` is the Q-format value 42 << 16.
+        let val = run_expect("fn main() -> Fixed<16> { 42Fixed<16> }", &[]);
+        assert_eq!(val, Value::Fixed(42 << 16));
+    }
+
+    #[test]
+    #[cfg(feature = "floats")]
+    fn numeric_suffix_float_from_integer_digits() {
+        let val = run_expect("fn main() -> Float { 42Float }", &[]);
+        assert_eq!(val, Value::Float(42.0));
+    }
+
+    #[test]
+    #[cfg(feature = "floats")]
+    fn numeric_suffix_fixed_fractional_form_rounds() {
+        let val = run_expect("fn main() -> Fixed<16> { 3.5Fixed<16> }", &[]);
+        assert_eq!(val, Value::Fixed((3.5 * 65536.0) as i64));
+    }
+
+    #[test]
     fn byte_cast_truncates_word_to_low_eight_bits() {
         let val = run_expect("fn main() -> Byte { 300 as Byte }", &[]);
         assert_eq!(val, Value::Byte(44));

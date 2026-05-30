@@ -5,6 +5,24 @@ use alloc::vec::Vec;
 
 use crate::token::{Span, Token, TokenKind};
 
+/// A numeric-literal type suffix recognized by the lexer. Surface
+/// forms are `Word`, `Byte`, `Float`, and `Fixed<N>`. Used only
+/// internally to route a suffixed literal to the right token kind.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NumSuffix {
+    /// No suffix present.
+    None,
+    /// `Word` suffix; the literal is a `Word` (the default integer).
+    Word,
+    /// `Byte` suffix; the literal is a `Byte`.
+    Byte,
+    /// `Float` suffix; the literal is a `Float`.
+    Float,
+    /// `Fixed<N>` suffix; the literal is a fixed-point value with
+    /// `N` fraction bits.
+    Fixed(u8),
+}
+
 /// Lexer error with source location.
 #[derive(Debug, Clone, PartialEq)]
 pub struct LexError {
@@ -406,7 +424,7 @@ impl<'a> Lexer<'a> {
             // existing scripts using f-strings fail with a clear
             // error rather than silently mis-tokenising.
             b'f' if self.peek() == Some(b'"') => Err(LexError {
-                message: alloc::string::String::from(
+                message: String::from(
                     "f-strings were removed in V0.2.0. Use a host native that formats the values you want to interpolate.",
                 ),
                 span: self.span_from(start, start_line, start_col),
@@ -513,9 +531,7 @@ impl<'a> Lexer<'a> {
             #[cfg(not(feature = "floats"))]
             {
                 return Err(LexError {
-                    message: alloc::string::String::from(
-                        "float literals require the `floats` cargo feature",
-                    ),
+                    message: String::from("float literals require the `floats` cargo feature"),
                     span: self.span_from(start, start_line, start_col),
                 });
             }
@@ -525,50 +541,198 @@ impl<'a> Lexer<'a> {
                 while self.peek().is_some_and(|c| c.is_ascii_digit()) {
                     self.advance();
                 }
-                // Check for f64 suffix.
-                if self.peek() == Some(b'f')
-                    && self.peek_at(1) == Some(b'6')
-                    && self.peek_at(2) == Some(b'4')
-                {
-                    self.advance();
-                    self.advance();
-                    self.advance();
-                }
-                let text = core::str::from_utf8(&self.source[start..self.pos]).unwrap_or("0");
-                let text = text.trim_end_matches("f64");
+                let value_end = self.pos;
+                let text = core::str::from_utf8(&self.source[start..value_end]).unwrap_or("0");
                 let value: f64 = text.parse().map_err(|_| LexError {
                     message: alloc::format!("float literal `{}` is not parseable as f64", text),
                     span: self.span_from(start, start_line, start_col),
                 })?;
+                // A fractional literal admits only the real-valued
+                // suffixes `Float` and `Fixed<N>`. An integer type
+                // suffix (`Word`, `Byte`) on a fractional literal is
+                // rejected.
+                let kind = match self.lex_numeric_suffix(start, start_line, start_col)? {
+                    NumSuffix::None | NumSuffix::Float => TokenKind::FloatLit(value),
+                    NumSuffix::Fixed(n) => {
+                        let scale = (1u64 << n) as f64;
+                        let scaled = libm::round(value * scale);
+                        if !scaled.is_finite()
+                            || scaled < i64::MIN as f64
+                            || scaled > i64::MAX as f64
+                        {
+                            return Err(LexError {
+                                message: alloc::format!(
+                                    "`Fixed<{}>` literal `{}` overflows the fixed-point range",
+                                    n,
+                                    value
+                                ),
+                                span: self.span_from(start, start_line, start_col),
+                            });
+                        }
+                        TokenKind::FixedLit(scaled as i64, n)
+                    }
+                    NumSuffix::Word | NumSuffix::Byte => {
+                        return Err(LexError {
+                            message: String::from(
+                                "integer type suffix is not valid on a fractional literal; use `Float` or `Fixed<N>`",
+                            ),
+                            span: self.span_from(start, start_line, start_col),
+                        });
+                    }
+                };
                 return Ok(Token {
-                    kind: TokenKind::FloatLit(value),
+                    kind,
                     span: self.span_from(start, start_line, start_col),
                 });
             }
         }
 
-        // Check for i64 suffix.
-        if self.peek() == Some(b'i')
-            && self.peek_at(1) == Some(b'6')
-            && self.peek_at(2) == Some(b'4')
-        {
-            self.advance();
-            self.advance();
-            self.advance();
-        }
-
-        let text = core::str::from_utf8(&self.source[start..self.pos]).unwrap_or("0");
-        let text = text.trim_end_matches("i64");
         // A decimal integer literal must fit in i64. Silently
         // truncating an oversize literal to zero would let a typo
         // or generated-source bug compile and run with the wrong
         // value; reject at lex time instead.
+        let text = core::str::from_utf8(&self.source[start..self.pos]).unwrap_or("0");
         let value: i64 = text.parse().map_err(|_| LexError {
             message: alloc::format!("integer literal `{}` does not fit in i64", text),
             span: self.span_from(start, start_line, start_col),
         })?;
+        // Optional type suffix: `Word`, `Byte`, `Float`, `Fixed<N>`.
+        let kind = match self.lex_numeric_suffix(start, start_line, start_col)? {
+            NumSuffix::None | NumSuffix::Word => TokenKind::IntLit(value),
+            NumSuffix::Byte => {
+                if !(0..=0xFF).contains(&value) {
+                    return Err(LexError {
+                        message: alloc::format!("`Byte` literal {} is out of range 0..=255", value),
+                        span: self.span_from(start, start_line, start_col),
+                    });
+                }
+                TokenKind::ByteLit(value as u8)
+            }
+            NumSuffix::Float => self.int_float_suffix_token(value, start, start_line, start_col)?,
+            NumSuffix::Fixed(n) => {
+                let raw = (value as i128) << n;
+                if raw < i64::MIN as i128 || raw > i64::MAX as i128 {
+                    return Err(LexError {
+                        message: alloc::format!(
+                            "`Fixed<{}>` literal {} overflows the fixed-point range",
+                            n,
+                            value
+                        ),
+                        span: self.span_from(start, start_line, start_col),
+                    });
+                }
+                TokenKind::FixedLit(raw as i64, n)
+            }
+        };
         Ok(Token {
-            kind: TokenKind::IntLit(value),
+            kind,
+            span: self.span_from(start, start_line, start_col),
+        })
+    }
+
+    /// Scan an optional numeric-literal type suffix immediately
+    /// following the digits of a numeric literal. Returns the
+    /// recognized suffix, or [`NumSuffix::None`] when the following
+    /// bytes do not begin a suffix keyword (in which case `self.pos`
+    /// is restored so those bytes lex as their own token). The
+    /// `Fixed` keyword commits to suffix parsing and requires a
+    /// `<N>` fraction-bit argument, so a bare `Fixed` immediately
+    /// following digits is an error rather than a separate token.
+    fn lex_numeric_suffix(
+        &mut self,
+        start: usize,
+        start_line: u32,
+        start_col: u32,
+    ) -> Result<NumSuffix, LexError> {
+        // Suffix keywords are uppercase type names. A non-uppercase
+        // (or absent) next byte means there is no suffix.
+        if !self.peek().is_some_and(|c| c.is_ascii_uppercase()) {
+            return Ok(NumSuffix::None);
+        }
+        let ident_start = self.pos;
+        while self
+            .peek()
+            .is_some_and(|c| c.is_ascii_alphanumeric() || c == b'_')
+        {
+            self.advance();
+        }
+        let ident = core::str::from_utf8(&self.source[ident_start..self.pos]).unwrap_or("");
+        match ident {
+            "Word" => Ok(NumSuffix::Word),
+            "Byte" => Ok(NumSuffix::Byte),
+            "Float" => Ok(NumSuffix::Float),
+            "Fixed" => {
+                if self.peek() != Some(b'<') {
+                    return Err(LexError {
+                        message: String::from(
+                            "`Fixed` numeric suffix requires a fraction-bit count, e.g. `Fixed<16>`",
+                        ),
+                        span: self.span_from(start, start_line, start_col),
+                    });
+                }
+                self.advance(); // consume '<'
+                let n_start = self.pos;
+                while self.peek().is_some_and(|c| c.is_ascii_digit()) {
+                    self.advance();
+                }
+                let n_text = core::str::from_utf8(&self.source[n_start..self.pos]).unwrap_or("");
+                let n: u8 = n_text
+                    .parse()
+                    .ok()
+                    .filter(|n: &u8| *n <= 62)
+                    .ok_or_else(|| LexError {
+                        message: alloc::format!(
+                            "`Fixed<N>` fraction bits must be an integer in the range [0, 62], found `{}`",
+                            n_text
+                        ),
+                        span: self.span_from(start, start_line, start_col),
+                    })?;
+                if self.peek() != Some(b'>') {
+                    return Err(LexError {
+                        message: String::from(
+                            "expected `>` to close the `Fixed<N>` numeric suffix",
+                        ),
+                        span: self.span_from(start, start_line, start_col),
+                    });
+                }
+                self.advance(); // consume '>'
+                Ok(NumSuffix::Fixed(n))
+            }
+            _ => {
+                // Not a recognized suffix; restore the position so
+                // the identifier lexes as its own token.
+                self.pos = ident_start;
+                Ok(NumSuffix::None)
+            }
+        }
+    }
+
+    /// Build the token for a `Float`-suffixed integer-form literal.
+    /// Gated on the `floats` feature so that `42Float` is rejected
+    /// at lex time in integer-only builds, matching the treatment of
+    /// fractional float literals.
+    #[cfg(feature = "floats")]
+    fn int_float_suffix_token(
+        &self,
+        value: i64,
+        _start: usize,
+        _start_line: u32,
+        _start_col: u32,
+    ) -> Result<TokenKind, LexError> {
+        Ok(TokenKind::FloatLit(value as f64))
+    }
+
+    /// Integer-only build: the `Float` suffix is unavailable.
+    #[cfg(not(feature = "floats"))]
+    fn int_float_suffix_token(
+        &self,
+        _value: i64,
+        start: usize,
+        start_line: u32,
+        start_col: u32,
+    ) -> Result<TokenKind, LexError> {
+        Err(LexError {
+            message: String::from("the `Float` numeric suffix requires the `floats` cargo feature"),
             span: self.span_from(start, start_line, start_col),
         })
     }
@@ -799,7 +963,7 @@ mod tests {
 
     #[test]
     fn integer_literals() {
-        let result = kinds("0 42 123 0xff 0b1010 100i64");
+        let result = kinds("0 42 123 0xff 0b1010 100Word");
         assert_eq!(
             result,
             vec![
@@ -808,6 +972,8 @@ mod tests {
                 TokenKind::IntLit(123),
                 TokenKind::IntLit(0xff),
                 TokenKind::IntLit(0b1010),
+                // `Word` is the integer type; the suffix is accepted
+                // and the literal stays a plain `IntLit`.
                 TokenKind::IntLit(100),
                 TokenKind::Eof,
             ]
@@ -817,7 +983,7 @@ mod tests {
     #[test]
     #[cfg(feature = "floats")]
     fn float_literals() {
-        let result = kinds("3.25 0.5 100.0 4.75f64");
+        let result = kinds("3.25 0.5 100.0 4.75Float");
         assert_eq!(
             result,
             vec![
@@ -827,6 +993,102 @@ mod tests {
                 TokenKind::FloatLit(4.75),
                 TokenKind::Eof,
             ]
+        );
+    }
+
+    #[test]
+    fn numeric_suffix_word_and_byte() {
+        // `Word` keeps the literal an integer; `Byte` produces a
+        // dedicated byte literal token.
+        assert_eq!(
+            kinds("7Word 200Byte"),
+            vec![
+                TokenKind::IntLit(7),
+                TokenKind::ByteLit(200),
+                TokenKind::Eof,
+            ]
+        );
+    }
+
+    #[test]
+    fn numeric_suffix_byte_out_of_range_rejected() {
+        let err = tokenize("300Byte").unwrap_err();
+        assert!(
+            err.message.contains("out of range 0..=255"),
+            "{}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn numeric_suffix_fixed_integer_form() {
+        // `42Fixed<16>` encodes the Q-format raw value 42 << 16.
+        assert_eq!(
+            kinds("42Fixed<16>"),
+            vec![TokenKind::FixedLit(42 << 16, 16), TokenKind::Eof]
+        );
+    }
+
+    #[test]
+    fn numeric_suffix_fixed_requires_fraction_bits() {
+        let err = tokenize("42Fixed").unwrap_err();
+        assert!(
+            err.message.contains("requires a fraction-bit count"),
+            "{}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn numeric_suffix_unknown_is_two_tokens() {
+        // A non-suffix identifier directly after digits is not
+        // consumed as a suffix; it lexes as its own token.
+        assert_eq!(
+            kinds("42Foo"),
+            vec![
+                TokenKind::IntLit(42),
+                TokenKind::UpperIdent(String::from("Foo")),
+                TokenKind::Eof,
+            ]
+        );
+    }
+
+    #[test]
+    fn i64_f64_suffixes_removed() {
+        // The retired `i64`/`f64` suffixes now lex as a separate
+        // identifier following the numeric literal.
+        assert_eq!(
+            kinds("100i64"),
+            vec![
+                TokenKind::IntLit(100),
+                TokenKind::LowerIdent(String::from("i64")),
+                TokenKind::Eof,
+            ]
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "floats")]
+    fn numeric_suffix_float_and_fixed_fractional() {
+        // `42Float` promotes integer digits to a float; `3.5Fixed<16>`
+        // encodes round(3.5 * 2^16); `3.14Word` is rejected.
+        assert_eq!(
+            kinds("42Float"),
+            vec![TokenKind::FloatLit(42.0), TokenKind::Eof]
+        );
+        assert_eq!(
+            kinds("3.5Fixed<16>"),
+            vec![
+                TokenKind::FixedLit((3.5 * 65536.0) as i64, 16),
+                TokenKind::Eof
+            ]
+        );
+        let err = tokenize("3.14Word").unwrap_err();
+        assert!(
+            err.message
+                .contains("integer type suffix is not valid on a fractional literal"),
+            "{}",
+            err.message
         );
     }
 

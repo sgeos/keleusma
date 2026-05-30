@@ -806,6 +806,10 @@ fn infer_arg_type(
         Expr::Literal { value, span } => Some(match value {
             Literal::Int(_) => TypeExpr::Prim(PrimType::Word, *span),
             Literal::Float(_) => TypeExpr::Prim(PrimType::Float, *span),
+            Literal::Byte(_) => TypeExpr::Prim(PrimType::Byte, *span),
+            Literal::Fixed { frac_bits, .. } => {
+                TypeExpr::Prim(PrimType::Fixed(Some(*frac_bits)), *span)
+            }
             Literal::Bool(_) => TypeExpr::Prim(PrimType::Bool, *span),
             Literal::String(_) => TypeExpr::Prim(PrimType::Text, *span),
             Literal::Unit => TypeExpr::Unit(*span),

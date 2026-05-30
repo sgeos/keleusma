@@ -66,7 +66,7 @@ The font-lock specification distinguishes:
 | User-defined types | `font-lock-type-face` | Uppercase-initial identifiers |
 | Function names | `font-lock-function-name-face` | Lowercase identifier followed by `(` |
 | Booleans | `font-lock-constant-face` | `true`, `false` |
-| Numeric literals | `font-lock-constant-face` | `42`, `0xff`, `0b1010`, `3.14`, `42i64`, `3.14f64` |
+| Numeric literals | `font-lock-constant-face` | `42`, `0xff`, `0b1010`, `3.14`, `42Word`, `42Byte`, `42Fixed<16>`, `3.14Float` |
 | Comments | `font-lock-comment-face` | `// line`, `/* block */`, `#!shebang` |
 
 Emacs has fewer distinct font-lock faces than Vim's standard highlight categories. The IFC machinery, pipeline operator, and checked-arithmetic arms cluster on `font-lock-builtin-face` together rather than splitting into separate scopes; this keeps the V0.2 surface visually distinguishable while staying within the standard face vocabulary that color themes ship.

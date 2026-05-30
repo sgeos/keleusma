@@ -101,16 +101,16 @@ syn keyword keleusmaType Byte Word Fixed Float bool Text Option
 " specific primitive list above takes priority.
 syn match   keleusmaType "\<[A-Z][A-Za-z0-9_]*\>"
 
-" Integer literals: decimal, hexadecimal, binary, with optional
-" `i64` suffix.
-syn match keleusmaNumber "\<\d[0-9_]*\(i64\)\?\>"
+" Integer literals: decimal, hexadecimal, binary, with an optional
+" `Word`, `Byte`, `Float`, or `Fixed<N>` type suffix.
+syn match keleusmaNumber "\<\d[0-9_]*\(Word\|Byte\|Float\|Fixed<\d\+>\)\?"
 syn match keleusmaNumber "\<0x[0-9a-fA-F_]\+\>"
 syn match keleusmaNumber "\<0b[01_]\+\>"
 
-" Float literals. The grammar requires digits on both sides of
-" the decimal point; the optional `f64` suffix is per literal
-" suffix rules.
-syn match keleusmaFloat "\<\d[0-9_]*\.\d[0-9_]*\(f64\)\?\>"
+" Float literals. The grammar requires digits on both sides of the
+" decimal point; the optional suffix is the real-valued `Float` or
+" `Fixed<N>`.
+syn match keleusmaFloat "\<\d[0-9_]*\.\d[0-9_]*\(Float\|Fixed<\d\+>\)\?"
 
 " String literals. V0.2.0 retired f-string interpolation; only
 " ordinary `"..."` strings remain. The escape set is

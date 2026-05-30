@@ -809,6 +809,26 @@ impl<'a> Parser<'a> {
                 let value = if negate { -f } else { f };
                 Literal::Float(value)
             }
+            TokenKind::ByteLit(b) => {
+                self.pos += 1;
+                if negate {
+                    return Err(ParseError {
+                        message: alloc::string::String::from(
+                            "a `Byte` literal cannot be negated; `Byte` is unsigned",
+                        ),
+                        span: tok.span,
+                    });
+                }
+                Literal::Byte(b)
+            }
+            TokenKind::FixedLit(raw, frac) => {
+                self.pos += 1;
+                let raw = if negate { raw.wrapping_neg() } else { raw };
+                Literal::Fixed {
+                    raw,
+                    frac_bits: frac,
+                }
+            }
             TokenKind::True if !negate => {
                 self.pos += 1;
                 Literal::Bool(true)
@@ -1700,6 +1720,23 @@ impl<'a> Parser<'a> {
                     span: tok.span,
                 })
             }
+            TokenKind::ByteLit(v) => {
+                self.pos += 1;
+                Ok(Expr::Literal {
+                    value: Literal::Byte(v),
+                    span: tok.span,
+                })
+            }
+            TokenKind::FixedLit(raw, frac) => {
+                self.pos += 1;
+                Ok(Expr::Literal {
+                    value: Literal::Fixed {
+                        raw,
+                        frac_bits: frac,
+                    },
+                    span: tok.span,
+                })
+            }
             TokenKind::StringLit(v) => {
                 self.pos += 1;
                 Ok(Expr::Literal {
@@ -2275,6 +2312,20 @@ impl<'a> Parser<'a> {
             TokenKind::FloatLit(v) => {
                 self.pos += 1;
                 Ok(Pattern::Literal(Literal::Float(v), tok.span))
+            }
+            TokenKind::ByteLit(v) => {
+                self.pos += 1;
+                Ok(Pattern::Literal(Literal::Byte(v), tok.span))
+            }
+            TokenKind::FixedLit(raw, frac) => {
+                self.pos += 1;
+                Ok(Pattern::Literal(
+                    Literal::Fixed {
+                        raw,
+                        frac_bits: frac,
+                    },
+                    tok.span,
+                ))
             }
 
             // String literal.

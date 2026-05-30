@@ -116,11 +116,13 @@ that `bool' is lowercase per the grammar.")
     (,(keleusma--word-regexp keleusma-boolean-keywords) . font-lock-constant-face)
     ;; Primitive types
     (,(keleusma--word-regexp keleusma-primitive-types) . font-lock-type-face)
-    ;; Numeric literals: float, hex, binary, integer
-    ("\\b[0-9][0-9_]*\\.[0-9][0-9_]*\\(f64\\)?\\b" . font-lock-constant-face)
+    ;; Numeric literals: float, hex, binary, integer. Type suffixes:
+    ;; fractional literals take `Float` or `Fixed<N>`; integer
+    ;; literals take `Word`, `Byte`, `Float`, or `Fixed<N>`.
+    ("\\b[0-9][0-9_]*\\.[0-9][0-9_]*\\(Float\\|Fixed<[0-9]+>\\)?" . font-lock-constant-face)
     ("\\b0x[0-9a-fA-F_]+\\b" . font-lock-constant-face)
     ("\\b0b[01_]+\\b" . font-lock-constant-face)
-    ("\\b[0-9][0-9_]*\\(i64\\)?\\b" . font-lock-constant-face)
+    ("\\b[0-9][0-9_]*\\(Word\\|Byte\\|Float\\|Fixed<[0-9]+>\\)?" . font-lock-constant-face)
     ;; User-defined type identifiers (uppercase initial). Matched after
     ;; the specific keyword and primitive-type rules above so those win.
     ("\\<[A-Z][A-Za-z0-9_]*\\>" . font-lock-type-face)
