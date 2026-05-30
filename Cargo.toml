@@ -180,6 +180,16 @@ hkdf = { version = "0.12", default-features = false, optional = true }
 sha2 = { version = "0.10", default-features = false, optional = true }
 sdl3 = { version = "0.18", features = ["build-from-source-static"], optional = true }
 
+[dev-dependencies]
+# Installs the version-controlled git hooks under `.cargo-husky/hooks/`
+# into `.git/hooks/` the next time the dev-dependencies compile (for
+# example on `cargo test`). `user-hooks` disables cargo-husky's built-in
+# hooks and uses the project's own pre-push hook, which mirrors the
+# `CONTRIBUTING.md` pre-pull-request checklist (test, fmt, clippy, doc).
+# Dev-only: not part of the published crate and never pulled by
+# downstream consumers.
+cargo-husky = { version = "1", default-features = false, features = ["user-hooks"] }
+
 [[example]]
 name = "piano_roll"
 required-features = ["compile", "verify", "sdl3-example"]

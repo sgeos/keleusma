@@ -1,0 +1,30 @@
+#!/bin/sh
+#
+# Pre-push hook for Keleusma. Mirrors the "Before opening a pull
+# request" checklist in CONTRIBUTING.md so the same signals that gate
+# CI are checked before code leaves the machine. Installed from this
+# version-controlled copy by cargo-husky (see the dev-dependency in
+# Cargo.toml) the next time the dev-dependencies compile.
+#
+# Bypass for a work-in-progress push with: git push --no-verify
+#
+# The doc step uses the same feature set and RUSTDOCFLAGS as the CI
+# Doc job. Keep these in sync with .github/workflows/ci.yml and the
+# CONTRIBUTING.md checklist if either changes.
+
+set -eu
+
+echo "pre-push: cargo test --workspace"
+cargo test --workspace
+
+echo "pre-push: cargo fmt --all -- --check"
+cargo fmt --all -- --check
+
+echo "pre-push: cargo clippy --workspace --all-targets -- -D warnings"
+cargo clippy --workspace --all-targets -- -D warnings
+
+echo "pre-push: cargo doc (keleusma, docs.rs feature set, CI flags)"
+RUSTDOCFLAGS="-D warnings -A rustdoc::redundant-explicit-links" \
+    cargo doc -p keleusma --no-deps --features signatures,encryption,shell
+
+echo "pre-push: all checks passed"
