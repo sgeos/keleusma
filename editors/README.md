@@ -12,6 +12,7 @@ Editor and IDE integration for Keleusma. The contents of this directory are not 
 | Visual Studio Code | [`vscode/`](./vscode/) | ✓ | ✓ | basic |
 | Sublime Text | [`vscode/`](./vscode/) (reuses the TextMate grammar) | ✓ | ✓ | basic |
 | Emacs | [`emacs/`](./emacs/) | ✓ | ✓ | none |
+| Rouge (Jekyll, web) | [`rouge/`](./rouge/) | ✓ | n/a | n/a |
 | Helix | [`helix/`](./helix/) | pending (tree-sitter) | ✓ | basic |
 | Zed | pending | pending (tree-sitter) | n/a | n/a |
 | JetBrains IDEs | not provided | n/a | n/a | n/a |
