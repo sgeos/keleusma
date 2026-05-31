@@ -258,7 +258,7 @@ fn classify(c: Code) -> Word {
 }
 ````
 
-The cast respects both implicit and explicit discriminants. The reverse direction (a `Word` cast back to an enum) is not currently admissible; construct enum values with the variant syntax.
+The cast respects both implicit and explicit discriminants. The reverse direction, a `Word` cast back to an enum, is admissible only through the discriminant-to-enum construct described in the "Discriminant-to-Enum Construct" section below. A bare `Word as Enum` cast without the outcome-arm block remains inadmissible, because a discriminant alone cannot reconstruct a payload-bearing variant.
 
 Text conversion is the host's responsibility. The runtime does not bundle a `to_string` native; hosts register one (typically named `format` or `to_string`) through `register_verified_native` or the `register_fn` marshalling layer.
 
@@ -746,6 +746,34 @@ let p = Percent(raw_value) {
     ok(v) => v,
     invalid_newtype(x) when x < 0 => Percent(0),
     invalid_newtype(_) => Percent(100),
+};
+````
+
+### Discriminant-to-Enum Construct
+
+````
+discriminant_construct = word_as_enum_cast '{' disc_arm { ',' disc_arm } [ ',' ] '}'
+disc_arm       = disc_kind [ 'when' expr ] '=>' expr
+disc_kind      = 'ok' '(' disc_target ')'
+               | 'payload_discriminant' '(' disc_target ')'
+               | 'invalid_discriminant' '(' arm_pattern ')'
+disc_target    = upper_ident | '_'
+arm_pattern    = '_' | lower_ident | signed_int_lit
+````
+
+Converts a `Word` discriminant back into an enum value, the reverse of the enum-to-`Word` cast. Because only the discriminant is available, the three arm kinds split the variants by what the discriminant can determine. Arms match by variant name, not by raw discriminant, so the construct is robust to discriminant renumbering.
+
+An `ok(Variant)` arm names a unit, that is discriminant-only, variant and overrides its conversion. A unit variant with no `ok` arm converts to itself. A generic `ok(v)` or `ok(_)` arm binds the converted unit-variant value as a blanket post-processor, applied to any unit variant without a specific `ok` arm. A `payload_discriminant(Variant)` arm names a payload-bearing variant whose payload the arm body supplies, since the discriminant cannot carry it; `payload_discriminant(_)` is a catch-all over the remaining payload variants. Coverage of every payload-bearing variant is mandatory, specifically or through the catch-all. An `invalid_discriminant(raw)` arm binds the raw `Word` of a discriminant that matches no variant; it is optional, and an unhandled invalid discriminant traps as `EnumVariantUnmapped`. The source must be a `Word`. The type checker rejects a payload variant in `ok`, a unit variant in `payload_discriminant`, and the arms of the other construct families.
+
+Example:
+
+````
+enum Status { Ok = 0, Pending = 1, Failed(Word) = 2 }
+
+let s = code as Status {
+    ok(Pending) => Status::Ok,
+    payload_discriminant(Failed) => Status::Failed(code),
+    invalid_discriminant(raw) => Status::Failed(raw),
 };
 ````
 
