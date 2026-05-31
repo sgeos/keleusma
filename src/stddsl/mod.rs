@@ -114,9 +114,10 @@ pub struct Audio;
 /// Shell-script utilities. Requires the `shell` cargo feature.
 ///
 /// Registers `shell::getenv` (returns `Option<Text>`),
-/// `shell::run` (returns `(Word, Text)`), `shell::run_checked`
-/// (returns `Text`, traps on non-zero exit), and `shell::exit`
-/// (terminates the host process).
+/// `shell::run` (returns `(Word, Text)`), `shell::run_full`
+/// (returns `(Word, Text, Text)` including stderr),
+/// `shell::run_checked` (returns `Text`, traps on non-zero exit),
+/// and `shell::exit` (terminates the host process).
 ///
 /// The Shell bundle is unavailable when the `shell` feature is
 /// disabled because it depends on `std::process` and `std::env`.
@@ -371,6 +372,7 @@ impl Shell {
         "use shell::getenv(Text) -> Option<Text>\n",
         "use shell::has_env(Text) -> bool\n",
         "use shell::run(Text) -> (Word, Text)\n",
+        "use shell::run_full(Text) -> (Word, Text, Text)\n",
         "use shell::run_checked(Text) -> Text\n",
         "use shell::exit(Word) -> ()\n",
         "use shell::sleep_ms(Word) -> ()\n",

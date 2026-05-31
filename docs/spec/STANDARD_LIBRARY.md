@@ -143,7 +143,8 @@ The `Shell` bundle registers shell-script utilities. It depends on the `shell` c
 |---|---|---|
 | `shell::getenv` | `(Text) -> Option<Text>` | Read an environment variable. |
 | `shell::has_env` | `(Text) -> bool` | Test whether an environment variable is set. |
-| `shell::run` | `(Text) -> (Word, Text)` | Execute a command, returning exit code and combined output. |
+| `shell::run` | `(Text) -> (Word, Text)` | Execute a command through `sh -c`, returning exit code and captured stdout. Captured stderr is discarded. |
+| `shell::run_full` | `(Text) -> (Word, Text, Text)` | Execute a command through `sh -c`, returning exit code, captured stdout, and captured stderr. |
 | `shell::run_checked` | `(Text) -> Text` | Execute a command. Traps on a non-zero exit. |
 | `shell::exit` | `(Word) -> Unit` | Terminate the host process with the given exit code. |
 | `shell::sleep_ms` | `(Word) -> Unit` | Sleep the current thread for the requested duration in milliseconds. Negative or zero inputs return immediately. |
@@ -154,6 +155,8 @@ The `Shell` bundle registers shell-script utilities. It depends on the `shell` c
 | `shell::file_exists` | `(Text) -> bool` | Test whether a filesystem entry exists at the given path. Symlinks are followed. |
 | `shell::write_err` | `(Text) -> Unit` | Write to stderr without a trailing newline. |
 | `shell::writeln_err` | `(Text) -> Unit` | Write to stderr with a trailing newline. |
+| `shell::arg_count` | `() -> Word` | Number of entries in the script argument vector: argument zero (the script path) plus the positional arguments the launcher passed after it. Falls back to the host process argv when no script argument vector is installed. |
+| `shell::arg` | `(Word) -> Option<Text>` | Script argument at the given index. Argument zero is the script path (`$0` semantics); argument one onward are the positional arguments. `Option::None` when out of range or negative. |
 
 ## Type Flexibility
 

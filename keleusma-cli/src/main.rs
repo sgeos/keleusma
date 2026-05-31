@@ -85,6 +85,15 @@ fn main() -> ExitCode {
                 };
                 let verifying = ctx.enrolled_keys.clone();
                 let decrypting = ctx.decryption_keys.clone();
+                // Shebang/shorthand invocation: the script path is
+                // `other` (argv[1]) and everything after it is a script
+                // argument. Install argv[0] = script path, the rest as
+                // positionals, so `shell::arg`/`arg_count` see the
+                // script's own arguments.
+                let mut argv = Vec::with_capacity(args.len() - 1);
+                argv.push(other.to_string());
+                argv.extend(args[2..].iter().cloned());
+                stddsl::shell::set_script_args(argv);
                 run_file(
                     other,
                     &verifying,
@@ -218,6 +227,10 @@ fn run_subcommand(args: &[String]) -> ExitCode {
     let mut command_line_keys: Vec<ed25519_dalek::VerifyingKey> = Vec::new();
     let mut command_line_decryption_keys: Vec<[u8; X25519_PRIVATE_KEY_LEN]> = Vec::new();
     let mut loop_config = LoopRunnerConfig::default();
+    // Positional arguments the launcher passed after the script path.
+    // These become the script's own argument vector (after the script
+    // path itself) exposed through `shell::arg`/`shell::arg_count`.
+    let mut script_args: Vec<String> = Vec::new();
     let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {
@@ -277,9 +290,26 @@ fn run_subcommand(args: &[String]) -> ExitCode {
                 loop_config.quiet = true;
                 i += 1;
             }
-            other => {
+            // Explicit terminator: everything after `--` is a script
+            // argument, even if it looks like a CLI option. This lets a
+            // script receive arguments such as `--verbose` without the
+            // CLI intercepting them.
+            "--" => {
+                script_args.extend(args[i + 1..].iter().cloned());
+                break;
+            }
+            // A leading dash on an unrecognized token is a flag typo,
+            // not a positional argument; reject it so misspelled CLI
+            // options do not silently reach the script.
+            other if other.starts_with('-') => {
                 eprintln!("error: unknown option `{}`", other);
                 return ExitCode::FAILURE;
+            }
+            // Any other token is a positional argument destined for the
+            // script's own argument vector.
+            other => {
+                script_args.push(other.to_string());
+                i += 1;
             }
         }
     }
@@ -311,6 +341,15 @@ fn run_subcommand(args: &[String]) -> ExitCode {
     verifying_keys.extend(command_line_keys);
     let mut decryption_keys = ctx.decryption_keys.clone();
     decryption_keys.extend(command_line_decryption_keys);
+
+    // Install the script's argument vector so `shell::arg`/`arg_count`
+    // report the script's own arguments rather than the host process's
+    // full argv. Index zero is the script path (`$0` semantics);
+    // indices one onward are the collected positional arguments.
+    let mut argv = Vec::with_capacity(1 + script_args.len());
+    argv.push(path.clone());
+    argv.extend(script_args);
+    stddsl::shell::set_script_args(argv);
 
     run_file(path, &verifying_keys, &decryption_keys, &ctx, &loop_config)
 }

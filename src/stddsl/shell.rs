@@ -18,7 +18,14 @@
 //! - `shell::run(cmd: Text) -> (Word, Text)` — executes `cmd`
 //!   through `sh -c` and returns `(exit_code, stdout)`. A
 //!   non-zero exit code is not an error; the caller decides
-//!   what to do with it.
+//!   what to do with it. Captured stderr is discarded; use
+//!   `shell::run_full` when stderr is needed.
+//! - `shell::run_full(cmd: Text) -> (Word, Text, Text)` —
+//!   executes `cmd` through `sh -c` and returns
+//!   `(exit_code, stdout, stderr)`. Identical to `shell::run`
+//!   except the third tuple element carries the captured
+//!   standard error stream, so a caller can log or branch on
+//!   diagnostics that the command writes to stderr.
 //! - `shell::run_checked(cmd: Text) -> Text` — executes `cmd`
 //!   through `sh -c` and returns stdout. A non-zero exit code
 //!   produces a `VmError::NativeError` with the captured exit
@@ -52,11 +59,20 @@
 //! - `shell::hostname() -> Text` — returns the host name reported
 //!   by the operating system. Traps when the host name cannot be
 //!   retrieved (no platform fallback).
-//! - `shell::arg_count() -> Word` — returns the number of command
-//!   line arguments visible to the host process.
+//! - `shell::arg_count() -> Word` — returns the number of
+//!   arguments in the script's own argument vector: argument zero
+//!   (the script path) plus the positional arguments the launcher
+//!   passed after it. The count mirrors C's `argc` in that it
+//!   includes argument zero. When no script argument vector has
+//!   been installed by the embedding host (see
+//!   [`set_script_args`]), the count falls back to the host
+//!   process's full argv.
 //! - `shell::arg(index: Word) -> Option<Text>` — returns the
-//!   command line argument at `index`. `Option::None` when out
-//!   of range. Argument zero is the host executable path.
+//!   script argument at `index`. `Option::None` when out of
+//!   range or when `index` is negative. Argument zero is the
+//!   script path (`$0` semantics); argument one onward are the
+//!   positional arguments. Falls back to the host process argv
+//!   when no script argument vector is installed.
 //! - `shell::setenv(name: Text, value: Text) -> ()` — sets an
 //!   environment variable in the host process for subsequent
 //!   subprocesses spawned through `shell::run`. The change is
@@ -82,6 +98,65 @@ use crate::float::Float;
 use crate::vm::{GenericVm, VmError};
 use crate::word::Word;
 
+std::thread_local! {
+    // The script's own argument vector, installed by the embedding
+    // host (the `keleusma` CLI) before it invokes the script entry
+    // point. Index zero holds the script path and indices one onward
+    // the positional arguments the launcher passed after it, mirroring
+    // `$0`/`$1` shell semantics. While `None`, `shell::arg` and
+    // `shell::arg_count` fall back to the host process's full argv via
+    // `std::env::args`, which reports the host program's own arguments.
+    //
+    // The vector is thread-local because the natives that read it run
+    // on the VM thread, which is the thread that called the script.
+    // A host that drives a script from a thread other than the one
+    // that called `set_script_args` observes the fallback, not the
+    // installed vector. The CLI runs both on the main thread, so this
+    // is invisible there.
+    static SCRIPT_ARGS: std::cell::RefCell<std::option::Option<std::vec::Vec<std::string::String>>> =
+        const { std::cell::RefCell::new(std::option::Option::None) };
+}
+
+/// Install the script argument vector reported by `shell::arg` and
+/// `shell::arg_count` on the current thread. Index zero is taken as
+/// the script path (`$0`); indices one onward are the positional
+/// arguments. The embedding host calls this before invoking the
+/// script so the script observes its own arguments rather than the
+/// host process's full argv (`keleusma`, `run`, the script path, and
+/// any CLI flags). Without this call the natives fall back to
+/// [`std::env::args`].
+pub fn set_script_args(args: std::vec::Vec<std::string::String>) {
+    SCRIPT_ARGS.with(|cell| *cell.borrow_mut() = std::option::Option::Some(args));
+}
+
+/// Clear any script argument vector previously installed by
+/// [`set_script_args`] on the current thread, restoring the
+/// [`std::env::args`] fallback. Provided so a host that reuses a
+/// thread across distinct script invocations does not leak one
+/// script's arguments into the next.
+pub fn clear_script_args() {
+    SCRIPT_ARGS.with(|cell| *cell.borrow_mut() = std::option::Option::None);
+}
+
+// Count of arguments visible to the script: the installed vector's
+// length when present, otherwise the host process argv length.
+fn script_arg_count() -> i64 {
+    SCRIPT_ARGS.with(|cell| match &*cell.borrow() {
+        std::option::Option::Some(v) => v.len() as i64,
+        std::option::Option::None => std::env::args().count() as i64,
+    })
+}
+
+// The argument at `index` from the script vector when present,
+// otherwise from the host process argv. `index` is a validated
+// non-negative value.
+fn script_arg_at(index: usize) -> std::option::Option<std::string::String> {
+    SCRIPT_ARGS.with(|cell| match &*cell.borrow() {
+        std::option::Option::Some(v) => v.get(index).cloned(),
+        std::option::Option::None => std::env::args().nth(index),
+    })
+}
+
 /// Register the shell-bundle natives (`shell::getenv`,
 /// `shell::has_env`, `shell::run`, `shell::run_checked`,
 /// `shell::exit`) on `vm`. Called by
@@ -96,6 +171,7 @@ pub fn register<'a, 'arena, W: Word, A: Address, F: Float>(
     vm.register_native("shell::getenv", getenv_native::<W, F>);
     vm.register_native("shell::has_env", has_env_native::<W, F>);
     vm.register_native("shell::run", run_native::<W, F>);
+    vm.register_native("shell::run_full", run_full_native::<W, F>);
     vm.register_native("shell::run_checked", run_checked_native::<W, F>);
     vm.register_native("shell::exit", exit_native::<W, F>);
     vm.register_native("shell::sleep_ms", sleep_ms_native::<W, F>);
@@ -205,6 +281,37 @@ fn run_native<W: Word, F: Float>(
     Ok(GenericValue::Tuple(std::vec![
         GenericValue::Int(W::from_i64_wrap(exit_code)),
         GenericValue::StaticStr(stdout),
+    ]))
+}
+
+fn run_full_native<W: Word, F: Float>(
+    args: &[GenericValue<W, F>],
+) -> Result<GenericValue<W, F>, VmError> {
+    if args.len() != 1 {
+        return Err(VmError::NativeError(std::string::String::from(
+            "shell::run_full: expected exactly one argument",
+        )));
+    }
+    let cmd: &str = args[0].as_str().ok_or_else(|| {
+        VmError::TypeError(std::format!(
+            "shell::run_full: expected Text, got {}",
+            args[0].type_name()
+        ))
+    })?;
+    let output = Command::new("sh")
+        .arg("-c")
+        .arg(cmd)
+        .output()
+        .map_err(|e| {
+            VmError::NativeError(std::format!("shell::run_full: failed to spawn sh: {}", e))
+        })?;
+    let exit_code = output.status.code().unwrap_or(-1) as i64;
+    let stdout = std::string::String::from_utf8_lossy(&output.stdout).into_owned();
+    let stderr = std::string::String::from_utf8_lossy(&output.stderr).into_owned();
+    Ok(GenericValue::Tuple(std::vec![
+        GenericValue::Int(W::from_i64_wrap(exit_code)),
+        GenericValue::StaticStr(stdout),
+        GenericValue::StaticStr(stderr),
     ]))
 }
 
@@ -484,8 +591,7 @@ fn arg_count_native<W: Word, F: Float>(
             "shell::arg_count: expected zero arguments",
         )));
     }
-    let n = std::env::args().count() as i64;
-    Ok(GenericValue::Int(W::from_i64_wrap(n)))
+    Ok(GenericValue::Int(W::from_i64_wrap(script_arg_count())))
 }
 
 fn arg_native<W: Word, F: Float>(
@@ -508,8 +614,7 @@ fn arg_native<W: Word, F: Float>(
     if index < 0 {
         return Ok(GenericValue::None);
     }
-    let mut iter = std::env::args();
-    let value = iter.nth(index as usize);
+    let value = script_arg_at(index as usize);
     match value {
         Some(v) => Ok(GenericValue::Enum {
             type_name: std::string::String::from("Option"),
@@ -672,6 +777,115 @@ mod tests {
     use std::string::ToString;
 
     type V = GenericValue<i64, f64>;
+
+    // Extract the inner string from an `Option::Some(Text)` returned
+    // by `shell::arg`, panicking on any other shape.
+    fn unwrap_some(v: V) -> std::string::String {
+        match v {
+            V::Enum {
+                type_name,
+                variant,
+                fields,
+            } => {
+                assert_eq!(type_name, "Option");
+                assert_eq!(variant, "Some");
+                match &fields[..] {
+                    [V::StaticStr(s)] => s.clone(),
+                    other => panic!("unexpected Some payload: {:?}", other),
+                }
+            }
+            other => panic!("expected Option::Some, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn arg_reports_installed_script_vector() {
+        // Each test runs on its own thread, so the thread-local set
+        // here does not leak into other tests. Clear at the end anyway
+        // to model correct host hygiene.
+        set_script_args(std::vec![
+            "script.kel".to_string(),
+            "alpha".to_string(),
+            "beta".to_string(),
+        ]);
+
+        assert_eq!(unwrap_some(arg_native::<i64, f64>(&[V::Int(0)]).unwrap()), "script.kel");
+        assert_eq!(unwrap_some(arg_native::<i64, f64>(&[V::Int(1)]).unwrap()), "alpha");
+        assert_eq!(unwrap_some(arg_native::<i64, f64>(&[V::Int(2)]).unwrap()), "beta");
+        // Out of range yields Option::None.
+        assert!(matches!(arg_native::<i64, f64>(&[V::Int(3)]).unwrap(), V::None));
+
+        match arg_count_native::<i64, f64>(&[]).unwrap() {
+            V::Int(n) => assert_eq!(n, 3),
+            other => panic!("wrong variant: {:?}", other),
+        }
+
+        clear_script_args();
+    }
+
+    #[test]
+    fn arg_negative_index_is_none() {
+        set_script_args(std::vec!["script.kel".to_string(), "x".to_string()]);
+        assert!(matches!(arg_native::<i64, f64>(&[V::Int(-1)]).unwrap(), V::None));
+        clear_script_args();
+    }
+
+    #[test]
+    fn clear_script_args_restores_process_argv_fallback() {
+        set_script_args(std::vec!["only".to_string()]);
+        match arg_count_native::<i64, f64>(&[]).unwrap() {
+            V::Int(n) => assert_eq!(n, 1),
+            other => panic!("wrong variant: {:?}", other),
+        }
+        clear_script_args();
+        // After clearing, the count falls back to the host process
+        // argv, which always carries at least the test executable path.
+        match arg_count_native::<i64, f64>(&[]).unwrap() {
+            V::Int(n) => assert!(n >= 1),
+            other => panic!("wrong variant: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn run_full_returns_stdout_and_stderr() {
+        let result = run_full_native::<i64, f64>(&[V::StaticStr(
+            "printf out; printf err 1>&2".to_string(),
+        )])
+        .expect("run_full");
+        match result {
+            V::Tuple(items) => {
+                assert_eq!(items.len(), 3);
+                assert!(matches!(items[0], V::Int(0)));
+                match (&items[1], &items[2]) {
+                    (V::StaticStr(out), V::StaticStr(err)) => {
+                        assert_eq!(out, "out");
+                        assert_eq!(err, "err");
+                    }
+                    other => panic!("unexpected tuple payload: {:?}", other),
+                }
+            }
+            other => panic!("wrong variant: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn run_full_propagates_exit_code() {
+        let result =
+            run_full_native::<i64, f64>(&[V::StaticStr("exit 7".to_string())]).expect("run_full");
+        match result {
+            V::Tuple(items) => assert!(matches!(items[0], V::Int(7))),
+            other => panic!("wrong variant: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn run_full_rejects_wrong_arity() {
+        let err = run_full_native::<i64, f64>(&[]).expect_err("arity");
+        match err {
+            VmError::NativeError(m) => assert!(m.contains("expected exactly one")),
+            other => panic!("wrong variant: {:?}", other),
+        }
+    }
 
     #[test]
     fn sleep_ms_zero_returns_immediately() {
