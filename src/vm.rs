@@ -3565,9 +3565,28 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                             sp!(self, crate::bytecode::GenericValue::Int(high));
                             sp!(self, crate::bytecode::GenericValue::Int(flag));
                         }
+                        (
+                            crate::bytecode::GenericValue::Byte(x),
+                            crate::bytecode::GenericValue::Byte(y),
+                        ) => {
+                            // Unsigned Byte addition: overflow above
+                            // 255, never underflow. The wrapped result
+                            // (low 8 bits) is the low slot; the high
+                            // slot is unused for Byte.
+                            let r = x as i64 + y as i64;
+                            let flag: i64 = if r > 0xFF { 1 } else { 0 };
+                            sp!(self, crate::bytecode::GenericValue::Byte(r as u8));
+                            sp!(self, crate::bytecode::GenericValue::Byte(0));
+                            sp!(
+                                self,
+                                crate::bytecode::GenericValue::Int(
+                                    <W as crate::word::Word>::from_i64_wrap(flag)
+                                )
+                            );
+                        }
                         (a, b) => {
                             return Err(VmError::TypeError(format!(
-                                "Op::CheckedAdd expects Word operands, got {} and {}",
+                                "Op::CheckedAdd expects Word or Byte operands, got {} and {}",
                                 a.type_name(),
                                 b.type_name()
                             )));
@@ -3589,9 +3608,27 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                             sp!(self, crate::bytecode::GenericValue::Int(high));
                             sp!(self, crate::bytecode::GenericValue::Int(flag));
                         }
+                        (
+                            crate::bytecode::GenericValue::Byte(x),
+                            crate::bytecode::GenericValue::Byte(y),
+                        ) => {
+                            // Unsigned Byte subtraction: underflow below
+                            // 0, never overflow. `r as u8` wraps modulo
+                            // 256 for the low slot.
+                            let r = x as i64 - y as i64;
+                            let flag: i64 = if r < 0 { 2 } else { 0 };
+                            sp!(self, crate::bytecode::GenericValue::Byte(r as u8));
+                            sp!(self, crate::bytecode::GenericValue::Byte(0));
+                            sp!(
+                                self,
+                                crate::bytecode::GenericValue::Int(
+                                    <W as crate::word::Word>::from_i64_wrap(flag)
+                                )
+                            );
+                        }
                         (a, b) => {
                             return Err(VmError::TypeError(format!(
-                                "Op::CheckedSub expects Word operands, got {} and {}",
+                                "Op::CheckedSub expects Word or Byte operands, got {} and {}",
                                 a.type_name(),
                                 b.type_name()
                             )));
@@ -3620,9 +3657,26 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                             sp!(self, crate::bytecode::GenericValue::Int(high));
                             sp!(self, crate::bytecode::GenericValue::Int(flag));
                         }
+                        (
+                            crate::bytecode::GenericValue::Byte(x),
+                            crate::bytecode::GenericValue::Byte(y),
+                        ) => {
+                            // Unsigned Byte multiplication: overflow
+                            // above 255, never underflow.
+                            let r = x as i64 * y as i64;
+                            let flag: i64 = if r > 0xFF { 1 } else { 0 };
+                            sp!(self, crate::bytecode::GenericValue::Byte(r as u8));
+                            sp!(self, crate::bytecode::GenericValue::Byte(0));
+                            sp!(
+                                self,
+                                crate::bytecode::GenericValue::Int(
+                                    <W as crate::word::Word>::from_i64_wrap(flag)
+                                )
+                            );
+                        }
                         (a, b) => {
                             return Err(VmError::TypeError(format!(
-                                "Op::CheckedMul expects Word operands, got {} and {}",
+                                "Op::CheckedMul expects Word or Byte operands, got {} and {}",
                                 a.type_name(),
                                 b.type_name()
                             )));
@@ -3709,9 +3763,38 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                                 )
                             );
                         }
+                        (
+                            crate::bytecode::GenericValue::Byte(x),
+                            crate::bytecode::GenericValue::Byte(0),
+                        ) => {
+                            // Byte zero divisor: flag 3, numerator in
+                            // the low slot.
+                            sp!(self, crate::bytecode::GenericValue::Byte(x));
+                            sp!(self, crate::bytecode::GenericValue::Byte(0));
+                            sp!(
+                                self,
+                                crate::bytecode::GenericValue::Int(
+                                    <W as crate::word::Word>::from_i64_wrap(3)
+                                )
+                            );
+                        }
+                        (
+                            crate::bytecode::GenericValue::Byte(x),
+                            crate::bytecode::GenericValue::Byte(y),
+                        ) => {
+                            // Unsigned Byte division never overflows.
+                            sp!(self, crate::bytecode::GenericValue::Byte(x / y));
+                            sp!(self, crate::bytecode::GenericValue::Byte(0));
+                            sp!(
+                                self,
+                                crate::bytecode::GenericValue::Int(
+                                    <W as crate::word::Word>::from_i64_wrap(0)
+                                )
+                            );
+                        }
                         (a, b) => {
                             return Err(VmError::TypeError(format!(
-                                "Op::CheckedDiv expects Word operands, got {} and {}",
+                                "Op::CheckedDiv expects Word or Byte operands, got {} and {}",
                                 a.type_name(),
                                 b.type_name()
                             )));
@@ -3761,9 +3844,38 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                                 )
                             );
                         }
+                        (
+                            crate::bytecode::GenericValue::Byte(x),
+                            crate::bytecode::GenericValue::Byte(0),
+                        ) => {
+                            // Byte zero divisor: flag 3, numerator in
+                            // the low slot.
+                            sp!(self, crate::bytecode::GenericValue::Byte(x));
+                            sp!(self, crate::bytecode::GenericValue::Byte(0));
+                            sp!(
+                                self,
+                                crate::bytecode::GenericValue::Int(
+                                    <W as crate::word::Word>::from_i64_wrap(3)
+                                )
+                            );
+                        }
+                        (
+                            crate::bytecode::GenericValue::Byte(x),
+                            crate::bytecode::GenericValue::Byte(y),
+                        ) => {
+                            // A Byte remainder is always in range.
+                            sp!(self, crate::bytecode::GenericValue::Byte(x % y));
+                            sp!(self, crate::bytecode::GenericValue::Byte(0));
+                            sp!(
+                                self,
+                                crate::bytecode::GenericValue::Int(
+                                    <W as crate::word::Word>::from_i64_wrap(0)
+                                )
+                            );
+                        }
                         (a, b) => {
                             return Err(VmError::TypeError(format!(
-                                "Op::CheckedMod expects Word operands, got {} and {}",
+                                "Op::CheckedMod expects Word or Byte operands, got {} and {}",
                                 a.type_name(),
                                 b.type_name()
                             )));
