@@ -144,6 +144,22 @@ pub struct DebugPool {
     pub records: Vec<DebugRecord>,
 }
 
+/// A source location resolved from a debug record through the pool's
+/// sub-pools: the file name (when the string pool carries one) and the
+/// byte range in that file. Returned by the read API on [`DebugPool`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SourceLocation<'a> {
+    /// The source file name, or `None` when the referenced string-pool
+    /// entry is absent. The compiler emits an empty placeholder string
+    /// for the file name (it does not know the source path), so this is
+    /// commonly `Some("")` until a host rewrites it.
+    pub file: Option<&'a str>,
+    /// Byte offset of the location's start in the file.
+    pub byte_offset: u32,
+    /// Byte length of the location's span.
+    pub byte_length: u32,
+}
+
 /// Failure decoding a [`DebugPool`] from bytes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DebugMetaError {
@@ -322,6 +338,53 @@ impl DebugPool {
             records,
         })
     }
+
+    // --- Read path ---
+    //
+    // The query API a consumer uses to resolve op-stream positions to
+    // debug information: a debugger, a stack-trace formatter, or a
+    // runtime error decorator that maps a faulting op back to source.
+    // The records are stored in canonical `(op_index, kind)` order, so
+    // a given op's records are contiguous.
+
+    /// The records annotating op-stream position `op_index`, in
+    /// canonical order. Empty when the position carries no debug
+    /// information.
+    pub fn records_at(&self, op_index: u32) -> impl Iterator<Item = &DebugRecord> {
+        self.records.iter().filter(move |r| r.op_index == op_index)
+    }
+
+    /// The string-pool entry at `index`, or `None` when out of range.
+    pub fn string(&self, index: u16) -> Option<&str> {
+        self.string_pool.get(index as usize).map(|s| s.as_str())
+    }
+
+    /// The span-pool entry at `index`, or `None` when out of range.
+    pub fn span(&self, index: u16) -> Option<Span> {
+        self.span_pool.get(index as usize).copied()
+    }
+
+    /// Resolve a record that references a span to a [`SourceLocation`].
+    /// Applies to record kinds whose first operand indexes the span
+    /// pool (`CallSite`, `SourceSpan`, `AssertionContext`,
+    /// `BreakpointCandidate`). Returns `None` for other kinds, for a
+    /// record with no operands, or when an operand index dangles.
+    pub fn source_location(&self, record: &DebugRecord) -> Option<SourceLocation<'_>> {
+        match record.kind {
+            DebugRecordKind::CallSite
+            | DebugRecordKind::SourceSpan
+            | DebugRecordKind::AssertionContext
+            | DebugRecordKind::BreakpointCandidate => {}
+            _ => return None,
+        }
+        let span_idx = *record.operands.first()?;
+        let (file_idx, byte_offset, byte_length) = self.span(span_idx)?;
+        Some(SourceLocation {
+            file: self.string(file_idx),
+            byte_offset,
+            byte_length,
+        })
+    }
 }
 
 #[cfg(test)]
@@ -348,6 +411,45 @@ mod tests {
                 },
             ],
         }
+    }
+
+    #[test]
+    fn records_at_returns_records_for_a_position() {
+        let pool = sample_pool();
+        let at7: alloc::vec::Vec<_> = pool.records_at(7).collect();
+        assert_eq!(at7.len(), 1);
+        assert_eq!(at7[0].kind, DebugRecordKind::CallSite);
+        assert!(pool.records_at(99).next().is_none());
+    }
+
+    #[test]
+    fn source_location_resolves_call_site_span() {
+        let pool = sample_pool();
+        let rec = pool.records_at(7).next().unwrap();
+        let loc = pool.source_location(rec).expect("call site resolves");
+        assert_eq!(loc.file, Some("main.kel"));
+        assert_eq!(loc.byte_offset, 10);
+        assert_eq!(loc.byte_length, 4);
+    }
+
+    #[test]
+    fn source_location_is_none_for_non_span_kinds() {
+        let pool = sample_pool();
+        let var = pool.records_at(3).next().unwrap();
+        assert_eq!(var.kind, DebugRecordKind::VariableName);
+        assert!(pool.source_location(var).is_none());
+    }
+
+    #[test]
+    fn source_location_is_none_on_dangling_span_index() {
+        let mut pool = DebugPool::default();
+        pool.records.push(DebugRecord {
+            op_index: 0,
+            kind: DebugRecordKind::CallSite,
+            operands: vec![5], // no span-pool entries exist
+        });
+        let rec = &pool.records[0];
+        assert!(pool.source_location(rec).is_none());
     }
 
     #[test]

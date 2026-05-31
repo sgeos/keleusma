@@ -6240,6 +6240,39 @@ mod tests {
     }
 
     #[test]
+    fn debug_read_path_resolves_call_to_source() {
+        // End-to-end through the public read API: compile with debug,
+        // look up the record at the call op, and resolve it back to the
+        // source text via source_location.
+        let src = "fn helper() -> Word { 1 }\nfn main() -> Word { helper() }";
+        let module = compile_str_debug(src);
+        let main_chunk = module
+            .chunks
+            .iter()
+            .find(|c| c.ops.iter().any(|op| matches!(op, Op::Call(..))))
+            .expect("a chunk containing a call");
+        let pool = main_chunk.debug_pool.as_ref().expect("debug pool present");
+        let call_idx = main_chunk
+            .ops
+            .iter()
+            .position(|op| matches!(op, Op::Call(..)))
+            .unwrap() as u32;
+        let rec = pool
+            .records_at(call_idx)
+            .next()
+            .expect("a record at the call op");
+        let loc = pool
+            .source_location(rec)
+            .expect("the call-site record resolves to a source location");
+        let snippet = &src[loc.byte_offset as usize..(loc.byte_offset + loc.byte_length) as usize];
+        assert!(
+            snippet.contains("helper"),
+            "resolved location should cover the call expression, got {:?}",
+            snippet
+        );
+    }
+
+    #[test]
     fn release_build_emits_no_debug_pool() {
         let src = "fn helper() -> Word { 1 }\nfn main() -> Word { helper() }";
         let module = compile_str(src).expect("compile");
