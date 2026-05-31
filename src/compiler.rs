@@ -4730,6 +4730,20 @@ fn compile_checked(
         }
     }
 
+    // The operand type determines the type bound by the arm
+    // patterns: `Word` for a Word construct, `Byte` for a Byte
+    // construct. The type checker has already constrained the
+    // operands to one of these.
+    let operand = match op_expr {
+        Expr::BinOp { left, .. } => Some(left.as_ref()),
+        Expr::UnaryOp { operand, .. } => Some(operand.as_ref()),
+        _ => None,
+    };
+    let bind_ty = match operand.and_then(|e| infer_expr_type(fc, e)) {
+        Some(TypeExpr::Prim(PrimType::Byte, _)) => TypeExpr::Prim(PrimType::Byte, *span),
+        _ => TypeExpr::Prim(PrimType::Word, *span),
+    };
+
     // Stack: [low, high, flag]. Stash to temporary locals. The
     // local names embed the span's start position so multiple
     // checked constructs in the same function get distinct slots.
@@ -4800,13 +4814,11 @@ fn compile_checked(
             test_literal(fc, l, low_slot, &mut fail_addrs);
         }
 
-        // Variable bindings. The bound names carry `Word` type
-        // information because the checked-arithmetic family
-        // produces `Int` low/high/flag triples by construction;
-        // typing the binds enables Consolidation B's type-driven
-        // arithmetic dispatch to route subsequent `h + l` etc.
-        // expressions through `CheckedAdd; PopN(2)`.
-        let word_ty = TypeExpr::Prim(PrimType::Word, *span);
+        // Variable bindings. The bound names carry the operand type
+        // (`Word` or `Byte`); typing the binds enables Consolidation
+        // B's type-driven arithmetic dispatch to route subsequent
+        // `h + l` etc. expressions through the right checked op. The
+        // two-pattern `(h, l)` form is only produced for `Word`.
         let bind_var = |fc: &mut FuncCompiler,
                         pat: &Pattern,
                         slot: u16,
@@ -4820,11 +4832,11 @@ fn compile_checked(
             Ok(())
         };
         if let Some(p) = single_pattern {
-            bind_var(fc, p, low_slot, &word_ty)?;
+            bind_var(fc, p, low_slot, &bind_ty)?;
         }
         if let (Some(h), Some(l)) = (h_pattern, l_pattern) {
-            bind_var(fc, h, high_slot, &word_ty)?;
-            bind_var(fc, l, low_slot, &word_ty)?;
+            bind_var(fc, h, high_slot, &bind_ty)?;
+            bind_var(fc, l, low_slot, &bind_ty)?;
         }
 
         // Guard expression.

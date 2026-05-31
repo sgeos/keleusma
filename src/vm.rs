@@ -4573,6 +4573,69 @@ mod tests {
         assert_eq!(val, Value::Int(99));
     }
 
+    #[test]
+    fn checked_byte_add_overflow_binds_wrapped() {
+        // B35 P3d-i: unsigned Byte addition overflows above 255; the
+        // single-pattern overflow arm binds the wrapped result.
+        let val = run_expect(
+            "fn main() -> Byte {\n\
+                let y = 200Byte + 100Byte {\n\
+                    ok(v) => v,\n\
+                    overflow(w) => w,\n\
+                };\n\
+                y\n\
+             }",
+            &[],
+        );
+        assert_eq!(val, Value::Byte(44));
+    }
+
+    #[test]
+    fn checked_byte_add_ok_in_range() {
+        let val = run_expect(
+            "fn main() -> Byte {\n\
+                let y = 100Byte + 50Byte {\n\
+                    ok(v) => v,\n\
+                    overflow(_) => 255Byte,\n\
+                };\n\
+                y\n\
+             }",
+            &[],
+        );
+        assert_eq!(val, Value::Byte(150));
+    }
+
+    #[test]
+    fn checked_byte_sub_underflow_binds_wrapped() {
+        // 5 - 10 underflows; the wrapped result is 251 (modulo 256).
+        let val = run_expect(
+            "fn main() -> Byte {\n\
+                let y = 5Byte - 10Byte {\n\
+                    ok(v) => v,\n\
+                    underflow(w) => w,\n\
+                };\n\
+                y\n\
+             }",
+            &[],
+        );
+        assert_eq!(val, Value::Byte(251));
+    }
+
+    #[test]
+    fn checked_byte_div_zero_divisor_binds_numerator() {
+        let val = run_expect(
+            "fn main() -> Byte {\n\
+                let y = 42Byte / 0Byte {\n\
+                    ok(q) => q,\n\
+                    zero_divisor(n) => n,\n\
+                };\n\
+                y\n\
+             }",
+            &[],
+        );
+        assert_eq!(val, Value::Byte(42));
+    }
+
     // The next three checked-overflow tests embed integer literals
     // (4294967296 = 2^32, large guard values, literal-high patterns)
     // sized for an i64 Word. Under any of the `narrow-word-*`

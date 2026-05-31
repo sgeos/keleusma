@@ -2024,15 +2024,15 @@ fn checked_arm_is_catchall(kind: &crate::ast::CheckedArmKind) -> bool {
     }
 }
 
-/// Bind a checked-arm pattern's variables into the current scope.
-/// The bound type is always `Word`; wildcards and literals
-/// introduce no bindings. The compiler relies on the type checker
-/// to reject pattern shapes that cannot match a `Word` (e.g. a
-/// string literal pattern would fail unification at the test
+/// Bind a checked-arm pattern's variables into the current scope at
+/// `bind_ty`, the operand type of the construct (`Word` or `Byte`);
+/// wildcards and literals introduce no bindings. The compiler relies
+/// on the type checker to reject pattern shapes that cannot match
+/// (e.g. a string literal pattern would fail unification at the test
 /// site, not here).
-fn bind_checked_pattern(ctx: &mut Ctx, pattern: &Pattern) {
+fn bind_checked_pattern(ctx: &mut Ctx, pattern: &Pattern, bind_ty: Type) {
     match pattern {
-        Pattern::Variable(name, _) => ctx.add_local(name.clone(), Type::Word),
+        Pattern::Variable(name, _) => ctx.add_local(name.clone(), bind_ty),
         Pattern::Wildcard(_) | Pattern::Literal(_, _) => {}
         // Other pattern shapes are rejected at parse time by
         // `parse_checked_arm_pattern`; if one slips through, fall
@@ -3804,15 +3804,18 @@ fn type_of_expr(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError> {
                 ));
             }
             let inner_ty = type_of_expr(ctx, op_expr)?;
-            if !types_compatible(ctx, &inner_ty, &Type::Word) {
+            let is_word = types_compatible(ctx, &inner_ty, &Type::Word);
+            let is_byte = !is_word && types_compatible(ctx, &inner_ty, &Type::Byte);
+            if !is_word && !is_byte {
                 return Err(TypeError::new(
                     alloc::format!(
-                        "checked-overflow construct expects a Word arithmetic operation, got {}",
+                        "checked-overflow construct expects a Word or Byte arithmetic operation, got {}",
                         inner_ty.display()
                     ),
                     *span,
                 ));
             }
+            let operand_ty = if is_byte { Type::Byte } else { Type::Word };
             // Validate arm structure. The `ok` class must have an
             // unguarded catch-all arm; `overflow` and `underflow` are
             // optional and default to wrapping (B35 P3a); a
@@ -3824,72 +3827,112 @@ fn type_of_expr(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError> {
             // literal case.
             use crate::ast::CheckedArmKind;
 
-            // Per-operator admissibility (B35 P3c). For the signed
-            // `Word` type: `+`, `-`, `*` admit `overflow` and
-            // `underflow`; unary `-` admits `overflow` only; `/`
-            // admits `overflow` and `zero_divisor`; `%` admits
-            // `zero_divisor` only. An arm whose outcome cannot arise
-            // for the operator is a compile error rather than dead
-            // code. `ok` is admissible for every operator.
-            #[derive(Clone, Copy)]
-            enum AdmissibleOp {
-                AddSubMul,
-                Neg,
+            // The guarded operator, used for admissibility and arity.
+            #[derive(Clone, Copy, PartialEq)]
+            enum CheckedOp {
+                Add,
+                Sub,
+                Mul,
                 Div,
                 Mod,
+                Neg,
             }
-            let (adm_op, op_desc) = match op_expr.as_ref() {
-                Expr::BinOp { op: BinOp::Add, .. } => (AdmissibleOp::AddSubMul, "`+`"),
-                Expr::BinOp { op: BinOp::Sub, .. } => (AdmissibleOp::AddSubMul, "`-`"),
-                Expr::BinOp { op: BinOp::Mul, .. } => (AdmissibleOp::AddSubMul, "`*`"),
-                Expr::BinOp { op: BinOp::Div, .. } => (AdmissibleOp::Div, "`/`"),
-                Expr::BinOp { op: BinOp::Mod, .. } => (AdmissibleOp::Mod, "`%`"),
-                // The `supported` check above guarantees unary `-`
-                // here; any other shape was already rejected.
-                _ => (AdmissibleOp::Neg, "unary `-`"),
+            let (cop, op_desc) = match op_expr.as_ref() {
+                Expr::BinOp { op: BinOp::Add, .. } => (CheckedOp::Add, "`+`"),
+                Expr::BinOp { op: BinOp::Sub, .. } => (CheckedOp::Sub, "`-`"),
+                Expr::BinOp { op: BinOp::Mul, .. } => (CheckedOp::Mul, "`*`"),
+                Expr::BinOp { op: BinOp::Div, .. } => (CheckedOp::Div, "`/`"),
+                Expr::BinOp { op: BinOp::Mod, .. } => (CheckedOp::Mod, "`%`"),
+                // The `supported` check above guarantees unary `-`.
+                _ => (CheckedOp::Neg, "unary `-`"),
             };
+
+            // Unary negation is signed-only; reject it on Byte.
+            if is_byte && cop == CheckedOp::Neg {
+                return Err(TypeError::new(
+                    alloc::string::String::from(
+                        "unary `-` is not supported on Byte operands in a checked construct",
+                    ),
+                    *span,
+                ));
+            }
+
+            // Per-operand-type admissibility (B35 P3c, P3d). For the
+            // signed `Word` type: `+`, `-`, `*` admit `overflow` and
+            // `underflow`; unary `-` admits `overflow`; `/` admits
+            // `overflow` and `zero_divisor`; `%` admits `zero_divisor`.
+            // For the unsigned `Byte` type: `+` and `*` admit
+            // `overflow`; `-` admits `underflow`; `/` and `%` admit
+            // `zero_divisor`. `ok` is admissible for every operator. An
+            // arm whose outcome cannot arise is a compile error.
+            let type_name = if is_byte { "Byte" } else { "Word" };
             for arm in arms.iter() {
                 let (admissible, arm_name) = match &arm.kind {
                     CheckedArmKind::Ok(_) => (true, "ok"),
-                    CheckedArmKind::Overflow(_, _) => (
-                        matches!(
-                            adm_op,
-                            AdmissibleOp::AddSubMul | AdmissibleOp::Neg | AdmissibleOp::Div
-                        ),
-                        "overflow",
-                    ),
+                    CheckedArmKind::Overflow(_, _) => {
+                        let ok = if is_byte {
+                            matches!(cop, CheckedOp::Add | CheckedOp::Mul)
+                        } else {
+                            matches!(
+                                cop,
+                                CheckedOp::Add
+                                    | CheckedOp::Sub
+                                    | CheckedOp::Mul
+                                    | CheckedOp::Neg
+                                    | CheckedOp::Div
+                            )
+                        };
+                        (ok, "overflow")
+                    }
                     CheckedArmKind::Underflow(_, _) => {
-                        (matches!(adm_op, AdmissibleOp::AddSubMul), "underflow")
+                        let ok = if is_byte {
+                            cop == CheckedOp::Sub
+                        } else {
+                            matches!(cop, CheckedOp::Add | CheckedOp::Sub | CheckedOp::Mul)
+                        };
+                        (ok, "underflow")
                     }
                     CheckedArmKind::ZeroDivisor(_) => (
-                        matches!(adm_op, AdmissibleOp::Div | AdmissibleOp::Mod),
+                        matches!(cop, CheckedOp::Div | CheckedOp::Mod),
                         "zero_divisor",
                     ),
                 };
                 if !admissible {
                     return Err(TypeError::new(
                         alloc::format!(
-                            "the `{}` arm is not admissible for the {} operation: that outcome cannot arise",
+                            "the `{}` arm is not admissible for the {} operation on {}: that outcome cannot arise",
                             arm_name,
-                            op_desc
+                            op_desc,
+                            type_name
                         ),
                         arm.span,
                     ));
                 }
-                // `overflow`/`underflow` bind the high and low halves
-                // `(h, l)` on the `Word` construct. The single-pattern
-                // form is reserved for the Byte construct (B35 P3d),
-                // which is not yet admitted, so require two patterns.
-                if matches!(
-                    &arm.kind,
-                    CheckedArmKind::Overflow(_, None) | CheckedArmKind::Underflow(_, None)
-                ) {
-                    return Err(TypeError::new(
-                        alloc::string::String::from(
-                            "an `overflow` or `underflow` arm requires two patterns `(h, l)`",
-                        ),
-                        arm.span,
-                    ));
+                // Arity: a `Word` `overflow`/`underflow` arm binds the
+                // high and low halves `(h, l)`; a `Byte` arm binds the
+                // single wrapped result.
+                if let CheckedArmKind::Overflow(_, l) | CheckedArmKind::Underflow(_, l) = &arm.kind
+                {
+                    if is_byte && l.is_some() {
+                        return Err(TypeError::new(
+                            alloc::format!(
+                                "a Byte `{}` arm binds a single wrapped result; write `{}(w)`",
+                                arm_name,
+                                arm_name
+                            ),
+                            arm.span,
+                        ));
+                    }
+                    if !is_byte && l.is_none() {
+                        return Err(TypeError::new(
+                            alloc::format!(
+                                "a Word `{}` arm binds the high and low halves; write `{}(h, l)`",
+                                arm_name,
+                                arm_name
+                            ),
+                            arm.span,
+                        ));
+                    }
                 }
             }
             let mut ok_catchall_seen = false;
@@ -3953,12 +3996,12 @@ fn type_of_expr(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError> {
                 ctx.push_scope();
                 match &arm.kind {
                     CheckedArmKind::Ok(p) | CheckedArmKind::ZeroDivisor(p) => {
-                        bind_checked_pattern(ctx, p);
+                        bind_checked_pattern(ctx, p, operand_ty.clone());
                     }
                     CheckedArmKind::Overflow(h, l) | CheckedArmKind::Underflow(h, l) => {
-                        bind_checked_pattern(ctx, h);
+                        bind_checked_pattern(ctx, h, operand_ty.clone());
                         if let Some(l) = l {
-                            bind_checked_pattern(ctx, l);
+                            bind_checked_pattern(ctx, l, operand_ty.clone());
                         }
                     }
                 }
@@ -4675,6 +4718,68 @@ mod tests {
         .unwrap_err();
         assert!(
             err.message.contains("not admissible") && err.message.contains("zero_divisor"),
+            "{}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn checked_byte_overflow_single_pattern_typechecks() {
+        // B35 P3d-i: a Byte overflow arm binds a single wrapped value.
+        check_src(
+            "fn main() -> Byte { let y = 200Byte + 100Byte { ok(v) => v, overflow(w) => w }; y }",
+        )
+        .expect("Byte checked overflow with single pattern should typecheck");
+    }
+
+    #[test]
+    fn checked_byte_overflow_two_patterns_rejected() {
+        // The two-pattern (h, l) form is the Word shape; Byte rejects it.
+        let err = check_src(
+            "fn main() -> Byte { let y = 200Byte + 100Byte { ok(v) => v, overflow(h, l) => h }; y }",
+        )
+        .unwrap_err();
+        assert!(
+            err.message.contains("single wrapped result"),
+            "{}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn checked_byte_underflow_rejected_on_addition() {
+        // Byte addition cannot underflow.
+        let err = check_src(
+            "fn main() -> Byte { let y = 1Byte + 2Byte { ok(v) => v, underflow(w) => w }; y }",
+        )
+        .unwrap_err();
+        assert!(
+            err.message.contains("not admissible") && err.message.contains("underflow"),
+            "{}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn checked_word_overflow_single_pattern_rejected() {
+        // The single-pattern form is the Byte shape; Word requires (h, l).
+        let err =
+            check_src("fn main() -> Word { let y = 1 + 2 { ok(v) => v, overflow(w) => w }; y }")
+                .unwrap_err();
+        assert!(
+            err.message.contains("high and low halves"),
+            "{}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn checked_unary_neg_rejected_on_byte() {
+        // Unary negation is signed-only.
+        let err =
+            check_src("fn main() -> Byte { let y = -(5Byte) { ok(v) => v }; y }").unwrap_err();
+        assert!(
+            err.message.contains("unary `-`") && err.message.contains("Byte"),
             "{}",
             err.message
         );
