@@ -2349,8 +2349,7 @@ fn compile_function_group(
         }
 
         // No head matched: emit trap.
-        let msg = fc.add_string_constant(&format!("no matching head for {}", name));
-        fc.emit(Op::Trap(msg));
+        fc.emit(Op::Trap(crate::bytecode::TrapKind::NoMatchingHead.code()));
 
         if stream_dispatch {
             // Emit EndLoop with its back-edge target = loop_ip + 1.
@@ -3277,10 +3276,10 @@ fn compile_enum_to_word(
     // is an enum of the named type, and the loop covers every
     // declared variant, so the fall-through is unreachable
     // unless host-constructed Value::Enum carries a variant
-    // name outside the declaration. The trap message documents
-    // the contract.
-    let msg = fc.add_string_constant("enum-to-Word cast: variant not in declaration");
-    fc.emit(Op::Trap(msg));
+    // name outside the declaration.
+    fc.emit(Op::Trap(
+        crate::bytecode::TrapKind::EnumVariantUnmapped.code(),
+    ));
 
     // Close the virtual loop. Pattern copied from
     // `compile_expr`'s `Match` arm.
@@ -4331,8 +4330,7 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
             }
 
             // No arm matched.
-            let msg = fc.add_string_constant("no matching arm in match expression");
-            fc.emit(Op::Trap(msg));
+            fc.emit(Op::Trap(crate::bytecode::TrapKind::NoMatchingArm.code()));
 
             let endloop_addr = fc.emit(Op::EndLoop(0));
 
@@ -4846,8 +4844,9 @@ fn compile_checked(
 
     // Unreachable when the type checker has validated
     // exhaustiveness; trap as a defensive measure.
-    let msg = fc.add_string_constant("no matching arm in checked-overflow construct");
-    fc.emit(Op::Trap(msg));
+    fc.emit(Op::Trap(
+        crate::bytecode::TrapKind::CheckedArithNoArm.code(),
+    ));
 
     let endloop_addr = fc.emit(Op::EndLoop(0));
     let after_loop = (loop_addr + 1) as u16;
@@ -4974,17 +4973,10 @@ fn compile_call(
             // jumps to EndIf.
             let else_addr = fc.emit_jump(Op::Else(0));
             fc.patch_jump(if_addr);
-            // False branch: predicate failed. Trap with a message
-            // identifying the newtype and the predicate. The
-            // message construction is purely internal to the
-            // compiler and does not require the `text` surface
-            // feature.
-            let msg = fc.add_string_constant(&alloc::format!(
-                "refinement check `{}` failed for newtype `{}`",
-                pred_name,
-                name
-            ));
-            fc.emit(Op::Trap(msg));
+            // False branch: predicate failed. Trap with the
+            // refinement-failed kind. The host categorizes the fault
+            // through `VmError::Trap(TrapKind::RefinementFailed)`.
+            fc.emit(Op::Trap(crate::bytecode::TrapKind::RefinementFailed.code()));
             fc.patch_jump(else_addr);
             fc.emit(Op::EndIf);
             // Stack: [value]

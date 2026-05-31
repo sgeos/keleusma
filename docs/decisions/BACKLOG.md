@@ -1665,6 +1665,16 @@ A native that fails as part of normal control flow should instead return an opti
 | P8 | Native code generation contract per target, namely the inserted guards and the platform-specific defaults. Gated on the native code generation work tracked elsewhere. |
 | P9 | Documentation, namely the grammar, the language design narrative, and a runtime-faults reference, and B35 closure. |
 
+**Implementation status.**
+
+P1 is implemented on the `feat-partial-op-handling` branch. The compiler-emitted `Op::Trap` now carries a `crate::bytecode::TrapKind` code in its operand rather than a string-constant index, and the virtual machine surfaces each cause as a distinct top-level `VmError` variant, namely `RefinementFailed`, `NoMatchingHead`, `NoMatchingArm`, `CheckedArithNoArm`, and `EnumVariantUnmapped`, so a host categorizes the fault without parsing a message. `TrapKind` is the bytecode-level operand encoding, and the virtual machine maps it to the matching `VmError` variant. The change touches only the compiler and the virtual machine. The wire format is unaffected because the operand is an opaque `u16` that the encoder round-trips and the verifier ignores, so there is no opcode change, no instruction-count change, and no `BYTECODE_VERSION` change.
+
+Distinct top-level variants were chosen over a single `Trap(TrapKind)` variant for consistency, since `VmError` already represents `DivisionByZero`, `IndexOutOfBounds`, and `FieldNotFound` as top-level fault variants, and the coarse grouping a host might want is already provided by `category()`, where all of these map to `SoftScript`. The vestigial `VmError::NoMatch(String)` variant, which was never raised, was removed in the same change so it does not sit confusingly beside `NoMatchingArm`.
+
+One behavioral change is recorded as open. The prior runtime trap message embedded dynamic detail such as the failing predicate and newtype names, and that detail is dropped from the runtime error in favor of the structured kind, consistent with the language's move away from runtime strings. Localization, if wanted, should return through a compact source location on the trap rather than through a message string, which is B29 debug-information territory.
+
+The remaining phases P2 through P9 are pending.
+
 **Cross-references.**
 
 - The existing checked-arithmetic construct in `src/compiler.rs` and `src/vm.rs` is the redesign site for P3.

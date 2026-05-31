@@ -66,14 +66,25 @@ pub enum VmError {
     IndexOutOfBounds(i64, usize),
     /// Struct field not found.
     FieldNotFound(String, String),
-    /// No pattern matched in match expression or multiheaded function.
-    NoMatch(String),
     /// A native function returned an error.
     NativeError(String),
     /// Invalid or unexpected bytecode.
     InvalidBytecode(String),
-    /// Script execution was halted by a Trap instruction.
-    Trap(String),
+    /// A newtype refinement predicate returned false at a
+    /// construction site. One of the partial-operation traps; see
+    /// [`crate::bytecode::TrapKind`].
+    RefinementFailed,
+    /// No head of a multiheaded function matched the arguments.
+    NoMatchingHead,
+    /// No arm of a `match` expression matched the scrutinee.
+    /// Reachable only when every arm carries a `when` guard.
+    NoMatchingArm,
+    /// No arm of a checked-arithmetic construct matched the outcome.
+    CheckedArithNoArm,
+    /// An enum-to-`Word` cast met a `Value::Enum` whose variant is
+    /// outside the declared set, reachable only through a host-
+    /// constructed enum value.
+    EnumVariantUnmapped,
     /// Structural verification failed at load time.
     VerifyError(String),
     /// Bytecode load failure encountered before verification could run,
@@ -153,8 +164,11 @@ impl VmError {
             | VmError::DivisionByZero
             | VmError::IndexOutOfBounds(_, _)
             | VmError::FieldNotFound(_, _)
-            | VmError::NoMatch(_)
-            | VmError::Trap(_) => VmErrorCategory::SoftScript,
+            | VmError::RefinementFailed
+            | VmError::NoMatchingHead
+            | VmError::NoMatchingArm
+            | VmError::CheckedArithNoArm
+            | VmError::EnumVariantUnmapped => VmErrorCategory::SoftScript,
             // Soft host: a native returned an error. The host owns
             // the policy.
             VmError::NativeError(_) => VmErrorCategory::SoftHost,
@@ -3513,11 +3527,19 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                     }
                 }
 
-                Op::Trap(msg_const) => {
-                    let msg = self
-                        .chunk_const_str(chunk_idx, msg_const as usize)
-                        .unwrap_or_else(|| String::from("trap"));
-                    return Err(VmError::Trap(msg));
+                Op::Trap(kind_code) => {
+                    use crate::bytecode::TrapKind;
+                    return Err(match TrapKind::from_code(kind_code) {
+                        Some(TrapKind::RefinementFailed) => VmError::RefinementFailed,
+                        Some(TrapKind::NoMatchingHead) => VmError::NoMatchingHead,
+                        Some(TrapKind::NoMatchingArm) => VmError::NoMatchingArm,
+                        Some(TrapKind::CheckedArithNoArm) => VmError::CheckedArithNoArm,
+                        Some(TrapKind::EnumVariantUnmapped) => VmError::EnumVariantUnmapped,
+                        None => VmError::InvalidBytecode(alloc::format!(
+                            "Op::Trap carried an unknown trap-kind code {}",
+                            kind_code
+                        )),
+                    });
                 }
                 Op::CheckedAdd => {
                     let word_bits_log2 = self.word_bits_log2();
@@ -4104,8 +4126,11 @@ mod tests {
                 alloc::string::String::from("S"),
                 alloc::string::String::from("f"),
             ),
-            VmError::NoMatch(alloc::string::String::from("oops")),
-            VmError::Trap(alloc::string::String::from("oops")),
+            VmError::RefinementFailed,
+            VmError::NoMatchingHead,
+            VmError::NoMatchingArm,
+            VmError::CheckedArithNoArm,
+            VmError::EnumVariantUnmapped,
         ];
         for e in &soft_script {
             assert_eq!(
@@ -4550,16 +4575,11 @@ mod tests {
             &[],
         )
         .unwrap_err();
-        match err {
-            VmError::Trap(msg) => {
-                assert!(
-                    msg.contains("nonneg") && msg.contains("Counter"),
-                    "expected refinement-trap message naming `nonneg` and `Counter`, got: {}",
-                    msg
-                );
-            }
-            other => panic!("expected VmError::Trap, got {:?}", other),
-        }
+        assert!(
+            matches!(err, VmError::RefinementFailed),
+            "expected VmError::RefinementFailed, got {:?}",
+            err
+        );
     }
 
     #[test]
@@ -4940,16 +4960,11 @@ mod tests {
             &[],
         )
         .unwrap_err();
-        match err {
-            VmError::Trap(msg) => {
-                assert!(
-                    msg.contains("nonneg") && msg.contains("Counter"),
-                    "expected refinement-trap message naming `nonneg` and `Counter`, got: {}",
-                    msg
-                );
-            }
-            other => panic!("expected VmError::Trap, got {:?}", other),
-        }
+        assert!(
+            matches!(err, VmError::RefinementFailed),
+            "expected VmError::RefinementFailed, got {:?}",
+            err
+        );
     }
 
     #[test]
@@ -5610,6 +5625,37 @@ mod tests {
             &[],
         );
         assert_eq!(val, Value::StaticStr(String::from("other")));
+    }
+
+    #[test]
+    fn multiheaded_no_matching_head_traps_with_kind() {
+        // Two literal heads with no catch-all; an argument matching
+        // neither traps with the NoMatchingHead kind.
+        let err = run_program(
+            "fn pick(0) -> Word { 100 }\nfn pick(1) -> Word { 200 }\nfn main() -> Word { pick(5) }",
+            &[],
+        )
+        .unwrap_err();
+        assert!(
+            matches!(err, VmError::NoMatchingHead),
+            "expected NoMatchingHead trap, got {:?}",
+            err
+        );
+    }
+
+    #[test]
+    fn trap_kind_code_round_trips() {
+        use crate::bytecode::TrapKind;
+        for k in [
+            TrapKind::RefinementFailed,
+            TrapKind::NoMatchingHead,
+            TrapKind::NoMatchingArm,
+            TrapKind::CheckedArithNoArm,
+            TrapKind::EnumVariantUnmapped,
+        ] {
+            assert_eq!(TrapKind::from_code(k.code()), Some(k));
+        }
+        assert_eq!(TrapKind::from_code(999), None);
     }
 
     #[test]

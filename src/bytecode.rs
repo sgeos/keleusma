@@ -461,6 +461,64 @@ pub enum BlockType {
     Stream,
 }
 
+/// The specific cause of an [`Op::Trap`]. The compiler encodes the
+/// kind in the trap instruction's operand, and the virtual machine
+/// surfaces it through `VmError::Trap` so a host can categorize the
+/// fault without parsing a message string. These are the compiler-
+/// emitted traps for partial operations whose unhandled case has no
+/// in-band result, as distinct from the data faults that already
+/// have their own `VmError` variants such as division by zero and
+/// out-of-bounds indexing.
+///
+/// B35 (Partial Operation Handling) introduced this kind in place of
+/// the prior free-form trap message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TrapKind {
+    /// A newtype refinement predicate returned false at a
+    /// construction site.
+    RefinementFailed,
+    /// No head of a multiheaded function matched the arguments.
+    NoMatchingHead,
+    /// No arm of a `match` expression matched the scrutinee. This is
+    /// reachable only when every arm carries a `when` guard, since
+    /// the type checker proves unguarded matches exhaustive.
+    NoMatchingArm,
+    /// No arm of a checked-arithmetic construct matched the outcome.
+    /// Reachable only through guarded arms, defensive otherwise.
+    CheckedArithNoArm,
+    /// An enum-to-`Word` cast met a `Value::Enum` whose variant is
+    /// outside the declared set. Reachable only through a host-
+    /// constructed enum value.
+    EnumVariantUnmapped,
+}
+
+impl TrapKind {
+    /// The `u16` code carried in the [`Op::Trap`] operand.
+    pub fn code(self) -> u16 {
+        match self {
+            TrapKind::RefinementFailed => 0,
+            TrapKind::NoMatchingHead => 1,
+            TrapKind::NoMatchingArm => 2,
+            TrapKind::CheckedArithNoArm => 3,
+            TrapKind::EnumVariantUnmapped => 4,
+        }
+    }
+
+    /// Decode a trap kind from an [`Op::Trap`] operand. Returns
+    /// `None` for an unrecognized code, which indicates malformed
+    /// bytecode.
+    pub fn from_code(code: u16) -> Option<TrapKind> {
+        match code {
+            0 => Some(TrapKind::RefinementFailed),
+            1 => Some(TrapKind::NoMatchingHead),
+            2 => Some(TrapKind::NoMatchingArm),
+            3 => Some(TrapKind::CheckedArithNoArm),
+            4 => Some(TrapKind::EnumVariantUnmapped),
+            _ => None,
+        }
+    }
+}
+
 /// A bytecode instruction.
 ///
 /// V0.2.0 Phase 7c moved opcode serialization out of the rkyv
