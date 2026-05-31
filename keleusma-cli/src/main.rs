@@ -33,7 +33,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
-use keleusma::compiler::compile;
+use keleusma::compiler::{CompileOptions, compile_with_options};
 use keleusma::lexer::tokenize;
 use keleusma::parser::parse;
 use keleusma::stddsl;
@@ -58,6 +58,7 @@ fn main() -> ExitCode {
         "run" => run_subcommand(&args[2..]),
         "run-tasks" => run_tasks_subcommand(&args[2..]),
         "compile" => compile_subcommand(&args[2..]),
+        "strip" => strip_subcommand(&args[2..]),
         "keygen" => keygen_subcommand(&args[2..]),
         "repl" => repl_subcommand(&args[2..]),
         "--help" | "-h" | "help" => {
@@ -133,8 +134,11 @@ fn print_help() {
     println!("                                    that fires when an iteration exceeds the");
     println!("                                    configured interval.");
     println!("  compile <file> [-o <output>] [--signing-key <keyfile>]");
-    println!("                 [--encryption-key <keyfile>] [--target <name>]");
-    println!("                                    Compile to bytecode. With --signing-key,");
+    println!("                 [--encryption-key <keyfile>] [--target <name>] [--debug]");
+    println!("                                    Compile to bytecode. With --debug, emit");
+    println!("                                    strippable debug metadata (source spans for");
+    println!("                                    stack traces); remove it later with `strip`.");
+    println!("                                    With --signing-key,");
     println!("                                    sign the output with the supplied 32-byte");
     println!("                                    Ed25519 seed file. The source script must");
     println!("                                    declare the entry function with the");
@@ -161,6 +165,12 @@ fn print_help() {
     println!("                                    supervised restart, and per-task signing");
     println!("                                    and encryption policy. See");
     println!("                                    docs/architecture/RUN_TASKS.md.");
+    println!("  strip <file.bin> [-o <output>]");
+    println!("                                    Remove debug metadata from compiled");
+    println!("                                    bytecode, producing a release artefact byte-");
+    println!("                                    identical to a non-debug compile. Output");
+    println!("                                    defaults to the input path. Refuses signed or");
+    println!("                                    encrypted input; strip before signing.");
     println!("  repl                              Start interactive REPL");
     println!("  help, --help, -h                  Show this help");
     println!("  version, --version, -V            Show version");
@@ -169,6 +179,8 @@ fn print_help() {
     println!("  keleusma run hello.kel");
     println!("  keleusma hello.kel");
     println!("  keleusma compile hello.kel -o hello.kel.bin");
+    println!("  keleusma compile hello.kel --debug -o hello.dbg.bin");
+    println!("  keleusma strip hello.dbg.bin -o hello.kel.bin");
     println!("  keleusma keygen --seed key.seed --public key.pub");
     println!("  keleusma compile hello.kel --signing-key key.seed -o hello.kel.bin");
     println!("  keleusma run hello.kel.bin --verifying-key key.pub");
@@ -460,6 +472,7 @@ fn compile_subcommand(args: &[String]) -> ExitCode {
     let mut signing_key_path: Option<String> = None;
     let mut encryption_key_path: Option<String> = None;
     let mut target: Option<keleusma::target::Target> = None;
+    let mut emit_debug = false;
     let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {
@@ -504,6 +517,10 @@ fn compile_subcommand(args: &[String]) -> ExitCode {
                     }
                 }
                 i += 2;
+            }
+            "--debug" => {
+                emit_debug = true;
+                i += 1;
             }
             other => {
                 eprintln!("error: unknown option `{}`", other);
@@ -559,7 +576,7 @@ fn compile_subcommand(args: &[String]) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let module = match compile_source_with_target(&source, target.as_ref()) {
+    let module = match compile_source_with_target(&source, target.as_ref(), emit_debug) {
         Ok(m) => m,
         Err(e) => {
             eprintln!("error: {}", e);
@@ -1123,8 +1140,93 @@ fn preamble_line_count() -> u32 {
     build_preamble().bytes().filter(|b| *b == b'\n').count() as u32
 }
 
+/// Core of `keleusma strip`: load a plain (unsigned, unencrypted)
+/// bytecode buffer, drop every chunk's debug metadata section, and
+/// re-encode. The result is byte-identical to a release build compiled
+/// without `--debug` (B29 invariant 5). Factored out for testing.
+fn strip_module_bytes(bytes: &[u8]) -> Result<Vec<u8>, String> {
+    let mut module = keleusma::bytecode::Module::from_bytes(bytes)
+        .map_err(|e| format!("reading bytecode: {:?}", e))?;
+    for chunk in &mut module.chunks {
+        chunk.debug_pool = None;
+    }
+    module
+        .to_bytes()
+        .map_err(|e| format!("encoding stripped bytecode: {:?}", e))
+}
+
+/// `strip <input.bin> [-o <output.bin>]`. Removes B29 debug metadata
+/// from a compiled bytecode artefact. Output defaults to the input path
+/// (in place). Signed or encrypted artefacts are refused: stripping
+/// rewrites the body, which invalidates a signature, and the stripper
+/// holds no key. The supported workflow is compile, then strip, then
+/// sign.
+fn strip_subcommand(args: &[String]) -> ExitCode {
+    if args.is_empty() {
+        eprintln!("error: `strip` requires a bytecode path");
+        return ExitCode::FAILURE;
+    }
+    let input = &args[0];
+    let mut output: Option<String> = None;
+    let mut i = 1;
+    while i < args.len() {
+        match args[i].as_str() {
+            "-o" | "--output" => {
+                if i + 1 >= args.len() {
+                    eprintln!("error: --output requires a path");
+                    return ExitCode::FAILURE;
+                }
+                output = Some(args[i + 1].clone());
+                i += 2;
+            }
+            other => {
+                eprintln!("error: unknown option `{}`", other);
+                return ExitCode::FAILURE;
+            }
+        }
+    }
+    let bytes = match fs::read(input) {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("error: reading {}: {}", input, e);
+            return ExitCode::FAILURE;
+        }
+    };
+    if keleusma::wire_format::header_requires_signature(&bytes)
+        || keleusma::wire_format::header_requires_encryption(&bytes)
+    {
+        eprintln!(
+            "error: cannot strip a signed or encrypted artefact; stripping rewrites the body and invalidates the signature. Strip before signing: compile, then strip, then sign."
+        );
+        return ExitCode::FAILURE;
+    }
+    let stripped = match strip_module_bytes(&bytes) {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("error: {}", e);
+            return ExitCode::FAILURE;
+        }
+    };
+    let out_path = output.unwrap_or_else(|| input.clone());
+    match fs::write(&out_path, &stripped) {
+        Ok(()) => {
+            eprintln!(
+                "stripped {} -> {} ({} bytes)",
+                input,
+                out_path,
+                stripped.len()
+            );
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("error: writing {}: {}", out_path, e);
+            ExitCode::FAILURE
+        }
+    }
+}
+
 fn compile_source(source: &str) -> Result<keleusma::bytecode::Module, String> {
-    compile_source_with_target(source, None)
+    compile_source_with_target(source, None, false)
 }
 
 /// Compile the source through the standard pipeline, routing
@@ -1134,6 +1236,7 @@ fn compile_source(source: &str) -> Result<keleusma::bytecode::Module, String> {
 fn compile_source_with_target(
     source: &str,
     target: Option<&keleusma::target::Target>,
+    emit_debug: bool,
 ) -> Result<keleusma::bytecode::Module, String> {
     let mut combined = build_preamble();
     // A script may begin with a `#!/usr/bin/env keleusma` shebang so it
@@ -1160,12 +1263,19 @@ fn compile_source_with_target(
         .map_err(|e| format_err_with_offset("lex", &e.message, e.span, preamble_lines))?;
     let program = parse(&tokens)
         .map_err(|e| format_err_with_offset("parse", &e.message, e.span, preamble_lines))?;
-    let module = match target {
-        Some(t) => keleusma::compiler::compile_with_target(&program, t)
-            .map_err(|e| format_err_with_offset("compile", &e.message, e.span, preamble_lines))?,
-        None => compile(&program)
-            .map_err(|e| format_err_with_offset("compile", &e.message, e.span, preamble_lines))?,
+    // Resolve the target. Absent `--target`, compile for the host,
+    // which is what the bare `compile` entry point does.
+    let host_target;
+    let resolved_target = match target {
+        Some(t) => t,
+        None => {
+            host_target = keleusma::target::Target::host();
+            &host_target
+        }
     };
+    let options = CompileOptions { emit_debug };
+    let (module, _warnings) = compile_with_options(&program, resolved_target, &options)
+        .map_err(|e| format_err_with_offset("compile", &e.message, e.span, preamble_lines))?;
     Ok(module)
 }
 
@@ -1872,6 +1982,40 @@ mod tests {
     #[test]
     fn no_shebang_still_compiles() {
         assert!(compile_source("fn main() -> Word { 42 }\n").is_ok());
+    }
+
+    #[test]
+    fn compile_debug_then_strip_reproduces_release_bytes() {
+        let src = "fn helper() -> Word { 1 }\nfn main() -> Word { helper() }";
+
+        // Release build (no debug).
+        let release_bytes = compile_source_with_target(src, None, false)
+            .expect("compile release")
+            .to_bytes()
+            .expect("encode release");
+
+        // Debug build carries a debug pool on the calling chunk.
+        let debug_module = compile_source_with_target(src, None, true).expect("compile debug");
+        assert!(
+            debug_module.chunks.iter().any(|c| c.debug_pool.is_some()),
+            "a --debug compile should attach debug metadata"
+        );
+        let debug_bytes = debug_module.to_bytes().expect("encode debug");
+        assert_ne!(
+            debug_bytes, release_bytes,
+            "the debug build should differ from the release build before stripping"
+        );
+
+        // Stripping the debug bytes reproduces the release bytes exactly.
+        let stripped = strip_module_bytes(&debug_bytes).expect("strip");
+        assert_eq!(
+            stripped, release_bytes,
+            "stripped debug bytecode must be byte-identical to the release build"
+        );
+
+        // Stripping is idempotent: stripping already-release bytes is a no-op.
+        let restripped = strip_module_bytes(&release_bytes).expect("re-strip");
+        assert_eq!(restripped, release_bytes);
     }
 
     #[test]
