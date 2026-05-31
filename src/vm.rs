@@ -5393,6 +5393,49 @@ mod tests {
         assert!(matches!(err, VmError::EnumVariantUnmapped), "{:?}", err);
     }
 
+    // B35 P9 follow-up: `saturate_max`/`saturate_min` resolve at the
+    // construct's operand type, not only `Word`. Each rewrites to that
+    // type's saturating bound.
+
+    #[test]
+    fn checked_byte_saturate_max_clamps_to_255() {
+        let val = run_expect(
+            "fn main() -> Byte {\n\
+                200Byte + 100Byte { ok(v) => v, overflow(_) => saturate_max }\n\
+             }",
+            &[],
+        );
+        assert_eq!(val, Value::Byte(255));
+    }
+
+    #[test]
+    fn checked_byte_saturate_min_clamps_to_0() {
+        let val = run_expect(
+            "fn main() -> Byte {\n\
+                5Byte - 10Byte { ok(v) => v, underflow(_) => saturate_min }\n\
+             }",
+            &[],
+        );
+        assert_eq!(val, Value::Byte(0));
+    }
+
+    #[test]
+    fn checked_fixed_saturate_max_clamps_to_max_raw() {
+        // The Q-format saturating maximum is the largest raw bit
+        // pattern, i64::MAX.
+        let val = run_expect(
+            "fn main() -> Fixed<16> {\n\
+                16777216Fixed<16> * 16777216Fixed<16> {\n\
+                    ok(v) => v,\n\
+                    overflow(_) => saturate_max,\n\
+                    underflow(_) => saturate_min,\n\
+                }\n\
+             }",
+            &[],
+        );
+        assert_eq!(val, Value::Fixed(i64::MAX));
+    }
+
     // The next three checked-overflow tests embed integer literals
     // (4294967296 = 2^32, large guard values, literal-high patterns)
     // sized for an i64 Word. Under any of the `narrow-word-*`

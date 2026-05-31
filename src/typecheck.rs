@@ -4797,45 +4797,68 @@ fn type_of_expr(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError> {
             Ok(result_ty.apply(&ctx.subst))
         }
         Expr::SaturateMax { span } | Expr::SaturateMin { span } => {
-            // `saturate_max` / `saturate_min` have a context-
-            // determined type. They are admitted as `Word` in V0.2
-            // because the checked-overflow construct only supports
-            // Word operations; future iterations extend this to
-            // Byte and Fixed by tying the saturation type to the
-            // surrounding construct's expected type.
-            //
-            // Refinement-driven resolution: when the surrounding
-            // expected type is a refined newtype that declared a
-            // `saturate_max` / `saturate_min` value in its `with`
-            // clause, mutate the AST node in place to a `Literal::Int`
-            // carrying that value. The construct is otherwise
-            // transparent at the bytecode layer.
+            // `saturate_max` / `saturate_min` have a context-determined
+            // type, tied to the surrounding construct's expected type.
+            // The node is rewritten in place to a concrete typed
+            // literal so the compiler emits the right bound; the
+            // construct is otherwise transparent at the bytecode layer.
+            // `Word` keeps the bare keyword, which the compiler lowers
+            // to the runtime `Word` bound. `Byte`, `Float`, and
+            // `Fixed<N>` rewrite to that type's saturating bound (B35
+            // P3d extended checked arithmetic to those operand types).
+            // A refined newtype that declared a `with saturate_max` /
+            // `saturate_min` value rewrites to a constructor call on
+            // that literal, predicate-checked at runtime.
             let span_copy = *span;
             let is_max = matches!(expr, Expr::SaturateMax { .. });
-            if let Some(exp_ty) = ctx.expected_type()
-                && let Type::Newtype(name) = strip_labels(exp_ty)
-            {
-                let resolved = if is_max {
-                    ctx.newtype_saturate_max.get(&name).copied()
-                } else {
-                    ctx.newtype_saturate_min.get(&name).copied()
-                };
-                if let Some(value) = resolved {
-                    // Replace the keyword with a constructor call
-                    // `Name(value)` so the produced expression has the
-                    // refined newtype as its type. The refinement
-                    // predicate (declared in the `where` clause) is
-                    // verified at runtime by the constructor call on
-                    // the literal argument.
-                    *expr = Expr::Call {
-                        name: name.clone(),
-                        args: alloc::vec![Expr::Literal {
-                            value: Literal::Int(value),
+            if let Some(exp_ty) = ctx.expected_type() {
+                match strip_labels(exp_ty) {
+                    Type::Newtype(name) => {
+                        let resolved = if is_max {
+                            ctx.newtype_saturate_max.get(&name).copied()
+                        } else {
+                            ctx.newtype_saturate_min.get(&name).copied()
+                        };
+                        if let Some(value) = resolved {
+                            *expr = Expr::Call {
+                                name: name.clone(),
+                                args: alloc::vec![Expr::Literal {
+                                    value: Literal::Int(value),
+                                    span: span_copy,
+                                }],
+                                span: span_copy,
+                            };
+                            return Ok(Type::Newtype(name));
+                        }
+                    }
+                    Type::Byte => {
+                        // Unsigned Byte bounds: 255 and 0.
+                        let value = if is_max { 255 } else { 0 };
+                        *expr = Expr::Literal {
+                            value: Literal::Byte(value),
                             span: span_copy,
-                        }],
-                        span: span_copy,
-                    };
-                    return Ok(Type::Newtype(name));
+                        };
+                        return Ok(Type::Byte);
+                    }
+                    Type::Float => {
+                        // The largest and most-negative finite Float.
+                        let value = if is_max { f64::MAX } else { f64::MIN };
+                        *expr = Expr::Literal {
+                            value: Literal::Float(value),
+                            span: span_copy,
+                        };
+                        return Ok(Type::Float);
+                    }
+                    Type::Fixed(n) => {
+                        // The extremal Q-format raw bit patterns.
+                        let raw = if is_max { i64::MAX } else { i64::MIN };
+                        *expr = Expr::Literal {
+                            value: Literal::Fixed { raw, frac_bits: n },
+                            span: span_copy,
+                        };
+                        return Ok(Type::Fixed(n));
+                    }
+                    _ => {}
                 }
             }
             Ok(Type::Word)
