@@ -809,11 +809,23 @@ mod tests {
             "beta".to_string(),
         ]);
 
-        assert_eq!(unwrap_some(arg_native::<i64, f64>(&[V::Int(0)]).unwrap()), "script.kel");
-        assert_eq!(unwrap_some(arg_native::<i64, f64>(&[V::Int(1)]).unwrap()), "alpha");
-        assert_eq!(unwrap_some(arg_native::<i64, f64>(&[V::Int(2)]).unwrap()), "beta");
+        assert_eq!(
+            unwrap_some(arg_native::<i64, f64>(&[V::Int(0)]).unwrap()),
+            "script.kel"
+        );
+        assert_eq!(
+            unwrap_some(arg_native::<i64, f64>(&[V::Int(1)]).unwrap()),
+            "alpha"
+        );
+        assert_eq!(
+            unwrap_some(arg_native::<i64, f64>(&[V::Int(2)]).unwrap()),
+            "beta"
+        );
         // Out of range yields Option::None.
-        assert!(matches!(arg_native::<i64, f64>(&[V::Int(3)]).unwrap(), V::None));
+        assert!(matches!(
+            arg_native::<i64, f64>(&[V::Int(3)]).unwrap(),
+            V::None
+        ));
 
         match arg_count_native::<i64, f64>(&[]).unwrap() {
             V::Int(n) => assert_eq!(n, 3),
@@ -826,7 +838,10 @@ mod tests {
     #[test]
     fn arg_negative_index_is_none() {
         set_script_args(std::vec!["script.kel".to_string(), "x".to_string()]);
-        assert!(matches!(arg_native::<i64, f64>(&[V::Int(-1)]).unwrap(), V::None));
+        assert!(matches!(
+            arg_native::<i64, f64>(&[V::Int(-1)]).unwrap(),
+            V::None
+        ));
         clear_script_args();
     }
 
@@ -848,10 +863,9 @@ mod tests {
 
     #[test]
     fn run_full_returns_stdout_and_stderr() {
-        let result = run_full_native::<i64, f64>(&[V::StaticStr(
-            "printf out; printf err 1>&2".to_string(),
-        )])
-        .expect("run_full");
+        let result =
+            run_full_native::<i64, f64>(&[V::StaticStr("printf out; printf err 1>&2".to_string())])
+                .expect("run_full");
         match result {
             V::Tuple(items) => {
                 assert_eq!(items.len(), 3);
