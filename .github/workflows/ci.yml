@@ -213,3 +213,15 @@ jobs:
         env:
           MIRIFLAGS: -Zmiri-tree-borrows
         run: cargo miri test -p keleusma-arena
+
+  docs-links:
+    name: Doc links
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      # The link-checker is itself a Keleusma script run through the
+      # CLI; it orchestrates POSIX tools and exits non-zero when any
+      # relative Markdown link fails to resolve.
+      - name: Check relative Markdown links
+        run: cargo run -q -p keleusma-cli -- run scripts/check-md-links.kel
