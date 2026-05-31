@@ -137,11 +137,110 @@ struct FuncCompiler {
     /// while emitting this chunk and assembles it into the chunk's
     /// `debug_pool` in [`FuncCompiler::finish`]. Off by default.
     emit_debug: bool,
-    /// Collected call-site annotations gathered while `emit_debug` is
-    /// on: `(op_index, span)` pairs, one per call instruction emitted
-    /// for a source-level call expression. Drained into `CallSite`
-    /// debug records at finish time.
-    pending_call_sites: Vec<(usize, crate::token::Span)>,
+    /// Strippable debug annotations (B29) gathered while `emit_debug`
+    /// is on, drained into the chunk's `debug_pool` at finish time.
+    pending_debug: Vec<PendingDebug>,
+}
+
+/// A debug annotation captured during codegen, pending assembly into a
+/// `debug_meta::DebugRecord` once the chunk is finished. Kept as an
+/// intermediate so string interning and span-pool construction happen
+/// once, in `build_debug_pool`.
+enum PendingDebug {
+    /// A call instruction at `op_index` originating from the call
+    /// expression covering `span`.
+    CallSite {
+        op_index: usize,
+        span: crate::token::Span,
+    },
+    /// The first op of a statement covering `span`.
+    SourceSpan {
+        op_index: usize,
+        span: crate::token::Span,
+    },
+    /// The source line of the statement beginning at `op_index`.
+    LineNumber { op_index: usize, line: u32 },
+    /// A local slot declared with the given human-readable name, in
+    /// scope from `op_index`.
+    VariableName {
+        op_index: usize,
+        slot: u16,
+        name: String,
+    },
+}
+
+/// Append a span-pool entry and return its index.
+fn push_debug_span(
+    pool: &mut crate::debug_meta::DebugPool,
+    file_idx: u16,
+    span: &crate::token::Span,
+) -> u16 {
+    let idx = pool.span_pool.len() as u16;
+    let length = span.end.saturating_sub(span.start) as u32;
+    pool.span_pool.push((file_idx, span.start as u32, length));
+    idx
+}
+
+/// Intern a string into the pool's string sub-pool, returning its
+/// index. Deduplicates so repeated names share one entry.
+fn intern_debug_string(pool: &mut crate::debug_meta::DebugPool, s: &str) -> u16 {
+    if let Some(i) = pool.string_pool.iter().position(|x| x == s) {
+        return i as u16;
+    }
+    let i = pool.string_pool.len() as u16;
+    pool.string_pool.push(String::from(s));
+    i
+}
+
+/// Assemble the captured annotations into a `DebugPool`. String index 0
+/// is a placeholder source-file name (the compiler does not know the
+/// path); spans reference it. A host may rewrite index 0 downstream.
+fn build_debug_pool(pending: &[PendingDebug]) -> crate::debug_meta::DebugPool {
+    use crate::debug_meta::{DebugPool, DebugRecord, DebugRecordKind};
+    let mut pool = DebugPool::default();
+    pool.string_pool.push(String::new());
+    let file_idx: u16 = 0;
+    for item in pending {
+        match item {
+            PendingDebug::CallSite { op_index, span } => {
+                let span_idx = push_debug_span(&mut pool, file_idx, span);
+                pool.records.push(DebugRecord {
+                    op_index: *op_index as u32,
+                    kind: DebugRecordKind::CallSite,
+                    operands: alloc::vec![span_idx],
+                });
+            }
+            PendingDebug::SourceSpan { op_index, span } => {
+                let span_idx = push_debug_span(&mut pool, file_idx, span);
+                pool.records.push(DebugRecord {
+                    op_index: *op_index as u32,
+                    kind: DebugRecordKind::SourceSpan,
+                    operands: alloc::vec![span_idx],
+                });
+            }
+            PendingDebug::LineNumber { op_index, line } => {
+                let line_u16 = (*line).min(u32::from(u16::MAX)) as u16;
+                pool.records.push(DebugRecord {
+                    op_index: *op_index as u32,
+                    kind: DebugRecordKind::LineNumber,
+                    operands: alloc::vec![line_u16],
+                });
+            }
+            PendingDebug::VariableName {
+                op_index,
+                slot,
+                name,
+            } => {
+                let name_idx = intern_debug_string(&mut pool, name);
+                pool.records.push(DebugRecord {
+                    op_index: *op_index as u32,
+                    kind: DebugRecordKind::VariableName,
+                    operands: alloc::vec![*slot, name_idx],
+                });
+            }
+        }
+    }
+    pool
 }
 
 impl FuncCompiler {
@@ -182,7 +281,7 @@ impl FuncCompiler {
             local_const_values: BTreeMap::new(),
             local_ranges: BTreeMap::new(),
             emit_debug,
-            pending_call_sites: Vec::new(),
+            pending_debug: Vec::new(),
         }
     }
 
@@ -202,8 +301,28 @@ impl FuncCompiler {
                 Op::Call(..) | Op::CallVerifiedNative(..) | Op::CallExternalNative(..)
             )
         {
-            self.pending_call_sites.push((idx, *span));
+            self.pending_debug.push(PendingDebug::CallSite {
+                op_index: idx,
+                span: *span,
+            });
         }
+    }
+
+    /// Record a `SourceSpan` and a `LineNumber` annotation for a
+    /// statement whose code begins at `op_index`, when debug emission
+    /// is on. No-op when no ops were emitted for the statement.
+    fn record_statement(&mut self, op_index: usize, span: &crate::token::Span) {
+        if !self.emit_debug || op_index >= self.chunk.ops.len() {
+            return;
+        }
+        self.pending_debug.push(PendingDebug::SourceSpan {
+            op_index,
+            span: *span,
+        });
+        self.pending_debug.push(PendingDebug::LineNumber {
+            op_index,
+            line: span.line,
+        });
     }
 
     /// Infer the static array length of an expression used as a
@@ -427,6 +546,13 @@ impl FuncCompiler {
             depth: self.scope_depth,
             ty,
         });
+        if self.emit_debug {
+            self.pending_debug.push(PendingDebug::VariableName {
+                op_index: self.chunk.ops.len(),
+                slot,
+                name: String::from(name),
+            });
+        }
         slot
     }
 
@@ -468,25 +594,8 @@ impl FuncCompiler {
 
     fn finish(mut self) -> Chunk {
         self.chunk.local_count = self.next_slot;
-        if self.emit_debug && !self.pending_call_sites.is_empty() {
-            use crate::debug_meta::{DebugPool, DebugRecord, DebugRecordKind};
-            let mut pool = DebugPool::default();
-            // A single placeholder file-name entry at index 0. The
-            // compiler does not know the source path; a host that wants
-            // a real file name rewrites string index 0 downstream. The
-            // load-bearing information is the byte span.
-            pool.string_pool.push(String::new());
-            for (op_index, span) in &self.pending_call_sites {
-                let span_idx = pool.span_pool.len() as u16;
-                let length = span.end.saturating_sub(span.start) as u32;
-                pool.span_pool.push((0, span.start as u32, length));
-                pool.records.push(DebugRecord {
-                    op_index: *op_index as u32,
-                    kind: DebugRecordKind::CallSite,
-                    operands: alloc::vec![span_idx],
-                });
-            }
-            self.chunk.debug_pool = Some(pool);
+        if self.emit_debug && !self.pending_debug.is_empty() {
+            self.chunk.debug_pool = Some(build_debug_pool(&self.pending_debug));
         }
         self.chunk
     }
@@ -2518,7 +2627,21 @@ fn compile_data_field_assign(
 }
 
 /// Compile a single statement.
+/// The source span of a statement, used for B29 `SourceSpan` and
+/// `LineNumber` debug records.
+fn stmt_span(stmt: &Stmt) -> crate::token::Span {
+    match stmt {
+        Stmt::Let(l) => l.span,
+        Stmt::For(f) => f.span,
+        Stmt::Break(s) => *s,
+        Stmt::DataFieldAssign { span, .. } => *span,
+        Stmt::DataFieldIndexAssign { span, .. } => *span,
+        Stmt::Expr(e) => e.span(),
+    }
+}
+
 fn compile_stmt(fc: &mut FuncCompiler, stmt: &Stmt) -> Result<(), CompileError> {
+    let stmt_start_op = fc.chunk.ops.len();
     match stmt {
         Stmt::Let(let_stmt) => {
             // Determine the binding's type. If annotated, use the
@@ -2598,6 +2721,7 @@ fn compile_stmt(fc: &mut FuncCompiler, stmt: &Stmt) -> Result<(), CompileError> 
             fc.emit(Op::PopN(1));
         }
     }
+    fc.record_statement(stmt_start_op, &stmt_span(stmt));
     Ok(())
 }
 
@@ -6270,6 +6394,40 @@ mod tests {
             "resolved location should cover the call expression, got {:?}",
             snippet
         );
+    }
+
+    #[test]
+    fn debug_emission_covers_the_emittable_catalogue() {
+        // A program with a call and a local binding exercises all four
+        // emittable record kinds: CallSite, SourceSpan, LineNumber,
+        // VariableName.
+        let src = "fn helper() -> Word { 1 }\nfn main() -> Word { let x = helper(); x }";
+        let module = compile_str_debug(src);
+        let main_chunk = module
+            .chunks
+            .iter()
+            .find(|c| c.ops.iter().any(|op| matches!(op, Op::Call(..))))
+            .expect("a chunk containing a call");
+        let pool = main_chunk.debug_pool.as_ref().expect("debug pool present");
+
+        use crate::debug_meta::DebugRecordKind;
+        let present = |k: DebugRecordKind| pool.records.iter().any(|r| r.kind == k);
+        assert!(present(DebugRecordKind::CallSite), "CallSite emitted");
+        assert!(present(DebugRecordKind::SourceSpan), "SourceSpan emitted");
+        assert!(present(DebugRecordKind::LineNumber), "LineNumber emitted");
+        assert!(
+            present(DebugRecordKind::VariableName),
+            "VariableName emitted"
+        );
+
+        // The VariableName record resolves its slot to the source name.
+        let var = pool
+            .records
+            .iter()
+            .find(|r| r.kind == DebugRecordKind::VariableName)
+            .unwrap();
+        let name_idx = var.operands[1];
+        assert_eq!(pool.string(name_idx), Some("x"));
     }
 
     #[test]
