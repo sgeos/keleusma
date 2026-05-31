@@ -81,6 +81,11 @@ pub mod address;
 /// Runtime values, instructions, the [`Module`] type, and the cost
 /// model.
 pub mod bytecode;
+/// Strippable debug metadata: the chunk-local [`debug_meta::DebugPool`]
+/// section and its canonical byte encoding. Parallel infrastructure for
+/// B29; the foundational data model and serialization, not yet attached
+/// to [`bytecode::Chunk`] nor emitted by the compiler.
+pub mod debug_meta;
 /// Authenticated encryption of compiled [`Module`]s under the
 /// optional `encryption` feature. Implements the V0.2.1 hybrid
 /// asymmetric key wrapping (X25519 ECDH plus HKDF-SHA-256 plus
