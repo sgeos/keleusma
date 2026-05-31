@@ -4665,6 +4665,15 @@ fn compile_checked(
     if let Expr::ArrayIndex { object, index, .. } = op_expr {
         return compile_checked_index(fc, op_expr, object, index, arms, span);
     }
+    // The newtype-construction construct (B35 P5): reify the
+    // refinement-predicate check into an outcome flag rather than
+    // trapping on failure.
+    if let Expr::Call { name, args, .. } = op_expr
+        && fc.type_info.newtype_names.contains(name)
+        && args.len() == 1
+    {
+        return compile_checked_newtype(fc, op_expr, name, &args[0], arms, span);
+    }
 
     // Determine the operand expression and, when it is `Fixed`, its
     // fraction-bit count (B35 P3d-iii). The multiply and divide paths
@@ -4830,10 +4839,10 @@ fn compile_checked(
             // is compiled by `compile_checked_index`; reaching it here
             // means the type checker admitted it on an arithmetic
             // operation, which is an internal inconsistency.
-            CheckedArmKind::InvalidIndex(_) => {
+            CheckedArmKind::InvalidIndex(_) | CheckedArmKind::InvalidNewtype(_) => {
                 return Err(CompileError {
                     message: alloc::string::String::from(
-                        "internal error: `invalid_index` arm on a non-indexing checked construct",
+                        "internal error: indexing or newtype-construction arm on an arithmetic checked construct",
                     ),
                     span: *span,
                 });
@@ -5088,6 +5097,160 @@ fn compile_checked_index(
     fc.emit(Op::GetLocal(arr_slot));
     fc.emit(Op::GetLocal(idx_slot));
     fc.emit(Op::GetIndex);
+    let default_break = fc.emit(Op::Break(0));
+    if let Some(breaks) = fc.loop_breaks.last_mut() {
+        breaks.push(default_break);
+    }
+
+    let endloop_addr = fc.emit(Op::EndLoop(0));
+    let after_loop = (loop_addr + 1) as u16;
+    if let Op::EndLoop(a) = &mut fc.chunk.ops[endloop_addr] {
+        *a = after_loop;
+    }
+    let after_endloop = fc.chunk.ops.len() as u16;
+    if let Op::Loop(a) = &mut fc.chunk.ops[loop_addr] {
+        *a = after_endloop;
+    }
+    fc.exit_loop();
+
+    Ok(())
+}
+
+/// Compile the newtype-construction construct `Name(value) { ok(v)
+/// => ..., invalid_newtype(x) => ... }` (B35 P5). The lowering needs
+/// no new opcode: it computes the underlying value, runs the
+/// refinement predicate when one exists, and branches on the result
+/// into an outcome flag (`0` ok, `1` invalid newtype). The arm
+/// dispatch mirrors the other constructs. `ok` is a mandatory
+/// catch-all; `invalid_newtype` is optional, and an unhandled failure
+/// traps with `TrapKind::RefinementFailed`, the same fault a bare
+/// construction produces.
+fn compile_checked_newtype(
+    fc: &mut FuncCompiler,
+    op_expr: &Expr,
+    newtype_name: &str,
+    arg: &Expr,
+    arms: &[crate::ast::CheckedArm],
+    span: &Span,
+) -> Result<(), CompileError> {
+    use crate::ast::{CheckedArmKind, Pattern};
+
+    // `ok` binds the newtype; `invalid_newtype` binds the underlying
+    // value. Newtypes are transparent at runtime, so both read the
+    // same slot; only the bound type differs.
+    let newtype_ty = infer_expr_type(fc, op_expr).unwrap_or_else(|| {
+        TypeExpr::Named(alloc::string::String::from(newtype_name), Vec::new(), *span)
+    });
+    let underlying_ty = infer_expr_type(fc, arg).unwrap_or(TypeExpr::Prim(PrimType::Word, *span));
+
+    let suffix = span.start;
+    let value_slot = fc.declare_local(&alloc::format!("__nt_val_{}", suffix));
+    let flag_slot = fc.declare_local(&alloc::format!("__nt_flag_{}", suffix));
+
+    // value_slot = the underlying value (the constructor is
+    // transparent, so this is just the argument).
+    compile_expr(fc, arg)?;
+    fc.emit(Op::SetLocal(value_slot));
+
+    // Compute the outcome flag. With a refinement predicate, run it
+    // and set flag 0 on success, leaving the default 1 on failure.
+    // Without a refinement the construction is total, so flag is 0.
+    if let Some(pred_name) = fc.type_info.newtype_refinements.get(newtype_name).cloned() {
+        let pred_idx = *fc
+            .function_map
+            .get(pred_name.as_str())
+            .ok_or_else(|| CompileError {
+                message: alloc::format!(
+                    "refinement predicate `{}` for newtype `{}` is not a declared function",
+                    pred_name,
+                    newtype_name
+                ),
+                span: *span,
+            })?;
+        let one_idx = fc.add_constant(Value::Int(1));
+        fc.emit(Op::Const(one_idx));
+        fc.emit(Op::SetLocal(flag_slot));
+        fc.emit(Op::GetLocal(value_slot));
+        fc.emit(Op::Call(pred_idx, 1));
+        let pred_fail = fc.emit_jump(Op::If(0));
+        let zero_idx = fc.add_constant(Value::Int(0));
+        fc.emit(Op::Const(zero_idx));
+        fc.emit(Op::SetLocal(flag_slot));
+        fc.patch_jump(pred_fail);
+        fc.emit(Op::EndIf);
+    } else {
+        let zero_idx = fc.add_constant(Value::Int(0));
+        fc.emit(Op::Const(zero_idx));
+        fc.emit(Op::SetLocal(flag_slot));
+    }
+
+    // Dispatch arms in a virtual loop, mirroring compile_checked.
+    let loop_addr = fc.emit(Op::Loop(0));
+    fc.enter_loop();
+    for arm in arms {
+        fc.begin_scope();
+        let mut fail_addrs: Vec<usize> = Vec::new();
+        let (class_flag, pat, bind_ty): (i64, &Pattern, &TypeExpr) = match &arm.kind {
+            CheckedArmKind::Ok(p) => (0, p, &newtype_ty),
+            CheckedArmKind::InvalidNewtype(p) => (1, p, &underlying_ty),
+            _ => {
+                return Err(CompileError {
+                    message: alloc::string::String::from(
+                        "internal error: non-newtype arm in a newtype-construction checked construct",
+                    ),
+                    span: *span,
+                });
+            }
+        };
+        fc.emit(Op::GetLocal(flag_slot));
+        let cidx = fc.add_constant(Value::Int(class_flag));
+        fc.emit(Op::Const(cidx));
+        fc.emit(Op::CmpEq);
+        let class_fail = fc.emit_jump(Op::If(0));
+        fail_addrs.push(class_fail);
+        if let Pattern::Literal(crate::ast::Literal::Int(v), _) = pat {
+            fc.emit(Op::GetLocal(value_slot));
+            let idxc = fc.add_constant(Value::Int(*v));
+            fc.emit(Op::Const(idxc));
+            fc.emit(Op::CmpEq);
+            let fail = fc.emit_jump(Op::If(0));
+            fail_addrs.push(fail);
+        }
+        if let Pattern::Variable(vname, _) = pat {
+            let v_slot = fc.declare_local_typed(vname, Some(bind_ty.clone()));
+            fc.emit(Op::GetLocal(value_slot));
+            fc.emit(Op::SetLocal(v_slot));
+        }
+        if let Some(guard) = arm.guard.as_ref() {
+            compile_expr(fc, guard)?;
+            let guard_fail = fc.emit_jump(Op::If(0));
+            fail_addrs.push(guard_fail);
+        }
+        compile_expr(fc, &arm.body)?;
+        let break_addr = fc.emit(Op::Break(0));
+        if let Some(breaks) = fc.loop_breaks.last_mut() {
+            breaks.push(break_addr);
+        }
+        fc.end_scope();
+        for addr in fail_addrs.into_iter().rev() {
+            fc.patch_jump(addr);
+            fc.emit(Op::EndIf);
+        }
+    }
+
+    // No arm matched. The `ok` class is a mandatory catch-all, so the
+    // flag is 1 (invalid newtype). Trap with RefinementFailed, the
+    // same fault a bare construction produces. The trailing default
+    // break keeps the loop structurally closed.
+    fc.emit(Op::GetLocal(flag_slot));
+    let one_idx = fc.add_constant(Value::Int(1));
+    fc.emit(Op::Const(one_idx));
+    fc.emit(Op::CmpEq);
+    let not_invalid = fc.emit_jump(Op::If(0));
+    fc.emit(Op::Trap(crate::bytecode::TrapKind::RefinementFailed.code()));
+    fc.patch_jump(not_invalid);
+    fc.emit(Op::EndIf);
+    fc.emit(Op::GetLocal(value_slot));
     let default_break = fc.emit(Op::Break(0));
     if let Some(breaks) = fc.loop_breaks.last_mut() {
         breaks.push(default_break);

@@ -804,6 +804,13 @@ pub enum CheckedArmKind {
     /// (B35 P4). Optional; an unhandled out-of-bounds index traps as
     /// `VmError::IndexOutOfBounds`.
     InvalidIndex(Pattern),
+    /// `invalid_newtype(value)`: a refined-newtype construction whose
+    /// predicate rejected the underlying value. The single pattern
+    /// matches the offending underlying value. Admissible only when
+    /// the guarded operation constructs a refined newtype (B35 P5).
+    /// Optional; an unhandled failure traps as
+    /// `VmError::RefinementFailed`.
+    InvalidNewtype(Pattern),
 }
 
 impl Expr {

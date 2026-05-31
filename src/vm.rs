@@ -5220,6 +5220,62 @@ mod tests {
         assert_eq!(val, Value::Byte(30));
     }
 
+    // B35 P5: the newtype-construction construct `Name(v) { ok(p) =>
+    // ..., invalid_newtype(x) => ... }`. The `ok` arm binds the
+    // constructed newtype; `invalid_newtype` binds the underlying
+    // value the refinement rejected. An unhandled failure traps with
+    // RefinementFailed.
+
+    #[test]
+    fn checked_newtype_ok_when_predicate_passes() {
+        let val = run_expect(
+            "fn is_pos(x: Word) -> bool { x > 0 }\n\
+             newtype Positive = Word where is_pos;\n\
+             fn main() -> Word {\n\
+                Positive(5) {\n\
+                    ok(p) => 1,\n\
+                    invalid_newtype(x) => x,\n\
+                }\n\
+             }",
+            &[],
+        );
+        assert_eq!(val, Value::Int(1));
+    }
+
+    #[test]
+    fn checked_newtype_invalid_binds_underlying() {
+        // The predicate rejects -7; the invalid_newtype arm binds the
+        // underlying value.
+        let val = run_expect(
+            "fn is_pos(x: Word) -> bool { x > 0 }\n\
+             newtype Positive = Word where is_pos;\n\
+             fn main() -> Word {\n\
+                Positive(0 - 7) {\n\
+                    ok(p) => 1,\n\
+                    invalid_newtype(x) => x,\n\
+                }\n\
+             }",
+            &[],
+        );
+        assert_eq!(val, Value::Int(-7));
+    }
+
+    #[test]
+    fn checked_newtype_unhandled_failure_traps() {
+        let err = run_program(
+            "fn is_pos(x: Word) -> bool { x > 0 }\n\
+             newtype Positive = Word where is_pos;\n\
+             fn main() -> Word {\n\
+                Positive(0 - 7) {\n\
+                    ok(p) => 1,\n\
+                }\n\
+             }",
+            &[],
+        )
+        .unwrap_err();
+        assert!(matches!(err, VmError::RefinementFailed), "{:?}", err);
+    }
+
     // The next three checked-overflow tests embed integer literals
     // (4294967296 = 2^32, large guard values, literal-high patterns)
     // sized for an i64 Word. Under any of the `narrow-word-*`
