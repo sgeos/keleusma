@@ -167,6 +167,10 @@ enum PendingDebug {
         slot: u16,
         name: String,
     },
+    /// A named compiler optimisation applied to the region beginning at
+    /// `op_index` (for example refinement-elision, where a refinement
+    /// check was proven at compile time and no runtime check emitted).
+    Optimisation { op_index: usize, name: String },
 }
 
 /// Append a span-pool entry and return its index.
@@ -236,6 +240,14 @@ fn build_debug_pool(pending: &[PendingDebug]) -> crate::debug_meta::DebugPool {
                     op_index: *op_index as u32,
                     kind: DebugRecordKind::VariableName,
                     operands: alloc::vec![*slot, name_idx],
+                });
+            }
+            PendingDebug::Optimisation { op_index, name } => {
+                let name_idx = intern_debug_string(&mut pool, name);
+                pool.records.push(DebugRecord {
+                    op_index: *op_index as u32,
+                    kind: DebugRecordKind::OptimisationMarker,
+                    operands: alloc::vec![name_idx],
                 });
             }
         }
@@ -323,6 +335,17 @@ impl FuncCompiler {
             op_index,
             line: span.line,
         });
+    }
+
+    /// Record an `OptimisationMarker` naming a compiler optimisation
+    /// applied at `op_index`, when debug emission is on.
+    fn record_optimisation(&mut self, op_index: usize, name: &str) {
+        if self.emit_debug {
+            self.pending_debug.push(PendingDebug::Optimisation {
+                op_index,
+                name: String::from(name),
+            });
+        }
     }
 
     /// Infer the static array length of an expression used as a
@@ -5929,7 +5952,9 @@ fn compile_call(
             if let Some(n) = fold_to_int(&args[0], &|s| fc.local_const_lookup(s)) {
                 match eval_predicate_at_int(&body, &param_name, n) {
                     Some(true) => {
+                        let opt_op = fc.chunk.ops.len();
                         compile_expr(fc, &args[0])?;
+                        fc.record_optimisation(opt_op, "refinement-elision");
                         return Ok(());
                     }
                     Some(false) => {
@@ -5951,7 +5976,9 @@ fn compile_call(
                 && let Some(true_set) = predicate_true_set(&body, &param_name)
             {
                 if !arg_range.is_empty() && arg_range.is_subset_of(&true_set) {
+                    let opt_op = fc.chunk.ops.len();
                     compile_expr(fc, &args[0])?;
+                    fc.record_optimisation(opt_op, "refinement-elision");
                     return Ok(());
                 }
                 if !arg_range.is_empty() && arg_range.intersect(&true_set).is_empty() {
@@ -6428,6 +6455,29 @@ mod tests {
             .unwrap();
         let name_idx = var.operands[1];
         assert_eq!(pool.string(name_idx), Some("x"));
+    }
+
+    #[test]
+    fn debug_emission_records_refinement_elision_as_optimisation() {
+        // Counter(5) constant-folds: the compiler proves the predicate
+        // at compile time and elides the runtime check, recording a
+        // refinement-elision OptimisationMarker.
+        let src = "fn nonneg(x: Word) -> bool { x >= 0 }\n\
+                   newtype Counter = Word where nonneg;\n\
+                   fn main() -> Word { let c = Counter(5); c as Word }";
+        let module = compile_str_debug(src);
+        let found = module.chunks.iter().any(|c| {
+            c.debug_pool.as_ref().is_some_and(|p| {
+                p.records.iter().any(|r| {
+                    r.kind == crate::debug_meta::DebugRecordKind::OptimisationMarker
+                        && p.string(r.operands[0]) == Some("refinement-elision")
+                })
+            })
+        });
+        assert!(
+            found,
+            "a constant-folded refinement construction should record a refinement-elision OptimisationMarker"
+        );
     }
 
     #[test]
