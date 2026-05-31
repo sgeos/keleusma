@@ -2015,7 +2015,7 @@ fn checked_arm_is_catchall(kind: &crate::ast::CheckedArmKind) -> bool {
     use crate::ast::CheckedArmKind;
     let is_catchall_pat = |p: &Pattern| matches!(p, Pattern::Wildcard(_) | Pattern::Variable(_, _));
     match kind {
-        CheckedArmKind::Ok(p) => is_catchall_pat(p),
+        CheckedArmKind::Ok(p) | CheckedArmKind::ZeroDivisor(p) => is_catchall_pat(p),
         CheckedArmKind::Overflow(h, l) | CheckedArmKind::Underflow(h, l) => {
             is_catchall_pat(h) && is_catchall_pat(l)
         }
@@ -3822,6 +3822,7 @@ fn type_of_expr(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError> {
             let mut ok_catchall_seen = false;
             let mut overflow_catchall_seen = false;
             let mut underflow_catchall_seen = false;
+            let mut zero_divisor_catchall_seen = false;
             for arm in arms.iter() {
                 // Outcomes whose catchall has already been seen
                 // cannot have further arms; subsequent arms in the
@@ -3830,6 +3831,7 @@ fn type_of_expr(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError> {
                     CheckedArmKind::Ok(_) => ok_catchall_seen,
                     CheckedArmKind::Overflow(_, _) => overflow_catchall_seen,
                     CheckedArmKind::Underflow(_, _) => underflow_catchall_seen,
+                    CheckedArmKind::ZeroDivisor(_) => zero_divisor_catchall_seen,
                 };
                 if class_catchall_seen {
                     return Err(TypeError::new(
@@ -3845,6 +3847,7 @@ fn type_of_expr(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError> {
                         CheckedArmKind::Ok(_) => ok_catchall_seen = true,
                         CheckedArmKind::Overflow(_, _) => overflow_catchall_seen = true,
                         CheckedArmKind::Underflow(_, _) => underflow_catchall_seen = true,
+                        CheckedArmKind::ZeroDivisor(_) => zero_divisor_catchall_seen = true,
                     }
                 }
             }
@@ -3862,7 +3865,11 @@ fn type_of_expr(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError> {
             // The catch-all-seen flags above remain in use only for
             // the unreachable-arm check; they no longer gate
             // exhaustiveness.
-            let _ = (overflow_catchall_seen, underflow_catchall_seen);
+            let _ = (
+                overflow_catchall_seen,
+                underflow_catchall_seen,
+                zero_divisor_catchall_seen,
+            );
             // Type-check arm bodies. Each arm scope binds the
             // pattern variables to `Word`. The guard expression (if
             // present) is checked in the same scope and must be
@@ -3872,7 +3879,7 @@ fn type_of_expr(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError> {
             for arm in arms.iter_mut() {
                 ctx.push_scope();
                 match &arm.kind {
-                    CheckedArmKind::Ok(p) => {
+                    CheckedArmKind::Ok(p) | CheckedArmKind::ZeroDivisor(p) => {
                         bind_checked_pattern(ctx, p);
                     }
                     CheckedArmKind::Overflow(h, l) | CheckedArmKind::Underflow(h, l) => {

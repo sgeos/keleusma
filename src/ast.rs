@@ -786,6 +786,11 @@ pub enum CheckedArmKind {
     /// `underflow(h, l)`: negative overflow; same destructuring as
     /// `Overflow`.
     Underflow(Pattern, Pattern),
+    /// `zero_divisor(numerator)`: a division or modulo by zero. The
+    /// single pattern matches the numerator. Admissible only on `/`
+    /// and `%`. An unhandled zero divisor traps as a division by
+    /// zero.
+    ZeroDivisor(Pattern),
 }
 
 impl Expr {

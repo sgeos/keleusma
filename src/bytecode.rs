@@ -490,6 +490,11 @@ pub enum TrapKind {
     /// outside the declared set. Reachable only through a host-
     /// constructed enum value.
     EnumVariantUnmapped,
+    /// A checked division or modulo met a zero divisor that no
+    /// `zero_divisor` arm handled. The virtual machine surfaces this
+    /// as `VmError::DivisionByZero`, the same error a plain division
+    /// by zero produces.
+    ZeroDivisor,
 }
 
 impl TrapKind {
@@ -501,6 +506,7 @@ impl TrapKind {
             TrapKind::NoMatchingArm => 2,
             TrapKind::CheckedArithNoArm => 3,
             TrapKind::EnumVariantUnmapped => 4,
+            TrapKind::ZeroDivisor => 5,
         }
     }
 
@@ -514,6 +520,7 @@ impl TrapKind {
             2 => Some(TrapKind::NoMatchingArm),
             3 => Some(TrapKind::CheckedArithNoArm),
             4 => Some(TrapKind::EnumVariantUnmapped),
+            5 => Some(TrapKind::ZeroDivisor),
             _ => None,
         }
     }

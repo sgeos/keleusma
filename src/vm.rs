@@ -3535,6 +3535,10 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                         Some(TrapKind::NoMatchingArm) => VmError::NoMatchingArm,
                         Some(TrapKind::CheckedArithNoArm) => VmError::CheckedArithNoArm,
                         Some(TrapKind::EnumVariantUnmapped) => VmError::EnumVariantUnmapped,
+                        // An unhandled zero divisor in a checked
+                        // construct surfaces as the same error a plain
+                        // division by zero produces.
+                        Some(TrapKind::ZeroDivisor) => VmError::DivisionByZero,
                         None => VmError::InvalidBytecode(alloc::format!(
                             "Op::Trap carried an unknown trap-kind code {}",
                             kind_code
@@ -3656,9 +3660,24 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                     let a = self.pop()?;
                     match (a, b) {
                         (
-                            crate::bytecode::GenericValue::Int(_),
+                            crate::bytecode::GenericValue::Int(x),
                             crate::bytecode::GenericValue::Int(y),
-                        ) if y == W::default() => return Err(VmError::DivisionByZero),
+                        ) if y == W::default() => {
+                            // Zero divisor: reify as flag 3
+                            // (zero_divisor) rather than trapping. The
+                            // numerator goes in the low slot so the
+                            // construct's `zero_divisor(numerator)` arm
+                            // binds it; an unhandled zero divisor traps
+                            // as DivisionByZero in the compiled dispatch.
+                            sp!(self, crate::bytecode::GenericValue::Int(x));
+                            sp!(self, crate::bytecode::GenericValue::Int(W::default()));
+                            sp!(
+                                self,
+                                crate::bytecode::GenericValue::Int(
+                                    <W as crate::word::Word>::from_i64_wrap(3)
+                                )
+                            );
+                        }
                         (
                             crate::bytecode::GenericValue::Int(x),
                             crate::bytecode::GenericValue::Int(y),
@@ -3704,9 +3723,20 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                     let a = self.pop()?;
                     match (a, b) {
                         (
-                            crate::bytecode::GenericValue::Int(_),
+                            crate::bytecode::GenericValue::Int(x),
                             crate::bytecode::GenericValue::Int(y),
-                        ) if y == W::default() => return Err(VmError::DivisionByZero),
+                        ) if y == W::default() => {
+                            // Zero divisor: reify as flag 3, numerator
+                            // in the low slot, mirroring CheckedDiv.
+                            sp!(self, crate::bytecode::GenericValue::Int(x));
+                            sp!(self, crate::bytecode::GenericValue::Int(W::default()));
+                            sp!(
+                                self,
+                                crate::bytecode::GenericValue::Int(
+                                    <W as crate::word::Word>::from_i64_wrap(3)
+                                )
+                            );
+                        }
                         (
                             crate::bytecode::GenericValue::Int(x),
                             crate::bytecode::GenericValue::Int(y),
@@ -4388,9 +4418,10 @@ mod tests {
 
     #[test]
     fn checked_div_by_zero_traps() {
-        // Division by zero traps with VmError::DivisionByZero;
-        // the construct does not catch it (the arm dispatch does
-        // not run because the opcode itself fails).
+        // With no `zero_divisor` arm, a zero divisor is reified by
+        // the opcode (flag 3) and the dispatch's default traps with
+        // VmError::DivisionByZero, the same error plain division by
+        // zero produces.
         let result = run_program(
             "fn main() -> Word {\n\
                 let y = 10 / 0 {\n\
@@ -4403,6 +4434,39 @@ mod tests {
             &[],
         );
         assert!(matches!(result, Err(VmError::DivisionByZero)));
+    }
+
+    #[test]
+    fn checked_div_zero_divisor_arm_binds_numerator() {
+        // B35 P3b: a handled zero divisor runs the `zero_divisor`
+        // arm, which binds the numerator.
+        let val = run_expect(
+            "fn main() -> Word {\n\
+                let y = 42 / 0 {\n\
+                    ok(q) => q,\n\
+                    zero_divisor(n) => n,\n\
+                };\n\
+                y\n\
+             }",
+            &[],
+        );
+        assert_eq!(val, Value::Int(42));
+    }
+
+    #[test]
+    fn checked_mod_zero_divisor_arm_handled() {
+        // Modulo by zero is reified and handled the same way.
+        let val = run_expect(
+            "fn main() -> Word {\n\
+                let y = 7 % 0 {\n\
+                    ok(r) => r,\n\
+                    zero_divisor(_) => 99,\n\
+                };\n\
+                y\n\
+             }",
+            &[],
+        );
+        assert_eq!(val, Value::Int(99));
     }
 
     // The next three checked-overflow tests embed integer literals

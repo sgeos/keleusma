@@ -1682,7 +1682,9 @@ P3 is large enough to be split into sub-phases, since it modifies a working cons
 
 P3a is implemented. The type checker now requires only an `ok` catch-all arm; the `overflow` and `underflow` classes are optional. When a class has no covering arm, the compiler emits a wrapping default: it pushes the `low` slot, which holds the in-range result for `ok` and the two's-complement wrapped result for `overflow` and `underflow`, so an unhandled outcome wraps rather than trapping. The defensive `CheckedArithNoArm` trap the compiler previously emitted is replaced by this default and is no longer reachable from the checked construct.
 
-The remaining sub-phases P3b through P3d and the phases P4 through P9 are pending.
+P3b is implemented. A `CheckedArmKind::ZeroDivisor(numerator)` arm is added across the abstract syntax tree, parser, type checker, and compiler. The virtual machine's `CheckedDiv` and `CheckedMod` no longer trap on a zero divisor; they reify it as flag 3 with the numerator in the low slot. The compiled dispatch routes flag 3 to a `zero_divisor` arm when present, binding the numerator, and otherwise traps. The unhandled case uses a new `TrapKind::ZeroDivisor` that the virtual machine maps to `VmError::DivisionByZero`, so an unhandled zero divisor in a checked construct produces the same error as a plain division by zero. The change reuses the existing single-pattern binding, so the numerator binds exactly as an `ok` value does.
+
+The remaining sub-phases P3c, namely per-operand-type admissibility, and P3d, the Byte and Float extension, and the phases P4 through P9 are pending.
 
 **Cross-references.**
 

@@ -4761,6 +4761,10 @@ fn compile_checked(
             CheckedArmKind::Ok(p) => (0_i64, Some(p), None, None),
             CheckedArmKind::Overflow(h, l) => (1_i64, None, Some(h), Some(l)),
             CheckedArmKind::Underflow(h, l) => (2_i64, None, Some(h), Some(l)),
+            // Zero divisor: flag 3, the numerator bound through the
+            // single pattern against the low slot (where the checked
+            // division and modulo place it).
+            CheckedArmKind::ZeroDivisor(p) => (3_i64, Some(p), None, None),
         };
         fc.emit(Op::GetLocal(flag_slot));
         let class_idx = fc.add_constant(Value::Int(class_flag));
@@ -4842,13 +4846,23 @@ fn compile_checked(
         }
     }
 
-    // No user arm matched the outcome. The default behavior is to
-    // wrap: `low` holds the in-range result for the `ok` class and
-    // the two's-complement wrapped result for the `overflow` and
-    // `underflow` classes, so pushing it yields the wrapping default
-    // for any outcome class without a covering arm. The type checker
-    // still requires an `ok` catch-all, so this default covers the
-    // optional `overflow` and `underflow` classes.
+    // No user arm matched the outcome. An unhandled zero divisor
+    // (flag 3) traps as a division by zero, matching the contract
+    // that a partial operation with no in-band result traps when
+    // unhandled. Any other unhandled outcome wraps: `low` holds the
+    // in-range result for `ok` and the two's-complement wrapped
+    // result for `overflow` and `underflow`, so pushing it is the
+    // wrapping default for the optional `overflow` and `underflow`
+    // classes.
+    fc.emit(Op::GetLocal(flag_slot));
+    let three_idx = fc.add_constant(Value::Int(3));
+    fc.emit(Op::Const(three_idx));
+    fc.emit(Op::CmpEq);
+    let not_zero_divisor = fc.emit_jump(Op::If(0));
+    fc.emit(Op::Trap(crate::bytecode::TrapKind::ZeroDivisor.code()));
+    fc.patch_jump(not_zero_divisor);
+    fc.emit(Op::EndIf);
+
     fc.emit(Op::GetLocal(low_slot));
     let default_break = fc.emit(Op::Break(0));
     if let Some(breaks) = fc.loop_breaks.last_mut() {
