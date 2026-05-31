@@ -166,9 +166,28 @@ The body of the bytecode partitions into three sections after the framing header
 
 1. **Opcode stream.** Concatenated four-byte records for every chunk in declaration order. Per-chunk boundaries live in the auxiliary body's chunk table.
 2. **Operand pool.** Concatenated eight-byte entries indexed by the inline pool index in the opcode records that reference them.
-3. **Auxiliary body.** Constant pool, struct templates, chunk table (name, op offset, op count, local count, parameter types), native names, data layout, and entry point index. The auxiliary body uses the existing rkyv archived encoding through V0.2.x and migrates to a custom encoding under a Phase 7c follow-on.
+3. **Auxiliary body.** Constant pool, struct templates, chunk table (name, op offset, op count, local count, parameter types, and an optional per-chunk debug metadata section), native names, data layout, and entry point index. The auxiliary body uses the existing rkyv archived encoding through V0.2.x and migrates to a custom encoding under a Phase 7c follow-on.
 
 The CRC-32 trailer covers the header and all three sections. The trailer's algebraic self-inclusion property holds: a consumer computing the CRC over the bytes from offset zero through the four-byte trailer obtains the residue constant `0x2144DF1C`. This property survives the section-partitioned body unchanged.
+
+### Debug metadata (optional, B29)
+
+Each entry in the chunk table carries an optional `debug_pool_bytes` field: the canonical byte encoding of a strippable debug-metadata section, or absent for a release build or a stripped artefact. The metadata lives only in the auxiliary body and never in the opcode stream, so the opcode stream is byte-identical between a debug build and a release build, and stripping the metadata removes the field rather than transforming the program.
+
+The field holds the bytes produced by `debug_meta::DebugPool::encode`, using the same little-endian, `u32`-length-prefixed convention as the rest of the wire format. The layout is four sub-pools in fixed order.
+
+| Sub-pool | Encoding |
+|----------|----------|
+| String pool | `u32` count, then each entry as a `u32` byte length and UTF-8 bytes |
+| Span pool | `u32` count, then each entry as `(u16 file_string_index, u32 byte_offset, u32 byte_length)` |
+| Type pool | `u32` count, then each entry as a `u32` byte length and opaque bytes |
+| Record pool | `u32` count, then each record as `(u32 op_index, u8 kind, u16 operand_count, operand_count × u16)` |
+
+A record annotates the op-stream position named by its `op_index` and carries `u16` operand indices into the sub-pools, with the operand meaning fixed per record kind. The record pool is emitted in canonical `(op_index, kind, operands)` order, so the encoding is byte-deterministic for a given logical pool. Dropping the field reproduces a release artefact byte-for-byte, and re-encoding a decoded pool reproduces the same bytes.
+
+The metadata never affects execution. Strippable annotations neither push nor pop operand-stack values nor alter control flow, so the verifier's stack-effect and control-flow analyses are identical with or without the field, and the worst-case memory pass treats it as zero runtime cost.
+
+The compiler emits the field when invoked with debug enabled (`compiler::compile_with_options` with `emit_debug`, surfaced as `keleusma compile --debug`); the `keleusma strip` subcommand removes it. The current compiler emits `CallSite` records; the remaining kinds in the B29 catalogue share this encoding. The field was added within the V0.2.x line without a `BYTECODE_VERSION` bump, consistent with the project's no-production-traction stance; a runtime built before B29 does not know the optional section.
 
 ## Wire format types
 
