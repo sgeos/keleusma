@@ -26,7 +26,7 @@ Second, integrity at the record level. Each opcode record and each operand pool 
 
 Third, separation of code and data. The opcode stream is contiguous and the operand pool is addressed separately. Compound operands that exceed three inline bytes (the addressable space within a four-byte record) reference an entry in the operand pool by index. Pool entries are eight-byte aligned, which matches a natural cache-line boundary and lets a host that streams the pool into a separately mapped region do so without realignment.
 
-The audit considered an alternative variable-length encoding that placed compound operands inline. The fixed-size record won on decoder simplicity and on the observation that compound operands cover only four of the sixty-nine V0.2.0 opcodes. The pool indirection cost is paid only for those four.
+The audit considered an alternative variable-length encoding that placed compound operands inline. The fixed-size record won on decoder simplicity and on the observation that compound operands cover only four of the seventy-one V0.2.0 opcodes. The pool indirection cost is paid only for those four.
 
 ## Framing header
 
@@ -127,7 +127,7 @@ Each opcode is a four-byte record. The record carries the opcode identifier in t
 
 The parity bit is the XOR of the other thirty-one bits in the record. A consumer reads byte zero, computes the parity over the seven low bits of byte zero and all bits of bytes one through three, compares against the high bit of byte zero, and rejects the record on mismatch. The parity covers the entire record so single bit flips anywhere are detected at the consumer site.
 
-The opcode identifier is the index of the `Op` variant in the canonical V0.2.0 listing. The table is fixed at version 1 of the wire format. The mapping is stable across the V0.2.0 series and across V0.2.x patch releases. The identifier fits in seven bits because the V0.2.0 ISA has sixty-nine variants; future ISA additions that exceed one hundred and twenty-eight variants would require a version bump.
+The opcode identifier is the index of the `Op` variant in the canonical V0.2.0 listing. The table is fixed at version 1 of the wire format. The mapping is stable across the V0.2.0 series and across V0.2.x patch releases. The identifier fits in seven bits because the V0.2.0 ISA has seventy-one variants; future ISA additions that exceed one hundred and twenty-eight variants would require a version bump.
 
 The operand semantics depend on the opcode variant. Inline operands cover four shapes:
 

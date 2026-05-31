@@ -4659,6 +4659,33 @@ fn compile_checked(
 ) -> Result<(), CompileError> {
     use crate::ast::{CheckedArmKind, Pattern};
 
+    // Determine the operand expression and, when it is `Fixed`, its
+    // fraction-bit count (B35 P3d-iii). The multiply and divide paths
+    // select the `Q`-format-aware checked opcodes
+    // (`Op::CheckedFixedMul` / `Op::CheckedFixedDiv`, which carry the
+    // shift), and the arm bindings carry the `Fixed` type so the
+    // arm-body arithmetic dispatch routes through the `Fixed` opcodes.
+    // `+`, `-`, `%`, and unary `-` on `Fixed` need no fraction-bit
+    // count and reuse the generic checked opcodes, whose VM dispatch
+    // now carries `Fixed` arms. When `n` is `None` (the default-form
+    // `Fixed` surface), it falls back to `DEFAULT_FIXED_FRAC_BITS`,
+    // matching the plain-arithmetic path; the AST is normalized to a
+    // concrete count before compilation in practice.
+    let operand = match op_expr {
+        Expr::BinOp { left, .. } => Some(left.as_ref()),
+        Expr::UnaryOp { operand, .. } => Some(operand.as_ref()),
+        _ => None,
+    };
+    let operand_fixed_n: Option<u8> =
+        operand
+            .and_then(|e| infer_expr_type(fc, e))
+            .and_then(|t| match t {
+                TypeExpr::Prim(PrimType::Fixed(n), _) => {
+                    Some(n.unwrap_or(crate::typecheck::DEFAULT_FIXED_FRAC_BITS))
+                }
+                _ => None,
+            });
+
     // Emit the checked operation. Each path leaves [high, low,
     // flag] on the stack.
     match op_expr {
@@ -4690,7 +4717,10 @@ fn compile_checked(
         } => {
             compile_expr(fc, left)?;
             compile_expr(fc, right)?;
-            fc.emit(Op::CheckedMul);
+            match operand_fixed_n {
+                Some(n) => fc.emit(Op::CheckedFixedMul(n)),
+                None => fc.emit(Op::CheckedMul),
+            };
         }
         Expr::BinOp {
             op: BinOp::Div,
@@ -4700,7 +4730,10 @@ fn compile_checked(
         } => {
             compile_expr(fc, left)?;
             compile_expr(fc, right)?;
-            fc.emit(Op::CheckedDiv);
+            match operand_fixed_n {
+                Some(n) => fc.emit(Op::CheckedFixedDiv(n)),
+                None => fc.emit(Op::CheckedDiv),
+            };
         }
         Expr::BinOp {
             op: BinOp::Mod,
@@ -4723,7 +4756,7 @@ fn compile_checked(
         _ => {
             return Err(CompileError {
                 message: alloc::string::String::from(
-                    "checked-overflow construct currently supports only `+`, `-`, `*`, `/`, `%`, and unary `-` on Word operands",
+                    "checked-overflow construct currently supports only the operators `+`, `-`, `*`, `/`, `%`, and unary `-`",
                 ),
                 span: *span,
             });
@@ -4732,16 +4765,17 @@ fn compile_checked(
 
     // The operand type determines the type bound by the arm
     // patterns: `Word` for a Word construct, `Byte` for a Byte
-    // construct. The type checker has already constrained the
-    // operands to one of these.
-    let operand = match op_expr {
-        Expr::BinOp { left, .. } => Some(left.as_ref()),
-        Expr::UnaryOp { operand, .. } => Some(operand.as_ref()),
-        _ => None,
-    };
-    let bind_ty = match operand.and_then(|e| infer_expr_type(fc, e)) {
-        Some(TypeExpr::Prim(PrimType::Byte, _)) => TypeExpr::Prim(PrimType::Byte, *span),
-        _ => TypeExpr::Prim(PrimType::Word, *span),
+    // construct, and `Fixed<n>` for a Fixed construct (so the
+    // arm-body arithmetic dispatch routes through the Fixed opcodes).
+    // The type checker has already constrained the operands to one of
+    // these. `operand` was bound above for the Fixed-opcode dispatch.
+    let bind_ty = if let Some(n) = operand_fixed_n {
+        TypeExpr::Prim(PrimType::Fixed(Some(n)), *span)
+    } else {
+        match operand.and_then(|e| infer_expr_type(fc, e)) {
+            Some(TypeExpr::Prim(PrimType::Byte, _)) => TypeExpr::Prim(PrimType::Byte, *span),
+            _ => TypeExpr::Prim(PrimType::Word, *span),
+        }
     };
 
     // Stack: [low, high, flag]. Stash to temporary locals. The

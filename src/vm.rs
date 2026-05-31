@@ -5007,6 +5007,160 @@ mod tests {
         assert_eq!(val, Value::Float(3.0));
     }
 
+    // B35 P3d-iii: Fixed checked arithmetic. `6Fixed<16>` has raw
+    // bits `6 << 16 = 393216`. Fixed is signed, so its admissibility
+    // mirrors Word; its arms bind a single result like Byte/Float;
+    // and `*`/`/` route through the Q-format-aware opcodes that carry
+    // the fraction-bit shift. Overflow/underflow wrap (the wrapping
+    // default), unlike the saturating plain `FixedMul`/`FixedDiv`.
+
+    #[test]
+    fn checked_fixed_div_zero_divisor_binds_numerator() {
+        // 6 / 0 reifies as zero_divisor; the numerator (raw 393216)
+        // binds through the single pattern.
+        let val = run_expect(
+            "fn main() -> Fixed<16> {\n\
+                6Fixed<16> / 0Fixed<16> {\n\
+                    ok(q) => q,\n\
+                    zero_divisor(n) => n,\n\
+                }\n\
+             }",
+            &[],
+        );
+        assert_eq!(val, Value::Fixed(393216));
+    }
+
+    #[test]
+    fn checked_fixed_div_ok_in_range() {
+        // 6 / 2 = 3; raw 3 << 16 = 196608.
+        let val = run_expect(
+            "fn main() -> Fixed<16> {\n\
+                6Fixed<16> / 2Fixed<16> {\n\
+                    ok(q) => q,\n\
+                    zero_divisor(n) => n,\n\
+                }\n\
+             }",
+            &[],
+        );
+        assert_eq!(val, Value::Fixed(196608));
+    }
+
+    #[test]
+    fn checked_fixed_div_unhandled_zero_traps() {
+        // An unhandled zero divisor traps as DivisionByZero, matching
+        // the contract that a partial operation with no in-band result
+        // traps when unhandled.
+        let err = run_program(
+            "fn main() -> Fixed<16> {\n\
+                6Fixed<16> / 0Fixed<16> {\n\
+                    ok(q) => q,\n\
+                }\n\
+             }",
+            &[],
+        )
+        .unwrap_err();
+        assert!(matches!(err, VmError::DivisionByZero));
+    }
+
+    #[test]
+    fn checked_fixed_mod_zero_divisor_binds_numerator() {
+        let val = run_expect(
+            "fn main() -> Fixed<16> {\n\
+                6Fixed<16> % 0Fixed<16> {\n\
+                    ok(r) => r,\n\
+                    zero_divisor(n) => n,\n\
+                }\n\
+             }",
+            &[],
+        );
+        assert_eq!(val, Value::Fixed(393216));
+    }
+
+    #[test]
+    fn checked_fixed_mul_overflow_routes_overflow() {
+        // raw(16777216Fixed<16>) = 2^24 << 16 = 2^40; the Q-format
+        // product is 2^80 >> 16 = 2^64, which exceeds i64::MAX, so the
+        // overflow arm fires. The sentinel distinguishes it from ok.
+        let val = run_expect(
+            "fn main() -> Fixed<16> {\n\
+                16777216Fixed<16> * 16777216Fixed<16> {\n\
+                    ok(v) => v,\n\
+                    overflow(_) => 1Fixed<16>,\n\
+                    underflow(_) => 2Fixed<16>,\n\
+                }\n\
+             }",
+            &[],
+        );
+        assert_eq!(val, Value::Fixed(65536));
+    }
+
+    #[test]
+    fn checked_fixed_mul_underflow_routes_underflow() {
+        // A large negative times a large positive lands below
+        // i64::MIN after the shift, routing to underflow.
+        let val = run_expect(
+            "fn main() -> Fixed<16> {\n\
+                let a = 0Fixed<16> - 16777216Fixed<16>;\n\
+                a * 16777216Fixed<16> {\n\
+                    ok(v) => v,\n\
+                    overflow(_) => 1Fixed<16>,\n\
+                    underflow(_) => 2Fixed<16>,\n\
+                }\n\
+             }",
+            &[],
+        );
+        assert_eq!(val, Value::Fixed(131072));
+    }
+
+    #[test]
+    fn checked_fixed_mul_unhandled_overflow_wraps() {
+        // With no overflow arm, the out-of-range product wraps to the
+        // low slot (2^64 mod 2^64 = 0) and does not trap.
+        let val = run_expect(
+            "fn main() -> Fixed<16> {\n\
+                16777216Fixed<16> * 16777216Fixed<16> {\n\
+                    ok(v) => v,\n\
+                }\n\
+             }",
+            &[],
+        );
+        assert_eq!(val, Value::Fixed(0));
+    }
+
+    #[test]
+    fn checked_fixed_add_overflow_routes_overflow() {
+        // raw(70368744177664Fixed<16>) = 2^46 << 16 = 2^62; the sum is
+        // 2^63, which exceeds i64::MAX, so the overflow arm fires.
+        let val = run_expect(
+            "fn main() -> Fixed<16> {\n\
+                let big = 70368744177664Fixed<16>;\n\
+                big + big {\n\
+                    ok(v) => v,\n\
+                    overflow(_) => 1Fixed<16>,\n\
+                    underflow(_) => 2Fixed<16>,\n\
+                }\n\
+             }",
+            &[],
+        );
+        assert_eq!(val, Value::Fixed(65536));
+    }
+
+    #[test]
+    fn checked_fixed_neg_ok() {
+        // Negation of `-5` is `5`; raw 5 << 16 = 327680.
+        let val = run_expect(
+            "fn main() -> Fixed<16> {\n\
+                let m = 0Fixed<16> - 5Fixed<16>;\n\
+                -m {\n\
+                    ok(v) => v,\n\
+                    overflow(_) => 1Fixed<16>,\n\
+                }\n\
+             }",
+            &[],
+        );
+        assert_eq!(val, Value::Fixed(327680));
+    }
+
     // The next three checked-overflow tests embed integer literals
     // (4294967296 = 2^32, large guard values, literal-high patterns)
     // sized for an i64 Word. Under any of the `narrow-word-*`

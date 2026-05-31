@@ -3809,10 +3809,26 @@ fn type_of_expr(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError> {
             let is_word = types_compatible(ctx, &inner_ty, &Type::Word);
             let is_byte = !is_word && types_compatible(ctx, &inner_ty, &Type::Byte);
             let is_float = !is_word && !is_byte && types_compatible(ctx, &inner_ty, &Type::Float);
-            if !is_word && !is_byte && !is_float {
+            // `Fixed` carries a fraction-bit count, so it cannot be
+            // matched against a fixed `Type` constant; resolve the
+            // operand type through the substitution and match it
+            // structurally (B35 P3d-iii). `Fixed` is signed, so its
+            // outcome admissibility mirrors `Word`; the distinction
+            // is that its arms bind a single result like `Byte` and
+            // `Float`.
+            let fixed_frac_bits: Option<u8> = if !is_word && !is_byte && !is_float {
+                match strip_labels(inner_ty.apply(&ctx.subst)) {
+                    Type::Fixed(n) => Some(n),
+                    _ => None,
+                }
+            } else {
+                None
+            };
+            let is_fixed = fixed_frac_bits.is_some();
+            if !is_word && !is_byte && !is_float && !is_fixed {
                 return Err(TypeError::new(
                     alloc::format!(
-                        "checked-overflow construct expects a Word, Byte, or Float arithmetic operation, got {}",
+                        "checked-overflow construct expects a Word, Byte, Float, or Fixed arithmetic operation, got {}",
                         inner_ty.display()
                     ),
                     *span,
@@ -3822,6 +3838,8 @@ fn type_of_expr(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError> {
                 Type::Byte
             } else if is_float {
                 Type::Float
+            } else if let Some(n) = fixed_frac_bits {
+                Type::Fixed(n)
             } else {
                 Type::Word
             };
@@ -3881,12 +3899,19 @@ fn type_of_expr(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError> {
             // `overflow` and `zero_divisor`; `%` admits `zero_divisor`.
             // For the unsigned `Byte` type: `+` and `*` admit
             // `overflow`; `-` admits `underflow`; `/` and `%` admit
-            // `zero_divisor`. `ok` is admissible for every operator. An
-            // arm whose outcome cannot arise is a compile error.
+            // `zero_divisor`. The signed `Fixed` type mirrors `Word`
+            // (it is signed and `Q`-format arithmetic can overflow or
+            // underflow in either direction), differing only in that
+            // its arms bind a single result; it therefore reuses the
+            // `Word` admissibility branch below. `ok` is admissible for
+            // every operator. An arm whose outcome cannot arise is a
+            // compile error.
             let type_name = if is_byte {
                 "Byte"
             } else if is_float {
                 "Float"
+            } else if is_fixed {
+                "Fixed"
             } else {
                 "Word"
             };
@@ -3954,7 +3979,10 @@ fn type_of_expr(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError> {
                 // binds a single result.
                 if let CheckedArmKind::Overflow(_, l) | CheckedArmKind::Underflow(_, l) = &arm.kind
                 {
-                    let wants_single = is_byte || is_float;
+                    // `Byte`, `Float`, and `Fixed` arms bind a single
+                    // result; only the signed `Word` arm binds the
+                    // high and low halves `(h, l)`.
+                    let wants_single = is_byte || is_float || is_fixed;
                     if wants_single && l.is_some() {
                         return Err(TypeError::new(
                             alloc::format!(
@@ -4876,6 +4904,68 @@ mod tests {
             .unwrap_err();
         assert!(
             err.message.contains("modulo") && err.message.contains("Float"),
+            "{}",
+            err.message
+        );
+    }
+
+    // B35 P3d-iii: Fixed checked arithmetic. Fixed is signed, so it
+    // admits the same outcomes as Word, but binds a single result.
+
+    #[test]
+    fn checked_fixed_div_zero_divisor_typechecks() {
+        check_src(
+            "fn main() -> Fixed<16> { let y = 6Fixed<16> / 0Fixed<16> { ok(q) => q, zero_divisor(n) => n }; y }",
+        )
+        .expect("Fixed checked division with a zero_divisor arm should typecheck");
+    }
+
+    #[test]
+    fn checked_fixed_overflow_single_pattern_typechecks() {
+        check_src(
+            "fn main() -> Fixed<16> { let y = 3Fixed<16> * 4Fixed<16> { ok(v) => v, overflow(w) => w }; y }",
+        )
+        .expect("Fixed checked multiply with a single-pattern overflow arm should typecheck");
+    }
+
+    #[test]
+    fn checked_fixed_overflow_two_patterns_rejected() {
+        // The two-pattern (h, l) form is the Word shape; Fixed binds a
+        // single result.
+        let err = check_src(
+            "fn main() -> Fixed<16> { let y = 3Fixed<16> * 4Fixed<16> { ok(v) => v, overflow(h, l) => h }; y }",
+        )
+        .unwrap_err();
+        assert!(err.message.contains("single result"), "{}", err.message);
+    }
+
+    #[test]
+    fn checked_fixed_nan_arm_rejected() {
+        // Fixed arithmetic never produces NaN.
+        let err = check_src(
+            "fn main() -> Fixed<16> { let y = 6Fixed<16> / 2Fixed<16> { ok(q) => q, nan(_) => 0Fixed<16> }; y }",
+        )
+        .unwrap_err();
+        assert!(
+            err.message.contains("not admissible")
+                && err.message.contains("nan")
+                && err.message.contains("Fixed"),
+            "{}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn checked_fixed_zero_divisor_rejected_on_addition() {
+        // Addition has no zero divisor.
+        let err = check_src(
+            "fn main() -> Fixed<16> { let y = 3Fixed<16> + 4Fixed<16> { ok(v) => v, zero_divisor(_) => 0Fixed<16> }; y }",
+        )
+        .unwrap_err();
+        assert!(
+            err.message.contains("not admissible")
+                && err.message.contains("zero_divisor")
+                && err.message.contains("Fixed"),
             "{}",
             err.message
         );

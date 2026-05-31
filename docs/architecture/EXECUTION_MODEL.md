@@ -195,7 +195,7 @@ The 24-bit operand field of each opcode record is interpreted by the opcode's op
 | `(u16, u8)` inline | Bytes 1-2 hold the `u16` (little-endian). Byte 3 holds the `u8`. Carried by `Call`, `CallVerifiedNative`, `CallExternalNative`. |
 | Compound `(u16, u16)`, `(u16, u16, u8)` | Bytes 1-3 hold a 24-bit little-endian index into the operand pool (up to `1 << 24` entries). Carried by `GetDataIndexed`, `SetDataIndexed`, `IsEnum`, `NewEnum`. |
 
-65 of 69 opcodes carry their operand inline in the 4-byte record. Four opcodes — `GetDataIndexed`, `SetDataIndexed`, `IsEnum` (`(u16, u16)`), and `NewEnum` (`(u16, u16, u8)`) — reference the operand pool because their payload exceeds three bytes.
+67 of 71 opcodes carry their operand inline in the 4-byte record. Four opcodes — `GetDataIndexed`, `SetDataIndexed`, `IsEnum` (`(u16, u16)`), and `NewEnum` (`(u16, u16, u8)`) — reference the operand pool because their payload exceeds three bytes.
 
 #### Operand pool
 
