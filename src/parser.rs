@@ -1272,7 +1272,7 @@ impl<'a> Parser<'a> {
         matches!(
             self.peek_ahead(1),
             TokenKind::Overflow | TokenKind::Underflow
-        ) || matches!(self.peek_ahead(1), TokenKind::LowerIdent(s) if s == "ok" || s == "invalid_index" || s == "invalid_newtype")
+        ) || matches!(self.peek_ahead(1), TokenKind::LowerIdent(s) if s == "ok" || s == "invalid_index" || s == "invalid_newtype" || s == "payload_discriminant" || s == "invalid_discriminant")
     }
 
     fn parse_checked_arms_after(&mut self, op_expr: Expr) -> Result<Expr, ParseError> {
@@ -1319,6 +1319,15 @@ impl<'a> Parser<'a> {
                 Ok(crate::ast::Pattern::Wildcard(tok.span))
             }
             TokenKind::LowerIdent(name) => {
+                self.bump();
+                Ok(crate::ast::Pattern::Variable(name.clone(), tok.span))
+            }
+            // An upper-case identifier names an enum variant in the
+            // discriminant-to-enum construct's `ok` and
+            // `payload_discriminant` arms (B35 P6). It is stored as a
+            // `Variable`; the type checker distinguishes a variant
+            // name from a binder by the leading-character case.
+            TokenKind::UpperIdent(name) => {
                 self.bump();
                 Ok(crate::ast::Pattern::Variable(name.clone(), tok.span))
             }
@@ -1407,9 +1416,23 @@ impl<'a> Parser<'a> {
                 self.expect(&TokenKind::RParen)?;
                 Ok(crate::ast::CheckedArmKind::InvalidNewtype(p))
             }
+            TokenKind::LowerIdent(name) if name == "payload_discriminant" => {
+                self.bump();
+                self.expect(&TokenKind::LParen)?;
+                let p = self.parse_checked_arm_pattern()?;
+                self.expect(&TokenKind::RParen)?;
+                Ok(crate::ast::CheckedArmKind::PayloadDiscriminant(p))
+            }
+            TokenKind::LowerIdent(name) if name == "invalid_discriminant" => {
+                self.bump();
+                self.expect(&TokenKind::LParen)?;
+                let p = self.parse_checked_arm_pattern()?;
+                self.expect(&TokenKind::RParen)?;
+                Ok(crate::ast::CheckedArmKind::InvalidDiscriminant(p))
+            }
             other => Err(ParseError {
                 message: alloc::format!(
-                    "expected `ok(pattern)`, `overflow(...)`, `underflow(...)`, `zero_divisor(numerator)`, `nan(result)`, `invalid_index(index)`, or `invalid_newtype(value)`, found {:?}",
+                    "expected `ok(pattern)`, `overflow(...)`, `underflow(...)`, `zero_divisor(numerator)`, `nan(result)`, `invalid_index(index)`, `invalid_newtype(value)`, `payload_discriminant(Variant)`, or `invalid_discriminant(raw)`, found {:?}",
                     other
                 ),
                 span: self.peek_span(),

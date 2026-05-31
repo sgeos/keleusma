@@ -811,6 +811,20 @@ pub enum CheckedArmKind {
     /// Optional; an unhandled failure traps as
     /// `VmError::RefinementFailed`.
     InvalidNewtype(Pattern),
+    /// `payload_discriminant(Variant)`: in a discriminant-to-enum
+    /// conversion, names a payload-bearing variant whose payload the
+    /// arm body supplies, or `payload_discriminant(_)` as a catch-all
+    /// over the remaining payload variants. The pattern is an
+    /// upper-case variant name (`Pattern::Variable`) or a wildcard.
+    /// Admissible only on a `Word as Enum` conversion (B35 P6).
+    /// Coverage of every payload-bearing variant is mandatory.
+    PayloadDiscriminant(Pattern),
+    /// `invalid_discriminant(raw)`: in a discriminant-to-enum
+    /// conversion, catches a `Word` that matches no variant. The
+    /// single pattern binds the raw `Word`. Admissible only on a
+    /// `Word as Enum` conversion (B35 P6). Optional; an unhandled
+    /// invalid discriminant traps as `VmError::EnumVariantUnmapped`.
+    InvalidDiscriminant(Pattern),
 }
 
 impl Expr {

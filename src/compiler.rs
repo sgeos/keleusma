@@ -2631,6 +2631,19 @@ fn infer_expr_type(fc: &FuncCompiler, expr: &Expr) -> Option<TypeExpr> {
             }
         }
         Expr::UnaryOp { operand, .. } => infer_expr_type(fc, operand),
+        // The discriminant-to-enum construct (B35 P6) yields the
+        // target enum type, so a `let`-bound result carries the enum
+        // type for subsequent type-directed operations (e.g. a later
+        // `as Word` cast).
+        Expr::Checked { op_expr, .. } => match op_expr.as_ref() {
+            Expr::Cast {
+                target: TypeExpr::Named(n, args, sp),
+                ..
+            } if fc.type_info.enum_variant_order.contains_key(n) => {
+                Some(TypeExpr::Named(n.clone(), args.clone(), *sp))
+            }
+            _ => None,
+        },
         _ => None,
     }
 }
@@ -4674,6 +4687,20 @@ fn compile_checked(
     {
         return compile_checked_newtype(fc, op_expr, name, &args[0], arms, span);
     }
+    // The discriminant-to-enum construct (B35 P6): a `Word as Enum`
+    // cast with outcome arms lowers to a per-variant discriminant
+    // dispatch.
+    if let Expr::Cast {
+        expr: inner,
+        target,
+        ..
+    } = op_expr
+        && let TypeExpr::Named(enum_name, _, _) = target
+        && fc.type_info.enum_variant_order.contains_key(enum_name)
+    {
+        let enum_name = enum_name.clone();
+        return compile_checked_discriminant(fc, inner, &enum_name, arms, span);
+    }
 
     // Determine the operand expression and, when it is `Fixed`, its
     // fraction-bit count (B35 P3d-iii). The multiply and divide paths
@@ -4839,10 +4866,13 @@ fn compile_checked(
             // is compiled by `compile_checked_index`; reaching it here
             // means the type checker admitted it on an arithmetic
             // operation, which is an internal inconsistency.
-            CheckedArmKind::InvalidIndex(_) | CheckedArmKind::InvalidNewtype(_) => {
+            CheckedArmKind::InvalidIndex(_)
+            | CheckedArmKind::InvalidNewtype(_)
+            | CheckedArmKind::PayloadDiscriminant(_)
+            | CheckedArmKind::InvalidDiscriminant(_) => {
                 return Err(CompileError {
                     message: alloc::string::String::from(
-                        "internal error: indexing or newtype-construction arm on an arithmetic checked construct",
+                        "internal error: non-arithmetic outcome arm on an arithmetic checked construct",
                     ),
                     span: *span,
                 });
@@ -5255,6 +5285,210 @@ fn compile_checked_newtype(
     if let Some(breaks) = fc.loop_breaks.last_mut() {
         breaks.push(default_break);
     }
+
+    let endloop_addr = fc.emit(Op::EndLoop(0));
+    let after_loop = (loop_addr + 1) as u16;
+    if let Op::EndLoop(a) = &mut fc.chunk.ops[endloop_addr] {
+        *a = after_loop;
+    }
+    let after_endloop = fc.chunk.ops.len() as u16;
+    if let Op::Loop(a) = &mut fc.chunk.ops[loop_addr] {
+        *a = after_endloop;
+    }
+    fc.exit_loop();
+
+    Ok(())
+}
+
+/// Compile the discriminant-to-enum construct `discriminant as Enum {
+/// ok(Variant) => ..., payload_discriminant(Variant) => ...,
+/// invalid_discriminant(raw) => ... }` (B35 P6). The lowering needs
+/// no new opcode: it evaluates the `Word` discriminant once, then for
+/// each variant emits `if discriminant == variant_discriminant {
+/// <action> }`. A unit variant's action is the matching `ok` arm
+/// body, a generic `ok` body binding the variant value, or the
+/// variant value itself when no `ok` arm covers it. A payload
+/// variant's action is the matching `payload_discriminant` arm body.
+/// An unmatched discriminant runs the `invalid_discriminant` arm or
+/// traps with `TrapKind::EnumVariantUnmapped`.
+fn compile_checked_discriminant(
+    fc: &mut FuncCompiler,
+    inner: &Expr,
+    enum_name: &str,
+    arms: &[crate::ast::CheckedArm],
+    span: &Span,
+) -> Result<(), CompileError> {
+    use crate::ast::{CheckedArmKind, Pattern};
+
+    // Variant-name extraction: an upper-case `Variable` names a
+    // variant; lower-case or `_` is a binder or catch-all.
+    fn variant_name(p: &Pattern) -> Option<&str> {
+        match p {
+            Pattern::Variable(name, _) if name.chars().next().is_some_and(|c| c.is_uppercase()) => {
+                Some(name)
+            }
+            _ => None,
+        }
+    }
+
+    // Resolve, for each kind of arm, the body to emit per variant.
+    // `ok` specific arms by variant name; the first generic `ok`
+    // (lower-case binder or `_`); `payload_discriminant` specific arms
+    // by variant name; the first `payload_discriminant(_)` catch-all;
+    // and the `invalid_discriminant` arm.
+    let mut ok_specific: BTreeMap<&str, &crate::ast::CheckedArm> = BTreeMap::new();
+    let mut ok_generic: Option<&crate::ast::CheckedArm> = None;
+    let mut payload_specific: BTreeMap<&str, &crate::ast::CheckedArm> = BTreeMap::new();
+    let mut payload_catchall: Option<&crate::ast::CheckedArm> = None;
+    let mut invalid_arm: Option<&crate::ast::CheckedArm> = None;
+    for arm in arms {
+        match &arm.kind {
+            CheckedArmKind::Ok(p) => match variant_name(p) {
+                Some(v) => {
+                    ok_specific.insert(v, arm);
+                }
+                None => {
+                    if ok_generic.is_none() {
+                        ok_generic = Some(arm);
+                    }
+                }
+            },
+            CheckedArmKind::PayloadDiscriminant(p) => match variant_name(p) {
+                Some(v) => {
+                    payload_specific.insert(v, arm);
+                }
+                None => {
+                    if payload_catchall.is_none() {
+                        payload_catchall = Some(arm);
+                    }
+                }
+            },
+            CheckedArmKind::InvalidDiscriminant(_) if invalid_arm.is_none() => {
+                invalid_arm = Some(arm);
+            }
+            _ => {}
+        }
+    }
+
+    // Evaluate the discriminant once into a temporary.
+    let suffix = span.start;
+    let temp = fc.declare_local(&alloc::format!("__disc_{}", suffix));
+    compile_expr(fc, inner)?;
+    fc.emit(Op::SetLocal(temp));
+
+    // Snapshot the variant table (name, discriminant) in declaration
+    // order, and the per-variant arity from the payload-field map.
+    let variants: Vec<(String, i64)> = fc
+        .type_info
+        .enum_variant_order
+        .get(enum_name)
+        .cloned()
+        .unwrap_or_default();
+    let e_const = fc.add_string_constant(enum_name);
+
+    let loop_addr = fc.emit(Op::Loop(0));
+    fc.enter_loop();
+
+    for (vname, disc) in &variants {
+        let arity = fc
+            .type_info
+            .enums
+            .get(enum_name)
+            .and_then(|m| m.get(vname))
+            .map(|fields| fields.len())
+            .unwrap_or(0);
+
+        fc.begin_scope();
+        // if discriminant == this variant's discriminant
+        fc.emit(Op::GetLocal(temp));
+        let disc_const = fc.add_constant(Value::Int(*disc));
+        fc.emit(Op::Const(disc_const));
+        fc.emit(Op::CmpEq);
+        let fail = fc.emit_jump(Op::If(0));
+
+        if arity == 0 {
+            // Unit variant. Specific `ok` overrides; else a generic
+            // `ok` binds the variant value and runs its body; else the
+            // variant converts to itself.
+            if let Some(arm) = ok_specific.get(vname.as_str()) {
+                compile_expr(fc, &arm.body)?;
+            } else if let Some(arm) = ok_generic {
+                let v_const = fc.add_string_constant(vname);
+                fc.emit(Op::NewEnum(e_const, v_const, 0));
+                match &arm.kind {
+                    CheckedArmKind::Ok(Pattern::Variable(bind, _)) => {
+                        let slot = fc.declare_local_typed(
+                            bind,
+                            Some(TypeExpr::Named(
+                                alloc::string::String::from(enum_name),
+                                Vec::new(),
+                                *span,
+                            )),
+                        );
+                        fc.emit(Op::SetLocal(slot));
+                    }
+                    // Wildcard generic `ok`: discard the value.
+                    _ => {
+                        fc.emit(Op::PopN(1));
+                    }
+                }
+                compile_expr(fc, &arm.body)?;
+            } else {
+                // No `ok` arm: the unit variant converts to itself.
+                let v_const = fc.add_string_constant(vname);
+                fc.emit(Op::NewEnum(e_const, v_const, 0));
+            }
+        } else {
+            // Payload variant. The body constructs the value; a
+            // specific arm wins over the catch-all. The type checker
+            // guarantees one of them exists.
+            let arm = payload_specific
+                .get(vname.as_str())
+                .copied()
+                .or(payload_catchall);
+            match arm {
+                Some(arm) => compile_expr(fc, &arm.body)?,
+                None => {
+                    return Err(CompileError {
+                        message: alloc::format!(
+                            "internal error: payload-bearing variant `{}` is uncovered in a discriminant-to-enum conversion",
+                            vname
+                        ),
+                        span: *span,
+                    });
+                }
+            }
+        }
+
+        let break_addr = fc.emit(Op::Break(0));
+        if let Some(breaks) = fc.loop_breaks.last_mut() {
+            breaks.push(break_addr);
+        }
+        fc.patch_jump(fail);
+        fc.emit(Op::EndIf);
+        fc.end_scope();
+    }
+
+    // No variant matched. Run the `invalid_discriminant` arm (binding
+    // the raw `Word`) or trap with EnumVariantUnmapped.
+    fc.begin_scope();
+    if let Some(arm) = invalid_arm {
+        if let CheckedArmKind::InvalidDiscriminant(Pattern::Variable(bind, _)) = &arm.kind {
+            let slot = fc.declare_local_typed(bind, Some(TypeExpr::Prim(PrimType::Word, *span)));
+            fc.emit(Op::GetLocal(temp));
+            fc.emit(Op::SetLocal(slot));
+        }
+        compile_expr(fc, &arm.body)?;
+        let break_addr = fc.emit(Op::Break(0));
+        if let Some(breaks) = fc.loop_breaks.last_mut() {
+            breaks.push(break_addr);
+        }
+    } else {
+        fc.emit(Op::Trap(
+            crate::bytecode::TrapKind::EnumVariantUnmapped.code(),
+        ));
+    }
+    fc.end_scope();
 
     let endloop_addr = fc.emit(Op::EndLoop(0));
     let after_loop = (loop_addr + 1) as u16;

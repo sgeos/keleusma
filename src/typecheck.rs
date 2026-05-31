@@ -2027,7 +2027,9 @@ fn checked_arm_is_catchall(kind: &crate::ast::CheckedArmKind) -> bool {
         | CheckedArmKind::ZeroDivisor(p)
         | CheckedArmKind::Nan(p)
         | CheckedArmKind::InvalidIndex(p)
-        | CheckedArmKind::InvalidNewtype(p) => is_catchall_pat(p),
+        | CheckedArmKind::InvalidNewtype(p)
+        | CheckedArmKind::PayloadDiscriminant(p)
+        | CheckedArmKind::InvalidDiscriminant(p) => is_catchall_pat(p),
         CheckedArmKind::Overflow(h, l) | CheckedArmKind::Underflow(h, l) => {
             // A `None` second pattern (the Byte single-pattern form)
             // covers its slot unconditionally.
@@ -2062,6 +2064,8 @@ fn check_checked_index(
             CheckedArmKind::ZeroDivisor(_) => Some("zero_divisor"),
             CheckedArmKind::Nan(_) => Some("nan"),
             CheckedArmKind::InvalidNewtype(_) => Some("invalid_newtype"),
+            CheckedArmKind::PayloadDiscriminant(_) => Some("payload_discriminant"),
+            CheckedArmKind::InvalidDiscriminant(_) => Some("invalid_discriminant"),
         };
         if let Some(name) = inadmissible {
             return Err(TypeError::new(
@@ -2199,6 +2203,8 @@ fn check_checked_newtype(
             CheckedArmKind::ZeroDivisor(_) => Some("zero_divisor"),
             CheckedArmKind::Nan(_) => Some("nan"),
             CheckedArmKind::InvalidIndex(_) => Some("invalid_index"),
+            CheckedArmKind::PayloadDiscriminant(_) => Some("payload_discriminant"),
+            CheckedArmKind::InvalidDiscriminant(_) => Some("invalid_discriminant"),
         };
         if let Some(name) = inadmissible {
             return Err(TypeError::new(
@@ -2283,6 +2289,237 @@ fn check_checked_newtype(
         }
     }
     Ok(result_ty.apply(&ctx.subst))
+}
+
+/// Whether a checked-arm pattern names an enum variant: an
+/// upper-case `Variable`. The discriminant-to-enum construct (B35 P6)
+/// uses upper-case identifiers for `ok` and `payload_discriminant`
+/// variant names and lower-case identifiers (or `_`) for binders and
+/// catch-alls.
+fn checked_arm_variant_name(p: &Pattern) -> Option<&str> {
+    if let Pattern::Variable(name, _) = p
+        && name.chars().next().is_some_and(|c| c.is_uppercase())
+    {
+        Some(name)
+    } else {
+        None
+    }
+}
+
+/// Type-check the discriminant-to-enum construct `discriminant as
+/// EnumType { ok(Variant) => ..., payload_discriminant(Variant) =>
+/// ..., invalid_discriminant(raw) => ... }` (B35 P6). The source must
+/// be a `Word`. An `ok(Variant)` arm overrides a unit variant; a
+/// generic `ok(v)`/`ok(_)` arm post-processes any unit variant; a
+/// `payload_discriminant(Variant)` arm supplies a payload variant's
+/// payload; and `invalid_discriminant(raw)` catches an unmapped
+/// discriminant. Coverage of every payload-bearing variant is
+/// mandatory. Unit variants convert to themselves when no arm covers
+/// them; an unhandled invalid discriminant traps.
+fn check_checked_discriminant(
+    ctx: &mut Ctx,
+    op_expr: &mut Expr,
+    enum_name: &str,
+    arms: &mut [crate::ast::CheckedArm],
+    span: &Span,
+) -> Result<Type, TypeError> {
+    use crate::ast::CheckedArmKind;
+    // The source of the cast must be a `Word`.
+    let inner_ty = match op_expr {
+        Expr::Cast { expr, .. } => type_of_expr(ctx, expr)?,
+        _ => {
+            return Err(TypeError::new(
+                alloc::string::String::from(
+                    "internal error: discriminant-to-enum construct on a non-cast operation",
+                ),
+                *span,
+            ));
+        }
+    };
+    if !types_compatible(ctx, &strip_labels(inner_ty.clone()), &Type::Word) {
+        return Err(TypeError::new(
+            alloc::format!(
+                "discriminant-to-enum conversion requires a Word source, got {}",
+                inner_ty.display()
+            ),
+            *span,
+        ));
+    }
+    let enum_ty = match op_expr {
+        Expr::Cast { target, .. } => strip_labels(ctx.resolve_type(target)),
+        _ => unreachable!(),
+    };
+
+    // Variant classification. `ctx.enums` maps each variant to its
+    // payload field types; an empty list is a unit variant.
+    let variants = match ctx.enums.get(enum_name).cloned() {
+        Some(v) => v,
+        None => {
+            return Err(TypeError::new(
+                alloc::format!("`{}` is not a declared enum", enum_name),
+                *span,
+            ));
+        }
+    };
+    let payload_variants: BTreeSet<String> = variants
+        .iter()
+        .filter(|(_, fields)| !fields.is_empty())
+        .map(|(name, _)| name.clone())
+        .collect();
+
+    // Validate the arm vocabulary and per-variant admissibility,
+    // collecting the payload variants covered for the mandatory-
+    // coverage check.
+    let mut payload_covered: BTreeSet<String> = BTreeSet::new();
+    let mut payload_catchall = false;
+    for arm in arms.iter() {
+        match &arm.kind {
+            CheckedArmKind::Ok(p) => {
+                if let Some(vname) = checked_arm_variant_name(p) {
+                    match variants.get(vname) {
+                        None => {
+                            return Err(TypeError::new(
+                                alloc::format!(
+                                    "`ok` names `{}`, which is not a variant of enum `{}`",
+                                    vname,
+                                    enum_name
+                                ),
+                                arm.span,
+                            ));
+                        }
+                        Some(fields) if !fields.is_empty() => {
+                            return Err(TypeError::new(
+                                alloc::format!(
+                                    "`ok` names the payload-bearing variant `{}`; use `payload_discriminant` for it",
+                                    vname
+                                ),
+                                arm.span,
+                            ));
+                        }
+                        Some(_) => {}
+                    }
+                }
+                // A lower-case `Variable` or `_` is a generic blanket
+                // `ok` over unit variants; no further checks.
+            }
+            CheckedArmKind::PayloadDiscriminant(p) => {
+                if let Some(vname) = checked_arm_variant_name(p) {
+                    if !payload_variants.contains(vname) {
+                        return Err(TypeError::new(
+                            alloc::format!(
+                                "`payload_discriminant` names `{}`, which is not a payload-bearing variant of enum `{}`",
+                                vname,
+                                enum_name
+                            ),
+                            arm.span,
+                        ));
+                    }
+                    payload_covered.insert(alloc::string::String::from(vname));
+                } else if matches!(p, Pattern::Wildcard(_)) {
+                    payload_catchall = true;
+                } else {
+                    return Err(TypeError::new(
+                        alloc::string::String::from(
+                            "`payload_discriminant` takes a variant name or `_`",
+                        ),
+                        arm.span,
+                    ));
+                }
+            }
+            CheckedArmKind::InvalidDiscriminant(p) => {
+                if checked_arm_variant_name(p).is_some() {
+                    return Err(TypeError::new(
+                        alloc::string::String::from(
+                            "`invalid_discriminant` takes a binder or `_`, not a variant name",
+                        ),
+                        arm.span,
+                    ));
+                }
+            }
+            other => {
+                let n = match other {
+                    CheckedArmKind::Overflow(_, _) => "overflow",
+                    CheckedArmKind::Underflow(_, _) => "underflow",
+                    CheckedArmKind::ZeroDivisor(_) => "zero_divisor",
+                    CheckedArmKind::Nan(_) => "nan",
+                    CheckedArmKind::InvalidIndex(_) => "invalid_index",
+                    CheckedArmKind::InvalidNewtype(_) => "invalid_newtype",
+                    _ => "this",
+                };
+                return Err(TypeError::new(
+                    alloc::format!(
+                        "the `{}` arm is not admissible for a discriminant-to-enum conversion; only `ok`, `payload_discriminant`, and `invalid_discriminant` are admissible",
+                        n
+                    ),
+                    arm.span,
+                ));
+            }
+        }
+    }
+
+    // Mandatory coverage: every payload-bearing variant must be
+    // covered, either specifically or through a `_` catch-all,
+    // because the discriminant alone cannot reconstruct the payload.
+    if !payload_catchall {
+        let missing: Vec<String> = payload_variants
+            .iter()
+            .filter(|v| !payload_covered.contains(*v))
+            .cloned()
+            .collect();
+        if !missing.is_empty() {
+            return Err(TypeError::new(
+                alloc::format!(
+                    "discriminant-to-enum conversion does not cover the payload-bearing variant(s) {}; add a `payload_discriminant` arm for each, or a `payload_discriminant(_)` catch-all",
+                    missing.join(", ")
+                ),
+                *span,
+            ));
+        }
+    }
+
+    // Type-check arm bodies. An `ok` generic binder binds the
+    // converted unit-variant value at the enum type; an
+    // `invalid_discriminant` binder binds the raw `Word`. Specific
+    // `ok` and `payload_discriminant` arms bind nothing. Every body
+    // yields the enum type.
+    for arm in arms.iter_mut() {
+        ctx.push_scope();
+        match &arm.kind {
+            CheckedArmKind::Ok(p) if checked_arm_variant_name(p).is_none() => {
+                bind_checked_pattern(ctx, p, enum_ty.clone());
+            }
+            CheckedArmKind::InvalidDiscriminant(p) => {
+                bind_checked_pattern(ctx, p, Type::Word);
+            }
+            _ => {}
+        }
+        if let Some(guard) = arm.guard.as_mut() {
+            let guard_ty = type_of_expr(ctx, guard)?;
+            if !types_compatible(ctx, &strip_labels(guard_ty.clone()), &Type::Bool) {
+                ctx.pop_scope();
+                return Err(TypeError::new(
+                    alloc::format!(
+                        "discriminant-to-enum arm guard must be Bool, got {}",
+                        guard_ty.display()
+                    ),
+                    arm.span,
+                ));
+            }
+        }
+        let body_ty = type_of_expr(ctx, &mut arm.body)?;
+        ctx.pop_scope();
+        if !types_compatible(ctx, &body_ty, &enum_ty) {
+            return Err(TypeError::new(
+                alloc::format!(
+                    "discriminant-to-enum arm produces {} which does not unify with the target enum type {}",
+                    body_ty.display(),
+                    enum_ty.display()
+                ),
+                arm.span,
+            ));
+        }
+    }
+    Ok(enum_ty)
 }
 
 /// Bind a checked-arm pattern's variables into the current scope at
@@ -4061,6 +4298,18 @@ fn type_of_expr(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError> {
                 let name = name.clone();
                 return check_checked_newtype(ctx, op_expr, &name, arms, span);
             }
+            // The discriminant-to-enum construct (B35 P6): when the
+            // guarded operation is a `Word as Enum` cast, the
+            // admissible arms are `ok` (override a unit variant),
+            // `payload_discriminant` (supply a payload variant's
+            // payload), and `invalid_discriminant` (catch an unmapped
+            // discriminant).
+            if let Expr::Cast { target, .. } = op_expr.as_ref()
+                && let Type::Enum(enum_name, _) = strip_labels(ctx.resolve_type(target))
+            {
+                let enum_name = enum_name.clone();
+                return check_checked_discriminant(ctx, op_expr, &enum_name, arms, span);
+            }
             // The guarded operation must be a single arithmetic
             // operation on Word operands. V0.2 supports the four
             // standard binary ops plus unary negation; other
@@ -4246,6 +4495,8 @@ fn type_of_expr(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError> {
                     // constructs route away before reaching this path.
                     CheckedArmKind::InvalidIndex(_) => (false, "invalid_index"),
                     CheckedArmKind::InvalidNewtype(_) => (false, "invalid_newtype"),
+                    CheckedArmKind::PayloadDiscriminant(_) => (false, "payload_discriminant"),
+                    CheckedArmKind::InvalidDiscriminant(_) => (false, "invalid_discriminant"),
                 };
                 if !admissible {
                     return Err(TypeError::new(
@@ -4305,9 +4556,13 @@ fn type_of_expr(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError> {
                     CheckedArmKind::Underflow(_, _) => underflow_catchall_seen,
                     CheckedArmKind::ZeroDivisor(_) => zero_divisor_catchall_seen,
                     CheckedArmKind::Nan(_) => nan_catchall_seen,
-                    // Unreachable on arithmetic; indexing and newtype
-                    // construction route earlier.
-                    CheckedArmKind::InvalidIndex(_) | CheckedArmKind::InvalidNewtype(_) => false,
+                    // Unreachable on arithmetic; indexing, newtype
+                    // construction, and discriminant conversion route
+                    // earlier.
+                    CheckedArmKind::InvalidIndex(_)
+                    | CheckedArmKind::InvalidNewtype(_)
+                    | CheckedArmKind::PayloadDiscriminant(_)
+                    | CheckedArmKind::InvalidDiscriminant(_) => false,
                 };
                 if class_catchall_seen {
                     return Err(TypeError::new(
@@ -4325,7 +4580,10 @@ fn type_of_expr(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError> {
                         CheckedArmKind::Underflow(_, _) => underflow_catchall_seen = true,
                         CheckedArmKind::ZeroDivisor(_) => zero_divisor_catchall_seen = true,
                         CheckedArmKind::Nan(_) => nan_catchall_seen = true,
-                        CheckedArmKind::InvalidIndex(_) | CheckedArmKind::InvalidNewtype(_) => {}
+                        CheckedArmKind::InvalidIndex(_)
+                        | CheckedArmKind::InvalidNewtype(_)
+                        | CheckedArmKind::PayloadDiscriminant(_)
+                        | CheckedArmKind::InvalidDiscriminant(_) => {}
                     }
                 }
             }
@@ -4362,7 +4620,9 @@ fn type_of_expr(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError> {
                     | CheckedArmKind::ZeroDivisor(p)
                     | CheckedArmKind::Nan(p)
                     | CheckedArmKind::InvalidIndex(p)
-                    | CheckedArmKind::InvalidNewtype(p) => {
+                    | CheckedArmKind::InvalidNewtype(p)
+                    | CheckedArmKind::PayloadDiscriminant(p)
+                    | CheckedArmKind::InvalidDiscriminant(p) => {
                         bind_checked_pattern(ctx, p, operand_ty.clone());
                     }
                     CheckedArmKind::Overflow(h, l) | CheckedArmKind::Underflow(h, l) => {
@@ -5369,6 +5629,78 @@ mod tests {
         let err = check_src(&src).unwrap_err();
         assert!(
             err.message.contains("non-exhaustive on `ok`"),
+            "{}",
+            err.message
+        );
+    }
+
+    // B35 P6: the discriminant-to-enum construct.
+
+    const DISC_ENUM_PRELUDE: &str = "enum Color { Red = 0, Green = 1, Custom(Word) = 2 }\n";
+
+    #[test]
+    fn checked_discriminant_typechecks() {
+        let src = alloc::format!(
+            "{}fn main() -> Color {{ 0 as Color {{ ok(Red) => Color::Green, payload_discriminant(Custom) => Color::Custom(0), invalid_discriminant(r) => Color::Red }} }}",
+            DISC_ENUM_PRELUDE
+        );
+        check_src(&src).expect("discriminant-to-enum construct should typecheck");
+    }
+
+    #[test]
+    fn checked_discriminant_payload_in_ok_rejected() {
+        let src = alloc::format!(
+            "{}fn main() -> Color {{ 0 as Color {{ ok(Custom) => Color::Red, payload_discriminant(_) => Color::Red }} }}",
+            DISC_ENUM_PRELUDE
+        );
+        let err = check_src(&src).unwrap_err();
+        assert!(
+            err.message.contains("payload-bearing variant `Custom`"),
+            "{}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn checked_discriminant_unit_in_payload_rejected() {
+        let src = alloc::format!(
+            "{}fn main() -> Color {{ 0 as Color {{ payload_discriminant(Red) => Color::Red, payload_discriminant(Custom) => Color::Custom(0) }} }}",
+            DISC_ENUM_PRELUDE
+        );
+        let err = check_src(&src).unwrap_err();
+        assert!(
+            err.message.contains("not a payload-bearing variant"),
+            "{}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn checked_discriminant_uncovered_payload_rejected() {
+        let src = alloc::format!(
+            "{}fn main() -> Color {{ 0 as Color {{ ok(Red) => Color::Green }} }}",
+            DISC_ENUM_PRELUDE
+        );
+        let err = check_src(&src).unwrap_err();
+        assert!(
+            err.message
+                .contains("does not cover the payload-bearing variant"),
+            "{}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn checked_discriminant_non_word_source_rejected() {
+        // The source of the conversion must be a Word. A Byte source
+        // is rejected (Byte is available without the floats feature).
+        let src = alloc::format!(
+            "{}fn main() -> Color {{ 5Byte as Color {{ payload_discriminant(_) => Color::Red }} }}",
+            DISC_ENUM_PRELUDE
+        );
+        let err = check_src(&src).unwrap_err();
+        assert!(
+            err.message.contains("requires a Word source"),
             "{}",
             err.message
         );

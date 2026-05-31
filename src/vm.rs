@@ -5276,6 +5276,68 @@ mod tests {
         assert!(matches!(err, VmError::RefinementFailed), "{:?}", err);
     }
 
+    // B35 P6: the discriminant-to-enum construct `d as Enum { ok(V)
+    // => ..., payload_discriminant(V) => ..., invalid_discriminant(r)
+    // => ... }`. A unit variant converts to itself by default; an `ok`
+    // arm overrides; a payload variant's payload comes from the
+    // payload_discriminant arm body; an unmapped discriminant runs the
+    // invalid_discriminant arm or traps.
+
+    const DISC_ENUM: &str = "enum Color { Red = 0, Green = 1, Custom(Word) = 2 }\n";
+
+    #[test]
+    fn checked_discriminant_unit_converts_to_itself() {
+        // Discriminant 1 maps to the unit variant Green with no `ok`
+        // arm, so it converts to itself; the `as Word` reads it back.
+        let src = alloc::format!(
+            "{}fn main() -> Word {{ let c = 1 as Color {{ payload_discriminant(Custom) => Color::Custom(0), invalid_discriminant(r) => Color::Red }}; c as Word }}",
+            DISC_ENUM
+        );
+        assert_eq!(run_expect(&src, &[]), Value::Int(1));
+    }
+
+    #[test]
+    fn checked_discriminant_payload_arm_supplies_payload() {
+        let src = alloc::format!(
+            "{}fn main() -> Word {{ let c = 2 as Color {{ payload_discriminant(Custom) => Color::Custom(99), invalid_discriminant(r) => Color::Red }}; c as Word }}",
+            DISC_ENUM
+        );
+        // Custom has discriminant 2; the value reads back to 2.
+        assert_eq!(run_expect(&src, &[]), Value::Int(2));
+    }
+
+    #[test]
+    fn checked_discriminant_ok_override() {
+        // Discriminant 0 is Red; the ok(Red) arm overrides to Green.
+        let src = alloc::format!(
+            "{}fn main() -> Word {{ let c = 0 as Color {{ ok(Red) => Color::Green, payload_discriminant(Custom) => Color::Custom(0) }}; c as Word }}",
+            DISC_ENUM
+        );
+        assert_eq!(run_expect(&src, &[]), Value::Int(1));
+    }
+
+    #[test]
+    fn checked_discriminant_invalid_binds_raw() {
+        // Discriminant 7 maps to no variant; invalid_discriminant
+        // binds the raw Word and the body uses it.
+        let src = alloc::format!(
+            "{}fn main() -> Word {{ let c = 7 as Color {{ payload_discriminant(Custom) => Color::Custom(0), invalid_discriminant(r) => Color::Custom(r) }}; c as Word }}",
+            DISC_ENUM
+        );
+        // Custom discriminant is 2 regardless of payload.
+        assert_eq!(run_expect(&src, &[]), Value::Int(2));
+    }
+
+    #[test]
+    fn checked_discriminant_unhandled_invalid_traps() {
+        let src = alloc::format!(
+            "{}fn main() -> Color {{ 9 as Color {{ payload_discriminant(_) => Color::Red }} }}",
+            DISC_ENUM
+        );
+        let err = run_program(&src, &[]).unwrap_err();
+        assert!(matches!(err, VmError::EnumVariantUnmapped), "{:?}", err);
+    }
+
     // The next three checked-overflow tests embed integer literals
     // (4294967296 = 2^32, large guard values, literal-high patterns)
     // sized for an i64 Word. Under any of the `narrow-word-*`
