@@ -2017,7 +2017,9 @@ fn checked_arm_is_catchall(kind: &crate::ast::CheckedArmKind) -> bool {
     match kind {
         CheckedArmKind::Ok(p) | CheckedArmKind::ZeroDivisor(p) => is_catchall_pat(p),
         CheckedArmKind::Overflow(h, l) | CheckedArmKind::Underflow(h, l) => {
-            is_catchall_pat(h) && is_catchall_pat(l)
+            // A `None` second pattern (the Byte single-pattern form)
+            // covers its slot unconditionally.
+            is_catchall_pat(h) && l.as_ref().is_none_or(is_catchall_pat)
         }
     }
 }
@@ -3874,6 +3876,21 @@ fn type_of_expr(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError> {
                         arm.span,
                     ));
                 }
+                // `overflow`/`underflow` bind the high and low halves
+                // `(h, l)` on the `Word` construct. The single-pattern
+                // form is reserved for the Byte construct (B35 P3d),
+                // which is not yet admitted, so require two patterns.
+                if matches!(
+                    &arm.kind,
+                    CheckedArmKind::Overflow(_, None) | CheckedArmKind::Underflow(_, None)
+                ) {
+                    return Err(TypeError::new(
+                        alloc::string::String::from(
+                            "an `overflow` or `underflow` arm requires two patterns `(h, l)`",
+                        ),
+                        arm.span,
+                    ));
+                }
             }
             let mut ok_catchall_seen = false;
             let mut overflow_catchall_seen = false;
@@ -3940,7 +3957,9 @@ fn type_of_expr(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError> {
                     }
                     CheckedArmKind::Overflow(h, l) | CheckedArmKind::Underflow(h, l) => {
                         bind_checked_pattern(ctx, h);
-                        bind_checked_pattern(ctx, l);
+                        if let Some(l) = l {
+                            bind_checked_pattern(ctx, l);
+                        }
                     }
                 }
                 if let Some(guard) = arm.guard.as_mut() {

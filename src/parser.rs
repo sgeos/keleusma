@@ -1339,14 +1339,28 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// Parse the optional second pattern of an `overflow`/`underflow`
+    /// arm. `Word` operands use the two-pattern `(h, l)` form; `Byte`
+    /// operands use the single-pattern `(w)` form. The type checker
+    /// enforces the arity against the operand type.
+    fn parse_optional_second_checked_pattern(
+        &mut self,
+    ) -> Result<Option<crate::ast::Pattern>, ParseError> {
+        if self.at(&TokenKind::Comma) {
+            self.bump();
+            Ok(Some(self.parse_checked_arm_pattern()?))
+        } else {
+            Ok(None)
+        }
+    }
+
     fn parse_checked_arm_kind(&mut self) -> Result<crate::ast::CheckedArmKind, ParseError> {
         match self.peek().clone() {
             TokenKind::Overflow => {
                 self.bump();
                 self.expect(&TokenKind::LParen)?;
                 let h = self.parse_checked_arm_pattern()?;
-                self.expect(&TokenKind::Comma)?;
-                let l = self.parse_checked_arm_pattern()?;
+                let l = self.parse_optional_second_checked_pattern()?;
                 self.expect(&TokenKind::RParen)?;
                 Ok(crate::ast::CheckedArmKind::Overflow(h, l))
             }
@@ -1354,8 +1368,7 @@ impl<'a> Parser<'a> {
                 self.bump();
                 self.expect(&TokenKind::LParen)?;
                 let h = self.parse_checked_arm_pattern()?;
-                self.expect(&TokenKind::Comma)?;
-                let l = self.parse_checked_arm_pattern()?;
+                let l = self.parse_optional_second_checked_pattern()?;
                 self.expect(&TokenKind::RParen)?;
                 Ok(crate::ast::CheckedArmKind::Underflow(h, l))
             }

@@ -1686,7 +1686,11 @@ P3b is implemented. A `CheckedArmKind::ZeroDivisor(numerator)` arm is added acro
 
 P3c is implemented. The type checker now rejects an arm whose outcome cannot arise for the operator: `+`, `-`, and `*` admit `overflow` and `underflow`, unary `-` admits `overflow` only, `/` admits `overflow` and `zero_divisor`, and `%` admits `zero_divisor` only; `ok` is admissible for every operator. To make the runtime consistent with this table, `CheckedMod` no longer reports `i64::MIN % -1` as overflow; a remainder is always in range, so modulo produces only the `ok` and `zero_divisor` outcomes and the corner surfaces as an in-range `0`. The admissibility table is for the signed `Word` type; the per-operand-type generalization arrives with the Byte and Float extension.
 
-The remaining sub-phase P3d, the Byte and Float extension, and the phases P4 through P9 are pending.
+P3d is the Byte and Float extension, split into P3d-i Byte and P3d-ii Float. The design decisions are settled: a Byte `overflow`/`underflow` arm binds the single wrapped Byte result, written `overflow(w)`; a Float construct uses `ok`, `overflow` for positive infinity, `underflow` for negative infinity, and `nan`; Byte lands before Float.
+
+The P3d preparation refactor is implemented. The `CheckedArmKind::Overflow` and `Underflow` second pattern is now `Option<Pattern>`, so the two-pattern `Word` form is `Some` and the single-pattern Byte form is `None`; the parser accepts one or two patterns; the compiler binds the single-pattern form against the low slot and the two-pattern form against the high and low slots. This is behavior-neutral, since the type checker still requires the two-pattern form (only `Word` operands are admitted so far) and rejects the single-pattern form.
+
+The remaining P3d-i work is the Byte feature itself: the type checker admitting `Byte` operands with the unsigned admissibility table (`+` and `*` overflow, `-` underflow, `/` and `%` zero divisor, no unary negation), enforcing the single-pattern arity and binding the patterns at `Byte` type; the compiler binding at the operand type; and the virtual machine computing Byte-checked arithmetic in the `CheckedAdd`, `CheckedSub`, `CheckedMul`, `CheckedDiv`, and `CheckedMod` handlers, placing the wrapped Byte in the low slot. P3d-ii Float follows, then the phases P4 through P9.
 
 **Cross-references.**
 

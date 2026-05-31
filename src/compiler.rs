@@ -4759,8 +4759,13 @@ fn compile_checked(
         // Class-flag check.
         let (class_flag, single_pattern, h_pattern, l_pattern) = match &arm.kind {
             CheckedArmKind::Ok(p) => (0_i64, Some(p), None, None),
-            CheckedArmKind::Overflow(h, l) => (1_i64, None, Some(h), Some(l)),
-            CheckedArmKind::Underflow(h, l) => (2_i64, None, Some(h), Some(l)),
+            // Word overflow/underflow bind two halves (high, low).
+            CheckedArmKind::Overflow(h, Some(l)) => (1_i64, None, Some(h), Some(l)),
+            CheckedArmKind::Underflow(h, Some(l)) => (2_i64, None, Some(h), Some(l)),
+            // Byte overflow/underflow bind a single wrapped result,
+            // which the checked Byte op places in the low slot.
+            CheckedArmKind::Overflow(p, None) => (1_i64, Some(p), None, None),
+            CheckedArmKind::Underflow(p, None) => (2_i64, Some(p), None, None),
             // Zero divisor: flag 3, the numerator bound through the
             // single pattern against the low slot (where the checked
             // division and modulo place it).

@@ -780,12 +780,15 @@ pub enum CheckedArmKind {
     /// `ok(p)`: in-range result; the single pattern matches the
     /// result `Word`.
     Ok(Pattern),
-    /// `overflow(h, l)`: positive overflow; the patterns match the
-    /// high and low halves of the `i128` intermediate.
-    Overflow(Pattern, Pattern),
-    /// `underflow(h, l)`: negative overflow; same destructuring as
-    /// `Overflow`.
-    Underflow(Pattern, Pattern),
+    /// `overflow(h, l)`: positive overflow. On `Word` operands the
+    /// two patterns match the high and low halves of the `i128`
+    /// intermediate. On `Byte` operands the single pattern (the
+    /// second is `None`) matches the wrapped `Byte` result.
+    Overflow(Pattern, Option<Pattern>),
+    /// `underflow(h, l)`: negative overflow; same shape as
+    /// `Overflow`, two patterns on `Word` and a single wrapped-result
+    /// pattern on `Byte`.
+    Underflow(Pattern, Option<Pattern>),
     /// `zero_divisor(numerator)`: a division or modulo by zero. The
     /// single pattern matches the numerator. Admissible only on `/`
     /// and `%`. An unhandled zero divisor traps as a division by
