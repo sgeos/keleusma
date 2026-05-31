@@ -4203,6 +4203,23 @@ mod tests {
     }
 
     #[test]
+    fn checked_overflow_without_arm_wraps_by_default() {
+        // B35 P3: with no `overflow` arm, a positive overflow defaults
+        // to the two's-complement wrapped result. `Word::MAX + 1`
+        // wraps to `Word::MIN`.
+        let val = run_expect(
+            "fn main() -> Word {\n\
+                let y = 9223372036854775807 + 1 {\n\
+                    ok(v) => v,\n\
+                };\n\
+                y\n\
+             }",
+            &[],
+        );
+        assert_eq!(val, Value::Int(i64::MIN));
+    }
+
+    #[test]
     fn checked_overflow_arm_returns_saturate_max() {
         // A positive overflow (Word::MAX + 1) dispatches to the
         // overflow arm; `saturate_max` evaluates to Word::MAX.

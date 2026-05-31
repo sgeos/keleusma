@@ -3856,22 +3856,13 @@ fn type_of_expr(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError> {
                     *span,
                 ));
             }
-            if !overflow_catchall_seen {
-                return Err(TypeError::new(
-                    alloc::string::String::from(
-                        "checked-overflow construct is non-exhaustive on `overflow`: the last `overflow` arm must be an unguarded catch-all (bare variables or wildcards)",
-                    ),
-                    *span,
-                ));
-            }
-            if !underflow_catchall_seen {
-                return Err(TypeError::new(
-                    alloc::string::String::from(
-                        "checked-overflow construct is non-exhaustive on `underflow`: the last `underflow` arm must be an unguarded catch-all (bare variables or wildcards)",
-                    ),
-                    *span,
-                ));
-            }
+            // The `overflow` and `underflow` classes are optional
+            // (B35 P3). An omitted or non-exhaustive class defaults to
+            // two's-complement wrapping, which the compiler supplies.
+            // The catch-all-seen flags above remain in use only for
+            // the unreachable-arm check; they no longer gate
+            // exhaustiveness.
+            let _ = (overflow_catchall_seen, underflow_catchall_seen);
             // Type-check arm bodies. Each arm scope binds the
             // pattern variables to `Word`. The guard expression (if
             // present) is checked in the same scope and must be
@@ -4486,8 +4477,10 @@ mod tests {
     }
 
     #[test]
-    fn checked_overflow_requires_overflow_arm() {
-        let err = check_src(
+    fn checked_overflow_arm_is_optional() {
+        // B35 P3: the `overflow` class is optional. Omitting it
+        // typechecks; the missing class defaults to wrapping.
+        check_src(
             "fn main() -> Word {\n\
                 let y = 1 + 2 {\n\
                     underflow(_, _) => 0,\n\
@@ -4496,17 +4489,13 @@ mod tests {
                 y\n\
              }",
         )
-        .unwrap_err();
-        assert!(
-            err.message.contains("non-exhaustive on `overflow`"),
-            "unexpected error: {}",
-            err.message
-        );
+        .unwrap();
     }
 
     #[test]
-    fn checked_overflow_requires_underflow_arm() {
-        let err = check_src(
+    fn checked_underflow_arm_is_optional() {
+        // B35 P3: the `underflow` class is optional, likewise.
+        check_src(
             "fn main() -> Word {\n\
                 let y = 1 + 2 {\n\
                     overflow(_, _) => 0,\n\
@@ -4515,12 +4504,22 @@ mod tests {
                 y\n\
              }",
         )
-        .unwrap_err();
-        assert!(
-            err.message.contains("non-exhaustive on `underflow`"),
-            "unexpected error: {}",
-            err.message
-        );
+        .unwrap();
+    }
+
+    #[test]
+    fn checked_overflow_and_underflow_both_optional() {
+        // Only the `ok` class is required; both exceptional classes
+        // may be omitted and default to wrapping.
+        check_src(
+            "fn main() -> Word {\n\
+                let y = 1 + 2 {\n\
+                    ok(v) => v,\n\
+                };\n\
+                y\n\
+             }",
+        )
+        .unwrap();
     }
 
     #[test]

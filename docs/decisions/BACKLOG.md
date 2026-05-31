@@ -1678,7 +1678,11 @@ One behavioral change is recorded as open. The prior runtime trap message embedd
 
 P2 is implemented on the same branch as the `crate::zero_value` module, gated behind the `compile` feature because it operates on abstract-syntax-tree types. It provides `zero_value`, which returns the canonical zero value of any type as a `ConstValue`, and `lowest_valid`, which resolves a refined newtype's lowest valid value by the precedence above, namely a declared `with saturate_min`, then the minimum of the predicate's true set computed by reusing the compiler's `predicate_true_set` over the interval and lattice analysis, then none. The module is pure and operates on a borrowed `TypeRegistry` of declarations, so it is unit-tested in isolation. It has no runtime consumer yet, since the virtual machine traps rather than substituting a zero value, and native code generation is the intended consumer, so this is parallel infrastructure in the same sense as the B28 P0 and P1 scaffolding.
 
-The remaining phases P3 through P9 are pending.
+P3 is large enough to be split into sub-phases, since it modifies a working construct with many pinning tests and, for the zero-divisor outcome, the virtual-machine `(low, high, flag)` protocol. The sub-phases are P3a optional `overflow` and `underflow` arms with wrapping defaults, P3b the `zero_divisor` outcome for division and modulo, which reifies the divisor check the virtual machine currently traps on and thus changes the checked-op protocol, P3c per-operand-type admissibility so an inadmissible arm such as `underflow` on division is a compile error, and P3d the extension of the construct to `Byte` and `Float` operands with their own admissibility rules.
+
+P3a is implemented. The type checker now requires only an `ok` catch-all arm; the `overflow` and `underflow` classes are optional. When a class has no covering arm, the compiler emits a wrapping default: it pushes the `low` slot, which holds the in-range result for `ok` and the two's-complement wrapped result for `overflow` and `underflow`, so an unhandled outcome wraps rather than trapping. The defensive `CheckedArithNoArm` trap the compiler previously emitted is replaced by this default and is no longer reachable from the checked construct.
+
+The remaining sub-phases P3b through P3d and the phases P4 through P9 are pending.
 
 **Cross-references.**
 

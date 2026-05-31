@@ -4842,11 +4842,18 @@ fn compile_checked(
         }
     }
 
-    // Unreachable when the type checker has validated
-    // exhaustiveness; trap as a defensive measure.
-    fc.emit(Op::Trap(
-        crate::bytecode::TrapKind::CheckedArithNoArm.code(),
-    ));
+    // No user arm matched the outcome. The default behavior is to
+    // wrap: `low` holds the in-range result for the `ok` class and
+    // the two's-complement wrapped result for the `overflow` and
+    // `underflow` classes, so pushing it yields the wrapping default
+    // for any outcome class without a covering arm. The type checker
+    // still requires an `ok` catch-all, so this default covers the
+    // optional `overflow` and `underflow` classes.
+    fc.emit(Op::GetLocal(low_slot));
+    let default_break = fc.emit(Op::Break(0));
+    if let Some(breaks) = fc.loop_breaks.last_mut() {
+        breaks.push(default_break);
+    }
 
     let endloop_addr = fc.emit(Op::EndLoop(0));
     let after_loop = (loop_addr + 1) as u16;
