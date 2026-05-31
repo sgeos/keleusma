@@ -696,6 +696,34 @@ let result = x + y {
 };
 ````
 
+### Array Indexing Construct
+
+````
+index_construct = array_index '{' index_arm { ',' index_arm } [ ',' ] '}'
+index_arm      = index_kind [ 'when' expr ] '=>' expr
+index_kind     = 'ok' '(' arm_pattern ')'
+               | 'invalid_index' '(' arm_pattern ')'
+arm_pattern    = '_' | lower_ident | signed_int_lit
+````
+
+Guards an array index against an out-of-bounds access. The construct shares the arm-block syntax of the numeric overflow construct, attached to an array-index expression rather than an arithmetic operation. The `ok` arm binds the indexed element, and the `invalid_index` arm binds the offending index `Word`. An index is out of bounds when it is negative or not less than the array length. The `ok` class must have an unguarded catch-all arm. The `invalid_index` class is optional; an unhandled out-of-bounds index traps as `IndexOutOfBounds`, carrying the index and the length. The arithmetic outcome arms (`overflow`, `underflow`, `zero_divisor`, `nan`) are inadmissible on an index, and `invalid_index` is inadmissible on an arithmetic operation. Patterns are drawn from the same restricted subset, and an optional `when expr` guard is checked as `Bool`.
+
+Example:
+
+````
+let element = buffer[i] {
+    ok(v) => v,
+    invalid_index(_) => 0,
+};
+
+// Binding and reusing the offending index.
+let safe = table[i] {
+    ok(v) => v,
+    invalid_index(idx) when idx < 0 => 0,
+    invalid_index(idx) => table[idx % length(table)],
+};
+````
+
 ### Information-Flow Labels
 
 ````
