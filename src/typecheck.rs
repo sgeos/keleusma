@@ -3811,14 +3811,70 @@ fn type_of_expr(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError> {
                     *span,
                 ));
             }
-            // Validate arm structure. Each outcome class (ok,
-            // overflow, underflow) must have at least one arm, and
-            // the last covering arm per class must be an unguarded
-            // catch-all (bare variable or wildcard pattern in every
-            // position). Patterns are restricted to wildcard,
-            // variable, and integer literal; type unification on the
-            // arm scope catches mismatches in the literal case.
+            // Validate arm structure. The `ok` class must have an
+            // unguarded catch-all arm; `overflow` and `underflow` are
+            // optional and default to wrapping (B35 P3a); a
+            // `zero_divisor` arm handles a zero divisor on `/` and `%`
+            // (B35 P3b). The last covering arm per class must be an
+            // unguarded catch-all. Patterns are restricted to
+            // wildcard, variable, and integer literal; type
+            // unification on the arm scope catches mismatches in the
+            // literal case.
             use crate::ast::CheckedArmKind;
+
+            // Per-operator admissibility (B35 P3c). For the signed
+            // `Word` type: `+`, `-`, `*` admit `overflow` and
+            // `underflow`; unary `-` admits `overflow` only; `/`
+            // admits `overflow` and `zero_divisor`; `%` admits
+            // `zero_divisor` only. An arm whose outcome cannot arise
+            // for the operator is a compile error rather than dead
+            // code. `ok` is admissible for every operator.
+            #[derive(Clone, Copy)]
+            enum AdmissibleOp {
+                AddSubMul,
+                Neg,
+                Div,
+                Mod,
+            }
+            let (adm_op, op_desc) = match op_expr.as_ref() {
+                Expr::BinOp { op: BinOp::Add, .. } => (AdmissibleOp::AddSubMul, "`+`"),
+                Expr::BinOp { op: BinOp::Sub, .. } => (AdmissibleOp::AddSubMul, "`-`"),
+                Expr::BinOp { op: BinOp::Mul, .. } => (AdmissibleOp::AddSubMul, "`*`"),
+                Expr::BinOp { op: BinOp::Div, .. } => (AdmissibleOp::Div, "`/`"),
+                Expr::BinOp { op: BinOp::Mod, .. } => (AdmissibleOp::Mod, "`%`"),
+                // The `supported` check above guarantees unary `-`
+                // here; any other shape was already rejected.
+                _ => (AdmissibleOp::Neg, "unary `-`"),
+            };
+            for arm in arms.iter() {
+                let (admissible, arm_name) = match &arm.kind {
+                    CheckedArmKind::Ok(_) => (true, "ok"),
+                    CheckedArmKind::Overflow(_, _) => (
+                        matches!(
+                            adm_op,
+                            AdmissibleOp::AddSubMul | AdmissibleOp::Neg | AdmissibleOp::Div
+                        ),
+                        "overflow",
+                    ),
+                    CheckedArmKind::Underflow(_, _) => {
+                        (matches!(adm_op, AdmissibleOp::AddSubMul), "underflow")
+                    }
+                    CheckedArmKind::ZeroDivisor(_) => (
+                        matches!(adm_op, AdmissibleOp::Div | AdmissibleOp::Mod),
+                        "zero_divisor",
+                    ),
+                };
+                if !admissible {
+                    return Err(TypeError::new(
+                        alloc::format!(
+                            "the `{}` arm is not admissible for the {} operation: that outcome cannot arise",
+                            arm_name,
+                            op_desc
+                        ),
+                        arm.span,
+                    ));
+                }
+            }
             let mut ok_catchall_seen = false;
             let mut overflow_catchall_seen = false;
             let mut underflow_catchall_seen = false;
@@ -4553,12 +4609,56 @@ mod tests {
                 let y = -1 {\n\
                     ok(v) => v,\n\
                     overflow(_, _) => 0,\n\
-                    underflow(_, _) => 0,\n\
                 };\n\
                 y\n\
              }",
         )
         .expect("checked construct admits unary `-`");
+    }
+
+    #[test]
+    fn checked_underflow_arm_rejected_on_division() {
+        // B35 P3c: division cannot underflow, so an `underflow` arm
+        // on `/` is a compile error.
+        let err = check_src(
+            "fn main() -> Word { let y = 10 / 2 { ok(v) => v, underflow(_, _) => 0 }; y }",
+        )
+        .unwrap_err();
+        assert!(
+            err.message.contains("not admissible") && err.message.contains("underflow"),
+            "{}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn checked_overflow_arm_rejected_on_modulo() {
+        // Modulo never overflows, so an `overflow` arm on `%` is a
+        // compile error.
+        let err = check_src(
+            "fn main() -> Word { let y = 10 % 2 { ok(v) => v, overflow(_, _) => 0 }; y }",
+        )
+        .unwrap_err();
+        assert!(
+            err.message.contains("not admissible") && err.message.contains("overflow"),
+            "{}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn checked_zero_divisor_arm_rejected_on_addition() {
+        // Addition has no zero divisor, so a `zero_divisor` arm on
+        // `+` is a compile error.
+        let err = check_src(
+            "fn main() -> Word { let y = 1 + 2 { ok(v) => v, zero_divisor(_) => 0 }; y }",
+        )
+        .unwrap_err();
+        assert!(
+            err.message.contains("not admissible") && err.message.contains("zero_divisor"),
+            "{}",
+            err.message
+        );
     }
 
     #[test]

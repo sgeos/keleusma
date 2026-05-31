@@ -1684,7 +1684,9 @@ P3a is implemented. The type checker now requires only an `ok` catch-all arm; th
 
 P3b is implemented. A `CheckedArmKind::ZeroDivisor(numerator)` arm is added across the abstract syntax tree, parser, type checker, and compiler. The virtual machine's `CheckedDiv` and `CheckedMod` no longer trap on a zero divisor; they reify it as flag 3 with the numerator in the low slot. The compiled dispatch routes flag 3 to a `zero_divisor` arm when present, binding the numerator, and otherwise traps. The unhandled case uses a new `TrapKind::ZeroDivisor` that the virtual machine maps to `VmError::DivisionByZero`, so an unhandled zero divisor in a checked construct produces the same error as a plain division by zero. The change reuses the existing single-pattern binding, so the numerator binds exactly as an `ok` value does.
 
-The remaining sub-phases P3c, namely per-operand-type admissibility, and P3d, the Byte and Float extension, and the phases P4 through P9 are pending.
+P3c is implemented. The type checker now rejects an arm whose outcome cannot arise for the operator: `+`, `-`, and `*` admit `overflow` and `underflow`, unary `-` admits `overflow` only, `/` admits `overflow` and `zero_divisor`, and `%` admits `zero_divisor` only; `ok` is admissible for every operator. To make the runtime consistent with this table, `CheckedMod` no longer reports `i64::MIN % -1` as overflow; a remainder is always in range, so modulo produces only the `ok` and `zero_divisor` outcomes and the corner surfaces as an in-range `0`. The admissibility table is for the signed `Word` type; the per-operand-type generalization arrives with the Byte and Float extension.
+
+The remaining sub-phase P3d, the Byte and Float extension, and the phases P4 through P9 are pending.
 
 **Cross-references.**
 

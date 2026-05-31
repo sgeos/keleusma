@@ -3741,18 +3741,17 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                             crate::bytecode::GenericValue::Int(x),
                             crate::bytecode::GenericValue::Int(y),
                         ) => {
-                            // `i64::MIN % -1` overflows on the
-                            // underlying division step; the true
-                            // mathematical result is `0`. We
-                            // detect this corner by computing in
-                            // the widened type and report overflow
-                            // (flag=1) so the arm dispatch matches
-                            // the documented behaviour.
+                            // A remainder is always in range, including
+                            // the `i64::MIN % -1` corner whose true
+                            // result is `0`, so modulo never overflows
+                            // or underflows; the only non-`ok` outcome
+                            // is the zero divisor handled above. The
+                            // type checker forbids `overflow` and
+                            // `underflow` arms on `%` (B35 P3c).
                             let r = x.widen() % y.widen();
                             let high = <W as crate::word::Word>::from_wide_wrap(r.high_half());
                             let low = <W as crate::word::Word>::from_wide_wrap(r);
-                            let corner = x == W::MIN && y == W::from_i64_wrap(-1);
-                            let flag: i64 = if corner { 1 } else { 0 };
+                            let flag: i64 = 0;
                             sp!(self, crate::bytecode::GenericValue::Int(low));
                             sp!(self, crate::bytecode::GenericValue::Int(high));
                             sp!(
@@ -4333,7 +4332,6 @@ mod tests {
                 let y = -(m - 1) {\n\
                     ok(v) => v,\n\
                     overflow(_, _) => 1,\n\
-                    underflow(_, _) => 2,\n\
                 };\n\
                 y\n\
              }",
@@ -4351,7 +4349,6 @@ mod tests {
                 let y = 10 / 3 {\n\
                     ok(v) => v,\n\
                     overflow(_, _) => 0,\n\
-                    underflow(_, _) => 0,\n\
                 };\n\
                 y\n\
              }",
@@ -4379,7 +4376,6 @@ mod tests {
                 let y = m / (0 - 1) {\n\
                     ok(_) => 0,\n\
                     overflow(h, l) => h + l,\n\
-                    underflow(_, _) => 0 - 1,\n\
                 };\n\
                 y\n\
              }",
@@ -4395,25 +4391,22 @@ mod tests {
         feature = "narrow-word-32"
     )))]
     #[test]
-    fn checked_mod_min_by_neg_one_surfaces_corner() {
-        // `i64::MIN % -1` is mathematically `0` but the
-        // underlying division step overflows. The construct
-        // surfaces the corner through the overflow arm with high
-        // and low both zero (the mathematical result).
+    fn checked_mod_min_by_neg_one_is_in_range_zero() {
+        // `i64::MIN % -1` is mathematically `0`. A remainder is
+        // always in range, so modulo never overflows or underflows
+        // (B35 P3c forbids those arms on `%`); the corner surfaces
+        // through the `ok` arm as `0`.
         let val = run_expect(
             "fn main() -> Word {\n\
                 let m = 0 - 9223372036854775807 - 1;\n\
                 let y = m % (0 - 1) {\n\
-                    ok(_) => 0 - 1,\n\
-                    overflow(h, l) => h + l + 42,\n\
-                    underflow(_, _) => 0 - 1,\n\
+                    ok(r) => r,\n\
                 };\n\
                 y\n\
              }",
             &[],
         );
-        // h = 0, l = 0; the overflow arm body returns 0 + 0 + 42.
-        assert_eq!(val, Value::Int(42));
+        assert_eq!(val, Value::Int(0));
     }
 
     #[test]
@@ -4427,7 +4420,6 @@ mod tests {
                 let y = 10 / 0 {\n\
                     ok(v) => v,\n\
                     overflow(_, _) => 0,\n\
-                    underflow(_, _) => 0,\n\
                 };\n\
                 y\n\
              }",
