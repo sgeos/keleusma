@@ -221,7 +221,7 @@ pub use bytecode::{
     VALUE_SLOT_SIZE_BYTES, Value, nominal_op_cycles,
 };
 pub use float::Float;
-pub use keleusma_macros::KeleusmaType;
+pub use keleusma_macros::{KeleusmaError, KeleusmaType};
 pub use marshall::{IntoFallibleNativeFn, IntoNativeFn, KeleusmaType};
 pub use opaque::{HostOpaque, host_arc};
 #[cfg(feature = "verify")]

@@ -825,6 +825,12 @@ pub enum CheckedArmKind {
     /// `Word as Enum` conversion (B35 P6). Optional; an unhandled
     /// invalid discriminant traps as `VmError::EnumVariantUnmapped`.
     InvalidDiscriminant(Pattern),
+    /// `error(code)`: a fallible native call failed. The single
+    /// pattern binds the `Word` error code the native reported.
+    /// Admissible only when the guarded operation is a native call
+    /// (B35 P7). Optional; an unhandled native error propagates the
+    /// host failure as it would without the construct.
+    Error(Pattern),
 }
 
 impl Expr {

@@ -106,6 +106,73 @@ pub fn derive_keleusma_type(input: TokenStream) -> TokenStream {
     expanded.into()
 }
 
+/// Derive `From<E> for keleusma::VmError` for a fieldless
+/// (discriminant-only) enum, producing a
+/// [`keleusma::VmError::NativeErrorCode`] whose `code` is the
+/// variant's discriminant (B35 P7).
+///
+/// This is the host-side companion of the native-error `error(code)`
+/// construct. A fallible native registered with `register_fn_fallible`
+/// returns `Result<R, keleusma::VmError>`; with this derive a host can
+/// write `return Err(MyError::Variant.into())` (or use `?`), and the
+/// script-side `native(args) { ok(v) => ..., error(code) => ... }`
+/// construct binds the discriminant as `code`. Pairing the host enum's
+/// discriminants with a script-side `enum` lets `code as ScriptEnum {
+/// ... }` recover a structured error.
+///
+/// # Accepted inputs
+///
+/// - Enums all of whose variants are unit (fieldless), with implicit
+///   or explicit discriminants.
+///
+/// # Compile errors
+///
+/// - Non-enum types, and enums with any payload-bearing variant, are
+///   rejected: the `Word` error code is the variant discriminant, and
+///   only a fieldless enum casts to its discriminant.
+#[proc_macro_derive(KeleusmaError)]
+pub fn derive_keleusma_error(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+    let name = &input.ident;
+    let name_str = name.to_string();
+
+    let data = match &input.data {
+        Data::Enum(data) => data,
+        _ => {
+            return syn::Error::new_spanned(
+                &input,
+                "KeleusmaError can only be derived for fieldless enums",
+            )
+            .to_compile_error()
+            .into();
+        }
+    };
+    for v in &data.variants {
+        if !matches!(v.fields, Fields::Unit) {
+            return syn::Error::new_spanned(
+                v,
+                "KeleusmaError requires a fieldless (discriminant-only) enum; the Word error code is the variant discriminant",
+            )
+            .to_compile_error()
+            .into();
+        }
+    }
+
+    let expanded = quote! {
+        impl ::core::convert::From<#name> for ::keleusma::VmError {
+            fn from(e: #name) -> Self {
+                // A fieldless enum casts directly to its discriminant.
+                let code = e as i64;
+                ::keleusma::VmError::NativeErrorCode {
+                    code,
+                    message: ::alloc::format!("{} error code {}", #name_str, code),
+                }
+            }
+        }
+    };
+    expanded.into()
+}
+
 fn derive_struct_body(_name: &Ident, name_str: &str, data: &DataStruct) -> TokenStream2 {
     match &data.fields {
         Fields::Named(fields_named) => {

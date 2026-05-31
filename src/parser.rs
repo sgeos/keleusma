@@ -1272,7 +1272,7 @@ impl<'a> Parser<'a> {
         matches!(
             self.peek_ahead(1),
             TokenKind::Overflow | TokenKind::Underflow
-        ) || matches!(self.peek_ahead(1), TokenKind::LowerIdent(s) if s == "ok" || s == "invalid_index" || s == "invalid_newtype" || s == "payload_discriminant" || s == "invalid_discriminant")
+        ) || matches!(self.peek_ahead(1), TokenKind::LowerIdent(s) if s == "ok" || s == "invalid_index" || s == "invalid_newtype" || s == "payload_discriminant" || s == "invalid_discriminant" || s == "error")
     }
 
     fn parse_checked_arms_after(&mut self, op_expr: Expr) -> Result<Expr, ParseError> {
@@ -1430,9 +1430,16 @@ impl<'a> Parser<'a> {
                 self.expect(&TokenKind::RParen)?;
                 Ok(crate::ast::CheckedArmKind::InvalidDiscriminant(p))
             }
+            TokenKind::LowerIdent(name) if name == "error" => {
+                self.bump();
+                self.expect(&TokenKind::LParen)?;
+                let p = self.parse_checked_arm_pattern()?;
+                self.expect(&TokenKind::RParen)?;
+                Ok(crate::ast::CheckedArmKind::Error(p))
+            }
             other => Err(ParseError {
                 message: alloc::format!(
-                    "expected `ok(pattern)`, `overflow(...)`, `underflow(...)`, `zero_divisor(numerator)`, `nan(result)`, `invalid_index(index)`, `invalid_newtype(value)`, `payload_discriminant(Variant)`, or `invalid_discriminant(raw)`, found {:?}",
+                    "expected `ok(pattern)`, `overflow(...)`, `underflow(...)`, `zero_divisor(numerator)`, `nan(result)`, `invalid_index(index)`, `invalid_newtype(value)`, `payload_discriminant(Variant)`, `invalid_discriminant(raw)`, or `error(code)`, found {:?}",
                     other
                 ),
                 span: self.peek_span(),

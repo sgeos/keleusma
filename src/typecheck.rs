@@ -2029,7 +2029,8 @@ fn checked_arm_is_catchall(kind: &crate::ast::CheckedArmKind) -> bool {
         | CheckedArmKind::InvalidIndex(p)
         | CheckedArmKind::InvalidNewtype(p)
         | CheckedArmKind::PayloadDiscriminant(p)
-        | CheckedArmKind::InvalidDiscriminant(p) => is_catchall_pat(p),
+        | CheckedArmKind::InvalidDiscriminant(p)
+        | CheckedArmKind::Error(p) => is_catchall_pat(p),
         CheckedArmKind::Overflow(h, l) | CheckedArmKind::Underflow(h, l) => {
             // A `None` second pattern (the Byte single-pattern form)
             // covers its slot unconditionally.
@@ -2066,6 +2067,7 @@ fn check_checked_index(
             CheckedArmKind::InvalidNewtype(_) => Some("invalid_newtype"),
             CheckedArmKind::PayloadDiscriminant(_) => Some("payload_discriminant"),
             CheckedArmKind::InvalidDiscriminant(_) => Some("invalid_discriminant"),
+            CheckedArmKind::Error(_) => Some("error"),
         };
         if let Some(name) = inadmissible {
             return Err(TypeError::new(
@@ -2205,6 +2207,7 @@ fn check_checked_newtype(
             CheckedArmKind::InvalidIndex(_) => Some("invalid_index"),
             CheckedArmKind::PayloadDiscriminant(_) => Some("payload_discriminant"),
             CheckedArmKind::InvalidDiscriminant(_) => Some("invalid_discriminant"),
+            CheckedArmKind::Error(_) => Some("error"),
         };
         if let Some(name) = inadmissible {
             return Err(TypeError::new(
@@ -2520,6 +2523,125 @@ fn check_checked_discriminant(
         }
     }
     Ok(enum_ty)
+}
+
+/// Type-check the native-error construct `native(args) { ok(v) =>
+/// ..., error(code) => ... }` (B35 P7). The admissible arms are `ok`,
+/// binding the native's success value, and `error`, binding the
+/// `Word` error code a fallible native reported. The `ok` class must
+/// have an unguarded catch-all; `error` is optional, and an unhandled
+/// native error propagates as it would without the construct. `error`
+/// is admissible on any native call, since fallibility is not tracked
+/// at compile time; on an infallible native the arm is simply never
+/// taken.
+fn check_checked_native(
+    ctx: &mut Ctx,
+    op_expr: &mut Expr,
+    native_name: &str,
+    arms: &mut [crate::ast::CheckedArm],
+    span: &Span,
+) -> Result<Type, TypeError> {
+    use crate::ast::CheckedArmKind;
+    // Type-check the call itself; its type is the success value's type.
+    let ok_ty = type_of_expr(ctx, op_expr)?;
+    let _ = native_name;
+
+    // Vocabulary: only `ok` and `error`.
+    for arm in arms.iter() {
+        let inadmissible = match &arm.kind {
+            CheckedArmKind::Ok(_) | CheckedArmKind::Error(_) => None,
+            CheckedArmKind::Overflow(_, _) => Some("overflow"),
+            CheckedArmKind::Underflow(_, _) => Some("underflow"),
+            CheckedArmKind::ZeroDivisor(_) => Some("zero_divisor"),
+            CheckedArmKind::Nan(_) => Some("nan"),
+            CheckedArmKind::InvalidIndex(_) => Some("invalid_index"),
+            CheckedArmKind::InvalidNewtype(_) => Some("invalid_newtype"),
+            CheckedArmKind::PayloadDiscriminant(_) => Some("payload_discriminant"),
+            CheckedArmKind::InvalidDiscriminant(_) => Some("invalid_discriminant"),
+        };
+        if let Some(name) = inadmissible {
+            return Err(TypeError::new(
+                alloc::format!(
+                    "the `{}` arm is not admissible for a native call; only `ok` and `error` are admissible",
+                    name
+                ),
+                arm.span,
+            ));
+        }
+    }
+
+    // Unreachable-arm check per outcome class.
+    let mut ok_catchall_seen = false;
+    let mut error_catchall_seen = false;
+    for arm in arms.iter() {
+        let class_catchall_seen = match &arm.kind {
+            CheckedArmKind::Ok(_) => ok_catchall_seen,
+            CheckedArmKind::Error(_) => error_catchall_seen,
+            _ => false,
+        };
+        if class_catchall_seen {
+            return Err(TypeError::new(
+                alloc::string::String::from(
+                    "native-call arm is unreachable: a prior catch-all arm in the same outcome class already covers it",
+                ),
+                arm.span,
+            ));
+        }
+        if arm.guard.is_none() && checked_arm_is_catchall(&arm.kind) {
+            match &arm.kind {
+                CheckedArmKind::Ok(_) => ok_catchall_seen = true,
+                CheckedArmKind::Error(_) => error_catchall_seen = true,
+                _ => {}
+            }
+        }
+    }
+    if !ok_catchall_seen {
+        return Err(TypeError::new(
+            alloc::string::String::from(
+                "native-call construct is non-exhaustive on `ok`: the last `ok` arm must be an unguarded catch-all (bare variable or wildcard)",
+            ),
+            *span,
+        ));
+    }
+    let _ = error_catchall_seen;
+
+    // Type-check arm bodies. `ok` binds the success value; `error`
+    // binds the `Word` error code.
+    let result_ty = ctx.fresh();
+    for arm in arms.iter_mut() {
+        ctx.push_scope();
+        match &arm.kind {
+            CheckedArmKind::Ok(p) => bind_checked_pattern(ctx, p, ok_ty.clone()),
+            CheckedArmKind::Error(p) => bind_checked_pattern(ctx, p, Type::Word),
+            _ => {}
+        }
+        if let Some(guard) = arm.guard.as_mut() {
+            let guard_ty = type_of_expr(ctx, guard)?;
+            if !types_compatible(ctx, &strip_labels(guard_ty.clone()), &Type::Bool) {
+                ctx.pop_scope();
+                return Err(TypeError::new(
+                    alloc::format!(
+                        "native-call arm guard must be Bool, got {}",
+                        guard_ty.display()
+                    ),
+                    arm.span,
+                ));
+            }
+        }
+        let body_ty = type_of_expr(ctx, &mut arm.body)?;
+        ctx.pop_scope();
+        if !types_compatible(ctx, &body_ty, &result_ty) {
+            return Err(TypeError::new(
+                alloc::format!(
+                    "native-call arm produces {} which does not unify with the construct's result type {}",
+                    body_ty.display(),
+                    result_ty.apply(&ctx.subst).display()
+                ),
+                arm.span,
+            ));
+        }
+    }
+    Ok(result_ty.apply(&ctx.subst))
 }
 
 /// Bind a checked-arm pattern's variables into the current scope at
@@ -4310,6 +4432,16 @@ fn type_of_expr(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError> {
                 let enum_name = enum_name.clone();
                 return check_checked_discriminant(ctx, op_expr, &enum_name, arms, span);
             }
+            // The native-error construct (B35 P7): when the guarded
+            // operation is a native call, the admissible arms are
+            // `ok` (the success value) and `error` (the Word error
+            // code a fallible native reported).
+            if let Expr::Call { name, .. } = op_expr.as_ref()
+                && (ctx.natives.contains(name) || name.contains("::"))
+            {
+                let name = name.clone();
+                return check_checked_native(ctx, op_expr, &name, arms, span);
+            }
             // The guarded operation must be a single arithmetic
             // operation on Word operands. V0.2 supports the four
             // standard binary ops plus unary negation; other
@@ -4497,6 +4629,7 @@ fn type_of_expr(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError> {
                     CheckedArmKind::InvalidNewtype(_) => (false, "invalid_newtype"),
                     CheckedArmKind::PayloadDiscriminant(_) => (false, "payload_discriminant"),
                     CheckedArmKind::InvalidDiscriminant(_) => (false, "invalid_discriminant"),
+                    CheckedArmKind::Error(_) => (false, "error"),
                 };
                 if !admissible {
                     return Err(TypeError::new(
@@ -4557,12 +4690,13 @@ fn type_of_expr(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError> {
                     CheckedArmKind::ZeroDivisor(_) => zero_divisor_catchall_seen,
                     CheckedArmKind::Nan(_) => nan_catchall_seen,
                     // Unreachable on arithmetic; indexing, newtype
-                    // construction, and discriminant conversion route
-                    // earlier.
+                    // construction, discriminant conversion, and native
+                    // calls route earlier.
                     CheckedArmKind::InvalidIndex(_)
                     | CheckedArmKind::InvalidNewtype(_)
                     | CheckedArmKind::PayloadDiscriminant(_)
-                    | CheckedArmKind::InvalidDiscriminant(_) => false,
+                    | CheckedArmKind::InvalidDiscriminant(_)
+                    | CheckedArmKind::Error(_) => false,
                 };
                 if class_catchall_seen {
                     return Err(TypeError::new(
@@ -4583,7 +4717,8 @@ fn type_of_expr(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError> {
                         CheckedArmKind::InvalidIndex(_)
                         | CheckedArmKind::InvalidNewtype(_)
                         | CheckedArmKind::PayloadDiscriminant(_)
-                        | CheckedArmKind::InvalidDiscriminant(_) => {}
+                        | CheckedArmKind::InvalidDiscriminant(_)
+                        | CheckedArmKind::Error(_) => {}
                     }
                 }
             }
@@ -4622,7 +4757,8 @@ fn type_of_expr(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError> {
                     | CheckedArmKind::InvalidIndex(p)
                     | CheckedArmKind::InvalidNewtype(p)
                     | CheckedArmKind::PayloadDiscriminant(p)
-                    | CheckedArmKind::InvalidDiscriminant(p) => {
+                    | CheckedArmKind::InvalidDiscriminant(p)
+                    | CheckedArmKind::Error(p) => {
                         bind_checked_pattern(ctx, p, operand_ty.clone());
                     }
                     CheckedArmKind::Overflow(h, l) | CheckedArmKind::Underflow(h, l) => {
@@ -5701,6 +5837,41 @@ mod tests {
         let err = check_src(&src).unwrap_err();
         assert!(
             err.message.contains("requires a Word source"),
+            "{}",
+            err.message
+        );
+    }
+
+    // B35 P7: the native-error construct.
+
+    #[test]
+    fn checked_native_ok_and_error_typecheck() {
+        check_src(
+            "use host::f\nfn main() -> Word { host::f(1) { ok(v) => v, error(code) => code } }",
+        )
+        .expect("native-error construct should typecheck");
+    }
+
+    #[test]
+    fn checked_native_arithmetic_arm_rejected() {
+        let err = check_src(
+            "use host::f\nfn main() -> Word { host::f(1) { ok(v) => v, overflow(w) => w } }",
+        )
+        .unwrap_err();
+        assert!(
+            err.message.contains("not admissible") && err.message.contains("native call"),
+            "{}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn checked_native_non_exhaustive_ok_rejected() {
+        let err =
+            check_src("use host::f\nfn main() -> Word { host::f(1) { error(code) => code } }")
+                .unwrap_err();
+        assert!(
+            err.message.contains("non-exhaustive on `ok`"),
             "{}",
             err.message
         );

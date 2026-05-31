@@ -4701,6 +4701,13 @@ fn compile_checked(
         let enum_name = enum_name.clone();
         return compile_checked_discriminant(fc, inner, &enum_name, arms, span);
     }
+    // The native-error construct (B35 P7): a native call with outcome
+    // arms reifies a soft host failure into an `error(code)` arm.
+    if let Expr::Call { name, args, .. } = op_expr
+        && fc.native_map.contains_key(name)
+    {
+        return compile_checked_native(fc, op_expr, name, args, arms, span);
+    }
 
     // Determine the operand expression and, when it is `Fixed`, its
     // fraction-bit count (B35 P3d-iii). The multiply and divide paths
@@ -4869,7 +4876,8 @@ fn compile_checked(
             CheckedArmKind::InvalidIndex(_)
             | CheckedArmKind::InvalidNewtype(_)
             | CheckedArmKind::PayloadDiscriminant(_)
-            | CheckedArmKind::InvalidDiscriminant(_) => {
+            | CheckedArmKind::InvalidDiscriminant(_)
+            | CheckedArmKind::Error(_) => {
                 return Err(CompileError {
                     message: alloc::string::String::from(
                         "internal error: non-arithmetic outcome arm on an arithmetic checked construct",
@@ -5489,6 +5497,166 @@ fn compile_checked_discriminant(
         ));
     }
     fc.end_scope();
+
+    let endloop_addr = fc.emit(Op::EndLoop(0));
+    let after_loop = (loop_addr + 1) as u16;
+    if let Op::EndLoop(a) = &mut fc.chunk.ops[endloop_addr] {
+        *a = after_loop;
+    }
+    let after_endloop = fc.chunk.ops.len() as u16;
+    if let Op::Loop(a) = &mut fc.chunk.ops[loop_addr] {
+        *a = after_endloop;
+    }
+    fc.exit_loop();
+
+    Ok(())
+}
+
+/// Compile the native-error construct `native(args) { ok(v) => ...,
+/// error(code) => ... }` (B35 P7). The lowering needs no new opcode:
+/// when an `error` arm is present it sets the error-reify flag (the
+/// high bit of the call opcode's argument-count byte) so the VM
+/// pushes `(value, flag)` instead of propagating a soft host failure;
+/// the construct then dispatches `ok` (flag 0, the success value) and
+/// `error` (flag 1, the `Word` error code). Without an `error` arm the
+/// call is unmodified and a native error propagates as it would
+/// without the construct.
+fn compile_checked_native(
+    fc: &mut FuncCompiler,
+    op_expr: &Expr,
+    native_name: &str,
+    args: &[Expr],
+    arms: &[crate::ast::CheckedArm],
+    span: &Span,
+) -> Result<(), CompileError> {
+    use crate::ast::{CheckedArmKind, Pattern};
+
+    let ok_ty = infer_expr_type(fc, op_expr).unwrap_or(TypeExpr::Prim(PrimType::Word, *span));
+    let word_ty = TypeExpr::Prim(PrimType::Word, *span);
+    let has_error_arm = arms
+        .iter()
+        .any(|a| matches!(a.kind, CheckedArmKind::Error(_)));
+
+    if args.len() >= 0x80 {
+        return Err(CompileError {
+            message: alloc::string::String::from(
+                "a native call in an error-handling construct may take at most 127 arguments",
+            ),
+            span: *span,
+        });
+    }
+
+    // Emit the arguments and the native call. The reify flag is set in
+    // the high bit of the argument count only when an `error` arm is
+    // present.
+    for arg in args {
+        compile_expr(fc, arg)?;
+    }
+    let mut argc = args.len() as u8;
+    if has_error_arm {
+        argc |= 0x80;
+    }
+    let idx = *fc.native_map.get(native_name).ok_or_else(|| CompileError {
+        message: alloc::format!("unregistered native: {}", native_name),
+        span: *span,
+    })?;
+    let is_external = fc
+        .native_externals
+        .get(native_name)
+        .copied()
+        .unwrap_or(false);
+    if is_external {
+        fc.emit(Op::CallExternalNative(idx, argc));
+    } else {
+        fc.emit(Op::CallVerifiedNative(idx, argc));
+    }
+
+    let suffix = span.start;
+    let value_slot = fc.declare_local(&alloc::format!("__nat_val_{}", suffix));
+    let flag_slot = fc.declare_local(&alloc::format!("__nat_flag_{}", suffix));
+    if has_error_arm {
+        // Reified call left (value, flag) on the stack; flag is on top.
+        fc.emit(Op::SetLocal(flag_slot));
+        fc.emit(Op::SetLocal(value_slot));
+    } else {
+        // Plain call left the single result; the flag is always ok.
+        fc.emit(Op::SetLocal(value_slot));
+        let zero_idx = fc.add_constant(Value::Int(0));
+        fc.emit(Op::Const(zero_idx));
+        fc.emit(Op::SetLocal(flag_slot));
+    }
+
+    let loop_addr = fc.emit(Op::Loop(0));
+    fc.enter_loop();
+    for arm in arms {
+        fc.begin_scope();
+        let mut fail_addrs: Vec<usize> = Vec::new();
+        let (class_flag, pat, bind_ty): (i64, &Pattern, &TypeExpr) = match &arm.kind {
+            CheckedArmKind::Ok(p) => (0, p, &ok_ty),
+            CheckedArmKind::Error(p) => (1, p, &word_ty),
+            _ => {
+                return Err(CompileError {
+                    message: alloc::string::String::from(
+                        "internal error: non-native-call arm in a native-call checked construct",
+                    ),
+                    span: *span,
+                });
+            }
+        };
+        fc.emit(Op::GetLocal(flag_slot));
+        let cidx = fc.add_constant(Value::Int(class_flag));
+        fc.emit(Op::Const(cidx));
+        fc.emit(Op::CmpEq);
+        let class_fail = fc.emit_jump(Op::If(0));
+        fail_addrs.push(class_fail);
+        if let Pattern::Literal(crate::ast::Literal::Int(v), _) = pat {
+            fc.emit(Op::GetLocal(value_slot));
+            let idxc = fc.add_constant(Value::Int(*v));
+            fc.emit(Op::Const(idxc));
+            fc.emit(Op::CmpEq);
+            let fail = fc.emit_jump(Op::If(0));
+            fail_addrs.push(fail);
+        }
+        if let Pattern::Variable(vname, _) = pat {
+            let v_slot = fc.declare_local_typed(vname, Some(bind_ty.clone()));
+            fc.emit(Op::GetLocal(value_slot));
+            fc.emit(Op::SetLocal(v_slot));
+        }
+        if let Some(guard) = arm.guard.as_ref() {
+            compile_expr(fc, guard)?;
+            let guard_fail = fc.emit_jump(Op::If(0));
+            fail_addrs.push(guard_fail);
+        }
+        compile_expr(fc, &arm.body)?;
+        let break_addr = fc.emit(Op::Break(0));
+        if let Some(breaks) = fc.loop_breaks.last_mut() {
+            breaks.push(break_addr);
+        }
+        fc.end_scope();
+        for addr in fail_addrs.into_iter().rev() {
+            fc.patch_jump(addr);
+            fc.emit(Op::EndIf);
+        }
+    }
+
+    // No arm matched. The `ok` class is a mandatory catch-all, so this
+    // is reached only when an `error` arm with a guard or literal
+    // failed to match a reified error. Trap with the generic
+    // no-matching-arm fault. The trailing default break keeps the loop
+    // structurally closed.
+    fc.emit(Op::GetLocal(flag_slot));
+    let one_idx = fc.add_constant(Value::Int(1));
+    fc.emit(Op::Const(one_idx));
+    fc.emit(Op::CmpEq);
+    let not_error = fc.emit_jump(Op::If(0));
+    fc.emit(Op::Trap(crate::bytecode::TrapKind::NoMatchingArm.code()));
+    fc.patch_jump(not_error);
+    fc.emit(Op::EndIf);
+    fc.emit(Op::GetLocal(value_slot));
+    let default_break = fc.emit(Op::Break(0));
+    if let Some(breaks) = fc.loop_breaks.last_mut() {
+        breaks.push(default_break);
+    }
 
     let endloop_addr = fc.emit(Op::EndLoop(0));
     let after_loop = (loop_addr + 1) as u16;

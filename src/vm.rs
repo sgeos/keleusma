@@ -68,6 +68,20 @@ pub enum VmError {
     FieldNotFound(String, String),
     /// A native function returned an error.
     NativeError(String),
+    /// A fallible native function failed and reported a `Word` error
+    /// code alongside a message (B35 P7). The code is the value the
+    /// native-error `error(code)` arm binds; the message aids host
+    /// diagnostics. Produced through the `keleusma-macros`
+    /// `KeleusmaError` derive (`From<E> for VmError`) or constructed
+    /// directly. Categorized as a soft host error like
+    /// [`VmError::NativeError`].
+    NativeErrorCode {
+        /// The `Word`-valued error code, often a discriminant-only
+        /// enum's discriminant.
+        code: i64,
+        /// A human-readable message for host diagnostics.
+        message: String,
+    },
     /// Invalid or unexpected bytecode.
     InvalidBytecode(String),
     /// A newtype refinement predicate returned false at a
@@ -171,7 +185,7 @@ impl VmError {
             | VmError::EnumVariantUnmapped => VmErrorCategory::SoftScript,
             // Soft host: a native returned an error. The host owns
             // the policy.
-            VmError::NativeError(_) => VmErrorCategory::SoftHost,
+            VmError::NativeError(_) | VmError::NativeErrorCode { .. } => VmErrorCategory::SoftHost,
         }
     }
 }
@@ -4292,7 +4306,14 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                 // `verify_native_classifications`; the dispatch
                 // arm here trusts the load-time check.
                 Op::CallVerifiedNative(idx, arg_count) | Op::CallExternalNative(idx, arg_count) => {
-                    let n = arg_count as usize;
+                    // The high bit of the argument-count byte is the
+                    // error-reify flag (B35 P7). When set, the
+                    // native-error-handling construct surrounds the
+                    // call, so a soft host failure is reified onto the
+                    // stack as a `(code, flag)` pair rather than
+                    // propagated; the construct dispatches `ok`/`error`.
+                    let reify = arg_count & 0x80 != 0;
+                    let n = (arg_count & 0x7F) as usize;
                     if self.stack.len() < n {
                         return Err(VmError::StackUnderflow);
                     }
@@ -4312,8 +4333,42 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                             ))
                         })?;
                     let ctx = NativeCtx { arena: self.arena };
-                    let result = (entry.func)(&ctx, &args)?;
-                    sp!(self, result);
+                    let result = (entry.func)(&ctx, &args);
+                    if reify {
+                        match result {
+                            Ok(v) => {
+                                // Success: value, then flag 0.
+                                sp!(self, v);
+                                sp!(self, crate::bytecode::GenericValue::Int(W::default()));
+                            }
+                            // Reify only soft host failures into the
+                            // construct; VM-internal faults still
+                            // propagate.
+                            Err(e) if matches!(e.category(), VmErrorCategory::SoftHost) => {
+                                let code = match &e {
+                                    VmError::NativeErrorCode { code, .. } => *code,
+                                    // A message-only native error has
+                                    // no code; surface the sentinel -1.
+                                    _ => -1,
+                                };
+                                sp!(
+                                    self,
+                                    crate::bytecode::GenericValue::Int(
+                                        <W as crate::word::Word>::from_i64_wrap(code)
+                                    )
+                                );
+                                sp!(
+                                    self,
+                                    crate::bytecode::GenericValue::Int(
+                                        <W as crate::word::Word>::from_i64_wrap(1)
+                                    )
+                                );
+                            }
+                            Err(e) => return Err(e),
+                        }
+                    } else {
+                        sp!(self, result?);
+                    }
                 }
             }
         }

@@ -1196,7 +1196,16 @@ impl Op {
             Op::PushImmediate(_) => 1,
             Op::PopN(_) => 0,
             Op::BitAnd | Op::BitOr | Op::BitXor | Op::Shl | Op::Shr => 0,
-            Op::CallVerifiedNative(_, _) | Op::CallExternalNative(_, _) => 1,
+            // A native call pushes one result, or two slots
+            // `(code, flag)` when the error-reify flag (high bit of
+            // the argument-count byte, B35 P7) is set.
+            Op::CallVerifiedNative(_, n) | Op::CallExternalNative(_, n) => {
+                if n & 0x80 != 0 {
+                    2
+                } else {
+                    1
+                }
+            }
         }
     }
 
@@ -1273,7 +1282,9 @@ impl Op {
             // Bit ops pop 2, push 1; net shrink = 1 in the same
             // convention as `Add` etc.
             Op::BitAnd | Op::BitOr | Op::BitXor | Op::Shl | Op::Shr => 1,
-            Op::CallVerifiedNative(_, n) | Op::CallExternalNative(_, n) => *n as u32,
+            // Pop the argument count; the high bit is the error-reify
+            // flag (B35 P7), not part of the count.
+            Op::CallVerifiedNative(_, n) | Op::CallExternalNative(_, n) => (*n & 0x7F) as u32,
         }
     }
 

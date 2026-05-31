@@ -20,7 +20,7 @@ use keleusma::compiler::compile;
 use keleusma::lexer::tokenize;
 use keleusma::parser::parse;
 use keleusma::vm::{DEFAULT_ARENA_CAPACITY, Vm, VmState};
-use keleusma::{KeleusmaType, Value, VmError};
+use keleusma::{KeleusmaError, KeleusmaType, Value, VmError};
 
 // -- Derive on structs --
 
@@ -230,6 +230,136 @@ fn register_fn_fallible_propagates_error() {
     match err {
         VmError::DivisionByZero => {}
         other => panic!("expected DivisionByZero, got {:?}", other),
+    }
+}
+
+// -- B35 P7: native-error `error(code)` construct --
+
+#[test]
+fn native_error_arm_binds_code() {
+    // A fallible native reports a Word error code; the `error(code)`
+    // arm catches it and binds the code.
+    let arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+    let mut vm = build_vm(
+        "use host::risky\n\
+         fn main() -> Word { host::risky(0) { ok(v) => v, error(code) => code } }",
+        &arena,
+    );
+    vm.register_fn_fallible("host::risky", |x: i64| -> Result<i64, VmError> {
+        if x == 0 {
+            Err(VmError::NativeErrorCode {
+                code: 42,
+                message: String::from("boom"),
+            })
+        } else {
+            Ok(x)
+        }
+    });
+    match vm.call(&[]).unwrap() {
+        VmState::Finished(v) => assert_eq!(v, Value::Int(42)),
+        other => panic!("expected finished, got {:?}", other),
+    }
+}
+
+#[test]
+fn native_error_ok_path() {
+    let arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+    let mut vm = build_vm(
+        "use host::risky\n\
+         fn main() -> Word { host::risky(7) { ok(v) => v, error(code) => code } }",
+        &arena,
+    );
+    vm.register_fn_fallible("host::risky", |x: i64| -> Result<i64, VmError> {
+        if x == 0 {
+            Err(VmError::NativeErrorCode {
+                code: 42,
+                message: String::from("boom"),
+            })
+        } else {
+            Ok(x)
+        }
+    });
+    match vm.call(&[]).unwrap() {
+        VmState::Finished(v) => assert_eq!(v, Value::Int(7)),
+        other => panic!("expected finished, got {:?}", other),
+    }
+}
+
+#[test]
+fn native_error_unhandled_propagates() {
+    // With no `error` arm the call is not reified, so the native
+    // failure propagates to the host unchanged.
+    let arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+    let mut vm = build_vm(
+        "use host::risky\n\
+         fn main() -> Word { host::risky(0) { ok(v) => v } }",
+        &arena,
+    );
+    vm.register_fn_fallible("host::risky", |x: i64| -> Result<i64, VmError> {
+        if x == 0 {
+            Err(VmError::NativeErrorCode {
+                code: 42,
+                message: String::from("boom"),
+            })
+        } else {
+            Ok(x)
+        }
+    });
+    match vm.call(&[]).unwrap_err() {
+        VmError::NativeErrorCode { code, .. } => assert_eq!(code, 42),
+        other => panic!("expected NativeErrorCode, got {:?}", other),
+    }
+}
+
+#[test]
+fn native_error_message_only_reifies_sentinel() {
+    // A message-only native error has no code; the construct reifies
+    // it to the sentinel -1.
+    let arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+    let mut vm = build_vm(
+        "use host::risky\n\
+         fn main() -> Word { host::risky(0) { ok(v) => v, error(code) => code } }",
+        &arena,
+    );
+    vm.register_fn_fallible("host::risky", |_x: i64| -> Result<i64, VmError> {
+        Err(VmError::NativeError(String::from("plain message")))
+    });
+    match vm.call(&[]).unwrap() {
+        VmState::Finished(v) => assert_eq!(v, Value::Int(-1)),
+        other => panic!("expected finished, got {:?}", other),
+    }
+}
+
+// A host error type whose discriminants are the Word error codes the
+// script side observes. The derive generates `From<HostErr> for
+// VmError` producing a `NativeErrorCode`.
+#[derive(KeleusmaError, Debug, Clone, Copy)]
+#[allow(dead_code)] // `NotFound` documents the discriminant mapping.
+enum HostErr {
+    NotFound = 1,
+    Forbidden = 3,
+}
+
+#[test]
+fn keleusma_error_derive_maps_discriminant_to_code() {
+    let arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+    let mut vm = build_vm(
+        "use host::lookup\n\
+         fn main() -> Word { host::lookup(0) { ok(v) => v, error(code) => code } }",
+        &arena,
+    );
+    vm.register_fn_fallible("host::lookup", |key: i64| -> Result<i64, VmError> {
+        if key == 0 {
+            // `HostErr::Forbidden` carries discriminant 3; the derive
+            // converts it to `NativeErrorCode { code: 3, .. }`.
+            Err(HostErr::Forbidden.into())
+        } else {
+            Ok(key)
+        }
+    });
+    match vm.call(&[]).unwrap() {
+        VmState::Finished(v) => assert_eq!(v, Value::Int(3)),
+        other => panic!("expected finished, got {:?}", other),
     }
 }
 
