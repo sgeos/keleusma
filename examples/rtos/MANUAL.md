@@ -318,7 +318,7 @@ For probe and embedded deployments where saturation rather than wrapping is the 
 
 ## 5.6. Other V0.2 language features
 
-The remaining V0.2 surface extensions (newtype declarations, refinement-type predicates, information-flow labels) are not yet adopted by the microkernel demonstrator but compose naturally with the patterns shown above. The reference documentation is in [`docs/design/GRAMMAR.md`](../../docs/design/GRAMMAR.md) Section 7.5 and [`docs/architecture/LANGUAGE_DESIGN.md`](../../docs/architecture/LANGUAGE_DESIGN.md) Section "Surface Extensions Added in V0.2".
+The remaining V0.2 surface extensions (newtype declarations, refinement-type predicates, information-flow labels) are not yet adopted by the microkernel demonstrator but compose naturally with the patterns shown above. The reference documentation is in [`docs/spec/GRAMMAR.md`](../../docs/spec/GRAMMAR.md) Section 7.5 and [`docs/architecture/LANGUAGE_DESIGN.md`](../../docs/architecture/LANGUAGE_DESIGN.md) Section "Surface Extensions Added in V0.2".
 
 Worked patterns operators may want to adopt:
 

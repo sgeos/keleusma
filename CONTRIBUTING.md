@@ -43,13 +43,16 @@ cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
 RUSTDOCFLAGS="-D warnings -A rustdoc::redundant-explicit-links" \
     cargo doc -p keleusma --no-deps --features signatures,encryption,shell
+sh scripts/check-md-links.sh
 ```
 
-All four must pass. CI runs the same set plus per-feature variants, no_std targets, Miri on the arena crate, and the bare-metal STM32N6570-DK build through `examples/rtos`. The doc command uses the docs.rs feature set; the `encryption` feature carries the `crate::encryption` module that the wire-format documentation links to, so omitting it produces an unresolved-link failure.
+All five must pass. The last verifies that relative links between
+Markdown files resolve to existing files; see
+[`scripts/check-md-links.sh`](scripts/check-md-links.sh) for its scope. CI runs the same set plus per-feature variants, no_std targets, Miri on the arena crate, and the bare-metal STM32N6570-DK build through `examples/rtos`. The doc command uses the docs.rs feature set; the `encryption` feature carries the `crate::encryption` module that the wire-format documentation links to, so omitting it produces an unresolved-link failure.
 
 ## Automated pre-push hook
 
-These four checks also run automatically before every `git push` through a [cargo-husky](https://github.com/rhysd/cargo-husky) pre-push hook. The hook is version-controlled at [`.cargo-husky/hooks/pre-push`](.cargo-husky/hooks/pre-push) and cargo-husky installs it into `.git/hooks/` the next time the dev-dependencies compile, for example on the first `cargo test --workspace` after cloning. No manual setup step is required.
+These five checks also run automatically before every `git push` through a [cargo-husky](https://github.com/rhysd/cargo-husky) pre-push hook. The hook is version-controlled at [`.cargo-husky/hooks/pre-push`](.cargo-husky/hooks/pre-push) and cargo-husky installs it into `.git/hooks/` the next time the dev-dependencies compile, for example on the first `cargo test --workspace` after cloning. No manual setup step is required.
 
 The hook fails the push if any check fails. To push a work-in-progress branch without running it, bypass with `git push --no-verify`. If the CI feature set or the checklist above changes, update the hook script to match.
 
