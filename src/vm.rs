@@ -4745,6 +4745,78 @@ mod tests {
         assert_eq!(val, Value::Byte(42));
     }
 
+    #[test]
+    #[cfg(feature = "floats")]
+    fn checked_float_div_zero_is_infinity_overflow() {
+        // B35 P3d-ii: float `1.0 / 0.0` is +inf, classified as the
+        // overflow outcome (IEEE 754, no trap).
+        let val = run_expect(
+            "fn main() -> Float {\n\
+                1.0Float / 0.0Float {\n\
+                    ok(v) => v,\n\
+                    overflow(_) => 1.0Float,\n\
+                    underflow(_) => 2.0Float,\n\
+                    nan(_) => 3.0Float,\n\
+                }\n\
+             }",
+            &[],
+        );
+        assert_eq!(val, Value::Float(1.0));
+    }
+
+    #[test]
+    #[cfg(feature = "floats")]
+    fn checked_float_zero_over_zero_is_nan() {
+        let val = run_expect(
+            "fn main() -> Float {\n\
+                0.0Float / 0.0Float {\n\
+                    ok(v) => v,\n\
+                    overflow(_) => 1.0Float,\n\
+                    underflow(_) => 2.0Float,\n\
+                    nan(_) => 3.0Float,\n\
+                }\n\
+             }",
+            &[],
+        );
+        assert_eq!(val, Value::Float(3.0));
+    }
+
+    #[test]
+    #[cfg(feature = "floats")]
+    fn checked_float_negative_over_zero_is_underflow() {
+        // (0.0 - 1.0) / 0.0 is -inf, the underflow outcome.
+        let val = run_expect(
+            "fn main() -> Float {\n\
+                let n = 0.0Float - 1.0Float;\n\
+                n / 0.0Float {\n\
+                    ok(v) => v,\n\
+                    overflow(_) => 1.0Float,\n\
+                    underflow(_) => 2.0Float,\n\
+                    nan(_) => 3.0Float,\n\
+                }\n\
+             }",
+            &[],
+        );
+        assert_eq!(val, Value::Float(2.0));
+    }
+
+    #[test]
+    #[cfg(feature = "floats")]
+    fn checked_float_ok_finite_result() {
+        let val = run_expect(
+            "fn main() -> Float {\n\
+                6.0Float / 2.0Float {\n\
+                    ok(v) => v,\n\
+                    overflow(_) => 0.0Float,\n\
+                    underflow(_) => 0.0Float,\n\
+                    nan(_) => 0.0Float,\n\
+                }\n\
+             }",
+            &[],
+        );
+        assert_eq!(val, Value::Float(3.0));
+    }
+
     // The next three checked-overflow tests embed integer literals
     // (4294967296 = 2^32, large guard values, literal-high patterns)
     // sized for an i64 Word. Under any of the `narrow-word-*`

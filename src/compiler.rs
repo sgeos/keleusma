@@ -4784,6 +4784,10 @@ fn compile_checked(
             // single pattern against the low slot (where the checked
             // division and modulo place it).
             CheckedArmKind::ZeroDivisor(p) => (3_i64, Some(p), None, None),
+            // NaN: flag 4, the result bound through the single pattern
+            // against the low slot (where the checked float op places
+            // it).
+            CheckedArmKind::Nan(p) => (4_i64, Some(p), None, None),
         };
         fc.emit(Op::GetLocal(flag_slot));
         let class_idx = fc.add_constant(Value::Int(class_flag));

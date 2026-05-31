@@ -2015,7 +2015,9 @@ fn checked_arm_is_catchall(kind: &crate::ast::CheckedArmKind) -> bool {
     use crate::ast::CheckedArmKind;
     let is_catchall_pat = |p: &Pattern| matches!(p, Pattern::Wildcard(_) | Pattern::Variable(_, _));
     match kind {
-        CheckedArmKind::Ok(p) | CheckedArmKind::ZeroDivisor(p) => is_catchall_pat(p),
+        CheckedArmKind::Ok(p) | CheckedArmKind::ZeroDivisor(p) | CheckedArmKind::Nan(p) => {
+            is_catchall_pat(p)
+        }
         CheckedArmKind::Overflow(h, l) | CheckedArmKind::Underflow(h, l) => {
             // A `None` second pattern (the Byte single-pattern form)
             // covers its slot unconditionally.
@@ -3806,16 +3808,23 @@ fn type_of_expr(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError> {
             let inner_ty = type_of_expr(ctx, op_expr)?;
             let is_word = types_compatible(ctx, &inner_ty, &Type::Word);
             let is_byte = !is_word && types_compatible(ctx, &inner_ty, &Type::Byte);
-            if !is_word && !is_byte {
+            let is_float = !is_word && !is_byte && types_compatible(ctx, &inner_ty, &Type::Float);
+            if !is_word && !is_byte && !is_float {
                 return Err(TypeError::new(
                     alloc::format!(
-                        "checked-overflow construct expects a Word or Byte arithmetic operation, got {}",
+                        "checked-overflow construct expects a Word, Byte, or Float arithmetic operation, got {}",
                         inner_ty.display()
                     ),
                     *span,
                 ));
             }
-            let operand_ty = if is_byte { Type::Byte } else { Type::Word };
+            let operand_ty = if is_byte {
+                Type::Byte
+            } else if is_float {
+                Type::Float
+            } else {
+                Type::Word
+            };
             // Validate arm structure. The `ok` class must have an
             // unguarded catch-all arm; `overflow` and `underflow` are
             // optional and default to wrapping (B35 P3a); a
@@ -3856,6 +3865,15 @@ fn type_of_expr(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError> {
                     *span,
                 ));
             }
+            // Float has no modulo and no checked negation.
+            if is_float && matches!(cop, CheckedOp::Mod | CheckedOp::Neg) {
+                return Err(TypeError::new(
+                    alloc::string::String::from(
+                        "modulo and unary `-` are not supported on Float operands in a checked construct",
+                    ),
+                    *span,
+                ));
+            }
 
             // Per-operand-type admissibility (B35 P3c, P3d). For the
             // signed `Word` type: `+`, `-`, `*` admit `overflow` and
@@ -3865,13 +3883,25 @@ fn type_of_expr(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError> {
             // `overflow`; `-` admits `underflow`; `/` and `%` admit
             // `zero_divisor`. `ok` is admissible for every operator. An
             // arm whose outcome cannot arise is a compile error.
-            let type_name = if is_byte { "Byte" } else { "Word" };
+            let type_name = if is_byte {
+                "Byte"
+            } else if is_float {
+                "Float"
+            } else {
+                "Word"
+            };
             for arm in arms.iter() {
                 let (admissible, arm_name) = match &arm.kind {
                     CheckedArmKind::Ok(_) => (true, "ok"),
                     CheckedArmKind::Overflow(_, _) => {
                         let ok = if is_byte {
                             matches!(cop, CheckedOp::Add | CheckedOp::Mul)
+                        } else if is_float {
+                            // Float `+`, `-`, `*`, `/` can yield +inf.
+                            matches!(
+                                cop,
+                                CheckedOp::Add | CheckedOp::Sub | CheckedOp::Mul | CheckedOp::Div
+                            )
                         } else {
                             matches!(
                                 cop,
@@ -3887,15 +3917,26 @@ fn type_of_expr(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError> {
                     CheckedArmKind::Underflow(_, _) => {
                         let ok = if is_byte {
                             cop == CheckedOp::Sub
+                        } else if is_float {
+                            // Float `+`, `-`, `*`, `/` can yield -inf.
+                            matches!(
+                                cop,
+                                CheckedOp::Add | CheckedOp::Sub | CheckedOp::Mul | CheckedOp::Div
+                            )
                         } else {
                             matches!(cop, CheckedOp::Add | CheckedOp::Sub | CheckedOp::Mul)
                         };
                         (ok, "underflow")
                     }
                     CheckedArmKind::ZeroDivisor(_) => (
-                        matches!(cop, CheckedOp::Div | CheckedOp::Mod),
+                        // Integer-only: a float division by zero yields
+                        // an infinity or NaN, not a trap.
+                        !is_float && matches!(cop, CheckedOp::Div | CheckedOp::Mod),
                         "zero_divisor",
                     ),
+                    // `nan` arises only on Float, where every supported
+                    // operator can produce a NaN (e.g. inf - inf, 0/0).
+                    CheckedArmKind::Nan(_) => (is_float, "nan"),
                 };
                 if !admissible {
                     return Err(TypeError::new(
@@ -3909,21 +3950,23 @@ fn type_of_expr(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError> {
                     ));
                 }
                 // Arity: a `Word` `overflow`/`underflow` arm binds the
-                // high and low halves `(h, l)`; a `Byte` arm binds the
-                // single wrapped result.
+                // high and low halves `(h, l)`; a `Byte` or `Float` arm
+                // binds a single result.
                 if let CheckedArmKind::Overflow(_, l) | CheckedArmKind::Underflow(_, l) = &arm.kind
                 {
-                    if is_byte && l.is_some() {
+                    let wants_single = is_byte || is_float;
+                    if wants_single && l.is_some() {
                         return Err(TypeError::new(
                             alloc::format!(
-                                "a Byte `{}` arm binds a single wrapped result; write `{}(w)`",
+                                "a {} `{}` arm binds a single result; write `{}(v)`",
+                                type_name,
                                 arm_name,
                                 arm_name
                             ),
                             arm.span,
                         ));
                     }
-                    if !is_byte && l.is_none() {
+                    if !wants_single && l.is_none() {
                         return Err(TypeError::new(
                             alloc::format!(
                                 "a Word `{}` arm binds the high and low halves; write `{}(h, l)`",
@@ -3939,6 +3982,7 @@ fn type_of_expr(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError> {
             let mut overflow_catchall_seen = false;
             let mut underflow_catchall_seen = false;
             let mut zero_divisor_catchall_seen = false;
+            let mut nan_catchall_seen = false;
             for arm in arms.iter() {
                 // Outcomes whose catchall has already been seen
                 // cannot have further arms; subsequent arms in the
@@ -3948,6 +3992,7 @@ fn type_of_expr(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError> {
                     CheckedArmKind::Overflow(_, _) => overflow_catchall_seen,
                     CheckedArmKind::Underflow(_, _) => underflow_catchall_seen,
                     CheckedArmKind::ZeroDivisor(_) => zero_divisor_catchall_seen,
+                    CheckedArmKind::Nan(_) => nan_catchall_seen,
                 };
                 if class_catchall_seen {
                     return Err(TypeError::new(
@@ -3964,6 +4009,7 @@ fn type_of_expr(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError> {
                         CheckedArmKind::Overflow(_, _) => overflow_catchall_seen = true,
                         CheckedArmKind::Underflow(_, _) => underflow_catchall_seen = true,
                         CheckedArmKind::ZeroDivisor(_) => zero_divisor_catchall_seen = true,
+                        CheckedArmKind::Nan(_) => nan_catchall_seen = true,
                     }
                 }
             }
@@ -3985,6 +4031,7 @@ fn type_of_expr(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError> {
                 overflow_catchall_seen,
                 underflow_catchall_seen,
                 zero_divisor_catchall_seen,
+                nan_catchall_seen,
             );
             // Type-check arm bodies. Each arm scope binds the
             // pattern variables to `Word`. The guard expression (if
@@ -3995,7 +4042,9 @@ fn type_of_expr(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError> {
             for arm in arms.iter_mut() {
                 ctx.push_scope();
                 match &arm.kind {
-                    CheckedArmKind::Ok(p) | CheckedArmKind::ZeroDivisor(p) => {
+                    CheckedArmKind::Ok(p)
+                    | CheckedArmKind::ZeroDivisor(p)
+                    | CheckedArmKind::Nan(p) => {
                         bind_checked_pattern(ctx, p, operand_ty.clone());
                     }
                     CheckedArmKind::Overflow(h, l) | CheckedArmKind::Underflow(h, l) => {
@@ -4739,11 +4788,7 @@ mod tests {
             "fn main() -> Byte { let y = 200Byte + 100Byte { ok(v) => v, overflow(h, l) => h }; y }",
         )
         .unwrap_err();
-        assert!(
-            err.message.contains("single wrapped result"),
-            "{}",
-            err.message
-        );
+        assert!(err.message.contains("single result"), "{}", err.message);
     }
 
     #[test]
@@ -4783,6 +4828,68 @@ mod tests {
             "{}",
             err.message
         );
+    }
+
+    #[test]
+    #[cfg(feature = "floats")]
+    fn checked_float_all_outcomes_typecheck() {
+        // B35 P3d-ii: a Float construct admits ok, overflow, underflow,
+        // and nan, each binding a single result.
+        check_src(
+            "fn main() -> Float { let y = 1.0Float / 2.0Float { ok(v) => v, overflow(i) => i, underflow(i) => i, nan(n) => n }; y }",
+        )
+        .expect("Float checked construct should typecheck");
+    }
+
+    #[test]
+    #[cfg(feature = "floats")]
+    fn checked_nan_arm_rejected_on_word() {
+        // Integer arithmetic never produces NaN.
+        let err = check_src("fn main() -> Word { let y = 1 + 2 { ok(v) => v, nan(_) => 0 }; y }")
+            .unwrap_err();
+        assert!(
+            err.message.contains("not admissible") && err.message.contains("nan"),
+            "{}",
+            err.message
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "floats")]
+    fn checked_zero_divisor_arm_rejected_on_float() {
+        // A float division by zero is an infinity or NaN, not a trap.
+        let err = check_src(
+            "fn main() -> Float { let y = 1.0Float / 2.0Float { ok(v) => v, zero_divisor(_) => 0.0Float }; y }",
+        )
+        .unwrap_err();
+        assert!(
+            err.message.contains("not admissible") && err.message.contains("zero_divisor"),
+            "{}",
+            err.message
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "floats")]
+    fn checked_modulo_rejected_on_float() {
+        let err = check_src("fn main() -> Float { let y = 5.0Float % 2.0Float { ok(v) => v }; y }")
+            .unwrap_err();
+        assert!(
+            err.message.contains("modulo") && err.message.contains("Float"),
+            "{}",
+            err.message
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "floats")]
+    fn checked_float_overflow_two_patterns_rejected() {
+        // Float overflow binds a single result, not two halves.
+        let err = check_src(
+            "fn main() -> Float { let y = 1.0Float + 2.0Float { ok(v) => v, overflow(h, l) => h }; y }",
+        )
+        .unwrap_err();
+        assert!(err.message.contains("single result"), "{}", err.message);
     }
 
     #[test]

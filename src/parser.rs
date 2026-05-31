@@ -1386,9 +1386,16 @@ impl<'a> Parser<'a> {
                 self.expect(&TokenKind::RParen)?;
                 Ok(crate::ast::CheckedArmKind::ZeroDivisor(p))
             }
+            TokenKind::LowerIdent(name) if name == "nan" => {
+                self.bump();
+                self.expect(&TokenKind::LParen)?;
+                let p = self.parse_checked_arm_pattern()?;
+                self.expect(&TokenKind::RParen)?;
+                Ok(crate::ast::CheckedArmKind::Nan(p))
+            }
             other => Err(ParseError {
                 message: alloc::format!(
-                    "expected `ok(pattern)`, `overflow(h, l)`, `underflow(h, l)`, or `zero_divisor(numerator)`, found {:?}",
+                    "expected `ok(pattern)`, `overflow(...)`, `underflow(...)`, `zero_divisor(numerator)`, or `nan(result)`, found {:?}",
                     other
                 ),
                 span: self.peek_span(),

@@ -794,6 +794,10 @@ pub enum CheckedArmKind {
     /// and `%`. An unhandled zero divisor traps as a division by
     /// zero.
     ZeroDivisor(Pattern),
+    /// `nan(result)`: a floating-point operation produced a NaN. The
+    /// single pattern matches the NaN result. Admissible only on
+    /// Float operands.
+    Nan(Pattern),
 }
 
 impl Expr {
