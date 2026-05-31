@@ -466,6 +466,23 @@ fn checked_arith_outputs<W: crate::word::Word>(r: W::Wide, word_bits_log2: u8) -
     (low, high, <W as crate::word::Word>::from_i64_wrap(flag))
 }
 
+/// Classify a checked floating-point result into the construct's
+/// flag: `0` ok (finite), `1` overflow (positive infinity), `2`
+/// underflow (negative infinity), `4` not-a-number. The Institute of
+/// Electrical and Electronics Engineers 754 operations are total, so
+/// there is no zero-divisor flag (flag `3`) for floats; a division by
+/// zero produces an infinity or a NaN classified here.
+#[cfg(feature = "floats")]
+fn float_checked_flag(rf: f64) -> i64 {
+    if rf.is_nan() {
+        4
+    } else if rf.is_infinite() {
+        if rf > 0.0 { 1 } else { 2 }
+    } else {
+        0
+    }
+}
+
 fn decode_all_ops(bytes: &[u8]) -> Result<Vec<Vec<Op>>, VmError> {
     // V0.2.0 Phase 7c routes the per-chunk op decode through
     // the wire-format opcode stream. Each chunk's slice in the
@@ -3584,9 +3601,34 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                                 )
                             );
                         }
+                        #[cfg(feature = "floats")]
+                        (
+                            crate::bytecode::GenericValue::Float(x),
+                            crate::bytecode::GenericValue::Float(y),
+                        ) => {
+                            // Float addition is total (IEEE 754): the
+                            // result is finite, an infinity, or NaN,
+                            // classified into the flag. The result is
+                            // the low slot; the high slot is unused.
+                            let r = x + y;
+                            let flag = float_checked_flag(<F as crate::float::Float>::to_f64(r));
+                            sp!(self, crate::bytecode::GenericValue::Float(r));
+                            sp!(
+                                self,
+                                crate::bytecode::GenericValue::Float(
+                                    <F as crate::float::Float>::from_f64(0.0)
+                                )
+                            );
+                            sp!(
+                                self,
+                                crate::bytecode::GenericValue::Int(
+                                    <W as crate::word::Word>::from_i64_wrap(flag)
+                                )
+                            );
+                        }
                         (a, b) => {
                             return Err(VmError::TypeError(format!(
-                                "Op::CheckedAdd expects Word or Byte operands, got {} and {}",
+                                "Op::CheckedAdd expects Word, Byte, or Float operands, got {} and {}",
                                 a.type_name(),
                                 b.type_name()
                             )));
@@ -3626,9 +3668,30 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                                 )
                             );
                         }
+                        #[cfg(feature = "floats")]
+                        (
+                            crate::bytecode::GenericValue::Float(x),
+                            crate::bytecode::GenericValue::Float(y),
+                        ) => {
+                            let r = x - y;
+                            let flag = float_checked_flag(<F as crate::float::Float>::to_f64(r));
+                            sp!(self, crate::bytecode::GenericValue::Float(r));
+                            sp!(
+                                self,
+                                crate::bytecode::GenericValue::Float(
+                                    <F as crate::float::Float>::from_f64(0.0)
+                                )
+                            );
+                            sp!(
+                                self,
+                                crate::bytecode::GenericValue::Int(
+                                    <W as crate::word::Word>::from_i64_wrap(flag)
+                                )
+                            );
+                        }
                         (a, b) => {
                             return Err(VmError::TypeError(format!(
-                                "Op::CheckedSub expects Word or Byte operands, got {} and {}",
+                                "Op::CheckedSub expects Word, Byte, or Float operands, got {} and {}",
                                 a.type_name(),
                                 b.type_name()
                             )));
@@ -3674,9 +3737,30 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                                 )
                             );
                         }
+                        #[cfg(feature = "floats")]
+                        (
+                            crate::bytecode::GenericValue::Float(x),
+                            crate::bytecode::GenericValue::Float(y),
+                        ) => {
+                            let r = x * y;
+                            let flag = float_checked_flag(<F as crate::float::Float>::to_f64(r));
+                            sp!(self, crate::bytecode::GenericValue::Float(r));
+                            sp!(
+                                self,
+                                crate::bytecode::GenericValue::Float(
+                                    <F as crate::float::Float>::from_f64(0.0)
+                                )
+                            );
+                            sp!(
+                                self,
+                                crate::bytecode::GenericValue::Int(
+                                    <W as crate::word::Word>::from_i64_wrap(flag)
+                                )
+                            );
+                        }
                         (a, b) => {
                             return Err(VmError::TypeError(format!(
-                                "Op::CheckedMul expects Word or Byte operands, got {} and {}",
+                                "Op::CheckedMul expects Word, Byte, or Float operands, got {} and {}",
                                 a.type_name(),
                                 b.type_name()
                             )));
@@ -3792,9 +3876,34 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                                 )
                             );
                         }
+                        #[cfg(feature = "floats")]
+                        (
+                            crate::bytecode::GenericValue::Float(x),
+                            crate::bytecode::GenericValue::Float(y),
+                        ) => {
+                            // Float division is total: division by zero
+                            // yields a signed infinity (x != 0) or NaN
+                            // (0 / 0), classified into the flag. There
+                            // is no zero-divisor trap for floats.
+                            let r = x / y;
+                            let flag = float_checked_flag(<F as crate::float::Float>::to_f64(r));
+                            sp!(self, crate::bytecode::GenericValue::Float(r));
+                            sp!(
+                                self,
+                                crate::bytecode::GenericValue::Float(
+                                    <F as crate::float::Float>::from_f64(0.0)
+                                )
+                            );
+                            sp!(
+                                self,
+                                crate::bytecode::GenericValue::Int(
+                                    <W as crate::word::Word>::from_i64_wrap(flag)
+                                )
+                            );
+                        }
                         (a, b) => {
                             return Err(VmError::TypeError(format!(
-                                "Op::CheckedDiv expects Word or Byte operands, got {} and {}",
+                                "Op::CheckedDiv expects Word, Byte, or Float operands, got {} and {}",
                                 a.type_name(),
                                 b.type_name()
                             )));
