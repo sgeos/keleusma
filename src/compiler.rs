@@ -180,6 +180,13 @@ enum PendingDebug {
         op_index: usize,
         labels: Vec<String>,
     },
+    /// The declared or inferred type of local `slot`, in scope from
+    /// `op_index`, rendered as a string-form `TypeRepr`.
+    TypeAnnotation {
+        op_index: usize,
+        slot: u16,
+        type_repr: String,
+    },
 }
 
 /// Append a span-pool entry and return its index.
@@ -203,6 +210,59 @@ fn intern_debug_string(pool: &mut crate::debug_meta::DebugPool, s: &str) -> u16 
     let i = pool.string_pool.len() as u16;
     pool.string_pool.push(String::from(s));
     i
+}
+
+/// Intern a type-representation blob into the pool's type sub-pool,
+/// returning its index. Deduplicates so repeated types share one entry.
+fn intern_debug_type(pool: &mut crate::debug_meta::DebugPool, bytes: &[u8]) -> u16 {
+    if let Some(i) = pool.type_pool.iter().position(|x| x.as_slice() == bytes) {
+        return i as u16;
+    }
+    let i = pool.type_pool.len() as u16;
+    pool.type_pool.push(bytes.to_vec());
+    i
+}
+
+/// Render a `TypeExpr` to a compact human-readable string. This is the
+/// version-1 `TypeRepr` carried in a `TypeAnnotation` record's type
+/// sub-pool entry: a debugger can display it directly. A structured
+/// binary encoding can replace it later without changing the record
+/// shape, since the entry is an opaque blob.
+fn render_type_expr(ty: &TypeExpr) -> String {
+    use crate::ast::PrimType;
+    match ty {
+        TypeExpr::Prim(p, _) => match p {
+            PrimType::Byte => String::from("Byte"),
+            PrimType::Word => String::from("Word"),
+            PrimType::Float => String::from("Float"),
+            PrimType::Bool => String::from("bool"),
+            PrimType::Text => String::from("Text"),
+            PrimType::Fixed(None) => String::from("Fixed"),
+            PrimType::Fixed(Some(n)) => alloc::format!("Fixed<{}>", n),
+        },
+        TypeExpr::Named(name, args, _) => {
+            if args.is_empty() {
+                name.clone()
+            } else {
+                let inner: Vec<String> = args.iter().map(render_type_expr).collect();
+                alloc::format!("{}<{}>", name, inner.join(", "))
+            }
+        }
+        TypeExpr::Tuple(elems, _) => {
+            let inner: Vec<String> = elems.iter().map(render_type_expr).collect();
+            alloc::format!("({})", inner.join(", "))
+        }
+        TypeExpr::Array(inner, n, _) => alloc::format!("[{}; {}]", render_type_expr(inner), n),
+        TypeExpr::Option(inner, _) => alloc::format!("Option<{}>", render_type_expr(inner)),
+        TypeExpr::Unit(_) => String::from("()"),
+        TypeExpr::Labelled(inner, labels, _) => {
+            alloc::format!("{}@{{{}}}", render_type_expr(inner), labels.join(", "))
+        }
+        TypeExpr::NegativeLabelled(inner, labels, _) => {
+            let neg: Vec<String> = labels.iter().map(|l| alloc::format!("!{}", l)).collect();
+            alloc::format!("{}@{{{}}}", render_type_expr(inner), neg.join(", "))
+        }
+    }
 }
 
 /// Assemble the captured annotations into a `DebugPool`. String index 0
@@ -277,6 +337,18 @@ fn build_debug_pool(pending: &[PendingDebug]) -> crate::debug_meta::DebugPool {
                     op_index: *op_index as u32,
                     kind: DebugRecordKind::IfcLabelAnnotation,
                     operands,
+                });
+            }
+            PendingDebug::TypeAnnotation {
+                op_index,
+                slot,
+                type_repr,
+            } => {
+                let type_idx = intern_debug_type(&mut pool, type_repr.as_bytes());
+                pool.records.push(DebugRecord {
+                    op_index: *op_index as u32,
+                    kind: DebugRecordKind::TypeAnnotation,
+                    operands: alloc::vec![*slot, type_idx],
                 });
             }
         }
@@ -616,6 +688,13 @@ impl FuncCompiler {
         if self.next_slot > self.chunk.local_count {
             self.chunk.local_count = self.next_slot;
         }
+        // Render the local's type before `ty` is moved into `Local`,
+        // for a TypeAnnotation record under debug emission.
+        let type_repr = if self.emit_debug {
+            ty.as_ref().map(render_type_expr)
+        } else {
+            None
+        };
         self.locals.push(Local {
             name: String::from(name),
             slot,
@@ -623,11 +702,19 @@ impl FuncCompiler {
             ty,
         });
         if self.emit_debug {
+            let op_index = self.chunk.ops.len();
             self.pending_debug.push(PendingDebug::VariableName {
-                op_index: self.chunk.ops.len(),
+                op_index,
                 slot,
                 name: String::from(name),
             });
+            if let Some(type_repr) = type_repr {
+                self.pending_debug.push(PendingDebug::TypeAnnotation {
+                    op_index,
+                    slot,
+                    type_repr,
+                });
+            }
         }
         slot
     }
@@ -6583,6 +6670,26 @@ mod tests {
         assert!(
             found,
             "classify/declassify @Secret should record an IfcLabelAnnotation with label Secret"
+        );
+    }
+
+    #[test]
+    fn debug_emission_records_type_annotation_for_locals() {
+        // A typed local records a TypeAnnotation mapping its slot to a
+        // string-form TypeRepr.
+        let src = "fn main() -> Word { let x: Word = 5; x }";
+        let module = compile_str_debug(src);
+        let found = module.chunks.iter().any(|c| {
+            c.debug_pool.as_ref().is_some_and(|p| {
+                p.records.iter().any(|r| {
+                    r.kind == crate::debug_meta::DebugRecordKind::TypeAnnotation
+                        && p.type_blob(r.operands[1]) == Some("Word".as_bytes())
+                })
+            })
+        });
+        assert!(
+            found,
+            "a typed local should record a TypeAnnotation with TypeRepr `Word`"
         );
     }
 

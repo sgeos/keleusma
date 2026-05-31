@@ -364,6 +364,14 @@ impl DebugPool {
         self.span_pool.get(index as usize).copied()
     }
 
+    /// The type sub-pool blob at `index`, or `None` when out of range.
+    /// A `TypeAnnotation` record's second operand indexes this pool.
+    /// The blob is the opaque `TypeRepr`; the current compiler stores a
+    /// UTF-8 string-form rendering.
+    pub fn type_blob(&self, index: u16) -> Option<&[u8]> {
+        self.type_pool.get(index as usize).map(|v| v.as_slice())
+    }
+
     /// Resolve a record that references a span to a [`SourceLocation`].
     /// Applies to record kinds whose first operand indexes the span
     /// pool (`CallSite`, `SourceSpan`, `AssertionContext`,
