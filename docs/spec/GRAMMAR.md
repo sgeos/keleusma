@@ -724,6 +724,31 @@ let safe = table[i] {
 };
 ````
 
+### Newtype Construction Construct
+
+````
+newtype_construct = newtype_call '{' newtype_arm { ',' newtype_arm } [ ',' ] '}'
+newtype_arm    = newtype_kind [ 'when' expr ] '=>' expr
+newtype_kind   = 'ok' '(' arm_pattern ')'
+               | 'invalid_newtype' '(' arm_pattern ')'
+arm_pattern    = '_' | lower_ident | signed_int_lit
+````
+
+Guards the construction of a refined newtype against a refinement-predicate failure. The construct shares the arm-block syntax of the other construct-family members, attached to a newtype constructor call. The `ok` arm binds the constructed newtype value, and the `invalid_newtype` arm binds the underlying value that the predicate rejected. The `ok` class must have an unguarded catch-all arm. The `invalid_newtype` class is optional, and an unhandled failure traps as `RefinementFailed`, the same fault a bare construction produces. The `invalid_newtype` arm is admissible only when the newtype carries a refinement predicate, because a non-refined newtype's construction is total and cannot fail. The arithmetic and indexing outcome arms are inadmissible on a construction. Patterns are drawn from the same restricted subset, and an optional `when expr` guard is checked as `Bool`.
+
+Example:
+
+````
+fn in_range(x: Word) -> bool { x >= 0 and x <= 100 }
+newtype Percent = Word where in_range;
+
+let p = Percent(raw_value) {
+    ok(v) => v,
+    invalid_newtype(x) when x < 0 => Percent(0),
+    invalid_newtype(_) => Percent(100),
+};
+````
+
 ### Information-Flow Labels
 
 ````
