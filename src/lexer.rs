@@ -509,7 +509,16 @@ impl<'a> Lexer<'a> {
                     self.advance();
                     return self.lex_hex(start, start_line, start_col);
                 }
-                Some(b'b') | Some(b'B') => {
+                // Lowercase `0b` is always a binary prefix. Uppercase
+                // `0B` is only a binary prefix when a binary digit
+                // follows; otherwise the `B` begins the `Byte` numeric
+                // suffix, so `0Byte` lexes as the byte literal zero
+                // rather than a malformed binary literal.
+                Some(b'b') => {
+                    self.advance();
+                    return self.lex_binary(start, start_line, start_col);
+                }
+                Some(b'B') if matches!(self.peek_at(1), Some(b'0') | Some(b'1')) => {
                     self.advance();
                     return self.lex_binary(start, start_line, start_col);
                 }
@@ -1008,6 +1017,21 @@ mod tests {
                 TokenKind::Eof,
             ]
         );
+    }
+
+    #[test]
+    fn byte_zero_suffix_not_binary_prefix() {
+        // `0Byte` is the byte literal zero. The uppercase `B` must not
+        // be grabbed as a `0B` binary prefix when no binary digit
+        // follows.
+        assert_eq!(kinds("0Byte"), vec![TokenKind::ByteLit(0), TokenKind::Eof]);
+        // Uppercase binary with digits still lexes as binary.
+        assert_eq!(
+            kinds("0B1010"),
+            vec![TokenKind::IntLit(0b1010), TokenKind::Eof]
+        );
+        // Lowercase `0b` with no digits still errors.
+        assert!(tokenize("0b").is_err());
     }
 
     #[test]
