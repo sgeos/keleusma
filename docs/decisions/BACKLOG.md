@@ -1289,6 +1289,8 @@ The wire format framing is unchanged. The chunk-level `debug_pool` field is a ne
 
 Debugger quality, certification artefacts, and richer error reports each create demand for one or more strippable debug opcodes. None individually forces the entire framework; the framework lands once and admits incremental opcode additions thereafter. Each opcode becomes operationally important when its consuming workflow (a debugger, a certification reviewer, a runtime introspection tool) becomes operationally important.
 
+B35 P1 created one concrete near-term demand. The compiler-emitted traps now surface as specific `VmError` variants without the dynamic detail the prior message carried, namely the failing predicate and newtype names for a refinement trap and the function name for a no-matching-head trap, so a runtime trap identifies its cause but not its source site. The intended way to restore localization is the `SourceSpan` or `CallSite` debug opcode here, or a dedicated trap-context opcode, which would let a host map a trap back to a source position at `Word` cost rather than re-embedding a string. So a refinement or no-match trap is a consumer of this framework, and the `AssertionContext` row is the closest existing analogue for the trap case.
+
 **Cross-references**
 
 - B28 (runtime composite Value representation aligned with the language guarantee) is independent of B29 under the pure-runtime-refactor framing. An earlier framing tied them together; that coupling no longer applies.
@@ -1296,6 +1298,7 @@ Debugger quality, certification artefacts, and richer error reports each create 
 - `docs/spec/INSTRUCTION_SET.md` and `docs/spec/STRUCTURAL_ISA.md` gain a `strippable` column on the opcode table to mark each opcode's strip eligibility.
 - The CLI README's `compile` and `run` sections get a note about the strip workflow; a new `keleusma strip` subcommand is added.
 - `Rex` is the cited prior art for `CallSite`'s shape; the specific mechanism it uses is the basis for this entry's `CallSite` design.
+- B35 (Partial Operation Handling) P1 dropped the dynamic detail from runtime traps in favor of structured `VmError` variants. Restoring trap localization is a consumer of this framework's `SourceSpan`, `CallSite`, or a dedicated trap-context opcode, rather than a re-embedded message string.
 
 ## B30. CLI runner deferred work
 
@@ -1682,3 +1685,4 @@ The remaining phases P2 through P9 are pending.
 - The forward enum-to-`Word` cast `compile_enum_to_word` in `src/compiler.rs` is the companion to the new reverse cast in P6.
 - The native code generation target work, when it exists, consumes the P8 contract.
 - The conservative-verification stance in `docs/architecture/LANGUAGE_DESIGN.md` is the framing this entry refines toward genuine totality.
+- B29 (strippable debug opcodes) is where trap localization returns, through its `SourceSpan` or `CallSite` opcode or a dedicated trap-context opcode, after P1 dropped the dynamic detail from runtime traps.
