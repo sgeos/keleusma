@@ -110,5 +110,10 @@ custom bundle can implement the `Library` trait and expose a parallel
 - `register_native_closure` is the route for natives that capture host
   state, as every piano roll native does.
 - `register_library` installs a bundled or custom set of natives.
+- A fallible native's failure is handled on the script side with the
+  native-error construct `native(args) { ok(v) => ..., error(code) =>
+  ... }`. The host reports the `Word` error code by returning an error
+  built with the `KeleusmaError` derive, which maps a fieldless enum's
+  variants to their discriminants. See [Chapter 23](./23_big_numbers.md).
 
 The next chapter drives a script that yields.

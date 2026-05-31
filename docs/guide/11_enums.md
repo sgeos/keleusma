@@ -93,5 +93,8 @@ variant looks like a function call: `Interval::Up(7)`.
   checks this.
 - A variant may carry a value, written `Variant(Type)`, and a `match` arm
   can name and use that carried value.
+- A `Word` can be turned back into an enum value with the
+  discriminant-to-enum construct `d as Name { ... }`, the reverse of
+  casting an enum to its discriminant. See [Chapter 23](./23_big_numbers.md).
 
 The next chapter groups values by position rather than by name.

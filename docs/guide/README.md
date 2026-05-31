@@ -72,7 +72,7 @@ onward.
 |---------|-------|
 | 21 | [Generics and Traits](./21_generics_and_traits.md) |
 | 22 | [Newtypes and Refinement Types](./22_newtypes_and_refinement.md) |
-| 23 | [Big Numbers: The Overflow Construct](./23_big_numbers.md) |
+| 23 | [Handling Partial Operations](./23_big_numbers.md) |
 | 24 | [Information-Flow Labels](./24_information_flow_labels.md) |
 
 ### Part VII — Shipping a Program

@@ -183,9 +183,14 @@ dispatch. Draws on `08_method_dispatch.kel`.
 predicates. Draws on `07_refinement.kel`. Music hook: a part written so a
 wrong note cannot be played.
 
-**Ch 23. Big Numbers: The Overflow Construct.** The `ok`/`overflow`/
-`underflow` arms. Draws on `09_big_numbers.kel`, `10_multbyte.kel`,
-`BIG_NUMBERS.md`.
+**Ch 23. Handling Partial Operations.** The partial-operation construct
+family. Checked arithmetic (`ok`/`overflow`/`underflow`/`zero_divisor`
+over `Word`, `Byte`, `Float`, `Fixed<N>`, with `saturate_max`/
+`saturate_min`), array indexing (`invalid_index`), newtype construction
+(`invalid_newtype`), discriminant-to-enum (`payload_discriminant`/
+`invalid_discriminant`), and native calls (`error`), framed by the
+two-backend contract. Draws on `09_big_numbers.kel`, `10_multbyte.kel`,
+`BIG_NUMBERS.md`, and `RUNTIME_FAULTS.md`.
 
 **Ch 24. Information-Flow Labels.** Confidentiality labels, `classify`,
 `declassify`. An advanced chapter placed late by design. Music hook: a

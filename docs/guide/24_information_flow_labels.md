@@ -1,7 +1,7 @@
 # Chapter 24. Information-Flow Labels
 
 > Part VI, Going Deeper. Chapter 24 of 40.
-> Previous: [Chapter 23, Big Numbers: The Overflow Construct](./23_big_numbers.md).
+> Previous: [Chapter 23, Handling Partial Operations](./23_big_numbers.md).
 > Next: [Chapter 25, From Source to Bytecode](./25_from_source_to_bytecode.md).
 
 ## Goal

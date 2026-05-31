@@ -2,7 +2,7 @@
 
 > Part VI, Going Deeper. Chapter 22 of 40.
 > Previous: [Chapter 21, Generics and Traits](./21_generics_and_traits.md).
-> Next: [Chapter 23, Big Numbers: The Overflow Construct](./23_big_numbers.md).
+> Next: [Chapter 23, Handling Partial Operations](./23_big_numbers.md).
 
 ## Goal
 
@@ -100,5 +100,10 @@ part written so that a wrong note cannot be played.
   at every construction.
 - A construction that provably breaks the rule is rejected before the
   program runs.
+- When a value can break the rule only at run time, the
+  newtype-construction construct `Name(value) { ok(v) => ...,
+  invalid_newtype(x) => ... }` handles the rejection in place. See
+  [Chapter 23](./23_big_numbers.md).
 
-The next chapter handles arithmetic whose result may not fit.
+The next chapter handles the operations that can fail, including the
+construction rejection above.

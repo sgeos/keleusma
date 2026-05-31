@@ -88,6 +88,9 @@ different questions.
 - An array, `[a, b, c]`, is a fixed-length row of one type, read with
   `array[index]`.
 - An array's length is fixed and is part of its type.
+- An index that points past the end is handled with the indexing
+  construct `array[i] { ok(v) => ..., invalid_index(idx) => ... }`. See
+  [Chapter 23](./23_big_numbers.md).
 
 The next chapter studies `match`, the tool for choosing on the shape of a
 value, in depth.
