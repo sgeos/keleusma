@@ -3,9 +3,11 @@
 //!
 //! This crate is the proc-macro backend for the
 //! [`keleusma::KeleusmaType`](https://docs.rs/keleusma/latest/keleusma/trait.KeleusmaType.html)
-//! derive. The expansion generates `KeleusmaType` trait implementations
-//! that convert between the host type and the runtime `Value` enum at
-//! the native function boundary.
+//! derive, which generates `KeleusmaType` trait implementations that
+//! convert between the host type and the runtime `Value` enum at the
+//! native function boundary, and the `keleusma::KeleusmaError` derive,
+//! which generates `From<E> for keleusma::VmError` for a fieldless
+//! enum so a fallible native can report a `Word` error code (B35 P7).
 //!
 //! # Implementation detail
 //!

@@ -777,6 +777,33 @@ let s = code as Status {
 };
 ````
 
+### Native-Error Construct
+
+````
+native_construct = native_call '{' native_arm { ',' native_arm } [ ',' ] '}'
+native_arm     = native_kind [ 'when' expr ] '=>' expr
+native_kind    = 'ok' '(' arm_pattern ')'
+               | 'error' '(' arm_pattern ')'
+arm_pattern    = '_' | lower_ident | signed_int_lit
+````
+
+Guards a native function call against a host failure. The construct shares the arm-block syntax of the other construct-family members, attached to a native call. The `ok` arm binds the success value, and the `error` arm binds the `Word` error code the native reported on failure. The `ok` class must have an unguarded catch-all arm. The `error` class is optional, and an unhandled native error propagates the host failure exactly as it would without the construct. The `error` arm is admissible on any native call, because fallibility is not tracked at compile time; on a native that never fails, the `error` arm is simply never taken. The arithmetic, indexing, newtype, and discriminant arms are inadmissible.
+
+The host reports the `Word` code by returning an error that converts to it. The `keleusma-macros` `KeleusmaError` derive generates `From<E> for VmError` for a fieldless enum, mapping each variant to its discriminant as the code, so the native may `return Err(MyError::Variant.into())`. Pairing the host enum's discriminants with a script-side `enum` lets the error code be recovered structurally with the discriminant-to-enum construct.
+
+A native that fails as part of ordinary control flow should instead return an option or result enum as a normal value and be handled by a standard match, which keeps expected failures in the type system. The `error` arm is reserved for exceptional host failures.
+
+Example:
+
+````
+let row = host::fetch(id) {
+    ok(v) => v,
+    error(code) => code as FetchError {
+        invalid_discriminant(raw) => FetchError::Unknown(raw),
+    } |> recover(),
+};
+````
+
 ### Information-Flow Labels
 
 ````
