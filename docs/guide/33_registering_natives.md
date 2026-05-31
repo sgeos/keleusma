@@ -88,8 +88,8 @@ vm.register_library(stddsl::Shell);  // shell::getenv, shell::run, shell::sleep_
 ````
 
 The Shell bundle in V0.2.1 covers environment access (`getenv`,
-`has_env`, `setenv`), subprocess execution (`run`, `run_checked`,
-`run_timeout`), process termination (`exit`), timing (`sleep_ms`,
+`has_env`, `setenv`), subprocess execution (`run`, `run_full`,
+`run_checked`, `run_timeout`), process termination (`exit`), timing (`sleep_ms`,
 `now_unix_ms`), file I/O (`read_file`, `write_file`, `append_file`,
 `file_exists`), stderr output (`write_err`, `writeln_err`), and host
 metadata (`pid`, `hostname`, `arg_count`, `arg`, `pwd`, `cd`). See
