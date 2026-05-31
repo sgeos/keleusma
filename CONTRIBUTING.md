@@ -43,12 +43,15 @@ cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
 RUSTDOCFLAGS="-D warnings -A rustdoc::redundant-explicit-links" \
     cargo doc -p keleusma --no-deps --features signatures,encryption,shell
-sh scripts/check-md-links.sh
+cargo run -q -p keleusma-cli -- run scripts/check-md-links.kel
 ```
 
 All five must pass. The last verifies that relative links between
-Markdown files resolve to existing files; see
-[`scripts/check-md-links.sh`](scripts/check-md-links.sh) for its scope. CI runs the same set plus per-feature variants, no_std targets, Miri on the arena crate, and the bare-metal STM32N6570-DK build through `examples/rtos`. The doc command uses the docs.rs feature set; the `encryption` feature carries the `crate::encryption` module that the wire-format documentation links to, so omitting it produces an unresolved-link failure.
+Markdown files resolve to existing files. It is itself a Keleusma
+script, [`scripts/check-md-links.kel`](scripts/check-md-links.kel), run
+through the CLI; it orchestrates POSIX tools through `shell::run` and
+drives its exit code from their result. The earlier pure-POSIX
+implementation remains in the git history at `scripts/check-md-links.sh`. CI runs the same set plus per-feature variants, no_std targets, Miri on the arena crate, and the bare-metal STM32N6570-DK build through `examples/rtos`. The doc command uses the docs.rs feature set; the `encryption` feature carries the `crate::encryption` module that the wire-format documentation links to, so omitting it produces an unresolved-link failure.
 
 ## Automated pre-push hook
 

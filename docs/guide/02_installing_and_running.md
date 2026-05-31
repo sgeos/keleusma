@@ -158,6 +158,17 @@ mechanism, and the file is run with `keleusma run octave.kel`, which works
 on every operating system. The shebang line is harmless on Windows, so a
 file that carries it stays usable everywhere.
 
+An executable script becomes most useful when it acts as a small command-
+line tool. With the `shell` native bundle that the CLI registers, a script
+can delegate work to ordinary command-line programs through `shell::run`,
+branch on the `Word` exit code each returns, accumulate in a mutable
+`private data` segment, and set its own exit status with `shell::exit`. The
+repository's own Markdown link-checker, `scripts/check-md-links.kel`, is
+written this way. The text-scanning is left to POSIX tools; the Keleusma
+script orchestrates them and reports the result. The constructs that make
+that orchestration safe, the partial-operation family, are covered in
+[Chapter 23](./23_big_numbers.md).
+
 ## What you now know
 
 - The Keleusma tool is installed and runs from the command line.

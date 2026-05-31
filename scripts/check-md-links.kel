@@ -1,0 +1,60 @@
+#!/usr/bin/env keleusma
+// check-md-links.kel -- verify that relative links in Markdown files
+// resolve to existing files.
+//
+// This is a Keleusma script, run by the `keleusma` CLI through the
+// `#!/usr/bin/env keleusma` shebang. It dogfoods Keleusma as a CLI
+// orchestrator: the text parsing is mathematically partial and the
+// language has no script-side string primitives, so the find-and-check
+// work is delegated to POSIX tools through `shell::run`, and this
+// script drives the control flow on the returned `Word` exit code,
+// accumulates in a mutable `private data` segment, and sets the
+// process exit code with `shell::exit`.
+//
+// The previous pure-POSIX implementation, which is fence-aware and
+// handles link titles, remains in the git history at
+// `scripts/check-md-links.sh`. The delegated pipeline below is a
+// streamlined equivalent: it walks the tree (pruning target, .git,
+// node_modules, and tmp), extracts every inline `](target)` link,
+// skips external and protocol-relative links and anchor fragments,
+// resolves each relative target against its file's directory, prints
+// any that do not resolve, and exits non-zero when any link is broken.
+
+use shell::run
+use shell::writeln_err
+use shell::exit
+
+// Mutable, script-only state that survives across the run. Only
+// `const data` fields admit declaration initializers, so the counter
+// is initialized in `main`.
+private data report {
+    failures: Word,
+}
+
+fn main() -> Word {
+    report.failures = 0;
+
+    // Delegate the find-and-check work to POSIX tools. The command
+    // prints `path broken-link target` for each unresolved relative
+    // link on stdout and exits 0 when every link resolves, 1 otherwise.
+    let (code, details) = shell::run("broken=0; for f in $(find . -path ./target -prune -o -path ./.git -prune -o -path ./node_modules -prune -o -path ./tmp -prune -o -name '*.md' -print); do d=$(dirname $f); for raw in $(grep -oE '][(][^)]*[)]' $f | sed 's/^](//;s/)$//'); do u=${raw%%#*}; case $u in http://*|https://*|//*|mailto:*|'') continue;; esac; if [ ! -e $d/$u ]; then echo $f broken-link $u; broken=1; fi; done; done; exit $broken");
+
+    // Drive control flow on the returned Word, accumulating in the
+    // private data segment.
+    report.failures = if code == 0 {
+        report.failures
+    } else {
+        report.failures + 1 { ok(v) => v }
+    };
+
+    let _ = if report.failures == 0 {
+        shell::writeln_err("md-links: all relative Markdown links resolve")
+    } else {
+        let _ = shell::writeln_err(details);
+        shell::writeln_err("md-links: broken Markdown links found (see above)")
+    };
+
+    // Propagate the delegated tool's status as the process exit code.
+    let _ = shell::exit(code);
+    code
+}

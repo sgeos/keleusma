@@ -27,7 +27,7 @@ echo "pre-push: cargo doc (keleusma, docs.rs feature set, CI flags)"
 RUSTDOCFLAGS="-D warnings -A rustdoc::redundant-explicit-links" \
     cargo doc -p keleusma --no-deps --features signatures,encryption,shell
 
-echo "pre-push: sh scripts/check-md-links.sh"
-sh scripts/check-md-links.sh
+echo "pre-push: keleusma run scripts/check-md-links.kel"
+cargo run -q -p keleusma-cli -- run scripts/check-md-links.kel
 
 echo "pre-push: all checks passed"
