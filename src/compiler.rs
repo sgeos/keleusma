@@ -133,6 +133,15 @@ struct FuncCompiler {
     /// non-convex true sets (e.g. predicates with `or`, `!=`, or
     /// `not (x < N)` over a bounded range) compose cleanly.
     local_ranges: BTreeMap<u16, crate::interval::IntervalSet>,
+    /// When true, the compiler records strippable debug metadata (B29)
+    /// while emitting this chunk and assembles it into the chunk's
+    /// `debug_pool` in [`FuncCompiler::finish`]. Off by default.
+    emit_debug: bool,
+    /// Collected call-site annotations gathered while `emit_debug` is
+    /// on: `(op_index, span)` pairs, one per call instruction emitted
+    /// for a source-level call expression. Drained into `CallSite`
+    /// debug records at finish time.
+    pending_call_sites: Vec<(usize, crate::token::Span)>,
 }
 
 impl FuncCompiler {
@@ -146,6 +155,7 @@ impl FuncCompiler {
         data_fields: BTreeMap<String, Vec<(String, u16)>>,
         const_fields: BTreeMap<String, BTreeMap<String, crate::bytecode::ConstValue>>,
         type_info: TypeInfo,
+        emit_debug: bool,
     ) -> Self {
         Self {
             chunk: Chunk {
@@ -171,6 +181,28 @@ impl FuncCompiler {
             type_info,
             local_const_values: BTreeMap::new(),
             local_ranges: BTreeMap::new(),
+            emit_debug,
+            pending_call_sites: Vec::new(),
+        }
+    }
+
+    /// Record a `CallSite` debug annotation for the call instruction
+    /// most recently emitted, when debug emission is on. Records only
+    /// when the chunk's last op is an actual call instruction, so it is
+    /// safe to invoke after compiling any call-shaped expression: a
+    /// newtype construction or refinement-elided call that emitted no
+    /// call op is correctly skipped.
+    fn record_call_site_last_op(&mut self, span: &crate::token::Span) {
+        if !self.emit_debug {
+            return;
+        }
+        if let Some(idx) = self.chunk.ops.len().checked_sub(1)
+            && matches!(
+                self.chunk.ops[idx],
+                Op::Call(..) | Op::CallVerifiedNative(..) | Op::CallExternalNative(..)
+            )
+        {
+            self.pending_call_sites.push((idx, *span));
         }
     }
 
@@ -436,6 +468,26 @@ impl FuncCompiler {
 
     fn finish(mut self) -> Chunk {
         self.chunk.local_count = self.next_slot;
+        if self.emit_debug && !self.pending_call_sites.is_empty() {
+            use crate::debug_meta::{DebugPool, DebugRecord, DebugRecordKind};
+            let mut pool = DebugPool::default();
+            // A single placeholder file-name entry at index 0. The
+            // compiler does not know the source path; a host that wants
+            // a real file name rewrites string index 0 downstream. The
+            // load-bearing information is the byte span.
+            pool.string_pool.push(String::new());
+            for (op_index, span) in &self.pending_call_sites {
+                let span_idx = pool.span_pool.len() as u16;
+                let length = span.end.saturating_sub(span.start) as u32;
+                pool.span_pool.push((0, span.start as u32, length));
+                pool.records.push(DebugRecord {
+                    op_index: *op_index as u32,
+                    kind: DebugRecordKind::CallSite,
+                    operands: alloc::vec![span_idx],
+                });
+            }
+            self.chunk.debug_pool = Some(pool);
+        }
         self.chunk
     }
 }
@@ -607,6 +659,30 @@ pub fn compile_with_target(
 pub fn compile_with_warnings(
     program: &Program,
     target: &crate::target::Target,
+) -> Result<(Module, Vec<CompileWarning>), CompileError> {
+    compile_with_options(program, target, &CompileOptions::default())
+}
+
+/// Compilation options. Extends the default pipeline with opt-in
+/// behaviour while leaving the existing entry points unchanged.
+#[derive(Debug, Clone, Default)]
+pub struct CompileOptions {
+    /// When true, the compiler emits strippable debug metadata (B29)
+    /// into each chunk's `debug_pool`. The current implementation emits
+    /// `CallSite` records that map each call instruction to the source
+    /// span of the call expression. Default false, so release builds
+    /// carry no debug metadata and produce byte-identical output to the
+    /// pre-B29 compiler.
+    pub emit_debug: bool,
+}
+
+/// As [`compile_with_warnings`], with explicit [`CompileOptions`]. This
+/// is the workhorse; the other entry points delegate here with default
+/// options.
+pub fn compile_with_options(
+    program: &Program,
+    target: &crate::target::Target,
+    options: &CompileOptions,
 ) -> Result<(Module, Vec<CompileWarning>), CompileError> {
     let mut warnings: Vec<CompileWarning> = Vec::new();
     target.validate_against_runtime()?;
@@ -998,6 +1074,7 @@ pub fn compile_with_warnings(
             &data_fields,
             &const_fields,
             &type_info,
+            options.emit_debug,
         )?;
         let span = defs
             .first()
@@ -2169,6 +2246,7 @@ fn compile_function_group(
     data_fields: &BTreeMap<String, Vec<(String, u16)>>,
     const_fields: &BTreeMap<String, BTreeMap<String, crate::bytecode::ConstValue>>,
     type_info: &TypeInfo,
+    emit_debug: bool,
 ) -> Result<Chunk, CompileError> {
     // Within a group, every head after the first must dispatch on
     // a pattern shape distinct from every earlier head; otherwise
@@ -2215,6 +2293,7 @@ fn compile_function_group(
         data_fields.clone(),
         const_fields.clone(),
         type_info.clone(),
+        emit_debug,
     );
     fc.chunk.param_count = param_count;
     fc.chunk.param_types = first.params.iter().map(type_tag_for_param).collect();
@@ -4165,6 +4244,7 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
 
         Expr::Call { name, args, span } => {
             compile_call(fc, name, args, span)?;
+            fc.record_call_site_last_op(span);
         }
 
         Expr::MethodCall {
@@ -4218,6 +4298,7 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
             }
             let arg_count = (args.len() + 1) as u8;
             fc.emit(Op::Call(chunk_idx, arg_count));
+            fc.record_call_site_last_op(span);
         }
 
         Expr::Pipeline {
@@ -4270,6 +4351,7 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
                     span: *span,
                 });
             }
+            fc.record_call_site_last_op(span);
         }
 
         Expr::Yield { value, .. } => {
@@ -6102,6 +6184,90 @@ mod tests {
         let tokens = tokenize(src).expect("lex error");
         let program = parse(&tokens).expect("parse error");
         compile(&program)
+    }
+
+    fn compile_str_debug(src: &str) -> Module {
+        let tokens = tokenize(src).expect("lex error");
+        let program = parse(&tokens).expect("parse error");
+        compile_with_options(
+            &program,
+            &crate::target::Target::host(),
+            &CompileOptions { emit_debug: true },
+        )
+        .expect("compile")
+        .0
+    }
+
+    #[test]
+    fn debug_emission_records_call_site_at_the_call_op() {
+        let src = "fn helper() -> Word { 1 }\nfn main() -> Word { helper() }";
+        let module = compile_str_debug(src);
+        let main_chunk = module
+            .chunks
+            .iter()
+            .find(|c| c.ops.iter().any(|op| matches!(op, Op::Call(..))))
+            .expect("a chunk containing a call");
+        let pool = main_chunk
+            .debug_pool
+            .as_ref()
+            .expect("debug build attaches a debug pool to the calling chunk");
+
+        let call_idx = main_chunk
+            .ops
+            .iter()
+            .position(|op| matches!(op, Op::Call(..)))
+            .unwrap();
+        let call_records: alloc::vec::Vec<_> = pool
+            .records
+            .iter()
+            .filter(|r| r.kind == crate::debug_meta::DebugRecordKind::CallSite)
+            .collect();
+        assert_eq!(call_records.len(), 1, "one CallSite for the single call");
+        assert_eq!(
+            call_records[0].op_index as usize, call_idx,
+            "the CallSite must key on the call instruction's op index"
+        );
+
+        // The referenced span covers the `helper()` call in the source.
+        let span_idx = call_records[0].operands[0] as usize;
+        let (_file, start, len) = pool.span_pool[span_idx];
+        let snippet = &src[start as usize..(start + len) as usize];
+        assert!(
+            snippet.contains("helper"),
+            "span should cover the call expression, got {:?}",
+            snippet
+        );
+    }
+
+    #[test]
+    fn release_build_emits_no_debug_pool() {
+        let src = "fn helper() -> Word { 1 }\nfn main() -> Word { helper() }";
+        let module = compile_str(src).expect("compile");
+        assert!(
+            module.chunks.iter().all(|c| c.debug_pool.is_none()),
+            "a default (release) build must carry no debug metadata"
+        );
+    }
+
+    #[test]
+    fn debug_build_strips_to_release_bytes() {
+        // The debug build, with its debug pools dropped, must encode to
+        // exactly the release bytes (B29 invariant 5 end to end).
+        let src = "fn helper() -> Word { 1 }\nfn main() -> Word { helper() }";
+        let release = compile_str(src).expect("compile");
+        let mut debug = compile_str_debug(src);
+        assert!(
+            debug.chunks.iter().any(|c| c.debug_pool.is_some()),
+            "debug build should have emitted at least one pool"
+        );
+        for c in &mut debug.chunks {
+            c.debug_pool = None;
+        }
+        assert_eq!(
+            release.to_bytes().expect("encode release"),
+            debug.to_bytes().expect("encode stripped"),
+            "stripped debug build must be byte-identical to the release build"
+        );
     }
 
     #[test]
