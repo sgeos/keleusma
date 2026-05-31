@@ -36,6 +36,17 @@ use crate::ast::*;
 /// Apply monomorphization to a program. Returns a new program with
 /// specialized functions added and call sites rewritten.
 pub fn monomorphize(program: Program) -> Program {
+    monomorphize_with_provenance(program).0
+}
+
+/// As [`monomorphize`], additionally returning a provenance map from
+/// each specialized function's mangled name to its `(origin, type_args)`
+/// pair. The compiler consumes this for B29 `GenericInstantiation`
+/// debug records; non-debug builds discard it through the
+/// [`monomorphize`] wrapper.
+pub fn monomorphize_with_provenance(
+    program: Program,
+) -> (Program, BTreeMap<String, (String, String)>) {
     let mut program = program;
 
     // Build a map from function name to FunctionDef for lookup.
@@ -219,6 +230,14 @@ pub fn monomorphize(program: Program) -> Program {
         .functions
         .retain(|f| !specialized_origins.contains(&f.name));
 
+    // Provenance for B29 GenericInstantiation records: invert `specs`
+    // so each specialized function's mangled name maps to its origin
+    // and the canonical type-argument encoding.
+    let provenance: BTreeMap<String, (String, String)> = specs
+        .into_iter()
+        .map(|((origin, type_args), mangled)| (mangled, (origin, type_args)))
+        .collect();
+
     // Generic struct specialization. Walk the program once more
     // looking for `Expr::StructInit` whose target is a generic
     // struct. Infer the struct's type arguments from the provided
@@ -236,7 +255,7 @@ pub fn monomorphize(program: Program) -> Program {
     // arguments, and the pass emits a specialized `EnumDef` with
     // payload types substituted.
     program = specialize_enums(program, &fn_returns);
-    program
+    (program, provenance)
 }
 
 /// Generic enum specialization pass. See [`specialize_structs`] for
