@@ -798,6 +798,12 @@ pub enum CheckedArmKind {
     /// single pattern matches the NaN result. Admissible only on
     /// Float operands.
     Nan(Pattern),
+    /// `invalid_index(index)`: an array index fell outside `[0, len)`.
+    /// The single pattern matches the offending index `Word`.
+    /// Admissible only when the guarded operation is an array index
+    /// (B35 P4). Optional; an unhandled out-of-bounds index traps as
+    /// `VmError::IndexOutOfBounds`.
+    InvalidIndex(Pattern),
 }
 
 impl Expr {

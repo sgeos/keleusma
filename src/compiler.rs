@@ -4659,6 +4659,13 @@ fn compile_checked(
 ) -> Result<(), CompileError> {
     use crate::ast::{CheckedArmKind, Pattern};
 
+    // The indexing construct (B35 P4) shares this node but lowers
+    // differently: a bounds check synthesized from existing opcodes,
+    // not a checked-arithmetic opcode.
+    if let Expr::ArrayIndex { object, index, .. } = op_expr {
+        return compile_checked_index(fc, op_expr, object, index, arms, span);
+    }
+
     // Determine the operand expression and, when it is `Fixed`, its
     // fraction-bit count (B35 P3d-iii). The multiply and divide paths
     // select the `Q`-format-aware checked opcodes
@@ -4822,6 +4829,18 @@ fn compile_checked(
             // against the low slot (where the checked float op places
             // it).
             CheckedArmKind::Nan(p) => (4_i64, Some(p), None, None),
+            // `invalid_index` belongs to the indexing construct, which
+            // is compiled by `compile_checked_index`; reaching it here
+            // means the type checker admitted it on an arithmetic
+            // operation, which is an internal inconsistency.
+            CheckedArmKind::InvalidIndex(_) => {
+                return Err(CompileError {
+                    message: alloc::string::String::from(
+                        "internal error: `invalid_index` arm on a non-indexing checked construct",
+                    ),
+                    span: *span,
+                });
+            }
         };
         fc.emit(Op::GetLocal(flag_slot));
         let class_idx = fc.add_constant(Value::Int(class_flag));
@@ -4919,6 +4938,159 @@ fn compile_checked(
     fc.emit(Op::EndIf);
 
     fc.emit(Op::GetLocal(low_slot));
+    let default_break = fc.emit(Op::Break(0));
+    if let Some(breaks) = fc.loop_breaks.last_mut() {
+        breaks.push(default_break);
+    }
+
+    let endloop_addr = fc.emit(Op::EndLoop(0));
+    let after_loop = (loop_addr + 1) as u16;
+    if let Op::EndLoop(a) = &mut fc.chunk.ops[endloop_addr] {
+        *a = after_loop;
+    }
+    let after_endloop = fc.chunk.ops.len() as u16;
+    if let Op::Loop(a) = &mut fc.chunk.ops[loop_addr] {
+        *a = after_endloop;
+    }
+    fc.exit_loop();
+
+    Ok(())
+}
+
+/// Compile the indexing construct `array[index] { ok(v) => ...,
+/// invalid_index(i) => ... }` (B35 P4). The lowering needs no new
+/// opcode: it synthesizes the bounds check from `Op::Len`, integer
+/// comparisons, and `Op::If`, computing an outcome flag (`0` ok, `1`
+/// invalid index) and stashing the element (in-bounds) or leaving the
+/// index for the `invalid_index` binding. The arm dispatch mirrors
+/// `compile_checked`. An unhandled out-of-bounds index re-issues the
+/// plain `Op::GetIndex`, which traps with the precise
+/// `VmError::IndexOutOfBounds(index, len)`.
+fn compile_checked_index(
+    fc: &mut FuncCompiler,
+    op_expr: &Expr,
+    object: &Expr,
+    index: &Expr,
+    arms: &[crate::ast::CheckedArm],
+    span: &Span,
+) -> Result<(), CompileError> {
+    use crate::ast::{CheckedArmKind, Pattern};
+
+    // The `ok` arm binds the element type; `invalid_index` binds the
+    // index `Word`. The element type comes from the array-index
+    // expression's inferred type.
+    let elem_ty = infer_expr_type(fc, op_expr).unwrap_or(TypeExpr::Prim(PrimType::Word, *span));
+    let word_ty = TypeExpr::Prim(PrimType::Word, *span);
+
+    let suffix = span.start;
+    let arr_slot = fc.declare_local(&alloc::format!("__idx_arr_{}", suffix));
+    let idx_slot = fc.declare_local(&alloc::format!("__idx_i_{}", suffix));
+    let len_slot = fc.declare_local(&alloc::format!("__idx_len_{}", suffix));
+    let flag_slot = fc.declare_local(&alloc::format!("__idx_flag_{}", suffix));
+    let elem_slot = fc.declare_local(&alloc::format!("__idx_elem_{}", suffix));
+
+    // arr_slot = object; idx_slot = index.
+    compile_expr(fc, object)?;
+    fc.emit(Op::SetLocal(arr_slot));
+    compile_expr(fc, index)?;
+    fc.emit(Op::SetLocal(idx_slot));
+    // len_slot = len(arr).
+    fc.emit(Op::GetLocal(arr_slot));
+    fc.emit(Op::Len);
+    fc.emit(Op::SetLocal(len_slot));
+    // flag defaults to 1 (invalid_index); flipped to 0 when in range.
+    let one_idx = fc.add_constant(Value::Int(1));
+    fc.emit(Op::Const(one_idx));
+    fc.emit(Op::SetLocal(flag_slot));
+    // if idx >= 0 { if idx < len { elem = arr[idx]; flag = 0 } }
+    fc.emit(Op::GetLocal(idx_slot));
+    let zero_idx = fc.add_constant(Value::Int(0));
+    fc.emit(Op::Const(zero_idx));
+    fc.emit(Op::CmpGe);
+    let ge_skip = fc.emit_jump(Op::If(0));
+    fc.emit(Op::GetLocal(idx_slot));
+    fc.emit(Op::GetLocal(len_slot));
+    fc.emit(Op::CmpLt);
+    let lt_skip = fc.emit_jump(Op::If(0));
+    fc.emit(Op::GetLocal(arr_slot));
+    fc.emit(Op::GetLocal(idx_slot));
+    fc.emit(Op::GetIndex);
+    fc.emit(Op::SetLocal(elem_slot));
+    let zero_flag_idx = fc.add_constant(Value::Int(0));
+    fc.emit(Op::Const(zero_flag_idx));
+    fc.emit(Op::SetLocal(flag_slot));
+    fc.patch_jump(lt_skip);
+    fc.emit(Op::EndIf);
+    fc.patch_jump(ge_skip);
+    fc.emit(Op::EndIf);
+
+    // Dispatch arms in a virtual loop, mirroring compile_checked.
+    let loop_addr = fc.emit(Op::Loop(0));
+    fc.enter_loop();
+    for arm in arms {
+        fc.begin_scope();
+        let mut fail_addrs: Vec<usize> = Vec::new();
+        let (class_flag, pat, bind_slot, bind_ty): (i64, &Pattern, u16, &TypeExpr) = match &arm.kind
+        {
+            CheckedArmKind::Ok(p) => (0, p, elem_slot, &elem_ty),
+            CheckedArmKind::InvalidIndex(p) => (1, p, idx_slot, &word_ty),
+            _ => {
+                return Err(CompileError {
+                    message: alloc::string::String::from(
+                        "internal error: non-indexing arm in an indexing checked construct",
+                    ),
+                    span: *span,
+                });
+            }
+        };
+        // Class-flag check.
+        fc.emit(Op::GetLocal(flag_slot));
+        let cidx = fc.add_constant(Value::Int(class_flag));
+        fc.emit(Op::Const(cidx));
+        fc.emit(Op::CmpEq);
+        let class_fail = fc.emit_jump(Op::If(0));
+        fail_addrs.push(class_fail);
+        // Literal pattern test against the bound slot.
+        if let Pattern::Literal(crate::ast::Literal::Int(v), _) = pat {
+            fc.emit(Op::GetLocal(bind_slot));
+            let idxc = fc.add_constant(Value::Int(*v));
+            fc.emit(Op::Const(idxc));
+            fc.emit(Op::CmpEq);
+            let fail = fc.emit_jump(Op::If(0));
+            fail_addrs.push(fail);
+        }
+        // Variable binding, typed so arm-body dispatch is correct.
+        if let Pattern::Variable(name, _) = pat {
+            let v_slot = fc.declare_local_typed(name, Some(bind_ty.clone()));
+            fc.emit(Op::GetLocal(bind_slot));
+            fc.emit(Op::SetLocal(v_slot));
+        }
+        // Guard.
+        if let Some(guard) = arm.guard.as_ref() {
+            compile_expr(fc, guard)?;
+            let guard_fail = fc.emit_jump(Op::If(0));
+            fail_addrs.push(guard_fail);
+        }
+        // Body, then break out of the virtual loop with the result.
+        compile_expr(fc, &arm.body)?;
+        let break_addr = fc.emit(Op::Break(0));
+        if let Some(breaks) = fc.loop_breaks.last_mut() {
+            breaks.push(break_addr);
+        }
+        fc.end_scope();
+        for addr in fail_addrs.into_iter().rev() {
+            fc.patch_jump(addr);
+            fc.emit(Op::EndIf);
+        }
+    }
+
+    // No arm matched. Reaching here implies the index was out of
+    // bounds (flag 1) and no `invalid_index` arm covered it, since the
+    // `ok` class is a mandatory catch-all. Re-issue the plain index so
+    // the runtime traps with the precise `IndexOutOfBounds(index, len)`.
+    fc.emit(Op::GetLocal(arr_slot));
+    fc.emit(Op::GetLocal(idx_slot));
+    fc.emit(Op::GetIndex);
     let default_break = fc.emit(Op::Break(0));
     if let Some(breaks) = fc.loop_breaks.last_mut() {
         breaks.push(default_break);

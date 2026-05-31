@@ -2015,15 +2015,129 @@ fn checked_arm_is_catchall(kind: &crate::ast::CheckedArmKind) -> bool {
     use crate::ast::CheckedArmKind;
     let is_catchall_pat = |p: &Pattern| matches!(p, Pattern::Wildcard(_) | Pattern::Variable(_, _));
     match kind {
-        CheckedArmKind::Ok(p) | CheckedArmKind::ZeroDivisor(p) | CheckedArmKind::Nan(p) => {
-            is_catchall_pat(p)
-        }
+        CheckedArmKind::Ok(p)
+        | CheckedArmKind::ZeroDivisor(p)
+        | CheckedArmKind::Nan(p)
+        | CheckedArmKind::InvalidIndex(p) => is_catchall_pat(p),
         CheckedArmKind::Overflow(h, l) | CheckedArmKind::Underflow(h, l) => {
             // A `None` second pattern (the Byte single-pattern form)
             // covers its slot unconditionally.
             is_catchall_pat(h) && l.as_ref().is_none_or(is_catchall_pat)
         }
     }
+}
+
+/// Type-check the indexing construct `array[index] { ok(v) => ...,
+/// invalid_index(i) => ... }` (B35 P4). The admissible arms are `ok`,
+/// binding the element type, and `invalid_index`, binding the
+/// offending index `Word`. The `ok` class must have an unguarded
+/// catch-all; `invalid_index` is optional and an unhandled
+/// out-of-bounds index traps at runtime. The arithmetic outcome arms
+/// (`overflow`, `underflow`, `zero_divisor`, `nan`) are inadmissible.
+fn check_checked_index(
+    ctx: &mut Ctx,
+    op_expr: &mut Expr,
+    arms: &mut [crate::ast::CheckedArm],
+    span: &Span,
+) -> Result<Type, TypeError> {
+    use crate::ast::CheckedArmKind;
+    // The element type is the type of the array-index expression.
+    let elem_ty = type_of_expr(ctx, op_expr)?;
+
+    // Vocabulary: only `ok` and `invalid_index` are admissible.
+    for arm in arms.iter() {
+        let inadmissible = match &arm.kind {
+            CheckedArmKind::Ok(_) | CheckedArmKind::InvalidIndex(_) => None,
+            CheckedArmKind::Overflow(_, _) => Some("overflow"),
+            CheckedArmKind::Underflow(_, _) => Some("underflow"),
+            CheckedArmKind::ZeroDivisor(_) => Some("zero_divisor"),
+            CheckedArmKind::Nan(_) => Some("nan"),
+        };
+        if let Some(name) = inadmissible {
+            return Err(TypeError::new(
+                alloc::format!(
+                    "the `{}` arm is not admissible for array indexing; only `ok` and `invalid_index` are admissible",
+                    name
+                ),
+                arm.span,
+            ));
+        }
+    }
+
+    // Unreachable-arm check per outcome class.
+    let mut ok_catchall_seen = false;
+    let mut invalid_catchall_seen = false;
+    for arm in arms.iter() {
+        let class_catchall_seen = match &arm.kind {
+            CheckedArmKind::Ok(_) => ok_catchall_seen,
+            CheckedArmKind::InvalidIndex(_) => invalid_catchall_seen,
+            _ => false,
+        };
+        if class_catchall_seen {
+            return Err(TypeError::new(
+                alloc::string::String::from(
+                    "indexing-construct arm is unreachable: a prior catch-all arm in the same outcome class already covers it",
+                ),
+                arm.span,
+            ));
+        }
+        if arm.guard.is_none() && checked_arm_is_catchall(&arm.kind) {
+            match &arm.kind {
+                CheckedArmKind::Ok(_) => ok_catchall_seen = true,
+                CheckedArmKind::InvalidIndex(_) => invalid_catchall_seen = true,
+                _ => {}
+            }
+        }
+    }
+    if !ok_catchall_seen {
+        return Err(TypeError::new(
+            alloc::string::String::from(
+                "indexing construct is non-exhaustive on `ok`: the last `ok` arm must be an unguarded catch-all (bare variable or wildcard)",
+            ),
+            *span,
+        ));
+    }
+    // `invalid_index` is optional; an unhandled out-of-bounds index
+    // traps. The flag remains in use only for the unreachable check.
+    let _ = invalid_catchall_seen;
+
+    // Type-check arm bodies. `ok` binds the element type; an
+    // `invalid_index` arm binds the offending index `Word`.
+    let result_ty = ctx.fresh();
+    for arm in arms.iter_mut() {
+        ctx.push_scope();
+        match &arm.kind {
+            CheckedArmKind::Ok(p) => bind_checked_pattern(ctx, p, elem_ty.clone()),
+            CheckedArmKind::InvalidIndex(p) => bind_checked_pattern(ctx, p, Type::Word),
+            _ => {}
+        }
+        if let Some(guard) = arm.guard.as_mut() {
+            let guard_ty = type_of_expr(ctx, guard)?;
+            if !types_compatible(ctx, &strip_labels(guard_ty.clone()), &Type::Bool) {
+                ctx.pop_scope();
+                return Err(TypeError::new(
+                    alloc::format!(
+                        "indexing-construct arm guard must be Bool, got {}",
+                        guard_ty.display()
+                    ),
+                    arm.span,
+                ));
+            }
+        }
+        let body_ty = type_of_expr(ctx, &mut arm.body)?;
+        ctx.pop_scope();
+        if !types_compatible(ctx, &body_ty, &result_ty) {
+            return Err(TypeError::new(
+                alloc::format!(
+                    "indexing-construct arm produces {} which does not unify with the construct's result type {}",
+                    body_ty.display(),
+                    result_ty.apply(&ctx.subst).display()
+                ),
+                arm.span,
+            ));
+        }
+    }
+    Ok(result_ty.apply(&ctx.subst))
 }
 
 /// Bind a checked-arm pattern's variables into the current scope at
@@ -3783,6 +3897,14 @@ fn type_of_expr(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError> {
             arms,
             span,
         } => {
+            // The indexing construct (B35 P4) is a sibling of the
+            // arithmetic construct sharing the same node: when the
+            // guarded operation is an array index, the admissible arms
+            // are `ok` (binding the element) and `invalid_index`
+            // (binding the offending index `Word`).
+            if matches!(op_expr.as_ref(), Expr::ArrayIndex { .. }) {
+                return check_checked_index(ctx, op_expr, arms, span);
+            }
             // The guarded operation must be a single arithmetic
             // operation on Word operands. V0.2 supports the four
             // standard binary ops plus unary negation; other
@@ -3962,6 +4084,11 @@ fn type_of_expr(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError> {
                     // `nan` arises only on Float, where every supported
                     // operator can produce a NaN (e.g. inf - inf, 0/0).
                     CheckedArmKind::Nan(_) => (is_float, "nan"),
+                    // `invalid_index` is the indexing construct's arm,
+                    // never admissible on an arithmetic operation.
+                    // Indexing is routed to `check_checked_index`
+                    // before reaching this path.
+                    CheckedArmKind::InvalidIndex(_) => (false, "invalid_index"),
                 };
                 if !admissible {
                     return Err(TypeError::new(
@@ -4021,6 +4148,8 @@ fn type_of_expr(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError> {
                     CheckedArmKind::Underflow(_, _) => underflow_catchall_seen,
                     CheckedArmKind::ZeroDivisor(_) => zero_divisor_catchall_seen,
                     CheckedArmKind::Nan(_) => nan_catchall_seen,
+                    // Unreachable on arithmetic; indexing routes earlier.
+                    CheckedArmKind::InvalidIndex(_) => false,
                 };
                 if class_catchall_seen {
                     return Err(TypeError::new(
@@ -4038,6 +4167,7 @@ fn type_of_expr(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError> {
                         CheckedArmKind::Underflow(_, _) => underflow_catchall_seen = true,
                         CheckedArmKind::ZeroDivisor(_) => zero_divisor_catchall_seen = true,
                         CheckedArmKind::Nan(_) => nan_catchall_seen = true,
+                        CheckedArmKind::InvalidIndex(_) => {}
                     }
                 }
             }
@@ -4072,7 +4202,8 @@ fn type_of_expr(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError> {
                 match &arm.kind {
                     CheckedArmKind::Ok(p)
                     | CheckedArmKind::ZeroDivisor(p)
-                    | CheckedArmKind::Nan(p) => {
+                    | CheckedArmKind::Nan(p)
+                    | CheckedArmKind::InvalidIndex(p) => {
                         bind_checked_pattern(ctx, p, operand_ty.clone());
                     }
                     CheckedArmKind::Overflow(h, l) | CheckedArmKind::Underflow(h, l) => {
@@ -4966,6 +5097,62 @@ mod tests {
             err.message.contains("not admissible")
                 && err.message.contains("zero_divisor")
                 && err.message.contains("Fixed"),
+            "{}",
+            err.message
+        );
+    }
+
+    // B35 P4: the indexing construct.
+
+    #[test]
+    fn checked_index_ok_and_invalid_index_typecheck() {
+        check_src(
+            "fn main() -> Word { let a = [10, 20, 30]; let y = a[1] { ok(v) => v, invalid_index(i) => i }; y }",
+        )
+        .expect("indexing construct with ok and invalid_index should typecheck");
+    }
+
+    #[test]
+    fn checked_index_ok_only_typechecks() {
+        // invalid_index is optional; ok alone is exhaustive.
+        check_src("fn main() -> Word { let a = [10, 20, 30]; let y = a[1] { ok(v) => v }; y }")
+            .expect("indexing construct with only ok should typecheck");
+    }
+
+    #[test]
+    fn checked_index_arithmetic_arm_rejected() {
+        let err = check_src(
+            "fn main() -> Word { let a = [10, 20, 30]; let y = a[1] { ok(v) => v, overflow(w) => w }; y }",
+        )
+        .unwrap_err();
+        assert!(
+            err.message.contains("not admissible") && err.message.contains("array indexing"),
+            "{}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn checked_invalid_index_arm_rejected_on_arithmetic() {
+        let err = check_src(
+            "fn main() -> Word { let y = 1 + 2 { ok(v) => v, invalid_index(i) => i }; y }",
+        )
+        .unwrap_err();
+        assert!(
+            err.message.contains("not admissible") && err.message.contains("invalid_index"),
+            "{}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn checked_index_non_exhaustive_ok_rejected() {
+        let err = check_src(
+            "fn main() -> Word { let a = [10, 20, 30]; let y = a[1] { invalid_index(i) => i }; y }",
+        )
+        .unwrap_err();
+        assert!(
+            err.message.contains("non-exhaustive on `ok`"),
             "{}",
             err.message
         );

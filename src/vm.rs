@@ -5161,6 +5161,91 @@ mod tests {
         assert_eq!(val, Value::Fixed(327680));
     }
 
+    // B35 P4: the indexing construct `array[i] { ok(v) => ...,
+    // invalid_index(idx) => ... }`. The `ok` arm binds the element;
+    // `invalid_index` binds the offending index. An unhandled
+    // out-of-bounds index re-issues the plain index and traps with
+    // the precise IndexOutOfBounds payload.
+
+    #[test]
+    fn checked_index_ok_in_bounds_binds_element() {
+        let val = run_expect(
+            "fn main() -> Word {\n\
+                let a = [10, 20, 30];\n\
+                a[1] {\n\
+                    ok(v) => v,\n\
+                    invalid_index(i) => i,\n\
+                }\n\
+             }",
+            &[],
+        );
+        assert_eq!(val, Value::Int(20));
+    }
+
+    #[test]
+    fn checked_index_oob_binds_index() {
+        let val = run_expect(
+            "fn main() -> Word {\n\
+                let a = [10, 20, 30];\n\
+                a[7] {\n\
+                    ok(v) => v,\n\
+                    invalid_index(i) => i,\n\
+                }\n\
+             }",
+            &[],
+        );
+        assert_eq!(val, Value::Int(7));
+    }
+
+    #[test]
+    fn checked_index_negative_routes_to_invalid_index() {
+        let val = run_expect(
+            "fn main() -> Word {\n\
+                let a = [10, 20, 30];\n\
+                a[0 - 5] {\n\
+                    ok(v) => v,\n\
+                    invalid_index(i) => i,\n\
+                }\n\
+             }",
+            &[],
+        );
+        assert_eq!(val, Value::Int(-5));
+    }
+
+    #[test]
+    fn checked_index_unhandled_oob_traps_with_payload() {
+        // No invalid_index arm: an out-of-bounds index re-issues the
+        // plain index, trapping with the precise (index, len).
+        let err = run_program(
+            "fn main() -> Word {\n\
+                let a = [10, 20, 30];\n\
+                a[7] {\n\
+                    ok(v) => v,\n\
+                }\n\
+             }",
+            &[],
+        )
+        .unwrap_err();
+        assert!(matches!(err, VmError::IndexOutOfBounds(7, 3)), "{:?}", err);
+    }
+
+    #[test]
+    fn checked_index_element_binds_at_element_type() {
+        // A Byte array's `ok` binding is typed Byte, so the body
+        // returns a Byte without a coercion error.
+        let val = run_expect(
+            "fn main() -> Byte {\n\
+                let a = [10Byte, 20Byte, 30Byte];\n\
+                a[2] {\n\
+                    ok(v) => v,\n\
+                    invalid_index(_) => 0Byte,\n\
+                }\n\
+             }",
+            &[],
+        );
+        assert_eq!(val, Value::Byte(30));
+    }
+
     // The next three checked-overflow tests embed integer literals
     // (4294967296 = 2^32, large guard values, literal-high patterns)
     // sized for an i64 Word. Under any of the `narrow-word-*`

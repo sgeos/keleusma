@@ -1272,7 +1272,7 @@ impl<'a> Parser<'a> {
         matches!(
             self.peek_ahead(1),
             TokenKind::Overflow | TokenKind::Underflow
-        ) || matches!(self.peek_ahead(1), TokenKind::LowerIdent(s) if s == "ok")
+        ) || matches!(self.peek_ahead(1), TokenKind::LowerIdent(s) if s == "ok" || s == "invalid_index")
     }
 
     fn parse_checked_arms_after(&mut self, op_expr: Expr) -> Result<Expr, ParseError> {
@@ -1393,9 +1393,16 @@ impl<'a> Parser<'a> {
                 self.expect(&TokenKind::RParen)?;
                 Ok(crate::ast::CheckedArmKind::Nan(p))
             }
+            TokenKind::LowerIdent(name) if name == "invalid_index" => {
+                self.bump();
+                self.expect(&TokenKind::LParen)?;
+                let p = self.parse_checked_arm_pattern()?;
+                self.expect(&TokenKind::RParen)?;
+                Ok(crate::ast::CheckedArmKind::InvalidIndex(p))
+            }
             other => Err(ParseError {
                 message: alloc::format!(
-                    "expected `ok(pattern)`, `overflow(...)`, `underflow(...)`, `zero_divisor(numerator)`, or `nan(result)`, found {:?}",
+                    "expected `ok(pattern)`, `overflow(...)`, `underflow(...)`, `zero_divisor(numerator)`, `nan(result)`, or `invalid_index(index)`, found {:?}",
                     other
                 ),
                 span: self.peek_span(),
