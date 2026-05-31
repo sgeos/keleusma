@@ -3436,7 +3436,7 @@ fn eval_expr_with(expr: &Expr, lookup: &dyn Fn(&str) -> Option<EvalValue>) -> Op
 /// - `predicate_a and predicate_b` (set intersection).
 /// - `predicate_a or predicate_b` (set union).
 /// - `not predicate` (set complement) for any handled subexpression.
-fn predicate_true_set(body: &Expr, param: &str) -> Option<crate::interval::IntervalSet> {
+pub(crate) fn predicate_true_set(body: &Expr, param: &str) -> Option<crate::interval::IntervalSet> {
     use crate::interval::IntervalSet;
     match body {
         Expr::Literal {

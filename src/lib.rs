@@ -187,6 +187,12 @@ pub mod typecheck;
 /// the AST.
 #[cfg(feature = "compile")]
 pub mod visitor;
+/// Canonical zero value per type and lowest-valid resolution for
+/// refined newtypes. Parallel infrastructure for B35's Partial
+/// Operation Handling; native code generation is the intended
+/// consumer. Not yet consumed by the runtime.
+#[cfg(feature = "compile")]
+pub mod zero_value;
 
 // Verifier modules. Gated behind the `verify` feature (default
 // on). With the feature off, `Vm::new` skips structural and

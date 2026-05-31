@@ -1676,7 +1676,9 @@ Distinct top-level variants were chosen over a single `Trap(TrapKind)` variant f
 
 One behavioral change is recorded as open. The prior runtime trap message embedded dynamic detail such as the failing predicate and newtype names, and that detail is dropped from the runtime error in favor of the structured kind, consistent with the language's move away from runtime strings. Localization, if wanted, should return through a compact source location on the trap rather than through a message string, which is B29 debug-information territory.
 
-The remaining phases P2 through P9 are pending.
+P2 is implemented on the same branch as the `crate::zero_value` module, gated behind the `compile` feature because it operates on abstract-syntax-tree types. It provides `zero_value`, which returns the canonical zero value of any type as a `ConstValue`, and `lowest_valid`, which resolves a refined newtype's lowest valid value by the precedence above, namely a declared `with saturate_min`, then the minimum of the predicate's true set computed by reusing the compiler's `predicate_true_set` over the interval and lattice analysis, then none. The module is pure and operates on a borrowed `TypeRegistry` of declarations, so it is unit-tested in isolation. It has no runtime consumer yet, since the virtual machine traps rather than substituting a zero value, and native code generation is the intended consumer, so this is parallel infrastructure in the same sense as the B28 P0 and P1 scaffolding.
+
+The remaining phases P3 through P9 are pending.
 
 **Cross-references.**
 
