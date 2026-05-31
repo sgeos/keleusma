@@ -1541,3 +1541,134 @@ B28 P5 or P6, when shared `data` access integrates with the flat-byte runtime. U
 - B28 (runtime composite Value representation aligned with the language guarantee) is the immediate consumer.
 - The existing `keleusma-macros` crate is the implementation site.
 - The `#[derive(KeleusmaType)]` macro's current shape lives in `keleusma-macros/src/lib.rs`.
+
+## B35. Partial Operation Handling
+
+Every operation in the language that is mathematically partial, namely undefined on some inputs, currently traps at runtime when given an undefined input. The partial operations are integer division and modulo on a zero divisor, explicit array indexing out of bounds, refinement-newtype construction whose predicate fails, the planned discriminant-to-enum conversion on an invalid or payload-bearing discriminant, and fallible native function calls. The verifier proves termination and the worst-case execution time and worst-case memory usage bounds, but it does not prove totality, so these traps are the partiality the language admits. B35 gives every partial operation a defined contract and an opt-in handling mechanism, so that a program can be made total at the source level and so that native code generation has a defined, non-crashing contract on every target.
+
+This is a redesign of the existing checked-arithmetic construct, not only an addition. The current construct requires a covering arm for each of the `ok`, `overflow`, and `underflow` classes and traps on a zero divisor even when handled. Under B35 the arms become optional with defined defaults, a zero-divisor outcome is added, and the construct family extends to indexing, newtype construction, discriminant-to-enum conversion, and native calls.
+
+**The two-backend contract.**
+
+- The virtual machine traps on any unhandled partial operation. A trap is a recoverable error returned to the host, not a process abort, consistent with the existing treatment of arena exhaustion.
+- Native code produces a defined, non-crashing value for any unhandled partial operation. It uses the hardware result where the hardware does not fault, and an inserted guard that yields a defined value where the hardware would fault. The unhandled native value is therefore platform-specific, so handling the arm is what makes a program portable in value.
+
+The virtual machine is the safe reference interpreter. Native code is the as-fast-as-hardware target with its own contract. The two intentionally diverge on unhandled partial operations, and that divergence is part of the contract rather than an accident, so verification on the virtual machine does not by itself establish the values a native build produces.
+
+**Hardware basis.**
+
+- x86 and x86-64 raise a divide-error fault on integer division or modulo by zero. Native code inserts a guard to avoid the fault.
+- ARM returns zero for integer division by zero and does not fault.
+- RISC-V returns all-ones for the quotient and the dividend for the remainder, and does not fault.
+- The 6502 has no divide instruction at all. Division is a software routine, so the routine defines the zero-divisor result, and there is no hardware fault. The 6502 also has no arithmetic fault mechanism, no memory protection, and on the NES no operating system, so a trap there can only be a compiler-emitted software check, and the nominally-safe defined value is the appropriate contract.
+- Institute of Electrical and Electronics Engineers 754 floating point already defines non-trapping results, namely signed infinity, not-a-number, and a defined zero-divisor result. So for floating point the arms intercept those special results rather than avert a trap.
+
+**Native default values.**
+
+| Operation | Native default where the hardware does not fault | Native default where the hardware faults |
+|-----------|---------------------------------------------------|-------------------------------------------|
+| Division by zero | hardware result | zero |
+| Modulo by zero | hardware result | the numerator |
+| Out-of-bounds index | not applicable | the element type's zero-or-lowest-valid value |
+| Newtype predicate failure | not applicable | see the lowest-valid precedence |
+| Discriminant-to-enum, invalid | not applicable | the zero-discriminant variant, or the lowest valid variant |
+| Native error | not applicable | trap, since there is no safe default |
+
+Modulo defaults to the numerator rather than zero, which matches the RISC-V remainder convention and the value ARM derives, so it is closer to portable than zero would be.
+
+**Lowest-valid precedence.** Several native defaults need the lowest valid value of a refined type. It is resolved in this order. First, the value declared by the newtype's `with saturate_min` clause, which already exists in the grammar and is predicate-checked. Second, the lowest valid value computed by the interval and lattice analysis, when the valid set is analyzable. Third, where neither exists, the virtual machine traps and native code uses a hard zero even if it violates the predicate, because a bare-metal target has no recovery context and no better option.
+
+**The canonical zero value.** A single zero value is defined once for every type and used by the out-of-bounds, newtype, and conversion native defaults. It is zero for `Word`, `0` for `Byte`, `0.0` for `Float`, `false` for `Bool`, the empty string for `Text`, each field's zero value for a tuple or struct, and the zero-discriminant variant, or lowest-discriminant variant when zero is not present, for an enum. For a refined newtype it is the lowest-valid value above.
+
+**The construct family.** Each construct is a standard match block over a fallible operation, distinguished only by a fixed vocabulary of specialized outcome-arm keywords. The arms are optional unless noted, and omitting an admissible arm invokes the default behavior above. An arm keyword is admissible only when its condition can arise, and writing an inadmissible arm is a compile error. The type checker enforces both the vocabulary and the per-construct exhaustiveness rule.
+
+| Construct | Admissible outcome arms | Mandatory coverage |
+|-----------|------------------------|--------------------|
+| Division, modulo | `ok`, `overflow` where it can arise, `zero_divisor` | success only |
+| Checked add, subtract, multiply, negate | `ok`, `overflow`, `underflow` where each can arise | success only |
+| Array indexing | `ok`, `invalid_index` | success only |
+| Newtype construction | `ok`, `invalid_newtype` | success only |
+| Discriminant-to-enum | `ok`, `payload_discriminant`, `invalid_discriminant` | success and every payload-bearing variant |
+| Fallible native call | `ok`, `error` | success only |
+
+The zero-divisor arm is named `zero_divisor` for both division and modulo. The arithmetic arms bind the relevant datum, for example `zero_divisor(numerator)` and `invalid_index(index)`, and the wildcard form is permitted in every position.
+
+**Per-operation admissibility.** The admissibility of `overflow` and `underflow` depends on the operator and the operand type. The table below is for the signed `Word` type.
+
+| Operation | overflow | underflow | zero_divisor |
+|-----------|----------|-----------|--------------|
+| `+`, `-`, `*` | yes | yes | no |
+| unary `-` | yes, negating the minimum | no | no |
+| `/` | yes, minimum over negative one | no | yes |
+| `%` | no | no | yes |
+
+For the unsigned `Byte` type the table differs. Addition and multiplication can overflow but not underflow, subtraction can underflow below zero but not overflow, division never overflows, and modulo neither overflows nor underflows. For `Float` the Institute of Electrical and Electronics Engineers 754 special results replace overflow and underflow with the infinity, not-a-number, and zero-divisor outcomes. The implementation computes admissibility from the operand type, not the operator alone.
+
+**Default for missing arithmetic arms.** Overflow and underflow default to two's-complement wrapping. So an `ok(v) => v` arm with no overflow or underflow arm is functionally identical to the bare wrapping operation, which is acceptable. The success arm is required.
+
+**Discriminant-to-enum conversion.** The conversion `discriminant as EnumType { ... }` turns a `Word` into an enum value. Because only the `Word` is available, payload data cannot be reconstructed from it, so the three arm kinds split the variants by what the discriminant can determine.
+
+- `ok(UnitValue)` names a unit, that is discriminant-only, variant. The conversion produces that variant automatically, and the arm is an optional override. A unit variant with no `ok` arm converts to itself. A generic `ok(v)` arm is permitted and binds the converted unit-variant value as a blanket post-processor, ordered after any specific `ok` arms.
+- `payload_discriminant(IntValue)` names a payload-bearing variant. The discriminant cannot carry the payload, so the author supplies it in the arm body, and coverage of every payload-bearing variant is mandatory, including through a `payload_discriminant(_) => SomeUnitVariant` catch-all.
+- `invalid_discriminant(_)` catches a `Word` that matches no variant. The virtual machine default is a trap. The native default is the zero-discriminant variant, or the lowest valid variant when zero is not a discriminant.
+
+Arms match by variant name, not by raw discriminant integer, so the construct is robust to discriminant renumbering. The type checker rejects a payload variant in `ok` and a unit variant in `payload_discriminant`. Every arm body yields the target enum type. An example follows.
+
+```
+let enum_value = discriminant as EnumType {
+  ok(UnitValue) => OtherUnitValue,
+  ok(ThirdUnitValue) => StringValue("empty"),
+  payload_discriminant(IntValue) => IntValue(0),
+  payload_discriminant(OtherIntValue) => OtherIntValue(generate_inner()),
+  invalid_discriminant(_) => safe_default(),
+};
+```
+
+The forward enum-to-`Word` cast already exists. The reverse `Word`-to-enum cast is new machinery.
+
+**Native function errors.** A fallible native yields a `Word` error code on failure. The `error(code)` arm binds it. The error arm is admissible only for fallible natives, and an `error` arm on an infallible native is a compile error. Native errors have no safe default, so an unhandled native error traps on both backends, which is consistent with the rule that an operation gets a defined non-trapping default only when a total result exists. The `Word` error code may be converted to a structured error enum with the discriminant-to-enum construct, where a failed conversion falls through to the next arm.
+
+```
+let result = native_function(parameters) {
+  ok(v) => v,
+  error(code) => recover(code as ErrorEnum {
+    invalid_discriminant(raw) => default_error(raw),
+  }),
+};
+```
+
+A native that fails as part of normal control flow should instead return an option or result enum as an ordinary value, handled by a standard match. That keeps expected failures in the type system. The `error` arm is reserved for exceptional host failures.
+
+**Specific trap errors.** The generic `VmError::Trap(String)` is replaced by specific error variants, for example a refinement-failure error, a no-matching-head error, a no-matching-arm error, a zero-divisor error, an out-of-bounds error, and an invalid-discriminant error. This lets the host's error-category mechanism map outcomes to policy without parsing a message string.
+
+**Exhaustiveness.** Ordinary matches and multiheaded functions remain exhaustive. The specialized outcome arms are opt-in, and omitting an admissible arm invokes the default behavior, except for the mandatory coverage noted in the construct table.
+
+**Construct syntax.** The failure-handling block is uniform across the construct family. The keyword choice, whether a leading `match`, a postfix brace, or another keyword, is open, but it must be the same across arithmetic, indexing, newtype construction, conversion, and native calls.
+
+**Open items requiring verification before implementation.**
+
+- Whether a zero-sized array `[T; 0]` can be constructed at all. If the parser and monomorphizer never produce one, the out-of-bounds default needs only a defensive note. If they can, the element type's zero value is the answer.
+- The `Word`-to-enum cast does not exist yet and is net-new.
+- The checked-arithmetic construct is being redesigned from mandatory arms to optional arms with a new zero-divisor outcome, so the change is not purely additive.
+
+**Phased plan.**
+
+| Phase | Scope |
+|-------|-------|
+| P1 | Specific trap error variants replacing `VmError::Trap`. Independent and low risk. |
+| P2 | Canonical zero value for every type, and the lowest-valid precedence that consults `with saturate_min`. |
+| P3 | Redesign the arithmetic construct, namely optional arms, the `zero_divisor` outcome, per-operand-type admissibility, and wrapping defaults. |
+| P4 | Indexing construct and the out-of-bounds native default. |
+| P5 | Newtype construction construct and its native default. |
+| P6 | `Word`-to-enum cast and the discriminant-to-enum construct with its three arm kinds. |
+| P7 | Native error `error(code)` arm and the option-or-result idiom. |
+| P8 | Native code generation contract per target, namely the inserted guards and the platform-specific defaults. Gated on the native code generation work tracked elsewhere. |
+| P9 | Documentation, namely the grammar, the language design narrative, and a runtime-faults reference, and B35 closure. |
+
+**Cross-references.**
+
+- The existing checked-arithmetic construct in `src/compiler.rs` and `src/vm.rs` is the redesign site for P3.
+- The `with saturate_min` and `saturate_max` machinery in `src/parser.rs` and the grammar is reused by P2.
+- The forward enum-to-`Word` cast `compile_enum_to_word` in `src/compiler.rs` is the companion to the new reverse cast in P6.
+- The native code generation target work, when it exists, consumes the P8 contract.
+- The conservative-verification stance in `docs/architecture/LANGUAGE_DESIGN.md` is the framing this entry refines toward genuine totality.
