@@ -199,6 +199,7 @@ fn build_benchmark_chunk(pattern: &[Op], constants: &[ConstValue], repetitions: 
         param_count: 0,
         block_type: BlockType::Func,
         param_types: Vec::new(),
+        debug_pool: None,
     };
 
     Module {

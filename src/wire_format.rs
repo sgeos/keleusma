@@ -908,6 +908,16 @@ pub struct WireChunk {
     /// The chunk's total byte span in the opcode stream is
     /// `op_record_count * OPCODE_RECORD_BYTES`.
     pub op_record_count: u32,
+    /// Optional strippable debug metadata (B29), carried as the
+    /// canonical bytes produced by
+    /// [`crate::debug_meta::DebugPool::encode`]. `None` for a release
+    /// build or a stripped artefact. Held as opaque bytes so the
+    /// section is parseable by external tooling without rkyv and so
+    /// dropping it (strip) is a single `None` assignment. The debug
+    /// metadata lives only here in the auxiliary body, never in the
+    /// opcode stream, which keeps the opcode stream byte-identical
+    /// between debug and release builds.
+    pub debug_pool_bytes: Option<Vec<u8>>,
 }
 
 /// Wire-format auxiliary body. Mirrors [`Module`] but carries
@@ -1214,6 +1224,7 @@ pub fn module_to_wire_bytes(module: &Module) -> Result<Vec<u8>, LoadError> {
             param_types: chunk.param_types.clone(),
             op_byte_offset,
             op_record_count,
+            debug_pool_bytes: chunk.debug_pool.as_ref().map(|p| p.encode()),
         });
     }
     let aux = WireAuxBody {
@@ -1415,6 +1426,7 @@ pub fn module_to_signed_wire_bytes(
             param_types: chunk.param_types.clone(),
             op_byte_offset,
             op_record_count,
+            debug_pool_bytes: chunk.debug_pool.as_ref().map(|p| p.encode()),
         });
     }
     let aux = WireAuxBody {
@@ -2103,6 +2115,13 @@ pub fn module_from_wire_bytes(bytes: &[u8]) -> Result<Module, LoadError> {
                 .map_err(|e| LoadError::Codec(format!("opcode decode failed: {:?}", e)))?;
             ops.push(op);
         }
+        let debug_pool = match &wc.debug_pool_bytes {
+            Some(bytes) => Some(
+                crate::debug_meta::DebugPool::decode(bytes)
+                    .map_err(|e| LoadError::Codec(format!("debug pool decode failed: {:?}", e)))?,
+            ),
+            None => None,
+        };
         chunks.push(Chunk {
             name: wc.name.clone(),
             ops,
@@ -2112,6 +2131,7 @@ pub fn module_from_wire_bytes(bytes: &[u8]) -> Result<Module, LoadError> {
             param_count: wc.param_count,
             block_type: wc.block_type,
             param_types: wc.param_types.clone(),
+            debug_pool,
         });
     }
 
@@ -2473,6 +2493,7 @@ mod tests {
             param_count: 0,
             block_type: BlockType::Func,
             param_types: alloc::vec::Vec::new(),
+            debug_pool: None,
         };
         Module {
             chunks: alloc::vec![chunk],
@@ -2519,6 +2540,85 @@ mod tests {
         module_roundtrip_through_wire_format(make_minimal_module());
     }
 
+    fn sample_debug_pool() -> crate::debug_meta::DebugPool {
+        use crate::debug_meta::{DebugPool, DebugRecord, DebugRecordKind};
+        DebugPool {
+            string_pool: alloc::vec![alloc::string::String::from("main.kel")],
+            span_pool: alloc::vec![(0, 0, 2)],
+            type_pool: alloc::vec::Vec::new(),
+            records: alloc::vec![
+                DebugRecord {
+                    op_index: 0,
+                    kind: DebugRecordKind::SourceSpan,
+                    operands: alloc::vec![0],
+                },
+                DebugRecord {
+                    op_index: 1,
+                    kind: DebugRecordKind::CallSite,
+                    operands: alloc::vec![0],
+                },
+            ],
+        }
+    }
+
+    #[test]
+    fn module_roundtrip_preserves_debug_pool() {
+        let mut module = make_minimal_module();
+        let pool = sample_debug_pool();
+        module.chunks[0].debug_pool = Some(pool.clone());
+        let bytes = module_to_wire_bytes(&module).expect("encode");
+        let decoded = module_from_wire_bytes(&bytes).expect("decode");
+        let decoded_pool = decoded.chunks[0]
+            .debug_pool
+            .as_ref()
+            .expect("debug pool survives round trip");
+        // Compare canonically; `encode` is record-order independent.
+        assert_eq!(decoded_pool.encode(), pool.encode());
+        // Decode then re-encode is byte-stable.
+        let re = module_to_wire_bytes(&decoded).expect("re-encode");
+        assert_eq!(bytes, re);
+    }
+
+    #[test]
+    fn debug_pool_does_not_alter_opcode_stream() {
+        // B29 invariant 4: debug metadata lives only in the auxiliary
+        // body, so the opcode stream section is byte-identical whether
+        // or not a chunk carries a debug pool.
+        let without = make_minimal_module();
+        let mut with = make_minimal_module();
+        with.chunks[0].debug_pool = Some(sample_debug_pool());
+
+        let bytes_without = module_to_wire_bytes(&without).expect("encode");
+        let bytes_with = module_to_wire_bytes(&with).expect("encode");
+
+        let s_without = parse_wire_sections(&bytes_without).expect("sections");
+        let s_with = parse_wire_sections(&bytes_with).expect("sections");
+        assert_eq!(
+            s_without.opcode_stream, s_with.opcode_stream,
+            "debug metadata must not change the opcode stream"
+        );
+    }
+
+    #[test]
+    fn stripping_debug_pool_reproduces_release_bytes() {
+        // B29 invariant 5 at the wire level: encoding a module whose
+        // debug pool has been dropped yields bytes identical to a module
+        // that never carried one.
+        let release = make_minimal_module();
+        let release_bytes = module_to_wire_bytes(&release).expect("encode");
+
+        let mut debug = make_minimal_module();
+        debug.chunks[0].debug_pool = Some(sample_debug_pool());
+        // Strip: drop the section.
+        debug.chunks[0].debug_pool = None;
+        let stripped_bytes = module_to_wire_bytes(&debug).expect("encode");
+
+        assert_eq!(
+            release_bytes, stripped_bytes,
+            "stripped bytecode must be byte-identical to a release build"
+        );
+    }
+
     #[test]
     fn module_roundtrip_branchy_program() {
         // Exercise If/Else/EndIf and a loop with a BreakIf.
@@ -2540,6 +2640,7 @@ mod tests {
             param_count: 0,
             block_type: BlockType::Func,
             param_types: alloc::vec::Vec::new(),
+            debug_pool: None,
         };
         let if_chunk = Chunk {
             name: alloc::string::String::from("if_chain"),
@@ -2558,6 +2659,7 @@ mod tests {
             param_count: 0,
             block_type: BlockType::Func,
             param_types: alloc::vec::Vec::new(),
+            debug_pool: None,
         };
         let module = Module {
             chunks: alloc::vec![body_chunk, if_chunk],
@@ -2599,6 +2701,7 @@ mod tests {
             param_count: 0,
             block_type: BlockType::Func,
             param_types: alloc::vec::Vec::new(),
+            debug_pool: None,
         };
         let module = Module {
             chunks: alloc::vec![chunk],
@@ -2639,6 +2742,7 @@ mod tests {
             param_count: 0,
             block_type: BlockType::Stream,
             param_types: alloc::vec::Vec::new(),
+            debug_pool: None,
         };
         let module = Module {
             chunks: alloc::vec![chunk],

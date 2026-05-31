@@ -157,6 +157,7 @@ impl FuncCompiler {
                 param_count: 0,
                 block_type,
                 param_types: Vec::new(),
+                debug_pool: None,
             },
             locals: Vec::new(),
             scope_depth: 0,
@@ -6751,6 +6752,7 @@ mod tests {
             param_count: 0,
             block_type: crate::bytecode::BlockType::Func,
             param_types: alloc::vec::Vec::new(),
+            debug_pool: None,
         }
     }
 

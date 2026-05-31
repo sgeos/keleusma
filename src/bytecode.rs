@@ -1400,6 +1400,13 @@ pub struct Chunk {
     /// For Stream chunks, the single entry also serves as the
     /// resume value's type (see [`crate::vm::Vm::resume`]).
     pub param_types: Vec<TypeTag>,
+    /// Optional strippable debug metadata (B29). `None` for a release
+    /// build or a stripped artefact; `Some` when the chunk carries
+    /// development aids such as source spans and variable names. The
+    /// debug pool is held entirely here and never in `ops`, so the
+    /// opcode sequence is byte-identical whether or not the pool is
+    /// present. See [`crate::debug_meta`].
+    pub debug_pool: Option<crate::debug_meta::DebugPool>,
 }
 
 /// Compact representation of a primitive parameter type for
@@ -2343,6 +2350,7 @@ mod cost_model_tests {
             param_count: 0,
             block_type: BlockType::Func,
             param_types: alloc::vec::Vec::new(),
+            debug_pool: None,
         };
         let op = Op::NewArray(4);
         let nominal_bytes = nominal.heap_alloc_bytes(&op, &chunk);
@@ -2413,6 +2421,7 @@ mod cost_model_tests {
             param_count: 0,
             block_type: BlockType::Func,
             param_types: alloc::vec::Vec::new(),
+            debug_pool: None,
         };
         let cost = NOMINAL_COST_MODEL.heap_alloc_cost(&Op::Add, &chunk);
         assert!(matches!(cost, OpCost::Dynamic(_)));
@@ -2434,6 +2443,7 @@ mod cost_model_tests {
             param_count: 0,
             block_type: BlockType::Func,
             param_types: alloc::vec::Vec::new(),
+            debug_pool: None,
         };
         let cost = NOMINAL_COST_MODEL.heap_alloc_cost(&Op::NewArray(3), &chunk);
         assert!(matches!(cost, OpCost::Fixed(_)));
@@ -2456,6 +2466,7 @@ mod cost_model_tests {
             param_count: 0,
             block_type: BlockType::Func,
             param_types: alloc::vec::Vec::new(),
+            debug_pool: None,
         };
         assert_eq!(NOMINAL_COST_MODEL.heap_alloc_bytes(&Op::Add, &chunk), 0);
     }

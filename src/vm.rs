@@ -7722,17 +7722,25 @@ mod tests {
         // Layout: 64-byte framing header + opcode stream (8 bytes:
         // PushImmediate(5) + Return as 4-byte records) + empty
         // operand pool + rkyv-archived WireAuxBody + 4-byte CRC.
-        // Total length: 216 bytes.
+        // Total length: 228 bytes.
+        //
+        // The aux body grew by the optional per-chunk
+        // `WireChunk::debug_pool_bytes` field added for B29 (strippable
+        // debug metadata). It is `None` here, so the chunk carries no
+        // debug section; rkyv still archives the `Option`, which
+        // accounts for the increase from the prior 216 bytes. Per B29
+        // the wire-format addition lands without a BYTECODE_VERSION bump
+        // (the runtime has no production traction).
         let expected: alloc::vec::Vec<u8> = alloc::vec![
-            75, 69, 76, 69, 1, 0, 64, 0, 216, 0, 0, 0, 6, 6, 6, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-            0, 0, 0, 0, 0, 64, 0, 0, 0, 8, 0, 0, 0, 72, 0, 0, 0, 0, 0, 0, 0, 72, 0, 0, 0, 140, 0,
+            75, 69, 76, 69, 1, 0, 64, 0, 228, 0, 0, 0, 6, 6, 6, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 64, 0, 0, 0, 8, 0, 0, 0, 72, 0, 0, 0, 0, 0, 0, 0, 72, 0, 0, 0, 152, 0,
             0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 159, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 1, 0,
             0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 109, 97, 105, 110,
             255, 255, 255, 255, 216, 255, 255, 255, 1, 0, 0, 0, 240, 255, 255, 255, 0, 0, 0, 0, 0,
-            0, 0, 0, 228, 255, 255, 255, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 212, 255, 255, 255, 1,
-            0, 0, 0, 248, 255, 255, 255, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-            0, 0, 0, 0, 0, 6, 6, 6, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-            0, 0, 0, 0, 205, 36, 48, 180,
+            0, 0, 0, 228, 255, 255, 255, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 200, 255, 255, 255, 1, 0, 0, 0, 248, 255, 255, 255, 0, 0, 0, 0, 1, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 6, 6, 6, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 147, 59, 35, 17,
         ];
         let src = "fn main() -> Word { 1 }";
         let tokens = tokenize(src).expect("lex");
@@ -8148,6 +8156,7 @@ mod tests {
             param_count: 0,
             block_type: BlockType::Stream,
             param_types: alloc::vec![],
+            debug_pool: None,
         };
         let module = Module {
             schema_hash: 0,
@@ -9327,6 +9336,7 @@ mod tests {
             param_count: 0,
             block_type: BlockType::Func,
             param_types: alloc::vec::Vec::new(),
+            debug_pool: None,
         };
         // Suppress the compiler's per-chunk field defaults that may
         // differ across builds. Module-level fields below are also
@@ -9342,6 +9352,7 @@ mod tests {
             param_count: 0,
             block_type: BlockType::Func,
             param_types: alloc::vec::Vec::new(),
+            debug_pool: None,
         };
 
         let module = Module {
