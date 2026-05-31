@@ -4672,10 +4672,19 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(any(
+        feature = "narrow-word-8",
+        feature = "narrow-word-16",
+        feature = "narrow-word-32"
+    )))]
     fn checked_overflow_without_arm_wraps_by_default() {
         // B35 P3: with no `overflow` arm, a positive overflow defaults
         // to the two's-complement wrapped result. `Word::MAX + 1`
-        // wraps to `Word::MIN`.
+        // wraps to `Word::MIN`. The `i64::MAX` literal and the
+        // `i64::MIN` expectation are specific to the default 64-bit
+        // declared width, so this is gated off the narrow-word runtimes
+        // where the wrap occurs at a smaller width (matching the
+        // sibling checked-arithmetic tests).
         let val = run_expect(
             "fn main() -> Word {\n\
                 let y = 9223372036854775807 + 1 {\n\
