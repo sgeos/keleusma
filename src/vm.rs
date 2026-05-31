@@ -3757,7 +3757,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                         }
                     }
                 }
-                Op::CheckedMul => {
+                Op::CheckedMul(frac_bits) => {
                     let word_bits_log2 = self.word_bits_log2();
                     let b = self.pop()?;
                     let a = self.pop()?;
@@ -3766,13 +3766,13 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                             crate::bytecode::GenericValue::Int(x),
                             crate::bytecode::GenericValue::Int(y),
                         ) => {
-                            // True product in i128; both halves are
-                            // load-bearing for big-number
-                            // multiplication. The shared helper
-                            // computes high relative to the
-                            // declared word width and reports flag
-                            // direction (overflow / underflow) at
-                            // the declared range.
+                            // Integer multiply. The compiler emits
+                            // `frac_bits = 0` for this case; the field
+                            // is the Q-format shift used only by the
+                            // Fixed arm below, so 0 fraction bits is
+                            // exactly integer multiply. Both halves of
+                            // the i128 product are load-bearing for
+                            // big-number multiplication.
                             let r = x.widen() * y.widen();
                             let (low, high, flag) = checked_arith_outputs::<W>(r, word_bits_log2);
                             sp!(self, crate::bytecode::GenericValue::Int(low));
@@ -3817,9 +3817,31 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                                 )
                             );
                         }
+                        (
+                            crate::bytecode::GenericValue::Fixed(x),
+                            crate::bytecode::GenericValue::Fixed(y),
+                        ) => {
+                            // Q-format multiply: widen to avoid the
+                            // intermediate overflow, multiply, shift
+                            // right by the fraction-bit count, then
+                            // classify against the Word range. The
+                            // checked form wraps the low slot, unlike
+                            // the saturating `Op::FixedMul`.
+                            let product = x.widen() * y.widen();
+                            let shifted = product >> (frac_bits as u32);
+                            let (low, flag) = fixed_checked_outputs::<W>(shifted);
+                            sp!(self, crate::bytecode::GenericValue::Fixed(low));
+                            sp!(self, crate::bytecode::GenericValue::Fixed(W::default()));
+                            sp!(
+                                self,
+                                crate::bytecode::GenericValue::Int(
+                                    <W as crate::word::Word>::from_i64_wrap(flag)
+                                )
+                            );
+                        }
                         (a, b) => {
                             return Err(VmError::TypeError(format!(
-                                "Op::CheckedMul expects Word, Byte, or Float operands, got {} and {}",
+                                "Op::CheckedMul expects Word, Byte, Float, or Fixed operands, got {} and {}",
                                 a.type_name(),
                                 b.type_name()
                             )));
@@ -3866,7 +3888,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                         }
                     }
                 }
-                Op::CheckedDiv => {
+                Op::CheckedDiv(frac_bits) => {
                     let b = self.pop()?;
                     let a = self.pop()?;
                     match (a, b) {
@@ -3974,9 +3996,45 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                                 )
                             );
                         }
+                        (
+                            crate::bytecode::GenericValue::Fixed(x),
+                            crate::bytecode::GenericValue::Fixed(y),
+                        ) if y == W::default() => {
+                            // Fixed zero divisor: flag 3, numerator in
+                            // the low slot, mirroring the Int case.
+                            sp!(self, crate::bytecode::GenericValue::Fixed(x));
+                            sp!(self, crate::bytecode::GenericValue::Fixed(W::default()));
+                            sp!(
+                                self,
+                                crate::bytecode::GenericValue::Int(
+                                    <W as crate::word::Word>::from_i64_wrap(3)
+                                )
+                            );
+                        }
+                        (
+                            crate::bytecode::GenericValue::Fixed(x),
+                            crate::bytecode::GenericValue::Fixed(y),
+                        ) => {
+                            // Q-format quotient: left-shift the
+                            // dividend by the fraction-bit count in the
+                            // wide domain, divide, then classify. The
+                            // checked form wraps the low slot, unlike
+                            // the saturating `Op::FixedDiv`.
+                            let dividend = x.widen() << (frac_bits as u32);
+                            let quotient = dividend / y.widen();
+                            let (low, flag) = fixed_checked_outputs::<W>(quotient);
+                            sp!(self, crate::bytecode::GenericValue::Fixed(low));
+                            sp!(self, crate::bytecode::GenericValue::Fixed(W::default()));
+                            sp!(
+                                self,
+                                crate::bytecode::GenericValue::Int(
+                                    <W as crate::word::Word>::from_i64_wrap(flag)
+                                )
+                            );
+                        }
                         (a, b) => {
                             return Err(VmError::TypeError(format!(
-                                "Op::CheckedDiv expects Word, Byte, or Float operands, got {} and {}",
+                                "Op::CheckedDiv expects Word, Byte, Float, or Fixed operands, got {} and {}",
                                 a.type_name(),
                                 b.type_name()
                             )));
@@ -4091,90 +4149,6 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                         (a, b) => {
                             return Err(VmError::TypeError(format!(
                                 "Op::CheckedMod expects Word, Byte, or Fixed operands, got {} and {}",
-                                a.type_name(),
-                                b.type_name()
-                            )));
-                        }
-                    }
-                }
-                Op::CheckedFixedMul(frac_bits) => {
-                    let b = self.pop()?;
-                    let a = self.pop()?;
-                    match (a, b) {
-                        (
-                            crate::bytecode::GenericValue::Fixed(x),
-                            crate::bytecode::GenericValue::Fixed(y),
-                        ) => {
-                            // Q-format product: widen to avoid the
-                            // intermediate overflow, multiply, shift
-                            // right by the shared fraction-bit count,
-                            // then classify against the Word range.
-                            // The checked form wraps the low slot,
-                            // unlike the saturating `Op::FixedMul`.
-                            let product = x.widen() * y.widen();
-                            let shifted = product >> (frac_bits as u32);
-                            let (low, flag) = fixed_checked_outputs::<W>(shifted);
-                            sp!(self, crate::bytecode::GenericValue::Fixed(low));
-                            sp!(self, crate::bytecode::GenericValue::Fixed(W::default()));
-                            sp!(
-                                self,
-                                crate::bytecode::GenericValue::Int(
-                                    <W as crate::word::Word>::from_i64_wrap(flag)
-                                )
-                            );
-                        }
-                        (a, b) => {
-                            return Err(VmError::TypeError(format!(
-                                "Op::CheckedFixedMul requires two Fixed operands, got {} and {}",
-                                a.type_name(),
-                                b.type_name()
-                            )));
-                        }
-                    }
-                }
-                Op::CheckedFixedDiv(frac_bits) => {
-                    let b = self.pop()?;
-                    let a = self.pop()?;
-                    match (a, b) {
-                        (
-                            crate::bytecode::GenericValue::Fixed(x),
-                            crate::bytecode::GenericValue::Fixed(y),
-                        ) if y == W::default() => {
-                            // Fixed zero divisor: flag 3, numerator in
-                            // the low slot, mirroring CheckedDiv.
-                            sp!(self, crate::bytecode::GenericValue::Fixed(x));
-                            sp!(self, crate::bytecode::GenericValue::Fixed(W::default()));
-                            sp!(
-                                self,
-                                crate::bytecode::GenericValue::Int(
-                                    <W as crate::word::Word>::from_i64_wrap(3)
-                                )
-                            );
-                        }
-                        (
-                            crate::bytecode::GenericValue::Fixed(x),
-                            crate::bytecode::GenericValue::Fixed(y),
-                        ) => {
-                            // Q-format quotient: left-shift the
-                            // dividend by the fraction-bit count in the
-                            // wide domain, divide, then classify. The
-                            // checked form wraps the low slot, unlike
-                            // the saturating `Op::FixedDiv`.
-                            let dividend = x.widen() << (frac_bits as u32);
-                            let quotient = dividend / y.widen();
-                            let (low, flag) = fixed_checked_outputs::<W>(quotient);
-                            sp!(self, crate::bytecode::GenericValue::Fixed(low));
-                            sp!(self, crate::bytecode::GenericValue::Fixed(W::default()));
-                            sp!(
-                                self,
-                                crate::bytecode::GenericValue::Int(
-                                    <W as crate::word::Word>::from_i64_wrap(flag)
-                                )
-                            );
-                        }
-                        (a, b) => {
-                            return Err(VmError::TypeError(format!(
-                                "Op::CheckedFixedDiv requires two Fixed operands, got {} and {}",
                                 a.type_name(),
                                 b.type_name()
                             )));

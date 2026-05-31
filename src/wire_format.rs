@@ -408,8 +408,6 @@ const OPCODE_ID_TABLE: &[(&str, u8)] = &[
     ("Shr", 66),
     ("CallVerifiedNative", 67),
     ("CallExternalNative", 68),
-    ("CheckedFixedMul", 69),
-    ("CheckedFixedDiv", 70),
 ];
 
 /// Return the wire-format identifier for an `Op` variant.
@@ -471,9 +469,9 @@ pub fn opcode_id_of(op: &Op) -> OpcodeId {
         Op::Trap(_) => 53,
         Op::CheckedAdd => 54,
         Op::CheckedSub => 55,
-        Op::CheckedMul => 56,
+        Op::CheckedMul(_) => 56,
         Op::CheckedNeg => 57,
-        Op::CheckedDiv => 58,
+        Op::CheckedDiv(_) => 58,
         Op::CheckedMod => 59,
         Op::PushImmediate(_) => 60,
         Op::PopN(_) => 61,
@@ -484,8 +482,6 @@ pub fn opcode_id_of(op: &Op) -> OpcodeId {
         Op::Shr => 66,
         Op::CallVerifiedNative(_, _) => 67,
         Op::CallExternalNative(_, _) => 68,
-        Op::CheckedFixedMul(_) => 69,
-        Op::CheckedFixedDiv(_) => 70,
     };
     OpcodeId(id)
 }
@@ -540,9 +536,7 @@ pub fn encode_op(
         | Op::ByteToWord
         | Op::CheckedAdd
         | Op::CheckedSub
-        | Op::CheckedMul
         | Op::CheckedNeg
-        | Op::CheckedDiv
         | Op::CheckedMod
         | Op::BitAnd
         | Op::BitOr
@@ -558,8 +552,8 @@ pub fn encode_op(
         | Op::FixedToWord(n)
         | Op::FixedMul(n)
         | Op::FixedDiv(n)
-        | Op::CheckedFixedMul(n)
-        | Op::CheckedFixedDiv(n)
+        | Op::CheckedMul(n)
+        | Op::CheckedDiv(n)
         | Op::PushImmediate(n)
         | Op::PopN(n) => [*n, 0, 0],
 
@@ -697,14 +691,12 @@ pub fn decode_op(record: OpcodeRecord, pool: &[OperandPoolEntry]) -> Result<Op, 
         53 => Op::Trap(record.operand_u16()),
         54 => Op::CheckedAdd,
         55 => Op::CheckedSub,
-        56 => Op::CheckedMul,
+        56 => Op::CheckedMul(record.operand_u8()),
         57 => Op::CheckedNeg,
-        58 => Op::CheckedDiv,
+        58 => Op::CheckedDiv(record.operand_u8()),
         59 => Op::CheckedMod,
         60 => Op::PushImmediate(record.operand_u8()),
         61 => Op::PopN(record.operand_u8()),
-        69 => Op::CheckedFixedMul(record.operand_u8()),
-        70 => Op::CheckedFixedDiv(record.operand_u8()),
         62 => Op::BitAnd,
         63 => Op::BitOr,
         64 => Op::BitXor,
@@ -2227,9 +2219,9 @@ mod tests {
             (Op::Trap(0), 53),
             (Op::CheckedAdd, 54),
             (Op::CheckedSub, 55),
-            (Op::CheckedMul, 56),
+            (Op::CheckedMul(0), 56),
             (Op::CheckedNeg, 57),
-            (Op::CheckedDiv, 58),
+            (Op::CheckedDiv(0), 58),
             (Op::CheckedMod, 59),
             (Op::PushImmediate(0), 60),
             (Op::PopN(0), 61),
@@ -2240,8 +2232,6 @@ mod tests {
             (Op::Shr, 66),
             (Op::CallVerifiedNative(0, 0), 67),
             (Op::CallExternalNative(0, 0), 68),
-            (Op::CheckedFixedMul(0), 69),
-            (Op::CheckedFixedDiv(0), 70),
         ];
         for (op, expected) in cases {
             assert_eq!(
@@ -2284,9 +2274,7 @@ mod tests {
             Op::ByteToWord,
             Op::CheckedAdd,
             Op::CheckedSub,
-            Op::CheckedMul,
             Op::CheckedNeg,
-            Op::CheckedDiv,
             Op::CheckedMod,
             Op::BitAnd,
             Op::BitOr,
@@ -2309,8 +2297,10 @@ mod tests {
             Op::FixedToWord(16),
             Op::FixedMul(8),
             Op::FixedDiv(4),
-            Op::CheckedFixedMul(8),
-            Op::CheckedFixedDiv(4),
+            Op::CheckedMul(0),
+            Op::CheckedMul(8),
+            Op::CheckedDiv(0),
+            Op::CheckedDiv(4),
             Op::PushImmediate(5),
             Op::PopN(2),
         ] {

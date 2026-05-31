@@ -75,9 +75,9 @@ pub fn measured_op_cycles(op: &keleusma::bytecode::Op) -> u32 {
         | Op::Neg
         | Op::CheckedAdd
         | Op::CheckedSub
-        | Op::CheckedMul
+        | Op::CheckedMul(_)
         | Op::CheckedNeg
-        | Op::CheckedDiv
+        | Op::CheckedDiv(_)
         | Op::CheckedMod
         | Op::CmpEq
         | Op::CmpNe
@@ -97,8 +97,6 @@ pub fn measured_op_cycles(op: &keleusma::bytecode::Op) -> u32 {
         | Op::FixedToWord(_)
         | Op::FixedMul(_)
         | Op::FixedDiv(_)
-        | Op::CheckedFixedMul(_)
-        | Op::CheckedFixedDiv(_)
         | Op::BitAnd
         | Op::BitOr
         | Op::BitXor

@@ -1880,8 +1880,8 @@ fn emit_indexed_offset(
             // `Int` operands, the compiler synthesizes the
             // wrapping product via `CheckedMul` followed by
             // `PopN(2)` so the overflow flag and high half are
-            // discarded.
-            fc.emit(Op::CheckedMul);
+            // discarded. `0` fraction bits selects integer multiply.
+            fc.emit(Op::CheckedMul(0));
             fc.emit(Op::PopN(2));
         }
         if emitted_first {
@@ -4081,7 +4081,7 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
                     if let Some(n) = left_fixed_n {
                         fc.emit(Op::FixedMul(n));
                     } else if left_is_int {
-                        fc.emit(Op::CheckedMul);
+                        fc.emit(Op::CheckedMul(0));
                         fc.emit(Op::PopN(2));
                     } else {
                         fc.emit(Op::Mul);
@@ -4668,10 +4668,11 @@ fn compile_checked(
 
     // Determine the operand expression and, when it is `Fixed`, its
     // fraction-bit count (B35 P3d-iii). The multiply and divide paths
-    // select the `Q`-format-aware checked opcodes
-    // (`Op::CheckedFixedMul` / `Op::CheckedFixedDiv`, which carry the
-    // shift), and the arm bindings carry the `Fixed` type so the
-    // arm-body arithmetic dispatch routes through the `Fixed` opcodes.
+    // pass the count to the unified `Op::CheckedMul` / `Op::CheckedDiv`
+    // opcodes, where `0` selects integer arithmetic and a positive
+    // count selects the `Q`-format shift. The arm bindings carry the
+    // `Fixed` type so the arm-body arithmetic dispatch routes through
+    // the `Fixed` opcodes.
     // `+`, `-`, `%`, and unary `-` on `Fixed` need no fraction-bit
     // count and reuse the generic checked opcodes, whose VM dispatch
     // now carries `Fixed` arms. When `n` is `None` (the default-form
@@ -4724,10 +4725,9 @@ fn compile_checked(
         } => {
             compile_expr(fc, left)?;
             compile_expr(fc, right)?;
-            match operand_fixed_n {
-                Some(n) => fc.emit(Op::CheckedFixedMul(n)),
-                None => fc.emit(Op::CheckedMul),
-            };
+            // The fraction-bit count selects integer (0) or Q-format
+            // (>0) multiply on the unified opcode.
+            fc.emit(Op::CheckedMul(operand_fixed_n.unwrap_or(0)));
         }
         Expr::BinOp {
             op: BinOp::Div,
@@ -4737,10 +4737,7 @@ fn compile_checked(
         } => {
             compile_expr(fc, left)?;
             compile_expr(fc, right)?;
-            match operand_fixed_n {
-                Some(n) => fc.emit(Op::CheckedFixedDiv(n)),
-                None => fc.emit(Op::CheckedDiv),
-            };
+            fc.emit(Op::CheckedDiv(operand_fixed_n.unwrap_or(0)));
         }
         Expr::BinOp {
             op: BinOp::Mod,

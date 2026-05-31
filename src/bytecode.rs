@@ -717,25 +717,34 @@ pub enum Op {
     /// `Op::CheckedAdd`. The true difference is computed in `i128`
     /// and split into high and low halves before the flag.
     CheckedSub,
-    /// Overflow-checked Word multiplication. Same stack effect.
-    /// The true product is computed in `i128`; the high half is
-    /// the load-bearing value for big-number multiplication.
-    CheckedMul,
+    /// Overflow-checked multiplication parameterized by a Q-format
+    /// fraction-bit count (B35 P3d-iii). The operand is `0` for
+    /// integer multiplication and greater than zero for `Fixed`
+    /// multiplication, where the `i128` product is arithmetic-shifted
+    /// right by that many bits before the range check, so `0`
+    /// fraction bits is exactly integer multiply. For integer
+    /// operands the true product is computed in `i128` and the high
+    /// half is the load-bearing value for big-number multiplication;
+    /// for `Fixed` operands the shifted result is a single word and
+    /// the high slot is unused. Same stack effect as `CheckedAdd`.
+    CheckedMul(u8),
     /// Overflow-checked Word negation. Pops one `Value::Int` and
     /// pushes three slots in the same shape: high, low, flag. The
     /// only overflow case is `-i64::MIN`, in which the high half
     /// is `0` and the low half is `i64::MIN` (the wrapped result).
     CheckedNeg,
-    /// Overflow-checked Word division. Same stack shape as the
-    /// other `Op::Checked*` variants: pops two operands and pushes
-    /// `(high, low, flag)`. Division by zero traps with
-    /// `VmError::DivisionByZero` as usual. The only overflow case
-    /// is `i64::MIN / -1`, whose true mathematical result is
-    /// `2^63` and does not fit in `Word`; the construct routes to
-    /// the overflow arm with `high = 0`, `low = i64::MIN`. All
-    /// other inputs route through the ok arm with `high = 0` and
-    /// the wrapped quotient as `low`.
-    CheckedDiv,
+    /// Overflow-checked division parameterized by a Q-format
+    /// fraction-bit count (B35 P3d-iii). The operand is `0` for
+    /// integer division and greater than zero for `Fixed` division,
+    /// where the dividend is left-shifted by that many bits in the
+    /// `i128` domain before dividing, so `0` fraction bits is exactly
+    /// integer divide. A zero divisor reifies as flag `3`
+    /// (zero_divisor) carrying the numerator; an unhandled zero
+    /// divisor surfaces as `VmError::DivisionByZero`. For integer
+    /// operands the only overflow case is `i64::MIN / -1`; for `Fixed`
+    /// operands an out-of-range quotient wraps the single-word result.
+    /// Same stack shape as the other `Op::Checked*` variants.
+    CheckedDiv(u8),
     /// Overflow-checked Word modulo. Same stack shape. Division
     /// by zero traps. The only overflow case is `i64::MIN % -1`,
     /// whose mathematical result is `0` but whose computation
@@ -791,30 +800,6 @@ pub enum Op {
     /// `register_verified_native` referenced here is rejected at
     /// load time.
     CallExternalNative(u16, u8),
-
-    /// Overflow-checked `Fixed` multiplication sharing the given
-    /// fraction-bit count (B35 P3d-iii). Pops two `Value::Fixed`,
-    /// computes the Q-format product `(a as i128 * b as i128) >>
-    /// frac_bits`, and pushes three slots in the single-result shape
-    /// used by `Byte` and `Float`: the wrapped result as
-    /// `Value::Fixed` (the low slot), an unused `Value::Fixed(0)`
-    /// (the high slot), and an outcome flag `Value::Int(0)` (ok),
-    /// `Value::Int(1)` (overflow, result exceeds `i64::MAX` after the
-    /// shift), or `Value::Int(2)` (underflow, result below
-    /// `i64::MIN`). Unlike `Op::FixedMul`, the checked form wraps the
-    /// out-of-range result rather than saturating, matching the
-    /// wrapping default of the other `Op::Checked*` families.
-    CheckedFixedMul(u8),
-    /// Overflow-checked `Fixed` division sharing the given
-    /// fraction-bit count (B35 P3d-iii). Pops two `Value::Fixed`,
-    /// computes the Q-format quotient `(a as i128 << frac_bits) / b
-    /// as i128`, and pushes the single-result `(low, high, flag)`
-    /// shape. A zero divisor reifies as flag `3` (zero_divisor) with
-    /// the numerator in the low slot, mirroring `Op::CheckedDiv`; an
-    /// unhandled zero divisor traps as `VmError::DivisionByZero` in
-    /// the compiled dispatch. A quotient outside the `Word` range
-    /// flags overflow (`1`) or underflow (`2`) and wraps the low slot.
-    CheckedFixedDiv(u8),
 }
 
 /// Size in bytes of one operand-stack slot, namely the size of `Value` on
@@ -1065,9 +1050,9 @@ pub fn nominal_op_cycles(op: &Op) -> u32 {
         | Op::Sub
         | Op::CheckedAdd
         | Op::CheckedSub
-        | Op::CheckedMul
+        | Op::CheckedMul(_)
         | Op::CheckedNeg
-        | Op::CheckedDiv
+        | Op::CheckedDiv(_)
         | Op::CheckedMod
         | Op::Mul
         | Op::Neg
@@ -1089,8 +1074,6 @@ pub fn nominal_op_cycles(op: &Op) -> u32 {
         | Op::FixedToWord(_)
         | Op::FixedMul(_)
         | Op::FixedDiv(_)
-        | Op::CheckedFixedMul(_)
-        | Op::CheckedFixedDiv(_)
         | Op::Return
         | Op::GetDataIndexed(_, _)
         | Op::SetDataIndexed(_, _)
@@ -1153,11 +1136,11 @@ impl Op {
             // three; net delta +2. The high half is the i128
             // intermediate's high 64 bits, providing the load-
             // bearing value for big-number multiplication.
-            Op::CheckedAdd | Op::CheckedSub | Op::CheckedMul | Op::CheckedDiv | Op::CheckedMod => 1,
-            // Checked Fixed multiply/divide pop two and push three
-            // (low, high, flag); net delta +1, as the other binary
-            // checked families.
-            Op::CheckedFixedMul(_) | Op::CheckedFixedDiv(_) => 1,
+            Op::CheckedAdd
+            | Op::CheckedSub
+            | Op::CheckedMul(_)
+            | Op::CheckedDiv(_)
+            | Op::CheckedMod => 1,
             Op::CheckedNeg => 2,
 
             Op::Add
@@ -1231,12 +1214,10 @@ impl Op {
             // net pop.
             Op::CheckedAdd
             | Op::CheckedSub
-            | Op::CheckedMul
+            | Op::CheckedMul(_)
             | Op::CheckedNeg
-            | Op::CheckedDiv
-            | Op::CheckedMod
-            | Op::CheckedFixedMul(_)
-            | Op::CheckedFixedDiv(_) => 0,
+            | Op::CheckedDiv(_)
+            | Op::CheckedMod => 0,
 
             Op::Add
             | Op::Sub

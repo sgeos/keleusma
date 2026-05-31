@@ -587,9 +587,9 @@ pub fn emit_cost_model_source(
     out.push_str("        | Op::Neg\n");
     out.push_str("        | Op::CheckedAdd\n");
     out.push_str("        | Op::CheckedSub\n");
-    out.push_str("        | Op::CheckedMul\n");
+    out.push_str("        | Op::CheckedMul(_)\n");
     out.push_str("        | Op::CheckedNeg\n");
-    out.push_str("        | Op::CheckedDiv\n");
+    out.push_str("        | Op::CheckedDiv(_)\n");
     out.push_str("        | Op::CheckedMod\n");
     out.push_str("        | Op::CmpEq\n");
     out.push_str("        | Op::CmpNe\n");
@@ -609,8 +609,6 @@ pub fn emit_cost_model_source(
     out.push_str("        | Op::FixedToWord(_)\n");
     out.push_str("        | Op::FixedMul(_)\n");
     out.push_str("        | Op::FixedDiv(_)\n");
-    out.push_str("        | Op::CheckedFixedMul(_)\n");
-    out.push_str("        | Op::CheckedFixedDiv(_)\n");
     out.push_str("        | Op::BitAnd\n");
     out.push_str("        | Op::BitOr\n");
     out.push_str("        | Op::BitXor\n");
@@ -739,7 +737,7 @@ pub const OPCODE_SPECS: &[OpcodeSpec] = &[
     },
     OpcodeSpec {
         name: "CheckedMul",
-        build: || vec![Op::Const(0), Op::Const(0), Op::CheckedMul, Op::PopN(3)],
+        build: || vec![Op::Const(0), Op::Const(0), Op::CheckedMul(0), Op::PopN(3)],
         constants: &[ConstValueDescriptor::Int(7)],
         ops_per_pattern: 4,
     },
