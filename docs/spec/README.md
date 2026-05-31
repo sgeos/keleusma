@@ -16,3 +16,4 @@ For conceptual descriptions of the implemented system (language design philosoph
 | [INSTRUCTION_SET.md](./INSTRUCTION_SET.md) | Bytecode instruction reference with per-opcode operands, behaviour, and cost contributions to WCET and WCMU analyses |
 | [STRUCTURAL_ISA.md](./STRUCTURAL_ISA.md) | Block-structured Instruction Set Architecture, block hierarchy, structural verification rules, streaming machinery |
 | [WIRE_FORMAT.md](./WIRE_FORMAT.md) | Bytecode wire format: framing header, section-partitioned body, opcode-stream encoding, operand pool, signature extension, CRC trailer |
+| [RUNTIME_FAULTS.md](./RUNTIME_FAULTS.md) | Partial-operation handling: the two-backend contract, virtual-machine trap variants, and the native code-generation contract (per-target guards and default values, deferred to V0.4.0) |

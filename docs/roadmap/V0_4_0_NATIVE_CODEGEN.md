@@ -185,6 +185,14 @@ V0.4.0 ships with posture 1. The verifier produces a WCET claim with explicit "b
 
 WCMU is easier than WCET. The master arena layout is fixed at compile time and does not change under LLVM optimisation. Native code accesses the same arena structure the bytecode would. WCMU bounds are preserved across native compilation.
 
+## Partial-operation native lowering (B35 P8)
+
+The B35 Partial Operation Handling design defines a two-backend contract for every mathematically partial operation, namely division and modulo by zero, out-of-bounds indexing, refinement-newtype construction failure, the invalid discriminant-to-enum conversion, and native-call failure. The virtual-machine side of that contract is implemented in V0.2.x. The virtual machine traps recoverably on any unhandled partial operation, and six source-level constructs let a program handle each outcome so both backends agree.
+
+The native side of the contract is V0.4.0 scope. The IR generator lowers each partial operation to the bare hardware instruction where the target's hardware does not fault, and to a guarded sequence where it would fault. The guarded sequence tests the partial condition, branches to the hardware instruction on the safe path, and produces the contract's defined default value on the unsafe path, namely zero for integer division by zero, the numerator for modulo by zero, the element type's canonical zero or lowest-valid value for an out-of-bounds index, the lowest-valid value for a newtype-predicate failure, and the zero-discriminant variant for an invalid discriminant. A native-call failure traps on both backends, because a host failure has no safe default. Where the source handles the outcome through a construct arm, the IR generator lowers the arm body in place of the default.
+
+The guard adds a small fixed number of operations on the longest path, so it preserves the worst-case execution time and worst-case memory usage bounds the verifier proves on the bytecode shape under posture 1 above. The complete normative contract, including the per-target hardware basis and the canonical-zero and lowest-valid resolution the guards consult, is specified in [`../spec/RUNTIME_FAULTS.md`](../spec/RUNTIME_FAULTS.md). That specification is complete and reviewable now; only the lowering is deferred to V0.4.0.
+
 ## Bootstrap procedure
 
 Three phases.
