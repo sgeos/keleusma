@@ -1097,7 +1097,25 @@ fn compile_source_with_target(
     target: Option<&keleusma::target::Target>,
 ) -> Result<keleusma::bytecode::Module, String> {
     let mut combined = build_preamble();
-    combined.push_str(source);
+    // A script may begin with a `#!/usr/bin/env keleusma` shebang so it
+    // is directly executable. The lexer skips a shebang only when it is
+    // at byte 0, but the preamble prepended here displaces it, so strip
+    // the shebang line before appending the source. A blank line is
+    // left in its place to keep source line numbers unchanged for
+    // error reporting.
+    if let Some(rest) = source.strip_prefix("#!") {
+        match rest.find('\n') {
+            Some(nl) => {
+                combined.push('\n');
+                combined.push_str(&rest[nl + 1..]);
+            }
+            None => {
+                // The source is only a shebang line with no body.
+            }
+        }
+    } else {
+        combined.push_str(source);
+    }
     let preamble_lines = preamble_line_count();
     let tokens = tokenize(&combined)
         .map_err(|e| format_err_with_offset("lex", &e.message, e.span, preamble_lines))?;
@@ -1791,5 +1809,44 @@ fn print_value(v: &Value, arena: &Arena) {
             Err(_) => println!("<stale KStr>"),
         },
         other => println!("{}", format_value(other)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shebang_line_is_skipped() {
+        // A leading shebang makes a script Unix-executable through
+        // `#!/usr/bin/env keleusma`. It must compile the same as the
+        // same script without it; the preamble the CLI prepends must
+        // not defeat the lexer's shebang handling.
+        let with = compile_source("#!/usr/bin/env keleusma\nfn main() -> Word { 42 }\n");
+        assert!(
+            with.is_ok(),
+            "shebang script failed to compile: {:?}",
+            with.err()
+        );
+    }
+
+    #[test]
+    fn no_shebang_still_compiles() {
+        assert!(compile_source("fn main() -> Word { 42 }\n").is_ok());
+    }
+
+    #[test]
+    fn shebang_preserves_source_line_numbers() {
+        // An error on source line 3 must report line 3, so stripping
+        // the shebang must leave a blank line in its place rather than
+        // shifting subsequent lines up.
+        let err =
+            compile_source("#!/usr/bin/env keleusma\nfn main() -> Word {\n  undefined_thing\n}\n")
+                .expect_err("undefined identifier should fail to compile");
+        assert!(
+            err.contains("3:"),
+            "expected an error on line 3, got: {}",
+            err
+        );
     }
 }
