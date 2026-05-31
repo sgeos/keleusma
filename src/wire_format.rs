@@ -408,6 +408,8 @@ const OPCODE_ID_TABLE: &[(&str, u8)] = &[
     ("Shr", 66),
     ("CallVerifiedNative", 67),
     ("CallExternalNative", 68),
+    ("CheckedFixedMul", 69),
+    ("CheckedFixedDiv", 70),
 ];
 
 /// Return the wire-format identifier for an `Op` variant.
@@ -482,6 +484,8 @@ pub fn opcode_id_of(op: &Op) -> OpcodeId {
         Op::Shr => 66,
         Op::CallVerifiedNative(_, _) => 67,
         Op::CallExternalNative(_, _) => 68,
+        Op::CheckedFixedMul(_) => 69,
+        Op::CheckedFixedDiv(_) => 70,
     };
     OpcodeId(id)
 }
@@ -554,6 +558,8 @@ pub fn encode_op(
         | Op::FixedToWord(n)
         | Op::FixedMul(n)
         | Op::FixedDiv(n)
+        | Op::CheckedFixedMul(n)
+        | Op::CheckedFixedDiv(n)
         | Op::PushImmediate(n)
         | Op::PopN(n) => [*n, 0, 0],
 
@@ -697,6 +703,8 @@ pub fn decode_op(record: OpcodeRecord, pool: &[OperandPoolEntry]) -> Result<Op, 
         59 => Op::CheckedMod,
         60 => Op::PushImmediate(record.operand_u8()),
         61 => Op::PopN(record.operand_u8()),
+        69 => Op::CheckedFixedMul(record.operand_u8()),
+        70 => Op::CheckedFixedDiv(record.operand_u8()),
         62 => Op::BitAnd,
         63 => Op::BitOr,
         64 => Op::BitXor,
@@ -2232,6 +2240,8 @@ mod tests {
             (Op::Shr, 66),
             (Op::CallVerifiedNative(0, 0), 67),
             (Op::CallExternalNative(0, 0), 68),
+            (Op::CheckedFixedMul(0), 69),
+            (Op::CheckedFixedDiv(0), 70),
         ];
         for (op, expected) in cases {
             assert_eq!(
@@ -2299,6 +2309,8 @@ mod tests {
             Op::FixedToWord(16),
             Op::FixedMul(8),
             Op::FixedDiv(4),
+            Op::CheckedFixedMul(8),
+            Op::CheckedFixedDiv(4),
             Op::PushImmediate(5),
             Op::PopN(2),
         ] {

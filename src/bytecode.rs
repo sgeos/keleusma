@@ -791,6 +791,30 @@ pub enum Op {
     /// `register_verified_native` referenced here is rejected at
     /// load time.
     CallExternalNative(u16, u8),
+
+    /// Overflow-checked `Fixed` multiplication sharing the given
+    /// fraction-bit count (B35 P3d-iii). Pops two `Value::Fixed`,
+    /// computes the Q-format product `(a as i128 * b as i128) >>
+    /// frac_bits`, and pushes three slots in the single-result shape
+    /// used by `Byte` and `Float`: the wrapped result as
+    /// `Value::Fixed` (the low slot), an unused `Value::Fixed(0)`
+    /// (the high slot), and an outcome flag `Value::Int(0)` (ok),
+    /// `Value::Int(1)` (overflow, result exceeds `i64::MAX` after the
+    /// shift), or `Value::Int(2)` (underflow, result below
+    /// `i64::MIN`). Unlike `Op::FixedMul`, the checked form wraps the
+    /// out-of-range result rather than saturating, matching the
+    /// wrapping default of the other `Op::Checked*` families.
+    CheckedFixedMul(u8),
+    /// Overflow-checked `Fixed` division sharing the given
+    /// fraction-bit count (B35 P3d-iii). Pops two `Value::Fixed`,
+    /// computes the Q-format quotient `(a as i128 << frac_bits) / b
+    /// as i128`, and pushes the single-result `(low, high, flag)`
+    /// shape. A zero divisor reifies as flag `3` (zero_divisor) with
+    /// the numerator in the low slot, mirroring `Op::CheckedDiv`; an
+    /// unhandled zero divisor traps as `VmError::DivisionByZero` in
+    /// the compiled dispatch. A quotient outside the `Word` range
+    /// flags overflow (`1`) or underflow (`2`) and wraps the low slot.
+    CheckedFixedDiv(u8),
 }
 
 /// Size in bytes of one operand-stack slot, namely the size of `Value` on
@@ -1065,6 +1089,8 @@ pub fn nominal_op_cycles(op: &Op) -> u32 {
         | Op::FixedToWord(_)
         | Op::FixedMul(_)
         | Op::FixedDiv(_)
+        | Op::CheckedFixedMul(_)
+        | Op::CheckedFixedDiv(_)
         | Op::Return
         | Op::GetDataIndexed(_, _)
         | Op::SetDataIndexed(_, _)
@@ -1128,6 +1154,10 @@ impl Op {
             // intermediate's high 64 bits, providing the load-
             // bearing value for big-number multiplication.
             Op::CheckedAdd | Op::CheckedSub | Op::CheckedMul | Op::CheckedDiv | Op::CheckedMod => 1,
+            // Checked Fixed multiply/divide pop two and push three
+            // (low, high, flag); net delta +1, as the other binary
+            // checked families.
+            Op::CheckedFixedMul(_) | Op::CheckedFixedDiv(_) => 1,
             Op::CheckedNeg => 2,
 
             Op::Add
@@ -1204,7 +1234,9 @@ impl Op {
             | Op::CheckedMul
             | Op::CheckedNeg
             | Op::CheckedDiv
-            | Op::CheckedMod => 0,
+            | Op::CheckedMod
+            | Op::CheckedFixedMul(_)
+            | Op::CheckedFixedDiv(_) => 0,
 
             Op::Add
             | Op::Sub

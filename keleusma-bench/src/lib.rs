@@ -609,6 +609,8 @@ pub fn emit_cost_model_source(
     out.push_str("        | Op::FixedToWord(_)\n");
     out.push_str("        | Op::FixedMul(_)\n");
     out.push_str("        | Op::FixedDiv(_)\n");
+    out.push_str("        | Op::CheckedFixedMul(_)\n");
+    out.push_str("        | Op::CheckedFixedDiv(_)\n");
     out.push_str("        | Op::BitAnd\n");
     out.push_str("        | Op::BitOr\n");
     out.push_str("        | Op::BitXor\n");
