@@ -94,6 +94,32 @@ it, and it produces `0`.
 Every `match` must cover every possibility. The `_` case guarantees that.
 Chapter 13 returns to `match` in depth.
 
+## Checking an assumption: assert
+
+A `bool` question can also guard an assumption during development. The
+`assert` statement checks a condition and, when it is false, stops the
+program with an assertion failure:
+
+````
+assert count > 0;
+assert index < length, "index past the end of the buffer";
+````
+
+`assert` is a debug aid, and it follows a deliberate rule. The check is
+present only in a debug build, produced with `keleusma compile --debug`.
+An ordinary build compiles the assertion away entirely, so it costs
+nothing in a shipped program. A debug build and an ordinary build are
+therefore separate compilations rather than one artefact, and the
+optional message is recorded as removable debug information that
+`keleusma strip` can take out. Use `assert` to state what you believe is
+true while developing; rely on the type system and the partial-operation
+constructs of [Chapter 23](./23_big_numbers.md) for checks that must
+hold in a shipped program.
+
+`assert` is not a reserved word. Written before an expression it is the
+assertion statement; written as `assert(...)` it is an ordinary call to
+a function you happen to have named `assert`.
+
 ## What you now know
 
 - Comparisons (`<`, `>`, `<=`, `>=`, `==`, `!=`) produce a `bool`.
@@ -101,5 +127,7 @@ Chapter 13 returns to `match` in depth.
   symbols.
 - `if condition { ... } else { ... }` chooses between two values.
 - `match` chooses among many cases, and `_` is the catch-all.
+- `assert condition` checks a development-time assumption; it is present
+  only in a `--debug` build and compiles away otherwise.
 
 The next chapter repeats an action a fixed number of times.

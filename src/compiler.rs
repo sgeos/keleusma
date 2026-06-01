@@ -6872,6 +6872,70 @@ mod tests {
         );
     }
 
+    #[test]
+    fn assert_strip_keeps_check_drops_context() {
+        // Stripping a debug build removes the AssertionContext record
+        // but leaves the check ops, so a stripped build still traps
+        // (generically) and is not identical to a release build, which
+        // has no check at all.
+        use crate::debug_meta::DebugRecordKind;
+        let assert_code = crate::bytecode::TrapKind::AssertionFailed.code();
+        let has_trap = |m: &Module| {
+            m.chunks.iter().any(|c| {
+                c.ops
+                    .iter()
+                    .any(|op| matches!(op, Op::Trap(c) if *c == assert_code))
+            })
+        };
+        let mut debug = compile_str_debug("fn main() -> Word { assert false; 0 }");
+        assert!(has_trap(&debug), "debug build emits the assert check");
+        assert!(
+            debug
+                .chunks
+                .iter()
+                .any(|c| c.debug_pool.as_ref().is_some_and(|p| p
+                    .records
+                    .iter()
+                    .any(|r| r.kind == DebugRecordKind::AssertionContext))),
+            "debug build carries an AssertionContext record"
+        );
+        for c in &mut debug.chunks {
+            c.debug_pool = None;
+        }
+        assert!(has_trap(&debug), "strip keeps the assert check ops");
+        let release = compile_str("fn main() -> Word { assert false; 0 }").expect("compile");
+        assert!(!has_trap(&release), "release build has no assert check");
+    }
+
+    #[cfg(feature = "verify")]
+    #[test]
+    fn assert_in_nested_loop_body_verifies_and_passes() {
+        use crate::vm::{Vm, VmState};
+        let module = compile_str_debug(
+            "fn main() -> Word { for i in 0..3 { assert i < 10, \"small\"; } 0 }",
+        );
+        let arena = crate::Arena::with_capacity(crate::vm::DEFAULT_ARENA_CAPACITY);
+        let mut vm = Vm::new(module, &arena).expect("verify accepts assert in a loop body");
+        match vm.call(&[]).expect("call") {
+            VmState::Finished(crate::Value::Int(0)) => {}
+            other => panic!("expected Finished(Int(0)), got {:?}", other),
+        }
+    }
+
+    #[cfg(feature = "verify")]
+    #[test]
+    fn assert_in_loop_main_stream_chunk_verifies() {
+        use crate::vm::Vm;
+        // Vm::new runs structural and resource verification; success
+        // proves the assert trap is well-formed inside a Stream chunk.
+        // The productive-divergent loop itself is not driven here.
+        let module = compile_str_debug(
+            "loop main(tick: Word) -> Word { assert tick >= 0, \"t\"; let r = yield tick; r }",
+        );
+        let arena = crate::Arena::with_capacity(crate::vm::DEFAULT_ARENA_CAPACITY);
+        let _vm = Vm::new(module, &arena).expect("verify accepts assert in a Stream chunk");
+    }
+
     #[cfg(feature = "verify")]
     #[test]
     fn assert_false_traps_at_runtime_under_debug() {
