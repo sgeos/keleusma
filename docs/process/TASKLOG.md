@@ -18,7 +18,7 @@ Current sprint source of truth.
 
 ## Active Milestone
 
-V0.2.x. The research pass and integration work is complete. Three pre-implementation cleanup tasks just landed: R4.1 milestone M1 spike, cross-document consistency audit, this TASKLOG and REVERSE_PROMPT update. The next concrete implementation deliverable, per operator direction, is the strict-mode enrolled-keys execution feature specified in `tmp/enrolled_keys_execution.md`. V0.3.0 implementation is gated on operator decision; the V0.2.x prep work and the V0.3/V0.4/V0.5 sequencing are documented in `docs/roadmap/IMPLEMENTATION_ORDER.md`.
+V0.2.1. B29 strippable debug metadata is implemented and concluded for V0.2.1 on the `v0.2.1` branch: all twelve record kinds emit, the VM trap read path is wired (`Vm::fault_source_location`), the breakpoint runtime mechanism and candidates are in place, the per-resume Reentrant worst-case-execution-time bound is exact for top-level yields and soundly bounded for nested yields, and the format has an authoritative spec at `docs/spec/DEBUG_METADATA.md`. Three precision refinements are deferred (see the B29 entry in `BACKLOG.md`). The next concrete implementation deliverable, per operator direction, is the flat memory model (branch `feat-flat-memory-model`, cut from `v0.2.1`). The strict-mode enrolled-keys execution feature specified in `tmp/enrolled_keys_execution.md` remains an open operator-decision item. V0.3.0 implementation is gated on operator decision; the V0.2.x prep work and the V0.3/V0.4/V0.5 sequencing are documented in `docs/roadmap/IMPLEMENTATION_ORDER.md`.
 
 ## Outstanding TODO
 
@@ -32,6 +32,12 @@ Active operator-decision items:
 Long-horizon work tracked in `docs/decisions/BACKLOG.md` and `PRIORITY.md`.
 
 ## Task Breakdown
+
+### Recent: B29 strippable debug metadata, concluded for V0.2.1 (2026-06-01)
+
+| ID | Description | Status | Verification |
+|----|-------------|--------|--------------|
+| V0.2.1-B29 | Strippable debug metadata: full catalogue, trap read path, spec | Complete (three precision refinements deferred) | All twelve `DebugRecordKind` records emit under `keleusma compile --debug`; `keleusma strip` removes the section to byte-identical release bytes. `VerifierWitness` is a per-construct structural trace produced inline by `verify_chunk` plus per-iteration (Stream) and per-call/per-resume (Func/Reentrant) resource-bound proofs. The VM records the faulting op (`Vm::fault_location`) and resolves it to source (`Vm::fault_source_location`, two-tier exact/enclosing); every partial-operation trap and failed `assert` resolves exactly. Breakpoint runtime mechanism (`set_breakpoint`/`resume_from_breakpoint`, `BreakpointHit`) with candidates at statements, tail expressions, trap operators, and function entry. Per-resume Reentrant WCET is the exact max inter-yield segment for top-level yields and a sound productive-loop-clamped bound for nested yields. Authoritative format spec at [`docs/spec/DEBUG_METADATA.md`](../spec/DEBUG_METADATA.md). Full workspace gate green (default, `--all-features`, clippy both, doc, markdown links). Deferred: every-op breakpoint candidates, a finer nested-yield WCET, and per-op spans for non-trapping ops; tracked in the B29 entry of [`BACKLOG.md`](../decisions/BACKLOG.md). |
 
 ### Recent: research-pass follow-on cleanup (2026-05-22)
 

@@ -1173,7 +1173,7 @@ B26 and B27 stay in the backlog as documentary captures of the symptom-level fix
 - The hierarchical control scenarios are the operational shape that benefits most from the deterministic-allocator property and the certification-grade WCMU precision.
 - V0.2.0's WCMU calculation imprecision is the operational artefact of this defect; corrected runtime produces corrected numbers.
 
-## B29. Strippable debug metadata in the ISA
+## ~~B29. Strippable debug metadata in the ISA~~ (Resolved for V0.2.1; three precision refinements deferred)
 
 > **Implementation status (V0.2.1): complete; all twelve record kinds emit and the VM trap read path is wired; only precision refinements remain.** The chunk-local `debug_pool` section, its data model, and its canonical byte encoding are implemented ([`src/debug_meta.rs`](../../src/debug_meta.rs)), carried through the wire format as an optional per-chunk field that leaves the opcode stream byte-identical ([`src/wire_format.rs`](../../src/wire_format.rs)), emitted by the compiler under `compile_with_options` / `keleusma compile --debug`, removed by the `keleusma strip` subcommand, read back through a query API (`DebugPool::records_at`, `source_location`), and surfaced at runtime traps through `Vm::fault_source_location`. Invariants 4 and 5 are exercised end to end: a `--debug` build strips to byte-identical release bytes. The authoritative format reference is [`DEBUG_METADATA.md`](../spec/DEBUG_METADATA.md); this section records the design rationale and decision history.
 >
