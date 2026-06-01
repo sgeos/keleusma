@@ -160,6 +160,14 @@ enum PendingDebug {
     },
     /// The source line of the statement beginning at `op_index`.
     LineNumber { op_index: usize, line: u32 },
+    /// A statement-boundary position at which a breakpoint may be set,
+    /// at `op_index` covering `span`. A debugger reads these to present
+    /// breakpoint choices; arming one inserts `op_index` into the VM's
+    /// breakpoint position list (the runtime mechanism is future work).
+    BreakpointCandidate {
+        op_index: usize,
+        span: crate::token::Span,
+    },
     /// A local slot declared with the given human-readable name, in
     /// scope from `op_index`.
     VariableName {
@@ -295,6 +303,14 @@ fn build_debug_pool(pending: &[PendingDebug]) -> crate::debug_meta::DebugPool {
                 pool.records.push(DebugRecord {
                     op_index: *op_index as u32,
                     kind: DebugRecordKind::SourceSpan,
+                    operands: alloc::vec![span_idx],
+                });
+            }
+            PendingDebug::BreakpointCandidate { op_index, span } => {
+                let span_idx = push_debug_span(&mut pool, file_idx, span);
+                pool.records.push(DebugRecord {
+                    op_index: *op_index as u32,
+                    kind: DebugRecordKind::BreakpointCandidate,
                     operands: alloc::vec![span_idx],
                 });
             }
@@ -458,6 +474,11 @@ impl FuncCompiler {
         self.pending_debug.push(PendingDebug::LineNumber {
             op_index,
             line: span.line,
+        });
+        // Each statement boundary is a candidate breakpoint position.
+        self.pending_debug.push(PendingDebug::BreakpointCandidate {
+            op_index,
+            span: *span,
         });
     }
 
@@ -6960,6 +6981,36 @@ mod tests {
             VmState::Finished(crate::Value::Int(0)) => {}
             other => panic!("expected Finished(Int(0)), got {:?}", other),
         }
+    }
+
+    #[test]
+    fn debug_emission_records_breakpoint_candidates() {
+        // Every statement boundary in a debug build is a breakpoint
+        // candidate that resolves to a source span.
+        let src = "fn main() -> Word { let x = 1; let y = 2; x }";
+        let module = compile_str_debug(src);
+        let pool = module
+            .chunks
+            .iter()
+            .find_map(|c| c.debug_pool.as_ref())
+            .expect("debug pool present");
+        let candidates: alloc::vec::Vec<_> = pool
+            .records
+            .iter()
+            .filter(|r| r.kind == crate::debug_meta::DebugRecordKind::BreakpointCandidate)
+            .collect();
+        assert!(
+            !candidates.is_empty(),
+            "a debug build records breakpoint candidates"
+        );
+        for c in &candidates {
+            assert!(
+                pool.source_location(c).is_some(),
+                "a breakpoint candidate resolves to a source location"
+            );
+        }
+        let release = compile_str(src).expect("compile");
+        assert!(release.chunks.iter().all(|c| c.debug_pool.is_none()));
     }
 
     #[test]
