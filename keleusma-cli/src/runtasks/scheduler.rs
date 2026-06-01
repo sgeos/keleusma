@@ -712,6 +712,17 @@ fn dispatch_one(task: &mut Task, now_ms: u64, quiet: bool) {
             // restart policy.
             on_task_exit(task, /* error */ false, quiet);
         }
+        Ok(VmState::BreakpointHit { chunk, op }) => {
+            // The scheduler does not arm breakpoints, so a hit is
+            // unexpected; treat it as a task error.
+            if !quiet {
+                eprintln!(
+                    "[scheduler] task {} hit an unexpected breakpoint at chunk {} op {}",
+                    task.cfg.name, chunk, op
+                );
+            }
+            on_task_exit(task, /* error */ true, quiet);
+        }
         Err(e) => {
             if !quiet {
                 eprintln!("[scheduler] task {} error: {:?}", task.cfg.name, e);

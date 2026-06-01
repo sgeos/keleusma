@@ -417,6 +417,9 @@ mod tests {
             VmState::Finished(v) => v,
             VmState::Yielded(v) => panic!("unexpected yield: {:?}", v),
             VmState::Reset => panic!("unexpected reset"),
+            VmState::BreakpointHit { chunk, op } => {
+                panic!("unexpected breakpoint at chunk {} op {}", chunk, op)
+            }
         }
     }
 

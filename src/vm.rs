@@ -210,6 +210,19 @@ pub enum GenericVmState<W: crate::word::Word, F: crate::float::Float> {
     Finished(crate::bytecode::GenericValue<W, F>),
     /// The stream hit a Reset boundary.
     Reset,
+    /// Execution paused at an armed breakpoint, before executing the op
+    /// at `(chunk, op)`. The operand and call-frame stacks are intact;
+    /// the host inspects state and continues with
+    /// [`GenericVm::resume_from_breakpoint`]. Breakpoints are a
+    /// host-driven debugging mechanism (B29); a debugger maps a
+    /// `BreakpointCandidate` debug record's op index to a position and
+    /// arms it through [`GenericVm::set_breakpoint`].
+    BreakpointHit {
+        /// Chunk index of the paused position.
+        chunk: usize,
+        /// Op index within the chunk of the paused position.
+        op: usize,
+    },
 }
 
 /// Policy for handling WCET and WCMU bound overflow at verification.
@@ -693,6 +706,18 @@ pub struct GenericVm<
     /// data slots.
     arena: &'arena keleusma_arena::Arena,
     started: bool,
+    /// Host-armed breakpoint positions as `(chunk_idx, op_index)`. The
+    /// run loop suspends with [`GenericVmState::BreakpointHit`] before
+    /// executing an op whose position is listed. Empty by default; the
+    /// per-op check is gated on `is_empty` so a program with no
+    /// breakpoints pays nothing. Breakpoints are runtime debugging
+    /// state, not part of the verified bytecode, so they do not affect
+    /// the declared WCET or WCMU bounds.
+    breakpoints: alloc::vec::Vec<(usize, usize)>,
+    /// One-shot suppression of the breakpoint at this position, set by
+    /// [`GenericVm::resume_from_breakpoint`] so resuming executes the
+    /// op at a breakpoint rather than re-triggering it immediately.
+    skip_breakpoint_at: Option<(usize, usize)>,
     /// Cached load-time native classification check. Populated on
     /// the first `call` after natives are registered (or after
     /// `replace_module`). `None` means the check has not been run
@@ -1417,6 +1442,8 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
             private_slot_count: private_count,
             arena,
             started: false,
+            breakpoints: alloc::vec::Vec::new(),
+            skip_breakpoint_at: None,
             native_classifications_verified: false,
             #[cfg(feature = "signatures")]
             verifying_keys: Vec::new(),
@@ -1579,6 +1606,8 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
             private_slot_count: private_count,
             arena,
             started: false,
+            breakpoints: alloc::vec::Vec::new(),
+            skip_breakpoint_at: None,
             native_classifications_verified: false,
             #[cfg(feature = "signatures")]
             verifying_keys: Vec::new(),
@@ -2708,6 +2737,63 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         self.run()
     }
 
+    /// Arm a breakpoint at `(chunk, op)`. When execution reaches that
+    /// op the VM suspends with [`GenericVmState::BreakpointHit`] before
+    /// executing it. Idempotent: arming an already-armed position is a
+    /// no-op. A debugger obtains the position from a `BreakpointCandidate`
+    /// debug record's op index (see [`crate::debug_meta`]). Breakpoints
+    /// are runtime state and do not modify the bytecode, preserving
+    /// signing, encryption, and verification.
+    pub fn set_breakpoint(&mut self, chunk: usize, op: usize) {
+        let pos = (chunk, op);
+        if !self.breakpoints.contains(&pos) {
+            self.breakpoints.push(pos);
+        }
+    }
+
+    /// Disarm the breakpoint at `(chunk, op)`. Returns true if a
+    /// breakpoint was present and removed.
+    pub fn clear_breakpoint(&mut self, chunk: usize, op: usize) -> bool {
+        let pos = (chunk, op);
+        if let Some(i) = self.breakpoints.iter().position(|p| *p == pos) {
+            self.breakpoints.swap_remove(i);
+            if self.skip_breakpoint_at == Some(pos) {
+                self.skip_breakpoint_at = None;
+            }
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Disarm all breakpoints.
+    pub fn clear_breakpoints(&mut self) {
+        self.breakpoints.clear();
+        self.skip_breakpoint_at = None;
+    }
+
+    /// The number of armed breakpoints.
+    pub fn breakpoint_count(&self) -> usize {
+        self.breakpoints.len()
+    }
+
+    /// Resume execution after a [`GenericVmState::BreakpointHit`]. The
+    /// op at the breakpoint position runs (the breakpoint does not
+    /// re-trigger on this step), then execution continues to the next
+    /// suspension or completion. Unlike [`resume`](Self::resume) this
+    /// pushes no value, since a breakpoint is not a yield. Returns
+    /// [`VmError::NotSuspended`] if the VM is not in a suspended state.
+    pub fn resume_from_breakpoint(&mut self) -> Result<GenericVmState<W, F>, VmError> {
+        if !self.started || self.frames.is_empty() {
+            return Err(VmError::NotSuspended);
+        }
+        // The top frame's position is the breakpoint we paused before;
+        // suppress it once so the op executes rather than re-triggering.
+        let frame = *self.frames.last().ok_or(VmError::NotSuspended)?;
+        self.skip_breakpoint_at = Some((frame.chunk_idx, frame.ip));
+        self.run()
+    }
+
     /// Execute bytecode until yield, return, reset, or error.
     fn run(&mut self) -> Result<GenericVmState<W, F>, VmError> {
         loop {
@@ -2732,6 +2818,24 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                 }
                 sp!(self, result);
                 continue;
+            }
+
+            // Breakpoint check. Suspend before executing the op at an
+            // armed position, leaving the stacks and `ip` intact so a
+            // later `resume_from_breakpoint` continues here. The
+            // `is_empty` guard keeps this zero-cost when no breakpoints
+            // are armed. `skip_breakpoint_at` is a one-shot suppression
+            // so resuming runs the op rather than re-triggering.
+            if !self.breakpoints.is_empty() {
+                let pos = (chunk_idx, ip);
+                if self.skip_breakpoint_at == Some(pos) {
+                    self.skip_breakpoint_at = None;
+                } else if self.breakpoints.contains(&pos) {
+                    return Ok(GenericVmState::BreakpointHit {
+                        chunk: chunk_idx,
+                        op: ip,
+                    });
+                }
             }
 
             let op = self.chunk_op(chunk_idx, ip);
@@ -4637,6 +4741,9 @@ mod tests {
             VmState::Finished(v) => v,
             VmState::Yielded(v) => panic!("unexpected yield: {:?}", v),
             VmState::Reset => panic!("unexpected reset"),
+            VmState::BreakpointHit { chunk, op } => {
+                panic!("unexpected breakpoint at chunk {} op {}", chunk, op)
+            }
         }
     }
 
@@ -8761,6 +8868,62 @@ mod tests {
                 assert!(msg.contains("got Float"), "got: {}", msg);
             }
             other => panic!("expected TypeError, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn breakpoint_suspends_before_op_then_resumes() {
+        let module = build_module("fn main() -> Word { 7 + 35 }");
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let mut vm = Vm::new(module, &arena).expect("verify");
+        vm.set_breakpoint(0, 0);
+        assert_eq!(vm.breakpoint_count(), 1);
+        match vm.call(&[]).expect("call") {
+            VmState::BreakpointHit { chunk, op } => assert_eq!((chunk, op), (0, 0)),
+            other => panic!("expected BreakpointHit, got {:?}", other),
+        }
+        // Resume runs the op at the breakpoint (no re-trigger) and
+        // continues to completion.
+        match vm.resume_from_breakpoint().expect("resume") {
+            VmState::Finished(v) => assert_eq!(v, Value::Int(42)),
+            other => panic!("expected Finished(42), got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn no_breakpoint_runs_straight_to_completion() {
+        let module = build_module("fn main() -> Word { 7 + 35 }");
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let mut vm = Vm::new(module, &arena).expect("verify");
+        match vm.call(&[]).expect("call") {
+            VmState::Finished(v) => assert_eq!(v, Value::Int(42)),
+            other => panic!("expected Finished(42), got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn clear_breakpoint_disarms() {
+        let module = build_module("fn main() -> Word { 7 + 35 }");
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let mut vm = Vm::new(module, &arena).expect("verify");
+        vm.set_breakpoint(0, 0);
+        assert!(vm.clear_breakpoint(0, 0), "first clear removes it");
+        assert!(!vm.clear_breakpoint(0, 0), "second clear is a no-op");
+        assert_eq!(vm.breakpoint_count(), 0);
+        match vm.call(&[]).expect("call") {
+            VmState::Finished(v) => assert_eq!(v, Value::Int(42)),
+            other => panic!("expected Finished(42), got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn resume_from_breakpoint_when_not_suspended_errors() {
+        let module = build_module("fn main() -> Word { 7 + 35 }");
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let mut vm = Vm::new(module, &arena).expect("verify");
+        match vm.resume_from_breakpoint() {
+            Err(VmError::NotSuspended) => {}
+            other => panic!("expected NotSuspended, got {:?}", other),
         }
     }
 

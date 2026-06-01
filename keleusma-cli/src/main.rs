@@ -1372,6 +1372,10 @@ fn execute_source_repl_silent(source: &str, shared_state: &mut Vec<Value>) -> Re
         VmState::Finished(_) => Ok(()),
         VmState::Yielded(v) => Err(format!("REPL wrapper yielded unexpectedly: {:?}", v)),
         VmState::Reset => Err(String::from("REPL wrapper reset unexpectedly")),
+        VmState::BreakpointHit { chunk, op } => Err(format!(
+            "REPL wrapper hit a breakpoint at chunk {} op {} unexpectedly",
+            chunk, op
+        )),
     }
 }
 
@@ -1718,6 +1722,10 @@ fn drive_atomic_fn(vm: &mut Vm, arena: &Arena) -> Result<(), String> {
         VmState::Reset => Err(String::from(
             "fn main reset unexpectedly (atomic fn should run to completion)",
         )),
+        VmState::BreakpointHit { chunk, op } => Err(format!(
+            "fn main hit a breakpoint at chunk {} op {}; the CLI does not arm breakpoints",
+            chunk, op
+        )),
     }
 }
 
@@ -1772,6 +1780,12 @@ fn drive_loop_main(vm: &mut Vm, _arena: &Arena, config: &LoopRunnerConfig) -> Re
                 state = vm
                     .resume(Value::Int(tick))
                     .map_err(|e| format!("vm: {:?}", e))?;
+            }
+            VmState::BreakpointHit { chunk, op } => {
+                return Err(format!(
+                    "loop main hit a breakpoint at chunk {} op {}; the CLI does not arm breakpoints",
+                    chunk, op
+                ));
             }
             VmState::Reset => {
                 // The script triggered a Reset (Op::Reset). The VM
@@ -1832,6 +1846,12 @@ fn drive_yield_main(vm: &mut Vm, _arena: &Arena, config: &LoopRunnerConfig) -> R
                 state = vm
                     .resume(Value::Int(tick))
                     .map_err(|e| format!("vm: {:?}", e))?;
+            }
+            VmState::BreakpointHit { chunk, op } => {
+                return Err(format!(
+                    "yield main hit a breakpoint at chunk {} op {}; the CLI does not arm breakpoints",
+                    chunk, op
+                ));
             }
             VmState::Reset => {
                 let elapsed = iteration_start.elapsed();
