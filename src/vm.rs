@@ -4946,6 +4946,26 @@ mod tests {
     }
 
     #[test]
+    fn fault_in_tail_expression_resolves_to_its_span() {
+        // A function whose whole body is one tail expression now carries
+        // a SourceSpan for that expression (B29 item 2), so a fault in it
+        // resolves to the tail expression's span rather than to nothing.
+        let module = compile_debug("fn main(d: Word) -> Word { 1 / d }");
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let mut vm = Vm::new(module, &arena).expect("vm constructs");
+        let err = vm
+            .call(&[Value::Int(0)])
+            .expect_err("division by zero traps");
+        assert!(matches!(err, VmError::DivisionByZero));
+        let src = vm
+            .fault_source_location()
+            .expect("the tail-expression fault now resolves");
+        // The Div op itself carries no exact span; it resolves to the
+        // enclosing tail expression's SourceSpan.
+        assert!(!src.exact);
+    }
+
+    #[test]
     fn fault_source_location_none_without_debug_pool() {
         // A release build carries no debug pool, so even though the
         // fault op is recorded, it does not resolve to source.

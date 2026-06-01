@@ -482,6 +482,19 @@ impl FuncCompiler {
         });
     }
 
+    /// Record a function-entry `BreakpointCandidate` at op 0 (B29), when
+    /// debug emission is on and the chunk has at least one op. This is
+    /// the function-entry breakpoint granularity, distinct from the
+    /// per-statement candidates `record_statement` emits.
+    fn record_function_entry(&mut self, span: &crate::token::Span) {
+        if self.emit_debug && !self.chunk.ops.is_empty() {
+            self.pending_debug.push(PendingDebug::BreakpointCandidate {
+                op_index: 0,
+                span: *span,
+            });
+        }
+    }
+
     /// Record an `AssertionContext` for a debug assert whose trap is at
     /// `op_index`, when debug emission is on.
     fn record_assert(&mut self, op_index: usize, span: &crate::token::Span, message: Option<&str>) {
@@ -1707,21 +1720,27 @@ pub fn compile_with_options(
                     }
                 }
             } else if options.emit_debug
-                && matches!(chunk.block_type, crate::bytecode::BlockType::Func)
+                && matches!(
+                    chunk.block_type,
+                    crate::bytecode::BlockType::Func | crate::bytecode::BlockType::Reentrant
+                )
             {
-                // Func chunks: emit per-chunk resource-bound obligations
-                // for the witness. These attest that a finite whole-call
-                // WCET and WCMU bound was proven for the function under
-                // the nominal cost model. Unlike the Stream arm above,
-                // they are NOT folded into `module.wcet_cycles` /
-                // `module.wcmu_bytes`, which remain the per-iteration
-                // maximum across Stream chunks (an atomic-total module
-                // declares no header bound). The bound is per-chunk and
-                // shallow with respect to calls, like the Stream WCET.
-                // Each obligation is emitted only on the proof arm, so a
-                // chunk whose bound does not prove (e.g. a loop with no
-                // statically extractable iteration count) records none.
-                if crate::verify::wcet_func_chunk(chunk).is_ok() {
+                // Func and Reentrant chunks: emit per-chunk resource-bound
+                // obligations for the witness. These attest that a finite
+                // whole-body WCET and WCMU bound was proven under the
+                // nominal cost model. For a Func chunk the WCET is the
+                // per-call bound; for a Reentrant chunk it is the
+                // cumulative-across-resumptions bound (a sound upper bound
+                // on any single resume) while the WCMU is the persistent
+                // peak (the coroutine frame survives yields). Unlike the
+                // Stream arm above, neither is folded into
+                // `module.wcet_cycles`/`module.wcmu_bytes`, which remain
+                // the per-iteration maximum across Stream chunks. The
+                // bound is shallow with respect to calls, like the Stream
+                // WCET. Each obligation is emitted only on the proof arm,
+                // so a chunk whose bound does not prove (e.g. a loop with
+                // no statically extractable iteration count) records none.
+                if crate::verify::wcet_whole_chunk(chunk).is_ok() {
                     let pool = chunk
                         .debug_pool
                         .get_or_insert_with(crate::debug_meta::DebugPool::default);
@@ -1733,7 +1752,7 @@ pub fn compile_with_options(
                         operands: alloc::vec![pass, property],
                     });
                 }
-                if let Ok((stack, heap)) = crate::verify::wcmu_func_chunk(chunk)
+                if let Ok((stack, heap)) = crate::verify::wcmu_whole_chunk(chunk)
                     && stack.saturating_add(heap) != u32::MAX
                 {
                     let pool = chunk
@@ -2923,6 +2942,11 @@ fn compile_function_group(
         }
     }
 
+    // Function entry is a breakpoint candidate at op 0 (B29), distinct
+    // from the per-statement candidates: a debugger arms it to break
+    // when the function is entered, before any statement runs.
+    fc.record_function_entry(&first.span);
+
     Ok(fc.finish())
 }
 
@@ -2958,7 +2982,16 @@ fn compile_block(fc: &mut FuncCompiler, block: &Block) -> Result<(), CompileErro
         compile_stmt(fc, stmt)?;
     }
     if let Some(tail) = &block.tail_expr {
+        // The block's tail expression carries no `Stmt`, so without this
+        // it would have no `SourceSpan` and a fault inside it would
+        // resolve only to an outer statement (or, for a function whose
+        // whole body is one expression, to nothing). Recording the tail
+        // expression's span gives fault localization a tighter enclosing
+        // span (B29, item 2). Captured before codegen so the span is
+        // keyed to the tail's first op.
+        let tail_start_op = fc.chunk.ops.len();
         compile_expr(fc, tail)?;
+        fc.record_statement(tail_start_op, &tail.span());
     } else {
         fc.emit(Op::PushImmediate(0));
     }
@@ -7186,6 +7219,45 @@ mod tests {
         let module = compile_str_debug("fn main() -> Word { 1 + 2 }");
         assert_eq!(module.wcet_cycles, 0, "no Stream chunk: header stays auto");
         assert_eq!(module.wcmu_bytes, 0, "no Stream chunk: header stays auto");
+    }
+
+    #[cfg(feature = "verify")]
+    #[test]
+    fn verifier_witness_records_reentrant_resource_bounds() {
+        // A Reentrant chunk (a yield function) records the per-chunk
+        // resource-bound obligations: a whole-body WCET (cumulative
+        // across resumptions) and the persistent WCMU peak.
+        let module = compile_str_debug("yield process(input: Word) -> Word { yield input * 2 }");
+        let chunk = module
+            .chunks
+            .iter()
+            .find(|c| matches!(c.block_type, crate::bytecode::BlockType::Reentrant))
+            .expect("a Reentrant chunk");
+        let pool = chunk.debug_pool.as_ref().expect("debug pool present");
+        let pairs = witness_pairs(pool);
+        assert!(pairs.contains(&("resource-bounds", "wcet-per-chunk-bound-proven")));
+        assert!(pairs.contains(&("resource-bounds", "wcmu-per-chunk-bound-proven")));
+    }
+
+    #[test]
+    fn debug_emission_records_function_entry_breakpoint() {
+        // Op 0 of a chunk is a function-entry breakpoint candidate,
+        // distinct from the per-statement candidates. A Stream function
+        // isolates it: op 0 is the Stream op and the first statement
+        // begins later, so the only candidate at op 0 is function entry.
+        use crate::debug_meta::DebugRecordKind;
+        let module = compile_str_debug("loop main(tick: Word) -> Word { let r = yield tick; r }");
+        let chunk = module
+            .chunks
+            .iter()
+            .find(|c| matches!(c.block_type, crate::bytecode::BlockType::Stream))
+            .expect("a Stream chunk");
+        let pool = chunk.debug_pool.as_ref().expect("debug pool present");
+        assert!(
+            pool.records_at(0)
+                .any(|r| r.kind == DebugRecordKind::BreakpointCandidate),
+            "function entry (op 0) is a breakpoint candidate"
+        );
     }
 
     #[cfg(feature = "verify")]

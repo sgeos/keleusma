@@ -873,37 +873,46 @@ pub fn wcet_stream_iteration_with_cost_model(
     Ok(overhead + region_cost)
 }
 
-/// Compute the worst-case execution cost of one whole call of a `Func`
-/// chunk, taking the maximum-cost branch at each control-flow join.
+/// Compute the worst-case execution cost of a non-Stream chunk's whole
+/// op range, taking the maximum-cost branch at each control-flow join.
 ///
 /// This is the [`wcet_stream_iteration`] computation applied to the
-/// chunk's entire op range rather than a Stream-to-Reset body: a `Func`
-/// chunk is atomic-total, so its whole body is one bounded computation.
-/// It feeds the B29 `VerifierWitness` `resource-bounds` obligation for
-/// `Func` chunks; it is *not* folded into the module's declared WCET
-/// header, which remains the per-iteration maximum across `Stream`
-/// chunks.
+/// chunk's entire op range rather than a Stream-to-Reset body. It
+/// accepts `Func` and `Reentrant` chunks and feeds their B29
+/// `VerifierWitness` `resource-bounds` obligation; it is *not* folded
+/// into the module's declared WCET header, which remains the
+/// per-iteration maximum across `Stream` chunks.
+///
+/// Interpretation differs by block type. For a `Func` chunk the body is
+/// one atomic call, so the result is the per-call WCET. For a
+/// `Reentrant` chunk (a `yield` function) the body spans `yield`
+/// boundaries; the whole-body cost is the *cumulative* cost across all
+/// resumptions, which is therefore a sound upper bound on any single
+/// resumption's cost. It is a loose per-resume bound — a finer
+/// per-segment analysis (cost between consecutive yields) would tighten
+/// it — but it is faithful: the actual execution traverses exactly
+/// these ops, so no single resume can exceed the whole-body cost.
 ///
 /// Like the Stream path, the cost is shallow with respect to calls: an
 /// `Op::Call` contributes its dispatch cycle only, not the callee's
-/// body (there is no transitive WCET resolver). Returns an error if the
-/// chunk is not a `Func` block, mirroring the Stream guard, or if a
-/// loop lacks a statically extractable iteration bound.
-pub fn wcet_func_chunk(chunk: &Chunk) -> Result<u32, VerifyError> {
-    wcet_func_chunk_with_cost_model(chunk, &crate::bytecode::NOMINAL_COST_MODEL)
+/// body (there is no transitive WCET resolver). Returns an error for a
+/// `Stream` chunk (use [`wcet_stream_iteration`]) or if a loop lacks a
+/// statically extractable iteration bound.
+pub fn wcet_whole_chunk(chunk: &Chunk) -> Result<u32, VerifyError> {
+    wcet_whole_chunk_with_cost_model(chunk, &crate::bytecode::NOMINAL_COST_MODEL)
 }
 
-/// Variant of [`wcet_func_chunk`] that uses a host-supplied cost model.
+/// Variant of [`wcet_whole_chunk`] that uses a host-supplied cost model.
 /// See [`wcet_stream_iteration_with_cost_model`] for the cost-model
 /// contract.
-pub fn wcet_func_chunk_with_cost_model(
+pub fn wcet_whole_chunk_with_cost_model(
     chunk: &Chunk,
     cost_model: &crate::bytecode::CostModel,
 ) -> Result<u32, VerifyError> {
-    if chunk.block_type != BlockType::Func {
+    if chunk.block_type == BlockType::Stream {
         return Err(VerifyError {
             chunk_name: chunk.name.clone(),
-            message: String::from("wcet_func_chunk requires a Func block"),
+            message: String::from("wcet_whole_chunk requires a non-Stream block"),
         });
     }
     let mut break_costs: Vec<u32> = Vec::new();
@@ -911,30 +920,33 @@ pub fn wcet_func_chunk_with_cost_model(
     Ok(body_cost.unwrap_or(0))
 }
 
-/// Compute the worst-case memory usage of one whole call of a `Func`
-/// chunk as `(stack_bytes, heap_bytes)`.
+/// Compute the worst-case memory usage of a non-Stream chunk's whole op
+/// range as `(stack_bytes, heap_bytes)`.
 ///
 /// This is the [`wcmu_stream_iteration`] computation applied to the
-/// chunk's entire op range. Like the Stream path it uses an empty call
-/// resolver (the per-site transitive contribution is composed by
+/// chunk's entire op range. It accepts `Func` and `Reentrant` chunks.
+/// For a `Reentrant` chunk the WCMU is genuinely the whole-body peak,
+/// not a loose bound: a coroutine's call frame and operand stack
+/// persist across `yield`, so the peak footprint is the maximum over
+/// the whole body. Like the Stream path it uses an empty call resolver
+/// (the per-site transitive contribution is composed by
 /// [`module_wcmu`]); it feeds the B29 `VerifierWitness` `resource-bounds`
-/// obligation for `Func` chunks and is not folded into the module WCMU
-/// header.
-pub fn wcmu_func_chunk(chunk: &Chunk) -> Result<(u32, u32), VerifyError> {
-    wcmu_func_chunk_with_value_slot_bytes(chunk, crate::bytecode::VALUE_SLOT_SIZE_BYTES)
+/// obligation and is not folded into the module WCMU header.
+pub fn wcmu_whole_chunk(chunk: &Chunk) -> Result<(u32, u32), VerifyError> {
+    wcmu_whole_chunk_with_value_slot_bytes(chunk, crate::bytecode::VALUE_SLOT_SIZE_BYTES)
 }
 
-/// Variant of [`wcmu_func_chunk`] that uses a host-supplied
+/// Variant of [`wcmu_whole_chunk`] that uses a host-supplied
 /// `value_slot_bytes`. See
 /// [`wcmu_stream_iteration_with_value_slot_bytes`].
-pub fn wcmu_func_chunk_with_value_slot_bytes(
+pub fn wcmu_whole_chunk_with_value_slot_bytes(
     chunk: &Chunk,
     value_slot_bytes: u32,
 ) -> Result<(u32, u32), VerifyError> {
-    if chunk.block_type != BlockType::Func {
+    if chunk.block_type == BlockType::Stream {
         return Err(VerifyError {
             chunk_name: chunk.name.clone(),
-            message: String::from("wcmu_func_chunk requires a Func block"),
+            message: String::from("wcmu_whole_chunk requires a non-Stream block"),
         });
     }
     let mut breaks: Vec<McuResult> = Vec::new();
@@ -2143,25 +2155,36 @@ mod tests {
     }
 
     #[test]
-    fn func_chunk_resource_bounds_compute_and_reject_non_func() {
+    fn whole_chunk_resource_bounds_accept_func_and_reentrant_reject_stream() {
         // A Func chunk yields finite whole-call WCET/WCMU bounds.
         let func = make_chunk(
             "main",
             vec![Op::PushImmediate(1), Op::Return],
             BlockType::Func,
         );
-        assert!(wcet_func_chunk(&func).is_ok());
-        assert!(wcmu_func_chunk(&func).is_ok());
+        assert!(wcet_whole_chunk(&func).is_ok());
+        assert!(wcmu_whole_chunk(&func).is_ok());
 
-        // The Func entry points reject a Stream chunk, mirroring the
-        // Stream entry points' guard against non-Stream input.
+        // A Reentrant chunk (a yield function) is accepted: its
+        // whole-body WCET is the cumulative-across-resumptions bound and
+        // its WCMU is the persistent peak.
+        let reentrant = make_chunk(
+            "gen",
+            vec![Op::PushImmediate(1), Op::Yield, Op::Return],
+            BlockType::Reentrant,
+        );
+        assert!(wcet_whole_chunk(&reentrant).is_ok());
+        assert!(wcmu_whole_chunk(&reentrant).is_ok());
+
+        // A Stream chunk is rejected; it has its own iteration entry
+        // points.
         let stream = make_chunk(
             "tick",
             vec![Op::Stream, Op::PushImmediate(1), Op::Yield, Op::Reset],
             BlockType::Stream,
         );
-        assert!(wcet_func_chunk(&stream).is_err());
-        assert!(wcmu_func_chunk(&stream).is_err());
+        assert!(wcet_whole_chunk(&stream).is_err());
+        assert!(wcmu_whole_chunk(&stream).is_err());
     }
 
     #[test]
