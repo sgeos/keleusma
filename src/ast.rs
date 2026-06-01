@@ -506,6 +506,20 @@ pub enum Stmt {
     /// Expression-statement (expression evaluated for side effects;
     /// result discarded).
     Expr(Expr),
+    /// Debug assertion: `assert cond` or `assert cond, "message"`. The
+    /// condition is a `bool`. Under a debug build the compiler emits a
+    /// runtime check that traps when the condition is false; in a
+    /// non-debug build the statement is compiled out entirely. The
+    /// optional message and the source span ride in a strippable
+    /// `AssertionContext` debug record (B29).
+    Assert {
+        /// The asserted condition; must be `bool`.
+        cond: Expr,
+        /// Optional human-readable failure message.
+        message: Option<String>,
+        /// Span of the assert statement.
+        span: Span,
+    },
 }
 
 /// A `let` binding.

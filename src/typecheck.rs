@@ -3346,6 +3346,16 @@ fn check_stmt(ctx: &mut Ctx, stmt: &mut Stmt) -> Result<(), TypeError> {
             let _ = type_of_expr(ctx, e)?;
             Ok(())
         }
+        Stmt::Assert { cond, span, .. } => {
+            let cond_ty = type_of_expr(ctx, cond)?;
+            if !types_compatible(ctx, &strip_labels(cond_ty.clone()), &Type::Bool) {
+                return Err(TypeError::new(
+                    alloc::format!("assert condition must be bool, got {}", cond_ty.display()),
+                    *span,
+                ));
+            }
+            Ok(())
+        }
     }
 }
 

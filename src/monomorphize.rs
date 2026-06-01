@@ -1151,6 +1151,15 @@ fn subst_in_stmt(stmt: &Stmt, subst: &BTreeMap<String, TypeExpr>) -> Stmt {
             span: *span,
         },
         Stmt::Expr(e) => Stmt::Expr(subst_in_expr(e, subst)),
+        Stmt::Assert {
+            cond,
+            message,
+            span,
+        } => Stmt::Assert {
+            cond: subst_in_expr(cond, subst),
+            message: message.clone(),
+            span: *span,
+        },
     }
 }
 

@@ -99,6 +99,12 @@ pub enum VmError {
     /// outside the declared set, reachable only through a host-
     /// constructed enum value.
     EnumVariantUnmapped,
+    /// A debug `assert` condition evaluated to false at runtime.
+    /// Reachable only in debug builds, which compile the assert check
+    /// in; release builds compile it out (B29). The failing
+    /// assertion's source location and message, when present, live in
+    /// the chunk's strippable `AssertionContext` debug record.
+    AssertionFailed,
     /// Structural verification failed at load time.
     VerifyError(String),
     /// Bytecode load failure encountered before verification could run,
@@ -182,7 +188,8 @@ impl VmError {
             | VmError::NoMatchingHead
             | VmError::NoMatchingArm
             | VmError::CheckedArithNoArm
-            | VmError::EnumVariantUnmapped => VmErrorCategory::SoftScript,
+            | VmError::EnumVariantUnmapped
+            | VmError::AssertionFailed => VmErrorCategory::SoftScript,
             // Soft host: a native returned an error. The host owns
             // the policy.
             VmError::NativeError(_) | VmError::NativeErrorCode { .. } => VmErrorCategory::SoftHost,
@@ -3593,6 +3600,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                         // construct surfaces as the same error a plain
                         // division by zero produces.
                         Some(TrapKind::ZeroDivisor) => VmError::DivisionByZero,
+                        Some(TrapKind::AssertionFailed) => VmError::AssertionFailed,
                         None => VmError::InvalidBytecode(alloc::format!(
                             "Op::Trap carried an unknown trap-kind code {}",
                             kind_code

@@ -1132,6 +1132,17 @@ impl<'a> Parser<'a> {
                 break;
             }
 
+            // Contextual `assert` statement. `assert` is not a reserved
+            // keyword; a lowercase `assert` at statement position that
+            // is not followed by `(` is the assertion form. `assert(x)`
+            // remains a call to a user function named `assert`.
+            if matches!(self.peek(), TokenKind::LowerIdent(n) if n == "assert")
+                && !matches!(self.peek_ahead(1), TokenKind::LParen)
+            {
+                stmts.push(self.parse_assert_stmt()?);
+                continue;
+            }
+
             match self.peek() {
                 TokenKind::Let => {
                     stmts.push(Stmt::Let(self.parse_let_stmt()?));
@@ -1200,6 +1211,30 @@ impl<'a> Parser<'a> {
         Ok(Block {
             stmts,
             tail_expr,
+            span: merge_spans(start, end),
+        })
+    }
+
+    /// Parse a contextual `assert` statement:
+    /// `assert <expr> [, "<message>"] ;`. The leading `assert`
+    /// identifier has already been confirmed by the caller.
+    fn parse_assert_stmt(&mut self) -> Result<Stmt, ParseError> {
+        let start = self.bump(); // consume the `assert` identifier
+        let cond = self.parse_expr()?;
+        let message = if self.eat(&TokenKind::Comma) {
+            if let TokenKind::StringLit(s) = self.peek().clone() {
+                self.bump();
+                Some(s)
+            } else {
+                return Err(self.error("expected a string-literal message after `,` in an assert"));
+            }
+        } else {
+            None
+        };
+        let end = self.expect(&TokenKind::Semicolon)?;
+        Ok(Stmt::Assert {
+            cond,
+            message,
             span: merge_spans(start, end),
         })
     }

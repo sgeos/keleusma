@@ -440,6 +440,17 @@ for i in 0..8 {
 
 `break` is not valid in `loop` functions. The `loop` construct represents the coroutine tick loop and must always reach a `yield` on every iteration.
 
+### Assert Statement
+
+`assert cond` and `assert cond, "message"` express a debug assertion. The condition is a `bool`. The construct is a compile-out debug aid: under a debug build (`keleusma compile --debug`, or `compiler::compile_with_options` with `emit_debug`) the compiler emits a runtime check that traps when the condition is false; under an ordinary build the statement compiles out entirely and contributes no opcodes. The optional message and the source span ride in a strippable `AssertionContext` debug record (backlog item B29), so `keleusma strip` reduces a failure to a generic assertion trap while leaving the check in place.
+
+````
+assert n > 0;
+assert index < len, "index past end of buffer";
+````
+
+Like `classify` and `declassify`, `assert` is **not** a reserved keyword. It is recognised as the assertion statement only at statement position when not followed by `(`; `assert(x)` remains a call to a user-defined function named `assert`. Because a debug and a release build differ in whether the check is present, the two are distinct compilations rather than a single artefact bridged by `strip` (which removes only the debug record, never opcodes).
+
 ### Loop Statement
 
 ````
@@ -1066,10 +1077,11 @@ comparison_op   = '==' | '!=' | '<' | '>' | '<=' | '>='
 
 (* Blocks and Statements *)
 block           = { statement } [ expression ]
-statement       = let_stmt | for_stmt | break_stmt
+statement       = let_stmt | for_stmt | break_stmt | assert_stmt
                 | data_field_assign | data_field_index_assign
                 | expr_stmt
 let_stmt        = 'let' pattern [ ':' type_expr ] '=' expression ';'
+assert_stmt     = 'assert' expression [ ',' string_lit ] ';'
 for_stmt        = 'for' lower_ident 'in' iterable '{' block '}'
 iterable        = expression
                 | expression '..' expression

@@ -45,8 +45,9 @@ The virtual machine surfaces each unhandled partial operation through a specific
 | Discriminant matches no variant, unhandled | `EnumVariantUnmapped` |
 | Native failure with a reported code, unhandled | `NativeErrorCode { code, message }` |
 | Native failure with a message only, unhandled | `NativeError(message)` |
+| Debug `assert` condition false (debug build only) | `AssertionFailed` |
 
-The compiler-emitted traps for partial operations whose unhandled case has no in-band result are encoded through the `TrapKind` encoding, distinct from the data faults above that already carry their own variant. Restoring the dropped dynamic detail, namely the failing predicate, newtype, or function name, is tracked under the debug-information work and is independent of this contract.
+The compiler-emitted traps for partial operations whose unhandled case has no in-band result are encoded through the `TrapKind` encoding, distinct from the data faults above that already carry their own variant. The `assert` trap is also a `TrapKind` (`AssertionFailed`), but it is reachable only in debug builds, which compile the assert check in; a release build compiles the check out entirely. The failing assertion's source span and message, when present, ride in the strippable `AssertionContext` debug record (B29), not in the `VmError`. Restoring the dropped dynamic detail, namely the failing predicate, newtype, or function name, is tracked under the debug-information work and is independent of this contract.
 
 ## Native default values
 

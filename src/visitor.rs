@@ -75,6 +75,7 @@ pub trait MutVisitor {
                 self.visit_expr(value);
             }
             Stmt::Expr(e) => self.visit_expr(e),
+            Stmt::Assert { cond, .. } => self.visit_expr(cond),
         }
     }
 
@@ -243,6 +244,7 @@ pub trait Visitor {
                 self.visit_expr(value);
             }
             Stmt::Expr(e) => self.visit_expr(e),
+            Stmt::Assert { cond, .. } => self.visit_expr(cond),
         }
     }
 

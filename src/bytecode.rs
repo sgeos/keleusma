@@ -495,6 +495,10 @@ pub enum TrapKind {
     /// as `VmError::DivisionByZero`, the same error a plain division
     /// by zero produces.
     ZeroDivisor,
+    /// A debug `assert` whose condition evaluated to false. Emitted
+    /// only by debug builds (B29); release builds compile the assert
+    /// out entirely.
+    AssertionFailed,
 }
 
 impl TrapKind {
@@ -507,6 +511,7 @@ impl TrapKind {
             TrapKind::CheckedArithNoArm => 3,
             TrapKind::EnumVariantUnmapped => 4,
             TrapKind::ZeroDivisor => 5,
+            TrapKind::AssertionFailed => 6,
         }
     }
 
@@ -521,6 +526,7 @@ impl TrapKind {
             3 => Some(TrapKind::CheckedArithNoArm),
             4 => Some(TrapKind::EnumVariantUnmapped),
             5 => Some(TrapKind::ZeroDivisor),
+            6 => Some(TrapKind::AssertionFailed),
             _ => None,
         }
     }
