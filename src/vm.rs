@@ -197,6 +197,29 @@ impl VmError {
     }
 }
 
+/// The source location a runtime fault maps back to, resolved from a
+/// chunk's strippable debug records (B29). Owned (rather than borrowing
+/// the chunk's debug pool, like [`crate::debug_meta::SourceLocation`])
+/// because [`GenericVm::fault_source_location`] decodes the pool on
+/// demand and the borrow could not outlive that call.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FaultSource {
+    /// The source file name recorded for the span, when present. The
+    /// compiler emits an empty placeholder it does not know the source
+    /// path, so this is commonly `Some("")` until a host rewrites it.
+    pub file: Option<String>,
+    /// Byte offset of the span's start in the file.
+    pub byte_offset: u32,
+    /// Byte length of the span.
+    pub byte_length: u32,
+    /// `true` when the span is keyed to the faulting op itself (an
+    /// exact match, e.g. a `CallSite` or `AssertionContext` at that op);
+    /// `false` when it is the nearest enclosing statement's `SourceSpan`
+    /// resolved as a fallback. A host that needs precision should not
+    /// treat a non-exact location as the precise fault site.
+    pub exact: bool,
+}
+
 /// Type alias for the bundled 64-bit `VmState` shape.
 pub type VmState = GenericVmState<i64, f64>;
 
@@ -718,6 +741,17 @@ pub struct GenericVm<
     /// [`GenericVm::resume_from_breakpoint`] so resuming executes the
     /// op at a breakpoint rather than re-triggering it immediately.
     skip_breakpoint_at: Option<(usize, usize)>,
+    /// Position `(chunk_idx, op_index)` of the op the run loop was
+    /// executing when it last returned an error, or `None` after a
+    /// successful run or before any run. The run loop records the
+    /// current op here before dispatching it and the [`GenericVm::run`]
+    /// wrapper clears it on success, so after a failed `call`/`resume`
+    /// it names the faulting op. A host maps it back to source through
+    /// [`GenericVm::fault_source_location`] (B29). Tracking it is a
+    /// single `Option` write per op; it is runtime debugging state, not
+    /// part of the verified bytecode, so it does not affect the
+    /// declared WCET or WCMU bounds.
+    fault_location: Option<(usize, usize)>,
     /// Cached load-time native classification check. Populated on
     /// the first `call` after natives are registered (or after
     /// `replace_module`). `None` means the check has not been run
@@ -1444,6 +1478,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
             started: false,
             breakpoints: alloc::vec::Vec::new(),
             skip_breakpoint_at: None,
+            fault_location: None,
             native_classifications_verified: false,
             #[cfg(feature = "signatures")]
             verifying_keys: Vec::new(),
@@ -1608,6 +1643,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
             started: false,
             breakpoints: alloc::vec::Vec::new(),
             skip_breakpoint_at: None,
+            fault_location: None,
             native_classifications_verified: false,
             #[cfg(feature = "signatures")]
             verifying_keys: Vec::new(),
@@ -2794,8 +2830,106 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         self.run()
     }
 
+    /// The position `(chunk_idx, op_index)` of the op the VM was
+    /// executing when the most recent `call`/`resume` returned an error,
+    /// or `None` after a successful run or before any run.
+    ///
+    /// This is the B29 read path into the trap path: a runtime trap (an
+    /// unhandled partial operation, a failed debug `assert`, a type
+    /// error) leaves the faulting op here so a host can map it back to
+    /// source through the chunk's debug records, either directly with
+    /// [`crate::debug_meta::DebugPool::records_at`] or through the
+    /// convenience [`fault_source_location`](Self::fault_source_location).
+    ///
+    /// The location is meaningful for faults that arise while executing
+    /// an op (the recoverable `SoftScript`/`SoftHost` traps and most
+    /// `Halt` cases). It is `None` for failures that occur before any op
+    /// is dispatched, such as a load- or verify-time rejection from
+    /// [`Vm::new`], which never enters the run loop.
+    pub fn fault_location(&self) -> Option<(usize, usize)> {
+        self.fault_location
+    }
+
+    /// Decode the strippable debug pool of `chunk_idx` from the archived
+    /// bytecode, or `None` when the chunk carries none (a release build,
+    /// or after `strip`). Decoded on demand; this is a cold path used
+    /// only when a host resolves a fault, so it is not cached.
+    fn chunk_debug_pool(&self, chunk_idx: usize) -> Option<crate::debug_meta::DebugPool> {
+        let chunk = self.archived().chunks.get(chunk_idx)?;
+        let bytes = chunk.debug_pool_bytes.as_ref()?;
+        crate::debug_meta::DebugPool::decode(bytes.as_slice()).ok()
+    }
+
+    /// Resolve the most recent fault to a [`FaultSource`] through the
+    /// faulting chunk's debug records, or `None` when there is no fault,
+    /// the chunk carries no debug pool (release build or stripped), or
+    /// no record maps the position to a span.
+    ///
+    /// Resolution is two-tier and never fabricates a location. First,
+    /// if a span-bearing record (`CallSite`, `SourceSpan`,
+    /// `AssertionContext`, `BreakpointCandidate`) sits exactly at the
+    /// faulting op, its span is returned with `exact = true`. Otherwise
+    /// the nearest enclosing statement is used: the `SourceSpan` with
+    /// the greatest op index at or before the fault, returned with
+    /// `exact = false`. Because span-bearing records that do not land on
+    /// the faulting op (most mid-statement partial-operation traps) only
+    /// resolve to the enclosing statement, callers needing the precise
+    /// site should consult `exact`.
+    pub fn fault_source_location(&self) -> Option<FaultSource> {
+        let (chunk_idx, op) = self.fault_location?;
+        let pool = self.chunk_debug_pool(chunk_idx)?;
+        let op_u32 = op as u32;
+
+        // Tier 1: an exact span-bearing record at the faulting op.
+        for record in pool.records_at(op_u32) {
+            if let Some(loc) = pool.source_location(record) {
+                return Some(FaultSource {
+                    file: loc.file.map(alloc::string::String::from),
+                    byte_offset: loc.byte_offset,
+                    byte_length: loc.byte_length,
+                    exact: true,
+                });
+            }
+        }
+
+        // Tier 2: the nearest enclosing statement's SourceSpan, i.e. the
+        // SourceSpan record with the greatest op index at or before the
+        // fault. SourceSpan records are emitted at each statement's
+        // starting op in op order, so this is the statement covering the
+        // fault, not a guess.
+        let enclosing = pool
+            .records
+            .iter()
+            .filter(|r| {
+                r.kind == crate::debug_meta::DebugRecordKind::SourceSpan && r.op_index <= op_u32
+            })
+            .max_by_key(|r| r.op_index)?;
+        let loc = pool.source_location(enclosing)?;
+        Some(FaultSource {
+            file: loc.file.map(alloc::string::String::from),
+            byte_offset: loc.byte_offset,
+            byte_length: loc.byte_length,
+            exact: false,
+        })
+    }
+
     /// Execute bytecode until yield, return, reset, or error.
+    /// Execute until the VM yields, finishes, resets, hits a
+    /// breakpoint, or errors. Thin wrapper over [`run_inner`] that
+    /// maintains [`fault_location`](Self::fault_location): the loop
+    /// records the op it is about to dispatch in `self.fault_location`,
+    /// so on an error return that field already names the faulting op.
+    /// On a successful outcome the field is cleared, so it is `Some`
+    /// only after a fault.
     fn run(&mut self) -> Result<GenericVmState<W, F>, VmError> {
+        let result = self.run_inner();
+        if result.is_ok() {
+            self.fault_location = None;
+        }
+        result
+    }
+
+    fn run_inner(&mut self) -> Result<GenericVmState<W, F>, VmError> {
         loop {
             if self.frames.is_empty() {
                 return Err(VmError::InvalidBytecode(String::from("empty call stack")));
@@ -2839,6 +2973,11 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
             }
 
             let op = self.chunk_op(chunk_idx, ip);
+            // Record the op about to be dispatched as the candidate
+            // fault location. If any arm below returns an error, the
+            // `run` wrapper leaves this in place as the faulting op;
+            // on success it clears it. A single `Option` write per op.
+            self.fault_location = Some((chunk_idx, ip));
             // Advance IP.
             self.frames.last_mut().unwrap().ip += 1;
 
@@ -4734,6 +4873,99 @@ mod tests {
         let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
         let mut vm = Vm::new(module, &arena)?;
         vm.call(args)
+    }
+
+    /// Compile `src` with debug metadata (B29) so each chunk carries a
+    /// `debug_pool` the fault-localization read path can consult.
+    fn compile_debug(src: &str) -> Module {
+        let tokens = tokenize(src).expect("lex error");
+        let program = parse(&tokens).expect("parse error");
+        let (module, _warnings) = crate::compiler::compile_with_options(
+            &program,
+            &crate::target::Target::host(),
+            &crate::compiler::CompileOptions { emit_debug: true },
+        )
+        .expect("compile error");
+        module
+    }
+
+    #[test]
+    fn fault_location_records_trapping_op_and_maps_to_source() {
+        // A division by a runtime zero traps inside a `let` statement;
+        // the VM records the faulting op (the Div), which carries no
+        // exact span, so it resolves to the enclosing statement's
+        // SourceSpan (the tier-2 fallback, `exact == false`).
+        let module = compile_debug("fn main(d: Word) -> Word { let x = 1 / d; x }");
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let mut vm = Vm::new(module, &arena).expect("vm constructs");
+        let err = vm
+            .call(&[Value::Int(0)])
+            .expect_err("division by zero traps");
+        assert!(matches!(err, VmError::DivisionByZero));
+        let (chunk, _op) = vm.fault_location().expect("fault location recorded");
+        assert_eq!(chunk, 0, "the fault is in main, chunk 0");
+        let src = vm
+            .fault_source_location()
+            .expect("the fault maps to the enclosing statement");
+        assert!(
+            !src.exact,
+            "a bare Div op carries no exact span; resolution is the enclosing statement"
+        );
+    }
+
+    #[test]
+    fn fault_source_is_exact_for_failed_assert() {
+        // A failed debug `assert` traps; its AssertionContext record
+        // sits exactly at the assert op, so resolution is exact.
+        let module = compile_debug("fn main() -> Word { assert false, \"boom\"; 0 }");
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let mut vm = Vm::new(module, &arena).expect("vm constructs");
+        let err = vm.call(&[]).expect_err("assert false traps");
+        assert!(matches!(err, VmError::AssertionFailed));
+        let src = vm
+            .fault_source_location()
+            .expect("the assert maps to a source span");
+        assert!(
+            src.exact,
+            "an AssertionContext record sits exactly at the assert op"
+        );
+    }
+
+    #[test]
+    fn fault_location_cleared_after_successful_run() {
+        let module = compile_debug("fn main() -> Word { 21 + 21 }");
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let mut vm = Vm::new(module, &arena).expect("vm constructs");
+        let state = vm.call(&[]).expect("runs to completion");
+        assert!(matches!(state, VmState::Finished(Value::Int(42))));
+        assert!(
+            vm.fault_location().is_none(),
+            "a successful run leaves no fault location"
+        );
+        assert!(vm.fault_source_location().is_none());
+    }
+
+    #[test]
+    fn fault_source_location_none_without_debug_pool() {
+        // A release build carries no debug pool, so even though the
+        // fault op is recorded, it does not resolve to source.
+        let tokens = tokenize("fn main(d: Word) -> Word { 1 / d }").expect("lex");
+        let program = parse(&tokens).expect("parse");
+        let module = compile(&program).expect("compile");
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let mut vm = Vm::new(module, &arena).expect("vm constructs");
+        let err = vm
+            .call(&[Value::Int(0)])
+            .expect_err("division by zero traps");
+        assert!(matches!(err, VmError::DivisionByZero));
+        assert!(
+            vm.fault_location().is_some(),
+            "the op position is recorded regardless of debug metadata"
+        );
+        assert!(
+            vm.fault_source_location().is_none(),
+            "without a debug pool there is no source mapping"
+        );
     }
 
     fn run_expect(src: &str, args: &[Value]) -> Value {
