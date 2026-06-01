@@ -1588,20 +1588,36 @@ pub fn compile_with_options(
         let mut max_wcmu: u32 = 0;
         let mut wcet_overflow = false;
         let mut wcmu_overflow = false;
-        for chunk in &mut module.chunks {
+        // Compute the structural verification trace per chunk before the
+        // mutable loop below, since `chunk_verification_obligations`
+        // borrows the whole module (for the data layout) and the loop
+        // borrows `module.chunks` mutably. `verify(&module)` above
+        // returned Ok, so each chunk's trace is complete (not truncated
+        // at a failing check).
+        let per_chunk_obligations: alloc::vec::Vec<
+            alloc::vec::Vec<crate::verify::VerificationObligation>,
+        > = if options.emit_debug {
+            module
+                .chunks
+                .iter()
+                .map(|c| crate::verify::chunk_verification_obligations(c, &module))
+                .collect()
+        } else {
+            alloc::vec::Vec::new()
+        };
+        for (chunk_idx, chunk) in module.chunks.iter_mut().enumerate() {
             // Under debug emission, record the chunk's verification
             // trace as one VerifierWitness per discharged obligation,
-            // keyed to the op position it concerns (verify(&module)
-            // above returned Ok, so every obligation holds). Each
-            // record's operands are [pass, property] string indices.
-            // This is a verifier-stage record, appended to the built
-            // chunk rather than emitted during codegen.
+            // keyed to the op position it concerns. Each record's
+            // operands are [pass, property] string indices. This is a
+            // verifier-stage record, appended to the built chunk rather
+            // than emitted during codegen.
             if options.emit_debug {
-                let obligations = crate::verify::chunk_verification_obligations(chunk);
+                let obligations = &per_chunk_obligations[chunk_idx];
                 let pool = chunk
                     .debug_pool
                     .get_or_insert_with(crate::debug_meta::DebugPool::default);
-                for ob in &obligations {
+                for ob in obligations {
                     let pass = intern_debug_string(pool, ob.pass);
                     let property = intern_debug_string(pool, ob.property);
                     pool.records.push(crate::debug_meta::DebugRecord {
@@ -7108,7 +7124,9 @@ mod tests {
         assert!(!passes.contains(&"productive-divergence"));
         // The chunk-level obligations are present.
         assert!(pairs.contains(&("block-nesting-and-offsets", "all-blocks-closed")));
-        assert!(pairs.contains(&("block-type-constraints", "func-free-of-yield-stream-reset")));
+        assert!(pairs.contains(&("block-type-constraints", "func-has-no-yield")));
+        assert!(pairs.contains(&("block-type-constraints", "func-has-no-stream")));
+        assert!(pairs.contains(&("block-type-constraints", "func-has-no-reset")));
 
         let release = compile_str("fn main() -> Word { 1 }").expect("compile");
         assert!(release.chunks.iter().all(|c| c.debug_pool.is_none()));
@@ -7130,7 +7148,7 @@ mod tests {
             "a Stream chunk's witness records the productive-divergence proof"
         );
         // The Stream block-type obligations are present too.
-        assert!(pairs.contains(&("block-type-constraints", "stream-contains-yield")));
+        assert!(pairs.contains(&("block-type-constraints", "stream-has-yield")));
         assert!(pairs.contains(&("block-type-constraints", "stream-has-exactly-one-stream")));
     }
 

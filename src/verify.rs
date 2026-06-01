@@ -1379,8 +1379,9 @@ pub struct VerificationObligation {
 }
 
 /// The per-construct *structural* verification trace for `chunk`: one
-/// [`VerificationObligation`] for each property [`verify`] establishes,
-/// keyed to the op position it concerns.
+/// [`VerificationObligation`] for each individual check the three
+/// structural passes of [`verify`] discharge, keyed to the op position
+/// it concerns.
 ///
 /// Scope: this covers the three structural passes of [`verify`] only
 /// (block nesting and offsets, block-type constraints, and productive
@@ -1388,92 +1389,30 @@ pub struct VerificationObligation {
 /// (per-iteration WCET and WCMU), which is a distinct verification
 /// activity the compile pipeline runs separately and whose obligations
 /// it emits at that stage, nor the load-time arena-capacity admission
-/// (`verify_resource_bounds`). Those have no representation here
-/// because this function takes only a `&Chunk` and has neither a cost
-/// model nor an arena capacity.
+/// (`verify_resource_bounds`).
 ///
-/// This is the finer counterpart to [`chunk_verification_witness`]. It
-/// is faithful only because it is produced *after* [`verify`] has
-/// returned `Ok` for the module: each obligation records a fact that a
-/// successful structural verification guarantees for the named
-/// construct, rather than re-deriving it. The function therefore walks
-/// the op stream and attaches, to each construct the verifier inspects,
-/// the property that construct's successful admission implies. Calling
-/// it on a chunk that would *fail* [`verify`] yields obligations that
-/// do not hold; callers must gate emission on a prior successful
-/// verification, as the compile pipeline does.
+/// This is the finer counterpart to [`chunk_verification_witness`].
+/// The obligations are produced by the same per-chunk routine that
+/// renders the verdict ([`verify`] and this function both call
+/// `verify_chunk`), so the trace cannot drift from the checks the
+/// verifier actually performs: each obligation is recorded at the point
+/// the corresponding check is discharged, one obligation per check.
+/// Because the obligations are emitted only as checks *pass*, a chunk
+/// that would fail [`verify`] yields a truncated trace ending at the
+/// first failing check rather than fabricated facts; callers that want
+/// a complete trace must verify first, as the compile pipeline does.
 ///
-/// The properties are a faithful projection of the checks in
-/// [`verify`], not an exhaustive proof object: the trace records which
-/// construct each pass admitted and on what ground, not a machine-
-/// checkable derivation. Some property identifiers stand in for more
-/// than one underlying check (for example, `else-targets-matching-endif`
-/// covers both that an `If` is open and that the target is an `EndIf`).
-pub fn chunk_verification_obligations(chunk: &Chunk) -> alloc::vec::Vec<VerificationObligation> {
-    const P1: &str = "block-nesting-and-offsets";
-    const P2: &str = "block-type-constraints";
-    const P3: &str = "productive-divergence";
-
+/// The properties remain a faithful record of the verifier's checks,
+/// not a machine-checkable derivation.
+pub fn chunk_verification_obligations(
+    chunk: &Chunk,
+    module: &Module,
+) -> alloc::vec::Vec<VerificationObligation> {
     let mut obligations: alloc::vec::Vec<VerificationObligation> = alloc::vec::Vec::new();
-    let mut push = |op_index: usize, pass: &'static str, property: &'static str| {
-        obligations.push(VerificationObligation {
-            op_index: op_index as u32,
-            pass,
-            property,
-        });
-    };
-
-    // -- Pass 1 obligations: one per block/offset/data construct. --
-    for (ip, op) in chunk.ops.iter().enumerate() {
-        match op {
-            Op::If(_) => push(ip, P1, "if-branch-target-in-bounds"),
-            Op::Else(_) => push(ip, P1, "else-targets-matching-endif"),
-            Op::EndIf => push(ip, P1, "endif-closes-open-if"),
-            Op::Loop(_) => push(ip, P1, "loop-exit-target-in-bounds"),
-            Op::EndLoop(_) => push(ip, P1, "endloop-back-edge-targets-loop-entry"),
-            Op::Break(_) => push(ip, P1, "break-within-loop-target-in-bounds"),
-            Op::BreakIf(_) => push(ip, P1, "break-if-within-loop-target-in-bounds"),
-            Op::GetData(_) | Op::SetData(_) => push(ip, P1, "data-slot-in-range"),
-            Op::GetDataIndexed(_, _) | Op::SetDataIndexed(_, _) => {
-                push(ip, P1, "data-slot-range-in-bounds")
-            }
-            _ => {}
-        }
-    }
-    // The end-of-pass-1 balance check is a chunk-level fact.
-    push(0, P1, "all-blocks-closed");
-
-    // -- Pass 2 obligations: keyed to the marker ops where possible. --
-    let first_yield = chunk.ops.iter().position(|op| matches!(op, Op::Yield));
-    let stream_pos = chunk.ops.iter().position(|op| matches!(op, Op::Stream));
-    let reset_pos = chunk.ops.iter().position(|op| matches!(op, Op::Reset));
-    match chunk.block_type {
-        BlockType::Func => push(0, P2, "func-free-of-yield-stream-reset"),
-        BlockType::Reentrant => {
-            if let Some(y) = first_yield {
-                push(y, P2, "reentrant-contains-yield");
-            }
-        }
-        BlockType::Stream => {
-            if let Some(s) = stream_pos {
-                push(s, P2, "stream-has-exactly-one-stream");
-            }
-            if let Some(r) = reset_pos {
-                push(r, P2, "stream-has-exactly-one-reset");
-            }
-            if let Some(y) = first_yield {
-                push(y, P2, "stream-contains-yield");
-            }
-        }
-    }
-
-    // -- Pass 3 obligation: productive divergence, keyed to Stream. --
-    if chunk.block_type == BlockType::Stream
-        && let Some(s) = stream_pos
-    {
-        push(s, P3, "every-stream-to-reset-path-yields");
-    }
-
+    // The Result is ignored: on success the trace is complete; on
+    // failure it is truncated at the first failing check, which is the
+    // documented contract. Callers gate completeness on a prior verify.
+    let _ = verify_chunk(chunk, module, Some(&mut obligations));
     obligations
 }
 
@@ -1494,6 +1433,40 @@ pub fn chunk_verification_obligations(chunk: &Chunk) -> alloc::vec::Vec<Verifica
 ///    Stream to Reset pass through at least one Yield.
 pub fn verify(module: &Module) -> Result<(), VerifyError> {
     for chunk in &module.chunks {
+        verify_chunk(chunk, module, None)?;
+    }
+    Ok(())
+}
+
+/// Verify a single chunk, optionally recording one
+/// [`VerificationObligation`] per check as it is discharged.
+///
+/// This is the single source of truth for structural verification:
+/// [`verify`] calls it with `sink = None` for the verdict, and
+/// [`chunk_verification_obligations`] calls it with a sink to collect
+/// the trace. The verdict logic is identical in both modes; the only
+/// difference is whether `record` is a no-op. Obligations are recorded
+/// only on the path where a check *passes*, so an error return leaves a
+/// trace truncated at the first failing check.
+fn verify_chunk(
+    chunk: &Chunk,
+    module: &Module,
+    mut sink: Option<&mut alloc::vec::Vec<VerificationObligation>>,
+) -> Result<(), VerifyError> {
+    const P1: &str = "block-nesting-and-offsets";
+    const P2: &str = "block-type-constraints";
+    const P3: &str = "productive-divergence";
+    let mut record = |op_index: usize, pass: &'static str, property: &'static str| {
+        if let Some(s) = sink.as_mut() {
+            s.push(VerificationObligation {
+                op_index: op_index as u32,
+                pass,
+                property,
+            });
+        }
+    };
+
+    {
         let name = &chunk.name;
         let ops = &chunk.ops;
 
@@ -1520,6 +1493,7 @@ pub fn verify(module: &Module) -> Result<(), VerifyError> {
                         });
                     }
                     block_stack.push((BlockKind::If, ip));
+                    record(ip, P1, "if-branch-target-in-bounds");
                 }
                 Op::Else(target) => {
                     let t = *target as usize;
@@ -1536,6 +1510,7 @@ pub fn verify(module: &Module) -> Result<(), VerifyError> {
                             });
                         }
                     }
+                    record(ip, P1, "else-preceded-by-matching-if");
                     // Target must point to EndIf within bounds.
                     if t >= ops.len() {
                         return Err(VerifyError {
@@ -1548,6 +1523,7 @@ pub fn verify(module: &Module) -> Result<(), VerifyError> {
                             ),
                         });
                     }
+                    record(ip, P1, "else-target-in-bounds");
                     if !matches!(&ops[t], Op::EndIf) {
                         return Err(VerifyError {
                             chunk_name: name.clone(),
@@ -1559,22 +1535,26 @@ pub fn verify(module: &Module) -> Result<(), VerifyError> {
                             ),
                         });
                     }
+                    record(ip, P1, "else-target-is-endif");
                 }
-                Op::EndIf => match block_stack.pop() {
-                    Some((BlockKind::If, _)) => {}
-                    Some((BlockKind::Loop, _)) => {
-                        return Err(VerifyError {
-                            chunk_name: name.clone(),
-                            message: alloc::format!("EndIf at {} but expected EndLoop", ip),
-                        });
+                Op::EndIf => {
+                    match block_stack.pop() {
+                        Some((BlockKind::If, _)) => {}
+                        Some((BlockKind::Loop, _)) => {
+                            return Err(VerifyError {
+                                chunk_name: name.clone(),
+                                message: alloc::format!("EndIf at {} but expected EndLoop", ip),
+                            });
+                        }
+                        None => {
+                            return Err(VerifyError {
+                                chunk_name: name.clone(),
+                                message: alloc::format!("EndIf at {} with no matching If", ip),
+                            });
+                        }
                     }
-                    None => {
-                        return Err(VerifyError {
-                            chunk_name: name.clone(),
-                            message: alloc::format!("EndIf at {} with no matching If", ip),
-                        });
-                    }
-                },
+                    record(ip, P1, "endif-closes-open-if");
+                }
                 Op::Loop(target) => {
                     let t = *target as usize;
                     // Target must be past the matching EndLoop.
@@ -1592,11 +1572,13 @@ pub fn verify(module: &Module) -> Result<(), VerifyError> {
                     }
                     block_stack.push((BlockKind::Loop, ip));
                     loop_depth += 1;
+                    record(ip, P1, "loop-exit-target-in-bounds");
                 }
                 Op::EndLoop(target) => {
                     let t = *target as usize;
                     match block_stack.pop() {
                         Some((BlockKind::Loop, loop_ip)) => {
+                            record(ip, P1, "endloop-closes-open-loop");
                             // EndLoop back-edge must point to instruction after Loop.
                             if t != loop_ip + 1 {
                                 return Err(VerifyError {
@@ -1610,6 +1592,7 @@ pub fn verify(module: &Module) -> Result<(), VerifyError> {
                                     ),
                                 });
                             }
+                            record(ip, P1, "endloop-back-edge-targets-loop-entry");
                         }
                         Some((BlockKind::If, _)) => {
                             return Err(VerifyError {
@@ -1633,6 +1616,7 @@ pub fn verify(module: &Module) -> Result<(), VerifyError> {
                             message: alloc::format!("Break at {} outside any Loop block", ip),
                         });
                     }
+                    record(ip, P1, "break-within-loop");
                     let t = *target as usize;
                     if t > ops.len() {
                         return Err(VerifyError {
@@ -1645,6 +1629,7 @@ pub fn verify(module: &Module) -> Result<(), VerifyError> {
                             ),
                         });
                     }
+                    record(ip, P1, "break-target-in-bounds");
                 }
                 Op::BreakIf(target) => {
                     if loop_depth == 0 {
@@ -1653,6 +1638,7 @@ pub fn verify(module: &Module) -> Result<(), VerifyError> {
                             message: alloc::format!("BreakIf at {} outside any Loop block", ip),
                         });
                     }
+                    record(ip, P1, "break-if-within-loop");
                     let t = *target as usize;
                     if t > ops.len() {
                         return Err(VerifyError {
@@ -1665,6 +1651,7 @@ pub fn verify(module: &Module) -> Result<(), VerifyError> {
                             ),
                         });
                     }
+                    record(ip, P1, "break-if-target-in-bounds");
                 }
                 Op::GetData(slot) | Op::SetData(slot) => {
                     let idx = *slot as usize;
@@ -1684,6 +1671,7 @@ pub fn verify(module: &Module) -> Result<(), VerifyError> {
                             ),
                         });
                     }
+                    record(ip, P1, "data-slot-layout-declared");
                     if idx >= data_len {
                         let op_name = if matches!(op, Op::GetData(_)) {
                             "GetData"
@@ -1701,6 +1689,7 @@ pub fn verify(module: &Module) -> Result<(), VerifyError> {
                             ),
                         });
                     }
+                    record(ip, P1, "data-slot-index-in-range");
                 }
                 Op::GetDataIndexed(base, len) | Op::SetDataIndexed(base, len) => {
                     let data_len = module.data_layout.as_ref().map_or(0, |dl| dl.slots.len());
@@ -1719,6 +1708,7 @@ pub fn verify(module: &Module) -> Result<(), VerifyError> {
                             ),
                         });
                     }
+                    record(ip, P1, "data-range-layout-declared");
                     let base_usize = *base as usize;
                     let len_usize = *len as usize;
                     let end = base_usize.saturating_add(len_usize);
@@ -1735,6 +1725,7 @@ pub fn verify(module: &Module) -> Result<(), VerifyError> {
                             ),
                         });
                     }
+                    record(ip, P1, "data-range-in-bounds");
                 }
                 _ => {}
             }
@@ -1751,6 +1742,7 @@ pub fn verify(module: &Module) -> Result<(), VerifyError> {
                 message: alloc::format!("unclosed {} block opened at {}", kind_str, ip),
             });
         }
+        record(0, P1, "all-blocks-closed");
 
         // -- Pass 2: Block type constraints --
         let mut yield_count = 0usize;
@@ -1766,6 +1758,12 @@ pub fn verify(module: &Module) -> Result<(), VerifyError> {
             }
         }
 
+        // Positions of the marker ops, for keying the obligations to
+        // the construct each block-type constraint concerns.
+        let first_yield = ops.iter().position(|op| matches!(op, Op::Yield));
+        let first_stream = ops.iter().position(|op| matches!(op, Op::Stream));
+        let first_reset = ops.iter().position(|op| matches!(op, Op::Reset));
+
         match chunk.block_type {
             BlockType::Func => {
                 if yield_count > 0 {
@@ -1777,6 +1775,7 @@ pub fn verify(module: &Module) -> Result<(), VerifyError> {
                         ),
                     });
                 }
+                record(0, P2, "func-has-no-yield");
                 if stream_count > 0 {
                     return Err(VerifyError {
                         chunk_name: name.clone(),
@@ -1786,6 +1785,7 @@ pub fn verify(module: &Module) -> Result<(), VerifyError> {
                         ),
                     });
                 }
+                record(0, P2, "func-has-no-stream");
                 if reset_count > 0 {
                     return Err(VerifyError {
                         chunk_name: name.clone(),
@@ -1795,6 +1795,7 @@ pub fn verify(module: &Module) -> Result<(), VerifyError> {
                         ),
                     });
                 }
+                record(0, P2, "func-has-no-reset");
             }
             BlockType::Reentrant => {
                 if yield_count == 0 {
@@ -1803,6 +1804,7 @@ pub fn verify(module: &Module) -> Result<(), VerifyError> {
                         message: String::from("Reentrant block must contain at least one Yield"),
                     });
                 }
+                record(first_yield.unwrap_or(0), P2, "reentrant-has-yield");
                 if stream_count > 0 {
                     return Err(VerifyError {
                         chunk_name: name.clone(),
@@ -1812,6 +1814,7 @@ pub fn verify(module: &Module) -> Result<(), VerifyError> {
                         ),
                     });
                 }
+                record(0, P2, "reentrant-has-no-stream");
                 if reset_count > 0 {
                     return Err(VerifyError {
                         chunk_name: name.clone(),
@@ -1821,6 +1824,7 @@ pub fn verify(module: &Module) -> Result<(), VerifyError> {
                         ),
                     });
                 }
+                record(0, P2, "reentrant-has-no-reset");
             }
             BlockType::Stream => {
                 if stream_count != 1 {
@@ -1832,6 +1836,11 @@ pub fn verify(module: &Module) -> Result<(), VerifyError> {
                         ),
                     });
                 }
+                record(
+                    first_stream.unwrap_or(0),
+                    P2,
+                    "stream-has-exactly-one-stream",
+                );
                 if reset_count != 1 {
                     return Err(VerifyError {
                         chunk_name: name.clone(),
@@ -1841,12 +1850,14 @@ pub fn verify(module: &Module) -> Result<(), VerifyError> {
                         ),
                     });
                 }
+                record(first_reset.unwrap_or(0), P2, "stream-has-exactly-one-reset");
                 if yield_count == 0 {
                     return Err(VerifyError {
                         chunk_name: name.clone(),
                         message: String::from("Stream block must contain at least one Yield"),
                     });
                 }
+                record(first_yield.unwrap_or(0), P2, "stream-has-yield");
             }
         }
 
@@ -1866,6 +1877,7 @@ pub fn verify(module: &Module) -> Result<(), VerifyError> {
                         ),
                     });
                 }
+                record(s, P3, "every-stream-to-reset-path-yields");
             }
         }
     }
@@ -1958,18 +1970,25 @@ mod tests {
             BlockType::Func,
         );
         // Precondition for faithfulness: the chunk verifies.
-        assert!(verify(&make_module(vec![chunk.clone()])).is_ok());
-        let obs = chunk_verification_obligations(&chunk);
+        let module = make_module(vec![chunk.clone()]);
+        assert!(verify(&module).is_ok());
+        let obs = chunk_verification_obligations(&chunk, &module);
         let has = |op: u32, property: &str| {
             obs.iter()
                 .any(|o| o.op_index == op && o.property == property)
         };
         assert!(has(1, "if-branch-target-in-bounds"));
-        assert!(has(4, "else-targets-matching-endif"));
+        // The Else construct discharges three distinct checks, each its
+        // own obligation, all keyed to the Else op.
+        assert!(has(4, "else-preceded-by-matching-if"));
+        assert!(has(4, "else-target-in-bounds"));
+        assert!(has(4, "else-target-is-endif"));
         assert!(has(6, "endif-closes-open-if"));
         // Chunk-level pass-1 and pass-2 facts at op 0.
         assert!(has(0, "all-blocks-closed"));
-        assert!(has(0, "func-free-of-yield-stream-reset"));
+        assert!(has(0, "func-has-no-yield"));
+        assert!(has(0, "func-has-no-stream"));
+        assert!(has(0, "func-has-no-reset"));
         // A Func chunk records no productive-divergence obligation.
         assert!(obs.iter().all(|o| o.pass != "productive-divergence"));
     }
@@ -1987,8 +2006,9 @@ mod tests {
             ],
             BlockType::Stream,
         );
-        assert!(verify(&make_module(vec![chunk.clone()])).is_ok());
-        let obs = chunk_verification_obligations(&chunk);
+        let module = make_module(vec![chunk.clone()]);
+        assert!(verify(&module).is_ok());
+        let obs = chunk_verification_obligations(&chunk, &module);
         // Productive divergence keyed to the Stream op.
         assert!(obs.iter().any(|o| o.op_index == 0
             && o.pass == "productive-divergence"
@@ -2004,8 +2024,41 @@ mod tests {
         );
         assert!(
             obs.iter()
-                .any(|o| o.op_index == 2 && o.property == "stream-contains-yield")
+                .any(|o| o.op_index == 2 && o.property == "stream-has-yield")
         );
+    }
+
+    #[test]
+    fn obligations_truncate_at_first_failing_check() {
+        // A chunk that fails verify yields a trace ending at the first
+        // failing check: the obligations for the constructs admitted
+        // before it are present, the failing construct's is absent, and
+        // no later or chunk-level facts are fabricated. This is what
+        // makes the trace a faithful record of `verify` rather than an
+        // independent re-derivation.
+        let chunk = make_chunk(
+            "main",
+            vec![
+                Op::If(3),      // 0 valid: target 3 <= len 4
+                Op::EndIf,      // 1 closes the If
+                Op::Loop(99),   // 2 INVALID: target 99 > len 4
+                Op::EndLoop(3), // 3
+            ],
+            BlockType::Func,
+        );
+        let module = make_module(vec![chunk.clone()]);
+        // The chunk does not verify.
+        assert!(verify(&module).is_err());
+        let obs = chunk_verification_obligations(&chunk, &module);
+        let has = |property: &str| obs.iter().any(|o| o.property == property);
+        // Admitted before the failure:
+        assert!(has("if-branch-target-in-bounds"));
+        assert!(has("endif-closes-open-if"));
+        // The failing construct's obligation is absent:
+        assert!(!has("loop-exit-target-in-bounds"));
+        // No pass-1 completion or pass-2 facts are fabricated:
+        assert!(!has("all-blocks-closed"));
+        assert!(obs.iter().all(|o| o.pass != "block-type-constraints"));
     }
 
     #[test]
