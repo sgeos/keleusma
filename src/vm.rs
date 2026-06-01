@@ -4892,9 +4892,9 @@ mod tests {
     #[test]
     fn fault_location_records_trapping_op_and_maps_to_source() {
         // A division by a runtime zero traps inside a `let` statement;
-        // the VM records the faulting op (the Div), which carries no
-        // exact span, so it resolves to the enclosing statement's
-        // SourceSpan (the tier-2 fallback, `exact == false`).
+        // the VM records the faulting op (the Div), which now carries an
+        // exact SourceSpan at the operator site (B29 items 2/3), so the
+        // fault resolves exactly to the division sub-expression.
         let module = compile_debug("fn main(d: Word) -> Word { let x = 1 / d; x }");
         let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
         let mut vm = Vm::new(module, &arena).expect("vm constructs");
@@ -4906,10 +4906,10 @@ mod tests {
         assert_eq!(chunk, 0, "the fault is in main, chunk 0");
         let src = vm
             .fault_source_location()
-            .expect("the fault maps to the enclosing statement");
+            .expect("the fault maps to the division sub-expression");
         assert!(
-            !src.exact,
-            "a bare Div op carries no exact span; resolution is the enclosing statement"
+            src.exact,
+            "the Div op carries an exact operator-site SourceSpan"
         );
     }
 
@@ -4960,9 +4960,11 @@ mod tests {
         let src = vm
             .fault_source_location()
             .expect("the tail-expression fault now resolves");
-        // The Div op itself carries no exact span; it resolves to the
-        // enclosing tail expression's SourceSpan.
-        assert!(!src.exact);
+        // The Div operator site now carries an exact SourceSpan, so the
+        // tail-expression fault resolves exactly (B29 items 2/3). The
+        // tail-expression span (item 2) additionally guarantees a
+        // resolution even for non-operator tail faults.
+        assert!(src.exact);
     }
 
     #[test]

@@ -460,6 +460,30 @@ impl FuncCompiler {
         }
     }
 
+    /// Record a `SourceSpan` and a `BreakpointCandidate` at the last
+    /// emitted op, when debug emission is on, for a trap-bearing
+    /// operator (B29 items 2 and 3). The `SourceSpan` lets a runtime
+    /// fault at that op resolve exactly to the operator's sub-expression
+    /// span rather than to the enclosing statement; the candidate is an
+    /// operator-level breakpoint position. Intended to be called
+    /// immediately after emitting a partial operation such as `Op::Div`
+    /// or `Op::Mod`, so the last op is the operator.
+    fn record_operator_site(&mut self, span: &crate::token::Span) {
+        if !self.emit_debug {
+            return;
+        }
+        if let Some(idx) = self.chunk.ops.len().checked_sub(1) {
+            self.pending_debug.push(PendingDebug::SourceSpan {
+                op_index: idx,
+                span: *span,
+            });
+            self.pending_debug.push(PendingDebug::BreakpointCandidate {
+                op_index: idx,
+                span: *span,
+            });
+        }
+    }
+
     /// Record a `SourceSpan` and a `LineNumber` annotation for a
     /// statement whose code begins at `op_index`, when debug emission
     /// is on. No-op when no ops were emitted for the statement.
@@ -4619,7 +4643,10 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
         }
 
         Expr::BinOp {
-            op, left, right, ..
+            op,
+            left,
+            right,
+            span,
         } => {
             // Short-circuit for logical operators using block-structured control.
             match op {
@@ -4737,9 +4764,15 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
                     } else {
                         fc.emit(Op::Div);
                     }
+                    // Division can trap on a zero divisor; record the
+                    // operator site so the fault resolves exactly here
+                    // (B29 items 2 and 3).
+                    fc.record_operator_site(span);
                 }
                 BinOp::Mod => {
                     fc.emit(Op::Mod);
+                    // Modulo by zero traps; record the operator site.
+                    fc.record_operator_site(span);
                 }
                 BinOp::Eq => {
                     fc.emit(Op::CmpEq);
@@ -7237,6 +7270,32 @@ mod tests {
         let pairs = witness_pairs(pool);
         assert!(pairs.contains(&("resource-bounds", "wcet-per-chunk-bound-proven")));
         assert!(pairs.contains(&("resource-bounds", "wcmu-per-chunk-bound-proven")));
+    }
+
+    #[test]
+    fn debug_emission_records_operator_site_at_division() {
+        // A division emits a SourceSpan and a BreakpointCandidate at the
+        // Div op (B29 items 2/3), so a zero-divisor fault resolves
+        // exactly and a debugger can break before the division.
+        use crate::bytecode::Op;
+        use crate::debug_meta::DebugRecordKind;
+        let module = compile_str_debug("fn main(d: Word) -> Word { let x = 1 / d; x }");
+        let chunk = &module.chunks[0];
+        let div_op = chunk
+            .ops
+            .iter()
+            .position(|op| matches!(op, Op::Div))
+            .expect("a Div op") as u32;
+        let pool = chunk.debug_pool.as_ref().expect("debug pool present");
+        let kinds: alloc::vec::Vec<_> = pool.records_at(div_op).map(|r| r.kind).collect();
+        assert!(
+            kinds.contains(&DebugRecordKind::SourceSpan),
+            "the Div op has an exact SourceSpan, found {kinds:?}"
+        );
+        assert!(
+            kinds.contains(&DebugRecordKind::BreakpointCandidate),
+            "the Div op is an operator-level breakpoint candidate"
+        );
     }
 
     #[test]
