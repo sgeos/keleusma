@@ -2534,6 +2534,9 @@ fn emit_data_indexed_read(
         for index_expr in chain.indices {
             compile_expr(fc, index_expr)?;
             fc.emit(Op::GetIndex);
+            // Each level's index can trap out-of-bounds; record the
+            // operator site so the fault resolves exactly (B29 item 2).
+            fc.record_operator_site(&span);
         }
         return Ok(());
     }
@@ -2558,6 +2561,9 @@ fn emit_data_indexed_read(
         })?;
     let total = emit_indexed_offset(fc, &field_type, &chain.indices, span)?;
     fc.emit(Op::GetDataIndexed(base, total));
+    // A dynamic data-array index can trap out-of-bounds; record the
+    // operator site so the fault resolves exactly (B29 item 2).
+    fc.record_operator_site(&span);
     Ok(())
 }
 
@@ -2605,6 +2611,9 @@ fn emit_data_indexed_write(
         })?;
     let total = emit_indexed_offset(fc, &field_type, &chain.indices, span)?;
     fc.emit(Op::SetDataIndexed(base, total));
+    // A dynamic data-array index can trap out-of-bounds; record the
+    // operator site so the fault resolves exactly (B29 item 2).
+    fc.record_operator_site(&span);
     Ok(())
 }
 
@@ -5128,6 +5137,9 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
             compile_expr(fc, object)?;
             compile_expr(fc, index)?;
             fc.emit(Op::GetIndex);
+            // Indexing can trap on an out-of-bounds index; record the
+            // operator site so the fault resolves exactly (B29 item 2).
+            fc.record_operator_site(span);
         }
 
         Expr::StructInit { name, fields, .. } => {
@@ -5957,6 +5969,10 @@ fn compile_checked_newtype(
     fc.emit(Op::CmpEq);
     let not_invalid = fc.emit_jump(Op::If(0));
     fc.emit(Op::Trap(crate::bytecode::TrapKind::RefinementFailed.code()));
+    // The refinement-failure trap is a partial-operation fault; record
+    // the operator site so it resolves exactly to the construction
+    // (B29 item 2).
+    fc.record_operator_site(span);
     fc.patch_jump(not_invalid);
     fc.emit(Op::EndIf);
     fc.emit(Op::GetLocal(value_slot));

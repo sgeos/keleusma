@@ -4932,6 +4932,48 @@ mod tests {
     }
 
     #[test]
+    fn fault_in_newtype_construction_resolves_exactly() {
+        // A refinement-predicate failure traps RefinementFailed at the
+        // construction's Trap op, which now carries an operator-site
+        // SourceSpan (B29 item 2), so the fault resolves exactly.
+        let module = compile_debug(
+            "fn is_pos(x: Word) -> bool { x > 0 }\n\
+             newtype Positive = Word where is_pos;\n\
+             fn main() -> Word { Positive(0 - 7) { ok(p) => 1 } }",
+        );
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let mut vm = Vm::new(module, &arena).expect("vm constructs");
+        let err = vm.call(&[]).expect_err("refinement failure traps");
+        assert!(matches!(err, VmError::RefinementFailed));
+        let src = vm
+            .fault_source_location()
+            .expect("the refinement failure resolves to source");
+        assert!(src.exact, "the refinement Trap carries an exact span");
+    }
+
+    #[test]
+    fn fault_in_array_index_resolves_exactly() {
+        // An out-of-bounds data-array index traps IndexOutOfBounds at
+        // the GetDataIndexed op, which now carries an operator-site
+        // SourceSpan (B29 item 2), so the fault resolves exactly.
+        let module = compile_debug(
+            "data state { items: [Word; 3] }\n\
+             fn main() -> Word { state.items[5] }",
+        );
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let mut vm = Vm::new(module, &arena).expect("vm constructs");
+        for slot in 0..3 {
+            vm.set_data(slot, Value::Int(0)).expect("init slot");
+        }
+        let err = vm.call(&[]).expect_err("out-of-bounds index traps");
+        assert!(matches!(err, VmError::IndexOutOfBounds(_, _)));
+        let src = vm
+            .fault_source_location()
+            .expect("the index fault resolves to source");
+        assert!(src.exact, "the index op carries an exact span");
+    }
+
+    #[test]
     fn fault_location_cleared_after_successful_run() {
         let module = compile_debug("fn main() -> Word { 21 + 21 }");
         let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
