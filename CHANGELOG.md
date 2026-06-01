@@ -24,6 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The `string_ops` example was rewritten for V0.2.0.** It had been broken since the V0.2.0 line because it used f-strings and the `to_string`/`concat`/`slice` utility natives, all of which V0.2.0 retired (the bundled utility set is now `println` only). The example now demonstrates the V0.2.0 model directly: it registers `concat` and `slice` as host natives and a script composes them, with no f-string interpolation.
 - **`shell::arg` and `shell::arg_count` reported the host process argv instead of the script's arguments.** Both natives read `std::env::args` directly, so a script observed `keleusma`, `run`, and the script path ahead of its own arguments, with no stable offset because intervening CLI flags shifted the indices. They now report the script argument vector the CLI installs (see the Added entry), and the CLI no longer rejects positional arguments after the script path. Hosts that embed the `shell` bundle outside the CLI and do not call `set_script_args` retain the `std::env::args` reading as a documented fallback.
 
 ## [0.2.0] - 2026-05-21
