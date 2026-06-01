@@ -17,3 +17,4 @@ For conceptual descriptions of the implemented system (language design philosoph
 | [STRUCTURAL_ISA.md](./STRUCTURAL_ISA.md) | Block-structured Instruction Set Architecture, block hierarchy, structural verification rules, streaming machinery |
 | [WIRE_FORMAT.md](./WIRE_FORMAT.md) | Bytecode wire format: framing header, section-partitioned body, opcode-stream encoding, operand pool, signature extension, CRC trailer |
 | [RUNTIME_FAULTS.md](./RUNTIME_FAULTS.md) | Partial-operation handling: the two-backend contract, virtual-machine trap variants, and the native code-generation contract (per-target guards and default values, deferred to V0.4.0) |
+| [DEBUG_METADATA.md](./DEBUG_METADATA.md) | Strippable debug metadata (B29): the chunk-local debug pool, the twelve record kinds and their operand encodings, the canonical byte form, the read and query interface, and runtime fault localization |

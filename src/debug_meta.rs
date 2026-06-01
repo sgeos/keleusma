@@ -3,25 +3,23 @@
 //! Debug information in Keleusma lives entirely in an optional,
 //! chunk-local section and never in the op stream. This module defines
 //! that section, [`crate::debug_meta::DebugPool`], and its canonical
-//! byte encoding. The
-//! design and rationale are recorded in B29 of
-//! `docs/decisions/BACKLOG.md`; the short version is that keeping debug
-//! markers out of the op stream makes the op stream byte-identical
+//! byte encoding. The authoritative format reference is
+//! `docs/spec/DEBUG_METADATA.md` and the design rationale is recorded in
+//! B29 of `docs/decisions/BACKLOG.md`; the short version is that keeping
+//! debug markers out of the op stream makes the op stream byte-identical
 //! between a debug build and a release build, so stripping debug
 //! information is the removal of a separable section rather than a
 //! transform of the program.
 //!
 //! # Status
 //!
-//! This is the foundational data model and serialization for B29. It is
-//! parallel infrastructure: defined and tested in isolation, not yet
-//! attached to [`crate::bytecode::Chunk`] nor emitted by the compiler.
-//! Subsequent increments wire the optional section into the chunk wire
-//! format, emit records from the compiler, and add the `keleusma strip`
-//! tool. The module mirrors the established pattern of
-//! [`crate::flat_value`], [`crate::value_layout`], and
-//! [`crate::zero_value`], which are likewise staged ahead of their
-//! consumers.
+//! All twelve record kinds emit. The section is attached to
+//! [`crate::bytecode::Chunk`] as `debug_pool`, stored in the wire format
+//! as the optional `WireChunk.debug_pool_bytes`, emitted by the compiler
+//! under `keleusma compile --debug`, removed by `keleusma strip`, and
+//! read back through the query interface below. The virtual machine maps
+//! a runtime trap to source through these records via
+//! [`crate::vm::GenericVm::fault_source_location`].
 //!
 //! # Encoding
 //!
