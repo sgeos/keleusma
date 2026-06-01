@@ -1340,6 +1340,24 @@ fn enforce_arena_capacity(
     Ok(())
 }
 
+/// The verification checks that admit `chunk`, as a structured
+/// acceptance trace for the B29 `VerifierWitness` debug record. The
+/// returned identifiers name the passes [`verify`] runs and that a
+/// successful [`verify`] therefore establishes for the chunk: block
+/// nesting and offset validation (pass 1) and block-type constraints
+/// (pass 2) apply to every chunk, and productive divergence (pass 3,
+/// every Stream-to-Reset path yields) additionally applies to Stream
+/// chunks. The names are stable identifiers a certification reviewer
+/// can correlate to the verifier's passes; this is a per-chunk
+/// admission summary, not a per-construct trace.
+pub fn chunk_verification_witness(chunk: &Chunk) -> alloc::vec::Vec<&'static str> {
+    let mut checks = alloc::vec!["block-nesting-and-offsets", "block-type-constraints"];
+    if chunk.block_type == BlockType::Stream {
+        checks.push("productive-divergence");
+    }
+    checks
+}
+
 /// Verify structural invariants of a compiled module.
 ///
 /// Checks performed per chunk:
