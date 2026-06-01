@@ -1706,6 +1706,47 @@ pub fn compile_with_options(
                         wcmu_overflow = true;
                     }
                 }
+            } else if options.emit_debug
+                && matches!(chunk.block_type, crate::bytecode::BlockType::Func)
+            {
+                // Func chunks: emit per-chunk resource-bound obligations
+                // for the witness. These attest that a finite whole-call
+                // WCET and WCMU bound was proven for the function under
+                // the nominal cost model. Unlike the Stream arm above,
+                // they are NOT folded into `module.wcet_cycles` /
+                // `module.wcmu_bytes`, which remain the per-iteration
+                // maximum across Stream chunks (an atomic-total module
+                // declares no header bound). The bound is per-chunk and
+                // shallow with respect to calls, like the Stream WCET.
+                // Each obligation is emitted only on the proof arm, so a
+                // chunk whose bound does not prove (e.g. a loop with no
+                // statically extractable iteration count) records none.
+                if crate::verify::wcet_func_chunk(chunk).is_ok() {
+                    let pool = chunk
+                        .debug_pool
+                        .get_or_insert_with(crate::debug_meta::DebugPool::default);
+                    let pass = intern_debug_string(pool, "resource-bounds");
+                    let property = intern_debug_string(pool, "wcet-per-chunk-bound-proven");
+                    pool.records.push(crate::debug_meta::DebugRecord {
+                        op_index: 0,
+                        kind: crate::debug_meta::DebugRecordKind::VerifierWitness,
+                        operands: alloc::vec![pass, property],
+                    });
+                }
+                if let Ok((stack, heap)) = crate::verify::wcmu_func_chunk(chunk)
+                    && stack.saturating_add(heap) != u32::MAX
+                {
+                    let pool = chunk
+                        .debug_pool
+                        .get_or_insert_with(crate::debug_meta::DebugPool::default);
+                    let pass = intern_debug_string(pool, "resource-bounds");
+                    let property = intern_debug_string(pool, "wcmu-per-chunk-bound-proven");
+                    pool.records.push(crate::debug_meta::DebugRecord {
+                        op_index: 0,
+                        kind: crate::debug_meta::DebugRecordKind::VerifierWitness,
+                        operands: alloc::vec![pass, property],
+                    });
+                }
             }
         }
         module.wcet_cycles = if wcet_overflow { u32::MAX } else { max_wcet };
@@ -7127,9 +7168,24 @@ mod tests {
         assert!(pairs.contains(&("block-type-constraints", "func-has-no-yield")));
         assert!(pairs.contains(&("block-type-constraints", "func-has-no-stream")));
         assert!(pairs.contains(&("block-type-constraints", "func-has-no-reset")));
+        // A Func chunk records per-chunk resource-bound obligations.
+        assert!(pairs.contains(&("resource-bounds", "wcet-per-chunk-bound-proven")));
+        assert!(pairs.contains(&("resource-bounds", "wcmu-per-chunk-bound-proven")));
 
         let release = compile_str("fn main() -> Word { 1 }").expect("compile");
         assert!(release.chunks.iter().all(|c| c.debug_pool.is_none()));
+    }
+
+    #[cfg(feature = "verify")]
+    #[test]
+    fn func_resource_witness_does_not_set_module_wcet_header() {
+        // The Func per-chunk resource-bound obligations are a witness
+        // fact only: an atomic-total (Stream-free) module still declares
+        // no WCET/WCMU header (the header is the per-iteration maximum
+        // across Stream chunks, of which there are none here).
+        let module = compile_str_debug("fn main() -> Word { 1 + 2 }");
+        assert_eq!(module.wcet_cycles, 0, "no Stream chunk: header stays auto");
+        assert_eq!(module.wcmu_bytes, 0, "no Stream chunk: header stays auto");
     }
 
     #[cfg(feature = "verify")]
@@ -7174,19 +7230,22 @@ mod tests {
             pairs.contains(&("resource-bounds", "wcmu-per-iteration-bound-proven")),
             "the WCMU bound proof is recorded, found {pairs:?}"
         );
-        // A Func chunk has no Stream iteration, so no resource-bound
-        // obligation is recorded for it.
+        // A Func chunk records the per-chunk resource-bound variant,
+        // not the per-iteration one (which is Stream-specific).
         let func = compile_str_debug("fn main() -> Word { 1 }");
         let fpool = func
             .chunks
             .iter()
             .find_map(|c| c.debug_pool.as_ref())
             .expect("debug pool present");
+        let fpairs = witness_pairs(fpool);
+        assert!(fpairs.contains(&("resource-bounds", "wcet-per-chunk-bound-proven")));
+        assert!(fpairs.contains(&("resource-bounds", "wcmu-per-chunk-bound-proven")));
         assert!(
-            !witness_pairs(fpool)
+            !fpairs
                 .iter()
-                .any(|(pass, _)| *pass == "resource-bounds"),
-            "a Func chunk records no resource-bound obligation"
+                .any(|(_, prop)| prop.ends_with("per-iteration-bound-proven")),
+            "a Func chunk does not record the Stream per-iteration variant"
         );
     }
 

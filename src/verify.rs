@@ -873,6 +873,87 @@ pub fn wcet_stream_iteration_with_cost_model(
     Ok(overhead + region_cost)
 }
 
+/// Compute the worst-case execution cost of one whole call of a `Func`
+/// chunk, taking the maximum-cost branch at each control-flow join.
+///
+/// This is the [`wcet_stream_iteration`] computation applied to the
+/// chunk's entire op range rather than a Stream-to-Reset body: a `Func`
+/// chunk is atomic-total, so its whole body is one bounded computation.
+/// It feeds the B29 `VerifierWitness` `resource-bounds` obligation for
+/// `Func` chunks; it is *not* folded into the module's declared WCET
+/// header, which remains the per-iteration maximum across `Stream`
+/// chunks.
+///
+/// Like the Stream path, the cost is shallow with respect to calls: an
+/// `Op::Call` contributes its dispatch cycle only, not the callee's
+/// body (there is no transitive WCET resolver). Returns an error if the
+/// chunk is not a `Func` block, mirroring the Stream guard, or if a
+/// loop lacks a statically extractable iteration bound.
+pub fn wcet_func_chunk(chunk: &Chunk) -> Result<u32, VerifyError> {
+    wcet_func_chunk_with_cost_model(chunk, &crate::bytecode::NOMINAL_COST_MODEL)
+}
+
+/// Variant of [`wcet_func_chunk`] that uses a host-supplied cost model.
+/// See [`wcet_stream_iteration_with_cost_model`] for the cost-model
+/// contract.
+pub fn wcet_func_chunk_with_cost_model(
+    chunk: &Chunk,
+    cost_model: &crate::bytecode::CostModel,
+) -> Result<u32, VerifyError> {
+    if chunk.block_type != BlockType::Func {
+        return Err(VerifyError {
+            chunk_name: chunk.name.clone(),
+            message: String::from("wcet_func_chunk requires a Func block"),
+        });
+    }
+    let mut break_costs: Vec<u32> = Vec::new();
+    let body_cost = wcet_region(chunk, 0, chunk.ops.len(), &mut break_costs, cost_model)?;
+    Ok(body_cost.unwrap_or(0))
+}
+
+/// Compute the worst-case memory usage of one whole call of a `Func`
+/// chunk as `(stack_bytes, heap_bytes)`.
+///
+/// This is the [`wcmu_stream_iteration`] computation applied to the
+/// chunk's entire op range. Like the Stream path it uses an empty call
+/// resolver (the per-site transitive contribution is composed by
+/// [`module_wcmu`]); it feeds the B29 `VerifierWitness` `resource-bounds`
+/// obligation for `Func` chunks and is not folded into the module WCMU
+/// header.
+pub fn wcmu_func_chunk(chunk: &Chunk) -> Result<(u32, u32), VerifyError> {
+    wcmu_func_chunk_with_value_slot_bytes(chunk, crate::bytecode::VALUE_SLOT_SIZE_BYTES)
+}
+
+/// Variant of [`wcmu_func_chunk`] that uses a host-supplied
+/// `value_slot_bytes`. See
+/// [`wcmu_stream_iteration_with_value_slot_bytes`].
+pub fn wcmu_func_chunk_with_value_slot_bytes(
+    chunk: &Chunk,
+    value_slot_bytes: u32,
+) -> Result<(u32, u32), VerifyError> {
+    if chunk.block_type != BlockType::Func {
+        return Err(VerifyError {
+            chunk_name: chunk.name.clone(),
+            message: String::from("wcmu_func_chunk requires a Func block"),
+        });
+    }
+    let mut breaks: Vec<McuResult> = Vec::new();
+    let resolver = CallResolver::empty();
+    let body = wcmu_region(
+        chunk,
+        0,
+        chunk.ops.len(),
+        &mut breaks,
+        &resolver,
+        value_slot_bytes,
+    )?
+    .unwrap_or(McuResult::empty());
+
+    let stack_slots = chunk.local_count as u32 + body.peak_above_initial;
+    let stack_bytes = stack_slots * value_slot_bytes;
+    Ok((stack_bytes, body.heap_total))
+}
+
 /// Compute the per-chunk WCMU for an entire module.
 ///
 /// Returns a vector indexed by chunk index. Each entry is `(stack_bytes,
@@ -2059,6 +2140,28 @@ mod tests {
         // No pass-1 completion or pass-2 facts are fabricated:
         assert!(!has("all-blocks-closed"));
         assert!(obs.iter().all(|o| o.pass != "block-type-constraints"));
+    }
+
+    #[test]
+    fn func_chunk_resource_bounds_compute_and_reject_non_func() {
+        // A Func chunk yields finite whole-call WCET/WCMU bounds.
+        let func = make_chunk(
+            "main",
+            vec![Op::PushImmediate(1), Op::Return],
+            BlockType::Func,
+        );
+        assert!(wcet_func_chunk(&func).is_ok());
+        assert!(wcmu_func_chunk(&func).is_ok());
+
+        // The Func entry points reject a Stream chunk, mirroring the
+        // Stream entry points' guard against non-Stream input.
+        let stream = make_chunk(
+            "tick",
+            vec![Op::Stream, Op::PushImmediate(1), Op::Yield, Op::Reset],
+            BlockType::Stream,
+        );
+        assert!(wcet_func_chunk(&stream).is_err());
+        assert!(wcmu_func_chunk(&stream).is_err());
     }
 
     #[test]
