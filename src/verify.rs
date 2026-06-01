@@ -1378,25 +1378,37 @@ pub struct VerificationObligation {
     pub property: &'static str,
 }
 
-/// The per-construct verification trace for `chunk`: one
+/// The per-construct *structural* verification trace for `chunk`: one
 /// [`VerificationObligation`] for each property [`verify`] establishes,
 /// keyed to the op position it concerns.
+///
+/// Scope: this covers the three structural passes of [`verify`] only
+/// (block nesting and offsets, block-type constraints, and productive
+/// divergence). It does **not** cover the resource-bound analysis
+/// (per-iteration WCET and WCMU), which is a distinct verification
+/// activity the compile pipeline runs separately and whose obligations
+/// it emits at that stage, nor the load-time arena-capacity admission
+/// (`verify_resource_bounds`). Those have no representation here
+/// because this function takes only a `&Chunk` and has neither a cost
+/// model nor an arena capacity.
 ///
 /// This is the finer counterpart to [`chunk_verification_witness`]. It
 /// is faithful only because it is produced *after* [`verify`] has
 /// returned `Ok` for the module: each obligation records a fact that a
-/// successful verification guarantees for the named construct, rather
-/// than re-deriving it. The function therefore walks the op stream and
-/// attaches, to each construct the verifier inspects, the property that
-/// construct's successful admission implies. Calling it on a chunk that
-/// would *fail* [`verify`] yields obligations that do not hold; callers
-/// must gate emission on a prior successful verification, as the
-/// compile pipeline does.
+/// successful structural verification guarantees for the named
+/// construct, rather than re-deriving it. The function therefore walks
+/// the op stream and attaches, to each construct the verifier inspects,
+/// the property that construct's successful admission implies. Calling
+/// it on a chunk that would *fail* [`verify`] yields obligations that
+/// do not hold; callers must gate emission on a prior successful
+/// verification, as the compile pipeline does.
 ///
 /// The properties are a faithful projection of the checks in
 /// [`verify`], not an exhaustive proof object: the trace records which
 /// construct each pass admitted and on what ground, not a machine-
-/// checkable derivation.
+/// checkable derivation. Some property identifiers stand in for more
+/// than one underlying check (for example, `else-targets-matching-endif`
+/// covers both that an `If` is open and that the target is an `EndIf`).
 pub fn chunk_verification_obligations(chunk: &Chunk) -> alloc::vec::Vec<VerificationObligation> {
     const P1: &str = "block-nesting-and-offsets";
     const P2: &str = "block-type-constraints";

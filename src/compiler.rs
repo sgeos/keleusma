@@ -1633,6 +1633,22 @@ pub fn compile_with_options(
                                 kind: crate::debug_meta::DebugRecordKind::WcetMarker,
                                 operands: alloc::vec![0u16, (c & 0xFFFF) as u16, (c >> 16) as u16],
                             });
+                            // A resource-bound VerifierWitness obligation
+                            // citing the proof just discharged: the Ok
+                            // arm of wcet_stream_iteration is exactly the
+                            // proof that a finite per-iteration WCET bound
+                            // exists for this chunk under the bundled
+                            // nominal cost model. The cycle count itself
+                            // is in the WcetMarker above. Emitted only on
+                            // the Ok arm, so overflow records no witness.
+                            let pass = intern_debug_string(pool, "resource-bounds");
+                            let property =
+                                intern_debug_string(pool, "wcet-per-iteration-bound-proven");
+                            pool.records.push(crate::debug_meta::DebugRecord {
+                                op_index: 0,
+                                kind: crate::debug_meta::DebugRecordKind::VerifierWitness,
+                                operands: alloc::vec![pass, property],
+                            });
                         }
                     }
                     Err(_) => {
@@ -1646,6 +1662,28 @@ pub fn compile_with_options(
                             wcmu_overflow = true;
                         } else {
                             max_wcmu = max_wcmu.max(total);
+                            // A resource-bound VerifierWitness obligation:
+                            // the Ok arm with a non-saturating total is
+                            // the proof that a finite per-iteration WCMU
+                            // bound exists for this chunk. This is the
+                            // per-iteration bound only; admission against
+                            // a host arena capacity is a separate
+                            // load-time check (verify_resource_bounds)
+                            // not run here, so the witness does not claim
+                            // it. Emitted only when the bound is finite.
+                            if options.emit_debug {
+                                let pool = chunk
+                                    .debug_pool
+                                    .get_or_insert_with(crate::debug_meta::DebugPool::default);
+                                let pass = intern_debug_string(pool, "resource-bounds");
+                                let property =
+                                    intern_debug_string(pool, "wcmu-per-iteration-bound-proven");
+                                pool.records.push(crate::debug_meta::DebugRecord {
+                                    op_index: 0,
+                                    kind: crate::debug_meta::DebugRecordKind::VerifierWitness,
+                                    operands: alloc::vec![pass, property],
+                                });
+                            }
                         }
                     }
                     Err(_) => {
@@ -7094,6 +7132,44 @@ mod tests {
         // The Stream block-type obligations are present too.
         assert!(pairs.contains(&("block-type-constraints", "stream-contains-yield")));
         assert!(pairs.contains(&("block-type-constraints", "stream-has-exactly-one-stream")));
+    }
+
+    #[cfg(feature = "verify")]
+    #[test]
+    fn verifier_witness_records_resource_bounds() {
+        // A Stream chunk's witness records the per-iteration WCET and
+        // WCMU bound proofs discharged at the verifier stage, distinct
+        // from the structural passes.
+        let module = compile_str_debug("loop main(tick: Word) -> Word { let r = yield tick; r }");
+        let stream = module
+            .chunks
+            .iter()
+            .find(|c| matches!(c.block_type, crate::bytecode::BlockType::Stream))
+            .expect("a Stream chunk");
+        let pool = stream.debug_pool.as_ref().expect("debug pool present");
+        let pairs = witness_pairs(pool);
+        assert!(
+            pairs.contains(&("resource-bounds", "wcet-per-iteration-bound-proven")),
+            "the WCET bound proof is recorded, found {pairs:?}"
+        );
+        assert!(
+            pairs.contains(&("resource-bounds", "wcmu-per-iteration-bound-proven")),
+            "the WCMU bound proof is recorded, found {pairs:?}"
+        );
+        // A Func chunk has no Stream iteration, so no resource-bound
+        // obligation is recorded for it.
+        let func = compile_str_debug("fn main() -> Word { 1 }");
+        let fpool = func
+            .chunks
+            .iter()
+            .find_map(|c| c.debug_pool.as_ref())
+            .expect("debug pool present");
+        assert!(
+            !witness_pairs(fpool)
+                .iter()
+                .any(|(pass, _)| *pass == "resource-bounds"),
+            "a Func chunk records no resource-bound obligation"
+        );
     }
 
     #[cfg(feature = "verify")]
