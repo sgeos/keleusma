@@ -1349,13 +1349,120 @@ fn enforce_arena_capacity(
 /// every Stream-to-Reset path yields) additionally applies to Stream
 /// chunks. The names are stable identifiers a certification reviewer
 /// can correlate to the verifier's passes; this is a per-chunk
-/// admission summary, not a per-construct trace.
+/// admission summary. For a finer trace keyed to individual op
+/// positions, see [`chunk_verification_obligations`].
 pub fn chunk_verification_witness(chunk: &Chunk) -> alloc::vec::Vec<&'static str> {
     let mut checks = alloc::vec!["block-nesting-and-offsets", "block-type-constraints"];
     if chunk.block_type == BlockType::Stream {
         checks.push("productive-divergence");
     }
     checks
+}
+
+/// A single verification obligation discharged for a chunk: the
+/// op-stream position it concerns, the [`verify`] pass that established
+/// it, and a stable identifier for the property proven.
+///
+/// An obligation that pertains to the chunk as a whole rather than to a
+/// particular construct carries `op_index == 0` (for example,
+/// `all-blocks-closed`). Construct-level obligations carry the position
+/// of the construct they describe, so a reader groups them with
+/// [`DebugPool::records_at`](crate::debug_meta::DebugPool::records_at).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VerificationObligation {
+    /// The op the obligation concerns, or `0` for a chunk-level fact.
+    pub op_index: u32,
+    /// The [`verify`] pass that established the obligation.
+    pub pass: &'static str,
+    /// A stable identifier for the property the pass proved.
+    pub property: &'static str,
+}
+
+/// The per-construct verification trace for `chunk`: one
+/// [`VerificationObligation`] for each property [`verify`] establishes,
+/// keyed to the op position it concerns.
+///
+/// This is the finer counterpart to [`chunk_verification_witness`]. It
+/// is faithful only because it is produced *after* [`verify`] has
+/// returned `Ok` for the module: each obligation records a fact that a
+/// successful verification guarantees for the named construct, rather
+/// than re-deriving it. The function therefore walks the op stream and
+/// attaches, to each construct the verifier inspects, the property that
+/// construct's successful admission implies. Calling it on a chunk that
+/// would *fail* [`verify`] yields obligations that do not hold; callers
+/// must gate emission on a prior successful verification, as the
+/// compile pipeline does.
+///
+/// The properties are a faithful projection of the checks in
+/// [`verify`], not an exhaustive proof object: the trace records which
+/// construct each pass admitted and on what ground, not a machine-
+/// checkable derivation.
+pub fn chunk_verification_obligations(chunk: &Chunk) -> alloc::vec::Vec<VerificationObligation> {
+    const P1: &str = "block-nesting-and-offsets";
+    const P2: &str = "block-type-constraints";
+    const P3: &str = "productive-divergence";
+
+    let mut obligations: alloc::vec::Vec<VerificationObligation> = alloc::vec::Vec::new();
+    let mut push = |op_index: usize, pass: &'static str, property: &'static str| {
+        obligations.push(VerificationObligation {
+            op_index: op_index as u32,
+            pass,
+            property,
+        });
+    };
+
+    // -- Pass 1 obligations: one per block/offset/data construct. --
+    for (ip, op) in chunk.ops.iter().enumerate() {
+        match op {
+            Op::If(_) => push(ip, P1, "if-branch-target-in-bounds"),
+            Op::Else(_) => push(ip, P1, "else-targets-matching-endif"),
+            Op::EndIf => push(ip, P1, "endif-closes-open-if"),
+            Op::Loop(_) => push(ip, P1, "loop-exit-target-in-bounds"),
+            Op::EndLoop(_) => push(ip, P1, "endloop-back-edge-targets-loop-entry"),
+            Op::Break(_) => push(ip, P1, "break-within-loop-target-in-bounds"),
+            Op::BreakIf(_) => push(ip, P1, "break-if-within-loop-target-in-bounds"),
+            Op::GetData(_) | Op::SetData(_) => push(ip, P1, "data-slot-in-range"),
+            Op::GetDataIndexed(_, _) | Op::SetDataIndexed(_, _) => {
+                push(ip, P1, "data-slot-range-in-bounds")
+            }
+            _ => {}
+        }
+    }
+    // The end-of-pass-1 balance check is a chunk-level fact.
+    push(0, P1, "all-blocks-closed");
+
+    // -- Pass 2 obligations: keyed to the marker ops where possible. --
+    let first_yield = chunk.ops.iter().position(|op| matches!(op, Op::Yield));
+    let stream_pos = chunk.ops.iter().position(|op| matches!(op, Op::Stream));
+    let reset_pos = chunk.ops.iter().position(|op| matches!(op, Op::Reset));
+    match chunk.block_type {
+        BlockType::Func => push(0, P2, "func-free-of-yield-stream-reset"),
+        BlockType::Reentrant => {
+            if let Some(y) = first_yield {
+                push(y, P2, "reentrant-contains-yield");
+            }
+        }
+        BlockType::Stream => {
+            if let Some(s) = stream_pos {
+                push(s, P2, "stream-has-exactly-one-stream");
+            }
+            if let Some(r) = reset_pos {
+                push(r, P2, "stream-has-exactly-one-reset");
+            }
+            if let Some(y) = first_yield {
+                push(y, P2, "stream-contains-yield");
+            }
+        }
+    }
+
+    // -- Pass 3 obligation: productive divergence, keyed to Stream. --
+    if chunk.block_type == BlockType::Stream
+        && let Some(s) = stream_pos
+    {
+        push(s, P3, "every-stream-to-reset-path-yields");
+    }
+
+    obligations
 }
 
 /// Verify structural invariants of a compiled module.
@@ -1818,6 +1925,75 @@ mod tests {
         );
         let module = make_module(vec![chunk]);
         assert!(verify(&module).is_ok());
+    }
+
+    #[test]
+    fn obligations_key_if_else_to_their_positions() {
+        // The same If/Else/EndIf chunk that verify accepts yields
+        // pass-1 obligations keyed to the construct op positions.
+        let chunk = make_chunk(
+            "main",
+            vec![
+                Op::PushImmediate(1), // 0
+                Op::If(5),            // 1
+                Op::Const(0),         // 2
+                Op::Const(0),         // 3
+                Op::Else(6),          // 4
+                Op::Const(0),         // 5
+                Op::EndIf,            // 6
+                Op::Return,           // 7
+            ],
+            BlockType::Func,
+        );
+        // Precondition for faithfulness: the chunk verifies.
+        assert!(verify(&make_module(vec![chunk.clone()])).is_ok());
+        let obs = chunk_verification_obligations(&chunk);
+        let has = |op: u32, property: &str| {
+            obs.iter()
+                .any(|o| o.op_index == op && o.property == property)
+        };
+        assert!(has(1, "if-branch-target-in-bounds"));
+        assert!(has(4, "else-targets-matching-endif"));
+        assert!(has(6, "endif-closes-open-if"));
+        // Chunk-level pass-1 and pass-2 facts at op 0.
+        assert!(has(0, "all-blocks-closed"));
+        assert!(has(0, "func-free-of-yield-stream-reset"));
+        // A Func chunk records no productive-divergence obligation.
+        assert!(obs.iter().all(|o| o.pass != "productive-divergence"));
+    }
+
+    #[test]
+    fn obligations_record_stream_productive_divergence() {
+        // Stream(0) ... Yield ... Reset
+        let chunk = make_chunk(
+            "tick",
+            vec![
+                Op::Stream,           // 0
+                Op::PushImmediate(1), // 1
+                Op::Yield,            // 2
+                Op::Reset,            // 3
+            ],
+            BlockType::Stream,
+        );
+        assert!(verify(&make_module(vec![chunk.clone()])).is_ok());
+        let obs = chunk_verification_obligations(&chunk);
+        // Productive divergence keyed to the Stream op.
+        assert!(obs.iter().any(|o| o.op_index == 0
+            && o.pass == "productive-divergence"
+            && o.property == "every-stream-to-reset-path-yields"));
+        // Block-type obligations keyed to their marker ops.
+        assert!(
+            obs.iter()
+                .any(|o| o.op_index == 0 && o.property == "stream-has-exactly-one-stream")
+        );
+        assert!(
+            obs.iter()
+                .any(|o| o.op_index == 3 && o.property == "stream-has-exactly-one-reset")
+        );
+        assert!(
+            obs.iter()
+                .any(|o| o.op_index == 2 && o.property == "stream-contains-yield")
+        );
     }
 
     #[test]

@@ -1589,25 +1589,27 @@ pub fn compile_with_options(
         let mut wcet_overflow = false;
         let mut wcmu_overflow = false;
         for chunk in &mut module.chunks {
-            // Under debug emission, record a VerifierWitness per chunk:
-            // a structured acceptance trace naming the verifier passes
-            // that admitted it (verify(&module) above returned Ok, so
-            // these hold). This is a verifier-stage record, appended to
-            // the built chunk rather than emitted during codegen.
+            // Under debug emission, record the chunk's verification
+            // trace as one VerifierWitness per discharged obligation,
+            // keyed to the op position it concerns (verify(&module)
+            // above returned Ok, so every obligation holds). Each
+            // record's operands are [pass, property] string indices.
+            // This is a verifier-stage record, appended to the built
+            // chunk rather than emitted during codegen.
             if options.emit_debug {
-                let checks = crate::verify::chunk_verification_witness(chunk);
+                let obligations = crate::verify::chunk_verification_obligations(chunk);
                 let pool = chunk
                     .debug_pool
                     .get_or_insert_with(crate::debug_meta::DebugPool::default);
-                let mut operands = alloc::vec::Vec::with_capacity(checks.len());
-                for c in &checks {
-                    operands.push(intern_debug_string(pool, c));
+                for ob in &obligations {
+                    let pass = intern_debug_string(pool, ob.pass);
+                    let property = intern_debug_string(pool, ob.property);
+                    pool.records.push(crate::debug_meta::DebugRecord {
+                        op_index: ob.op_index,
+                        kind: crate::debug_meta::DebugRecordKind::VerifierWitness,
+                        operands: alloc::vec![pass, property],
+                    });
                 }
-                pool.records.push(crate::debug_meta::DebugRecord {
-                    op_index: 0,
-                    kind: crate::debug_meta::DebugRecordKind::VerifierWitness,
-                    operands,
-                });
             }
             if matches!(chunk.block_type, crate::bytecode::BlockType::Stream) {
                 match crate::verify::wcet_stream_iteration(chunk) {
@@ -7033,32 +7035,42 @@ mod tests {
         assert!(release.chunks.iter().all(|c| c.debug_pool.is_none()));
     }
 
+    /// Collect the (pass, property) string pairs of every
+    /// VerifierWitness record in a pool, for assertions below.
+    #[cfg(feature = "verify")]
+    fn witness_pairs(pool: &crate::debug_meta::DebugPool) -> alloc::vec::Vec<(&str, &str)> {
+        use crate::debug_meta::DebugRecordKind;
+        pool.records
+            .iter()
+            .filter(|r| r.kind == DebugRecordKind::VerifierWitness)
+            .filter_map(|r| {
+                let pass = pool.string(*r.operands.first()?)?;
+                let property = pool.string(*r.operands.get(1)?)?;
+                Some((pass, property))
+            })
+            .collect()
+    }
+
     #[cfg(feature = "verify")]
     #[test]
     fn debug_emission_records_verifier_witness() {
-        // A debug build records a VerifierWitness per chunk naming the
-        // verifier passes that admitted it.
-        use crate::debug_meta::DebugRecordKind;
+        // A debug build records a VerifierWitness per discharged
+        // obligation, naming the pass and the property it established.
         let module = compile_str_debug("fn main() -> Word { 1 }");
         let pool = module
             .chunks
             .iter()
             .find_map(|c| c.debug_pool.as_ref())
             .expect("debug pool present");
-        let witness = pool
-            .records
-            .iter()
-            .find(|r| r.kind == DebugRecordKind::VerifierWitness)
-            .expect("a VerifierWitness record");
-        let names: alloc::vec::Vec<&str> = witness
-            .operands
-            .iter()
-            .filter_map(|&o| pool.string(o))
-            .collect();
-        assert!(names.contains(&"block-nesting-and-offsets"));
-        assert!(names.contains(&"block-type-constraints"));
+        let pairs = witness_pairs(pool);
+        let passes: alloc::vec::Vec<&str> = pairs.iter().map(|(p, _)| *p).collect();
+        assert!(passes.contains(&"block-nesting-and-offsets"));
+        assert!(passes.contains(&"block-type-constraints"));
         // A Func chunk is not productively divergent.
-        assert!(!names.contains(&"productive-divergence"));
+        assert!(!passes.contains(&"productive-divergence"));
+        // The chunk-level obligations are present.
+        assert!(pairs.contains(&("block-nesting-and-offsets", "all-blocks-closed")));
+        assert!(pairs.contains(&("block-type-constraints", "func-free-of-yield-stream-reset")));
 
         let release = compile_str("fn main() -> Word { 1 }").expect("compile");
         assert!(release.chunks.iter().all(|c| c.debug_pool.is_none()));
@@ -7067,7 +7079,6 @@ mod tests {
     #[cfg(feature = "verify")]
     #[test]
     fn verifier_witness_marks_stream_productive_divergence() {
-        use crate::debug_meta::DebugRecordKind;
         let module = compile_str_debug("loop main(tick: Word) -> Word { let r = yield tick; r }");
         let stream = module
             .chunks
@@ -7075,20 +7086,47 @@ mod tests {
             .find(|c| matches!(c.block_type, crate::bytecode::BlockType::Stream))
             .expect("a Stream chunk");
         let pool = stream.debug_pool.as_ref().expect("debug pool present");
-        let witness = pool
-            .records
-            .iter()
-            .find(|r| r.kind == DebugRecordKind::VerifierWitness)
-            .expect("a VerifierWitness record");
-        let names: alloc::vec::Vec<&str> = witness
-            .operands
-            .iter()
-            .filter_map(|&o| pool.string(o))
-            .collect();
+        let pairs = witness_pairs(pool);
         assert!(
-            names.contains(&"productive-divergence"),
+            pairs.contains(&("productive-divergence", "every-stream-to-reset-path-yields")),
             "a Stream chunk's witness records the productive-divergence proof"
         );
+        // The Stream block-type obligations are present too.
+        assert!(pairs.contains(&("block-type-constraints", "stream-contains-yield")));
+        assert!(pairs.contains(&("block-type-constraints", "stream-has-exactly-one-stream")));
+    }
+
+    #[cfg(feature = "verify")]
+    #[test]
+    fn verifier_witness_keys_obligations_to_construct_positions() {
+        use crate::bytecode::Op;
+        use crate::debug_meta::DebugRecordKind;
+        // A function with an `if` produces a per-construct pass-1
+        // obligation keyed to the If op's position, not to op 0.
+        let module = compile_str_debug("fn main() -> Word { if true { 1 } else { 2 } }");
+        let chunk = module
+            .chunks
+            .iter()
+            .find(|c| c.name == "main")
+            .expect("main chunk");
+        let if_pos = chunk
+            .ops
+            .iter()
+            .position(|op| matches!(op, Op::If(_)))
+            .expect("an If op") as u32;
+        let pool = chunk.debug_pool.as_ref().expect("debug pool present");
+        // The If's obligation is keyed to the If position.
+        let at_if: alloc::vec::Vec<&str> = pool
+            .records_at(if_pos)
+            .filter(|r| r.kind == DebugRecordKind::VerifierWitness)
+            .filter_map(|r| pool.string(*r.operands.get(1)?))
+            .collect();
+        assert!(
+            at_if.contains(&"if-branch-target-in-bounds"),
+            "the If obligation is keyed to op {if_pos}, found {at_if:?}"
+        );
+        // And it is not the chunk-level position.
+        assert_ne!(if_pos, 0);
     }
 
     #[test]
