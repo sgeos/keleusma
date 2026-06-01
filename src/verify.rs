@@ -122,12 +122,35 @@ fn analyze_yield_coverage(
 /// Returns `None` if all paths exit via Break.
 ///
 /// Break costs are accumulated in `break_costs` for the enclosing loop.
+/// True when every fall-through path of the op range `[start, end)`
+/// passes through a `Yield` and the range contains no nested `Loop`.
+///
+/// Used by [`wcet_region`] under `clamp_productive_yield_loops` to
+/// decide whether a loop body is provably productive, so the loop
+/// contributes one iteration per coroutine resumption. The no-nested-
+/// loop guard keeps the productivity decision within
+/// [`analyze_yield_coverage`]'s `If`/`Break` domain rather than relying
+/// on its handling of inner loops; a body with an inner loop is treated
+/// as not-provably-productive and keeps its full iteration bound, which
+/// is conservative (sound).
+fn loop_body_all_paths_yield_no_inner_loop(ops: &[Op], start: usize, end: usize) -> bool {
+    if ops[start..end].iter().any(|op| matches!(op, Op::Loop(_))) {
+        return false;
+    }
+    let mut break_states: Vec<bool> = Vec::new();
+    matches!(
+        analyze_yield_coverage(ops, start, end, false, &mut break_states),
+        Some(true)
+    )
+}
+
 fn wcet_region(
     chunk: &Chunk,
     start: usize,
     end: usize,
     break_costs: &mut Vec<u32>,
     cost_model: &crate::bytecode::CostModel,
+    clamp_productive_yield_loops: bool,
 ) -> Result<Option<u32>, VerifyError> {
     let ops = &chunk.ops;
     let mut cost: u32 = 0;
@@ -162,9 +185,22 @@ fn wcet_region(
                     } else {
                         unreachable!()
                     };
-                    let then_cost =
-                        wcet_region(chunk, ip + 1, target - 1, break_costs, cost_model)?;
-                    let else_cost = wcet_region(chunk, target, endif_pos, break_costs, cost_model)?;
+                    let then_cost = wcet_region(
+                        chunk,
+                        ip + 1,
+                        target - 1,
+                        break_costs,
+                        cost_model,
+                        clamp_productive_yield_loops,
+                    )?;
+                    let else_cost = wcet_region(
+                        chunk,
+                        target,
+                        endif_pos,
+                        break_costs,
+                        cost_model,
+                        clamp_productive_yield_loops,
+                    )?;
                     let branch_cost = match (then_cost, else_cost) {
                         (Some(a), Some(b)) => Some(if a > b { a } else { b }),
                         (Some(a), None) => Some(a),
@@ -174,7 +210,14 @@ fn wcet_region(
                     cost += branch_cost.unwrap_or(0);
                     ip = endif_pos + 1;
                 } else {
-                    let then_cost = wcet_region(chunk, ip + 1, target, break_costs, cost_model)?;
+                    let then_cost = wcet_region(
+                        chunk,
+                        ip + 1,
+                        target,
+                        break_costs,
+                        cost_model,
+                        clamp_productive_yield_loops,
+                    )?;
                     // False path has zero additional cost (skips to EndIf).
                     // Worst case is the then-body if it is more expensive.
                     match then_cost {
@@ -191,13 +234,32 @@ fn wcet_region(
                 let loop_exit_target = *target as usize;
                 let endloop_ip = loop_exit_target - 1;
                 let mut loop_break_costs: Vec<u32> = Vec::new();
-                let body_cost =
-                    wcet_region(chunk, ip + 1, endloop_ip, &mut loop_break_costs, cost_model)?;
+                let body_cost = wcet_region(
+                    chunk,
+                    ip + 1,
+                    endloop_ip,
+                    &mut loop_break_costs,
+                    cost_model,
+                    clamp_productive_yield_loops,
+                )?;
                 if loop_break_costs.is_empty() && body_cost.is_none() {
                     return Ok(None);
                 }
-                // Strict mode iteration count.
-                let iter_count = if body_cost.is_none() {
+                // Strict mode iteration count. Under
+                // `clamp_productive_yield_loops` (the per-resume WCET of a
+                // Reentrant coroutine), a loop whose every body path
+                // provably yields contributes at most one iteration per
+                // resumption, because the resume suspends at the yield
+                // before completing a second pass. The clamp is guarded
+                // against nested loops so the productivity check stays in
+                // `analyze_yield_coverage`'s well-tested If/Break domain;
+                // a loop that is not provably productive keeps its full
+                // iteration bound, so a conditional yield (which a resume
+                // could skip across many iterations) is never under-counted.
+                let iter_count = if body_cost.is_none()
+                    || (clamp_productive_yield_loops
+                        && loop_body_all_paths_yield_no_inner_loop(ops, ip + 1, endloop_ip))
+                {
                     1
                 } else {
                     match extract_loop_iteration_bound(chunk, ip) {
@@ -864,6 +926,7 @@ pub fn wcet_stream_iteration_with_cost_model(
         reset_pos,
         &mut break_costs,
         cost_model,
+        false,
     )?;
 
     // Include Stream and Reset instruction costs.
@@ -885,16 +948,22 @@ pub fn wcet_stream_iteration_with_cost_model(
 ///
 /// Interpretation differs by block type. For a `Func` chunk the body is
 /// one atomic call, so the result is the per-call WCET. For a
-/// `Reentrant` chunk (a `yield` function) the result is the worst-case
-/// cost of a single resumption: when every `Yield` is at the top level
-/// (not nested in an `If`/`Loop` block), the body splits into
-/// inter-yield segments and the result is the maximum segment cost,
-/// which is the exact per-resume WCET. When a `Yield` is nested in
-/// control flow the segment split is not structural, so the result
-/// falls back to the whole-body *cumulative* cost across all
-/// resumptions — a sound (if loose) upper bound on any single resume,
-/// since the actual execution traverses exactly these ops. The
-/// per-segment computation is `reentrant_segmented_wcet`.
+/// `Reentrant` chunk (a `yield` function) the result is a sound bound on
+/// the worst-case cost of a single resumption, tightened in two stages:
+///
+/// * When every `Yield` is at the top level (not nested in an `If`/`Loop`
+///   block), the body splits into inter-yield segments and the result is
+///   the maximum segment cost — the exact per-resume WCET
+///   (`reentrant_segmented_wcet`).
+/// * Otherwise the result is the whole-body cost computed with each
+///   provably-productive yield-loop clamped to one iteration (a single
+///   resumption cannot complete more than one pass of a loop whose every
+///   body path yields). This is a sound upper bound on any single
+///   resume, and tighter than the plain cumulative cost whenever such a
+///   loop has an iteration bound above one. A loop that is not provably
+///   productive keeps its full iteration count, so a conditional yield
+///   is never under-counted. Straight-line code summed across yields
+///   keeps this bound loose but sound.
 ///
 /// Like the Stream path, the cost is shallow with respect to calls: an
 /// `Op::Call` contributes its dispatch cycle only, not the callee's
@@ -918,16 +987,27 @@ pub fn wcet_whole_chunk_with_cost_model(
             message: String::from("wcet_whole_chunk requires a non-Stream block"),
         });
     }
-    // A Reentrant chunk's per-resume WCET is the maximum inter-yield
-    // segment cost when the yields are top-level; otherwise fall back to
-    // the whole-body cumulative cost (a sound upper bound).
+    // A Reentrant chunk's per-resume WCET is the exact maximum inter-yield
+    // segment cost when the yields are top-level.
     if chunk.block_type == BlockType::Reentrant
         && let Some(segmented) = reentrant_segmented_wcet(chunk, cost_model)?
     {
         return Ok(segmented);
     }
+    // Otherwise: the whole-body cost. For a Reentrant chunk, clamp
+    // provably-productive yield-loops to one iteration (a sound per-resume
+    // tightening); for a Func chunk the body is one atomic call, so no
+    // clamp applies.
+    let clamp = chunk.block_type == BlockType::Reentrant;
     let mut break_costs: Vec<u32> = Vec::new();
-    let body_cost = wcet_region(chunk, 0, chunk.ops.len(), &mut break_costs, cost_model)?;
+    let body_cost = wcet_region(
+        chunk,
+        0,
+        chunk.ops.len(),
+        &mut break_costs,
+        cost_model,
+        clamp,
+    )?;
     Ok(body_cost.unwrap_or(0))
 }
 
@@ -976,15 +1056,19 @@ fn reentrant_segmented_wcet(
     let mut seg_start: usize = 0;
     // Each segment ends just past its terminating yield, so the yield
     // op's own cost is included in the segment it ends.
+    // A segment contains no yields (the top-level yields delimit them),
+    // so any loop within a segment runs fully in one resumption: no
+    // productivity clamp applies (pass `false`).
     for &y in &yields {
         let mut break_costs: Vec<u32> = Vec::new();
-        let c = wcet_region(chunk, seg_start, y + 1, &mut break_costs, cost_model)?.unwrap_or(0);
+        let c =
+            wcet_region(chunk, seg_start, y + 1, &mut break_costs, cost_model, false)?.unwrap_or(0);
         max_cost = max_cost.max(c);
         seg_start = y + 1;
     }
     // The final segment runs from after the last yield to the end.
     let mut break_costs: Vec<u32> = Vec::new();
-    let c = wcet_region(chunk, seg_start, len, &mut break_costs, cost_model)?.unwrap_or(0);
+    let c = wcet_region(chunk, seg_start, len, &mut break_costs, cost_model, false)?.unwrap_or(0);
     max_cost = max_cost.max(c);
     Ok(Some(max_cost))
 }
@@ -2285,7 +2369,7 @@ mod tests {
             .expect("top-level yields segment");
         // Whole-body cumulative cost for comparison.
         let mut breaks = Vec::new();
-        let cumulative = wcet_region(&reentrant, 0, reentrant.ops.len(), &mut breaks, cm)
+        let cumulative = wcet_region(&reentrant, 0, reentrant.ops.len(), &mut breaks, cm, false)
             .unwrap()
             .unwrap_or(0);
         assert!(
@@ -2294,6 +2378,69 @@ mod tests {
         );
         // wcet_whole_chunk returns the tighter per-segment value.
         assert_eq!(wcet_whole_chunk(&reentrant).unwrap(), segmented);
+    }
+
+    #[test]
+    fn productive_loop_predicate_guards() {
+        // Unconditional yield, no inner loop: provably productive.
+        let body = [Op::PushImmediate(1), Op::Yield, Op::BreakIf(0)];
+        assert!(loop_body_all_paths_yield_no_inner_loop(
+            &body,
+            0,
+            body.len()
+        ));
+        // An inner loop is rejected (kept out of analyze_yield_coverage's
+        // domain) regardless of the yield.
+        let inner = [Op::Loop(2), Op::Yield, Op::EndLoop(1)];
+        assert!(!loop_body_all_paths_yield_no_inner_loop(
+            &inner,
+            0,
+            inner.len()
+        ));
+        // No yield at all: rejected.
+        let none = [Op::PushImmediate(1)];
+        assert!(!loop_body_all_paths_yield_no_inner_loop(
+            &none,
+            0,
+            none.len()
+        ));
+    }
+
+    #[test]
+    fn reentrant_nested_productive_yield_loop_clamps_to_one_iteration() {
+        // A yield nested in a loop whose every body path yields: the
+        // per-resume WCET clamps the loop to one iteration. The clamp is
+        // observable here because this loop has no for-range bound, so
+        // the unclamped whole-body cost errors ("no extractable iteration
+        // bound") while the clamped per-resume cost succeeds.
+        let cm = &crate::bytecode::NOMINAL_COST_MODEL;
+        let chunk = make_chunk(
+            "gen",
+            vec![
+                Op::Loop(5),          // 0 -> exit target after EndLoop
+                Op::PushImmediate(1), // 1 (body)
+                Op::Yield,            // 2 (every path yields)
+                Op::BreakIf(5),       // 3
+                Op::EndLoop(1),       // 4 back-edge to 1
+                Op::Return,           // 5
+            ],
+            BlockType::Reentrant,
+        );
+        // The yield is nested, so the top-level segment split declines.
+        assert_eq!(reentrant_segmented_wcet(&chunk, cm).unwrap(), None);
+        // The clamped per-resume cost succeeds (loop counted once).
+        let clamped = wcet_whole_chunk_with_cost_model(&chunk, cm)
+            .expect("clamp succeeds for productive loop");
+        assert!(clamped > 0);
+        // Without the clamp, the unbounded loop has no extractable
+        // iteration count, so the plain whole-body cost errors. This is
+        // the unclamped path a Func chunk (or the old behaviour) would
+        // take.
+        let mut breaks = Vec::new();
+        assert!(
+            wcet_region(&chunk, 0, chunk.ops.len(), &mut breaks, cm, false).is_err(),
+            "unclamped whole-body cost requires a for-range bound"
+        );
     }
 
     #[test]
