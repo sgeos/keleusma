@@ -1532,11 +1532,30 @@ pub fn compile_with_options(
         let mut max_wcmu: u32 = 0;
         let mut wcet_overflow = false;
         let mut wcmu_overflow = false;
-        for chunk in &module.chunks {
+        for chunk in &mut module.chunks {
             if matches!(chunk.block_type, crate::bytecode::BlockType::Stream) {
                 match crate::verify::wcet_stream_iteration(chunk) {
                     Ok(c) => {
                         max_wcet = max_wcet.max(c);
+                        // Under debug emission, record the chunk's
+                        // declared per-iteration WCET as a WcetMarker so
+                        // runtime telemetry can compare measured cost
+                        // against the declared bound. This is a
+                        // verifier-stage record: it is appended to the
+                        // already-built chunk after the WCET pass rather
+                        // than emitted during codegen. The u32 cycle
+                        // count is carried as two u16 operands (low,
+                        // high) following the block id (0 = whole chunk).
+                        if options.emit_debug {
+                            let pool = chunk
+                                .debug_pool
+                                .get_or_insert_with(crate::debug_meta::DebugPool::default);
+                            pool.records.push(crate::debug_meta::DebugRecord {
+                                op_index: 0,
+                                kind: crate::debug_meta::DebugRecordKind::WcetMarker,
+                                operands: alloc::vec![0u16, (c & 0xFFFF) as u16, (c >> 16) as u16],
+                            });
+                        }
                     }
                     Err(_) => {
                         wcet_overflow = true;
@@ -6690,6 +6709,36 @@ mod tests {
         assert!(
             found,
             "a typed local should record a TypeAnnotation with TypeRepr `Word`"
+        );
+    }
+
+    #[cfg(feature = "verify")]
+    #[test]
+    fn debug_emission_records_wcet_marker_for_stream_chunks() {
+        // A loop-main program has a Stream chunk whose per-iteration
+        // WCET the verifier computes; under --debug it carries a
+        // WcetMarker whose two u16 operands reconstruct that u32 cost.
+        let src = "loop main(tick: Word) -> Word { let r = yield tick; r }";
+        let module = compile_str_debug(src);
+        let stream = module
+            .chunks
+            .iter()
+            .find(|c| matches!(c.block_type, crate::bytecode::BlockType::Stream))
+            .expect("a Stream chunk");
+        let pool = stream
+            .debug_pool
+            .as_ref()
+            .expect("Stream chunk carries a debug pool under --debug");
+        let rec = pool
+            .records
+            .iter()
+            .find(|r| r.kind == crate::debug_meta::DebugRecordKind::WcetMarker)
+            .expect("a WcetMarker record");
+        let reconstructed = rec.operands[1] as u32 | ((rec.operands[2] as u32) << 16);
+        let expected = crate::verify::wcet_stream_iteration(stream).unwrap();
+        assert_eq!(
+            reconstructed, expected,
+            "the WcetMarker cycle count should match the verifier's WCET"
         );
     }
 
