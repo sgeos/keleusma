@@ -265,6 +265,108 @@ impl<W: crate::word::Word, F: crate::float::Float> PartialEq for GenericValue<W,
 }
 
 impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
+    /// Write this fixed-size scalar's little-endian bytes into `dst` at
+    /// `offset` (B28 P2). The width of an `Int`/`Fixed` is `word_bytes`
+    /// and of a `Float` is `float_bytes`, taken from the runtime's
+    /// target descriptor, so the same routine serves narrow runtimes.
+    /// `Unit` and `None` write nothing.
+    ///
+    /// This is the pack half of the composite construct handlers: each
+    /// field's scalar is written at the offset the compiler baked.
+    /// Reference scalars (`StaticStr`, `KStr`, `Opaque`) and composites
+    /// are handled by later phases and panic here, which a correct
+    /// compiler never reaches because it routes them differently.
+    #[cfg_attr(not(feature = "floats"), allow(unused_variables))]
+    pub fn write_scalar_le(
+        &self,
+        dst: &mut [u8],
+        offset: usize,
+        word_bytes: usize,
+        float_bytes: usize,
+    ) {
+        match self {
+            Self::Unit | Self::None => {}
+            Self::Bool(b) => dst[offset] = u8::from(*b),
+            Self::Byte(b) => dst[offset] = *b,
+            Self::Int(w) | Self::Fixed(w) => {
+                let le = w.to_i64().to_le_bytes();
+                dst[offset..offset + word_bytes].copy_from_slice(&le[..word_bytes]);
+            }
+            #[cfg(feature = "floats")]
+            Self::Float(f) => {
+                let v = f.to_f64();
+                match float_bytes {
+                    8 => dst[offset..offset + 8].copy_from_slice(&v.to_le_bytes()),
+                    4 => dst[offset..offset + 4].copy_from_slice(&(v as f32).to_le_bytes()),
+                    other => panic!("write_scalar_le: unsupported float width {other}"),
+                }
+            }
+            other => panic!("write_scalar_le: not a fixed-size scalar: {other:?}"),
+        }
+    }
+
+    /// Read a fixed-size scalar of `kind` from `src` at `offset` (B28
+    /// P2), the read half of the composite access handlers. `Int` and
+    /// `Fixed` are sign-extended from `word_bytes`; `Float` is widened
+    /// from `float_bytes`. `kind` is the value the compiler baked into
+    /// the access instruction. Panics on the reference kinds and on a
+    /// `kind` outside the fixed-size scalar set, which later phases
+    /// handle.
+    #[cfg_attr(not(feature = "floats"), allow(unused_variables))]
+    pub fn read_scalar_le(
+        src: &[u8],
+        offset: usize,
+        kind: crate::value_layout::ScalarKind,
+        word_bytes: usize,
+        float_bytes: usize,
+    ) -> Self {
+        use crate::value_layout::ScalarKind;
+        match kind {
+            ScalarKind::Unit => Self::Unit,
+            ScalarKind::Bool => Self::Bool(src[offset] != 0),
+            ScalarKind::Byte => Self::Byte(src[offset]),
+            ScalarKind::Int | ScalarKind::Fixed => {
+                let mut buf = [0u8; 8];
+                buf[..word_bytes].copy_from_slice(&src[offset..offset + word_bytes]);
+                let mut n = i64::from_le_bytes(buf);
+                // Sign-extend a narrow word from its top bit.
+                if word_bytes < 8 {
+                    let bits = word_bytes * 8;
+                    let sign = 1i64 << (bits - 1);
+                    if n & sign != 0 {
+                        n |= !((1i64 << bits) - 1);
+                    }
+                }
+                let w = W::from_i64_wrap(n);
+                if matches!(kind, ScalarKind::Fixed) {
+                    Self::Fixed(w)
+                } else {
+                    Self::Int(w)
+                }
+            }
+            #[cfg(feature = "floats")]
+            ScalarKind::Float => {
+                let v = match float_bytes {
+                    8 => {
+                        let mut buf = [0u8; 8];
+                        buf.copy_from_slice(&src[offset..offset + 8]);
+                        f64::from_le_bytes(buf)
+                    }
+                    4 => {
+                        let mut buf = [0u8; 4];
+                        buf.copy_from_slice(&src[offset..offset + 4]);
+                        f32::from_le_bytes(buf) as f64
+                    }
+                    other => panic!("read_scalar_le: unsupported float width {other}"),
+                };
+                Self::Float(F::from_f64(v))
+            }
+            ScalarKind::Text | ScalarKind::Opaque => {
+                panic!("read_scalar_le: reference kinds are handled in B28 P3")
+            }
+        }
+    }
+
     /// Walk the value recursively and replace every `KStr` variant
     /// with an equivalent `StaticStr` whose contents come from the
     /// supplied arena. Use this when transporting a value across a
@@ -2475,6 +2577,95 @@ mod cost_model_tests {
             debug_pool: None,
         };
         assert_eq!(NOMINAL_COST_MODEL.heap_alloc_bytes(&Op::Add, &chunk), 0);
+    }
+}
+
+#[cfg(test)]
+mod flat_scalar_bridge_tests {
+    use super::*;
+    use crate::value_layout::ScalarKind;
+
+    type V = Value; // GenericValue<i64, f64>
+
+    // Bundled runtime widths.
+    const W8: usize = 8;
+    const F8: usize = 8;
+
+    fn roundtrip(v: V, kind: ScalarKind, word_bytes: usize, float_bytes: usize, size: usize) -> V {
+        let mut buf = alloc::vec![0u8; size];
+        v.write_scalar_le(&mut buf, 0, word_bytes, float_bytes);
+        V::read_scalar_le(&buf, 0, kind, word_bytes, float_bytes)
+    }
+
+    #[test]
+    fn bool_byte_roundtrip() {
+        assert_eq!(
+            roundtrip(V::Bool(true), ScalarKind::Bool, W8, F8, 1),
+            V::Bool(true)
+        );
+        assert_eq!(
+            roundtrip(V::Bool(false), ScalarKind::Bool, W8, F8, 1),
+            V::Bool(false)
+        );
+        assert_eq!(
+            roundtrip(V::Byte(0xAB), ScalarKind::Byte, W8, F8, 1),
+            V::Byte(0xAB)
+        );
+    }
+
+    #[test]
+    fn int_roundtrip_full_word() {
+        for n in [0i64, 42, -5, i64::MAX, i64::MIN, -1] {
+            assert_eq!(roundtrip(V::Int(n), ScalarKind::Int, W8, F8, 8), V::Int(n));
+        }
+    }
+
+    #[test]
+    fn fixed_roundtrip_returns_fixed_kind() {
+        assert_eq!(
+            roundtrip(V::Fixed(-123), ScalarKind::Fixed, W8, F8, 8),
+            V::Fixed(-123)
+        );
+    }
+
+    #[test]
+    fn int_narrow_word_sign_extends() {
+        // A 2-byte word: low 16 bits stored, sign-extended on read.
+        assert_eq!(roundtrip(V::Int(-5), ScalarKind::Int, 2, F8, 2), V::Int(-5));
+        assert_eq!(
+            roundtrip(V::Int(1234), ScalarKind::Int, 2, F8, 2),
+            V::Int(1234)
+        );
+        // -32768 is the most-negative 16-bit value.
+        assert_eq!(
+            roundtrip(V::Int(-32768), ScalarKind::Int, 2, F8, 2),
+            V::Int(-32768)
+        );
+    }
+
+    #[test]
+    fn unit_writes_no_bytes() {
+        let mut buf = [0xFFu8; 0];
+        V::Unit.write_scalar_le(&mut buf, 0, W8, F8);
+        assert_eq!(
+            V::read_scalar_le(&buf, 0, ScalarKind::Unit, W8, F8),
+            V::Unit
+        );
+    }
+
+    #[cfg(feature = "floats")]
+    #[test]
+    fn float_roundtrip_f64_and_f32_width() {
+        // f64 width is exact.
+        assert_eq!(
+            roundtrip(V::Float(0.1), ScalarKind::Float, W8, F8, 8),
+            V::Float(0.1)
+        );
+        // 4-byte float width round-trips values exactly representable in f32.
+        assert_eq!(
+            roundtrip(V::Float(0.5), ScalarKind::Float, W8, 4, 4),
+            V::Float(0.5)
+        );
     }
 }
 
