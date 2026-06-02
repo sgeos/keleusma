@@ -1,11 +1,13 @@
 //! Flat-byte composite representation for Keleusma values.
 //!
-//! This module is parallel infrastructure introduced in B28 P0
+//! Introduced as B28 P0 infrastructure
 //! (see [`docs/decisions/BACKLOG.md`](../../docs/decisions/BACKLOG.md)).
 //! It defines the byte-level read and write helpers for fixed-
 //! size primitive types and the [`crate::flat_value::FlatComposite`]
-//! container that pairs a byte buffer with a
-//! [`crate::value_layout::LayoutDescriptor`].
+//! byte buffer that holds a composite value's fields packed
+//! contiguously. A composite is pure bytes; the field offsets and
+//! kinds are baked into the access instructions by the compiler, so
+//! the body carries no layout reference.
 //!
 //! The helpers are little-endian throughout. Keleusma's wire
 //! format is little-endian (see [`crate::wire_format`]); the
@@ -21,17 +23,16 @@
 //! bundled case so the rest of the migration can proceed
 //! incrementally.
 //!
-//! No runtime path consumes this module yet. P0 is parallel
-//! infrastructure; subsequent phases (P1 through P5) migrate the
-//! composite runtime representation onto this foundation.
+//! P2 migrates the composite runtime representation onto this
+//! foundation. `LayoutDescriptor` (see [`crate::value_layout`]) and the
+//! layout pass remain compile-time only; they bake the offsets and
+//! compute the worst-case-memory-usage bound and are never carried on a
+//! value.
 
 extern crate alloc;
 
-use alloc::sync::Arc;
 use alloc::vec;
 use alloc::vec::Vec;
-
-use crate::value_layout::LayoutDescriptor;
 
 /// Write a boolean to the byte buffer at the given offset.
 ///
@@ -111,72 +112,80 @@ pub fn read_f64(bytes: &[u8], offset: usize) -> f64 {
     f64::from_le_bytes(buf)
 }
 
-/// Container pairing a byte buffer with the layout descriptor
-/// that interprets it.
+/// The flat-byte body of a composite value.
 ///
-/// The bytes hold the flat-byte representation of a composite
-/// value. The layout descriptor identifies the byte offset and
-/// type of each field. The two together form a self-describing
-/// composite value that can be read and written through the
-/// scalar helpers in this module without losing track of which
-/// bytes correspond to which fields.
+/// A composite is pure bytes (B28). The field offsets and kinds are
+/// baked into the access instructions by the compiler, so the body
+/// carries no layout reference, no template index, and no `Arc`. It is
+/// just the byte buffer holding the fields packed contiguously, read
+/// and written through the scalar helpers in this module at the offsets
+/// the compiler resolved.
 ///
-/// The layout is held behind an `Arc` so multiple composite
-/// values of the same type share one descriptor allocation. The
-/// runtime is expected to interrogate the layout repeatedly
-/// during op handler execution; the `Arc` clone is cheap and
-/// keeps the descriptor immortal across composite lifetimes.
-///
-/// `FlatComposite` is not yet consumed by any runtime path. P0
-/// is parallel infrastructure; subsequent B28 phases wire it
-/// into the runtime's composite value representation.
-#[derive(Debug, Clone)]
+/// The buffer is a `Vec<u8>` for now; a later B28 phase moves it to the
+/// arena's top ephemeral head so composites carry no global-heap
+/// allocation. Callers reach the bytes through the accessor methods
+/// rather than the field directly, so that move does not churn call
+/// sites.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FlatComposite {
-    /// The bytes that hold the composite's field data.
-    pub bytes: Vec<u8>,
-    /// The layout that interprets the bytes.
-    pub layout: Arc<LayoutDescriptor>,
+    bytes: Vec<u8>,
 }
 
 impl FlatComposite {
-    /// Construct a zero-initialised flat composite of the
-    /// supplied layout.
-    ///
-    /// The byte buffer is sized to the layout's
-    /// [`LayoutDescriptor::size_in_bytes`] result and filled
-    /// with zeros. Zero is a valid initialiser for every
-    /// supported scalar type:
-    /// - `Unit`: zero bytes, no initialisation needed.
-    /// - `Bool`: `0u8` represents `false`.
-    /// - `Byte`: `0u8` is the zero `Byte`.
-    /// - `Int`: a zeroed buffer represents `0`.
-    /// - `Fixed`: a zeroed buffer represents `0` in any
-    ///   Q-format with non-negative integer-bit count.
-    /// - `Float`: a zeroed buffer represents `+0.0` in IEEE
-    ///   754.
-    ///
-    /// For enum layouts, the zeroed discriminant byte selects
-    /// the first declared variant. Callers that need a
-    /// different initial variant must write the discriminant
-    /// after construction.
-    pub fn new(layout: Arc<LayoutDescriptor>, word_bytes: usize, float_bytes: usize) -> Self {
-        let size = layout.size_in_bytes(word_bytes, float_bytes);
+    /// A zero-initialised body of `size` bytes. Zero is a valid initial
+    /// value for every fixed-size scalar (`false`, `0`, `+0.0`) and
+    /// selects an enum's first declared variant through its zero
+    /// discriminant byte.
+    pub fn zeroed(size: usize) -> Self {
         Self {
             bytes: vec![0u8; size],
-            layout,
         }
     }
 
-    /// Byte size of this composite.
-    pub fn size_in_bytes(&self) -> usize {
+    /// A body wrapping already-packed bytes.
+    pub fn from_bytes(bytes: Vec<u8>) -> Self {
+        Self { bytes }
+    }
+
+    /// Byte length of the body.
+    pub fn len(&self) -> usize {
         self.bytes.len()
+    }
+
+    /// True when the body has no bytes (the `Unit`-only case).
+    pub fn is_empty(&self) -> bool {
+        self.bytes.is_empty()
+    }
+
+    /// The body's bytes, for reading a field at a baked offset.
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+
+    /// The body's bytes, mutable, for writing a field at a baked offset.
+    pub fn as_bytes_mut(&mut self) -> &mut [u8] {
+        &mut self.bytes
+    }
+
+    /// Copy `src` into the body at `offset`, for packing a scalar's
+    /// little-endian bytes or a nested composite's body inline. Panics
+    /// if the range is out of bounds, which a correct compiler-baked
+    /// offset never produces.
+    pub fn write_at(&mut self, offset: usize, src: &[u8]) {
+        self.bytes[offset..offset + src.len()].copy_from_slice(src);
+    }
+
+    /// Borrow `len` bytes at `offset`, for reading a nested composite's
+    /// body or a field's raw bytes.
+    pub fn slice_at(&self, offset: usize, len: usize) -> &[u8] {
+        &self.bytes[offset..offset + len]
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::value_layout::ScalarKind;
+    use crate::value_layout::{LayoutDescriptor, ScalarKind};
     use alloc::boxed::Box;
     use alloc::string::ToString;
 
@@ -296,28 +305,33 @@ mod tests {
         assert!(read_f64(&bytes, 0).is_nan());
     }
 
+    // The layout descriptor below stands in for the compiler computing
+    // the byte size and the field offsets; the runtime body carries
+    // neither, only the bytes. The tests pack and read at the
+    // layout-computed offsets, which is what the baked access ops do.
+
     #[test]
     fn flat_composite_construction_size_matches_layout() {
-        let layout = Arc::new(LayoutDescriptor::Tuple(alloc::vec![
+        let layout = LayoutDescriptor::Tuple(alloc::vec![
             LayoutDescriptor::Scalar(ScalarKind::Int),
             LayoutDescriptor::Scalar(ScalarKind::Bool),
-        ]));
-        let comp = FlatComposite::new(layout, I64_BYTES, F64_BYTES);
-        assert_eq!(comp.size_in_bytes(), 8 + 1);
-        assert!(comp.bytes.iter().all(|&b| b == 0));
+        ]);
+        let comp = FlatComposite::zeroed(layout.size_in_bytes(I64_BYTES, F64_BYTES));
+        assert_eq!(comp.len(), 8 + 1);
+        assert!(comp.as_bytes().iter().all(|&b| b == 0));
     }
 
     #[test]
     fn flat_composite_struct() {
-        let layout = Arc::new(LayoutDescriptor::Struct {
+        let layout = LayoutDescriptor::Struct {
             type_name: "Point".to_string(),
             fields: alloc::vec![
                 ("x".to_string(), LayoutDescriptor::Scalar(ScalarKind::Int)),
                 ("y".to_string(), LayoutDescriptor::Scalar(ScalarKind::Int)),
             ],
-        });
-        let mut comp = FlatComposite::new(layout.clone(), I64_BYTES, F64_BYTES);
-        assert_eq!(comp.size_in_bytes(), 16);
+        };
+        let mut comp = FlatComposite::zeroed(layout.size_in_bytes(I64_BYTES, F64_BYTES));
+        assert_eq!(comp.len(), 16);
 
         let x_off = layout
             .struct_field_offset("x", I64_BYTES, F64_BYTES)
@@ -325,51 +339,63 @@ mod tests {
         let y_off = layout
             .struct_field_offset("y", I64_BYTES, F64_BYTES)
             .unwrap();
-        write_i64(&mut comp.bytes, x_off, 3);
-        write_i64(&mut comp.bytes, y_off, 4);
-        assert_eq!(read_i64(&comp.bytes, x_off), 3);
-        assert_eq!(read_i64(&comp.bytes, y_off), 4);
+        write_i64(comp.as_bytes_mut(), x_off, 3);
+        write_i64(comp.as_bytes_mut(), y_off, 4);
+        assert_eq!(read_i64(comp.as_bytes(), x_off), 3);
+        assert_eq!(read_i64(comp.as_bytes(), y_off), 4);
     }
 
     #[test]
     fn flat_composite_array() {
-        let layout = Arc::new(LayoutDescriptor::Array {
+        let layout = LayoutDescriptor::Array {
             element: Box::new(LayoutDescriptor::Scalar(ScalarKind::Int)),
             count: 4,
-        });
-        let mut comp = FlatComposite::new(layout.clone(), I64_BYTES, F64_BYTES);
-        assert_eq!(comp.size_in_bytes(), 32);
+        };
+        let mut comp = FlatComposite::zeroed(layout.size_in_bytes(I64_BYTES, F64_BYTES));
+        assert_eq!(comp.len(), 32);
 
         for i in 0..4 {
             let off = layout.field_offset(i, I64_BYTES, F64_BYTES).unwrap();
-            write_i64(&mut comp.bytes, off, (i as i64) * 10);
+            write_i64(comp.as_bytes_mut(), off, (i as i64) * 10);
         }
         for i in 0..4 {
             let off = layout.field_offset(i, I64_BYTES, F64_BYTES).unwrap();
-            assert_eq!(read_i64(&comp.bytes, off), (i as i64) * 10);
+            assert_eq!(read_i64(comp.as_bytes(), off), (i as i64) * 10);
         }
     }
 
     #[test]
     fn flat_composite_mixed_field_types() {
-        let layout = Arc::new(LayoutDescriptor::Tuple(alloc::vec![
+        let layout = LayoutDescriptor::Tuple(alloc::vec![
             LayoutDescriptor::Scalar(ScalarKind::Bool),
             LayoutDescriptor::Scalar(ScalarKind::Int),
             LayoutDescriptor::Scalar(ScalarKind::Byte),
-        ]));
-        let mut comp = FlatComposite::new(layout.clone(), I64_BYTES, F64_BYTES);
-        assert_eq!(comp.size_in_bytes(), 1 + 8 + 1);
+        ]);
+        let mut comp = FlatComposite::zeroed(layout.size_in_bytes(I64_BYTES, F64_BYTES));
+        assert_eq!(comp.len(), 1 + 8 + 1);
 
         let off_bool = layout.field_offset(0, I64_BYTES, F64_BYTES).unwrap();
         let off_int = layout.field_offset(1, I64_BYTES, F64_BYTES).unwrap();
         let off_byte = layout.field_offset(2, I64_BYTES, F64_BYTES).unwrap();
 
-        write_bool(&mut comp.bytes, off_bool, true);
-        write_i64(&mut comp.bytes, off_int, -123);
-        write_byte(&mut comp.bytes, off_byte, 0xAB);
+        write_bool(comp.as_bytes_mut(), off_bool, true);
+        write_i64(comp.as_bytes_mut(), off_int, -123);
+        write_byte(comp.as_bytes_mut(), off_byte, 0xAB);
 
-        assert!(read_bool(&comp.bytes, off_bool));
-        assert_eq!(read_i64(&comp.bytes, off_int), -123);
-        assert_eq!(read_byte(&comp.bytes, off_byte), 0xAB);
+        assert!(read_bool(comp.as_bytes(), off_bool));
+        assert_eq!(read_i64(comp.as_bytes(), off_int), -123);
+        assert_eq!(read_byte(comp.as_bytes(), off_byte), 0xAB);
+    }
+
+    #[test]
+    fn flat_composite_nested_inline_copy() {
+        // A nested composite's body copies inline at an offset, and
+        // reads back as the same byte range. This is how a nested
+        // composite field is packed and read in the flat representation.
+        let inner = FlatComposite::from_bytes(alloc::vec![1, 2, 3, 4]);
+        let mut outer = FlatComposite::zeroed(10);
+        outer.write_at(2, inner.as_bytes());
+        assert_eq!(outer.slice_at(2, inner.len()), &[1, 2, 3, 4]);
+        assert_eq!(outer.as_bytes(), &[0, 0, 1, 2, 3, 4, 0, 0, 0, 0]);
     }
 }

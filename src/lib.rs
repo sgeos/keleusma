@@ -94,9 +94,10 @@ pub mod debug_meta;
 #[cfg(feature = "encryption")]
 pub mod encryption;
 /// Flat-byte composite representation helpers and the
-/// [`flat_value::FlatComposite`] container. Parallel
-/// infrastructure for B28's runtime composite-value
-/// representation refactor. Not yet consumed by the runtime.
+/// [`flat_value::FlatComposite`] byte buffer for B28's runtime
+/// composite-value refactor. A composite value is pure bytes; the
+/// field offsets are baked into the access instructions by the
+/// compiler, so the buffer carries no layout reference.
 pub mod flat_value;
 /// Arena-resident dynamic strings ([`KString`]) at the host-VM
 /// boundary.
