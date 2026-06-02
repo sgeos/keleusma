@@ -9,12 +9,46 @@
 
 use std::sync::{Arc, Mutex};
 
-use keleusma::bytecode::Value;
+use keleusma::bytecode::{TupleBody, Value};
 use keleusma::compiler::compile;
 use keleusma::lexer::tokenize;
 use keleusma::parser::parse;
+use keleusma::value_layout::ScalarKind;
 use keleusma::vm::{DEFAULT_ARENA_CAPACITY, Vm, VmError, VmState};
 use keleusma::{Arena, Module};
+
+/// Materialize the components of an all-`Word` tuple returned by a
+/// rogue script, handling both the flat and boxed bodies (B28 P2).
+///
+/// The rogue AI, combat, and item scripts return tuples whose elements
+/// are all `Word`, so each component reads back as an `i64`. A flat
+/// body carries no element count, so the arity is derived from the
+/// byte length at the bundled runtime's eight-byte word width; this is
+/// the typed read the host performs now that a scalar tuple is pure
+/// bytes. Panics if the value is not such a tuple.
+fn word_tuple(v: &Value) -> Vec<i64> {
+    match v {
+        Value::Tuple(TupleBody::Boxed(elems)) => elems
+            .iter()
+            .map(|e| match e {
+                Value::Int(n) => *n,
+                other => panic!("non-int tuple element: {:?}", other),
+            })
+            .collect(),
+        Value::Tuple(TupleBody::Flat(fc)) => {
+            let bytes = fc.as_bytes();
+            (0..bytes.len() / 8)
+                .map(
+                    |i| match Value::read_scalar_le(bytes, i * 8, ScalarKind::Int, 8, 8) {
+                        Value::Int(n) => n,
+                        other => panic!("non-int flat tuple element: {:?}", other),
+                    },
+                )
+                .collect()
+        }
+        other => panic!("expected a Word tuple, got {:?}", other),
+    }
+}
 
 const SRC_BESTIARY: &str = include_str!("../examples/scripts/rogue/rogue_bestiary.kel");
 const SRC_GEAR: &str = include_str!("../examples/scripts/rogue/rogue_gear.kel");
@@ -236,14 +270,11 @@ fn ai_tracker_chases_when_seen() {
     ]);
     let result = vm.call(&[input]).expect("vm call");
     match result {
-        VmState::Yielded(Value::Tuple(t)) if t.elements().len() == 3 => {
-            match (&t.elements()[0], &t.elements()[1], &t.elements()[2]) {
-                (Value::Int(action), Value::Int(tx), Value::Int(ty)) => {
-                    assert_eq!(*action, 1);
-                    assert_eq!((*tx, *ty), (6, 6));
-                }
-                _ => panic!("non-int tuple"),
-            }
+        VmState::Yielded(ref v @ Value::Tuple(_)) => {
+            let c = word_tuple(v);
+            assert_eq!(c.len(), 3, "expected Yielded triple");
+            assert_eq!(c[0], 1);
+            assert_eq!((c[1], c[2]), (6, 6));
         }
         other => panic!("expected Yielded triple, got {:?}", other),
     }
@@ -281,15 +312,12 @@ fn ai_tracker_pursues_last_known_when_unseen() {
     let mut state = vm.resume(unseen_input.clone()).expect("vm resume");
     for _ in 0..16 {
         match state {
-            VmState::Yielded(Value::Tuple(t)) if t.elements().len() == 3 => {
-                match (&t.elements()[0], &t.elements()[1], &t.elements()[2]) {
-                    (Value::Int(action), Value::Int(tx), Value::Int(ty)) => {
-                        assert_eq!(*action, 1, "should chase last known");
-                        assert_eq!((*tx, *ty), (7, 7), "step toward (10, 10)");
-                        return;
-                    }
-                    _ => panic!("non-int tuple"),
-                }
+            VmState::Yielded(ref v @ Value::Tuple(_)) => {
+                let c = word_tuple(v);
+                assert_eq!(c.len(), 3, "non-int tuple");
+                assert_eq!(c[0], 1, "should chase last known");
+                assert_eq!((c[1], c[2]), (7, 7), "step toward (10, 10)");
+                return;
             }
             VmState::Reset => {
                 state = vm.resume(unseen_input.clone()).expect("vm resume");
@@ -313,11 +341,10 @@ fn run_player_ai(mx: i64, my: i64, cmd: i64) -> (i64, i64, i64) {
         .call(&[Value::Int(mx), Value::Int(my), Value::Int(cmd)])
         .expect("vm call");
     match result {
-        VmState::Finished(Value::Tuple(t)) if t.elements().len() == 3 => {
-            match (&t.elements()[0], &t.elements()[1], &t.elements()[2]) {
-                (Value::Int(a), Value::Int(x), Value::Int(y)) => (*a, *x, *y),
-                _ => panic!("player ai returned non-int tuple components"),
-            }
+        VmState::Finished(ref v @ Value::Tuple(_)) => {
+            let c = word_tuple(v);
+            assert_eq!(c.len(), 3, "player ai returned non-int tuple components");
+            (c[0], c[1], c[2])
         }
         other => panic!("expected Finished triple, got {:?}", other),
     }
@@ -376,11 +403,10 @@ fn run_combat(skill: i64, dmg: i64, evasion: i64, armor: i64, roll: i64) -> (i64
         ])
         .expect("vm call");
     match result {
-        VmState::Finished(Value::Tuple(t)) if t.elements().len() == 2 => {
-            match (&t.elements()[0], &t.elements()[1]) {
-                (Value::Int(a), Value::Int(b)) => (*a, *b),
-                _ => panic!("combat returned non-int tuple"),
-            }
+        VmState::Finished(ref v @ Value::Tuple(_)) => {
+            let c = word_tuple(v);
+            assert_eq!(c.len(), 2, "combat returned non-int tuple");
+            (c[0], c[1])
         }
         other => panic!("expected Finished pair, got {:?}", other),
     }
@@ -662,11 +688,10 @@ fn call_ai(src: &str, mx: i64, my: i64, px: i64, py: i64, sees: i64) -> (i64, i6
         ])
         .expect("ai vm call");
     match result {
-        VmState::Finished(Value::Tuple(t)) if t.elements().len() == 3 => {
-            match (&t.elements()[0], &t.elements()[1], &t.elements()[2]) {
-                (Value::Int(a), Value::Int(x), Value::Int(y)) => (*a, *x, *y),
-                _ => panic!("ai returned non-int tuple components"),
-            }
+        VmState::Finished(ref v @ Value::Tuple(_)) => {
+            let c = word_tuple(v);
+            assert_eq!(c.len(), 3, "ai returned non-int tuple components");
+            (c[0], c[1], c[2])
         }
         other => panic!("expected Finished tuple, got {:?}", other),
     }
@@ -773,11 +798,10 @@ fn call_boss_first(
     ]);
     let result = vm.call(&[input]).expect("vm call");
     let triple = match result {
-        VmState::Yielded(Value::Tuple(t)) if t.elements().len() == 3 => {
-            match (&t.elements()[0], &t.elements()[1], &t.elements()[2]) {
-                (Value::Int(a), Value::Int(x), Value::Int(y)) => (*a, *x, *y),
-                _ => panic!("boss yielded non-int tuple components"),
-            }
+        VmState::Yielded(ref v @ Value::Tuple(_)) => {
+            let c = word_tuple(v);
+            assert_eq!(c.len(), 3, "boss yielded non-int tuple components");
+            (c[0], c[1], c[2])
         }
         other => panic!("expected Yielded triple, got {:?}", other),
     };
@@ -816,15 +840,12 @@ fn ai_boss_second_turn_chases() {
     let mut state = vm.resume(input.clone()).expect("vm resume");
     for _ in 0..16 {
         match state {
-            VmState::Yielded(Value::Tuple(t)) if t.elements().len() == 3 => {
-                match (&t.elements()[0], &t.elements()[1], &t.elements()[2]) {
-                    (Value::Int(action), Value::Int(tx), Value::Int(ty)) => {
-                        assert_eq!(*action, 1, "second turn should chase");
-                        assert_eq!((*tx, *ty), (6, 6), "should step diagonally toward player");
-                        return;
-                    }
-                    _ => panic!("non-int tuple components"),
-                }
+            VmState::Yielded(ref v @ Value::Tuple(_)) => {
+                let c = word_tuple(v);
+                assert_eq!(c.len(), 3, "non-int tuple components");
+                assert_eq!(c[0], 1, "second turn should chase");
+                assert_eq!((c[1], c[2]), (6, 6), "should step diagonally toward player");
+                return;
             }
             VmState::Reset => {
                 state = vm.resume(input.clone()).expect("vm resume after reset");
@@ -844,15 +865,10 @@ fn call_5_tuple(src: &str, args: &[i64]) -> (i64, i64, i64, i64, i64) {
     let values: Vec<Value> = args.iter().map(|n| Value::Int(*n)).collect();
     let result = vm.call(&values).expect("vm call");
     match result {
-        VmState::Finished(Value::Tuple(t)) if t.elements().len() == 5 => {
-            let mut out = [0i64; 5];
-            for (i, v) in t.elements().iter().enumerate() {
-                out[i] = match v {
-                    Value::Int(n) => *n,
-                    _ => panic!("non-int tuple element"),
-                };
-            }
-            (out[0], out[1], out[2], out[3], out[4])
+        VmState::Finished(ref v @ Value::Tuple(_)) => {
+            let c = word_tuple(v);
+            assert_eq!(c.len(), 5, "expected 5-tuple");
+            (c[0], c[1], c[2], c[3], c[4])
         }
         other => panic!("expected 5-tuple, got {:?}", other),
     }

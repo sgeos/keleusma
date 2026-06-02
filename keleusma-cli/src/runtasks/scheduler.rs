@@ -733,21 +733,10 @@ fn dispatch_one(task: &mut Task, now_ms: u64, quiet: bool) {
 }
 
 fn parse_yield_tuple(v: &Value) -> Option<(i64, i64)> {
-    if let Value::Tuple(items) = v
-        && items.elements().len() == 2
-    {
-        let items = items.elements();
-        let reason = match items[0] {
-            Value::Int(n) => n,
-            _ => return None,
-        };
-        let payload = match items[1] {
-            Value::Int(n) => n,
-            _ => return None,
-        };
-        return Some((reason, payload));
-    }
-    None
+    // Read the (reason, payload) Word pair through the typed marshalling
+    // path, which decodes both the flat and boxed tuple bodies (B28 P2).
+    use keleusma::KeleusmaType;
+    <(i64, i64) as KeleusmaType<i64, f64>>::from_value(v).ok()
 }
 
 fn on_task_exit(task: &mut Task, was_error: bool, quiet: bool) {

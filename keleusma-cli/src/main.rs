@@ -1926,10 +1926,20 @@ pub(crate) fn format_value(v: &Value) -> String {
         Value::StaticStr(s) => s.clone(),
         Value::Unit => "()".to_string(),
         Value::None => "None".to_string(),
-        Value::Tuple(items) => {
-            let items = items.elements();
+        // A boxed tuple holds its elements and formats recursively. A
+        // flat tuple is pure bytes with no layout, so this typeless
+        // display path cannot decode its fields element-wise without the
+        // static type, which it does not have here (B28 P2). It renders
+        // a placeholder noting the byte length. This is an interim
+        // limitation of REPL display for transitively-scalar tuples;
+        // the typed marshalling path decodes such tuples for hosts that
+        // know the type, and the V0.4 native backend bakes display.
+        Value::Tuple(keleusma::bytecode::TupleBody::Boxed(items)) => {
             let parts: Vec<String> = items.iter().map(format_value).collect();
             format!("({})", parts.join(", "))
+        }
+        Value::Tuple(keleusma::bytecode::TupleBody::Flat(fc)) => {
+            format!("(<flat tuple: {} bytes>)", fc.len())
         }
         Value::Array(items) => {
             let parts: Vec<String> = items.iter().map(format_value).collect();

@@ -79,6 +79,16 @@ struct TypeInfo {
     /// falls through to the runtime check when looking up a
     /// missing summary.
     function_return_ranges: BTreeMap<String, crate::interval::IntervalSet>,
+    /// Module-declared word width in bytes, taken from the compile
+    /// target (B28 P2). The flat-tuple layout computes baked field
+    /// offsets at this width, the same one written into the module
+    /// header, so the runtime reads at the offsets the compiler baked.
+    /// `Default` yields `0`; the real value is set in
+    /// `compile_with_options` where the target is in scope.
+    word_bytes: usize,
+    /// Module-declared float width in bytes, the float companion of
+    /// [`TypeInfo::word_bytes`].
+    float_bytes: usize,
 }
 
 /// State for compiling a single function chunk.
@@ -1329,8 +1339,14 @@ pub fn compile_with_options(
         function_map.insert(name.clone(), chunk_idx as u16);
     }
 
-    // Build type info for the compiler's static analyses.
-    let mut type_info = TypeInfo::default();
+    // Build type info for the compiler's static analyses. The target's
+    // scalar widths are recorded so the flat-tuple layout (B28 P2) bakes
+    // offsets at the same width the module header declares.
+    let mut type_info = TypeInfo {
+        word_bytes: (1usize << target.word_bits_log2) / 8,
+        float_bytes: (1usize << target.float_bits_log2) / 8,
+        ..TypeInfo::default()
+    };
     for type_def in &program.types {
         match type_def {
             TypeDef::Struct(s) => {
@@ -2915,7 +2931,12 @@ fn compile_function_group(
 
             // Test each parameter against the head's pattern.
             for (i, param) in def.params.iter().enumerate() {
-                let fail = compile_pattern_test(&mut fc, &param.pattern, param_slots[i])?;
+                let fail = compile_pattern_test(
+                    &mut fc,
+                    &param.pattern,
+                    param_slots[i],
+                    param.type_expr.as_ref(),
+                )?;
                 fail_jumps.extend(fail);
             }
 
@@ -3199,6 +3220,65 @@ fn compile_stmt(fc: &mut FuncCompiler, stmt: &Stmt) -> Result<(), CompileError> 
 /// information for downstream optimizations such as for-in iteration
 /// bound inference. Returns `None` for expressions whose type is not
 /// determinable through this narrow set of patterns.
+/// Collect the variable names bound by a checked-arm kind whose
+/// bindings carry exactly the operation's operand type (B28 P2).
+///
+/// Only `ok`, `overflow`, `underflow`, and `zero_divisor` qualify: on
+/// `Word` operands their patterns bind `Word` halves or results, and
+/// on `Byte` operands a single `Byte`, so the binding type equals the
+/// operand type the caller infers from the guarded operation. Other
+/// arm kinds bind values of unrelated types (a native error code, a
+/// float NaN result) and are intentionally excluded so the caller does
+/// not infer an incorrect type, which would bake a wrong flat offset
+/// and corrupt the read. Their absence yields `None`, a safe boxed
+/// fallback.
+fn collect_checked_arm_bindings(kind: &crate::ast::CheckedArmKind, out: &mut Vec<String>) {
+    use crate::ast::CheckedArmKind as K;
+    let mut push = |p: &Pattern| {
+        if let Pattern::Variable(name, _) = p {
+            out.push(name.clone());
+        }
+    };
+    match kind {
+        K::Ok(p) | K::ZeroDivisor(p) => push(p),
+        K::Overflow(h, l) | K::Underflow(h, l) => {
+            push(h);
+            if let Some(l) = l {
+                push(l);
+            }
+        }
+        // Other kinds bind values whose type is not the operand type;
+        // excluded to keep inference accurate-or-None.
+        _ => {}
+    }
+}
+
+/// Infer a checked construct's arm-body type, resolving arm-binding
+/// idents to the operation's operand type (B28 P2).
+///
+/// Tuple-literal bodies recurse so a scalar tuple body infers fully;
+/// any other body falls back to ordinary inference, which is itself
+/// accurate-or-`None`. The result therefore never names an incorrect
+/// type, so a baked flat access can only be correct or absent.
+fn infer_arm_body_type(
+    fc: &FuncCompiler,
+    body: &Expr,
+    bound: &[String],
+    operand_ty: &TypeExpr,
+) -> Option<TypeExpr> {
+    match body {
+        Expr::TupleLiteral { elements, span } => {
+            let mut tys = Vec::with_capacity(elements.len());
+            for e in elements {
+                tys.push(infer_arm_body_type(fc, e, bound, operand_ty)?);
+            }
+            Some(TypeExpr::Tuple(tys, *span))
+        }
+        Expr::Ident { name, .. } if bound.iter().any(|b| b == name) => Some(operand_ty.clone()),
+        _ => infer_expr_type(fc, body),
+    }
+}
+
 fn infer_expr_type(fc: &FuncCompiler, expr: &Expr) -> Option<TypeExpr> {
     match expr {
         Expr::StructInit { name, span, .. } => {
@@ -3298,14 +3378,28 @@ fn infer_expr_type(fc: &FuncCompiler, expr: &Expr) -> Option<TypeExpr> {
         // target enum type, so a `let`-bound result carries the enum
         // type for subsequent type-directed operations (e.g. a later
         // `as Word` cast).
-        Expr::Checked { op_expr, .. } => match op_expr.as_ref() {
+        Expr::Checked { op_expr, arms, .. } => match op_expr.as_ref() {
             Expr::Cast {
                 target: TypeExpr::Named(n, args, sp),
                 ..
             } if fc.type_info.enum_variant_order.contains_key(n) => {
                 Some(TypeExpr::Named(n.clone(), args.clone(), *sp))
             }
-            _ => None,
+            // The construct's result type is its arms' common body type.
+            // The arm bindings (ok(v), overflow(h, l), …) carry the
+            // guarded operation's operand type, which is not in scope
+            // here, so the first arm's body is inferred with those names
+            // bound to the operand type. This lets a let-destructure of
+            // a checked construct yielding a scalar tuple recover the
+            // tuple type and bake flat field access (B28 P2). Inference
+            // stays accurate-or-None, so a wrong type is never baked.
+            _ => {
+                let operand_ty = infer_expr_type(fc, op_expr)?;
+                let first = arms.first()?;
+                let mut bound: Vec<String> = Vec::new();
+                collect_checked_arm_bindings(&first.kind, &mut bound);
+                infer_arm_body_type(fc, &first.body, &bound, &operand_ty)
+            }
         },
         _ => None,
     }
@@ -3342,6 +3436,96 @@ fn type_expr_head(ty: &TypeExpr) -> Option<String> {
 /// The type, when present, is recorded on the resulting local for
 /// downstream optimization passes. Compound patterns destructure the
 /// type along with the value.
+/// Map a tuple element type to its flat-composite scalar kind, or
+/// `None` when the type is not a flat-eligible field (B28 P2).
+///
+/// Eligible kinds are the non-reference, non-float fixed-size scalars,
+/// mirroring the VM's `flat_tuple_scalar_kind` so construction and
+/// access agree. `Float` is excluded for now because the flat body
+/// compares by raw bytes, which would change the `+0.0`/`-0.0` and
+/// `NaN` semantics of tuple equality. `Text`, named types (struct,
+/// enum, opaque), tuples, arrays, and options are not flat scalars.
+/// Information-flow label wrappers are compile-time only and unwrap to
+/// the underlying type.
+fn type_flat_scalar_kind(ty: &TypeExpr) -> Option<crate::value_layout::ScalarKind> {
+    use crate::value_layout::ScalarKind as K;
+    match ty {
+        TypeExpr::Unit(_) => Some(K::Unit),
+        TypeExpr::Prim(p, _) => match p {
+            PrimType::Bool => Some(K::Bool),
+            PrimType::Byte => Some(K::Byte),
+            PrimType::Word => Some(K::Int),
+            PrimType::Fixed(_) => Some(K::Fixed),
+            PrimType::Float | PrimType::Text => None,
+        },
+        TypeExpr::Labelled(inner, _, _) | TypeExpr::NegativeLabelled(inner, _, _) => {
+            type_flat_scalar_kind(inner)
+        }
+        _ => None,
+    }
+}
+
+/// Resolve the baked [`TupleField`] for accessing element `index` of a
+/// tuple whose element types are `elem_types` (B28 P2).
+///
+/// Returns the `Flat` form carrying the packed little-endian byte
+/// offset and the element's scalar kind when every element is
+/// flat-eligible and the offset fits the sixteen-bit operand;
+/// otherwise the `Boxed` positional form. The all-or-nothing
+/// eligibility, the packed layout, and the target width source mirror
+/// the VM's `pack_flat_tuple`, so the access form always matches the
+/// body the construct handler builds. A `None` element type (the
+/// compiler could not recover it) or unset target widths force the
+/// boxed form.
+fn tuple_field_access(
+    fc: &FuncCompiler,
+    elem_types: &[Option<TypeExpr>],
+    index: usize,
+) -> TupleField {
+    let boxed = TupleField::Boxed { index: index as u8 };
+    let wb = fc.type_info.word_bytes;
+    let fb = fc.type_info.float_bytes;
+    if wb == 0 {
+        return boxed;
+    }
+    let mut offset = 0usize;
+    let mut field_at = None;
+    for (i, ty) in elem_types.iter().enumerate() {
+        let Some(ty) = ty else { return boxed };
+        let Some(kind) = type_flat_scalar_kind(ty) else {
+            return boxed;
+        };
+        if i == index {
+            field_at = Some((offset, kind));
+        }
+        offset += kind.size_in_bytes(wb, fb);
+    }
+    if offset > u16::MAX as usize {
+        return boxed;
+    }
+    match field_at {
+        Some((off, kind)) if off <= u16::MAX as usize => TupleField::Flat {
+            offset: off as u16,
+            kind,
+        },
+        _ => boxed,
+    }
+}
+
+/// Decompose a tuple type into per-element types of the given arity,
+/// unwrapping information-flow label wrappers (B28 P2). Yields a vector
+/// of `None` when the type is absent or is not a matching tuple, which
+/// `tuple_field_access` then resolves to the boxed form.
+fn tuple_elem_types_of(ty: Option<&TypeExpr>, arity: usize) -> Vec<Option<TypeExpr>> {
+    match ty {
+        Some(TypeExpr::Tuple(ts, _)) if ts.len() == arity => ts.iter().cloned().map(Some).collect(),
+        Some(TypeExpr::Labelled(inner, _, _)) | Some(TypeExpr::NegativeLabelled(inner, _, _)) => {
+            tuple_elem_types_of(Some(inner), arity)
+        }
+        _ => core::iter::repeat_with(|| None).take(arity).collect(),
+    }
+}
+
 fn compile_let_pattern_typed(
     fc: &mut FuncCompiler,
     pattern: &Pattern,
@@ -3374,7 +3558,7 @@ fn compile_let_pattern_typed(
             fc.emit(Op::SetLocal(temp));
             for (i, pat) in pats.iter().enumerate() {
                 fc.emit(Op::GetLocal(temp));
-                fc.emit(Op::GetTupleField(TupleField::Boxed { index: i as u8 }));
+                fc.emit(Op::GetTupleField(tuple_field_access(fc, &elem_types, i)));
                 let sub_ty = elem_types.get(i).cloned().unwrap_or(None);
                 compile_let_pattern_typed(fc, pat, sub_ty)?;
             }
@@ -4979,6 +5163,10 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
         Expr::Match {
             scrutinee, arms, ..
         } => {
+            // The scrutinee's type lets the pattern test and bind bake
+            // flat tuple-field access when the matched tuple is scalar
+            // (B28 P2); an un-inferable scrutinee falls back to boxed.
+            let scrutinee_ty = infer_expr_type(fc, scrutinee);
             compile_expr(fc, scrutinee)?;
             let temp = fc.declare_local("__match");
             fc.emit(Op::SetLocal(temp));
@@ -4990,8 +5178,9 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
             for arm in arms {
                 fc.begin_scope();
 
-                let mut fail_addrs = compile_pattern_test(fc, &arm.pattern, temp)?;
-                compile_pattern_bind(fc, &arm.pattern, temp)?;
+                let mut fail_addrs =
+                    compile_pattern_test(fc, &arm.pattern, temp, scrutinee_ty.as_ref())?;
+                compile_pattern_bind_typed(fc, &arm.pattern, temp, scrutinee_ty.clone())?;
                 // Optional guard: evaluate in the scope of the
                 // pattern's bindings; on false, fall through to the
                 // next arm via the same If/EndIf machinery used by
@@ -5117,10 +5306,18 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
         }
 
         Expr::TupleIndex { object, index, .. } => {
+            // Recover the tuple's element types to bake a flat access
+            // when eligible; an un-inferable object stays boxed (B28 P2).
+            let elem_types: Vec<Option<TypeExpr>> = match infer_expr_type(fc, object) {
+                Some(TypeExpr::Tuple(ts, _)) => ts.into_iter().map(Some).collect(),
+                _ => Vec::new(),
+            };
             compile_expr(fc, object)?;
-            fc.emit(Op::GetTupleField(TupleField::Boxed {
-                index: *index as u8,
-            }));
+            fc.emit(Op::GetTupleField(tuple_field_access(
+                fc,
+                &elem_types,
+                *index as usize,
+            )));
         }
 
         Expr::ArrayIndex {
@@ -6533,6 +6730,12 @@ fn compile_pattern_test(
     fc: &mut FuncCompiler,
     pattern: &Pattern,
     value_slot: u16,
+    // The matched value's static type, threaded so the tuple arm can
+    // bake a flat field access when the elements are scalar (B28 P2).
+    // `None` forces the boxed access form, which a flat-bodied value
+    // would reject; callers therefore supply the type wherever a tuple
+    // pattern can meet a flat tuple.
+    ty: Option<&TypeExpr>,
 ) -> Result<Vec<usize>, CompileError> {
     let mut fail_addrs = Vec::new();
 
@@ -6621,7 +6824,14 @@ fn compile_pattern_test(
                 fc.emit(Op::GetLocal(value_slot));
                 fc.emit(Op::GetEnumField(i as u8));
                 fc.emit(Op::SetLocal(temp));
-                let sub_fails = compile_pattern_test(fc, sub_pat, temp)?;
+                let sub_ty = fc
+                    .type_info
+                    .enums
+                    .get(enum_name)
+                    .and_then(|m| m.get(variant))
+                    .and_then(|payloads| payloads.get(i))
+                    .cloned();
+                let sub_fails = compile_pattern_test(fc, sub_pat, temp, sub_ty.as_ref())?;
                 fail_addrs.extend(sub_fails);
             }
         }
@@ -6642,36 +6852,35 @@ fn compile_pattern_test(
                     let name_const = fc.add_string_constant(&field_pat.name);
                     fc.emit(Op::GetField(name_const));
                     fc.emit(Op::SetLocal(temp));
-                    let sub_fails = compile_pattern_test(fc, pat, temp)?;
+                    let sub_ty = fc
+                        .type_info
+                        .structs
+                        .get(type_name)
+                        .and_then(|m| m.get(&field_pat.name))
+                        .cloned();
+                    let sub_fails = compile_pattern_test(fc, pat, temp, sub_ty.as_ref())?;
                     fail_addrs.extend(sub_fails);
                 }
             }
         }
         Pattern::Tuple(pats, _) => {
+            let elem_types = tuple_elem_types_of(ty, pats.len());
             for (i, pat) in pats.iter().enumerate() {
                 if matches!(pat, Pattern::Variable(_, _) | Pattern::Wildcard(_)) {
                     continue;
                 }
                 let temp = fc.declare_local(&format!("__tuple_{}", i));
                 fc.emit(Op::GetLocal(value_slot));
-                fc.emit(Op::GetTupleField(TupleField::Boxed { index: i as u8 }));
+                fc.emit(Op::GetTupleField(tuple_field_access(fc, &elem_types, i)));
                 fc.emit(Op::SetLocal(temp));
-                let sub_fails = compile_pattern_test(fc, pat, temp)?;
+                let sub_ty = elem_types.get(i).and_then(|o| o.as_ref());
+                let sub_fails = compile_pattern_test(fc, pat, temp, sub_ty)?;
                 fail_addrs.extend(sub_fails);
             }
         }
     }
 
     Ok(fail_addrs)
-}
-
-/// Compile pattern bindings: extract values and store in local variables.
-fn compile_pattern_bind(
-    fc: &mut FuncCompiler,
-    pattern: &Pattern,
-    value_slot: u16,
-) -> Result<(), CompileError> {
-    compile_pattern_bind_typed(fc, pattern, value_slot, None)
 }
 
 /// Compile a pattern bind with the value's known type expression.
@@ -6767,7 +6976,7 @@ fn compile_pattern_bind_typed(
                     continue;
                 }
                 fc.emit(Op::GetLocal(value_slot));
-                fc.emit(Op::GetTupleField(TupleField::Boxed { index: i as u8 }));
+                fc.emit(Op::GetTupleField(tuple_field_access(fc, &elem_types, i)));
                 let sub_ty = elem_types.get(i).cloned().unwrap_or(None);
                 if let Pattern::Variable(name, _) = pat {
                     let slot = fc.declare_local_typed(name, sub_ty);

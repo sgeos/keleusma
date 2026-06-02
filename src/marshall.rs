@@ -53,6 +53,21 @@ pub trait KeleusmaType<W: Word, F: Float>: Sized {
 
     /// Convert from the Rust type into a runtime [`GenericValue`].
     fn into_value(self) -> GenericValue<W, F>;
+
+    /// The flat-composite scalar kind this type occupies when it is a
+    /// tuple field, or `None` when it is not a flat-eligible scalar
+    /// (B28 P2).
+    ///
+    /// Used to read an element out of a flat tuple body at the host
+    /// boundary, where the value is pure bytes and the Rust type
+    /// supplies the layout. The default is `None`, treated as a
+    /// non-flat field, so existing external implementations remain
+    /// valid without change. `Float` returns `None` because float
+    /// fields keep the boxed representation (byte equality would change
+    /// `+0.0`/`-0.0` and `NaN` semantics).
+    fn flat_field_kind() -> Option<crate::value_layout::ScalarKind> {
+        None
+    }
 }
 
 // -- Primitive impls --
@@ -71,6 +86,10 @@ impl<W: Word, F: Float> KeleusmaType<W, F> for i64 {
     fn into_value(self) -> GenericValue<W, F> {
         GenericValue::Int(W::from_i64_wrap(self))
     }
+
+    fn flat_field_kind() -> Option<crate::value_layout::ScalarKind> {
+        Some(crate::value_layout::ScalarKind::Int)
+    }
 }
 
 impl<W: Word, F: Float> KeleusmaType<W, F> for u8 {
@@ -86,6 +105,10 @@ impl<W: Word, F: Float> KeleusmaType<W, F> for u8 {
 
     fn into_value(self) -> GenericValue<W, F> {
         GenericValue::Byte(self)
+    }
+
+    fn flat_field_kind() -> Option<crate::value_layout::ScalarKind> {
+        Some(crate::value_layout::ScalarKind::Byte)
     }
 }
 
@@ -121,6 +144,10 @@ impl<W: Word, F: Float> KeleusmaType<W, F> for bool {
     fn into_value(self) -> GenericValue<W, F> {
         GenericValue::Bool(self)
     }
+
+    fn flat_field_kind() -> Option<crate::value_layout::ScalarKind> {
+        Some(crate::value_layout::ScalarKind::Bool)
+    }
 }
 
 impl<W: Word, F: Float> KeleusmaType<W, F> for () {
@@ -136,6 +163,10 @@ impl<W: Word, F: Float> KeleusmaType<W, F> for () {
 
     fn into_value(self) -> GenericValue<W, F> {
         GenericValue::Unit
+    }
+
+    fn flat_field_kind() -> Option<crate::value_layout::ScalarKind> {
+        Some(crate::value_layout::ScalarKind::Unit)
     }
 }
 
@@ -212,10 +243,9 @@ macro_rules! impl_tuple {
         {
             #[allow(clippy::unused_unit, unused_assignments, non_snake_case)]
             fn from_value(v: &GenericValue<W, FloatT>) -> Result<Self, VmError> {
+                let expected = [$(stringify!($name),)*].len();
                 match v {
-                    GenericValue::Tuple(items) => {
-                        let items = items.elements();
-                        let expected = [$(stringify!($name),)*].len();
+                    GenericValue::Tuple(crate::bytecode::TupleBody::Boxed(items)) => {
                         if items.len() != expected {
                             return Err(VmError::TypeError(format!(
                                 "expected tuple of arity {}, got {}",
@@ -224,6 +254,31 @@ macro_rules! impl_tuple {
                             )));
                         }
                         Ok(($($name::from_value(&items[$idx])?,)*))
+                    }
+                    // A flat tuple body is pure bytes; the Rust element
+                    // types supply the per-field kinds so each scalar is
+                    // read at its packed offset (B28 P2). Runtime widths
+                    // match the module widths on the bundled runtime.
+                    GenericValue::Tuple(crate::bytecode::TupleBody::Flat(fc)) => {
+                        let word_bytes = (1usize << <W as Word>::BITS_LOG2) / 8;
+                        let float_bytes = (1usize << <FloatT as Float>::BITS_LOG2) / 8;
+                        let bytes = fc.as_bytes();
+                        let kinds = [$(<$name as KeleusmaType<W, FloatT>>::flat_field_kind(),)*];
+                        let mut vals: Vec<GenericValue<W, FloatT>> = Vec::with_capacity(expected);
+                        let mut offset = 0usize;
+                        for k in kinds {
+                            let k = k.ok_or_else(|| {
+                                VmError::TypeError(format!(
+                                    "flat tuple field is not a flat scalar at arity {}",
+                                    expected
+                                ))
+                            })?;
+                            vals.push(GenericValue::<W, FloatT>::read_scalar_le(
+                                bytes, offset, k, word_bytes, float_bytes,
+                            ));
+                            offset += k.size_in_bytes(word_bytes, float_bytes);
+                        }
+                        Ok(($($name::from_value(&vals[$idx])?,)*))
                     }
                     other => Err(VmError::TypeError(format!(
                         "expected tuple, got {}",
@@ -235,7 +290,14 @@ macro_rules! impl_tuple {
             #[allow(non_snake_case)]
             fn into_value(self) -> GenericValue<W, FloatT> {
                 let ($($name,)*) = self;
-                GenericValue::tuple(::alloc::vec![$($name.into_value(),)*])
+                // Route through the shared constructor so a host-built
+                // tuple has the same representation as a script-built one
+                // of the same type, which tuple equality relies on.
+                GenericValue::tuple_with_widths(
+                    ::alloc::vec![$($name.into_value(),)*],
+                    (1usize << <W as Word>::BITS_LOG2) / 8,
+                    (1usize << <FloatT as Float>::BITS_LOG2) / 8,
+                )
             }
         }
     };

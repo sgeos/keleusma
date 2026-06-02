@@ -304,7 +304,90 @@ impl<W: crate::word::Word, F: crate::float::Float> PartialEq for GenericValue<W,
     }
 }
 
+/// The flat-composite scalar kind of a value, or `None` when the value
+/// is not a flat-eligible tuple field (B28 P2).
+///
+/// Eligible kinds are the non-reference, non-float fixed-size scalars.
+/// `Float` is excluded because the flat body compares by raw bytes,
+/// which would change the `+0.0`/`-0.0` and `NaN` semantics of tuple
+/// equality. References, `None`, and composites are not flat-eligible.
+/// The compiler's `type_flat_scalar_kind` mirrors this on the type
+/// side so construction and baked access agree.
+pub(crate) fn flat_tuple_scalar_kind<W: crate::word::Word, F: crate::float::Float>(
+    v: &GenericValue<W, F>,
+) -> Option<crate::value_layout::ScalarKind> {
+    use crate::value_layout::ScalarKind as K;
+    match v {
+        GenericValue::Unit => Some(K::Unit),
+        GenericValue::Bool(_) => Some(K::Bool),
+        GenericValue::Byte(_) => Some(K::Byte),
+        GenericValue::Int(_) => Some(K::Int),
+        GenericValue::Fixed(_) => Some(K::Fixed),
+        _ => None,
+    }
+}
+
 impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
+    /// Construct a tuple value, choosing the flat byte body for a
+    /// transitively-scalar tuple and the boxed body otherwise (B28 P2).
+    ///
+    /// This is the common constructor used by hosts, tests, and the
+    /// runtime. It delegates to [`GenericValue::tuple_with_widths`] at
+    /// the runtime's own scalar widths (from [`crate::word::Word::BITS_LOG2`]
+    /// and [`crate::float::Float::BITS_LOG2`]), which equal the
+    /// module-declared widths on the bundled runtime. Routing every
+    /// construction through the same flat-or-boxed decision is what lets
+    /// a given tuple type have one representation, which tuple equality
+    /// and flat access both rely on. A reference-bearing or float-
+    /// bearing tuple is not flat-eligible and stays boxed.
+    pub fn tuple(elements: alloc::vec::Vec<Self>) -> Self {
+        let word_bytes = (1usize << <W as crate::word::Word>::BITS_LOG2) / 8;
+        let float_bytes = (1usize << <F as crate::float::Float>::BITS_LOG2) / 8;
+        Self::tuple_with_widths(elements, word_bytes, float_bytes)
+    }
+
+    /// Construct a tuple value, choosing the flat byte body for a
+    /// transitively-scalar tuple and the boxed body otherwise, using
+    /// the given scalar widths (B28 P2).
+    ///
+    /// This is the single choke point for tuple construction so every
+    /// path (the VM `NewTuple` handler, constant materialisation, and
+    /// host marshalling) agrees on the representation for a given type.
+    /// A flat body is produced only when every element is a
+    /// flat-eligible scalar (see [`flat_tuple_scalar_kind`]) and the
+    /// packed size fits the sixteen-bit access offset; the fields are
+    /// written little-endian at packed offsets using `word_bytes` and
+    /// `float_bytes`, the same widths the compiler bakes access offsets
+    /// against.
+    pub fn tuple_with_widths(
+        elements: alloc::vec::Vec<Self>,
+        word_bytes: usize,
+        float_bytes: usize,
+    ) -> Self {
+        let mut total = 0usize;
+        let mut eligible = true;
+        for v in &elements {
+            match flat_tuple_scalar_kind(v) {
+                Some(kind) => total += kind.size_in_bytes(word_bytes, float_bytes),
+                None => {
+                    eligible = false;
+                    break;
+                }
+            }
+        }
+        if !eligible || total > u16::MAX as usize {
+            return Self::Tuple(TupleBody::Boxed(elements));
+        }
+        let mut body = crate::flat_value::FlatComposite::zeroed(total);
+        let mut offset = 0usize;
+        for v in &elements {
+            let kind = flat_tuple_scalar_kind(v).expect("eligibility checked above");
+            v.write_scalar_le(body.as_bytes_mut(), offset, word_bytes, float_bytes);
+            offset += kind.size_in_bytes(word_bytes, float_bytes);
+        }
+        Self::Tuple(TupleBody::Flat(body))
+    }
+
     /// Write this fixed-size scalar's little-endian bytes into `dst` at
     /// `offset` (B28 P2). The width of an `Int`/`Fixed` is `word_bytes`
     /// and of a `Float` is `float_bytes`, taken from the runtime's
@@ -316,15 +399,6 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
     /// Reference scalars (`StaticStr`, `KStr`, `Opaque`) and composites
     /// are handled by later phases and panic here, which a correct
     /// compiler never reaches because it routes them differently.
-    /// Construct a tuple value from its elements in the boxed (pre-B28)
-    /// representation. The flat representation is produced by the VM
-    /// `NewTuple` handler for transitively-scalar tuples; all other
-    /// construction sites use this and stay boxed until B28 P3 removes
-    /// the boxed form.
-    pub fn tuple(elements: alloc::vec::Vec<Self>) -> Self {
-        Self::Tuple(TupleBody::Boxed(elements))
-    }
-
     #[cfg_attr(not(feature = "floats"), allow(unused_variables))]
     pub fn write_scalar_le(
         &self,
@@ -440,9 +514,12 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
                 Ok(s) => Self::StaticStr(alloc::string::String::from(s)),
                 Err(_) => Self::StaticStr(alloc::string::String::new()),
             },
-            Self::Tuple(items) => Self::tuple(
+            // A flat tuple is transitively scalar, so it holds no KStr
+            // and materialises to itself. A boxed tuple may carry a
+            // KStr and is walked element-wise.
+            Self::Tuple(TupleBody::Flat(_)) => self.clone(),
+            Self::Tuple(TupleBody::Boxed(items)) => Self::tuple(
                 items
-                    .elements()
                     .iter()
                     .map(|v| v.materialise_kstrings(arena))
                     .collect(),
@@ -539,7 +616,10 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
     pub fn contains_dynstr(&self) -> bool {
         match self {
             Self::KStr(_) => true,
-            Self::Tuple(items) => items.elements().iter().any(Self::contains_dynstr),
+            // A flat tuple is transitively scalar and cannot hold a
+            // dynamic string; a boxed tuple is walked element-wise.
+            Self::Tuple(TupleBody::Flat(_)) => false,
+            Self::Tuple(TupleBody::Boxed(items)) => items.iter().any(Self::contains_dynstr),
             Self::Array(items) => items.iter().any(Self::contains_dynstr),
             Self::Struct { fields, .. } => fields.iter().any(|(_, v)| v.contains_dynstr()),
             Self::Enum { fields, .. } => fields.iter().any(Self::contains_dynstr),
@@ -557,7 +637,11 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
     /// when the runtime's word or float width is narrower than
     /// the bytecode's; programs whose constants do not fit are
     /// rejected at load time by the bytecode-header width check.
-    pub fn from_const_archived(c: &ArchivedConstValue) -> Self {
+    pub fn from_const_archived(
+        c: &ArchivedConstValue,
+        word_bytes: usize,
+        float_bytes: usize,
+    ) -> Self {
         match c {
             ArchivedConstValue::Unit => Self::Unit,
             ArchivedConstValue::Bool(b) => Self::Bool(*b),
@@ -570,19 +654,36 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
                 use alloc::string::ToString;
                 Self::StaticStr(s.as_str().to_string())
             }
-            ArchivedConstValue::Tuple(items) => {
-                Self::tuple(items.iter().map(Self::from_const_archived).collect())
-            }
-            ArchivedConstValue::Array(items) => {
-                Self::Array(items.iter().map(Self::from_const_archived).collect())
-            }
+            // A constant tuple materialises through the same flat-or-boxed
+            // choice as every other construction path, so a scalar
+            // constant tuple matches a runtime-built one and the baked
+            // flat access reads it correctly (B28 P2).
+            ArchivedConstValue::Tuple(items) => Self::tuple_with_widths(
+                items
+                    .iter()
+                    .map(|c| Self::from_const_archived(c, word_bytes, float_bytes))
+                    .collect(),
+                word_bytes,
+                float_bytes,
+            ),
+            ArchivedConstValue::Array(items) => Self::Array(
+                items
+                    .iter()
+                    .map(|c| Self::from_const_archived(c, word_bytes, float_bytes))
+                    .collect(),
+            ),
             ArchivedConstValue::Struct { type_name, fields } => {
                 use alloc::string::ToString;
                 Self::Struct {
                     type_name: type_name.as_str().to_string(),
                     fields: fields
                         .iter()
-                        .map(|kv| (kv.0.as_str().to_string(), Self::from_const_archived(&kv.1)))
+                        .map(|kv| {
+                            (
+                                kv.0.as_str().to_string(),
+                                Self::from_const_archived(&kv.1, word_bytes, float_bytes),
+                            )
+                        })
                         .collect(),
                 }
             }
@@ -595,7 +696,10 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
                 Self::Enum {
                     type_name: type_name.as_str().to_string(),
                     variant: variant.as_str().to_string(),
-                    fields: fields.iter().map(Self::from_const_archived).collect(),
+                    fields: fields
+                        .iter()
+                        .map(|c| Self::from_const_archived(c, word_bytes, float_bytes))
+                        .collect(),
                 }
             }
             ArchivedConstValue::None => Self::None,
@@ -2327,9 +2431,16 @@ impl ConstValue {
             #[cfg(feature = "floats")]
             ConstValue::Float(f) => Value::Float(f),
             ConstValue::StaticStr(s) => Value::StaticStr(s),
-            ConstValue::Tuple(items) => {
-                Value::tuple(items.into_iter().map(ConstValue::into_value).collect())
-            }
+            // The bundled `Value` is `GenericValue<i64, f64>`, so the
+            // scalar widths are eight bytes each. Routing through
+            // `tuple_with_widths` keeps this constant tuple's body
+            // representation identical to the runtime and archived
+            // paths (B28 P2).
+            ConstValue::Tuple(items) => Value::tuple_with_widths(
+                items.into_iter().map(ConstValue::into_value).collect(),
+                8,
+                8,
+            ),
             ConstValue::Array(items) => {
                 Value::Array(items.into_iter().map(ConstValue::into_value).collect())
             }
@@ -2404,8 +2515,10 @@ impl PartialEq for ConstValue {
 /// includes a heap allocation.
 pub fn value_from_archived<W: crate::word::Word, F: crate::float::Float>(
     archived: &ArchivedConstValue,
+    word_bytes: usize,
+    float_bytes: usize,
 ) -> GenericValue<W, F> {
-    GenericValue::<W, F>::from_const_archived(archived)
+    GenericValue::<W, F>::from_const_archived(archived, word_bytes, float_bytes)
 }
 
 /// Sign-extending truncation to a narrower-than-runtime word width.

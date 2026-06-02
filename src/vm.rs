@@ -909,7 +909,14 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
     /// Materialize the constant at `(chunk_idx, idx)` from archived storage.
     fn chunk_const(&self, chunk_idx: usize, idx: usize) -> crate::bytecode::GenericValue<W, F> {
         let chunk = &self.archived().chunks[chunk_idx];
-        crate::bytecode::value_from_archived(&chunk.constants[idx])
+        // Materialise constants at the module-declared scalar widths so a
+        // constant tuple's flat body matches the offsets the compiler
+        // baked into its access instructions (B28 P2).
+        crate::bytecode::value_from_archived(
+            &chunk.constants[idx],
+            self.module_word_bytes(),
+            self.module_float_bytes(),
+        )
     }
 
     /// Number of ops in the chunk. V0.2.0 Phase 7c reads the
@@ -3480,7 +3487,18 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                     let n = count as usize;
                     let elements: Vec<crate::bytecode::GenericValue<W, F>> =
                         self.stack.drain(self.stack.len() - n..).collect();
-                    sp!(self, crate::bytecode::GenericValue::tuple(elements));
+                    // Build the flat body when every element is a
+                    // non-reference, non-float fixed-size scalar and the
+                    // packed size fits the baked offset operand, at the
+                    // module-declared widths. The shared constructor is the
+                    // runtime mirror of the compiler's flat eligibility, so
+                    // the baked access form always agrees with the body.
+                    let wb = self.module_word_bytes();
+                    let fb = self.module_float_bytes();
+                    sp!(
+                        self,
+                        crate::bytecode::GenericValue::tuple_with_widths(elements, wb, fb)
+                    );
                 }
                 Op::GetField(name_const) => {
                     let container = self.pop()?;
@@ -3625,15 +3643,29 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                                 )
                             );
                         }
-                        crate::bytecode::GenericValue::Tuple(t) => {
+                        // A boxed tuple reports its element count directly.
+                        // A flat tuple does not store its arity in the
+                        // bytes, but tuple length is a compile-time constant
+                        // that the compiler emits as a literal, so the flat
+                        // body never reaches this arm in a well-formed
+                        // artefact. A flat body here is therefore a
+                        // mis-compilation rather than a script error.
+                        crate::bytecode::GenericValue::Tuple(
+                            crate::bytecode::TupleBody::Boxed(elems),
+                        ) => {
                             sp!(
                                 self,
                                 crate::bytecode::GenericValue::Int(
-                                    <W as crate::word::Word>::from_i64_wrap(
-                                        t.elements().len() as i64
-                                    )
+                                    <W as crate::word::Word>::from_i64_wrap(elems.len() as i64)
                                 )
                             );
+                        }
+                        crate::bytecode::GenericValue::Tuple(crate::bytecode::TupleBody::Flat(
+                            _,
+                        )) => {
+                            return Err(VmError::InvalidBytecode(String::from(
+                                "Op::Len on a flat tuple; arity is a compile-time constant",
+                            )));
                         }
                         v => {
                             return Err(VmError::TypeError(format!(
@@ -8328,7 +8360,9 @@ mod tests {
             Module::access_bytes(&aligned).expect("access");
         let main_chunk = &archived.chunks[0];
         for (i, archived_val) in main_chunk.constants.iter().enumerate() {
-            let owned = value_from_archived(archived_val);
+            // The bundled runtime is i64/f64, eight-byte scalars; the
+            // into_value comparand uses the same widths (B28 P2).
+            let owned = value_from_archived(archived_val, 8, 8);
             let original = module.chunks[0].constants[i].clone().into_value();
             assert_eq!(
                 owned, original,
@@ -8628,6 +8662,44 @@ mod tests {
         let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
         let result = unsafe { Vm::new_unchecked(module, &arena) };
         assert!(matches!(result, Err(VmError::VerifyError(_))));
+    }
+
+    #[test]
+    fn poc_wordtofixed_overshift_accepted_by_verifier() {
+        use crate::bytecode::{BlockType, Chunk, ConstValue, Module, Op};
+        let chunk = Chunk {
+            name: alloc::string::String::from("main"),
+            ops: alloc::vec![Op::Const(0), Op::WordToFixed(200), Op::Return],
+            constants: alloc::vec![ConstValue::Int(0)],
+            struct_templates: alloc::vec![],
+            local_count: 0,
+            param_count: 0,
+            block_type: BlockType::Func,
+            param_types: alloc::vec![],
+            debug_pool: None,
+        };
+        let module = Module {
+            schema_hash: 0,
+            chunks: alloc::vec![chunk],
+            native_names: alloc::vec![],
+            entry_point: Some(0),
+            data_layout: None,
+            word_bits_log2: crate::bytecode::RUNTIME_WORD_BITS_LOG2,
+            addr_bits_log2: crate::bytecode::RUNTIME_ADDRESS_BITS_LOG2,
+            float_bits_log2: crate::bytecode::RUNTIME_FLOAT_BITS_LOG2,
+            wcet_cycles: 0,
+            wcmu_bytes: 0,
+            flags: 0,
+            shared_data_bytes: 0,
+            private_data_bytes: 0,
+        };
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let res = Vm::new(module, &arena);
+        // The verifier must ACCEPT this module for the claim to hold.
+        assert!(res.is_ok(), "verifier unexpectedly rejected: {:?}", res.err());
+        let mut vm = res.unwrap();
+        // Executing the overshift opcode should panic in debug builds.
+        let _ = vm.call(&[]);
     }
 
     #[test]
