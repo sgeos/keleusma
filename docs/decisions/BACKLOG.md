@@ -1032,9 +1032,11 @@ A V0.4.x or V0.5.x deployment to an embedded target with no global allocator (or
 
 ## B28. Runtime composite Value representation aligned with the language guarantee
 
+> **Implementation status (V0.2.1): active on branch `feat-flat-memory-model`. P0 and P1 landed; P2 through P5 are the revised plan below.** The plan was revised after a design pass that established four things. The instruction set does not change at all, not one opcode added, removed, or re-specified, which is the leanest possible outcome for the rad-hard silicon target. No layout table is emitted into the artifact and none lives at run time; the layout is the compiler's transient symbol table, dissolved into offset resolution and the worst-case-memory-usage bound. Byte-code compatibility with V0.2.0 is **not** a goal; the byte code may break freely and is simply recompiled, and `BYTECODE_VERSION` stays at 1 only for lack of production traction, not because compatibility is maintained. The Rust runtime model that results is correct but deliberately suboptimal in three documented ways, and the ideal flat-machine model is a V0.4 native-code-generation ISA redesign, recorded below under *Deferred ISA redesign*.
+
 The language admits only fixed-size types in composite positions. The verifier proves WCMU bounds assuming fixed sizes. The runtime contradicts the guarantee at the storage layer: `Value::Tuple(Vec<Value>)`, `Value::Array(Vec<Value>)`, `Value::Struct { fields: Vec<(String, Value)> }`, and `Value::Enum { type_name: String, variant: String, fields: Vec<Value> }` use heap-allocated `Vec` and `String` indirection. The script's promise is "fixed size, no references"; the runtime's reality is "heap pointer to dynamically-sized backing, plus string keys for structs".
 
-This is a runtime defect, not an ISA defect. The V0.2.0 ISA's composite opcodes (`Op::NewTuple`, `Op::NewArray`, `Op::NewStruct`, `Op::NewEnum`, `Op::GetField`, `Op::GetTupleField`, `Op::GetEnumField`, `Op::GetIndex`, `Op::Len`) carry sufficient information for a flat-byte runtime: the count of operand-stack values to consume, the struct-template index, or the field name index in the constant pool. The runtime can build per-chunk byte-layout caches at load time and use them to size flat byte buffers and resolve field offsets. The ISA stays at 69 opcodes; the wire format is unchanged; `BYTECODE_VERSION` stays at 1. The refactor is entirely runtime-side.
+This is a runtime defect, not an ISA defect. The V0.2.0 ISA's composite opcodes (`Op::NewTuple`, `Op::NewArray`, `Op::NewStruct`, `Op::NewEnum`, `Op::GetField`, `Op::GetTupleField`, `Op::GetEnumField`, `Op::GetIndex`, `Op::Len`) carry sufficient information for a flat-byte runtime: the count of operand-stack values to consume, the struct-template index, or the field name index in the constant pool. Each keeps its current signature; only the handlers change, to pack and read bytes rather than build `Vec`s. Offsets are resolved at dispatch from the struct template or from the layout reference the composite value carries, not from an emitted table, since there is no layout table in the artifact or at run time. The ISA stays at 69 opcodes; `BYTECODE_VERSION` stays at 1. The refactor is entirely runtime-side.
 
 B26 and B27 are local fixes for two symptoms of this defect (persistent region byte portability, transient bodies on the global heap). B28 fixes the root cause and subsumes both.
 
@@ -1080,31 +1082,39 @@ RESET clears both ephemeral heads and increments the arena's epoch counter. The 
 
 Composites are byte-sums of their fields. A `(Word, Word)` tuple is `2 * word_bytes`. A `struct Point { x: Word, y: Word, name: Text }` is `2 * word_bytes + sizeof(StaticStr_or_KStr_handle)`. An `[Word; 8]` array is `8 * word_bytes`. An `enum Color { Red, Green, Blue }` is `1` (discriminant byte) plus `0` (largest variant payload). An `enum Maybe<Word> { None, Some(Word) }` is `1 + word_bytes`.
 
-**ISA stays unchanged.**
+**ISA stays unchanged (zero opcode delta).**
 
-The V0.2.0 ISA's 69 opcodes carry sufficient information for the flat-byte runtime. `Op::NewTuple(count)` takes a slot count; the runtime pops `count` operand-stack values, infers each value's byte size from its discriminant, and packs the bytes into a flat buffer. `Op::NewStruct(template_idx)` looks up the struct template's byte layout (computed once at chunk-load time) and reads field byte sizes from there. `Op::NewArray(count)` and `Op::NewEnum(type, variant, count)` are analogous.
+An opcode analysis over the composite, data-segment, and type-test ops confirmed that every one keeps its current signature. `Op::NewStruct(template_idx)` packs field bytes from the template. `Op::NewTuple(count)`, `Op::NewArray(count)`, and `Op::NewEnum(type, variant, count)` pack from the operand kinds. `Op::GetField`, `Op::GetTupleField`, `Op::GetEnumField`, and `Op::GetIndex` read at a resolved offset and push the correctly tagged scalar. `Op::GetData`/`Op::SetData` read or write a composite slot as a flat byte range, and `Op::GetDataIndexed`/`Op::SetDataIndexed` compute `base + index * element_bytes`. Only the handlers change, to pack and read bytes instead of building `Vec`s. No opcode is added, removed, or re-specified, which is the leanest possible result for the rad-hard silicon objective.
 
-Field access opcodes (`Op::GetField(name_const)`, `Op::GetTupleField(index)`, `Op::GetEnumField(index)`, `Op::GetIndex`) use the layout cache to resolve field positions to byte offsets at dispatch time. `Op::GetField` resolves the name-to-offset mapping through the struct template's layout; `Op::GetTupleField` and `Op::GetEnumField` index into pre-computed offset arrays.
+Offsets are resolved at dispatch. A struct or enum resolves through its template, which already lives in the wire format. An array carries its element kind and count inline on the value. A tuple, being heterogeneous and template-less, carries its field layout on the value. There is no emitted layout table and none at run time; the compile-time layout (`layout_pass`) is the compiler's transient symbol table, used to resolve offsets and to compute the worst-case-memory-usage bound, and is never written into the artifact.
 
-`Op::GetData(slot)` and `Op::SetData(slot)` read or write whole-slot values. For composite-typed slots the runtime returns the entire flat-byte buffer as a `Value::Tuple`, `Value::Array`, `Value::Struct`, or `Value::Enum` (whose internal representation is now flat bytes). The host marshalling layer translates at the API boundary.
+**What stays the same.**
 
-`Op::GetDataIndexed(base, count)` and `Op::SetDataIndexed(base, count)` handle dynamic indexed access. The slot's per-element byte size comes from the layout cache; the byte offset is `base + index * element_bytes`.
+- The opcode set, 69 variants with their numeric encoding and semantic contracts, is preserved.
+- `BYTECODE_VERSION` stays at 1, for lack of production traction, not because compatibility is maintained.
+- The framing header, operand pool, chunk metadata, and constant pool are structurally unchanged.
+- The public `Value` enum surface at the host API is preserved. `Value::Tuple`, `Value::Array`, `Value::Struct`, `Value::Enum` keep the same constructors and accessors; only the internal payload changes from `Vec<Value>` to flat bytes plus a layout reference.
 
-**What stays unchanged at the wire-format level.**
-
-- The opcode set (69 variants, numeric encoding 0-68, semantic contracts) is preserved.
-- `BYTECODE_VERSION` stays at 1.
-- The framing header layout, the operand pool, the chunk metadata, and the constant pool are unchanged.
-- Existing V0.2.x bytecode loads under the post-B28 runtime without recompilation. The same source produces the same bytecode under the updated toolchain.
-- The public `Value` enum surface visible at the host API is preserved. `Value::Tuple`, `Value::Array`, `Value::Struct`, `Value::Enum` variants remain. Internally the payload changes from `Vec<Value>` to flat bytes plus a layout reference, but the public surface keeps the same constructors and accessors.
+**Byte-code compatibility is not a goal.** V0.2.0 and V0.2.1 byte code may differ and need not interoperate. There is nothing deployed to break, so a program is simply recompiled. The version is not bumped because the number is not worth bumping without traction, not because the format is held stable.
 
 **What changes (entirely runtime-side).**
 
-- **Composite internal representation.** `Value::Tuple(Vec<Value>)` becomes `Value::Tuple` carrying a flat byte buffer plus a layout reference. Same for `Value::Array`, `Value::Struct`, `Value::Enum`. The `String` field names that `Value::Struct` previously carried are replaced by the layout reference's offset table.
-- **Layout cache.** At chunk-load time the runtime walks struct templates and tuple/array/enum type declarations and computes byte sizes and field offsets. The cache lives alongside the existing chunk decode cache; access is O(1) after construction.
-- **Op handler logic.** `NewStruct`, `NewTuple`, `NewArray`, `NewEnum` allocate flat byte buffers and pack field bytes inline. `GetField`, `GetTupleField`, `GetEnumField`, `GetIndex` read from the buffer at the layout-resolved offset. `SetData` writes whole-slot values; for composite-typed slots the write copies the flat bytes into the slot's byte range.
-- **Composite body storage.** Composite bodies move from the global heap (`Vec<Value>`) to the arena's top ephemeral head alongside dynamic string bodies (`KString`). Bump-allocated; mark-based reclamation at scope boundaries. RESET at `loop main()` closing brace clears both ephemeral heads. The high-water mark across a single iteration is the WCMU bound for the transient region.
-- **WCMU calculation.** The verifier walks each composite-constructing opcode and computes the precise byte cost from the layout cache. The V0.2.0 over-approximations (`Vec` headers, `String` keys, per-element indirection) disappear. Numbers update; tools that consume WCMU should expect smaller, more precise values after recompilation.
+- **Composite internal representation.** `Value::Tuple(Vec<Value>)` becomes a flat byte buffer plus a layout reference, and the same for `Array`, `Struct`, `Enum`. A struct's `String` field names and a tuple's element list are gone from the value. The layout reference is a struct or enum template index, an array's element kind and count, or a tuple's field layout, none of which is a per-value heap allocation or an `Arc`.
+- **Op handler logic.** `NewStruct`, `NewTuple`, `NewArray`, `NewEnum` pack field bytes inline. `GetField`, `GetTupleField`, `GetEnumField`, `GetIndex` read at the resolved offset and push the tagged scalar. `SetData` for a composite slot copies the flat bytes into the slot's byte range.
+- **Composite body storage.** Composite bodies move from the global heap to the arena's top ephemeral head alongside dynamic string bodies. Bump-allocated, mark-reclaimed at scope boundaries, cleared at the RESET that closes each `loop main()` iteration. The single-iteration high-water mark is the transient-region worst-case-memory-usage bound.
+- **Worst-case-memory-usage calculation.** The verifier computes the precise byte cost from the compile-time layout. The V0.2.0 over-approximations from `Vec` headers, `String` keys, and per-element indirection disappear, so the numbers shrink and sharpen on recompilation.
+
+**Documented suboptimalities of the Rust model.**
+
+Keeping the instruction set untouched forces three compromises into the runtime. Each is correct and each is superseded by the V0.4 native-code-generation redesign below. They are recorded here so the interim is not mistaken for the intended end state.
+
+1. **Offsets are resolved at dispatch, not baked into the instruction.** `GetField` resolves a name to an offset through the template at run time. The ideal bakes the offset at compile time.
+2. **Composite values carry a layout reference, so they are not pure bytes.** Structs and enums carry a template index and arrays carry an inline kind and count, both cheap and module-scoped, but a tuple has to carry its field layout, which is the least clean spot. The ideal value is pure bytes with the offset and kind in the instruction.
+3. **The operand stack stays tagged.** The kind rides on the value rather than living purely in the opcode. Making the stack untyped bytes would force every currently tag-dispatching op, such as `Op::Add`, to become kind-determined, which is the one change that would actually stress the opcode set, so it is deferred wholesale.
+
+**Deferred ISA redesign (V0.4 native code generation).**
+
+The clean model is an assembler one and belongs to the native-code-generation pass at V0.4, where the instruction set is designed for rad-hard silicon rather than borrowed from the Rust host. In that model the operand stack and memory are untyped bytes, a composite value is pure bytes with no layout reference, the compiler bakes each field offset directly into the access instruction the way an assembler resolves a struct equate, and the kind is carried by the opcode rather than by a tag on the value. Field access becomes a fixed-offset byte move, every operation is statically kind-determined and verified, and there is no run-time type dispatch, no layout table, and no per-value layout anywhere. This is leaner and more rad-hard than the tagged-stack interim, because resolution is wholly static and the value disappears into fixed loads and stores. The opcode-set consequence, kind-specific opcodes versus a kind operand for the operations that today dispatch on the value tag, is the design question for that pass and is captured here as input to it. See [`docs/roadmap/V0_4_0_NATIVE_CODEGEN.md`](../roadmap/V0_4_0_NATIVE_CODEGEN.md).
 
 **Information the compiler and runtime use.**
 
@@ -1123,30 +1133,24 @@ The compile-time layout pass (`src/layout_pass.rs`, landed in P1) walks every Ke
 | Cache locality | One indirection per composite access plus another for elements | Locality follows source-level structure; LLVM register-allocation under V0.4.x lowering can see individual fields |
 | Hot code swap migration | Walk `Value` trees, rebuild composites | Migration table maps offset-to-offset; flat-byte transfer |
 | ISA opcode count | 69 | 69 (unchanged) |
-| Wire format compatibility | V0.2.x bytecode loads under the post-B28 runtime; same source produces same bytecode | Unchanged |
+| Byte-code compatibility | not a goal; recompile | not a goal; recompile (no opcode change, but the value representation and worst-case-memory-usage numbers change) |
 
 **Phased implementation plan.**
 
-Estimated four to six weeks of focused work, split:
+Revised plan. P0 and P1 landed. The remaining phases are resliced by field-type difficulty rather than by composite kind, because the difficulty is the field type, not the kind, so all four kinds migrate together on the shared flat-byte machinery and the hard reference-field case is isolated. This supersedes the prior P2 through P9, which cut by composite kind and met the reference-field problem four times.
 
-| Phase | Scope | Deliverable | Effort |
-|-------|-------|-------------|--------|
-| P0 | `LayoutDescriptor` and `FlatComposite` infrastructure | `src/value_layout.rs` and `src/flat_value.rs` modules; no behaviour change | Complete (landed in commit `45df5bf`) |
-| P1 | Compile-time layout pass | Compiler walks every Keleusma type and computes byte sizes plus field offsets using `LayoutDescriptor`. Used in subsequent phases for validation. No opcode emission changes. | Complete (landed in commit `0fc5950`) |
-| P2 | Migrate `Value::Tuple` internal storage | `Value::Tuple` payload changes from `Vec<GenericValue>` to flat bytes plus a layout reference. `Op::NewTuple` and `Op::GetTupleField` handlers update; opcode signatures unchanged. Tuple bodies still on the global heap for now. | 4-5 days |
-| P3 | Migrate `Value::Array` internal storage | Same shape as P2, applied to arrays. `Op::NewArray`, `Op::GetIndex`, `Op::SetDataIndexed`, `Op::GetDataIndexed` handlers update. | 3-4 days |
-| P4 | Migrate `Value::Struct` internal storage | Same shape, applied to structs. Per-chunk struct-template layout cache built at chunk-load time. `Op::NewStruct`, `Op::GetField`, `Op::IsStruct` handlers update. `String` field names retire in favour of name-to-offset cache lookups. | 5-7 days |
-| P5 | Migrate `Value::Enum` internal storage | Discriminant byte plus payload bytes. `Op::NewEnum`, `Op::GetEnumField`, `Op::IsEnum` handlers update. | 3-4 days |
-| P6 | Move composite bodies to arena top ephemeral head | Composite bodies become arena-resident, alongside existing KString bodies. Mark-based reclamation at scope boundaries. RESET at `loop main()` closing brace clears the head. Embedded targets without a global allocator now supported. | 5-7 days |
-| P7 | WCMU correction in the verifier | Verifier walks composite-constructing opcodes and computes precise byte costs from the layout cache. Golden WCMU numbers in tests update to the precise values. Cost model recalibration via `keleusma-bench` if measured cycle counts drift. | 3-4 days |
-| P8 | Native marshalling preservation | `KeleusmaType` derive and the `marshall` module continue to produce and consume the public `Value::Tuple`, `Value::Array`, `Value::Struct`, `Value::Enum` constructors. Host-side code is unaffected. Tests confirm cross-API stability. | 3-4 days |
-| P9 | Hot-code-swap migration, documentation pass, B28 closure | R29 migration path uses flat-byte transfer where possible; tree-walk fallback retired. Documentation updates: R32 (dual-end arena), R29 (hot swap), language design narrative, EXECUTION_MODEL.md, INSTRUCTION_SET.md (no opcode change, just clarification of the flat-byte runtime). B26 and B27 transition to "resolved through B28". B28 itself moves to RESOLVED. | 3-4 days |
+| Phase | Scope | Status |
+|-------|-------|--------|
+| P0 | `LayoutDescriptor` and the flat-byte and scalar helpers | Complete (`45df5bf`). `FlatComposite` drops its `Arc<LayoutDescriptor>` in P2; the value carries a layout reference, not an owned descriptor. |
+| P1 | Compile-time layout pass (`layout_pass`), the compiler's transient symbol table | Complete (`0fc5950`) |
+| P2 | Flat representation for fixed-scalar and nested-composite fields, all four composite kinds together. Value becomes flat bytes plus a layout reference; the handlers pack and read at resolved offsets; the operand stack stays tagged; bytes are arena-resident in the end state, with temporary scaffolding permitted within the phase; the public `Value` surface and host marshalling keep working throughout. | Pending |
+| P3 | Reference-typed fields as fixed-size handles. `Text` and `Opaque` become handles into runtime side tables, a string or rodata table and a host-reference list; a dynamic string is already an arena handle. | Pending |
+| P4 | Worst-case-memory-usage recomputation in the verifier from the compile-time layout. Golden bounds update to the precise values; cost-model recalibration via `keleusma-bench` if cycle counts drift. | Pending |
+| P5 | Hot-code-swap migration over flat bytes, documentation (`EXECUTION_MODEL.md`, the dual-end-arena and hot-swap decisions, an `INSTRUCTION_SET.md` clarification that no opcode changed), B26 and B27 marked resolved through B28, and B28 closure. | Pending |
 
-The ISA does not change. The wire format does not change. `BYTECODE_VERSION` stays at 1 throughout.
+No opcode changes in any phase. `BYTECODE_VERSION` stays at 1 for lack of traction, not for compatibility.
 
-**Compatibility.**
-
-V0.2.x bytecode loads under the post-B28 runtime without modification. The opcode encoding, the wire format, and the public `Value` enum surface are unchanged. The same source produces the same bytecode under the updated toolchain. The corrected runtime produces different WCMU numbers for the same source (smaller and more precise); tools that consume WCMU should expect this. No recompilation is required for behavioural compatibility, but recompilation surfaces the precise WCMU bounds.
+**Compatibility.** Not a goal. V0.2.0 and V0.2.1 byte code may differ and need not interoperate, and a program is simply recompiled. The recompiled program reports smaller and more precise worst-case-memory-usage bounds, since the `Vec` and `String` over-approximation is gone, so any tool that consumes those numbers should expect them to change.
 
 **Forcing case.**
 

@@ -10,6 +10,8 @@ Add native code generation to the Keleusma toolchain. Keleusma source compiles v
 
 The bytecode shape continues to ship in parallel. V0.4.0 does not retire the VM; it adds a second deployment shape.
 
+The flat-machine ISA redesign that native code generation enables, an untyped byte operand stack, composite values as pure bytes, field offsets baked into access instructions rather than resolved at run time, and the kind carried by the opcode rather than by a tag on the value, is captured as input under *Deferred ISA redesign* in B28 of [`../decisions/BACKLOG.md`](../decisions/BACKLOG.md). The V0.2.x Rust runtime deliberately keeps a tagged operand stack and resolves offsets at dispatch, which native code generation supersedes by resolving everything statically.
+
 ## Why native matters
 
 Three reasons.
