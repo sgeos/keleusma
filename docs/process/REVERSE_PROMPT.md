@@ -8,44 +8,45 @@ AI to Human communication channel.
 
 ## Last Updated
 
-**Date**: 2026-06-01
-**Status**: B28 flat memory model active on branch `feat-flat-memory-model`. A design pass settled the approach, the B28 entry in `BACKLOG.md` was rewritten to match and is authoritative, and P2 has started with the foundation refit committed. The next P2 increment is the large coupled wiring of the composite value representation and the op handlers.
+**Date**: 2026-06-02
+**Status**: B28 P2 tuple flat activation complete end to end on sub-feature branch `feat-flat-memory-tuple`, two commits beyond the feature branch `feat-flat-memory-model`. The full default test suite is green. The branch is ready to merge into `feat-flat-memory-model` once you have reviewed the host-reflection decision below.
 
-## The B28 design, as settled this session
+## What landed this session
 
-The authoritative version is the B28 entry in [`../decisions/BACKLOG.md`](../decisions/BACKLOG.md). Summary so a fresh session has the decisions without re-deriving them:
+Tuples whose fields are transitively scalar (non-reference, non-float) now use the flat byte body end to end. The two commits:
 
-- **No templates and no layout table.** The compiler bakes each composite field's offset and kind directly into the access instructions, the way an assembler resolves a struct equate. `layout_pass` is the compiler's transient symbol table, used to bake those offsets and to compute the worst-case-memory-usage bound, and is never written into the artifact or carried at run time.
-- **The composite value is pure bytes.** No layout reference, no template index, no `Arc`. Construction infers field sizes from the kinds of the tagged operands it pops; access reads at the baked offset and pushes the correctly tagged scalar.
-- **Instruction set.** No opcode added or removed. The operands of the composite ops are re-specified (construct ops carry a count, access ops carry offset and kind). Operand re-spec is allowed; opcode additions are wildly scrutinised. The set stays lean for the rad-hard silicon target.
-- **Byte-code compatibility is not a goal.** V0.2.0 and V0.2.1 byte code may differ and are simply recompiled. `BYTECODE_VERSION` stays at 1 only for lack of production traction.
-- **One remaining suboptimality.** Baking offsets removed the two interim compromises (dispatch-time resolution and a value-carried layout reference). What remains is the tagged scalar operand stack: a scalar still carries its kind tag, so the arithmetic ops dispatch on it. Making the stack untyped bytes is the one flat-machine step deferred to the V0.4 native-code-generation ISA redesign, documented under *Deferred ISA redesign* in B28 and cross-referenced from `../roadmap/V0_4_0_NATIVE_CODEGEN.md`.
+- `b57c307` re-spec, behaviour preserving. `Op::GetTupleField(u8)` became `Op::GetTupleField(TupleField)`, where `TupleField` is `Flat { offset, kind }` or `Boxed { index }`. Wire codec, cost and slot arms, and round-trip tests updated. The compiler still emitted boxed and the VM still built boxed, so behaviour was unchanged; this isolated the operand and wire churn.
+- `5baa8fe` activation. Construction, access, and every reader now agree on the representation per tuple type, which equality relies on.
 
-The mental model throughout is the assembler one: the Keleusma surface lays out `.text`, `.rodata`, `.data`, `.bss`, and host-shared `.data`, and a value is bytes at a known offset. The 6502 and Nintendo Entertainment System native target is the forcing case for the flat representation.
+Key pieces of the activation:
 
-## P2 status
+- One construction choke point. `GenericValue::tuple_with_widths` decides flat or boxed from the element kinds and packs little-endian at given widths. `tuple()` delegates at runtime widths. The VM `NewTuple` packs at module widths. `from_const_archived` and `ConstValue::into_value` thread widths so constant tuples match. Host marshalling builds through the same path. This uniformity is what keeps a tuple type a single representation everywhere it is built.
+- Access baking. The compiler bakes offset and kind per element when the tuple type is flat-eligible, threaded into all four emission sites including `compile_pattern_test`, which receives an ephemeral compile-time type record. `infer_expr_type` gained accurate-or-none inference for the checked-arithmetic construct so a let-destructure of its scalar-tuple result bakes flat access rather than faulting.
+- Float exclusion. Float fields keep the boxed body for now, because the flat body compares by raw bytes, which would change the plus-zero, minus-zero, and NaN semantics of tuple equality. Revisit with a kind-aware equality before flattening floats.
 
-- **Done (committed `03b6e6e`).** `src/flat_value.rs` `FlatComposite` refit from `{ bytes, Arc<LayoutDescriptor> }` to a pure byte buffer with an accessor API (`zeroed`, `from_bytes`, `len`, `is_empty`, `as_bytes`, `as_bytes_mut`, `write_at`, `slice_at`). Callers reach the bytes only through the accessors so the later move to arena-resident bytes does not churn call sites. 18 `flat_value` tests pass.
-- **Next increment (not started).** Wire the byte buffer into the four `GenericValue` composite variants (`Tuple`, `Array`, `Struct`, `Enum`) and re-spec the construct and access op handlers across the compiler and the VM. Start with one kind as a vertical slice to prove the baked-offset machinery end to end, then replicate. This touches roughly two hundred composite sites in `bytecode.rs`, `compiler.rs`, `vm.rs`, `marshall.rs`, `ast.rs`, `audio_natives.rs`, `zero_value.rs`. Encapsulate composite reads behind accessor methods to contain the blast radius.
-- **Scaffold decision.** A composite value cannot be half-migrated, and a composite can mix scalar and reference fields. So P2 migrates composites whose fields are transitively scalars and nested composites to pure bytes; composites containing a `Text` or `Opaque` field keep the boxed `Vec` representation until P3 handles reference-field byte handles. That dual representation during P2 and P3 is the scaffold, removed in P3.
+## The host-reflection decision
+
+A pure-bytes flat tuple cannot be read by generic Rust code that lacks the element layout. The marshalling boundary was reshaped to read flat bodies through the Rust element types. The remaining raw readers, meaning code that matched `Value::Tuple` and called `.elements()`, were converted to the typed marshalling path. You chose to push through this rather than defer the runtime representation to V0.4.
+
+One genuine limit remains and is accepted as interim. `format_value` in the command-line frontend is a typeless display path with no static type at runtime, so it cannot decode a flat tuple element-wise. It renders a flat tuple as a placeholder noting the byte length. REPL and `println` display of a transitively-scalar tuple is therefore degraded until either the return type is threaded into the formatter or the V0.4 native backend bakes display. This is documented inline at the call site.
 
 ## Verification
 
-- `cargo test --workspace` green at `03b6e6e`. `flat_value` unit tests: 18 pass.
-- `cargo fmt --all -- --check`, `cargo clippy -p keleusma --lib -- -D warnings`, and the Markdown link check are clean.
+- `cargo test` green across all suites: lib 1070, marshall, arena, zero-copy, bench, and the 53 rogue-script tests.
+- `cargo clippy --tests -- -D warnings` and `cargo clippy --tests --all-features -- -D warnings` clean. `cargo fmt --check` clean for the B28 files.
+- Tests under `--no-default-features` and `--all-features` show no failures.
 
-## Branch and push state
+## Concurrent external activity observed
 
-- On `feat-flat-memory-model`, two commits beyond `v0.2.1`: `5266c36` (B28 plan rewrite) and `03b6e6e` (P2 start).
-- `v0.2.1` is one commit ahead of `origin/v0.2.1`: the B29 closeout `b652249`, not yet pushed.
-- Nothing has been pushed since `origin/v0.2.1 = 6fcf311`. Working tree clean. Push when ready; the pre-push hook runs the full gate.
+During this session the working tree was modified concurrently by activity outside this task: `src/typecheck.rs`, `src/verify.rs`, and several untracked probe and proof-of-concept test files appeared and disappeared, carrying information-flow-control label-laundering probes and array and call underflow proofs of concept. Some of those probes are order-dependent or rely on shared global state and fail when run in isolation. None of this is part of B28 and none was authored here. The B28 commits were made by explicit path so they contain only the seven flat-tuple files and none of that separate work. If those probes are yours in progress, they are untouched in the working tree.
 
 ## Recommended next step
 
-Resume P2 by wiring the byte buffer into the `GenericValue` composite variants and re-specing the construct and access op handlers, one composite kind first as a vertical slice. Keep reference-containing composites boxed until P3.
+Merge `feat-flat-memory-tuple` into `feat-flat-memory-model` once the reflection decision above is acceptable. Then continue P2 by replicating the flat representation for `Array`, `Struct`, and `Enum`, and by flattening nested composites inline through the recursive layout. References (`Text`, `Opaque`) and the boxed fallback remain the scaffold until P3 makes them fixed-size handles, after which the dual representation is removed.
 
 ## Reference
 
-- `docs/decisions/BACKLOG.md` B28 is the authoritative design and plan; B29 is resolved for V0.2.1.
-- `src/flat_value.rs` is the refit foundation; `src/value_layout.rs` and `src/layout_pass.rs` are the compile-time layout, never carried on a value.
-- `docs/roadmap/V0_4_0_NATIVE_CODEGEN.md` carries the deferred flat-machine ISA redesign (untyped operand stack).
+- `docs/decisions/BACKLOG.md` B28 is the authoritative design and plan.
+- `src/flat_value.rs` holds `FlatComposite`; `src/value_layout.rs` and `src/layout_pass.rs` are the compile-time layout, never carried on a value.
+- `src/bytecode.rs` `tuple_with_widths` and `flat_tuple_scalar_kind` are the construction choke point and the kind predicate; the compiler's `type_flat_scalar_kind` and `tuple_field_access` are the type-side mirror.
+- `docs/roadmap/V0_4_0_NATIVE_CODEGEN.md` carries the deferred flat-machine ISA redesign.
