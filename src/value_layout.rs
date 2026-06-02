@@ -120,6 +120,46 @@ impl ScalarKind {
             Self::Opaque => word_bytes,
         }
     }
+
+    /// Stable one-byte tag for wire encoding inside a baked access
+    /// operand (see [`crate::bytecode::TupleField`] and
+    /// [`crate::wire_format`]). The mapping is fixed and independent of
+    /// the `floats` feature so that `Float` keeps tag `5` whether or
+    /// not the variant is compiled in. Tag `255` is reserved by the
+    /// operand codec as a non-kind sentinel and is never returned here.
+    pub fn to_tag(&self) -> u8 {
+        match self {
+            Self::Unit => 0,
+            Self::Bool => 1,
+            Self::Byte => 2,
+            Self::Int => 3,
+            Self::Fixed => 4,
+            #[cfg(feature = "floats")]
+            Self::Float => 5,
+            Self::Text => 6,
+            Self::Opaque => 7,
+        }
+    }
+
+    /// Inverse of [`ScalarKind::to_tag`]. Returns `None` for an
+    /// unknown tag, which the decoder treats as a corrupted operand.
+    /// Tag `5` (`Float`) decodes only when the `floats` feature is
+    /// enabled; without it the tag is unknown because the variant does
+    /// not exist.
+    pub fn from_tag(tag: u8) -> Option<Self> {
+        match tag {
+            0 => Some(Self::Unit),
+            1 => Some(Self::Bool),
+            2 => Some(Self::Byte),
+            3 => Some(Self::Int),
+            4 => Some(Self::Fixed),
+            #[cfg(feature = "floats")]
+            5 => Some(Self::Float),
+            6 => Some(Self::Text),
+            7 => Some(Self::Opaque),
+            _ => None,
+        }
+    }
 }
 
 /// Byte-level layout descriptor for a Keleusma composite type.

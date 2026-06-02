@@ -70,6 +70,12 @@ pub enum WireFormatError {
     /// entries which is well beyond any observed program; the
     /// producer rejects such modules at encode time.
     OperandPoolIndexOverflow,
+    /// The kind tag in a baked `Op::GetTupleField` flat operand did
+    /// not map to a known [`crate::value_layout::ScalarKind`]. Either
+    /// the producer assembled the operand incorrectly or the record
+    /// was corrupted. The boxed sentinel (`255`) is handled
+    /// separately and is not reported here.
+    TupleFieldKindUnknown(u8),
 }
 
 /// Opcode identifier as it appears in the seven low bits of byte
@@ -94,6 +100,15 @@ pub const POOL_TAG_U16_U16: u8 = 0x01;
 /// Pool entry type tag for the `(u16, u16, u8)` shape. Used by
 /// `Op::NewEnum`.
 pub const POOL_TAG_U16_U16_U8: u8 = 0x02;
+
+/// Byte-three sentinel in a baked `Op::GetTupleField` record marking
+/// the boxed (positional-index) form. Distinguished from a flat
+/// scalar-kind tag because [`crate::value_layout::ScalarKind::to_tag`]
+/// returns values in `0..=7`, well below `255`. For the flat form
+/// byte three holds the scalar-kind tag and bytes one and two hold
+/// the little-endian offset; for the boxed form byte one holds the
+/// index.
+pub const TUPLE_FIELD_BOXED_SENTINEL: u8 = 0xFF;
 
 /// Width of an opcode record in bytes.
 pub const OPCODE_RECORD_BYTES: usize = 4;
@@ -546,7 +561,6 @@ pub fn encode_op(
 
         // `u8` operand carried inline in byte one.
         Op::NewTuple(n)
-        | Op::GetTupleField(n)
         | Op::GetEnumField(n)
         | Op::WordToFixed(n)
         | Op::FixedToWord(n)
@@ -584,6 +598,18 @@ pub fn encode_op(
         Op::Call(c, n) | Op::CallVerifiedNative(c, n) | Op::CallExternalNative(c, n) => {
             let b = c.to_le_bytes();
             [b[0], b[1], *n]
+        }
+
+        // Baked tuple-field access (B28 P2). The flat form stores the
+        // little-endian offset in bytes one and two and the scalar-kind
+        // tag in byte three. The boxed form stores the index in byte
+        // one and the boxed sentinel in byte three.
+        Op::GetTupleField(crate::bytecode::TupleField::Flat { offset, kind }) => {
+            let b = offset.to_le_bytes();
+            [b[0], b[1], kind.to_tag()]
+        }
+        Op::GetTupleField(crate::bytecode::TupleField::Boxed { index }) => {
+            [*index, 0, TUPLE_FIELD_BOXED_SENTINEL]
         }
 
         // Pool-using shapes. Append the entry and store the index
@@ -672,7 +698,17 @@ pub fn decode_op(record: OpcodeRecord, pool: &[OperandPoolEntry]) -> Result<Op, 
         37 => Op::NewTuple(record.operand_u8()),
         38 => Op::GetField(record.operand_u16()),
         39 => Op::GetIndex,
-        40 => Op::GetTupleField(record.operand_u8()),
+        40 => {
+            let bytes = record.operand_bytes();
+            if bytes[2] == TUPLE_FIELD_BOXED_SENTINEL {
+                Op::GetTupleField(crate::bytecode::TupleField::Boxed { index: bytes[0] })
+            } else {
+                let offset = u16::from_le_bytes([bytes[0], bytes[1]]);
+                let kind = crate::value_layout::ScalarKind::from_tag(bytes[2])
+                    .ok_or(WireFormatError::TupleFieldKindUnknown(bytes[2]))?;
+                Op::GetTupleField(crate::bytecode::TupleField::Flat { offset, kind })
+            }
+        }
         41 => Op::GetEnumField(record.operand_u8()),
         42 => Op::Len,
         43 => {
@@ -2223,7 +2259,10 @@ mod tests {
             (Op::NewTuple(0), 37),
             (Op::GetField(0), 38),
             (Op::GetIndex, 39),
-            (Op::GetTupleField(0), 40),
+            (
+                Op::GetTupleField(crate::bytecode::TupleField::Boxed { index: 0 }),
+                40,
+            ),
             (Op::GetEnumField(0), 41),
             (Op::Len, 42),
             (Op::IsEnum(0, 0), 43),
@@ -2311,7 +2350,6 @@ mod tests {
         for op in [
             Op::NewTuple(0),
             Op::NewTuple(255),
-            Op::GetTupleField(7),
             Op::GetEnumField(3),
             Op::WordToFixed(32),
             Op::FixedToWord(16),
@@ -2326,6 +2364,44 @@ mod tests {
         ] {
             roundtrip(op);
         }
+    }
+
+    #[test]
+    fn opcode_record_roundtrip_tuple_field() {
+        use crate::bytecode::TupleField;
+        use crate::value_layout::ScalarKind;
+        for op in [
+            Op::GetTupleField(TupleField::Boxed { index: 0 }),
+            Op::GetTupleField(TupleField::Boxed { index: 255 }),
+            Op::GetTupleField(TupleField::Flat {
+                offset: 0,
+                kind: ScalarKind::Bool,
+            }),
+            Op::GetTupleField(TupleField::Flat {
+                offset: 9,
+                kind: ScalarKind::Int,
+            }),
+            Op::GetTupleField(TupleField::Flat {
+                offset: 65535,
+                kind: ScalarKind::Byte,
+            }),
+            Op::GetTupleField(TupleField::Flat {
+                offset: 16,
+                kind: ScalarKind::Fixed,
+            }),
+        ] {
+            roundtrip(op);
+        }
+    }
+
+    #[test]
+    fn tuple_field_unknown_kind_tag_rejected() {
+        // Byte three carries a kind tag of 9, which maps to no
+        // ScalarKind and is not the boxed sentinel, so the decoder
+        // reports a corrupted operand rather than fabricating a kind.
+        let record = OpcodeRecord::from_id_and_operand(OpcodeId(40), [0, 0, 9]);
+        let result = decode_op(record, &[]);
+        assert_eq!(result, Err(WireFormatError::TupleFieldKindUnknown(9)));
     }
 
     #[test]

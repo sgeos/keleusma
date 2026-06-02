@@ -3374,7 +3374,7 @@ fn compile_let_pattern_typed(
             fc.emit(Op::SetLocal(temp));
             for (i, pat) in pats.iter().enumerate() {
                 fc.emit(Op::GetLocal(temp));
-                fc.emit(Op::GetTupleField(i as u8));
+                fc.emit(Op::GetTupleField(TupleField::Boxed { index: i as u8 }));
                 let sub_ty = elem_types.get(i).cloned().unwrap_or(None);
                 compile_let_pattern_typed(fc, pat, sub_ty)?;
             }
@@ -5118,7 +5118,9 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
 
         Expr::TupleIndex { object, index, .. } => {
             compile_expr(fc, object)?;
-            fc.emit(Op::GetTupleField(*index as u8));
+            fc.emit(Op::GetTupleField(TupleField::Boxed {
+                index: *index as u8,
+            }));
         }
 
         Expr::ArrayIndex {
@@ -6652,7 +6654,7 @@ fn compile_pattern_test(
                 }
                 let temp = fc.declare_local(&format!("__tuple_{}", i));
                 fc.emit(Op::GetLocal(value_slot));
-                fc.emit(Op::GetTupleField(i as u8));
+                fc.emit(Op::GetTupleField(TupleField::Boxed { index: i as u8 }));
                 fc.emit(Op::SetLocal(temp));
                 let sub_fails = compile_pattern_test(fc, pat, temp)?;
                 fail_addrs.extend(sub_fails);
@@ -6765,7 +6767,7 @@ fn compile_pattern_bind_typed(
                     continue;
                 }
                 fc.emit(Op::GetLocal(value_slot));
-                fc.emit(Op::GetTupleField(i as u8));
+                fc.emit(Op::GetTupleField(TupleField::Boxed { index: i as u8 }));
                 let sub_ty = elem_types.get(i).cloned().unwrap_or(None);
                 if let Pattern::Variable(name, _) = pat {
                     let slot = fc.declare_local_typed(name, sub_ty);

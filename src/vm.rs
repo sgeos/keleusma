@@ -935,6 +935,20 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         self.archived().word_bits_log2
     }
 
+    /// Module-declared word width in bytes. Used by the B28 flat
+    /// composite handlers to pack and read scalar fields at the same
+    /// width the compiler baked offsets against, so the runtime and
+    /// the artefact agree regardless of the runtime `Word` width.
+    fn module_word_bytes(&self) -> usize {
+        (1usize << self.archived().word_bits_log2) / 8
+    }
+
+    /// Module-declared float width in bytes. The companion of
+    /// [`Self::module_word_bytes`] for floating-point fields.
+    fn module_float_bytes(&self) -> usize {
+        (1usize << self.archived().float_bits_log2) / 8
+    }
+
     /// Test whether a chunk index is in range.
     fn chunk_count(&self) -> usize {
         self.archived().chunks.len()
@@ -3515,17 +3529,40 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                         }
                     }
                 }
-                Op::GetTupleField(idx) => {
+                Op::GetTupleField(field) => {
+                    use crate::bytecode::{TupleBody, TupleField};
                     let container = self.pop()?;
                     match container {
-                        crate::bytecode::GenericValue::Tuple(body) => {
-                            let elems = body.elements();
-                            let i = idx as usize;
-                            if i >= elems.len() {
-                                return Err(VmError::IndexOutOfBounds(i as i64, elems.len()));
+                        crate::bytecode::GenericValue::Tuple(body) => match (field, &body) {
+                            (TupleField::Boxed { index }, TupleBody::Boxed(elems)) => {
+                                let i = index as usize;
+                                if i >= elems.len() {
+                                    return Err(VmError::IndexOutOfBounds(i as i64, elems.len()));
+                                }
+                                sp!(self, elems[i].clone());
                             }
-                            sp!(self, elems[i].clone());
-                        }
+                            (TupleField::Flat { offset, kind }, TupleBody::Flat(fc)) => {
+                                let wb = self.module_word_bytes();
+                                let fb = self.module_float_bytes();
+                                let val = crate::bytecode::GenericValue::read_scalar_le(
+                                    fc.as_bytes(),
+                                    offset as usize,
+                                    kind,
+                                    wb,
+                                    fb,
+                                );
+                                sp!(self, val);
+                            }
+                            // Construction and access agree on the body
+                            // representation by static type, so a form
+                            // mismatch is a corrupted or mis-compiled
+                            // artefact rather than a script error.
+                            _ => {
+                                return Err(VmError::InvalidBytecode(String::from(
+                                    "GetTupleField operand form does not match tuple body",
+                                )));
+                            }
+                        },
                         v => {
                             return Err(VmError::TypeError(format!(
                                 "cannot tuple-index {}",

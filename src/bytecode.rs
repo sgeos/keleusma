@@ -685,6 +685,36 @@ impl TrapKind {
     }
 }
 
+/// Baked operand of [`Op::GetTupleField`] (B28 P2).
+///
+/// The compiler resolves the access at compile time from the
+/// ephemeral layout and bakes one of two forms. `Flat` reads the
+/// field directly from the composite's byte buffer at `offset` as
+/// `kind`, which is the flat representation a transitively-scalar
+/// tuple uses. `Boxed` indexes the pre-B28 `Vec` body positionally
+/// and is the fallback for a tuple that still carries a reference
+/// field or a not-yet-migrated nested composite. The two forms agree
+/// with the construction handler by static type, so a given tuple
+/// type is always one or the other; the access handler dispatches on
+/// the runtime body and faults on a form mismatch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TupleField {
+    /// Flat read at a compiler-baked byte `offset`, interpreting the
+    /// bytes as `kind`. The offset is packed little-endian, the same
+    /// layout the construction handler writes.
+    Flat {
+        /// Byte offset of the field within the composite body.
+        offset: u16,
+        /// Fixed-size scalar kind to read at the offset.
+        kind: crate::value_layout::ScalarKind,
+    },
+    /// Positional index into the boxed `Vec` body (pre-B28 form).
+    Boxed {
+        /// Zero-based element index.
+        index: u8,
+    },
+}
+
 /// A bytecode instruction.
 ///
 /// V0.2.0 Phase 7c moved opcode serialization out of the rkyv
@@ -815,8 +845,10 @@ pub enum Op {
     GetField(u16),
     /// Pop index (Int), pop array, push element.
     GetIndex,
-    /// Pop tuple, push element at literal index.
-    GetTupleField(u8),
+    /// Pop tuple, push element. The baked [`TupleField`] operand
+    /// selects a flat read at an offset or a positional index into the
+    /// boxed body (B28 P2).
+    GetTupleField(TupleField),
     /// Pop enum, push field at literal index.
     GetEnumField(u8),
     /// Pop composite value, push its length as Int.
