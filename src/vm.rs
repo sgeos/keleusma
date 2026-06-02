@@ -3466,7 +3466,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                     let n = count as usize;
                     let elements: Vec<crate::bytecode::GenericValue<W, F>> =
                         self.stack.drain(self.stack.len() - n..).collect();
-                    sp!(self, crate::bytecode::GenericValue::Tuple(elements));
+                    sp!(self, crate::bytecode::GenericValue::tuple(elements));
                 }
                 Op::GetField(name_const) => {
                     let container = self.pop()?;
@@ -3518,7 +3518,8 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                 Op::GetTupleField(idx) => {
                     let container = self.pop()?;
                     match container {
-                        crate::bytecode::GenericValue::Tuple(elems) => {
+                        crate::bytecode::GenericValue::Tuple(body) => {
+                            let elems = body.elements();
                             let i = idx as usize;
                             if i >= elems.len() {
                                 return Err(VmError::IndexOutOfBounds(i as i64, elems.len()));
@@ -3591,7 +3592,9 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                             sp!(
                                 self,
                                 crate::bytecode::GenericValue::Int(
-                                    <W as crate::word::Word>::from_i64_wrap(t.len() as i64)
+                                    <W as crate::word::Word>::from_i64_wrap(
+                                        t.elements().len() as i64
+                                    )
                                 )
                             );
                         }
@@ -8598,9 +8601,9 @@ mod tests {
         assert!(!Value::Int(1).contains_dynstr());
         assert!(!Value::StaticStr(String::from("hi")).contains_dynstr());
         assert!(kstr.contains_dynstr());
-        assert!(Value::Tuple(alloc::vec![Value::Int(1), kstr.clone()]).contains_dynstr());
+        assert!(Value::tuple(alloc::vec![Value::Int(1), kstr.clone()]).contains_dynstr());
         assert!(
-            !Value::Tuple(alloc::vec![
+            !Value::tuple(alloc::vec![
                 Value::Int(1),
                 Value::StaticStr(String::from("x"))
             ])

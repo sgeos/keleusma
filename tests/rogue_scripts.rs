@@ -227,7 +227,7 @@ fn ai_tracker_chases_when_seen() {
     for slot in 0..vm.data_len() {
         vm.set_data(slot, Value::Int(0)).expect("set_data");
     }
-    let input = Value::Tuple(vec![
+    let input = Value::tuple(vec![
         Value::Int(5),
         Value::Int(5),
         Value::Int(10),
@@ -236,13 +236,15 @@ fn ai_tracker_chases_when_seen() {
     ]);
     let result = vm.call(&[input]).expect("vm call");
     match result {
-        VmState::Yielded(Value::Tuple(t)) if t.len() == 3 => match (&t[0], &t[1], &t[2]) {
-            (Value::Int(action), Value::Int(tx), Value::Int(ty)) => {
-                assert_eq!(*action, 1);
-                assert_eq!((*tx, *ty), (6, 6));
+        VmState::Yielded(Value::Tuple(t)) if t.elements().len() == 3 => {
+            match (&t.elements()[0], &t.elements()[1], &t.elements()[2]) {
+                (Value::Int(action), Value::Int(tx), Value::Int(ty)) => {
+                    assert_eq!(*action, 1);
+                    assert_eq!((*tx, *ty), (6, 6));
+                }
+                _ => panic!("non-int tuple"),
             }
-            _ => panic!("non-int tuple"),
-        },
+        }
         other => panic!("expected Yielded triple, got {:?}", other),
     }
 }
@@ -257,7 +259,7 @@ fn ai_tracker_pursues_last_known_when_unseen() {
     }
     // First turn: player visible at (10, 10). Tracker chases and
     // records the last known position.
-    let visible_input = Value::Tuple(vec![
+    let visible_input = Value::tuple(vec![
         Value::Int(5),
         Value::Int(5),
         Value::Int(10),
@@ -269,7 +271,7 @@ fn ai_tracker_pursues_last_known_when_unseen() {
     // Yielded with a fresh input. Second turn: player not
     // visible. Tracker should move toward the stored last
     // position.
-    let unseen_input = Value::Tuple(vec![
+    let unseen_input = Value::tuple(vec![
         Value::Int(6),
         Value::Int(6),
         Value::Int(0),
@@ -279,14 +281,16 @@ fn ai_tracker_pursues_last_known_when_unseen() {
     let mut state = vm.resume(unseen_input.clone()).expect("vm resume");
     for _ in 0..16 {
         match state {
-            VmState::Yielded(Value::Tuple(t)) if t.len() == 3 => match (&t[0], &t[1], &t[2]) {
-                (Value::Int(action), Value::Int(tx), Value::Int(ty)) => {
-                    assert_eq!(*action, 1, "should chase last known");
-                    assert_eq!((*tx, *ty), (7, 7), "step toward (10, 10)");
-                    return;
+            VmState::Yielded(Value::Tuple(t)) if t.elements().len() == 3 => {
+                match (&t.elements()[0], &t.elements()[1], &t.elements()[2]) {
+                    (Value::Int(action), Value::Int(tx), Value::Int(ty)) => {
+                        assert_eq!(*action, 1, "should chase last known");
+                        assert_eq!((*tx, *ty), (7, 7), "step toward (10, 10)");
+                        return;
+                    }
+                    _ => panic!("non-int tuple"),
                 }
-                _ => panic!("non-int tuple"),
-            },
+            }
             VmState::Reset => {
                 state = vm.resume(unseen_input.clone()).expect("vm resume");
             }
@@ -309,10 +313,12 @@ fn run_player_ai(mx: i64, my: i64, cmd: i64) -> (i64, i64, i64) {
         .call(&[Value::Int(mx), Value::Int(my), Value::Int(cmd)])
         .expect("vm call");
     match result {
-        VmState::Finished(Value::Tuple(t)) if t.len() == 3 => match (&t[0], &t[1], &t[2]) {
-            (Value::Int(a), Value::Int(x), Value::Int(y)) => (*a, *x, *y),
-            _ => panic!("player ai returned non-int tuple components"),
-        },
+        VmState::Finished(Value::Tuple(t)) if t.elements().len() == 3 => {
+            match (&t.elements()[0], &t.elements()[1], &t.elements()[2]) {
+                (Value::Int(a), Value::Int(x), Value::Int(y)) => (*a, *x, *y),
+                _ => panic!("player ai returned non-int tuple components"),
+            }
+        }
         other => panic!("expected Finished triple, got {:?}", other),
     }
 }
@@ -370,10 +376,12 @@ fn run_combat(skill: i64, dmg: i64, evasion: i64, armor: i64, roll: i64) -> (i64
         ])
         .expect("vm call");
     match result {
-        VmState::Finished(Value::Tuple(t)) if t.len() == 2 => match (&t[0], &t[1]) {
-            (Value::Int(a), Value::Int(b)) => (*a, *b),
-            _ => panic!("combat returned non-int tuple"),
-        },
+        VmState::Finished(Value::Tuple(t)) if t.elements().len() == 2 => {
+            match (&t.elements()[0], &t.elements()[1]) {
+                (Value::Int(a), Value::Int(b)) => (*a, *b),
+                _ => panic!("combat returned non-int tuple"),
+            }
+        }
         other => panic!("expected Finished pair, got {:?}", other),
     }
 }
@@ -654,10 +662,12 @@ fn call_ai(src: &str, mx: i64, my: i64, px: i64, py: i64, sees: i64) -> (i64, i6
         ])
         .expect("ai vm call");
     match result {
-        VmState::Finished(Value::Tuple(t)) if t.len() == 3 => match (&t[0], &t[1], &t[2]) {
-            (Value::Int(a), Value::Int(x), Value::Int(y)) => (*a, *x, *y),
-            _ => panic!("ai returned non-int tuple components"),
-        },
+        VmState::Finished(Value::Tuple(t)) if t.elements().len() == 3 => {
+            match (&t.elements()[0], &t.elements()[1], &t.elements()[2]) {
+                (Value::Int(a), Value::Int(x), Value::Int(y)) => (*a, *x, *y),
+                _ => panic!("ai returned non-int tuple components"),
+            }
+        }
         other => panic!("expected Finished tuple, got {:?}", other),
     }
 }
@@ -754,7 +764,7 @@ fn call_boss_first(
     for slot in 0..vm.data_len() {
         vm.set_data(slot, Value::Int(0)).expect("set_data");
     }
-    let input = Value::Tuple(vec![
+    let input = Value::tuple(vec![
         Value::Int(mx),
         Value::Int(my),
         Value::Int(px),
@@ -763,10 +773,12 @@ fn call_boss_first(
     ]);
     let result = vm.call(&[input]).expect("vm call");
     let triple = match result {
-        VmState::Yielded(Value::Tuple(t)) if t.len() == 3 => match (&t[0], &t[1], &t[2]) {
-            (Value::Int(a), Value::Int(x), Value::Int(y)) => (*a, *x, *y),
-            _ => panic!("boss yielded non-int tuple components"),
-        },
+        VmState::Yielded(Value::Tuple(t)) if t.elements().len() == 3 => {
+            match (&t.elements()[0], &t.elements()[1], &t.elements()[2]) {
+                (Value::Int(a), Value::Int(x), Value::Int(y)) => (*a, *x, *y),
+                _ => panic!("boss yielded non-int tuple components"),
+            }
+        }
         other => panic!("expected Yielded triple, got {:?}", other),
     };
     let dummy_arena = Arena::with_capacity(0);
@@ -794,7 +806,7 @@ fn ai_boss_second_turn_chases() {
     // emits Reset at the body's wrap point so the helper loops
     // past Reset until the next Yielded.
     let (_a1, _x1, _y1, mut vm, _arena) = call_boss_first(5, 5, 12, 12, 1);
-    let input = Value::Tuple(vec![
+    let input = Value::tuple(vec![
         Value::Int(5),
         Value::Int(5),
         Value::Int(12),
@@ -804,14 +816,16 @@ fn ai_boss_second_turn_chases() {
     let mut state = vm.resume(input.clone()).expect("vm resume");
     for _ in 0..16 {
         match state {
-            VmState::Yielded(Value::Tuple(t)) if t.len() == 3 => match (&t[0], &t[1], &t[2]) {
-                (Value::Int(action), Value::Int(tx), Value::Int(ty)) => {
-                    assert_eq!(*action, 1, "second turn should chase");
-                    assert_eq!((*tx, *ty), (6, 6), "should step diagonally toward player");
-                    return;
+            VmState::Yielded(Value::Tuple(t)) if t.elements().len() == 3 => {
+                match (&t.elements()[0], &t.elements()[1], &t.elements()[2]) {
+                    (Value::Int(action), Value::Int(tx), Value::Int(ty)) => {
+                        assert_eq!(*action, 1, "second turn should chase");
+                        assert_eq!((*tx, *ty), (6, 6), "should step diagonally toward player");
+                        return;
+                    }
+                    _ => panic!("non-int tuple components"),
                 }
-                _ => panic!("non-int tuple components"),
-            },
+            }
             VmState::Reset => {
                 state = vm.resume(input.clone()).expect("vm resume after reset");
             }
@@ -830,9 +844,9 @@ fn call_5_tuple(src: &str, args: &[i64]) -> (i64, i64, i64, i64, i64) {
     let values: Vec<Value> = args.iter().map(|n| Value::Int(*n)).collect();
     let result = vm.call(&values).expect("vm call");
     match result {
-        VmState::Finished(Value::Tuple(t)) if t.len() == 5 => {
+        VmState::Finished(Value::Tuple(t)) if t.elements().len() == 5 => {
             let mut out = [0i64; 5];
-            for (i, v) in t.iter().enumerate() {
+            for (i, v) in t.elements().iter().enumerate() {
                 out[i] = match v {
                     Value::Int(n) => *n,
                     _ => panic!("non-int tuple element"),

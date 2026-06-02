@@ -197,7 +197,7 @@ fn value_kstr_counts_as_dynstr_for_cross_yield_prohibition() {
 fn value_kstr_inside_tuple_is_detected() {
     let arena = Arena::with_capacity(64);
     let handle = KString::alloc(&arena, "y").unwrap();
-    let v = Value::Tuple(alloc::vec![Value::Int(1), Value::KStr(handle)]);
+    let v = Value::tuple(alloc::vec![Value::Int(1), Value::KStr(handle)]);
     assert!(v.contains_dynstr());
 }
 

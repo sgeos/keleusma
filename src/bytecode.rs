@@ -120,6 +120,44 @@ pub type Value = GenericValue<i64, f64>;
 /// runtimes use a different specialization. The `W: Word` and
 /// `F: Float` constraints match the bytecode header's
 /// `word_bits_log2` and `float_bits_log2` declared widths.
+/// The body of a `Tuple` value during the B28 P2 migration.
+///
+/// A transitively-scalar tuple is `Flat`, a pure byte buffer with the
+/// fields packed at compiler-baked offsets. A tuple containing a
+/// reference field (`Text`, `Opaque`) or a not-yet-migrated nested
+/// composite is `Boxed`, the pre-B28 `Vec` representation, which P3
+/// removes. Construction chooses the form; the access handler dispatches
+/// on it.
+#[derive(Debug, Clone, PartialEq)]
+pub enum TupleBody<W: crate::word::Word, F: crate::float::Float> {
+    /// Flat bytes; fields read at compiler-baked offsets.
+    Flat(crate::flat_value::FlatComposite),
+    /// Boxed elements (pre-B28 representation; removed in P3).
+    Boxed(alloc::vec::Vec<GenericValue<W, F>>),
+}
+
+impl<W: crate::word::Word, F: crate::float::Float> TupleBody<W, F> {
+    /// The boxed elements. Panics on the `Flat` form, which the VM
+    /// `NewTuple` handler does not yet construct in B28 P2; once it does,
+    /// the callers of this helper move to reading flat bytes at baked
+    /// offsets instead.
+    pub fn elements(&self) -> &[GenericValue<W, F>] {
+        match self {
+            Self::Boxed(v) => v,
+            Self::Flat(_) => unreachable!("flat tuple body is not constructed yet (B28 P2)"),
+        }
+    }
+
+    /// The boxed elements by value. Panics on the `Flat` form, not yet
+    /// constructed in B28 P2.
+    pub fn into_elements(self) -> alloc::vec::Vec<GenericValue<W, F>> {
+        match self {
+            Self::Boxed(v) => v,
+            Self::Flat(_) => unreachable!("flat tuple body is not constructed yet (B28 P2)"),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum GenericValue<W: crate::word::Word, F: crate::float::Float> {
     /// Unit value `()`.
@@ -158,8 +196,9 @@ pub enum GenericValue<W: crate::word::Word, F: crate::float::Float> {
     /// reset. The boundary type for native callers and the host that
     /// want bounded-memory accounting and stale-pointer detection.
     KStr(KString),
-    /// Tuple of values.
-    Tuple(Vec<GenericValue<W, F>>),
+    /// Tuple of values. The body is flat bytes for a transitively-scalar
+    /// tuple or boxed elements otherwise (B28 P2); see [`TupleBody`].
+    Tuple(TupleBody<W, F>),
     /// Fixed-size array of values.
     Array(Vec<GenericValue<W, F>>),
     /// Named struct with ordered fields.
@@ -231,7 +270,8 @@ impl<W: crate::word::Word, F: crate::float::Float> PartialEq for GenericValue<W,
             // equality must compare through `as_str_with_arena` against
             // a known arena.
             (Self::KStr(a), Self::KStr(b)) => a.epoch() == b.epoch(),
-            (Self::Tuple(a), Self::Tuple(b)) | (Self::Array(a), Self::Array(b)) => a == b,
+            (Self::Tuple(a), Self::Tuple(b)) => a == b,
+            (Self::Array(a), Self::Array(b)) => a == b,
             (
                 Self::Struct {
                     type_name: na,
@@ -276,6 +316,15 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
     /// Reference scalars (`StaticStr`, `KStr`, `Opaque`) and composites
     /// are handled by later phases and panic here, which a correct
     /// compiler never reaches because it routes them differently.
+    /// Construct a tuple value from its elements in the boxed (pre-B28)
+    /// representation. The flat representation is produced by the VM
+    /// `NewTuple` handler for transitively-scalar tuples; all other
+    /// construction sites use this and stay boxed until B28 P3 removes
+    /// the boxed form.
+    pub fn tuple(elements: alloc::vec::Vec<Self>) -> Self {
+        Self::Tuple(TupleBody::Boxed(elements))
+    }
+
     #[cfg_attr(not(feature = "floats"), allow(unused_variables))]
     pub fn write_scalar_le(
         &self,
@@ -391,8 +440,9 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
                 Ok(s) => Self::StaticStr(alloc::string::String::from(s)),
                 Err(_) => Self::StaticStr(alloc::string::String::new()),
             },
-            Self::Tuple(items) => Self::Tuple(
+            Self::Tuple(items) => Self::tuple(
                 items
+                    .elements()
                     .iter()
                     .map(|v| v.materialise_kstrings(arena))
                     .collect(),
@@ -489,7 +539,8 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
     pub fn contains_dynstr(&self) -> bool {
         match self {
             Self::KStr(_) => true,
-            Self::Tuple(items) | Self::Array(items) => items.iter().any(Self::contains_dynstr),
+            Self::Tuple(items) => items.elements().iter().any(Self::contains_dynstr),
+            Self::Array(items) => items.iter().any(Self::contains_dynstr),
             Self::Struct { fields, .. } => fields.iter().any(|(_, v)| v.contains_dynstr()),
             Self::Enum { fields, .. } => fields.iter().any(Self::contains_dynstr),
             _ => false,
@@ -520,7 +571,7 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
                 Self::StaticStr(s.as_str().to_string())
             }
             ArchivedConstValue::Tuple(items) => {
-                Self::Tuple(items.iter().map(Self::from_const_archived).collect())
+                Self::tuple(items.iter().map(Self::from_const_archived).collect())
             }
             ArchivedConstValue::Array(items) => {
                 Self::Array(items.iter().map(Self::from_const_archived).collect())
@@ -2190,6 +2241,7 @@ impl ConstValue {
             Value::KStr(_) => Err("KStr cannot be a compile-time constant"),
             Value::Opaque(_) => Err("Opaque cannot be a compile-time constant"),
             Value::Tuple(items) => items
+                .into_elements()
                 .into_iter()
                 .map(ConstValue::try_from_value)
                 .collect::<Result<Vec<_>, _>>()
@@ -2244,7 +2296,7 @@ impl ConstValue {
             ConstValue::Float(f) => Value::Float(f),
             ConstValue::StaticStr(s) => Value::StaticStr(s),
             ConstValue::Tuple(items) => {
-                Value::Tuple(items.into_iter().map(ConstValue::into_value).collect())
+                Value::tuple(items.into_iter().map(ConstValue::into_value).collect())
             }
             ConstValue::Array(items) => {
                 Value::Array(items.into_iter().map(ConstValue::into_value).collect())
@@ -2712,10 +2764,11 @@ mod materialise_kstrings_tests {
     fn tuple_walks_recursively() {
         let arena = make_arena();
         let handle = KString::alloc(&arena, "inner").expect("alloc");
-        let v = V::Tuple(alloc::vec![V::Int(1), V::KStr(handle), V::Bool(false),]);
+        let v = V::tuple(alloc::vec![V::Int(1), V::KStr(handle), V::Bool(false),]);
         let materialised = v.materialise_kstrings(&arena);
         match materialised {
             V::Tuple(items) => {
+                let items = items.elements();
                 assert_eq!(items.len(), 3);
                 assert_eq!(items[0], V::Int(1));
                 match &items[1] {

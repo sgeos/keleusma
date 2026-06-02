@@ -446,6 +446,7 @@ mod tests {
         );
         match val {
             Value::Tuple(elems) => {
+                let elems = elems.elements();
                 assert_eq!(elems.len(), 2);
                 let l = match elems[0] {
                     Value::Float(f) => f,
@@ -480,6 +481,7 @@ mod tests {
         );
         match val {
             Value::Tuple(elems) => {
+                let elems = elems.elements();
                 let l = match elems[0] {
                     Value::Float(f) => f,
                     _ => panic!("expected Float"),
@@ -502,6 +504,7 @@ mod tests {
         );
         match val {
             Value::Tuple(elems) => {
+                let elems = elems.elements();
                 let l = match elems[0] {
                     Value::Float(f) => f,
                     _ => panic!("expected Float"),
@@ -525,6 +528,7 @@ mod tests {
         );
         match val {
             Value::Tuple(elems) => {
+                let elems = elems.elements();
                 let l = match elems[0] {
                     Value::Float(f) => f,
                     _ => panic!("expected Float"),

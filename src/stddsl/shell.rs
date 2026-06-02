@@ -278,7 +278,7 @@ fn run_native<W: Word, F: Float>(
         .map_err(|e| VmError::NativeError(std::format!("shell::run: failed to spawn sh: {}", e)))?;
     let exit_code = output.status.code().unwrap_or(-1) as i64;
     let stdout = std::string::String::from_utf8_lossy(&output.stdout).into_owned();
-    Ok(GenericValue::Tuple(std::vec![
+    Ok(GenericValue::tuple(std::vec![
         GenericValue::Int(W::from_i64_wrap(exit_code)),
         GenericValue::StaticStr(stdout),
     ]))
@@ -308,7 +308,7 @@ fn run_full_native<W: Word, F: Float>(
     let exit_code = output.status.code().unwrap_or(-1) as i64;
     let stdout = std::string::String::from_utf8_lossy(&output.stdout).into_owned();
     let stderr = std::string::String::from_utf8_lossy(&output.stderr).into_owned();
-    Ok(GenericValue::Tuple(std::vec![
+    Ok(GenericValue::tuple(std::vec![
         GenericValue::Int(W::from_i64_wrap(exit_code)),
         GenericValue::StaticStr(stdout),
         GenericValue::StaticStr(stderr),
@@ -745,7 +745,7 @@ fn run_timeout_native<W: Word, F: Float>(
                 })?;
                 let exit_code = status.code().unwrap_or(-1) as i64;
                 let stdout = std::string::String::from_utf8_lossy(&output.stdout).into_owned();
-                return Ok(GenericValue::Tuple(std::vec![
+                return Ok(GenericValue::tuple(std::vec![
                     GenericValue::Int(W::from_i64_wrap(exit_code)),
                     GenericValue::StaticStr(stdout),
                 ]));
@@ -868,6 +868,7 @@ mod tests {
                 .expect("run_full");
         match result {
             V::Tuple(items) => {
+                let items = items.elements();
                 assert_eq!(items.len(), 3);
                 assert!(matches!(items[0], V::Int(0)));
                 match (&items[1], &items[2]) {
@@ -887,7 +888,7 @@ mod tests {
         let result =
             run_full_native::<i64, f64>(&[V::StaticStr("exit 7".to_string())]).expect("run_full");
         match result {
-            V::Tuple(items) => assert!(matches!(items[0], V::Int(7))),
+            V::Tuple(items) => assert!(matches!(items.elements()[0], V::Int(7))),
             other => panic!("wrong variant: {:?}", other),
         }
     }

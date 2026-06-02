@@ -214,6 +214,7 @@ macro_rules! impl_tuple {
             fn from_value(v: &GenericValue<W, FloatT>) -> Result<Self, VmError> {
                 match v {
                     GenericValue::Tuple(items) => {
+                        let items = items.elements();
                         let expected = [$(stringify!($name),)*].len();
                         if items.len() != expected {
                             return Err(VmError::TypeError(format!(
@@ -234,7 +235,7 @@ macro_rules! impl_tuple {
             #[allow(non_snake_case)]
             fn into_value(self) -> GenericValue<W, FloatT> {
                 let ($($name,)*) = self;
-                GenericValue::Tuple(::alloc::vec![$($name.into_value(),)*])
+                GenericValue::tuple(::alloc::vec![$($name.into_value(),)*])
             }
         }
     };
@@ -417,7 +418,7 @@ mod tests {
         let t = (1i64, 2.0f64, true);
         let v = <(i64, f64, bool) as KeleusmaType<i64, f64>>::into_value(t);
         match &v {
-            Value::Tuple(items) => assert_eq!(items.len(), 3),
+            Value::Tuple(items) => assert_eq!(items.elements().len(), 3),
             other => panic!("expected tuple, got {:?}", other),
         }
         let r: (i64, f64, bool) =

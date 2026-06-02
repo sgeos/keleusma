@@ -734,8 +734,9 @@ fn dispatch_one(task: &mut Task, now_ms: u64, quiet: bool) {
 
 fn parse_yield_tuple(v: &Value) -> Option<(i64, i64)> {
     if let Value::Tuple(items) = v
-        && items.len() == 2
+        && items.elements().len() == 2
     {
+        let items = items.elements();
         let reason = match items[0] {
             Value::Int(n) => n,
             _ => return None,

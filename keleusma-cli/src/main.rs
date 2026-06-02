@@ -1927,6 +1927,7 @@ pub(crate) fn format_value(v: &Value) -> String {
         Value::Unit => "()".to_string(),
         Value::None => "None".to_string(),
         Value::Tuple(items) => {
+            let items = items.elements();
             let parts: Vec<String> = items.iter().map(format_value).collect();
             format!("({})", parts.join(", "))
         }
