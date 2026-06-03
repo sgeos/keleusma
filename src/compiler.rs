@@ -7990,6 +7990,36 @@ mod tests {
     }
 
     #[test]
+    fn compile_array_index_bakes_flat_access() {
+        // A scalar array indexes through the flat access form, matching
+        // the flat body the construction handler builds (B28 P2).
+        let module = compile_str("fn main() -> Word { let a = [10, 20, 30]; a[1] }").unwrap();
+        assert!(
+            module.chunks[0]
+                .ops
+                .iter()
+                .any(|op| matches!(op, Op::GetIndex(crate::bytecode::ArrayElem::Flat { .. })))
+        );
+    }
+
+    #[test]
+    fn compile_checked_index_folds_length_no_op_len() {
+        // The checked-index bounds length is a compile-time constant the
+        // compiler folds to a literal; it never emits `Op::Len` on a
+        // (flat) array, and the element read bakes the flat form (B28 P2).
+        let module = compile_str(
+            "fn main() -> Word { let a = [10, 20, 30]; a[1] { ok(v) => v, invalid_index(i) => i } }",
+        )
+        .unwrap();
+        let ops = &module.chunks[0].ops;
+        assert!(!ops.iter().any(|op| matches!(op, Op::Len)));
+        assert!(
+            ops.iter()
+                .any(|op| matches!(op, Op::GetIndex(crate::bytecode::ArrayElem::Flat { .. })))
+        );
+    }
+
+    #[test]
     fn compile_tuple_literal() {
         let module =
             compile_str("fn main() -> (Word, Word, Word) { let t = (1, 2, 3); t }").unwrap();

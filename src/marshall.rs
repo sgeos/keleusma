@@ -542,6 +542,39 @@ mod tests {
     }
 
     #[test]
+    fn scalar_array_into_value_uses_flat_body() {
+        // A transitively-scalar array marshals to the flat byte body
+        // (B28 P2), so the host and the runtime agree on representation.
+        use crate::bytecode::ArrayBody;
+        let v = <[i64; 3] as KeleusmaType<i64, f64>>::into_value([1, 2, 3]);
+        assert!(matches!(v, Value::Array(ArrayBody::Flat(_))));
+    }
+
+    #[test]
+    fn byte_array_roundtrips_through_flat_body() {
+        // A one-byte element kind exercises the flat read/write offset
+        // arithmetic at a non-word stride (B28 P2).
+        use crate::bytecode::ArrayBody;
+        let a: [u8; 4] = [1, 2, 250, 255];
+        let v = <[u8; 4] as KeleusmaType<i64, f64>>::into_value(a);
+        assert!(matches!(v, Value::Array(ArrayBody::Flat(_))));
+        let r: [u8; 4] = <[u8; 4] as KeleusmaType<i64, f64>>::from_value(&v).unwrap();
+        assert_eq!(r, [1, 2, 250, 255]);
+    }
+
+    #[test]
+    fn reference_element_array_uses_boxed_body() {
+        // A reference-typed element (static string) is not flat-eligible,
+        // so the array stays boxed (B28 P2 interim, matching tuples).
+        use crate::bytecode::ArrayBody;
+        let v = Value::array(::alloc::vec![
+            Value::StaticStr(::alloc::string::String::from("a")),
+            Value::StaticStr(::alloc::string::String::from("b")),
+        ]);
+        assert!(matches!(v, Value::Array(ArrayBody::Boxed(_))));
+    }
+
+    #[test]
     fn array_length_mismatch() {
         let v = Value::array(::alloc::vec![Value::Int(1), Value::Int(2)]);
         let err = <[i64; 3] as KeleusmaType<i64, f64>>::from_value(&v).unwrap_err();

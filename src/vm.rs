@@ -7171,6 +7171,24 @@ mod tests {
     }
 
     #[test]
+    fn eval_bool_array_index_flat_one_byte_stride() {
+        // A `[Bool; N]` array is transitively scalar, so it uses the flat
+        // byte body with a one-byte element stride; indexing exercises the
+        // flat-read offset arithmetic for a non-word element kind end to
+        // end (B28 P2).
+        let val = run_expect(
+            "fn main() -> bool { let a = [true, false, true]; a[1] }",
+            &[],
+        );
+        assert_eq!(val, Value::Bool(false));
+        let val2 = run_expect(
+            "fn main() -> bool { let a = [true, false, true]; a[2] }",
+            &[],
+        );
+        assert_eq!(val2, Value::Bool(true));
+    }
+
+    #[test]
     fn eval_yield_and_resume() {
         let src = "loop main(input: Word) -> Word { let input = yield input * 2; input }";
         let tokens = tokenize(src).expect("lex error");
