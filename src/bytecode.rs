@@ -354,7 +354,7 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
     /// path (the VM `NewTuple` handler, constant materialisation, and
     /// host marshalling) agrees on the representation for a given type.
     /// A flat body is produced only when every element is a
-    /// flat-eligible scalar (see [`flat_tuple_scalar_kind`]) and the
+    /// flat-eligible scalar (see `flat_tuple_scalar_kind`) and the
     /// packed size fits the sixteen-bit access offset; the fields are
     /// written little-endian at packed offsets using `word_bytes` and
     /// `float_bytes`, the same widths the compiler bakes access offsets
