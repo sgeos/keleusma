@@ -1973,6 +1973,78 @@ fn verify_chunk(
                     }
                     record(ip, P1, "data-range-in-bounds");
                 }
+                // Constant-pool index validation (audit finding 1,
+                // poc_const_oob). The VM dereferences these operands
+                // directly, so an out-of-range index must be rejected at
+                // load. `Const` carries a value index; `GetField` and
+                // `IsStruct` a name index; `IsEnum` and `NewEnum` an enum
+                // and a variant name index.
+                Op::Const(idx) | Op::GetField(idx) | Op::IsStruct(idx) => {
+                    let len = chunk.constants.len();
+                    if *idx as usize >= len {
+                        return Err(VerifyError {
+                            chunk_name: name.clone(),
+                            message: alloc::format!(
+                                "{:?} at {} references constant {} but the pool has {} entr(ies)",
+                                op,
+                                ip,
+                                idx,
+                                len
+                            ),
+                        });
+                    }
+                    record(ip, P1, "constant-index-in-range");
+                }
+                Op::IsEnum(e, v) | Op::NewEnum(e, v, _) => {
+                    let len = chunk.constants.len();
+                    if *e as usize >= len || *v as usize >= len {
+                        return Err(VerifyError {
+                            chunk_name: name.clone(),
+                            message: alloc::format!(
+                                "{:?} at {} references constants ({}, {}) but the pool has {} entr(ies)",
+                                op,
+                                ip,
+                                e,
+                                v,
+                                len
+                            ),
+                        });
+                    }
+                    record(ip, P1, "constant-index-in-range");
+                }
+                // Call target and argument-count validation (audit
+                // finding 4, poc/zz_call). The callee index must name a
+                // chunk, and the argument count must not exceed the
+                // callee's local-slot count (parameters are a prefix of
+                // locals), which would underflow the dispatch frame setup.
+                Op::Call(callee, arg_count) => {
+                    let nchunks = module.chunks.len();
+                    if *callee as usize >= nchunks {
+                        return Err(VerifyError {
+                            chunk_name: name.clone(),
+                            message: alloc::format!(
+                                "Call at {} targets chunk {} but the module has {} chunk(s)",
+                                ip,
+                                callee,
+                                nchunks
+                            ),
+                        });
+                    }
+                    let callee_locals = module.chunks[*callee as usize].local_count;
+                    if *arg_count as u16 > callee_locals {
+                        return Err(VerifyError {
+                            chunk_name: name.clone(),
+                            message: alloc::format!(
+                                "Call at {} passes {} arguments but callee chunk {} declares only {} local slot(s)",
+                                ip,
+                                arg_count,
+                                callee,
+                                callee_locals
+                            ),
+                        });
+                    }
+                    record(ip, P1, "call-target-and-arity-in-range");
+                }
                 // A Q-format fraction-bit count must be less than the
                 // declared word width: the fraction cannot meet or exceed
                 // the word, and a count at or beyond the wide width would
@@ -2187,7 +2259,10 @@ mod tests {
         Chunk {
             name: String::from(name),
             ops,
-            constants: Vec::new(),
+            // One backing constant so the `Const(0)` filler these
+            // structural fixtures use satisfies the operand-index check
+            // (audit finding 1). Constants do not affect the WCMU bound.
+            constants: alloc::vec![crate::bytecode::ConstValue::Int(0)],
             struct_templates: Vec::new(),
             local_count: 0,
             param_count: 0,
@@ -2204,15 +2279,17 @@ mod tests {
         assert!(verify(&module).is_ok());
     }
 
+    // Audit remediation (SECURITY_AUDIT_V0_2_1, poc_const_oob). The
+    // verifier now rejects an out-of-range constant-pool index (finding 1)
+    // rather than admitting it for the VM to dereference and panic on.
     #[test]
-    fn poc_const_oob_accepted_by_verifier() {
+    fn const_oob_index_rejected_by_verifier() {
         let mut chunk = make_chunk("main", vec![Op::Const(5), Op::Return], BlockType::Func);
         chunk.constants = vec![ConstValue::Int(0)]; // len 1, index 5 is OOB
         let module = make_module(vec![chunk]);
-        // The claim: the verifier ACCEPTS this even though Const(5) is OOB.
         assert!(
-            verify(&module).is_ok(),
-            "verifier rejected OOB Const; claim would be refuted"
+            verify(&module).is_err(),
+            "expected the verifier to reject the out-of-range Const index"
         );
     }
 

@@ -1,5 +1,9 @@
-//! Adversarial reproduction for the Op::Call arg_count / local_count
-//! subtraction underflow claim. Temporary verifier artifact.
+//! Audit regression (SECURITY_AUDIT_V0_2_1, Call arity, findings 4/16).
+//! The verifier rejects a Call whose argument count exceeds the callee's
+//! local-slot count, so the dispatch frame setup can never underflow
+//! `local_count - arg_count` (and the operand stack cannot underflow on
+//! the arguments either). The runtime additionally uses checked
+//! subtraction as defense in depth for new_unchecked loads.
 
 #![cfg(feature = "verify")]
 
@@ -40,32 +44,19 @@ fn mk_module(chunks: Vec<Chunk>) -> Module {
 }
 
 #[test]
-fn call_arg_count_exceeds_stack_depth() {
-    // chunk0: Call(1, 10) with an empty operand stack -> stack.len() - 10 underflows.
+fn call_arg_count_exceeds_callee_locals_rejected() {
+    // Call(1, 10) into a callee declaring zero local slots: ten arguments
+    // exceed the callee frame, which the old code computed as the
+    // underflowing `local_count - arg_count`. The verifier must reject it.
     let chunk0 = mk_chunk("main", vec![Op::Call(1, 10), Op::Return], 0);
     let chunk1 = mk_chunk("callee", vec![Op::Return], 0);
     let module = mk_module(vec![chunk0, chunk1]);
 
     let arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
-    let new_result = Vm::new(module, &arena);
-    eprintln!("Vm::new result: {:?}", new_result.as_ref().map(|_| "Ok"));
-    let mut vm = match new_result {
-        Ok(vm) => vm,
-        Err(e) => {
-            eprintln!("Vm::new REJECTED: {:?}", e);
-            return;
-        }
-    };
-
-    // Run the entry point. Watch for panic vs error.
-    let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| vm.call(&[])));
-    match run {
-        Ok(Ok(_state)) => eprintln!("ran cleanly (no panic, no error)"),
-        Ok(Err(e)) => eprintln!("returned Err (no panic): {:?}", e),
-        Err(_) => eprintln!("PANICKED during execution"),
-    }
+    let res = Vm::new(module, &arena);
+    assert!(
+        matches!(res, Err(VmError::VerifyError(_))),
+        "expected the verifier to reject the over-arity Call, got {:?}",
+        res.map(|_| "Ok")
+    );
 }
-
-// silence unused warning if VmError import unused
-#[allow(dead_code)]
-fn _use(_e: VmError) {}
