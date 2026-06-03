@@ -47,10 +47,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             ("led", keleusma_rtos::setup::SRC_LED),
             ("sensor", keleusma_rtos::setup::SRC_SENSOR),
             ("heartbeat", keleusma_rtos::setup::SRC_HEARTBEAT),
-            (
-                "event_listener",
-                keleusma_rtos::setup::SRC_EVENT_LISTENER,
-            ),
+            ("event_listener", keleusma_rtos::setup::SRC_EVENT_LISTENER),
             ("faulty", keleusma_rtos::setup::SRC_FAULTY),
         ] {
             // Task scripts reference `Status` and friends from the

@@ -118,10 +118,8 @@ pub const BIN_SIGNED_SELF_TEST: &[u8] =
 ///
 /// Requires the `keleusma-signatures` cargo feature.
 #[cfg(feature = "keleusma-signatures")]
-pub const PUB_SIGNED_SELF_TEST: &[u8; 32] = include_bytes!(concat!(
-    env!("OUT_DIR"),
-    "/signed_self_test_pub.bin"
-));
+pub const PUB_SIGNED_SELF_TEST: &[u8; 32] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/signed_self_test_pub.bin"));
 
 /// Exercise the cryptographic verification path at boot. Decodes
 /// the embedded verifying key, runs

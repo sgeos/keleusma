@@ -178,7 +178,10 @@ async fn main(_spawner: Spawner) {
         );
     }
 
-    info!("BENCH_DONE cpu_hz={=u64} counter_hz={=u64}", N6_CPU_HZ, N6_CPU_HZ);
+    info!(
+        "BENCH_DONE cpu_hz={=u64} counter_hz={=u64}",
+        N6_CPU_HZ, N6_CPU_HZ
+    );
 
     // Halt. The probe-rs runner detects the BENCH_DONE marker and
     // disconnects; the firmware loops until reset.

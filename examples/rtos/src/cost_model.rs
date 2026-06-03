@@ -41,10 +41,7 @@ include!(concat!(
     "/../../keleusma-bench/measured_cost_models/thumbv8m_main_none_eabihf.rs"
 ));
 
-#[cfg(not(any(
-    all(target_arch = "aarch64", target_os = "macos"),
-    target_arch = "arm",
-)))]
+#[cfg(not(any(all(target_arch = "aarch64", target_os = "macos"), target_arch = "arm",)))]
 pub const MEASURED_COST_MODEL: keleusma::bytecode::CostModel =
     keleusma::bytecode::NOMINAL_COST_MODEL;
 
