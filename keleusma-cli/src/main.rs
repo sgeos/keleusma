@@ -1941,9 +1941,15 @@ pub(crate) fn format_value(v: &Value) -> String {
         Value::Tuple(keleusma::bytecode::TupleBody::Flat(fc)) => {
             format!("(<flat tuple: {} bytes>)", fc.len())
         }
-        Value::Array(items) => {
+        Value::Array(keleusma::bytecode::ArrayBody::Boxed(items)) => {
             let parts: Vec<String> = items.iter().map(format_value).collect();
             format!("[{}]", parts.join(", "))
+        }
+        // As with a flat tuple, the typeless display path cannot recover
+        // the element kind of a flat array; the typed marshalling path
+        // decodes it for hosts that know the type (B28 P2 interim).
+        Value::Array(keleusma::bytecode::ArrayBody::Flat(fc)) => {
+            format!("[<flat array: {} bytes>]", fc.len())
         }
         Value::Enum {
             type_name,

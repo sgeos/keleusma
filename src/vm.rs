@@ -3509,7 +3509,17 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                     }
                     let elements: Vec<crate::bytecode::GenericValue<W, F>> =
                         self.stack.drain(self.stack.len() - n..).collect();
-                    sp!(self, crate::bytecode::GenericValue::Array(elements));
+                    // Build the flat body when the element type is a
+                    // non-reference, non-float fixed-size scalar, at the
+                    // module-declared widths; the shared constructor mirrors
+                    // the compiler's flat eligibility so the baked GetIndex
+                    // form always agrees with the body.
+                    let wb = self.module_word_bytes();
+                    let fb = self.module_float_bytes();
+                    sp!(
+                        self,
+                        crate::bytecode::GenericValue::array_with_widths(elements, wb, fb)
+                    );
                 }
                 Op::NewTuple(count) => {
                     let n = count as usize;
@@ -3557,24 +3567,83 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                         }
                     }
                 }
-                Op::GetIndex(_elem) => {
-                    // B28 P2: the baked `_elem` selects a flat read at
-                    // `index * element_size` or a positional index. The
-                    // array body is still the boxed `Vec` until the array
-                    // activation increment, so the boxed path runs here
-                    // and `_elem` is consumed when the flat body lands.
+                Op::GetIndex(elem) => {
+                    // B28 P2: the baked `elem` selects a flat read at
+                    // `index * element_size` (kind carried by the operand)
+                    // or a positional index into the boxed body. The two
+                    // forms agree with the construction handler by static
+                    // type; the access dispatches on the runtime body.
+                    use crate::bytecode::{ArrayBody, ArrayElem};
                     let index = self.pop()?;
                     let container = self.pop()?;
                     match (container, index) {
                         (
-                            crate::bytecode::GenericValue::Array(arr),
+                            crate::bytecode::GenericValue::Array(body),
                             crate::bytecode::GenericValue::Int(i),
                         ) => {
-                            let len = arr.len();
-                            if i.to_i64() < 0 || i.to_i64() as usize >= len {
-                                return Err(VmError::IndexOutOfBounds(i.to_i64(), len));
+                            let idx = i.to_i64();
+                            match (elem, &body) {
+                                (ArrayElem::Boxed, ArrayBody::Boxed(arr)) => {
+                                    let len = arr.len();
+                                    if idx < 0 || idx as usize >= len {
+                                        return Err(VmError::IndexOutOfBounds(idx, len));
+                                    }
+                                    sp!(self, arr[idx as usize].clone());
+                                }
+                                (ArrayElem::Flat { kind }, ArrayBody::Flat(fc)) => {
+                                    let wb = self.module_word_bytes();
+                                    let fb = self.module_float_bytes();
+                                    let esize = kind.size_in_bytes(wb, fb);
+                                    match fc.as_bytes().len().checked_div(esize) {
+                                        // A zero-size element kind (`Unit`)
+                                        // carries no bytes, so every element
+                                        // is the same `Unit`; length and
+                                        // offset are not byte-derivable.
+                                        // Reject a negative index and read
+                                        // the kind back directly.
+                                        None => {
+                                            if idx < 0 {
+                                                return Err(VmError::IndexOutOfBounds(idx, 0));
+                                            }
+                                            sp!(
+                                                self,
+                                                crate::bytecode::GenericValue::read_scalar_le(
+                                                    fc.as_bytes(),
+                                                    0,
+                                                    kind,
+                                                    wb,
+                                                    fb,
+                                                )
+                                            );
+                                        }
+                                        Some(len) => {
+                                            if idx < 0 || idx as usize >= len {
+                                                return Err(VmError::IndexOutOfBounds(idx, len));
+                                            }
+                                            let off = idx as usize * esize;
+                                            sp!(
+                                                self,
+                                                crate::bytecode::GenericValue::read_scalar_le(
+                                                    fc.as_bytes(),
+                                                    off,
+                                                    kind,
+                                                    wb,
+                                                    fb,
+                                                )
+                                            );
+                                        }
+                                    }
+                                }
+                                // Construction and access agree on the body
+                                // representation by static type, so a form
+                                // mismatch is a corrupted or mis-compiled
+                                // artefact rather than a script error.
+                                _ => {
+                                    return Err(VmError::InvalidBytecode(String::from(
+                                        "GetIndex operand form does not match array body",
+                                    )));
+                                }
                             }
-                            sp!(self, arr[i.to_i64() as usize].clone());
                         }
                         (c, i) => {
                             return Err(VmError::TypeError(format!(
@@ -3648,13 +3717,29 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                 Op::Len => {
                     let val = self.pop()?;
                     match val {
-                        crate::bytecode::GenericValue::Array(arr) => {
+                        // A boxed array reports its element count directly.
+                        // A flat array does not store its length in the
+                        // bytes, but array length is a fixed-size, compile-
+                        // time constant the compiler folds to a literal (it
+                        // never emits `Op::Len` on an array), so a flat body
+                        // here is a mis-compilation rather than a script
+                        // error.
+                        crate::bytecode::GenericValue::Array(
+                            crate::bytecode::ArrayBody::Boxed(arr),
+                        ) => {
                             sp!(
                                 self,
                                 crate::bytecode::GenericValue::Int(
                                     <W as crate::word::Word>::from_i64_wrap(arr.len() as i64)
                                 )
                             );
+                        }
+                        crate::bytecode::GenericValue::Array(crate::bytecode::ArrayBody::Flat(
+                            _,
+                        )) => {
+                            return Err(VmError::InvalidBytecode(String::from(
+                                "Op::Len on a flat array; length is a compile-time constant",
+                            )));
                         }
                         crate::bytecode::GenericValue::StaticStr(s) => {
                             sp!(

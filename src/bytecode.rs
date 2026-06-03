@@ -158,6 +158,52 @@ impl<W: crate::word::Word, F: crate::float::Float> TupleBody<W, F> {
     }
 }
 
+/// The byte body of an array value (B28 P2). An array is homogeneous, so
+/// its flat body is `count * element_size` packed little-endian bytes with
+/// no per-element offset table; the element kind is carried by the
+/// [`ArrayElem`] operand the compiler bakes into [`Op::GetIndex`], and the
+/// element size follows from that kind at the module-declared scalar
+/// widths. A transitively-scalar array is `Flat`; an array whose element
+/// type is a reference, float, or composite stays `Boxed`, the pre-B28
+/// `Vec` form that P3 removes.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ArrayBody<W: crate::word::Word, F: crate::float::Float> {
+    /// Flat bytes; elements read at `index * element_size`.
+    Flat(crate::flat_value::FlatComposite),
+    /// Boxed elements (pre-B28 representation; removed in P3).
+    Boxed(alloc::vec::Vec<GenericValue<W, F>>),
+}
+
+impl<W: crate::word::Word, F: crate::float::Float> ArrayBody<W, F> {
+    /// The boxed elements. Panics on the `Flat` form, which carries no
+    /// element kind; flat-array reads go through [`Op::GetIndex`] with the
+    /// baked [`ArrayElem`] kind, or through the host marshalling boundary
+    /// which supplies the element type, never through this accessor.
+    pub fn elements(&self) -> &[GenericValue<W, F>] {
+        match self {
+            Self::Boxed(v) => v,
+            Self::Flat(_) => {
+                unreachable!(
+                    "flat array body has no element kind; read via GetIndex or marshalling"
+                )
+            }
+        }
+    }
+
+    /// The boxed elements by value. Panics on the `Flat` form, as
+    /// [`Self::elements`].
+    pub fn into_elements(self) -> alloc::vec::Vec<GenericValue<W, F>> {
+        match self {
+            Self::Boxed(v) => v,
+            Self::Flat(_) => {
+                unreachable!(
+                    "flat array body has no element kind; read via GetIndex or marshalling"
+                )
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum GenericValue<W: crate::word::Word, F: crate::float::Float> {
     /// Unit value `()`.
@@ -199,8 +245,10 @@ pub enum GenericValue<W: crate::word::Word, F: crate::float::Float> {
     /// Tuple of values. The body is flat bytes for a transitively-scalar
     /// tuple or boxed elements otherwise (B28 P2); see [`TupleBody`].
     Tuple(TupleBody<W, F>),
-    /// Fixed-size array of values.
-    Array(Vec<GenericValue<W, F>>),
+    /// Fixed-size array of values. The body is flat bytes for a
+    /// transitively-scalar element type or boxed elements otherwise
+    /// (B28 P2); see [`ArrayBody`].
+    Array(ArrayBody<W, F>),
     /// Named struct with ordered fields.
     Struct {
         /// Name of the struct type.
@@ -388,6 +436,57 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
         Self::Tuple(TupleBody::Flat(body))
     }
 
+    /// Construct an array value at the runtime's own scalar widths,
+    /// choosing the flat byte body for a transitively-scalar element type
+    /// and the boxed body otherwise (B28 P2). The array analogue of
+    /// [`GenericValue::tuple`].
+    pub fn array(elements: alloc::vec::Vec<Self>) -> Self {
+        let word_bytes = (1usize << <W as crate::word::Word>::BITS_LOG2) / 8;
+        let float_bytes = (1usize << <F as crate::float::Float>::BITS_LOG2) / 8;
+        Self::array_with_widths(elements, word_bytes, float_bytes)
+    }
+
+    /// Construct an array value, choosing the flat byte body for a
+    /// transitively-scalar element type and the boxed body otherwise,
+    /// using the given scalar widths (B28 P2).
+    ///
+    /// This is the single choke point for array construction so the VM
+    /// `NewArray` handler, constant materialisation, and host marshalling
+    /// all agree on the representation an array type uses, which equality
+    /// relies on. The eligibility rule is the same as for a tuple field
+    /// ([`flat_tuple_scalar_kind`]): a flat body is produced only when
+    /// every element is a flat-eligible scalar and the packed size fits
+    /// the sixteen-bit access offset. Because the array is homogeneous the
+    /// elements share one kind, so the packed layout is `count * size`.
+    pub fn array_with_widths(
+        elements: alloc::vec::Vec<Self>,
+        word_bytes: usize,
+        float_bytes: usize,
+    ) -> Self {
+        let mut total = 0usize;
+        let mut eligible = true;
+        for v in &elements {
+            match flat_tuple_scalar_kind(v) {
+                Some(kind) => total += kind.size_in_bytes(word_bytes, float_bytes),
+                None => {
+                    eligible = false;
+                    break;
+                }
+            }
+        }
+        if !eligible || total > u16::MAX as usize {
+            return Self::Array(ArrayBody::Boxed(elements));
+        }
+        let mut body = crate::flat_value::FlatComposite::zeroed(total);
+        let mut offset = 0usize;
+        for v in &elements {
+            let kind = flat_tuple_scalar_kind(v).expect("eligibility checked above");
+            v.write_scalar_le(body.as_bytes_mut(), offset, word_bytes, float_bytes);
+            offset += kind.size_in_bytes(word_bytes, float_bytes);
+        }
+        Self::Array(ArrayBody::Flat(body))
+    }
+
     /// Write this fixed-size scalar's little-endian bytes into `dst` at
     /// `offset` (B28 P2). The width of an `Int`/`Fixed` is `word_bytes`
     /// and of a `Float` is `float_bytes`, taken from the runtime's
@@ -524,7 +623,10 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
                     .map(|v| v.materialise_kstrings(arena))
                     .collect(),
             ),
-            Self::Array(items) => Self::Array(
+            // A flat array is transitively scalar and holds no KStr; a
+            // boxed array is walked element-wise.
+            Self::Array(ArrayBody::Flat(_)) => self.clone(),
+            Self::Array(ArrayBody::Boxed(items)) => Self::array(
                 items
                     .iter()
                     .map(|v| v.materialise_kstrings(arena))
@@ -620,7 +722,8 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
             // dynamic string; a boxed tuple is walked element-wise.
             Self::Tuple(TupleBody::Flat(_)) => false,
             Self::Tuple(TupleBody::Boxed(items)) => items.iter().any(Self::contains_dynstr),
-            Self::Array(items) => items.iter().any(Self::contains_dynstr),
+            Self::Array(ArrayBody::Flat(_)) => false,
+            Self::Array(ArrayBody::Boxed(items)) => items.iter().any(Self::contains_dynstr),
             Self::Struct { fields, .. } => fields.iter().any(|(_, v)| v.contains_dynstr()),
             Self::Enum { fields, .. } => fields.iter().any(Self::contains_dynstr),
             _ => false,
@@ -666,11 +769,13 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
                 word_bytes,
                 float_bytes,
             ),
-            ArchivedConstValue::Array(items) => Self::Array(
+            ArchivedConstValue::Array(items) => Self::array_with_widths(
                 items
                     .iter()
                     .map(|c| Self::from_const_archived(c, word_bytes, float_bytes))
                     .collect(),
+                word_bytes,
+                float_bytes,
             ),
             ArchivedConstValue::Struct { type_name, fields } => {
                 use alloc::string::ToString;
@@ -2410,6 +2515,7 @@ impl ConstValue {
                 .collect::<Result<Vec<_>, _>>()
                 .map(ConstValue::Tuple),
             Value::Array(items) => items
+                .into_elements()
                 .into_iter()
                 .map(ConstValue::try_from_value)
                 .collect::<Result<Vec<_>, _>>()
@@ -2468,9 +2574,11 @@ impl ConstValue {
                 8,
                 8,
             ),
-            ConstValue::Array(items) => {
-                Value::Array(items.into_iter().map(ConstValue::into_value).collect())
-            }
+            ConstValue::Array(items) => Value::array_with_widths(
+                items.into_iter().map(ConstValue::into_value).collect(),
+                8,
+                8,
+            ),
             ConstValue::Struct { type_name, fields } => Value::Struct {
                 type_name,
                 fields: fields

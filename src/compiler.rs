@@ -2547,9 +2547,22 @@ fn emit_data_indexed_read(
             })?;
         let idx = fc.add_const_value(cv);
         fc.emit(Op::Const(idx));
+        // Track the element type as one array dimension is peeled per
+        // index level, so each `GetIndex` bakes the flat-or-boxed access
+        // form that matches the body the constant materialised into
+        // (B28 P2). A const scalar array is flat; a nested-array element
+        // is a composite and stays boxed.
+        let mut cur_ty = fc
+            .type_info
+            .data_field_types
+            .get(chain.data_name)
+            .and_then(|m| m.get(chain.field))
+            .cloned();
         for index_expr in chain.indices {
             compile_expr(fc, index_expr)?;
-            fc.emit(Op::GetIndex(ArrayElem::Boxed));
+            let elem_ty = cur_ty.as_ref().and_then(element_type_of);
+            fc.emit(Op::GetIndex(array_elem_operand(elem_ty.as_ref())));
+            cur_ty = elem_ty;
             // Each level's index can trap out-of-bounds; record the
             // operator site so the fault resolves exactly (B29 item 2).
             fc.record_operator_site(&span);
@@ -3465,6 +3478,21 @@ fn type_flat_scalar_kind(ty: &TypeExpr) -> Option<crate::value_layout::ScalarKin
     }
 }
 
+/// Resolve the baked [`ArrayElem`] operand for indexing an array whose
+/// element type is `elem_ty` (B28 P2). A flat-eligible scalar element type
+/// bakes `Flat { kind }`, matching the flat body the construction handler
+/// builds for a transitively-scalar array; any other element type
+/// (reference, float, nested composite) or an unrecoverable type bakes the
+/// boxed positional form, matching the boxed body. The decision mirrors the
+/// runtime's value-based eligibility in `array_with_widths`, so a
+/// well-typed program's access form always agrees with the body.
+fn array_elem_operand(elem_ty: Option<&TypeExpr>) -> ArrayElem {
+    match elem_ty.and_then(type_flat_scalar_kind) {
+        Some(kind) => ArrayElem::Flat { kind },
+        None => ArrayElem::Boxed,
+    }
+}
+
 /// Resolve the baked [`TupleField`] for accessing element `index` of a
 /// tuple whose element types are `elem_types` (B28 P2).
 ///
@@ -3796,7 +3824,7 @@ fn compile_for(fc: &mut FuncCompiler, for_stmt: &ForStmt) -> Result<(), CompileE
             // Extract element at current index.
             fc.emit(Op::GetLocal(arr_slot));
             fc.emit(Op::GetLocal(idx_slot));
-            fc.emit(Op::GetIndex(ArrayElem::Boxed));
+            fc.emit(Op::GetIndex(array_elem_operand(element_ty.as_ref())));
             let var_slot = fc.declare_local_typed(&for_stmt.var, element_ty);
             fc.emit(Op::SetLocal(var_slot));
 
@@ -5333,9 +5361,10 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
                 emit_data_indexed_read(fc, chain, *span)?;
                 return Ok(());
             }
+            let elem_ty = infer_expr_type(fc, object).and_then(|t| element_type_of(&t));
             compile_expr(fc, object)?;
             compile_expr(fc, index)?;
-            fc.emit(Op::GetIndex(ArrayElem::Boxed));
+            fc.emit(Op::GetIndex(array_elem_operand(elem_ty.as_ref())));
             // Indexing can trap on an out-of-bounds index; record the
             // operator site so the fault resolves exactly (B29 item 2).
             fc.record_operator_site(span);
@@ -5920,9 +5949,21 @@ fn compile_checked_index(
     fc.emit(Op::SetLocal(arr_slot));
     compile_expr(fc, index)?;
     fc.emit(Op::SetLocal(idx_slot));
-    // len_slot = len(arr).
-    fc.emit(Op::GetLocal(arr_slot));
-    fc.emit(Op::Len);
+    // len_slot = the array length. Array length is a fixed-size,
+    // compile-time constant, so fold it to a literal rather than emit
+    // `Op::Len`, which a flat array body cannot answer (B28 P2). Fall back
+    // to `Op::Len` only for a boxed array whose length the compiler could
+    // not recover statically.
+    let arr_len = infer_expr_type(fc, object)
+        .as_ref()
+        .and_then(array_length_of_type);
+    if let Some(n) = arr_len {
+        let n_const = fc.add_constant(Value::Int(n));
+        fc.emit(Op::Const(n_const));
+    } else {
+        fc.emit(Op::GetLocal(arr_slot));
+        fc.emit(Op::Len);
+    }
     fc.emit(Op::SetLocal(len_slot));
     // flag defaults to 1 (invalid_index); flipped to 0 when in range.
     let one_idx = fc.add_constant(Value::Int(1));
@@ -5940,7 +5981,7 @@ fn compile_checked_index(
     let lt_skip = fc.emit_jump(Op::If(0));
     fc.emit(Op::GetLocal(arr_slot));
     fc.emit(Op::GetLocal(idx_slot));
-    fc.emit(Op::GetIndex(ArrayElem::Boxed));
+    fc.emit(Op::GetIndex(array_elem_operand(Some(&elem_ty))));
     fc.emit(Op::SetLocal(elem_slot));
     let zero_flag_idx = fc.add_constant(Value::Int(0));
     fc.emit(Op::Const(zero_flag_idx));
@@ -6016,7 +6057,7 @@ fn compile_checked_index(
     // the runtime traps with the precise `IndexOutOfBounds(index, len)`.
     fc.emit(Op::GetLocal(arr_slot));
     fc.emit(Op::GetLocal(idx_slot));
-    fc.emit(Op::GetIndex(ArrayElem::Boxed));
+    fc.emit(Op::GetIndex(array_elem_operand(Some(&elem_ty))));
     let default_break = fc.emit(Op::Break(0));
     if let Some(breaks) = fc.loop_breaks.last_mut() {
         breaks.push(default_break);

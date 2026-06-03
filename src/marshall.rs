@@ -204,8 +204,9 @@ impl<W: Word, F: Float, T: KeleusmaType<W, F> + Clone, const N: usize> KeleusmaT
     for [T; N]
 {
     fn from_value(v: &GenericValue<W, F>) -> Result<Self, VmError> {
+        use crate::bytecode::ArrayBody;
         match v {
-            GenericValue::Array(items) => {
+            GenericValue::Array(ArrayBody::Boxed(items)) => {
                 if items.len() != N {
                     return Err(VmError::TypeError(format!(
                         "expected array of length {}, got {}",
@@ -221,6 +222,44 @@ impl<W: Word, F: Float, T: KeleusmaType<W, F> + Clone, const N: usize> KeleusmaT
                     VmError::TypeError(format!("failed to convert array of length {}", N))
                 })
             }
+            // A flat array body is pure bytes; the element type `T` supplies
+            // the scalar kind so each element is read at its packed offset
+            // (B28 P2). Runtime widths match the module widths on the
+            // bundled runtime.
+            GenericValue::Array(ArrayBody::Flat(fc)) => {
+                let word_bytes = (1usize << <W as Word>::BITS_LOG2) / 8;
+                let float_bytes = (1usize << <F as Float>::BITS_LOG2) / 8;
+                let kind = <T as KeleusmaType<W, F>>::flat_field_kind().ok_or_else(|| {
+                    VmError::TypeError(alloc::string::String::from(
+                        "flat array element type is not a flat scalar",
+                    ))
+                })?;
+                let esize = kind.size_in_bytes(word_bytes, float_bytes);
+                let bytes = fc.as_bytes();
+                // A zero-size element kind (`Unit`) stores no bytes, so the
+                // length is not byte-derivable; trust the static `N`.
+                let len = bytes.len().checked_div(esize).unwrap_or(N);
+                if len != N {
+                    return Err(VmError::TypeError(format!(
+                        "expected array of length {}, got {}",
+                        N, len
+                    )));
+                }
+                let mut converted: Vec<T> = Vec::with_capacity(N);
+                for i in 0..N {
+                    let val = GenericValue::<W, F>::read_scalar_le(
+                        bytes,
+                        i * esize,
+                        kind,
+                        word_bytes,
+                        float_bytes,
+                    );
+                    converted.push(T::from_value(&val)?);
+                }
+                converted.try_into().map_err(|_| {
+                    VmError::TypeError(format!("failed to convert array of length {}", N))
+                })
+            }
             other => Err(VmError::TypeError(format!(
                 "expected array, got {}",
                 other.type_name()
@@ -229,8 +268,14 @@ impl<W: Word, F: Float, T: KeleusmaType<W, F> + Clone, const N: usize> KeleusmaT
     }
 
     fn into_value(self) -> GenericValue<W, F> {
-        let items: Vec<GenericValue<W, F>> = self.into_iter().map(|t| t.into_value()).collect();
-        GenericValue::Array(items)
+        // Route through the shared constructor so a host-built array has the
+        // same representation as a script-built one of the same type, which
+        // array equality relies on (B28 P2).
+        GenericValue::array_with_widths(
+            self.into_iter().map(|t| t.into_value()).collect(),
+            (1usize << <W as Word>::BITS_LOG2) / 8,
+            (1usize << <F as Float>::BITS_LOG2) / 8,
+        )
     }
 }
 
@@ -498,7 +543,7 @@ mod tests {
 
     #[test]
     fn array_length_mismatch() {
-        let v = Value::Array(::alloc::vec![Value::Int(1), Value::Int(2)]);
+        let v = Value::array(::alloc::vec![Value::Int(1), Value::Int(2)]);
         let err = <[i64; 3] as KeleusmaType<i64, f64>>::from_value(&v).unwrap_err();
         match err {
             VmError::TypeError(msg) => assert!(msg.contains("length")),
