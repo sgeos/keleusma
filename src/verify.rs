@@ -2205,10 +2205,15 @@ fn verify_chunk(
                 // Constant-pool index validation (audit finding 1,
                 // poc_const_oob). The VM dereferences these operands
                 // directly, so an out-of-range index must be rejected at
-                // load. `Const` carries a value index; `GetField` and
-                // `IsStruct` a name index; `IsEnum` and `NewEnum` an enum
-                // and a variant name index.
-                Op::Const(idx) | Op::GetField(idx) | Op::IsStruct(idx) => {
+                // load. `Const` carries a value index; `IsStruct` a name
+                // index; `IsEnum` and `NewEnum` an enum and a variant name
+                // index. `GetField`'s boxed form carries a name index; its
+                // flat form carries a byte offset (validated by the flat
+                // body, like `GetTupleField`), so only the boxed form is
+                // checked here.
+                Op::Const(idx)
+                | Op::IsStruct(idx)
+                | Op::GetField(crate::bytecode::StructField::Boxed { name_const: idx }) => {
                     let len = chunk.constants.len();
                     if *idx as usize >= len {
                         return Err(VerifyError {
@@ -3279,7 +3284,10 @@ mod tests {
 
         assert_eq!(Op::Div.cost(), 3);
         assert_eq!(Op::Mod.cost(), 3);
-        assert_eq!(Op::GetField(0).cost(), 3);
+        assert_eq!(
+            Op::GetField(crate::bytecode::StructField::Boxed { name_const: 0 }).cost(),
+            3
+        );
 
         assert_eq!(Op::NewStruct(0).cost(), 5);
         assert_eq!(Op::NewArray(0).cost(), 5);

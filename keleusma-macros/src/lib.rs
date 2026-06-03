@@ -191,7 +191,9 @@ fn derive_struct_body(_name: &Ident, name_str: &str, data: &DataStruct) -> Token
                     -> ::core::result::Result<Self, ::keleusma::VmError>
                 {
                     match v {
-                        ::keleusma::GenericValue::Struct { type_name, fields } if type_name == #name_str => {
+                        ::keleusma::GenericValue::Struct(
+                            ::keleusma::bytecode::StructBody::Boxed { type_name, fields }
+                        ) if type_name == #name_str => {
                             #(
                                 let #field_names = {
                                     let pair = fields.iter().find(|(n, _)| n == #field_name_strs)
@@ -199,6 +201,31 @@ fn derive_struct_body(_name: &Ident, name_str: &str, data: &DataStruct) -> Token
                                             ::alloc::format!("missing field `{}` on `{}`", #field_name_strs, #name_str)
                                         ))?;
                                     <#field_types as ::keleusma::KeleusmaType<__KW, __KF>>::from_value(&pair.1)?
+                                };
+                            )*
+                            ::core::result::Result::Ok(Self { #(#field_names),* })
+                        }
+                        // A flat struct body is pure bytes; the field types
+                        // supply the per-field kinds, read at the packed
+                        // offsets in declaration order (B28 P2).
+                        ::keleusma::GenericValue::Struct(
+                            ::keleusma::bytecode::StructBody::Flat(__fc)
+                        ) => {
+                            let __wb = (1usize << <__KW as ::keleusma::Word>::BITS_LOG2) / 8;
+                            let __fb = (1usize << <__KF as ::keleusma::Float>::BITS_LOG2) / 8;
+                            let __bytes = __fc.as_bytes();
+                            let mut __offset = 0usize;
+                            #(
+                                let #field_names = {
+                                    let __kind = <#field_types as ::keleusma::KeleusmaType<__KW, __KF>>::flat_field_kind()
+                                        .ok_or_else(|| ::keleusma::VmError::TypeError(
+                                            ::alloc::format!("field `{}` of `{}` is not a flat scalar", #field_name_strs, #name_str)
+                                        ))?;
+                                    let __val = ::keleusma::GenericValue::<__KW, __KF>::read_scalar_le(
+                                        __bytes, __offset, __kind, __wb, __fb,
+                                    );
+                                    __offset += __kind.size_in_bytes(__wb, __fb);
+                                    <#field_types as ::keleusma::KeleusmaType<__KW, __KF>>::from_value(&__val)?
                                 };
                             )*
                             ::core::result::Result::Ok(Self { #(#field_names),* })
@@ -221,10 +248,15 @@ fn derive_struct_body(_name: &Ident, name_str: &str, data: &DataStruct) -> Token
                             ),
                         )*
                     ];
-                    ::keleusma::GenericValue::Struct {
-                        type_name: ::alloc::string::String::from(#name_str),
+                    // Route through the shared constructor so a host-built
+                    // struct has the same representation as a script-built
+                    // one of the same type, which equality relies on (B28).
+                    ::keleusma::GenericValue::struct_with_widths(
+                        ::alloc::string::String::from(#name_str),
                         fields,
-                    }
+                        (1usize << <__KW as ::keleusma::Word>::BITS_LOG2) / 8,
+                        (1usize << <__KF as ::keleusma::Float>::BITS_LOG2) / 8,
+                    )
                 }
             }
         }

@@ -563,6 +563,29 @@ mod tests {
     }
 
     #[test]
+    fn struct_value_chooses_flat_or_boxed_body() {
+        // An all-scalar struct uses the flat byte body; a reference field
+        // forces the boxed body (B28 P2).
+        use crate::bytecode::StructBody;
+        let flat = Value::struct_value(
+            ::alloc::string::String::from("P"),
+            ::alloc::vec![
+                (::alloc::string::String::from("a"), Value::Int(1)),
+                (::alloc::string::String::from("b"), Value::Int(2)),
+            ],
+        );
+        assert!(matches!(flat, Value::Struct(StructBody::Flat(_))));
+        let boxed = Value::struct_value(
+            ::alloc::string::String::from("Q"),
+            ::alloc::vec![(
+                ::alloc::string::String::from("s"),
+                Value::StaticStr(::alloc::string::String::from("x")),
+            )],
+        );
+        assert!(matches!(boxed, Value::Struct(StructBody::Boxed { .. })));
+    }
+
+    #[test]
     fn reference_element_array_uses_boxed_body() {
         // A reference-typed element (static string) is not flat-eligible,
         // so the array stays boxed (B28 P2 interim, matching tuples).

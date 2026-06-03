@@ -204,6 +204,26 @@ impl<W: crate::word::Word, F: crate::float::Float> ArrayBody<W, F> {
     }
 }
 
+/// The byte body of a struct value (B28 P2). A struct is a named record;
+/// its flat body packs the fields in declaration order with no type name
+/// or field-name keys (those are compile-time information baked into the
+/// access ops and the type test). A struct with a reference, float, or
+/// nested-composite field stays `Boxed`, the pre-B28 representation that
+/// carries the type name and the ordered (name, value) pairs, which P3
+/// removes.
+#[derive(Debug, Clone, PartialEq)]
+pub enum StructBody<W: crate::word::Word, F: crate::float::Float> {
+    /// Flat bytes; fields read at compiler-baked offsets.
+    Flat(crate::flat_value::FlatComposite),
+    /// Boxed named fields (pre-B28 representation; removed in P3).
+    Boxed {
+        /// Name of the struct type.
+        type_name: alloc::string::String,
+        /// Ordered (field-name, field-value) pairs.
+        fields: alloc::vec::Vec<(alloc::string::String, GenericValue<W, F>)>,
+    },
+}
+
 #[derive(Debug, Clone)]
 pub enum GenericValue<W: crate::word::Word, F: crate::float::Float> {
     /// Unit value `()`.
@@ -249,13 +269,10 @@ pub enum GenericValue<W: crate::word::Word, F: crate::float::Float> {
     /// transitively-scalar element type or boxed elements otherwise
     /// (B28 P2); see [`ArrayBody`].
     Array(ArrayBody<W, F>),
-    /// Named struct with ordered fields.
-    Struct {
-        /// Name of the struct type.
-        type_name: String,
-        /// Ordered (field-name, field-value) pairs.
-        fields: Vec<(String, GenericValue<W, F>)>,
-    },
+    /// Named struct. The body is flat bytes for a transitively-scalar
+    /// field list or boxed named fields otherwise (B28 P2); see
+    /// [`StructBody`].
+    Struct(StructBody<W, F>),
     /// Enum variant with optional payload.
     Enum {
         /// Name of the enum type.
@@ -320,16 +337,7 @@ impl<W: crate::word::Word, F: crate::float::Float> PartialEq for GenericValue<W,
             (Self::KStr(a), Self::KStr(b)) => a.epoch() == b.epoch(),
             (Self::Tuple(a), Self::Tuple(b)) => a == b,
             (Self::Array(a), Self::Array(b)) => a == b,
-            (
-                Self::Struct {
-                    type_name: na,
-                    fields: fa,
-                },
-                Self::Struct {
-                    type_name: nb,
-                    fields: fb,
-                },
-            ) => na == nb && fa == fb,
+            (Self::Struct(a), Self::Struct(b)) => a == b,
             (
                 Self::Enum {
                     type_name: na,
@@ -487,6 +495,60 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
         Self::Array(ArrayBody::Flat(body))
     }
 
+    /// Construct a struct value at the runtime's own scalar widths,
+    /// choosing the flat byte body for a transitively-scalar field list and
+    /// the boxed body otherwise (B28 P2). The struct analogue of
+    /// [`GenericValue::tuple`]; `fields` must be in declaration order.
+    pub fn struct_value(
+        type_name: alloc::string::String,
+        fields: alloc::vec::Vec<(alloc::string::String, Self)>,
+    ) -> Self {
+        let word_bytes = (1usize << <W as crate::word::Word>::BITS_LOG2) / 8;
+        let float_bytes = (1usize << <F as crate::float::Float>::BITS_LOG2) / 8;
+        Self::struct_with_widths(type_name, fields, word_bytes, float_bytes)
+    }
+
+    /// Construct a struct value, choosing the flat byte body for a
+    /// transitively-scalar field list and the boxed body otherwise, using
+    /// the given scalar widths (B28 P2).
+    ///
+    /// The single choke point for struct construction, so the VM
+    /// `NewStruct` handler, constant materialisation, and host marshalling
+    /// agree on the representation a struct type uses, which equality relies
+    /// on. `fields` are packed in declaration order, the same order the
+    /// compiler bakes field offsets against; the eligibility rule is the
+    /// same as for a tuple field (`flat_tuple_scalar_kind`). A flat body
+    /// carries no type name or field names.
+    pub fn struct_with_widths(
+        type_name: alloc::string::String,
+        fields: alloc::vec::Vec<(alloc::string::String, Self)>,
+        word_bytes: usize,
+        float_bytes: usize,
+    ) -> Self {
+        let mut total = 0usize;
+        let mut eligible = true;
+        for (_, v) in &fields {
+            match flat_tuple_scalar_kind(v) {
+                Some(kind) => total += kind.size_in_bytes(word_bytes, float_bytes),
+                None => {
+                    eligible = false;
+                    break;
+                }
+            }
+        }
+        if !eligible || total > u16::MAX as usize {
+            return Self::Struct(StructBody::Boxed { type_name, fields });
+        }
+        let mut body = crate::flat_value::FlatComposite::zeroed(total);
+        let mut offset = 0usize;
+        for (_, v) in &fields {
+            let kind = flat_tuple_scalar_kind(v).expect("eligibility checked above");
+            v.write_scalar_le(body.as_bytes_mut(), offset, word_bytes, float_bytes);
+            offset += kind.size_in_bytes(word_bytes, float_bytes);
+        }
+        Self::Struct(StructBody::Flat(body))
+    }
+
     /// Write this fixed-size scalar's little-endian bytes into `dst` at
     /// `offset` (B28 P2). The width of an `Int`/`Fixed` is `word_bytes`
     /// and of a `Float` is `float_bytes`, taken from the runtime's
@@ -632,13 +694,14 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
                     .map(|v| v.materialise_kstrings(arena))
                     .collect(),
             ),
-            Self::Struct { type_name, fields } => Self::Struct {
-                type_name: type_name.clone(),
-                fields: fields
+            Self::Struct(StructBody::Flat(_)) => self.clone(),
+            Self::Struct(StructBody::Boxed { type_name, fields }) => Self::struct_value(
+                type_name.clone(),
+                fields
                     .iter()
                     .map(|(k, v)| (k.clone(), v.materialise_kstrings(arena)))
                     .collect(),
-            },
+            ),
             Self::Enum {
                 type_name,
                 variant,
@@ -724,7 +787,10 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
             Self::Tuple(TupleBody::Boxed(items)) => items.iter().any(Self::contains_dynstr),
             Self::Array(ArrayBody::Flat(_)) => false,
             Self::Array(ArrayBody::Boxed(items)) => items.iter().any(Self::contains_dynstr),
-            Self::Struct { fields, .. } => fields.iter().any(|(_, v)| v.contains_dynstr()),
+            Self::Struct(StructBody::Flat(_)) => false,
+            Self::Struct(StructBody::Boxed { fields, .. }) => {
+                fields.iter().any(|(_, v)| v.contains_dynstr())
+            }
             Self::Enum { fields, .. } => fields.iter().any(Self::contains_dynstr),
             _ => false,
         }
@@ -779,9 +845,9 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
             ),
             ArchivedConstValue::Struct { type_name, fields } => {
                 use alloc::string::ToString;
-                Self::Struct {
-                    type_name: type_name.as_str().to_string(),
-                    fields: fields
+                Self::struct_with_widths(
+                    type_name.as_str().to_string(),
+                    fields
                         .iter()
                         .map(|kv| {
                             (
@@ -790,7 +856,9 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
                             )
                         })
                         .collect(),
-                }
+                    word_bytes,
+                    float_bytes,
+                )
             }
             ArchivedConstValue::Enum {
                 type_name,
@@ -921,6 +989,33 @@ pub enum TupleField {
     Boxed {
         /// Zero-based element index.
         index: u8,
+    },
+}
+
+/// Baked operand of [`Op::GetField`] for struct field access (B28 P2).
+///
+/// Mirrors [`TupleField`] (a tuple is an anonymous struct), but the boxed
+/// form carries the field-name constant-pool index rather than a
+/// positional index, because the pre-B28 boxed struct body looks fields up
+/// by name. The flat form reads at the compiler-baked byte offset; a struct
+/// type is one form or the other by static type, and the access handler
+/// dispatches on the runtime body and faults on a form mismatch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StructField {
+    /// Flat read at a compiler-baked byte `offset`, interpreting the bytes
+    /// as `kind`. The offset is packed little-endian, the same layout the
+    /// construction handler writes.
+    Flat {
+        /// Byte offset of the field within the composite body.
+        offset: u16,
+        /// Fixed-size scalar kind to read at the offset.
+        kind: crate::value_layout::ScalarKind,
+    },
+    /// Constant-pool index of the field name, looked up in the boxed body
+    /// (pre-B28 form).
+    Boxed {
+        /// Field-name constant-pool index.
+        name_const: u16,
     },
 }
 
@@ -1075,8 +1170,10 @@ pub enum Op {
     /// Build tuple from top N stack values.
     NewTuple(u8),
 
-    /// Pop struct, push field value by name (const pool index).
-    GetField(u16),
+    /// Pop struct, push field value. The baked [`StructField`] operand
+    /// selects a flat read at a compiler-baked byte offset or a by-name
+    /// lookup in the boxed body (B28 P2).
+    GetField(StructField),
     /// Pop index (Int), pop array, push element. The baked
     /// [`ArrayElem`] operand selects a flat read at `index * size` or a
     /// positional index into the boxed body (B28 P2).
@@ -2520,7 +2617,7 @@ impl ConstValue {
                 .map(ConstValue::try_from_value)
                 .collect::<Result<Vec<_>, _>>()
                 .map(ConstValue::Array),
-            Value::Struct { type_name, fields } => {
+            Value::Struct(StructBody::Boxed { type_name, fields }) => {
                 let cfields: Result<Vec<_>, _> = fields
                     .into_iter()
                     .map(|(n, v)| ConstValue::try_from_value(v).map(|cv| (n, cv)))
@@ -2529,6 +2626,12 @@ impl ConstValue {
                     type_name,
                     fields: cfields?,
                 })
+            }
+            // A flat struct body carries no field names or values to
+            // recover; compile-time constant folding runs before flat
+            // construction, so a flat struct never reaches this path.
+            Value::Struct(StructBody::Flat(_)) => {
+                Err("a flat struct cannot be converted to a compile-time constant")
             }
             Value::Enum {
                 type_name,
@@ -2579,13 +2682,15 @@ impl ConstValue {
                 8,
                 8,
             ),
-            ConstValue::Struct { type_name, fields } => Value::Struct {
+            ConstValue::Struct { type_name, fields } => Value::struct_with_widths(
                 type_name,
-                fields: fields
+                fields
                     .into_iter()
                     .map(|(n, v)| (n, v.into_value()))
                     .collect(),
-            },
+                8,
+                8,
+            ),
             ConstValue::Enum {
                 type_name,
                 variant,
@@ -3087,16 +3192,16 @@ mod materialise_kstrings_tests {
     fn struct_walks_recursively() {
         let arena = make_arena();
         let handle = KString::alloc(&arena, "field-value").expect("alloc");
-        let v = V::Struct {
-            type_name: alloc::string::String::from("Point"),
-            fields: alloc::vec![
+        let v = V::struct_value(
+            alloc::string::String::from("Point"),
+            alloc::vec![
                 (alloc::string::String::from("x"), V::Int(7)),
                 (alloc::string::String::from("name"), V::KStr(handle)),
             ],
-        };
+        );
         let materialised = v.materialise_kstrings(&arena);
         match materialised {
-            V::Struct { fields, .. } => {
+            V::Struct(StructBody::Boxed { fields, .. }) => {
                 assert_eq!(fields.len(), 2);
                 assert_eq!(fields[0].1, V::Int(7));
                 match &fields[1].1 {

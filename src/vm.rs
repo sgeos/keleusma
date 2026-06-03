@@ -3463,9 +3463,19 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                         self.stack.drain(self.stack.len() - n..).collect();
                     let fields: Vec<(String, crate::bytecode::GenericValue<W, F>)> =
                         field_names.into_iter().zip(values).collect();
+                    // Pack a flat body when every field is a non-reference,
+                    // non-float fixed-size scalar, at the module-declared
+                    // widths; the shared constructor mirrors the compiler's
+                    // flat eligibility so the baked GetField form agrees
+                    // with the body. Fields are in template (declaration)
+                    // order, the order offsets are baked against.
+                    let wb = self.module_word_bytes();
+                    let fb = self.module_float_bytes();
                     sp!(
                         self,
-                        crate::bytecode::GenericValue::Struct { type_name, fields }
+                        crate::bytecode::GenericValue::struct_with_widths(
+                            type_name, fields, wb, fb
+                        )
                     );
                 }
                 Op::NewEnum(enum_const, var_const, arg_count) => {
@@ -3543,22 +3553,53 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                         crate::bytecode::GenericValue::tuple_with_widths(elements, wb, fb)
                     );
                 }
-                Op::GetField(name_const) => {
+                Op::GetField(field) => {
+                    use crate::bytecode::{StructBody, StructField};
                     let container = self.pop()?;
-                    let field_name = self
-                        .chunk_const_str(chunk_idx, name_const as usize)
-                        .ok_or_else(|| {
-                            VmError::InvalidBytecode(String::from("field name not a string"))
-                        })?;
                     match container {
-                        crate::bytecode::GenericValue::Struct { type_name, fields } => {
-                            let val = fields
-                                .iter()
-                                .find(|(n, _)| n == &field_name)
-                                .map(|(_, v)| v.clone())
-                                .ok_or(VmError::FieldNotFound(type_name, field_name))?;
-                            sp!(self, val);
-                        }
+                        crate::bytecode::GenericValue::Struct(body) => match (field, &body) {
+                            (StructField::Flat { offset, kind }, StructBody::Flat(fc)) => {
+                                let wb = self.module_word_bytes();
+                                let fb = self.module_float_bytes();
+                                let val = crate::bytecode::GenericValue::read_scalar_le(
+                                    fc.as_bytes(),
+                                    offset as usize,
+                                    kind,
+                                    wb,
+                                    fb,
+                                );
+                                sp!(self, val);
+                            }
+                            (
+                                StructField::Boxed { name_const },
+                                StructBody::Boxed { type_name, fields },
+                            ) => {
+                                let field_name = self
+                                    .chunk_const_str(chunk_idx, name_const as usize)
+                                    .ok_or_else(|| {
+                                        VmError::InvalidBytecode(String::from(
+                                            "field name not a string",
+                                        ))
+                                    })?;
+                                let val = fields
+                                    .iter()
+                                    .find(|(n, _)| n == &field_name)
+                                    .map(|(_, v)| v.clone())
+                                    .ok_or_else(|| {
+                                        VmError::FieldNotFound(type_name.clone(), field_name)
+                                    })?;
+                                sp!(self, val);
+                            }
+                            // Construction and access agree on the body
+                            // representation by static type, so a form
+                            // mismatch is a corrupted or mis-compiled
+                            // artefact rather than a script error.
+                            _ => {
+                                return Err(VmError::InvalidBytecode(String::from(
+                                    "GetField operand form does not match struct body",
+                                )));
+                            }
+                        },
                         v => {
                             return Err(VmError::TypeError(format!(
                                 "cannot access field on {}",
@@ -3826,7 +3867,23 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                             VmError::InvalidBytecode(String::from("type const not string"))
                         })?;
                     let val = self.stack.last().ok_or(VmError::StackUnderflow)?;
-                    let matches = matches!(val, crate::bytecode::GenericValue::Struct { type_name, .. } if type_name == &expected);
+                    let matches = match val {
+                        crate::bytecode::GenericValue::Struct(
+                            crate::bytecode::StructBody::Boxed { type_name, .. },
+                        ) => type_name == &expected,
+                        // A struct pattern's type test is irrefutable (the
+                        // scrutinee type is statically known), so the
+                        // compiler folds it and a flat struct never reaches
+                        // here; a flat body is therefore a mis-compilation.
+                        crate::bytecode::GenericValue::Struct(
+                            crate::bytecode::StructBody::Flat(_),
+                        ) => {
+                            return Err(VmError::InvalidBytecode(String::from(
+                                "Op::IsStruct on a flat struct; the type test is a compile-time constant",
+                            )));
+                        }
+                        _ => false,
+                    };
                     sp!(self, crate::bytecode::GenericValue::Bool(matches));
                 }
 
@@ -7156,6 +7213,29 @@ mod tests {
     }
 
     #[test]
+    fn eval_struct_literal_non_declaration_order_reads_canonically() {
+        // The flat struct layout is canonical (declaration order x, y)
+        // regardless of the literal field order, so `p.x` and `p.y` read
+        // the right bytes even when the literal lists `y` first (B28 P2).
+        let val = run_expect(
+            "struct Point { x: Word, y: Word }\nfn main() -> Word { let p = Point { y: 32, x: 10 }; p.x - p.y }",
+            &[],
+        );
+        assert_eq!(val, Value::Int(-22));
+    }
+
+    #[test]
+    fn eval_struct_pattern_match_on_flat_struct() {
+        // Matching an all-Word (flat) struct exercises the folded type
+        // test and the flat field reads end to end (B28 P2).
+        let val = run_expect(
+            "struct P { a: Word, b: Word }\nfn main() -> Word { let p = P { a: 5, b: 7 }; match p { P { a, b } => a * b, _ => 0 } }",
+            &[],
+        );
+        assert_eq!(val, Value::Int(35));
+    }
+
+    #[test]
     fn eval_enum_variant() {
         let val = run_expect(
             "enum Color { Red, Green, Blue }\nfn main() -> Word { let c = Color::Red(); 42 }",
@@ -8912,11 +8992,8 @@ mod tests {
             .contains_dynstr()
         );
         assert!(
-            Value::Struct {
-                type_name: String::from("Foo"),
-                fields: alloc::vec![(String::from("x"), kstr)],
-            }
-            .contains_dynstr()
+            Value::struct_value(String::from("Foo"), alloc::vec![(String::from("x"), kstr)],)
+                .contains_dynstr()
         );
     }
 

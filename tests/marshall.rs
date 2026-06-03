@@ -30,6 +30,13 @@ struct Point {
     y: f64,
 }
 
+// All-`Word` fields, so this struct marshals to the flat byte body (B28).
+#[derive(KeleusmaType, Debug, Clone, PartialEq)]
+struct Pair {
+    a: i64,
+    b: i64,
+}
+
 #[derive(KeleusmaType, Debug, Clone, PartialEq)]
 struct Frame {
     origin: Point,
@@ -42,6 +49,17 @@ fn derive_struct_roundtrip() {
     let p = Point { x: 3.0, y: 4.0 };
     let v: Value = p.clone().into_value();
     let recovered = Point::from_value(&v).unwrap();
+    assert_eq!(recovered, p);
+}
+
+#[test]
+fn derive_flat_struct_roundtrips_through_flat_body() {
+    use keleusma::bytecode::StructBody;
+    let p = Pair { a: 7, b: 9 };
+    let v: Value = p.clone().into_value();
+    // An all-Word struct marshals to the flat byte body (B28 P2).
+    assert!(matches!(v, Value::Struct(StructBody::Flat(_))));
+    let recovered = Pair::from_value(&v).unwrap();
     assert_eq!(recovered, p);
 }
 
@@ -59,13 +77,13 @@ fn derive_nested_struct_roundtrip() {
 
 #[test]
 fn derive_struct_wrong_type_name_errors() {
-    let bogus = Value::Struct {
-        type_name: String::from("Square"),
-        fields: vec![
+    let bogus = Value::struct_value(
+        String::from("Square"),
+        vec![
             (String::from("x"), Value::Float(1.0)),
             (String::from("y"), Value::Float(2.0)),
         ],
-    };
+    );
     let err = Point::from_value(&bogus).unwrap_err();
     match err {
         VmError::TypeError(msg) => assert!(msg.contains("Point")),
@@ -75,10 +93,10 @@ fn derive_struct_wrong_type_name_errors() {
 
 #[test]
 fn derive_struct_missing_field_errors() {
-    let bogus = Value::Struct {
-        type_name: String::from("Point"),
-        fields: vec![(String::from("x"), Value::Float(1.0))],
-    };
+    let bogus = Value::struct_value(
+        String::from("Point"),
+        vec![(String::from("x"), Value::Float(1.0))],
+    );
     let err = Point::from_value(&bogus).unwrap_err();
     match err {
         VmError::TypeError(msg) => assert!(msg.contains("y")),

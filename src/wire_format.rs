@@ -586,7 +586,6 @@ pub fn encode_op(
         | Op::BreakIf(v)
         | Op::NewStruct(v)
         | Op::NewArray(v)
-        | Op::GetField(v)
         | Op::IsStruct(v)
         | Op::Trap(v) => {
             let b = v.to_le_bytes();
@@ -610,6 +609,18 @@ pub fn encode_op(
         }
         Op::GetTupleField(crate::bytecode::TupleField::Boxed { index }) => {
             [*index, 0, TUPLE_FIELD_BOXED_SENTINEL]
+        }
+
+        // Baked struct-field access (B28 P2). Both forms carry a u16 in
+        // bytes one and two; byte three discriminates: a scalar-kind tag
+        // for the flat read, or the boxed sentinel for the by-name lookup.
+        Op::GetField(crate::bytecode::StructField::Flat { offset, kind }) => {
+            let b = offset.to_le_bytes();
+            [b[0], b[1], kind.to_tag()]
+        }
+        Op::GetField(crate::bytecode::StructField::Boxed { name_const }) => {
+            let b = name_const.to_le_bytes();
+            [b[0], b[1], TUPLE_FIELD_BOXED_SENTINEL]
         }
 
         // Baked array element access (B28 P2). The flat form stores the
@@ -703,7 +714,18 @@ pub fn decode_op(record: OpcodeRecord, pool: &[OperandPoolEntry]) -> Result<Op, 
         }
         36 => Op::NewArray(record.operand_u16()),
         37 => Op::NewTuple(record.operand_u8()),
-        38 => Op::GetField(record.operand_u16()),
+        38 => {
+            let bytes = record.operand_bytes();
+            if bytes[2] == TUPLE_FIELD_BOXED_SENTINEL {
+                let name_const = u16::from_le_bytes([bytes[0], bytes[1]]);
+                Op::GetField(crate::bytecode::StructField::Boxed { name_const })
+            } else {
+                let offset = u16::from_le_bytes([bytes[0], bytes[1]]);
+                let kind = crate::value_layout::ScalarKind::from_tag(bytes[2])
+                    .ok_or(WireFormatError::TupleFieldKindUnknown(bytes[2]))?;
+                Op::GetField(crate::bytecode::StructField::Flat { offset, kind })
+            }
+        }
         39 => {
             let b0 = record.operand_bytes()[0];
             if b0 == TUPLE_FIELD_BOXED_SENTINEL {
@@ -2273,7 +2295,10 @@ mod tests {
             (Op::NewEnum(0, 0, 0), 35),
             (Op::NewArray(0), 36),
             (Op::NewTuple(0), 37),
-            (Op::GetField(0), 38),
+            (
+                Op::GetField(crate::bytecode::StructField::Boxed { name_const: 0 }),
+                38,
+            ),
             (Op::GetIndex(crate::bytecode::ArrayElem::Boxed), 39),
             (
                 Op::GetTupleField(crate::bytecode::TupleField::Boxed { index: 0 }),
@@ -2444,7 +2469,7 @@ mod tests {
             Op::BreakIf(700),
             Op::NewStruct(800),
             Op::NewArray(900),
-            Op::GetField(1000),
+            Op::GetField(crate::bytecode::StructField::Boxed { name_const: 1000 }),
             Op::IsStruct(1100),
             Op::Trap(1200),
         ] {

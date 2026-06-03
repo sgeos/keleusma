@@ -38,6 +38,12 @@ struct Local {
 struct TypeInfo {
     /// Struct name to (field name to declared field type).
     structs: BTreeMap<String, BTreeMap<String, TypeExpr>>,
+    /// Struct name to ordered (field name, declared type) list, in
+    /// declaration order. The flat-byte struct layout (B28 P2) packs and
+    /// reads fields in this canonical order, which is needed because the
+    /// `structs` map above is keyed by a `BTreeMap` (alphabetical) and the
+    /// type checker admits struct literals with fields in any order.
+    struct_field_order: BTreeMap<String, Vec<(String, TypeExpr)>>,
     /// Enum name to (variant name to payload field types).
     enums: BTreeMap<String, BTreeMap<String, Vec<TypeExpr>>>,
     /// Enum name to ordered (variant name, discriminant) list.
@@ -1351,10 +1357,13 @@ pub fn compile_with_options(
         match type_def {
             TypeDef::Struct(s) => {
                 let mut fields = BTreeMap::new();
+                let mut order = Vec::with_capacity(s.fields.len());
                 for f in &s.fields {
                     fields.insert(f.name.clone(), f.type_expr.clone());
+                    order.push((f.name.clone(), f.type_expr.clone()));
                 }
                 type_info.structs.insert(s.name.clone(), fields);
+                type_info.struct_field_order.insert(s.name.clone(), order);
             }
             TypeDef::Enum(e) => {
                 let mut variants = BTreeMap::new();
@@ -3554,6 +3563,61 @@ fn tuple_elem_types_of(ty: Option<&TypeExpr>, arity: usize) -> Vec<Option<TypeEx
     }
 }
 
+/// Resolve the baked [`StructField`] for accessing `field_name` of a struct
+/// of type `type_name` (B28 P2). Returns the `Flat` form carrying the
+/// packed little-endian byte offset and the field's scalar kind when every
+/// field of the struct is a flat-eligible scalar and the packed size fits
+/// the sixteen-bit operand; otherwise the `Boxed` form carrying the
+/// field-name constant index. The declaration-order layout, the
+/// all-or-nothing eligibility, and the target width source mirror
+/// `struct_with_widths`, so the access form always matches the body the
+/// construct handler builds. An unknown struct, an unset target width, or
+/// a non-flat field forces the boxed form.
+fn struct_field_access(fc: &mut FuncCompiler, type_name: &str, field_name: &str) -> StructField {
+    let wb = fc.type_info.word_bytes;
+    let fb = fc.type_info.float_bytes;
+    let flat = fc
+        .type_info
+        .struct_field_order
+        .get(type_name)
+        .and_then(|order| {
+            if wb == 0 {
+                return None;
+            }
+            let mut offset = 0usize;
+            let mut field_at = None;
+            for (fname, ty) in order {
+                let kind = type_flat_scalar_kind(ty)?;
+                if fname == field_name {
+                    field_at = Some((offset, kind));
+                }
+                offset += kind.size_in_bytes(wb, fb);
+            }
+            if offset > u16::MAX as usize {
+                return None;
+            }
+            field_at.map(|(off, kind)| (off as u16, kind))
+        });
+    match flat {
+        Some((offset, kind)) => StructField::Flat { offset, kind },
+        None => StructField::Boxed {
+            name_const: fc.add_string_constant(field_name),
+        },
+    }
+}
+
+/// The name of a named (struct, enum, or opaque) type expression,
+/// unwrapping information-flow label wrappers. `None` for any other type.
+fn named_type_name(ty: Option<&TypeExpr>) -> Option<&str> {
+    match ty {
+        Some(TypeExpr::Named(name, _, _)) => Some(name),
+        Some(TypeExpr::Labelled(inner, _, _)) | Some(TypeExpr::NegativeLabelled(inner, _, _)) => {
+            named_type_name(Some(inner))
+        }
+        _ => None,
+    }
+}
+
 fn compile_let_pattern_typed(
     fc: &mut FuncCompiler,
     pattern: &Pattern,
@@ -5328,9 +5392,18 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
                 fc.emit(Op::GetData(slot));
                 return Ok(());
             }
+            // Bake the flat field access when the object's struct type is
+            // recoverable and all its fields are flat scalars; otherwise
+            // the boxed by-name form (B28 P2).
+            let obj_ty = infer_expr_type(fc, object);
             compile_expr(fc, object)?;
-            let name_const = fc.add_string_constant(field);
-            fc.emit(Op::GetField(name_const));
+            let field_op = match named_type_name(obj_ty.as_ref()) {
+                Some(tn) => struct_field_access(fc, tn, field),
+                None => StructField::Boxed {
+                    name_const: fc.add_string_constant(field),
+                },
+            };
+            fc.emit(Op::GetField(field_op));
         }
 
         Expr::TupleIndex { object, index, .. } => {
@@ -5371,9 +5444,29 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
         }
 
         Expr::StructInit { name, fields, .. } => {
-            let field_names: Vec<String> = fields.iter().map(|f| f.name.clone()).collect();
+            // Pack fields in declaration order so the flat-byte layout
+            // (B28 P2) is canonical regardless of the literal field order,
+            // which the type checker admits in any order. The struct
+            // template and the value pushes therefore both follow the
+            // declared order, the order `GetField` bakes offsets against.
+            // An unknown struct (rejected earlier by the type checker)
+            // falls back to literal order.
+            let decl_order = fc.type_info.struct_field_order.get(name).cloned();
+            let ordered: Vec<_> = match &decl_order {
+                Some(order) => order
+                    .iter()
+                    .map(|(fname, _)| {
+                        fields
+                            .iter()
+                            .find(|f| &f.name == fname)
+                            .expect("type checker guarantees the field is present")
+                    })
+                    .collect(),
+                None => fields.iter().collect(),
+            };
+            let field_names: Vec<String> = ordered.iter().map(|f| f.name.clone()).collect();
             let template_idx = fc.add_struct_template(name, field_names);
-            for field in fields {
+            for field in &ordered {
                 compile_expr(fc, &field.value)?;
             }
             fc.emit(Op::NewStruct(template_idx));
@@ -6877,11 +6970,19 @@ fn compile_pattern_test(
             }
         }
         Pattern::Struct(type_name, field_pats, _) => {
-            fc.emit(Op::GetLocal(value_slot));
-            let t_const = fc.add_string_constant(type_name);
-            fc.emit(Op::IsStruct(t_const));
-            fail_addrs.push(fc.emit_jump(Op::If(0)));
-            fc.emit(Op::PopN(1));
+            // The scrutinee of a struct pattern is statically the struct
+            // type, so the type test is irrefutable; fold it out when the
+            // type is confirmed (this also keeps a flat struct, which
+            // carries no type name, away from `Op::IsStruct`). Fall back to
+            // the runtime test only when the type is not statically known,
+            // where the boxed body answers it.
+            if named_type_name(ty) != Some(type_name.as_str()) {
+                fc.emit(Op::GetLocal(value_slot));
+                let t_const = fc.add_string_constant(type_name);
+                fc.emit(Op::IsStruct(t_const));
+                fail_addrs.push(fc.emit_jump(Op::If(0)));
+                fc.emit(Op::PopN(1));
+            }
 
             for field_pat in field_pats {
                 if let Some(pat) = &field_pat.pattern {
@@ -6890,8 +6991,8 @@ fn compile_pattern_test(
                     }
                     let temp = fc.declare_local(&format!("__struct_{}", field_pat.name));
                     fc.emit(Op::GetLocal(value_slot));
-                    let name_const = fc.add_string_constant(&field_pat.name);
-                    fc.emit(Op::GetField(name_const));
+                    let field_op = struct_field_access(fc, type_name, &field_pat.name);
+                    fc.emit(Op::GetField(field_op));
                     fc.emit(Op::SetLocal(temp));
                     let sub_ty = fc
                         .type_info
@@ -6983,9 +7084,9 @@ fn compile_pattern_bind_typed(
                 .cloned()
                 .unwrap_or_default();
             for field_pat in field_pats {
-                let name_const = fc.add_string_constant(&field_pat.name);
                 fc.emit(Op::GetLocal(value_slot));
-                fc.emit(Op::GetField(name_const));
+                let field_op = struct_field_access(fc, struct_name, &field_pat.name);
+                fc.emit(Op::GetField(field_op));
                 let field_ty = field_types.get(&field_pat.name).cloned();
                 if let Some(pat) = &field_pat.pattern {
                     if let Pattern::Variable(vname, _) = pat {
@@ -8016,6 +8117,39 @@ mod tests {
         assert!(
             ops.iter()
                 .any(|op| matches!(op, Op::GetIndex(crate::bytecode::ArrayElem::Flat { .. })))
+        );
+    }
+
+    #[test]
+    fn compile_struct_access_bakes_flat_field() {
+        // A scalar struct's field access bakes the flat form, matching the
+        // flat body the construction handler builds (B28 P2).
+        let module = compile_str(
+            "struct P { a: Word, b: Word }\nfn main() -> Word { let p = P { a: 1, b: 2 }; p.a + p.b }",
+        )
+        .unwrap();
+        assert!(
+            module.chunks[0]
+                .ops
+                .iter()
+                .any(|op| matches!(op, Op::GetField(crate::bytecode::StructField::Flat { .. })))
+        );
+    }
+
+    #[test]
+    fn compile_struct_pattern_folds_is_struct() {
+        // A struct pattern's type test is irrefutable (the scrutinee type
+        // is statically known), so it is folded out; no `Op::IsStruct` is
+        // emitted, and a flat struct never reaches that op (B28 P2).
+        let module = compile_str(
+            "struct P { a: Word, b: Word }\nfn main() -> Word { let p = P { a: 1, b: 2 }; match p { P { a, b } => a + b, _ => 0 } }",
+        )
+        .unwrap();
+        let ops = &module.chunks[0].ops;
+        assert!(!ops.iter().any(|op| matches!(op, Op::IsStruct(_))));
+        assert!(
+            ops.iter()
+                .any(|op| matches!(op, Op::GetField(crate::bytecode::StructField::Flat { .. })))
         );
     }
 

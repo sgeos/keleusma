@@ -1970,12 +1970,19 @@ pub(crate) fn format_value(v: &Value) -> String {
                 format!("{}({})", variant, parts.join(", "))
             }
         }
-        Value::Struct { type_name, fields } => {
+        Value::Struct(keleusma::bytecode::StructBody::Boxed { type_name, fields }) => {
             let parts: Vec<String> = fields
                 .iter()
                 .map(|(k, v)| format!("{}: {}", k, format_value(v)))
                 .collect();
             format!("{} {{ {} }}", type_name, parts.join(", "))
+        }
+        // As with a flat tuple or array, the typeless display path cannot
+        // recover a flat struct's field names or kinds; the typed
+        // marshalling path decodes it for hosts that know the type
+        // (B28 P2 interim).
+        Value::Struct(keleusma::bytecode::StructBody::Flat(fc)) => {
+            format!("<flat struct: {} bytes>", fc.len())
         }
         other => format!("{:?}", other),
     }
