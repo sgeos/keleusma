@@ -5,7 +5,7 @@ use keleusma::bytecode::{
     BlockType, Chunk, Module, Op, RUNTIME_ADDRESS_BITS_LOG2, RUNTIME_FLOAT_BITS_LOG2,
     RUNTIME_WORD_BITS_LOG2,
 };
-use keleusma::vm::{DEFAULT_ARENA_CAPACITY, Vm};
+use keleusma::vm::{DEFAULT_ARENA_CAPACITY, Vm, VmError};
 
 fn make_chunk(name: &str, ops: Vec<Op>) -> Chunk {
     Chunk {
@@ -39,28 +39,21 @@ fn make_module(chunks: Vec<Chunk>) -> Module {
     }
 }
 
-// Audit remediation (SECURITY_AUDIT_V0_2_1, poc_newarray_underflow). The
-// VM now guards the operand-stack drain, so NewArray with too few operands
-// returns a clean error instead of panicking on `len - n`. Rejecting an
-// operand-stack-depth underflow at load time is the broader finding-3
-// verifier-completeness work, tracked separately; the invariant asserted
-// here is that the malformed chunk never panics the VM.
+// Audit remediation (SECURITY_AUDIT_V0_2_1, poc_newarray_underflow,
+// finding 3). `NewArray(10)` on an empty operand stack would drain ten
+// operands that are not present. The operand-stack-depth verifier pass now
+// rejects it at load: `Vm::new` returns a `VerifyError` rather than
+// constructing a VM whose execution would underflow. The VM's drain guard
+// remains as defense in depth for `new_unchecked` loads.
 #[test]
-fn newarray_underflow_is_a_clean_error_not_a_panic() {
+fn newarray_underflow_rejected_by_verifier() {
     let chunk = make_chunk("main", vec![Op::NewArray(10), Op::Return]);
     let module = make_module(vec![chunk]);
     let arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
-    match Vm::new(module, &arena) {
-        // Acceptable: a future verifier depth pass rejects this at load.
-        Err(_) => {}
-        // Otherwise the VM must return a clean error, never panic.
-        Ok(mut vm) => {
-            let result = vm.call(&[]);
-            assert!(
-                result.is_err(),
-                "expected a clean error for the NewArray underflow, got {:?}",
-                result.map(|_| "Ok")
-            );
-        }
-    }
+    let res = Vm::new(module, &arena);
+    assert!(
+        matches!(res, Err(VmError::VerifyError(_))),
+        "expected the verifier to reject the NewArray operand-stack underflow, got {:?}",
+        res.map(|_| "Ok")
+    );
 }

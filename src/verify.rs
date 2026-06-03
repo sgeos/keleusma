@@ -1680,8 +1680,237 @@ pub fn chunk_verification_obligations(
 pub fn verify(module: &Module) -> Result<(), VerifyError> {
     for chunk in &module.chunks {
         verify_chunk(chunk, module, None)?;
+        verify_stack_depth(chunk)?;
     }
     Ok(())
+}
+
+/// Operand-stack effect of `op` for the depth-verification pass (audit
+/// finding 3): `(required, net)`, where `required` is the number of
+/// operands that must be present on entry and `net` is the change to the
+/// operand-stack depth (`produced - consumed`).
+///
+/// This is deliberately distinct from [`crate::bytecode::Op::stack_shrink`]
+/// and [`crate::bytecode::Op::stack_growth`], which encode the worst-case-
+/// memory net and do not capture actual operand consumption: `Add`
+/// consumes two operands yet has `stack_shrink` 1, the checked ops consume
+/// two yet have `stack_shrink` 0, and `Yield` is modelled there as net -1
+/// though it pops the output and pushes the resume value (net 0). The
+/// values here follow the VM handlers' actual pops and pushes. The
+/// control-flow ops `If`, `Loop`, `Break`, `Trap`, and `Return` are
+/// intercepted by [`verify_depth_region`]; their entries here are used
+/// only as a defensive fall-through.
+fn op_depth_effect(op: &Op, chunk: &Chunk) -> (i32, i32) {
+    match op {
+        Op::Const(_) | Op::GetLocal(_) | Op::GetData(_) | Op::PushImmediate(_) => (0, 1),
+        Op::Dup => (1, 1),
+        Op::SetLocal(_) | Op::SetData(_) => (1, -1),
+        Op::GetDataIndexed(_, _) => (1, 0),
+        Op::SetDataIndexed(_, _) => (2, -2),
+        Op::BoundsCheck(_) => (1, 0),
+        Op::Add
+        | Op::Sub
+        | Op::Mul
+        | Op::Div
+        | Op::Mod
+        | Op::CmpEq
+        | Op::CmpNe
+        | Op::CmpLt
+        | Op::CmpGt
+        | Op::CmpLe
+        | Op::CmpGe
+        | Op::BitAnd
+        | Op::BitOr
+        | Op::BitXor
+        | Op::Shl
+        | Op::Shr
+        | Op::FixedMul(_)
+        | Op::FixedDiv(_)
+        | Op::GetIndex(_) => (2, -1),
+        Op::Neg
+        | Op::Not
+        | Op::IntToFloat
+        | Op::FloatToInt
+        | Op::WordToByte
+        | Op::ByteToWord
+        | Op::WordToFixed(_)
+        | Op::FixedToWord(_)
+        | Op::GetField(_)
+        | Op::GetTupleField(_)
+        | Op::GetEnumField(_)
+        | Op::Len => (1, 0),
+        // Yield pops the output and the resume pushes the input: net 0.
+        Op::Yield => (1, 0),
+        // IsEnum/IsStruct peek the value and push a bool, keeping the
+        // value for a following field extraction: net +1.
+        Op::IsEnum(_, _) | Op::IsStruct(_) => (1, 1),
+        Op::Call(_, n) => (*n as i32, 1 - *n as i32),
+        Op::CallVerifiedNative(_, n) | Op::CallExternalNative(_, n) => {
+            let m = (*n & 0x7F) as i32;
+            let produced = if *n & 0x80 != 0 { 2 } else { 1 };
+            (m, produced - m)
+        }
+        Op::NewStruct(idx) => {
+            let fc = chunk
+                .struct_templates
+                .get(*idx as usize)
+                .map_or(0, |t| t.field_names.len()) as i32;
+            (fc, 1 - fc)
+        }
+        Op::NewEnum(_, _, n) => (*n as i32, 1 - *n as i32),
+        Op::NewArray(n) => (*n as i32, 1 - *n as i32),
+        Op::NewTuple(n) => (*n as i32, 1 - *n as i32),
+        Op::CheckedAdd
+        | Op::CheckedSub
+        | Op::CheckedMod
+        | Op::CheckedMul(_)
+        | Op::CheckedDiv(_) => (2, 1),
+        Op::CheckedNeg => (1, 2),
+        Op::PopN(n) => (*n as i32, -(*n as i32)),
+        Op::If(_) | Op::BreakIf(_) => (1, -1),
+        Op::Else(_)
+        | Op::EndIf
+        | Op::Loop(_)
+        | Op::EndLoop(_)
+        | Op::Break(_)
+        | Op::Stream
+        | Op::Reset
+        | Op::Trap(_)
+        | Op::Return => (0, 0),
+    }
+}
+
+fn depth_underflow(chunk: &Chunk, ip: usize, op: &Op, need: i32, have: i32) -> VerifyError {
+    VerifyError {
+        chunk_name: chunk.name.clone(),
+        message: alloc::format!(
+            "{:?} at {} requires {} operand(s) but only {} are on the stack; the operand stack would underflow",
+            op,
+            ip,
+            need,
+            have
+        ),
+    }
+}
+
+/// Operand-stack-depth verification (audit finding 3,
+/// `poc_newarray_underflow`).
+///
+/// A forward pass over the chunk that tracks the *absolute* operand-stack
+/// depth and rejects any op that would consume more operands than are
+/// present. Unlike [`wcmu_region`], which tracks a region-relative offset
+/// for the worst-case-memory bound and clamps underflow, this pass passes
+/// the entry depth into each branch and loop body, so the underflow check
+/// is correct inside structured control flow. It mirrors that traversal's
+/// control-flow shape: an `If` with or without an `Else`, a `Loop` body
+/// treated as depth-neutral, and `Break`/`Trap`/`Return` as path exits.
+///
+/// This establishes the precondition the VM construct and call handlers
+/// assume, so a safe `Vm::new` rejects an underflowing chunk instead of
+/// relying on the runtime guards, which remain as defense in depth for
+/// `Vm::new_unchecked`. Runs after `verify_chunk`, so branch and loop
+/// targets are already validated in bounds.
+fn verify_stack_depth(chunk: &Chunk) -> Result<(), VerifyError> {
+    // The chunk body is not inside any loop, so its break collector stays
+    // empty (Pass-1 already rejects a Break outside a loop).
+    let mut breaks: Vec<i32> = Vec::new();
+    verify_depth_region(chunk, 0, chunk.ops.len(), 0, &mut breaks).map(|_| ())
+}
+
+/// Walk ops `[start, end)` tracking absolute operand depth from `entry`.
+/// Returns `Ok(Some(end_depth))` when the region falls through and
+/// `Ok(None)` when every path exits via `Break`, `Trap`, or `Return`.
+/// `breaks` collects the operand depth at each `Break`/`BreakIf` edge that
+/// leaves the enclosing loop, so the loop can resume at the depth its
+/// exits leave on the stack (a loop used as a labelled block can break
+/// with a value). Returns `Err` on an operand-stack underflow.
+fn verify_depth_region(
+    chunk: &Chunk,
+    start: usize,
+    end: usize,
+    entry: i32,
+    breaks: &mut Vec<i32>,
+) -> Result<Option<i32>, VerifyError> {
+    let ops = &chunk.ops;
+    let mut depth = entry;
+    let mut ip = start;
+    while ip < end {
+        let op = &ops[ip];
+        match op {
+            Op::Trap(_) | Op::Return => return Ok(None),
+            Op::Break(_) => {
+                // Unconditional exit to after the enclosing loop, carrying
+                // the current operand depth.
+                breaks.push(depth);
+                return Ok(None);
+            }
+            Op::BreakIf(_) => {
+                // Pop the condition; the break edge and the fall-through
+                // both continue at the post-pop depth.
+                let (req, net) = op_depth_effect(op, chunk);
+                if depth < req {
+                    return Err(depth_underflow(chunk, ip, op, req, depth));
+                }
+                depth += net;
+                breaks.push(depth);
+                ip += 1;
+            }
+            Op::If(target) => {
+                let (req, net) = op_depth_effect(op, chunk);
+                if depth < req {
+                    return Err(depth_underflow(chunk, ip, op, req, depth));
+                }
+                depth += net;
+                let target = *target as usize;
+                if target > 0 && matches!(&ops[target - 1], Op::Else(_)) {
+                    let endif = match &ops[target - 1] {
+                        Op::Else(e) => *e as usize,
+                        _ => unreachable!(),
+                    };
+                    let then_end = verify_depth_region(chunk, ip + 1, target - 1, depth, breaks)?;
+                    let else_end = verify_depth_region(chunk, target, endif, depth, breaks)?;
+                    depth = match (then_end, else_end) {
+                        (Some(a), Some(b)) => a.max(b),
+                        (Some(a), None) => a,
+                        (None, Some(b)) => b,
+                        (None, None) => return Ok(None),
+                    };
+                    ip = endif + 1;
+                } else {
+                    let then_end = verify_depth_region(chunk, ip + 1, target, depth, breaks)?;
+                    if let Some(a) = then_end {
+                        depth = depth.max(a);
+                    }
+                    ip = target + 1;
+                }
+            }
+            Op::Loop(target) => {
+                let exit = *target as usize;
+                // The body's own break edges determine the depth after the
+                // loop. A loop exited only by falling through a neutral
+                // body resumes at the loop-entry depth.
+                let mut loop_breaks: Vec<i32> = Vec::new();
+                let body_end =
+                    verify_depth_region(chunk, ip + 1, exit - 1, depth, &mut loop_breaks)?;
+                depth = loop_breaks
+                    .iter()
+                    .copied()
+                    .max()
+                    .or(body_end)
+                    .unwrap_or(depth);
+                ip = exit;
+            }
+            _ => {
+                let (req, net) = op_depth_effect(op, chunk);
+                if depth < req {
+                    return Err(depth_underflow(chunk, ip, op, req, depth));
+                }
+                depth += net;
+                ip += 1;
+            }
+        }
+    }
+    Ok(Some(depth))
 }
 
 /// Verify a single chunk, optionally recording one
