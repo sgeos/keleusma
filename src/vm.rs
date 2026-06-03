@@ -3524,7 +3524,12 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                         }
                     }
                 }
-                Op::GetIndex => {
+                Op::GetIndex(_elem) => {
+                    // B28 P2: the baked `_elem` selects a flat read at
+                    // `index * element_size` or a positional index. The
+                    // array body is still the boxed `Vec` until the array
+                    // activation increment, so the boxed path runs here
+                    // and `_elem` is consumed when the flat body lands.
                     let index = self.pop()?;
                     let container = self.pop()?;
                     match (container, index) {

@@ -2549,7 +2549,7 @@ fn emit_data_indexed_read(
         fc.emit(Op::Const(idx));
         for index_expr in chain.indices {
             compile_expr(fc, index_expr)?;
-            fc.emit(Op::GetIndex);
+            fc.emit(Op::GetIndex(ArrayElem::Boxed));
             // Each level's index can trap out-of-bounds; record the
             // operator site so the fault resolves exactly (B29 item 2).
             fc.record_operator_site(&span);
@@ -3796,7 +3796,7 @@ fn compile_for(fc: &mut FuncCompiler, for_stmt: &ForStmt) -> Result<(), CompileE
             // Extract element at current index.
             fc.emit(Op::GetLocal(arr_slot));
             fc.emit(Op::GetLocal(idx_slot));
-            fc.emit(Op::GetIndex);
+            fc.emit(Op::GetIndex(ArrayElem::Boxed));
             let var_slot = fc.declare_local_typed(&for_stmt.var, element_ty);
             fc.emit(Op::SetLocal(var_slot));
 
@@ -5335,7 +5335,7 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
             }
             compile_expr(fc, object)?;
             compile_expr(fc, index)?;
-            fc.emit(Op::GetIndex);
+            fc.emit(Op::GetIndex(ArrayElem::Boxed));
             // Indexing can trap on an out-of-bounds index; record the
             // operator site so the fault resolves exactly (B29 item 2).
             fc.record_operator_site(span);
@@ -5940,7 +5940,7 @@ fn compile_checked_index(
     let lt_skip = fc.emit_jump(Op::If(0));
     fc.emit(Op::GetLocal(arr_slot));
     fc.emit(Op::GetLocal(idx_slot));
-    fc.emit(Op::GetIndex);
+    fc.emit(Op::GetIndex(ArrayElem::Boxed));
     fc.emit(Op::SetLocal(elem_slot));
     let zero_flag_idx = fc.add_constant(Value::Int(0));
     fc.emit(Op::Const(zero_flag_idx));
@@ -6016,7 +6016,7 @@ fn compile_checked_index(
     // the runtime traps with the precise `IndexOutOfBounds(index, len)`.
     fc.emit(Op::GetLocal(arr_slot));
     fc.emit(Op::GetLocal(idx_slot));
-    fc.emit(Op::GetIndex);
+    fc.emit(Op::GetIndex(ArrayElem::Boxed));
     let default_break = fc.emit(Op::Break(0));
     if let Some(breaks) = fc.loop_breaks.last_mut() {
         breaks.push(default_break);
@@ -7944,7 +7944,7 @@ mod tests {
             module.chunks[0]
                 .ops
                 .iter()
-                .any(|op| matches!(op, Op::GetIndex))
+                .any(|op| matches!(op, Op::GetIndex(_)))
         );
     }
 

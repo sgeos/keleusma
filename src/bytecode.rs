@@ -819,6 +819,31 @@ pub enum TupleField {
     },
 }
 
+/// Baked operand of [`Op::GetIndex`] (B28 P2).
+///
+/// An array is homogeneous, so unlike a tuple field the element offset
+/// is not a compile-time constant; it is `index * element_size`,
+/// computed at run time from the index on the stack. The baked operand
+/// therefore carries only the element `kind`, from which the element
+/// size follows at the runtime's scalar widths. `Flat` reads the
+/// element directly from the array's flat byte body; `Boxed` indexes
+/// the pre-B28 `Vec` body. The two forms agree with the construction
+/// handler by static type, and the access handler dispatches on the
+/// runtime body.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArrayElem {
+    /// Flat read at `index * element_size`, interpreting the element
+    /// bytes as `kind`. The element size is `kind.size_in_bytes` at the
+    /// module-declared scalar widths, the same widths the construction
+    /// handler packs against.
+    Flat {
+        /// Fixed-size scalar kind of each element.
+        kind: crate::value_layout::ScalarKind,
+    },
+    /// Positional index into the boxed `Vec` body (pre-B28 form).
+    Boxed,
+}
+
 /// A bytecode instruction.
 ///
 /// V0.2.0 Phase 7c moved opcode serialization out of the rkyv
@@ -947,8 +972,10 @@ pub enum Op {
 
     /// Pop struct, push field value by name (const pool index).
     GetField(u16),
-    /// Pop index (Int), pop array, push element.
-    GetIndex,
+    /// Pop index (Int), pop array, push element. The baked
+    /// [`ArrayElem`] operand selects a flat read at `index * size` or a
+    /// positional index into the boxed body (B28 P2).
+    GetIndex(ArrayElem),
     /// Pop tuple, push element. The baked [`TupleField`] operand
     /// selects a flat read at an offset or a positional index into the
     /// boxed body (B28 P2).
@@ -1357,7 +1384,7 @@ pub fn nominal_op_cycles(op: &Op) -> u32 {
         | Op::CmpGt
         | Op::CmpLe
         | Op::CmpGe
-        | Op::GetIndex
+        | Op::GetIndex(_)
         | Op::GetTupleField(_)
         | Op::GetEnumField(_)
         | Op::Len
@@ -1470,7 +1497,7 @@ impl Op {
             Op::NewStruct(_) | Op::NewEnum(_, _, _) | Op::NewArray(_) | Op::NewTuple(_) => 1,
 
             Op::GetField(_)
-            | Op::GetIndex
+            | Op::GetIndex(_)
             | Op::GetTupleField(_)
             | Op::GetEnumField(_)
             | Op::Len => 0,
@@ -1556,7 +1583,7 @@ impl Op {
             Op::NewArray(n) => *n as u32,
             Op::NewTuple(n) => *n as u32,
 
-            Op::GetField(_) | Op::GetIndex | Op::GetTupleField(_) | Op::GetEnumField(_) => 1,
+            Op::GetField(_) | Op::GetIndex(_) | Op::GetTupleField(_) | Op::GetEnumField(_) => 1,
             Op::Len => 0,
 
             Op::IsEnum(_, _) | Op::IsStruct(_) => 0,

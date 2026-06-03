@@ -85,7 +85,7 @@ pub fn measured_op_cycles(op: &keleusma::bytecode::Op) -> u32 {
         | Op::CmpGt
         | Op::CmpLe
         | Op::CmpGe
-        | Op::GetIndex
+        | Op::GetIndex(_)
         | Op::GetTupleField(_)
         | Op::GetEnumField(_)
         | Op::Len

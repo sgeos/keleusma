@@ -70,11 +70,12 @@ pub enum WireFormatError {
     /// entries which is well beyond any observed program; the
     /// producer rejects such modules at encode time.
     OperandPoolIndexOverflow,
-    /// The kind tag in a baked `Op::GetTupleField` flat operand did
-    /// not map to a known [`crate::value_layout::ScalarKind`]. Either
-    /// the producer assembled the operand incorrectly or the record
-    /// was corrupted. The boxed sentinel (`255`) is handled
-    /// separately and is not reported here.
+    /// The scalar-kind tag in a baked flat-composite access operand
+    /// (`Op::GetTupleField` or `Op::GetIndex`) did not map to a known
+    /// [`crate::value_layout::ScalarKind`]. Either the producer
+    /// assembled the operand incorrectly or the record was corrupted.
+    /// The boxed sentinel (`255`) is handled separately and is not
+    /// reported here.
     TupleFieldKindUnknown(u8),
 }
 
@@ -467,7 +468,7 @@ pub fn opcode_id_of(op: &Op) -> OpcodeId {
         Op::NewArray(_) => 36,
         Op::NewTuple(_) => 37,
         Op::GetField(_) => 38,
-        Op::GetIndex => 39,
+        Op::GetIndex(_) => 39,
         Op::GetTupleField(_) => 40,
         Op::GetEnumField(_) => 41,
         Op::Len => 42,
@@ -543,7 +544,6 @@ pub fn encode_op(
         | Op::Return
         | Op::Yield
         | Op::Dup
-        | Op::GetIndex
         | Op::Len
         | Op::IntToFloat
         | Op::FloatToInt
@@ -611,6 +611,13 @@ pub fn encode_op(
         Op::GetTupleField(crate::bytecode::TupleField::Boxed { index }) => {
             [*index, 0, TUPLE_FIELD_BOXED_SENTINEL]
         }
+
+        // Baked array element access (B28 P2). The flat form stores the
+        // element scalar-kind tag in byte one; the runtime derives the
+        // element size and the offset from the index. The boxed form
+        // stores the boxed sentinel in byte one.
+        Op::GetIndex(crate::bytecode::ArrayElem::Flat { kind }) => [kind.to_tag(), 0, 0],
+        Op::GetIndex(crate::bytecode::ArrayElem::Boxed) => [TUPLE_FIELD_BOXED_SENTINEL, 0, 0],
 
         // Pool-using shapes. Append the entry and store the index
         // in the inline operand bytes.
@@ -697,7 +704,16 @@ pub fn decode_op(record: OpcodeRecord, pool: &[OperandPoolEntry]) -> Result<Op, 
         36 => Op::NewArray(record.operand_u16()),
         37 => Op::NewTuple(record.operand_u8()),
         38 => Op::GetField(record.operand_u16()),
-        39 => Op::GetIndex,
+        39 => {
+            let b0 = record.operand_bytes()[0];
+            if b0 == TUPLE_FIELD_BOXED_SENTINEL {
+                Op::GetIndex(crate::bytecode::ArrayElem::Boxed)
+            } else {
+                let kind = crate::value_layout::ScalarKind::from_tag(b0)
+                    .ok_or(WireFormatError::TupleFieldKindUnknown(b0))?;
+                Op::GetIndex(crate::bytecode::ArrayElem::Flat { kind })
+            }
+        }
         40 => {
             let bytes = record.operand_bytes();
             if bytes[2] == TUPLE_FIELD_BOXED_SENTINEL {
@@ -2258,7 +2274,7 @@ mod tests {
             (Op::NewArray(0), 36),
             (Op::NewTuple(0), 37),
             (Op::GetField(0), 38),
-            (Op::GetIndex, 39),
+            (Op::GetIndex(crate::bytecode::ArrayElem::Boxed), 39),
             (
                 Op::GetTupleField(crate::bytecode::TupleField::Boxed { index: 0 }),
                 40,
@@ -2325,7 +2341,6 @@ mod tests {
             Op::Return,
             Op::Yield,
             Op::Dup,
-            Op::GetIndex,
             Op::Len,
             Op::IntToFloat,
             Op::FloatToInt,
@@ -2388,6 +2403,13 @@ mod tests {
             Op::GetTupleField(TupleField::Flat {
                 offset: 16,
                 kind: ScalarKind::Fixed,
+            }),
+            Op::GetIndex(crate::bytecode::ArrayElem::Boxed),
+            Op::GetIndex(crate::bytecode::ArrayElem::Flat {
+                kind: ScalarKind::Int,
+            }),
+            Op::GetIndex(crate::bytecode::ArrayElem::Flat {
+                kind: ScalarKind::Byte,
             }),
         ] {
             roundtrip(op);

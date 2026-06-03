@@ -598,7 +598,7 @@ pub fn emit_cost_model_source(
     out.push_str("        | Op::CmpGt\n");
     out.push_str("        | Op::CmpLe\n");
     out.push_str("        | Op::CmpGe\n");
-    out.push_str("        | Op::GetIndex\n");
+    out.push_str("        | Op::GetIndex(_)\n");
     out.push_str("        | Op::GetTupleField(_)\n");
     out.push_str("        | Op::GetEnumField(_)\n");
     out.push_str("        | Op::Len\n");
