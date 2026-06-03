@@ -1973,6 +1973,34 @@ fn verify_chunk(
                     }
                     record(ip, P1, "data-range-in-bounds");
                 }
+                // A Q-format fraction-bit count must be less than the
+                // declared word width: the fraction cannot meet or exceed
+                // the word, and a count at or beyond the wide width would
+                // overflow the shift in the VM. Rejecting it here keeps a
+                // safe load from reaching a panicking shift (audit
+                // poc_wordtofixed_overshift). The runtime additionally
+                // saturates as defense in depth for new_unchecked loads.
+                Op::WordToFixed(fb)
+                | Op::FixedToWord(fb)
+                | Op::FixedMul(fb)
+                | Op::FixedDiv(fb)
+                | Op::CheckedMul(fb)
+                | Op::CheckedDiv(fb) => {
+                    let word_bits = 1usize << module.word_bits_log2;
+                    if (*fb as usize) >= word_bits {
+                        return Err(VerifyError {
+                            chunk_name: name.clone(),
+                            message: alloc::format!(
+                                "{:?} at {} declares {} fraction bits but the word is {} bits; a Q-format fraction count must be less than the word width",
+                                op,
+                                ip,
+                                fb,
+                                word_bits
+                            ),
+                        });
+                    }
+                    record(ip, P1, "fixed-frac-bits-in-range");
+                }
                 _ => {}
             }
         }

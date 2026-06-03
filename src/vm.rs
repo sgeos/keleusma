@@ -3797,15 +3797,33 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                     match val {
                         crate::bytecode::GenericValue::Int(i) => {
                             // Left-shift the word into the fixed
-                            // representation. Saturate at
-                            // i64::MAX/MIN on overflow.
-                            let shifted = i.widen() << (frac_bits as u32);
-                            let bits = if shifted > <W as crate::word::Word>::MAX.widen() {
-                                <W as crate::word::Word>::MAX
-                            } else if shifted < <W as crate::word::Word>::MIN.widen() {
-                                <W as crate::word::Word>::MIN
+                            // representation. Saturate at i64::MAX/MIN on
+                            // overflow. A fraction-bit count at or beyond
+                            // the wide width would overflow the shift
+                            // itself; the structural verifier rejects such
+                            // a count on a safe load, and this guard keeps
+                            // the VM panic-free on new_unchecked or corrupt
+                            // bytecode by saturating by sign (zero stays
+                            // zero).
+                            let wide_bits = 1u32 << (<W as crate::word::Word>::BITS_LOG2 + 1);
+                            let bits = if (frac_bits as u32) >= wide_bits {
+                                let v = i.to_i64();
+                                if v > 0 {
+                                    <W as crate::word::Word>::MAX
+                                } else if v < 0 {
+                                    <W as crate::word::Word>::MIN
+                                } else {
+                                    <W as crate::word::Word>::from_i64_wrap(0)
+                                }
                             } else {
-                                <W as crate::word::Word>::from_wide_wrap(shifted)
+                                let shifted = i.widen() << (frac_bits as u32);
+                                if shifted > <W as crate::word::Word>::MAX.widen() {
+                                    <W as crate::word::Word>::MAX
+                                } else if shifted < <W as crate::word::Word>::MIN.widen() {
+                                    <W as crate::word::Word>::MIN
+                                } else {
+                                    <W as crate::word::Word>::from_wide_wrap(shifted)
+                                }
                             };
                             sp!(self, crate::bytecode::GenericValue::Fixed(bits));
                         }
@@ -8669,13 +8687,13 @@ mod tests {
         assert!(matches!(result, Err(VmError::VerifyError(_))));
     }
 
-    // Audit probe (SECURITY_AUDIT_V0_2_1). Documents an unfixed bug: the
-    // verifier accepts a WordToFixed overshift and the VM then panics.
-    // Ignored so it does not block the gate while remediation is deferred
-    // until after the flat-byte work; run with `cargo test -- --ignored`.
+    // Audit remediation (SECURITY_AUDIT_V0_2_1, poc_wordtofixed). The
+    // verifier now rejects a WordToFixed whose fraction-bit count is not
+    // less than the word width, so the overshift cannot reach the VM on a
+    // safe load. The VM also saturates such a shift as defense in depth
+    // for new_unchecked loads.
     #[test]
-    #[ignore = "documents an unfixed verifier/VM bug; remediation deferred"]
-    fn poc_wordtofixed_overshift_accepted_by_verifier() {
+    fn wordtofixed_overshift_rejected_by_verifier() {
         use crate::bytecode::{BlockType, Chunk, ConstValue, Module, Op};
         let chunk = Chunk {
             name: alloc::string::String::from("main"),
@@ -8704,16 +8722,14 @@ mod tests {
             private_data_bytes: 0,
         };
         let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        // The verifier rejects the out-of-range fraction-bit count, so the
+        // safe loader never admits the overshift.
         let res = Vm::new(module, &arena);
-        // The verifier must ACCEPT this module for the claim to hold.
         assert!(
-            res.is_ok(),
-            "verifier unexpectedly rejected: {:?}",
-            res.err()
+            matches!(res, Err(VmError::VerifyError(_))),
+            "expected VerifyError for WordToFixed(200), got {:?}",
+            res.map(|_| "Ok")
         );
-        let mut vm = res.unwrap();
-        // Executing the overshift opcode should panic in debug builds.
-        let _ = vm.call(&[]);
     }
 
     #[test]
