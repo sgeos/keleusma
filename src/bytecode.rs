@@ -1272,7 +1272,12 @@ pub enum Op {
 
     /// Build struct from template. Pop field_count values in field order.
     NewStruct(u16),
-    /// Build enum variant. Pop arg_count values.
+    /// Build enum variant. Operands are the enum-name and variant-name
+    /// constant-pool indices and the payload `arg_count`. Pops the
+    /// discriminant (an `Int`, which the compiler pushes beneath the
+    /// payload) and then `arg_count` payload values: the discriminant
+    /// becomes the leading `Word` of a flat enum body, or is discarded for
+    /// a boxed body (B28 P2).
     NewEnum(u16, u16, u8),
     /// Build array from top N stack values.
     NewArray(u16),
@@ -1291,8 +1296,11 @@ pub enum Op {
     /// selects a flat read at an offset or a positional index into the
     /// boxed body (B28 P2).
     GetTupleField(TupleField),
-    /// Pop enum, push field at literal index.
-    GetEnumField(u8),
+    /// Pop enum, push payload field. The baked [`EnumField`] operand
+    /// selects a flat read at a compiler-baked byte offset (past the
+    /// discriminant word) or a positional index into the boxed body
+    /// (B28 P2).
+    GetEnumField(EnumField),
     /// Pop composite value, push its length as Int.
     Len,
 

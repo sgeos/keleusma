@@ -3500,6 +3500,10 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                     } else {
                         Vec::new()
                     };
+                    // Flat-enum activation (the discriminant push and flat
+                    // packing) is the next increment; construction stays
+                    // boxed here so the GetEnumField operand re-spec lands
+                    // behaviour-preserving.
                     sp!(
                         self,
                         crate::bytecode::GenericValue::Enum(crate::bytecode::EnumBody::Boxed {
@@ -3737,19 +3741,39 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                         }
                     }
                 }
-                Op::GetEnumField(idx) => {
+                Op::GetEnumField(field) => {
+                    use crate::bytecode::{EnumBody, EnumField};
                     let container = self.pop()?;
                     match container {
-                        crate::bytecode::GenericValue::Enum(crate::bytecode::EnumBody::Boxed {
-                            fields,
-                            ..
-                        }) => {
-                            let i = idx as usize;
-                            if i >= fields.len() {
-                                return Err(VmError::IndexOutOfBounds(i as i64, fields.len()));
+                        crate::bytecode::GenericValue::Enum(body) => match (field, &body) {
+                            (EnumField::Boxed { index }, EnumBody::Boxed { fields, .. }) => {
+                                let i = index as usize;
+                                if i >= fields.len() {
+                                    return Err(VmError::IndexOutOfBounds(i as i64, fields.len()));
+                                }
+                                sp!(self, fields[i].clone());
                             }
-                            sp!(self, fields[i].clone());
-                        }
+                            (EnumField::Flat { offset, kind }, EnumBody::Flat(fc)) => {
+                                let wb = self.module_word_bytes();
+                                let fb = self.module_float_bytes();
+                                let val = crate::bytecode::GenericValue::read_scalar_le(
+                                    fc.as_bytes(),
+                                    offset as usize,
+                                    kind,
+                                    wb,
+                                    fb,
+                                );
+                                sp!(self, val);
+                            }
+                            // Construction and access agree on the body
+                            // representation by static type; a form mismatch
+                            // is a corrupted or mis-compiled artefact.
+                            _ => {
+                                return Err(VmError::InvalidBytecode(String::from(
+                                    "GetEnumField operand form does not match enum body",
+                                )));
+                            }
+                        },
                         v => {
                             return Err(VmError::TypeError(format!(
                                 "cannot enum-field {}",

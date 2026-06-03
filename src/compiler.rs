@@ -6956,7 +6956,9 @@ fn compile_pattern_test(
                 }
                 let temp = fc.declare_local(&format!("__enum_field{}", i));
                 fc.emit(Op::GetLocal(value_slot));
-                fc.emit(Op::GetEnumField(i as u8));
+                fc.emit(Op::GetEnumField(crate::bytecode::EnumField::Boxed {
+                    index: i as u8,
+                }));
                 fc.emit(Op::SetLocal(temp));
                 let sub_ty = fc
                     .type_info
@@ -7063,7 +7065,9 @@ fn compile_pattern_bind_typed(
                     continue;
                 }
                 fc.emit(Op::GetLocal(value_slot));
-                fc.emit(Op::GetEnumField(i as u8));
+                fc.emit(Op::GetEnumField(crate::bytecode::EnumField::Boxed {
+                    index: i as u8,
+                }));
                 let sub_ty = payload_types.get(i).cloned().unwrap_or(None);
                 if let Pattern::Variable(name, _) = sub_pat {
                     let slot = fc.declare_local_typed(name, sub_ty);

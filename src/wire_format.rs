@@ -559,9 +559,21 @@ pub fn encode_op(
         | Op::Shl
         | Op::Shr => [0, 0, 0],
 
+        // Baked enum-payload access (B28 P2). Same inline layout as the
+        // struct/tuple field forms: the flat form stores the offset
+        // little-endian in bytes one and two and the scalar-kind tag in
+        // byte three; the boxed form stores the index in byte one and the
+        // boxed sentinel in byte three.
+        Op::GetEnumField(crate::bytecode::EnumField::Flat { offset, kind }) => {
+            let b = offset.to_le_bytes();
+            [b[0], b[1], kind.to_tag()]
+        }
+        Op::GetEnumField(crate::bytecode::EnumField::Boxed { index }) => {
+            [*index, 0, TUPLE_FIELD_BOXED_SENTINEL]
+        }
+
         // `u8` operand carried inline in byte one.
         Op::NewTuple(n)
-        | Op::GetEnumField(n)
         | Op::WordToFixed(n)
         | Op::FixedToWord(n)
         | Op::FixedMul(n)
@@ -747,7 +759,17 @@ pub fn decode_op(record: OpcodeRecord, pool: &[OperandPoolEntry]) -> Result<Op, 
                 Op::GetTupleField(crate::bytecode::TupleField::Flat { offset, kind })
             }
         }
-        41 => Op::GetEnumField(record.operand_u8()),
+        41 => {
+            let bytes = record.operand_bytes();
+            if bytes[2] == TUPLE_FIELD_BOXED_SENTINEL {
+                Op::GetEnumField(crate::bytecode::EnumField::Boxed { index: bytes[0] })
+            } else {
+                let offset = u16::from_le_bytes([bytes[0], bytes[1]]);
+                let kind = crate::value_layout::ScalarKind::from_tag(bytes[2])
+                    .ok_or(WireFormatError::TupleFieldKindUnknown(bytes[2]))?;
+                Op::GetEnumField(crate::bytecode::EnumField::Flat { offset, kind })
+            }
+        }
         42 => Op::Len,
         43 => {
             let (a, b) = decode_pool_u16_u16(record, pool)?;
@@ -2304,7 +2326,10 @@ mod tests {
                 Op::GetTupleField(crate::bytecode::TupleField::Boxed { index: 0 }),
                 40,
             ),
-            (Op::GetEnumField(0), 41),
+            (
+                Op::GetEnumField(crate::bytecode::EnumField::Boxed { index: 0 }),
+                41,
+            ),
             (Op::Len, 42),
             (Op::IsEnum(0, 0), 43),
             (Op::IsStruct(0), 44),
@@ -2390,7 +2415,7 @@ mod tests {
         for op in [
             Op::NewTuple(0),
             Op::NewTuple(255),
-            Op::GetEnumField(3),
+            Op::GetEnumField(crate::bytecode::EnumField::Boxed { index: 3 }),
             Op::WordToFixed(32),
             Op::FixedToWord(16),
             Op::FixedMul(8),
