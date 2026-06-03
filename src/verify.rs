@@ -2177,6 +2177,18 @@ mod tests {
     }
 
     #[test]
+    fn poc_const_oob_accepted_by_verifier() {
+        let mut chunk = make_chunk("main", vec![Op::Const(5), Op::Return], BlockType::Func);
+        chunk.constants = vec![ConstValue::Int(0)]; // len 1, index 5 is OOB
+        let module = make_module(vec![chunk]);
+        // The claim: the verifier ACCEPTS this even though Const(5) is OOB.
+        assert!(
+            verify(&module).is_ok(),
+            "verifier rejected OOB Const; claim would be refuted"
+        );
+    }
+
+    #[test]
     fn valid_if_else() {
         // If targets the else body (instruction after Else), Else targets EndIf.
         let chunk = make_chunk(
