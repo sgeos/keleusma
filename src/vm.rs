@@ -5592,6 +5592,9 @@ mod tests {
     // default), unlike the saturating plain `FixedMul`/`FixedDiv`.
 
     #[test]
+    // Gated: `Fixed<16>` needs a declared word width above 16; the
+    // verifier rejects the fraction count on the 8- and 16-bit runtimes.
+    #[cfg(not(any(feature = "narrow-word-8", feature = "narrow-word-16")))]
     fn checked_fixed_div_zero_divisor_binds_numerator() {
         // 6 / 0 reifies as zero_divisor; the numerator (raw 393216)
         // binds through the single pattern.
@@ -5608,6 +5611,9 @@ mod tests {
     }
 
     #[test]
+    // Gated: `Fixed<16>` needs a declared word width above 16; the
+    // verifier rejects the fraction count on the 8- and 16-bit runtimes.
+    #[cfg(not(any(feature = "narrow-word-8", feature = "narrow-word-16")))]
     fn checked_fixed_div_ok_in_range() {
         // 6 / 2 = 3; raw 3 << 16 = 196608.
         let val = run_expect(
@@ -5623,6 +5629,9 @@ mod tests {
     }
 
     #[test]
+    // Gated: `Fixed<16>` needs a declared word width above 16; the
+    // verifier rejects the fraction count on the 8- and 16-bit runtimes.
+    #[cfg(not(any(feature = "narrow-word-8", feature = "narrow-word-16")))]
     fn checked_fixed_div_unhandled_zero_traps() {
         // An unhandled zero divisor traps as DivisionByZero, matching
         // the contract that a partial operation with no in-band result
@@ -5654,6 +5663,9 @@ mod tests {
     }
 
     #[test]
+    // Gated: `Fixed<16>` needs a declared word width above 16; the
+    // verifier rejects the fraction count on the 8- and 16-bit runtimes.
+    #[cfg(not(any(feature = "narrow-word-8", feature = "narrow-word-16")))]
     fn checked_fixed_mul_overflow_routes_overflow() {
         // raw(16777216Fixed<16>) = 2^24 << 16 = 2^40; the Q-format
         // product is 2^80 >> 16 = 2^64, which exceeds i64::MAX, so the
@@ -5672,6 +5684,9 @@ mod tests {
     }
 
     #[test]
+    // Gated: `Fixed<16>` needs a declared word width above 16; the
+    // verifier rejects the fraction count on the 8- and 16-bit runtimes.
+    #[cfg(not(any(feature = "narrow-word-8", feature = "narrow-word-16")))]
     fn checked_fixed_mul_underflow_routes_underflow() {
         // A large negative times a large positive lands below
         // i64::MIN after the shift, routing to underflow.
@@ -5690,6 +5705,9 @@ mod tests {
     }
 
     #[test]
+    // Gated: `Fixed<16>` needs a declared word width above 16; the
+    // verifier rejects the fraction count on the 8- and 16-bit runtimes.
+    #[cfg(not(any(feature = "narrow-word-8", feature = "narrow-word-16")))]
     fn checked_fixed_mul_unhandled_overflow_wraps() {
         // With no overflow arm, the out-of-range product wraps to the
         // low slot (2^64 mod 2^64 = 0) and does not trap.
@@ -5968,6 +5986,9 @@ mod tests {
     }
 
     #[test]
+    // Gated: `Fixed<16>` needs a declared word width above 16; the
+    // verifier rejects the fraction count on the 8- and 16-bit runtimes.
+    #[cfg(not(any(feature = "narrow-word-8", feature = "narrow-word-16")))]
     fn checked_fixed_saturate_max_clamps_to_max_raw() {
         // The Q-format saturating maximum is the largest raw bit
         // pattern, i64::MAX.
@@ -6845,6 +6866,9 @@ mod tests {
     }
 
     #[test]
+    // Gated: `Fixed<16>` needs a declared word width above 16; the
+    // verifier rejects the fraction count on the 8- and 16-bit runtimes.
+    #[cfg(not(any(feature = "narrow-word-8", feature = "narrow-word-16")))]
     fn fixed_parameterised_q15_16_uses_sixteen_fraction_bits() {
         // `Fixed<16>` is Q15.16: 1 cast to Fixed<16> equals
         // `1 << 16 = 65_536` in the underlying bits.
@@ -6853,6 +6877,9 @@ mod tests {
     }
 
     #[test]
+    // Gated: `Fixed<16>` needs a declared word width above 16; the
+    // verifier rejects the fraction count on the 8- and 16-bit runtimes.
+    #[cfg(not(any(feature = "narrow-word-8", feature = "narrow-word-16")))]
     fn fixed_parameterised_q15_16_multiply_maintains_format() {
         let val = run_expect(
             "fn main() -> Word { ((4 as Fixed<16>) * (5 as Fixed<16>)) as Word }",
