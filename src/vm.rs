@@ -3387,8 +3387,25 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                         return Err(VmError::InvalidBytecode(format!("invalid chunk: {}", idx)));
                     }
                     let called_local_count = self.chunk_local_count(idx as usize) as usize;
-                    let new_base = self.stack.len() - arg_count as usize;
-                    let extra = called_local_count - arg_count as usize;
+                    // Guard both subtractions against malformed bytecode
+                    // (audit findings 4, 16, 18). `new_base` underflows when
+                    // the call claims more arguments than are on the stack;
+                    // `extra` underflows when the argument count exceeds the
+                    // callee's local-slot count (an arity mismatch). Both
+                    // return a clean error instead of panicking or wrapping
+                    // to a wild frame base.
+                    let new_base = self
+                        .stack
+                        .len()
+                        .checked_sub(arg_count as usize)
+                        .ok_or(VmError::StackUnderflow)?;
+                    let extra = called_local_count
+                        .checked_sub(arg_count as usize)
+                        .ok_or_else(|| {
+                            VmError::InvalidBytecode(String::from(
+                                "call argument count exceeds the callee's local slot count",
+                            ))
+                        })?;
                     for _ in 0..extra {
                         sp!(self, crate::bytecode::GenericValue::Unit);
                     }
@@ -3463,6 +3480,11 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                             VmError::InvalidBytecode(String::from("variant name not a string"))
                         })?;
                     let n = arg_count as usize;
+                    // Guard against operand-stack underflow (audit, same
+                    // class as poc_newarray_underflow).
+                    if self.stack.len() < n {
+                        return Err(VmError::StackUnderflow);
+                    }
                     let fields: Vec<crate::bytecode::GenericValue<W, F>> = if n > 0 {
                         self.stack.drain(self.stack.len() - n..).collect()
                     } else {
@@ -3479,12 +3501,23 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                 }
                 Op::NewArray(count) => {
                     let n = count as usize;
+                    // Guard the drain against an operand-stack underflow so
+                    // malformed bytecode returns a clean error rather than
+                    // panicking on `len - n` (audit poc_newarray_underflow).
+                    if self.stack.len() < n {
+                        return Err(VmError::StackUnderflow);
+                    }
                     let elements: Vec<crate::bytecode::GenericValue<W, F>> =
                         self.stack.drain(self.stack.len() - n..).collect();
                     sp!(self, crate::bytecode::GenericValue::Array(elements));
                 }
                 Op::NewTuple(count) => {
                     let n = count as usize;
+                    // Guard against operand-stack underflow (audit, same
+                    // class as poc_newarray_underflow).
+                    if self.stack.len() < n {
+                        return Err(VmError::StackUnderflow);
+                    }
                     let elements: Vec<crate::bytecode::GenericValue<W, F>> =
                         self.stack.drain(self.stack.len() - n..).collect();
                     // Build the flat body when every element is a

@@ -39,20 +39,28 @@ fn make_module(chunks: Vec<Chunk>) -> Module {
     }
 }
 
-// Audit probe (SECURITY_AUDIT_V0_2_1). Documents an unfixed bug: the
-// verifier accepts NewArray on an empty stack and the VM then underflows
-// and panics. Ignored so it does not block the gate while remediation is
-// deferred until after the flat-byte work; run with `cargo test -- --ignored`.
+// Audit remediation (SECURITY_AUDIT_V0_2_1, poc_newarray_underflow). The
+// VM now guards the operand-stack drain, so NewArray with too few operands
+// returns a clean error instead of panicking on `len - n`. Rejecting an
+// operand-stack-depth underflow at load time is the broader finding-3
+// verifier-completeness work, tracked separately; the invariant asserted
+// here is that the malformed chunk never panics the VM.
 #[test]
-#[ignore = "documents an unfixed verifier/VM bug; remediation deferred"]
-fn poc_newarray_underflow_accepted_then_runs() {
+fn newarray_underflow_is_a_clean_error_not_a_panic() {
     let chunk = make_chunk("main", vec![Op::NewArray(10), Op::Return]);
     let module = make_module(vec![chunk]);
     let arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
-    // Step 1: Vm::new must accept (this is the claim's premise).
-    let mut vm = Vm::new(module, &arena).expect("Vm::new ACCEPTED malicious chunk");
-    eprintln!("STEP1_VM_NEW_ACCEPTED");
-    // Step 2: execution. The claim says this panics with subtract overflow.
-    let result = vm.call(&[]);
-    eprintln!("STEP2_RESULT={:?}", result);
+    match Vm::new(module, &arena) {
+        // Acceptable: a future verifier depth pass rejects this at load.
+        Err(_) => {}
+        // Otherwise the VM must return a clean error, never panic.
+        Ok(mut vm) => {
+            let result = vm.call(&[]);
+            assert!(
+                result.is_err(),
+                "expected a clean error for the NewArray underflow, got {:?}",
+                result.map(|_| "Ok")
+            );
+        }
+    }
 }
