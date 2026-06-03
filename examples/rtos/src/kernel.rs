@@ -244,18 +244,21 @@ impl<P: Platform> Kernel<P> {
             self.tasks[i].vm.call(&[reason_value])
         };
         match result {
-            Ok(VmState::Yielded(Value::Tuple(t))) if t.len() == 2 => {
-                let r = extract_int(&t[0]);
-                let payload = extract_int(&t[1]);
-                self.tasks[i].state = match r {
-                    0 => TaskState::SleepingUntil(payload as u64),
-                    1 => TaskState::Ready(WakeReason::Timer),
-                    2 => TaskState::WaitingFor(payload as u8),
-                    _ => {
-                        P::log_event(crate::natives::EV_KERNEL_UNKNOWN_YIELD, r);
-                        TaskState::Finished
-                    }
-                };
+            Ok(VmState::Yielded(val)) => {
+                if let Some((r, payload)) = tuple_pair(&val) {
+                    self.tasks[i].state = match r {
+                        0 => TaskState::SleepingUntil(payload as u64),
+                        1 => TaskState::Ready(WakeReason::Timer),
+                        2 => TaskState::WaitingFor(payload as u8),
+                        _ => {
+                            P::log_event(crate::natives::EV_KERNEL_UNKNOWN_YIELD, r);
+                            TaskState::Finished
+                        }
+                    };
+                } else {
+                    P::log_event(crate::natives::EV_KERNEL_UNEXPECTED_STATE, 0);
+                    self.tasks[i].state = TaskState::Finished;
+                }
             }
             Ok(VmState::Reset) => {
                 // `loop main` body wrapped past its terminator.
@@ -342,5 +345,46 @@ fn extract_int(v: &Value) -> i64 {
     match v {
         Value::Int(n) => *n,
         _ => 0,
+    }
+}
+
+/// Read the two `Word` fields of a `(Word, Word)` yield tuple. A
+/// transitively-scalar tuple is stored as a flat little-endian byte body
+/// (B28); each field is read back at its packed offset using the bundled
+/// runtime's eight-byte word, the same decode the marshalling layer uses.
+/// The boxed body is also accepted. Returns `None` for any other shape.
+fn tuple_pair(v: &Value) -> Option<(i64, i64)> {
+    use keleusma::bytecode::TupleBody;
+    use keleusma::value_layout::ScalarKind;
+    // Bundled runtime widths: `Value = GenericValue<i64, f64>`.
+    const WORD_BYTES: usize = 8;
+    const FLOAT_BYTES: usize = 8;
+    match v {
+        Value::Tuple(TupleBody::Boxed(items)) if items.len() == 2 => {
+            Some((extract_int(&items[0]), extract_int(&items[1])))
+        }
+        Value::Tuple(TupleBody::Flat(fc)) => {
+            let bytes = fc.as_bytes();
+            if bytes.len() != 2 * WORD_BYTES {
+                return None;
+            }
+            Some((
+                extract_int(&Value::read_scalar_le(
+                    bytes,
+                    0,
+                    ScalarKind::Int,
+                    WORD_BYTES,
+                    FLOAT_BYTES,
+                )),
+                extract_int(&Value::read_scalar_le(
+                    bytes,
+                    WORD_BYTES,
+                    ScalarKind::Int,
+                    WORD_BYTES,
+                    FLOAT_BYTES,
+                )),
+            ))
+        }
+        _ => None,
     }
 }

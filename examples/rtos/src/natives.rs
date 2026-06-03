@@ -290,13 +290,13 @@ fn register_usart<P: Platform>(vm: &mut Vm) {
             check_arity("usart_read", 1, args)?;
             let ctrl = as_i64(&args[0])?;
             if !(0..P::RESOURCES.uart_count as i64).contains(&ctrl) {
-                return Ok(Value::Tuple(vec![
+                return Ok(Value::tuple(vec![
                     status_err(StatusErrorCode::InvalidController),
                     Value::Int(0),
                 ]));
             }
             let byte = P::usart_read(ctrl as u8);
-            Ok(Value::Tuple(vec![status_ok(), Value::Int(byte as i64)]))
+            Ok(Value::tuple(vec![status_ok(), Value::Int(byte as i64)]))
         }),
     );
 }
@@ -326,13 +326,13 @@ fn register_spi<P: Platform>(vm: &mut Vm) {
             check_arity("spi_read", 1, args)?;
             let ctrl = as_i64(&args[0])?;
             if !(0..P::RESOURCES.spi_count as i64).contains(&ctrl) {
-                return Ok(Value::Tuple(vec![
+                return Ok(Value::tuple(vec![
                     status_err(StatusErrorCode::InvalidController),
                     Value::Int(0),
                 ]));
             }
             let byte = P::spi_read(ctrl as u8);
-            Ok(Value::Tuple(vec![status_ok(), Value::Int(byte as i64)]))
+            Ok(Value::tuple(vec![status_ok(), Value::Int(byte as i64)]))
         }),
     );
 }
@@ -369,19 +369,19 @@ fn register_i2c<P: Platform>(vm: &mut Vm) {
             let ctrl = as_i64(&args[0])?;
             let addr = as_i64(&args[1])?;
             if !(0..P::RESOURCES.i2c_count as i64).contains(&ctrl) {
-                return Ok(Value::Tuple(vec![
+                return Ok(Value::tuple(vec![
                     status_err(StatusErrorCode::InvalidController),
                     Value::Int(0),
                 ]));
             }
             if !(0..=0x7F).contains(&addr) {
-                return Ok(Value::Tuple(vec![
+                return Ok(Value::tuple(vec![
                     status_err(StatusErrorCode::InvalidAddress),
                     Value::Int(0),
                 ]));
             }
             let byte = P::i2c_read(ctrl as u8, addr as u8);
-            Ok(Value::Tuple(vec![status_ok(), Value::Int(byte as i64)]))
+            Ok(Value::tuple(vec![status_ok(), Value::Int(byte as i64)]))
         }),
     );
 }
@@ -395,13 +395,13 @@ fn register_adc<P: Platform>(vm: &mut Vm) {
             check_arity("adc_read", 1, args)?;
             let ch = as_i64(&args[0])?;
             if !(0..P::RESOURCES.sensor_channel_count as i64).contains(&ch) {
-                return Ok(Value::Tuple(vec![
+                return Ok(Value::tuple(vec![
                     status_err(StatusErrorCode::InvalidChannel),
                     Value::Int(0),
                 ]));
             }
             let val = P::adc_read(ch as u8);
-            Ok(Value::Tuple(vec![status_ok(), Value::Int(val as i64)]))
+            Ok(Value::tuple(vec![status_ok(), Value::Int(val as i64)]))
         }),
     );
 }
