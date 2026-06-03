@@ -1,7 +1,7 @@
 //! Adversarial reproduction for the Op::Call arg_count / local_count
 //! subtraction underflow claim. Temporary verifier artifact.
 
-#![cfg(all(feature = "verify"))]
+#![cfg(feature = "verify")]
 
 use keleusma::bytecode::{BlockType, Chunk, Op};
 use keleusma::vm::{DEFAULT_ARENA_CAPACITY, Vm, VmError};

@@ -8701,7 +8701,11 @@ mod tests {
         let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
         let res = Vm::new(module, &arena);
         // The verifier must ACCEPT this module for the claim to hold.
-        assert!(res.is_ok(), "verifier unexpectedly rejected: {:?}", res.err());
+        assert!(
+            res.is_ok(),
+            "verifier unexpectedly rejected: {:?}",
+            res.err()
+        );
         let mut vm = res.unwrap();
         // Executing the overshift opcode should panic in debug builds.
         let _ = vm.call(&[]);

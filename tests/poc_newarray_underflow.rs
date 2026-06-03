@@ -1,4 +1,4 @@
-#![cfg(all(feature = "verify"))]
+#![cfg(feature = "verify")]
 
 use keleusma::Arena;
 use keleusma::bytecode::{
