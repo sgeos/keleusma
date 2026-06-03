@@ -224,6 +224,32 @@ pub enum StructBody<W: crate::word::Word, F: crate::float::Float> {
     },
 }
 
+/// The byte body of an enum value (B28 P2). The flat body is the variant's
+/// `Word`-sized discriminant followed by the current variant's payload
+/// packed in declaration order: `[disc: word_bytes][payload]`. The
+/// discriminant matches the `Enum as Word` cast and is what the variant
+/// test (`Op::IsEnum`) reads, since an enum is a sum type whose variant is
+/// not statically known. The body is sized to the *current* variant (enums
+/// are not yet inlined into other flat composites, so a per-value size is
+/// sufficient); the worst-case-memory bound is still the largest variant.
+/// An enum with a reference, float, or nested-composite payload stays
+/// `Boxed`, the pre-B28 representation carrying the type and variant names
+/// and the payload values, which P3 removes.
+#[derive(Debug, Clone, PartialEq)]
+pub enum EnumBody<W: crate::word::Word, F: crate::float::Float> {
+    /// Flat bytes: `[discriminant: word_bytes][payload]`.
+    Flat(crate::flat_value::FlatComposite),
+    /// Boxed variant (pre-B28 representation; removed in P3).
+    Boxed {
+        /// Name of the enum type.
+        type_name: alloc::string::String,
+        /// Name of the variant.
+        variant: alloc::string::String,
+        /// Positional payload values; empty for a unit variant.
+        fields: alloc::vec::Vec<GenericValue<W, F>>,
+    },
+}
+
 #[derive(Debug, Clone)]
 pub enum GenericValue<W: crate::word::Word, F: crate::float::Float> {
     /// Unit value `()`.
@@ -273,16 +299,10 @@ pub enum GenericValue<W: crate::word::Word, F: crate::float::Float> {
     /// field list or boxed named fields otherwise (B28 P2); see
     /// [`StructBody`].
     Struct(StructBody<W, F>),
-    /// Enum variant with optional payload.
-    Enum {
-        /// Name of the enum type.
-        type_name: String,
-        /// Name of the variant.
-        variant: String,
-        /// Positional payload values for tuple-variant constructions.
-        /// Empty for unit variants.
-        fields: Vec<GenericValue<W, F>>,
-    },
+    /// Enum variant with optional payload. The body is flat bytes for a
+    /// transitively-scalar payload or boxed otherwise (B28 P2); see
+    /// [`EnumBody`].
+    Enum(EnumBody<W, F>),
     /// Option::None.
     None,
     /// Opaque host-managed value referenced through a shared
@@ -338,18 +358,7 @@ impl<W: crate::word::Word, F: crate::float::Float> PartialEq for GenericValue<W,
             (Self::Tuple(a), Self::Tuple(b)) => a == b,
             (Self::Array(a), Self::Array(b)) => a == b,
             (Self::Struct(a), Self::Struct(b)) => a == b,
-            (
-                Self::Enum {
-                    type_name: na,
-                    variant: va,
-                    fields: fa,
-                },
-                Self::Enum {
-                    type_name: nb,
-                    variant: vb,
-                    fields: fb,
-                },
-            ) => na == nb && va == vb && fa == fb,
+            (Self::Enum(a), Self::Enum(b)) => a == b,
             // Opaque equality is pointer identity. Two Arcs are
             // equal only if they share the same allocation. This
             // matches the convention for host-managed references
@@ -549,6 +558,75 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
         Self::Struct(StructBody::Flat(body))
     }
 
+    /// Construct an enum value at the runtime's own scalar widths, choosing
+    /// the flat byte body for a transitively-scalar payload and the boxed
+    /// body otherwise (B28 P2). `disc` is the variant's discriminant value.
+    pub fn enum_value(
+        type_name: alloc::string::String,
+        variant: alloc::string::String,
+        disc: i64,
+        fields: alloc::vec::Vec<Self>,
+    ) -> Self {
+        let word_bytes = (1usize << <W as crate::word::Word>::BITS_LOG2) / 8;
+        let float_bytes = (1usize << <F as crate::float::Float>::BITS_LOG2) / 8;
+        Self::enum_with_widths(type_name, variant, disc, fields, word_bytes, float_bytes)
+    }
+
+    /// Construct an enum value, choosing the flat byte body for a
+    /// transitively-scalar payload and the boxed body otherwise, using the
+    /// given scalar widths (B28 P2).
+    ///
+    /// The single choke point for enum construction, so the VM `NewEnum`
+    /// handler, constant materialisation, and host marshalling agree on the
+    /// representation. The flat body is `[disc: word_bytes][payload]`: the
+    /// discriminant is written as a `Word` at offset zero, then the payload
+    /// fields are packed in declaration order. A payload field that is not
+    /// a flat-eligible scalar forces the boxed body.
+    pub fn enum_with_widths(
+        type_name: alloc::string::String,
+        variant: alloc::string::String,
+        disc: i64,
+        fields: alloc::vec::Vec<Self>,
+        word_bytes: usize,
+        float_bytes: usize,
+    ) -> Self {
+        let mut payload = 0usize;
+        let mut eligible = true;
+        for v in &fields {
+            match flat_tuple_scalar_kind(v) {
+                Some(kind) => payload += kind.size_in_bytes(word_bytes, float_bytes),
+                None => {
+                    eligible = false;
+                    break;
+                }
+            }
+        }
+        let total = word_bytes + payload;
+        if !eligible || total > u16::MAX as usize {
+            return Self::Enum(EnumBody::Boxed {
+                type_name,
+                variant,
+                fields,
+            });
+        }
+        let mut body = crate::flat_value::FlatComposite::zeroed(total);
+        // Discriminant word at offset zero, matching the `Enum as Word`
+        // cast and what `Op::IsEnum` reads on the flat body.
+        Self::Int(<W as crate::word::Word>::from_i64_wrap(disc)).write_scalar_le(
+            body.as_bytes_mut(),
+            0,
+            word_bytes,
+            float_bytes,
+        );
+        let mut offset = word_bytes;
+        for v in &fields {
+            let kind = flat_tuple_scalar_kind(v).expect("eligibility checked above");
+            v.write_scalar_le(body.as_bytes_mut(), offset, word_bytes, float_bytes);
+            offset += kind.size_in_bytes(word_bytes, float_bytes);
+        }
+        Self::Enum(EnumBody::Flat(body))
+    }
+
     /// Write this fixed-size scalar's little-endian bytes into `dst` at
     /// `offset` (B28 P2). The width of an `Int`/`Fixed` is `word_bytes`
     /// and of a `Float` is `float_bytes`, taken from the runtime's
@@ -702,18 +780,20 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
                     .map(|(k, v)| (k.clone(), v.materialise_kstrings(arena)))
                     .collect(),
             ),
-            Self::Enum {
+            // A flat enum is transitively scalar and holds no KStr.
+            Self::Enum(EnumBody::Flat(_)) => self.clone(),
+            Self::Enum(EnumBody::Boxed {
                 type_name,
                 variant,
                 fields,
-            } => Self::Enum {
+            }) => Self::Enum(EnumBody::Boxed {
                 type_name: type_name.clone(),
                 variant: variant.clone(),
                 fields: fields
                     .iter()
                     .map(|v| v.materialise_kstrings(arena))
                     .collect(),
-            },
+            }),
             other => other.clone(),
         }
     }
@@ -733,7 +813,7 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
             Self::Tuple(_) => "Tuple",
             Self::Array(_) => "Array",
             Self::Struct { .. } => "Struct",
-            Self::Enum { .. } => "Enum",
+            Self::Enum(_) => "Enum",
             Self::None => "None",
             // Returning a `&'static str` for an opaque value would
             // require leaking the host-supplied name, so we surface
@@ -791,7 +871,8 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
             Self::Struct(StructBody::Boxed { fields, .. }) => {
                 fields.iter().any(|(_, v)| v.contains_dynstr())
             }
-            Self::Enum { fields, .. } => fields.iter().any(Self::contains_dynstr),
+            Self::Enum(EnumBody::Flat(_)) => false,
+            Self::Enum(EnumBody::Boxed { fields, .. }) => fields.iter().any(Self::contains_dynstr),
             _ => false,
         }
     }
@@ -866,14 +947,18 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
                 fields,
             } => {
                 use alloc::string::ToString;
-                Self::Enum {
+                // A constant enum carries the variant name but not the
+                // discriminant, so it materialises boxed; flat enums are
+                // built at run time by `Op::NewEnum` with the baked disc
+                // (B28 P2).
+                Self::Enum(EnumBody::Boxed {
                     type_name: type_name.as_str().to_string(),
                     variant: variant.as_str().to_string(),
                     fields: fields
                         .iter()
                         .map(|c| Self::from_const_archived(c, word_bytes, float_bytes))
                         .collect(),
-                }
+                })
             }
             ArchivedConstValue::None => Self::None,
         }
@@ -1016,6 +1101,30 @@ pub enum StructField {
     Boxed {
         /// Field-name constant-pool index.
         name_const: u16,
+    },
+}
+
+/// Baked operand of [`Op::GetEnumField`] for enum-payload access (B28 P2).
+///
+/// An enum payload field is positional (like a tuple element), so the boxed
+/// form carries the index. The flat form carries the byte `offset` within
+/// the flat body (already including the leading discriminant word) and the
+/// field `kind`. The compiler bakes the form per variant; the access
+/// handler dispatches on the runtime body and faults on a form mismatch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EnumField {
+    /// Flat read at a compiler-baked byte `offset` (past the discriminant
+    /// word), interpreting the bytes as `kind`.
+    Flat {
+        /// Byte offset of the payload field within the flat enum body.
+        offset: u16,
+        /// Fixed-size scalar kind to read at the offset.
+        kind: crate::value_layout::ScalarKind,
+    },
+    /// Positional index into the boxed payload (pre-B28 form).
+    Boxed {
+        /// Zero-based payload-field index.
+        index: u8,
     },
 }
 
@@ -2633,11 +2742,11 @@ impl ConstValue {
             Value::Struct(StructBody::Flat(_)) => {
                 Err("a flat struct cannot be converted to a compile-time constant")
             }
-            Value::Enum {
+            Value::Enum(EnumBody::Boxed {
                 type_name,
                 variant,
                 fields,
-            } => {
+            }) => {
                 let cfields: Result<Vec<_>, _> =
                     fields.into_iter().map(ConstValue::try_from_value).collect();
                 Ok(ConstValue::Enum {
@@ -2645,6 +2754,13 @@ impl ConstValue {
                     variant,
                     fields: cfields?,
                 })
+            }
+            // A flat enum carries a discriminant and bytes, not the
+            // variant name and values a constant needs; constant folding
+            // runs before flat construction, so this is unreachable on a
+            // valid path.
+            Value::Enum(EnumBody::Flat(_)) => {
+                Err("a flat enum cannot be converted to a compile-time constant")
             }
             Value::None => Ok(ConstValue::None),
             #[cfg(not(feature = "floats"))]
@@ -2691,15 +2807,17 @@ impl ConstValue {
                 8,
                 8,
             ),
+            // A constant enum has no discriminant, so it materialises
+            // boxed (B28 P2); flat enums are built at run time.
             ConstValue::Enum {
                 type_name,
                 variant,
                 fields,
-            } => Value::Enum {
+            } => Value::Enum(EnumBody::Boxed {
                 type_name,
                 variant,
                 fields: fields.into_iter().map(ConstValue::into_value).collect(),
-            },
+            }),
             ConstValue::None => Value::None,
         }
     }
@@ -3170,14 +3288,14 @@ mod materialise_kstrings_tests {
     fn enum_with_kstr_payload_walks_recursively() {
         let arena = make_arena();
         let handle = KString::alloc(&arena, "payload").expect("alloc");
-        let v = V::Enum {
+        let v = V::Enum(EnumBody::Boxed {
             type_name: alloc::string::String::from("Option"),
             variant: alloc::string::String::from("Some"),
             fields: alloc::vec![V::KStr(handle)],
-        };
+        });
         let materialised = v.materialise_kstrings(&arena);
         match materialised {
-            V::Enum { fields, .. } => {
+            V::Enum(EnumBody::Boxed { fields, .. }) => {
                 assert_eq!(fields.len(), 1);
                 match &fields[0] {
                     V::StaticStr(s) => assert_eq!(s, "payload"),

@@ -1951,12 +1951,12 @@ pub(crate) fn format_value(v: &Value) -> String {
         Value::Array(keleusma::bytecode::ArrayBody::Flat(fc)) => {
             format!("[<flat array: {} bytes>]", fc.len())
         }
-        Value::Enum {
+        Value::Enum(keleusma::bytecode::EnumBody::Boxed {
             type_name,
             variant,
             fields,
             ..
-        } => {
+        }) => {
             if type_name == "Option" && variant == "Some" {
                 if let Some(f) = fields.first() {
                     format!("Some({})", format_value(f))

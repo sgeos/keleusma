@@ -244,11 +244,11 @@ fn getenv_native<W: Word, F: Float>(
         ))
     })?;
     match std::env::var(name) {
-        Ok(value) => Ok(GenericValue::Enum {
+        Ok(value) => Ok(GenericValue::Enum(crate::bytecode::EnumBody::Boxed {
             type_name: std::string::String::from("Option"),
             variant: std::string::String::from("Some"),
             fields: std::vec![GenericValue::StaticStr(value)],
-        }),
+        })),
         Err(std::env::VarError::NotPresent) => Ok(GenericValue::None),
         Err(std::env::VarError::NotUnicode(_)) => Err(VmError::NativeError(std::format!(
             "shell::getenv: {} is not valid Unicode",
@@ -616,11 +616,11 @@ fn arg_native<W: Word, F: Float>(
     }
     let value = script_arg_at(index as usize);
     match value {
-        Some(v) => Ok(GenericValue::Enum {
+        Some(v) => Ok(GenericValue::Enum(crate::bytecode::EnumBody::Boxed {
             type_name: std::string::String::from("Option"),
             variant: std::string::String::from("Some"),
             fields: std::vec![GenericValue::StaticStr(v)],
-        }),
+        })),
         None => Ok(GenericValue::None),
     }
 }
@@ -782,11 +782,11 @@ mod tests {
     // by `shell::arg`, panicking on any other shape.
     fn unwrap_some(v: V) -> std::string::String {
         match v {
-            V::Enum {
+            V::Enum(crate::bytecode::EnumBody::Boxed {
                 type_name,
                 variant,
                 fields,
-            } => {
+            }) => {
                 assert_eq!(type_name, "Option");
                 assert_eq!(variant, "Some");
                 match &fields[..] {

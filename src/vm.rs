@@ -3502,11 +3502,11 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                     };
                     sp!(
                         self,
-                        crate::bytecode::GenericValue::Enum {
+                        crate::bytecode::GenericValue::Enum(crate::bytecode::EnumBody::Boxed {
                             type_name,
                             variant,
                             fields,
-                        }
+                        })
                     );
                 }
                 Op::NewArray(count) => {
@@ -3740,7 +3740,10 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                 Op::GetEnumField(idx) => {
                     let container = self.pop()?;
                     match container {
-                        crate::bytecode::GenericValue::Enum { fields, .. } => {
+                        crate::bytecode::GenericValue::Enum(crate::bytecode::EnumBody::Boxed {
+                            fields,
+                            ..
+                        }) => {
                             let i = idx as usize;
                             if i >= fields.len() {
                                 return Err(VmError::IndexOutOfBounds(i as i64, fields.len()));
@@ -3855,8 +3858,9 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                     let val = self.stack.last().ok_or(VmError::StackUnderflow)?;
                     let matches = matches!(
                         val,
-                        crate::bytecode::GenericValue::Enum { type_name, variant, .. }
-                            if type_name == &expected_type && variant == &expected_var
+                        crate::bytecode::GenericValue::Enum(
+                            crate::bytecode::EnumBody::Boxed { type_name, variant, .. }
+                        ) if type_name == &expected_type && variant == &expected_var
                     );
                     sp!(self, crate::bytecode::GenericValue::Bool(matches));
                 }
@@ -7331,41 +7335,41 @@ mod tests {
         let module = compile(&program).expect("compile error");
         let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
         let mut vm = Vm::new(module, &arena).unwrap();
-        let initial = Value::Enum {
+        let initial = Value::Enum(EnumBody::Boxed {
             type_name: String::from("Reply"),
             variant: String::from("Ok"),
             fields: alloc::vec![Value::Int(0)],
-        };
+        });
         match vm.call(&[initial]).unwrap() {
             VmState::Yielded(v) => assert_eq!(v, Value::Int(0)),
             other => panic!("expected first yield, got {:?}", other),
         }
         // Successful resume returns the Ok payload.
-        let success = Value::Enum {
+        let success = Value::Enum(EnumBody::Boxed {
             type_name: String::from("Reply"),
             variant: String::from("Ok"),
             fields: alloc::vec![Value::Int(42)],
-        };
+        });
         match vm.resume(success).unwrap() {
             VmState::Reset => {}
             other => panic!("expected reset, got {:?}", other),
         }
         // After the implicit reset, send Err to drive the next round
         // through the error branch.
-        let initial2 = Value::Enum {
+        let initial2 = Value::Enum(EnumBody::Boxed {
             type_name: String::from("Reply"),
             variant: String::from("Ok"),
             fields: alloc::vec![Value::Int(0)],
-        };
+        });
         match vm.resume(initial2).unwrap() {
             VmState::Yielded(_) => {}
             other => panic!("expected yield, got {:?}", other),
         }
-        let err = Value::Enum {
+        let err = Value::Enum(EnumBody::Boxed {
             type_name: String::from("Reply"),
             variant: String::from("Err"),
             fields: alloc::vec![],
-        };
+        });
         match vm.resume_err(err).unwrap() {
             VmState::Reset => {}
             other => panic!("expected reset on err, got {:?}", other),
@@ -7393,22 +7397,22 @@ mod tests {
         let module = compile(&program).expect("compile error");
         let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
         let mut vm = Vm::new(module, &arena).unwrap();
-        let initial = Value::Enum {
+        let initial = Value::Enum(EnumBody::Boxed {
             type_name: String::from("Reply"),
             variant: String::from("Ok"),
             fields: alloc::vec![Value::Int(0)],
-        };
+        });
         match vm.call(&[initial]).unwrap() {
             VmState::Yielded(_) => {}
             other => panic!("expected yield, got {:?}", other),
         }
         // resume_err with Err variant routes through the error arm
         // and the script returns 99 to the host before reset.
-        let err = Value::Enum {
+        let err = Value::Enum(EnumBody::Boxed {
             type_name: String::from("Reply"),
             variant: String::from("Err"),
             fields: alloc::vec![],
-        };
+        });
         match vm.resume_err(err).unwrap() {
             VmState::Reset => {}
             other => panic!("expected reset, got {:?}", other),

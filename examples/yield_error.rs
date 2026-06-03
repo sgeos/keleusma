@@ -43,44 +43,44 @@ fn main() {
     let arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
     let mut vm = Vm::new(module, &arena).expect("verify");
 
-    let seed = Value::Enum {
+    let seed = Value::Enum(keleusma::bytecode::EnumBody::Boxed {
         type_name: String::from("Reply"),
         variant: String::from("Ok"),
         fields: alloc_vec(Value::Int(0)),
-    };
+    });
     match vm.call(&[seed]).expect("call") {
         VmState::Yielded(v) => println!("first yield: {:?}", v),
         other => panic!("expected yield, got {:?}", other),
     }
 
     println!("simulating successful host reply Ok(42)");
-    let success = Value::Enum {
+    let success = Value::Enum(keleusma::bytecode::EnumBody::Boxed {
         type_name: String::from("Reply"),
         variant: String::from("Ok"),
         fields: alloc_vec(Value::Int(42)),
-    };
+    });
     match vm.resume(success).expect("resume ok") {
         VmState::Reset => println!("script reset after Ok arm"),
         other => panic!("expected reset, got {:?}", other),
     }
 
     println!("starting next iteration");
-    let seed2 = Value::Enum {
+    let seed2 = Value::Enum(keleusma::bytecode::EnumBody::Boxed {
         type_name: String::from("Reply"),
         variant: String::from("Ok"),
         fields: alloc_vec(Value::Int(0)),
-    };
+    });
     match vm.resume(seed2).expect("resume seed") {
         VmState::Yielded(_) => println!("yielded (waiting for reply)"),
         other => panic!("expected yield, got {:?}", other),
     }
 
     println!("simulating failure host reply Err");
-    let err = Value::Enum {
+    let err = Value::Enum(keleusma::bytecode::EnumBody::Boxed {
         type_name: String::from("Reply"),
         variant: String::from("Err"),
         fields: alloc::vec::Vec::new(),
-    };
+    });
     match vm.resume_err(err).expect("resume_err") {
         VmState::Reset => println!("script reset after Err arm"),
         other => panic!("expected reset on err, got {:?}", other),

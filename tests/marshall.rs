@@ -148,11 +148,11 @@ fn derive_enum_struct_variant() {
 
 #[test]
 fn derive_enum_unknown_variant_errors() {
-    let bogus = Value::Enum {
+    let bogus = Value::Enum(keleusma::bytecode::EnumBody::Boxed {
         type_name: String::from("Status"),
         variant: String::from("Unknown"),
         fields: vec![],
-    };
+    });
     let err = Status::from_value(&bogus).unwrap_err();
     match err {
         VmError::TypeError(msg) => assert!(msg.contains("Unknown")),
