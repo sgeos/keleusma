@@ -454,7 +454,7 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
     /// `NewArray` handler, constant materialisation, and host marshalling
     /// all agree on the representation an array type uses, which equality
     /// relies on. The eligibility rule is the same as for a tuple field
-    /// ([`flat_tuple_scalar_kind`]): a flat body is produced only when
+    /// (`flat_tuple_scalar_kind`): a flat body is produced only when
     /// every element is a flat-eligible scalar and the packed size fits
     /// the sixteen-bit access offset. Because the array is homogeneous the
     /// elements share one kind, so the packed layout is `count * size`.
