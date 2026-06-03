@@ -560,11 +560,9 @@ impl AiPool {
         ];
         let result = vm.call(&args).map_err(|e| format!("ai vm: {:?}", e))?;
         match result {
-            VmState::Finished(Value::Tuple(t)) if t.len() == 3 => {
-                let a = expect_int(&t[0])?;
-                let x = expect_int(&t[1])?;
-                let y = expect_int(&t[2])?;
-                Ok(decode_action(a, x, y))
+            VmState::Finished(val @ Value::Tuple(_)) => {
+                let t = tuple_ints(&val, 3)?;
+                Ok(decode_action(t[0], t[1], t[2]))
             }
             other => Err(format!("ai vm returned unexpected shape: {:?}", other).into()),
         }
@@ -584,7 +582,10 @@ impl AiPool {
         py: i32,
         sees: bool,
     ) -> Result<AiAction, Box<dyn std::error::Error>> {
-        let input = Value::Tuple(alloc::vec![
+        // Build the input through the shared constructor so the tuple has
+        // the same representation a script-built tuple of the same type
+        // would, which the compiled `GetTupleField` offsets rely on.
+        let input = Value::tuple(alloc::vec![
             Value::Int(mx as i64),
             Value::Int(my as i64),
             Value::Int(px as i64),
@@ -605,11 +606,9 @@ impl AiPool {
         .map_err(|e| format!("loop main vm: {:?}", e))?;
         for _ in 0..16 {
             match state {
-                VmState::Yielded(Value::Tuple(t)) if t.len() == 3 => {
-                    let a = expect_int(&t[0])?;
-                    let x = expect_int(&t[1])?;
-                    let y = expect_int(&t[2])?;
-                    return Ok(decode_action(a, x, y));
+                VmState::Yielded(val @ Value::Tuple(_)) => {
+                    let t = tuple_ints(&val, 3)?;
+                    return Ok(decode_action(t[0], t[1], t[2]));
                 }
                 VmState::Reset => {
                     state = vm
@@ -644,6 +643,52 @@ fn expect_int(v: &Value) -> Result<i64, Box<dyn std::error::Error>> {
     }
 }
 
+/// Extract the integer fields of a tuple `Value` returned by an
+/// artificial-intelligence script. A transitively-scalar tuple is stored
+/// as a flat little-endian byte body (B28); each `Word` field is read back
+/// at its packed offset using the bundled runtime's eight-byte word, the
+/// same width the marshalling layer applies. The boxed body, used when a
+/// tuple is not all flat scalars, is also accepted.
+fn tuple_ints(v: &Value, expected: usize) -> Result<Vec<i64>, Box<dyn std::error::Error>> {
+    use keleusma::bytecode::TupleBody;
+    use keleusma::value_layout::ScalarKind;
+    // Bundled runtime widths: `Value = GenericValue<i64, f64>`.
+    const WORD_BYTES: usize = 8;
+    const FLOAT_BYTES: usize = 8;
+    let ints: Vec<i64> = match v {
+        Value::Tuple(TupleBody::Boxed(items)) => {
+            items.iter().map(expect_int).collect::<Result<_, _>>()?
+        }
+        Value::Tuple(TupleBody::Flat(fc)) => {
+            let bytes = fc.as_bytes();
+            if bytes.len() != expected * WORD_BYTES {
+                return Err(format!(
+                    "expected a flat tuple of {} words, got {} bytes",
+                    expected,
+                    bytes.len()
+                )
+                .into());
+            }
+            (0..expected)
+                .map(|i| {
+                    expect_int(&Value::read_scalar_le(
+                        bytes,
+                        i * WORD_BYTES,
+                        ScalarKind::Int,
+                        WORD_BYTES,
+                        FLOAT_BYTES,
+                    ))
+                })
+                .collect::<Result<_, _>>()?
+        }
+        other => return Err(format!("expected tuple, got {:?}", other).into()),
+    };
+    if ints.len() != expected {
+        return Err(format!("expected tuple of arity {}, got {}", expected, ints.len()).into());
+    }
+    Ok(ints)
+}
+
 /// Unpack a `Finished` virtual-machine state whose value is a
 /// tuple of `n` integers. Used by the pure-function dispatch
 /// helpers to share the result-decoding boilerplate.
@@ -653,7 +698,8 @@ fn unpack_finished_ints(
     n: usize,
 ) -> Result<Vec<i64>, Box<dyn std::error::Error>> {
     match result {
-        VmState::Finished(Value::Tuple(t)) if t.len() == n => t.iter().map(expect_int).collect(),
+        VmState::Finished(val @ Value::Tuple(_)) => tuple_ints(&val, n)
+            .map_err(|e| format!("{} vm returned unexpected shape: {}", name, e).into()),
         other => Err(format!("{} vm returned unexpected shape: {:?}", name, other).into()),
     }
 }
@@ -669,13 +715,10 @@ fn unpack_finished_int(result: VmState, name: &str) -> Result<i64, Box<dyn std::
 
 fn unpack_5_tuple(result: VmState) -> Result<EffectTuple, Box<dyn std::error::Error>> {
     match result {
-        VmState::Finished(Value::Tuple(t)) if t.len() == 5 => Ok((
-            expect_int(&t[0])?,
-            expect_int(&t[1])?,
-            expect_int(&t[2])?,
-            expect_int(&t[3])?,
-            expect_int(&t[4])?,
-        )),
+        VmState::Finished(val @ Value::Tuple(_)) => {
+            let t = tuple_ints(&val, 5)?;
+            Ok((t[0], t[1], t[2], t[3], t[4]))
+        }
         other => Err(format!("expected 5-tuple, got {:?}", other).into()),
     }
 }

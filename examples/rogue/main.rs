@@ -452,6 +452,7 @@ fn run_dungen(vm: &mut Vm, floor: i64) -> Result<(), Box<dyn std::error::Error>>
         VmState::Finished(_) => Ok(()),
         VmState::Yielded(_) => Err("dungen yielded; expected fn-style return".into()),
         VmState::Reset => Err("dungen reset; expected fn-style return".into()),
+        VmState::BreakpointHit { .. } => Err("dungen hit a breakpoint; none armed".into()),
     }
 }
 

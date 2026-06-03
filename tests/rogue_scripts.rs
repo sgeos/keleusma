@@ -9,11 +9,10 @@
 
 use std::sync::{Arc, Mutex};
 
-use keleusma::bytecode::{TupleBody, Value};
+use keleusma::bytecode::Value;
 use keleusma::compiler::compile;
 use keleusma::lexer::tokenize;
 use keleusma::parser::parse;
-use keleusma::value_layout::ScalarKind;
 use keleusma::vm::{DEFAULT_ARENA_CAPACITY, Vm, VmError, VmState};
 use keleusma::{Arena, Module};
 
@@ -26,7 +25,14 @@ use keleusma::{Arena, Module};
 /// byte length at the bundled runtime's eight-byte word width; this is
 /// the typed read the host performs now that a scalar tuple is pure
 /// bytes. Panics if the value is not such a tuple.
+#[cfg(not(any(
+    feature = "narrow-word-8",
+    feature = "narrow-word-16",
+    feature = "narrow-word-32"
+)))]
 fn word_tuple(v: &Value) -> Vec<i64> {
+    use keleusma::bytecode::TupleBody;
+    use keleusma::value_layout::ScalarKind;
     match v {
         Value::Tuple(TupleBody::Boxed(elems)) => elems
             .iter()
@@ -53,16 +59,66 @@ fn word_tuple(v: &Value) -> Vec<i64> {
 const SRC_BESTIARY: &str = include_str!("../examples/scripts/rogue/rogue_bestiary.kel");
 const SRC_GEAR: &str = include_str!("../examples/scripts/rogue/rogue_gear.kel");
 const SRC_DUNGEN: &str = include_str!("../examples/scripts/rogue/rogue_dungen.kel");
+#[cfg(not(any(
+    feature = "narrow-word-8",
+    feature = "narrow-word-16",
+    feature = "narrow-word-32"
+)))]
 const SRC_AI_IDLE: &str = include_str!("../examples/scripts/rogue/rogue_ai_idle.kel");
+#[cfg(not(any(
+    feature = "narrow-word-8",
+    feature = "narrow-word-16",
+    feature = "narrow-word-32"
+)))]
 const SRC_AI_CHASER: &str = include_str!("../examples/scripts/rogue/rogue_ai_chaser.kel");
+#[cfg(not(any(
+    feature = "narrow-word-8",
+    feature = "narrow-word-16",
+    feature = "narrow-word-32"
+)))]
 const SRC_AI_WANDER: &str = include_str!("../examples/scripts/rogue/rogue_ai_wander.kel");
+#[cfg(not(any(
+    feature = "narrow-word-8",
+    feature = "narrow-word-16",
+    feature = "narrow-word-32"
+)))]
 const SRC_AI_SLEEPER: &str = include_str!("../examples/scripts/rogue/rogue_ai_sleeper.kel");
+#[cfg(not(any(
+    feature = "narrow-word-8",
+    feature = "narrow-word-16",
+    feature = "narrow-word-32"
+)))]
 const SRC_AI_RANGED: &str = include_str!("../examples/scripts/rogue/rogue_ai_ranged.kel");
+#[cfg(not(any(
+    feature = "narrow-word-8",
+    feature = "narrow-word-16",
+    feature = "narrow-word-32"
+)))]
 const SRC_AI_FAST: &str = include_str!("../examples/scripts/rogue/rogue_ai_fast.kel");
+#[cfg(not(any(
+    feature = "narrow-word-8",
+    feature = "narrow-word-16",
+    feature = "narrow-word-32"
+)))]
 const SRC_AI_SMART: &str = include_str!("../examples/scripts/rogue/rogue_ai_smart.kel");
+#[cfg(not(any(
+    feature = "narrow-word-8",
+    feature = "narrow-word-16",
+    feature = "narrow-word-32"
+)))]
 const SRC_AI_BOSS: &str = include_str!("../examples/scripts/rogue/rogue_ai_boss.kel");
 const SRC_AI_TRACKER: &str = include_str!("../examples/scripts/rogue/rogue_ai_tracker.kel");
+#[cfg(not(any(
+    feature = "narrow-word-8",
+    feature = "narrow-word-16",
+    feature = "narrow-word-32"
+)))]
 const SRC_ITEM_POTION: &str = include_str!("../examples/scripts/rogue/rogue_item_potion.kel");
+#[cfg(not(any(
+    feature = "narrow-word-8",
+    feature = "narrow-word-16",
+    feature = "narrow-word-32"
+)))]
 const SRC_ITEM_SCROLL: &str = include_str!("../examples/scripts/rogue/rogue_item_scroll.kel");
 const SRC_GAME: &str = include_str!("../examples/scripts/rogue/rogue_game.kel");
 const SRC_PLAYER_AI: &str = include_str!("../examples/scripts/rogue/rogue_player_ai.kel");
@@ -254,6 +310,11 @@ fn ai_tracker_compiles() {
 }
 
 #[test]
+#[cfg(not(any(
+    feature = "narrow-word-8",
+    feature = "narrow-word-16",
+    feature = "narrow-word-32"
+)))]
 fn ai_tracker_chases_when_seen() {
     let module = build(SRC_AI_TRACKER);
     let arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
@@ -281,6 +342,11 @@ fn ai_tracker_chases_when_seen() {
 }
 
 #[test]
+#[cfg(not(any(
+    feature = "narrow-word-8",
+    feature = "narrow-word-16",
+    feature = "narrow-word-32"
+)))]
 fn ai_tracker_pursues_last_known_when_unseen() {
     let module = build(SRC_AI_TRACKER);
     let arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
@@ -333,6 +399,11 @@ fn combat_compiles() {
     let _ = build(SRC_COMBAT);
 }
 
+#[cfg(not(any(
+    feature = "narrow-word-8",
+    feature = "narrow-word-16",
+    feature = "narrow-word-32"
+)))]
 fn run_player_ai(mx: i64, my: i64, cmd: i64) -> (i64, i64, i64) {
     let module = build(SRC_PLAYER_AI);
     let arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
@@ -351,6 +422,11 @@ fn run_player_ai(mx: i64, my: i64, cmd: i64) -> (i64, i64, i64) {
 }
 
 #[test]
+#[cfg(not(any(
+    feature = "narrow-word-8",
+    feature = "narrow-word-16",
+    feature = "narrow-word-32"
+)))]
 fn player_ai_wait_returns_action_zero() {
     let (action, tx, ty) = run_player_ai(5, 5, 0);
     assert_eq!(action, 0);
@@ -358,6 +434,11 @@ fn player_ai_wait_returns_action_zero() {
 }
 
 #[test]
+#[cfg(not(any(
+    feature = "narrow-word-8",
+    feature = "narrow-word-16",
+    feature = "narrow-word-32"
+)))]
 fn player_ai_move_north_returns_action_one() {
     let (action, tx, ty) = run_player_ai(5, 5, 1);
     assert_eq!(action, 1);
@@ -365,6 +446,11 @@ fn player_ai_move_north_returns_action_one() {
 }
 
 #[test]
+#[cfg(not(any(
+    feature = "narrow-word-8",
+    feature = "narrow-word-16",
+    feature = "narrow-word-32"
+)))]
 fn player_ai_move_diagonal_southeast() {
     let (action, tx, ty) = run_player_ai(5, 5, 8);
     assert_eq!(action, 1);
@@ -372,23 +458,43 @@ fn player_ai_move_diagonal_southeast() {
 }
 
 #[test]
+#[cfg(not(any(
+    feature = "narrow-word-8",
+    feature = "narrow-word-16",
+    feature = "narrow-word-32"
+)))]
 fn player_ai_descend_returns_action_three() {
     let (action, _tx, _ty) = run_player_ai(5, 5, 9);
     assert_eq!(action, 3);
 }
 
 #[test]
+#[cfg(not(any(
+    feature = "narrow-word-8",
+    feature = "narrow-word-16",
+    feature = "narrow-word-32"
+)))]
 fn player_ai_quaff_returns_action_four() {
     let (action, _tx, _ty) = run_player_ai(5, 5, 10);
     assert_eq!(action, 4);
 }
 
 #[test]
+#[cfg(not(any(
+    feature = "narrow-word-8",
+    feature = "narrow-word-16",
+    feature = "narrow-word-32"
+)))]
 fn player_ai_read_returns_action_five() {
     let (action, _tx, _ty) = run_player_ai(5, 5, 11);
     assert_eq!(action, 5);
 }
 
+#[cfg(not(any(
+    feature = "narrow-word-8",
+    feature = "narrow-word-16",
+    feature = "narrow-word-32"
+)))]
 fn run_combat(skill: i64, dmg: i64, evasion: i64, armor: i64, roll: i64) -> (i64, i64) {
     let module = build(SRC_COMBAT);
     let arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
@@ -413,12 +519,22 @@ fn run_combat(skill: i64, dmg: i64, evasion: i64, armor: i64, roll: i64) -> (i64
 }
 
 #[test]
+#[cfg(not(any(
+    feature = "narrow-word-8",
+    feature = "narrow-word-16",
+    feature = "narrow-word-32"
+)))]
 fn combat_fumble_always_misses() {
     let (hit, dmg) = run_combat(20, 10, 0, 0, 1);
     assert_eq!((hit, dmg), (0, 0));
 }
 
 #[test]
+#[cfg(not(any(
+    feature = "narrow-word-8",
+    feature = "narrow-word-16",
+    feature = "narrow-word-32"
+)))]
 fn combat_critical_always_hits() {
     let (hit, dmg) = run_combat(0, 5, 50, 0, 20);
     assert_eq!(hit, 2);
@@ -426,6 +542,11 @@ fn combat_critical_always_hits() {
 }
 
 #[test]
+#[cfg(not(any(
+    feature = "narrow-word-8",
+    feature = "narrow-word-16",
+    feature = "narrow-word-32"
+)))]
 fn combat_ordinary_hit_subtracts_armor() {
     let (hit, dmg) = run_combat(10, 8, 0, 3, 12);
     assert_eq!(hit, 1);
@@ -433,12 +554,22 @@ fn combat_ordinary_hit_subtracts_armor() {
 }
 
 #[test]
+#[cfg(not(any(
+    feature = "narrow-word-8",
+    feature = "narrow-word-16",
+    feature = "narrow-word-32"
+)))]
 fn combat_miss_returns_zero_damage() {
     let (hit, dmg) = run_combat(0, 8, 5, 0, 10);
     assert_eq!((hit, dmg), (0, 0));
 }
 
 #[test]
+#[cfg(not(any(
+    feature = "narrow-word-8",
+    feature = "narrow-word-16",
+    feature = "narrow-word-32"
+)))]
 fn combat_damage_floored_at_one() {
     let (hit, dmg) = run_combat(10, 2, 0, 8, 12);
     assert_eq!(hit, 1);
@@ -662,6 +793,11 @@ fn dungen_runs_floor_1() {
 
 // -- Artificial-intelligence script tests ---------------------------
 
+#[cfg(not(any(
+    feature = "narrow-word-8",
+    feature = "narrow-word-16",
+    feature = "narrow-word-32"
+)))]
 fn call_ai(src: &str, mx: i64, my: i64, px: i64, py: i64, sees: i64) -> (i64, i64, i64) {
     let module = build(src);
     let arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
@@ -698,6 +834,11 @@ fn call_ai(src: &str, mx: i64, my: i64, px: i64, py: i64, sees: i64) -> (i64, i6
 }
 
 #[test]
+#[cfg(not(any(
+    feature = "narrow-word-8",
+    feature = "narrow-word-16",
+    feature = "narrow-word-32"
+)))]
 fn ai_idle_waits_in_place() {
     let (action, tx, ty) = call_ai(SRC_AI_IDLE, 5, 5, 10, 10, 1);
     assert_eq!(action, 0);
@@ -705,6 +846,11 @@ fn ai_idle_waits_in_place() {
 }
 
 #[test]
+#[cfg(not(any(
+    feature = "narrow-word-8",
+    feature = "narrow-word-16",
+    feature = "narrow-word-32"
+)))]
 fn ai_chaser_steps_toward_player_when_seen() {
     let (action, tx, ty) = call_ai(SRC_AI_CHASER, 5, 5, 10, 10, 1);
     assert_eq!(action, 1);
@@ -712,12 +858,22 @@ fn ai_chaser_steps_toward_player_when_seen() {
 }
 
 #[test]
+#[cfg(not(any(
+    feature = "narrow-word-8",
+    feature = "narrow-word-16",
+    feature = "narrow-word-32"
+)))]
 fn ai_chaser_waits_when_unseen() {
     let (action, _tx, _ty) = call_ai(SRC_AI_CHASER, 5, 5, 10, 10, 0);
     assert_eq!(action, 0);
 }
 
 #[test]
+#[cfg(not(any(
+    feature = "narrow-word-8",
+    feature = "narrow-word-16",
+    feature = "narrow-word-32"
+)))]
 fn ai_wander_chases_when_seen() {
     let (action, tx, ty) = call_ai(SRC_AI_WANDER, 5, 5, 10, 10, 1);
     assert_eq!(action, 1);
@@ -725,6 +881,11 @@ fn ai_wander_chases_when_seen() {
 }
 
 #[test]
+#[cfg(not(any(
+    feature = "narrow-word-8",
+    feature = "narrow-word-16",
+    feature = "narrow-word-32"
+)))]
 fn ai_sleeper_chases_when_seen() {
     let (action, tx, ty) = call_ai(SRC_AI_SLEEPER, 5, 5, 10, 10, 1);
     assert_eq!(action, 1);
@@ -732,12 +893,22 @@ fn ai_sleeper_chases_when_seen() {
 }
 
 #[test]
+#[cfg(not(any(
+    feature = "narrow-word-8",
+    feature = "narrow-word-16",
+    feature = "narrow-word-32"
+)))]
 fn ai_sleeper_waits_when_unseen() {
     let (action, _tx, _ty) = call_ai(SRC_AI_SLEEPER, 5, 5, 10, 10, 0);
     assert_eq!(action, 0);
 }
 
 #[test]
+#[cfg(not(any(
+    feature = "narrow-word-8",
+    feature = "narrow-word-16",
+    feature = "narrow-word-32"
+)))]
 fn ai_ranged_attacks_when_distant() {
     let (action, tx, ty) = call_ai(SRC_AI_RANGED, 5, 5, 10, 10, 1);
     assert_eq!(action, 2);
@@ -745,6 +916,11 @@ fn ai_ranged_attacks_when_distant() {
 }
 
 #[test]
+#[cfg(not(any(
+    feature = "narrow-word-8",
+    feature = "narrow-word-16",
+    feature = "narrow-word-32"
+)))]
 fn ai_ranged_retreats_when_adjacent() {
     let (action, tx, ty) = call_ai(SRC_AI_RANGED, 5, 5, 6, 5, 1);
     assert_eq!(action, 1);
@@ -752,6 +928,11 @@ fn ai_ranged_retreats_when_adjacent() {
 }
 
 #[test]
+#[cfg(not(any(
+    feature = "narrow-word-8",
+    feature = "narrow-word-16",
+    feature = "narrow-word-32"
+)))]
 fn ai_fast_steps_toward_player() {
     let (action, tx, ty) = call_ai(SRC_AI_FAST, 5, 5, 10, 10, 1);
     assert_eq!(action, 1);
@@ -759,6 +940,11 @@ fn ai_fast_steps_toward_player() {
 }
 
 #[test]
+#[cfg(not(any(
+    feature = "narrow-word-8",
+    feature = "narrow-word-16",
+    feature = "narrow-word-32"
+)))]
 fn ai_smart_dominant_axis_step() {
     // Player far east, same row. Smart picks the dominant axis.
     let (action, tx, ty) = call_ai(SRC_AI_SMART, 5, 5, 20, 5, 1);
@@ -769,6 +955,11 @@ fn ai_smart_dominant_axis_step() {
 /// Helper for the boss archetype which uses `loop main` with a
 /// five-tuple input. Returns the yielded action triple for the
 /// supplied turn inputs.
+#[cfg(not(any(
+    feature = "narrow-word-8",
+    feature = "narrow-word-16",
+    feature = "narrow-word-32"
+)))]
 fn call_boss_first(
     mx: i64,
     my: i64,
@@ -810,6 +1001,11 @@ fn call_boss_first(
 }
 
 #[test]
+#[cfg(not(any(
+    feature = "narrow-word-8",
+    feature = "narrow-word-16",
+    feature = "narrow-word-32"
+)))]
 fn ai_boss_first_turn_attacks_at_range_when_distant() {
     // Phase zero is a ranged attack when the player is visible.
     let (action, tx, ty, _vm, _arena) = call_boss_first(5, 5, 12, 12, 1);
@@ -818,12 +1014,22 @@ fn ai_boss_first_turn_attacks_at_range_when_distant() {
 }
 
 #[test]
+#[cfg(not(any(
+    feature = "narrow-word-8",
+    feature = "narrow-word-16",
+    feature = "narrow-word-32"
+)))]
 fn ai_boss_first_turn_waits_when_unseen() {
     let (action, _tx, _ty, _vm, _arena) = call_boss_first(5, 5, 12, 12, 0);
     assert_eq!(action, 0);
 }
 
 #[test]
+#[cfg(not(any(
+    feature = "narrow-word-8",
+    feature = "narrow-word-16",
+    feature = "narrow-word-32"
+)))]
 fn ai_boss_second_turn_chases() {
     // The boss alternates ranged and chase. The second visible
     // turn lands on phase one which is a chase step. `loop main`
@@ -858,6 +1064,11 @@ fn ai_boss_second_turn_chases() {
 
 // -- Item-effect script tests --------------------------------------
 
+#[cfg(not(any(
+    feature = "narrow-word-8",
+    feature = "narrow-word-16",
+    feature = "narrow-word-32"
+)))]
 fn call_5_tuple(src: &str, args: &[i64]) -> (i64, i64, i64, i64, i64) {
     let module = build(src);
     let arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
@@ -875,66 +1086,121 @@ fn call_5_tuple(src: &str, args: &[i64]) -> (i64, i64, i64, i64, i64) {
 }
 
 #[test]
+#[cfg(not(any(
+    feature = "narrow-word-8",
+    feature = "narrow-word-16",
+    feature = "narrow-word-32"
+)))]
 fn potion_healing_heals_five() {
     let (hp, _, _, _, _) = call_5_tuple(SRC_ITEM_POTION, &[0, 5, 12]);
     assert_eq!(hp, 5);
 }
 
 #[test]
+#[cfg(not(any(
+    feature = "narrow-word-8",
+    feature = "narrow-word-16",
+    feature = "narrow-word-32"
+)))]
 fn potion_greater_healing_heals_fifteen() {
     let (hp, _, _, _, _) = call_5_tuple(SRC_ITEM_POTION, &[1, 5, 30]);
     assert_eq!(hp, 15);
 }
 
 #[test]
+#[cfg(not(any(
+    feature = "narrow-word-8",
+    feature = "narrow-word-16",
+    feature = "narrow-word-32"
+)))]
 fn potion_restoration_returns_status_11() {
     let (_, _, _, status, _) = call_5_tuple(SRC_ITEM_POTION, &[2, 5, 30]);
     assert_eq!(status, 11);
 }
 
 #[test]
+#[cfg(not(any(
+    feature = "narrow-word-8",
+    feature = "narrow-word-16",
+    feature = "narrow-word-32"
+)))]
 fn potion_poison_damages_three() {
     let (hp, _, _, _, _) = call_5_tuple(SRC_ITEM_POTION, &[3, 5, 30]);
     assert_eq!(hp, -3);
 }
 
 #[test]
+#[cfg(not(any(
+    feature = "narrow-word-8",
+    feature = "narrow-word-16",
+    feature = "narrow-word-32"
+)))]
 fn potion_strength_raises_max_hp() {
     let (hp, max_hp, _, _, _) = call_5_tuple(SRC_ITEM_POTION, &[5, 5, 12]);
     assert_eq!((hp, max_hp), (2, 2));
 }
 
 #[test]
+#[cfg(not(any(
+    feature = "narrow-word-8",
+    feature = "narrow-word-16",
+    feature = "narrow-word-32"
+)))]
 fn potion_skill_raises_skill() {
     let (_, _, skill, _, _) = call_5_tuple(SRC_ITEM_POTION, &[6, 5, 12]);
     assert_eq!(skill, 1);
 }
 
 #[test]
+#[cfg(not(any(
+    feature = "narrow-word-8",
+    feature = "narrow-word-16",
+    feature = "narrow-word-32"
+)))]
 fn scroll_identify_returns_status_3() {
     let (_, _, _, status, _) = call_5_tuple(SRC_ITEM_SCROLL, &[0]);
     assert_eq!(status, 3);
 }
 
 #[test]
+#[cfg(not(any(
+    feature = "narrow-word-8",
+    feature = "narrow-word-16",
+    feature = "narrow-word-32"
+)))]
 fn scroll_magic_mapping_returns_status_1() {
     let (_, _, _, status, _) = call_5_tuple(SRC_ITEM_SCROLL, &[1]);
     assert_eq!(status, 1);
 }
 
 #[test]
+#[cfg(not(any(
+    feature = "narrow-word-8",
+    feature = "narrow-word-16",
+    feature = "narrow-word-32"
+)))]
 fn scroll_teleport_returns_status_2() {
     let (_, _, _, status, _) = call_5_tuple(SRC_ITEM_SCROLL, &[2]);
     assert_eq!(status, 2);
 }
 
 #[test]
+#[cfg(not(any(
+    feature = "narrow-word-8",
+    feature = "narrow-word-16",
+    feature = "narrow-word-32"
+)))]
 fn scroll_enchant_weapon_returns_status_4_arg_1() {
     let (_, _, _, status, arg) = call_5_tuple(SRC_ITEM_SCROLL, &[3]);
     assert_eq!((status, arg), (4, 1));
 }
 
 #[test]
+#[cfg(not(any(
+    feature = "narrow-word-8",
+    feature = "narrow-word-16",
+    feature = "narrow-word-32"
+)))]
 fn scroll_enchant_armor_returns_status_5_arg_1() {
     let (_, _, _, status, arg) = call_5_tuple(SRC_ITEM_SCROLL, &[4]);
     assert_eq!((status, arg), (5, 1));
