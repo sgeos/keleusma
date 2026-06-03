@@ -195,7 +195,7 @@ pub trait MutVisitor {
     }
 }
 
-/// Immutable AST visitor. Same shape as [`MutVisitor`](crate::visitor::MutVisitor) but operates
+/// Immutable AST visitor. Same shape as [`MutVisitor`] but operates
 /// on `&` references, suitable for passes that only inspect the AST.
 pub trait Visitor {
     /// Visit a [`Block`]. Default: recurse through statements and
