@@ -425,6 +425,18 @@ const MIN_FRAMES_RESERVE: usize = 1;
 
 /// Build a `VmError::OutOfArena` for an in-execution push that exceeded
 /// the arena's capacity.
+/// Error for reading a flat composite body whose arena allocation has
+/// been released by a `RESET` (its epoch no longer matches) (B28 P2 arena
+/// residence). A well-formed program never reads a value across the
+/// `RESET` that issued it, since `RESET` also clears the operand stack, so
+/// this surfaces a corrupted or mis-compiled artefact rather than a script
+/// error.
+fn stale_arena_body() -> VmError {
+    VmError::InvalidBytecode(alloc::string::String::from(
+        "flat composite body read after arena reset (stale)",
+    ))
+}
+
 fn out_of_arena_push(region: &str, capacity: usize) -> VmError {
     use alloc::format;
     VmError::OutOfArena(format!(
@@ -2969,7 +2981,9 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                     .unwrap_or(crate::bytecode::GenericValue::Unit);
                 self.frames.pop();
                 if self.frames.is_empty() {
-                    return Ok(GenericVmState::Finished(result));
+                    // Detach the returned value from the arena so it survives a
+                    // later RESET or the arena being dropped (B28 P2).
+                    return Ok(GenericVmState::Finished(result.materialized(self.arena)));
                 }
                 sp!(self, result);
                 continue;
@@ -3038,7 +3052,11 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                             idx
                         )));
                     }
-                    let val = self.pop()?;
+                    // A data slot lives in the persistent region and survives
+                    // RESET, so detach any ephemeral arena composite body to
+                    // an inline (heap) body before storing it; otherwise its
+                    // handle would dangle after the next RESET (B28 P2).
+                    let val = self.pop()?.materialized(self.arena);
                     self.write_data_slot(idx, val);
                 }
                 Op::GetDataIndexed(base, len) => {
@@ -3078,7 +3096,10 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                     if index.to_i64() < 0 || index.to_i64() >= len as i64 {
                         return Err(VmError::IndexOutOfBounds(index.to_i64(), len as usize));
                     }
-                    let val = self.pop()?;
+                    // Detach an ephemeral arena composite to inline before
+                    // storing it in a persistent data slot (B28 P2; see
+                    // `Op::SetData`).
+                    let val = self.pop()?.materialized(self.arena);
                     let slot = base as usize + index.to_i64() as usize;
                     let total = self.data_len();
                     if slot >= total {
@@ -3255,13 +3276,20 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                 }
 
                 Op::CmpEq => {
-                    let b = self.pop()?;
-                    let a = self.pop()?;
+                    // Materialise arena-resident composite bodies to inline
+                    // so equality compares content, not handles: validity is
+                    // established by resolving each body, then `PartialEq`
+                    // compares the bytes (B28 P2; `if_exists` then
+                    // `if_equals`). Scalars are unaffected.
+                    let arena = self.arena;
+                    let b = self.pop()?.materialized(arena);
+                    let a = self.pop()?.materialized(arena);
                     sp!(self, crate::bytecode::GenericValue::Bool(a == b));
                 }
                 Op::CmpNe => {
-                    let b = self.pop()?;
-                    let a = self.pop()?;
+                    let arena = self.arena;
+                    let b = self.pop()?.materialized(arena);
+                    let a = self.pop()?.materialized(arena);
                     sp!(self, crate::bytecode::GenericValue::Bool(a != b));
                 }
                 Op::CmpLt => self.compare_op(|ord| ord.is_lt())?,
@@ -3423,7 +3451,9 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                     let old_frame = self.frames.pop().unwrap();
                     self.stack.truncate(old_frame.base);
                     if self.frames.is_empty() {
-                        return Ok(GenericVmState::Finished(result));
+                        // Detach the returned value from the arena so it survives a
+                        // later RESET or the arena being dropped (B28 P2).
+                        return Ok(GenericVmState::Finished(result.materialized(self.arena)));
                     }
                     sp!(self, result);
                 }
@@ -3444,7 +3474,9 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                              to a non-string representation in the host",
                         )));
                     }
-                    return Ok(GenericVmState::Yielded(output));
+                    // Detach the yielded value from the arena so it survives a
+                    // later RESET (B28 P2).
+                    return Ok(GenericVmState::Yielded(output.materialized(self.arena)));
                 }
 
                 Op::Dup => {
@@ -3459,8 +3491,16 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                     if self.stack.len() < n {
                         return Err(VmError::StackUnderflow);
                     }
-                    let values: Vec<crate::bytecode::GenericValue<W, F>> =
-                        self.stack.drain(self.stack.len() - n..).collect();
+                    let arena = self.arena;
+                    // Materialise any arena-resident field value back to an
+                    // inline body so the shared packer can read its bytes;
+                    // the finished parent is then migrated to the arena
+                    // (B28 P2 arena residence).
+                    let values: Vec<crate::bytecode::GenericValue<W, F>> = self
+                        .stack
+                        .drain(self.stack.len() - n..)
+                        .map(|v| v.materialized(arena))
+                        .collect();
                     let fields: Vec<(String, crate::bytecode::GenericValue<W, F>)> =
                         field_names.into_iter().zip(values).collect();
                     // Pack a flat body when every field is a non-reference,
@@ -3471,12 +3511,12 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                     // order, the order offsets are baked against.
                     let wb = self.module_word_bytes();
                     let fb = self.module_float_bytes();
-                    sp!(
-                        self,
-                        crate::bytecode::GenericValue::struct_with_widths(
-                            type_name, fields, wb, fb
-                        )
-                    );
+                    let value = crate::bytecode::GenericValue::struct_with_widths(
+                        type_name, fields, wb, fb,
+                    )
+                    .into_arena_body(arena)
+                    .map_err(|_| out_of_arena_push("composite body", arena.capacity()))?;
+                    sp!(self, value);
                 }
                 Op::NewEnum(enum_const, var_const, arg_count) => {
                     let type_name = self
@@ -3499,8 +3539,15 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                     if self.stack.len() < n + 2 {
                         return Err(VmError::StackUnderflow);
                     }
+                    let arena = self.arena;
+                    // Materialise arena-resident payload values to inline so
+                    // the shared packer can read their bytes; the finished
+                    // enum is migrated to the arena below (B28 P2).
                     let fields: Vec<crate::bytecode::GenericValue<W, F>> = if n > 0 {
-                        self.stack.drain(self.stack.len() - n..).collect()
+                        self.stack
+                            .drain(self.stack.len() - n..)
+                            .map(|v| v.materialized(arena))
+                            .collect()
                     } else {
                         Vec::new()
                     };
@@ -3537,18 +3584,18 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                     // body.
                     let wb = self.module_word_bytes();
                     let fb = self.module_float_bytes();
-                    sp!(
-                        self,
-                        crate::bytecode::GenericValue::enum_with_widths(
-                            type_name,
-                            variant,
-                            disc,
-                            fields,
-                            min_payload,
-                            wb,
-                            fb
-                        )
-                    );
+                    let value = crate::bytecode::GenericValue::enum_with_widths(
+                        type_name,
+                        variant,
+                        disc,
+                        fields,
+                        min_payload,
+                        wb,
+                        fb,
+                    )
+                    .into_arena_body(arena)
+                    .map_err(|_| out_of_arena_push("composite body", arena.capacity()))?;
+                    sp!(self, value);
                 }
                 Op::NewArray(count) => {
                     let n = count as usize;
@@ -3558,19 +3605,24 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                     if self.stack.len() < n {
                         return Err(VmError::StackUnderflow);
                     }
-                    let elements: Vec<crate::bytecode::GenericValue<W, F>> =
-                        self.stack.drain(self.stack.len() - n..).collect();
+                    let arena = self.arena;
+                    let elements: Vec<crate::bytecode::GenericValue<W, F>> = self
+                        .stack
+                        .drain(self.stack.len() - n..)
+                        .map(|v| v.materialized(arena))
+                        .collect();
                     // Build the flat body when the element type is a
                     // non-reference, non-float fixed-size scalar, at the
                     // module-declared widths; the shared constructor mirrors
                     // the compiler's flat eligibility so the baked GetIndex
-                    // form always agrees with the body.
+                    // form always agrees with the body. Migrate the finished
+                    // array to the arena (B28 P2).
                     let wb = self.module_word_bytes();
                     let fb = self.module_float_bytes();
-                    sp!(
-                        self,
-                        crate::bytecode::GenericValue::array_with_widths(elements, wb, fb)
-                    );
+                    let value = crate::bytecode::GenericValue::array_with_widths(elements, wb, fb)
+                        .into_arena_body(arena)
+                        .map_err(|_| out_of_arena_push("composite body", arena.capacity()))?;
+                    sp!(self, value);
                 }
                 Op::NewTuple(count) => {
                     let n = count as usize;
@@ -3579,20 +3631,25 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                     if self.stack.len() < n {
                         return Err(VmError::StackUnderflow);
                     }
-                    let elements: Vec<crate::bytecode::GenericValue<W, F>> =
-                        self.stack.drain(self.stack.len() - n..).collect();
+                    let arena = self.arena;
+                    let elements: Vec<crate::bytecode::GenericValue<W, F>> = self
+                        .stack
+                        .drain(self.stack.len() - n..)
+                        .map(|v| v.materialized(arena))
+                        .collect();
                     // Build the flat body when every element is a
                     // non-reference, non-float fixed-size scalar and the
                     // packed size fits the baked offset operand, at the
                     // module-declared widths. The shared constructor is the
                     // runtime mirror of the compiler's flat eligibility, so
                     // the baked access form always agrees with the body.
+                    // Migrate the finished tuple to the arena (B28 P2).
                     let wb = self.module_word_bytes();
                     let fb = self.module_float_bytes();
-                    sp!(
-                        self,
-                        crate::bytecode::GenericValue::tuple_with_widths(elements, wb, fb)
-                    );
+                    let value = crate::bytecode::GenericValue::tuple_with_widths(elements, wb, fb)
+                        .into_arena_body(arena)
+                        .map_err(|_| out_of_arena_push("composite body", arena.capacity()))?;
+                    sp!(self, value);
                 }
                 Op::GetField(field) => {
                     use crate::bytecode::{StructBody, StructField};
@@ -3602,8 +3659,10 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                             (StructField::Flat { offset, kind }, StructBody::Flat(fc)) => {
                                 let wb = self.module_word_bytes();
                                 let fb = self.module_float_bytes();
+                                let bytes =
+                                    fc.resolve(self.arena).map_err(|_| stale_arena_body())?;
                                 let val = crate::bytecode::GenericValue::read_scalar_le(
-                                    fc.as_bytes(),
+                                    bytes,
                                     offset as usize,
                                     kind,
                                     wb,
@@ -3621,7 +3680,9 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                             ) => {
                                 // Extract the nested child's body bytes and
                                 // re-wrap them as a flat composite (B28 P2).
-                                let bytes = fc.slice_at(offset as usize, size as usize);
+                                let body =
+                                    fc.resolve(self.arena).map_err(|_| stale_arena_body())?;
+                                let bytes = &body[offset as usize..offset as usize + size as usize];
                                 let val = crate::bytecode::GenericValue::from_flat_nested_bytes(
                                     bytes, variant,
                                 );
@@ -3692,7 +3753,9 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                                     let wb = self.module_word_bytes();
                                     let fb = self.module_float_bytes();
                                     let esize = kind.size_in_bytes(wb, fb);
-                                    match fc.as_bytes().len().checked_div(esize) {
+                                    let bytes =
+                                        fc.resolve(self.arena).map_err(|_| stale_arena_body())?;
+                                    match bytes.len().checked_div(esize) {
                                         // A zero-size element kind (`Unit`)
                                         // carries no bytes, so every element
                                         // is the same `Unit`; length and
@@ -3706,11 +3769,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                                             sp!(
                                                 self,
                                                 crate::bytecode::GenericValue::read_scalar_le(
-                                                    fc.as_bytes(),
-                                                    0,
-                                                    kind,
-                                                    wb,
-                                                    fb,
+                                                    bytes, 0, kind, wb, fb,
                                                 )
                                             );
                                         }
@@ -3722,11 +3781,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                                             sp!(
                                                 self,
                                                 crate::bytecode::GenericValue::read_scalar_le(
-                                                    fc.as_bytes(),
-                                                    off,
-                                                    kind,
-                                                    wb,
-                                                    fb,
+                                                    bytes, off, kind, wb, fb,
                                                 )
                                             );
                                         }
@@ -3738,12 +3793,14 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                                     // (B28 P2). Extract the element body and
                                     // re-wrap it.
                                     let esize = size as usize;
-                                    let len = fc.as_bytes().len().checked_div(esize).unwrap_or(0);
+                                    let body =
+                                        fc.resolve(self.arena).map_err(|_| stale_arena_body())?;
+                                    let len = body.len().checked_div(esize).unwrap_or(0);
                                     if idx < 0 || idx as usize >= len {
                                         return Err(VmError::IndexOutOfBounds(idx, len));
                                     }
                                     let off = idx as usize * esize;
-                                    let bytes = fc.slice_at(off, esize);
+                                    let bytes = &body[off..off + esize];
                                     sp!(
                                         self,
                                         crate::bytecode::GenericValue::from_flat_nested_bytes(
@@ -3786,8 +3843,10 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                             (TupleField::Flat { offset, kind }, TupleBody::Flat(fc)) => {
                                 let wb = self.module_word_bytes();
                                 let fb = self.module_float_bytes();
+                                let bytes =
+                                    fc.resolve(self.arena).map_err(|_| stale_arena_body())?;
                                 let val = crate::bytecode::GenericValue::read_scalar_le(
-                                    fc.as_bytes(),
+                                    bytes,
                                     offset as usize,
                                     kind,
                                     wb,
@@ -3805,7 +3864,9 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                             ) => {
                                 // Extract the nested child's body and re-wrap
                                 // it as a flat composite (B28 P2).
-                                let bytes = fc.slice_at(offset as usize, size as usize);
+                                let body =
+                                    fc.resolve(self.arena).map_err(|_| stale_arena_body())?;
+                                let bytes = &body[offset as usize..offset as usize + size as usize];
                                 let val = crate::bytecode::GenericValue::from_flat_nested_bytes(
                                     bytes, variant,
                                 );
@@ -3844,8 +3905,10 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                             (EnumField::Flat { offset, kind }, EnumBody::Flat(fc)) => {
                                 let wb = self.module_word_bytes();
                                 let fb = self.module_float_bytes();
+                                let bytes =
+                                    fc.resolve(self.arena).map_err(|_| stale_arena_body())?;
                                 let val = crate::bytecode::GenericValue::read_scalar_le(
-                                    fc.as_bytes(),
+                                    bytes,
                                     offset as usize,
                                     kind,
                                     wb,
@@ -3864,7 +3927,9 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                                 // Extract the nested payload child's body
                                 // (past the discriminant word) and re-wrap it
                                 // as a flat composite (B28 P2).
-                                let bytes = fc.slice_at(offset as usize, size as usize);
+                                let body =
+                                    fc.resolve(self.arena).map_err(|_| stale_arena_body())?;
+                                let bytes = &body[offset as usize..offset as usize + size as usize];
                                 let val = crate::bytecode::GenericValue::from_flat_nested_bytes(
                                     bytes, variant,
                                 );
@@ -4006,21 +4071,27 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                         // expected discriminant.
                         crate::bytecode::GenericValue::Enum(crate::bytecode::EnumBody::Flat(
                             fc,
-                        )) => {
-                            let stored = match crate::bytecode::GenericValue::<W, F>::read_scalar_le(
-                                fc.as_bytes(),
-                                0,
-                                crate::value_layout::ScalarKind::Int,
-                                wb,
-                                fb,
-                            ) {
-                                crate::bytecode::GenericValue::Int(w) => {
-                                    <W as crate::word::Word>::to_i64(w)
-                                }
-                                _ => 0,
-                            };
-                            stored == expected_disc
-                        }
+                        )) => match fc.resolve(self.arena) {
+                            Ok(bytes) => {
+                                let stored =
+                                    match crate::bytecode::GenericValue::<W, F>::read_scalar_le(
+                                        bytes,
+                                        0,
+                                        crate::value_layout::ScalarKind::Int,
+                                        wb,
+                                        fb,
+                                    ) {
+                                        crate::bytecode::GenericValue::Int(w) => {
+                                            <W as crate::word::Word>::to_i64(w)
+                                        }
+                                        _ => 0,
+                                    };
+                                stored == expected_disc
+                            }
+                            // A stale body no longer exists, so it is not the
+                            // expected variant (B28 P2).
+                            Err(_) => false,
+                        },
                         _ => false,
                     };
                     sp!(self, crate::bytecode::GenericValue::Bool(matches));
@@ -5003,8 +5074,17 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                     if self.stack.len() < n {
                         return Err(VmError::StackUnderflow);
                     }
-                    let args: Vec<crate::bytecode::GenericValue<W, F>> =
-                        self.stack.drain(self.stack.len() - n..).collect();
+                    // Materialise arena-resident composite arguments to inline
+                    // bodies before handing them to the native: host
+                    // marshalling (`from_value`) reads composite bytes with no
+                    // arena, so an arena body must be copied out first (B28
+                    // P2 arena residence).
+                    let arena = self.arena;
+                    let args: Vec<crate::bytecode::GenericValue<W, F>> = self
+                        .stack
+                        .drain(self.stack.len() - n..)
+                        .map(|v| v.materialized(arena))
+                        .collect();
                     let native_name = self.native_name(idx as usize).ok_or_else(|| {
                         VmError::InvalidBytecode(format!("invalid native index: {}", idx))
                     })?;
@@ -7407,6 +7487,30 @@ mod tests {
             &[],
         );
         assert_eq!(val, Value::Int(42));
+    }
+
+    #[test]
+    fn vm_built_composite_is_arena_resident() {
+        // A flat struct built in the VM is migrated onto the arena's top
+        // ephemeral head, not left on the global heap (B28 P2 arena
+        // residence). The three-Word body lands on the top head, so the
+        // high watermark is non-zero. The exact size depends on the module
+        // word width (narrow-word features make it smaller), so the test
+        // asserts residence rather than a specific byte count.
+        let src = "struct P { a: Word, b: Word, c: Word }\n\
+                   fn main() -> Word { let p = P { a: 1, b: 2, c: 3 }; p.a + p.b + p.c }";
+        let tokens = tokenize(src).expect("lex");
+        let program = parse(&tokens).expect("parse");
+        let module = compile(&program).expect("compile");
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let mut vm = Vm::new(module, &arena).expect("vm");
+        let state = vm.call(&[]).expect("run");
+        assert!(matches!(state, VmState::Finished(Value::Int(6))));
+        assert!(
+            arena.top_peak() > 0,
+            "expected the flat struct body on the arena top head, top_peak = {}",
+            arena.top_peak()
+        );
     }
 
     #[test]

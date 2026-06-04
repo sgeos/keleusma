@@ -373,7 +373,14 @@ impl<W: crate::word::Word, F: crate::float::Float> PartialEq for GenericValue<W,
             // variant, so distinct variants never alias. Boxed and mixed
             // pairs keep the derived comparison.
             (Self::Enum(EnumBody::Flat(a)), Self::Enum(EnumBody::Flat(b))) => {
-                flat_enum_bytes_eq(a.as_bytes(), b.as_bytes())
+                match (a.inline_bytes(), b.inline_bytes()) {
+                    (Some(x), Some(y)) => flat_enum_bytes_eq(x, y),
+                    // An arena enum body needs the arena to read, which
+                    // `PartialEq` lacks; the VM materialises composites to
+                    // inline before `CmpEq`, so this arm never sees an arena
+                    // body in practice (B28 P2).
+                    _ => false,
+                }
             }
             (Self::Enum(a), Self::Enum(b)) => a == b,
             // Opaque equality is pointer identity. Two Arcs are
@@ -775,6 +782,75 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
             C::Array => Self::Array(ArrayBody::Flat(fc)),
             C::Struct => Self::Struct(StructBody::Flat(fc)),
             C::Enum => Self::Enum(EnumBody::Flat(fc)),
+        }
+    }
+
+    /// Migrate a flat composite value's body to the arena's top ephemeral
+    /// head (B28 P2 arena residence). A `Flat`-bodied tuple, array, struct,
+    /// or enum has its body copied to the arena and replaced with an
+    /// epoch-guarded handle; any other value (a scalar, a boxed composite,
+    /// a reference) is returned unchanged. The VM calls this on a
+    /// freshly-constructed composite so it carries no global-heap allocation
+    /// across a `loop` iteration's `RESET`.
+    pub fn into_arena_body(
+        self,
+        arena: &keleusma_arena::Arena,
+    ) -> Result<Self, allocator_api2::alloc::AllocError> {
+        Ok(match self {
+            Self::Tuple(TupleBody::Flat(fc)) => Self::Tuple(TupleBody::Flat(fc.in_arena(arena)?)),
+            Self::Array(ArrayBody::Flat(fc)) => Self::Array(ArrayBody::Flat(fc.in_arena(arena)?)),
+            Self::Struct(StructBody::Flat(fc)) => {
+                Self::Struct(StructBody::Flat(fc.in_arena(arena)?))
+            }
+            Self::Enum(EnumBody::Flat(fc)) => Self::Enum(EnumBody::Flat(fc.in_arena(arena)?)),
+            other => other,
+        })
+    }
+
+    /// Materialise any arena-resident composite body in this value back to
+    /// an owned `Inline` body (B28 P2 arena residence). A `Flat` body is
+    /// copied out of the arena (its bytes are self-contained, so nested
+    /// composites come with it); a `Boxed` body recurses into its element
+    /// values, since those are separate values that may themselves be
+    /// arena-resident. Scalars and references are returned unchanged.
+    ///
+    /// Used to bridge arena bodies across the three points that read bytes
+    /// without an arena handle: the shared construction packer (which reads
+    /// a child field's bytes to inline them), value equality, and the
+    /// native-call boundary (where `from_value` has no arena).
+    pub fn materialized(self, arena: &keleusma_arena::Arena) -> Self {
+        match self {
+            Self::Tuple(TupleBody::Flat(fc)) => Self::Tuple(TupleBody::Flat(fc.to_inline(arena))),
+            Self::Array(ArrayBody::Flat(fc)) => Self::Array(ArrayBody::Flat(fc.to_inline(arena))),
+            Self::Struct(StructBody::Flat(fc)) => {
+                Self::Struct(StructBody::Flat(fc.to_inline(arena)))
+            }
+            Self::Enum(EnumBody::Flat(fc)) => Self::Enum(EnumBody::Flat(fc.to_inline(arena))),
+            Self::Tuple(TupleBody::Boxed(elems)) => Self::Tuple(TupleBody::Boxed(
+                elems.into_iter().map(|e| e.materialized(arena)).collect(),
+            )),
+            Self::Array(ArrayBody::Boxed(elems)) => Self::Array(ArrayBody::Boxed(
+                elems.into_iter().map(|e| e.materialized(arena)).collect(),
+            )),
+            Self::Struct(StructBody::Boxed { type_name, fields }) => {
+                Self::Struct(StructBody::Boxed {
+                    type_name,
+                    fields: fields
+                        .into_iter()
+                        .map(|(n, v)| (n, v.materialized(arena)))
+                        .collect(),
+                })
+            }
+            Self::Enum(EnumBody::Boxed {
+                type_name,
+                variant,
+                fields,
+            }) => Self::Enum(EnumBody::Boxed {
+                type_name,
+                variant,
+                fields: fields.into_iter().map(|e| e.materialized(arena)).collect(),
+            }),
+            other => other,
         }
     }
 

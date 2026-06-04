@@ -195,6 +195,23 @@ impl FlatComposite {
         }
     }
 
+    /// Copy an `Arena` body's bytes back into an owned `Inline` body
+    /// (B28 P2). An `Inline` body is returned unchanged. A stale `Arena`
+    /// body (its epoch no longer matches) yields an empty body, which is
+    /// the conservative reading of a body that no longer exists; live
+    /// callers never materialise a stale body. Used to bridge an arena body
+    /// across a boundary that has no arena (host marshalling) or that reads
+    /// bytes without one (the shared construction packer, value equality).
+    pub fn to_inline(self, arena: &Arena) -> Self {
+        match self {
+            Self::Inline(v) => Self::Inline(v),
+            Self::Arena(handle) => {
+                let bytes = handle.get(arena).map(|b| b.to_vec()).unwrap_or_default();
+                Self::Inline(bytes)
+            }
+        }
+    }
+
     /// Resolve the body to its bytes against `arena` (B28 P2). An `Inline`
     /// body is read directly and is always valid; an `Arena` body resolves
     /// its handle, returning [`Stale`] if a `RESET` advanced the epoch
@@ -250,6 +267,17 @@ impl FlatComposite {
             Self::Arena(_) => {
                 panic!("FlatComposite::is_empty on an arena body; resolve(arena) instead")
             }
+        }
+    }
+
+    /// The bytes of an `Inline` body, or `None` for an `Arena` body
+    /// (B28 P2). Lets a caller that has no arena (notably `PartialEq`) read
+    /// an inline body's content and decline an arena body rather than
+    /// panic, keeping validity and equality orthogonal.
+    pub fn inline_bytes(&self) -> Option<&[u8]> {
+        match self {
+            Self::Inline(v) => Some(v),
+            Self::Arena(_) => None,
         }
     }
 
