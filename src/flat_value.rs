@@ -33,6 +33,10 @@ extern crate alloc;
 
 use alloc::vec;
 use alloc::vec::Vec;
+use core::ptr::NonNull;
+
+use allocator_api2::alloc::AllocError;
+use keleusma_arena::{Arena, ArenaHandle, Stale};
 
 /// Write a boolean to the byte buffer at the given offset.
 ///
@@ -121,66 +125,192 @@ pub fn read_f64(bytes: &[u8], offset: usize) -> f64 {
 /// and written through the scalar helpers in this module at the offsets
 /// the compiler resolved.
 ///
-/// The buffer is a `Vec<u8>` for now; a later B28 phase moves it to the
-/// arena's top ephemeral head so composites carry no global-heap
-/// allocation. Callers reach the bytes through the accessor methods
-/// rather than the field directly, so that move does not churn call
-/// sites.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FlatComposite {
-    bytes: Vec<u8>,
+/// The body is built `Inline` (an owned `Vec<u8>`) and may be migrated to
+/// the arena's top ephemeral head via [`FlatComposite::in_arena`], after
+/// which it is an epoch-guarded [`ArenaHandle`] (B28 P2 arena residence,
+/// mirroring [`crate::kstring::KString`]). Hosts and constants keep the
+/// `Inline` form; the VM migrates a freshly-built body to the arena so
+/// composites carry no global-heap allocation across a `loop` iteration's
+/// `RESET`.
+///
+/// Validity and equality are orthogonal. A read first resolves the handle
+/// against the arena ([`FlatComposite::resolve`], which fails `Stale` if a
+/// `RESET` advanced the epoch since the body was issued), then the
+/// resolved bytes are read or compared. [`FlatComposite::eq_in_arena`]
+/// composes the two: it requires both bodies to resolve, then compares
+/// their content. The `Inline` form is always valid and is read directly.
+#[derive(Debug, Clone)]
+pub enum FlatComposite {
+    /// An owned byte body on the global heap. Built by the construction
+    /// choke points, host marshalling, and constant materialisation.
+    Inline(Vec<u8>),
+    /// A body resident in the arena's top ephemeral head, addressed by an
+    /// epoch-guarded handle. Built by [`FlatComposite::in_arena`] and read
+    /// only through [`FlatComposite::resolve`] against the owning arena.
+    Arena(ArenaHandle<[u8]>),
 }
 
 impl FlatComposite {
     /// A zero-initialised body of `size` bytes. Zero is a valid initial
     /// value for every fixed-size scalar (`false`, `0`, `+0.0`) and
     /// selects an enum's first declared variant through its zero
-    /// discriminant byte.
+    /// discriminant byte. Built `Inline`; the VM migrates it to the arena
+    /// after packing (B28 P2).
     pub fn zeroed(size: usize) -> Self {
-        Self {
-            bytes: vec![0u8; size],
+        Self::Inline(vec![0u8; size])
+    }
+
+    /// A body wrapping already-packed bytes, `Inline`.
+    pub fn from_bytes(bytes: Vec<u8>) -> Self {
+        Self::Inline(bytes)
+    }
+
+    /// Migrate an `Inline` body to the arena's top ephemeral head, copying
+    /// its bytes and capturing the current epoch (B28 P2). An already-arena
+    /// body and an empty body are returned unchanged (an empty body needs
+    /// no allocation and has no stable pointer). Mirrors
+    /// [`crate::kstring::KString::alloc`].
+    pub fn in_arena(self, arena: &Arena) -> Result<Self, AllocError> {
+        match self {
+            Self::Arena(_) => Ok(self),
+            Self::Inline(v) if v.is_empty() => Ok(Self::Inline(v)),
+            Self::Inline(v) => {
+                let buffer = arena.alloc_top_bytes(v.len())?;
+                let dst = buffer.as_ptr() as *mut u8;
+                // SAFETY: `buffer` is unique storage of `v.len()` bytes
+                // freshly allocated from the arena's top head; the source
+                // is a valid byte slice; the regions do not overlap because
+                // the allocator returns previously unused memory. Mirrors
+                // `KString::alloc`.
+                unsafe { core::ptr::copy_nonoverlapping(v.as_ptr(), dst, v.len()) };
+                let raw: *mut [u8] = core::ptr::slice_from_raw_parts_mut(dst, v.len());
+                // SAFETY: `raw` is non-null because `dst` came from a
+                // successful arena allocation.
+                let nn = unsafe { NonNull::new_unchecked(raw) };
+                // SAFETY: `nn` references storage in the arena's top region
+                // freshly allocated under the current epoch.
+                let handle = unsafe { ArenaHandle::from_raw_parts(nn, arena.epoch()) };
+                Ok(Self::Arena(handle))
+            }
         }
     }
 
-    /// A body wrapping already-packed bytes.
-    pub fn from_bytes(bytes: Vec<u8>) -> Self {
-        Self { bytes }
+    /// Resolve the body to its bytes against `arena` (B28 P2). An `Inline`
+    /// body is read directly and is always valid; an `Arena` body resolves
+    /// its handle, returning [`Stale`] if a `RESET` advanced the epoch
+    /// since the body was issued. Both borrows share the call scope so the
+    /// returned slice never outlives the arena.
+    pub fn resolve<'a>(&'a self, arena: &'a Arena) -> Result<&'a [u8], Stale> {
+        match self {
+            Self::Inline(v) => Ok(v.as_slice()),
+            Self::Arena(handle) => handle.get(arena),
+        }
     }
 
-    /// Byte length of the body.
+    /// Whether the body still exists (the `if_exists` half of equality):
+    /// `true` for an `Inline` body, and for an `Arena` body only while its
+    /// epoch matches the arena (B28 P2).
+    pub fn is_valid(&self, arena: &Arena) -> bool {
+        self.resolve(arena).is_ok()
+    }
+
+    /// Content equality gated on validity (B28 P2): both bodies must
+    /// resolve against `arena` (`if_exists`), then their bytes are compared
+    /// (`if_equals`). A stale body equals nothing. This keeps composite
+    /// equality content-based rather than keying on the handle, so two
+    /// equal-content bodies in distinct allocations compare equal.
+    pub fn eq_in_arena(&self, other: &Self, arena: &Arena) -> bool {
+        match (self.resolve(arena), other.resolve(arena)) {
+            (Ok(a), Ok(b)) => a == b,
+            _ => false,
+        }
+    }
+
+    /// Byte length of an `Inline` body.
+    ///
+    /// Panics on an `Arena` body, which has no length without the arena;
+    /// callers with the arena use [`FlatComposite::resolve`] and read the
+    /// slice length. Construction and the not-yet-migrated read sites
+    /// operate on `Inline` bodies (B28 P2 arena residence migrates the
+    /// arena-aware read sites to `resolve`).
     pub fn len(&self) -> usize {
-        self.bytes.len()
+        match self {
+            Self::Inline(v) => v.len(),
+            Self::Arena(_) => {
+                panic!("FlatComposite::len on an arena body; resolve(arena) and read its length")
+            }
+        }
     }
 
-    /// True when the body has no bytes (the `Unit`-only case).
+    /// True when an `Inline` body has no bytes (the `Unit`-only case).
+    /// Panics on an `Arena` body, like [`FlatComposite::len`].
     pub fn is_empty(&self) -> bool {
-        self.bytes.is_empty()
+        match self {
+            Self::Inline(v) => v.is_empty(),
+            Self::Arena(_) => {
+                panic!("FlatComposite::is_empty on an arena body; resolve(arena) instead")
+            }
+        }
     }
 
-    /// The body's bytes, for reading a field at a baked offset.
+    /// The bytes of an `Inline` body, for reading a field at a baked
+    /// offset. Panics on an `Arena` body; arena-aware callers use
+    /// [`FlatComposite::resolve`] (B28 P2).
     pub fn as_bytes(&self) -> &[u8] {
-        &self.bytes
+        match self {
+            Self::Inline(v) => v,
+            Self::Arena(_) => {
+                panic!("FlatComposite::as_bytes on an arena body; use resolve(arena)")
+            }
+        }
     }
 
-    /// The body's bytes, mutable, for writing a field at a baked offset.
+    /// The bytes of an `Inline` body, mutable, for packing fields during
+    /// construction. Panics on an `Arena` body, which is immutable after
+    /// migration.
     pub fn as_bytes_mut(&mut self) -> &mut [u8] {
-        &mut self.bytes
+        match self {
+            Self::Inline(v) => v,
+            Self::Arena(_) => {
+                panic!("FlatComposite::as_bytes_mut on an arena body; arena bodies are immutable")
+            }
+        }
     }
 
-    /// Copy `src` into the body at `offset`, for packing a scalar's
-    /// little-endian bytes or a nested composite's body inline. Panics
-    /// if the range is out of bounds, which a correct compiler-baked
-    /// offset never produces.
+    /// Copy `src` into an `Inline` body at `offset`, for packing a scalar's
+    /// little-endian bytes or a nested composite's body inline. Panics if
+    /// the range is out of bounds (a correct compiler-baked offset never
+    /// produces this) or if the body is an `Arena` body.
     pub fn write_at(&mut self, offset: usize, src: &[u8]) {
-        self.bytes[offset..offset + src.len()].copy_from_slice(src);
+        self.as_bytes_mut()[offset..offset + src.len()].copy_from_slice(src);
     }
 
-    /// Borrow `len` bytes at `offset`, for reading a nested composite's
-    /// body or a field's raw bytes.
+    /// Borrow `len` bytes at `offset` of an `Inline` body, for reading a
+    /// nested composite's body or a field's raw bytes. Panics on an
+    /// `Arena` body; arena-aware callers resolve first (B28 P2).
     pub fn slice_at(&self, offset: usize, len: usize) -> &[u8] {
-        &self.bytes[offset..offset + len]
+        &self.as_bytes()[offset..offset + len]
     }
 }
+
+/// Content equality, valid for `Inline` bodies (B28 P2).
+///
+/// `Inline` bodies compare by content. An `Arena` body cannot be read
+/// without the arena, which `PartialEq` does not have, so any pair
+/// involving an `Arena` body compares unequal here; the arena-aware
+/// [`FlatComposite::eq_in_arena`] is the correct comparison for arena
+/// bodies and is what the VM uses. The two halves stay orthogonal:
+/// validity is established by `resolve`, content by the byte compare.
+impl PartialEq for FlatComposite {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Inline(a), Self::Inline(b)) => a == b,
+            _ => false,
+        }
+    }
+}
+
+impl Eq for FlatComposite {}
 
 #[cfg(test)]
 mod tests {
@@ -397,5 +527,80 @@ mod tests {
         outer.write_at(2, inner.as_bytes());
         assert_eq!(outer.slice_at(2, inner.len()), &[1, 2, 3, 4]);
         assert_eq!(outer.as_bytes(), &[0, 0, 1, 2, 3, 4, 0, 0, 0, 0]);
+    }
+
+    // -- Arena residence (B28 P2) --
+
+    fn test_arena() -> Arena {
+        Arena::with_capacity(4096)
+    }
+
+    #[test]
+    fn arena_body_resolves_to_its_bytes() {
+        let arena = test_arena();
+        let body = FlatComposite::from_bytes(alloc::vec![1, 2, 3, 4])
+            .in_arena(&arena)
+            .unwrap();
+        assert!(matches!(body, FlatComposite::Arena(_)));
+        assert_eq!(body.resolve(&arena).unwrap(), &[1, 2, 3, 4]);
+        assert!(body.is_valid(&arena));
+    }
+
+    #[test]
+    fn arena_equality_is_content_not_handle() {
+        // Two distinct arena allocations of the same content compare equal
+        // (validity then content), unlike a handle-keyed equality.
+        let arena = test_arena();
+        let a = FlatComposite::from_bytes(alloc::vec![7, 8, 9])
+            .in_arena(&arena)
+            .unwrap();
+        let b = FlatComposite::from_bytes(alloc::vec![7, 8, 9])
+            .in_arena(&arena)
+            .unwrap();
+        let c = FlatComposite::from_bytes(alloc::vec![7, 8, 0])
+            .in_arena(&arena)
+            .unwrap();
+        assert!(a.eq_in_arena(&b, &arena));
+        assert!(!a.eq_in_arena(&c, &arena));
+    }
+
+    #[test]
+    fn inline_and_arena_same_content_compare_equal_in_arena() {
+        // Equality is content-based across the two representations.
+        let arena = test_arena();
+        let inline = FlatComposite::from_bytes(alloc::vec![5, 6, 7, 8]);
+        let arena_body = FlatComposite::from_bytes(alloc::vec![5, 6, 7, 8])
+            .in_arena(&arena)
+            .unwrap();
+        assert!(inline.eq_in_arena(&arena_body, &arena));
+        assert!(arena_body.eq_in_arena(&inline, &arena));
+    }
+
+    #[test]
+    fn reset_makes_an_arena_body_stale() {
+        // A RESET advances the epoch; the prior body no longer exists, so
+        // it is invalid and equals nothing (validity is orthogonal to and
+        // gates content equality).
+        let mut arena = test_arena();
+        let a = FlatComposite::from_bytes(alloc::vec![1, 2, 3])
+            .in_arena(&arena)
+            .unwrap();
+        let b = FlatComposite::from_bytes(alloc::vec![1, 2, 3])
+            .in_arena(&arena)
+            .unwrap();
+        assert!(a.eq_in_arena(&b, &arena));
+        arena.reset().unwrap();
+        assert!(!a.is_valid(&arena));
+        assert!(a.resolve(&arena).is_err());
+        assert!(!a.eq_in_arena(&b, &arena));
+    }
+
+    #[test]
+    fn empty_body_stays_inline_under_in_arena() {
+        // A zero-length body needs no allocation and has no stable pointer.
+        let arena = test_arena();
+        let empty = FlatComposite::zeroed(0).in_arena(&arena).unwrap();
+        assert!(matches!(empty, FlatComposite::Inline(_)));
+        assert_eq!(empty.resolve(&arena).unwrap(), &[] as &[u8]);
     }
 }
