@@ -9,7 +9,7 @@ AI to Human communication channel.
 ## Last Updated
 
 **Date**: 2026-06-04
-**Status**: B28 P2 nested-composite inlining is complete end to end on the sub-feature branch `feat-flat-memory-nested`, cut from `feat-flat-memory-model`, followed by a layout-arithmetic consolidation that folds the compiler's flat-layout helpers onto the P1 `LayoutContext`/`LayoutDescriptor`. The full verification gate is green under default features, all features, clippy on both, strict rustdoc, and rustfmt. Both pieces are committed locally and not pushed.
+**Status**: On the sub-feature branch `feat-flat-memory-nested` (cut from `feat-flat-memory-model`), four pieces landed this session: B28 P2 nested-composite inlining end to end, the layout-arithmetic consolidation onto the P1 `LayoutContext`/`LayoutDescriptor`, and arena-residence Phase 1 (the `FlatComposite` arena representation and the validity-then-content equality model, behaviour-preserving). The full verification gate is green (default and all features, clippy on both, strict rustdoc, rustfmt). All four commits are local and not pushed. Arena-residence Phase 2 (the activation that allocates bodies on the arena) is scoped below and not started.
 
 ## Layout-arithmetic consolidation (follow-up this session)
 
@@ -69,11 +69,20 @@ A design investigation this session surfaced the gating decision that shapes the
 - Preserve content equality (recommended). Route composite comparison through the arena in the VM `CmpEq` path (and resolve bodies with the arena wherever bytes are read), so `tuple1 == tuple2` stays content-based. More work: the read sites that today call `as_bytes()` with no arena must either thread the arena or use a new `unsafe` unchecked-deref on the handle justified by the VM's no-read-after-`RESET` discipline (the same discipline the operand stack and `KString` already rely on). Equality must not silently regress.
 - Handle equality (simpler, not recommended). Compare composite handles/epochs like `KString`. Two equal-content composites built separately would compare unequal, a silent semantic regression for script `==`. Reject unless you accept that.
 
-This is memory-safety-critical (`unsafe` arena pointers, use-after-`RESET`) and was deliberately not started at the tail of this session to avoid a hasty unsound change. It wants a focused pass: decide the equality model (recommended: preserve content equality), then stage it as Phase 1 representation (the `Inline`/`Arena` enum with content-based equality, behaviour-preserving while all construction stays `Inline`) and Phase 2 activation (VM `NewTuple`/`NewStruct`/`NewArray`/`NewEnum` allocate the body on the arena top head, threading the arena they already hold; `RESET` already clears the top head and bumps the epoch). P4 (worst-case-memory-usage) then counts composite bytes on the top head.
+The equality model is settled (your direction: validity and equality are orthogonal, `if_exists` then `if_equals`). Phase 1 landed it.
+
+**Phase 1 (done, commit `6bf782a`).** `FlatComposite` is now `Inline(Vec<u8>) | Arena(ArenaHandle<[u8]>)`, mirroring `KString`. `in_arena(arena)` migrates an `Inline` body to the top head (unsafe alloc encapsulated like `KString::alloc`; empty bodies stay `Inline`). `resolve(arena)` reads (epoch-checked for `Arena`, direct for `Inline`); `is_valid` and `eq_in_arena` compose validity then content. `PartialEq` stays content-based for `Inline`. Production construction still builds `Inline`, so the phase is behaviour-preserving; the no-arena accessors (`as_bytes`/`len`/`slice_at`/...) serve `Inline` and panic on `Arena`, unreachable this phase. Five proof tests cover resolve, content-not-handle equality, cross-representation equality, `RESET` staleness, and the empty body.
+
+**Phase 2 (the activation, not yet started).** Flip the VM to build arena bodies and migrate every arena-aware read off the panic-stubs:
+- Construction. The four `NewTuple`/`NewStruct`/`NewArray`/`NewEnum` handlers migrate the freshly-built body with `in_arena(self_arena)`. Wrinkle discovered this session: the shared `*_with_widths` choke points inline each child field by reading its bytes with `as_bytes()`. A child that is already an arena body would hit the panic. So the handler must first materialise any popped arena-composite children back to `Inline` (resolve plus `from_bytes`) before calling `*_with_widths`, then migrate the finished parent. A `value.materialized(arena)` helper does the conversion.
+- Reads. `GetField`/`GetTupleField`/`GetIndex`/`GetEnumField` move from `fc.as_bytes()`/`slice_at()` to `fc.resolve(arena)?`, mapping `Stale` to a `VmError`.
+- Equality. `Op::CmpEq`/`CmpNe` route composite comparison through `eq_in_arena` (the VM has the arena); a `vm_eq(a, b, arena)` helper falls back to `PartialEq` for non-composites.
+- Marshalling boundary. `from_value` has no arena, so at the native-call boundary the VM materialises arena composites to `Inline` before handing arguments to a native; native return values are already `Inline`.
+- `RESET` already clears the top head and bumps the epoch, so stale handles fault. P4 then counts composite bytes on the top head.
 
 After P2, P3 is reference fields as handles, P4 the worst-case-memory-usage recompute against flat sizes, and P5 hot-swap migration, documentation, and decision closure.
 
 ## Awaiting direction
 
-- Whether to merge `feat-flat-memory-nested` into `feat-flat-memory-model` and push (two commits this session: nested inlining and the layout fold).
-- Confirmation of the arena-residence equality model (recommended: preserve content equality) before I build it as the next focused slice.
+- Whether to merge `feat-flat-memory-nested` into `feat-flat-memory-model` and push (four commits this session: nested inlining, the layout fold, the arena-residence Phase 1 representation, and the doc updates).
+- Whether to proceed with arena-residence Phase 2 (the activation scoped above) as the next slice. The equality model is settled; Phase 2 is the construction, read-site, equality, and marshalling-boundary migration.
