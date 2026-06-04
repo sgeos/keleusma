@@ -269,7 +269,43 @@ fn derive_struct_body(_name: &Ident, name_str: &str, data: &DataStruct) -> Token
     }
 }
 
+/// Extract an explicit enum-variant discriminant literal (`= 5`, `= -1`)
+/// for the flat-enum marshalling (B28 P2). `None` for a non-literal or
+/// absent discriminant; the caller falls back to the running counter.
+fn explicit_disc(expr: &syn::Expr) -> Option<i64> {
+    match expr {
+        syn::Expr::Lit(syn::ExprLit {
+            lit: syn::Lit::Int(i),
+            ..
+        }) => i.base10_parse::<i64>().ok(),
+        syn::Expr::Unary(u) if matches!(u.op, syn::UnOp::Neg(_)) => {
+            explicit_disc(&u.expr).map(|v| -v)
+        }
+        _ => None,
+    }
+}
+
 fn derive_enum_body(_name: &Ident, name_str: &str, data: &DataEnum) -> TokenStream2 {
+    // Per-variant discriminants, mirroring the language's assignment
+    // (explicit value, else the previous discriminant plus one starting at
+    // zero). These are what a flat enum body stores and what the access
+    // ops compare, so host-marshalled enums agree with script-built ones
+    // when the Rust enum mirrors the Keleusma enum's discriminants (B28 P2).
+    let discs: Vec<i64> = {
+        let mut out = Vec::with_capacity(data.variants.len());
+        let mut next = 0i64;
+        for v in &data.variants {
+            let d = v
+                .discriminant
+                .as_ref()
+                .and_then(|(_, expr)| explicit_disc(expr))
+                .unwrap_or(next);
+            out.push(d);
+            next = d + 1;
+        }
+        out
+    };
+
     let from_arms: Vec<TokenStream2> = data
         .variants
         .iter()
@@ -334,16 +370,22 @@ fn derive_enum_body(_name: &Ident, name_str: &str, data: &DataEnum) -> TokenStre
     let into_arms: Vec<TokenStream2> = data
         .variants
         .iter()
-        .map(|v| {
+        .enumerate()
+        .map(|(__vi, v)| {
             let v_ident = &v.ident;
             let v_str = v_ident.to_string();
+            let disc = discs[__vi];
+            // Route through the shared `enum_value` constructor so a
+            // host-built enum has the flat-or-boxed representation a
+            // script-built one of the same type does (B28 P2).
             match &v.fields {
                 Fields::Unit => quote! {
-                    Self::#v_ident => ::keleusma::GenericValue::Enum(::keleusma::bytecode::EnumBody::Boxed {
-                        type_name: ::alloc::string::String::from(#name_str),
-                        variant: ::alloc::string::String::from(#v_str),
-                        fields: ::alloc::vec::Vec::new(),
-                    }),
+                    Self::#v_ident => ::keleusma::GenericValue::enum_value(
+                        ::alloc::string::String::from(#name_str),
+                        ::alloc::string::String::from(#v_str),
+                        #disc,
+                        ::alloc::vec::Vec::new(),
+                    ),
                 },
                 Fields::Unnamed(unnamed) => {
                     let count = unnamed.unnamed.len();
@@ -352,15 +394,16 @@ fn derive_enum_body(_name: &Ident, name_str: &str, data: &DataEnum) -> TokenStre
                         .map(|i| Ident::new(&format!("__f{}", i), proc_macro2::Span::call_site()))
                         .collect();
                     quote! {
-                        Self::#v_ident(#(#bindings),*) => ::keleusma::GenericValue::Enum(::keleusma::bytecode::EnumBody::Boxed {
-                            type_name: ::alloc::string::String::from(#name_str),
-                            variant: ::alloc::string::String::from(#v_str),
-                            fields: ::alloc::vec![
+                        Self::#v_ident(#(#bindings),*) => ::keleusma::GenericValue::enum_value(
+                            ::alloc::string::String::from(#name_str),
+                            ::alloc::string::String::from(#v_str),
+                            #disc,
+                            ::alloc::vec![
                                 #(
                                     <#types as ::keleusma::KeleusmaType<__KW, __KF>>::into_value(#bindings),
                                 )*
                             ],
-                        }),
+                        ),
                     }
                 }
                 Fields::Named(named) => {
@@ -371,15 +414,84 @@ fn derive_enum_body(_name: &Ident, name_str: &str, data: &DataEnum) -> TokenStre
                         .collect();
                     let types: Vec<&syn::Type> = named.named.iter().map(|f| &f.ty).collect();
                     quote! {
-                        Self::#v_ident { #(#names),* } => ::keleusma::GenericValue::Enum(::keleusma::bytecode::EnumBody::Boxed {
-                            type_name: ::alloc::string::String::from(#name_str),
-                            variant: ::alloc::string::String::from(#v_str),
-                            fields: ::alloc::vec![
+                        Self::#v_ident { #(#names),* } => ::keleusma::GenericValue::enum_value(
+                            ::alloc::string::String::from(#name_str),
+                            ::alloc::string::String::from(#v_str),
+                            #disc,
+                            ::alloc::vec![
                                 #(
                                     <#types as ::keleusma::KeleusmaType<__KW, __KF>>::into_value(#names),
                                 )*
                             ],
-                        }),
+                        ),
+                    }
+                }
+            }
+        })
+        .collect();
+
+    // Flat-body read arms keyed on the stored discriminant word (B28 P2).
+    // Each reads the variant's payload fields at their packed offsets,
+    // past the leading discriminant word, using the field types' kinds.
+    let flat_from_arms: Vec<TokenStream2> = data
+        .variants
+        .iter()
+        .enumerate()
+        .map(|(__vi, v)| {
+            let v_ident = &v.ident;
+            let v_str = v_ident.to_string();
+            let disc = discs[__vi];
+            match &v.fields {
+                Fields::Unit => quote! {
+                    #disc => ::core::result::Result::Ok(Self::#v_ident),
+                },
+                Fields::Unnamed(unnamed) => {
+                    let types: Vec<&syn::Type> = unnamed.unnamed.iter().map(|f| &f.ty).collect();
+                    let bindings: Vec<Ident> = (0..unnamed.unnamed.len())
+                        .map(|i| Ident::new(&format!("__f{}", i), proc_macro2::Span::call_site()))
+                        .collect();
+                    quote! {
+                        #disc => {
+                            let mut __off = __wb;
+                            #(
+                                let #bindings = {
+                                    let __k = <#types as ::keleusma::KeleusmaType<__KW, __KF>>::flat_field_kind()
+                                        .ok_or_else(|| ::keleusma::VmError::TypeError(
+                                            ::alloc::format!("flat field of `{}::{}` is not a flat scalar", #name_str, #v_str)
+                                        ))?;
+                                    let __val = ::keleusma::GenericValue::<__KW, __KF>::read_scalar_le(
+                                        __bytes, __off, __k, __wb, __fb,
+                                    );
+                                    __off += __k.size_in_bytes(__wb, __fb);
+                                    <#types as ::keleusma::KeleusmaType<__KW, __KF>>::from_value(&__val)?
+                                };
+                            )*
+                            ::core::result::Result::Ok(Self::#v_ident(#(#bindings),*))
+                        }
+                    }
+                }
+                Fields::Named(named) => {
+                    let names: Vec<&Ident> =
+                        named.named.iter().map(|f| f.ident.as_ref().unwrap()).collect();
+                    let types: Vec<&syn::Type> = named.named.iter().map(|f| &f.ty).collect();
+                    quote! {
+                        #disc => {
+                            let mut __off = __wb;
+                            #(
+                                let #names = {
+                                    let __k = <#types as ::keleusma::KeleusmaType<__KW, __KF>>::flat_field_kind()
+                                        .ok_or_else(|| ::keleusma::VmError::TypeError(
+                                            ::alloc::format!("flat field of `{}::{}` is not a flat scalar", #name_str, #v_str)
+                                        ))?;
+                                    let __val = ::keleusma::GenericValue::<__KW, __KF>::read_scalar_le(
+                                        __bytes, __off, __k, __wb, __fb,
+                                    );
+                                    __off += __k.size_in_bytes(__wb, __fb);
+                                    <#types as ::keleusma::KeleusmaType<__KW, __KF>>::from_value(&__val)?
+                                };
+                            )*
+                            ::core::result::Result::Ok(Self::#v_ident { #(#names),* })
+                        }
                     }
                 }
             }
@@ -396,6 +508,30 @@ fn derive_enum_body(_name: &Ident, name_str: &str, data: &DataEnum) -> TokenStre
                         #(#from_arms)*
                         other => ::core::result::Result::Err(::keleusma::VmError::TypeError(
                             ::alloc::format!("unknown variant `{}::{}`", #name_str, other)
+                        )),
+                    }
+                }
+                // A flat enum body carries no type name; the leading
+                // discriminant word selects the variant, and each payload
+                // field is read at its packed offset (B28 P2).
+                ::keleusma::GenericValue::Enum(::keleusma::bytecode::EnumBody::Flat(__fc)) => {
+                    let __wb = (1usize << <__KW as ::keleusma::Word>::BITS_LOG2) / 8;
+                    let __fb = (1usize << <__KF as ::keleusma::Float>::BITS_LOG2) / 8;
+                    let __bytes = __fc.as_bytes();
+                    let __disc = match ::keleusma::GenericValue::<__KW, __KF>::read_scalar_le(
+                        __bytes, 0, ::keleusma::value_layout::ScalarKind::Int, __wb, __fb,
+                    ) {
+                        ::keleusma::GenericValue::Int(w) => <__KW as ::keleusma::Word>::to_i64(w),
+                        _ => {
+                            return ::core::result::Result::Err(::keleusma::VmError::TypeError(
+                                ::alloc::format!("flat enum `{}` discriminant is not an Int", #name_str)
+                            ));
+                        }
+                    };
+                    match __disc {
+                        #(#flat_from_arms)*
+                        other => ::core::result::Result::Err(::keleusma::VmError::TypeError(
+                            ::alloc::format!("unknown discriminant {} for enum `{}`", other, #name_str)
                         )),
                     }
                 }

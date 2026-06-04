@@ -147,6 +147,32 @@ fn derive_enum_struct_variant() {
 }
 
 #[test]
+fn derive_enum_marshals_flat_per_variant() {
+    use keleusma::bytecode::EnumBody;
+    // A scalar-payload variant marshals to the flat body (B28 P2),
+    // matching the flat access the compiler bakes for it; a float-bearing
+    // variant stays boxed. Both directions round-trip.
+    let active = Status::Active(42).into_value();
+    assert!(matches!(active, Value::Enum(EnumBody::Flat(_))));
+    assert_eq!(Status::from_value(&active).unwrap(), Status::Active(42));
+
+    let range = Status::Range { start: 1, end: 10 }.into_value();
+    assert!(matches!(range, Value::Enum(EnumBody::Flat(_))));
+    assert_eq!(
+        Status::from_value(&range).unwrap(),
+        Status::Range { start: 1, end: 10 }
+    );
+
+    let idle = Status::Idle.into_value();
+    assert!(matches!(idle, Value::Enum(EnumBody::Flat(_))));
+    assert_eq!(Status::from_value(&idle).unwrap(), Status::Idle);
+
+    let pair = Status::Pair(7, 2.5).into_value();
+    assert!(matches!(pair, Value::Enum(EnumBody::Boxed { .. })));
+    assert_eq!(Status::from_value(&pair).unwrap(), Status::Pair(7, 2.5));
+}
+
+#[test]
 fn derive_enum_unknown_variant_errors() {
     let bogus = Value::Enum(keleusma::bytecode::EnumBody::Boxed {
         type_name: String::from("Status"),
