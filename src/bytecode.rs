@@ -502,32 +502,11 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
         word_bytes: usize,
         float_bytes: usize,
     ) -> Self {
-        let mut total = 0usize;
-        let mut eligible = true;
-        for v in &elements {
-            // A flat-eligible field is a scalar or a nested flat composite
-            // (B28 P2 nested inlining); either contributes a fixed byte
-            // length. Anything else forces the boxed body.
-            match flat_field_size(v, word_bytes, float_bytes) {
-                Some(size) => total += size,
-                None => {
-                    eligible = false;
-                    break;
-                }
-            }
+        // A tuple has no padding (no minimum), so the packed size is exact.
+        match Self::try_pack_flat(elements.iter(), 0, word_bytes, float_bytes) {
+            Some(body) => Self::Tuple(TupleBody::Flat(body)),
+            None => Self::Tuple(TupleBody::Boxed(elements)),
         }
-        if !eligible || total > u16::MAX as usize {
-            return Self::Tuple(TupleBody::Boxed(elements));
-        }
-        let mut body = crate::flat_value::FlatComposite::zeroed(total);
-        let mut offset = 0usize;
-        for v in &elements {
-            let size =
-                flat_field_size(v, word_bytes, float_bytes).expect("eligibility checked above");
-            v.write_flat_field(body.as_bytes_mut(), offset, word_bytes, float_bytes);
-            offset += size;
-        }
-        Self::Tuple(TupleBody::Flat(body))
     }
 
     /// Construct an array value at the runtime's own scalar widths,
@@ -557,29 +536,10 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
         word_bytes: usize,
         float_bytes: usize,
     ) -> Self {
-        let mut total = 0usize;
-        let mut eligible = true;
-        for v in &elements {
-            match flat_field_size(v, word_bytes, float_bytes) {
-                Some(size) => total += size,
-                None => {
-                    eligible = false;
-                    break;
-                }
-            }
+        match Self::try_pack_flat(elements.iter(), 0, word_bytes, float_bytes) {
+            Some(body) => Self::Array(ArrayBody::Flat(body)),
+            None => Self::Array(ArrayBody::Boxed(elements)),
         }
-        if !eligible || total > u16::MAX as usize {
-            return Self::Array(ArrayBody::Boxed(elements));
-        }
-        let mut body = crate::flat_value::FlatComposite::zeroed(total);
-        let mut offset = 0usize;
-        for v in &elements {
-            let size =
-                flat_field_size(v, word_bytes, float_bytes).expect("eligibility checked above");
-            v.write_flat_field(body.as_bytes_mut(), offset, word_bytes, float_bytes);
-            offset += size;
-        }
-        Self::Array(ArrayBody::Flat(body))
     }
 
     /// Construct a struct value at the runtime's own scalar widths,
@@ -612,29 +572,10 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
         word_bytes: usize,
         float_bytes: usize,
     ) -> Self {
-        let mut total = 0usize;
-        let mut eligible = true;
-        for (_, v) in &fields {
-            match flat_field_size(v, word_bytes, float_bytes) {
-                Some(size) => total += size,
-                None => {
-                    eligible = false;
-                    break;
-                }
-            }
+        match Self::try_pack_flat(fields.iter().map(|(_, v)| v), 0, word_bytes, float_bytes) {
+            Some(body) => Self::Struct(StructBody::Flat(body)),
+            None => Self::Struct(StructBody::Boxed { type_name, fields }),
         }
-        if !eligible || total > u16::MAX as usize {
-            return Self::Struct(StructBody::Boxed { type_name, fields });
-        }
-        let mut body = crate::flat_value::FlatComposite::zeroed(total);
-        let mut offset = 0usize;
-        for (_, v) in &fields {
-            let size =
-                flat_field_size(v, word_bytes, float_bytes).expect("eligibility checked above");
-            v.write_flat_field(body.as_bytes_mut(), offset, word_bytes, float_bytes);
-            offset += size;
-        }
-        Self::Struct(StructBody::Flat(body))
     }
 
     /// Construct an enum value at the runtime's own scalar widths, choosing
@@ -679,51 +620,36 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
         // form for it; keep its construction boxed too, so the two agree
         // (B28 P2). `Option::None` is the separate `Value::None`; only
         // `Option::Some` reaches here.
-        let mut payload = 0usize;
-        let mut eligible = type_name != "Option";
-        for v in &fields {
-            // Payload fields may be scalars or nested flat composites
-            // (B28 P2 nested inlining).
-            match flat_field_size(v, word_bytes, float_bytes) {
-                Some(size) => payload += size,
-                None => {
-                    eligible = false;
-                    break;
-                }
-            }
-        }
-        // `min_payload` is the type's largest-variant payload, baked by the
-        // compiler so every value of a uniformly-flat enum type shares one
-        // fixed body size — which a nested enum field's fixed slot requires
-        // (B28 P2). The variant's own payload may be smaller; the trailing
-        // slot is zero padding. Flat-enum equality tolerates that padding,
-        // so an unpadded ad-hoc value still compares equal to a padded one.
-        let payload_slot = core::cmp::max(payload, min_payload);
-        let total = word_bytes + payload_slot;
-        if !eligible || total > u16::MAX as usize {
+        if type_name == "Option" {
             return Self::Enum(EnumBody::Boxed {
                 type_name,
                 variant,
                 fields,
             });
         }
-        let mut body = crate::flat_value::FlatComposite::zeroed(total);
-        // Discriminant word at offset zero, matching the `Enum as Word`
-        // cast and what `Op::IsEnum` reads on the flat body.
-        Self::Int(<W as crate::word::Word>::from_i64_wrap(disc)).write_scalar_le(
-            body.as_bytes_mut(),
-            0,
+        // The flat enum body is `[disc word][payload]`. The discriminant is
+        // the first packed field (an `Int` written as a `Word`), matching
+        // the `Enum as Word` cast and what `Op::IsEnum` reads. `min_payload`
+        // is the type's largest-variant payload, baked by the compiler so
+        // every value of a uniformly-flat enum shares one fixed body size,
+        // which a nested enum field's fixed slot requires (B28 P2). The
+        // padded body is `word + min_payload`; the trailing slot is zero
+        // padding, which padding-tolerant equality tolerates.
+        let disc_value = Self::Int(<W as crate::word::Word>::from_i64_wrap(disc));
+        let min_bytes = word_bytes + min_payload;
+        match Self::try_pack_flat(
+            core::iter::once(&disc_value).chain(fields.iter()),
+            min_bytes,
             word_bytes,
             float_bytes,
-        );
-        let mut offset = word_bytes;
-        for v in &fields {
-            let size =
-                flat_field_size(v, word_bytes, float_bytes).expect("eligibility checked above");
-            v.write_flat_field(body.as_bytes_mut(), offset, word_bytes, float_bytes);
-            offset += size;
+        ) {
+            Some(body) => Self::Enum(EnumBody::Flat(body)),
+            None => Self::Enum(EnumBody::Boxed {
+                type_name,
+                variant,
+                fields,
+            }),
         }
-        Self::Enum(EnumBody::Flat(body))
     }
 
     /// Write this fixed-size scalar's little-endian bytes into `dst` at
@@ -854,24 +780,66 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
         }
     }
 
-    /// Write a flat composite field at `offset`: a scalar through
-    /// [`GenericValue::write_scalar_le`], or a nested flat composite by
-    /// copying its body bytes inline (B28 P2 nested inlining). The caller
-    /// has already verified flat eligibility through `flat_field_size`, so
-    /// a value that is neither a flat scalar nor a flat composite never
-    /// reaches here.
-    fn write_flat_field(
+    /// Append a flat composite field's bytes to `buf`: a scalar's
+    /// little-endian bytes or a nested flat composite's body bytes (B28
+    /// P2). The caller has verified flat eligibility through
+    /// `flat_field_size`, so a value that is neither a flat scalar nor a
+    /// flat composite never reaches here. Appending (rather than writing at
+    /// a pre-zeroed offset) means the packed region is written exactly
+    /// once; only the trailing slack (an enum's padding to the largest
+    /// variant) is zero-filled by the caller (B28 P4 alloc model).
+    fn push_flat_field(
         &self,
-        dst: &mut [u8],
-        offset: usize,
+        buf: &mut alloc::vec::Vec<u8>,
         word_bytes: usize,
         float_bytes: usize,
     ) {
         if flat_tuple_scalar_kind(self).is_some() {
-            self.write_scalar_le(dst, offset, word_bytes, float_bytes);
+            let start = buf.len();
+            let size = flat_tuple_scalar_kind(self)
+                .expect("scalar checked")
+                .size_in_bytes(word_bytes, float_bytes);
+            buf.resize(start + size, 0);
+            self.write_scalar_le(buf, start, word_bytes, float_bytes);
         } else if let Some(bytes) = flat_body_bytes(self) {
-            dst[offset..offset + bytes.len()].copy_from_slice(bytes);
+            buf.extend_from_slice(bytes);
         }
+    }
+
+    /// Pack `values` into a flat byte body, padded to at least `min_bytes`
+    /// (B28 P4). Returns `None` if any value is not flat-eligible (a
+    /// reference or float field) or the packed body exceeds the sixteen-bit
+    /// access offset, in which case the caller falls back to the boxed body.
+    ///
+    /// The fields are appended in order, so each packed byte is written
+    /// exactly once; the body is then grown to `min_bytes` with zeros,
+    /// which is the only zero-fill and is non-empty solely for an enum
+    /// padded to its largest variant. `min_bytes` is the explicit
+    /// allocation size the compiler bakes and the worst-case-memory-usage
+    /// verifier sums.
+    fn try_pack_flat<'a, I>(
+        values: I,
+        min_bytes: usize,
+        word_bytes: usize,
+        float_bytes: usize,
+    ) -> Option<crate::flat_value::FlatComposite>
+    where
+        I: IntoIterator<Item = &'a Self>,
+        Self: 'a,
+    {
+        let mut buf = alloc::vec::Vec::new();
+        for v in values {
+            flat_field_size(v, word_bytes, float_bytes)?;
+            v.push_flat_field(&mut buf, word_bytes, float_bytes);
+        }
+        // Grow to the minimum (the enum padding slack); never shrink.
+        if buf.len() < min_bytes {
+            buf.resize(min_bytes, 0);
+        }
+        if buf.len() > u16::MAX as usize {
+            return None;
+        }
+        Some(crate::flat_value::FlatComposite::from_bytes(buf))
     }
 
     /// Read a fixed-size scalar of `kind` from `src` at `offset` (B28
