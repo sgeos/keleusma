@@ -320,7 +320,8 @@ mod tests {
         let (structs, enums) = empty_tables();
         let ctx = LayoutContext::new(&structs, &enums, I64_BYTES, F64_BYTES);
         let ty = TypeExpr::Option(Box::new(TypeExpr::Prim(PrimType::Word, span())), span());
-        assert_eq!(ctx.size_in_bytes(&ty).unwrap(), 1 + I64_BYTES);
+        // Word-sized discriminant (B28 P2): 8-byte disc + 8-byte payload.
+        assert_eq!(ctx.size_in_bytes(&ty).unwrap(), I64_BYTES + I64_BYTES);
     }
 
     #[test]
@@ -328,7 +329,8 @@ mod tests {
         let (structs, enums) = empty_tables();
         let ctx = LayoutContext::new(&structs, &enums, I64_BYTES, F64_BYTES);
         let ty = TypeExpr::Option(Box::new(TypeExpr::Prim(PrimType::Bool, span())), span());
-        assert_eq!(ctx.size_in_bytes(&ty).unwrap(), 1 + 1);
+        // Word-sized discriminant (B28 P2): 8-byte disc + 1-byte payload.
+        assert_eq!(ctx.size_in_bytes(&ty).unwrap(), I64_BYTES + 1);
     }
 
     #[test]
@@ -418,7 +420,8 @@ mod tests {
         );
         let ctx = LayoutContext::new(&structs, &enums, I64_BYTES, F64_BYTES);
         let ty = TypeExpr::Named("Color".to_string(), alloc::vec![], span());
-        assert_eq!(ctx.size_in_bytes(&ty).unwrap(), 1 + 3);
+        // Word-sized discriminant (B28 P2): 8-byte disc + 3-byte payload.
+        assert_eq!(ctx.size_in_bytes(&ty).unwrap(), I64_BYTES + 3);
     }
 
     #[test]

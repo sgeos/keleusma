@@ -8,45 +8,52 @@ AI to Human communication channel.
 
 ## Last Updated
 
-**Date**: 2026-06-02
-**Status**: B28 P2 tuple flat activation complete end to end on sub-feature branch `feat-flat-memory-tuple`, two commits beyond the feature branch `feat-flat-memory-model`. The full default test suite is green. The branch is ready to merge into `feat-flat-memory-model` once you have reviewed the host-reflection decision below.
+**Date**: 2026-06-04
+**Status**: B28 P2 nested-composite inlining is complete end to end on the sub-feature branch `feat-flat-memory-nested`, cut from `feat-flat-memory-model`. The full verification gate is green under default features, all features, clippy on both, strict rustdoc, and rustfmt. The work is committed locally and not pushed.
 
 ## What landed this session
 
-Tuples whose fields are transitively scalar (non-reference, non-float) now use the flat byte body end to end. The two commits:
+A composite-typed field of a flat composite now inlines into the parent's flat byte body rather than forcing the parent boxed. The four composite kinds nest recursively. Access reads a nested field by extracting its byte range and re-wrapping it as a flat composite value. Nested enums are included, which required reconciling the enum body to one fixed size.
 
-- `b57c307` re-spec, behaviour preserving. `Op::GetTupleField(u8)` became `Op::GetTupleField(TupleField)`, where `TupleField` is `Flat { offset, kind }` or `Boxed { index }`. Wire codec, cost and slot arms, and round-trip tests updated. The compiler still emitted boxed and the VM still built boxed, so behaviour was unchanged; this isolated the operand and wire churn.
-- `5baa8fe` activation. Construction, access, and every reader now agree on the representation per tuple type, which equality relies on.
+### Representation and access
 
-Key pieces of the activation:
+- Recursive eligibility. A field is flat-eligible when it is a non-reference non-float scalar or when it is itself a transitively-flat composite. `flat_field_size` and `flat_body_bytes` on the runtime value, and `type_flat_size`, `type_flat_composite_kind`, and `classify_flat_field` on the compiler type side, mirror each other so a baked access always agrees with the constructed body.
+- New operand form. Each access operand gained a `FlatNested { offset, size, variant }` variant. `ArrayElem` carries only `size`, since the element offset is `index * size`. The `variant` is a new `CompositeKind` tag identifying which value variant to re-wrap as.
+- Wire encoding. A nested access spills the offset and size into a `from_u16_u16` operand-pool entry, references it by a sixteen-bit pool index in operand bytes one and two, and marks byte three with the sentinel `0xF0` combined with the variant tag. The scalar `Flat` and `Boxed` forms stay inline and unchanged. A nested access whose pool index would exceed sixteen bits is rejected at encode time, which the small modules of the target never reach.
+- VM read. `GetField`, `GetTupleField`, `GetIndex`, and `GetEnumField` gained a `FlatNested` arm that slices the child body out of the parent and re-wraps it through `GenericValue::from_flat_nested_bytes`.
 
-- One construction choke point. `GenericValue::tuple_with_widths` decides flat or boxed from the element kinds and packs little-endian at given widths. `tuple()` delegates at runtime widths. The VM `NewTuple` packs at module widths. `from_const_archived` and `ConstValue::into_value` thread widths so constant tuples match. Host marshalling builds through the same path. This uniformity is what keeps a tuple type a single representation everywhere it is built.
-- Access baking. The compiler bakes offset and kind per element when the tuple type is flat-eligible, threaded into all four emission sites including `compile_pattern_test`, which receives an ephemeral compile-time type record. `infer_expr_type` gained accurate-or-none inference for the checked-arithmetic construct so a let-destructure of its scalar-tuple result bakes flat access rather than faulting.
-- Float exclusion. Float fields keep the boxed body for now, because the flat body compares by raw bytes, which would change the plus-zero, minus-zero, and NaN semantics of tuple equality. Revisit with a kind-aware equality before flattening floats.
+### Enum reconciliation
 
-## The host-reflection decision
+The shipped flat enum body was variant-sized, which a nested enum field cannot use because a field needs a fixed slot. Two changes resolve this.
 
-A pure-bytes flat tuple cannot be read by generic Rust code that lacks the element layout. The marshalling boundary was reshaped to read flat bodies through the Rust element types. The remaining raw readers, meaning code that matched `Value::Tuple` and called `.elements()`, were converted to the typed marshalling path. You chose to push through this rather than defer the runtime representation to V0.4.
+- Uniform fixed size. A uniformly-flat enum, meaning one whose every variant is flat, is padded to `word_bytes` plus the largest variant payload, computed by the compiler and delivered to `NewEnum` as a minimum-payload constant pushed beneath the discriminant on the stack. The stack delivery avoids any wire-format, golden-byte, or cost-model churn. `enum_with_widths` gained a `min_payload` parameter, and the convenience `enum_value` passes zero, so the public constructor and its many call sites are unchanged.
+- Padding-tolerant equality. Flat enum bodies compare by their overlapping prefix with each trailing remainder required to be zero. A compiler-padded body and an unpadded variant-sized body of the same value therefore compare equal without a type table at the equality site. This avoids a mixed-variant regression. A non-uniform enum, meaning one with a non-flat variant, keeps per-variant flat-or-boxed bodies standalone, and a nested field of such an enum forces the parent boxed.
 
-One genuine limit remains and is accepted as interim. `format_value` in the command-line frontend is a typeless display path with no static type at runtime, so it cannot decode a flat tuple element-wise. It renders a flat tuple as a placeholder noting the byte length. REPL and `println` display of a transitively-scalar tuple is therefore degraded until either the return type is threaded into the formatter or the V0.4 native backend bakes display. This is documented inline at the call site.
+### Layout-pass reconciliation
+
+The P1 `LayoutDescriptor::Enum` and `LayoutContext` modelled a one-byte discriminant, which disagreed with the shipped word-sized runtime discriminant. The descriptor now uses a word-sized discriminant plus the largest variant payload, and the P1 tests were updated. The pass is still not consulted at run time. The access baking uses the focused recursive helpers over the compiler type tables.
+
+### Host marshalling
+
+Flattening nested-composite composites changed how `struct_with_widths` and its siblings build a host-marshalled struct that nests a flat composite, so the derive flat-read path had to learn nested fields or it would have regressed the previously-working boxed round-trip. `KeleusmaType` gained two defaulted methods, `flat_byte_size` and `from_flat_bytes`, so existing implementations stay valid. The array and tuple implementations and the `#[derive(KeleusmaType)]` struct and enum expansions override them to read and write nested flat composites at packed offsets. The derived enum computes its largest-variant payload at run time so a host-built nested enum pads to the same slot the compiler bakes for a script.
 
 ## Verification
 
-- `cargo test` green across all suites: lib 1070, marshall, arena, zero-copy, bench, and the 53 rogue-script tests.
-- `cargo clippy --tests -- -D warnings` and `cargo clippy --tests --all-features -- -D warnings` clean. `cargo fmt --check` clean for the B28 files.
-- Tests under `--no-default-features` and `--all-features` show no failures.
+- Default workspace: lib 1124, plus rogue 53, arena 37, marshall 27, narrow 17, zero-copy 17, bench 6, cli 32, and the rest. All pass.
+- All features: all pass.
+- Clippy on default and all features with warnings denied: clean.
+- Strict rustdoc with warnings denied: clean. One pre-existing unresolvable intra-doc link in `keleusma-macros` was demoted to a code span. It predated this work and the local pre-push hook had tolerated it.
+- rustfmt: clean.
+- New tests: four script-level cases drive the full pipeline, namely a nested struct in a struct, a nested tuple in a struct, the extracted nested struct bound as a value, and a uniformly-flat enum nested in a struct and matched. Three derive cases cover the nested flat struct and tuple round-trip, the uniformly-flat enum padding, and a struct nesting a flat enum.
 
-## Concurrent external activity observed
+## Decisions taken and concerns
 
-During this session the working tree was modified concurrently by activity outside this task: `src/typecheck.rs`, `src/verify.rs`, and several untracked probe and proof-of-concept test files appeared and disappeared, carrying information-flow-control label-laundering probes and array and call underflow proofs of concept. Some of those probes are order-dependent or rely on shared global state and fail when run in isolation. None of this is part of B28 and none was authored here. The B28 commits were made by explicit path so they contain only the seven flat-tuple files and none of that separate work. If those probes are yours in progress, they are untouched in the working tree.
+- You chose the larger scope that includes nested enums rather than deferring them. The enum reconciliation above is the consequence.
+- A nested access uses one operand-pool entry. The common scalar field access stays inline, so only the nesting case pays a pool entry.
+- The mixed-variant enum case keeps its current standalone behaviour. There is no flatness regression.
+- Const-folded composites that would nest an enum are not flat-folded, so a variant-sized const enum is never inlined into a fixed parent slot. A const struct nesting a fixed-size composite such as a tuple, array, or struct is fine because those carry no variant-dependent size.
+- Open concern. The eligibility helpers on the compiler side and the runtime construction choke points are two implementations of the same layout arithmetic. They are tested to agree on the corpus, but a future field-type addition must update both. Folding both onto the reconciled `LayoutContext` would remove the duplication and is a candidate follow-up, not done here to keep the slice focused.
 
-## Recommended next step
+## Intended next step
 
-Merge `feat-flat-memory-tuple` into `feat-flat-memory-model` once the reflection decision above is acceptable. Then continue P2 by replicating the flat representation for `Array`, `Struct`, and `Enum`, and by flattening nested composites inline through the recursive layout. References (`Text`, `Opaque`) and the boxed fallback remain the scaffold until P3 makes them fixed-size handles, after which the dual representation is removed.
-
-## Reference
-
-- `docs/decisions/BACKLOG.md` B28 is the authoritative design and plan.
-- `src/flat_value.rs` holds `FlatComposite`; `src/value_layout.rs` and `src/layout_pass.rs` are the compile-time layout, never carried on a value.
-- `src/bytecode.rs` `tuple_with_widths` and `flat_tuple_scalar_kind` are the construction choke point and the kind predicate; the compiler's `type_flat_scalar_kind` and `tuple_field_access` are the type-side mirror.
-- `docs/roadmap/V0_4_0_NATIVE_CODEGEN.md` carries the deferred flat-machine ISA redesign.
+Remaining B28 P2 is arena residence of `FlatComposite`, which is still a heap byte vector. After that, P3 is reference fields as handles, P4 is the worst-case-memory-usage recompute against flat sizes, and P5 is hot-swap migration, documentation, and decision closure. Awaiting your direction on whether to merge `feat-flat-memory-nested` into `feat-flat-memory-model` and push, and on which item to take next.

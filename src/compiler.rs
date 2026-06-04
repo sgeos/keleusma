@@ -2617,7 +2617,10 @@ fn emit_data_indexed_read(
         for index_expr in chain.indices {
             compile_expr(fc, index_expr)?;
             let elem_ty = cur_ty.as_ref().and_then(element_type_of);
-            fc.emit(Op::GetIndex(array_elem_operand(elem_ty.as_ref())));
+            fc.emit(Op::GetIndex(array_elem_operand(
+                elem_ty.as_ref(),
+                &fc.type_info,
+            )));
             cur_ty = elem_ty;
             // Each level's index can trap out-of-bounds; record the
             // operator site so the fault resolves exactly (B29 item 2).
@@ -3534,18 +3537,156 @@ fn type_flat_scalar_kind(ty: &TypeExpr) -> Option<crate::value_layout::ScalarKin
     }
 }
 
+/// Unwrap information-flow label wrappers to the underlying type (B28 P2).
+fn unwrap_labels(ty: &TypeExpr) -> &TypeExpr {
+    match ty {
+        TypeExpr::Labelled(inner, _, _) | TypeExpr::NegativeLabelled(inner, _, _) => {
+            unwrap_labels(inner)
+        }
+        other => other,
+    }
+}
+
+/// Total flat byte size of a type at the module's widths, or `None` when
+/// the type is not transitively flat (B28 P2 nested inlining).
+///
+/// A scalar contributes its scalar size. A tuple, array, or struct is flat
+/// when every element or field is flat; its size is the sum (arrays: count
+/// times the element size). An enum is flat only when it is uniformly flat
+/// (every variant's payload is flat), with size `word_bytes + payload_max`,
+/// matching the runtime flat enum body padded to the largest variant.
+/// `Option` is forced boxed (it is generic and absent from the type
+/// tables), so it is never flat. This mirrors the runtime construction
+/// choke points, so a baked nested access agrees with the body the
+/// construction builds.
+fn type_flat_size(ty: &TypeExpr, ti: &TypeInfo) -> Option<usize> {
+    let wb = ti.word_bytes;
+    let fb = ti.float_bytes;
+    if wb == 0 {
+        return None;
+    }
+    if let Some(kind) = type_flat_scalar_kind(ty) {
+        return Some(kind.size_in_bytes(wb, fb));
+    }
+    match unwrap_labels(ty) {
+        TypeExpr::Tuple(elems, _) => {
+            let mut total = 0usize;
+            for e in elems {
+                total += type_flat_size(e, ti)?;
+            }
+            Some(total)
+        }
+        TypeExpr::Array(elem, count, _) if *count >= 0 => {
+            Some(*count as usize * type_flat_size(elem, ti)?)
+        }
+        TypeExpr::Named(name, args, _) if args.is_empty() => {
+            if let Some(order) = ti.struct_field_order.get(name) {
+                let mut total = 0usize;
+                for (_, fty) in order {
+                    total += type_flat_size(fty, ti)?;
+                }
+                Some(total)
+            } else if ti.enums.contains_key(name) {
+                enum_uniform_flat_payload_max(name, ti).map(|pmax| wb + pmax)
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
+/// The largest-variant flat payload byte size of an enum, or `None` when
+/// the enum is not uniformly flat (some variant carries a non-flat
+/// payload) (B28 P2). Excludes the leading discriminant word. The compiler
+/// bakes this as the `NewEnum` minimum-payload operand so every value of a
+/// uniformly-flat enum shares one fixed body size, which a nested enum
+/// field's fixed slot requires. A non-uniform enum returns `None`, so it
+/// is never a flat nested field and bakes a per-variant body standalone.
+fn enum_uniform_flat_payload_max(name: &str, ti: &TypeInfo) -> Option<usize> {
+    // `Option` is forced boxed, so it is never uniformly flat.
+    if name == "Option" {
+        return None;
+    }
+    let variants = ti.enums.get(name)?;
+    let mut max = 0usize;
+    for payload in variants.values() {
+        let mut sum = 0usize;
+        for pty in payload {
+            sum += type_flat_size(pty, ti)?;
+        }
+        if sum > max {
+            max = sum;
+        }
+    }
+    Some(max)
+}
+
+/// The composite kind a flat composite type re-wraps to, or `None` for a
+/// scalar or non-flat type (B28 P2 nested inlining). Used to bake the
+/// `FlatNested` variant tag.
+fn type_flat_composite_kind(
+    ty: &TypeExpr,
+    ti: &TypeInfo,
+) -> Option<crate::value_layout::CompositeKind> {
+    use crate::value_layout::CompositeKind as C;
+    match unwrap_labels(ty) {
+        TypeExpr::Tuple(..) => Some(C::Tuple),
+        TypeExpr::Array(..) => Some(C::Array),
+        TypeExpr::Named(name, args, _) if args.is_empty() => {
+            if ti.struct_field_order.contains_key(name) {
+                Some(C::Struct)
+            } else if name != "Option" && enum_uniform_flat_payload_max(name, ti).is_some() {
+                Some(C::Enum)
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
+/// Classify a composite field as a flat scalar, a flat nested composite, or
+/// not flat (B28 P2). The access-baking functions use this to choose
+/// between the `Flat`, `FlatNested`, and boxed operand forms.
+enum FlatFieldForm {
+    /// A flat-eligible scalar field of the given kind.
+    Scalar(crate::value_layout::ScalarKind),
+    /// A nested flat composite field of the given byte size and kind.
+    Nested(u16, crate::value_layout::CompositeKind),
+    /// Not flat-eligible; the whole composite falls back to boxed.
+    NotFlat,
+}
+
+/// Classify `ty` as a flat field form at the module's widths (B28 P2). A
+/// nested composite whose size exceeds the sixteen-bit operand bound is
+/// reported `NotFlat` so the whole composite falls back to boxed.
+fn classify_flat_field(ty: &TypeExpr, ti: &TypeInfo) -> FlatFieldForm {
+    if let Some(kind) = type_flat_scalar_kind(ty) {
+        return FlatFieldForm::Scalar(kind);
+    }
+    if let (Some(size), Some(variant)) = (type_flat_size(ty, ti), type_flat_composite_kind(ty, ti))
+        && size <= u16::MAX as usize
+    {
+        return FlatFieldForm::Nested(size as u16, variant);
+    }
+    FlatFieldForm::NotFlat
+}
+
 /// Resolve the baked [`ArrayElem`] operand for indexing an array whose
 /// element type is `elem_ty` (B28 P2). A flat-eligible scalar element type
-/// bakes `Flat { kind }`, matching the flat body the construction handler
-/// builds for a transitively-scalar array; any other element type
-/// (reference, float, nested composite) or an unrecoverable type bakes the
-/// boxed positional form, matching the boxed body. The decision mirrors the
-/// runtime's value-based eligibility in `array_with_widths`, so a
+/// bakes `Flat { kind }` and a nested flat composite element bakes
+/// `FlatNested { size, kind }`, matching the flat body the construction
+/// handler builds for a transitively-flat array; any other element type
+/// (reference, float, non-flat composite) or an unrecoverable type bakes
+/// the boxed positional form, matching the boxed body. The decision mirrors
+/// the runtime's value-based eligibility in `array_with_widths`, so a
 /// well-typed program's access form always agrees with the body.
-fn array_elem_operand(elem_ty: Option<&TypeExpr>) -> ArrayElem {
-    match elem_ty.and_then(type_flat_scalar_kind) {
-        Some(kind) => ArrayElem::Flat { kind },
-        None => ArrayElem::Boxed,
+fn array_elem_operand(elem_ty: Option<&TypeExpr>, ti: &TypeInfo) -> ArrayElem {
+    match elem_ty.map(|ty| classify_flat_field(ty, ti)) {
+        Some(FlatFieldForm::Scalar(kind)) => ArrayElem::Flat { kind },
+        Some(FlatFieldForm::Nested(size, variant)) => ArrayElem::FlatNested { size, variant },
+        _ => ArrayElem::Boxed,
     }
 }
 
@@ -3568,7 +3709,6 @@ fn tuple_field_access(
 ) -> TupleField {
     let boxed = TupleField::Boxed { index: index as u8 };
     let wb = fc.type_info.word_bytes;
-    let fb = fc.type_info.float_bytes;
     if wb == 0 {
         return boxed;
     }
@@ -3576,22 +3716,31 @@ fn tuple_field_access(
     let mut field_at = None;
     for (i, ty) in elem_types.iter().enumerate() {
         let Some(ty) = ty else { return boxed };
-        let Some(kind) = type_flat_scalar_kind(ty) else {
+        // Any non-flat element forces the whole tuple boxed; a nested flat
+        // composite contributes its full size to following offsets (B28 P2).
+        let Some(size) = type_flat_size(ty, &fc.type_info) else {
             return boxed;
         };
         if i == index {
-            field_at = Some((offset, kind));
+            field_at = Some((offset, classify_flat_field(ty, &fc.type_info)));
         }
-        offset += kind.size_in_bytes(wb, fb);
+        offset += size;
     }
     if offset > u16::MAX as usize {
         return boxed;
     }
     match field_at {
-        Some((off, kind)) if off <= u16::MAX as usize => TupleField::Flat {
+        Some((off, FlatFieldForm::Scalar(kind))) if off <= u16::MAX as usize => TupleField::Flat {
             offset: off as u16,
             kind,
         },
+        Some((off, FlatFieldForm::Nested(size, variant))) if off <= u16::MAX as usize => {
+            TupleField::FlatNested {
+                offset: off as u16,
+                size,
+                variant,
+            }
+        }
         _ => boxed,
     }
 }
@@ -3622,32 +3771,40 @@ fn tuple_elem_types_of(ty: Option<&TypeExpr>, arity: usize) -> Vec<Option<TypeEx
 /// a non-flat field forces the boxed form.
 fn struct_field_access(fc: &mut FuncCompiler, type_name: &str, field_name: &str) -> StructField {
     let wb = fc.type_info.word_bytes;
-    let fb = fc.type_info.float_bytes;
-    let flat = fc
-        .type_info
-        .struct_field_order
-        .get(type_name)
-        .and_then(|order| {
-            if wb == 0 {
-                return None;
+    // Clone the field order to release the borrow on `type_info`, so the
+    // recursive size/classification helpers can borrow it again (B28 P2).
+    let order = fc.type_info.struct_field_order.get(type_name).cloned();
+    let flat = order.and_then(|order| {
+        if wb == 0 {
+            return None;
+        }
+        let mut offset = 0usize;
+        let mut field_at = None;
+        for (fname, ty) in &order {
+            // Any non-flat field forces the whole struct boxed; a nested
+            // flat composite contributes its full size (B28 P2).
+            let size = type_flat_size(ty, &fc.type_info)?;
+            if fname == field_name {
+                field_at = Some((offset, classify_flat_field(ty, &fc.type_info)));
             }
-            let mut offset = 0usize;
-            let mut field_at = None;
-            for (fname, ty) in order {
-                let kind = type_flat_scalar_kind(ty)?;
-                if fname == field_name {
-                    field_at = Some((offset, kind));
-                }
-                offset += kind.size_in_bytes(wb, fb);
-            }
-            if offset > u16::MAX as usize {
-                return None;
-            }
-            field_at.map(|(off, kind)| (off as u16, kind))
-        });
+            offset += size;
+        }
+        if offset > u16::MAX as usize {
+            return None;
+        }
+        match field_at {
+            Some((off, form)) if off <= u16::MAX as usize => Some((off as u16, form)),
+            _ => None,
+        }
+    });
     match flat {
-        Some((offset, kind)) => StructField::Flat { offset, kind },
-        None => StructField::Boxed {
+        Some((offset, FlatFieldForm::Scalar(kind))) => StructField::Flat { offset, kind },
+        Some((offset, FlatFieldForm::Nested(size, variant))) => StructField::FlatNested {
+            offset,
+            size,
+            variant,
+        },
+        _ => StructField::Boxed {
             name_const: fc.add_string_constant(field_name),
         },
     }
@@ -3678,34 +3835,45 @@ fn enum_field_access(
     index: usize,
 ) -> EnumField {
     let wb = fc.type_info.word_bytes;
-    let fb = fc.type_info.float_bytes;
-    let flat = fc
+    // Clone the payload types to release the borrow on `type_info` (B28 P2).
+    let payload = fc
         .type_info
         .enums
         .get(type_name)
         .and_then(|vs| vs.get(variant))
-        .and_then(|payload| {
-            if wb == 0 {
-                return None;
+        .cloned();
+    let flat = payload.and_then(|payload| {
+        if wb == 0 {
+            return None;
+        }
+        // The flat enum body begins with the discriminant word.
+        let mut offset = wb;
+        let mut field_at = None;
+        for (i, ty) in payload.iter().enumerate() {
+            // A non-flat payload field forces the boxed body; a nested flat
+            // composite payload field contributes its full size (B28 P2).
+            let size = type_flat_size(ty, &fc.type_info)?;
+            if i == index {
+                field_at = Some((offset, classify_flat_field(ty, &fc.type_info)));
             }
-            // The flat enum body begins with the discriminant word.
-            let mut offset = wb;
-            let mut field_at = None;
-            for (i, ty) in payload.iter().enumerate() {
-                let kind = type_flat_scalar_kind(ty)?;
-                if i == index {
-                    field_at = Some((offset, kind));
-                }
-                offset += kind.size_in_bytes(wb, fb);
-            }
-            if offset > u16::MAX as usize {
-                return None;
-            }
-            field_at.map(|(off, kind)| (off as u16, kind))
-        });
+            offset += size;
+        }
+        if offset > u16::MAX as usize {
+            return None;
+        }
+        match field_at {
+            Some((off, form)) if off <= u16::MAX as usize => Some((off as u16, form)),
+            _ => None,
+        }
+    });
     match flat {
-        Some((offset, kind)) => EnumField::Flat { offset, kind },
-        None => EnumField::Boxed { index: index as u8 },
+        Some((offset, FlatFieldForm::Scalar(kind))) => EnumField::Flat { offset, kind },
+        Some((offset, FlatFieldForm::Nested(size, variant))) => EnumField::FlatNested {
+            offset,
+            size,
+            variant,
+        },
+        _ => EnumField::Boxed { index: index as u8 },
     }
 }
 
@@ -3979,7 +4147,10 @@ fn compile_for(fc: &mut FuncCompiler, for_stmt: &ForStmt) -> Result<(), CompileE
             // Extract element at current index.
             fc.emit(Op::GetLocal(arr_slot));
             fc.emit(Op::GetLocal(idx_slot));
-            fc.emit(Op::GetIndex(array_elem_operand(element_ty.as_ref())));
+            fc.emit(Op::GetIndex(array_elem_operand(
+                element_ty.as_ref(),
+                &fc.type_info,
+            )));
             let var_slot = fc.declare_local_typed(&for_stmt.var, element_ty);
             fc.emit(Op::SetLocal(var_slot));
 
@@ -5529,7 +5700,10 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
             let elem_ty = infer_expr_type(fc, object).and_then(|t| element_type_of(&t));
             compile_expr(fc, object)?;
             compile_expr(fc, index)?;
-            fc.emit(Op::GetIndex(array_elem_operand(elem_ty.as_ref())));
+            fc.emit(Op::GetIndex(array_elem_operand(
+                elem_ty.as_ref(),
+                &fc.type_info,
+            )));
             // Indexing can trap on an out-of-bounds index; record the
             // operator site so the fault resolves exactly (B29 item 2).
             fc.record_operator_site(span);
@@ -5570,9 +5744,14 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
             args,
             ..
         } => {
-            // Push the variant discriminant beneath the payload so the VM
-            // `NewEnum` can write it as the leading word of a flat enum
-            // body (B28 P2).
+            // Push the largest-variant payload size, then the variant
+            // discriminant, beneath the payload so the VM `NewEnum` can pad
+            // the flat body to one fixed size and write the discriminant as
+            // its leading word (B28 P2). A non-uniform enum bakes zero,
+            // leaving a variant-sized body.
+            let min_payload = enum_uniform_flat_payload_max(enum_name, &fc.type_info).unwrap_or(0);
+            let p_const = fc.add_constant(Value::Int(min_payload as i64));
+            fc.emit(Op::Const(p_const));
             let disc = fc
                 .type_info
                 .enum_variant_order
@@ -6177,7 +6356,10 @@ fn compile_checked_index(
     let lt_skip = fc.emit_jump(Op::If(0));
     fc.emit(Op::GetLocal(arr_slot));
     fc.emit(Op::GetLocal(idx_slot));
-    fc.emit(Op::GetIndex(array_elem_operand(Some(&elem_ty))));
+    fc.emit(Op::GetIndex(array_elem_operand(
+        Some(&elem_ty),
+        &fc.type_info,
+    )));
     fc.emit(Op::SetLocal(elem_slot));
     let zero_flag_idx = fc.add_constant(Value::Int(0));
     fc.emit(Op::Const(zero_flag_idx));
@@ -6253,7 +6435,10 @@ fn compile_checked_index(
     // the runtime traps with the precise `IndexOutOfBounds(index, len)`.
     fc.emit(Op::GetLocal(arr_slot));
     fc.emit(Op::GetLocal(idx_slot));
-    fc.emit(Op::GetIndex(array_elem_operand(Some(&elem_ty))));
+    fc.emit(Op::GetIndex(array_elem_operand(
+        Some(&elem_ty),
+        &fc.type_info,
+    )));
     let default_break = fc.emit(Op::Break(0));
     if let Some(breaks) = fc.loop_breaks.last_mut() {
         breaks.push(default_break);
@@ -6555,6 +6740,10 @@ fn compile_checked_discriminant(
                             .map(|(_, d)| *d)
                     })
                     .unwrap_or(0);
+                let min_payload =
+                    enum_uniform_flat_payload_max(enum_name, &fc.type_info).unwrap_or(0);
+                let p_const = fc.add_constant(Value::Int(min_payload as i64));
+                fc.emit(Op::Const(p_const));
                 let d_const = fc.add_constant(Value::Int(disc));
                 fc.emit(Op::Const(d_const));
                 fc.emit(Op::NewEnum(e_const, v_const, 0));
@@ -6589,6 +6778,10 @@ fn compile_checked_discriminant(
                             .map(|(_, d)| *d)
                     })
                     .unwrap_or(0);
+                let min_payload =
+                    enum_uniform_flat_payload_max(enum_name, &fc.type_info).unwrap_or(0);
+                let p_const = fc.add_constant(Value::Int(min_payload as i64));
+                fc.emit(Op::Const(p_const));
                 let d_const = fc.add_constant(Value::Int(disc));
                 fc.emit(Op::Const(d_const));
                 fc.emit(Op::NewEnum(e_const, v_const, 0));

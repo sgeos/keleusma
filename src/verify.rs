@@ -1757,9 +1757,10 @@ fn op_depth_effect(op: &Op, chunk: &Chunk) -> (i32, i32) {
                 .map_or(0, |t| t.field_names.len()) as i32;
             (fc, 1 - fc)
         }
-        // NewEnum pops the discriminant (pushed beneath the payload) plus
-        // the `n` payload values, and pushes one enum value (B28 P2).
-        Op::NewEnum(_, _, n) => (*n as i32 + 1, -(*n as i32)),
+        // NewEnum pops the largest-variant payload size and the
+        // discriminant (both pushed beneath the payload) plus the `n`
+        // payload values, and pushes one enum value (B28 P2).
+        Op::NewEnum(_, _, n) => (*n as i32 + 2, -(*n as i32 + 1)),
         Op::NewArray(n) => (*n as i32, 1 - *n as i32),
         Op::NewTuple(n) => (*n as i32, 1 - *n as i32),
         Op::CheckedAdd

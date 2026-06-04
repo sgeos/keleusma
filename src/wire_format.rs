@@ -116,6 +116,28 @@ pub const POOL_TAG_U16_U16_U16: u8 = 0x03;
 /// index.
 pub const TUPLE_FIELD_BOXED_SENTINEL: u8 = 0xFF;
 
+/// Byte-three sentinel base marking the `FlatNested` form of a baked
+/// composite-access record (B28 P2 nested inlining). The low two bits
+/// carry the [`crate::value_layout::CompositeKind`] tag, so the four
+/// concrete sentinels are `0xF0..=0xF3`. Distinguished from a flat
+/// scalar-kind tag (`0..=7`) and from the boxed sentinel (`0xFF`).
+///
+/// Unlike the inline scalar form, a nested access cannot fit its
+/// `(offset, size)` in the remaining two operand bytes, so it spills to
+/// an operand-pool entry (the existing `from_u16_u16` shape). Bytes one
+/// and two hold the pool index (little-endian `u16`); byte three is this
+/// sentinel with the variant tag. The pool entry holds `(offset, size)`
+/// for the field forms (`GetField`/`GetTupleField`/`GetEnumField`) and
+/// `(size, 0)` for `GetIndex` (a homogeneous array has no per-element
+/// offset; the element offset is `index * size`). A module whose nested
+/// access would reference a pool index beyond `u16::MAX` is rejected at
+/// encode time, which the `no_std` target's small modules never reach.
+pub const FLAT_NESTED_SENTINEL_BASE: u8 = 0xF0;
+
+/// Mask selecting the [`FLAT_NESTED_SENTINEL_BASE`] marker bits (the
+/// high six bits); the low two bits carry the composite-kind tag.
+pub const FLAT_NESTED_SENTINEL_MASK: u8 = 0xFC;
+
 /// Width of an opcode record in bytes.
 pub const OPCODE_RECORD_BYTES: usize = 4;
 
@@ -537,9 +559,34 @@ fn opcode_name_for_id(id: u8) -> Option<&'static str> {
         .find_map(|(name, code)| if *code == id { Some(*name) } else { None })
 }
 
+/// Append a `from_u16_u16(a, b)` pool entry for a nested composite
+/// access and return the inline operand record `[idx_lo, idx_hi,
+/// sentinel | variant]` (B28 P2). The pool index must fit a `u16`
+/// because the nested record reserves byte three for the variant
+/// sentinel; a larger index is rejected with `OperandPoolIndexOverflow`.
+fn encode_nested(
+    pool: &mut Vec<OperandPoolEntry>,
+    a: u16,
+    b: u16,
+    variant: crate::value_layout::CompositeKind,
+) -> Result<[u8; 3], WireFormatError> {
+    let idx = pool.len();
+    if idx >= MAX_POOL_ENTRIES || idx > u16::MAX as usize {
+        return Err(WireFormatError::OperandPoolIndexOverflow);
+    }
+    pool.push(OperandPoolEntry::from_u16_u16(a, b));
+    let idx_bytes = (idx as u16).to_le_bytes();
+    Ok([
+        idx_bytes[0],
+        idx_bytes[1],
+        FLAT_NESTED_SENTINEL_BASE | variant.to_tag(),
+    ])
+}
+
 /// Encode an [`Op`] into an [`OpcodeRecord`], appending an entry
-/// to `pool` for the four compound-operand opcodes
-/// (`GetDataIndexed`, `SetDataIndexed`, `IsEnum`, `NewEnum`).
+/// to `pool` for the compound-operand opcodes (`GetDataIndexed`,
+/// `SetDataIndexed`, `IsEnum`, `NewEnum`, and the `FlatNested` form of
+/// the composite-access opcodes).
 ///
 /// The pool index of an appended entry is the entry's position
 /// in `pool` before the append. The encoder rejects modules
@@ -595,6 +642,11 @@ pub fn encode_op(
             let b = offset.to_le_bytes();
             [b[0], b[1], kind.to_tag()]
         }
+        Op::GetEnumField(crate::bytecode::EnumField::FlatNested {
+            offset,
+            size,
+            variant,
+        }) => encode_nested(pool, *offset, *size, *variant)?,
         Op::GetEnumField(crate::bytecode::EnumField::Boxed { index }) => {
             [*index, 0, TUPLE_FIELD_BOXED_SENTINEL]
         }
@@ -646,6 +698,11 @@ pub fn encode_op(
             let b = offset.to_le_bytes();
             [b[0], b[1], kind.to_tag()]
         }
+        Op::GetTupleField(crate::bytecode::TupleField::FlatNested {
+            offset,
+            size,
+            variant,
+        }) => encode_nested(pool, *offset, *size, *variant)?,
         Op::GetTupleField(crate::bytecode::TupleField::Boxed { index }) => {
             [*index, 0, TUPLE_FIELD_BOXED_SENTINEL]
         }
@@ -657,6 +714,11 @@ pub fn encode_op(
             let b = offset.to_le_bytes();
             [b[0], b[1], kind.to_tag()]
         }
+        Op::GetField(crate::bytecode::StructField::FlatNested {
+            offset,
+            size,
+            variant,
+        }) => encode_nested(pool, *offset, *size, *variant)?,
         Op::GetField(crate::bytecode::StructField::Boxed { name_const }) => {
             let b = name_const.to_le_bytes();
             [b[0], b[1], TUPLE_FIELD_BOXED_SENTINEL]
@@ -667,6 +729,12 @@ pub fn encode_op(
         // element size and the offset from the index. The boxed form
         // stores the boxed sentinel in byte one.
         Op::GetIndex(crate::bytecode::ArrayElem::Flat { kind }) => [kind.to_tag(), 0, 0],
+        // A nested array element carries no per-element offset (the offset
+        // is `index * size`, computed at run time), so the pool entry holds
+        // `(size, 0)`.
+        Op::GetIndex(crate::bytecode::ArrayElem::FlatNested { size, variant }) => {
+            encode_nested(pool, *size, 0, *variant)?
+        }
         Op::GetIndex(crate::bytecode::ArrayElem::Boxed) => [TUPLE_FIELD_BOXED_SENTINEL, 0, 0],
 
         // Pool-using shapes. Append the entry and store the index
@@ -700,6 +768,19 @@ pub fn encode_op(
         }
     };
     Ok(OpcodeRecord::from_id_and_operand(id, operand))
+}
+
+/// Decode the byte-three sentinel of a composite-access record into a
+/// nested composite kind, or `None` when the byte is not a nested
+/// sentinel (B28 P2 nested inlining). The high six bits select the
+/// nested marker; the low two carry the
+/// [`crate::value_layout::CompositeKind`] tag.
+fn decode_nested_variant(tag: u8) -> Option<crate::value_layout::CompositeKind> {
+    if tag & FLAT_NESTED_SENTINEL_MASK == FLAT_NESTED_SENTINEL_BASE {
+        crate::value_layout::CompositeKind::from_tag(tag & !FLAT_NESTED_SENTINEL_MASK)
+    } else {
+        None
+    }
 }
 
 /// Decode an [`OpcodeRecord`] into an [`Op`], consulting the
@@ -767,6 +848,13 @@ pub fn decode_op(record: OpcodeRecord, pool: &[OperandPoolEntry]) -> Result<Op, 
             if bytes[2] == TUPLE_FIELD_BOXED_SENTINEL {
                 let name_const = u16::from_le_bytes([bytes[0], bytes[1]]);
                 Op::GetField(crate::bytecode::StructField::Boxed { name_const })
+            } else if let Some(variant) = decode_nested_variant(bytes[2]) {
+                let (offset, size) = decode_nested_pool(record, pool)?;
+                Op::GetField(crate::bytecode::StructField::FlatNested {
+                    offset,
+                    size,
+                    variant,
+                })
             } else {
                 let offset = u16::from_le_bytes([bytes[0], bytes[1]]);
                 let kind = crate::value_layout::ScalarKind::from_tag(bytes[2])
@@ -775,12 +863,15 @@ pub fn decode_op(record: OpcodeRecord, pool: &[OperandPoolEntry]) -> Result<Op, 
             }
         }
         39 => {
-            let b0 = record.operand_bytes()[0];
-            if b0 == TUPLE_FIELD_BOXED_SENTINEL {
+            let bytes = record.operand_bytes();
+            if bytes[2] == 0 && bytes[0] == TUPLE_FIELD_BOXED_SENTINEL {
                 Op::GetIndex(crate::bytecode::ArrayElem::Boxed)
+            } else if let Some(variant) = decode_nested_variant(bytes[2]) {
+                let (size, _) = decode_nested_pool(record, pool)?;
+                Op::GetIndex(crate::bytecode::ArrayElem::FlatNested { size, variant })
             } else {
-                let kind = crate::value_layout::ScalarKind::from_tag(b0)
-                    .ok_or(WireFormatError::TupleFieldKindUnknown(b0))?;
+                let kind = crate::value_layout::ScalarKind::from_tag(bytes[0])
+                    .ok_or(WireFormatError::TupleFieldKindUnknown(bytes[0]))?;
                 Op::GetIndex(crate::bytecode::ArrayElem::Flat { kind })
             }
         }
@@ -788,6 +879,13 @@ pub fn decode_op(record: OpcodeRecord, pool: &[OperandPoolEntry]) -> Result<Op, 
             let bytes = record.operand_bytes();
             if bytes[2] == TUPLE_FIELD_BOXED_SENTINEL {
                 Op::GetTupleField(crate::bytecode::TupleField::Boxed { index: bytes[0] })
+            } else if let Some(variant) = decode_nested_variant(bytes[2]) {
+                let (offset, size) = decode_nested_pool(record, pool)?;
+                Op::GetTupleField(crate::bytecode::TupleField::FlatNested {
+                    offset,
+                    size,
+                    variant,
+                })
             } else {
                 let offset = u16::from_le_bytes([bytes[0], bytes[1]]);
                 let kind = crate::value_layout::ScalarKind::from_tag(bytes[2])
@@ -799,6 +897,13 @@ pub fn decode_op(record: OpcodeRecord, pool: &[OperandPoolEntry]) -> Result<Op, 
             let bytes = record.operand_bytes();
             if bytes[2] == TUPLE_FIELD_BOXED_SENTINEL {
                 Op::GetEnumField(crate::bytecode::EnumField::Boxed { index: bytes[0] })
+            } else if let Some(variant) = decode_nested_variant(bytes[2]) {
+                let (offset, size) = decode_nested_pool(record, pool)?;
+                Op::GetEnumField(crate::bytecode::EnumField::FlatNested {
+                    offset,
+                    size,
+                    variant,
+                })
             } else {
                 let offset = u16::from_le_bytes([bytes[0], bytes[1]]);
                 let kind = crate::value_layout::ScalarKind::from_tag(bytes[2])
@@ -855,6 +960,29 @@ fn decode_pool_u16_u16(
     pool: &[OperandPoolEntry],
 ) -> Result<(u16, u16), WireFormatError> {
     let idx = record.operand_pool_index() as usize;
+    let entry = pool
+        .get(idx)
+        .copied()
+        .ok_or(WireFormatError::OperandPoolIndexOutOfBounds(idx))?;
+    entry.check_parity()?;
+    if entry.tag() != POOL_TAG_U16_U16 {
+        return Err(WireFormatError::OperandPoolTagMismatch {
+            observed: entry.tag(),
+            expected: POOL_TAG_U16_U16,
+        });
+    }
+    Ok(entry.as_u16_u16())
+}
+
+/// Helper: fetch the `(offset, size)` of a nested composite access from
+/// a `from_u16_u16` pool entry, reading the pool index from operand bytes
+/// one and two (byte three holds the variant sentinel) (B28 P2).
+fn decode_nested_pool(
+    record: OpcodeRecord,
+    pool: &[OperandPoolEntry],
+) -> Result<(u16, u16), WireFormatError> {
+    let bytes = record.operand_bytes();
+    let idx = u16::from_le_bytes([bytes[0], bytes[1]]) as usize;
     let entry = pool
         .get(idx)
         .copied()

@@ -68,6 +68,42 @@ pub trait KeleusmaType<W: Word, F: Float>: Sized {
     fn flat_field_kind() -> Option<crate::value_layout::ScalarKind> {
         None
     }
+
+    /// The flat byte size this type occupies inside a flat composite body,
+    /// or `None` when it is not flat-eligible (B28 P2 nested inlining).
+    ///
+    /// A flat-eligible scalar returns its scalar size (the default, derived
+    /// from [`KeleusmaType::flat_field_kind`]). A flat composite (a derived
+    /// struct or enum, or a tuple or array of flat fields) overrides this to
+    /// return its total flat body size, so it can be read from and written
+    /// to a parent body inline. A type that returns `None` keeps the boxed
+    /// representation and is not inlined.
+    fn flat_byte_size(word_bytes: usize, float_bytes: usize) -> Option<usize> {
+        Self::flat_field_kind().map(|k| k.size_in_bytes(word_bytes, float_bytes))
+    }
+
+    /// Reconstruct the Rust type from a flat byte slice that holds exactly
+    /// this type's flat body (B28 P2 nested inlining).
+    ///
+    /// The default reads a single flat scalar of [`KeleusmaType::flat_field_kind`]
+    /// from the start of `bytes`; a type with no flat scalar kind returns a
+    /// [`VmError::TypeError`]. Flat composites override this to read their
+    /// fields at packed offsets, recursing through nested composites.
+    fn from_flat_bytes(
+        bytes: &[u8],
+        word_bytes: usize,
+        float_bytes: usize,
+    ) -> Result<Self, VmError> {
+        match Self::flat_field_kind() {
+            Some(kind) => {
+                let v = GenericValue::read_scalar_le(bytes, 0, kind, word_bytes, float_bytes);
+                Self::from_value(&v)
+            }
+            None => Err(VmError::TypeError(alloc::string::String::from(
+                "type has no flat byte representation",
+            ))),
+        }
+    }
 }
 
 // -- Primitive impls --
@@ -223,42 +259,13 @@ impl<W: Word, F: Float, T: KeleusmaType<W, F> + Clone, const N: usize> KeleusmaT
                 })
             }
             // A flat array body is pure bytes; the element type `T` supplies
-            // the scalar kind so each element is read at its packed offset
-            // (B28 P2). Runtime widths match the module widths on the
-            // bundled runtime.
+            // its flat byte size so each element (a scalar or a nested flat
+            // composite) is read at its packed offset (B28 P2). Runtime
+            // widths match the module widths on the bundled runtime.
             GenericValue::Array(ArrayBody::Flat(fc)) => {
                 let word_bytes = (1usize << <W as Word>::BITS_LOG2) / 8;
                 let float_bytes = (1usize << <F as Float>::BITS_LOG2) / 8;
-                let kind = <T as KeleusmaType<W, F>>::flat_field_kind().ok_or_else(|| {
-                    VmError::TypeError(alloc::string::String::from(
-                        "flat array element type is not a flat scalar",
-                    ))
-                })?;
-                let esize = kind.size_in_bytes(word_bytes, float_bytes);
-                let bytes = fc.as_bytes();
-                // A zero-size element kind (`Unit`) stores no bytes, so the
-                // length is not byte-derivable; trust the static `N`.
-                let len = bytes.len().checked_div(esize).unwrap_or(N);
-                if len != N {
-                    return Err(VmError::TypeError(format!(
-                        "expected array of length {}, got {}",
-                        N, len
-                    )));
-                }
-                let mut converted: Vec<T> = Vec::with_capacity(N);
-                for i in 0..N {
-                    let val = GenericValue::<W, F>::read_scalar_le(
-                        bytes,
-                        i * esize,
-                        kind,
-                        word_bytes,
-                        float_bytes,
-                    );
-                    converted.push(T::from_value(&val)?);
-                }
-                converted.try_into().map_err(|_| {
-                    VmError::TypeError(format!("failed to convert array of length {}", N))
-                })
+                Self::from_flat_bytes(fc.as_bytes(), word_bytes, float_bytes)
             }
             other => Err(VmError::TypeError(format!(
                 "expected array, got {}",
@@ -276,6 +283,45 @@ impl<W: Word, F: Float, T: KeleusmaType<W, F> + Clone, const N: usize> KeleusmaT
             (1usize << <W as Word>::BITS_LOG2) / 8,
             (1usize << <F as Float>::BITS_LOG2) / 8,
         )
+    }
+
+    fn flat_byte_size(word_bytes: usize, float_bytes: usize) -> Option<usize> {
+        Some(N * <T as KeleusmaType<W, F>>::flat_byte_size(word_bytes, float_bytes)?)
+    }
+
+    fn from_flat_bytes(
+        bytes: &[u8],
+        word_bytes: usize,
+        float_bytes: usize,
+    ) -> Result<Self, VmError> {
+        let esize = <T as KeleusmaType<W, F>>::flat_byte_size(word_bytes, float_bytes).ok_or_else(
+            || {
+                VmError::TypeError(alloc::string::String::from(
+                    "flat array element type is not flat-eligible",
+                ))
+            },
+        )?;
+        // A zero-size element (`Unit`) stores no bytes, so the length is not
+        // byte-derivable; trust the static `N`.
+        let len = bytes.len().checked_div(esize).unwrap_or(N);
+        if len != N {
+            return Err(VmError::TypeError(format!(
+                "expected array of length {}, got {}",
+                N, len
+            )));
+        }
+        let mut converted: Vec<T> = Vec::with_capacity(N);
+        for i in 0..N {
+            let lo = i * esize;
+            converted.push(<T as KeleusmaType<W, F>>::from_flat_bytes(
+                &bytes[lo..lo + esize],
+                word_bytes,
+                float_bytes,
+            )?);
+        }
+        converted
+            .try_into()
+            .map_err(|_| VmError::TypeError(format!("failed to convert array of length {}", N)))
     }
 }
 
@@ -304,26 +350,15 @@ macro_rules! impl_tuple {
                     // types supply the per-field kinds so each scalar is
                     // read at its packed offset (B28 P2). Runtime widths
                     // match the module widths on the bundled runtime.
+                    // A flat tuple body is pure bytes; the Rust element types
+                    // supply their flat sizes so each field (a scalar or a
+                    // nested flat composite) is read at its packed offset
+                    // (B28 P2). Runtime widths match the module widths on the
+                    // bundled runtime.
                     GenericValue::Tuple(crate::bytecode::TupleBody::Flat(fc)) => {
                         let word_bytes = (1usize << <W as Word>::BITS_LOG2) / 8;
                         let float_bytes = (1usize << <FloatT as Float>::BITS_LOG2) / 8;
-                        let bytes = fc.as_bytes();
-                        let kinds = [$(<$name as KeleusmaType<W, FloatT>>::flat_field_kind(),)*];
-                        let mut vals: Vec<GenericValue<W, FloatT>> = Vec::with_capacity(expected);
-                        let mut offset = 0usize;
-                        for k in kinds {
-                            let k = k.ok_or_else(|| {
-                                VmError::TypeError(format!(
-                                    "flat tuple field is not a flat scalar at arity {}",
-                                    expected
-                                ))
-                            })?;
-                            vals.push(GenericValue::<W, FloatT>::read_scalar_le(
-                                bytes, offset, k, word_bytes, float_bytes,
-                            ));
-                            offset += k.size_in_bytes(word_bytes, float_bytes);
-                        }
-                        Ok(($($name::from_value(&vals[$idx])?,)*))
+                        Self::from_flat_bytes(fc.as_bytes(), word_bytes, float_bytes)
                     }
                     other => Err(VmError::TypeError(format!(
                         "expected tuple, got {}",
@@ -343,6 +378,37 @@ macro_rules! impl_tuple {
                     (1usize << <W as Word>::BITS_LOG2) / 8,
                     (1usize << <FloatT as Float>::BITS_LOG2) / 8,
                 )
+            }
+
+            #[allow(unused_assignments, unused_mut, unused_variables)]
+            fn flat_byte_size(word_bytes: usize, float_bytes: usize) -> Option<usize> {
+                let mut total = 0usize;
+                $(
+                    total += <$name as KeleusmaType<W, FloatT>>::flat_byte_size(word_bytes, float_bytes)?;
+                )*
+                Some(total)
+            }
+
+            #[allow(unused_assignments, unused_mut, unused_variables, non_snake_case)]
+            fn from_flat_bytes(bytes: &[u8], word_bytes: usize, float_bytes: usize)
+                -> Result<Self, VmError>
+            {
+                let mut offset = 0usize;
+                // Tuple elements evaluate left-to-right, so the running
+                // offset advances in declaration order (B28 P2).
+                Ok(($(
+                    {
+                        let size = <$name as KeleusmaType<W, FloatT>>::flat_byte_size(word_bytes, float_bytes)
+                            .ok_or_else(|| VmError::TypeError(::alloc::string::String::from(
+                                "flat tuple field is not flat-eligible",
+                            )))?;
+                        let val = <$name as KeleusmaType<W, FloatT>>::from_flat_bytes(
+                            &bytes[offset..offset + size], word_bytes, float_bytes,
+                        )?;
+                        offset += size;
+                        val
+                    },
+                )*))
             }
         }
     };

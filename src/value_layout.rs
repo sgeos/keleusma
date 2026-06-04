@@ -162,6 +162,56 @@ impl ScalarKind {
     }
 }
 
+/// Tag enum identifying which composite `GenericValue` variant a
+/// nested flat-composite field re-wraps to (B28 P2 nested inlining).
+///
+/// When a composite field is itself a transitively-flat composite, its
+/// access operand carries a [`crate::bytecode::TupleField::FlatNested`]
+/// (or the struct/enum analogue) recording the byte `offset` and `size`
+/// of the child's body within the parent, plus this tag so the access
+/// handler re-wraps the extracted byte range as the correct `Value`
+/// variant. The mapping is fixed and independent of feature flags so the
+/// wire encoding is stable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CompositeKind {
+    /// Re-wrap as [`crate::bytecode::GenericValue::Tuple`].
+    Tuple,
+    /// Re-wrap as [`crate::bytecode::GenericValue::Array`].
+    Array,
+    /// Re-wrap as [`crate::bytecode::GenericValue::Struct`].
+    Struct,
+    /// Re-wrap as [`crate::bytecode::GenericValue::Enum`].
+    Enum,
+}
+
+impl CompositeKind {
+    /// Stable one-byte tag for wire encoding inside a baked nested
+    /// access operand. Values are disjoint from [`ScalarKind::to_tag`]
+    /// only by context; the codec selects the table by the operand's
+    /// nested-vs-scalar discriminator, so reuse of small integers is
+    /// safe.
+    pub fn to_tag(&self) -> u8 {
+        match self {
+            Self::Tuple => 0,
+            Self::Array => 1,
+            Self::Struct => 2,
+            Self::Enum => 3,
+        }
+    }
+
+    /// Inverse of [`CompositeKind::to_tag`]. Returns `None` for an
+    /// unknown tag, which the decoder treats as a corrupted operand.
+    pub fn from_tag(tag: u8) -> Option<Self> {
+        match tag {
+            0 => Some(Self::Tuple),
+            1 => Some(Self::Array),
+            2 => Some(Self::Struct),
+            3 => Some(Self::Enum),
+            _ => None,
+        }
+    }
+}
+
 /// Byte-level layout descriptor for a Keleusma composite type.
 ///
 /// The descriptor captures the structural shape of the type
@@ -242,7 +292,14 @@ impl LayoutDescriptor {
                     })
                     .max()
                     .unwrap_or(0);
-                1 + payload_max
+                // Discriminant occupies a full word, matching the
+                // runtime flat enum body (`enum_with_widths` writes the
+                // discriminant as a `ScalarKind::Int` at offset zero) and
+                // the `Enum as Word` cast. The payload is padded to the
+                // largest variant so every value of the type shares one
+                // fixed size, which is what a nested enum field requires
+                // (B28 P2 nested inlining).
+                word_bytes + payload_max
             }
         }
     }
@@ -482,11 +539,12 @@ mod tests {
                 ),
             ],
         };
-        assert_eq!(layout.size_in_bytes(I64_BYTES, F64_BYTES), 1 + 8);
+        // Discriminant is a full word (B28 P2): 8-byte disc + 8-byte payload.
+        assert_eq!(layout.size_in_bytes(I64_BYTES, F64_BYTES), 8 + 8);
     }
 
     #[test]
-    fn enum_with_all_unit_variants_is_one_byte() {
+    fn enum_with_all_unit_variants_is_one_word() {
         let layout = LayoutDescriptor::Enum {
             type_name: "Color".to_string(),
             variants: vec![
@@ -495,16 +553,18 @@ mod tests {
                 ("Blue".to_string(), vec![]),
             ],
         };
-        assert_eq!(layout.size_in_bytes(I64_BYTES, F64_BYTES), 1);
+        // Word-sized discriminant, empty payload (B28 P2).
+        assert_eq!(layout.size_in_bytes(I64_BYTES, F64_BYTES), 8);
     }
 
     #[test]
-    fn enum_with_no_variants_is_one_byte() {
+    fn enum_with_no_variants_is_one_word() {
         let layout = LayoutDescriptor::Enum {
             type_name: "Never".to_string(),
             variants: vec![],
         };
-        assert_eq!(layout.size_in_bytes(I64_BYTES, F64_BYTES), 1);
+        // Word-sized discriminant, empty payload (B28 P2).
+        assert_eq!(layout.size_in_bytes(I64_BYTES, F64_BYTES), 8);
     }
 
     #[test]

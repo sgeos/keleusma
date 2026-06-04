@@ -363,6 +363,18 @@ impl<W: crate::word::Word, F: crate::float::Float> PartialEq for GenericValue<W,
             (Self::Tuple(a), Self::Tuple(b)) => a == b,
             (Self::Array(a), Self::Array(b)) => a == b,
             (Self::Struct(a), Self::Struct(b)) => a == b,
+            // Flat enum bodies compare with padding tolerance (B28 P2):
+            // a compiler-padded body (`word + payload_max`) and an
+            // unpadded variant-sized body of the same value differ only in
+            // trailing zero padding. Comparing the overlapping prefix and
+            // requiring each remainder to be zero makes them equal without
+            // a type table. The discriminant word lies in the prefix (both
+            // bodies are at least `word_bytes` long) and is unique per
+            // variant, so distinct variants never alias. Boxed and mixed
+            // pairs keep the derived comparison.
+            (Self::Enum(EnumBody::Flat(a)), Self::Enum(EnumBody::Flat(b))) => {
+                flat_enum_bytes_eq(a.as_bytes(), b.as_bytes())
+            }
             (Self::Enum(a), Self::Enum(b)) => a == b,
             // Opaque equality is pointer identity. Two Arcs are
             // equal only if they share the same allocation. This
@@ -393,6 +405,55 @@ pub(crate) fn flat_tuple_scalar_kind<W: crate::word::Word, F: crate::float::Floa
         GenericValue::Byte(_) => Some(K::Byte),
         GenericValue::Int(_) => Some(K::Int),
         GenericValue::Fixed(_) => Some(K::Fixed),
+        _ => None,
+    }
+}
+
+/// Byte length a value contributes as a field of a flat composite, or
+/// `None` if it is not flat-eligible (B28 P2 nested inlining).
+///
+/// A flat-eligible scalar contributes its scalar size. A composite that
+/// is itself in its `Flat` byte body contributes that body's byte
+/// length, so it can be inlined into the parent's body. A boxed
+/// composite or a reference-bearing value is not flat-eligible and forces
+/// the parent boxed, exactly as `flat_tuple_scalar_kind` already does for
+/// scalars.
+pub(crate) fn flat_field_size<W: crate::word::Word, F: crate::float::Float>(
+    v: &GenericValue<W, F>,
+    word_bytes: usize,
+    float_bytes: usize,
+) -> Option<usize> {
+    if let Some(kind) = flat_tuple_scalar_kind(v) {
+        return Some(kind.size_in_bytes(word_bytes, float_bytes));
+    }
+    flat_body_bytes(v).map(|b| b.len())
+}
+
+/// Padding-tolerant equality of two flat enum bodies (B28 P2).
+///
+/// Compares the overlapping prefix and requires each trailing remainder
+/// to be all-zero. This makes a compiler-padded body (`word + payload_max`)
+/// equal to an unpadded variant-sized body of the same value, because the
+/// only difference is deterministic zero padding. The discriminant word
+/// lies within the prefix (both bodies are at least `word_bytes` long) and
+/// is unique per variant, so two distinct variants always differ in the
+/// prefix and never alias under this rule.
+fn flat_enum_bytes_eq(a: &[u8], b: &[u8]) -> bool {
+    let m = core::cmp::min(a.len(), b.len());
+    a[..m] == b[..m] && a[m..].iter().all(|&x| x == 0) && b[m..].iter().all(|&x| x == 0)
+}
+
+/// The flat byte body of a composite value in its `Flat` representation,
+/// or `None` for a boxed composite or a non-composite (B28 P2 nested
+/// inlining). Callers inline these bytes into a parent composite body.
+pub(crate) fn flat_body_bytes<W: crate::word::Word, F: crate::float::Float>(
+    v: &GenericValue<W, F>,
+) -> Option<&[u8]> {
+    match v {
+        GenericValue::Tuple(TupleBody::Flat(fc))
+        | GenericValue::Array(ArrayBody::Flat(fc))
+        | GenericValue::Struct(StructBody::Flat(fc))
+        | GenericValue::Enum(EnumBody::Flat(fc)) => Some(fc.as_bytes()),
         _ => None,
     }
 }
@@ -437,8 +498,11 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
         let mut total = 0usize;
         let mut eligible = true;
         for v in &elements {
-            match flat_tuple_scalar_kind(v) {
-                Some(kind) => total += kind.size_in_bytes(word_bytes, float_bytes),
+            // A flat-eligible field is a scalar or a nested flat composite
+            // (B28 P2 nested inlining); either contributes a fixed byte
+            // length. Anything else forces the boxed body.
+            match flat_field_size(v, word_bytes, float_bytes) {
+                Some(size) => total += size,
                 None => {
                     eligible = false;
                     break;
@@ -451,9 +515,10 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
         let mut body = crate::flat_value::FlatComposite::zeroed(total);
         let mut offset = 0usize;
         for v in &elements {
-            let kind = flat_tuple_scalar_kind(v).expect("eligibility checked above");
-            v.write_scalar_le(body.as_bytes_mut(), offset, word_bytes, float_bytes);
-            offset += kind.size_in_bytes(word_bytes, float_bytes);
+            let size =
+                flat_field_size(v, word_bytes, float_bytes).expect("eligibility checked above");
+            v.write_flat_field(body.as_bytes_mut(), offset, word_bytes, float_bytes);
+            offset += size;
         }
         Self::Tuple(TupleBody::Flat(body))
     }
@@ -488,8 +553,8 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
         let mut total = 0usize;
         let mut eligible = true;
         for v in &elements {
-            match flat_tuple_scalar_kind(v) {
-                Some(kind) => total += kind.size_in_bytes(word_bytes, float_bytes),
+            match flat_field_size(v, word_bytes, float_bytes) {
+                Some(size) => total += size,
                 None => {
                     eligible = false;
                     break;
@@ -502,9 +567,10 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
         let mut body = crate::flat_value::FlatComposite::zeroed(total);
         let mut offset = 0usize;
         for v in &elements {
-            let kind = flat_tuple_scalar_kind(v).expect("eligibility checked above");
-            v.write_scalar_le(body.as_bytes_mut(), offset, word_bytes, float_bytes);
-            offset += kind.size_in_bytes(word_bytes, float_bytes);
+            let size =
+                flat_field_size(v, word_bytes, float_bytes).expect("eligibility checked above");
+            v.write_flat_field(body.as_bytes_mut(), offset, word_bytes, float_bytes);
+            offset += size;
         }
         Self::Array(ArrayBody::Flat(body))
     }
@@ -542,8 +608,8 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
         let mut total = 0usize;
         let mut eligible = true;
         for (_, v) in &fields {
-            match flat_tuple_scalar_kind(v) {
-                Some(kind) => total += kind.size_in_bytes(word_bytes, float_bytes),
+            match flat_field_size(v, word_bytes, float_bytes) {
+                Some(size) => total += size,
                 None => {
                     eligible = false;
                     break;
@@ -556,9 +622,10 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
         let mut body = crate::flat_value::FlatComposite::zeroed(total);
         let mut offset = 0usize;
         for (_, v) in &fields {
-            let kind = flat_tuple_scalar_kind(v).expect("eligibility checked above");
-            v.write_scalar_le(body.as_bytes_mut(), offset, word_bytes, float_bytes);
-            offset += kind.size_in_bytes(word_bytes, float_bytes);
+            let size =
+                flat_field_size(v, word_bytes, float_bytes).expect("eligibility checked above");
+            v.write_flat_field(body.as_bytes_mut(), offset, word_bytes, float_bytes);
+            offset += size;
         }
         Self::Struct(StructBody::Flat(body))
     }
@@ -574,7 +641,11 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
     ) -> Self {
         let word_bytes = (1usize << <W as crate::word::Word>::BITS_LOG2) / 8;
         let float_bytes = (1usize << <F as crate::float::Float>::BITS_LOG2) / 8;
-        Self::enum_with_widths(type_name, variant, disc, fields, word_bytes, float_bytes)
+        // Ad-hoc construction with no type-table knowledge: produce a
+        // variant-sized (unpadded) body. Padding-tolerant flat-enum
+        // equality lets this still compare equal to a compiler-padded
+        // value of the same variant (B28 P2).
+        Self::enum_with_widths(type_name, variant, disc, fields, 0, word_bytes, float_bytes)
     }
 
     /// Construct an enum value, choosing the flat byte body for a
@@ -592,6 +663,7 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
         variant: alloc::string::String,
         disc: i64,
         fields: alloc::vec::Vec<Self>,
+        min_payload: usize,
         word_bytes: usize,
         float_bytes: usize,
     ) -> Self {
@@ -603,15 +675,24 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
         let mut payload = 0usize;
         let mut eligible = type_name != "Option";
         for v in &fields {
-            match flat_tuple_scalar_kind(v) {
-                Some(kind) => payload += kind.size_in_bytes(word_bytes, float_bytes),
+            // Payload fields may be scalars or nested flat composites
+            // (B28 P2 nested inlining).
+            match flat_field_size(v, word_bytes, float_bytes) {
+                Some(size) => payload += size,
                 None => {
                     eligible = false;
                     break;
                 }
             }
         }
-        let total = word_bytes + payload;
+        // `min_payload` is the type's largest-variant payload, baked by the
+        // compiler so every value of a uniformly-flat enum type shares one
+        // fixed body size — which a nested enum field's fixed slot requires
+        // (B28 P2). The variant's own payload may be smaller; the trailing
+        // slot is zero padding. Flat-enum equality tolerates that padding,
+        // so an unpadded ad-hoc value still compares equal to a padded one.
+        let payload_slot = core::cmp::max(payload, min_payload);
+        let total = word_bytes + payload_slot;
         if !eligible || total > u16::MAX as usize {
             return Self::Enum(EnumBody::Boxed {
                 type_name,
@@ -630,9 +711,10 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
         );
         let mut offset = word_bytes;
         for v in &fields {
-            let kind = flat_tuple_scalar_kind(v).expect("eligibility checked above");
-            v.write_scalar_le(body.as_bytes_mut(), offset, word_bytes, float_bytes);
-            offset += kind.size_in_bytes(word_bytes, float_bytes);
+            let size =
+                flat_field_size(v, word_bytes, float_bytes).expect("eligibility checked above");
+            v.write_flat_field(body.as_bytes_mut(), offset, word_bytes, float_bytes);
+            offset += size;
         }
         Self::Enum(EnumBody::Flat(body))
     }
@@ -674,6 +756,45 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
                 }
             }
             other => panic!("write_scalar_le: not a fixed-size scalar: {other:?}"),
+        }
+    }
+
+    /// Re-wrap a nested composite's extracted byte range as a flat
+    /// composite `Value` of the given kind (B28 P2 nested inlining). The
+    /// access handler slices the child body out of the parent and calls
+    /// this to materialise the field value. The bytes are copied into a
+    /// fresh body, so the result is independent of the parent.
+    pub fn from_flat_nested_bytes(
+        bytes: &[u8],
+        variant: crate::value_layout::CompositeKind,
+    ) -> Self {
+        use crate::value_layout::CompositeKind as C;
+        let fc = crate::flat_value::FlatComposite::from_bytes(bytes.to_vec());
+        match variant {
+            C::Tuple => Self::Tuple(TupleBody::Flat(fc)),
+            C::Array => Self::Array(ArrayBody::Flat(fc)),
+            C::Struct => Self::Struct(StructBody::Flat(fc)),
+            C::Enum => Self::Enum(EnumBody::Flat(fc)),
+        }
+    }
+
+    /// Write a flat composite field at `offset`: a scalar through
+    /// [`GenericValue::write_scalar_le`], or a nested flat composite by
+    /// copying its body bytes inline (B28 P2 nested inlining). The caller
+    /// has already verified flat eligibility through `flat_field_size`, so
+    /// a value that is neither a flat scalar nor a flat composite never
+    /// reaches here.
+    fn write_flat_field(
+        &self,
+        dst: &mut [u8],
+        offset: usize,
+        word_bytes: usize,
+        float_bytes: usize,
+    ) {
+        if flat_tuple_scalar_kind(self).is_some() {
+            self.write_scalar_le(dst, offset, word_bytes, float_bytes);
+        } else if let Some(bytes) = flat_body_bytes(self) {
+            dst[offset..offset + bytes.len()].copy_from_slice(bytes);
         }
     }
 
@@ -971,6 +1092,13 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
                         variant.as_str().to_string(),
                         disc,
                         materialised,
+                        // Constants carry no per-type padding hint; a const
+                        // enum materialises variant-sized and relies on
+                        // padding-tolerant equality. Const composites that
+                        // would nest an enum are not flat-folded (see the
+                        // compiler's const path), so a variant-sized const
+                        // enum is never inlined into a fixed parent slot.
+                        0,
                         word_bytes,
                         float_bytes,
                     ),
@@ -1091,6 +1219,19 @@ pub enum TupleField {
         /// Fixed-size scalar kind to read at the offset.
         kind: crate::value_layout::ScalarKind,
     },
+    /// Flat read of a nested composite field: extract `size` bytes at
+    /// `offset` from the parent body and re-wrap them as `variant`
+    /// (B28 P2 nested inlining). The byte range is a complete child
+    /// flat-composite body; the access handler wraps it in a fresh
+    /// `Value` of the matching composite kind.
+    FlatNested {
+        /// Byte offset of the nested composite within the parent body.
+        offset: u16,
+        /// Byte length of the nested composite body.
+        size: u16,
+        /// Composite variant to re-wrap the extracted bytes as.
+        variant: crate::value_layout::CompositeKind,
+    },
     /// Positional index into the boxed `Vec` body (pre-B28 form).
     Boxed {
         /// Zero-based element index.
@@ -1117,6 +1258,17 @@ pub enum StructField {
         /// Fixed-size scalar kind to read at the offset.
         kind: crate::value_layout::ScalarKind,
     },
+    /// Flat read of a nested composite field: extract `size` bytes at
+    /// `offset` from the parent body and re-wrap them as `variant`
+    /// (B28 P2 nested inlining).
+    FlatNested {
+        /// Byte offset of the nested composite within the parent body.
+        offset: u16,
+        /// Byte length of the nested composite body.
+        size: u16,
+        /// Composite variant to re-wrap the extracted bytes as.
+        variant: crate::value_layout::CompositeKind,
+    },
     /// Constant-pool index of the field name, looked up in the boxed body
     /// (pre-B28 form).
     Boxed {
@@ -1141,6 +1293,17 @@ pub enum EnumField {
         offset: u16,
         /// Fixed-size scalar kind to read at the offset.
         kind: crate::value_layout::ScalarKind,
+    },
+    /// Flat read of a nested composite payload field: extract `size`
+    /// bytes at `offset` (past the discriminant word) from the flat enum
+    /// body and re-wrap them as `variant` (B28 P2 nested inlining).
+    FlatNested {
+        /// Byte offset of the nested composite within the flat enum body.
+        offset: u16,
+        /// Byte length of the nested composite body.
+        size: u16,
+        /// Composite variant to re-wrap the extracted bytes as.
+        variant: crate::value_layout::CompositeKind,
     },
     /// Positional index into the boxed payload (pre-B28 form).
     Boxed {
@@ -1169,6 +1332,16 @@ pub enum ArrayElem {
     Flat {
         /// Fixed-size scalar kind of each element.
         kind: crate::value_layout::ScalarKind,
+    },
+    /// Flat read of a nested composite element: each element occupies
+    /// `size` bytes, so the element offset is `index * size`. Extract the
+    /// element's bytes and re-wrap them as `variant` (B28 P2 nested
+    /// inlining).
+    FlatNested {
+        /// Byte length of each nested composite element.
+        size: u16,
+        /// Composite variant to re-wrap the extracted bytes as.
+        variant: crate::value_layout::CompositeKind,
     },
     /// Positional index into the boxed `Vec` body (pre-B28 form).
     Boxed,
@@ -2855,7 +3028,7 @@ impl ConstValue {
             } => {
                 let vals: Vec<Value> = fields.into_iter().map(ConstValue::into_value).collect();
                 match discriminant {
-                    Some(disc) => Value::enum_with_widths(type_name, variant, disc, vals, 8, 8),
+                    Some(disc) => Value::enum_with_widths(type_name, variant, disc, vals, 0, 8, 8),
                     None => Value::Enum(EnumBody::Boxed {
                         type_name,
                         variant,

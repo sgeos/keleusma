@@ -3490,12 +3490,13 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                             VmError::InvalidBytecode(String::from("variant name not a string"))
                         })?;
                     let n = arg_count as usize;
-                    // The compiler pushes the discriminant beneath the
-                    // payload, so the stack holds `[.., disc, payload..]`.
-                    // Pop the payload, then the discriminant. Guard against
-                    // operand-stack underflow (audit, same class as
-                    // poc_newarray_underflow).
-                    if self.stack.len() < n + 1 {
+                    // The compiler pushes the largest-variant payload size
+                    // and then the discriminant beneath the payload, so the
+                    // stack holds `[.., min_payload, disc, payload..]`. Pop
+                    // the payload, the discriminant, then the payload-size
+                    // hint. Guard against operand-stack underflow (audit,
+                    // same class as poc_newarray_underflow).
+                    if self.stack.len() < n + 2 {
                         return Err(VmError::StackUnderflow);
                     }
                     let fields: Vec<crate::bytecode::GenericValue<W, F>> = if n > 0 {
@@ -3513,16 +3514,39 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                             )));
                         }
                     };
+                    // The largest-variant payload size baked by the compiler
+                    // (B28 P2): every value of a uniformly-flat enum type is
+                    // padded to one fixed body size so a nested enum field's
+                    // slot is fixed. A non-uniform type bakes zero, leaving a
+                    // variant-sized body.
+                    let min_payload = match self.pop()? {
+                        crate::bytecode::GenericValue::Int(w) => {
+                            let m = <W as crate::word::Word>::to_i64(w);
+                            if m < 0 { 0 } else { m as usize }
+                        }
+                        _ => {
+                            return Err(VmError::InvalidBytecode(String::from(
+                                "enum payload-size operand must be an Int",
+                            )));
+                        }
+                    };
                     // The shared constructor packs a flat `[disc][payload]`
-                    // body when the payload is all flat scalars, else boxed;
-                    // it mirrors the compiler's eligibility so the baked
-                    // access form agrees with the body.
+                    // body (padded to `min_payload`) when the payload is all
+                    // flat fields, else boxed; it mirrors the compiler's
+                    // eligibility so the baked access form agrees with the
+                    // body.
                     let wb = self.module_word_bytes();
                     let fb = self.module_float_bytes();
                     sp!(
                         self,
                         crate::bytecode::GenericValue::enum_with_widths(
-                            type_name, variant, disc, fields, wb, fb
+                            type_name,
+                            variant,
+                            disc,
+                            fields,
+                            min_payload,
+                            wb,
+                            fb
                         )
                     );
                 }
@@ -3584,6 +3608,22 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                                     kind,
                                     wb,
                                     fb,
+                                );
+                                sp!(self, val);
+                            }
+                            (
+                                StructField::FlatNested {
+                                    offset,
+                                    size,
+                                    variant,
+                                },
+                                StructBody::Flat(fc),
+                            ) => {
+                                // Extract the nested child's body bytes and
+                                // re-wrap them as a flat composite (B28 P2).
+                                let bytes = fc.slice_at(offset as usize, size as usize);
+                                let val = crate::bytecode::GenericValue::from_flat_nested_bytes(
+                                    bytes, variant,
                                 );
                                 sp!(self, val);
                             }
@@ -3692,6 +3732,25 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                                         }
                                     }
                                 }
+                                (ArrayElem::FlatNested { size, variant }, ArrayBody::Flat(fc)) => {
+                                    // Each element is a fixed-size nested
+                                    // composite; the offset is `index * size`
+                                    // (B28 P2). Extract the element body and
+                                    // re-wrap it.
+                                    let esize = size as usize;
+                                    let len = fc.as_bytes().len().checked_div(esize).unwrap_or(0);
+                                    if idx < 0 || idx as usize >= len {
+                                        return Err(VmError::IndexOutOfBounds(idx, len));
+                                    }
+                                    let off = idx as usize * esize;
+                                    let bytes = fc.slice_at(off, esize);
+                                    sp!(
+                                        self,
+                                        crate::bytecode::GenericValue::from_flat_nested_bytes(
+                                            bytes, variant,
+                                        )
+                                    );
+                                }
                                 // Construction and access agree on the body
                                 // representation by static type, so a form
                                 // mismatch is a corrupted or mis-compiled
@@ -3736,6 +3795,22 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                                 );
                                 sp!(self, val);
                             }
+                            (
+                                TupleField::FlatNested {
+                                    offset,
+                                    size,
+                                    variant,
+                                },
+                                TupleBody::Flat(fc),
+                            ) => {
+                                // Extract the nested child's body and re-wrap
+                                // it as a flat composite (B28 P2).
+                                let bytes = fc.slice_at(offset as usize, size as usize);
+                                let val = crate::bytecode::GenericValue::from_flat_nested_bytes(
+                                    bytes, variant,
+                                );
+                                sp!(self, val);
+                            }
                             // Construction and access agree on the body
                             // representation by static type, so a form
                             // mismatch is a corrupted or mis-compiled
@@ -3775,6 +3850,23 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                                     kind,
                                     wb,
                                     fb,
+                                );
+                                sp!(self, val);
+                            }
+                            (
+                                EnumField::FlatNested {
+                                    offset,
+                                    size,
+                                    variant,
+                                },
+                                EnumBody::Flat(fc),
+                            ) => {
+                                // Extract the nested payload child's body
+                                // (past the discriminant word) and re-wrap it
+                                // as a flat composite (B28 P2).
+                                let bytes = fc.slice_at(offset as usize, size as usize);
+                                let val = crate::bytecode::GenericValue::from_flat_nested_bytes(
+                                    bytes, variant,
                                 );
                                 sp!(self, val);
                             }
@@ -7315,6 +7407,59 @@ mod tests {
             &[],
         );
         assert_eq!(val, Value::Int(42));
+    }
+
+    #[test]
+    fn eval_nested_struct_in_struct_flat() {
+        // An all-Word inner struct nested in an outer struct inlines into
+        // one flat body; `o.inner.x` compiles to a nested extract-and-rewrap
+        // (GetField FlatNested) followed by a flat scalar read (B28 P2).
+        let val = run_expect(
+            "struct Inner { x: Word, y: Word }\n\
+             struct Outer { inner: Inner, tag: Word }\n\
+             fn main() -> Word { let o = Outer { inner: Inner { x: 10, y: 20 }, tag: 5 }; o.inner.x + o.inner.y + o.tag }",
+            &[],
+        );
+        assert_eq!(val, Value::Int(35));
+    }
+
+    #[test]
+    fn eval_nested_tuple_in_struct_flat() {
+        // A flat tuple nested in a struct: `h.coords.1` extracts the nested
+        // tuple body then reads the element (B28 P2).
+        let val = run_expect(
+            "struct Holder { coords: (Word, Word), tag: Word }\n\
+             fn main() -> Word { let h = Holder { coords: (3, 4), tag: 100 }; h.coords.0 * h.coords.1 + h.tag }",
+            &[],
+        );
+        assert_eq!(val, Value::Int(112));
+    }
+
+    #[test]
+    fn eval_nested_enum_in_struct_flat() {
+        // A uniformly-flat enum nested in a struct: the enum is padded to its
+        // largest-variant size so the struct slot is fixed; `c.sig` extracts
+        // the padded enum body and the match reads its payload (B28 P2).
+        let val = run_expect(
+            "enum Sig { Off, On(Word), Span(Word, Word) }\n\
+             struct Carrier { sig: Sig, n: Word }\n\
+             fn main() -> Word { let c = Carrier { sig: Sig::On(7), n: 5 }; match c.sig { Sig::On(v) => v + c.n, _ => 0 } }",
+            &[],
+        );
+        assert_eq!(val, Value::Int(12));
+    }
+
+    #[test]
+    fn eval_nested_struct_bound_as_value() {
+        // Binding the extracted nested struct to a local exercises the
+        // re-wrap into a standalone flat composite value (B28 P2).
+        let val = run_expect(
+            "struct Inner { x: Word, y: Word }\n\
+             struct Outer { inner: Inner, tag: Word }\n\
+             fn main() -> Word { let o = Outer { inner: Inner { x: 6, y: 9 }, tag: 0 }; let i = o.inner; i.x + i.y }",
+            &[],
+        );
+        assert_eq!(val, Value::Int(15));
     }
 
     #[test]

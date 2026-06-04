@@ -44,6 +44,32 @@ struct Frame {
     height: f64,
 }
 
+// Nested flat composites (B28 P2 nested inlining): `Pair` is an all-Word
+// flat struct and `(i64, i64)` a flat tuple, so `Holder` inlines both into
+// one flat byte body.
+#[derive(KeleusmaType, Debug, Clone, PartialEq)]
+struct Holder {
+    p: Pair,
+    coords: (i64, i64),
+    tag: i64,
+}
+
+// A uniformly-flat enum (every variant's payload is flat), so it is padded
+// to one fixed body size and may be nested as a flat field (B28 P2).
+#[derive(KeleusmaType, Debug, Clone, PartialEq)]
+enum Signal {
+    Off,
+    On(i64),
+    Span { lo: i64, hi: i64 },
+}
+
+// A flat struct nesting a uniformly-flat enum field (B28 P2).
+#[derive(KeleusmaType, Debug, Clone, PartialEq)]
+struct Carrier {
+    sig: Signal,
+    n: i64,
+}
+
 #[test]
 fn derive_struct_roundtrip() {
     let p = Point { x: 3.0, y: 4.0 };
@@ -73,6 +99,54 @@ fn derive_nested_struct_roundtrip() {
     let v: Value = f.clone().into_value();
     let recovered = Frame::from_value(&v).unwrap();
     assert_eq!(recovered, f);
+}
+
+#[test]
+fn derive_nested_flat_struct_and_tuple_roundtrip() {
+    use keleusma::bytecode::StructBody;
+    // A struct whose fields are themselves flat composites (a flat struct
+    // and a flat tuple) inlines them into one flat byte body and reads them
+    // back, recursing through the nested layout (B28 P2). Before nested
+    // inlining this round-tripped via the boxed path; it must still hold.
+    let h = Holder {
+        p: Pair { a: 11, b: 22 },
+        coords: (3, 4),
+        tag: 99,
+    };
+    let v: Value = h.clone().into_value();
+    assert!(matches!(v, Value::Struct(StructBody::Flat(_))));
+    let recovered = Holder::from_value(&v).unwrap();
+    assert_eq!(recovered, h);
+}
+
+#[test]
+fn derive_uniform_flat_enum_pads_and_roundtrips() {
+    use keleusma::bytecode::EnumBody;
+    // Every variant of a uniformly-flat enum marshals to a flat body of one
+    // fixed size (padded to the largest variant), so nesting it is sound and
+    // padding-tolerant equality preserves round-trips (B28 P2).
+    for s in [Signal::Off, Signal::On(7), Signal::Span { lo: 1, hi: 9 }] {
+        let v = s.clone().into_value();
+        assert!(matches!(v, Value::Enum(EnumBody::Flat(_))));
+        assert_eq!(Signal::from_value(&v).unwrap(), s);
+    }
+}
+
+#[test]
+fn derive_struct_nesting_flat_enum_roundtrips() {
+    use keleusma::bytecode::StructBody;
+    // A flat struct nesting a uniformly-flat enum field inlines the enum's
+    // fixed-size body and reads it back; the host-built slot size matches
+    // what the compiler bakes for a script (B28 P2).
+    for sig in [Signal::Off, Signal::On(5), Signal::Span { lo: 2, hi: 8 }] {
+        let c = Carrier {
+            sig: sig.clone(),
+            n: 42,
+        };
+        let v: Value = c.clone().into_value();
+        assert!(matches!(v, Value::Struct(StructBody::Flat(_))));
+        assert_eq!(Carrier::from_value(&v).unwrap(), c);
+    }
 }
 
 #[test]
