@@ -111,7 +111,7 @@ pub fn measured_op_cycles(op: &keleusma::bytecode::Op) -> u32 {
         Op::Div
         | Op::Mod
         | Op::GetField(_)
-        | Op::IsEnum(_, _)
+        | Op::IsEnum(_, _, _)
         | Op::IsStruct(_) => 9164,
 
         // Composite value construction (13540 cycles).

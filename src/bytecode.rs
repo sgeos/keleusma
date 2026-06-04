@@ -77,6 +77,11 @@ pub enum ConstValue {
         type_name: String,
         /// Name of the variant.
         variant: String,
+        /// Variant discriminant, when the compiler resolved it (B28 P2).
+        /// `Some` lets the value materialise into a flat enum body;
+        /// `None` (e.g. folded from a boxed runtime value) materialises
+        /// boxed.
+        discriminant: Option<i64>,
         /// Positional payload values for tuple-variant constructions.
         /// Empty for unit variants.
         #[rkyv(omit_bounds)]
@@ -590,8 +595,13 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
         word_bytes: usize,
         float_bytes: usize,
     ) -> Self {
+        // The built-in `Option` enum is generic and is not registered in
+        // the compiler's enum type tables, so the access ops bake the boxed
+        // form for it; keep its construction boxed too, so the two agree
+        // (B28 P2). `Option::None` is the separate `Value::None`; only
+        // `Option::Some` reaches here.
         let mut payload = 0usize;
-        let mut eligible = true;
+        let mut eligible = type_name != "Option";
         for v in &fields {
             match flat_tuple_scalar_kind(v) {
                 Some(kind) => payload += kind.size_in_bytes(word_bytes, float_bytes),
@@ -944,21 +954,32 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
             ArchivedConstValue::Enum {
                 type_name,
                 variant,
+                discriminant,
                 fields,
             } => {
                 use alloc::string::ToString;
-                // A constant enum carries the variant name but not the
-                // discriminant, so it materialises boxed; flat enums are
-                // built at run time by `Op::NewEnum` with the baked disc
-                // (B28 P2).
-                Self::Enum(EnumBody::Boxed {
-                    type_name: type_name.as_str().to_string(),
-                    variant: variant.as_str().to_string(),
-                    fields: fields
-                        .iter()
-                        .map(|c| Self::from_const_archived(c, word_bytes, float_bytes))
-                        .collect(),
-                })
+                let materialised: alloc::vec::Vec<Self> = fields
+                    .iter()
+                    .map(|c| Self::from_const_archived(c, word_bytes, float_bytes))
+                    .collect();
+                // A resolved discriminant lets the constant materialise
+                // into the flat body that matches the baked access; an
+                // unresolved one stays boxed (B28 P2).
+                match discriminant.as_ref().map(|d| d.to_native()) {
+                    Some(disc) => Self::enum_with_widths(
+                        type_name.as_str().to_string(),
+                        variant.as_str().to_string(),
+                        disc,
+                        materialised,
+                        word_bytes,
+                        float_bytes,
+                    ),
+                    None => Self::Enum(EnumBody::Boxed {
+                        type_name: type_name.as_str().to_string(),
+                        variant: variant.as_str().to_string(),
+                        fields: materialised,
+                    }),
+                }
             }
             ArchivedConstValue::None => Self::None,
         }
@@ -1304,8 +1325,12 @@ pub enum Op {
     /// Pop composite value, push its length as Int.
     Len,
 
-    /// Peek at TOS: push true if matching enum type and variant, false otherwise.
-    IsEnum(u16, u16),
+    /// Peek at TOS: push true if matching enum type and variant, false
+    /// otherwise. Operands are the enum-name and variant-name constant-pool
+    /// indices and the variant discriminant constant index. The boxed body
+    /// compares the variant name; the flat body compares the leading
+    /// discriminant word to the constant (B28 P2).
+    IsEnum(u16, u16, u16),
     /// Peek at TOS: push true if matching struct type, false otherwise.
     IsStruct(u16),
 
@@ -1720,7 +1745,7 @@ pub fn nominal_op_cycles(op: &Op) -> u32 {
         | Op::SetDataIndexed(_, _)
         | Op::BoundsCheck(_) => 2,
 
-        Op::Div | Op::Mod | Op::GetField(_) | Op::IsEnum(_, _) | Op::IsStruct(_) => 3,
+        Op::Div | Op::Mod | Op::GetField(_) | Op::IsEnum(_, _, _) | Op::IsStruct(_) => 3,
 
         Op::NewStruct(_) | Op::NewEnum(_, _, _) | Op::NewArray(_) | Op::NewTuple(_) => 5,
 
@@ -1821,7 +1846,7 @@ impl Op {
             | Op::GetEnumField(_)
             | Op::Len => 0,
 
-            Op::IsEnum(_, _) | Op::IsStruct(_) => 0,
+            Op::IsEnum(_, _, _) | Op::IsStruct(_) => 0,
 
             Op::IntToFloat
             | Op::FloatToInt
@@ -1898,14 +1923,16 @@ impl Op {
             Op::Return => 0,
 
             Op::NewStruct(_) => 0,
-            Op::NewEnum(_, _, n) => *n as u32,
+            // Pops the discriminant (pushed beneath the payload) plus the
+            // `n` payload values (B28 P2).
+            Op::NewEnum(_, _, n) => *n as u32 + 1,
             Op::NewArray(n) => *n as u32,
             Op::NewTuple(n) => *n as u32,
 
             Op::GetField(_) | Op::GetIndex(_) | Op::GetTupleField(_) | Op::GetEnumField(_) => 1,
             Op::Len => 0,
 
-            Op::IsEnum(_, _) | Op::IsStruct(_) => 0,
+            Op::IsEnum(_, _, _) | Op::IsStruct(_) => 0,
 
             Op::IntToFloat
             | Op::FloatToInt
@@ -2757,9 +2784,12 @@ impl ConstValue {
             }) => {
                 let cfields: Result<Vec<_>, _> =
                     fields.into_iter().map(ConstValue::try_from_value).collect();
+                // A boxed runtime enum carries no discriminant to recover,
+                // so the constant materialises boxed (B28 P2).
                 Ok(ConstValue::Enum {
                     type_name,
                     variant,
+                    discriminant: None,
                     fields: cfields?,
                 })
             }
@@ -2815,17 +2845,24 @@ impl ConstValue {
                 8,
                 8,
             ),
-            // A constant enum has no discriminant, so it materialises
-            // boxed (B28 P2); flat enums are built at run time.
+            // A resolved discriminant materialises the flat body that
+            // matches the baked access; otherwise boxed (B28 P2).
             ConstValue::Enum {
                 type_name,
                 variant,
+                discriminant,
                 fields,
-            } => Value::Enum(EnumBody::Boxed {
-                type_name,
-                variant,
-                fields: fields.into_iter().map(ConstValue::into_value).collect(),
-            }),
+            } => {
+                let vals: Vec<Value> = fields.into_iter().map(ConstValue::into_value).collect();
+                match discriminant {
+                    Some(disc) => Value::enum_with_widths(type_name, variant, disc, vals, 8, 8),
+                    None => Value::Enum(EnumBody::Boxed {
+                        type_name,
+                        variant,
+                        fields: vals,
+                    }),
+                }
+            }
             ConstValue::None => Value::None,
         }
     }
@@ -2859,11 +2896,13 @@ impl PartialEq for ConstValue {
                     type_name: na,
                     variant: va,
                     fields: fa,
+                    ..
                 },
                 ConstValue::Enum {
                     type_name: nb,
                     variant: vb,
                     fields: fb,
+                    ..
                 },
             ) => na == nb && va == vb && fa == fb,
             _ => false,

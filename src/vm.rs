@@ -3490,9 +3490,12 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                             VmError::InvalidBytecode(String::from("variant name not a string"))
                         })?;
                     let n = arg_count as usize;
-                    // Guard against operand-stack underflow (audit, same
-                    // class as poc_newarray_underflow).
-                    if self.stack.len() < n {
+                    // The compiler pushes the discriminant beneath the
+                    // payload, so the stack holds `[.., disc, payload..]`.
+                    // Pop the payload, then the discriminant. Guard against
+                    // operand-stack underflow (audit, same class as
+                    // poc_newarray_underflow).
+                    if self.stack.len() < n + 1 {
                         return Err(VmError::StackUnderflow);
                     }
                     let fields: Vec<crate::bytecode::GenericValue<W, F>> = if n > 0 {
@@ -3500,17 +3503,27 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                     } else {
                         Vec::new()
                     };
-                    // Flat-enum activation (the discriminant push and flat
-                    // packing) is the next increment; construction stays
-                    // boxed here so the GetEnumField operand re-spec lands
-                    // behaviour-preserving.
+                    let disc = match self.pop()? {
+                        crate::bytecode::GenericValue::Int(w) => {
+                            <W as crate::word::Word>::to_i64(w)
+                        }
+                        _ => {
+                            return Err(VmError::InvalidBytecode(String::from(
+                                "enum discriminant operand must be an Int",
+                            )));
+                        }
+                    };
+                    // The shared constructor packs a flat `[disc][payload]`
+                    // body when the payload is all flat scalars, else boxed;
+                    // it mirrors the compiler's eligibility so the baked
+                    // access form agrees with the body.
+                    let wb = self.module_word_bytes();
+                    let fb = self.module_float_bytes();
                     sp!(
                         self,
-                        crate::bytecode::GenericValue::Enum(crate::bytecode::EnumBody::Boxed {
-                            type_name,
-                            variant,
-                            fields,
-                        })
+                        crate::bytecode::GenericValue::enum_with_widths(
+                            type_name, variant, disc, fields, wb, fb
+                        )
                     );
                 }
                 Op::NewArray(count) => {
@@ -3868,24 +3881,56 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                 }
 
                 // -- Type predicates (push bool, no jump) --
-                Op::IsEnum(enum_const, var_const) => {
-                    let expected_type = self
-                        .chunk_const_str(chunk_idx, enum_const as usize)
-                        .ok_or_else(|| {
-                            VmError::InvalidBytecode(String::from("enum const not string"))
-                        })?;
-                    let expected_var = self
-                        .chunk_const_str(chunk_idx, var_const as usize)
-                        .ok_or_else(|| {
-                            VmError::InvalidBytecode(String::from("variant const not string"))
-                        })?;
+                Op::IsEnum(enum_const, var_const, disc_const) => {
+                    let wb = self.module_word_bytes();
+                    let fb = self.module_float_bytes();
+                    // The expected discriminant constant (an Int) for the
+                    // flat path.
+                    let expected_disc = match self.chunk_const(chunk_idx, disc_const as usize) {
+                        crate::bytecode::GenericValue::Int(w) => {
+                            <W as crate::word::Word>::to_i64(w)
+                        }
+                        _ => {
+                            return Err(VmError::InvalidBytecode(String::from(
+                                "enum discriminant const must be an Int",
+                            )));
+                        }
+                    };
                     let val = self.stack.last().ok_or(VmError::StackUnderflow)?;
-                    let matches = matches!(
-                        val,
-                        crate::bytecode::GenericValue::Enum(
-                            crate::bytecode::EnumBody::Boxed { type_name, variant, .. }
-                        ) if type_name == &expected_type && variant == &expected_var
-                    );
+                    let matches = match val {
+                        // Boxed: compare the type and variant names.
+                        crate::bytecode::GenericValue::Enum(crate::bytecode::EnumBody::Boxed {
+                            type_name,
+                            variant,
+                            ..
+                        }) => {
+                            let expected_type =
+                                self.chunk_const_str(chunk_idx, enum_const as usize);
+                            let expected_var = self.chunk_const_str(chunk_idx, var_const as usize);
+                            expected_type.as_deref() == Some(type_name.as_str())
+                                && expected_var.as_deref() == Some(variant.as_str())
+                        }
+                        // Flat: compare the leading discriminant word to the
+                        // expected discriminant.
+                        crate::bytecode::GenericValue::Enum(crate::bytecode::EnumBody::Flat(
+                            fc,
+                        )) => {
+                            let stored = match crate::bytecode::GenericValue::<W, F>::read_scalar_le(
+                                fc.as_bytes(),
+                                0,
+                                crate::value_layout::ScalarKind::Int,
+                                wb,
+                                fb,
+                            ) {
+                                crate::bytecode::GenericValue::Int(w) => {
+                                    <W as crate::word::Word>::to_i64(w)
+                                }
+                                _ => 0,
+                            };
+                            stored == expected_disc
+                        }
+                        _ => false,
+                    };
                     sp!(self, crate::bytecode::GenericValue::Bool(matches));
                 }
                 Op::IsStruct(type_const) => {
@@ -7359,41 +7404,40 @@ mod tests {
         let module = compile(&program).expect("compile error");
         let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
         let mut vm = Vm::new(module, &arena).unwrap();
-        let initial = Value::Enum(EnumBody::Boxed {
-            type_name: String::from("Reply"),
-            variant: String::from("Ok"),
-            fields: alloc::vec![Value::Int(0)],
-        });
+        let initial = Value::enum_value(
+            String::from("Reply"),
+            String::from("Ok"),
+            0,
+            alloc::vec![Value::Int(0)],
+        );
         match vm.call(&[initial]).unwrap() {
             VmState::Yielded(v) => assert_eq!(v, Value::Int(0)),
             other => panic!("expected first yield, got {:?}", other),
         }
         // Successful resume returns the Ok payload.
-        let success = Value::Enum(EnumBody::Boxed {
-            type_name: String::from("Reply"),
-            variant: String::from("Ok"),
-            fields: alloc::vec![Value::Int(42)],
-        });
+        let success = Value::enum_value(
+            String::from("Reply"),
+            String::from("Ok"),
+            0,
+            alloc::vec![Value::Int(42)],
+        );
         match vm.resume(success).unwrap() {
             VmState::Reset => {}
             other => panic!("expected reset, got {:?}", other),
         }
         // After the implicit reset, send Err to drive the next round
         // through the error branch.
-        let initial2 = Value::Enum(EnumBody::Boxed {
-            type_name: String::from("Reply"),
-            variant: String::from("Ok"),
-            fields: alloc::vec![Value::Int(0)],
-        });
+        let initial2 = Value::enum_value(
+            String::from("Reply"),
+            String::from("Ok"),
+            0,
+            alloc::vec![Value::Int(0)],
+        );
         match vm.resume(initial2).unwrap() {
             VmState::Yielded(_) => {}
             other => panic!("expected yield, got {:?}", other),
         }
-        let err = Value::Enum(EnumBody::Boxed {
-            type_name: String::from("Reply"),
-            variant: String::from("Err"),
-            fields: alloc::vec![],
-        });
+        let err = Value::enum_value(String::from("Reply"), String::from("Err"), 1, alloc::vec![]);
         match vm.resume_err(err).unwrap() {
             VmState::Reset => {}
             other => panic!("expected reset on err, got {:?}", other),
@@ -7421,22 +7465,19 @@ mod tests {
         let module = compile(&program).expect("compile error");
         let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
         let mut vm = Vm::new(module, &arena).unwrap();
-        let initial = Value::Enum(EnumBody::Boxed {
-            type_name: String::from("Reply"),
-            variant: String::from("Ok"),
-            fields: alloc::vec![Value::Int(0)],
-        });
+        let initial = Value::enum_value(
+            String::from("Reply"),
+            String::from("Ok"),
+            0,
+            alloc::vec![Value::Int(0)],
+        );
         match vm.call(&[initial]).unwrap() {
             VmState::Yielded(_) => {}
             other => panic!("expected yield, got {:?}", other),
         }
         // resume_err with Err variant routes through the error arm
         // and the script returns 99 to the host before reset.
-        let err = Value::Enum(EnumBody::Boxed {
-            type_name: String::from("Reply"),
-            variant: String::from("Err"),
-            fields: alloc::vec![],
-        });
+        let err = Value::enum_value(String::from("Reply"), String::from("Err"), 1, alloc::vec![]);
         match vm.resume_err(err).unwrap() {
             VmState::Reset => {}
             other => panic!("expected reset, got {:?}", other),
@@ -8503,21 +8544,23 @@ mod tests {
         //
         // The aux body grew by the optional per-chunk
         // `WireChunk::debug_pool_bytes` field added for B29 (strippable
-        // debug metadata). It is `None` here, so the chunk carries no
-        // debug section; rkyv still archives the `Option`, which
-        // accounts for the increase from the prior 216 bytes. Per B29
-        // the wire-format addition lands without a BYTECODE_VERSION bump
-        // (the runtime has no production traction).
+        // debug metadata) and again for the `ConstValue::Enum`
+        // `discriminant: Option<i64>` field added for B28 P2 (flat-enum
+        // constants): rkyv archives the wider `ConstValue` enum, which
+        // accounts for the increase to 244 bytes. Per B28 the format may
+        // change freely without a BYTECODE_VERSION bump (no production
+        // traction; programs are recompiled).
         let expected: alloc::vec::Vec<u8> = alloc::vec![
-            75, 69, 76, 69, 1, 0, 64, 0, 228, 0, 0, 0, 6, 6, 6, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-            0, 0, 0, 0, 0, 64, 0, 0, 0, 8, 0, 0, 0, 72, 0, 0, 0, 0, 0, 0, 0, 72, 0, 0, 0, 152, 0,
+            75, 69, 76, 69, 1, 0, 64, 0, 244, 0, 0, 0, 6, 6, 6, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 64, 0, 0, 0, 8, 0, 0, 0, 72, 0, 0, 0, 0, 0, 0, 0, 72, 0, 0, 0, 168, 0,
             0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 159, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 1, 0,
-            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 109, 97, 105, 110,
-            255, 255, 255, 255, 216, 255, 255, 255, 1, 0, 0, 0, 240, 255, 255, 255, 0, 0, 0, 0, 0,
-            0, 0, 0, 228, 255, 255, 255, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-            0, 0, 0, 0, 0, 200, 255, 255, 255, 1, 0, 0, 0, 248, 255, 255, 255, 0, 0, 0, 0, 1, 0, 0,
-            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 6, 6, 6, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-            1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 147, 59, 35, 17,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 109, 97, 105, 110, 255, 255, 255, 255, 200, 255, 255, 255,
+            1, 0, 0, 0, 240, 255, 255, 255, 0, 0, 0, 0, 0, 0, 0, 0, 228, 255, 255, 255, 0, 0, 0, 0,
+            0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 200, 255, 255, 255, 1, 0,
+            0, 0, 248, 255, 255, 255, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 6, 6, 6, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 210, 22, 68, 135,
         ];
         let src = "fn main() -> Word { 1 }";
         let tokens = tokenize(src).expect("lex");

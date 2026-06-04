@@ -162,6 +162,7 @@ fn zero_named(name: &str, reg: &TypeRegistry, depth: usize) -> Result<ConstValue
         return Ok(ConstValue::Enum {
             type_name: String::from(name),
             variant: variant.name.clone(),
+            discriminant: Some(variant.discriminant_value),
             fields,
         });
     }
@@ -401,6 +402,7 @@ mod tests {
             ConstValue::Enum {
                 type_name: String::from("Dir"),
                 variant: String::from("North"),
+                discriminant: Some(0),
                 fields: Vec::new(),
             }
         );

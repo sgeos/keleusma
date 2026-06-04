@@ -1743,7 +1743,7 @@ fn op_depth_effect(op: &Op, chunk: &Chunk) -> (i32, i32) {
         Op::Yield => (1, 0),
         // IsEnum/IsStruct peek the value and push a bool, keeping the
         // value for a following field extraction: net +1.
-        Op::IsEnum(_, _) | Op::IsStruct(_) => (1, 1),
+        Op::IsEnum(_, _, _) | Op::IsStruct(_) => (1, 1),
         Op::Call(_, n) => (*n as i32, 1 - *n as i32),
         Op::CallVerifiedNative(_, n) | Op::CallExternalNative(_, n) => {
             let m = (*n & 0x7F) as i32;
@@ -1757,7 +1757,9 @@ fn op_depth_effect(op: &Op, chunk: &Chunk) -> (i32, i32) {
                 .map_or(0, |t| t.field_names.len()) as i32;
             (fc, 1 - fc)
         }
-        Op::NewEnum(_, _, n) => (*n as i32, 1 - *n as i32),
+        // NewEnum pops the discriminant (pushed beneath the payload) plus
+        // the `n` payload values, and pushes one enum value (B28 P2).
+        Op::NewEnum(_, _, n) => (*n as i32 + 1, -(*n as i32)),
         Op::NewArray(n) => (*n as i32, 1 - *n as i32),
         Op::NewTuple(n) => (*n as i32, 1 - *n as i32),
         Op::CheckedAdd
@@ -2229,7 +2231,27 @@ fn verify_chunk(
                     }
                     record(ip, P1, "constant-index-in-range");
                 }
-                Op::IsEnum(e, v) | Op::NewEnum(e, v, _) => {
+                Op::IsEnum(e, v, d) => {
+                    // Enum-name, variant-name, and discriminant-value
+                    // constant indices are all dereferenced by the VM.
+                    let len = chunk.constants.len();
+                    if *e as usize >= len || *v as usize >= len || *d as usize >= len {
+                        return Err(VerifyError {
+                            chunk_name: name.clone(),
+                            message: alloc::format!(
+                                "{:?} at {} references constants ({}, {}, {}) but the pool has {} entr(ies)",
+                                op,
+                                ip,
+                                e,
+                                v,
+                                d,
+                                len
+                            ),
+                        });
+                    }
+                    record(ip, P1, "constant-index-in-range");
+                }
+                Op::NewEnum(e, v, _) => {
                     let len = chunk.constants.len();
                     if *e as usize >= len || *v as usize >= len {
                         return Err(VerifyError {

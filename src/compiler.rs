@@ -708,7 +708,12 @@ impl FuncCompiler {
     /// `Op::Const`. Used by the const-data field-access path
     /// where the compiler already has the typed `ConstValue`
     /// rather than a runtime `Value`.
-    fn add_const_value(&mut self, cv: ConstValue) -> u16 {
+    fn add_const_value(&mut self, mut cv: ConstValue) -> u16 {
+        // Fill in enum discriminants from the type tables so a constant
+        // enum materialises into the flat body that matches the baked
+        // access (B28 P2). This is the single point every constant value
+        // passes through with the type tables available.
+        resolve_const_enum_discriminants(&mut cv, &self.type_info.enum_variant_order);
         for (i, c) in self.chunk.constants.iter().enumerate() {
             if *c == cv {
                 return i as u16;
@@ -2170,6 +2175,46 @@ fn param_name_is_used(body: &Block, name: &str) -> bool {
 /// (struct fields and enum payloads). Scalar literals carry
 /// enough information to choose the right `ConstValue` variant;
 /// composite forms recurse.
+/// Fill in unresolved enum discriminants in a constant value from the
+/// enum variant-order table, recursively (B28 P2). Const-evaluation builds
+/// `ConstValue::Enum` with `discriminant: None` because it has no type
+/// tables; this resolves them so the constant materialises into the flat
+/// body the access ops bake against.
+fn resolve_const_enum_discriminants(
+    cv: &mut crate::bytecode::ConstValue,
+    order: &BTreeMap<String, Vec<(String, i64)>>,
+) {
+    use crate::bytecode::ConstValue;
+    match cv {
+        ConstValue::Enum {
+            type_name,
+            variant,
+            discriminant,
+            fields,
+        } => {
+            if discriminant.is_none() {
+                *discriminant = order
+                    .get(type_name)
+                    .and_then(|vs| vs.iter().find(|(n, _)| n == variant).map(|(_, d)| *d));
+            }
+            for f in fields {
+                resolve_const_enum_discriminants(f, order);
+            }
+        }
+        ConstValue::Tuple(items) | ConstValue::Array(items) => {
+            for i in items {
+                resolve_const_enum_discriminants(i, order);
+            }
+        }
+        ConstValue::Struct { fields, .. } => {
+            for (_, f) in fields {
+                resolve_const_enum_discriminants(f, order);
+            }
+        }
+        _ => {}
+    }
+}
+
 fn const_value_any(init: &ConstInitializer) -> crate::bytecode::ConstValue {
     use crate::bytecode::ConstValue;
     match init {
@@ -2212,6 +2257,7 @@ fn const_value_any(init: &ConstInitializer) -> crate::bytecode::ConstValue {
             ConstValue::Enum {
                 type_name: enum_name.clone(),
                 variant: variant.clone(),
+                discriminant: None,
                 fields: out,
             }
         }
@@ -2371,6 +2417,7 @@ fn const_value_from_literal_for_field(
             Ok(ConstValue::Enum {
                 type_name: enum_name.clone(),
                 variant: variant.clone(),
+                discriminant: None,
                 fields: out,
             })
         }
@@ -3618,6 +3665,50 @@ fn named_type_name(ty: Option<&TypeExpr>) -> Option<&str> {
     }
 }
 
+/// Resolve the baked [`EnumField`] for accessing payload field `index` of
+/// `variant` of enum `type_name` (B28 P2). Returns the `Flat` form carrying
+/// the packed byte offset (past the leading discriminant word) and the
+/// field kind when the variant's whole payload is flat-eligible scalars and
+/// the offset fits the sixteen-bit operand; otherwise the boxed positional
+/// form. Mirrors `enum_with_widths`, so the access form matches the body.
+fn enum_field_access(
+    fc: &mut FuncCompiler,
+    type_name: &str,
+    variant: &str,
+    index: usize,
+) -> EnumField {
+    let wb = fc.type_info.word_bytes;
+    let fb = fc.type_info.float_bytes;
+    let flat = fc
+        .type_info
+        .enums
+        .get(type_name)
+        .and_then(|vs| vs.get(variant))
+        .and_then(|payload| {
+            if wb == 0 {
+                return None;
+            }
+            // The flat enum body begins with the discriminant word.
+            let mut offset = wb;
+            let mut field_at = None;
+            for (i, ty) in payload.iter().enumerate() {
+                let kind = type_flat_scalar_kind(ty)?;
+                if i == index {
+                    field_at = Some((offset, kind));
+                }
+                offset += kind.size_in_bytes(wb, fb);
+            }
+            if offset > u16::MAX as usize {
+                return None;
+            }
+            field_at.map(|(off, kind)| (off as u16, kind))
+        });
+    match flat {
+        Some((offset, kind)) => EnumField::Flat { offset, kind },
+        None => EnumField::Boxed { index: index as u8 },
+    }
+}
+
 fn compile_let_pattern_typed(
     fc: &mut FuncCompiler,
     pattern: &Pattern,
@@ -4210,8 +4301,9 @@ fn compile_enum_to_word(
     for (variant_name, discriminant) in &variants {
         fc.begin_scope();
         let v_const = fc.add_string_constant(variant_name);
+        let d_const = fc.add_constant(Value::Int(*discriminant));
         fc.emit(Op::GetLocal(temp));
-        fc.emit(Op::IsEnum(e_const, v_const));
+        fc.emit(Op::IsEnum(e_const, v_const, d_const));
         let fail_addr = fc.emit_jump(Op::If(0));
         fc.emit(Op::PopN(1)); // Discard the peeked enum value.
         let disc_const = fc.add_constant(Value::Int(*discriminant));
@@ -5478,6 +5570,17 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
             args,
             ..
         } => {
+            // Push the variant discriminant beneath the payload so the VM
+            // `NewEnum` can write it as the leading word of a flat enum
+            // body (B28 P2).
+            let disc = fc
+                .type_info
+                .enum_variant_order
+                .get(enum_name)
+                .and_then(|vs| vs.iter().find(|(n, _)| n == variant).map(|(_, d)| *d))
+                .unwrap_or(0);
+            let d_const = fc.add_constant(Value::Int(disc));
+            fc.emit(Op::Const(d_const));
             for arg in args {
                 compile_expr(fc, arg)?;
             }
@@ -6442,6 +6545,18 @@ fn compile_checked_discriminant(
                 compile_expr(fc, &arm.body)?;
             } else if let Some(arm) = ok_generic {
                 let v_const = fc.add_string_constant(vname);
+                let disc = fc
+                    .type_info
+                    .enum_variant_order
+                    .get(enum_name)
+                    .and_then(|vs| {
+                        vs.iter()
+                            .find(|(n, _)| n.as_str() == vname.as_str())
+                            .map(|(_, d)| *d)
+                    })
+                    .unwrap_or(0);
+                let d_const = fc.add_constant(Value::Int(disc));
+                fc.emit(Op::Const(d_const));
                 fc.emit(Op::NewEnum(e_const, v_const, 0));
                 match &arm.kind {
                     CheckedArmKind::Ok(Pattern::Variable(bind, _)) => {
@@ -6464,6 +6579,18 @@ fn compile_checked_discriminant(
             } else {
                 // No `ok` arm: the unit variant converts to itself.
                 let v_const = fc.add_string_constant(vname);
+                let disc = fc
+                    .type_info
+                    .enum_variant_order
+                    .get(enum_name)
+                    .and_then(|vs| {
+                        vs.iter()
+                            .find(|(n, _)| n.as_str() == vname.as_str())
+                            .map(|(_, d)| *d)
+                    })
+                    .unwrap_or(0);
+                let d_const = fc.add_constant(Value::Int(disc));
+                fc.emit(Op::Const(d_const));
                 fc.emit(Op::NewEnum(e_const, v_const, 0));
             }
         } else {
@@ -6945,7 +7072,17 @@ fn compile_pattern_test(
             fc.emit(Op::GetLocal(value_slot));
             let e_const = fc.add_string_constant(enum_name);
             let v_const = fc.add_string_constant(variant);
-            fc.emit(Op::IsEnum(e_const, v_const));
+            // The variant discriminant lets the test compare a flat enum's
+            // leading discriminant word (B28 P2); the boxed body still
+            // compares the names.
+            let disc = fc
+                .type_info
+                .enum_variant_order
+                .get(enum_name)
+                .and_then(|vs| vs.iter().find(|(n, _)| n == variant).map(|(_, d)| *d))
+                .unwrap_or(0);
+            let d_const = fc.add_constant(Value::Int(disc));
+            fc.emit(Op::IsEnum(e_const, v_const, d_const));
             fail_addrs.push(fc.emit_jump(Op::If(0)));
             fc.emit(Op::PopN(1)); // Discard the peeked value.
 
@@ -6956,9 +7093,8 @@ fn compile_pattern_test(
                 }
                 let temp = fc.declare_local(&format!("__enum_field{}", i));
                 fc.emit(Op::GetLocal(value_slot));
-                fc.emit(Op::GetEnumField(crate::bytecode::EnumField::Boxed {
-                    index: i as u8,
-                }));
+                let efield = enum_field_access(fc, enum_name, variant, i);
+                fc.emit(Op::GetEnumField(efield));
                 fc.emit(Op::SetLocal(temp));
                 let sub_ty = fc
                     .type_info
@@ -7065,9 +7201,8 @@ fn compile_pattern_bind_typed(
                     continue;
                 }
                 fc.emit(Op::GetLocal(value_slot));
-                fc.emit(Op::GetEnumField(crate::bytecode::EnumField::Boxed {
-                    index: i as u8,
-                }));
+                let efield = enum_field_access(fc, enum_name, variant, i);
+                fc.emit(Op::GetEnumField(efield));
                 let sub_ty = payload_types.get(i).cloned().unwrap_or(None);
                 if let Pattern::Variable(name, _) = sub_pat {
                     let slot = fc.declare_local_typed(name, sub_ty);
@@ -7927,7 +8062,7 @@ mod tests {
         let ops = &module.chunks[0].ops;
         let isenum_count = ops
             .iter()
-            .filter(|op| matches!(op, Op::IsEnum(_, _)))
+            .filter(|op| matches!(op, Op::IsEnum(_, _, _)))
             .count();
         assert!(
             isenum_count >= 3,

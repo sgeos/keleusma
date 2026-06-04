@@ -102,6 +102,11 @@ pub const POOL_TAG_U16_U16: u8 = 0x01;
 /// `Op::NewEnum`.
 pub const POOL_TAG_U16_U16_U8: u8 = 0x02;
 
+/// Pool entry type tag for the `(u16, u16, u16)` shape. Used by
+/// `Op::IsEnum` (enum-name, variant-name, discriminant-value constant
+/// indices); the three `u16`s occupy bytes two through seven (B28 P2).
+pub const POOL_TAG_U16_U16_U16: u8 = 0x03;
+
 /// Byte-three sentinel in a baked `Op::GetTupleField` record marking
 /// the boxed (positional-index) form. Distinguished from a flat
 /// scalar-kind tag because [`crate::value_layout::ScalarKind::to_tag`]
@@ -292,6 +297,21 @@ impl OperandPoolEntry {
         OperandPoolEntry(bytes)
     }
 
+    /// Construct a `(u16, u16, u16)` pool entry. The three indices occupy
+    /// bytes two-three, four-five, and six-seven (B28 P2).
+    pub fn from_u16_u16_u16(a: u16, b: u16, c: u16) -> Self {
+        let mut bytes = [0u8; OPERAND_POOL_ENTRY_BYTES];
+        bytes[0] = POOL_TAG_U16_U16_U16;
+        bytes[2..4].copy_from_slice(&a.to_le_bytes());
+        bytes[4..6].copy_from_slice(&b.to_le_bytes());
+        bytes[6..8].copy_from_slice(&c.to_le_bytes());
+        let parity_payload = [
+            bytes[0], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
+        ];
+        bytes[1] = pool_entry_parity(&parity_payload);
+        OperandPoolEntry(bytes)
+    }
+
     /// Verify the parity byte against the rest of the entry.
     pub fn check_parity(&self) -> Result<(), WireFormatError> {
         let parity_payload = [
@@ -316,6 +336,13 @@ impl OperandPoolEntry {
             u16::from_le_bytes([self.0[2], self.0[3]]),
             u16::from_le_bytes([self.0[4], self.0[5]]),
         )
+    }
+
+    /// Decode the `(u16, u16, u16)` payload. Caller verifies the tag
+    /// and parity before invoking.
+    pub fn as_u16_u16_u16(&self) -> (u16, u16, u16) {
+        let (a, b) = self.as_u16_u16();
+        (a, b, u16::from_le_bytes([self.0[6], self.0[7]]))
     }
 
     /// Decode the `(u16, u16, u8)` payload. Caller verifies the
@@ -472,7 +499,7 @@ pub fn opcode_id_of(op: &Op) -> OpcodeId {
         Op::GetTupleField(_) => 40,
         Op::GetEnumField(_) => 41,
         Op::Len => 42,
-        Op::IsEnum(_, _) => 43,
+        Op::IsEnum(_, _, _) => 43,
         Op::IsStruct(_) => 44,
         Op::IntToFloat => 45,
         Op::FloatToInt => 46,
@@ -644,12 +671,21 @@ pub fn encode_op(
 
         // Pool-using shapes. Append the entry and store the index
         // in the inline operand bytes.
-        Op::GetDataIndexed(a, b) | Op::SetDataIndexed(a, b) | Op::IsEnum(a, b) => {
+        Op::GetDataIndexed(a, b) | Op::SetDataIndexed(a, b) => {
             let idx = pool.len();
             if idx >= MAX_POOL_ENTRIES {
                 return Err(WireFormatError::OperandPoolIndexOverflow);
             }
             pool.push(OperandPoolEntry::from_u16_u16(*a, *b));
+            let idx_bytes = (idx as u32).to_le_bytes();
+            [idx_bytes[0], idx_bytes[1], idx_bytes[2]]
+        }
+        Op::IsEnum(a, b, d) => {
+            let idx = pool.len();
+            if idx >= MAX_POOL_ENTRIES {
+                return Err(WireFormatError::OperandPoolIndexOverflow);
+            }
+            pool.push(OperandPoolEntry::from_u16_u16_u16(*a, *b, *d));
             let idx_bytes = (idx as u32).to_le_bytes();
             [idx_bytes[0], idx_bytes[1], idx_bytes[2]]
         }
@@ -772,8 +808,8 @@ pub fn decode_op(record: OpcodeRecord, pool: &[OperandPoolEntry]) -> Result<Op, 
         }
         42 => Op::Len,
         43 => {
-            let (a, b) = decode_pool_u16_u16(record, pool)?;
-            Op::IsEnum(a, b)
+            let (a, b, d) = decode_pool_u16_u16_u16(record, pool)?;
+            Op::IsEnum(a, b, d)
         }
         44 => Op::IsStruct(record.operand_u16()),
         45 => Op::IntToFloat,
@@ -852,6 +888,27 @@ fn decode_pool_u16_u16_u8(
         });
     }
     Ok(entry.as_u16_u16_u8())
+}
+
+/// Helper: fetch a `(u16, u16, u16)` operand pool entry, validating the
+/// index, the parity, and the type tag.
+fn decode_pool_u16_u16_u16(
+    record: OpcodeRecord,
+    pool: &[OperandPoolEntry],
+) -> Result<(u16, u16, u16), WireFormatError> {
+    let idx = record.operand_pool_index() as usize;
+    let entry = pool
+        .get(idx)
+        .copied()
+        .ok_or(WireFormatError::OperandPoolIndexOutOfBounds(idx))?;
+    entry.check_parity()?;
+    if entry.tag() != POOL_TAG_U16_U16_U16 {
+        return Err(WireFormatError::OperandPoolTagMismatch {
+            observed: entry.tag(),
+            expected: POOL_TAG_U16_U16_U16,
+        });
+    }
+    Ok(entry.as_u16_u16_u16())
 }
 
 /// Footer length: the trailing CRC-32 over the entire framed
@@ -2331,7 +2388,7 @@ mod tests {
                 41,
             ),
             (Op::Len, 42),
-            (Op::IsEnum(0, 0), 43),
+            (Op::IsEnum(0, 0, 0), 43),
             (Op::IsStruct(0), 44),
             (Op::IntToFloat, 45),
             (Op::FloatToInt, 46),
@@ -2520,7 +2577,7 @@ mod tests {
             Op::GetDataIndexed(0, 0),
             Op::GetDataIndexed(65535, 65535),
             Op::SetDataIndexed(100, 200),
-            Op::IsEnum(7, 13),
+            Op::IsEnum(7, 13, 21),
         ] {
             roundtrip(op);
         }
@@ -2838,7 +2895,7 @@ mod tests {
             ops: alloc::vec![
                 Op::NewEnum(3, 4, 1),
                 Op::NewEnum(0, 0, 0),
-                Op::IsEnum(3, 4),
+                Op::IsEnum(3, 4, 5),
                 Op::GetDataIndexed(7, 8),
                 Op::SetDataIndexed(7, 8),
                 Op::Return,
