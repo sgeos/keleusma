@@ -401,6 +401,100 @@ impl LayoutDescriptor {
             _ => None,
         }
     }
+
+    /// The flat-eligible scalar kind of this layout, or `None` when it is a
+    /// composite or a reference scalar (B28 P2 nested inlining).
+    ///
+    /// Flat-eligible kinds are the non-reference, non-float fixed-size
+    /// scalars: `Unit`, `Bool`, `Byte`, `Int`, `Fixed`. `Float`, `Text`,
+    /// and `Opaque` are excluded because the flat body compares by raw
+    /// bytes (which would change float equality) and references are not
+    /// inlined. This is the single type-side flat-eligibility predicate;
+    /// the compiler and the runtime value path agree with it by construction.
+    pub fn flat_scalar_kind(&self) -> Option<ScalarKind> {
+        match self {
+            Self::Scalar(k) => match k {
+                ScalarKind::Unit
+                | ScalarKind::Bool
+                | ScalarKind::Byte
+                | ScalarKind::Int
+                | ScalarKind::Fixed => Some(*k),
+                // Float (when present), Text, and Opaque are not flat.
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    /// The composite kind this layout re-wraps to as a nested flat field,
+    /// or `None` for a scalar (B28 P2 nested inlining). Structural only; a
+    /// caller pairs it with [`LayoutDescriptor::flat_byte_size`] to confirm
+    /// the composite is actually flat-eligible before baking a nested form.
+    pub fn flat_composite_kind(&self) -> Option<CompositeKind> {
+        match self {
+            Self::Tuple(_) => Some(CompositeKind::Tuple),
+            Self::Array { .. } => Some(CompositeKind::Array),
+            Self::Struct { .. } => Some(CompositeKind::Struct),
+            Self::Enum { .. } => Some(CompositeKind::Enum),
+            Self::Scalar(_) => None,
+        }
+    }
+
+    /// Total flat byte size of this layout, or `None` when it is not
+    /// transitively flat-eligible (B28 P2 nested inlining).
+    ///
+    /// This is the single source of the flat layout arithmetic that the
+    /// compiler's access baking and enum-padding both consult. A scalar
+    /// contributes its size when [`LayoutDescriptor::flat_scalar_kind`] is
+    /// `Some`. A tuple, array, or struct is flat when every constituent is
+    /// flat; the size is the sum (arrays multiply by the count). An enum is
+    /// flat only when it is uniformly flat (every variant's payload flat),
+    /// with size `word_bytes + payload_max` to match the runtime body padded
+    /// to the largest variant. The built-in `Option` is always boxed (it is
+    /// generic and absent from the type tables), so it returns `None`.
+    pub fn flat_byte_size(&self, word_bytes: usize, float_bytes: usize) -> Option<usize> {
+        match self {
+            Self::Scalar(_) => self
+                .flat_scalar_kind()
+                .map(|k| k.size_in_bytes(word_bytes, float_bytes)),
+            Self::Tuple(elems) => {
+                let mut total = 0usize;
+                for e in elems {
+                    total += e.flat_byte_size(word_bytes, float_bytes)?;
+                }
+                Some(total)
+            }
+            Self::Array { element, count } => {
+                Some(count * element.flat_byte_size(word_bytes, float_bytes)?)
+            }
+            Self::Struct { fields, .. } => {
+                let mut total = 0usize;
+                for (_, t) in fields {
+                    total += t.flat_byte_size(word_bytes, float_bytes)?;
+                }
+                Some(total)
+            }
+            Self::Enum {
+                type_name,
+                variants,
+            } => {
+                if type_name == "Option" {
+                    return None;
+                }
+                let mut payload_max = 0usize;
+                for (_, payload) in variants {
+                    let mut sum = 0usize;
+                    for p in payload {
+                        sum += p.flat_byte_size(word_bytes, float_bytes)?;
+                    }
+                    if sum > payload_max {
+                        payload_max = sum;
+                    }
+                }
+                Some(word_bytes + payload_max)
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -672,5 +766,132 @@ mod tests {
         };
         assert_eq!(layout.struct_field_offset("x", 2, F64_BYTES), Some(0));
         assert_eq!(layout.struct_field_offset("y", 2, F64_BYTES), Some(2));
+    }
+
+    #[test]
+    fn flat_byte_size_scalar_eligibility() {
+        assert_eq!(
+            LayoutDescriptor::Scalar(ScalarKind::Int).flat_byte_size(I64_BYTES, F64_BYTES),
+            Some(8)
+        );
+        assert_eq!(
+            LayoutDescriptor::Scalar(ScalarKind::Bool).flat_byte_size(I64_BYTES, F64_BYTES),
+            Some(1)
+        );
+        // References and floats are not flat-eligible.
+        assert_eq!(
+            LayoutDescriptor::Scalar(ScalarKind::Text).flat_byte_size(I64_BYTES, F64_BYTES),
+            None
+        );
+        assert_eq!(
+            LayoutDescriptor::Scalar(ScalarKind::Opaque).flat_byte_size(I64_BYTES, F64_BYTES),
+            None
+        );
+        #[cfg(feature = "floats")]
+        assert_eq!(
+            LayoutDescriptor::Scalar(ScalarKind::Float).flat_byte_size(I64_BYTES, F64_BYTES),
+            None
+        );
+    }
+
+    #[test]
+    fn flat_byte_size_nested_tuple_in_struct() {
+        let inner = LayoutDescriptor::Tuple(vec![
+            LayoutDescriptor::Scalar(ScalarKind::Int),
+            LayoutDescriptor::Scalar(ScalarKind::Int),
+        ]);
+        let outer = LayoutDescriptor::Struct {
+            type_name: "Holder".to_string(),
+            fields: vec![
+                ("coords".to_string(), inner),
+                ("tag".to_string(), LayoutDescriptor::Scalar(ScalarKind::Int)),
+            ],
+        };
+        assert_eq!(outer.flat_byte_size(I64_BYTES, F64_BYTES), Some(8 + 8 + 8));
+    }
+
+    #[test]
+    fn flat_byte_size_struct_with_text_field_is_not_flat() {
+        let layout = LayoutDescriptor::Struct {
+            type_name: "Greeting".to_string(),
+            fields: vec![
+                ("id".to_string(), LayoutDescriptor::Scalar(ScalarKind::Int)),
+                (
+                    "msg".to_string(),
+                    LayoutDescriptor::Scalar(ScalarKind::Text),
+                ),
+            ],
+        };
+        assert_eq!(layout.flat_byte_size(I64_BYTES, F64_BYTES), None);
+    }
+
+    #[test]
+    fn flat_byte_size_uniform_enum_pads_to_word_plus_max() {
+        let layout = LayoutDescriptor::Enum {
+            type_name: "Sig".to_string(),
+            variants: vec![
+                ("Off".to_string(), vec![]),
+                (
+                    "On".to_string(),
+                    vec![LayoutDescriptor::Scalar(ScalarKind::Int)],
+                ),
+                (
+                    "Span".to_string(),
+                    vec![
+                        LayoutDescriptor::Scalar(ScalarKind::Int),
+                        LayoutDescriptor::Scalar(ScalarKind::Int),
+                    ],
+                ),
+            ],
+        };
+        // Word discriminant plus the largest variant payload (two words).
+        assert_eq!(layout.flat_byte_size(I64_BYTES, F64_BYTES), Some(8 + 16));
+        assert_eq!(layout.flat_composite_kind(), Some(CompositeKind::Enum));
+    }
+
+    #[test]
+    fn flat_byte_size_option_is_boxed() {
+        let layout = LayoutDescriptor::Enum {
+            type_name: "Option".to_string(),
+            variants: vec![
+                ("None".to_string(), vec![]),
+                (
+                    "Some".to_string(),
+                    vec![LayoutDescriptor::Scalar(ScalarKind::Int)],
+                ),
+            ],
+        };
+        assert_eq!(layout.flat_byte_size(I64_BYTES, F64_BYTES), None);
+    }
+
+    #[test]
+    fn flat_byte_size_mixed_enum_is_not_flat() {
+        let layout = LayoutDescriptor::Enum {
+            type_name: "Reply".to_string(),
+            variants: vec![
+                (
+                    "Ok".to_string(),
+                    vec![LayoutDescriptor::Scalar(ScalarKind::Int)],
+                ),
+                (
+                    "Err".to_string(),
+                    vec![LayoutDescriptor::Scalar(ScalarKind::Text)],
+                ),
+            ],
+        };
+        assert_eq!(layout.flat_byte_size(I64_BYTES, F64_BYTES), None);
+    }
+
+    #[test]
+    fn flat_scalar_kind_rejects_references() {
+        assert_eq!(
+            LayoutDescriptor::Scalar(ScalarKind::Int).flat_scalar_kind(),
+            Some(ScalarKind::Int)
+        );
+        assert_eq!(
+            LayoutDescriptor::Scalar(ScalarKind::Text).flat_scalar_kind(),
+            None
+        );
+        assert_eq!(LayoutDescriptor::Tuple(vec![]).flat_scalar_kind(), None);
     }
 }

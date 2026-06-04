@@ -9,7 +9,11 @@ AI to Human communication channel.
 ## Last Updated
 
 **Date**: 2026-06-04
-**Status**: B28 P2 nested-composite inlining is complete end to end on the sub-feature branch `feat-flat-memory-nested`, cut from `feat-flat-memory-model`. The full verification gate is green under default features, all features, clippy on both, strict rustdoc, and rustfmt. The work is committed locally and not pushed.
+**Status**: B28 P2 nested-composite inlining is complete end to end on the sub-feature branch `feat-flat-memory-nested`, cut from `feat-flat-memory-model`, followed by a layout-arithmetic consolidation that folds the compiler's flat-layout helpers onto the P1 `LayoutContext`/`LayoutDescriptor`. The full verification gate is green under default features, all features, clippy on both, strict rustdoc, and rustfmt. Both pieces are committed locally and not pushed.
+
+## Layout-arithmetic consolidation (follow-up this session)
+
+The open concern below, that the compiler-side eligibility helpers reimplemented layout arithmetic the P1 pass already had, is resolved. `LayoutDescriptor` gained `flat_byte_size`, `flat_scalar_kind`, and `flat_composite_kind`, which fold flat-eligibility (excluding float, text, and opaque), the `Option`-boxed rule, enum uniformity with word-sized-discriminant padding, and the recursive size into one place. The compiler's `type_flat_size`, `enum_uniform_flat_payload_max`, and `classify_flat_field` are now thin queries over a `LayoutContext` built from the module's struct and enum definitions (added to `TypeInfo` as `struct_defs` and `enum_defs`); the ad-hoc `type_flat_scalar_kind`, `type_flat_composite_kind`, and `unwrap_labels` helpers were removed. The change is behaviour-preserving and the full gate stayed green. The runtime construction choke points remain a separate value-driven computation, which is inherent since the runtime has no type tables at construction; they agree with the type-side predicate by construction and are exercised by the same corpus.
 
 ## What landed this session
 
@@ -52,7 +56,7 @@ Flattening nested-composite composites changed how `struct_with_widths` and its 
 - A nested access uses one operand-pool entry. The common scalar field access stays inline, so only the nesting case pays a pool entry.
 - The mixed-variant enum case keeps its current standalone behaviour. There is no flatness regression.
 - Const-folded composites that would nest an enum are not flat-folded, so a variant-sized const enum is never inlined into a fixed parent slot. A const struct nesting a fixed-size composite such as a tuple, array, or struct is fine because those carry no variant-dependent size.
-- Open concern. The eligibility helpers on the compiler side and the runtime construction choke points are two implementations of the same layout arithmetic. They are tested to agree on the corpus, but a future field-type addition must update both. Folding both onto the reconciled `LayoutContext` would remove the duplication and is a candidate follow-up, not done here to keep the slice focused.
+- Resolved concern. The compiler-side eligibility helpers no longer reimplement the layout arithmetic; they query the reconciled `LayoutContext`/`LayoutDescriptor` (see the consolidation section above). The runtime value-driven path is the one remaining separate computation, which is inherent and not duplicative of the type-side pass.
 
 ## Intended next step
 

@@ -8,6 +8,7 @@ use alloc::vec::Vec;
 
 use crate::ast::*;
 use crate::bytecode::*;
+use crate::layout_pass::LayoutContext;
 use crate::token::Span;
 
 /// A compile-time error with a message and source location.
@@ -50,6 +51,14 @@ struct TypeInfo {
     /// Used by the enum-to-Word cast and any other site that
     /// needs to walk the variants in declaration order.
     enum_variant_order: BTreeMap<String, Vec<(String, i64)>>,
+    /// Struct and enum definitions, keyed by name, for building a
+    /// [`crate::layout_pass::LayoutContext`]. The flat layout arithmetic
+    /// (B28 P2) is computed once in `LayoutContext`/`LayoutDescriptor` and
+    /// consulted here rather than reimplemented, so the compiler's access
+    /// baking and the runtime construction agree by sharing the predicate.
+    struct_defs: BTreeMap<String, StructDef>,
+    /// Enum definitions, keyed by name. See [`TypeInfo::struct_defs`].
+    enum_defs: BTreeMap<String, EnumDef>,
     /// Function name to declared return type.
     function_returns: BTreeMap<String, TypeExpr>,
     /// Data block name to (field name to declared field type).
@@ -95,6 +104,23 @@ struct TypeInfo {
     /// Module-declared float width in bytes, the float companion of
     /// [`TypeInfo::word_bytes`].
     float_bytes: usize,
+}
+
+impl TypeInfo {
+    /// Build a [`LayoutContext`] over this module's struct and enum
+    /// definitions at the module widths (B28 P2). The flat layout
+    /// arithmetic the access baking needs is computed through this context
+    /// and [`crate::value_layout::LayoutDescriptor`] rather than
+    /// reimplemented, so the compiler and the runtime construction agree by
+    /// sharing one predicate.
+    fn layout_context(&self) -> LayoutContext<'_> {
+        LayoutContext::new(
+            &self.struct_defs,
+            &self.enum_defs,
+            self.word_bytes,
+            self.float_bytes,
+        )
+    }
 }
 
 /// State for compiling a single function chunk.
@@ -1369,6 +1395,7 @@ pub fn compile_with_options(
                 }
                 type_info.structs.insert(s.name.clone(), fields);
                 type_info.struct_field_order.insert(s.name.clone(), order);
+                type_info.struct_defs.insert(s.name.clone(), s.clone());
             }
             TypeDef::Enum(e) => {
                 let mut variants = BTreeMap::new();
@@ -1379,6 +1406,7 @@ pub fn compile_with_options(
                 }
                 type_info.enums.insert(e.name.clone(), variants);
                 type_info.enum_variant_order.insert(e.name.clone(), ordered);
+                type_info.enum_defs.insert(e.name.clone(), e.clone());
             }
             TypeDef::Newtype(n) => {
                 type_info.newtype_names.insert(n.name.clone());
@@ -3508,142 +3536,42 @@ fn type_expr_head(ty: &TypeExpr) -> Option<String> {
 /// The type, when present, is recorded on the resulting local for
 /// downstream optimization passes. Compound patterns destructure the
 /// type along with the value.
-/// Map a tuple element type to its flat-composite scalar kind, or
-/// `None` when the type is not a flat-eligible field (B28 P2).
-///
-/// Eligible kinds are the non-reference, non-float fixed-size scalars,
-/// mirroring the VM's `flat_tuple_scalar_kind` so construction and
-/// access agree. `Float` is excluded for now because the flat body
-/// compares by raw bytes, which would change the `+0.0`/`-0.0` and
-/// `NaN` semantics of tuple equality. `Text`, named types (struct,
-/// enum, opaque), tuples, arrays, and options are not flat scalars.
-/// Information-flow label wrappers are compile-time only and unwrap to
-/// the underlying type.
-fn type_flat_scalar_kind(ty: &TypeExpr) -> Option<crate::value_layout::ScalarKind> {
-    use crate::value_layout::ScalarKind as K;
-    match ty {
-        TypeExpr::Unit(_) => Some(K::Unit),
-        TypeExpr::Prim(p, _) => match p {
-            PrimType::Bool => Some(K::Bool),
-            PrimType::Byte => Some(K::Byte),
-            PrimType::Word => Some(K::Int),
-            PrimType::Fixed(_) => Some(K::Fixed),
-            PrimType::Float | PrimType::Text => None,
-        },
-        TypeExpr::Labelled(inner, _, _) | TypeExpr::NegativeLabelled(inner, _, _) => {
-            type_flat_scalar_kind(inner)
-        }
-        _ => None,
-    }
-}
-
-/// Unwrap information-flow label wrappers to the underlying type (B28 P2).
-fn unwrap_labels(ty: &TypeExpr) -> &TypeExpr {
-    match ty {
-        TypeExpr::Labelled(inner, _, _) | TypeExpr::NegativeLabelled(inner, _, _) => {
-            unwrap_labels(inner)
-        }
-        other => other,
-    }
-}
-
 /// Total flat byte size of a type at the module's widths, or `None` when
 /// the type is not transitively flat (B28 P2 nested inlining).
 ///
-/// A scalar contributes its scalar size. A tuple, array, or struct is flat
-/// when every element or field is flat; its size is the sum (arrays: count
-/// times the element size). An enum is flat only when it is uniformly flat
-/// (every variant's payload is flat), with size `word_bytes + payload_max`,
-/// matching the runtime flat enum body padded to the largest variant.
-/// `Option` is forced boxed (it is generic and absent from the type
-/// tables), so it is never flat. This mirrors the runtime construction
-/// choke points, so a baked nested access agrees with the body the
-/// construction builds.
+/// The flat layout arithmetic lives once in the compile-time layout pass
+/// ([`crate::value_layout::LayoutDescriptor::flat_byte_size`], built from a
+/// [`LayoutContext`] over the module's type definitions). This function and
+/// the runtime construction choke points consult that one predicate, so a
+/// baked nested access always agrees with the body the construction builds.
+/// A type the layout pass cannot resolve (an unknown name, an
+/// unsubstituted generic) is treated as non-flat.
 fn type_flat_size(ty: &TypeExpr, ti: &TypeInfo) -> Option<usize> {
-    let wb = ti.word_bytes;
-    let fb = ti.float_bytes;
-    if wb == 0 {
+    if ti.word_bytes == 0 {
         return None;
     }
-    if let Some(kind) = type_flat_scalar_kind(ty) {
-        return Some(kind.size_in_bytes(wb, fb));
-    }
-    match unwrap_labels(ty) {
-        TypeExpr::Tuple(elems, _) => {
-            let mut total = 0usize;
-            for e in elems {
-                total += type_flat_size(e, ti)?;
-            }
-            Some(total)
-        }
-        TypeExpr::Array(elem, count, _) if *count >= 0 => {
-            Some(*count as usize * type_flat_size(elem, ti)?)
-        }
-        TypeExpr::Named(name, args, _) if args.is_empty() => {
-            if let Some(order) = ti.struct_field_order.get(name) {
-                let mut total = 0usize;
-                for (_, fty) in order {
-                    total += type_flat_size(fty, ti)?;
-                }
-                Some(total)
-            } else if ti.enums.contains_key(name) {
-                enum_uniform_flat_payload_max(name, ti).map(|pmax| wb + pmax)
-            } else {
-                None
-            }
-        }
-        _ => None,
-    }
+    ti.layout_context()
+        .layout_for(ty)
+        .ok()?
+        .flat_byte_size(ti.word_bytes, ti.float_bytes)
 }
 
 /// The largest-variant flat payload byte size of an enum, or `None` when
-/// the enum is not uniformly flat (some variant carries a non-flat
-/// payload) (B28 P2). Excludes the leading discriminant word. The compiler
-/// bakes this as the `NewEnum` minimum-payload operand so every value of a
-/// uniformly-flat enum shares one fixed body size, which a nested enum
-/// field's fixed slot requires. A non-uniform enum returns `None`, so it
-/// is never a flat nested field and bakes a per-variant body standalone.
+/// the enum is not uniformly flat (B28 P2). Excludes the leading
+/// discriminant word. The compiler bakes this as the `NewEnum`
+/// minimum-payload operand so every value of a uniformly-flat enum shares
+/// one fixed body size, which a nested enum field's fixed slot requires. A
+/// non-uniform enum returns `None`, so it is never a flat nested field and
+/// bakes a per-variant body standalone. Derived from the enum descriptor's
+/// [`crate::value_layout::LayoutDescriptor::flat_byte_size`], which is
+/// `word_bytes + payload_max`.
 fn enum_uniform_flat_payload_max(name: &str, ti: &TypeInfo) -> Option<usize> {
-    // `Option` is forced boxed, so it is never uniformly flat.
-    if name == "Option" {
+    if ti.word_bytes == 0 {
         return None;
     }
-    let variants = ti.enums.get(name)?;
-    let mut max = 0usize;
-    for payload in variants.values() {
-        let mut sum = 0usize;
-        for pty in payload {
-            sum += type_flat_size(pty, ti)?;
-        }
-        if sum > max {
-            max = sum;
-        }
-    }
-    Some(max)
-}
-
-/// The composite kind a flat composite type re-wraps to, or `None` for a
-/// scalar or non-flat type (B28 P2 nested inlining). Used to bake the
-/// `FlatNested` variant tag.
-fn type_flat_composite_kind(
-    ty: &TypeExpr,
-    ti: &TypeInfo,
-) -> Option<crate::value_layout::CompositeKind> {
-    use crate::value_layout::CompositeKind as C;
-    match unwrap_labels(ty) {
-        TypeExpr::Tuple(..) => Some(C::Tuple),
-        TypeExpr::Array(..) => Some(C::Array),
-        TypeExpr::Named(name, args, _) if args.is_empty() => {
-            if ti.struct_field_order.contains_key(name) {
-                Some(C::Struct)
-            } else if name != "Option" && enum_uniform_flat_payload_max(name, ti).is_some() {
-                Some(C::Enum)
-            } else {
-                None
-            }
-        }
-        _ => None,
-    }
+    let ty = TypeExpr::Named(name.into(), Vec::new(), Span::default());
+    let size = type_flat_size(&ty, ti)?;
+    size.checked_sub(ti.word_bytes)
 }
 
 /// Classify a composite field as a flat scalar, a flat nested composite, or
@@ -3658,15 +3586,26 @@ enum FlatFieldForm {
     NotFlat,
 }
 
-/// Classify `ty` as a flat field form at the module's widths (B28 P2). A
-/// nested composite whose size exceeds the sixteen-bit operand bound is
-/// reported `NotFlat` so the whole composite falls back to boxed.
+/// Classify `ty` as a flat field form at the module's widths (B28 P2),
+/// from its layout descriptor. A scalar yields the `Flat` form, a
+/// transitively-flat composite the `FlatNested` form (with its byte size
+/// and composite kind), and anything else `NotFlat`. A nested composite
+/// whose size exceeds the sixteen-bit operand bound is reported `NotFlat`
+/// so the whole composite falls back to boxed.
 fn classify_flat_field(ty: &TypeExpr, ti: &TypeInfo) -> FlatFieldForm {
-    if let Some(kind) = type_flat_scalar_kind(ty) {
+    if ti.word_bytes == 0 {
+        return FlatFieldForm::NotFlat;
+    }
+    let Ok(descriptor) = ti.layout_context().layout_for(ty) else {
+        return FlatFieldForm::NotFlat;
+    };
+    if let Some(kind) = descriptor.flat_scalar_kind() {
         return FlatFieldForm::Scalar(kind);
     }
-    if let (Some(size), Some(variant)) = (type_flat_size(ty, ti), type_flat_composite_kind(ty, ti))
-        && size <= u16::MAX as usize
+    if let (Some(size), Some(variant)) = (
+        descriptor.flat_byte_size(ti.word_bytes, ti.float_bytes),
+        descriptor.flat_composite_kind(),
+    ) && size <= u16::MAX as usize
     {
         return FlatFieldForm::Nested(size as u16, variant);
     }
