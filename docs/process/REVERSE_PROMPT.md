@@ -60,4 +60,20 @@ Flattening nested-composite composites changed how `struct_with_widths` and its 
 
 ## Intended next step
 
-Remaining B28 P2 is arena residence of `FlatComposite`, which is still a heap byte vector. After that, P3 is reference fields as handles, P4 is the worst-case-memory-usage recompute against flat sizes, and P5 is hot-swap migration, documentation, and decision closure. Awaiting your direction on whether to merge `feat-flat-memory-nested` into `feat-flat-memory-model` and push, and on which item to take next.
+## Remaining B28 P2: arena residence (approach locked, scoped, not yet built)
+
+The one remaining P2 item is moving `FlatComposite` off the global heap onto the arena's top ephemeral head. You chose the epoch-guarded arena-handle approach: `FlatComposite` becomes `Inline(Vec<u8>) | Arena(handle)`, mirroring `KString`. The surface is about sixty `FlatComposite` read sites across `flat_value.rs`, `bytecode.rs`, `vm.rs`, `marshall.rs`, and the derive macro.
+
+A design investigation this session surfaced the gating decision that shapes the whole implementation. The arena's safe read API (`ArenaHandle::get(arena)`) requires the arena for the epoch-checked read, and `PartialEq` has no arena. `KString` resolves this by comparing **epoch only**, not content, accepting that two equal-content strings in distinct allocations compare unequal. Composites currently compare by **content** (raw bytes). So arena residence forces a fork:
+
+- Preserve content equality (recommended). Route composite comparison through the arena in the VM `CmpEq` path (and resolve bodies with the arena wherever bytes are read), so `tuple1 == tuple2` stays content-based. More work: the read sites that today call `as_bytes()` with no arena must either thread the arena or use a new `unsafe` unchecked-deref on the handle justified by the VM's no-read-after-`RESET` discipline (the same discipline the operand stack and `KString` already rely on). Equality must not silently regress.
+- Handle equality (simpler, not recommended). Compare composite handles/epochs like `KString`. Two equal-content composites built separately would compare unequal, a silent semantic regression for script `==`. Reject unless you accept that.
+
+This is memory-safety-critical (`unsafe` arena pointers, use-after-`RESET`) and was deliberately not started at the tail of this session to avoid a hasty unsound change. It wants a focused pass: decide the equality model (recommended: preserve content equality), then stage it as Phase 1 representation (the `Inline`/`Arena` enum with content-based equality, behaviour-preserving while all construction stays `Inline`) and Phase 2 activation (VM `NewTuple`/`NewStruct`/`NewArray`/`NewEnum` allocate the body on the arena top head, threading the arena they already hold; `RESET` already clears the top head and bumps the epoch). P4 (worst-case-memory-usage) then counts composite bytes on the top head.
+
+After P2, P3 is reference fields as handles, P4 the worst-case-memory-usage recompute against flat sizes, and P5 hot-swap migration, documentation, and decision closure.
+
+## Awaiting direction
+
+- Whether to merge `feat-flat-memory-nested` into `feat-flat-memory-model` and push (two commits this session: nested inlining and the layout fold).
+- Confirmation of the arena-residence equality model (recommended: preserve content equality) before I build it as the next focused slice.
