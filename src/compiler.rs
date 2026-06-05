@@ -3,6 +3,7 @@ use alloc::boxed::Box;
 use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::format;
 use alloc::string::String;
+use alloc::string::ToString;
 use alloc::vec;
 use alloc::vec::Vec;
 
@@ -3556,22 +3557,29 @@ fn type_flat_size(ty: &TypeExpr, ti: &TypeInfo) -> Option<usize> {
         .flat_byte_size(ti.word_bytes, ti.float_bytes)
 }
 
-/// The largest-variant flat payload byte size of an enum, or `None` when
-/// the enum is not uniformly flat (B28 P2). Excludes the leading
-/// discriminant word. The compiler bakes this as the `NewEnum`
-/// minimum-payload operand so every value of a uniformly-flat enum shares
-/// one fixed body size, which a nested enum field's fixed slot requires. A
-/// non-uniform enum returns `None`, so it is never a flat nested field and
-/// bakes a per-variant body standalone. Derived from the enum descriptor's
-/// [`crate::value_layout::LayoutDescriptor::flat_byte_size`], which is
-/// `word_bytes + payload_max`.
-fn enum_uniform_flat_payload_max(name: &str, ti: &TypeInfo) -> Option<usize> {
-    if ti.word_bytes == 0 {
-        return None;
+/// The flat allocation byte size of a composite type for the
+/// [`Op::NewComposite`] operand (B28 P4), or `None` when the type is not
+/// flat (the boxed form) or its size exceeds the sixteen-bit operand. This
+/// is the explicit allocation the worst-case-memory-usage verifier sums; it
+/// equals the type's flat layout size, which the runtime packer reproduces
+/// and the baked access offsets agree with.
+fn flat_alloc_bytes(ty: &TypeExpr, ti: &TypeInfo) -> Option<u16> {
+    let size = type_flat_size(ty, ti)?;
+    if size <= u16::MAX as usize {
+        Some(size as u16)
+    } else {
+        None
     }
-    let ty = TypeExpr::Named(name.into(), Vec::new(), Span::default());
-    let size = type_flat_size(&ty, ti)?;
-    size.checked_sub(ti.word_bytes)
+}
+
+/// A sound conservative flat allocation bound for `count` fields when the
+/// exact size is unknown (B28 P4). Each field occupies at most
+/// `VALUE_SLOT_SIZE_BYTES`, so `count * VALUE_SLOT_SIZE_BYTES` over-bounds
+/// the actual flat layout; it is the verifier annotation for a value-driven
+/// tuple or array whose element types the compiler could not recover.
+/// Clamped to the sixteen-bit operand.
+fn conservative_alloc_bytes(count: u16) -> u16 {
+    (count as u32 * crate::bytecode::VALUE_SLOT_SIZE_BYTES).min(u16::MAX as u32) as u16
 }
 
 /// Classify a composite field as a flat scalar, a flat nested composite, or
@@ -5670,11 +5678,32 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
                 None => fields.iter().collect(),
             };
             let field_names: Vec<String> = ordered.iter().map(|f| f.name.clone()).collect();
-            let template_idx = fc.add_struct_template(name, field_names);
+            // The flat allocation size comes from the struct type; a
+            // non-flat (reference-bearing) struct bakes the boxed form with
+            // a template for by-name access (B28 P4).
+            let ty = TypeExpr::Named(name.clone(), Vec::new(), Span::default());
+            let byte_size = flat_alloc_bytes(&ty, &fc.type_info);
+            let count = ordered.len() as u16;
             for field in &ordered {
                 compile_expr(fc, &field.value)?;
             }
-            fc.emit(Op::NewStruct(template_idx));
+            match byte_size {
+                Some(byte_size) => {
+                    fc.emit(Op::NewComposite(NewCompositeOperand::Flat {
+                        kind: crate::value_layout::CompositeKind::Struct,
+                        count,
+                        byte_size,
+                    }));
+                }
+                None => {
+                    let meta = fc.add_struct_template(name, field_names);
+                    fc.emit(Op::NewComposite(NewCompositeOperand::Boxed {
+                        kind: crate::value_layout::CompositeKind::Struct,
+                        count,
+                        meta,
+                    }));
+                }
+            }
         }
 
         Expr::EnumVariant {
@@ -5683,42 +5712,97 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
             args,
             ..
         } => {
-            // Push the largest-variant payload size, then the variant
-            // discriminant, beneath the payload so the VM `NewEnum` can pad
-            // the flat body to one fixed size and write the discriminant as
-            // its leading word (B28 P2). A non-uniform enum bakes zero,
-            // leaving a variant-sized body.
-            let min_payload = enum_uniform_flat_payload_max(enum_name, &fc.type_info).unwrap_or(0);
-            let p_const = fc.add_constant(Value::Int(min_payload as i64));
-            fc.emit(Op::Const(p_const));
+            // A uniformly-flat enum bakes the flat form: the discriminant is
+            // the first packed value (the leading word) and `byte_size` is
+            // `word + payload_max`, which carries the padding the verifier
+            // sums and retires the old `min_payload`-via-stack push (B28 P4).
+            // A non-uniform enum bakes the boxed form with a template holding
+            // the type and variant names.
+            let ty = TypeExpr::Named(enum_name.to_string(), Vec::new(), Span::default());
+            let byte_size = flat_alloc_bytes(&ty, &fc.type_info);
             let disc = fc
                 .type_info
                 .enum_variant_order
                 .get(enum_name)
                 .and_then(|vs| vs.iter().find(|(n, _)| n == variant).map(|(_, d)| *d))
                 .unwrap_or(0);
-            let d_const = fc.add_constant(Value::Int(disc));
-            fc.emit(Op::Const(d_const));
-            for arg in args {
-                compile_expr(fc, arg)?;
+            match byte_size {
+                Some(byte_size) => {
+                    let d_const = fc.add_constant(Value::Int(disc));
+                    fc.emit(Op::Const(d_const));
+                    for arg in args {
+                        compile_expr(fc, arg)?;
+                    }
+                    fc.emit(Op::NewComposite(NewCompositeOperand::Flat {
+                        kind: crate::value_layout::CompositeKind::Enum,
+                        count: args.len() as u16 + 1,
+                        byte_size,
+                    }));
+                }
+                None => {
+                    for arg in args {
+                        compile_expr(fc, arg)?;
+                    }
+                    let meta = fc.add_struct_template(enum_name, alloc::vec![variant.clone()]);
+                    fc.emit(Op::NewComposite(NewCompositeOperand::Boxed {
+                        kind: crate::value_layout::CompositeKind::Enum,
+                        count: args.len() as u16,
+                        meta,
+                    }));
+                }
             }
-            let enum_const = fc.add_string_constant(enum_name);
-            let var_const = fc.add_string_constant(variant);
-            fc.emit(Op::NewEnum(enum_const, var_const, args.len() as u8));
         }
 
         Expr::ArrayLiteral { elements, .. } => {
+            // A homogeneous array's flat size is `count * element_size`,
+            // taken from the inferred element type (B28 P4). An empty array
+            // is zero bytes; an unrecoverable element type bakes boxed.
+            let byte_size = if elements.is_empty() {
+                Some(0u16)
+            } else {
+                infer_expr_type(fc, &elements[0]).and_then(|elem_ty| {
+                    flat_alloc_bytes(
+                        &TypeExpr::Array(Box::new(elem_ty), elements.len() as i64, Span::default()),
+                        &fc.type_info,
+                    )
+                })
+            };
+            let count = elements.len() as u16;
+            // Tuple and array construction is value-driven at run time (the
+            // VM decides flat-or-boxed from the values, which agrees with the
+            // type-driven access), so the operand is always `Flat` and
+            // `byte_size` is only the verifier annotation: the exact flat size
+            // when the element type is known, else a sound conservative
+            // bound (B28 P4).
+            let byte_size = byte_size.unwrap_or_else(|| conservative_alloc_bytes(count));
             for elem in elements {
                 compile_expr(fc, elem)?;
             }
-            fc.emit(Op::NewArray(elements.len() as u16));
+            fc.emit(Op::NewComposite(NewCompositeOperand::Flat {
+                kind: crate::value_layout::CompositeKind::Array,
+                count,
+                byte_size,
+            }));
         }
 
         Expr::TupleLiteral { elements, .. } => {
+            // The tuple's flat size is the sum of its inferred element sizes
+            // (B28 P4); see the array case for the value-driven rationale.
+            let elem_types: Option<Vec<TypeExpr>> =
+                elements.iter().map(|e| infer_expr_type(fc, e)).collect();
+            let byte_size = elem_types.and_then(|types| {
+                flat_alloc_bytes(&TypeExpr::Tuple(types, Span::default()), &fc.type_info)
+            });
+            let count = elements.len() as u16;
+            let byte_size = byte_size.unwrap_or_else(|| conservative_alloc_bytes(count));
             for elem in elements {
                 compile_expr(fc, elem)?;
             }
-            fc.emit(Op::NewTuple(elements.len() as u8));
+            fc.emit(Op::NewComposite(NewCompositeOperand::Flat {
+                kind: crate::value_layout::CompositeKind::Tuple,
+                count,
+                byte_size,
+            }));
         }
 
         Expr::Cast {
@@ -6639,7 +6723,6 @@ fn compile_checked_discriminant(
         .get(enum_name)
         .cloned()
         .unwrap_or_default();
-    let e_const = fc.add_string_constant(enum_name);
 
     let loop_addr = fc.emit(Op::Loop(0));
     fc.enter_loop();
@@ -6668,7 +6751,6 @@ fn compile_checked_discriminant(
             if let Some(arm) = ok_specific.get(vname.as_str()) {
                 compile_expr(fc, &arm.body)?;
             } else if let Some(arm) = ok_generic {
-                let v_const = fc.add_string_constant(vname);
                 let disc = fc
                     .type_info
                     .enum_variant_order
@@ -6679,13 +6761,29 @@ fn compile_checked_discriminant(
                             .map(|(_, d)| *d)
                     })
                     .unwrap_or(0);
-                let min_payload =
-                    enum_uniform_flat_payload_max(enum_name, &fc.type_info).unwrap_or(0);
-                let p_const = fc.add_constant(Value::Int(min_payload as i64));
-                fc.emit(Op::Const(p_const));
-                let d_const = fc.add_constant(Value::Int(disc));
-                fc.emit(Op::Const(d_const));
-                fc.emit(Op::NewEnum(e_const, v_const, 0));
+                // Unit-variant construction (B28 P4). A flat enum bakes the
+                // discriminant as its only packed value; a non-uniform enum
+                // bakes the boxed form with a type/variant template.
+                let ty = TypeExpr::Named(enum_name.to_string(), Vec::new(), Span::default());
+                match flat_alloc_bytes(&ty, &fc.type_info) {
+                    Some(byte_size) => {
+                        let d_const = fc.add_constant(Value::Int(disc));
+                        fc.emit(Op::Const(d_const));
+                        fc.emit(Op::NewComposite(NewCompositeOperand::Flat {
+                            kind: crate::value_layout::CompositeKind::Enum,
+                            count: 1,
+                            byte_size,
+                        }));
+                    }
+                    None => {
+                        let meta = fc.add_struct_template(enum_name, alloc::vec![vname.clone()]);
+                        fc.emit(Op::NewComposite(NewCompositeOperand::Boxed {
+                            kind: crate::value_layout::CompositeKind::Enum,
+                            count: 0,
+                            meta,
+                        }));
+                    }
+                }
                 match &arm.kind {
                     CheckedArmKind::Ok(Pattern::Variable(bind, _)) => {
                         let slot = fc.declare_local_typed(
@@ -6706,7 +6804,6 @@ fn compile_checked_discriminant(
                 compile_expr(fc, &arm.body)?;
             } else {
                 // No `ok` arm: the unit variant converts to itself.
-                let v_const = fc.add_string_constant(vname);
                 let disc = fc
                     .type_info
                     .enum_variant_order
@@ -6717,13 +6814,29 @@ fn compile_checked_discriminant(
                             .map(|(_, d)| *d)
                     })
                     .unwrap_or(0);
-                let min_payload =
-                    enum_uniform_flat_payload_max(enum_name, &fc.type_info).unwrap_or(0);
-                let p_const = fc.add_constant(Value::Int(min_payload as i64));
-                fc.emit(Op::Const(p_const));
-                let d_const = fc.add_constant(Value::Int(disc));
-                fc.emit(Op::Const(d_const));
-                fc.emit(Op::NewEnum(e_const, v_const, 0));
+                // Unit-variant construction (B28 P4). A flat enum bakes the
+                // discriminant as its only packed value; a non-uniform enum
+                // bakes the boxed form with a type/variant template.
+                let ty = TypeExpr::Named(enum_name.to_string(), Vec::new(), Span::default());
+                match flat_alloc_bytes(&ty, &fc.type_info) {
+                    Some(byte_size) => {
+                        let d_const = fc.add_constant(Value::Int(disc));
+                        fc.emit(Op::Const(d_const));
+                        fc.emit(Op::NewComposite(NewCompositeOperand::Flat {
+                            kind: crate::value_layout::CompositeKind::Enum,
+                            count: 1,
+                            byte_size,
+                        }));
+                    }
+                    None => {
+                        let meta = fc.add_struct_template(enum_name, alloc::vec![vname.clone()]);
+                        fc.emit(Op::NewComposite(NewCompositeOperand::Boxed {
+                            kind: crate::value_layout::CompositeKind::Enum,
+                            count: 0,
+                            meta,
+                        }));
+                    }
+                }
             }
         } else {
             // Payload variant. The body constructs the value; a
@@ -8174,7 +8287,7 @@ mod tests {
             module.chunks[0]
                 .ops
                 .iter()
-                .any(|op| matches!(op, Op::NewEnum(_, _, 0)))
+                .any(|op| matches!(op, Op::NewComposite(o) if o.kind() == crate::value_layout::CompositeKind::Enum))
         );
     }
 
@@ -8262,7 +8375,7 @@ mod tests {
             module.chunks[0]
                 .ops
                 .iter()
-                .any(|op| matches!(op, Op::NewStruct(_)))
+                .any(|op| matches!(op, Op::NewComposite(o) if o.kind() == crate::value_layout::CompositeKind::Struct))
         );
     }
 
@@ -8433,7 +8546,7 @@ mod tests {
             module.chunks[0]
                 .ops
                 .iter()
-                .any(|op| matches!(op, Op::NewTuple(3)))
+                .any(|op| matches!(op, Op::NewComposite(o) if o.kind() == crate::value_layout::CompositeKind::Tuple && o.count() == 3))
         );
     }
 

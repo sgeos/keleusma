@@ -118,7 +118,8 @@ pub fn measured_op_cycles(op: &keleusma::bytecode::Op) -> u32 {
         Op::NewStruct(_)
         | Op::NewEnum(_, _, _)
         | Op::NewArray(_)
-        | Op::NewTuple(_) => 338,
+        | Op::NewTuple(_)
+        | Op::NewComposite(_) => 338,
 
         // Function calls (870 cycles).
         Op::Call(_, _)

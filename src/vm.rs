@@ -3673,6 +3673,22 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                     let wb = self.module_word_bytes();
                     let fb = self.module_float_bytes();
                     let value = match operand {
+                        // Tuple and array are value-driven: their element
+                        // types are inferred at compile time and may be
+                        // unknown, so the flat-or-boxed decision is made from
+                        // the runtime values (the shared constructor), which
+                        // agrees with the type-driven access by the same
+                        // invariant the legacy ops relied on (B28 P4). The
+                        // operand `byte_size` is the verifier annotation only.
+                        NCO::Flat {
+                            kind: CK::Tuple, ..
+                        } => crate::bytecode::GenericValue::tuple_with_widths(values, wb, fb),
+                        NCO::Flat {
+                            kind: CK::Array, ..
+                        } => crate::bytecode::GenericValue::array_with_widths(values, wb, fb),
+                        // Struct and enum name their type, so the compiler's
+                        // flat decision is reliable and operand-driven: pack
+                        // into the baked `byte_size` and wrap as `kind`.
                         NCO::Flat {
                             kind, byte_size, ..
                         } => crate::bytecode::GenericValue::new_composite_flat(

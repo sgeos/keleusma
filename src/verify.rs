@@ -3970,9 +3970,13 @@ mod tests {
             .find(|c| c.block_type == BlockType::Stream)
             .expect("no stream chunk");
         let (_stack_bytes, heap_bytes) = wcmu_stream_iteration(stream_chunk).unwrap();
-        // Each iteration allocates a 4-element array. With 5 iterations,
-        // heap = 5 * 4 * VALUE_SLOT_SIZE_BYTES = 5 * 128 = 640 bytes.
-        let expected = 5 * 4 * crate::bytecode::VALUE_SLOT_SIZE_BYTES;
+        // Each iteration allocates a four-Word array, now sized at its exact
+        // flat layout (`4 * word_bytes` bytes) from the `NewComposite`
+        // allocation operand rather than the legacy `4 * VALUE_SLOT_SIZE_BYTES`
+        // estimate (B28 P4). With the bundled eight-byte word and five
+        // iterations, heap = 5 * (4 * 8) = 160 bytes.
+        let word_bytes = (1usize << module.word_bits_log2) / 8;
+        let expected = 5 * 4 * word_bytes as u32;
         assert_eq!(heap_bytes, expected);
     }
 

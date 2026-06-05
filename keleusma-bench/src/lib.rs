@@ -641,7 +641,8 @@ pub fn emit_cost_model_source(
     out.push_str("        Op::NewStruct(_)\n");
     out.push_str("        | Op::NewEnum(_, _, _)\n");
     out.push_str("        | Op::NewArray(_)\n");
-    out.push_str("        | Op::NewTuple(_) => ");
+    out.push_str("        | Op::NewTuple(_)\n");
+    out.push_str("        | Op::NewComposite(_) => ");
     out.push_str(&format!("{},\n\n", cc));
 
     let fc = cat("function_call");
