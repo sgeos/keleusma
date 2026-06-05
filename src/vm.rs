@@ -3651,6 +3651,62 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                         .map_err(|_| out_of_arena_push("composite body", arena.capacity()))?;
                     sp!(self, value);
                 }
+                Op::NewComposite(operand) => {
+                    // The consolidated construction (B28 P4). Pop `count`
+                    // materialised values; the flat form packs them into the
+                    // baked `byte_size` and wraps as `kind`, the boxed form
+                    // builds the named body. The result is migrated to the
+                    // arena. `byte_size` is the explicit allocation the WCMU
+                    // verifier sums; the runtime packs against it directly.
+                    use crate::bytecode::NewCompositeOperand as NCO;
+                    use crate::value_layout::CompositeKind as CK;
+                    let count = operand.count() as usize;
+                    if self.stack.len() < count {
+                        return Err(VmError::StackUnderflow);
+                    }
+                    let arena = self.arena;
+                    let values: Vec<crate::bytecode::GenericValue<W, F>> = self
+                        .stack
+                        .drain(self.stack.len() - count..)
+                        .map(|v| v.materialized(arena))
+                        .collect();
+                    let wb = self.module_word_bytes();
+                    let fb = self.module_float_bytes();
+                    let value = match operand {
+                        NCO::Flat {
+                            kind, byte_size, ..
+                        } => crate::bytecode::GenericValue::new_composite_flat(
+                            kind,
+                            values,
+                            byte_size as usize,
+                            wb,
+                            fb,
+                        )
+                        .ok_or_else(|| {
+                            VmError::InvalidBytecode(String::from(
+                                "NewComposite flat operand on non-flat values",
+                            ))
+                        })?,
+                        NCO::Boxed { kind, meta, .. } => {
+                            // Tuple/array boxed need no metadata; struct/enum
+                            // read the (reused) template for the type name and
+                            // field names (or, for an enum, the variant name).
+                            let (type_name, names) = match kind {
+                                CK::Struct | CK::Enum => {
+                                    self.struct_template(chunk_idx, meta as usize)
+                                }
+                                CK::Tuple | CK::Array => (String::new(), Vec::new()),
+                            };
+                            crate::bytecode::GenericValue::new_composite_boxed(
+                                kind, type_name, names, values,
+                            )
+                        }
+                    };
+                    let value = value
+                        .into_arena_body(arena)
+                        .map_err(|_| out_of_arena_push("composite body", arena.capacity()))?;
+                    sp!(self, value);
+                }
                 Op::GetField(field) => {
                     use crate::bytecode::{StructBody, StructField};
                     let container = self.pop()?;

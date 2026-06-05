@@ -134,6 +134,17 @@ pub const TUPLE_FIELD_BOXED_SENTINEL: u8 = 0xFF;
 /// encode time, which the `no_std` target's small modules never reach.
 pub const FLAT_NESTED_SENTINEL_BASE: u8 = 0xF0;
 
+/// Largest field count carried inline in a flat [`crate::bytecode::Op::NewComposite`]
+/// record (B28 P4). The count occupies the low six bits of byte three, and
+/// `0x3F` is reserved as the pool sentinel, so the inline maximum is `62`.
+pub const NEW_COMPOSITE_INLINE_MAX_COUNT: u16 = 0x3E;
+
+/// Low-six-bit sentinel in a [`crate::bytecode::Op::NewComposite`] record's
+/// byte three marking the pool form (a field count that does not fit inline,
+/// or the boxed form) (B28 P4). Byte three's high two bits carry the
+/// composite kind in both forms.
+pub const NEW_COMPOSITE_POOL_SENTINEL: u8 = 0x3F;
+
 /// Mask selecting the [`FLAT_NESTED_SENTINEL_BASE`] marker bits (the
 /// high six bits); the low two bits carry the composite-kind tag.
 pub const FLAT_NESTED_SENTINEL_MASK: u8 = 0xFC;
@@ -473,6 +484,7 @@ const OPCODE_ID_TABLE: &[(&str, u8)] = &[
     ("Shr", 66),
     ("CallVerifiedNative", 67),
     ("CallExternalNative", 68),
+    ("NewComposite", 69),
 ];
 
 /// Return the wire-format identifier for an `Op` variant.
@@ -547,6 +559,7 @@ pub fn opcode_id_of(op: &Op) -> OpcodeId {
         Op::Shr => 66,
         Op::CallVerifiedNative(_, _) => 67,
         Op::CallExternalNative(_, _) => 68,
+        Op::NewComposite(_) => 69,
     };
     OpcodeId(id)
 }
@@ -766,6 +779,41 @@ pub fn encode_op(
             let idx_bytes = (idx as u32).to_le_bytes();
             [idx_bytes[0], idx_bytes[1], idx_bytes[2]]
         }
+        // NewComposite (B28 P4). The common flat form with a small field
+        // count rides inline: bytes one and two hold the allocation byte
+        // size, byte three packs the composite kind in its high two bits and
+        // the field count (0..=62) in its low six. A field count that does
+        // not fit, or the boxed form, spills to a `from_u16_u16_u8` pool
+        // entry `(count, byte_size_or_meta, boxed_flag)` referenced by a
+        // sixteen-bit index in bytes one and two, with byte three carrying
+        // the kind and the low-six sentinel `0x3F`.
+        Op::NewComposite(operand) => {
+            let (kind, count, b_field, boxed_flag) = match operand {
+                crate::bytecode::NewCompositeOperand::Flat {
+                    kind,
+                    count,
+                    byte_size,
+                } => (*kind, *count, *byte_size, 0u8),
+                crate::bytecode::NewCompositeOperand::Boxed { kind, count, meta } => {
+                    (*kind, *count, *meta, 1u8)
+                }
+            };
+            let ktag = kind.to_tag();
+            if boxed_flag == 0 && count <= NEW_COMPOSITE_INLINE_MAX_COUNT {
+                let b = b_field.to_le_bytes();
+                [b[0], b[1], (ktag << 6) | (count as u8)]
+            } else {
+                let idx = pool.len();
+                if idx >= MAX_POOL_ENTRIES || idx > u16::MAX as usize {
+                    return Err(WireFormatError::OperandPoolIndexOverflow);
+                }
+                pool.push(OperandPoolEntry::from_u16_u16_u8(
+                    count, b_field, boxed_flag,
+                ));
+                let ib = (idx as u16).to_le_bytes();
+                [ib[0], ib[1], (ktag << 6) | NEW_COMPOSITE_POOL_SENTINEL]
+            }
+        }
     };
     Ok(OpcodeRecord::from_id_and_operand(id, operand))
 }
@@ -946,6 +994,49 @@ pub fn decode_op(record: OpcodeRecord, pool: &[OperandPoolEntry]) -> Result<Op, 
         68 => {
             let (c, n) = record.operand_u16_u8();
             Op::CallExternalNative(c, n)
+        }
+        69 => {
+            let bytes = record.operand_bytes();
+            let kind = crate::value_layout::CompositeKind::from_tag(bytes[2] >> 6)
+                .ok_or(WireFormatError::TupleFieldKindUnknown(bytes[2]))?;
+            let low = bytes[2] & 0x3F;
+            if low == NEW_COMPOSITE_POOL_SENTINEL {
+                // Pool form: index in bytes one and two.
+                let idx = u16::from_le_bytes([bytes[0], bytes[1]]) as usize;
+                let entry = pool
+                    .get(idx)
+                    .copied()
+                    .ok_or(WireFormatError::OperandPoolIndexOutOfBounds(idx))?;
+                entry.check_parity()?;
+                if entry.tag() != POOL_TAG_U16_U16_U8 {
+                    return Err(WireFormatError::OperandPoolTagMismatch {
+                        observed: entry.tag(),
+                        expected: POOL_TAG_U16_U16_U8,
+                    });
+                }
+                let (count, b_field, boxed_flag) = entry.as_u16_u16_u8();
+                if boxed_flag == 1 {
+                    Op::NewComposite(crate::bytecode::NewCompositeOperand::Boxed {
+                        kind,
+                        count,
+                        meta: b_field,
+                    })
+                } else {
+                    Op::NewComposite(crate::bytecode::NewCompositeOperand::Flat {
+                        kind,
+                        count,
+                        byte_size: b_field,
+                    })
+                }
+            } else {
+                // Inline flat: byte size in bytes one and two, count in the
+                // low six bits of byte three.
+                Op::NewComposite(crate::bytecode::NewCompositeOperand::Flat {
+                    kind,
+                    count: low as u16,
+                    byte_size: u16::from_le_bytes([bytes[0], bytes[1]]),
+                })
+            }
         }
         other => return Err(WireFormatError::UnknownOpcodeId(other)),
     };
@@ -2542,6 +2633,14 @@ mod tests {
             (Op::Shr, 66),
             (Op::CallVerifiedNative(0, 0), 67),
             (Op::CallExternalNative(0, 0), 68),
+            (
+                Op::NewComposite(crate::bytecode::NewCompositeOperand::Flat {
+                    kind: crate::value_layout::CompositeKind::Tuple,
+                    count: 0,
+                    byte_size: 0,
+                }),
+                69,
+            ),
         ];
         for (op, expected) in cases {
             assert_eq!(
@@ -2552,6 +2651,48 @@ mod tests {
             );
         }
         assert_eq!(cases.len(), OPCODE_ID_TABLE.len());
+    }
+
+    #[test]
+    fn new_composite_roundtrips_all_forms() {
+        use crate::bytecode::NewCompositeOperand as NCO;
+        use crate::value_layout::CompositeKind as CK;
+        let cases = [
+            // Inline flat: small count, kind in the high bits.
+            NCO::Flat {
+                kind: CK::Struct,
+                count: 3,
+                byte_size: 24,
+            },
+            NCO::Flat {
+                kind: CK::Enum,
+                count: 62,
+                byte_size: 65535,
+            },
+            // Pool flat: count beyond the inline maximum.
+            NCO::Flat {
+                kind: CK::Array,
+                count: 1000,
+                byte_size: 8000,
+            },
+            // Boxed: metadata index, no byte size.
+            NCO::Boxed {
+                kind: CK::Struct,
+                count: 2,
+                meta: 7,
+            },
+            NCO::Boxed {
+                kind: CK::Tuple,
+                count: 4,
+                meta: 0,
+            },
+        ];
+        for operand in cases {
+            let mut pool = Vec::new();
+            let record = encode_op(&Op::NewComposite(operand), &mut pool).unwrap();
+            let decoded = decode_op(record, &pool).unwrap();
+            assert_eq!(decoded, Op::NewComposite(operand), "round-trip mismatch");
+        }
     }
 
     #[test]

@@ -692,6 +692,61 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
         }
     }
 
+    /// Build a flat composite of `kind` from `values`, allocating
+    /// `byte_size` bytes (B28 P4). The values are packed in order (for an
+    /// enum the first is the discriminant word) and the body is padded to
+    /// `byte_size`; the result is wrapped as the matching composite kind.
+    /// Returns `None` if any value is not flat-eligible, which a correct
+    /// compiler never produces for a `Flat` operand (the type is statically
+    /// flat). The single flat-construction choke point for `Op::NewComposite`.
+    pub fn new_composite_flat(
+        kind: crate::value_layout::CompositeKind,
+        values: alloc::vec::Vec<Self>,
+        byte_size: usize,
+        word_bytes: usize,
+        float_bytes: usize,
+    ) -> Option<Self> {
+        use crate::value_layout::CompositeKind as C;
+        let fc = Self::try_pack_flat(values.iter(), byte_size, word_bytes, float_bytes)?;
+        Some(match kind {
+            C::Tuple => Self::Tuple(TupleBody::Flat(fc)),
+            C::Array => Self::Array(ArrayBody::Flat(fc)),
+            C::Struct => Self::Struct(StructBody::Flat(fc)),
+            C::Enum => Self::Enum(EnumBody::Flat(fc)),
+        })
+    }
+
+    /// Build a boxed composite of `kind` from `values` (B28 P4). For a
+    /// struct the `names` are the field names (declaration order); for an
+    /// enum `names[0]` is the variant name and `type_name` the enum name; a
+    /// tuple or array ignores `type_name` and `names`. The boxed form is the
+    /// interim representation for a reference-bearing field or `Option`,
+    /// removed at P3.
+    pub fn new_composite_boxed(
+        kind: crate::value_layout::CompositeKind,
+        type_name: alloc::string::String,
+        names: alloc::vec::Vec<alloc::string::String>,
+        values: alloc::vec::Vec<Self>,
+    ) -> Self {
+        use crate::value_layout::CompositeKind as C;
+        match kind {
+            C::Tuple => Self::Tuple(TupleBody::Boxed(values)),
+            C::Array => Self::Array(ArrayBody::Boxed(values)),
+            C::Struct => Self::Struct(StructBody::Boxed {
+                type_name,
+                fields: names.into_iter().zip(values).collect(),
+            }),
+            C::Enum => {
+                let variant = names.into_iter().next().unwrap_or_default();
+                Self::Enum(EnumBody::Boxed {
+                    type_name,
+                    variant,
+                    fields: values,
+                })
+            }
+        }
+    }
+
     /// Re-wrap a nested composite's extracted byte range as a flat
     /// composite `Value` of the given kind (B28 P2 nested inlining). The
     /// access handler slices the child body out of the parent and calls
@@ -1391,6 +1446,69 @@ pub enum ArrayElem {
     Boxed,
 }
 
+/// Baked operand of [`Op::NewComposite`] (B28 P4).
+///
+/// One operand for all four composite kinds. The `Flat` form carries the
+/// composite [`crate::value_layout::CompositeKind`], the `count` of values
+/// to pop and pack, and the explicit `byte_size` to allocate on the arena
+/// top head, which the worst-case-memory-usage verifier sums (conceptually
+/// `ALLOCATEBYTES`). For a flat enum the first packed value is the
+/// discriminant word, so `count` includes it. The `Boxed` form keeps the
+/// boxed body for a reference-bearing field or `Option`; `meta` indexes the
+/// chunk's boxed-composite metadata (a struct template, or an enum
+/// type-and-variant pair) and is unused for a boxed tuple or array. The
+/// boxed form is removed at P3 when reference fields become handles.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NewCompositeOperand {
+    /// Allocate `byte_size` bytes, pack `count` popped values, wrap as
+    /// `kind`.
+    Flat {
+        /// Which composite value variant to wrap the packed body as.
+        kind: crate::value_layout::CompositeKind,
+        /// Number of values to pop and pack (an enum's leading
+        /// discriminant counts as one).
+        count: u16,
+        /// Bytes to allocate; the explicit allocation the WCMU pass sums.
+        byte_size: u16,
+    },
+    /// Build the boxed body: pop `count` values; `meta` indexes the boxed
+    /// metadata (struct template or enum type-and-variant).
+    Boxed {
+        /// Which composite value variant to build.
+        kind: crate::value_layout::CompositeKind,
+        /// Number of values to pop.
+        count: u16,
+        /// Index into the chunk's boxed-composite metadata.
+        meta: u16,
+    },
+}
+
+impl NewCompositeOperand {
+    /// The composite kind this operand builds.
+    pub fn kind(&self) -> crate::value_layout::CompositeKind {
+        match self {
+            Self::Flat { kind, .. } | Self::Boxed { kind, .. } => *kind,
+        }
+    }
+
+    /// The number of operand-stack values the construction pops.
+    pub fn count(&self) -> u16 {
+        match self {
+            Self::Flat { count, .. } | Self::Boxed { count, .. } => *count,
+        }
+    }
+
+    /// The explicit flat allocation byte size, or zero for the boxed form
+    /// (B28 P4). This is the value the worst-case-memory-usage verifier
+    /// adds to the arena top-head bound for the construction.
+    pub fn alloc_bytes(&self) -> u32 {
+        match self {
+            Self::Flat { byte_size, .. } => *byte_size as u32,
+            Self::Boxed { .. } => 0,
+        }
+    }
+}
+
 /// A bytecode instruction.
 ///
 /// V0.2.0 Phase 7c moved opcode serialization out of the rkyv
@@ -1521,6 +1639,16 @@ pub enum Op {
     NewArray(u16),
     /// Build tuple from top N stack values.
     NewTuple(u8),
+
+    /// Build a composite of any kind from the top values (B28 P4). The
+    /// single construction instruction that consolidates `NewStruct`,
+    /// `NewTuple`, `NewArray`, and `NewEnum`: a tuple is an anonymous
+    /// struct, an array a homogeneous struct, and a flat enum a struct
+    /// whose first packed value is the discriminant word. The flat form
+    /// carries the explicit allocation byte size the worst-case-memory-usage
+    /// verifier sums (conceptually `ALLOCATEBYTES`); the boxed form (a
+    /// reference-bearing field, or `Option`) carries the metadata index.
+    NewComposite(NewCompositeOperand),
 
     /// Pop struct, push field value. The baked [`StructField`] operand
     /// selects a flat read at a compiler-baked byte offset or a by-name
@@ -1862,6 +1990,12 @@ impl CostModel {
             Op::NewEnum(_, _, n) => OpCost::Fixed(self.slots_to_bytes(*n as u32)),
             Op::NewArray(n) => OpCost::Fixed(self.slots_to_bytes(*n as u32)),
             Op::NewTuple(n) => OpCost::Fixed(self.slots_to_bytes(*n as u32)),
+            // NewComposite carries its exact flat allocation size in the
+            // operand (B28 P4), so the worst-case-memory-usage bound is the
+            // precise byte count, not the `count * VALUE_SLOT` estimate the
+            // four legacy ops use. The boxed form contributes zero flat bytes
+            // (its body is the heap `Vec`, accounted as before).
+            Op::NewComposite(op) => OpCost::Fixed(op.alloc_bytes()),
             Op::Add => OpCost::Dynamic(add_text_heap_alloc_bytes),
             _ => OpCost::Fixed(0),
         }
@@ -1964,7 +2098,11 @@ pub fn nominal_op_cycles(op: &Op) -> u32 {
 
         Op::Div | Op::Mod | Op::GetField(_) | Op::IsEnum(_, _, _) | Op::IsStruct(_) => 3,
 
-        Op::NewStruct(_) | Op::NewEnum(_, _, _) | Op::NewArray(_) | Op::NewTuple(_) => 5,
+        Op::NewStruct(_)
+        | Op::NewEnum(_, _, _)
+        | Op::NewArray(_)
+        | Op::NewTuple(_)
+        | Op::NewComposite(_) => 5,
 
         Op::Call(_, _) => 10,
 
@@ -2055,7 +2193,11 @@ impl Op {
             Op::Call(_, _) => 1,
             Op::Return => 0,
 
-            Op::NewStruct(_) | Op::NewEnum(_, _, _) | Op::NewArray(_) | Op::NewTuple(_) => 1,
+            Op::NewStruct(_)
+            | Op::NewEnum(_, _, _)
+            | Op::NewArray(_)
+            | Op::NewTuple(_)
+            | Op::NewComposite(_) => 1,
 
             Op::GetField(_)
             | Op::GetIndex(_)
@@ -2140,6 +2282,9 @@ impl Op {
             Op::Return => 0,
 
             Op::NewStruct(_) => 0,
+            // NewComposite pops `count` values (an enum's leading
+            // discriminant counts as one) (B28 P4).
+            Op::NewComposite(c) => c.count() as u32,
             // Pops the discriminant (pushed beneath the payload) plus the
             // `n` payload values (B28 P2).
             Op::NewEnum(_, _, n) => *n as u32 + 1,

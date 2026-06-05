@@ -1763,6 +1763,12 @@ fn op_depth_effect(op: &Op, chunk: &Chunk) -> (i32, i32) {
         Op::NewEnum(_, _, n) => (*n as i32 + 2, -(*n as i32 + 1)),
         Op::NewArray(n) => (*n as i32, 1 - *n as i32),
         Op::NewTuple(n) => (*n as i32, 1 - *n as i32),
+        // NewComposite pops `count` values (an enum's leading discriminant
+        // counts as one) and pushes one composite (B28 P4).
+        Op::NewComposite(op) => {
+            let c = op.count() as i32;
+            (c, 1 - c)
+        }
         Op::CheckedAdd
         | Op::CheckedSub
         | Op::CheckedMod
