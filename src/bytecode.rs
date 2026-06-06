@@ -1626,20 +1626,6 @@ pub enum Op {
     /// Duplicate top of stack.
     Dup,
 
-    /// Build struct from template. Pop field_count values in field order.
-    NewStruct(u16),
-    /// Build enum variant. Operands are the enum-name and variant-name
-    /// constant-pool indices and the payload `arg_count`. Pops the
-    /// discriminant (an `Int`, which the compiler pushes beneath the
-    /// payload) and then `arg_count` payload values: the discriminant
-    /// becomes the leading `Word` of a flat enum body, or is discarded for
-    /// a boxed body (B28 P2).
-    NewEnum(u16, u16, u8),
-    /// Build array from top N stack values.
-    NewArray(u16),
-    /// Build tuple from top N stack values.
-    NewTuple(u8),
-
     /// Build a composite of any kind from the top values (B28 P4). The
     /// single construction instruction that consolidates `NewStruct`,
     /// `NewTuple`, `NewArray`, and `NewEnum`: a tuple is an anonymous
@@ -1977,24 +1963,13 @@ impl CostModel {
     /// `OpCost::Dynamic` because the allocated `KString` length is
     /// the sum of the operand lengths, which the verifier learns
     /// only through the abstract-interpretation text-size pass.
-    pub fn heap_alloc_cost(&self, op: &Op, chunk: &Chunk) -> OpCost {
+    pub fn heap_alloc_cost(&self, op: &Op, _chunk: &Chunk) -> OpCost {
         match op {
-            Op::NewStruct(template_idx) => {
-                let idx = *template_idx as usize;
-                let field_count = chunk
-                    .struct_templates
-                    .get(idx)
-                    .map_or(0, |t| t.field_names.len() as u32);
-                OpCost::Fixed(self.slots_to_bytes(field_count))
-            }
-            Op::NewEnum(_, _, n) => OpCost::Fixed(self.slots_to_bytes(*n as u32)),
-            Op::NewArray(n) => OpCost::Fixed(self.slots_to_bytes(*n as u32)),
-            Op::NewTuple(n) => OpCost::Fixed(self.slots_to_bytes(*n as u32)),
             // NewComposite carries its exact flat allocation size in the
             // operand (B28 P4), so the worst-case-memory-usage bound is the
-            // precise byte count, not the `count * VALUE_SLOT` estimate the
-            // four legacy ops use. The boxed form contributes zero flat bytes
-            // (its body is the heap `Vec`, accounted as before).
+            // precise byte count rather than a `count * VALUE_SLOT` estimate.
+            // The boxed form reports zero flat bytes (its body is the heap
+            // `Vec`, accounted separately).
             Op::NewComposite(op) => OpCost::Fixed(op.alloc_bytes()),
             Op::Add => OpCost::Dynamic(add_text_heap_alloc_bytes),
             _ => OpCost::Fixed(0),
@@ -2098,11 +2073,7 @@ pub fn nominal_op_cycles(op: &Op) -> u32 {
 
         Op::Div | Op::Mod | Op::GetField(_) | Op::IsEnum(_, _, _) | Op::IsStruct(_) => 3,
 
-        Op::NewStruct(_)
-        | Op::NewEnum(_, _, _)
-        | Op::NewArray(_)
-        | Op::NewTuple(_)
-        | Op::NewComposite(_) => 5,
+        Op::NewComposite(_) => 5,
 
         Op::Call(_, _) => 10,
 
@@ -2193,11 +2164,7 @@ impl Op {
             Op::Call(_, _) => 1,
             Op::Return => 0,
 
-            Op::NewStruct(_)
-            | Op::NewEnum(_, _, _)
-            | Op::NewArray(_)
-            | Op::NewTuple(_)
-            | Op::NewComposite(_) => 1,
+            Op::NewComposite(_) => 1,
 
             Op::GetField(_)
             | Op::GetIndex(_)
@@ -2281,15 +2248,9 @@ impl Op {
             Op::Call(_, n) => *n as u32,
             Op::Return => 0,
 
-            Op::NewStruct(_) => 0,
             // NewComposite pops `count` values (an enum's leading
             // discriminant counts as one) (B28 P4).
             Op::NewComposite(c) => c.count() as u32,
-            // Pops the discriminant (pushed beneath the payload) plus the
-            // `n` payload values (B28 P2).
-            Op::NewEnum(_, _, n) => *n as u32 + 1,
-            Op::NewArray(n) => *n as u32,
-            Op::NewTuple(n) => *n as u32,
 
             Op::GetField(_) | Op::GetIndex(_) | Op::GetTupleField(_) | Op::GetEnumField(_) => 1,
             Op::Len => 0,
@@ -3382,7 +3343,11 @@ mod cost_model_tests {
             Op::Add,
             Op::Mul,
             Op::Div,
-            Op::NewArray(2),
+            Op::NewComposite(NewCompositeOperand::Flat {
+                kind: crate::value_layout::CompositeKind::Array,
+                count: 2,
+                byte_size: 16,
+            }),
             Op::Call(0, 0),
             Op::Yield,
         ];
@@ -3403,11 +3368,12 @@ mod cost_model_tests {
     }
 
     #[test]
-    fn cost_model_heap_alloc_bytes_scales_with_slot_size() {
-        // A custom cost model with half the value-slot size should
-        // halve the reported heap allocation for composite-construction
-        // opcodes. This pins the contract that `value_slot_bytes`
-        // determines the byte conversion.
+    fn cost_model_heap_alloc_bytes_is_operand_exact_not_slot_scaled() {
+        // B28 P4: NewComposite carries its precise flat allocation size
+        // in the operand, so the reported heap allocation is that byte
+        // count verbatim and is independent of the model's
+        // `value_slot_bytes`. Two models with different slot sizes must
+        // agree on the composite's heap cost.
         let nominal = NOMINAL_COST_MODEL;
         let custom = CostModel {
             value_slot_bytes: VALUE_SLOT_SIZE_BYTES / 2,
@@ -3424,12 +3390,16 @@ mod cost_model_tests {
             param_types: alloc::vec::Vec::new(),
             debug_pool: None,
         };
-        let op = Op::NewArray(4);
+        let op = Op::NewComposite(NewCompositeOperand::Flat {
+            kind: crate::value_layout::CompositeKind::Array,
+            count: 4,
+            byte_size: 32,
+        });
         let nominal_bytes = nominal.heap_alloc_bytes(&op, &chunk);
         let custom_bytes = custom.heap_alloc_bytes(&op, &chunk);
-        assert_eq!(nominal_bytes, 4 * VALUE_SLOT_SIZE_BYTES);
-        assert_eq!(custom_bytes, 4 * (VALUE_SLOT_SIZE_BYTES / 2));
-        assert_eq!(custom_bytes * 2, nominal_bytes);
+        assert_eq!(nominal_bytes, 32);
+        assert_eq!(custom_bytes, 32);
+        assert_eq!(custom_bytes, nominal_bytes);
     }
 
     #[test]
@@ -3517,12 +3487,14 @@ mod cost_model_tests {
             param_types: alloc::vec::Vec::new(),
             debug_pool: None,
         };
-        let cost = NOMINAL_COST_MODEL.heap_alloc_cost(&Op::NewArray(3), &chunk);
+        let op = Op::NewComposite(NewCompositeOperand::Flat {
+            kind: crate::value_layout::CompositeKind::Array,
+            count: 3,
+            byte_size: 24,
+        });
+        let cost = NOMINAL_COST_MODEL.heap_alloc_cost(&op, &chunk);
         assert!(matches!(cost, OpCost::Fixed(_)));
-        assert_eq!(
-            cost.evaluate(&OpCostContext::default()),
-            3 * VALUE_SLOT_SIZE_BYTES
-        );
+        assert_eq!(cost.evaluate(&OpCostContext::default()), 24);
     }
 
     #[test]

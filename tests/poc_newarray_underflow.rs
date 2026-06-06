@@ -40,14 +40,24 @@ fn make_module(chunks: Vec<Chunk>) -> Module {
 }
 
 // Audit remediation (SECURITY_AUDIT_V0_2_1, poc_newarray_underflow,
-// finding 3). `NewArray(10)` on an empty operand stack would drain ten
-// operands that are not present. The operand-stack-depth verifier pass now
-// rejects it at load: `Vm::new` returns a `VerifyError` rather than
-// constructing a VM whose execution would underflow. The VM's drain guard
-// remains as defense in depth for `new_unchecked` loads.
+// finding 3). A `NewComposite` array of ten elements on an empty operand
+// stack would drain ten operands that are not present. The operand-stack-depth
+// verifier pass now rejects it at load: `Vm::new` returns a `VerifyError`
+// rather than constructing a VM whose execution would underflow. The VM's
+// drain guard remains as defense in depth for `new_unchecked` loads.
 #[test]
 fn newarray_underflow_rejected_by_verifier() {
-    let chunk = make_chunk("main", vec![Op::NewArray(10), Op::Return]);
+    let chunk = make_chunk(
+        "main",
+        vec![
+            Op::NewComposite(keleusma::bytecode::NewCompositeOperand::Flat {
+                kind: keleusma::value_layout::CompositeKind::Array,
+                count: 10,
+                byte_size: 80,
+            }),
+            Op::Return,
+        ],
+    );
     let module = make_module(vec![chunk]);
     let arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
     let res = Vm::new(module, &arena);

@@ -115,11 +115,7 @@ pub fn measured_op_cycles(op: &keleusma::bytecode::Op) -> u32 {
         | Op::IsStruct(_) => 9164,
 
         // Composite value construction (13540 cycles).
-        Op::NewStruct(_)
-        | Op::NewEnum(_, _, _)
-        | Op::NewArray(_)
-        | Op::NewTuple(_)
-        | Op::NewComposite(_) => 13540,
+        Op::NewComposite(_) => 13540,
 
         // Function calls (60700 cycles).
         Op::Call(_, _)

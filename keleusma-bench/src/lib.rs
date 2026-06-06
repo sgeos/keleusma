@@ -431,8 +431,12 @@ pub fn emit_cost_model_source(
         ("division", &["Div", "Mod"], Op::Div),
         (
             "composite_construction",
-            &["NewArray", "NewTuple"],
-            Op::NewArray(0),
+            &["NewComposite"],
+            Op::NewComposite(keleusma::bytecode::NewCompositeOperand::Flat {
+                kind: keleusma::value_layout::CompositeKind::Array,
+                count: 0,
+                byte_size: 0,
+            }),
         ),
         ("function_call", &[], Op::Call(0, 0)),
     ];
@@ -780,24 +784,22 @@ pub const OPCODE_SPECS: &[OpcodeSpec] = &[
         ops_per_pattern: 3,
     },
     OpcodeSpec {
-        name: "NewArray",
+        name: "NewComposite",
         build: || {
             vec![
                 Op::Const(0),
                 Op::Const(0),
                 Op::Const(0),
-                Op::NewArray(3),
+                Op::NewComposite(keleusma::bytecode::NewCompositeOperand::Flat {
+                    kind: keleusma::value_layout::CompositeKind::Array,
+                    count: 3,
+                    byte_size: 24,
+                }),
                 Op::PopN(1),
             ]
         },
         constants: &[ConstValueDescriptor::Int(0)],
         ops_per_pattern: 5,
-    },
-    OpcodeSpec {
-        name: "NewTuple",
-        build: || vec![Op::Const(0), Op::Const(0), Op::NewTuple(2), Op::PopN(1)],
-        constants: &[ConstValueDescriptor::Int(0)],
-        ops_per_pattern: 4,
     },
     // `Yield` and `Call` are intentionally not in the spec table.
     // `Yield` is rejected by Func chunks; `Call` requires a

@@ -409,9 +409,11 @@ fn trace_literal_array_length(chunk: &Chunk, before_ip: usize, arr_slot: u16) ->
             if ip == 0 {
                 return None;
             }
-            // Direct: NewArray(n) -> SetLocal(arr_slot).
-            if let Op::NewArray(n) = &ops[ip - 1] {
-                return Some(*n as i64);
+            // Direct: NewComposite(Array, count) -> SetLocal(arr_slot).
+            if let Op::NewComposite(o) = &ops[ip - 1]
+                && o.kind() == crate::value_layout::CompositeKind::Array
+            {
+                return Some(o.count() as i64);
             }
             // Aliased: GetLocal(other) -> SetLocal(arr_slot). Chase the
             // alias backward until a NewArray or unsupported source is
@@ -1700,7 +1702,7 @@ pub fn verify(module: &Module) -> Result<(), VerifyError> {
 /// control-flow ops `If`, `Loop`, `Break`, `Trap`, and `Return` are
 /// intercepted by [`verify_depth_region`]; their entries here are used
 /// only as a defensive fall-through.
-fn op_depth_effect(op: &Op, chunk: &Chunk) -> (i32, i32) {
+fn op_depth_effect(op: &Op, _chunk: &Chunk) -> (i32, i32) {
     match op {
         Op::Const(_) | Op::GetLocal(_) | Op::GetData(_) | Op::PushImmediate(_) => (0, 1),
         Op::Dup => (1, 1),
@@ -1750,19 +1752,6 @@ fn op_depth_effect(op: &Op, chunk: &Chunk) -> (i32, i32) {
             let produced = if *n & 0x80 != 0 { 2 } else { 1 };
             (m, produced - m)
         }
-        Op::NewStruct(idx) => {
-            let fc = chunk
-                .struct_templates
-                .get(*idx as usize)
-                .map_or(0, |t| t.field_names.len()) as i32;
-            (fc, 1 - fc)
-        }
-        // NewEnum pops the largest-variant payload size and the
-        // discriminant (both pushed beneath the payload) plus the `n`
-        // payload values, and pushes one enum value (B28 P2).
-        Op::NewEnum(_, _, n) => (*n as i32 + 2, -(*n as i32 + 1)),
-        Op::NewArray(n) => (*n as i32, 1 - *n as i32),
-        Op::NewTuple(n) => (*n as i32, 1 - *n as i32),
         // NewComposite pops `count` values (an enum's leading discriminant
         // counts as one) and pushes one composite (B28 P4).
         Op::NewComposite(op) => {
@@ -2252,23 +2241,6 @@ fn verify_chunk(
                                 e,
                                 v,
                                 d,
-                                len
-                            ),
-                        });
-                    }
-                    record(ip, P1, "constant-index-in-range");
-                }
-                Op::NewEnum(e, v, _) => {
-                    let len = chunk.constants.len();
-                    if *e as usize >= len || *v as usize >= len {
-                        return Err(VerifyError {
-                            chunk_name: name.clone(),
-                            message: alloc::format!(
-                                "{:?} at {} references constants ({}, {}) but the pool has {} entr(ies)",
-                                op,
-                                ip,
-                                e,
-                                v,
                                 len
                             ),
                         });
@@ -3318,9 +3290,15 @@ mod tests {
             3
         );
 
-        assert_eq!(Op::NewStruct(0).cost(), 5);
-        assert_eq!(Op::NewArray(0).cost(), 5);
-        assert_eq!(Op::NewTuple(0).cost(), 5);
+        assert_eq!(
+            Op::NewComposite(crate::bytecode::NewCompositeOperand::Flat {
+                kind: crate::value_layout::CompositeKind::Array,
+                count: 0,
+                byte_size: 0,
+            })
+            .cost(),
+            5
+        );
 
         assert_eq!(Op::Call(0, 0).cost(), 10);
         assert_eq!(Op::CallVerifiedNative(0, 0).cost(), 10);
@@ -3558,34 +3536,34 @@ mod tests {
 
     #[test]
     fn wcmu_new_struct_heap() {
-        // NewStruct with two fields allocates 2 * VALUE_SLOT_SIZE_BYTES.
-        use crate::bytecode::{StructTemplate, VALUE_SLOT_SIZE_BYTES};
+        // B28 P4: NewComposite carries its exact flat byte size in the
+        // operand. A two-word struct allocates 16 bytes precisely.
         let mut chunk = make_chunk(
             "tick",
             vec![
-                Op::Stream,       // 0
-                Op::Const(0),     // 1
-                Op::Const(0),     // 2
-                Op::NewStruct(0), // 3
-                Op::Yield,        // 4
-                Op::Reset,        // 5
+                Op::Stream,   // 0
+                Op::Const(0), // 1
+                Op::Const(0), // 2
+                Op::NewComposite(crate::bytecode::NewCompositeOperand::Flat {
+                    kind: crate::value_layout::CompositeKind::Struct,
+                    count: 2,
+                    byte_size: 16,
+                }), // 3
+                Op::Yield,    // 4
+                Op::Reset,    // 5
             ],
             BlockType::Stream,
         );
         chunk.local_count = 0;
         chunk.constants = vec![ConstValue::Int(0)];
-        chunk.struct_templates = vec![StructTemplate {
-            type_name: String::from("Point"),
-            field_names: vec![String::from("x"), String::from("y")],
-        }];
         let (_stack, heap) = wcmu_stream_iteration(&chunk).unwrap();
-        assert_eq!(heap, 2 * VALUE_SLOT_SIZE_BYTES);
+        assert_eq!(heap, 16);
     }
 
     #[test]
     fn wcmu_new_array_heap() {
-        // NewArray with three elements allocates 3 * VALUE_SLOT_SIZE_BYTES.
-        use crate::bytecode::VALUE_SLOT_SIZE_BYTES;
+        // B28 P4: a three-word flat array allocates 24 bytes precisely,
+        // read verbatim from the NewComposite operand.
         let mut chunk = make_chunk(
             "tick",
             vec![
@@ -3593,7 +3571,11 @@ mod tests {
                 Op::Const(0),
                 Op::Const(0),
                 Op::Const(0),
-                Op::NewArray(3),
+                Op::NewComposite(crate::bytecode::NewCompositeOperand::Flat {
+                    kind: crate::value_layout::CompositeKind::Array,
+                    count: 3,
+                    byte_size: 24,
+                }),
                 Op::Yield,
                 Op::Reset,
             ],
@@ -3601,7 +3583,7 @@ mod tests {
         );
         chunk.constants = vec![ConstValue::Int(0)];
         let (_stack, heap) = wcmu_stream_iteration(&chunk).unwrap();
-        assert_eq!(heap, 3 * VALUE_SLOT_SIZE_BYTES);
+        assert_eq!(heap, 24);
     }
 
     #[test]
@@ -3643,7 +3625,11 @@ mod tests {
                 Op::Stream,
                 Op::Const(0),
                 Op::Const(0),
-                Op::NewArray(2),
+                Op::NewComposite(crate::bytecode::NewCompositeOperand::Flat {
+                    kind: crate::value_layout::CompositeKind::Array,
+                    count: 2,
+                    byte_size: 64,
+                }),
                 Op::Yield,
                 Op::PopN(1),
                 Op::Reset,
@@ -3715,7 +3701,11 @@ mod tests {
                 Op::Const(0),
                 Op::Const(0),
                 Op::Const(0),
-                Op::NewArray(3),
+                Op::NewComposite(crate::bytecode::NewCompositeOperand::Flat {
+                    kind: crate::value_layout::CompositeKind::Array,
+                    count: 3,
+                    byte_size: 24,
+                }),
                 Op::PopN(1),
                 Op::PushImmediate(0),
                 Op::Return,
@@ -4148,7 +4138,11 @@ mod tests {
                 Op::BreakIf(15),
                 Op::Const(2),
                 Op::Const(2),
-                Op::NewArray(2), // body: allocate 2-element array
+                Op::NewComposite(crate::bytecode::NewCompositeOperand::Flat {
+                    kind: crate::value_layout::CompositeKind::Array,
+                    count: 2,
+                    byte_size: 16,
+                }), // body: allocate 2-element array
                 Op::PopN(1),
                 Op::EndLoop(6),
                 Op::PushImmediate(0),

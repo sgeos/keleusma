@@ -99,7 +99,7 @@ pub struct OpcodeId(pub u8);
 pub const POOL_TAG_U16_U16: u8 = 0x01;
 
 /// Pool entry type tag for the `(u16, u16, u8)` shape. Used by
-/// `Op::NewEnum`.
+/// `Op::NewComposite` (boxed form).
 pub const POOL_TAG_U16_U16_U8: u8 = 0x02;
 
 /// Pool entry type tag for the `(u16, u16, u16)` shape. Used by
@@ -449,10 +449,6 @@ const OPCODE_ID_TABLE: &[(&str, u8)] = &[
     ("Return", 31),
     ("Yield", 32),
     ("Dup", 33),
-    ("NewStruct", 34),
-    ("NewEnum", 35),
-    ("NewArray", 36),
-    ("NewTuple", 37),
     ("GetField", 38),
     ("GetIndex", 39),
     ("GetTupleField", 40),
@@ -524,10 +520,6 @@ pub fn opcode_id_of(op: &Op) -> OpcodeId {
         Op::Return => 31,
         Op::Yield => 32,
         Op::Dup => 33,
-        Op::NewStruct(_) => 34,
-        Op::NewEnum(_, _, _) => 35,
-        Op::NewArray(_) => 36,
-        Op::NewTuple(_) => 37,
         Op::GetField(_) => 38,
         Op::GetIndex(_) => 39,
         Op::GetTupleField(_) => 40,
@@ -665,8 +657,7 @@ pub fn encode_op(
         }
 
         // `u8` operand carried inline in byte one.
-        Op::NewTuple(n)
-        | Op::WordToFixed(n)
+        Op::WordToFixed(n)
         | Op::FixedToWord(n)
         | Op::FixedMul(n)
         | Op::FixedDiv(n)
@@ -688,8 +679,6 @@ pub fn encode_op(
         | Op::EndLoop(v)
         | Op::Break(v)
         | Op::BreakIf(v)
-        | Op::NewStruct(v)
-        | Op::NewArray(v)
         | Op::IsStruct(v)
         | Op::Trap(v) => {
             let b = v.to_le_bytes();
@@ -767,15 +756,6 @@ pub fn encode_op(
                 return Err(WireFormatError::OperandPoolIndexOverflow);
             }
             pool.push(OperandPoolEntry::from_u16_u16_u16(*a, *b, *d));
-            let idx_bytes = (idx as u32).to_le_bytes();
-            [idx_bytes[0], idx_bytes[1], idx_bytes[2]]
-        }
-        Op::NewEnum(a, b, c) => {
-            let idx = pool.len();
-            if idx >= MAX_POOL_ENTRIES {
-                return Err(WireFormatError::OperandPoolIndexOverflow);
-            }
-            pool.push(OperandPoolEntry::from_u16_u16_u8(*a, *b, *c));
             let idx_bytes = (idx as u32).to_le_bytes();
             [idx_bytes[0], idx_bytes[1], idx_bytes[2]]
         }
@@ -884,13 +864,6 @@ pub fn decode_op(record: OpcodeRecord, pool: &[OperandPoolEntry]) -> Result<Op, 
         31 => Op::Return,
         32 => Op::Yield,
         33 => Op::Dup,
-        34 => Op::NewStruct(record.operand_u16()),
-        35 => {
-            let (a, b, c) = decode_pool_u16_u16_u8(record, pool)?;
-            Op::NewEnum(a, b, c)
-        }
-        36 => Op::NewArray(record.operand_u16()),
-        37 => Op::NewTuple(record.operand_u8()),
         38 => {
             let bytes = record.operand_bytes();
             if bytes[2] == TUPLE_FIELD_BOXED_SENTINEL {
@@ -1086,27 +1059,6 @@ fn decode_nested_pool(
         });
     }
     Ok(entry.as_u16_u16())
-}
-
-/// Helper: fetch a `(u16, u16, u8)` operand pool entry,
-/// validating the index, the parity, and the type tag.
-fn decode_pool_u16_u16_u8(
-    record: OpcodeRecord,
-    pool: &[OperandPoolEntry],
-) -> Result<(u16, u16, u8), WireFormatError> {
-    let idx = record.operand_pool_index() as usize;
-    let entry = pool
-        .get(idx)
-        .copied()
-        .ok_or(WireFormatError::OperandPoolIndexOutOfBounds(idx))?;
-    entry.check_parity()?;
-    if entry.tag() != POOL_TAG_U16_U16_U8 {
-        return Err(WireFormatError::OperandPoolTagMismatch {
-            observed: entry.tag(),
-            expected: POOL_TAG_U16_U16_U8,
-        });
-    }
-    Ok(entry.as_u16_u16_u8())
 }
 
 /// Helper: fetch a `(u16, u16, u16)` operand pool entry, validating the
@@ -2589,10 +2541,6 @@ mod tests {
             (Op::Return, 31),
             (Op::Yield, 32),
             (Op::Dup, 33),
-            (Op::NewStruct(0), 34),
-            (Op::NewEnum(0, 0, 0), 35),
-            (Op::NewArray(0), 36),
-            (Op::NewTuple(0), 37),
             (
                 Op::GetField(crate::bytecode::StructField::Boxed { name_const: 0 }),
                 38,
@@ -2739,8 +2687,6 @@ mod tests {
     #[test]
     fn opcode_record_roundtrip_u8_operand() {
         for op in [
-            Op::NewTuple(0),
-            Op::NewTuple(255),
             Op::GetEnumField(crate::bytecode::EnumField::Boxed { index: 3 }),
             Op::WordToFixed(32),
             Op::FixedToWord(16),
@@ -2818,8 +2764,6 @@ mod tests {
             Op::EndLoop(500),
             Op::Break(600),
             Op::BreakIf(700),
-            Op::NewStruct(800),
-            Op::NewArray(900),
             Op::GetField(crate::bytecode::StructField::Boxed { name_const: 1000 }),
             Op::IsStruct(1100),
             Op::Trap(1200),
@@ -2847,17 +2791,6 @@ mod tests {
             Op::GetDataIndexed(65535, 65535),
             Op::SetDataIndexed(100, 200),
             Op::IsEnum(7, 13, 21),
-        ] {
-            roundtrip(op);
-        }
-    }
-
-    #[test]
-    fn opcode_record_roundtrip_pool_u16_u16_u8() {
-        for op in [
-            Op::NewEnum(0, 0, 0),
-            Op::NewEnum(65535, 65535, 255),
-            Op::NewEnum(1, 2, 3),
         ] {
             roundtrip(op);
         }
@@ -2905,10 +2838,17 @@ mod tests {
         let _record = encode_op(&Op::GetDataIndexed(1, 2), &mut pool).expect("encode");
         // Manufacture a NewEnum record that references the same
         // (mismatched) entry.
-        let id = opcode_id_of(&Op::NewEnum(0, 0, 0));
-        let idx_bytes = (0u32).to_le_bytes();
-        let bad_record =
-            OpcodeRecord::from_id_and_operand(id, [idx_bytes[0], idx_bytes[1], idx_bytes[2]]);
+        let id = opcode_id_of(&Op::NewComposite(
+            crate::bytecode::NewCompositeOperand::Boxed {
+                kind: crate::value_layout::CompositeKind::Struct,
+                count: 0,
+                meta: 0,
+            },
+        ));
+        // Pool index 0, kind in the high bits, pool sentinel in the low six.
+        let byte2 = (crate::value_layout::CompositeKind::Struct.to_tag() << 6)
+            | NEW_COMPOSITE_POOL_SENTINEL;
+        let bad_record = OpcodeRecord::from_id_and_operand(id, [0, 0, byte2]);
         let result = decode_op(bad_record, &pool);
         assert_eq!(
             result,
@@ -3162,8 +3102,16 @@ mod tests {
         let chunk = Chunk {
             name: alloc::string::String::from("pool_user"),
             ops: alloc::vec![
-                Op::NewEnum(3, 4, 1),
-                Op::NewEnum(0, 0, 0),
+                Op::NewComposite(crate::bytecode::NewCompositeOperand::Boxed {
+                    kind: crate::value_layout::CompositeKind::Enum,
+                    count: 1,
+                    meta: 4,
+                }),
+                Op::NewComposite(crate::bytecode::NewCompositeOperand::Boxed {
+                    kind: crate::value_layout::CompositeKind::Struct,
+                    count: 0,
+                    meta: 0,
+                }),
                 Op::IsEnum(3, 4, 5),
                 Op::GetDataIndexed(7, 8),
                 Op::SetDataIndexed(7, 8),
