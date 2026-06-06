@@ -26,7 +26,7 @@ Second, integrity at the record level. Each opcode record and each operand pool 
 
 Third, separation of code and data. The opcode stream is contiguous and the operand pool is addressed separately. Compound operands that exceed three inline bytes (the addressable space within a four-byte record) reference an entry in the operand pool by index. Pool entries are eight-byte aligned, which matches a natural cache-line boundary and lets a host that streams the pool into a separately mapped region do so without realignment.
 
-The audit considered an alternative variable-length encoding that placed compound operands inline. The fixed-size record won on decoder simplicity and on the observation that compound operands cover only four of the sixty-nine V0.2.0 opcodes. The pool indirection cost is paid only for those four.
+The audit considered an alternative variable-length encoding that placed compound operands inline. The fixed-size record won on decoder simplicity and on the observation that pool-referencing operands cover only a few opcodes: three always (`GetDataIndexed`, `SetDataIndexed`, `IsEnum`) plus `NewComposite` in its boxed or large-count form. The pool indirection cost is paid only for those.
 
 ## Framing header
 
@@ -127,21 +127,22 @@ Each opcode is a four-byte record. The record carries the opcode identifier in t
 
 The parity bit is the XOR of the other thirty-one bits in the record. A consumer reads byte zero, computes the parity over the seven low bits of byte zero and all bits of bytes one through three, compares against the high bit of byte zero, and rejects the record on mismatch. The parity covers the entire record so single bit flips anywhere are detected at the consumer site.
 
-The opcode identifier is the index of the `Op` variant in the canonical V0.2.0 listing. The table is fixed at version 1 of the wire format. The mapping is stable across the V0.2.0 series and across V0.2.x patch releases. The identifier fits in seven bits because the V0.2.0 ISA has sixty-nine variants; future ISA additions that exceed one hundred and twenty-eight variants would require a version bump.
+The opcode identifier is the index of the `Op` variant in the canonical wire listing. The table is fixed at version 1 of the wire format. The mapping is stable across the V0.2.x series. The B28 consolidation retired the four V0.2.0 construct opcodes (`NewStruct`, `NewEnum`, `NewArray`, `NewTuple`, ids 34-37) and introduced `NewComposite` at id 69, so the live ISA has sixty-six variants with a maximum identifier of 69 and four reserved-and-unused ids. The identifier fits in seven bits; future ISA additions that exceed one hundred and twenty-eight variants would require a version bump.
 
-The operand semantics depend on the opcode variant. Inline operands cover four shapes:
+The operand semantics depend on the opcode variant. Inline operands cover these shapes:
 
 - **No operand.** Bytes one through three are zero. Thirty-six variants.
-- **`u8`.** Byte one carries the value; bytes two and three are zero. Nine variants.
-- **`u16`.** Bytes one through two carry the value little-endian; byte three is zero. Seventeen variants.
+- **`u8`.** Byte one carries the value; bytes two and three are zero. Eight variants.
+- **`u16`.** Bytes one through two carry the value little-endian; byte three is zero. Fifteen variants.
 - **`(u16, u8)`.** Bytes one through two carry the `u16` little-endian; byte three carries the `u8`. Three variants.
+- **`NewComposite`, flat form.** Bytes one through two carry the composite's flat byte size little-endian. Byte three packs the composite kind in its high two bits and the operand-stack pop count (zero through sixty-two) in its low six bits. A low-six-bit value of `0x3F` is the sentinel that redirects to the pool form below.
 
-The remaining four variants reference the operand pool because their payload does not fit in three bytes:
+The pool-referencing forms place their payload in the operand pool because it does not fit in three bytes:
 
-- **`(u16, u16)`.** Pool entry tag `0x01`. Three variants: `GetDataIndexed`, `SetDataIndexed`, `IsEnum`.
-- **`(u16, u16, u8)`.** Pool entry tag `0x02`. One variant: `NewEnum`.
+- **`(u16, u16)`.** Pool entry tag `0x01`. Three variants: `GetDataIndexed`, `SetDataIndexed`, `IsEnum`. The inline operand bytes carry a twenty-four-bit pool index little-endian.
+- **`(u16, u16, u8)`.** Pool entry tag `0x02`. One variant: `NewComposite`, used for the boxed form or when the flat field count exceeds sixty-two. Operand byte three holds the composite kind in its high two bits and the sentinel `0x3F` in its low six bits, so operand bytes one through two carry a sixteen-bit pool index rather than the twenty-four-bit index used by the `(u16, u16)` opcodes. The referenced entry carries `(count, byte_size-or-meta, boxed_flag)`.
 
-For pool-referencing opcodes, the inline operand bytes carry the twenty-four-bit pool index in little-endian. A pool of up to 16,777,216 entries (no observed program approaches one tenth of this) covers the foreseeable case. A producer that exceeds the limit emits a `CompileError`.
+A pool of up to 16,777,216 entries (no observed program approaches one tenth of this) covers the foreseeable case for the twenty-four-bit forms. A producer that exceeds the applicable limit emits a `CompileError`.
 
 ## Operand pool
 

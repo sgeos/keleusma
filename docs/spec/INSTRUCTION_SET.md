@@ -159,10 +159,9 @@ The closure-construction and indirect-dispatch opcodes (`PushFunc`, `MakeClosure
 
 | Instruction | Operands | Cost | Description |
 |-------------|----------|------|-------------|
-| NewStruct | u16 template | 5 | Pop field values, create struct from template. |
-| NewEnum | u16 type, u16 variant, u8 fields | 5 | Pop field values, create enum variant. |
-| NewArray | u16 length | 5 | Pop N values, create array. |
-| NewTuple | u8 length | 5 | Pop N values, create tuple. |
+| NewComposite | kind, count, byte_size or meta | 5 | Pop `count` values and construct one composite of the given kind (struct, tuple, array, or enum). The flat form packs the popped values into `byte_size` bytes; the boxed form builds a heap composite from the template index `meta`. An enum's leading discriminant counts as one of the `count` values. The single opcode replaces the four V0.2.0 construct opcodes (wire ids 34-37, retired). |
+
+A tuple is an anonymous struct, an array a homogeneous struct, and a flat enum a struct whose first packed value is the discriminant, so flat construction is one operation across all four kinds. The operand carries the composite kind, the operand-stack pop count, and either the exact flat allocation size in bytes (flat form) or a struct-template index (boxed form). The flat byte size is the precise worst-case-memory-usage contribution the verifier sums; see the Heap allocation table below.
 
 The `Option::None` sentinel and `Option::Some` wrap are handled through `PushImmediate(3)` and the natural representation of the wrapped value, respectively; there are no dedicated `PushNone` or `WrapSome` opcodes.
 
@@ -204,18 +203,18 @@ The `Option::None` sentinel and `Option::Some` wrap are handled through `PushImm
 
 ## Opcode count and operand-shape inventory
 
-The instruction set contains 69 opcodes. Operand shapes:
+The instruction set contains 66 opcodes. The B28 consolidation retired the four V0.2.0 construct opcodes (`NewStruct`, `NewEnum`, `NewArray`, `NewTuple`, wire ids 34-37) in favour of the single `NewComposite` opcode (wire id 69). The retired ids are reserved and not reused; the maximum live wire id is 69. Operand shapes:
 
 | Shape | Used by |
 |-------|---------|
 | None (zero-operand) | 34 opcodes (arithmetic, comparison, bit ops, type coercions, stack manipulation, streaming, coroutine, etc.) |
-| `u8` | 11 opcodes (`PushImmediate`, `PopN`, `GetTupleField`, `GetEnumField`, `NewTuple`, `WordToFixed`, `FixedToWord`, `FixedMul`, `FixedDiv`, `CheckedMul`, `CheckedDiv`) |
-| `u16` | 17 opcodes (`Const`, `GetLocal`, `SetLocal`, `GetData`, `SetData`, `GetField`, `IsStruct`, `NewStruct`, `NewArray`, `If`, `Else`, `Loop`, `EndLoop`, `Break`, `BreakIf`, `BoundsCheck`, `Trap`) |
+| `u8` | 10 opcodes (`PushImmediate`, `PopN`, `GetTupleField`, `GetEnumField`, `WordToFixed`, `FixedToWord`, `FixedMul`, `FixedDiv`, `CheckedMul`, `CheckedDiv`) |
+| `u16` | 15 opcodes (`Const`, `GetLocal`, `SetLocal`, `GetData`, `SetData`, `GetField`, `IsStruct`, `If`, `Else`, `Loop`, `EndLoop`, `Break`, `BreakIf`, `BoundsCheck`, `Trap`) |
 | `(u16, u8)` | 3 opcodes (`Call`, `CallVerifiedNative`, `CallExternalNative`) |
 | `(u16, u16)` | 3 opcodes (`GetDataIndexed`, `SetDataIndexed`, `IsEnum`) |
-| `(u16, u16, u8)` | 1 opcode (`NewEnum`) |
+| NewComposite (bespoke) | 1 opcode (`NewComposite`). The flat form packs the composite kind, the operand-stack pop count (0 through 62), and the exact flat byte size into the three operand bytes of the record. The boxed form, or a flat field count above 62, spills a 24-bit operand-pool index to a `(u16, u16, u8)` entry carrying `(count, byte_size-or-meta, boxed_flag)`. |
 
-65 of 69 opcodes carry their operand inline in the 4-byte opcode record. The 4 opcodes whose payload exceeds three bytes (`GetDataIndexed`, `SetDataIndexed`, `IsEnum` with `(u16, u16)` shape and `NewEnum` with `(u16, u16, u8)`) reference an entry in the operand pool by index. The `(u16, u8)` opcodes (`Call`, `CallVerifiedNative`, `CallExternalNative`) fit inline because the `u8` lands in byte 3 of the record. See [EXECUTION_MODEL.md](../architecture/EXECUTION_MODEL.md) and [WIRE_FORMAT.md](./WIRE_FORMAT.md) for the wire format that encodes these shapes.
+62 of the 66 opcodes always carry their operand inline in the 4-byte opcode record. Three opcodes (`GetDataIndexed`, `SetDataIndexed`, and `IsEnum`, all `(u16, u16)`) always reference an entry in the operand pool by index. `NewComposite` carries its operand inline in the common small flat form and references a `(u16, u16, u8)` operand-pool entry only for the boxed form or a flat field count above 62. The `(u16, u8)` opcodes (`Call`, `CallVerifiedNative`, `CallExternalNative`) fit inline because the `u8` lands in byte 3 of the record. See [EXECUTION_MODEL.md](../architecture/EXECUTION_MODEL.md) and [WIRE_FORMAT.md](./WIRE_FORMAT.md) for the wire format that encodes these shapes.
 
 ## Cost Summary
 
@@ -226,7 +225,7 @@ The cost groupings reproduce `bytecode::nominal_op_cycles`. Hosts that need wall
 | 1 | Const, PushImmediate, GetLocal, SetLocal, GetData, SetData, Dup, Not, If, Else, EndIf, Loop, EndLoop, Break, BreakIf, Stream, Reset, Yield, Trap, PopN |
 | 2 | Add, Sub, Mul, Neg, CheckedAdd, CheckedSub, CheckedMul, CheckedNeg, CheckedDiv, CheckedMod, CmpEq, CmpNe, CmpLt, CmpGt, CmpLe, CmpGe, GetIndex, GetTupleField, GetEnumField, Len, IntToFloat, FloatToInt, WordToByte, ByteToWord, WordToFixed, FixedToWord, FixedMul, FixedDiv, Return, GetDataIndexed, SetDataIndexed, BoundsCheck, BitAnd, BitOr, BitXor, Shl, Shr |
 | 3 | Div, Mod, GetField, IsEnum, IsStruct |
-| 5 | NewStruct, NewEnum, NewArray, NewTuple |
+| 5 | NewComposite |
 | 10 | Call, CallVerifiedNative, CallExternalNative |
 
 ## WCMU contributions
@@ -240,7 +239,7 @@ The values reproduce `Op::stack_growth` in `src/bytecode.rs`. For multi-output o
 | Growth | Instructions |
 |--------|--------------|
 | 0 | Not, Neg, Add, Sub, Mul, Div, Mod, CmpEq, CmpNe, CmpLt, CmpGt, CmpLe, CmpGe, SetLocal, SetData, SetDataIndexed, BoundsCheck, If, BreakIf, Else, EndIf, Loop, EndLoop, Break, Stream, Reset, Yield, Return, GetField, GetIndex, GetTupleField, GetEnumField, Len, IsEnum, IsStruct, IntToFloat, FloatToInt, WordToByte, ByteToWord, WordToFixed, FixedToWord, FixedMul, FixedDiv, Trap, PopN, BitAnd, BitOr, BitXor, Shl, Shr |
-| 1 | Const, PushImmediate, GetLocal, GetData, Dup, GetDataIndexed, CheckedAdd, CheckedSub, CheckedMul, CheckedDiv, CheckedMod, Call, CallVerifiedNative, CallExternalNative, NewStruct, NewEnum, NewArray, NewTuple |
+| 1 | Const, PushImmediate, GetLocal, GetData, Dup, GetDataIndexed, CheckedAdd, CheckedSub, CheckedMul, CheckedDiv, CheckedMod, Call, CallVerifiedNative, CallExternalNative, NewComposite |
 | 2 | CheckedNeg |
 
 ### Stack shrink (slots popped during execution)
@@ -249,15 +248,15 @@ The values reproduce `Op::stack_shrink`. For opcodes whose net delta is non-nega
 
 | Shrink | Instructions |
 |--------|--------------|
-| 0 | Const, PushImmediate, GetLocal, GetData, Dup, Not, Neg, CheckedAdd, CheckedSub, CheckedMul, CheckedNeg, CheckedDiv, CheckedMod, BoundsCheck, Else, EndIf, Loop, EndLoop, Break, Stream, Reset, Return, NewStruct (template-driven), Len, IsEnum, IsStruct, IntToFloat, FloatToInt, WordToByte, ByteToWord, WordToFixed, FixedToWord, FixedMul, FixedDiv, Trap |
+| 0 | Const, PushImmediate, GetLocal, GetData, Dup, Not, Neg, CheckedAdd, CheckedSub, CheckedMul, CheckedNeg, CheckedDiv, CheckedMod, BoundsCheck, Else, EndIf, Loop, EndLoop, Break, Stream, Reset, Return, Len, IsEnum, IsStruct, IntToFloat, FloatToInt, WordToByte, ByteToWord, WordToFixed, FixedToWord, FixedMul, FixedDiv, Trap |
 | 1 | Add, Sub, Mul, Div, Mod, CmpEq, CmpNe, CmpLt, CmpGt, CmpLe, CmpGe, SetLocal, SetData, GetDataIndexed, If, BreakIf, Yield, GetField, GetIndex, GetTupleField, GetEnumField, BitAnd, BitOr, BitXor, Shl, Shr |
 | 2 | SetDataIndexed |
-| n | PopN(n), Call(_, n), CallVerifiedNative(_, n), CallExternalNative(_, n), NewEnum(_, _, n), NewArray(n), NewTuple(n) |
+| n | PopN(n), Call(_, n), CallVerifiedNative(_, n), CallExternalNative(_, n), NewComposite(count) |
 
 ### Heap allocation (bytes)
 
 | Heap | Instructions |
 |------|--------------|
 | 0 | All instructions not listed below |
-| n * `VALUE_SLOT_SIZE_BYTES` | NewStruct (n = field count from template), NewEnum(_, _, n), NewArray(n), NewTuple(n) |
+| `byte_size` from operand | NewComposite, flat form. The exact flat allocation size is baked into the operand at compile time, so the worst-case-memory-usage contribution is the precise byte count rather than a `count * VALUE_SLOT_SIZE_BYTES` estimate. The boxed form reports zero flat bytes; its body is the heap `Vec`, accounted separately. |
 | host-attested | CallVerifiedNative through host registration; CallExternalNative through per-iteration invocation-count bound |
