@@ -405,12 +405,17 @@ impl LayoutDescriptor {
     /// The flat-eligible scalar kind of this layout, or `None` when it is a
     /// composite or a reference scalar (B28 P2 nested inlining).
     ///
-    /// Flat-eligible kinds are the non-reference, non-float fixed-size
-    /// scalars: `Unit`, `Bool`, `Byte`, `Int`, `Fixed`. `Float`, `Text`,
-    /// and `Opaque` are excluded because the flat body compares by raw
-    /// bytes (which would change float equality) and references are not
-    /// inlined. This is the single type-side flat-eligibility predicate;
-    /// the compiler and the runtime value path agree with it by construction.
+    /// Flat-eligible kinds are the non-float fixed-size scalars plus the
+    /// opaque reference: `Unit`, `Bool`, `Byte`, `Int`, `Fixed`, `Opaque`.
+    /// `Opaque` is flat as a `word_bytes` index into the VM's ephemeral
+    /// opaque registry rather than the `Drop`-bearing `Arc` itself (B28
+    /// P3); the VM interns at construction and resolves at access, and
+    /// interning deduplicates by pointer identity so byte equality of two
+    /// bodies coincides with `Arc::ptr_eq`. `Float` is excluded because
+    /// raw-byte comparison would change its equality semantics, and `Text`
+    /// is not yet flat. This is the single type-side flat-eligibility
+    /// predicate; the compiler and the runtime value path agree with it by
+    /// construction.
     pub fn flat_scalar_kind(&self) -> Option<ScalarKind> {
         match self {
             Self::Scalar(k) => match k {
@@ -418,8 +423,9 @@ impl LayoutDescriptor {
                 | ScalarKind::Bool
                 | ScalarKind::Byte
                 | ScalarKind::Int
-                | ScalarKind::Fixed => Some(*k),
-                // Float (when present), Text, and Opaque are not flat.
+                | ScalarKind::Fixed
+                | ScalarKind::Opaque => Some(*k),
+                // Float (when present) and Text are not flat.
                 _ => None,
             },
             _ => None,
@@ -778,14 +784,15 @@ mod tests {
             LayoutDescriptor::Scalar(ScalarKind::Bool).flat_byte_size(I64_BYTES, F64_BYTES),
             Some(1)
         );
-        // References and floats are not flat-eligible.
+        // Text and floats are not flat-eligible.
         assert_eq!(
             LayoutDescriptor::Scalar(ScalarKind::Text).flat_byte_size(I64_BYTES, F64_BYTES),
             None
         );
+        // Opaque is flat-eligible as a `word_bytes` registry index (B28 P3).
         assert_eq!(
             LayoutDescriptor::Scalar(ScalarKind::Opaque).flat_byte_size(I64_BYTES, F64_BYTES),
-            None
+            Some(8)
         );
         #[cfg(feature = "floats")]
         assert_eq!(

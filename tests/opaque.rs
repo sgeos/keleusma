@@ -82,6 +82,70 @@ fn opaque_values_compare_equal_by_arc_identity() {
 }
 
 #[test]
+fn opaque_field_in_flat_struct_round_trips_through_access() {
+    // B28 P3: a struct holding an opaque is flat. Construction interns
+    // the opaque into the VM registry and packs its index; reading the
+    // field back resolves the index to the original `Arc`. The label
+    // surviving the round trip proves the same host object is returned.
+    let src = "use make_handle\n\
+               struct Wrap { h: Handle, tag: Word }\n\
+               fn main() -> Handle { let w = Wrap { h: make_handle(), tag: 7 }; w.h }";
+    let tokens = tokenize(src).expect("lex error");
+    let program = parse(&tokens).expect("parse error");
+    let module = compile(&program).expect("compile error");
+    let arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+    let mut vm = Vm::new(module, &arena).expect("verify");
+    vm.register_native("make_handle", |_args| {
+        Ok(Value::Opaque(host_arc(Handle {
+            label: "flat-field".into(),
+        })))
+    });
+    let val = match vm.call(&[]).expect("vm call") {
+        VmState::Finished(v) => v,
+        other => panic!("expected finished, got {:?}", other),
+    };
+    let opaque = match val {
+        Value::Opaque(o) => o,
+        other => panic!("expected opaque, got {:?}", other),
+    };
+    let typed: &Handle = opaque
+        .as_ref()
+        .downcast_ref::<Handle>()
+        .expect("downcast Handle");
+    assert_eq!(typed.label, "flat-field");
+}
+
+#[test]
+fn opaque_bearing_flat_composites_compare_by_identity() {
+    // B28 P3: two flat structs that hold the same opaque compare equal
+    // because interning deduplicates by pointer identity, so the packed
+    // index bytes coincide. Differing the scalar field makes them unequal.
+    let equal_src = "use make_handle\n\
+                     struct P { h: Handle, n: Word }\n\
+                     fn main() -> bool { let h = make_handle(); P { h: h, n: 1 } == P { h: h, n: 1 } }";
+    let unequal_src = "use make_handle\n\
+                       struct P { h: Handle, n: Word }\n\
+                       fn main() -> bool { let h = make_handle(); P { h: h, n: 1 } == P { h: h, n: 2 } }";
+
+    for (src, expected) in [(equal_src, true), (unequal_src, false)] {
+        let tokens = tokenize(src).expect("lex error");
+        let program = parse(&tokens).expect("parse error");
+        let module = compile(&program).expect("compile error");
+        let arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let mut vm = Vm::new(module, &arena).expect("verify");
+        vm.register_native("make_handle", |_args| {
+            Ok(Value::Opaque(host_arc(Handle { label: "id".into() })))
+        });
+        match vm.call(&[]).expect("vm call") {
+            VmState::Finished(Value::Bool(b)) => {
+                assert_eq!(b, expected, "src: {src}");
+            }
+            other => panic!("expected bool, got {:?}", other),
+        }
+    }
+}
+
+#[test]
 fn downcast_ref_returns_none_on_type_mismatch() {
     struct Other;
     impl HostOpaque for Other {

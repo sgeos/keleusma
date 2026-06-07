@@ -1891,9 +1891,6 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
     /// dropped at the next `RESET`, when the arena body holding the index
     /// is reclaimed.
     ///
-    /// Wired into the flat-composite construction path by the next P3
-    /// slice; see [`Self::resolve_ephemeral_opaque`] for the read side.
-    ///
     /// Interning deduplicates by pointer identity: an `Arc` already in the
     /// registry returns its existing index rather than a fresh one. This
     /// is correctness-critical, not an optimisation. Opaque equality is
@@ -1903,7 +1900,6 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
     /// with pointer identity. Without dedup, `(o,) == (o,)` would be false.
     /// The scan is linear in the live opaque count, which the worst-case
     /// memory bound caps.
-    #[allow(dead_code)]
     pub(crate) fn intern_ephemeral_opaque(
         &mut self,
         opaque: alloc::sync::Arc<dyn crate::opaque::HostOpaque>,
@@ -1928,8 +1924,6 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
     /// and a `RESET` that clears the registry also reclaims the arena
     /// body holding the index.
     ///
-    /// Wired into the flat-composite access path by the next P3 slice.
-    #[allow(dead_code)]
     pub(crate) fn resolve_ephemeral_opaque(
         &self,
         index: usize,
@@ -1937,6 +1931,53 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         self.ephemeral_opaques
             .get(index)
             .map(alloc::sync::Arc::clone)
+    }
+
+    /// Read a flat scalar field at `offset` of kind `kind` from a resolved
+    /// composite body, resolving an `Opaque` field's stored `word_bytes`
+    /// index back to its `Arc` through the ephemeral registry (B28 P3).
+    /// Non-reference kinds delegate to `read_scalar_le`.
+    ///
+    /// Returns an error if an opaque index does not resolve. A well-formed
+    /// flat body issued under the current epoch always resolves; a failure
+    /// indicates a stale body (already caught by the body resolve) or a
+    /// corrupt index, and is surfaced rather than producing a wrong value.
+    fn read_flat_scalar(
+        &self,
+        bytes: &[u8],
+        offset: usize,
+        kind: crate::value_layout::ScalarKind,
+        word_bytes: usize,
+        float_bytes: usize,
+    ) -> Result<crate::bytecode::GenericValue<W, F>, VmError> {
+        use crate::value_layout::ScalarKind;
+        if matches!(kind, ScalarKind::Opaque) {
+            let index = match crate::bytecode::GenericValue::<W, F>::read_scalar_le(
+                bytes,
+                offset,
+                ScalarKind::Int,
+                word_bytes,
+                float_bytes,
+            ) {
+                crate::bytecode::GenericValue::Int(w) => w.to_i64() as usize,
+                _ => unreachable!("read_scalar_le with Int kind yields Int"),
+            };
+            return self
+                .resolve_ephemeral_opaque(index)
+                .map(crate::bytecode::GenericValue::Opaque)
+                .ok_or_else(|| {
+                    VmError::InvalidBytecode(String::from(
+                        "opaque field index does not resolve (stale or out of range)",
+                    ))
+                });
+        }
+        Ok(crate::bytecode::GenericValue::read_scalar_le(
+            bytes,
+            offset,
+            kind,
+            word_bytes,
+            float_bytes,
+        ))
     }
 
     /// Recover from a runtime error and return the VM to a clean
@@ -3576,13 +3617,46 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                         return Err(VmError::StackUnderflow);
                     }
                     let arena = self.arena;
-                    let values: Vec<crate::bytecode::GenericValue<W, F>> = self
+                    let mut values: Vec<crate::bytecode::GenericValue<W, F>> = self
                         .stack
                         .drain(self.stack.len() - count..)
                         .map(|v| v.materialized(arena))
                         .collect();
                     let wb = self.module_word_bytes();
                     let fb = self.module_float_bytes();
+                    // Intern opaque fields on the flat construction path
+                    // (B28 P3). Decide flatness first. A struct/enum Flat
+                    // operand is flat by the compiler's decision, which the
+                    // named type makes reliable, so an opaque field is flat
+                    // (interned). Tuple and array are value-driven and their
+                    // access form is recovered by the compiler's lightweight
+                    // inference, which cannot recover an opaque element type;
+                    // to keep construction and access in agreement, an opaque
+                    // element keeps the tuple/array boxed (`flat_field_size`
+                    // is `None` for `Opaque`, so a tuple holding one is not
+                    // flattened). On the flat path each `Opaque` is replaced
+                    // by its registry index packed as a word.
+                    let flat = match operand {
+                        NCO::Flat {
+                            kind: CK::Struct | CK::Enum,
+                            ..
+                        } => true,
+                        NCO::Flat { .. } => values
+                            .iter()
+                            .all(|v| crate::bytecode::flat_field_size(v, wb, fb).is_some()),
+                        NCO::Boxed { .. } => false,
+                    };
+                    if flat {
+                        for v in values.iter_mut() {
+                            if let crate::bytecode::GenericValue::Opaque(arc) = v {
+                                let idx =
+                                    self.intern_ephemeral_opaque(alloc::sync::Arc::clone(arc));
+                                *v = crate::bytecode::GenericValue::Int(W::from_i64_wrap(
+                                    idx as i64,
+                                ));
+                            }
+                        }
+                    }
                     let value = match operand {
                         // Tuple and array are value-driven: their element
                         // types are inferred at compile time and may be
@@ -3644,13 +3718,8 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                                 let fb = self.module_float_bytes();
                                 let bytes =
                                     fc.resolve(self.arena).map_err(|_| stale_arena_body())?;
-                                let val = crate::bytecode::GenericValue::read_scalar_le(
-                                    bytes,
-                                    offset as usize,
-                                    kind,
-                                    wb,
-                                    fb,
-                                );
+                                let val =
+                                    self.read_flat_scalar(bytes, offset as usize, kind, wb, fb)?;
                                 sp!(self, val);
                             }
                             (
@@ -3749,24 +3818,18 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                                             if idx < 0 {
                                                 return Err(VmError::IndexOutOfBounds(idx, 0));
                                             }
-                                            sp!(
-                                                self,
-                                                crate::bytecode::GenericValue::read_scalar_le(
-                                                    bytes, 0, kind, wb, fb,
-                                                )
-                                            );
+                                            let val =
+                                                self.read_flat_scalar(bytes, 0, kind, wb, fb)?;
+                                            sp!(self, val);
                                         }
                                         Some(len) => {
                                             if idx < 0 || idx as usize >= len {
                                                 return Err(VmError::IndexOutOfBounds(idx, len));
                                             }
                                             let off = idx as usize * esize;
-                                            sp!(
-                                                self,
-                                                crate::bytecode::GenericValue::read_scalar_le(
-                                                    bytes, off, kind, wb, fb,
-                                                )
-                                            );
+                                            let val =
+                                                self.read_flat_scalar(bytes, off, kind, wb, fb)?;
+                                            sp!(self, val);
                                         }
                                     }
                                 }
@@ -3828,13 +3891,8 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                                 let fb = self.module_float_bytes();
                                 let bytes =
                                     fc.resolve(self.arena).map_err(|_| stale_arena_body())?;
-                                let val = crate::bytecode::GenericValue::read_scalar_le(
-                                    bytes,
-                                    offset as usize,
-                                    kind,
-                                    wb,
-                                    fb,
-                                );
+                                let val =
+                                    self.read_flat_scalar(bytes, offset as usize, kind, wb, fb)?;
                                 sp!(self, val);
                             }
                             (
@@ -3890,13 +3948,8 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                                 let fb = self.module_float_bytes();
                                 let bytes =
                                     fc.resolve(self.arena).map_err(|_| stale_arena_body())?;
-                                let val = crate::bytecode::GenericValue::read_scalar_le(
-                                    bytes,
-                                    offset as usize,
-                                    kind,
-                                    wb,
-                                    fb,
-                                );
+                                let val =
+                                    self.read_flat_scalar(bytes, offset as usize, kind, wb, fb)?;
                                 sp!(self, val);
                             }
                             (

@@ -26,7 +26,7 @@
 extern crate alloc;
 
 use alloc::boxed::Box;
-use alloc::collections::BTreeMap;
+use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
@@ -77,6 +77,18 @@ pub struct LayoutContext<'a> {
     /// Byte width of the target's float type. Equals `8` for
     /// the bundled `f64` runtime.
     float_bytes: usize,
+    /// Newtype names, used only with `opaque_fallback` to avoid
+    /// misclassifying a newtype-typed field as opaque. `None` when no
+    /// fallback is configured.
+    newtypes: Option<&'a BTreeSet<String>>,
+    /// When set, a bare `Named` type that is neither a struct, an enum,
+    /// nor a newtype is treated as an opaque host reference
+    /// (`ScalarKind::Opaque`) rather than an [`LayoutError::UnknownType`]
+    /// error (B28 P3). The compiler enables this because it runs after the
+    /// type checker, where any surviving unknown named type used in a
+    /// signature is necessarily an opaque host type. Default off, so the
+    /// pass keeps strict unknown-type detection when used standalone.
+    opaque_fallback: bool,
 }
 
 impl<'a> LayoutContext<'a> {
@@ -95,7 +107,20 @@ impl<'a> LayoutContext<'a> {
             enums,
             word_bytes,
             float_bytes,
+            newtypes: None,
+            opaque_fallback: false,
         }
+    }
+
+    /// Enable opaque fallback (B28 P3): a bare `Named` type that is not a
+    /// struct, enum, or one of `newtypes` resolves to
+    /// [`ScalarKind::Opaque`] rather than erroring. Intended for callers
+    /// that run after type checking, where a surviving unknown named type
+    /// is an opaque host reference.
+    pub fn with_opaque_fallback(mut self, newtypes: &'a BTreeSet<String>) -> Self {
+        self.newtypes = Some(newtypes);
+        self.opaque_fallback = true;
+        self
     }
 
     /// Compute the byte layout for a type expression.
@@ -164,6 +189,22 @@ impl<'a> LayoutContext<'a> {
                         type_name: name.clone(),
                         variants,
                     });
+                }
+                // Post-type-check, a bare `Named` type that is neither a
+                // struct, an enum, a newtype, nor a built-in is an opaque
+                // host reference (B28 P3). It carries no generic arguments
+                // here (those errored above), so it is a fixed-size opaque
+                // handle. `Option` is excluded: it is a built-in generic
+                // enum that is not in the `enums` map and appears bare (no
+                // type argument) when the enum-variant lowering recovers an
+                // `Option::*` expression's type, so it must keep erroring
+                // here and stay boxed rather than be mistaken for opaque.
+                // Standalone use keeps strict unknown detection.
+                if self.opaque_fallback
+                    && name != "Option"
+                    && !self.newtypes.is_some_and(|nt| nt.contains(name))
+                {
+                    return Ok(LayoutDescriptor::Scalar(ScalarKind::Opaque));
                 }
                 Err(LayoutError::UnknownType(name.clone()))
             }

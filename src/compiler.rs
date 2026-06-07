@@ -115,12 +115,17 @@ impl TypeInfo {
     /// reimplemented, so the compiler and the runtime construction agree by
     /// sharing one predicate.
     fn layout_context(&self) -> LayoutContext<'_> {
+        // Opaque fallback is enabled because the compiler runs after the
+        // type checker: a bare `Named` type that is not a struct, enum, or
+        // newtype is an opaque host reference, which is flat-eligible as a
+        // `word_bytes` registry index (B28 P3).
         LayoutContext::new(
             &self.struct_defs,
             &self.enum_defs,
             self.word_bytes,
             self.float_bytes,
         )
+        .with_opaque_fallback(&self.newtype_names)
     }
 }
 
@@ -3631,6 +3636,10 @@ fn classify_flat_field(ty: &TypeExpr, ti: &TypeInfo) -> FlatFieldForm {
 /// well-typed program's access form always agrees with the body.
 fn array_elem_operand(elem_ty: Option<&TypeExpr>, ti: &TypeInfo) -> ArrayElem {
     match elem_ty.map(|ty| classify_flat_field(ty, ti)) {
+        // An opaque element keeps the array boxed (B28 P3): opaque is flat
+        // only in struct/enum fields, where the named type makes access
+        // reliable, not in value-driven tuples and arrays.
+        Some(FlatFieldForm::Scalar(crate::value_layout::ScalarKind::Opaque)) => ArrayElem::Boxed,
         Some(FlatFieldForm::Scalar(kind)) => ArrayElem::Flat { kind },
         Some(FlatFieldForm::Nested(size, variant)) => ArrayElem::FlatNested { size, variant },
         _ => ArrayElem::Boxed,
@@ -3668,6 +3677,18 @@ fn tuple_field_access(
         let Some(size) = type_flat_size(ty, &fc.type_info) else {
             return boxed;
         };
+        // An opaque element keeps the whole tuple boxed (B28 P3). Opaque is
+        // flat in a struct or enum, where the named type makes access
+        // reliable, but a tuple's access form is recovered by lightweight
+        // inference that cannot see an opaque element type, so the
+        // value-driven runtime keeps an opaque-bearing tuple boxed and the
+        // access must agree.
+        if matches!(
+            classify_flat_field(ty, &fc.type_info),
+            FlatFieldForm::Scalar(crate::value_layout::ScalarKind::Opaque)
+        ) {
+            return boxed;
+        }
         if i == index {
             field_at = Some((offset, classify_flat_field(ty, &fc.type_info)));
         }
