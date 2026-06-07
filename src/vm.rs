@@ -1893,11 +1893,28 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
     ///
     /// Wired into the flat-composite construction path by the next P3
     /// slice; see [`Self::resolve_ephemeral_opaque`] for the read side.
+    ///
+    /// Interning deduplicates by pointer identity: an `Arc` already in the
+    /// registry returns its existing index rather than a fresh one. This
+    /// is correctness-critical, not an optimisation. Opaque equality is
+    /// `Arc::ptr_eq` (see the `Value::Opaque` arm of `PartialEq`), and a
+    /// flat composite body compares by bytes, so two bodies that hold the
+    /// same opaque must store the same index for byte equality to coincide
+    /// with pointer identity. Without dedup, `(o,) == (o,)` would be false.
+    /// The scan is linear in the live opaque count, which the worst-case
+    /// memory bound caps.
     #[allow(dead_code)]
     pub(crate) fn intern_ephemeral_opaque(
         &mut self,
         opaque: alloc::sync::Arc<dyn crate::opaque::HostOpaque>,
     ) -> usize {
+        if let Some(index) = self
+            .ephemeral_opaques
+            .iter()
+            .position(|existing| alloc::sync::Arc::ptr_eq(existing, &opaque))
+        {
+            return index;
+        }
         let index = self.ephemeral_opaques.len();
         self.ephemeral_opaques.push(opaque);
         index
@@ -8674,6 +8691,38 @@ mod tests {
         vm.reset_after_error();
         assert_eq!(alloc::sync::Arc::strong_count(&external), 1);
         assert!(vm.resolve_ephemeral_opaque(idx).is_none());
+    }
+
+    #[test]
+    fn ephemeral_opaque_intern_dedups_by_pointer_identity() {
+        // Interning the same `Arc` twice returns the same index, so the
+        // byte equality of two flat composite bodies that hold the same
+        // opaque coincides with `Arc::ptr_eq`. Distinct `Arc`s, even of
+        // the same host type, get distinct indices.
+        struct Handle;
+        impl crate::opaque::HostOpaque for Handle {
+            fn type_name(&self) -> &'static str {
+                "Handle"
+            }
+        }
+
+        let module = build_module("fn main() -> Word { 42 }");
+        let arena = keleusma_arena::Arena::with_capacity(4096);
+        let mut vm = Vm::new(module, &arena).unwrap();
+
+        let a = crate::opaque::host_arc(Handle);
+        let b = crate::opaque::host_arc(Handle);
+
+        let ia0 = vm.intern_ephemeral_opaque(alloc::sync::Arc::clone(&a));
+        let ib = vm.intern_ephemeral_opaque(alloc::sync::Arc::clone(&b));
+        let ia1 = vm.intern_ephemeral_opaque(alloc::sync::Arc::clone(&a));
+
+        assert_eq!(ia0, ia1, "same Arc dedups to one index");
+        assert_ne!(ia0, ib, "distinct Arcs get distinct indices");
+        // The dedup did not grow the registry on the third intern.
+        assert!(vm.resolve_ephemeral_opaque(ia1).is_some());
+        assert!(vm.resolve_ephemeral_opaque(ib).is_some());
+        assert!(vm.resolve_ephemeral_opaque(2).is_none());
     }
 
     #[test]
