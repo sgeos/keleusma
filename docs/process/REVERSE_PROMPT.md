@@ -9,7 +9,7 @@ AI to Human communication channel.
 ## Last Updated
 
 **Date**: 2026-06-06
-**Status**: B28 P4 is merged into `feat-flat-memory-model`, pushed, and the sub-feature branch pruned. The B32 arena bytes-builder was prototyped, judged obsolete, and reverted (its commit was unpushed and is dropped; the `BACKLOG.md` B32 entry carries an obsolete banner with the rationale). A new sub-feature branch `feat-flat-memory-refs` is cut for B28 P3. No P3 code has landed yet; a design decision is open (below).
+**Status**: B28 P4 is merged, pushed, pruned. B32 was reverted and marked obsolete. B28 P3 is in progress on `feat-flat-memory-refs` (pushed): opaque (host-reference) fields are now flat-eligible in struct and enum composites, end to end through construction, access, and equality. Three P3 commits have landed green: the registry foundation with drop-at-RESET (`6c3f168`), pointer-identity dedup interning (`f542bc7`), and flat opaque struct/enum fields (`baf711f`).
 
 ## Why B32 was reverted
 
@@ -34,6 +34,19 @@ This is a multi-day, soundness-critical change touching the `Value` representati
 - The typeless-boundary problem is solved host-side: at a yield or native boundary the VM hands the host flat bytes, and the host's `#[derive(KeleusmaType)]` already knows the layout and decodes them through `from_flat_bytes` (the existing P2 flat-marshalling path, extended to reference fields). The marshalling layer resolves an opaque field's index through the registry as it decodes. No VM-side field-walker and no runtime layout table.
 - Construction interns each `Value::Opaque(arc)` into the registry and packs the index word; access reads the index word at the compiler-baked `ScalarKind::Opaque` offset and resolves it back to `Value::Opaque(Arc::clone(...))`.
 
+## What landed and what is scoped out
+
+Opaque is flat in struct and enum fields only. Tuples and arrays keep boxing an opaque element: their access form is recovered by the compiler's lightweight `infer_expr_type`, which cannot recover an opaque element type from a native call, so a value-driven flat tuple would disagree with its boxed-baked access. Structs and enums use the named type for access, which is reliable. Construction interns opaque fields on the flat path; access resolves the index; equality is correct via pointer-identity dedup.
+
+The opaque fallback in `LayoutContext` (post-type-check, a bare unknown `Named` is opaque) excludes the built-in `Option`, which the enum-variant lowering recovers as a bare `Named("Option")` that must stay boxed. The regression this caught (flat `Option` bodies) is fixed and covered by the existing `option_*` tests.
+
+## Remaining P3 sub-slices (boundaries)
+
+The committed slice is sound for internal use: a non-resolving opaque index errors cleanly rather than producing a wrong value or undefined behaviour. Two boundaries are feature gaps, not soundness holes, and are the next sub-slices:
+
+- **Yield and native.** Decoding a yielded or argument flat composite that holds an opaque field requires the host derive's `from_flat_bytes` to resolve the index through the registry (the marshall/macro path the operator identified). Until then, a host `#[derive(KeleusmaType)]` type with an opaque field decoded from a flat body is not supported.
+- **Persistent `data`.** A flat opaque composite written to a persistent slot holds an ephemeral index that the next `RESET` invalidates; reading it back after a reset errors cleanly. A persistent opaque registry (the second registry from B33) closes this.
+
 ## Intended next step
 
-Implement the coordinated first slice for Opaque: the registry plus reset-drop, the type-side and compiler flat-eligibility for `ScalarKind::Opaque`, construction interning, access resolution, and the marshall/macro decode of an opaque field at the yield and native boundaries. The slice is irreducibly cross-cutting (a registry with no reader trips the dead-code gate, and making Opaque flat-eligible without boundary handling would be unsound), so it lands as one green commit covering construct, access, and boundary decode, starting with Opaque in tuples and structs.
+Take the yield/native boundary: extend the marshall layer and `#[derive(KeleusmaType)]` so an opaque field in a flat composite resolves through the VM registry when crossing to the host, then the persistent registry for the `data` boundary. After that, P3 can extend to tuples/arrays only if `infer_expr_type` is strengthened to recover opaque element types, otherwise they remain boxed by design.
