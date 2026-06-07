@@ -774,6 +774,18 @@ pub struct GenericVm<
     /// Any `register_*` method or `replace_module` resets this
     /// field to `None`.
     native_classifications_verified: bool,
+    /// Registry of opaque host references reachable from ephemeral
+    /// (arena-resident) flat composite bodies (B28 P3). A flat
+    /// composite stores a `word_bytes` index into this Vec rather
+    /// than the `Arc` itself, because `Arc<dyn HostOpaque>` is a
+    /// `Drop`-bearing fat pointer that cannot be packed into the
+    /// reset-without-Drop arena bytes. `RESET` clears this Vec,
+    /// running each `Arc`'s `Drop` and decrementing the host
+    /// refcount, which is correct because the arena bodies that hold
+    /// the indices are themselves reclaimed at `RESET`. Opaques that
+    /// must survive `RESET` (those reachable from `private data`) will
+    /// use a separate persistent registry in a later slice.
+    ephemeral_opaques: Vec<alloc::sync::Arc<dyn crate::opaque::HostOpaque>>,
     /// Host-supplied trust matrix for cryptographic module
     /// signatures. Populated through
     /// [`Self::register_verifying_key`] before the host hot-swaps
@@ -1513,6 +1525,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
             skip_breakpoint_at: None,
             fault_location: None,
             native_classifications_verified: false,
+            ephemeral_opaques: Vec::new(),
             #[cfg(feature = "signatures")]
             verifying_keys: Vec::new(),
         })
@@ -1678,6 +1691,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
             skip_breakpoint_at: None,
             fault_location: None,
             native_classifications_verified: false,
+            ephemeral_opaques: Vec::new(),
             #[cfg(feature = "signatures")]
             verifying_keys: Vec::new(),
         })
@@ -1849,6 +1863,10 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
     /// is rewound, so they must be dropped before the bottom-region
     /// reset advances the bump pointer.
     fn full_reset_arena_internal(&mut self) -> Result<(), keleusma_arena::EpochSaturated> {
+        // Drop ephemeral opaque references reachable from the arena
+        // bodies that this reset reclaims (B28 P3). Clearing the Vec
+        // runs each `Arc`'s `Drop`, decrementing the host refcount.
+        self.ephemeral_opaques.clear();
         // Drop the old arena-backed stacks before clearing the bottom
         // bump pointer. Drop runs each contained value's destructor
         // and calls `BottomHandle::deallocate`, which is a no-op for
@@ -1863,6 +1881,45 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         // access after the reset rather than dereferencing reclaimed
         // memory.
         unsafe { self.arena.reset_unchecked() }
+    }
+
+    /// Intern an opaque host reference into the ephemeral registry and
+    /// return its index (B28 P3).
+    ///
+    /// The index is what a flat composite body stores `word_bytes`-wide
+    /// in place of the `Drop`-bearing `Arc`. The interned `Arc` is
+    /// dropped at the next `RESET`, when the arena body holding the index
+    /// is reclaimed.
+    ///
+    /// Wired into the flat-composite construction path by the next P3
+    /// slice; see [`Self::resolve_ephemeral_opaque`] for the read side.
+    #[allow(dead_code)]
+    pub(crate) fn intern_ephemeral_opaque(
+        &mut self,
+        opaque: alloc::sync::Arc<dyn crate::opaque::HostOpaque>,
+    ) -> usize {
+        let index = self.ephemeral_opaques.len();
+        self.ephemeral_opaques.push(opaque);
+        index
+    }
+
+    /// Resolve an ephemeral opaque index back to a cloned `Arc` (B28 P3).
+    ///
+    /// Returns `None` if the index is out of range. A well-formed flat
+    /// body never produces an out-of-range index because the index was
+    /// issued by [`Self::intern_ephemeral_opaque`] under the same epoch,
+    /// and a `RESET` that clears the registry also reclaims the arena
+    /// body holding the index.
+    ///
+    /// Wired into the flat-composite access path by the next P3 slice.
+    #[allow(dead_code)]
+    pub(crate) fn resolve_ephemeral_opaque(
+        &self,
+        index: usize,
+    ) -> Option<alloc::sync::Arc<dyn crate::opaque::HostOpaque>> {
+        self.ephemeral_opaques
+            .get(index)
+            .map(alloc::sync::Arc::clone)
     }
 
     /// Recover from a runtime error and return the VM to a clean
@@ -3389,6 +3446,10 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                     // dynamic strings and other arena values are reclaimed
                     // here.
                     let _ = self.reset_arena_internal();
+                    // Drop ephemeral opaque references reachable from the
+                    // arena bodies just reclaimed (B28 P3); their `Drop`
+                    // decrements the host refcount.
+                    self.ephemeral_opaques.clear();
 
                     // Find Stream instruction and set IP to
                     // instruction after it. V0.2.0 Phase 7c reads
@@ -8571,6 +8632,48 @@ mod tests {
         assert_eq!(vm.arena().epoch(), pre_epoch + 1);
         // The handle is now stale.
         assert!(handle.get(vm.arena()).is_err());
+    }
+
+    #[test]
+    fn ephemeral_opaque_registry_drops_at_reset() {
+        // B28 P3 foundation: the ephemeral opaque registry holds the
+        // `Drop`-bearing `Arc` that a flat composite body refers to by
+        // index, and a RESET drops it. The host refcount is observed
+        // through an external `Arc` clone.
+        struct Handle;
+        impl crate::opaque::HostOpaque for Handle {
+            fn type_name(&self) -> &'static str {
+                "Handle"
+            }
+        }
+
+        let module = build_module("fn main() -> Word { 42 }");
+        let arena = keleusma_arena::Arena::with_capacity(4096);
+        let mut vm = Vm::new(module, &arena).unwrap();
+
+        let arc = crate::opaque::host_arc(Handle);
+        let external = alloc::sync::Arc::clone(&arc);
+        assert_eq!(alloc::sync::Arc::strong_count(&external), 2);
+
+        // Interning moves the `Arc` into the registry; the external
+        // clone still observes two strong references.
+        let idx = vm.intern_ephemeral_opaque(arc);
+        assert_eq!(alloc::sync::Arc::strong_count(&external), 2);
+
+        // Resolving yields a fresh clone (transiently three), dropped
+        // back to two when the resolved handle is released.
+        let resolved = vm.resolve_ephemeral_opaque(idx).expect("index in range");
+        assert_eq!(alloc::sync::Arc::strong_count(&external), 3);
+        assert_eq!(resolved.type_name(), "Handle");
+        drop(resolved);
+        assert_eq!(alloc::sync::Arc::strong_count(&external), 2);
+
+        // RESET clears the registry, running the registry `Arc`'s
+        // `Drop`; the external clone is the sole remaining reference and
+        // the index no longer resolves.
+        vm.reset_after_error();
+        assert_eq!(alloc::sync::Arc::strong_count(&external), 1);
+        assert!(vm.resolve_ephemeral_opaque(idx).is_none());
     }
 
     #[test]

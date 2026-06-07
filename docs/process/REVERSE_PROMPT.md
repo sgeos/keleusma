@@ -27,6 +27,13 @@ The map (from `src/value_layout.rs`, `src/bytecode.rs`, `src/vm.rs`, `src/compil
 
 This is a multi-day, soundness-critical change touching the `Value` representation, the construction and access handlers, RESET semantics, the yield boundary, and the marshall layer.
 
+## P3 design (settled with the operator)
+
+- A reference field stores a `word_bytes` index into a VM-side registry, not the pointer. `Value::Opaque(Arc<dyn HostOpaque>)` cannot be packed directly (16-byte fat pointer, `Drop`-bearing), and `KString`/`StaticStr` do not fit the reserved slot either; an index does.
+- The registry is `ephemeral_opaques: Vec<Arc<dyn HostOpaque>>` on the VM. `RESET` clears it so `Drop` runs and refcounts decrement (the operator's "run `Drop` as part of `RESET`"). The clear lives in the VM (`Op::Reset` and `full_reset_arena_internal`, both `&mut self`), preserving the arena's POD-only contract. A later slice adds a persistent registry for opaques in `private data` that must survive `RESET`.
+- The typeless-boundary problem is solved host-side: at a yield or native boundary the VM hands the host flat bytes, and the host's `#[derive(KeleusmaType)]` already knows the layout and decodes them through `from_flat_bytes` (the existing P2 flat-marshalling path, extended to reference fields). The marshalling layer resolves an opaque field's index through the registry as it decodes. No VM-side field-walker and no runtime layout table.
+- Construction interns each `Value::Opaque(arc)` into the registry and packs the index word; access reads the index word at the compiler-baked `ScalarKind::Opaque` offset and resolves it back to `Value::Opaque(Arc::clone(...))`.
+
 ## Intended next step
 
-Confirm the P3 approach and scope before building, then implement the minimal sound first slice. The open question is which reference kind to take first and how far to scope the registry (ephemeral-only versus ephemeral plus persistent for `private data` fields).
+Implement the coordinated first slice for Opaque: the registry plus reset-drop, the type-side and compiler flat-eligibility for `ScalarKind::Opaque`, construction interning, access resolution, and the marshall/macro decode of an opaque field at the yield and native boundaries. The slice is irreducibly cross-cutting (a registry with no reader trips the dead-code gate, and making Opaque flat-eligible without boundary handling would be unsound), so it lands as one green commit covering construct, access, and boundary decode, starting with Opaque in tuples and structs.
