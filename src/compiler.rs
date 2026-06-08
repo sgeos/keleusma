@@ -3634,6 +3634,49 @@ fn classify_flat_field(ty: &TypeExpr, ti: &TypeInfo) -> FlatFieldForm {
     FlatFieldForm::NotFlat
 }
 
+/// Whether a value of this layout transitively contains a flat (dynamic)
+/// `Text` field (B28 P3 item 2), used to reject yielding it across the
+/// boundary.
+///
+/// A struct or non-`Option` enum flattens a direct `Text` field, packing it
+/// as an arena `(ptr, len)` that is always a dynamic string (a literal is
+/// copied into the arena at construction). Such a field is reclaimed at the
+/// iteration `RESET` and is invisible to the runtime `contains_dynstr`
+/// walk, so the compiler rejects it here. A `Text` reached only through a
+/// tuple, array, or `Option` is boxed, keeps its `StaticStr`/`KStr`
+/// distinction, and is governed by the runtime check (static allowed,
+/// dynamic rejected); such a direct element is not flagged, but the walk
+/// still descends through it to find a struct or enum below. On a
+/// narrow-word build a flat `Text` is boxed (the runtime gate), so it is not
+/// a flat-text concern there.
+fn layout_has_flat_text(d: &crate::value_layout::LayoutDescriptor, word_bytes: usize) -> bool {
+    use crate::value_layout::{LayoutDescriptor as L, ScalarKind};
+    let is_flat_text = |f: &L| {
+        matches!(f, L::Scalar(ScalarKind::Text)) && word_bytes >= core::mem::size_of::<usize>()
+    };
+    match d {
+        L::Struct { fields, .. } => fields
+            .iter()
+            .any(|(_, f)| is_flat_text(f) || layout_has_flat_text(f, word_bytes)),
+        L::Enum {
+            type_name,
+            variants,
+        } if type_name != "Option" => variants.iter().any(|(_, ps)| {
+            ps.iter()
+                .any(|p| is_flat_text(p) || layout_has_flat_text(p, word_bytes))
+        }),
+        // `Option` (an enum descriptor), tuples, and arrays box a direct
+        // `Text` element, so a direct `Text` is not flagged; recurse to find
+        // a struct or enum below.
+        L::Enum { variants, .. } => variants
+            .iter()
+            .any(|(_, ps)| ps.iter().any(|p| layout_has_flat_text(p, word_bytes))),
+        L::Tuple(elems) => elems.iter().any(|e| layout_has_flat_text(e, word_bytes)),
+        L::Array { element, .. } => layout_has_flat_text(element, word_bytes),
+        L::Scalar(_) => false,
+    }
+}
+
 /// Resolve the baked [`ArrayElem`] operand for indexing an array whose
 /// element type is `elem_ty` (B28 P2). A flat-eligible scalar element type
 /// bakes `Flat { kind }` and a nested flat composite element bakes
@@ -5467,7 +5510,32 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
             fc.record_call_site_last_op(span);
         }
 
-        Expr::Yield { value, .. } => {
+        Expr::Yield { value, span } => {
+            // A flat (struct/enum) Text field is always a dynamic arena
+            // string; it cannot cross the yield boundary because the
+            // iteration RESET reclaims it, and the runtime `contains_dynstr`
+            // walk cannot see it inside flat bytes. Reject it here (B28 P3
+            // item 2). Bare and boxed (tuple/array/Option) text keep their
+            // static/dynamic distinction and are governed by the runtime
+            // check; static text and containers of it remain free to cross.
+            // The check is best-effort: if the value's type cannot be
+            // recovered or laid out, the runtime check and the epoch-guarded
+            // read (B28 P3 item 1) remain as backstops.
+            if let Some(ty) = infer_expr_type(fc, value)
+                && let Ok(desc) = fc.type_info.layout_context().layout_for(&ty)
+                && layout_has_flat_text(&desc, fc.type_info.word_bytes)
+            {
+                return Err(CompileError {
+                    message: String::from(
+                        "yielded value contains a Text field inside a struct or enum, \
+                         which is a dynamic arena string and cannot cross the yield \
+                         boundary (it is reclaimed at the iteration boundary); yield a \
+                         non-string representation, or read the field in the host before \
+                         the next resume",
+                    ),
+                    span: *span,
+                });
+            }
             compile_expr(fc, value)?;
             fc.emit(Op::Yield);
         }
