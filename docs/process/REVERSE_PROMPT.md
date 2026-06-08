@@ -65,6 +65,21 @@ Implementation blueprint:
 
 This is a substantial unsafe slice (raw pointer pack/unpack), so it lands as its own green commit and is not rushed onto the shared branch.
 
+### Soundness finding: two-word `(ptr, len)` is not sound (implementation attempt, reverted)
+
+The two-word `(ptr, len)` representation was implemented end to end (construct, access, KString raw-parts API) and round-trips correctly while the composite stays arena-resident. It is **unsound across materialisation**, so it was reverted:
+
+- At yield or return, a flat composite is materialised arena-to-inline so it survives a later `RESET`. Materialisation copies the body bytes verbatim, including the `Text` field's `(ptr, len)`, but it does not (and typelessly cannot) copy the referenced arena string. The inline composite therefore outlives the arena string.
+- The access path rebuilds the `KString` from `(ptr, len)` using the **current** arena epoch, not the string's original epoch. After a `RESET`, the inline composite's epoch check is bypassed (it is inline, not arena), and the rebuilt handle's epoch equals the current epoch, so `get` passes and dereferences reclaimed memory — undefined behaviour.
+- The implementation attempt also revealed that flat `Text` entangles the `KString` lifecycle: making `KStr` value-side flat-eligible flattens `Text` in every constructor (`tuple_with_widths`, const materialisation, marshalling), which hides the `KStr` from `materialise_kstrings` and `contains_dynstr` (five tests). Type-side flat access forces all construction paths to flatten consistently, so it cannot be confined to the VM struct/enum path.
+
+The root cause is that two words hold `(ptr, len)` but not the epoch, so staleness cannot travel with the field once the composite leaves the arena. Two sound representations:
+
+1. **Three-word full handle `(ptr, len, epoch)`** — the `KString` handle stored inline, no registry, honouring the "no Arc, no extra tracking" intent (the epoch is the `KString`'s own existing staleness mechanism, not new tracking). Requires `ScalarKind::Text` to be three words instead of two. After materialisation, access rebuilds with the stored epoch, so a post-`RESET` read returns a clean `Stale` error rather than UB. `Text` equality is pointer-based.
+2. **One-word registry index** — like opaque, with a VM string registry deduped by `GenericValue` equality (preserving string equality semantics). Sound across materialisation because a cleared registry yields a clean error, not a dangling deref. Requires `ScalarKind::Text` to be one word. Reintroduces a registry, which the operator wanted to avoid for strings.
+
+Recommendation: option 1 (three-word inline handle) honours the operator's no-registry direction and is sound; it needs one more word than the current two-word slot. The `materialise_kstrings`/`contains_dynstr` lifecycle must still be updated so a flat composite's `Text` field crosses yield epoch-gated (the operator's stated model) rather than being walked. The decision between options 1 and 2 is the operator's; both are sound, the reverted two-word form is not.
+
 ## Other follow-ups
 
 Opaque marshalling (a `KeleusmaType` path for opaque values) and resolving a whole opaque-bearing composite yielded for manual host inspection are a separate later feature, not part of P3's core. P5 (hot-swap migration, documentation, decision closure) remains after the reference fields.
