@@ -412,6 +412,12 @@ pub(crate) fn flat_tuple_scalar_kind<W: crate::word::Word, F: crate::float::Floa
         GenericValue::Byte(_) => Some(K::Byte),
         GenericValue::Int(_) => Some(K::Int),
         GenericValue::Fixed(_) => Some(K::Fixed),
+        // A `KStr` is flat as a two-word `(data_ptr, len)` arena reference
+        // (B28 P3). `StaticStr` is heap-owned and not flat here; the VM
+        // construct path copies it into the arena, converting it to a
+        // `KStr`, before packing. `Opaque` stays non-flat (interned to a
+        // one-word registry index by the VM, not packed from here).
+        GenericValue::KStr(_) => Some(K::Text),
         _ => None,
     }
 }
@@ -502,6 +508,19 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
         word_bytes: usize,
         float_bytes: usize,
     ) -> Self {
+        // A tuple or array keeps a text element boxed (B28 P3): text is
+        // flat only in struct/enum fields, whose access form the named type
+        // makes reliable, not in value-driven tuples and arrays whose access
+        // form is recovered by lightweight inference. Keeping the
+        // value-side constructor boxed for text matches the boxed access the
+        // compiler bakes, and leaves a `KStr` visible to the `KString`
+        // lifecycle (`materialise_kstrings`, `contains_dynstr`).
+        if elements
+            .iter()
+            .any(|e| matches!(e, Self::StaticStr(_) | Self::KStr(_)))
+        {
+            return Self::Tuple(TupleBody::Boxed(elements));
+        }
         // A tuple has no padding (no minimum), so the packed size is exact.
         match Self::try_pack_flat(elements.iter(), 0, word_bytes, float_bytes) {
             Some(body) => Self::Tuple(TupleBody::Flat(body)),
@@ -536,6 +555,14 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
         word_bytes: usize,
         float_bytes: usize,
     ) -> Self {
+        // A text element keeps the array boxed (B28 P3); see
+        // `tuple_with_widths`.
+        if elements
+            .iter()
+            .any(|e| matches!(e, Self::StaticStr(_) | Self::KStr(_)))
+        {
+            return Self::Array(ArrayBody::Boxed(elements));
+        }
         match Self::try_pack_flat(elements.iter(), 0, word_bytes, float_bytes) {
             Some(body) => Self::Array(ArrayBody::Flat(body)),
             None => Self::Array(ArrayBody::Boxed(elements)),
@@ -687,6 +714,24 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
                     4 => dst[offset..offset + 4].copy_from_slice(&(v as f32).to_le_bytes()),
                     other => panic!("write_scalar_le: unsupported float width {other}"),
                 }
+            }
+            // A `KStr` Text field is two words: the arena data pointer then
+            // the byte length, each `word_bytes` wide (B28 P3). The epoch is
+            // reattached at the read side, not stored. This requires
+            // `word_bytes` to be at least the host pointer width, which the
+            // bundled `i64` runtime satisfies; a narrower-word target keeps
+            // `Text` boxed (a separate compile-time gate).
+            Self::KStr(ks) => {
+                let (ptr, len) = ks.raw_parts();
+                debug_assert!(
+                    word_bytes >= core::mem::size_of::<usize>(),
+                    "flat Text requires word_bytes >= host pointer width"
+                );
+                let pe = (ptr as u64).to_le_bytes();
+                dst[offset..offset + word_bytes].copy_from_slice(&pe[..word_bytes]);
+                let le = (len as u64).to_le_bytes();
+                dst[offset + word_bytes..offset + 2 * word_bytes]
+                    .copy_from_slice(&le[..word_bytes]);
             }
             other => panic!("write_scalar_le: not a fixed-size scalar: {other:?}"),
         }
@@ -3689,15 +3734,21 @@ mod materialise_kstrings_tests {
 
     #[test]
     fn struct_walks_recursively() {
+        // Built as an explicit boxed struct: `struct_value` now flattens a
+        // struct whose fields are all flat (a `Text`/`KStr` field is a
+        // two-word flat reference, B28 P3), and a flat struct's text field
+        // is an arena reference reattached at access through the epoch
+        // wrapper, not a `KStr` that `materialise_kstrings` converts. The
+        // recursive walk over a boxed struct is what this test exercises.
         let arena = make_arena();
         let handle = KString::alloc(&arena, "field-value").expect("alloc");
-        let v = V::struct_value(
-            alloc::string::String::from("Point"),
-            alloc::vec![
+        let v = V::Struct(StructBody::Boxed {
+            type_name: alloc::string::String::from("Point"),
+            fields: alloc::vec![
                 (alloc::string::String::from("x"), V::Int(7)),
                 (alloc::string::String::from("name"), V::KStr(handle)),
             ],
-        );
+        });
         let materialised = v.materialise_kstrings(&arena);
         match materialised {
             V::Struct(StructBody::Boxed { fields, .. }) => {

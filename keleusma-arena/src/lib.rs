@@ -1068,6 +1068,18 @@ impl<T: ?Sized> ArenaHandle<T> {
     pub fn epoch(&self) -> u64 {
         self.epoch
     }
+
+    /// The raw wide pointer this handle wraps.
+    ///
+    /// Reading the pointer value (and its slice/str length metadata) is
+    /// safe; dereferencing it is sound only under the handle's epoch, the
+    /// same contract [`ArenaHandle::get`] enforces. A higher-level helper
+    /// that stores a handle's raw `(pointer, length)` in a flat byte body
+    /// and later rebuilds it through [`ArenaHandle::from_raw_parts`] uses
+    /// this accessor for the store side.
+    pub fn as_non_null(&self) -> NonNull<T> {
+        self.ptr
+    }
 }
 
 #[cfg(test)]

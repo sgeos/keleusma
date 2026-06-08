@@ -3613,6 +3613,15 @@ fn classify_flat_field(ty: &TypeExpr, ti: &TypeInfo) -> FlatFieldForm {
         return FlatFieldForm::NotFlat;
     };
     if let Some(kind) = descriptor.flat_scalar_kind() {
+        // A flat `Text` field holds a host data pointer; it is flat only
+        // when the word slot is at least the host pointer width, matching
+        // the runtime gate in `LayoutDescriptor::flat_byte_size`. A
+        // narrow-word build keeps `Text` boxed (B28 P3).
+        if matches!(kind, crate::value_layout::ScalarKind::Text)
+            && ti.word_bytes < core::mem::size_of::<usize>()
+        {
+            return FlatFieldForm::NotFlat;
+        }
         return FlatFieldForm::Scalar(kind);
     }
     if let (Some(size), Some(variant)) = (
@@ -3636,10 +3645,12 @@ fn classify_flat_field(ty: &TypeExpr, ti: &TypeInfo) -> FlatFieldForm {
 /// well-typed program's access form always agrees with the body.
 fn array_elem_operand(elem_ty: Option<&TypeExpr>, ti: &TypeInfo) -> ArrayElem {
     match elem_ty.map(|ty| classify_flat_field(ty, ti)) {
-        // An opaque element keeps the array boxed (B28 P3): opaque is flat
-        // only in struct/enum fields, where the named type makes access
-        // reliable, not in value-driven tuples and arrays.
-        Some(FlatFieldForm::Scalar(crate::value_layout::ScalarKind::Opaque)) => ArrayElem::Boxed,
+        // A reference element keeps the array boxed (B28 P3): opaque and
+        // text are flat only in struct/enum fields, where the named type
+        // makes access reliable, not in value-driven tuples and arrays.
+        Some(FlatFieldForm::Scalar(
+            crate::value_layout::ScalarKind::Opaque | crate::value_layout::ScalarKind::Text,
+        )) => ArrayElem::Boxed,
         Some(FlatFieldForm::Scalar(kind)) => ArrayElem::Flat { kind },
         Some(FlatFieldForm::Nested(size, variant)) => ArrayElem::FlatNested { size, variant },
         _ => ArrayElem::Boxed,
@@ -3677,15 +3688,17 @@ fn tuple_field_access(
         let Some(size) = type_flat_size(ty, &fc.type_info) else {
             return boxed;
         };
-        // An opaque element keeps the whole tuple boxed (B28 P3). Opaque is
-        // flat in a struct or enum, where the named type makes access
-        // reliable, but a tuple's access form is recovered by lightweight
-        // inference that cannot see an opaque element type, so the
-        // value-driven runtime keeps an opaque-bearing tuple boxed and the
-        // access must agree.
+        // A reference element (opaque or text) keeps the whole tuple boxed
+        // (B28 P3). References are flat in a struct or enum, where the named
+        // type makes access reliable, but a tuple's access form is recovered
+        // by lightweight inference that cannot see a reference element type,
+        // so the value-driven runtime keeps a reference-bearing tuple boxed
+        // and the access must agree.
         if matches!(
             classify_flat_field(ty, &fc.type_info),
-            FlatFieldForm::Scalar(crate::value_layout::ScalarKind::Opaque)
+            FlatFieldForm::Scalar(
+                crate::value_layout::ScalarKind::Opaque | crate::value_layout::ScalarKind::Text
+            )
         ) {
             return boxed;
         }

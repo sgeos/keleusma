@@ -74,4 +74,39 @@ impl KString {
     pub fn as_handle(&self) -> &ArenaHandle<str> {
         &self.0
     }
+
+    /// The handle's raw `(data_pointer, byte_length)`, read from the wide
+    /// pointer's metadata without dereferencing it (B28 P3).
+    ///
+    /// A flat composite stores these two words in place of a `Text` field.
+    /// The epoch is not stored: it is reattached at every extraction by
+    /// [`KString::from_raw_parts`], which is the arena's epoch-carrying
+    /// wrapper for a value passed back out of a flat body.
+    pub fn raw_parts(&self) -> (usize, usize) {
+        let raw: *const [u8] = self.0.as_non_null().as_ptr() as *const [u8];
+        (raw as *const u8 as usize, raw.len())
+    }
+
+    /// Rebuild a handle from a `(data_pointer, byte_length)` pair read from
+    /// a flat `Text` field and the arena epoch current at extraction (B28
+    /// P3). The returned `KString` carries that epoch, so a later `get`
+    /// after a `RESET` returns [`Stale`] rather than dereferencing
+    /// reclaimed memory.
+    ///
+    /// # Safety
+    ///
+    /// `ptr` and `len` must describe a `str`-valid (UTF-8) region that is
+    /// live under `epoch`. The flat-composite access path upholds this: the
+    /// `(ptr, len)` words come from a composite body that has just resolved
+    /// current, so the referenced string shares that live epoch.
+    pub unsafe fn from_raw_parts(ptr: usize, len: usize, epoch: u64) -> Self {
+        let raw_slice: *mut [u8] = core::ptr::slice_from_raw_parts_mut(ptr as *mut u8, len);
+        let raw_str: *mut str = raw_slice as *mut str;
+        // SAFETY: the caller guarantees `ptr` is the non-null data pointer
+        // of a live arena allocation under `epoch`.
+        let nn = unsafe { NonNull::new_unchecked(raw_str) };
+        // SAFETY: forwarded from this function's safety contract.
+        let handle = unsafe { ArenaHandle::from_raw_parts(nn, epoch) };
+        KString(handle)
+    }
 }

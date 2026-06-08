@@ -65,7 +65,11 @@ Implementation blueprint:
 
 This is a substantial unsafe slice (raw pointer pack/unpack), so it lands as its own green commit and is not rushed onto the shared branch.
 
-### Soundness finding: two-word `(ptr, len)` is not sound (implementation attempt, reverted)
+### Correction: two-word `(ptr, len)` IS sound and is now implemented
+
+The "not sound" analysis below was over-cautious and is superseded. The feared undefined behaviour requires the host to read a materialised flat composite's `Text` field through `from_flat_bytes`, which **does not exist** (there is no `KeleusmaType` decode for `Text`-in-flat, just as there is none for opaque). Within the VM, every flat-`Text` access goes through `resolve()` on an arena-resident composite (epoch-checked) or a freshly-built transient one; locals hold arena composites that go `Stale` on `RESET`. So `(ptr, len)` with the epoch reattached at extraction (the `KString` wrapper, per the operator's model) is sound for the VM-internal surface. The two-word slot is exactly right, with one gate: a flat `Text` field stores a host data pointer, so it is flat only when `word_bytes >= size_of::<usize>()`; narrow-word builds (the `narrow-word-*` features) keep `Text` boxed. Implemented and green: flat `Text` in struct and enum fields (construct copies a `StaticStr` into the arena, packs `(ptr, len)`; access rebuilds a `KStr` against the current epoch). Tuples/arrays keep `Text` boxed (value-driven access). `materialise_kstrings`/`contains_dynstr` walk boxed values only; a flat composite's `Text` field crosses yield epoch-gated, the operator's stated model. The host-boundary decode of `Text` (and opaque) is the deferred paired feature.
+
+### Original (superseded) finding: two-word `(ptr, len)` is not sound (implementation attempt, reverted)
 
 The two-word `(ptr, len)` representation was implemented end to end (construct, access, KString raw-parts API) and round-trips correctly while the composite stays arena-resident. It is **unsound across materialisation**, so it was reverted:
 

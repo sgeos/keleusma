@@ -424,8 +424,12 @@ impl LayoutDescriptor {
                 | ScalarKind::Byte
                 | ScalarKind::Int
                 | ScalarKind::Fixed
-                | ScalarKind::Opaque => Some(*k),
-                // Float (when present) and Text are not flat.
+                | ScalarKind::Opaque
+                // Text is flat as a two-word `(data_ptr, len)` reference
+                // into the arena string bytes (B28 P3); the epoch is
+                // reattached at extraction, not stored in the field.
+                | ScalarKind::Text => Some(*k),
+                // Float (when present) is not flat.
                 _ => None,
             },
             _ => None,
@@ -460,9 +464,16 @@ impl LayoutDescriptor {
     /// generic and absent from the type tables), so it returns `None`.
     pub fn flat_byte_size(&self, word_bytes: usize, float_bytes: usize) -> Option<usize> {
         match self {
-            Self::Scalar(_) => self
-                .flat_scalar_kind()
-                .map(|k| k.size_in_bytes(word_bytes, float_bytes)),
+            Self::Scalar(_) => self.flat_scalar_kind().and_then(|k| {
+                // A flat `Text` field stores a host data pointer in its
+                // first word, so it is flat only when the word slot is at
+                // least the host pointer width; a narrow-word build keeps
+                // `Text` boxed to avoid truncating the pointer (B28 P3).
+                if matches!(k, ScalarKind::Text) && word_bytes < core::mem::size_of::<usize>() {
+                    return None;
+                }
+                Some(k.size_in_bytes(word_bytes, float_bytes))
+            }),
             Self::Tuple(elems) => {
                 let mut total = 0usize;
                 for e in elems {
@@ -784,10 +795,11 @@ mod tests {
             LayoutDescriptor::Scalar(ScalarKind::Bool).flat_byte_size(I64_BYTES, F64_BYTES),
             Some(1)
         );
-        // Text and floats are not flat-eligible.
+        // Text is flat-eligible as a two-word `(data_ptr, len)` arena
+        // reference (B28 P3), so its flat size is `2 * word_bytes`.
         assert_eq!(
             LayoutDescriptor::Scalar(ScalarKind::Text).flat_byte_size(I64_BYTES, F64_BYTES),
-            None
+            Some(16)
         );
         // Opaque is flat-eligible as a `word_bytes` registry index (B28 P3).
         assert_eq!(
@@ -818,7 +830,7 @@ mod tests {
     }
 
     #[test]
-    fn flat_byte_size_struct_with_text_field_is_not_flat() {
+    fn flat_byte_size_struct_with_text_field_is_flat() {
         let layout = LayoutDescriptor::Struct {
             type_name: "Greeting".to_string(),
             fields: vec![
@@ -829,7 +841,9 @@ mod tests {
                 ),
             ],
         };
-        assert_eq!(layout.flat_byte_size(I64_BYTES, F64_BYTES), None);
+        // Text is flat as a two-word reference (B28 P3): one word for the
+        // Int field plus two words for the Text field.
+        assert_eq!(layout.flat_byte_size(I64_BYTES, F64_BYTES), Some(8 + 16));
     }
 
     #[test]
@@ -872,7 +886,7 @@ mod tests {
     }
 
     #[test]
-    fn flat_byte_size_mixed_enum_is_not_flat() {
+    fn flat_byte_size_enum_with_text_payload_is_flat() {
         let layout = LayoutDescriptor::Enum {
             type_name: "Reply".to_string(),
             variants: vec![
@@ -886,7 +900,10 @@ mod tests {
                 ),
             ],
         };
-        assert_eq!(layout.flat_byte_size(I64_BYTES, F64_BYTES), None);
+        // Both payloads are flat now (Text is a two-word reference, B28 P3),
+        // so the enum is uniformly flat: word discriminant plus the largest
+        // payload (the two-word Text in `Err`).
+        assert_eq!(layout.flat_byte_size(I64_BYTES, F64_BYTES), Some(8 + 16));
     }
 
     #[test]
@@ -897,7 +914,7 @@ mod tests {
         );
         assert_eq!(
             LayoutDescriptor::Scalar(ScalarKind::Text).flat_scalar_kind(),
-            None
+            Some(ScalarKind::Text)
         );
         assert_eq!(LayoutDescriptor::Tuple(vec![]).flat_scalar_kind(), None);
     }

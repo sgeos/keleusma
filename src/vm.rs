@@ -1971,6 +1971,29 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                     ))
                 });
         }
+        if matches!(kind, ScalarKind::Text) {
+            // A flat Text field is two words: the arena data pointer then
+            // the byte length, each read unsigned (a pointer must not be
+            // sign-extended). The body just resolved current, so wrapping
+            // with the current epoch yields the arena's epoch-carrying
+            // wrapper for the live string; a later read after a RESET
+            // returns a clean `Stale` error rather than dereferencing
+            // reclaimed memory (B28 P3).
+            let read_word = |o: usize| -> usize {
+                let mut buf = [0u8; 8];
+                buf[..word_bytes].copy_from_slice(&bytes[o..o + word_bytes]);
+                u64::from_le_bytes(buf) as usize
+            };
+            let ptr = read_word(offset);
+            let len = read_word(offset + word_bytes);
+            // SAFETY: `(ptr, len)` were packed from a live `KStr` handle when
+            // this composite was built under the arena epoch the composite
+            // body still carries (it resolved current above), so the region
+            // is intact and UTF-8.
+            let ks =
+                unsafe { crate::kstring::KString::from_raw_parts(ptr, len, self.arena.epoch()) };
+            return Ok(crate::bytecode::GenericValue::KStr(ks));
+        }
         Ok(crate::bytecode::GenericValue::read_scalar_le(
             bytes,
             offset,
@@ -3636,24 +3659,51 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                     // is `None` for `Opaque`, so a tuple holding one is not
                     // flattened). On the flat path each `Opaque` is replaced
                     // by its registry index packed as a word.
+                    // A struct/enum Flat operand is flat by the compiler's
+                    // decision, which the named type makes reliable, so its
+                    // reference fields are flat. Tuple and array are
+                    // value-driven and keep a reference element boxed
+                    // (opaque via `flat_field_size` being `None`, text via
+                    // the explicit exclusion), because their access form is
+                    // recovered by lightweight inference (B28 P3).
                     let flat = match operand {
                         NCO::Flat {
                             kind: CK::Struct | CK::Enum,
                             ..
                         } => true,
-                        NCO::Flat { .. } => values
-                            .iter()
-                            .all(|v| crate::bytecode::flat_field_size(v, wb, fb).is_some()),
+                        NCO::Flat { .. } => values.iter().all(|v| {
+                            crate::bytecode::flat_field_size(v, wb, fb).is_some()
+                                && !matches!(
+                                    v,
+                                    crate::bytecode::GenericValue::StaticStr(_)
+                                        | crate::bytecode::GenericValue::KStr(_)
+                                )
+                        }),
                         NCO::Boxed { .. } => false,
                     };
                     if flat {
                         for v in values.iter_mut() {
-                            if let crate::bytecode::GenericValue::Opaque(arc) = v {
-                                let idx =
-                                    self.intern_ephemeral_opaque(alloc::sync::Arc::clone(arc));
-                                *v = crate::bytecode::GenericValue::Int(W::from_i64_wrap(
-                                    idx as i64,
-                                ));
+                            match v {
+                                // Opaque interns to a one-word registry index.
+                                crate::bytecode::GenericValue::Opaque(arc) => {
+                                    let idx =
+                                        self.intern_ephemeral_opaque(alloc::sync::Arc::clone(arc));
+                                    *v = crate::bytecode::GenericValue::Int(W::from_i64_wrap(
+                                        idx as i64,
+                                    ));
+                                }
+                                // A heap-owned static string is copied into
+                                // the arena so the flat field can hold a
+                                // (ptr, len) reference; it becomes a `KStr`
+                                // the packer writes as two words (B28 P3).
+                                crate::bytecode::GenericValue::StaticStr(s) => {
+                                    let ks =
+                                        crate::kstring::KString::alloc(arena, s).map_err(|_| {
+                                            out_of_arena_push("flat text field", arena.capacity())
+                                        })?;
+                                    *v = crate::bytecode::GenericValue::KStr(ks);
+                                }
+                                _ => {}
                             }
                         }
                     }
@@ -9421,8 +9471,22 @@ mod tests {
             ])
             .contains_dynstr()
         );
+        // A boxed struct holding a `KStr` is detected. (A struct whose
+        // fields are all flat now flattens, B28 P3; a flat struct's text
+        // field is an arena reference that crosses yield epoch-gated, so it
+        // is intentionally not flagged here — `contains_dynstr` walks the
+        // boxed value tree and does not read flat bytes.)
         assert!(
-            Value::struct_value(String::from("Foo"), alloc::vec![(String::from("x"), kstr)],)
+            Value::Struct(crate::bytecode::StructBody::Boxed {
+                type_name: String::from("Foo"),
+                fields: alloc::vec![(String::from("x"), kstr.clone())],
+            })
+            .contains_dynstr()
+        );
+        // The flat form of the same struct is not flagged: its text field is
+        // a two-word arena reference, not a walked `KStr`.
+        assert!(
+            !Value::struct_value(String::from("Foo"), alloc::vec![(String::from("x"), kstr)])
                 .contains_dynstr()
         );
     }
