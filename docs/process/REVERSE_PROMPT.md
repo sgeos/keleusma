@@ -100,6 +100,15 @@ This is a coordinated public-API change. Design:
 
 The change is irreducibly cross-cutting (trait + macro + native + helper) and touches the public marshalling surface, so it lands as its own coordinated green slice.
 
+### Operator simplification directives (keep it minimal)
+
+Operator guidance narrows this:
+
+- **Staleness is a normal system attribute, not a special case.** The arena may reset at any `resume`, so the host is already expected to use or copy values before the next `resume`. The `Vm::decode` helper therefore needs no special epoch ceremony — it reattaches the current epoch like every other arena read, and a stale read is the ordinary `Stale` outcome the system already has. Drop the bespoke "soundness contract" framing; document it as the same use-before-resume rule that already governs `KStr`.
+- **Opaque is a flat pass-through pointer.** An opaque field is just a handle to a host-managed value the host knows how to use. The host-side type is `Arc<dyn HostOpaque>`: `impl KeleusmaType for Arc<dyn HostOpaque>` with `flat_field_kind = Opaque`, `from_flat_bytes_ctx` reading the index and returning `ctx.opaques[index].clone()`, `from_value` handling `Value::Opaque`, `into_value` producing `Value::Opaque`. The host downcasts through the existing `dyn HostOpaque::downcast_ref`. No new opaque marshalling machinery beyond that one impl.
+- **Text is not the value-add; keep it minimal.** A single `impl KeleusmaType for String` whose `from_flat_bytes_ctx` reads `(ptr, len)`, rebuilds a `KString` against `ctx.arena.epoch()`, and copies it to an owned `String`. No `&str`, no zero-copy, no static/dynamic distinction at the host surface — just an owned `String` copy. Do not invest further.
+- **Whole system as simple as possible.** Prefer the smallest change: defaulted `from_flat_bytes_ctx` (and only that, not a parallel `from_value_ctx`, if `from_value` for a flat composite can route through `from_flat_bytes_ctx`); a thin `RefContext`; the macro threading `ctx`; the two leaf impls; one `Vm::decode` helper. Resist adding surface beyond this.
+
 ## Other follow-ups
 
 Opaque marshalling (a `KeleusmaType` path for opaque values) and resolving a whole opaque-bearing composite yielded for manual host inspection are a separate later feature, not part of P3's core. P5 (hot-swap migration, documentation, decision closure) remains after the reference fields.
