@@ -8,8 +8,8 @@ AI to Human communication channel.
 
 ## Last Updated
 
-**Date**: 2026-06-06
-**Status**: B28 P4 is merged, pushed, pruned. B32 was reverted and marked obsolete. B28 P3 is in progress on `feat-flat-memory-refs` (pushed): opaque (host-reference) fields are now flat-eligible in struct and enum composites, end to end through construction, access, and equality. Three P3 commits have landed green: the registry foundation with drop-at-RESET (`6c3f168`), pointer-identity dedup interning (`f542bc7`), and flat opaque struct/enum fields (`baf711f`).
+**Date**: 2026-06-08
+**Status**: B28 P4 is merged, pushed, pruned. B32 was reverted and marked obsolete. B28 P3 is substantially complete on `feat-flat-memory-refs`: opaque and Text reference fields are flat in struct and enum composites (construction, access, equality), and the host-boundary decode of both is implemented across struct, enum, nested container (Option/array/tuple), and native-argument paths via a `RefContext` threaded through `from_value_ctx`/`from_flat_bytes_ctx` and the `Vm::decode` helper. The latest commits (`478f908` struct decode, `6880962` enum/nested/native) are local; earlier P3 work (`6c3f168` registry+drop-at-RESET, `f542bc7` dedup, `baf711f` flat opaque, `3fbbbf5` flat Text, plus the design docs) is pushed. Remaining B28 work is P5 (hot-swap migration, documentation, decision closure).
 
 ## Why B32 was reverted
 
