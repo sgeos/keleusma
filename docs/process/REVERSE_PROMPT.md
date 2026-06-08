@@ -84,6 +84,22 @@ The root cause is that two words hold `(ptr, len)` but not the epoch, so stalene
 
 Recommendation: option 1 (three-word inline handle) honours the operator's no-registry direction and is sound; it needs one more word than the current two-word slot. The `materialise_kstrings`/`contains_dynstr` lifecycle must still be updated so a flat composite's `Text` field crosses yield epoch-gated (the operator's stated model) rather than being walked. The decision between options 1 and 2 is the operator's; both are sound, the reverted two-word form is not.
 
+## Host-boundary decode of Text and opaque (design locked, not yet implemented)
+
+A flat composite that crosses to the host (yield, return, native argument) carries `Text` as a two-word `(ptr, len)` and `Opaque` as a one-word registry index. The host's `#[derive(KeleusmaType)]` decode cannot resolve either: `KeleusmaType::from_value`/`from_flat_bytes` take only `(bytes, word_bytes, float_bytes)`, with no arena (needed to rebuild a `KStr` from `(ptr, len)`) and no `ephemeral_opaques` registry (needed to resolve an opaque index to its `Arc`). There is also no `KeleusmaType` impl for `String` or for any opaque type today, so a host marshalled type cannot even have a string or opaque field yet. The resolution context lives only in the VM's private `read_flat_scalar`.
+
+This is a coordinated public-API change. Design:
+
+- **Resolution context.** `pub struct RefContext<'a> { arena: &'a Arena, opaques: &'a [Arc<dyn HostOpaque>] }`, built from `self.arena` and `self.ephemeral_opaques`.
+- **Trait, backward-compatible.** Add defaulted `from_value_ctx(v, ctx)` and `from_flat_bytes_ctx(bytes, wb, fb, ctx)` that default to the existing context-free methods, so every current impl keeps working. Types needing resolution override them.
+- **`String` impl.** `flat_field_kind = Text`; `from_flat_bytes_ctx` reads `(ptr, len)`, rebuilds a `KString` against `ctx.arena.epoch()`, and `get`s it to an owned `String` (copying it out, which is the sound move: the host holds an owned copy, not an arena reference). `from_value_ctx` handles `StaticStr` (clone) and `KStr` (`get` via `ctx.arena`). `into_value` yields `StaticStr`.
+- **Opaque.** A host opaque field decodes its index through `ctx.opaques[index]` to a cloned `Arc`; this needs a `KeleusmaType` surface for opaque host types (downcast), which does not exist yet and is the larger half.
+- **Derive macro (`keleusma-macros`).** Generate `from_value_ctx`/`from_flat_bytes_ctx` that thread `ctx` to each field; tuple/array impls likewise.
+- **Native marshalling.** Extend `NativeCtx` (or build a `RefContext` at the call site, `vm.rs` ~5187, where `self.ephemeral_opaques` is in scope) and route the argument `from_value` through `from_value_ctx`.
+- **Yield/return helper.** A `Vm::decode::<T>(&self, value) -> Result<T>` that builds the context and calls `from_value_ctx`, so a host resolves a yielded/returned composite. **Soundness contract:** decode must happen before the next `RESET` (the `(ptr, len)` carries no epoch, so the decode reattaches the current epoch and copies the string out; after a `RESET` the reference is reclaimed). This is the operator's epoch-gated cross-yield model, and it must be documented at the helper.
+
+The change is irreducibly cross-cutting (trait + macro + native + helper) and touches the public marshalling surface, so it lands as its own coordinated green slice.
+
 ## Other follow-ups
 
 Opaque marshalling (a `KeleusmaType` path for opaque values) and resolving a whole opaque-bearing composite yielded for manual host inspection are a separate later feature, not part of P3's core. P5 (hot-swap migration, documentation, decision closure) remains after the reference fields.
