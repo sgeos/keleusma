@@ -80,3 +80,25 @@ fn decode_flat_struct_with_opaque_field() {
     let typed: &Handle = c.h.as_ref().downcast_ref::<Handle>().expect("downcast");
     assert_eq!(typed.label, "decoded");
 }
+
+#[test]
+fn native_receives_struct_with_text_field() {
+    // A register_fn native takes a struct argument with a Text field; the
+    // native-argument marshalling resolves the flat Text field through the
+    // VM context (B28 P3).
+    let src = "use greet_len\n\
+               struct Greeting { msg: Text, n: Word }\n\
+               fn main() -> Word { greet_len(Greeting { msg: \"hello\", n: 2 }) }";
+    let tokens = tokenize(src).expect("lex");
+    let program = parse(&tokens).expect("parse");
+    let module = compile(&program).expect("compile");
+    let arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+    let mut vm = Vm::new(module, &arena).expect("verify");
+    vm.register_fn("greet_len", |g: Greeting| -> i64 {
+        g.msg.len() as i64 + g.n
+    });
+    match vm.call(&[]).expect("call") {
+        VmState::Finished(Value::Int(n)) => assert_eq!(n, 7),
+        other => panic!("expected Int(7), got {:?}", other),
+    }
+}

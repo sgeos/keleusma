@@ -330,6 +330,27 @@ pub struct NativeCtx<'a> {
     /// Borrow of the host-owned arena for string and scratch
     /// allocations.
     pub arena: &'a keleusma_arena::Arena,
+    /// The VM's ephemeral opaque registry, so a composite argument with an
+    /// opaque field can resolve it during marshalling (B28 P3).
+    pub opaques: &'a [alloc::sync::Arc<dyn crate::opaque::HostOpaque>],
+    /// The module's packed word byte width, used to read a flat composite
+    /// argument's fields at the width the body was packed with.
+    pub word_bytes: usize,
+    /// The module's packed float byte width, paired with `word_bytes`.
+    pub float_bytes: usize,
+}
+
+impl<'a> NativeCtx<'a> {
+    /// The resolution context for marshalling a composite argument that may
+    /// hold `Text` or opaque fields (B28 P3).
+    pub fn ref_context(&self) -> crate::marshall::RefContext<'a> {
+        crate::marshall::RefContext {
+            arena: self.arena,
+            opaques: self.opaques,
+            word_bytes: self.word_bytes,
+            float_bytes: self.float_bytes,
+        }
+    }
 }
 
 /// Type alias for a native function callable from Keleusma.
@@ -5212,7 +5233,12 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                                 native_name
                             ))
                         })?;
-                    let ctx = NativeCtx { arena: self.arena };
+                    let ctx = NativeCtx {
+                        arena: self.arena,
+                        opaques: &self.ephemeral_opaques,
+                        word_bytes: self.module_word_bytes(),
+                        float_bytes: self.module_float_bytes(),
+                    };
                     let result = (entry.func)(&ctx, &args);
                     if reify {
                         match result {

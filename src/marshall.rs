@@ -425,6 +425,13 @@ impl<W: Word, F: Float, T: KeleusmaType<W, F>> KeleusmaType<W, F> for Option<T> 
             Option::None => GenericValue::None,
         }
     }
+
+    fn from_value_ctx(v: &GenericValue<W, F>, ctx: &RefContext<'_>) -> Result<Self, VmError> {
+        match v {
+            GenericValue::None => Ok(Option::None),
+            other => T::from_value_ctx(other, ctx).map(Some),
+        }
+    }
 }
 
 // -- Fixed-length arrays --
@@ -510,6 +517,70 @@ impl<W: Word, F: Float, T: KeleusmaType<W, F> + Clone, const N: usize> KeleusmaT
                 &bytes[lo..lo + esize],
                 word_bytes,
                 float_bytes,
+            )?);
+        }
+        converted
+            .try_into()
+            .map_err(|_| VmError::TypeError(format!("failed to convert array of length {}", N)))
+    }
+
+    fn from_value_ctx(v: &GenericValue<W, F>, ctx: &RefContext<'_>) -> Result<Self, VmError> {
+        use crate::bytecode::ArrayBody;
+        match v {
+            GenericValue::Array(ArrayBody::Boxed(items)) => {
+                if items.len() != N {
+                    return Err(VmError::TypeError(format!(
+                        "expected array of length {}, got {}",
+                        N,
+                        items.len()
+                    )));
+                }
+                let mut converted: Vec<T> = Vec::with_capacity(N);
+                for item in items.iter() {
+                    converted.push(T::from_value_ctx(item, ctx)?);
+                }
+                converted.try_into().map_err(|_| {
+                    VmError::TypeError(format!("failed to convert array of length {}", N))
+                })
+            }
+            GenericValue::Array(ArrayBody::Flat(fc)) => {
+                Self::from_flat_bytes_ctx(fc.as_bytes(), ctx.word_bytes, ctx.float_bytes, ctx)
+            }
+            other => Err(VmError::TypeError(format!(
+                "expected array, got {}",
+                other.type_name()
+            ))),
+        }
+    }
+
+    fn from_flat_bytes_ctx(
+        bytes: &[u8],
+        word_bytes: usize,
+        float_bytes: usize,
+        ctx: &RefContext<'_>,
+    ) -> Result<Self, VmError> {
+        let esize = <T as KeleusmaType<W, F>>::flat_byte_size(word_bytes, float_bytes).ok_or_else(
+            || {
+                VmError::TypeError(alloc::string::String::from(
+                    "flat array element type is not flat-eligible",
+                ))
+            },
+        )?;
+        let len = bytes.len().checked_div(esize).unwrap_or(N);
+        if len != N {
+            return Err(VmError::TypeError(format!(
+                "expected array of length {}, got {}",
+                N, len
+            )));
+        }
+        let mut converted: Vec<T> = Vec::with_capacity(N);
+        for i in 0..N {
+            let lo = i * esize;
+            converted.push(<T as KeleusmaType<W, F>>::from_flat_bytes_ctx(
+                &bytes[lo..lo + esize],
+                word_bytes,
+                float_bytes,
+                ctx,
             )?);
         }
         converted
@@ -603,6 +674,50 @@ macro_rules! impl_tuple {
                     },
                 )*))
             }
+
+            #[allow(clippy::unused_unit, unused_assignments, non_snake_case)]
+            fn from_value_ctx(v: &GenericValue<W, FloatT>, __ctx: &RefContext<'_>) -> Result<Self, VmError> {
+                let expected = [$(stringify!($name),)*].len();
+                match v {
+                    GenericValue::Tuple(crate::bytecode::TupleBody::Boxed(items)) => {
+                        if items.len() != expected {
+                            return Err(VmError::TypeError(format!(
+                                "expected tuple of arity {}, got {}",
+                                expected,
+                                items.len()
+                            )));
+                        }
+                        Ok(($($name::from_value_ctx(&items[$idx], __ctx)?,)*))
+                    }
+                    GenericValue::Tuple(crate::bytecode::TupleBody::Flat(fc)) => {
+                        Self::from_flat_bytes_ctx(fc.as_bytes(), __ctx.word_bytes, __ctx.float_bytes, __ctx)
+                    }
+                    other => Err(VmError::TypeError(format!(
+                        "expected tuple, got {}",
+                        other.type_name()
+                    ))),
+                }
+            }
+
+            #[allow(unused_assignments, unused_mut, unused_variables, non_snake_case)]
+            fn from_flat_bytes_ctx(bytes: &[u8], word_bytes: usize, float_bytes: usize, __ctx: &RefContext<'_>)
+                -> Result<Self, VmError>
+            {
+                let mut offset = 0usize;
+                Ok(($(
+                    {
+                        let size = <$name as KeleusmaType<W, FloatT>>::flat_byte_size(word_bytes, float_bytes)
+                            .ok_or_else(|| VmError::TypeError(::alloc::string::String::from(
+                                "flat tuple field is not flat-eligible",
+                            )))?;
+                        let val = <$name as KeleusmaType<W, FloatT>>::from_flat_bytes_ctx(
+                            &bytes[offset..offset + size], word_bytes, float_bytes, __ctx,
+                        )?;
+                        offset += size;
+                        val
+                    },
+                )*))
+            }
         }
     };
 }
@@ -658,7 +773,7 @@ macro_rules! impl_into_native_fn {
             #[allow(unused_variables, clippy::let_unit_value, non_snake_case)]
             fn into_native_fn(self) -> BoxedNativeFn<W, FloatT> {
                 alloc::boxed::Box::new(
-                    move |_ctx: &crate::vm::NativeCtx<'_>, args: &[GenericValue<W, FloatT>]|
+                    move |__ctx: &crate::vm::NativeCtx<'_>, args: &[GenericValue<W, FloatT>]|
                         -> Result<GenericValue<W, FloatT>, VmError> {
                         if args.len() != $arity {
                             return Err(VmError::NativeError(format!(
@@ -667,8 +782,12 @@ macro_rules! impl_into_native_fn {
                                 args.len()
                             )));
                         }
+                        // Resolve reference (Text, opaque) fields of a
+                        // composite argument through the VM context (B28 P3).
+                        let __rc = __ctx.ref_context();
+                        let _ = &__rc;
                         $(
-                            let $name = <$name as KeleusmaType<W, FloatT>>::from_value(&args[$idx])?;
+                            let $name = <$name as KeleusmaType<W, FloatT>>::from_value_ctx(&args[$idx], &__rc)?;
                         )*
                         Ok(self($($name,)*).into_value())
                     },
@@ -686,7 +805,7 @@ macro_rules! impl_into_native_fn {
             #[allow(unused_variables, clippy::let_unit_value, non_snake_case)]
             fn into_native_fn(self) -> BoxedNativeFn<W, FloatT> {
                 alloc::boxed::Box::new(
-                    move |_ctx: &crate::vm::NativeCtx<'_>, args: &[GenericValue<W, FloatT>]|
+                    move |__ctx: &crate::vm::NativeCtx<'_>, args: &[GenericValue<W, FloatT>]|
                         -> Result<GenericValue<W, FloatT>, VmError> {
                         if args.len() != $arity {
                             return Err(VmError::NativeError(format!(
@@ -695,8 +814,10 @@ macro_rules! impl_into_native_fn {
                                 args.len()
                             )));
                         }
+                        let __rc = __ctx.ref_context();
+                        let _ = &__rc;
                         $(
-                            let $name = <$name as KeleusmaType<W, FloatT>>::from_value(&args[$idx])?;
+                            let $name = <$name as KeleusmaType<W, FloatT>>::from_value_ctx(&args[$idx], &__rc)?;
                         )*
                         self($($name,)*).map(<R as KeleusmaType<W, FloatT>>::into_value)
                     },
@@ -867,7 +988,12 @@ mod tests {
     }
 
     fn ctx(arena: &keleusma_arena::Arena) -> crate::vm::NativeCtx<'_> {
-        crate::vm::NativeCtx { arena }
+        crate::vm::NativeCtx {
+            arena,
+            opaques: &[],
+            word_bytes: 8,
+            float_bytes: 8,
+        }
     }
 
     #[test]
