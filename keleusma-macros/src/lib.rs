@@ -254,6 +254,63 @@ fn derive_struct_body(_name: &Ident, name_str: &str, data: &DataStruct) -> Token
                     ::core::result::Result::Ok(Self { #(#field_names),* })
                 }
 
+                fn from_value_ctx(
+                    v: &::keleusma::GenericValue<__KW, __KF>,
+                    __ctx: &::keleusma::RefContext<'_>,
+                ) -> ::core::result::Result<Self, ::keleusma::VmError>
+                {
+                    match v {
+                        ::keleusma::GenericValue::Struct(
+                            ::keleusma::bytecode::StructBody::Boxed { type_name, fields }
+                        ) if type_name == #name_str => {
+                            #(
+                                let #field_names = {
+                                    let pair = fields.iter().find(|(n, _)| n == #field_name_strs)
+                                        .ok_or_else(|| ::keleusma::VmError::TypeError(
+                                            ::alloc::format!("missing field `{}` on `{}`", #field_name_strs, #name_str)
+                                        ))?;
+                                    <#field_types as ::keleusma::KeleusmaType<__KW, __KF>>::from_value_ctx(&pair.1, __ctx)?
+                                };
+                            )*
+                            ::core::result::Result::Ok(Self { #(#field_names),* })
+                        }
+                        ::keleusma::GenericValue::Struct(
+                            ::keleusma::bytecode::StructBody::Flat(__fc)
+                        ) => {
+                            // Read at the module's packed widths from the
+                            // context, which differ from the host `Word`
+                            // width on a narrow-word build (B28 P3).
+                            <Self as ::keleusma::KeleusmaType<__KW, __KF>>::from_flat_bytes_ctx(
+                                __fc.as_bytes(), __ctx.word_bytes, __ctx.float_bytes, __ctx,
+                            )
+                        }
+                        other => ::core::result::Result::Err(::keleusma::VmError::TypeError(
+                            ::alloc::format!("expected struct `{}`, got {}", #name_str, other.type_name())
+                        )),
+                    }
+                }
+
+                #[allow(unused_assignments)]
+                fn from_flat_bytes_ctx(__bytes: &[u8], __wb: usize, __fb: usize, __ctx: &::keleusma::RefContext<'_>)
+                    -> ::core::result::Result<Self, ::keleusma::VmError>
+                {
+                    let mut __offset = 0usize;
+                    #(
+                        let #field_names = {
+                            let __size = <#field_types as ::keleusma::KeleusmaType<__KW, __KF>>::flat_byte_size(__wb, __fb)
+                                .ok_or_else(|| ::keleusma::VmError::TypeError(
+                                    ::alloc::format!("field `{}` of `{}` is not flat-eligible", #field_name_strs, #name_str)
+                                ))?;
+                            let __val = <#field_types as ::keleusma::KeleusmaType<__KW, __KF>>::from_flat_bytes_ctx(
+                                &__bytes[__offset..__offset + __size], __wb, __fb, __ctx,
+                            )?;
+                            __offset += __size;
+                            __val
+                        };
+                    )*
+                    ::core::result::Result::Ok(Self { #(#field_names),* })
+                }
+
                 fn into_value(self) -> ::keleusma::GenericValue<__KW, __KF> {
                     let fields: ::alloc::vec::Vec<(
                         ::alloc::string::String,

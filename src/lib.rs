@@ -228,7 +228,7 @@ pub use bytecode::{
 };
 pub use float::Float;
 pub use keleusma_macros::{KeleusmaError, KeleusmaType};
-pub use marshall::{IntoFallibleNativeFn, IntoNativeFn, KeleusmaType};
+pub use marshall::{IntoFallibleNativeFn, IntoNativeFn, KeleusmaType, RefContext};
 pub use opaque::{HostOpaque, host_arc};
 #[cfg(feature = "verify")]
 pub use text_size::{TextSize, op_cost_context};

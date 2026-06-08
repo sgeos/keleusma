@@ -28,12 +28,42 @@
 
 extern crate alloc;
 use alloc::format;
+use alloc::sync::Arc;
 use alloc::vec::Vec;
 
 use crate::bytecode::GenericValue;
 use crate::float::Float;
+use crate::opaque::HostOpaque;
 use crate::vm::VmError;
 use crate::word::Word;
+
+/// Resolution context for decoding a flat composite's reference fields at
+/// the host boundary (B28 P3).
+///
+/// A flat `Text` field is a two-word arena `(ptr, len)` reference that is
+/// rebuilt into a `KString` against the arena epoch; a flat `Opaque` field
+/// is an index into the VM's ephemeral opaque registry. This context
+/// supplies the arena and the registry so [`KeleusmaType::from_value_ctx`]
+/// and [`KeleusmaType::from_flat_bytes_ctx`] can resolve them.
+///
+/// Like every arena read, a decoded reference is valid only until the next
+/// `resume`/`RESET`. The host uses or copies it before then, which is the
+/// same use-before-`resume` discipline that already governs `KStr`.
+pub struct RefContext<'a> {
+    /// The VM's arena, used to rebuild a `KString` from a flat `Text`
+    /// field's `(ptr, len)` against the current epoch.
+    pub arena: &'a keleusma_arena::Arena,
+    /// The VM's ephemeral opaque registry, indexed by a flat `Opaque`
+    /// field to recover the host reference.
+    pub opaques: &'a [Arc<dyn HostOpaque>],
+    /// The module's word byte width, used to read flat fields at the width
+    /// the body was packed with. This is the module's declared width, not
+    /// the host type's `Word`; the two differ on a narrow-word build, where
+    /// the bundled `i64` VM runs a module whose words are narrower.
+    pub word_bytes: usize,
+    /// The module's float byte width, paired with `word_bytes`.
+    pub float_bytes: usize,
+}
 
 /// A type that can cross the host-script boundary.
 ///
@@ -103,6 +133,30 @@ pub trait KeleusmaType<W: Word, F: Float>: Sized {
                 "type has no flat byte representation",
             ))),
         }
+    }
+
+    /// Like [`KeleusmaType::from_value`] but with a [`RefContext`] for
+    /// resolving reference fields (B28 P3). The default ignores the context
+    /// and delegates, so scalar and value-only types need no change.
+    /// `String` and `Arc<dyn HostOpaque>` override it, and the derive macro
+    /// generates an override that threads the context to each field.
+    fn from_value_ctx(v: &GenericValue<W, F>, ctx: &RefContext<'_>) -> Result<Self, VmError> {
+        let _ = ctx;
+        Self::from_value(v)
+    }
+
+    /// Like [`KeleusmaType::from_flat_bytes`] but with a [`RefContext`] for
+    /// resolving reference fields (B28 P3). The default delegates to the
+    /// context-free reader; composites with reference fields override it
+    /// (via the derive macro) to thread the context to each field.
+    fn from_flat_bytes_ctx(
+        bytes: &[u8],
+        word_bytes: usize,
+        float_bytes: usize,
+        ctx: &RefContext<'_>,
+    ) -> Result<Self, VmError> {
+        let _ = ctx;
+        Self::from_flat_bytes(bytes, word_bytes, float_bytes)
     }
 }
 
@@ -203,6 +257,145 @@ impl<W: Word, F: Float> KeleusmaType<W, F> for () {
 
     fn flat_field_kind() -> Option<crate::value_layout::ScalarKind> {
         Some(crate::value_layout::ScalarKind::Unit)
+    }
+}
+
+// -- Reference types (Text, opaque): host-boundary decode (B28 P3) --
+
+/// `String` marshals the surface `Text` type. A host receives an owned
+/// `String` copy and produces a static string. Reading from a flat `Text`
+/// field (a two-word arena `(ptr, len)`) or a dynamic `KStr` requires a
+/// [`RefContext`]; the context-free paths handle only the owning
+/// `StaticStr` and otherwise direct the caller to `Vm::decode`.
+impl<W: Word, F: Float> KeleusmaType<W, F> for alloc::string::String {
+    fn from_value(v: &GenericValue<W, F>) -> Result<Self, VmError> {
+        match v {
+            GenericValue::StaticStr(s) => Ok(s.clone()),
+            GenericValue::KStr(_) => Err(VmError::TypeError(alloc::string::String::from(
+                "dynamic string requires a resolution context; decode through Vm::decode",
+            ))),
+            other => Err(VmError::TypeError(format!(
+                "expected Text, got {}",
+                other.type_name()
+            ))),
+        }
+    }
+
+    fn into_value(self) -> GenericValue<W, F> {
+        GenericValue::StaticStr(self)
+    }
+
+    fn flat_field_kind() -> Option<crate::value_layout::ScalarKind> {
+        Some(crate::value_layout::ScalarKind::Text)
+    }
+
+    fn from_flat_bytes(
+        _bytes: &[u8],
+        _word_bytes: usize,
+        _float_bytes: usize,
+    ) -> Result<Self, VmError> {
+        // A flat Text field is a (ptr, len) arena reference; resolving it
+        // needs the arena epoch. Direct the caller to the context path
+        // rather than dereferencing without it.
+        Err(VmError::TypeError(alloc::string::String::from(
+            "flat Text field requires a resolution context; decode through Vm::decode",
+        )))
+    }
+
+    fn from_value_ctx(v: &GenericValue<W, F>, ctx: &RefContext<'_>) -> Result<Self, VmError> {
+        match v {
+            GenericValue::StaticStr(s) => Ok(s.clone()),
+            GenericValue::KStr(ks) => {
+                ks.get(ctx.arena)
+                    .map(alloc::string::String::from)
+                    .map_err(|_| {
+                        VmError::TypeError(alloc::string::String::from(
+                            "dynamic string is stale (arena reset since it was produced)",
+                        ))
+                    })
+            }
+            other => Err(VmError::TypeError(format!(
+                "expected Text, got {}",
+                other.type_name()
+            ))),
+        }
+    }
+
+    fn from_flat_bytes_ctx(
+        bytes: &[u8],
+        word_bytes: usize,
+        _float_bytes: usize,
+        ctx: &RefContext<'_>,
+    ) -> Result<Self, VmError> {
+        let read_word = |o: usize| -> usize {
+            let mut buf = [0u8; 8];
+            buf[..word_bytes].copy_from_slice(&bytes[o..o + word_bytes]);
+            u64::from_le_bytes(buf) as usize
+        };
+        let ptr = read_word(0);
+        let len = read_word(word_bytes);
+        // SAFETY: the (ptr, len) was packed from a live KString into this
+        // body; it is valid under the current epoch per the
+        // use-before-resume rule. Rebuilding with the current epoch yields
+        // a clean Stale error if the arena has since reset.
+        let ks = unsafe { crate::kstring::KString::from_raw_parts(ptr, len, ctx.arena.epoch()) };
+        ks.get(ctx.arena)
+            .map(alloc::string::String::from)
+            .map_err(|_| {
+                VmError::TypeError(alloc::string::String::from(
+                    "flat Text field is stale (arena reset since it was produced)",
+                ))
+            })
+    }
+}
+
+/// An opaque host reference is a flat pass-through: the host receives the
+/// `Arc` and downcasts it through [`dyn HostOpaque::downcast_ref`]. In a
+/// flat body it is a one-word index into the VM's ephemeral opaque
+/// registry, resolved through the [`RefContext`].
+impl<W: Word, F: Float> KeleusmaType<W, F> for Arc<dyn HostOpaque> {
+    fn from_value(v: &GenericValue<W, F>) -> Result<Self, VmError> {
+        match v {
+            GenericValue::Opaque(o) => Ok(Arc::clone(o)),
+            other => Err(VmError::TypeError(format!(
+                "expected opaque, got {}",
+                other.type_name()
+            ))),
+        }
+    }
+
+    fn into_value(self) -> GenericValue<W, F> {
+        GenericValue::Opaque(self)
+    }
+
+    fn flat_field_kind() -> Option<crate::value_layout::ScalarKind> {
+        Some(crate::value_layout::ScalarKind::Opaque)
+    }
+
+    fn from_flat_bytes(
+        _bytes: &[u8],
+        _word_bytes: usize,
+        _float_bytes: usize,
+    ) -> Result<Self, VmError> {
+        Err(VmError::TypeError(alloc::string::String::from(
+            "flat opaque field requires a resolution context; decode through Vm::decode",
+        )))
+    }
+
+    fn from_flat_bytes_ctx(
+        bytes: &[u8],
+        word_bytes: usize,
+        _float_bytes: usize,
+        ctx: &RefContext<'_>,
+    ) -> Result<Self, VmError> {
+        let mut buf = [0u8; 8];
+        buf[..word_bytes].copy_from_slice(&bytes[0..word_bytes]);
+        let index = u64::from_le_bytes(buf) as usize;
+        ctx.opaques.get(index).map(Arc::clone).ok_or_else(|| {
+            VmError::InvalidBytecode(alloc::string::String::from(
+                "opaque field index does not resolve (stale or out of range)",
+            ))
+        })
     }
 }
 

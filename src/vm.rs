@@ -1829,6 +1829,34 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         self.arena
     }
 
+    /// Decode a value produced at a host boundary (a yielded or returned
+    /// value, or one read from data) into a host type `T`, resolving a flat
+    /// composite's reference fields through the VM's arena and opaque
+    /// registry (B28 P3).
+    ///
+    /// A flat `Text` field is rebuilt from its arena `(ptr, len)` and copied
+    /// into an owned `String`; a flat opaque field is resolved to its
+    /// `Arc<dyn HostOpaque>` through the ephemeral registry. Use this rather
+    /// than `KeleusmaType::from_value` whenever the decoded type may contain
+    /// a `String` or opaque field, since those need the resolution context.
+    ///
+    /// Like every arena read, the value must be decoded before the next
+    /// `resume`/`RESET`: the arena may be reset at any resume, after which a
+    /// still-arena-resident reference is stale and decoding returns a clean
+    /// error. Owned results (a copied `String`, a cloned `Arc`) survive.
+    pub fn decode<T>(&self, value: &crate::bytecode::GenericValue<W, F>) -> Result<T, VmError>
+    where
+        T: crate::marshall::KeleusmaType<W, F>,
+    {
+        let ctx = crate::marshall::RefContext {
+            arena: self.arena,
+            opaques: &self.ephemeral_opaques,
+            word_bytes: self.module_word_bytes(),
+            float_bytes: self.module_float_bytes(),
+        };
+        T::from_value_ctx(value, &ctx)
+    }
+
     /// Reset the arena's top region and advance the epoch, leaving
     /// the bottom region intact.
     ///
