@@ -50,6 +50,12 @@ Dynamic strings reside in the arena heap region. They are produced by native fun
 
 The cross-yield prohibition is the load-bearing safety property of the dynamic string design. A dynamic string is an arena pointer. Allowing one across the yield boundary would either require the host to consume it before the next RESET or accept dangling references after the arena is cleared. Prohibiting it structurally is simpler and preserves the safe-swapping guarantee.
 
+### Strings inside composites (B28 P3)
+
+A `Text` field of a flat composite (struct or enum) is stored in the composite body as a **two-word handle**, the arena data pointer and the byte length. The handle is the `Text` value's compact in-body form. The epoch is not stored in the field. It is supplied by the arena when the field is read out, reconstituting the de-facto three-part arena handle (data pointer, length, epoch) that the runtime already uses for a bare dynamic string. The epoch used is the **originating composite's** epoch, so a read after a RESET resolves to a clean stale outcome rather than a dangling dereference, exactly as for a bare dynamic string. A flat composite's `Text` field is therefore an arena-resident dynamic string.
+
+Because of that, **a composite type that transitively contains `Text` carries the same string flow restrictions as a bare dynamic string**. It may not appear in the dialogue type B (the cross-yield prohibition applies to the whole value), and it is excluded from the data segment. The type checker enforces this by descending through composite field and variant-payload types, so the structural guarantee holds for nested strings, not only for a string named directly. A static-string literal placed in a flat composite field is copied into the arena at construction and thereafter behaves as a dynamic string for these purposes.
+
 ### Text surface features
 
 The surface language supports string literals only. There is no concatenation operator, no formatting syntax, no slicing or indexing built into the grammar. All variable-cost string operations are host-supplied native functions. This freeze is intentional. Keleusma is not a value-add for string processing. Anything fancier than literal handling and native function delegation is deferred per B5.
