@@ -49,6 +49,22 @@ Two boundaries I had listed turn out to be moot or non-existent, which significa
 
 What remains is the **yield of a whole opaque-bearing composite for manual host inspection**: pre-P3 the host received a boxed struct with `Value::Opaque(Arc)`; post-P3 it receives a flat byte body whose opaque field is a registry index. Resolving it at the yield boundary needs the compile-time type (the yield op does not carry it) or opaque marshalling support. This is the one genuine limitation, and it is the typeless-flat-composite display limitation already documented for scalar fields, now extended to opaque.
 
-## Intended next step
+## Text representation (operator-decided, blueprint locked)
 
-The opaque half of P3 is complete and verified for struct and enum fields (construct, access, equality), which is the supported internal surface. The next implementation piece is **Text fields** (the other reference kind): a flat `Text` field as an index into a VM string registry, reusing the dedup-registry pattern with `GenericValue` equality so the existing string equality semantics are preserved. Text carries its own decisions (the static-versus-dynamic `StaticStr`/`KStr` split, the reserved two-word slot, and the `KStr` cross-yield prohibition), so it is a distinct sub-slice. Opaque marshalling (a `KeleusmaType` path for opaque values) and the yield-of-composite resolution are a later, separate feature.
+The opaque half of P3 is complete and verified for struct and enum fields. Text is the next reference kind, and the operator chose a representation distinct from opaque: a flat `Text` field is a **two-word `(data_ptr, len)` reference directly into arena-resident string bytes** — no registry, no index, no extra tracking, because a string is not `Drop`-bearing like an `Arc`. The existing two-word `ScalarKind::Text` slot is exactly right, so no size change. Staleness is covered by the composite's own epoch-checked `resolve`: the string and the composite share the ephemeral arena lifetime, so if the composite resolves current the string is valid, and both are reclaimed together at `RESET`. A dynamic string that outlives its epoch resolves to a clean error, not undefined behaviour, so strings (static always, dynamic while epoch-valid) cross yield safely with no special guard.
+
+Implementation blueprint:
+
+- **`KString`/`ArenaHandle`**: add `raw_parts(&self) -> (usize, usize)` returning `(data_ptr as usize, len)` from the handle's `NonNull<str>` metadata (no arena deref), and rely on the existing `ArenaHandle::from_raw_parts` to rebuild a handle from `(ptr, len, epoch)`.
+- **`value_layout`**: `flat_scalar_kind(Text) -> Some(Text)`; size stays two words. Update the `Opaque`-style eligibility test for `Text`.
+- **Packer (`bytecode.rs`)**: `flat_tuple_scalar_kind(KStr) -> Some(Text)`; `write_scalar_le(KStr)` writes the two `raw_parts` words; `StaticStr` stays `None` and must be converted to `KStr` first. `read_scalar_le`'s `Text` arm cannot run (no epoch), so the `Text` read happens in the VM (below).
+- **VM construct (flat struct/enum path)**: before packing, convert each `StaticStr` to an arena-resident `KStr` via `KString::alloc(arena, s)` (the "heap-allocated string" exception); `KStr` values stay. This sits alongside the existing opaque-to-index substitution. Tuples and arrays keep boxing `Text` (add a `Text` exclusion to the value-driven flat decision, and bake boxed in `tuple_field_access`/`array_elem_operand`), because their access form is recovered by lightweight inference.
+- **VM access (`read_flat_scalar`)**: for `ScalarKind::Text`, read `(ptr, len)`, rebuild `KString` via `from_raw_parts` against `arena.epoch()` (valid because the composite just resolved current), and push `Value::KStr`.
+- **Equality**: becomes pointer-based for `Text` fields (same arena allocation compares equal), consistent with the existing `KStr` handle equality; document this as the one semantic consequence. `StaticStr` content equality across distinct flat composites does not hold (each gets its own arena copy), which is the deliberate trade for the no-tracking representation.
+- **Tests**: a flat struct `Text` field round-trips a static and a dynamic string through construction and access; a `KStr`-backed field crosses a yield and resolves while epoch-valid and errors cleanly after `RESET`.
+
+This is a substantial unsafe slice (raw pointer pack/unpack), so it lands as its own green commit and is not rushed onto the shared branch.
+
+## Other follow-ups
+
+Opaque marshalling (a `KeleusmaType` path for opaque values) and resolving a whole opaque-bearing composite yielded for manual host inspection are a separate later feature, not part of P3's core. P5 (hot-swap migration, documentation, decision closure) remains after the reference fields.
