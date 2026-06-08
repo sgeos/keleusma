@@ -133,6 +133,15 @@ pub fn read_f64(bytes: &[u8], offset: usize) -> f64 {
 /// composites carry no global-heap allocation across a `loop` iteration's
 /// `RESET`.
 ///
+/// An `Inline` body carries the arena epoch its arena-referencing fields
+/// (a flat `Text` field's `(ptr, len)`) belong to (B28 P3 item 1). A
+/// freshly-built or host body has no such reference and carries epoch `0`.
+/// When an `Arena` body is materialised back to `Inline`
+/// ([`FlatComposite::to_inline`]) the originating epoch travels with it, so
+/// a `Text` field read after a `RESET` reattaches that epoch and resolves
+/// to a clean `Stale` outcome rather than dereferencing reclaimed memory.
+/// The epoch is a validity attribute and is not part of content equality.
+///
 /// Validity and equality are orthogonal. A read first resolves the handle
 /// against the arena ([`FlatComposite::resolve`], which fails `Stale` if a
 /// `RESET` advanced the epoch since the body was issued), then the
@@ -143,7 +152,15 @@ pub fn read_f64(bytes: &[u8], offset: usize) -> f64 {
 pub enum FlatComposite {
     /// An owned byte body on the global heap. Built by the construction
     /// choke points, host marshalling, and constant materialisation.
-    Inline(Vec<u8>),
+    Inline {
+        /// The packed field bytes.
+        bytes: Vec<u8>,
+        /// The arena epoch any arena-referencing field (a flat `Text`
+        /// field's `(ptr, len)`) belongs to, or `0` when the body holds no
+        /// such reference (B28 P3 item 1). A `Text` read reattaches this
+        /// epoch so a read after a `RESET` resolves `Stale`.
+        epoch: u64,
+    },
     /// A body resident in the arena's top ephemeral head, addressed by an
     /// epoch-guarded handle. Built by [`FlatComposite::in_arena`] and read
     /// only through [`FlatComposite::resolve`] against the owning arena.
@@ -157,12 +174,39 @@ impl FlatComposite {
     /// discriminant byte. Built `Inline`; the VM migrates it to the arena
     /// after packing (B28 P2).
     pub fn zeroed(size: usize) -> Self {
-        Self::Inline(vec![0u8; size])
+        Self::Inline {
+            bytes: vec![0u8; size],
+            epoch: 0,
+        }
     }
 
-    /// A body wrapping already-packed bytes, `Inline`.
+    /// A body wrapping already-packed bytes, `Inline`, carrying epoch `0`
+    /// (no arena reference). Construction packs then migrates to the arena
+    /// (capturing the live epoch in the `Arena` handle) before any read, so
+    /// the `0` placeholder is never consulted for a `Text` read on this
+    /// path; a host or constant body has no flat `Text` field.
     pub fn from_bytes(bytes: Vec<u8>) -> Self {
-        Self::Inline(bytes)
+        Self::Inline { bytes, epoch: 0 }
+    }
+
+    /// A body wrapping already-packed bytes, `Inline`, carrying the arena
+    /// `epoch` its arena-referencing fields belong to (B28 P3 item 1). Used
+    /// when extracting a nested flat composite from a parent body so the
+    /// child inherits the parent's epoch for its own `Text` reads.
+    pub fn from_bytes_with_epoch(bytes: Vec<u8>, epoch: u64) -> Self {
+        Self::Inline { bytes, epoch }
+    }
+
+    /// The arena epoch this body's arena-referencing fields (a flat `Text`
+    /// field's `(ptr, len)`) belong to (B28 P3 item 1). For an `Arena` body
+    /// it is the handle's captured epoch; for an `Inline` body it is the
+    /// epoch carried since construction or materialisation. A `Text` read
+    /// reattaches this epoch so a read after a `RESET` resolves `Stale`.
+    pub fn ref_epoch(&self) -> u64 {
+        match self {
+            Self::Inline { epoch, .. } => *epoch,
+            Self::Arena(handle) => handle.epoch(),
+        }
     }
 
     /// Migrate an `Inline` body to the arena's top ephemeral head, copying
@@ -173,8 +217,10 @@ impl FlatComposite {
     pub fn in_arena(self, arena: &Arena) -> Result<Self, AllocError> {
         match self {
             Self::Arena(_) => Ok(self),
-            Self::Inline(v) if v.is_empty() => Ok(Self::Inline(v)),
-            Self::Inline(v) => {
+            Self::Inline { bytes: v, epoch } if v.is_empty() => {
+                Ok(Self::Inline { bytes: v, epoch })
+            }
+            Self::Inline { bytes: v, .. } => {
                 let buffer = arena.alloc_top_bytes(v.len())?;
                 let dst = buffer.as_ptr() as *mut u8;
                 // SAFETY: `buffer` is unique storage of `v.len()` bytes
@@ -204,10 +250,15 @@ impl FlatComposite {
     /// bytes without one (the shared construction packer, value equality).
     pub fn to_inline(self, arena: &Arena) -> Self {
         match self {
-            Self::Inline(v) => Self::Inline(v),
+            Self::Inline { bytes, epoch } => Self::Inline { bytes, epoch },
             Self::Arena(handle) => {
+                // Carry the handle's originating epoch into the inline body
+                // so a flat `Text` field reattaches it on read; after a
+                // `RESET` advanced the arena epoch the read resolves `Stale`
+                // rather than dereferencing reclaimed memory (B28 P3 item 1).
+                let epoch = handle.epoch();
                 let bytes = handle.get(arena).map(|b| b.to_vec()).unwrap_or_default();
-                Self::Inline(bytes)
+                Self::Inline { bytes, epoch }
             }
         }
     }
@@ -219,7 +270,7 @@ impl FlatComposite {
     /// returned slice never outlives the arena.
     pub fn resolve<'a>(&'a self, arena: &'a Arena) -> Result<&'a [u8], Stale> {
         match self {
-            Self::Inline(v) => Ok(v.as_slice()),
+            Self::Inline { bytes, .. } => Ok(bytes.as_slice()),
             Self::Arena(handle) => handle.get(arena),
         }
     }
@@ -252,7 +303,7 @@ impl FlatComposite {
     /// arena-aware read sites to `resolve`).
     pub fn len(&self) -> usize {
         match self {
-            Self::Inline(v) => v.len(),
+            Self::Inline { bytes, .. } => bytes.len(),
             Self::Arena(_) => {
                 panic!("FlatComposite::len on an arena body; resolve(arena) and read its length")
             }
@@ -263,7 +314,7 @@ impl FlatComposite {
     /// Panics on an `Arena` body, like [`FlatComposite::len`].
     pub fn is_empty(&self) -> bool {
         match self {
-            Self::Inline(v) => v.is_empty(),
+            Self::Inline { bytes, .. } => bytes.is_empty(),
             Self::Arena(_) => {
                 panic!("FlatComposite::is_empty on an arena body; resolve(arena) instead")
             }
@@ -276,7 +327,7 @@ impl FlatComposite {
     /// panic, keeping validity and equality orthogonal.
     pub fn inline_bytes(&self) -> Option<&[u8]> {
         match self {
-            Self::Inline(v) => Some(v),
+            Self::Inline { bytes, .. } => Some(bytes),
             Self::Arena(_) => None,
         }
     }
@@ -286,7 +337,7 @@ impl FlatComposite {
     /// [`FlatComposite::resolve`] (B28 P2).
     pub fn as_bytes(&self) -> &[u8] {
         match self {
-            Self::Inline(v) => v,
+            Self::Inline { bytes, .. } => bytes,
             Self::Arena(_) => {
                 panic!("FlatComposite::as_bytes on an arena body; use resolve(arena)")
             }
@@ -298,7 +349,7 @@ impl FlatComposite {
     /// migration.
     pub fn as_bytes_mut(&mut self) -> &mut [u8] {
         match self {
-            Self::Inline(v) => v,
+            Self::Inline { bytes, .. } => bytes,
             Self::Arena(_) => {
                 panic!("FlatComposite::as_bytes_mut on an arena body; arena bodies are immutable")
             }
@@ -332,7 +383,9 @@ impl FlatComposite {
 impl PartialEq for FlatComposite {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
-            (Self::Inline(a), Self::Inline(b)) => a == b,
+            // Content equality compares bytes only; the epoch is a validity
+            // attribute, not part of the value (B28 P3 item 1).
+            (Self::Inline { bytes: a, .. }, Self::Inline { bytes: b, .. }) => a == b,
             _ => false,
         }
     }
@@ -628,7 +681,7 @@ mod tests {
         // A zero-length body needs no allocation and has no stable pointer.
         let arena = test_arena();
         let empty = FlatComposite::zeroed(0).in_arena(&arena).unwrap();
-        assert!(matches!(empty, FlatComposite::Inline(_)));
+        assert!(matches!(empty, FlatComposite::Inline { .. }));
         assert_eq!(empty.resolve(&arena).unwrap(), &[] as &[u8]);
     }
 }

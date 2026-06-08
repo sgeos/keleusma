@@ -51,7 +51,7 @@ use crate::word::Word;
 /// same use-before-`resume` discipline that already governs `KStr`.
 pub struct RefContext<'a> {
     /// The VM's arena, used to rebuild a `KString` from a flat `Text`
-    /// field's `(ptr, len)` against the current epoch.
+    /// field's `(ptr, len)`.
     pub arena: &'a keleusma_arena::Arena,
     /// The VM's ephemeral opaque registry, indexed by a flat `Opaque`
     /// field to recover the host reference.
@@ -63,6 +63,14 @@ pub struct RefContext<'a> {
     pub word_bytes: usize,
     /// The module's float byte width, paired with `word_bytes`.
     pub float_bytes: usize,
+    /// The originating arena epoch of the flat composite being decoded
+    /// (B28 P3 item 1). A flat `Text` field's `KString` is rebuilt against
+    /// this epoch, not the current arena epoch, so a decode after a `RESET`
+    /// resolves to a clean `Stale` outcome rather than dereferencing
+    /// reclaimed memory. It is the composite body's `ref_epoch`; for a
+    /// non-composite decode it is the current arena epoch (a bare `KStr`
+    /// carries its own epoch and ignores this field).
+    pub ref_epoch: u64,
 }
 
 /// A type that can cross the host-script boundary.
@@ -334,11 +342,13 @@ impl<W: Word, F: Float> KeleusmaType<W, F> for alloc::string::String {
         };
         let ptr = read_word(0);
         let len = read_word(word_bytes);
-        // SAFETY: the (ptr, len) was packed from a live KString into this
-        // body; it is valid under the current epoch per the
-        // use-before-resume rule. Rebuilding with the current epoch yields
-        // a clean Stale error if the arena has since reset.
-        let ks = unsafe { crate::kstring::KString::from_raw_parts(ptr, len, ctx.arena.epoch()) };
+        // SAFETY: the (ptr, len) was packed from a KString issued under the
+        // composite body's originating epoch (`ctx.ref_epoch`). Rebuilding
+        // with that epoch (not the current arena epoch) means the `get`
+        // below dereferences the region only while the arena epoch still
+        // matches, and yields a clean Stale error once a RESET has advanced
+        // it (B28 P3 item 1).
+        let ks = unsafe { crate::kstring::KString::from_raw_parts(ptr, len, ctx.ref_epoch) };
         ks.get(ctx.arena)
             .map(alloc::string::String::from)
             .map_err(|_| {

@@ -349,6 +349,11 @@ impl<'a> NativeCtx<'a> {
             opaques: self.opaques,
             word_bytes: self.word_bytes,
             float_bytes: self.float_bytes,
+            // A native argument is materialised at the current epoch and read
+            // synchronously within the call, before any RESET, so the current
+            // arena epoch is the argument body's originating epoch (B28 P3
+            // item 1).
+            ref_epoch: self.arena.epoch(),
         }
     }
 }
@@ -1874,6 +1879,14 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
             opaques: &self.ephemeral_opaques,
             word_bytes: self.module_word_bytes(),
             float_bytes: self.module_float_bytes(),
+            // A decoded value may be held across a RESET (a returned or
+            // yielded composite). Reattach the composite body's originating
+            // epoch so a flat Text field resolves Stale after a reset rather
+            // than dereferencing reclaimed memory; a non-composite value
+            // carries its own epoch and ignores this (B28 P3 item 1).
+            ref_epoch: value
+                .flat_ref_epoch()
+                .unwrap_or_else(|| self.arena.epoch()),
         };
         T::from_value_ctx(value, &ctx)
     }
@@ -1998,6 +2011,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         kind: crate::value_layout::ScalarKind,
         word_bytes: usize,
         float_bytes: usize,
+        ref_epoch: u64,
     ) -> Result<crate::bytecode::GenericValue<W, F>, VmError> {
         use crate::value_layout::ScalarKind;
         if matches!(kind, ScalarKind::Opaque) {
@@ -2023,11 +2037,14 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         if matches!(kind, ScalarKind::Text) {
             // A flat Text field is two words: the arena data pointer then
             // the byte length, each read unsigned (a pointer must not be
-            // sign-extended). The body just resolved current, so wrapping
-            // with the current epoch yields the arena's epoch-carrying
-            // wrapper for the live string; a later read after a RESET
-            // returns a clean `Stale` error rather than dereferencing
-            // reclaimed memory (B28 P3).
+            // sign-extended). The epoch is supplied by the composite body,
+            // not read from the field, and is the epoch under which the
+            // referenced string was allocated (B28 P3 item 1). Reattaching
+            // that originating epoch (rather than the current arena epoch)
+            // makes a read after a `RESET` resolve to a clean `Stale`
+            // outcome rather than dereferencing reclaimed memory: the
+            // composite's `ref_epoch` no longer matches the advanced arena
+            // epoch, so the rebuilt `KString` resolves stale.
             let read_word = |o: usize| -> usize {
                 let mut buf = [0u8; 8];
                 buf[..word_bytes].copy_from_slice(&bytes[o..o + word_bytes]);
@@ -2035,12 +2052,12 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
             };
             let ptr = read_word(offset);
             let len = read_word(offset + word_bytes);
-            // SAFETY: `(ptr, len)` were packed from a live `KStr` handle when
-            // this composite was built under the arena epoch the composite
-            // body still carries (it resolved current above), so the region
-            // is intact and UTF-8.
-            let ks =
-                unsafe { crate::kstring::KString::from_raw_parts(ptr, len, self.arena.epoch()) };
+            // SAFETY: `(ptr, len)` were packed from a `KStr` handle issued
+            // under `ref_epoch`. The rebuilt handle carries that epoch, so
+            // its `get` dereferences the region only while the arena epoch
+            // still matches (the allocation is then intact and UTF-8) and
+            // returns `Stale` otherwise.
+            let ks = unsafe { crate::kstring::KString::from_raw_parts(ptr, len, ref_epoch) };
             return Ok(crate::bytecode::GenericValue::KStr(ks));
         }
         Ok(crate::bytecode::GenericValue::read_scalar_le(
@@ -3815,10 +3832,11 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                             (StructField::Flat { offset, kind }, StructBody::Flat(fc)) => {
                                 let wb = self.module_word_bytes();
                                 let fb = self.module_float_bytes();
+                                let ep = fc.ref_epoch();
                                 let bytes =
                                     fc.resolve(self.arena).map_err(|_| stale_arena_body())?;
-                                let val =
-                                    self.read_flat_scalar(bytes, offset as usize, kind, wb, fb)?;
+                                let val = self
+                                    .read_flat_scalar(bytes, offset as usize, kind, wb, fb, ep)?;
                                 sp!(self, val);
                             }
                             (
@@ -3831,11 +3849,15 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                             ) => {
                                 // Extract the nested child's body bytes and
                                 // re-wrap them as a flat composite (B28 P2).
+                                // The child inherits the parent's epoch so its
+                                // own Text reads resolve stale after a RESET
+                                // (B28 P3 item 1).
+                                let ep = fc.ref_epoch();
                                 let body =
                                     fc.resolve(self.arena).map_err(|_| stale_arena_body())?;
                                 let bytes = &body[offset as usize..offset as usize + size as usize];
                                 let val = crate::bytecode::GenericValue::from_flat_nested_bytes(
-                                    bytes, variant,
+                                    bytes, variant, ep,
                                 );
                                 sp!(self, val);
                             }
@@ -3903,6 +3925,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                                 (ArrayElem::Flat { kind }, ArrayBody::Flat(fc)) => {
                                     let wb = self.module_word_bytes();
                                     let fb = self.module_float_bytes();
+                                    let ep = fc.ref_epoch();
                                     let esize = kind.size_in_bytes(wb, fb);
                                     let bytes =
                                         fc.resolve(self.arena).map_err(|_| stale_arena_body())?;
@@ -3918,7 +3941,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                                                 return Err(VmError::IndexOutOfBounds(idx, 0));
                                             }
                                             let val =
-                                                self.read_flat_scalar(bytes, 0, kind, wb, fb)?;
+                                                self.read_flat_scalar(bytes, 0, kind, wb, fb, ep)?;
                                             sp!(self, val);
                                         }
                                         Some(len) => {
@@ -3926,8 +3949,8 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                                                 return Err(VmError::IndexOutOfBounds(idx, len));
                                             }
                                             let off = idx as usize * esize;
-                                            let val =
-                                                self.read_flat_scalar(bytes, off, kind, wb, fb)?;
+                                            let val = self
+                                                .read_flat_scalar(bytes, off, kind, wb, fb, ep)?;
                                             sp!(self, val);
                                         }
                                     }
@@ -3936,8 +3959,10 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                                     // Each element is a fixed-size nested
                                     // composite; the offset is `index * size`
                                     // (B28 P2). Extract the element body and
-                                    // re-wrap it.
+                                    // re-wrap it, inheriting the parent epoch
+                                    // (B28 P3 item 1).
                                     let esize = size as usize;
+                                    let ep = fc.ref_epoch();
                                     let body =
                                         fc.resolve(self.arena).map_err(|_| stale_arena_body())?;
                                     let len = body.len().checked_div(esize).unwrap_or(0);
@@ -3949,7 +3974,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                                     sp!(
                                         self,
                                         crate::bytecode::GenericValue::from_flat_nested_bytes(
-                                            bytes, variant,
+                                            bytes, variant, ep,
                                         )
                                     );
                                 }
@@ -3988,10 +4013,11 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                             (TupleField::Flat { offset, kind }, TupleBody::Flat(fc)) => {
                                 let wb = self.module_word_bytes();
                                 let fb = self.module_float_bytes();
+                                let ep = fc.ref_epoch();
                                 let bytes =
                                     fc.resolve(self.arena).map_err(|_| stale_arena_body())?;
-                                let val =
-                                    self.read_flat_scalar(bytes, offset as usize, kind, wb, fb)?;
+                                let val = self
+                                    .read_flat_scalar(bytes, offset as usize, kind, wb, fb, ep)?;
                                 sp!(self, val);
                             }
                             (
@@ -4003,12 +4029,14 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                                 TupleBody::Flat(fc),
                             ) => {
                                 // Extract the nested child's body and re-wrap
-                                // it as a flat composite (B28 P2).
+                                // it as a flat composite, inheriting the parent
+                                // epoch (B28 P3 item 1).
+                                let ep = fc.ref_epoch();
                                 let body =
                                     fc.resolve(self.arena).map_err(|_| stale_arena_body())?;
                                 let bytes = &body[offset as usize..offset as usize + size as usize];
                                 let val = crate::bytecode::GenericValue::from_flat_nested_bytes(
-                                    bytes, variant,
+                                    bytes, variant, ep,
                                 );
                                 sp!(self, val);
                             }
@@ -4045,10 +4073,11 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                             (EnumField::Flat { offset, kind }, EnumBody::Flat(fc)) => {
                                 let wb = self.module_word_bytes();
                                 let fb = self.module_float_bytes();
+                                let ep = fc.ref_epoch();
                                 let bytes =
                                     fc.resolve(self.arena).map_err(|_| stale_arena_body())?;
-                                let val =
-                                    self.read_flat_scalar(bytes, offset as usize, kind, wb, fb)?;
+                                let val = self
+                                    .read_flat_scalar(bytes, offset as usize, kind, wb, fb, ep)?;
                                 sp!(self, val);
                             }
                             (
@@ -4061,12 +4090,14 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                             ) => {
                                 // Extract the nested payload child's body
                                 // (past the discriminant word) and re-wrap it
-                                // as a flat composite (B28 P2).
+                                // as a flat composite, inheriting the parent
+                                // epoch (B28 P3 item 1).
+                                let ep = fc.ref_epoch();
                                 let body =
                                     fc.resolve(self.arena).map_err(|_| stale_arena_body())?;
                                 let bytes = &body[offset as usize..offset as usize + size as usize];
                                 let val = crate::bytecode::GenericValue::from_flat_nested_bytes(
-                                    bytes, variant,
+                                    bytes, variant, ep,
                                 );
                                 sp!(self, val);
                             }

@@ -800,9 +800,13 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
     pub fn from_flat_nested_bytes(
         bytes: &[u8],
         variant: crate::value_layout::CompositeKind,
+        epoch: u64,
     ) -> Self {
         use crate::value_layout::CompositeKind as C;
-        let fc = crate::flat_value::FlatComposite::from_bytes(bytes.to_vec());
+        // The child inherits the parent body's epoch so its own flat `Text`
+        // field reattaches that epoch on read and resolves `Stale` after a
+        // `RESET` rather than dereferencing reclaimed memory (B28 P3 item 1).
+        let fc = crate::flat_value::FlatComposite::from_bytes_with_epoch(bytes.to_vec(), epoch);
         match variant {
             C::Tuple => Self::Tuple(TupleBody::Flat(fc)),
             C::Array => Self::Array(ArrayBody::Flat(fc)),
@@ -844,6 +848,21 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
     /// without an arena handle: the shared construction packer (which reads
     /// a child field's bytes to inline them), value equality, and the
     /// native-call boundary (where `from_value` has no arena).
+    /// The originating arena epoch of this value's flat composite body, if
+    /// it has one (B28 P3 item 1). A flat `Text` field is decoded by
+    /// reattaching this epoch so a read after a `RESET` resolves `Stale`.
+    /// Returns `None` for a boxed or non-composite value, whose reference
+    /// fields (a bare `KStr`, an opaque index) carry their own validity.
+    pub fn flat_ref_epoch(&self) -> Option<u64> {
+        match self {
+            Self::Tuple(TupleBody::Flat(fc)) => Some(fc.ref_epoch()),
+            Self::Array(ArrayBody::Flat(fc)) => Some(fc.ref_epoch()),
+            Self::Struct(StructBody::Flat(fc)) => Some(fc.ref_epoch()),
+            Self::Enum(EnumBody::Flat(fc)) => Some(fc.ref_epoch()),
+            _ => None,
+        }
+    }
+
     pub fn materialized(self, arena: &keleusma_arena::Arena) -> Self {
         match self {
             Self::Tuple(TupleBody::Flat(fc)) => Self::Tuple(TupleBody::Flat(fc.to_inline(arena))),
