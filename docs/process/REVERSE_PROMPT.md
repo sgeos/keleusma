@@ -40,13 +40,15 @@ Opaque is flat in struct and enum fields only. Tuples and arrays keep boxing an 
 
 The opaque fallback in `LayoutContext` (post-type-check, a bare unknown `Named` is opaque) excludes the built-in `Option`, which the enum-variant lowering recovers as a bare `Named("Option")` that must stay boxed. The regression this caught (flat `Option` bodies) is fixed and covered by the existing `option_*` tests.
 
-## Remaining P3 sub-slices (boundaries)
+## Boundary analysis (corrected)
 
-The committed slice is sound for internal use: a non-resolving opaque index errors cleanly rather than producing a wrong value or undefined behaviour. Two boundaries are feature gaps, not soundness holes, and are the next sub-slices:
+Two boundaries I had listed turn out to be moot or non-existent, which significantly narrows the remaining opaque work:
 
-- **Yield and native.** Decoding a yielded or argument flat composite that holds an opaque field requires the host derive's `from_flat_bytes` to resolve the index through the registry (the marshall/macro path the operator identified). Until then, a host `#[derive(KeleusmaType)]` type with an opaque field decoded from a flat body is not supported.
-- **Persistent `data`.** A flat opaque composite written to a persistent slot holds an ephemeral index that the next `RESET` invalidates; reading it back after a reset errors cleanly. A persistent opaque registry (the second registry from B33) closes this.
+- **Persistent `data`: impossible, not a regression.** The compiler rejects opaque types (and any struct or enum transitively containing one) in data-segment fields (`compiler.rs`, "opaque types are not yet admissible in data segment fields"). An opaque-bearing composite therefore cannot reach a persistent slot, so the ephemeral registry never dangles into persistent state. No persistent registry is needed for opaque.
+- **Host decode via derive: never existed.** There is no `KeleusmaType` impl for opaque (`Arc<dyn HostOpaque>` or a host opaque type), so a `#[derive(KeleusmaType)]` type could never have an opaque field, before or after P3. Decoding an opaque field from a flat body host-side is a new feature (opaque marshalling), not a P3 regression.
+
+What remains is the **yield of a whole opaque-bearing composite for manual host inspection**: pre-P3 the host received a boxed struct with `Value::Opaque(Arc)`; post-P3 it receives a flat byte body whose opaque field is a registry index. Resolving it at the yield boundary needs the compile-time type (the yield op does not carry it) or opaque marshalling support. This is the one genuine limitation, and it is the typeless-flat-composite display limitation already documented for scalar fields, now extended to opaque.
 
 ## Intended next step
 
-Take the yield/native boundary: extend the marshall layer and `#[derive(KeleusmaType)]` so an opaque field in a flat composite resolves through the VM registry when crossing to the host, then the persistent registry for the `data` boundary. After that, P3 can extend to tuples/arrays only if `infer_expr_type` is strengthened to recover opaque element types, otherwise they remain boxed by design.
+The opaque half of P3 is complete and verified for struct and enum fields (construct, access, equality), which is the supported internal surface. The next implementation piece is **Text fields** (the other reference kind): a flat `Text` field as an index into a VM string registry, reusing the dedup-registry pattern with `GenericValue` equality so the existing string equality semantics are preserved. Text carries its own decisions (the static-versus-dynamic `StaticStr`/`KStr` split, the reserved two-word slot, and the `KStr` cross-yield prohibition), so it is a distinct sub-slice. Opaque marshalling (a `KeleusmaType` path for opaque values) and the yield-of-composite resolution are a later, separate feature.

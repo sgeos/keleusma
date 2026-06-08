@@ -146,6 +146,43 @@ fn opaque_bearing_flat_composites_compare_by_identity() {
 }
 
 #[test]
+fn opaque_payload_in_flat_enum_round_trips_through_match() {
+    // B28 P3: an enum variant carrying an opaque is flat (the discriminant
+    // word plus the packed opaque index). Pattern matching extracts the
+    // payload, which resolves the index back to the original `Arc`. The
+    // enum's payload access uses the enum definition, which is reliable.
+    let src = "use make_handle\n\
+               enum Held { Wrapped(Handle), Empty }\n\
+               fn main() -> Handle {\n\
+                   let e = Held::Wrapped(make_handle());\n\
+                   match e { Held::Wrapped(h) => h, Held::Empty => make_handle() }\n\
+               }";
+    let tokens = tokenize(src).expect("lex error");
+    let program = parse(&tokens).expect("parse error");
+    let module = compile(&program).expect("compile error");
+    let arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+    let mut vm = Vm::new(module, &arena).expect("verify");
+    vm.register_native("make_handle", |_args| {
+        Ok(Value::Opaque(host_arc(Handle {
+            label: "enum-payload".into(),
+        })))
+    });
+    let val = match vm.call(&[]).expect("vm call") {
+        VmState::Finished(v) => v,
+        other => panic!("expected finished, got {:?}", other),
+    };
+    let opaque = match val {
+        Value::Opaque(o) => o,
+        other => panic!("expected opaque, got {:?}", other),
+    };
+    let typed: &Handle = opaque
+        .as_ref()
+        .downcast_ref::<Handle>()
+        .expect("downcast Handle");
+    assert_eq!(typed.label, "enum-payload");
+}
+
+#[test]
 fn downcast_ref_returns_none_on_type_mismatch() {
     struct Other;
     impl HostOpaque for Other {
