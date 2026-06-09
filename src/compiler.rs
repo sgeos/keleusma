@@ -1429,6 +1429,32 @@ pub fn compile_with_options(
             .function_returns
             .insert(func.name.clone(), func.return_type.clone());
     }
+    // A native `use` declaration that carries a signature contributes its
+    // return type, so `infer_expr_type` can recover a native call's type
+    // (B28 P3 item 3). The flat tuple/array access baking needs reliable
+    // element types; a native whose result feeds a composite must be
+    // typeable for the composite to be flat rather than boxed. The entry is
+    // keyed by both the bare imported name and the fully qualified path so
+    // either call form resolves; a script function of the same name (already
+    // inserted) takes precedence. A native without a signature is left
+    // absent, so a composite holding its result falls back to boxed.
+    for use_decl in &program.uses {
+        if let (ImportItem::Name(name), Some(sig)) = (&use_decl.import, &use_decl.signature) {
+            type_info
+                .function_returns
+                .entry(name.clone())
+                .or_insert_with(|| sig.return_type.clone());
+            if !use_decl.path.is_empty() {
+                let mut full = use_decl.path.join("::");
+                full.push_str("::");
+                full.push_str(name);
+                type_info
+                    .function_returns
+                    .entry(full)
+                    .or_insert_with(|| sig.return_type.clone());
+            }
+        }
+    }
 
     // Cache predicate bodies for refinement-elision lookup. A
     // candidate predicate has exactly one parameter bound by a
