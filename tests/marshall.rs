@@ -151,13 +151,17 @@ fn derive_struct_nesting_flat_enum_roundtrips() {
 
 #[test]
 fn derive_struct_wrong_type_name_errors() {
-    let bogus = Value::struct_value(
-        String::from("Square"),
-        vec![
+    // A float struct is flat (B28 P3 item 5), and a flat body carries no type
+    // name to validate; the type-name check is a property of the boxed decode,
+    // so this exercises a host-built boxed struct (a host may pass either
+    // representation, and `from_value` accepts both).
+    let bogus = Value::Struct(keleusma::bytecode::StructBody::Boxed {
+        type_name: String::from("Square"),
+        fields: vec![
             (String::from("x"), Value::Float(1.0)),
             (String::from("y"), Value::Float(2.0)),
         ],
-    );
+    });
     let err = Point::from_value(&bogus).unwrap_err();
     match err {
         VmError::TypeError(msg) => assert!(msg.contains("Point")),
@@ -167,10 +171,13 @@ fn derive_struct_wrong_type_name_errors() {
 
 #[test]
 fn derive_struct_missing_field_errors() {
-    let bogus = Value::struct_value(
-        String::from("Point"),
-        vec![(String::from("x"), Value::Float(1.0))],
-    );
+    // A missing field is detectable in the boxed decode, which addresses
+    // fields by name; the flat body is positional bytes with no field names,
+    // so this exercises a host-built boxed struct (B28 P3 item 5).
+    let bogus = Value::Struct(keleusma::bytecode::StructBody::Boxed {
+        type_name: String::from("Point"),
+        fields: vec![(String::from("x"), Value::Float(1.0))],
+    });
     let err = Point::from_value(&bogus).unwrap_err();
     match err {
         VmError::TypeError(msg) => assert!(msg.contains("y")),
@@ -223,9 +230,11 @@ fn derive_enum_struct_variant() {
 #[test]
 fn derive_enum_marshals_flat_per_variant() {
     use keleusma::bytecode::EnumBody;
-    // A scalar-payload variant marshals to the flat body (B28 P2),
-    // matching the flat access the compiler bakes for it; a float-bearing
-    // variant stays boxed. Both directions round-trip.
+    // Every variant's payload is flat-eligible (Float included, B28 P3 item
+    // 5), so the enum is uniformly flat and each variant marshals to the flat
+    // body, matching the flat access the compiler bakes. A float-bearing
+    // variant is flat too and is compared field-wise. Both directions
+    // round-trip.
     let active = Status::Active(42).into_value();
     assert!(matches!(active, Value::Enum(EnumBody::Flat(_))));
     assert_eq!(Status::from_value(&active).unwrap(), Status::Active(42));
@@ -242,7 +251,7 @@ fn derive_enum_marshals_flat_per_variant() {
     assert_eq!(Status::from_value(&idle).unwrap(), Status::Idle);
 
     let pair = Status::Pair(7, 2.5).into_value();
-    assert!(matches!(pair, Value::Enum(EnumBody::Boxed { .. })));
+    assert!(matches!(pair, Value::Enum(EnumBody::Flat(_))));
     assert_eq!(Status::from_value(&pair).unwrap(), Status::Pair(7, 2.5));
 }
 
@@ -505,8 +514,13 @@ fn register_fn_with_derived_struct_arg() {
 #[test]
 fn register_fn_with_derived_struct_return() {
     let arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+    // The native return is field-accessed, so the compiler needs the declared
+    // return type to bake the flat field access that matches the flat struct
+    // body `into_value` now produces (B28 P3 item 5: a float struct is flat).
+    // Without the signature the access bakes the boxed by-name form and
+    // mismatches the flat body.
     let mut vm = build_vm(
-        "use host::origin\n\
+        "use host::origin() -> Point\n\
          struct Point { x: Float, y: Float }\n\
          fn main() -> Float { host::origin().x }",
         &arena,

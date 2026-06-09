@@ -412,6 +412,12 @@ pub(crate) fn flat_tuple_scalar_kind<W: crate::word::Word, F: crate::float::Floa
         GenericValue::Byte(_) => Some(K::Byte),
         GenericValue::Int(_) => Some(K::Int),
         GenericValue::Fixed(_) => Some(K::Fixed),
+        // A `Float` is flat (B28 P3 item 5): it packs by its little-endian
+        // bytes (handled by `write_scalar_le`/`read_scalar_le`) and a
+        // float-bearing composite is compared field-wise by the compiler, so
+        // the byte residence does not change its IEEE equality semantics.
+        #[cfg(feature = "floats")]
+        GenericValue::Float(_) => Some(K::Float),
         // A `KStr` is flat as a two-word `(data_ptr, len)` arena reference
         // (B28 P3). `StaticStr` is heap-owned and not flat here; the VM
         // construct path copies it into the arena, converting it to a

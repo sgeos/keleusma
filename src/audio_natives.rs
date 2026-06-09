@@ -247,6 +247,15 @@ mod tests {
         }
     }
 
+    /// Decode a `(Float, Float)` result through the host marshalling path.
+    /// A float-bearing tuple is flat (B28 P3 item 5), so its elements are read
+    /// from the flat byte body rather than a boxed `Vec`; `from_value` handles
+    /// both representations.
+    fn pan_pair(val: Value) -> (f64, f64) {
+        <(f64, f64) as crate::marshall::KeleusmaType<i64, f64>>::from_value(&val)
+            .expect("expected a (Float, Float) tuple")
+    }
+
     fn assert_close(val: Value, expected: f64, tol: f64) {
         match val {
             Value::Float(f) => assert!(
@@ -444,34 +453,20 @@ mod tests {
         let val = run_with_audio(
             "use audio::pan_law\nfn main() -> (Float, Float) { audio::pan_law(0.0) }",
         );
-        match val {
-            Value::Tuple(elems) => {
-                let elems = elems.elements();
-                assert_eq!(elems.len(), 2);
-                let l = match elems[0] {
-                    Value::Float(f) => f,
-                    _ => panic!("expected Float"),
-                };
-                let r = match elems[1] {
-                    Value::Float(f) => f,
-                    _ => panic!("expected Float"),
-                };
-                let target = core::f64::consts::FRAC_1_SQRT_2;
-                assert!(
-                    (l - target).abs() < 1e-9,
-                    "left expected ~{}, got {}",
-                    target,
-                    l
-                );
-                assert!(
-                    (r - target).abs() < 1e-9,
-                    "right expected ~{}, got {}",
-                    target,
-                    r
-                );
-            }
-            other => panic!("expected tuple, got {:?}", other),
-        }
+        let (l, r) = pan_pair(val);
+        let target = core::f64::consts::FRAC_1_SQRT_2;
+        assert!(
+            (l - target).abs() < 1e-9,
+            "left expected ~{}, got {}",
+            target,
+            l
+        );
+        assert!(
+            (r - target).abs() < 1e-9,
+            "right expected ~{}, got {}",
+            target,
+            r
+        );
     }
 
     #[test]
@@ -479,22 +474,9 @@ mod tests {
         let val = run_with_audio(
             "use audio::pan_law\nfn main() -> (Float, Float) { audio::pan_law(-1.0) }",
         );
-        match val {
-            Value::Tuple(elems) => {
-                let elems = elems.elements();
-                let l = match elems[0] {
-                    Value::Float(f) => f,
-                    _ => panic!("expected Float"),
-                };
-                let r = match elems[1] {
-                    Value::Float(f) => f,
-                    _ => panic!("expected Float"),
-                };
-                assert!((l - 1.0).abs() < 1e-9, "left expected 1.0, got {}", l);
-                assert!(r.abs() < 1e-9, "right expected 0.0, got {}", r);
-            }
-            other => panic!("expected tuple, got {:?}", other),
-        }
+        let (l, r) = pan_pair(val);
+        assert!((l - 1.0).abs() < 1e-9, "left expected 1.0, got {}", l);
+        assert!(r.abs() < 1e-9, "right expected 0.0, got {}", r);
     }
 
     #[test]
@@ -502,22 +484,9 @@ mod tests {
         let val = run_with_audio(
             "use audio::pan_law\nfn main() -> (Float, Float) { audio::pan_law(1.0) }",
         );
-        match val {
-            Value::Tuple(elems) => {
-                let elems = elems.elements();
-                let l = match elems[0] {
-                    Value::Float(f) => f,
-                    _ => panic!("expected Float"),
-                };
-                let r = match elems[1] {
-                    Value::Float(f) => f,
-                    _ => panic!("expected Float"),
-                };
-                assert!(l.abs() < 1e-9, "left expected 0.0, got {}", l);
-                assert!((r - 1.0).abs() < 1e-9, "right expected 1.0, got {}", r);
-            }
-            other => panic!("expected tuple, got {:?}", other),
-        }
+        let (l, r) = pan_pair(val);
+        assert!(l.abs() < 1e-9, "left expected 0.0, got {}", l);
+        assert!((r - 1.0).abs() < 1e-9, "right expected 1.0, got {}", r);
     }
 
     #[test]
@@ -526,22 +495,9 @@ mod tests {
         let val = run_with_audio(
             "use audio::pan_law\nfn main() -> (Float, Float) { audio::pan_law(2.0) }",
         );
-        match val {
-            Value::Tuple(elems) => {
-                let elems = elems.elements();
-                let l = match elems[0] {
-                    Value::Float(f) => f,
-                    _ => panic!("expected Float"),
-                };
-                let r = match elems[1] {
-                    Value::Float(f) => f,
-                    _ => panic!("expected Float"),
-                };
-                assert!(l.abs() < 1e-9, "left expected 0.0, got {}", l);
-                assert!((r - 1.0).abs() < 1e-9, "right expected 1.0, got {}", r);
-            }
-            other => panic!("expected tuple, got {:?}", other),
-        }
+        let (l, r) = pan_pair(val);
+        assert!(l.abs() < 1e-9, "left expected 0.0, got {}", l);
+        assert!((r - 1.0).abs() < 1e-9, "right expected 1.0, got {}", r);
     }
 
     // -- Error paths --

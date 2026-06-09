@@ -429,8 +429,13 @@ impl LayoutDescriptor {
                 // into the arena string bytes (B28 P3); the epoch is
                 // reattached at extraction, not stored in the field.
                 | ScalarKind::Text => Some(*k),
-                // Float (when present) is not flat.
-                _ => None,
+                // Float is flat (B28 P3 item 5): it packs by its
+                // little-endian bytes and a float-bearing composite is
+                // compared field-wise (the compiler's Phase A), so the byte
+                // residence does not change its IEEE `+0.0`/`-0.0`/`NaN`
+                // equality semantics.
+                #[cfg(feature = "floats")]
+                ScalarKind::Float => Some(*k),
             },
             _ => None,
         }
@@ -837,10 +842,13 @@ mod tests {
             LayoutDescriptor::Scalar(ScalarKind::Opaque).flat_byte_size(I64_BYTES, F64_BYTES),
             Some(8)
         );
+        // A Float is flat-eligible (B28 P3 item 5): it occupies `float_bytes`
+        // and a float-bearing composite is compared field-wise by the
+        // compiler, so the flat residence preserves its IEEE equality.
         #[cfg(feature = "floats")]
         assert_eq!(
             LayoutDescriptor::Scalar(ScalarKind::Float).flat_byte_size(I64_BYTES, F64_BYTES),
-            None
+            Some(8)
         );
     }
 

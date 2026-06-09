@@ -100,9 +100,10 @@ pub trait KeleusmaType<W: Word, F: Float>: Sized {
     /// boundary, where the value is pure bytes and the Rust type
     /// supplies the layout. The default is `None`, treated as a
     /// non-flat field, so existing external implementations remain
-    /// valid without change. `Float` returns `None` because float
-    /// fields keep the boxed representation (byte equality would change
-    /// `+0.0`/`-0.0` and `NaN` semantics).
+    /// valid without change. The `f64` impl overrides this to
+    /// `Some(Float)` (B28 P3 item 5): float fields are flat, and a
+    /// float-bearing composite is compared field-wise by the compiler so
+    /// the byte residence preserves the `+0.0`/`-0.0` and `NaN` semantics.
     fn flat_field_kind() -> Option<crate::value_layout::ScalarKind> {
         None
     }
@@ -225,6 +226,17 @@ impl<W: Word, F: Float> KeleusmaType<W, F> for f64 {
 
     fn into_value(self) -> GenericValue<W, F> {
         GenericValue::Float(F::from_f64(self))
+    }
+
+    // A float is flat (B28 P3 item 5): it occupies `float_bytes` in a flat
+    // composite body and is read/written little-endian by the default
+    // `flat_byte_size`/`from_flat_bytes`. A float-bearing composite is
+    // compared field-wise by the compiler, so the flat residence keeps its
+    // IEEE equality semantics. This makes host-built and script-built float
+    // composites share the flat representation that equality and access rely
+    // on.
+    fn flat_field_kind() -> Option<crate::value_layout::ScalarKind> {
+        Some(crate::value_layout::ScalarKind::Float)
     }
 }
 
@@ -914,10 +926,12 @@ mod tests {
     fn tuple_roundtrip() {
         let t = (1i64, 2.0f64, true);
         let v = <(i64, f64, bool) as KeleusmaType<i64, f64>>::into_value(t);
-        match &v {
-            Value::Tuple(items) => assert_eq!(items.elements().len(), 3),
-            other => panic!("expected tuple, got {:?}", other),
-        }
+        // Every element (including the Float) is flat-eligible (B28 P3 item 5),
+        // so the tuple marshals to the flat byte body, not a boxed `Vec`.
+        assert!(matches!(
+            &v,
+            Value::Tuple(crate::bytecode::TupleBody::Flat(_))
+        ));
         let r: (i64, f64, bool) =
             <(i64, f64, bool) as KeleusmaType<i64, f64>>::from_value(&v).unwrap();
         assert_eq!(r, (1, 2.0, true));
