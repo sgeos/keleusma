@@ -8,8 +8,18 @@ AI to Human communication channel.
 
 ## Last Updated
 
-**Date**: 2026-06-09 (session 3)
-**Status**: B28 P3 item 5 Phase A (field-wise composite equality) was investigated and prototyped. The struct keystone works and is proven (a `RED` experiment showed a flattened float struct comparing wrong under byte-blob equality, and the field-wise emitter fixed it). The investigation then established that the full feature is materially larger and more interlocking than "field-wise struct equality": **flattening float-bearing composites is unsound unless field-wise equality covers every composite kind that can transitively carry a float (struct, tuple, array, AND enum)**, and the float-flattening must be applied consistently across two parallel flat-eligibility systems (the layout/compiler/runtime path and the marshall-trait/derive-macro path). Per "commit only when green" and the conservative-verification stance, the production prototype was reverted to the sound baseline rather than shipping a partially-correct equality. This commit lands the executable specification (`tests/flat_float_eq.rs`, green via the boxed representation today) and this map; the prototype is preserved at `docs/process/attic/b28-p3-item5-phaseA.patch`. See "Phase A investigation outcome" immediately below. Items 1, 2, 3 remain done and pushed (`85c1711`, `d05a723`, `f987f4d`, `c9fcd04`); item 4 is satisfied (see below).
+**Date**: 2026-06-09 (session 4)
+**Status**: B28 P3 item 5 **Phases A and B are implemented, verified, and committed** on `feat-flat-memory-eq` (cut from `feat-flat-memory-model`). Field-wise composite equality covers all four composite kinds, and float-bearing composites now flatten. The four commits, each green:
+- `b188662` field-wise equality for struct/tuple/array (dispatched on `LayoutDescriptor::contains_float`; an inline short-circuit AND over extracted fields via the `compile_enum_to_word` `Loop`/`Break` idiom, no new opcode);
+- `f39f75c` variant-dispatched field-wise enum equality (`IsEnum` + `GetEnumField`), closing the case where a float struct is carried as an enum payload;
+- `380f308` Phase B: floats flatten in both flat-eligibility systems (`flat_scalar_kind`, `flat_tuple_scalar_kind`, and `f64::flat_field_kind = Some(Float)` for the marshall/derive system), with the host-boundary and representation-shift test expectations updated;
+- `6697247` nesting tests proving no byte-blob comparison of a flat float survives in any container (struct/tuple/array/enum).
+
+The build order deliberately landed the equality machinery first against the still-boxed representation (so each field-wise path was verified to equal the derived `PartialEq` oracle), then flipped the representation. `tests/flat_float_eq.rs` (21 cases) exercises the flat path; the full workspace suite, clippy, and fmt are green. Item 4 is subsumed (the padding-tolerant `flat_enum_bytes_eq` is superseded for float-bearing enums by the variant-dispatched comparison).
+
+**Residual limitation (documented, unchanged in kind from item 3):** a composite returned by a native *without* a declared `use` signature and then field-accessed bakes the boxed access form and mismatches the now-flat body; a `use foo() -> T` signature or a binding annotation resolves it (the field-wise equality dispatch has the analogous dependence on `infer_expr_type`). Closing it cleanly means consuming the type checker's authoritative annotations.
+
+**Remaining item-5 work:** Phases C and D from the plan below — moving residual global-heap users (the `FlatComposite::Inline` materialisation path, the opaque registry, `StaticStr` to rodata) into the arena with WCMU accounting that sizes it, then the snapshot image and relocatability. The original Phase A investigation map (now realised) follows for reference. Items 1, 2, 3 are done and pushed; item 4 subsumed.
 
 ## Phase A investigation outcome (2026-06-09, session 3)
 

@@ -16,8 +16,11 @@
 //! flat body would fail these assertions, so the flattening work must replace
 //! the byte-blob composite equality with a compiler-emitted field-wise
 //! comparison (the keystone "Phase A") for every composite kind that can
-//! transitively carry a float. See `docs/process/REVERSE_PROMPT.md` and the
-//! preserved work-in-progress at `docs/process/attic/b28-p3-item5-phaseA.patch`.
+//! transitively carry a float.
+//!
+//! Phases A and B are implemented (B28 P3 item 5): float-bearing composites
+//! flatten and are compared field-wise, so these cases now run against the
+//! flat representation. See `docs/process/REVERSE_PROMPT.md`.
 
 extern crate alloc;
 
