@@ -23,6 +23,25 @@ Operator direction: "track this count in WCMU so static allocation can be added 
 
 Recommendation: (A) is the architecturally correct end state ("all Keleusma memory in the arena") and the operator's "static allocation added to the arena" points at it; (B) is the lower-risk soundness patch. Either is a focused multi-step effort and should not be rushed; the next session should pick one and proceed with the verification discipline used for items 1 to 3.
 
+### Item 5 goal and corrected plan (operator guidance 2026-06-09, second round)
+
+The operator stated the driving goals: (1) Keleusma must run in embedded contexts with **no global heap, only the arena bump allocator**; (2) the arena must support **whole-image snapshots** that completely reflect point-in-time state for later restoration or controlled editing (the REPL is the snapshot use case). Both push the same way: every live composite must be a **flat byte body in the arena**, self-contained, so a boxed `Vec<GenericValue>` (whose `Arc`/`String` point into the global heap) is eliminated, not merely relocated.
+
+The operator corrected three over-stated "blockers":
+1. **Floats** flatten freely — location of the bits is irrelevant and core float ops need no `alloc`. The only consequence is equality: a byte-blob `==` mishandles IEEE (`+0.0`/`-0.0`, `NaN`) and would diverge from bare-float `==`. The operator acknowledged this means composite equality cannot be the plain `for i in 0..sizeof` byte loop.
+2. **Text** lives in the arena ephemeral (top) head as a `KStr`; location was never the blocker. The real work is extending the compile-time cross-yield check (`layout_has_flat_text`) to flat-text tuples/arrays and retiring the runtime `materialise_kstrings`/`contains_dynstr` value-walk.
+3. **"Uninferable composites" is not a real category** — the compiler has the type-checked types and bakes the access ops; the boxed fallback was an artefact of the lightweight `infer_expr_type`. The fix is to consume the authoritative annotated types.
+
+**Corrected keystone — Phase A: field-wise, kind-aware composite equality.** Replace the byte-blob composite `==` (and the enum padding-tolerant `flat_enum_bytes_eq`) with a per-field comparison: extract each field and compare it by its kind (a scalar or float field via `CmpEq`, which is already IEEE-correct on extracted `Float` values; a nested composite recursively). Recommended implementation: a synthesized per-composite-type `__eq_T` routine invoked via the existing `Call` (no new opcode, bounded WCET, recursion handles nesting); equality sites dispatch to it when the inferred operand type is a composite. The enum-to-word cast (`compile_enum_to_word`) is the precedent that the compiler can emit a multi-op sequence for a single surface operation.
+
+**Phased plan:**
+- **Phase A:** field-wise composite equality (keystone; unblocks floats; supersedes enum byte-compare).
+- **Phase B:** flatten the boxed cases — floats (equality now correct), text in tuples/arrays (extend the cross-yield check), and the lightweight-inference fallback (consume authoritative types). Result: no boxed bodies.
+- **Phase C:** move residual global-heap users into the arena — the `FlatComposite::Inline` materialisation path, the opaque registry, and `StaticStr` (→ rodata); add WCMU accounting so the bound is sound and sizes the arena.
+- **Phase D:** snapshot mechanics — a self-contained arena image and the relocatability decision (relative offsets for restore-at-different-base/edit vs. restore-at-same-base), with the documented limitation that opaque values reference host state and cannot be captured.
+
+`RESET` ordering is already safe for this work: the reset handler truncates the operand stack (running `Drop`) and resets locals **before** reclaiming the arena top head (`vm.rs` ~750-767), so `Drop`-bearing values are dropped before their backing region is reclaimed.
+
 ## Decisions locked (operator, 2026-06-08)
 
 Three questions were open. The operator resolved all three. The prior multi-option analysis in this file is superseded by these decisions and retained only as history at the end.
