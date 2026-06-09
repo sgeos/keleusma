@@ -3854,6 +3854,221 @@ fn struct_field_access(fc: &mut FuncCompiler, type_name: &str, field_name: &str)
     }
 }
 
+/// Strip information-flow label wrappers from a type expression, yielding
+/// the underlying type (B28 P3 item 5). Used by the field-wise equality
+/// emitter to recover the composite shape behind a `@Label` annotation.
+fn strip_type_labels(ty: &TypeExpr) -> TypeExpr {
+    match ty {
+        TypeExpr::Labelled(inner, _, _) | TypeExpr::NegativeLabelled(inner, _, _) => {
+            strip_type_labels(inner)
+        }
+        other => other.clone(),
+    }
+}
+
+/// Whether equality of a value of type `ty` must be compiled field-wise
+/// because the type is a struct, tuple, or array that transitively contains
+/// a `Float` (B28 P3 item 5, Phase A).
+///
+/// A raw-byte `CmpEq` over a float-bearing flat body would diverge from IEEE
+/// on `+0.0`/`-0.0` (equal values, distinct bytes) and `NaN` (equal bytes,
+/// unequal values), so the compiler emits a per-field comparison. The
+/// per-field extraction works on both flat and boxed bodies, so this dispatch
+/// is correct before and after the float-flattening representation switch. A
+/// bare `Float` scalar is already IEEE-correct under `CmpEq`; a type the
+/// layout pass cannot resolve falls back to `CmpEq`. Enums are added by the
+/// variant-dispatched emitter in a following commit.
+///
+/// Residual limitation: a float-bearing composite whose operand type the
+/// compiler cannot infer at the comparison site falls back to `CmpEq`. With
+/// the boxed representation that is still IEEE-correct (derived comparison);
+/// once the body is flat it would be byte-blob-wrong, so closing this needs
+/// the type checker's authoritative annotations rather than the lightweight
+/// `infer_expr_type`.
+fn composite_needs_fieldwise_eq(ty: &TypeExpr, ti: &TypeInfo) -> bool {
+    use crate::value_layout::LayoutDescriptor as L;
+    let Ok(d) = ti.layout_context().layout_for(ty) else {
+        return false;
+    };
+    matches!(d, L::Struct { .. } | L::Tuple(_) | L::Array { .. }) && d.contains_float()
+}
+
+/// A baked field-access operand paired with the local slot the access
+/// reads from, used by the field-wise equality emitter (B28 P3 item 5).
+enum FieldAccessOp {
+    Struct(crate::bytecode::StructField),
+    Tuple(crate::bytecode::TupleField),
+    Array {
+        elem: crate::bytecode::ArrayElem,
+        index_const: u16,
+    },
+}
+
+/// Emit the ops that push the addressed field of the composite in local
+/// `slot` onto the stack (B28 P3 item 5). Mirrors the access the compiler
+/// bakes for an ordinary field read, so the offsets agree with the
+/// constructed body (flat or boxed).
+fn emit_field_extract(fc: &mut FuncCompiler, slot: u16, access: &FieldAccessOp) {
+    fc.emit(Op::GetLocal(slot));
+    match access {
+        FieldAccessOp::Struct(f) => {
+            fc.emit(Op::GetField(*f));
+        }
+        FieldAccessOp::Tuple(f) => {
+            fc.emit(Op::GetTupleField(*f));
+        }
+        FieldAccessOp::Array { elem, index_const } => {
+            // `GetIndex` pops the index then the container, so push the
+            // container (via `GetLocal` above) then the index constant.
+            fc.emit(Op::Const(*index_const));
+            fc.emit(Op::GetIndex(*elem));
+        }
+    }
+}
+
+/// Resolve the ordered `(field access, field type)` list for the composite
+/// `ty` (B28 P3 item 5). Structs follow declaration order; tuples and arrays
+/// follow positional order. The access operands reuse the same baking the
+/// ordinary field reads use, so the offsets match the constructed body.
+fn composite_field_accessors(
+    fc: &mut FuncCompiler,
+    ty: &TypeExpr,
+) -> Result<Vec<(FieldAccessOp, TypeExpr)>, CompileError> {
+    match strip_type_labels(ty) {
+        TypeExpr::Named(name, _, span) => {
+            let order = fc
+                .type_info
+                .struct_field_order
+                .get(&name)
+                .cloned()
+                .ok_or_else(|| CompileError {
+                    message: alloc::format!(
+                        "field-wise equality requires a struct layout for `{}`",
+                        name
+                    ),
+                    span,
+                })?;
+            let mut out = Vec::with_capacity(order.len());
+            for (fname, fty) in &order {
+                let access = FieldAccessOp::Struct(struct_field_access(fc, &name, fname));
+                out.push((access, fty.clone()));
+            }
+            Ok(out)
+        }
+        TypeExpr::Tuple(elems, _) => {
+            let opt_types: Vec<Option<TypeExpr>> = elems.iter().cloned().map(Some).collect();
+            let mut out = Vec::with_capacity(elems.len());
+            for (i, ety) in elems.iter().enumerate() {
+                let access = FieldAccessOp::Tuple(tuple_field_access(fc, &opt_types, i));
+                out.push((access, ety.clone()));
+            }
+            Ok(out)
+        }
+        TypeExpr::Array(elem, count, span) => {
+            if count < 0 {
+                return Err(CompileError {
+                    message: String::from("field-wise equality on a negative-length array"),
+                    span,
+                });
+            }
+            let mut out = Vec::with_capacity(count as usize);
+            for i in 0..count {
+                let elem_op = array_elem_operand(Some(&elem), &fc.type_info);
+                let index_const = fc.add_constant(Value::Int(i));
+                out.push((
+                    FieldAccessOp::Array {
+                        elem: elem_op,
+                        index_const,
+                    },
+                    (*elem).clone(),
+                ));
+            }
+            Ok(out)
+        }
+        other => Err(CompileError {
+            message: alloc::format!(
+                "field-wise equality on an unsupported composite type {:?}",
+                other
+            ),
+            span: Span::default(),
+        }),
+    }
+}
+
+/// Emit a field-wise equality comparison of the two composites held in
+/// locals `ltmp` and `rtmp`, leaving a single `Bool` on the stack (B28 P3
+/// item 5, Phase A).
+///
+/// Each field is extracted from both operands and compared by kind: a scalar
+/// field (including `Float`, which `CmpEq` compares with IEEE semantics on
+/// the extracted value) by `CmpEq`, a float-bearing nested composite field
+/// by recursion, and any other nested composite by `CmpEq` (its body carries
+/// no float, so the comparison is correct). The fields are combined with a
+/// short-circuiting logical AND expressed as a virtual loop: the first
+/// unequal field breaks out with `false`, and reaching the end pushes `true`.
+/// This reuses the `Loop`/`Break` idiom of [`compile_enum_to_word`] and needs
+/// no new opcode. Termination is static: the field list is finite and
+/// recursion follows the finite, non-recursive composite type structure.
+fn emit_composite_fieldwise_eq(
+    fc: &mut FuncCompiler,
+    ty: &TypeExpr,
+    ltmp: u16,
+    rtmp: u16,
+) -> Result<(), CompileError> {
+    let fields = composite_field_accessors(fc, ty)?;
+    let loop_addr = fc.emit(Op::Loop(0));
+    fc.enter_loop();
+    for (access, fty) in fields {
+        fc.begin_scope();
+        emit_field_extract(fc, ltmp, &access);
+        emit_field_extract(fc, rtmp, &access);
+        if composite_needs_fieldwise_eq(&fty, &fc.type_info) {
+            let r2 = fc.declare_local("__eqf_r");
+            let l2 = fc.declare_local("__eqf_l");
+            fc.emit(Op::SetLocal(r2));
+            fc.emit(Op::SetLocal(l2));
+            emit_composite_fieldwise_eq(fc, &fty, l2, r2)?;
+        } else {
+            fc.emit(Op::CmpEq);
+        }
+        // Stack: a `Bool` that is true when this field is equal. Break out
+        // with `false` when it is unequal; otherwise continue to the next
+        // field. `If` jumps on false, so compare `Not` (unequal) and let the
+        // unequal case fall through to the break.
+        fc.emit(Op::Not);
+        let skip = fc.emit_jump(Op::If(0));
+        let f_const = fc.add_constant(Value::Bool(false));
+        fc.emit(Op::Const(f_const));
+        let br = fc.emit_jump(Op::Break(0));
+        fc.loop_breaks
+            .last_mut()
+            .expect("inside field-wise eq loop")
+            .push(br);
+        fc.patch_jump(skip);
+        fc.emit(Op::EndIf);
+        fc.end_scope();
+    }
+    // Every field compared equal.
+    let t_const = fc.add_constant(Value::Bool(true));
+    fc.emit(Op::Const(t_const));
+    let br = fc.emit_jump(Op::Break(0));
+    fc.loop_breaks
+        .last_mut()
+        .expect("inside field-wise eq loop")
+        .push(br);
+    let endloop_addr = fc.emit(Op::EndLoop(0));
+    let after_loop = (loop_addr + 1) as u16;
+    if let Op::EndLoop(a) = &mut fc.chunk.ops[endloop_addr] {
+        *a = after_loop;
+    }
+    let after_endloop = fc.chunk.ops.len() as u16;
+    if let Op::Loop(a) = &mut fc.chunk.ops[loop_addr] {
+        *a = after_endloop;
+    }
+    fc.exit_loop();
+    Ok(())
+}
+
 /// The name of a named (struct, enum, or opaque) type expression,
 /// unwrapping information-flow label wrappers. `None` for any other type.
 fn named_type_name(ty: Option<&TypeExpr>) -> Option<&str> {
@@ -5366,11 +5581,35 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
                     // Modulo by zero traps; record the operator site.
                     fc.record_operator_site(span);
                 }
-                BinOp::Eq => {
-                    fc.emit(Op::CmpEq);
-                }
-                BinOp::NotEq => {
-                    fc.emit(Op::CmpNe);
+                BinOp::Eq | BinOp::NotEq => {
+                    // A float-bearing composite must compare field-wise so the
+                    // IEEE `+0.0`/`-0.0` and `NaN` semantics survive a flat
+                    // body (B28 P3 item 5); a raw-byte `CmpEq` would diverge.
+                    // The operands are already on the stack, so stash them in
+                    // scratch locals, emit the per-field comparison, then
+                    // negate for `!=`. Non-float composites and scalars keep
+                    // the direct compare.
+                    let fieldwise = operand_ty
+                        .as_ref()
+                        .map(|ty| composite_needs_fieldwise_eq(ty, &fc.type_info))
+                        .unwrap_or(false);
+                    if fieldwise {
+                        let ty = operand_ty.clone().expect("fieldwise implies Some");
+                        fc.begin_scope();
+                        let rtmp = fc.declare_local("__eq_r");
+                        let ltmp = fc.declare_local("__eq_l");
+                        fc.emit(Op::SetLocal(rtmp));
+                        fc.emit(Op::SetLocal(ltmp));
+                        emit_composite_fieldwise_eq(fc, &ty, ltmp, rtmp)?;
+                        if matches!(op, BinOp::NotEq) {
+                            fc.emit(Op::Not);
+                        }
+                        fc.end_scope();
+                    } else if matches!(op, BinOp::Eq) {
+                        fc.emit(Op::CmpEq);
+                    } else {
+                        fc.emit(Op::CmpNe);
+                    }
                 }
                 BinOp::Lt => {
                     fc.emit(Op::CmpLt);
