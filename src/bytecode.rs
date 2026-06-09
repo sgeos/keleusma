@@ -442,6 +442,30 @@ pub(crate) fn flat_field_size<W: crate::word::Word, F: crate::float::Float>(
     flat_body_bytes(v).map(|b| b.len())
 }
 
+/// Whether `v` is flat-eligible as a tuple or array element including the
+/// opaque reference kind (B28 P3 item 3), the value-side mirror of the
+/// compiler's `classify_flat_field` for tuples and arrays. A tuple or array
+/// is built flat only when every element satisfies this. `Opaque` is
+/// eligible (the VM interns it to a one-word registry index). Text is not
+/// eligible here: flattening a tuple's text would hide its `KStr` from the
+/// `materialise_kstrings`/`contains_dynstr` lifecycle and remove the ability
+/// to yield a static-text tuple, so a text-bearing tuple stays boxed (its
+/// arena residence is the concern of the boxed-body arena migration). Every
+/// other case reduces to `flat_field_size` (a flat scalar or
+/// transitively-flat nested composite; a float, a string, or a boxed
+/// composite is not eligible). The VM interns an `Opaque` before packing, so
+/// this predicate takes the pre-interning value.
+pub(crate) fn flat_tuple_element_with_refs<W: crate::word::Word, F: crate::float::Float>(
+    v: &GenericValue<W, F>,
+    word_bytes: usize,
+    float_bytes: usize,
+) -> bool {
+    match v {
+        GenericValue::Opaque(_) => true,
+        _ => flat_field_size(v, word_bytes, float_bytes).is_some(),
+    }
+}
+
 /// Padding-tolerant equality of two flat enum bodies (B28 P2).
 ///
 /// Compares the overlapping prefix and requires each trailing remainder
@@ -508,13 +532,14 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
         word_bytes: usize,
         float_bytes: usize,
     ) -> Self {
-        // A tuple or array keeps a text element boxed (B28 P3): text is
-        // flat only in struct/enum fields, whose access form the named type
-        // makes reliable, not in value-driven tuples and arrays whose access
-        // form is recovered by lightweight inference. Keeping the
-        // value-side constructor boxed for text matches the boxed access the
-        // compiler bakes, and leaves a `KStr` visible to the `KString`
-        // lifecycle (`materialise_kstrings`, `contains_dynstr`).
+        // A text element keeps the tuple boxed (B28 P3): flattening it would
+        // hide the `KStr` from the `materialise_kstrings`/`contains_dynstr`
+        // lifecycle and remove the ability to yield a static-text tuple.
+        // Opaque is flat (B28 P3 item 3): the VM interns it to a one-word
+        // index before calling here, so an interned element is an `Int` and
+        // packs flat; a host- or constant-built tuple that still carries an
+        // `Opaque` cannot intern it and stays boxed via `try_pack_flat`
+        // returning `None`, the same host/VM gap struct and enum have.
         if elements
             .iter()
             .any(|e| matches!(e, Self::StaticStr(_) | Self::KStr(_)))
@@ -555,8 +580,8 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
         word_bytes: usize,
         float_bytes: usize,
     ) -> Self {
-        // A text element keeps the array boxed (B28 P3); see
-        // `tuple_with_widths`.
+        // A text element keeps the array boxed (B28 P3); opaque is flat (B28
+        // P3 item 3); see `tuple_with_widths`.
         if elements
             .iter()
             .any(|e| matches!(e, Self::StaticStr(_) | Self::KStr(_)))

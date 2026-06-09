@@ -3704,22 +3704,21 @@ fn layout_has_flat_text(d: &crate::value_layout::LayoutDescriptor, word_bytes: u
 }
 
 /// Resolve the baked [`ArrayElem`] operand for indexing an array whose
-/// element type is `elem_ty` (B28 P2). A flat-eligible scalar element type
-/// bakes `Flat { kind }` and a nested flat composite element bakes
-/// `FlatNested { size, kind }`, matching the flat body the construction
-/// handler builds for a transitively-flat array; any other element type
-/// (reference, float, non-flat composite) or an unrecoverable type bakes
-/// the boxed positional form, matching the boxed body. The decision mirrors
-/// the runtime's value-based eligibility in `array_with_widths`, so a
+/// element type is `elem_ty` (B28 P2, references added in B28 P3 item 3). A
+/// flat-eligible scalar element type (including the reference kinds `Opaque`
+/// and `Text`) bakes `Flat { kind }` and a nested flat composite element
+/// bakes `FlatNested { size, kind }`, matching the flat body the
+/// construction handler builds for a transitively-flat array; any other
+/// element type (float, non-flat composite, or `Text` on a narrow-word build
+/// where `classify_flat_field` reports `NotFlat`) or an unrecoverable type
+/// bakes the boxed positional form, matching the boxed body. The decision
+/// mirrors the runtime's value-based eligibility in `array_with_widths`, so a
 /// well-typed program's access form always agrees with the body.
 fn array_elem_operand(elem_ty: Option<&TypeExpr>, ti: &TypeInfo) -> ArrayElem {
     match elem_ty.map(|ty| classify_flat_field(ty, ti)) {
-        // A reference element keeps the array boxed (B28 P3): opaque and
-        // text are flat only in struct/enum fields, where the named type
-        // makes access reliable, not in value-driven tuples and arrays.
-        Some(FlatFieldForm::Scalar(
-            crate::value_layout::ScalarKind::Opaque | crate::value_layout::ScalarKind::Text,
-        )) => ArrayElem::Boxed,
+        // Text keeps the array boxed (the value-side constructor does too, to
+        // preserve the KStr lifecycle); opaque is flat (B28 P3 item 3).
+        Some(FlatFieldForm::Scalar(crate::value_layout::ScalarKind::Text)) => ArrayElem::Boxed,
         Some(FlatFieldForm::Scalar(kind)) => ArrayElem::Flat { kind },
         Some(FlatFieldForm::Nested(size, variant)) => ArrayElem::FlatNested { size, variant },
         _ => ArrayElem::Boxed,
@@ -3757,17 +3756,12 @@ fn tuple_field_access(
         let Some(size) = type_flat_size(ty, &fc.type_info) else {
             return boxed;
         };
-        // A reference element (opaque or text) keeps the whole tuple boxed
-        // (B28 P3). References are flat in a struct or enum, where the named
-        // type makes access reliable, but a tuple's access form is recovered
-        // by lightweight inference that cannot see a reference element type,
-        // so the value-driven runtime keeps a reference-bearing tuple boxed
-        // and the access must agree.
+        // A text element keeps the whole tuple boxed (the value-side
+        // constructor does too, to preserve the KStr lifecycle); opaque is
+        // flat (B28 P3 item 3).
         if matches!(
             classify_flat_field(ty, &fc.type_info),
-            FlatFieldForm::Scalar(
-                crate::value_layout::ScalarKind::Opaque | crate::value_layout::ScalarKind::Text
-            )
+            FlatFieldForm::Scalar(crate::value_layout::ScalarKind::Text)
         ) {
             return boxed;
         }
@@ -5884,7 +5878,8 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
         Expr::ArrayLiteral { elements, .. } => {
             // A homogeneous array's flat size is `count * element_size`,
             // taken from the inferred element type (B28 P4). An empty array
-            // is zero bytes; an unrecoverable element type bakes boxed.
+            // is zero bytes; an unrecoverable element type bakes a
+            // conservative bound.
             let byte_size = if elements.is_empty() {
                 Some(0u16)
             } else {
@@ -5900,8 +5895,12 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
             // VM decides flat-or-boxed from the values, which agrees with the
             // type-driven access), so the operand is always `Flat` and
             // `byte_size` is only the verifier annotation: the exact flat size
-            // when the element type is known, else a sound conservative
-            // bound (B28 P4).
+            // when the element type is known, else a sound conservative bound
+            // (B28 P4). The value-driven runtime flattens a scalar tuple even
+            // when the literal's element types are not statically recoverable,
+            // which an operand-driven decision here would wrongly box and
+            // disagree with the inferable access. The opaque reference kind is
+            // flat in this value-driven form too (B28 P3 item 3).
             let byte_size = byte_size.unwrap_or_else(|| conservative_alloc_bytes(count));
             for elem in elements {
                 compile_expr(fc, elem)?;

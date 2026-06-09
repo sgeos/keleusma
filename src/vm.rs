@@ -1884,9 +1884,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
             // epoch so a flat Text field resolves Stale after a reset rather
             // than dereferencing reclaimed memory; a non-composite value
             // carries its own epoch and ignores this (B28 P3 item 1).
-            ref_epoch: value
-                .flat_ref_epoch()
-                .unwrap_or_else(|| self.arena.epoch()),
+            ref_epoch: value.flat_ref_epoch().unwrap_or_else(|| self.arena.epoch()),
         };
         T::from_value_ctx(value, &ctx)
     }
@@ -3737,14 +3735,15 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                             kind: CK::Struct | CK::Enum,
                             ..
                         } => true,
-                        NCO::Flat { .. } => values.iter().all(|v| {
-                            crate::bytecode::flat_field_size(v, wb, fb).is_some()
-                                && !matches!(
-                                    v,
-                                    crate::bytecode::GenericValue::StaticStr(_)
-                                        | crate::bytecode::GenericValue::KStr(_)
-                                )
-                        }),
+                        // Tuple and array are value-driven: flat iff every
+                        // element is flat-eligible including the reference
+                        // kinds (B28 P3 item 3). An eligible `Opaque` is
+                        // interned and a `StaticStr` arena-copied below; the
+                        // predicate applies the same narrow-word text gate the
+                        // compiler bakes, so construction and access agree.
+                        NCO::Flat { .. } => values
+                            .iter()
+                            .all(|v| crate::bytecode::flat_tuple_element_with_refs(v, wb, fb)),
                         NCO::Boxed { .. } => false,
                     };
                     if flat {
@@ -3835,8 +3834,14 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                                 let ep = fc.ref_epoch();
                                 let bytes =
                                     fc.resolve(self.arena).map_err(|_| stale_arena_body())?;
-                                let val = self
-                                    .read_flat_scalar(bytes, offset as usize, kind, wb, fb, ep)?;
+                                let val = self.read_flat_scalar(
+                                    bytes,
+                                    offset as usize,
+                                    kind,
+                                    wb,
+                                    fb,
+                                    ep,
+                                )?;
                                 sp!(self, val);
                             }
                             (
@@ -4016,8 +4021,14 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                                 let ep = fc.ref_epoch();
                                 let bytes =
                                     fc.resolve(self.arena).map_err(|_| stale_arena_body())?;
-                                let val = self
-                                    .read_flat_scalar(bytes, offset as usize, kind, wb, fb, ep)?;
+                                let val = self.read_flat_scalar(
+                                    bytes,
+                                    offset as usize,
+                                    kind,
+                                    wb,
+                                    fb,
+                                    ep,
+                                )?;
                                 sp!(self, val);
                             }
                             (
@@ -4076,8 +4087,14 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                                 let ep = fc.ref_epoch();
                                 let bytes =
                                     fc.resolve(self.arena).map_err(|_| stale_arena_body())?;
-                                let val = self
-                                    .read_flat_scalar(bytes, offset as usize, kind, wb, fb, ep)?;
+                                let val = self.read_flat_scalar(
+                                    bytes,
+                                    offset as usize,
+                                    kind,
+                                    wb,
+                                    fb,
+                                    ep,
+                                )?;
                                 sp!(self, val);
                             }
                             (
