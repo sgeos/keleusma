@@ -312,6 +312,41 @@ fn enum_two_float_payload_fields_compare_equal() {
 }
 
 #[test]
+fn tuple_carrying_float_struct_compares_field_wise() {
+    // A flat tuple whose element is a flat float struct: equality must descend
+    // through the tuple element into the struct (IEEE), not byte-blob the
+    // nested float bytes.
+    let src = "use pos_zero() -> Float\n\
+               use neg_zero() -> Float\n\
+               struct P { x: Float }\n\
+               fn main() -> bool {\n\
+                   let a = (P { x: pos_zero() }, 5);\n\
+                   let b = (P { x: neg_zero() }, 5);\n\
+                   a == b\n\
+               }";
+    assert!(
+        run_bool(src),
+        "a tuple carrying a float struct must compare field-wise into the struct"
+    );
+}
+
+#[test]
+fn array_carrying_float_struct_compares_field_wise() {
+    let src = "use pos_zero() -> Float\n\
+               use neg_zero() -> Float\n\
+               struct P { x: Float }\n\
+               fn main() -> bool {\n\
+                   let a = [P { x: pos_zero() }];\n\
+                   let b = [P { x: neg_zero() }];\n\
+                   a == b\n\
+               }";
+    assert!(
+        run_bool(src),
+        "an array carrying a float struct must compare field-wise into the struct"
+    );
+}
+
+#[test]
 fn enum_carrying_float_struct_payload_compares_field_wise() {
     // The byte-blob hole: an enum whose payload is a float-bearing struct.
     // Equality must descend through the enum payload into the struct and
