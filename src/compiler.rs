@@ -3876,8 +3876,9 @@ fn strip_type_labels(ty: &TypeExpr) -> TypeExpr {
 /// per-field extraction works on both flat and boxed bodies, so this dispatch
 /// is correct before and after the float-flattening representation switch. A
 /// bare `Float` scalar is already IEEE-correct under `CmpEq`; a type the
-/// layout pass cannot resolve falls back to `CmpEq`. Enums are added by the
-/// variant-dispatched emitter in a following commit.
+/// layout pass cannot resolve falls back to `CmpEq`. An enum that
+/// transitively carries a float is compared by the variant-dispatched
+/// [`emit_enum_fieldwise_eq`].
 ///
 /// Residual limitation: a float-bearing composite whose operand type the
 /// compiler cannot infer at the comparison site falls back to `CmpEq`. With
@@ -3890,7 +3891,10 @@ fn composite_needs_fieldwise_eq(ty: &TypeExpr, ti: &TypeInfo) -> bool {
     let Ok(d) = ti.layout_context().layout_for(ty) else {
         return false;
     };
-    matches!(d, L::Struct { .. } | L::Tuple(_) | L::Array { .. }) && d.contains_float()
+    matches!(
+        d,
+        L::Struct { .. } | L::Tuple(_) | L::Array { .. } | L::Enum { .. }
+    ) && d.contains_float()
 }
 
 /// A baked field-access operand paired with the local slot the access
@@ -4015,6 +4019,13 @@ fn emit_composite_fieldwise_eq(
     ltmp: u16,
     rtmp: u16,
 ) -> Result<(), CompileError> {
+    // An enum is compared by variant dispatch, not the uniform field loop:
+    // the active variant selects which payload fields to compare.
+    if let TypeExpr::Named(name, _, _) = &strip_type_labels(ty)
+        && fc.type_info.enum_variant_order.contains_key(name)
+    {
+        return emit_enum_fieldwise_eq(fc, name, ltmp, rtmp);
+    }
     let fields = composite_field_accessors(fc, ty)?;
     let loop_addr = fc.emit(Op::Loop(0));
     fc.enter_loop();
@@ -4056,6 +4067,136 @@ fn emit_composite_fieldwise_eq(
         .last_mut()
         .expect("inside field-wise eq loop")
         .push(br);
+    let endloop_addr = fc.emit(Op::EndLoop(0));
+    let after_loop = (loop_addr + 1) as u16;
+    if let Op::EndLoop(a) = &mut fc.chunk.ops[endloop_addr] {
+        *a = after_loop;
+    }
+    let after_endloop = fc.chunk.ops.len() as u16;
+    if let Op::Loop(a) = &mut fc.chunk.ops[loop_addr] {
+        *a = after_endloop;
+    }
+    fc.exit_loop();
+    Ok(())
+}
+
+/// Emit a variant-dispatched field-wise equality of the two enums held in
+/// locals `ltmp` and `rtmp`, leaving a single `Bool` on the stack (B28 P3
+/// item 5, Phase A).
+///
+/// Two enums are equal iff they are the same variant and that variant's
+/// payload fields are field-wise equal. For each declared variant `V`: if the
+/// left value is `V`, then if the right value is also `V` compare `V`'s
+/// payload fields (short-circuiting), otherwise the values differ; if the left
+/// value is not `V`, try the next variant. The dispatch reuses the `IsEnum`
+/// check and `GetEnumField` extraction the compiler already bakes, so it is
+/// correct on both flat and boxed enum bodies, and the whole comparison is
+/// wrapped in the `Loop`/`Break` virtual block (the [`compile_enum_to_word`]
+/// idiom) so each outcome breaks out with its `Bool`.
+///
+/// `IsEnum` peeks (it leaves the inspected enum on the stack and pushes the
+/// Bool), so each `GetLocal`/`IsEnum`/`If` is followed by a `PopN(1)` that
+/// discards the peeked copy on the path that keeps it. A well-typed value
+/// always matches one declared variant; the post-loop `Trap` guards a
+/// host-built enum carrying an undeclared variant.
+fn emit_enum_fieldwise_eq(
+    fc: &mut FuncCompiler,
+    enum_name: &str,
+    ltmp: u16,
+    rtmp: u16,
+) -> Result<(), CompileError> {
+    let variants: Vec<(String, i64)> = fc
+        .type_info
+        .enum_variant_order
+        .get(enum_name)
+        .cloned()
+        .unwrap_or_default();
+    let e_const = fc.add_string_constant(enum_name);
+    let loop_addr = fc.emit(Op::Loop(0));
+    fc.enter_loop();
+    for (variant, disc) in &variants {
+        fc.begin_scope();
+        let v_const = fc.add_string_constant(variant);
+        let d_const = fc.add_constant(Value::Int(*disc));
+        // Is the left value variant `V`? `IsEnum` peeks, so discard the peeked
+        // copy on each path below.
+        fc.emit(Op::GetLocal(ltmp));
+        fc.emit(Op::IsEnum(e_const, v_const, d_const));
+        let l_not_v = fc.emit_jump(Op::If(0)); // false (not V) -> skip this variant
+        fc.emit(Op::PopN(1)); // discard the peeked left enum (left is V)
+        // Is the right value also `V`?
+        fc.emit(Op::GetLocal(rtmp));
+        fc.emit(Op::IsEnum(e_const, v_const, d_const));
+        let r_not_v = fc.emit_jump(Op::If(0)); // false (not V) -> different variants
+        fc.emit(Op::PopN(1)); // discard the peeked right enum (both are V)
+        // Both are `V`: compare the payload fields field-wise.
+        let payload: Vec<TypeExpr> = fc
+            .type_info
+            .enums
+            .get(enum_name)
+            .and_then(|vs| vs.get(variant))
+            .cloned()
+            .unwrap_or_default();
+        for (i, fty) in payload.iter().enumerate() {
+            let access = enum_field_access(fc, enum_name, variant, i);
+            fc.emit(Op::GetLocal(ltmp));
+            fc.emit(Op::GetEnumField(access));
+            fc.emit(Op::GetLocal(rtmp));
+            fc.emit(Op::GetEnumField(access));
+            if composite_needs_fieldwise_eq(fty, &fc.type_info) {
+                let r2 = fc.declare_local("__eqe_r");
+                let l2 = fc.declare_local("__eqe_l");
+                fc.emit(Op::SetLocal(r2));
+                fc.emit(Op::SetLocal(l2));
+                emit_composite_fieldwise_eq(fc, fty, l2, r2)?;
+            } else {
+                fc.emit(Op::CmpEq);
+            }
+            // A `Bool` that is true when this payload field is equal. Break
+            // with `false` when it is unequal; otherwise continue.
+            fc.emit(Op::Not);
+            let field_eq = fc.emit_jump(Op::If(0));
+            let f_const = fc.add_constant(Value::Bool(false));
+            fc.emit(Op::Const(f_const));
+            let br = fc.emit_jump(Op::Break(0));
+            fc.loop_breaks
+                .last_mut()
+                .expect("inside enum eq loop")
+                .push(br);
+            fc.patch_jump(field_eq);
+            fc.emit(Op::EndIf);
+        }
+        // Every payload field compared equal: the enums are equal.
+        let t_const = fc.add_constant(Value::Bool(true));
+        fc.emit(Op::Const(t_const));
+        let br = fc.emit_jump(Op::Break(0));
+        fc.loop_breaks
+            .last_mut()
+            .expect("inside enum eq loop")
+            .push(br);
+        // Right is not `V` while left is `V`: different variants, unequal.
+        fc.patch_jump(r_not_v);
+        fc.emit(Op::EndIf);
+        fc.emit(Op::PopN(1)); // discard the peeked right enum
+        let f_const = fc.add_constant(Value::Bool(false));
+        fc.emit(Op::Const(f_const));
+        let br = fc.emit_jump(Op::Break(0));
+        fc.loop_breaks
+            .last_mut()
+            .expect("inside enum eq loop")
+            .push(br);
+        // Left is not `V`: discard the peeked left enum and try the next
+        // variant.
+        fc.patch_jump(l_not_v);
+        fc.emit(Op::EndIf);
+        fc.emit(Op::PopN(1));
+        fc.end_scope();
+    }
+    // A well-typed value matched one variant; reaching here means a
+    // host-constructed enum carried an undeclared variant.
+    fc.emit(Op::Trap(
+        crate::bytecode::TrapKind::EnumVariantUnmapped.code(),
+    ));
     let endloop_addr = fc.emit(Op::EndLoop(0));
     let after_loop = (loop_addr + 1) as u16;
     if let Op::EndLoop(a) = &mut fc.chunk.ops[endloop_addr] {

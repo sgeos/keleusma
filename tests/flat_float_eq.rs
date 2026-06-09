@@ -231,3 +231,120 @@ fn nested_struct_distinct_inner_float_compares_unequal() {
         "a distinct nested float field must compare unequal"
     );
 }
+
+#[test]
+fn enum_same_variant_positive_and_negative_zero_compare_equal() {
+    // A float-bearing enum is compared by variant dispatch: same variant,
+    // then payload field-wise. +0.0 and -0.0 in the payload must compare
+    // equal.
+    let src = "use pos_zero() -> Float\n\
+               use neg_zero() -> Float\n\
+               enum Shape { Dot, Circle(Float) }\n\
+               fn main() -> bool {\n\
+                   let p = Shape::Circle(pos_zero());\n\
+                   let q = Shape::Circle(neg_zero());\n\
+                   p == q\n\
+               }";
+    assert!(run_bool(src), "enum payload +0.0/-0.0 must compare equal");
+}
+
+#[test]
+fn enum_nan_payload_is_not_equal_to_itself() {
+    let src = "use nan() -> Float\n\
+               enum Shape { Dot, Circle(Float) }\n\
+               fn main() -> bool {\n\
+                   let p = Shape::Circle(nan());\n\
+                   p == p\n\
+               }";
+    assert!(
+        !run_bool(src),
+        "an enum with a NaN payload must not equal itself"
+    );
+}
+
+#[test]
+fn enum_distinct_variants_compare_unequal() {
+    let src = "use one() -> Float\n\
+               enum Shape { Dot, Circle(Float) }\n\
+               fn main() -> bool {\n\
+                   let p = Shape::Circle(one());\n\
+                   let q = Shape::Dot;\n\
+                   p == q\n\
+               }";
+    assert!(
+        !run_bool(src),
+        "distinct enum variants must compare unequal"
+    );
+}
+
+#[test]
+fn enum_same_variant_distinct_floats_compare_unequal() {
+    let src = "use one() -> Float\n\
+               use pos_zero() -> Float\n\
+               enum Shape { Dot, Circle(Float) }\n\
+               fn main() -> bool {\n\
+                   let p = Shape::Circle(one());\n\
+                   let q = Shape::Circle(pos_zero());\n\
+                   p == q\n\
+               }";
+    assert!(
+        !run_bool(src),
+        "an enum payload with distinct floats must compare unequal"
+    );
+}
+
+#[test]
+fn enum_two_float_payload_fields_compare_equal() {
+    // A two-field float payload exercises the per-field payload loop.
+    let src = "use pos_zero() -> Float\n\
+               use neg_zero() -> Float\n\
+               use one() -> Float\n\
+               enum Shape { Dot, Box(Float, Float) }\n\
+               fn main() -> bool {\n\
+                   let p = Shape::Box(pos_zero(), one());\n\
+                   let q = Shape::Box(neg_zero(), one());\n\
+                   p == q\n\
+               }";
+    assert!(
+        run_bool(src),
+        "equal two-field float payloads must compare equal"
+    );
+}
+
+#[test]
+fn enum_carrying_float_struct_payload_compares_field_wise() {
+    // The byte-blob hole: an enum whose payload is a float-bearing struct.
+    // Equality must descend through the enum payload into the struct and
+    // compare its float field with IEEE semantics (+0.0 == -0.0), not by a
+    // byte blob. This is the case the flattening work would otherwise break.
+    let src = "use pos_zero() -> Float\n\
+               use neg_zero() -> Float\n\
+               struct P { x: Float }\n\
+               enum E { None, Some(P) }\n\
+               fn main() -> bool {\n\
+                   let a = E::Some(P { x: pos_zero() });\n\
+                   let b = E::Some(P { x: neg_zero() });\n\
+                   a == b\n\
+               }";
+    assert!(
+        run_bool(src),
+        "an enum carrying a float struct must compare field-wise into the struct"
+    );
+}
+
+#[test]
+fn enum_carrying_float_struct_distinct_compares_unequal() {
+    let src = "use one() -> Float\n\
+               use pos_zero() -> Float\n\
+               struct P { x: Float }\n\
+               enum E { None, Some(P) }\n\
+               fn main() -> bool {\n\
+                   let a = E::Some(P { x: one() });\n\
+                   let b = E::Some(P { x: pos_zero() });\n\
+                   a == b\n\
+               }";
+    assert!(
+        !run_bool(src),
+        "a distinct float struct inside an enum payload must compare unequal"
+    );
+}
