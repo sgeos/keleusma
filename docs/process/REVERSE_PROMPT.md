@@ -8,8 +8,49 @@ AI to Human communication channel.
 
 ## Last Updated
 
-**Date**: 2026-06-09
-**Status**: B28 P3 items 1 (epoch-safe flat Text), 2 (cross-yield rejection of flat Text composites), and 3 (flat opaque tuple/array elements, native-signature capture) are implemented, verified, and pushed on `feat-flat-memory-refs` (commits `85c1711`, `d05a723`, `f987f4d`, `c9fcd04`). The two remaining follow-ups are item 4 (enum equality) and item 5 (boxed-body WCMU). Operator guidance dated 2026-06-09 resolves item 4 and reframes item 5; see "P3 follow-ups: items 4 and 5" below.
+**Date**: 2026-06-09 (session 3)
+**Status**: B28 P3 item 5 Phase A (field-wise composite equality) was investigated and prototyped. The struct keystone works and is proven (a `RED` experiment showed a flattened float struct comparing wrong under byte-blob equality, and the field-wise emitter fixed it). The investigation then established that the full feature is materially larger and more interlocking than "field-wise struct equality": **flattening float-bearing composites is unsound unless field-wise equality covers every composite kind that can transitively carry a float (struct, tuple, array, AND enum)**, and the float-flattening must be applied consistently across two parallel flat-eligibility systems (the layout/compiler/runtime path and the marshall-trait/derive-macro path). Per "commit only when green" and the conservative-verification stance, the production prototype was reverted to the sound baseline rather than shipping a partially-correct equality. This commit lands the executable specification (`tests/flat_float_eq.rs`, green via the boxed representation today) and this map; the prototype is preserved at `docs/process/attic/b28-p3-item5-phaseA.patch`. See "Phase A investigation outcome" immediately below. Items 1, 2, 3 remain done and pushed (`85c1711`, `d05a723`, `f987f4d`, `c9fcd04`); item 4 is satisfied (see below).
+
+## Phase A investigation outcome (2026-06-09, session 3)
+
+### What was proven
+
+- A `tests/flat_float_eq.rs` suite pins IEEE-correct equality for float-bearing composites (`+0.0 == -0.0`, a `NaN` field makes a value `!= ` itself, ordinary float fields compare, mixed scalar+float, nested struct, tuple, array). It passes today because every float-bearing composite is **boxed** and the derived `PartialEq` compares each `Float` field with IEEE `==`.
+- Flipping the two flat-eligibility predicates so a float **struct** flattens (`LayoutDescriptor::flat_scalar_kind` and `flat_tuple_scalar_kind` admitting `Float`) and running the suite *without* the new equality made exactly the two IEEE-divergent cases fail (`+0.0`/`-0.0` and `NaN`), confirming the byte-blob hole bites on the flat path. The compiler-emitted field-wise comparison (an inline short-circuit AND over extracted fields, using the existing `Loop`/`Break`/`If`/`GetField`/`CmpEq` ops — the `compile_enum_to_word` idiom, **no new opcode**) made all cases pass. So the struct keystone is correct.
+
+### Why the full feature is larger than the struct keystone (the critical finding)
+
+A flat composite body carries no per-value type tag (B28's design), so `GenericValue`'s `PartialEq` on a flat body is necessarily a **byte blob** (`FlatComposite` compares `Inline` bytes). Once a float-bearing struct is flat, that byte-blob comparison is IEEE-wrong, and `PartialEq` is reached **transitively** wherever such a struct nests:
+
+- A **boxed** tuple/array/enum holding a flat float-struct element compares it via the derived `PartialEq`, i.e. `Struct(Flat) == Struct(Flat)` → byte blob → wrong.
+- A `match`/`CmpEq` on any composite that transitively contains a flat float-struct hits the same path.
+
+Therefore, to flatten any float into a struct soundly, the compiler must emit field-wise equality for **every composite kind that can transitively carry a float** — struct, tuple, array, **and enum** — dispatched on "type transitively contains a float" (a new `LayoutDescriptor::contains_float`), recursing into nested composites and comparing scalar/float leaves with `CmpEq` (already IEEE-correct on an extracted `Float`). This is exactly the operator's locked wording ("replace the byte-blob composite `==` *and* the enum padding-tolerant `flat_enum_bytes_eq`"). The enum case needs **variant-dispatched** equality (compare discriminants, then the active variant's payload field-wise), which the struct/tuple/array field loop does not cover; it is the one genuinely new, higher-risk emitter (build it with `IsEnum` + `GetEnumField` + the same `Loop`/`Break` idiom).
+
+### Two parallel flat-eligibility systems must agree
+
+Flattening floats is decided independently in two places that must stay consistent, or host-built and script-built values of the same type diverge:
+
+1. **Layout/compiler/runtime**: `LayoutDescriptor::flat_scalar_kind` / `flat_byte_size` (compiler baking and `flat_alloc_bytes`), the value-side `flat_tuple_scalar_kind` / `flat_field_size` / `try_pack_flat`, and the construction choke points `struct_with_widths` / `tuple_with_widths` / `array_with_widths`. `read_scalar_le` / `write_scalar_le` already handle `Float`, and `GetField`/`GetTupleField`/`GetIndex`/`GetEnumField` already route flat reads through them — so flat float **access and packing already work** once the predicates admit `Float`.
+2. **Marshall trait / derive macro**: `KeleusmaType::flat_field_kind` (the `f64` impl currently returns `None`; it must return `Some(Float)`), `flat_byte_size`, `from_flat_bytes`. The `#[derive(KeleusmaType)]` macro computes its own `__uniform`/`__min_payload` flat decision per field by delegating to these trait methods, so once `f64::flat_field_kind` is `Some(Float)`, the derive flattens float structs/enums to match the runtime. The host-boundary tests (`tests/marshall.rs`) assert the *boxed* representation for float structs/enums today; those expectations must be updated to the flat representation.
+
+If only system 1 flips, the derived host marshalling boxes a float struct while the runtime expects flat (and vice versa) → `GetField operand form does not match struct body` / "field is not flat-eligible". This was observed: flipping system 1 alone left 7 `tests/marshall.rs` failures, all in the derived-struct/enum host decode.
+
+### Recommended implementation order for the next session (all-flat, no holes)
+
+1. Admit `Float` in `flat_scalar_kind` and `flat_tuple_scalar_kind` (system 1) and `f64::flat_field_kind = Some(Float)` (system 2). Float read/write already works.
+2. Add `LayoutDescriptor::contains_float` (type-structural, recursive).
+3. Emit field-wise equality for struct, tuple, and array (the prototype's `emit_composite_fieldwise_eq` + `composite_field_accessors` + `FieldAccessOp` + `emit_field_extract`, preserved in the patch), dispatched at `BinOp::Eq`/`NotEq` when `operand_ty` resolves to a composite whose layout `contains_float`. Works on both flat and boxed bodies because the `Get*` ops do.
+4. Add the **enum** variant-dispatched field-wise emitter and include `Enum` in the dispatch. This is the new, careful piece.
+5. Update `tests/marshall.rs` representation expectations (boxed → flat for float structs/enums) and the `tests/flat_float_eq.rs` comments (the cases then exercise the flat path).
+6. Verify with targeted **nesting** tests that would expose the byte-blob hole: a float-struct inside a tuple `==`, inside an array `==`, and as an enum payload `==`. These must pass, proving no residual byte-blob comparison of a flat float.
+7. Residual inference gap (documented limitation, mirrors existing B28 access-baking): a composite `==` whose operand type `infer_expr_type` cannot recover falls back to `CmpEq`; for a flat float composite that would be byte-blob-wrong. The clean fix is to consume the type checker's authoritative annotations rather than the lightweight `infer_expr_type`.
+
+The preserved prototype patch implements steps 2 and 3 (and a struct-only variant of step 1 with gates that scoped tuples/arrays/enums to stay boxed — that scope is **not** recommended because it leaves the nested-float-struct byte-blob hole; the all-flat order above is the sound path).
+
+### Item 4 status under this finding
+
+Item 4 (enum equality) was previously "satisfied" for the all-Word/byte case (the padding-tolerant `flat_enum_bytes_eq` is correct when no payload is a float). It becomes **subsumed by Phase A**: once enums can carry a flat float (directly or via a flat float-struct payload), `flat_enum_bytes_eq` is IEEE-wrong and the variant-dispatched field-wise enum equality (step 4) replaces it.
 
 ## P3 follow-ups: items 4 and 5 (operator guidance 2026-06-09)
 

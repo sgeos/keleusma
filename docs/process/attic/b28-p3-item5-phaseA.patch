@@ -1,0 +1,623 @@
+diff --git a/src/bytecode.rs b/src/bytecode.rs
+index 000be26..d51a5dc 100644
+--- a/src/bytecode.rs
++++ b/src/bytecode.rs
+@@ -396,12 +396,17 @@ impl<W: crate::word::Word, F: crate::float::Float> PartialEq for GenericValue<W,
+ /// The flat-composite scalar kind of a value, or `None` when the value
+ /// is not a flat-eligible tuple field (B28 P2).
+ ///
+-/// Eligible kinds are the non-reference, non-float fixed-size scalars.
+-/// `Float` is excluded because the flat body compares by raw bytes,
+-/// which would change the `+0.0`/`-0.0` and `NaN` semantics of tuple
+-/// equality. References, `None`, and composites are not flat-eligible.
+-/// The compiler's `type_flat_scalar_kind` mirrors this on the type
+-/// side so construction and baked access agree.
++/// Eligible kinds are the fixed-size scalars including `Float` (B28 P3
++/// item 5): a float packs by its little-endian bytes and a float-bearing
++/// struct is compared field-wise (the compiler's Phase A), so the byte
++/// residence does not change the `+0.0`/`-0.0` and `NaN` equality
++/// semantics. This predicate admits a float scalar as a flat field; the
++/// tuple and array construction paths (`flat_tuple_element_with_refs`) and
++/// the compiler exclude a float element so only struct fields flatten their
++/// floats this iteration. References, `None`, and composites are not
++/// flat-eligible here. The layout-side `LayoutDescriptor::flat_scalar_kind`
++/// mirrors this on the type side so struct construction and baked access
++/// agree.
+ pub(crate) fn flat_tuple_scalar_kind<W: crate::word::Word, F: crate::float::Float>(
+     v: &GenericValue<W, F>,
+ ) -> Option<crate::value_layout::ScalarKind> {
+@@ -412,6 +417,12 @@ pub(crate) fn flat_tuple_scalar_kind<W: crate::word::Word, F: crate::float::Floa
+         GenericValue::Byte(_) => Some(K::Byte),
+         GenericValue::Int(_) => Some(K::Int),
+         GenericValue::Fixed(_) => Some(K::Fixed),
++        // Float is flat (B28 P3 item 5, Phase B). It packs by its
++        // little-endian bytes; a float-bearing composite is compared
++        // field-wise (Phase A) so the byte residence does not change its
++        // IEEE equality semantics.
++        #[cfg(feature = "floats")]
++        GenericValue::Float(_) => Some(K::Float),
+         // A `KStr` is flat as a two-word `(data_ptr, len)` arena reference
+         // (B28 P3). `StaticStr` is heap-owned and not flat here; the VM
+         // construct path copies it into the arena, converting it to a
+@@ -450,11 +461,14 @@ pub(crate) fn flat_field_size<W: crate::word::Word, F: crate::float::Float>(
+ /// eligible here: flattening a tuple's text would hide its `KStr` from the
+ /// `materialise_kstrings`/`contains_dynstr` lifecycle and remove the ability
+ /// to yield a static-text tuple, so a text-bearing tuple stays boxed (its
+-/// arena residence is the concern of the boxed-body arena migration). Every
+-/// other case reduces to `flat_field_size` (a flat scalar or
+-/// transitively-flat nested composite; a float, a string, or a boxed
+-/// composite is not eligible). The VM interns an `Opaque` before packing, so
+-/// this predicate takes the pre-interning value.
++/// arena residence is the concern of the boxed-body arena migration). Float
++/// is likewise not eligible here (B28 P3 item 5): only struct fields flatten
++/// their floats this iteration, so a float-bearing tuple or array stays boxed
++/// and keeps its derived (IEEE-correct) equality. Every other case reduces to
++/// `flat_field_size` (a flat scalar or a transitively-flat nested composite;
++/// a string, a float, or a boxed composite is not eligible). The VM interns
++/// an `Opaque` before packing, so this predicate takes the pre-interning
++/// value.
+ pub(crate) fn flat_tuple_element_with_refs<W: crate::word::Word, F: crate::float::Float>(
+     v: &GenericValue<W, F>,
+     word_bytes: usize,
+@@ -462,6 +476,14 @@ pub(crate) fn flat_tuple_element_with_refs<W: crate::word::Word, F: crate::float
+ ) -> bool {
+     match v {
+         GenericValue::Opaque(_) => true,
++        // A float element keeps the tuple or array boxed this iteration (B28
++        // P3 item 5): only struct fields flatten their floats and gain the
++        // field-wise comparison. A boxed float tuple keeps its derived
++        // (IEEE-correct) equality; flattening tuples and arrays is a
++        // documented follow-up. The compiler's `tuple_field_access` and
++        // `array_elem_operand` apply the same exclusion so access agrees.
++        #[cfg(feature = "floats")]
++        GenericValue::Float(_) => false,
+         _ => flat_field_size(v, word_bytes, float_bytes).is_some(),
+     }
+ }
+@@ -495,6 +517,25 @@ pub(crate) fn flat_body_bytes<W: crate::word::Word, F: crate::float::Float>(
+     }
+ }
+ 
++/// Whether a tuple or array of these elements must stay boxed rather than
++/// flatten (B28 P2, P3). A `StaticStr` or `KStr` element keeps the body boxed
++/// to preserve the `KStr` lifecycle, and a `Float` element keeps it boxed
++/// this iteration so its derived (IEEE-correct) equality is preserved; only
++/// struct fields flatten their floats and gain the field-wise comparison (B28
++/// P3 item 5). The struct constructor does not apply this exclusion. An
++/// `Opaque` is interned to an `Int` before construction reaches here, so it is
++/// not listed.
++fn tuple_or_array_stays_boxed<W: crate::word::Word, F: crate::float::Float>(
++    elements: &[GenericValue<W, F>],
++) -> bool {
++    elements.iter().any(|e| match e {
++        GenericValue::StaticStr(_) | GenericValue::KStr(_) => true,
++        #[cfg(feature = "floats")]
++        GenericValue::Float(_) => true,
++        _ => false,
++    })
++}
++
+ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
+     /// Construct a tuple value, choosing the flat byte body for a
+     /// transitively-scalar tuple and the boxed body otherwise (B28 P2).
+@@ -540,10 +581,12 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
+         // packs flat; a host- or constant-built tuple that still carries an
+         // `Opaque` cannot intern it and stays boxed via `try_pack_flat`
+         // returning `None`, the same host/VM gap struct and enum have.
+-        if elements
+-            .iter()
+-            .any(|e| matches!(e, Self::StaticStr(_) | Self::KStr(_)))
+-        {
++        // A float element also keeps the tuple boxed this iteration (B28 P3
++        // item 5): only struct fields flatten their floats and gain the
++        // field-wise comparison, so a boxed float tuple keeps its derived
++        // (IEEE-correct) equality. Flattening tuples and arrays is a
++        // documented follow-up.
++        if tuple_or_array_stays_boxed(&elements) {
+             return Self::Tuple(TupleBody::Boxed(elements));
+         }
+         // A tuple has no padding (no minimum), so the packed size is exact.
+@@ -581,11 +624,9 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
+         float_bytes: usize,
+     ) -> Self {
+         // A text element keeps the array boxed (B28 P3); opaque is flat (B28
+-        // P3 item 3); see `tuple_with_widths`.
+-        if elements
+-            .iter()
+-            .any(|e| matches!(e, Self::StaticStr(_) | Self::KStr(_)))
+-        {
++        // P3 item 3); a float element keeps the array boxed this iteration
++        // (B28 P3 item 5); see `tuple_with_widths`.
++        if tuple_or_array_stays_boxed(&elements) {
+             return Self::Array(ArrayBody::Boxed(elements));
+         }
+         match Self::try_pack_flat(elements.iter(), 0, word_bytes, float_bytes) {
+diff --git a/src/compiler.rs b/src/compiler.rs
+index 4297fad..abe5066 100644
+--- a/src/compiler.rs
++++ b/src/compiler.rs
+@@ -3717,8 +3717,13 @@ fn layout_has_flat_text(d: &crate::value_layout::LayoutDescriptor, word_bytes: u
+ fn array_elem_operand(elem_ty: Option<&TypeExpr>, ti: &TypeInfo) -> ArrayElem {
+     match elem_ty.map(|ty| classify_flat_field(ty, ti)) {
+         // Text keeps the array boxed (the value-side constructor does too, to
+-        // preserve the KStr lifecycle); opaque is flat (B28 P3 item 3).
+-        Some(FlatFieldForm::Scalar(crate::value_layout::ScalarKind::Text)) => ArrayElem::Boxed,
++        // preserve the KStr lifecycle); opaque is flat (B28 P3 item 3). Float
++        // keeps the array boxed this iteration (B28 P3 item 5): only struct
++        // fields flatten their floats and gain the field-wise comparison, so a
++        // boxed float array keeps its derived (IEEE-correct) equality.
++        Some(FlatFieldForm::Scalar(
++            crate::value_layout::ScalarKind::Text | crate::value_layout::ScalarKind::Float,
++        )) => ArrayElem::Boxed,
+         Some(FlatFieldForm::Scalar(kind)) => ArrayElem::Flat { kind },
+         Some(FlatFieldForm::Nested(size, variant)) => ArrayElem::FlatNested { size, variant },
+         _ => ArrayElem::Boxed,
+@@ -3758,10 +3763,14 @@ fn tuple_field_access(
+         };
+         // A text element keeps the whole tuple boxed (the value-side
+         // constructor does too, to preserve the KStr lifecycle); opaque is
+-        // flat (B28 P3 item 3).
++        // flat (B28 P3 item 3). A float element keeps the tuple boxed this
++        // iteration (B28 P3 item 5): only struct fields flatten their floats;
++        // a boxed float tuple keeps its derived (IEEE-correct) equality.
+         if matches!(
+             classify_flat_field(ty, &fc.type_info),
+-            FlatFieldForm::Scalar(crate::value_layout::ScalarKind::Text)
++            FlatFieldForm::Scalar(
++                crate::value_layout::ScalarKind::Text | crate::value_layout::ScalarKind::Float
++            )
+         ) {
+             return boxed;
+         }
+@@ -3854,6 +3863,222 @@ fn struct_field_access(fc: &mut FuncCompiler, type_name: &str, field_name: &str)
+     }
+ }
+ 
++/// Strip information-flow label wrappers from a type expression, yielding
++/// the underlying type (B28 P3 item 5). Used by the field-wise equality
++/// emitter to recover the composite shape behind a `@Label` annotation.
++fn strip_type_labels(ty: &TypeExpr) -> TypeExpr {
++    match ty {
++        TypeExpr::Labelled(inner, _, _) | TypeExpr::NegativeLabelled(inner, _, _) => {
++            strip_type_labels(inner)
++        }
++        other => other.clone(),
++    }
++}
++
++/// Whether equality of a value of type `ty` must be compiled field-wise
++/// because the type is a struct that transitively contains a `Float` (B28 P3
++/// item 5, Phase A).
++///
++/// A float-bearing struct is flat (Phase B); a raw-byte `CmpEq` over its body
++/// would diverge from IEEE on `+0.0`/`-0.0` (equal values, distinct bytes)
++/// and `NaN` (equal bytes, unequal values), so the compiler emits a per-field
++/// comparison instead. A bare `Float` scalar is already IEEE-correct under
++/// `CmpEq`; tuples, arrays, and enums keep boxing their floats this iteration
++/// (their derived comparison is IEEE-correct, and flattening them is a
++/// documented follow-up); and a type the layout pass cannot resolve falls
++/// back to `CmpEq` (it was not flattened either, so the boxed comparison is
++/// correct).
++///
++/// Residual limitation: a float-bearing struct whose operand type the
++/// compiler cannot infer at the comparison site falls back to `CmpEq` and
++/// would compare its flat body by bytes. This mirrors the existing
++/// inference-dependent flat-access baking; consuming the type checker's
++/// authoritative annotations would close it.
++fn composite_needs_fieldwise_eq(ty: &TypeExpr, ti: &TypeInfo) -> bool {
++    use crate::value_layout::LayoutDescriptor as L;
++    let Ok(d) = ti.layout_context().layout_for(ty) else {
++        return false;
++    };
++    matches!(d, L::Struct { .. }) && d.contains_float()
++}
++
++/// A baked field-access operand paired with the local slot the access
++/// reads from, used by the field-wise equality emitter (B28 P3 item 5).
++enum FieldAccessOp {
++    Struct(crate::bytecode::StructField),
++    Tuple(crate::bytecode::TupleField),
++    Array {
++        elem: crate::bytecode::ArrayElem,
++        index_const: u16,
++    },
++}
++
++/// Emit the ops that push the addressed field of the composite in local
++/// `slot` onto the stack (B28 P3 item 5). Mirrors the access the compiler
++/// bakes for an ordinary field read, so the offsets agree with the
++/// constructed body.
++fn emit_field_extract(fc: &mut FuncCompiler, slot: u16, access: &FieldAccessOp) {
++    fc.emit(Op::GetLocal(slot));
++    match access {
++        FieldAccessOp::Struct(f) => {
++            fc.emit(Op::GetField(*f));
++        }
++        FieldAccessOp::Tuple(f) => {
++            fc.emit(Op::GetTupleField(*f));
++        }
++        FieldAccessOp::Array { elem, index_const } => {
++            // `GetIndex` pops the index then the container, so push the
++            // container (via `GetLocal` above) then the index constant.
++            fc.emit(Op::Const(*index_const));
++            fc.emit(Op::GetIndex(*elem));
++        }
++    }
++}
++
++/// Resolve the ordered `(field access, field type)` list for the composite
++/// `ty` (B28 P3 item 5). Structs follow declaration order; tuples and arrays
++/// follow positional order. The access operands reuse the same baking the
++/// ordinary field reads use, so the offsets match the constructed body.
++fn composite_field_accessors(
++    fc: &mut FuncCompiler,
++    ty: &TypeExpr,
++) -> Result<Vec<(FieldAccessOp, TypeExpr)>, CompileError> {
++    match strip_type_labels(ty) {
++        TypeExpr::Named(name, _, span) => {
++            let order = fc
++                .type_info
++                .struct_field_order
++                .get(&name)
++                .cloned()
++                .ok_or_else(|| CompileError {
++                    message: alloc::format!(
++                        "field-wise equality requires a struct layout for `{}`",
++                        name
++                    ),
++                    span,
++                })?;
++            let mut out = Vec::with_capacity(order.len());
++            for (fname, fty) in &order {
++                let access = FieldAccessOp::Struct(struct_field_access(fc, &name, fname));
++                out.push((access, fty.clone()));
++            }
++            Ok(out)
++        }
++        TypeExpr::Tuple(elems, _) => {
++            let opt_types: Vec<Option<TypeExpr>> = elems.iter().cloned().map(Some).collect();
++            let mut out = Vec::with_capacity(elems.len());
++            for (i, ety) in elems.iter().enumerate() {
++                let access = FieldAccessOp::Tuple(tuple_field_access(fc, &opt_types, i));
++                out.push((access, ety.clone()));
++            }
++            Ok(out)
++        }
++        TypeExpr::Array(elem, count, span) => {
++            if count < 0 {
++                return Err(CompileError {
++                    message: String::from("field-wise equality on a negative-length array"),
++                    span,
++                });
++            }
++            let mut out = Vec::with_capacity(count as usize);
++            for i in 0..count {
++                let elem_op = array_elem_operand(Some(&elem), &fc.type_info);
++                let index_const = fc.add_constant(Value::Int(i));
++                out.push((
++                    FieldAccessOp::Array {
++                        elem: elem_op,
++                        index_const,
++                    },
++                    (*elem).clone(),
++                ));
++            }
++            Ok(out)
++        }
++        other => Err(CompileError {
++            message: alloc::format!(
++                "field-wise equality on an unsupported composite type {:?}",
++                other
++            ),
++            span: Span::default(),
++        }),
++    }
++}
++
++/// Emit a field-wise equality comparison of the two composites held in
++/// locals `ltmp` and `rtmp`, leaving a single `Bool` on the stack (B28 P3
++/// item 5, Phase A).
++///
++/// Each field is extracted from both operands and compared by kind: a scalar
++/// field (including `Float`, which `CmpEq` compares with IEEE semantics on
++/// the extracted value) by `CmpEq`, a float-bearing nested composite field
++/// by recursion, and any other nested composite by `CmpEq` (its byte body
++/// carries no float, so the blob comparison is correct). The fields are
++/// combined with a short-circuiting logical AND expressed as a virtual loop:
++/// the first unequal field breaks out with `false`, and reaching the end
++/// pushes `true`. This reuses the `Loop`/`Break` idiom of
++/// [`compile_enum_to_word`] and needs no new opcode. Termination is static:
++/// the field list is finite and recursion follows the finite, non-recursive
++/// composite type structure.
++fn emit_composite_fieldwise_eq(
++    fc: &mut FuncCompiler,
++    ty: &TypeExpr,
++    ltmp: u16,
++    rtmp: u16,
++) -> Result<(), CompileError> {
++    let fields = composite_field_accessors(fc, ty)?;
++    let loop_addr = fc.emit(Op::Loop(0));
++    fc.enter_loop();
++    for (access, fty) in fields {
++        fc.begin_scope();
++        emit_field_extract(fc, ltmp, &access);
++        emit_field_extract(fc, rtmp, &access);
++        if composite_needs_fieldwise_eq(&fty, &fc.type_info) {
++            let r2 = fc.declare_local("__eqf_r");
++            let l2 = fc.declare_local("__eqf_l");
++            fc.emit(Op::SetLocal(r2));
++            fc.emit(Op::SetLocal(l2));
++            emit_composite_fieldwise_eq(fc, &fty, l2, r2)?;
++        } else {
++            fc.emit(Op::CmpEq);
++        }
++        // Stack: a `Bool` that is true when this field is equal. Break out
++        // with `false` when it is unequal; otherwise continue to the next
++        // field. `If` jumps on false, so compare `Not` (unequal) and let the
++        // unequal case fall through to the break.
++        fc.emit(Op::Not);
++        let skip = fc.emit_jump(Op::If(0));
++        let f_const = fc.add_constant(Value::Bool(false));
++        fc.emit(Op::Const(f_const));
++        let br = fc.emit_jump(Op::Break(0));
++        fc.loop_breaks
++            .last_mut()
++            .expect("inside field-wise eq loop")
++            .push(br);
++        fc.patch_jump(skip);
++        fc.emit(Op::EndIf);
++        fc.end_scope();
++    }
++    // Every field compared equal.
++    let t_const = fc.add_constant(Value::Bool(true));
++    fc.emit(Op::Const(t_const));
++    let br = fc.emit_jump(Op::Break(0));
++    fc.loop_breaks
++        .last_mut()
++        .expect("inside field-wise eq loop")
++        .push(br);
++    let endloop_addr = fc.emit(Op::EndLoop(0));
++    let after_loop = (loop_addr + 1) as u16;
++    if let Op::EndLoop(a) = &mut fc.chunk.ops[endloop_addr] {
++        *a = after_loop;
++    }
++    let after_endloop = fc.chunk.ops.len() as u16;
++    if let Op::Loop(a) = &mut fc.chunk.ops[loop_addr] {
++        *a = after_endloop;
++    }
++    fc.exit_loop();
++    Ok(())
++}
++
+ /// The name of a named (struct, enum, or opaque) type expression,
+ /// unwrapping information-flow label wrappers. `None` for any other type.
+ fn named_type_name(ty: Option<&TypeExpr>) -> Option<&str> {
+@@ -5366,11 +5591,33 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError>
+                     // Modulo by zero traps; record the operator site.
+                     fc.record_operator_site(span);
+                 }
+-                BinOp::Eq => {
+-                    fc.emit(Op::CmpEq);
+-                }
+-                BinOp::NotEq => {
+-                    fc.emit(Op::CmpNe);
++                BinOp::Eq | BinOp::NotEq => {
++                    // A float-bearing composite is flat (B28 P3 item 5) and a
++                    // raw-byte `CmpEq` would diverge from IEEE; compile a
++                    // field-wise comparison instead. The operands are already
++                    // on the stack, so stash them in scratch locals and emit
++                    // the per-field comparison, then negate for `!=`.
++                    let fieldwise = operand_ty
++                        .as_ref()
++                        .map(|ty| composite_needs_fieldwise_eq(ty, &fc.type_info))
++                        .unwrap_or(false);
++                    if fieldwise {
++                        let ty = operand_ty.clone().expect("fieldwise implies Some");
++                        fc.begin_scope();
++                        let rtmp = fc.declare_local("__eq_r");
++                        let ltmp = fc.declare_local("__eq_l");
++                        fc.emit(Op::SetLocal(rtmp));
++                        fc.emit(Op::SetLocal(ltmp));
++                        emit_composite_fieldwise_eq(fc, &ty, ltmp, rtmp)?;
++                        if matches!(op, BinOp::NotEq) {
++                            fc.emit(Op::Not);
++                        }
++                        fc.end_scope();
++                    } else if matches!(op, BinOp::Eq) {
++                        fc.emit(Op::CmpEq);
++                    } else {
++                        fc.emit(Op::CmpNe);
++                    }
+                 }
+                 BinOp::Lt => {
+                     fc.emit(Op::CmpLt);
+diff --git a/src/value_layout.rs b/src/value_layout.rs
+index 0bc1f96..f8b26f9 100644
+--- a/src/value_layout.rs
++++ b/src/value_layout.rs
+@@ -405,17 +405,21 @@ impl LayoutDescriptor {
+     /// The flat-eligible scalar kind of this layout, or `None` when it is a
+     /// composite or a reference scalar (B28 P2 nested inlining).
+     ///
+-    /// Flat-eligible kinds are the non-float fixed-size scalars plus the
+-    /// opaque reference: `Unit`, `Bool`, `Byte`, `Int`, `Fixed`, `Opaque`.
+-    /// `Opaque` is flat as a `word_bytes` index into the VM's ephemeral
+-    /// opaque registry rather than the `Drop`-bearing `Arc` itself (B28
+-    /// P3); the VM interns at construction and resolves at access, and
++    /// Flat-eligible kinds are the fixed-size scalars plus the opaque
++    /// reference: `Unit`, `Bool`, `Byte`, `Int`, `Fixed`, `Float`, `Opaque`,
++    /// and `Text`. `Opaque` is flat as a `word_bytes` index into the VM's
++    /// ephemeral opaque registry rather than the `Drop`-bearing `Arc` itself
++    /// (B28 P3); the VM interns at construction and resolves at access, and
+     /// interning deduplicates by pointer identity so byte equality of two
+-    /// bodies coincides with `Arc::ptr_eq`. `Float` is excluded because
+-    /// raw-byte comparison would change its equality semantics, and `Text`
+-    /// is not yet flat. This is the single type-side flat-eligibility
+-    /// predicate; the compiler and the runtime value path agree with it by
+-    /// construction.
++    /// bodies coincides with `Arc::ptr_eq`. `Float` is flat (B28 P3 item 5):
++    /// it packs by its little-endian bytes, and a float-bearing struct is
++    /// compared field-wise (the compiler's Phase A) so the byte residence
++    /// does not change its IEEE equality semantics. This predicate admits a
++    /// float scalar; [`LayoutDescriptor::flat_byte_size`] keeps a
++    /// float-bearing tuple, array, or enum boxed so this iteration flattens
++    /// floats only in struct fields. This is the single type-side
++    /// flat-eligibility predicate; the compiler and the runtime value path
++    /// agree with it by construction.
+     pub fn flat_scalar_kind(&self) -> Option<ScalarKind> {
+         match self {
+             Self::Scalar(k) => match k {
+@@ -428,14 +432,42 @@ impl LayoutDescriptor {
+                 // Text is flat as a two-word `(data_ptr, len)` reference
+                 // into the arena string bytes (B28 P3); the epoch is
+                 // reattached at extraction, not stored in the field.
+-                | ScalarKind::Text => Some(*k),
+-                // Float (when present) is not flat.
+-                _ => None,
++                | ScalarKind::Text
++                // Float is flat (B28 P3 item 5, Phase B). Raw-byte equality
++                // would diverge from IEEE on `+0.0`/`-0.0` and `NaN`, so the
++                // compiler compares any float-bearing composite field-wise
++                // (Phase A) rather than by a byte blob; the flat residence is
++                // sound once that equality is in place.
++                | ScalarKind::Float => Some(*k),
+             },
+             _ => None,
+         }
+     }
+ 
++    /// Whether this layout transitively contains a [`ScalarKind::Float`]
++    /// field (B28 P3 item 5).
++    ///
++    /// A float-bearing flat composite must be compared field-by-field so the
++    /// IEEE `+0.0`/`-0.0` and `NaN` semantics survive; a raw-byte blob
++    /// comparison would diverge. Two callers consult this: the compiler routes
++    /// equality of a float-bearing struct to a field-wise comparison
++    /// (Phase A), and [`LayoutDescriptor::flat_byte_size`] keeps a
++    /// float-bearing tuple, array, or enum boxed (Phase B). This iteration
++    /// flattens floats only in struct fields; a boxed float tuple, array, or
++    /// enum keeps its derived (IEEE-correct) equality, and flattening them is
++    /// a documented follow-up.
++    pub fn contains_float(&self) -> bool {
++        match self {
++            Self::Scalar(k) => matches!(k, ScalarKind::Float),
++            Self::Tuple(elems) => elems.iter().any(|e| e.contains_float()),
++            Self::Array { element, .. } => element.contains_float(),
++            Self::Struct { fields, .. } => fields.iter().any(|(_, t)| t.contains_float()),
++            Self::Enum { variants, .. } => variants
++                .iter()
++                .any(|(_, payload)| payload.iter().any(|p| p.contains_float())),
++        }
++    }
++
+     /// The composite kind this layout re-wraps to as a nested flat field,
+     /// or `None` for a scalar (B28 P2 nested inlining). Structural only; a
+     /// caller pairs it with [`LayoutDescriptor::flat_byte_size`] to confirm
+@@ -475,6 +507,16 @@ impl LayoutDescriptor {
+                 Some(k.size_in_bytes(word_bytes, float_bytes))
+             }),
+             Self::Tuple(elems) => {
++                // A float-bearing tuple stays boxed this iteration (B28 P3
++                // item 5): only struct fields flatten their floats and gain
++                // the field-wise comparison; tuples and arrays are a
++                // documented follow-up. A boxed float tuple keeps its derived
++                // (IEEE-correct) equality. Gating here also keeps a struct
++                // that holds a float tuple boxed, so its construction and
++                // access agree.
++                if self.contains_float() {
++                    return None;
++                }
+                 let mut total = 0usize;
+                 for e in elems {
+                     total += e.flat_byte_size(word_bytes, float_bytes)?;
+@@ -482,6 +524,11 @@ impl LayoutDescriptor {
+                 Some(total)
+             }
+             Self::Array { element, count } => {
++                // A float-bearing array stays boxed this iteration (B28 P3
++                // item 5); see the tuple arm.
++                if self.contains_float() {
++                    return None;
++                }
+                 Some(count * element.flat_byte_size(word_bytes, float_bytes)?)
+             }
+             Self::Struct { fields, .. } => {
+@@ -498,6 +545,18 @@ impl LayoutDescriptor {
+                 if type_name == "Option" {
+                     return None;
+                 }
++                // A float-bearing enum stays boxed (B28 P3 item 5): a flat
++                // enum body compares by the padding-tolerant byte blob, which
++                // is correct for non-float payloads but would diverge from
++                // IEEE on a float payload, and the byte compare cannot select
++                // the active variant's float fields to compare them properly.
++                // Boxed enum equality keeps the derived (IEEE-correct)
++                // comparison. This iteration flattens floats only in struct
++                // fields (compared field-wise); tuples, arrays, and enums are
++                // a documented follow-up.
++                if self.contains_float() {
++                    return None;
++                }
+                 let mut payload_max = 0usize;
+                 for (_, payload) in variants {
+                     let mut sum = 0usize;
+@@ -806,13 +865,58 @@ mod tests {
+             LayoutDescriptor::Scalar(ScalarKind::Opaque).flat_byte_size(I64_BYTES, F64_BYTES),
+             Some(8)
+         );
++        // A bare Float scalar is flat-eligible (B28 P3 item 5): it packs by
++        // its little-endian bytes and a float-bearing struct is compared
++        // field-wise. (A float-bearing tuple, array, or enum stays boxed; see
++        // `flat_byte_size_float_tuple_is_boxed`.)
+         #[cfg(feature = "floats")]
+         assert_eq!(
+             LayoutDescriptor::Scalar(ScalarKind::Float).flat_byte_size(I64_BYTES, F64_BYTES),
+-            None
++            Some(8)
+         );
+     }
+ 
++    #[test]
++    #[cfg(feature = "floats")]
++    fn flat_byte_size_float_struct_is_flat() {
++        // A struct flattens its float fields (B28 P3 item 5).
++        let layout = LayoutDescriptor::Struct {
++            type_name: "FPair".to_string(),
++            fields: vec![
++                ("a".to_string(), LayoutDescriptor::Scalar(ScalarKind::Float)),
++                ("b".to_string(), LayoutDescriptor::Scalar(ScalarKind::Int)),
++            ],
++        };
++        assert_eq!(layout.flat_byte_size(I64_BYTES, F64_BYTES), Some(8 + 8));
++        assert!(layout.contains_float());
++    }
++
++    #[test]
++    #[cfg(feature = "floats")]
++    fn flat_byte_size_float_tuple_array_enum_is_boxed() {
++        // A float-bearing tuple, array, or enum stays boxed this iteration so
++        // its derived (IEEE-correct) equality is preserved; only struct fields
++        // flatten their floats (B28 P3 item 5).
++        let tuple = LayoutDescriptor::Tuple(vec![
++            LayoutDescriptor::Scalar(ScalarKind::Float),
++            LayoutDescriptor::Scalar(ScalarKind::Int),
++        ]);
++        assert_eq!(tuple.flat_byte_size(I64_BYTES, F64_BYTES), None);
++        let array = LayoutDescriptor::Array {
++            element: Box::new(LayoutDescriptor::Scalar(ScalarKind::Float)),
++            count: 4,
++        };
++        assert_eq!(array.flat_byte_size(I64_BYTES, F64_BYTES), None);
++        let enom = LayoutDescriptor::Enum {
++            type_name: "E".to_string(),
++            variants: vec![(
++                "V".to_string(),
++                vec![LayoutDescriptor::Scalar(ScalarKind::Float)],
++            )],
++        };
++        assert_eq!(enom.flat_byte_size(I64_BYTES, F64_BYTES), None);
++    }
++
+     #[test]
+     fn flat_byte_size_nested_tuple_in_struct() {
+         let inner = LayoutDescriptor::Tuple(vec![
