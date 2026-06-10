@@ -1660,7 +1660,10 @@ fn assemble_wire_bytes(
     buf.extend_from_slice(&operand_pool_length.to_le_bytes());
     buf.extend_from_slice(&aux_body_offset.to_le_bytes());
     buf.extend_from_slice(&aux_body_length.to_le_bytes());
-    buf.extend_from_slice(&[0u8; 4]); // reserved at offsets 56..60
+    // Runtime ephemeral tracking-list pre-size figure (B28 P3 item 5,
+    // Phase C). Occupies the formerly-reserved word at offset 56; a `0`
+    // value leaves the bytes identical to the prior reserved zero-fill.
+    buf.extend_from_slice(&module.aux_arena_bytes.to_le_bytes()); // offsets 56..60
     buf.extend_from_slice(&[0u8; 4]); // reserved at offsets 60..64
     debug_assert_eq!(buf.len(), WIRE_FORMAT_HEADER_BYTES);
 
@@ -2274,12 +2277,15 @@ pub fn module_from_wire_bytes(bytes: &[u8]) -> Result<Module, LoadError> {
         u32::from_le_bytes([bytes[44], bytes[45], bytes[46], bytes[47]]) as usize;
     let aux_body_offset = u32::from_le_bytes([bytes[48], bytes[49], bytes[50], bytes[51]]) as usize;
     let aux_body_length = u32::from_le_bytes([bytes[52], bytes[53], bytes[54], bytes[55]]) as usize;
-    let reserved_a = u32::from_le_bytes([bytes[56], bytes[57], bytes[58], bytes[59]]);
+    // Offsets 56..60 now carry the runtime ephemeral tracking-list
+    // pre-size figure (B28 P3 item 5, Phase C); offsets 60..64 stay
+    // reserved and must be zero.
+    let aux_arena_bytes = u32::from_le_bytes([bytes[56], bytes[57], bytes[58], bytes[59]]);
     let reserved_b = u32::from_le_bytes([bytes[60], bytes[61], bytes[62], bytes[63]]);
-    if reserved_a != 0 || reserved_b != 0 {
+    if reserved_b != 0 {
         return Err(LoadError::Codec(format!(
-            "wire format header reserved fields must be zero; got {:#010x} and {:#010x}",
-            reserved_a, reserved_b,
+            "wire format header reserved field at offset 60 must be zero; got {:#010x}",
+            reserved_b,
         )));
     }
     // Signature-extension consistency. Reuse `parse_wire_sections`'
@@ -2469,6 +2475,9 @@ pub fn module_from_wire_bytes(bytes: &[u8]) -> Result<Module, LoadError> {
         float_bits_log2: aux.float_bits_log2,
         wcet_cycles: aux.wcet_cycles,
         wcmu_bytes: aux.wcmu_bytes,
+        // Carried only in the framing header (CRC-covered) at offset 56,
+        // not mirrored in the auxiliary body (B28 P3 item 5, Phase C).
+        aux_arena_bytes,
         flags: aux.flags,
         shared_data_bytes: aux.shared_data_bytes,
         private_data_bytes: aux.private_data_bytes,
@@ -2919,11 +2928,34 @@ mod tests {
             float_bits_log2: crate::bytecode::RUNTIME_FLOAT_BITS_LOG2,
             wcet_cycles: 0,
             wcmu_bytes: 0,
+            aux_arena_bytes: 0,
             flags: 0,
             shared_data_bytes: 0,
             private_data_bytes: 0,
             schema_hash: 0,
         }
+    }
+
+    #[test]
+    fn module_roundtrip_preserves_aux_arena_bytes() {
+        // The runtime ephemeral tracking-list pre-size figure occupies the
+        // framing-header word at offset 56 (B28 P3 item 5, Phase C); it must
+        // be written there and survive a wire round trip.
+        let mut module = make_minimal_module();
+        module.aux_arena_bytes = 4096;
+        let bytes = module_to_wire_bytes(&module).expect("encode");
+        assert_eq!(
+            u32::from_le_bytes([bytes[56], bytes[57], bytes[58], bytes[59]]),
+            4096,
+            "aux_arena_bytes must occupy header offset 56"
+        );
+        let decoded = module_from_wire_bytes(&bytes).expect("decode");
+        assert_eq!(decoded.aux_arena_bytes, 4096);
+        // A zero value must leave the formerly-reserved word zero-filled.
+        let zero = make_minimal_module();
+        let zbytes = module_to_wire_bytes(&zero).expect("encode");
+        assert_eq!(&zbytes[56..64], &[0u8; 8], "zero aux + reserved stays zero");
+        module_roundtrip_through_wire_format(module);
     }
 
     #[test]
@@ -2941,6 +2973,7 @@ mod tests {
             float_bits_log2: crate::bytecode::RUNTIME_FLOAT_BITS_LOG2,
             wcet_cycles: 0,
             wcmu_bytes: 0,
+            aux_arena_bytes: 0,
             flags: 0,
             shared_data_bytes: 0,
             private_data_bytes: 0,
@@ -3085,6 +3118,7 @@ mod tests {
             float_bits_log2: crate::bytecode::RUNTIME_FLOAT_BITS_LOG2,
             wcet_cycles: 0,
             wcmu_bytes: 0,
+            aux_arena_bytes: 0,
             flags: 0,
             shared_data_bytes: 0,
             private_data_bytes: 0,
@@ -3135,6 +3169,7 @@ mod tests {
             float_bits_log2: crate::bytecode::RUNTIME_FLOAT_BITS_LOG2,
             wcet_cycles: 0,
             wcmu_bytes: 0,
+            aux_arena_bytes: 0,
             flags: 0,
             shared_data_bytes: 0,
             private_data_bytes: 0,
@@ -3176,6 +3211,7 @@ mod tests {
             float_bits_log2: crate::bytecode::RUNTIME_FLOAT_BITS_LOG2,
             wcet_cycles: 0,
             wcmu_bytes: 0,
+            aux_arena_bytes: 0,
             flags: 0,
             shared_data_bytes: 0,
             private_data_bytes: 0,

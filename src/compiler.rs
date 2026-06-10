@@ -1632,6 +1632,10 @@ pub fn compile_with_options(
         // Populated below after structural verification succeeds.
         wcet_cycles: 0,
         wcmu_bytes: 0,
+        // The runtime ephemeral tracking-list pre-size figure is computed
+        // when the relocation of those lists into the arena lands (B28 P3
+        // item 5, Phase C); zero until then.
+        aux_arena_bytes: 0,
         // Flags is populated by the verifier (under `verify`
         // feature) at end of compile_with_target. The shared
         // and private byte counts mirror the partition computed

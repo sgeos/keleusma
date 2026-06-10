@@ -696,7 +696,12 @@ pub fn auto_arena_capacity_for(
             }
         }
     }
-    Ok(max_total)
+    // The runtime allocates its ephemeral tracking lists (the opaque
+    // registry, and the backing of boxed composite bodies as the
+    // relocation lands) inside the arena, pre-sized once per iteration, so
+    // the arena must hold them in addition to the per-iteration script
+    // values (B28 P3 item 5, Phase C).
+    Ok(max_total.saturating_add(module.aux_arena_bytes as usize))
 }
 
 /// Bytecode storage for the VM.
@@ -9535,6 +9540,7 @@ mod tests {
             float_bits_log2: crate::bytecode::RUNTIME_FLOAT_BITS_LOG2,
             wcet_cycles: 0,
             wcmu_bytes: 0,
+            aux_arena_bytes: 0,
             flags: 0,
             shared_data_bytes: 0,
             private_data_bytes: 0,
@@ -9575,6 +9581,7 @@ mod tests {
             float_bits_log2: crate::bytecode::RUNTIME_FLOAT_BITS_LOG2,
             wcet_cycles: 0,
             wcmu_bytes: 0,
+            aux_arena_bytes: 0,
             flags: 0,
             shared_data_bytes: 0,
             private_data_bytes: 0,
@@ -10847,6 +10854,7 @@ mod tests {
             flags: 0,
             wcet_cycles: 0,
             wcmu_bytes: 0,
+            aux_arena_bytes: 0,
         };
 
         let analyses = crate::verify::module_chunk_text_analyses(&module).expect("analyse");

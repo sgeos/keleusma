@@ -2651,6 +2651,22 @@ pub struct Module {
     /// [`Module::wcet_cycles`]. Total of stack and heap regions.
     /// Mirrored in the framing header.
     pub wcmu_bytes: u32,
+    /// Worst-case bytes the runtime needs for its own ephemeral
+    /// tracking structures per Stream-to-Reset slice, beyond the
+    /// script-value WCMU (B28 P3 item 5, Phase C).
+    ///
+    /// These are the runtime's per-instance bookkeeping lists — the
+    /// opaque registry, and (as the relocation lands) the backing of
+    /// boxed composite bodies — which the runtime allocates inside the
+    /// arena (the top ephemeral region) and pre-sizes once, as the
+    /// first allocations after each RESET, rather than growing during
+    /// an iteration. The runtime reads this value to pre-size those
+    /// lists, and `auto_arena_capacity_for` adds it to the arena size.
+    /// It is a runtime-only figure: native code never observes it, and
+    /// it is distinct from the native-WCMU attestation path. `0` means
+    /// the module needs no such tracking memory. Carried in the framing
+    /// header's reserved word at offset 56.
+    pub aux_arena_bytes: u32,
     /// Bit flags describing static properties of the module.
     /// Currently defined bits.
     ///

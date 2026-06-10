@@ -33,6 +33,7 @@ fn make_module(chunks: Vec<Chunk>) -> Module {
         float_bits_log2: RUNTIME_FLOAT_BITS_LOG2,
         wcet_cycles: 0,
         wcmu_bytes: 0,
+        aux_arena_bytes: 0,
         flags: 0,
         shared_data_bytes: 0,
         private_data_bytes: 0,
