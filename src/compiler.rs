@@ -3866,35 +3866,35 @@ fn strip_type_labels(ty: &TypeExpr) -> TypeExpr {
     }
 }
 
-/// Whether equality of a value of type `ty` must be compiled field-wise
-/// because the type is a struct, tuple, or array that transitively contains
-/// a `Float` (B28 P3 item 5, Phase A).
+/// Whether equality of a value of type `ty` is compiled field-wise (B28 P3
+/// item 5).
 ///
-/// A raw-byte `CmpEq` over a float-bearing flat body would diverge from IEEE
-/// on `+0.0`/`-0.0` (equal values, distinct bytes) and `NaN` (equal bytes,
-/// unequal values), so the compiler emits a per-field comparison. The
-/// per-field extraction works on both flat and boxed bodies, so this dispatch
-/// is correct before and after the float-flattening representation switch. A
-/// bare `Float` scalar is already IEEE-correct under `CmpEq`; a type the
-/// layout pass cannot resolve falls back to `CmpEq`. An enum that
-/// transitively carries a float is compared by the variant-dispatched
-/// [`emit_enum_fieldwise_eq`].
+/// Every composite the compiler can name — a tuple, an array, or a declared
+/// struct or enum — is compared field by field rather than by a raw-byte
+/// `CmpEq` over its flat body. This is required for a float-bearing composite
+/// (a byte-blob compare diverges from IEEE on `+0.0`/`-0.0` and `NaN`) and is
+/// applied uniformly to all composites so that a flat composite body never
+/// reaches the runtime `CmpEq`: the VM `CmpEq`/`CmpNe` handlers trap on a flat
+/// composite operand, which then catches exactly the case the compiler could
+/// not name (an unsignatured native's composite result) as a clear fault
+/// rather than a silent byte-blob comparison. The per-field extraction works
+/// on both flat and boxed bodies.
 ///
-/// Residual limitation: a float-bearing composite whose operand type the
-/// compiler cannot infer at the comparison site falls back to `CmpEq`. With
-/// the boxed representation that is still IEEE-correct (derived comparison);
-/// once the body is flat it would be byte-blob-wrong, so closing this needs
-/// the type checker's authoritative annotations rather than the lightweight
-/// `infer_expr_type`.
+/// `Option`, scalars, and any type the compiler cannot resolve to a tabled
+/// struct or enum fall through to `CmpEq`: `Option` and other boxed composites
+/// compare correctly with the derived comparison, scalars compare directly,
+/// and an unresolved composite traps in the VM (see above) rather than risk a
+/// byte-blob compare. The dispatch keys on the declared type tables rather
+/// than the layout descriptor so it never selects a composite the field-wise
+/// emitter cannot build accessors for (notably the built-in `Option`).
 fn composite_needs_fieldwise_eq(ty: &TypeExpr, ti: &TypeInfo) -> bool {
-    use crate::value_layout::LayoutDescriptor as L;
-    let Ok(d) = ti.layout_context().layout_for(ty) else {
-        return false;
-    };
-    matches!(
-        d,
-        L::Struct { .. } | L::Tuple(_) | L::Array { .. } | L::Enum { .. }
-    ) && d.contains_float()
+    match strip_type_labels(ty) {
+        TypeExpr::Tuple(_, _) | TypeExpr::Array(_, _, _) => true,
+        TypeExpr::Named(name, _, _) => {
+            ti.struct_field_order.contains_key(&name) || ti.enum_variant_order.contains_key(&name)
+        }
+        _ => false,
+    }
 }
 
 /// A baked field-access operand paired with the local slot the access

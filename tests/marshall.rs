@@ -536,6 +536,49 @@ fn register_fn_with_derived_struct_return() {
 }
 
 #[test]
+fn untyped_native_composite_equality_faults_not_silently_wrong() {
+    // An unsignatured native returns a composite the compiler cannot type, so
+    // it cannot emit the field-wise comparison; the value flattens and reaches
+    // the runtime CmpEq. Rather than byte-blob-compare the flat body (which
+    // would silently mishandle IEEE floats), the VM faults with an actionable
+    // message (B28 P3 item 5: resolving the documented residual).
+    let arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+    let mut vm = build_vm(
+        "use host::origin\n\
+         struct Point { x: Float, y: Float }\n\
+         fn main() -> bool { host::origin() == host::origin() }",
+        &arena,
+    );
+    vm.register_fn("host::origin", || -> Point { Point { x: 0.0, y: 0.0 } });
+    let err = vm.call(&[]).unwrap_err();
+    match err {
+        VmError::TypeError(msg) => assert!(
+            msg.contains("flat composite") || msg.contains("signature"),
+            "fault should explain the missing type/signature, got: {msg}"
+        ),
+        other => panic!("expected a TypeError fault, got {:?}", other),
+    }
+}
+
+#[test]
+fn signed_native_composite_equality_compiles_field_wise() {
+    // With a declared return type the compiler recovers the composite type and
+    // emits the field-wise comparison, which is IEEE-correct on the flat body.
+    let arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+    let mut vm = build_vm(
+        "use host::origin() -> Point\n\
+         struct Point { x: Float, y: Float }\n\
+         fn main() -> bool { host::origin() == host::origin() }",
+        &arena,
+    );
+    vm.register_fn("host::origin", || -> Point { Point { x: 0.0, y: 0.0 } });
+    match vm.call(&[]).unwrap() {
+        VmState::Finished(Value::Bool(b)) => assert!(b, "two equal origins compare equal"),
+        other => panic!("expected Bool(true), got {:?}", other),
+    }
+}
+
+#[test]
 fn register_fn_argument_type_mismatch() {
     let arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
     let mut vm = build_vm(

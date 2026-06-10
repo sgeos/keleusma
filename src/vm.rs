@@ -463,6 +463,33 @@ fn stale_arena_body() -> VmError {
     ))
 }
 
+/// Fault when an `==`/`!=` reaches the runtime `CmpEq`/`CmpNe` with a flat
+/// composite operand (B28 P3 item 5).
+///
+/// The compiler emits every nameable composite comparison field-wise, so a
+/// flat composite body only reaches the runtime comparison when the compiler
+/// could not determine the operand's type, which happens for the result of a
+/// native called without a declared signature. A raw-byte comparison of a flat
+/// body would silently diverge from IEEE float equality (`+0.0`/`-0.0`,
+/// `NaN`), so this faults with a clear, actionable message rather than
+/// returning a wrong answer. Scalars and boxed composites pass through.
+fn reject_untyped_flat_composite_cmp<W: crate::word::Word, F: crate::float::Float>(
+    a: &crate::bytecode::GenericValue<W, F>,
+    b: &crate::bytecode::GenericValue<W, F>,
+) -> Result<(), VmError> {
+    if crate::bytecode::flat_body_bytes(a).is_some()
+        || crate::bytecode::flat_body_bytes(b).is_some()
+    {
+        return Err(VmError::TypeError(alloc::string::String::from(
+            "cannot compare a flat composite whose type the compiler could not \
+             determine (an unsignatured native's composite result); add a \
+             `use name() -> T` signature or a type annotation so the comparison \
+             is emitted field-wise",
+        )));
+    }
+    Ok(())
+}
+
 fn out_of_arena_push(region: &str, capacity: usize) -> VmError {
     use alloc::format;
     VmError::OutOfArena(format!(
@@ -3478,20 +3505,26 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                 }
 
                 Op::CmpEq => {
-                    // Materialise arena-resident composite bodies to inline
-                    // so equality compares content, not handles: validity is
-                    // established by resolving each body, then `PartialEq`
-                    // compares the bytes (B28 P2; `if_exists` then
-                    // `if_equals`). Scalars are unaffected.
+                    // Materialise arena-resident composite bodies to inline so
+                    // equality compares content, not handles (B28 P2). The
+                    // compiler emits every nameable composite comparison
+                    // field-wise, so a flat composite reaching `CmpEq` is one
+                    // whose type the compiler could not determine (an
+                    // unsignatured native's composite result). A raw-byte
+                    // compare of such a body would silently mishandle IEEE
+                    // floats, so fault instead (B28 P3 item 5). Scalars and
+                    // boxed composites are unaffected.
                     let arena = self.arena;
                     let b = self.pop()?.materialized(arena);
                     let a = self.pop()?.materialized(arena);
+                    reject_untyped_flat_composite_cmp(&a, &b)?;
                     sp!(self, crate::bytecode::GenericValue::Bool(a == b));
                 }
                 Op::CmpNe => {
                     let arena = self.arena;
                     let b = self.pop()?.materialized(arena);
                     let a = self.pop()?.materialized(arena);
+                    reject_untyped_flat_composite_cmp(&a, &b)?;
                     sp!(self, crate::bytecode::GenericValue::Bool(a != b));
                 }
                 Op::CmpLt => self.compare_op(|ord| ord.is_lt())?,

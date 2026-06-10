@@ -441,37 +441,6 @@ impl LayoutDescriptor {
         }
     }
 
-    /// Whether this layout transitively contains a [`ScalarKind::Float`]
-    /// field (B28 P3 item 5).
-    ///
-    /// A float-bearing composite must be compared field-by-field so the IEEE
-    /// `+0.0`/`-0.0` and `NaN` semantics survive; a raw-byte blob comparison
-    /// of a flat body would diverge. The compiler dispatches equality of such
-    /// a composite to a field-wise comparison. This predicate is purely
-    /// type-structural and independent of whether the value is flat or boxed,
-    /// so it correctly drives the dispatch in both representations.
-    pub fn contains_float(&self) -> bool {
-        match self {
-            Self::Scalar(k) => {
-                #[cfg(feature = "floats")]
-                {
-                    matches!(k, ScalarKind::Float)
-                }
-                #[cfg(not(feature = "floats"))]
-                {
-                    let _ = k;
-                    false
-                }
-            }
-            Self::Tuple(elems) => elems.iter().any(|e| e.contains_float()),
-            Self::Array { element, .. } => element.contains_float(),
-            Self::Struct { fields, .. } => fields.iter().any(|(_, t)| t.contains_float()),
-            Self::Enum { variants, .. } => variants
-                .iter()
-                .any(|(_, payload)| payload.iter().any(|p| p.contains_float())),
-        }
-    }
-
     /// The composite kind this layout re-wraps to as a nested flat field,
     /// or `None` for a scalar (B28 P2 nested inlining). Structural only; a
     /// caller pairs it with [`LayoutDescriptor::flat_byte_size`] to confirm
