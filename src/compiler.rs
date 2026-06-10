@@ -188,6 +188,15 @@ struct FuncCompiler {
     /// Strippable debug annotations (B29) gathered while `emit_debug`
     /// is on, drained into the chunk's `debug_pool` at finish time.
     pending_debug: Vec<PendingDebug>,
+    /// Set when this chunk emits a flat `NewComposite` that could intern a
+    /// host opaque into the ephemeral registry: a flat struct or enum whose
+    /// layout has an `Opaque` leaf, or a value-driven tuple or array with an
+    /// element that is opaque-typed or whose type the compiler cannot
+    /// recover (an unsignatured native result could be opaque at runtime).
+    /// Drives the opaque-registry arena bound: a module that never sets this
+    /// reserves no registry (`aux_arena_bytes = 0`); one that does falls back
+    /// to the sound heap-derived bound (B28 P3 item 5 registry tightening).
+    may_intern_opaque: bool,
 }
 
 /// A debug annotation captured during codegen, pending assembly into a
@@ -482,6 +491,7 @@ impl FuncCompiler {
             local_ranges: BTreeMap::new(),
             emit_debug,
             pending_debug: Vec::new(),
+            may_intern_opaque: false,
         }
     }
 
@@ -1519,11 +1529,14 @@ pub fn compile_with_options(
     // `CHUNK_SIZE_SOFT_WARN_THRESHOLD` are admissible but produce
     // a `CompileWarning` prompting decomposition into helpers.
     let mut chunks: Vec<Chunk> = Vec::new();
+    // Set when any chunk emits a flat composite that could intern a host
+    // opaque; gates the opaque-registry arena bound below (B28 P3 item 5).
+    let mut may_intern_opaque = false;
     for (name, defs) in &groups {
         let generic_origin = generic_provenance
             .get(name)
             .map(|(origin, type_args)| (origin.as_str(), type_args.as_str()));
-        let chunk = compile_function_group(
+        let (chunk, chunk_may_intern_opaque) = compile_function_group(
             name,
             defs,
             &function_map,
@@ -1535,6 +1548,7 @@ pub fn compile_with_options(
             options.emit_debug,
             generic_origin,
         )?;
+        may_intern_opaque |= chunk_may_intern_opaque;
         let span = defs
             .first()
             .map(|d| d.span)
@@ -1896,21 +1910,34 @@ pub fn compile_with_options(
         }
         module.wcet_cycles = if wcet_overflow { u32::MAX } else { max_wcet };
         module.wcmu_bytes = if wcmu_overflow { u32::MAX } else { max_wcmu };
-        // Bound the opaque registry's arena footprint (B28 P3 item 5, Phase
-        // C2). The registry lives in the arena bottom region and is `clear`ed
-        // each iteration; its per-iteration peak is at most one `Arc` per
-        // distinct interned opaque, and each such opaque has its word-sized
-        // index stored in a live flat-composite body, so the count is at most
-        // `heap_bytes / word_bytes`. This bound is independent of which
-        // elements are opaque, which is necessary because an unsignatured
-        // native can return an opaque the compiler cannot type; a tighter
-        // position-based count would undercount that case. `auto_arena_
-        // capacity_for` adds this so a host that autosizes provisions for the
-        // registry. Over-provisions for opaque-light programs; tightening is
-        // tracked as a follow-up.
+        // Bound the opaque registry's arena footprint (B28 P3 item 5). The
+        // registry lives in the arena bottom region and is `clear`ed each
+        // iteration; its per-iteration peak is at most one `Arc` per distinct
+        // interned opaque, and each such opaque has its word-sized index
+        // stored in a live flat-composite body, so the count is at most
+        // `heap_bytes / word_bytes`. That heap-derived figure is
+        // representation-independent, which matters because an unsignatured
+        // native can return an opaque the compiler cannot type and a
+        // position-based count would undercount it. The registry tightening
+        // gates that bound on `may_intern_opaque`: a module that never
+        // constructs a flat composite able to intern an opaque (the dominant
+        // case) needs no registry and reserves zero, while one that might
+        // falls back to the sound heap-derived figure. The flag is set
+        // conservatively at the flat `NewComposite` emission sites, including
+        // for value-driven tuples/arrays whose element types the compiler
+        // cannot recover, so a zero here soundly means no opaque can be
+        // interned. `auto_arena_capacity_for` adds this so a host that
+        // autosizes provisions for the registry.
         let word_bytes = (1usize << module.word_bits_log2) / 8;
         let arc_bytes = core::mem::size_of::<alloc::sync::Arc<dyn crate::opaque::HostOpaque>>();
-        module.aux_arena_bytes = if wcmu_overflow || word_bytes == 0 {
+        module.aux_arena_bytes = if wcmu_overflow || word_bytes == 0 || !may_intern_opaque {
+            // A module that never constructs a flat composite able to intern a
+            // host opaque needs no registry: the dominant case (opaque-free
+            // programs) now reserves zero rather than the heap-derived bound.
+            // The flag is set conservatively, including for value-driven
+            // tuples/arrays with untypeable elements, so a zero here soundly
+            // means no opaque can be interned (B28 P3 item 5 registry
+            // tightening).
             0
         } else {
             let max_interns = (max_heap as usize).div_ceil(word_bytes);
@@ -2953,7 +2980,7 @@ fn compile_function_group(
     type_info: &TypeInfo,
     emit_debug: bool,
     generic_origin: Option<(&str, &str)>,
-) -> Result<Chunk, CompileError> {
+) -> Result<(Chunk, bool), CompileError> {
     // Within a group, every head after the first must dispatch on
     // a pattern shape distinct from every earlier head; otherwise
     // the later head is unreachable. Single-head groups skip this
@@ -3165,7 +3192,8 @@ fn compile_function_group(
     // when the function is entered, before any statement runs.
     fc.record_function_entry(&first.span);
 
-    Ok(fc.finish())
+    let may_intern_opaque = fc.may_intern_opaque;
+    Ok((fc.finish(), may_intern_opaque))
 }
 
 /// Check if any parameter has a non-trivial pattern (not a simple variable).
@@ -3732,6 +3760,49 @@ fn layout_has_flat_text(d: &crate::value_layout::LayoutDescriptor, word_bytes: u
         L::Tuple(elems) => elems.iter().any(|e| layout_has_flat_text(e, word_bytes)),
         L::Array { element, .. } => layout_has_flat_text(element, word_bytes),
         L::Scalar(_) => false,
+    }
+}
+
+/// Whether a layout has an `Opaque` scalar leaf, i.e. a field that, when the
+/// composite is constructed flat, interns a host `Arc` into the ephemeral
+/// opaque registry (B28 P3 item 5 registry tightening). Recurses through
+/// every composite kind; an opaque inside a boxed sub-part never reaches
+/// here because the caller only consults this on the flat construction path.
+fn layout_has_opaque_leaf(d: &crate::value_layout::LayoutDescriptor) -> bool {
+    use crate::value_layout::{LayoutDescriptor as L, ScalarKind};
+    match d {
+        L::Scalar(ScalarKind::Opaque) => true,
+        L::Scalar(_) => false,
+        L::Struct { fields, .. } => fields.iter().any(|(_, f)| layout_has_opaque_leaf(f)),
+        L::Enum { variants, .. } => variants
+            .iter()
+            .any(|(_, ps)| ps.iter().any(layout_has_opaque_leaf)),
+        L::Tuple(elems) => elems.iter().any(layout_has_opaque_leaf),
+        L::Array { element, .. } => layout_has_opaque_leaf(element),
+    }
+}
+
+/// Whether constructing a value of `ty` flat could intern a host opaque
+/// (B28 P3 item 5 registry tightening). True when the type's flat layout
+/// has an `Opaque` leaf, and conservatively true when the layout cannot be
+/// computed, since an untypeable value (an unsignatured native result) could
+/// be an opaque at runtime. Used to set [`FuncCompiler::may_intern_opaque`]
+/// at flat `NewComposite` emission sites.
+fn type_may_intern_opaque(ty: &TypeExpr, ti: &TypeInfo) -> bool {
+    ti.layout_context()
+        .layout_for(ty)
+        .map(|d| layout_has_opaque_leaf(&d))
+        .unwrap_or(true)
+}
+
+/// Whether a value-driven tuple or array element could intern an opaque at
+/// runtime: true when its type cannot be recovered (an unsignatured native
+/// result could be an opaque) or its type's flat layout has an `Opaque` leaf
+/// (B28 P3 item 5 registry tightening).
+fn elem_may_intern_opaque(fc: &FuncCompiler, elem: &Expr) -> bool {
+    match infer_expr_type(fc, elem) {
+        None => true,
+        Some(ty) => type_may_intern_opaque(&ty, &fc.type_info),
     }
 }
 
@@ -6223,6 +6294,9 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
             }
             match byte_size {
                 Some(byte_size) => {
+                    if type_may_intern_opaque(&ty, &fc.type_info) {
+                        fc.may_intern_opaque = true;
+                    }
                     fc.emit(Op::NewComposite(NewCompositeOperand::Flat {
                         kind: crate::value_layout::CompositeKind::Struct,
                         count,
@@ -6262,6 +6336,9 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
                 .unwrap_or(0);
             match byte_size {
                 Some(byte_size) => {
+                    if type_may_intern_opaque(&ty, &fc.type_info) {
+                        fc.may_intern_opaque = true;
+                    }
                     let d_const = fc.add_constant(Value::Int(disc));
                     fc.emit(Op::Const(d_const));
                     for arg in args {
@@ -6314,6 +6391,12 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
             // disagree with the inferable access. The opaque reference kind is
             // flat in this value-driven form too (B28 P3 item 3).
             let byte_size = byte_size.unwrap_or_else(|| conservative_alloc_bytes(count));
+            // Value-driven flat construction interns an opaque element at
+            // runtime (B28 P3 item 3), so flag the registry bound when an
+            // element could be opaque or is untypeable (B28 P3 item 5).
+            if elements.iter().any(|e| elem_may_intern_opaque(fc, e)) {
+                fc.may_intern_opaque = true;
+            }
             for elem in elements {
                 compile_expr(fc, elem)?;
             }
@@ -6334,6 +6417,12 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
             });
             let count = elements.len() as u16;
             let byte_size = byte_size.unwrap_or_else(|| conservative_alloc_bytes(count));
+            // Value-driven flat construction interns an opaque element at
+            // runtime (B28 P3 item 3), so flag the registry bound when an
+            // element could be opaque or is untypeable (B28 P3 item 5).
+            if elements.iter().any(|e| elem_may_intern_opaque(fc, e)) {
+                fc.may_intern_opaque = true;
+            }
             for elem in elements {
                 compile_expr(fc, elem)?;
             }
