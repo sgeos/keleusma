@@ -512,30 +512,83 @@ fn out_of_arena_min(capacity: usize) -> VmError {
     ))
 }
 
-/// Construct the opaque registry pre-sized to its worst-case bottom-region
-/// footprint (B28 P3 item 5, Phase C).
+/// Element capacity of the opaque registry given the compiler's
+/// `aux_arena_bytes` bound (B28 P3 item 5, Phase C).
 ///
 /// `aux_arena_bytes` is the compiler's sound upper bound on the registry's
-/// per-iteration peak; dividing by the `Arc` width gives the element capacity.
-/// Reserving it up front means the registry never reallocates during a stream
-/// iteration — deterministic allocation, as required for the worst-case-memory
-/// guarantee (no allocation after initialisation). An arena too small to hold
-/// the reservation fails here, at construction, rather than at a later push.
-fn pre_sized_opaque_registry<'arena>(
-    arena: &'arena keleusma_arena::Arena,
-    aux_arena_bytes: u32,
-) -> Result<StackVec<'arena, alloc::sync::Arc<dyn crate::opaque::HostOpaque>>, VmError> {
-    let mut registry = ArenaVec::new_in(arena.bottom_handle());
+/// per-iteration peak in bytes; dividing by the `Arc` width gives the
+/// element capacity. Shared by `module_bottom_reservations` and the
+/// construction path so the reservation, the autosize, and a later
+/// `full_reset` all agree on the figure. `checked_div` guards the
+/// (never-zero in practice) `Arc` width without a manual zero check; a
+/// zero width or zero bound yields no reservation.
+fn opaque_registry_capacity(aux_arena_bytes: u32) -> usize {
     let arc_bytes = core::mem::size_of::<alloc::sync::Arc<dyn crate::opaque::HostOpaque>>();
-    // `checked_div` guards the (never-zero in practice) `Arc` width without a
-    // manual zero check; a zero width or zero bound yields no reservation.
-    let capacity = (aux_arena_bytes as usize).checked_div(arc_bytes).unwrap_or(0);
+    (aux_arena_bytes as usize)
+        .checked_div(arc_bytes)
+        .unwrap_or(0)
+}
+
+/// Pre-size a fresh bottom-region arena vector to exactly `capacity`
+/// elements (B28 P3 item 5, priority 1).
+///
+/// Uses `try_reserve_exact` so the backing allocation is exactly
+/// `capacity * size_of::<T>()` bytes, with no amortised-growth slack. This
+/// keeps the runtime footprint equal to the figure
+/// [`auto_arena_capacity_for`] reports, so a host that sizes its arena from
+/// that figure can construct with zero margin. Reserving up front means the
+/// vector never reallocates during execution — deterministic allocation, as
+/// the worst-case-memory guarantee requires (no allocation after
+/// initialisation). An arena too small to hold the reservation fails here,
+/// at construction, rather than aborting on a later push.
+fn pre_sized_bottom_vec<'arena, T>(
+    arena: &'arena keleusma_arena::Arena,
+    capacity: usize,
+) -> Result<StackVec<'arena, T>, VmError> {
+    let mut v = ArenaVec::new_in(arena.bottom_handle());
     if capacity > 0 {
-        registry
-            .try_reserve(capacity)
+        v.try_reserve_exact(capacity)
             .map_err(|_| out_of_arena_min(arena.capacity()))?;
     }
-    Ok(registry)
+    Ok(v)
+}
+
+/// Bottom-region reservation counts for `module`: operand-stack slots,
+/// call-frame depth, and opaque-registry capacity, each floored at the
+/// conservative minimum so a trivial module still reserves a usable
+/// working set (B28 P3 item 5, priority 1).
+///
+/// Gated on the `verify` feature because the operand-slot and frame-depth
+/// figures come from the verifier's static analysis. With the feature off
+/// (the host attests bounds through a build-time step) the minimums are
+/// used and the operand stack and frames grow on demand as before.
+#[cfg(feature = "verify")]
+fn module_bottom_reservations(module: &crate::bytecode::Module) -> (usize, usize, usize) {
+    let (slots, frames) = match verify::module_runtime_footprint(module, &[]) {
+        Ok(fp) => (
+            (fp.max_operand_slots as usize).max(MIN_STACK_RESERVE_SLOTS),
+            (fp.max_frame_depth as usize).max(MIN_FRAMES_RESERVE),
+        ),
+        // A module whose footprint cannot be computed (for example a
+        // recursive call graph) is rejected by `verify` before
+        // construction is reached on the checked path; fall back to the
+        // minimums defensively for the trust-skip path.
+        Err(_) => (MIN_STACK_RESERVE_SLOTS, MIN_FRAMES_RESERVE),
+    };
+    (
+        slots,
+        frames,
+        opaque_registry_capacity(module.aux_arena_bytes),
+    )
+}
+
+#[cfg(not(feature = "verify"))]
+fn module_bottom_reservations(module: &crate::bytecode::Module) -> (usize, usize, usize) {
+    (
+        MIN_STACK_RESERVE_SLOTS,
+        MIN_FRAMES_RESERVE,
+        opaque_registry_capacity(module.aux_arena_bytes),
+    )
 }
 
 /// Decode every op in every chunk of a bytecode buffer and return
@@ -697,37 +750,57 @@ fn decode_all_ops(bytes: &[u8]) -> Result<Vec<Vec<Op>>, VmError> {
     Ok(all_ops)
 }
 
-/// Compute the smallest arena capacity that admits the given module
-/// under the supplied native attestations. Returns the maximum WCMU sum
-/// across Stream chunks, or zero if the module has no Stream chunks.
+/// Compute the exact arena capacity (excluding the persistent `data`
+/// region) that the bundled `i64`/`f64` runtime needs to construct and
+/// run the given module under the supplied native attestations.
+///
+/// Because the runtime now pre-allocates its entire bottom-region working
+/// set at construction (B28 P3 item 5, priority 1), the figure is the sum
+/// of every component, each sized to the real bundled-runtime footprint:
+///
+/// - the operand stack, `max_operand_slots * size_of::<Value>()`;
+/// - the call frames, `max_frame_depth * size_of::<CallFrame>()`;
+/// - the opaque registry, `aux_arena_bytes`;
+/// - the per-iteration arena heap, `max_heap_bytes`.
+///
+/// The operand-slot and frame-depth components are floored at the same
+/// minimums the constructor applies (`MIN_STACK_RESERVE_SLOTS`,
+/// `MIN_FRAMES_RESERVE`) so the reported figure exactly matches the
+/// reservation the constructor makes, letting a host size its arena with
+/// zero margin. A host that needs headroom (for example to call a `Func`
+/// chunk whose stack exceeds the Stream worst case) is already covered:
+/// the footprint is the module-wide maximum over every chunk.
+///
+/// **Slot width.** This entry point uses the bundled runtime's
+/// `size_of::<GenericValue<i64, f64>>()`, the common case. A narrow
+/// `GenericVm<W, A, F>` has a different slot width; such hosts size their
+/// arena from [`verify::module_runtime_footprint`] multiplied by their own
+/// `size_of::<GenericValue<W, F>>()`. Note this is *not*
+/// `bytecode::VALUE_SLOT_SIZE_BYTES` (32), which under-states the real
+/// 64-bit-runtime slot; the binding admission check in [`GenericVm::new`]
+/// already uses the real `size_of`, so that constant governs only the
+/// compile-time advisory header.
 ///
 /// Available only when the `verify` feature is enabled because the
-/// computation routes through `verify::module_wcmu`. Hosts that
-/// build without the verifier must size arenas through a build-time
+/// computation routes through [`verify::module_runtime_footprint`]. Hosts
+/// that build without the verifier must size arenas through a build-time
 /// analysis instead.
 #[cfg(feature = "verify")]
 pub fn auto_arena_capacity_for(
     module: &crate::bytecode::Module,
     native_wcmu: &[u32],
 ) -> Result<usize, VmError> {
-    let chunk_wcmu = verify::module_wcmu(module, native_wcmu)
+    let footprint = verify::module_runtime_footprint(module, native_wcmu)
         .map_err(|e| VmError::VerifyError(format!("{}: {}", e.chunk_name, e.message)))?;
-    let mut max_total: usize = 0;
-    for (chunk_idx, chunk) in module.chunks.iter().enumerate() {
-        if chunk.block_type == crate::bytecode::BlockType::Stream {
-            let (s, h) = chunk_wcmu[chunk_idx];
-            let total = (s as usize).saturating_add(h as usize);
-            if total > max_total {
-                max_total = total;
-            }
-        }
-    }
-    // The runtime allocates its ephemeral tracking lists (the opaque
-    // registry, and the backing of boxed composite bodies as the
-    // relocation lands) inside the arena, pre-sized once per iteration, so
-    // the arena must hold them in addition to the per-iteration script
-    // values (B28 P3 item 5, Phase C).
-    Ok(max_total.saturating_add(module.aux_arena_bytes as usize))
+    let slots = (footprint.max_operand_slots as usize).max(MIN_STACK_RESERVE_SLOTS);
+    let frames = (footprint.max_frame_depth as usize).max(MIN_FRAMES_RESERVE);
+    let stack_bytes =
+        slots.saturating_mul(core::mem::size_of::<crate::bytecode::GenericValue<i64, f64>>());
+    let frame_bytes = frames.saturating_mul(core::mem::size_of::<CallFrame>());
+    Ok(stack_bytes
+        .saturating_add(frame_bytes)
+        .saturating_add(module.aux_arena_bytes as usize)
+        .saturating_add(footprint.max_heap_bytes as usize))
 }
 
 /// Bytecode storage for the VM.
@@ -877,6 +950,22 @@ pub struct GenericVm<
     /// longer reallocates. No global-heap allocation; the worst-case bytes are
     /// reported through `Module::aux_arena_bytes`.
     ephemeral_opaques: StackVec<'arena, alloc::sync::Arc<dyn crate::opaque::HostOpaque>>,
+    /// Pre-sized bottom-region reservations, in elements, captured at
+    /// construction (B28 P3 item 5, priority 1). The operand stack and
+    /// call frames are reserved to these counts up front so the runtime
+    /// performs no allocation after initialisation (JPL Power-of-10
+    /// rule 3); `full_reset_arena_internal` re-applies them after a
+    /// rewind so the recovered VM keeps the same deterministic footprint.
+    /// On the trust-skip view path the figures default to the
+    /// conservative minimums because that path receives raw bytes with no
+    /// `Module` to analyse.
+    reserved_operand_slots: usize,
+    /// Pre-sized call-frame reservation, in frames. See
+    /// [`Self::reserved_operand_slots`].
+    reserved_frame_depth: usize,
+    /// Pre-sized opaque-registry reservation, in `Arc` elements. See
+    /// [`Self::reserved_operand_slots`].
+    reserved_opaque_capacity: usize,
     /// Host-supplied trust matrix for cryptographic module
     /// signatures. Populated through
     /// [`Self::register_verifying_key`] before the host hot-swaps
@@ -1592,6 +1681,13 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         }
         let data = vec![crate::bytecode::GenericValue::Unit; shared_count as usize];
         let decoded_ops = decode_all_ops(bytes)?;
+        // The zero-copy view path receives raw bytes with no owned
+        // `Module`, so the verifier's footprint analysis is not available
+        // here; the operand stack and frames are reserved to the
+        // conservative minimums and grow on demand. This is a documented
+        // non-nominal path (the host attests bounds out of band); the
+        // checked `Vm::new` path pre-sizes to the exact footprint (B28 P3
+        // item 5, priority 1).
         let mut stack = ArenaVec::new_in(arena.bottom_handle());
         let mut frames = ArenaVec::new_in(arena.bottom_handle());
         stack
@@ -1617,6 +1713,9 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
             fault_location: None,
             native_classifications_verified: false,
             ephemeral_opaques: ArenaVec::new_in(arena.bottom_handle()),
+            reserved_operand_slots: MIN_STACK_RESERVE_SLOTS,
+            reserved_frame_depth: MIN_FRAMES_RESERVE,
+            reserved_opaque_capacity: 0,
             #[cfg(feature = "signatures")]
             verifying_keys: Vec::new(),
         })
@@ -1668,12 +1767,16 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
     }
 
     fn construct(module: Module, arena: &'arena keleusma_arena::Arena) -> Result<Self, VmError> {
-        // Worst-case bytes the opaque registry needs in the arena bottom
-        // region (B28 P3 item 5, Phase C). Captured before `module` is
-        // consumed so the registry can be pre-sized at construction rather
-        // than grown during execution (deterministic allocation: a too-small
-        // arena fails here, at init, not mid-stream).
-        let aux_arena_bytes = module.aux_arena_bytes;
+        // Bottom-region reservation counts (operand-stack slots, call-frame
+        // depth, opaque-registry capacity) captured before `module` is
+        // consumed, so all three can be pre-sized at construction rather
+        // than grown during execution (deterministic allocation: a
+        // too-small arena fails here, at init, not mid-stream — JPL
+        // Power-of-10 rule 3). The figures match what
+        // `auto_arena_capacity_for` reports, so a host sizing its arena
+        // from that figure constructs with zero margin (B28 P3 item 5,
+        // priority 1).
+        let (reserve_slots, reserve_frames, reserve_opaque) = module_bottom_reservations(&module);
         // B16 step 8: validate the module's declared widths against
         // this VM's compile-time W/A/F trait parameters. A narrower
         // Vm running wider bytecode would silently truncate values
@@ -1750,34 +1853,21 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         let mut aligned = rkyv::util::AlignedVec::<8>::with_capacity(bytes.len());
         aligned.extend_from_slice(&bytes);
         let decoded_ops = decode_all_ops(aligned.as_slice())?;
-        let mut stack = ArenaVec::new_in(arena.bottom_handle());
-        let mut frames = ArenaVec::new_in(arena.bottom_handle());
-        // Pre-reserve a known-good minimum for the operand stack and
-        // call frames so a too-small arena fails fast at construction
-        // with `VmError::OutOfArena` rather than aborting the host
-        // process via `handle_alloc_error` on a later push. The
-        // reservation also avoids reallocation amplification in the
-        // bump-allocator (a growing `Vec` over a bump allocator
-        // consumes cumulative memory across reallocations without
-        // freeing earlier capacity).
-        //
-        // The minimum is conservative: programs that need a larger
-        // stack still grow at runtime, which can still abort if the
-        // arena is too small relative to the worst-case usage. Full
-        // OOM-safe push paths for arbitrary workloads is tracked for
-        // V0.2.x.
-        stack
-            .try_reserve(MIN_STACK_RESERVE_SLOTS)
-            .map_err(|_| out_of_arena_min(arena.capacity()))?;
-        frames
-            .try_reserve(MIN_FRAMES_RESERVE)
-            .map_err(|_| out_of_arena_min(arena.capacity()))?;
-        // Pre-size the opaque registry to its worst-case bottom-region
-        // footprint so it never reallocates during a stream iteration
-        // (B28 P3 item 5, Phase C). The capacity is the recorded
-        // `aux_arena_bytes` divided by the `Arc` width; an arena too small to
-        // hold it fails here, at construction, rather than at a later push.
-        let ephemeral_opaques = pre_sized_opaque_registry(arena, aux_arena_bytes)?;
+        // Pre-size the operand stack, call frames, and opaque registry to
+        // the module's exact worst-case footprint so the runtime performs
+        // no allocation after construction (B28 P3 item 5, priority 1). An
+        // arena too small to hold a reservation fails here, at
+        // construction, with `VmError::OutOfArena` rather than aborting the
+        // host process via `handle_alloc_error` on a later push. Pre-sizing
+        // also avoids reallocation amplification in the bump allocator (a
+        // growing `Vec` over a bump allocator consumes cumulative memory
+        // across reallocations without freeing earlier capacity).
+        let stack =
+            pre_sized_bottom_vec::<crate::bytecode::GenericValue<W, F>>(arena, reserve_slots)?;
+        let frames = pre_sized_bottom_vec::<CallFrame>(arena, reserve_frames)?;
+        let ephemeral_opaques = pre_sized_bottom_vec::<
+            alloc::sync::Arc<dyn crate::opaque::HostOpaque>,
+        >(arena, reserve_opaque)?;
         Ok(Self {
             bytecode: BytecodeStore::Owned(aligned),
             _phantom_a: core::marker::PhantomData,
@@ -1795,6 +1885,9 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
             fault_location: None,
             native_classifications_verified: false,
             ephemeral_opaques,
+            reserved_operand_slots: reserve_slots,
+            reserved_frame_depth: reserve_frames,
+            reserved_opaque_capacity: reserve_opaque,
             #[cfg(feature = "signatures")]
             verifying_keys: Vec::new(),
         })
@@ -2001,15 +2094,17 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
     /// reset advances the bump pointer.
     fn full_reset_arena_internal(&mut self) -> Result<(), keleusma_arena::EpochSaturated> {
         // Drop the old arena-backed bottom-region structures before
-        // rewinding the bottom bump pointer. Reassignment drops each old
-        // `ArenaVec` — running every contained value's destructor (each
-        // `Arc`'s `Drop` for the opaque registry, decrementing the host
-        // refcount) and calling `BottomHandle::deallocate` (a no-op for the
-        // bump allocator) — and the fresh zero-capacity vectors do not
-        // allocate. The registry now lives in the bottom region alongside the
-        // stacks (B28 P3 item 5, Phase C2), so it must be recreated here too,
-        // not merely cleared, or its retained-capacity backing would alias
-        // memory the rewound bump pointer hands back.
+        // rewinding the bottom bump pointer. Reassignment to fresh
+        // zero-capacity vectors drops each old `ArenaVec` — running every
+        // contained value's destructor (each `Arc`'s `Drop` for the opaque
+        // registry, decrementing the host refcount) and calling
+        // `BottomHandle::deallocate` (a no-op for the bump allocator) — and
+        // allocates nothing, so the bottom region holds no live reservation
+        // when the rewind below runs. The registry now lives in the bottom
+        // region alongside the stacks (B28 P3 item 5, Phase C2), so it must
+        // be recreated here too, not merely cleared, or its retained-
+        // capacity backing would alias memory the rewound bump pointer hands
+        // back.
         self.ephemeral_opaques = ArenaVec::new_in(self.arena.bottom_handle());
         self.stack = ArenaVec::new_in(self.arena.bottom_handle());
         self.frames = ArenaVec::new_in(self.arena.bottom_handle());
@@ -2019,7 +2114,23 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         // `KString::alloc` are epoch-tagged and return `Stale` on
         // access after the reset rather than dereferencing reclaimed
         // memory.
-        unsafe { self.arena.reset_unchecked() }
+        unsafe { self.arena.reset_unchecked() }?;
+        // Re-reserve the bottom-region working set to the exact footprint
+        // the VM was constructed with, now that the rewind has freed the old
+        // reservations and returned the bump pointer to the base. This
+        // preserves the no-allocation-after-init contract through error
+        // recovery and hot swap: the recovered VM holds the identical
+        // pre-sized working set and does not grow mid-stream (B28 P3 item 5,
+        // priority 1). Re-reservation cannot fail because the arena already
+        // held this footprint before the rewind freed it; a failure is
+        // nonetheless absorbed by leaving the vector on-demand so a
+        // degenerate arena degrades gracefully rather than aborting.
+        let _ = self.stack.try_reserve_exact(self.reserved_operand_slots);
+        let _ = self.frames.try_reserve_exact(self.reserved_frame_depth);
+        let _ = self
+            .ephemeral_opaques
+            .try_reserve_exact(self.reserved_opaque_capacity);
+        Ok(())
     }
 
     /// Intern an opaque host reference into the ephemeral registry and
@@ -2434,6 +2545,15 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
             iter.by_ref().take(new_shared as usize).collect();
         let private_init: Vec<crate::bytecode::GenericValue<W, F>> = iter.collect();
 
+        // Recompute the bottom-region footprint for the new module so the
+        // `full_reset_arena_internal` below re-reserves the operand stack,
+        // frames, and registry to the swapped-in module's exact worst case
+        // rather than the retired module's (B28 P3 item 5, priority 1).
+        let (reserve_slots, reserve_frames, reserve_opaque) =
+            module_bottom_reservations(&new_module);
+        self.reserved_operand_slots = reserve_slots;
+        self.reserved_frame_depth = reserve_frames;
+        self.reserved_opaque_capacity = reserve_opaque;
         // Serialize the new module to aligned bytes for archived
         // access. The borrowed variant is replaced by an owned variant
         // because hot swap takes an owned input.

@@ -1195,6 +1195,91 @@ pub fn module_wcmu_with_value_slot_bytes(
         .collect())
 }
 
+/// Per-module runtime memory footprint used to pre-size the arena's
+/// bottom-region working structures at VM construction (B28 P3 item 5,
+/// priority 1: accurate worst-case memory usage).
+///
+/// All three figures are module-wide maxima taken over every chunk,
+/// because the host may invoke any `Func` chunk directly through
+/// [`crate::vm::GenericVm::call_function`] and the single operand-stack
+/// and call-frame vectors must hold the worst case across every entry the
+/// VM admits. Pre-sizing to these maxima realises the no-allocation-after-
+/// initialisation contract (JPL Power-of-10 rule 3): a too-small arena
+/// fails at construction, not mid-stream.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct RuntimeFootprint {
+    /// Peak number of operand-stack slots, transitively including the
+    /// slots consumed by called chunks (`wcmu_region` folds the callee's
+    /// stack into the caller at each `Op::Call`). Representation-
+    /// independent: a slot count, not bytes. The byte size depends on the
+    /// runtime's `GenericValue<W, F>` width, which the caller multiplies
+    /// in.
+    pub max_operand_slots: u32,
+    /// Peak call-frame depth, equal to the longest root-to-leaf path in
+    /// the (acyclic, recursion-rejected) static call graph. A chunk with
+    /// no calls has depth one (the frame pushed when it is invoked).
+    pub max_frame_depth: u32,
+    /// Peak per-iteration arena-heap (top-region) bytes over every chunk.
+    /// Real bytes, not slot-scaled.
+    pub max_heap_bytes: u32,
+}
+
+/// Maximum call-frame depth of the module's static call graph.
+///
+/// The call graph is acyclic because the type checker rejects direct and
+/// mutual recursion, so the depth is finite and computed in one pass over
+/// the topological order (callees before callers, so a caller sees each
+/// callee's resolved depth). A chunk with no calls has depth one. Returns
+/// an error if a cycle is detected (which `topological_call_order` already
+/// rejects).
+pub fn module_call_depth(module: &Module) -> Result<u32, VerifyError> {
+    let n = module.chunks.len();
+    let order = topological_call_order(module)?;
+    let mut depth = alloc::vec![1u32; n];
+    for idx in order {
+        let mut d = 1u32;
+        for op in &module.chunks[idx].ops {
+            if let Op::Call(callee, _) = op {
+                let c = *callee as usize;
+                if c < n {
+                    d = d.max(depth[c].saturating_add(1));
+                }
+            }
+        }
+        depth[idx] = d;
+    }
+    Ok(depth.into_iter().max().unwrap_or(0))
+}
+
+/// Compute the module's [`RuntimeFootprint`] for arena pre-sizing.
+///
+/// Runs the per-chunk WCMU analysis with a unit slot size so the stack
+/// component is denominated in slots rather than bytes; the slot count is
+/// representation-independent, and the runtime multiplies by its actual
+/// `size_of::<GenericValue<W, F>>()` when reserving. The Call-site folding
+/// (`callee_stack_bytes / value_slot_bytes`) stays consistent at unit
+/// scale, and the heap component (`Op::heap_alloc`) is independent of the
+/// slot size, so it remains in real bytes. The call-frame component comes
+/// from [`module_call_depth`].
+pub fn module_runtime_footprint(
+    module: &Module,
+    native_wcmu: &[u32],
+) -> Result<RuntimeFootprint, VerifyError> {
+    let per_chunk = module_wcmu_with_value_slot_bytes(module, native_wcmu, 1)?;
+    let mut max_operand_slots = 0u32;
+    let mut max_heap_bytes = 0u32;
+    for (stack_slots, heap_bytes) in per_chunk {
+        max_operand_slots = max_operand_slots.max(stack_slots);
+        max_heap_bytes = max_heap_bytes.max(heap_bytes);
+    }
+    let max_frame_depth = module_call_depth(module)?;
+    Ok(RuntimeFootprint {
+        max_operand_slots,
+        max_frame_depth,
+        max_heap_bytes,
+    })
+}
+
 /// Per-native attestation passed to
 /// [`module_wcmu_with_bounds`] and friends. Carries the host-
 /// attested per-call WCMU and, for external natives, the
