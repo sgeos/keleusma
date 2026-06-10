@@ -22,6 +22,19 @@ fn compiles(src: &str) -> bool {
     compile(&program).is_ok()
 }
 
+// The next three tests assert a *compile-time* rejection that exists only
+// when a `Text` field is flat. A flat `Text` holds a host data pointer, so
+// it is flat-eligible only when the module word is at least the host
+// pointer width (`value_layout.rs`: `word_bytes >= size_of::<usize>()`). A
+// narrow-word build (`narrow-word-8/16/32`) keeps `Text` boxed, where the
+// yield is governed by the runtime `contains_dynstr` check rather than a
+// compile error, so the rejection these tests assert does not apply. They
+// run only on the full 64-bit word, where `Text` is flat.
+#[cfg(not(any(
+    feature = "narrow-word-8",
+    feature = "narrow-word-16",
+    feature = "narrow-word-32"
+)))]
 #[test]
 fn yielding_struct_with_text_field_is_rejected() {
     let src = "struct Greeting { msg: Text, n: Word }\n\
@@ -34,6 +47,11 @@ fn yielding_struct_with_text_field_is_rejected() {
     );
 }
 
+#[cfg(not(any(
+    feature = "narrow-word-8",
+    feature = "narrow-word-16",
+    feature = "narrow-word-32"
+)))]
 #[test]
 fn yielding_enum_with_text_payload_is_rejected() {
     let src = "enum Msg { Quiet, Loud(Text) }\n\
@@ -44,6 +62,11 @@ fn yielding_enum_with_text_payload_is_rejected() {
     );
 }
 
+#[cfg(not(any(
+    feature = "narrow-word-8",
+    feature = "narrow-word-16",
+    feature = "narrow-word-32"
+)))]
 #[test]
 fn yielding_struct_holding_text_struct_is_rejected() {
     // A struct nesting another struct that carries Text: the inner struct's

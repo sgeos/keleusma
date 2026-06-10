@@ -68,12 +68,17 @@ fn array_of_opaque_flattens_and_indexes() {
 #[test]
 fn tuple_with_opaque_and_trailing_scalars_offsets() {
     // The opaque occupies one word; the two trailing scalars must read back
-    // at their post-opaque offsets.
+    // at their post-opaque offsets. The asymmetric weight on `t.1`
+    // distinguishes the two trailing offsets, so a swap would change the
+    // result. The combined value is kept within the 8-bit word range
+    // (`100 + 6 + 4 = 110 <= 127`) so the assertion holds under
+    // narrow-word builds (for example `--features narrow-word-8`), where a
+    // sum of 134 would correctly overflow to -122 and mask the offset check.
     let src = "use make_handle() -> Handle\n\
                use handle_val(Handle) -> Word\n\
                fn main() -> Word { \
                    let t = (make_handle(), 3, 4); \
-                   handle_val(t.0) + t.1 * 10 + t.2 \
+                   handle_val(t.0) + t.1 * 2 + t.2 \
                }";
-    assert_eq!(run(src), Value::Int(100 + 30 + 4));
+    assert_eq!(run(src), Value::Int(100 + 3 * 2 + 4));
 }
