@@ -1717,6 +1717,13 @@ pub fn compile_with_options(
         // computation overflowed; safe `Vm::new` rejects on `u32::MAX`.
         let mut max_wcet: u32 = 0;
         let mut max_wcmu: u32 = 0;
+        // Peak per-iteration arena heap (top-region) bytes across Stream
+        // chunks, used to bound the opaque registry's arena footprint
+        // (B28 P3 item 5, Phase C2): every distinct interned opaque has its
+        // word-sized index stored in a live flat composite body in the heap
+        // region (not reclaimed until RESET), so the number of interns is at
+        // most `heap_bytes / word_bytes`.
+        let mut max_heap: u32 = 0;
         let mut wcet_overflow = false;
         let mut wcmu_overflow = false;
         // Compute the structural verification trace per chunk before the
@@ -1809,6 +1816,7 @@ pub fn compile_with_options(
                             wcmu_overflow = true;
                         } else {
                             max_wcmu = max_wcmu.max(total);
+                            max_heap = max_heap.max(heap);
                             // A resource-bound VerifierWitness obligation:
                             // the Ok arm with a non-saturating total is
                             // the proof that a finite per-iteration WCMU
@@ -1888,6 +1896,26 @@ pub fn compile_with_options(
         }
         module.wcet_cycles = if wcet_overflow { u32::MAX } else { max_wcet };
         module.wcmu_bytes = if wcmu_overflow { u32::MAX } else { max_wcmu };
+        // Bound the opaque registry's arena footprint (B28 P3 item 5, Phase
+        // C2). The registry lives in the arena bottom region and is `clear`ed
+        // each iteration; its per-iteration peak is at most one `Arc` per
+        // distinct interned opaque, and each such opaque has its word-sized
+        // index stored in a live flat-composite body, so the count is at most
+        // `heap_bytes / word_bytes`. This bound is independent of which
+        // elements are opaque, which is necessary because an unsignatured
+        // native can return an opaque the compiler cannot type; a tighter
+        // position-based count would undercount that case. `auto_arena_
+        // capacity_for` adds this so a host that autosizes provisions for the
+        // registry. Over-provisions for opaque-light programs; tightening is
+        // tracked as a follow-up.
+        let word_bytes = (1usize << module.word_bits_log2) / 8;
+        let arc_bytes = core::mem::size_of::<alloc::sync::Arc<dyn crate::opaque::HostOpaque>>();
+        module.aux_arena_bytes = if wcmu_overflow || word_bytes == 0 {
+            0
+        } else {
+            let max_interns = (max_heap as usize).div_ceil(word_bytes);
+            max_interns.saturating_mul(arc_bytes).min(u32::MAX as usize) as u32
+        };
 
         // Ephemerality analysis. A module is ephemeral when it has no
         // private data and no value crossing the host-VM boundary at

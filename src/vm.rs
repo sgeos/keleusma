@@ -843,7 +843,14 @@ pub struct GenericVm<
     /// the indices are themselves reclaimed at `RESET`. Opaques that
     /// must survive `RESET` (those reachable from `private data`) will
     /// use a separate persistent registry in a later slice.
-    ephemeral_opaques: Vec<alloc::sync::Arc<dyn crate::opaque::HostOpaque>>,
+    /// Relocated into the arena's bottom region (B28 P3 item 5, Phase C2):
+    /// like the operand stack and frames, the backing survives a normal
+    /// `RESET` (which reclaims only the top region) and is `clear()`ed each
+    /// iteration — running each `Arc`'s `Drop` while retaining capacity, so it
+    /// grows on demand to its steady-state per-iteration maximum and then no
+    /// longer reallocates. No global-heap allocation; the worst-case bytes are
+    /// reported through `Module::aux_arena_bytes`.
+    ephemeral_opaques: StackVec<'arena, alloc::sync::Arc<dyn crate::opaque::HostOpaque>>,
     /// Host-supplied trust matrix for cryptographic module
     /// signatures. Populated through
     /// [`Self::register_verifying_key`] before the host hot-swaps
@@ -1583,7 +1590,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
             skip_breakpoint_at: None,
             fault_location: None,
             native_classifications_verified: false,
-            ephemeral_opaques: Vec::new(),
+            ephemeral_opaques: ArenaVec::new_in(arena.bottom_handle()),
             #[cfg(feature = "signatures")]
             verifying_keys: Vec::new(),
         })
@@ -1749,7 +1756,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
             skip_breakpoint_at: None,
             fault_location: None,
             native_classifications_verified: false,
-            ephemeral_opaques: Vec::new(),
+            ephemeral_opaques: ArenaVec::new_in(arena.bottom_handle()),
             #[cfg(feature = "signatures")]
             verifying_keys: Vec::new(),
         })
@@ -1955,15 +1962,17 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
     /// is rewound, so they must be dropped before the bottom-region
     /// reset advances the bump pointer.
     fn full_reset_arena_internal(&mut self) -> Result<(), keleusma_arena::EpochSaturated> {
-        // Drop ephemeral opaque references reachable from the arena
-        // bodies that this reset reclaims (B28 P3). Clearing the Vec
-        // runs each `Arc`'s `Drop`, decrementing the host refcount.
-        self.ephemeral_opaques.clear();
-        // Drop the old arena-backed stacks before clearing the bottom
-        // bump pointer. Drop runs each contained value's destructor
-        // and calls `BottomHandle::deallocate`, which is a no-op for
-        // the bump allocator. The fresh stacks have zero capacity
-        // and therefore do not allocate.
+        // Drop the old arena-backed bottom-region structures before
+        // rewinding the bottom bump pointer. Reassignment drops each old
+        // `ArenaVec` — running every contained value's destructor (each
+        // `Arc`'s `Drop` for the opaque registry, decrementing the host
+        // refcount) and calling `BottomHandle::deallocate` (a no-op for the
+        // bump allocator) — and the fresh zero-capacity vectors do not
+        // allocate. The registry now lives in the bottom region alongside the
+        // stacks (B28 P3 item 5, Phase C2), so it must be recreated here too,
+        // not merely cleared, or its retained-capacity backing would alias
+        // memory the rewound bump pointer hands back.
+        self.ephemeral_opaques = ArenaVec::new_in(self.arena.bottom_handle());
         self.stack = ArenaVec::new_in(self.arena.bottom_handle());
         self.frames = ArenaVec::new_in(self.arena.bottom_handle());
         // SAFETY: After the assignments above, no `Vec<T, BottomHandle>`
