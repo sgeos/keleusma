@@ -1951,31 +1951,27 @@ pub(crate) fn format_value(v: &Value) -> String {
         Value::Array(keleusma::bytecode::ArrayBody::Flat(fc)) => {
             format!("[<flat array: {} bytes>]", fc.len())
         }
-        Value::Enum(keleusma::bytecode::EnumBody::Boxed {
-            type_name,
-            variant,
-            fields,
-            ..
-        }) => {
-            if type_name == "Option" && variant == "Some" {
-                if let Some(f) = fields.first() {
+        Value::Enum(keleusma::bytecode::EnumBody::Boxed(b)) => {
+            if b.type_name == "Option" && b.variant == "Some" {
+                if let Some(f) = b.fields.first() {
                     format!("Some({})", format_value(f))
                 } else {
                     "Some".to_string()
                 }
-            } else if fields.is_empty() {
-                variant.clone()
+            } else if b.fields.is_empty() {
+                b.variant.clone()
             } else {
-                let parts: Vec<String> = fields.iter().map(format_value).collect();
-                format!("{}({})", variant, parts.join(", "))
+                let parts: Vec<String> = b.fields.iter().map(format_value).collect();
+                format!("{}({})", b.variant, parts.join(", "))
             }
         }
-        Value::Struct(keleusma::bytecode::StructBody::Boxed { type_name, fields }) => {
-            let parts: Vec<String> = fields
+        Value::Struct(keleusma::bytecode::StructBody::Boxed(b)) => {
+            let parts: Vec<String> = b
+                .fields
                 .iter()
                 .map(|(k, v)| format!("{}: {}", k, format_value(v)))
                 .collect();
-            format!("{} {{ {} }}", type_name, parts.join(", "))
+            format!("{} {{ {} }}", b.type_name, parts.join(", "))
         }
         // As with a flat tuple or array, the typeless display path cannot
         // recover a flat struct's field names or kinds; the typed

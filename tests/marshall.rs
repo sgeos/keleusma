@@ -155,13 +155,13 @@ fn derive_struct_wrong_type_name_errors() {
     // name to validate; the type-name check is a property of the boxed decode,
     // so this exercises a host-built boxed struct (a host may pass either
     // representation, and `from_value` accepts both).
-    let bogus = Value::Struct(keleusma::bytecode::StructBody::Boxed {
-        type_name: String::from("Square"),
-        fields: vec![
+    let bogus = Value::Struct(keleusma::bytecode::StructBody::boxed(
+        String::from("Square"),
+        vec![
             (String::from("x"), Value::Float(1.0)),
             (String::from("y"), Value::Float(2.0)),
         ],
-    });
+    ));
     let err = Point::from_value(&bogus).unwrap_err();
     match err {
         VmError::TypeError(msg) => assert!(msg.contains("Point")),
@@ -174,10 +174,10 @@ fn derive_struct_missing_field_errors() {
     // A missing field is detectable in the boxed decode, which addresses
     // fields by name; the flat body is positional bytes with no field names,
     // so this exercises a host-built boxed struct (B28 P3 item 5).
-    let bogus = Value::Struct(keleusma::bytecode::StructBody::Boxed {
-        type_name: String::from("Point"),
-        fields: vec![(String::from("x"), Value::Float(1.0))],
-    });
+    let bogus = Value::Struct(keleusma::bytecode::StructBody::boxed(
+        String::from("Point"),
+        vec![(String::from("x"), Value::Float(1.0))],
+    ));
     let err = Point::from_value(&bogus).unwrap_err();
     match err {
         VmError::TypeError(msg) => assert!(msg.contains("y")),
@@ -257,11 +257,11 @@ fn derive_enum_marshals_flat_per_variant() {
 
 #[test]
 fn derive_enum_unknown_variant_errors() {
-    let bogus = Value::Enum(keleusma::bytecode::EnumBody::Boxed {
-        type_name: String::from("Status"),
-        variant: String::from("Unknown"),
-        fields: vec![],
-    });
+    let bogus = Value::Enum(keleusma::bytecode::EnumBody::boxed(
+        String::from("Status"),
+        String::from("Unknown"),
+        vec![],
+    ));
     let err = Status::from_value(&bogus).unwrap_err();
     match err {
         VmError::TypeError(msg) => assert!(msg.contains("Unknown")),

@@ -220,13 +220,35 @@ impl<W: crate::word::Word, F: crate::float::Float> ArrayBody<W, F> {
 pub enum StructBody<W: crate::word::Word, F: crate::float::Float> {
     /// Flat bytes; fields read at compiler-baked offsets.
     Flat(crate::flat_value::FlatComposite),
-    /// Boxed named fields (pre-B28 representation; removed in P3).
-    Boxed {
-        /// Name of the struct type.
+    /// Boxed named fields (pre-B28 representation; removed in P3). The
+    /// payload is heap-boxed so this variant costs one pointer rather than
+    /// a `String` plus a `Vec`; a boxed struct is comparatively rare on the
+    /// operand stack, and keeping the variant small keeps every
+    /// `GenericValue` slot small, which directly shrinks the pre-sized
+    /// operand-stack arena footprint (B28 P3 item 5).
+    Boxed(alloc::boxed::Box<BoxedStruct<W, F>>),
+}
+
+/// Heap payload of a non-flat struct value. Boxed inside
+/// [`StructBody::Boxed`] to keep `GenericValue` small. Transitional
+/// representation removed when boxed bodies relocate into the arena
+/// (B28 P3 item 5 C4).
+#[derive(Debug, Clone, PartialEq)]
+pub struct BoxedStruct<W: crate::word::Word, F: crate::float::Float> {
+    /// Name of the struct type.
+    pub type_name: alloc::string::String,
+    /// Ordered (field-name, field-value) pairs.
+    pub fields: alloc::vec::Vec<(alloc::string::String, GenericValue<W, F>)>,
+}
+
+impl<W: crate::word::Word, F: crate::float::Float> StructBody<W, F> {
+    /// Build a [`StructBody::Boxed`] from its parts, boxing the payload.
+    pub fn boxed(
         type_name: alloc::string::String,
-        /// Ordered (field-name, field-value) pairs.
         fields: alloc::vec::Vec<(alloc::string::String, GenericValue<W, F>)>,
-    },
+    ) -> Self {
+        Self::Boxed(alloc::boxed::Box::new(BoxedStruct { type_name, fields }))
+    }
 }
 
 /// The byte body of an enum value (B28 P2). The flat body is the variant's
@@ -244,15 +266,40 @@ pub enum StructBody<W: crate::word::Word, F: crate::float::Float> {
 pub enum EnumBody<W: crate::word::Word, F: crate::float::Float> {
     /// Flat bytes: `[discriminant: word_bytes][payload]`.
     Flat(crate::flat_value::FlatComposite),
-    /// Boxed variant (pre-B28 representation; removed in P3).
-    Boxed {
-        /// Name of the enum type.
+    /// Boxed variant (pre-B28 representation; removed in P3). The payload
+    /// is heap-boxed so this variant costs one pointer rather than two
+    /// `String`s plus a `Vec` (the 72-byte form that previously made every
+    /// `GenericValue` slot 72 bytes); keeping it small shrinks the pre-sized
+    /// operand-stack arena footprint (B28 P3 item 5).
+    Boxed(alloc::boxed::Box<BoxedEnum<W, F>>),
+}
+
+/// Heap payload of a non-flat enum value. Boxed inside [`EnumBody::Boxed`]
+/// to keep `GenericValue` small. Transitional representation removed when
+/// boxed bodies relocate into the arena (B28 P3 item 5 C4).
+#[derive(Debug, Clone, PartialEq)]
+pub struct BoxedEnum<W: crate::word::Word, F: crate::float::Float> {
+    /// Name of the enum type.
+    pub type_name: alloc::string::String,
+    /// Name of the variant.
+    pub variant: alloc::string::String,
+    /// Positional payload values; empty for a unit variant.
+    pub fields: alloc::vec::Vec<GenericValue<W, F>>,
+}
+
+impl<W: crate::word::Word, F: crate::float::Float> EnumBody<W, F> {
+    /// Build an [`EnumBody::Boxed`] from its parts, boxing the payload.
+    pub fn boxed(
         type_name: alloc::string::String,
-        /// Name of the variant.
         variant: alloc::string::String,
-        /// Positional payload values; empty for a unit variant.
         fields: alloc::vec::Vec<GenericValue<W, F>>,
-    },
+    ) -> Self {
+        Self::Boxed(alloc::boxed::Box::new(BoxedEnum {
+            type_name,
+            variant,
+            fields,
+        }))
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -632,7 +679,7 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
     ) -> Self {
         match Self::try_pack_flat(fields.iter().map(|(_, v)| v), 0, word_bytes, float_bytes) {
             Some(body) => Self::Struct(StructBody::Flat(body)),
-            None => Self::Struct(StructBody::Boxed { type_name, fields }),
+            None => Self::Struct(StructBody::boxed(type_name, fields)),
         }
     }
 
@@ -679,11 +726,7 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
         // (B28 P2). `Option::None` is the separate `Value::None`; only
         // `Option::Some` reaches here.
         if type_name == "Option" {
-            return Self::Enum(EnumBody::Boxed {
-                type_name,
-                variant,
-                fields,
-            });
+            return Self::Enum(EnumBody::boxed(type_name, variant, fields));
         }
         // The flat enum body is `[disc word][payload]`. The discriminant is
         // the first packed field (an `Int` written as a `Word`), matching
@@ -702,11 +745,7 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
             float_bytes,
         ) {
             Some(body) => Self::Enum(EnumBody::Flat(body)),
-            None => Self::Enum(EnumBody::Boxed {
-                type_name,
-                variant,
-                fields,
-            }),
+            None => Self::Enum(EnumBody::boxed(type_name, variant, fields)),
         }
     }
 
@@ -808,17 +847,13 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
         match kind {
             C::Tuple => Self::Tuple(TupleBody::Boxed(values)),
             C::Array => Self::Array(ArrayBody::Boxed(values)),
-            C::Struct => Self::Struct(StructBody::Boxed {
+            C::Struct => Self::Struct(StructBody::boxed(
                 type_name,
-                fields: names.into_iter().zip(values).collect(),
-            }),
+                names.into_iter().zip(values).collect(),
+            )),
             C::Enum => {
                 let variant = names.into_iter().next().unwrap_or_default();
-                Self::Enum(EnumBody::Boxed {
-                    type_name,
-                    variant,
-                    fields: values,
-                })
+                Self::Enum(EnumBody::boxed(type_name, variant, values))
             }
         }
     }
@@ -908,24 +943,28 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
             Self::Array(ArrayBody::Boxed(elems)) => Self::Array(ArrayBody::Boxed(
                 elems.into_iter().map(|e| e.materialized(arena)).collect(),
             )),
-            Self::Struct(StructBody::Boxed { type_name, fields }) => {
-                Self::Struct(StructBody::Boxed {
+            Self::Struct(StructBody::Boxed(b)) => {
+                let BoxedStruct { type_name, fields } = *b;
+                Self::Struct(StructBody::boxed(
                     type_name,
-                    fields: fields
+                    fields
                         .into_iter()
                         .map(|(n, v)| (n, v.materialized(arena)))
                         .collect(),
-                })
+                ))
             }
-            Self::Enum(EnumBody::Boxed {
-                type_name,
-                variant,
-                fields,
-            }) => Self::Enum(EnumBody::Boxed {
-                type_name,
-                variant,
-                fields: fields.into_iter().map(|e| e.materialized(arena)).collect(),
-            }),
+            Self::Enum(EnumBody::Boxed(b)) => {
+                let BoxedEnum {
+                    type_name,
+                    variant,
+                    fields,
+                } = *b;
+                Self::Enum(EnumBody::boxed(
+                    type_name,
+                    variant,
+                    fields.into_iter().map(|e| e.materialized(arena)).collect(),
+                ))
+            }
             other => other,
         }
     }
@@ -1098,27 +1137,23 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
                     .collect(),
             ),
             Self::Struct(StructBody::Flat(_)) => self.clone(),
-            Self::Struct(StructBody::Boxed { type_name, fields }) => Self::struct_value(
-                type_name.clone(),
-                fields
+            Self::Struct(StructBody::Boxed(b)) => Self::struct_value(
+                b.type_name.clone(),
+                b.fields
                     .iter()
                     .map(|(k, v)| (k.clone(), v.materialise_kstrings(arena)))
                     .collect(),
             ),
             // A flat enum is transitively scalar and holds no KStr.
             Self::Enum(EnumBody::Flat(_)) => self.clone(),
-            Self::Enum(EnumBody::Boxed {
-                type_name,
-                variant,
-                fields,
-            }) => Self::Enum(EnumBody::Boxed {
-                type_name: type_name.clone(),
-                variant: variant.clone(),
-                fields: fields
+            Self::Enum(EnumBody::Boxed(b)) => Self::Enum(EnumBody::boxed(
+                b.type_name.clone(),
+                b.variant.clone(),
+                b.fields
                     .iter()
                     .map(|v| v.materialise_kstrings(arena))
                     .collect(),
-            }),
+            )),
             other => other.clone(),
         }
     }
@@ -1193,11 +1228,9 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
             Self::Array(ArrayBody::Flat(_)) => false,
             Self::Array(ArrayBody::Boxed(items)) => items.iter().any(Self::contains_dynstr),
             Self::Struct(StructBody::Flat(_)) => false,
-            Self::Struct(StructBody::Boxed { fields, .. }) => {
-                fields.iter().any(|(_, v)| v.contains_dynstr())
-            }
+            Self::Struct(StructBody::Boxed(b)) => b.fields.iter().any(|(_, v)| v.contains_dynstr()),
             Self::Enum(EnumBody::Flat(_)) => false,
-            Self::Enum(EnumBody::Boxed { fields, .. }) => fields.iter().any(Self::contains_dynstr),
+            Self::Enum(EnumBody::Boxed(b)) => b.fields.iter().any(Self::contains_dynstr),
             _ => false,
         }
     }
@@ -1296,11 +1329,11 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
                         word_bytes,
                         float_bytes,
                     ),
-                    None => Self::Enum(EnumBody::Boxed {
-                        type_name: type_name.as_str().to_string(),
-                        variant: variant.as_str().to_string(),
-                        fields: materialised,
-                    }),
+                    None => Self::Enum(EnumBody::boxed(
+                        type_name.as_str().to_string(),
+                        variant.as_str().to_string(),
+                        materialised,
+                    )),
                 }
             }
             ArchivedConstValue::None => Self::None,
@@ -1894,16 +1927,28 @@ pub enum Op {
     CallExternalNative(u16, u8),
 }
 
-/// Size in bytes of one operand-stack slot, namely the size of `Value` on
-/// the modern 64-bit target. The actual `core::mem::size_of::<Value>()` is
-/// implementation-dependent and may include padding to align variant
-/// discriminators. For WCMU analysis, the conservative upper bound is
-/// chosen so that the analysis remains sound even if the runtime
-/// representation grows.
+/// Size in bytes of one operand-stack slot, namely the real
+/// `size_of::<Value>()` of the bundled 64-bit runtime.
 ///
-/// On the V0.0 cycle target (R33), this constant is 32 bytes. Future work
-/// under B10 may parameterize this by target through a [`CostModel`].
-pub const VALUE_SLOT_SIZE_BYTES: u32 = 32;
+/// This is bound to the actual `core::mem::size_of::<GenericValue<i64,
+/// f64>>()` rather than a hand-maintained literal, so it can never drift
+/// from the runtime representation (a prior literal of 32 understated the
+/// real 72-byte value, which under-reported every WCMU figure derived from
+/// it). It auto-tracks any change to the value layout, including the B28
+/// flat-model shrink that reduced the value to 40 bytes.
+///
+/// **Soundness as a nominal figure.** The compiler bakes WCMU figures into
+/// representation-independent bytecode that may also run on a narrow
+/// `GenericVm<W, A, F>` whose slot is smaller, so this bundled-runtime size
+/// is a conservative upper bound for those narrower runtimes (their
+/// `GenericValue` is no larger, because the dominant `FlatComposite` body
+/// is not parameterised by the scalar widths). The binding admission check
+/// in [`crate::vm::GenericVm::new`] still uses each runtime's own
+/// `size_of::<GenericValue<W, F>>()`, so the per-runtime bound is exact;
+/// this constant governs the compile-time advisory header and the nominal
+/// cost model. Future work under B10 may parameterise it by target through
+/// a [`CostModel`].
+pub const VALUE_SLOT_SIZE_BYTES: u32 = core::mem::size_of::<Value>() as u32;
 
 /// Context passed to an [`OpCost::Dynamic`] cost evaluator.
 ///
@@ -3195,7 +3240,8 @@ impl ConstValue {
                 .map(ConstValue::try_from_value)
                 .collect::<Result<Vec<_>, _>>()
                 .map(ConstValue::Array),
-            Value::Struct(StructBody::Boxed { type_name, fields }) => {
+            Value::Struct(StructBody::Boxed(b)) => {
+                let BoxedStruct { type_name, fields } = *b;
                 let cfields: Result<Vec<_>, _> = fields
                     .into_iter()
                     .map(|(n, v)| ConstValue::try_from_value(v).map(|cv| (n, cv)))
@@ -3211,11 +3257,12 @@ impl ConstValue {
             Value::Struct(StructBody::Flat(_)) => {
                 Err("a flat struct cannot be converted to a compile-time constant")
             }
-            Value::Enum(EnumBody::Boxed {
-                type_name,
-                variant,
-                fields,
-            }) => {
+            Value::Enum(EnumBody::Boxed(b)) => {
+                let BoxedEnum {
+                    type_name,
+                    variant,
+                    fields,
+                } = *b;
                 let cfields: Result<Vec<_>, _> =
                     fields.into_iter().map(ConstValue::try_from_value).collect();
                 // A boxed runtime enum carries no discriminant to recover,
@@ -3290,11 +3337,7 @@ impl ConstValue {
                 let vals: Vec<Value> = fields.into_iter().map(ConstValue::into_value).collect();
                 match discriminant {
                     Some(disc) => Value::enum_with_widths(type_name, variant, disc, vals, 0, 8, 8),
-                    None => Value::Enum(EnumBody::Boxed {
-                        type_name,
-                        variant,
-                        fields: vals,
-                    }),
+                    None => Value::Enum(EnumBody::boxed(type_name, variant, vals)),
                 }
             }
             ConstValue::None => Value::None,
@@ -3780,16 +3823,16 @@ mod materialise_kstrings_tests {
     fn enum_with_kstr_payload_walks_recursively() {
         let arena = make_arena();
         let handle = KString::alloc(&arena, "payload").expect("alloc");
-        let v = V::Enum(EnumBody::Boxed {
-            type_name: alloc::string::String::from("Option"),
-            variant: alloc::string::String::from("Some"),
-            fields: alloc::vec![V::KStr(handle)],
-        });
+        let v = V::Enum(EnumBody::boxed(
+            alloc::string::String::from("Option"),
+            alloc::string::String::from("Some"),
+            alloc::vec![V::KStr(handle)],
+        ));
         let materialised = v.materialise_kstrings(&arena);
         match materialised {
-            V::Enum(EnumBody::Boxed { fields, .. }) => {
-                assert_eq!(fields.len(), 1);
-                match &fields[0] {
+            V::Enum(EnumBody::Boxed(b)) => {
+                assert_eq!(b.fields.len(), 1);
+                match &b.fields[0] {
                     V::StaticStr(s) => assert_eq!(s, "payload"),
                     other => panic!("expected StaticStr inside enum, got {:?}", other),
                 }
@@ -3808,19 +3851,19 @@ mod materialise_kstrings_tests {
         // recursive walk over a boxed struct is what this test exercises.
         let arena = make_arena();
         let handle = KString::alloc(&arena, "field-value").expect("alloc");
-        let v = V::Struct(StructBody::Boxed {
-            type_name: alloc::string::String::from("Point"),
-            fields: alloc::vec![
+        let v = V::Struct(StructBody::boxed(
+            alloc::string::String::from("Point"),
+            alloc::vec![
                 (alloc::string::String::from("x"), V::Int(7)),
                 (alloc::string::String::from("name"), V::KStr(handle)),
             ],
-        });
+        ));
         let materialised = v.materialise_kstrings(&arena);
         match materialised {
-            V::Struct(StructBody::Boxed { fields, .. }) => {
-                assert_eq!(fields.len(), 2);
-                assert_eq!(fields[0].1, V::Int(7));
-                match &fields[1].1 {
+            V::Struct(StructBody::Boxed(b)) => {
+                assert_eq!(b.fields.len(), 2);
+                assert_eq!(b.fields[0].1, V::Int(7));
+                match &b.fields[1].1 {
                     V::StaticStr(s) => assert_eq!(s, "field-value"),
                     other => panic!("expected StaticStr inside struct, got {:?}", other),
                 }

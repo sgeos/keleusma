@@ -194,8 +194,9 @@ fn derive_struct_body(_name: &Ident, name_str: &str, data: &DataStruct) -> Token
                 {
                     match v {
                         ::keleusma::GenericValue::Struct(
-                            ::keleusma::bytecode::StructBody::Boxed { type_name, fields }
-                        ) if type_name == #name_str => {
+                            ::keleusma::bytecode::StructBody::Boxed(__b)
+                        ) if __b.type_name == #name_str => {
+                            let fields = &__b.fields;
                             #(
                                 let #field_names = {
                                     let pair = fields.iter().find(|(n, _)| n == #field_name_strs)
@@ -261,8 +262,9 @@ fn derive_struct_body(_name: &Ident, name_str: &str, data: &DataStruct) -> Token
                 {
                     match v {
                         ::keleusma::GenericValue::Struct(
-                            ::keleusma::bytecode::StructBody::Boxed { type_name, fields }
-                        ) if type_name == #name_str => {
+                            ::keleusma::bytecode::StructBody::Boxed(__b)
+                        ) if __b.type_name == #name_str => {
+                            let fields = &__b.fields;
                             #(
                                 let #field_names = {
                                     let pair = fields.iter().find(|(n, _)| n == #field_name_strs)
@@ -762,7 +764,9 @@ fn derive_enum_body(_name: &Ident, name_str: &str, data: &DataEnum) -> TokenStre
             -> ::core::result::Result<Self, ::keleusma::VmError>
         {
             match v {
-                ::keleusma::GenericValue::Enum(::keleusma::bytecode::EnumBody::Boxed { type_name, variant, fields }) if type_name == #name_str => {
+                ::keleusma::GenericValue::Enum(::keleusma::bytecode::EnumBody::Boxed(__b)) if __b.type_name == #name_str => {
+                    let variant = &__b.variant;
+                    let fields = &__b.fields;
                     match variant.as_str() {
                         #(#from_arms)*
                         other => ::core::result::Result::Err(::keleusma::VmError::TypeError(
@@ -825,7 +829,9 @@ fn derive_enum_body(_name: &Ident, name_str: &str, data: &DataEnum) -> TokenStre
         ) -> ::core::result::Result<Self, ::keleusma::VmError>
         {
             match v {
-                ::keleusma::GenericValue::Enum(::keleusma::bytecode::EnumBody::Boxed { type_name, variant, fields }) if type_name == #name_str => {
+                ::keleusma::GenericValue::Enum(::keleusma::bytecode::EnumBody::Boxed(__b)) if __b.type_name == #name_str => {
+                    let variant = &__b.variant;
+                    let fields = &__b.fields;
                     match variant.as_str() {
                         #(#from_arms_ctx)*
                         other => ::core::result::Result::Err(::keleusma::VmError::TypeError(

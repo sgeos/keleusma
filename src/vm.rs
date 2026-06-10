@@ -4071,10 +4071,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                                 );
                                 sp!(self, val);
                             }
-                            (
-                                StructField::Boxed { name_const },
-                                StructBody::Boxed { type_name, fields },
-                            ) => {
+                            (StructField::Boxed { name_const }, StructBody::Boxed(b)) => {
                                 let field_name = self
                                     .chunk_const_str(chunk_idx, name_const as usize)
                                     .ok_or_else(|| {
@@ -4082,12 +4079,13 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                                             "field name not a string",
                                         ))
                                     })?;
-                                let val = fields
+                                let val = b
+                                    .fields
                                     .iter()
                                     .find(|(n, _)| n == &field_name)
                                     .map(|(_, v)| v.clone())
                                     .ok_or_else(|| {
-                                        VmError::FieldNotFound(type_name.clone(), field_name)
+                                        VmError::FieldNotFound(b.type_name.clone(), field_name)
                                     })?;
                                 sp!(self, val);
                             }
@@ -4279,12 +4277,15 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                     let container = self.pop()?;
                     match container {
                         crate::bytecode::GenericValue::Enum(body) => match (field, &body) {
-                            (EnumField::Boxed { index }, EnumBody::Boxed { fields, .. }) => {
+                            (EnumField::Boxed { index }, EnumBody::Boxed(b)) => {
                                 let i = index as usize;
-                                if i >= fields.len() {
-                                    return Err(VmError::IndexOutOfBounds(i as i64, fields.len()));
+                                if i >= b.fields.len() {
+                                    return Err(VmError::IndexOutOfBounds(
+                                        i as i64,
+                                        b.fields.len(),
+                                    ));
                                 }
-                                sp!(self, fields[i].clone());
+                                sp!(self, b.fields[i].clone());
                             }
                             (EnumField::Flat { offset, kind }, EnumBody::Flat(fc)) => {
                                 let wb = self.module_word_bytes();
@@ -4444,16 +4445,14 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                     let val = self.stack.last().ok_or(VmError::StackUnderflow)?;
                     let matches = match val {
                         // Boxed: compare the type and variant names.
-                        crate::bytecode::GenericValue::Enum(crate::bytecode::EnumBody::Boxed {
-                            type_name,
-                            variant,
-                            ..
-                        }) => {
+                        crate::bytecode::GenericValue::Enum(crate::bytecode::EnumBody::Boxed(
+                            b,
+                        )) => {
                             let expected_type =
                                 self.chunk_const_str(chunk_idx, enum_const as usize);
                             let expected_var = self.chunk_const_str(chunk_idx, var_const as usize);
-                            expected_type.as_deref() == Some(type_name.as_str())
-                                && expected_var.as_deref() == Some(variant.as_str())
+                            expected_type.as_deref() == Some(b.type_name.as_str())
+                                && expected_var.as_deref() == Some(b.variant.as_str())
                         }
                         // Flat: compare the leading discriminant word to the
                         // expected discriminant.
@@ -4493,8 +4492,8 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                     let val = self.stack.last().ok_or(VmError::StackUnderflow)?;
                     let matches = match val {
                         crate::bytecode::GenericValue::Struct(
-                            crate::bytecode::StructBody::Boxed { type_name, .. },
-                        ) => type_name == &expected,
+                            crate::bytecode::StructBody::Boxed(b),
+                        ) => b.type_name == expected,
                         // A struct pattern's type test is irrefutable (the
                         // scrutinee type is statically known), so the
                         // compiler folds it and a flat struct never reaches
@@ -9786,10 +9785,10 @@ mod tests {
         // is intentionally not flagged here — `contains_dynstr` walks the
         // boxed value tree and does not read flat bytes.)
         assert!(
-            Value::Struct(crate::bytecode::StructBody::Boxed {
-                type_name: String::from("Foo"),
-                fields: alloc::vec![(String::from("x"), kstr.clone())],
-            })
+            Value::Struct(crate::bytecode::StructBody::boxed(
+                String::from("Foo"),
+                alloc::vec![(String::from("x"), kstr.clone())],
+            ))
             .contains_dynstr()
         );
         // The flat form of the same struct is not flagged: its text field is
@@ -10647,8 +10646,14 @@ mod tests {
         let tokens = tokenize(src).expect("lex");
         let program = parse(&tokens).expect("parse");
         let module = compile(&program).expect("compile");
-        // Two shared slots times 32-byte VALUE_SLOT_SIZE_BYTES.
-        assert_eq!(module.shared_data_bytes, 64);
+        // Two shared slots times the per-slot byte size. Asserted against
+        // the constant rather than a literal so it tracks the real
+        // `size_of::<Value>()` (B28 P3 item 5 size optimisation) instead of
+        // re-baking a stale figure.
+        assert_eq!(
+            module.shared_data_bytes,
+            2 * crate::bytecode::VALUE_SLOT_SIZE_BYTES
+        );
         assert_eq!(module.private_data_bytes, 0);
     }
 
@@ -10663,7 +10668,10 @@ mod tests {
         let program = parse(&tokens).expect("parse");
         let module = compile(&program).expect("compile");
         assert_eq!(module.shared_data_bytes, 0);
-        assert_eq!(module.private_data_bytes, 32);
+        assert_eq!(
+            module.private_data_bytes,
+            crate::bytecode::VALUE_SLOT_SIZE_BYTES
+        );
     }
 
     #[test]
@@ -10716,8 +10724,14 @@ mod tests {
         let tokens = tokenize(src).expect("lex");
         let program = parse(&tokens).expect("parse");
         let module = compile(&program).expect("compile");
-        assert_eq!(module.shared_data_bytes, 32);
-        assert_eq!(module.private_data_bytes, 64);
+        assert_eq!(
+            module.shared_data_bytes,
+            crate::bytecode::VALUE_SLOT_SIZE_BYTES
+        );
+        assert_eq!(
+            module.private_data_bytes,
+            2 * crate::bytecode::VALUE_SLOT_SIZE_BYTES
+        );
     }
 
     #[test]
@@ -11262,8 +11276,14 @@ mod tests {
         let tokens = tokenize(src).expect("lex");
         let program = parse(&tokens).expect("parse");
         let module = compile(&program).expect("compile");
-        assert_eq!(module.shared_data_bytes, 32);
-        assert_eq!(module.private_data_bytes, 32);
+        assert_eq!(
+            module.shared_data_bytes,
+            crate::bytecode::VALUE_SLOT_SIZE_BYTES
+        );
+        assert_eq!(
+            module.private_data_bytes,
+            crate::bytecode::VALUE_SLOT_SIZE_BYTES
+        );
     }
 
     #[test]
