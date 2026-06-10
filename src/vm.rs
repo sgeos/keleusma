@@ -512,6 +512,32 @@ fn out_of_arena_min(capacity: usize) -> VmError {
     ))
 }
 
+/// Construct the opaque registry pre-sized to its worst-case bottom-region
+/// footprint (B28 P3 item 5, Phase C).
+///
+/// `aux_arena_bytes` is the compiler's sound upper bound on the registry's
+/// per-iteration peak; dividing by the `Arc` width gives the element capacity.
+/// Reserving it up front means the registry never reallocates during a stream
+/// iteration — deterministic allocation, as required for the worst-case-memory
+/// guarantee (no allocation after initialisation). An arena too small to hold
+/// the reservation fails here, at construction, rather than at a later push.
+fn pre_sized_opaque_registry<'arena>(
+    arena: &'arena keleusma_arena::Arena,
+    aux_arena_bytes: u32,
+) -> Result<StackVec<'arena, alloc::sync::Arc<dyn crate::opaque::HostOpaque>>, VmError> {
+    let mut registry = ArenaVec::new_in(arena.bottom_handle());
+    let arc_bytes = core::mem::size_of::<alloc::sync::Arc<dyn crate::opaque::HostOpaque>>();
+    // `checked_div` guards the (never-zero in practice) `Arc` width without a
+    // manual zero check; a zero width or zero bound yields no reservation.
+    let capacity = (aux_arena_bytes as usize).checked_div(arc_bytes).unwrap_or(0);
+    if capacity > 0 {
+        registry
+            .try_reserve(capacity)
+            .map_err(|_| out_of_arena_min(arena.capacity()))?;
+    }
+    Ok(registry)
+}
+
 /// Decode every op in every chunk of a bytecode buffer and return
 /// the resulting per-chunk owned op vectors.
 ///
@@ -1642,6 +1668,12 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
     }
 
     fn construct(module: Module, arena: &'arena keleusma_arena::Arena) -> Result<Self, VmError> {
+        // Worst-case bytes the opaque registry needs in the arena bottom
+        // region (B28 P3 item 5, Phase C). Captured before `module` is
+        // consumed so the registry can be pre-sized at construction rather
+        // than grown during execution (deterministic allocation: a too-small
+        // arena fails here, at init, not mid-stream).
+        let aux_arena_bytes = module.aux_arena_bytes;
         // B16 step 8: validate the module's declared widths against
         // this VM's compile-time W/A/F trait parameters. A narrower
         // Vm running wider bytecode would silently truncate values
@@ -1740,6 +1772,12 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         frames
             .try_reserve(MIN_FRAMES_RESERVE)
             .map_err(|_| out_of_arena_min(arena.capacity()))?;
+        // Pre-size the opaque registry to its worst-case bottom-region
+        // footprint so it never reallocates during a stream iteration
+        // (B28 P3 item 5, Phase C). The capacity is the recorded
+        // `aux_arena_bytes` divided by the `Arc` width; an arena too small to
+        // hold it fails here, at construction, rather than at a later push.
+        let ephemeral_opaques = pre_sized_opaque_registry(arena, aux_arena_bytes)?;
         Ok(Self {
             bytecode: BytecodeStore::Owned(aligned),
             _phantom_a: core::marker::PhantomData,
@@ -1756,7 +1794,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
             skip_breakpoint_at: None,
             fault_location: None,
             native_classifications_verified: false,
-            ephemeral_opaques: ArenaVec::new_in(arena.bottom_handle()),
+            ephemeral_opaques,
             #[cfg(feature = "signatures")]
             verifying_keys: Vec::new(),
         })
