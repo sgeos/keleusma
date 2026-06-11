@@ -1939,7 +1939,7 @@ pub(crate) fn format_value(v: &Value) -> String {
             format!("({})", parts.join(", "))
         }
         Value::Tuple(keleusma::bytecode::TupleBody::Flat(fc)) => {
-            format!("(<flat tuple: {} bytes>)", fc.len())
+            format!("(<flat tuple: {} bytes>)", fc.byte_len())
         }
         Value::Array(keleusma::bytecode::ArrayBody::Boxed(items)) => {
             let parts: Vec<String> = items.iter().map(format_value).collect();
@@ -1949,7 +1949,7 @@ pub(crate) fn format_value(v: &Value) -> String {
         // the element kind of a flat array; the typed marshalling path
         // decodes it for hosts that know the type (B28 P2 interim).
         Value::Array(keleusma::bytecode::ArrayBody::Flat(fc)) => {
-            format!("[<flat array: {} bytes>]", fc.len())
+            format!("[<flat array: {} bytes>]", fc.byte_len())
         }
         Value::Enum(keleusma::bytecode::EnumBody::Boxed(b)) => {
             if b.type_name == "Option" && b.variant == "Some" {
@@ -1978,7 +1978,7 @@ pub(crate) fn format_value(v: &Value) -> String {
         // marshalling path decodes it for hosts that know the type
         // (B28 P2 interim).
         Value::Struct(keleusma::bytecode::StructBody::Flat(fc)) => {
-            format!("<flat struct: {} bytes>", fc.len())
+            format!("<flat struct: {} bytes>", fc.byte_len())
         }
         other => format!("{:?}", other),
     }

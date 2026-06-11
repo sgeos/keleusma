@@ -30,7 +30,7 @@ use keleusma::{Arena, Module};
     feature = "narrow-word-16",
     feature = "narrow-word-32"
 )))]
-fn word_tuple(v: &Value) -> Vec<i64> {
+fn word_tuple(arena: &keleusma::Arena, v: &Value) -> Vec<i64> {
     use keleusma::bytecode::TupleBody;
     use keleusma::value_layout::ScalarKind;
     match v {
@@ -42,7 +42,13 @@ fn word_tuple(v: &Value) -> Vec<i64> {
             })
             .collect(),
         Value::Tuple(TupleBody::Flat(fc)) => {
-            let bytes = fc.as_bytes();
+            // Read-before-resume (B28 P3 item 5 C3): a yielded/returned tuple
+            // is arena-resident, so resolve its body against the arena rather
+            // than assuming an inline body. The host reads it before the next
+            // resume, which would RESET the arena and make it stale.
+            let bytes = fc
+                .resolve(arena)
+                .expect("flat tuple body resolves (read-before-resume)");
             (0..bytes.len() / 8)
                 .map(
                     |i| match Value::read_scalar_le(bytes, i * 8, ScalarKind::Int, 8, 8) {
@@ -332,7 +338,7 @@ fn ai_tracker_chases_when_seen() {
     let result = vm.call(&[input]).expect("vm call");
     match result {
         VmState::Yielded(ref v @ Value::Tuple(_)) => {
-            let c = word_tuple(v);
+            let c = word_tuple(&arena, v);
             assert_eq!(c.len(), 3, "expected Yielded triple");
             assert_eq!(c[0], 1);
             assert_eq!((c[1], c[2]), (6, 6));
@@ -379,7 +385,7 @@ fn ai_tracker_pursues_last_known_when_unseen() {
     for _ in 0..16 {
         match state {
             VmState::Yielded(ref v @ Value::Tuple(_)) => {
-                let c = word_tuple(v);
+                let c = word_tuple(&arena, v);
                 assert_eq!(c.len(), 3, "non-int tuple");
                 assert_eq!(c[0], 1, "should chase last known");
                 assert_eq!((c[1], c[2]), (7, 7), "step toward (10, 10)");
@@ -413,7 +419,7 @@ fn run_player_ai(mx: i64, my: i64, cmd: i64) -> (i64, i64, i64) {
         .expect("vm call");
     match result {
         VmState::Finished(ref v @ Value::Tuple(_)) => {
-            let c = word_tuple(v);
+            let c = word_tuple(&arena, v);
             assert_eq!(c.len(), 3, "player ai returned non-int tuple components");
             (c[0], c[1], c[2])
         }
@@ -510,7 +516,7 @@ fn run_combat(skill: i64, dmg: i64, evasion: i64, armor: i64, roll: i64) -> (i64
         .expect("vm call");
     match result {
         VmState::Finished(ref v @ Value::Tuple(_)) => {
-            let c = word_tuple(v);
+            let c = word_tuple(&arena, v);
             assert_eq!(c.len(), 2, "combat returned non-int tuple");
             (c[0], c[1])
         }
@@ -825,7 +831,7 @@ fn call_ai(src: &str, mx: i64, my: i64, px: i64, py: i64, sees: i64) -> (i64, i6
         .expect("ai vm call");
     match result {
         VmState::Finished(ref v @ Value::Tuple(_)) => {
-            let c = word_tuple(v);
+            let c = word_tuple(&arena, v);
             assert_eq!(c.len(), 3, "ai returned non-int tuple components");
             (c[0], c[1], c[2])
         }
@@ -990,7 +996,7 @@ fn call_boss_first(
     let result = vm.call(&[input]).expect("vm call");
     let triple = match result {
         VmState::Yielded(ref v @ Value::Tuple(_)) => {
-            let c = word_tuple(v);
+            let c = word_tuple(arena_ref, v);
             assert_eq!(c.len(), 3, "boss yielded non-int tuple components");
             (c[0], c[1], c[2])
         }
@@ -1047,7 +1053,7 @@ fn ai_boss_second_turn_chases() {
     for _ in 0..16 {
         match state {
             VmState::Yielded(ref v @ Value::Tuple(_)) => {
-                let c = word_tuple(v);
+                let c = word_tuple(vm.arena(), v);
                 assert_eq!(c.len(), 3, "non-int tuple components");
                 assert_eq!(c[0], 1, "second turn should chase");
                 assert_eq!((c[1], c[2]), (6, 6), "should step diagonally toward player");
@@ -1077,7 +1083,7 @@ fn call_5_tuple(src: &str, args: &[i64]) -> (i64, i64, i64, i64, i64) {
     let result = vm.call(&values).expect("vm call");
     match result {
         VmState::Finished(ref v @ Value::Tuple(_)) => {
-            let c = word_tuple(v);
+            let c = word_tuple(&arena, v);
             assert_eq!(c.len(), 5, "expected 5-tuple");
             (c[0], c[1], c[2], c[3], c[4])
         }

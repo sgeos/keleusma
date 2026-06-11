@@ -1014,6 +1014,23 @@ impl<T: ?Sized> core::fmt::Debug for ArenaHandle<T> {
 // arena it references is single-threaded. The pointer is `*mut` under
 // `NonNull`, which inherits the conservative auto-trait posture.
 
+impl<T> ArenaHandle<[T]> {
+    /// The number of elements the handle addresses, read from the fat
+    /// pointer's length metadata without dereferencing the storage or
+    /// consulting the arena. Unlike resolving the bytes, this is valid even
+    /// after a `RESET`: the length is inert metadata. Lets an arena-less
+    /// caller (for example a display path) learn a body's size without the
+    /// arena that would be needed to read its contents.
+    pub fn len(&self) -> usize {
+        self.ptr.len()
+    }
+
+    /// Whether the handle addresses zero elements. See [`ArenaHandle::len`].
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+
 impl<T: ?Sized> ArenaHandle<T> {
     /// Construct a handle from raw parts.
     ///

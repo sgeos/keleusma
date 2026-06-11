@@ -310,6 +310,20 @@ impl FlatComposite {
         }
     }
 
+    /// Byte length of the body, valid for both forms (B28 P3 item 5 C3).
+    ///
+    /// An `Inline` body reports its buffer length; an `Arena` body reports
+    /// its handle's fat-pointer length metadata without the arena, so unlike
+    /// [`FlatComposite::len`] it never panics on an arena body. For an
+    /// arena-less caller that needs only the size, for example a typeless
+    /// display path rendering a placeholder, not the contents.
+    pub fn byte_len(&self) -> usize {
+        match self {
+            Self::Inline { bytes, .. } => bytes.len(),
+            Self::Arena(handle) => handle.len(),
+        }
+    }
+
     /// True when an `Inline` body has no bytes (the `Unit`-only case).
     /// Panics on an `Arena` body, like [`FlatComposite::len`].
     pub fn is_empty(&self) -> bool {

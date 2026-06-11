@@ -225,11 +225,29 @@ pub type VmState = GenericVmState<i64, f64>;
 
 /// The execution state of the VM, parametric over the runtime's
 /// word and float widths.
+///
+/// **Composite-value lifetime (read-before-resume, B28 P3 item 5 C3).** A
+/// `Yielded` or `Finished` value whose body is a flat composite (a struct,
+/// enum, tuple, or array) stays resident in the VM's arena rather than being
+/// copied to the global heap. The host must read it before it is
+/// invalidated: decode it through [`GenericVm::decode`] (which resolves the
+/// arena body) before the next [`GenericVm::resume`] for a `Yielded` value,
+/// since `resume` RESETs the arena, and before dropping the VM for a
+/// `Finished` value. A read after that point resolves to a clean
+/// [`VmError`] (the arena body is stale), never undefined behaviour. Scalar
+/// values (`Int`, `Float`, `Bool`, and the like) are self-contained and
+/// carry no such restriction. This trades the previous "value survives the
+/// arena" guarantee for the no-global-heap property the embedded target
+/// requires.
 #[derive(Debug, Clone)]
 pub enum GenericVmState<W: crate::word::Word, F: crate::float::Float> {
-    /// The coroutine yielded a value and is suspended.
+    /// The coroutine yielded a value and is suspended. A composite value is
+    /// arena-resident; decode it before the next `resume` (see the type-level
+    /// read-before-resume note).
     Yielded(crate::bytecode::GenericValue<W, F>),
-    /// The function completed with a return value.
+    /// The function completed with a return value. A composite value is
+    /// arena-resident; decode it before dropping the VM (see the type-level
+    /// read-before-resume note).
     Finished(crate::bytecode::GenericValue<W, F>),
     /// The stream hit a Reset boundary.
     Reset,
@@ -3382,9 +3400,12 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                     .unwrap_or(crate::bytecode::GenericValue::Unit);
                 self.frames.pop();
                 if self.frames.is_empty() {
-                    // Detach the returned value from the arena so it survives a
-                    // later RESET or the arena being dropped (B28 P2).
-                    return Ok(GenericVmState::Finished(result.materialized(self.arena)));
+                    // Read-before-resume (B28 P3 item 5 C3): the returned value
+                    // stays arena-resident rather than being copied to the
+                    // global heap. The host decodes it through `Vm::decode`
+                    // before the next `resume()` or before dropping the VM; a
+                    // later read resolves to a clean stale error, never UB.
+                    return Ok(GenericVmState::Finished(result));
                 }
                 sp!(self, result);
                 continue;
@@ -3862,9 +3883,10 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                     let old_frame = self.frames.pop().unwrap();
                     self.stack.truncate(old_frame.base);
                     if self.frames.is_empty() {
-                        // Detach the returned value from the arena so it survives a
-                        // later RESET or the arena being dropped (B28 P2).
-                        return Ok(GenericVmState::Finished(result.materialized(self.arena)));
+                        // Read-before-resume (B28 P3 item 5 C3): the returned
+                        // value stays arena-resident. The host decodes it before
+                        // the next `resume()` or before dropping the VM.
+                        return Ok(GenericVmState::Finished(result));
                     }
                     sp!(self, result);
                 }
@@ -3885,9 +3907,12 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                              to a non-string representation in the host",
                         )));
                     }
-                    // Detach the yielded value from the arena so it survives a
-                    // later RESET (B28 P2).
-                    return Ok(GenericVmState::Yielded(output.materialized(self.arena)));
+                    // Read-before-resume (B28 P3 item 5 C3): the yielded value
+                    // stays arena-resident rather than being copied to the
+                    // global heap. The host must decode it (`Vm::decode`)
+                    // before the next `resume()`, which RESETs the arena; a
+                    // read afterward resolves to a clean stale error.
+                    return Ok(GenericVmState::Yielded(output));
                 }
 
                 Op::Dup => {
