@@ -465,8 +465,9 @@ impl LayoutDescriptor {
     /// flat; the size is the sum (arrays multiply by the count). An enum is
     /// flat only when it is uniformly flat (every variant's payload flat),
     /// with size `word_bytes + payload_max` to match the runtime body padded
-    /// to the largest variant. The built-in `Option` is always boxed (it is
-    /// generic and absent from the type tables), so it returns `None`.
+    /// to the largest variant. The built-in `Option<T>` follows the same rule
+    /// (B28 P3 item 5 C4): its `Some(T)` payload flattens when `T` is flat;
+    /// `None` is the scalar `Value::None`.
     pub fn flat_byte_size(&self, word_bytes: usize, float_bytes: usize) -> Option<usize> {
         match self {
             Self::Scalar(_) => self.flat_scalar_kind().and_then(|k| {
@@ -497,12 +498,14 @@ impl LayoutDescriptor {
                 Some(total)
             }
             Self::Enum {
-                type_name,
+                type_name: _,
                 variants,
             } => {
-                if type_name == "Option" {
-                    return None;
-                }
+                // The built-in `Option` flattens like any uniformly-flat enum
+                // (B28 P3 item 5 C4): its layout descriptor carries the
+                // `None`/`Some(T)` variants, so the same `word + payload_max`
+                // rule applies. `Some`'s payload `T` must itself be flat, or
+                // the `?` below propagates `None` and `Option` stays boxed.
                 let mut payload_max = 0usize;
                 for (_, payload) in variants {
                     let mut sum = 0usize;
@@ -879,7 +882,9 @@ mod tests {
     }
 
     #[test]
-    fn flat_byte_size_option_is_boxed() {
+    fn flat_byte_size_option_is_flat() {
+        // `Option<T>` flattens like any uniformly-flat enum when `T` is flat
+        // (B28 P3 item 5 C4): `word + payload_max`, here `8 + 8 = 16`.
         let layout = LayoutDescriptor::Enum {
             type_name: "Option".to_string(),
             variants: vec![
@@ -890,7 +895,10 @@ mod tests {
                 ),
             ],
         };
-        assert_eq!(layout.flat_byte_size(I64_BYTES, F64_BYTES), None);
+        assert_eq!(
+            layout.flat_byte_size(I64_BYTES, F64_BYTES),
+            Some(I64_BYTES + I64_BYTES)
+        );
     }
 
     #[test]

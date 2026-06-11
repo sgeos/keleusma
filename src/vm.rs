@@ -495,8 +495,15 @@ fn reject_untyped_flat_composite_cmp<W: crate::word::Word, F: crate::float::Floa
     a: &crate::bytecode::GenericValue<W, F>,
     b: &crate::bytecode::GenericValue<W, F>,
 ) -> Result<(), VmError> {
+    // Fault only when BOTH operands are flat composites, the case where the
+    // derived `PartialEq` would perform an IEEE-unsafe raw-byte compare. A
+    // flat composite compared against a scalar, `Value::None`, or a boxed
+    // body short-circuits to `false` on the variant mismatch with no byte
+    // compare, so it is safe (and necessary: a flat `Option::Some` matched
+    // against `Value::None` in an `Option::None` arm reaches here, B28 P3
+    // item 5 C4).
     if crate::bytecode::flat_body_bytes(a).is_some()
-        || crate::bytecode::flat_body_bytes(b).is_some()
+        && crate::bytecode::flat_body_bytes(b).is_some()
     {
         return Err(VmError::TypeError(alloc::string::String::from(
             "cannot compare a flat composite whose type the compiler could not \

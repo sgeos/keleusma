@@ -3477,8 +3477,22 @@ fn infer_expr_type(fc: &FuncCompiler, expr: &Expr) -> Option<TypeExpr> {
             Some(TypeExpr::Named(name.clone(), Vec::new(), *span))
         }
         Expr::EnumVariant {
-            enum_name, span, ..
-        } => Some(TypeExpr::Named(enum_name.clone(), Vec::new(), *span)),
+            enum_name,
+            variant,
+            args,
+            span,
+        } => {
+            // `Option::Some(x)` infers as `Option<T>` so a later flat access
+            // (a `match` scrutinee binding) recovers the payload type `T`
+            // (B28 P3 item 5 C4); `Option` is generic and absent from the
+            // type tables, so `Named("Option")` would drop `T`.
+            if enum_name == "Option" && variant == "Some" {
+                let payload = args.first().and_then(|a| infer_expr_type(fc, a))?;
+                Some(TypeExpr::Option(Box::new(payload), *span))
+            } else {
+                Some(TypeExpr::Named(enum_name.clone(), Vec::new(), *span))
+            }
+        }
         Expr::Call { name, .. } => fc.type_info.function_returns.get(name).cloned(),
         Expr::Ident { name, .. } => fc.local_type(name).cloned(),
         Expr::FieldAccess { object, field, .. } => {
@@ -3996,6 +4010,9 @@ fn strip_type_labels(ty: &TypeExpr) -> TypeExpr {
 fn composite_needs_fieldwise_eq(ty: &TypeExpr, ti: &TypeInfo) -> bool {
     match strip_type_labels(ty) {
         TypeExpr::Tuple(_, _) | TypeExpr::Array(_, _, _) => true,
+        // `Option<T>` flattens its `Some` payload (B28 P3 item 5 C4), so two
+        // `Some` bodies must be compared field-wise rather than by raw bytes.
+        TypeExpr::Option(_, _) => true,
         TypeExpr::Named(name, _, _) => {
             ti.struct_field_order.contains_key(&name) || ti.enum_variant_order.contains_key(&name)
         }
@@ -4125,6 +4142,11 @@ fn emit_composite_fieldwise_eq(
     ltmp: u16,
     rtmp: u16,
 ) -> Result<(), CompileError> {
+    // `Option<T>` is the built-in generic enum: it is hybrid (scalar `None`,
+    // flat `Some`) and untabled, so it has its own emitter (B28 P3 item 5 C4).
+    if matches!(strip_type_labels(ty), TypeExpr::Option(_, _)) {
+        return emit_option_fieldwise_eq(fc, ty, ltmp, rtmp);
+    }
     // An enum is compared by variant dispatch, not the uniform field loop:
     // the active variant selects which payload fields to compare.
     if let TypeExpr::Named(name, _, _) = &strip_type_labels(ty)
@@ -4205,6 +4227,108 @@ fn emit_composite_fieldwise_eq(
 /// discards the peeked copy on the path that keeps it. A well-typed value
 /// always matches one declared variant; the post-loop `Trap` guards a
 /// host-built enum carrying an undeclared variant.
+/// Emit field-wise equality of two `Option<T>` values in `ltmp`/`rtmp`,
+/// leaving a single `Bool` on the stack (B28 P3 item 5 C4).
+///
+/// `Option` is hybrid at runtime: `None` is the scalar `Value::None` (also
+/// what host natives return) and `Some(x)` is a flat enum `[disc=1][x]`. The
+/// only case the derived `PartialEq` mishandles is two `Some` bodies, where a
+/// raw-byte compare is IEEE-unsafe for a float payload, so this special-cases
+/// it: if both values are `Some`, compare the extracted payloads field-wise;
+/// otherwise fall back to `CmpEq`, which is correct and fault-free for any
+/// pairing with at least one `None` (the relaxed `reject_untyped_flat_
+/// composite_cmp` does not fire unless both operands are flat). Reuses the
+/// `Loop`/`Break` idiom and the `IsEnum`-peek/`PopN` discipline of
+/// [`emit_enum_fieldwise_eq`]. `ty` is the static `Option<T>` type, the source
+/// of the payload type `T` since `Option` is generic and untabled.
+fn emit_option_fieldwise_eq(
+    fc: &mut FuncCompiler,
+    ty: &TypeExpr,
+    ltmp: u16,
+    rtmp: u16,
+) -> Result<(), CompileError> {
+    let e_const = fc.add_string_constant("Option");
+    let v_const = fc.add_string_constant("Some");
+    let some_disc = fc.add_constant(Value::Int(1));
+    let opt_ty = Some(strip_type_labels(ty));
+    let payload_ty = option_inner(opt_ty.as_ref());
+    let some_field = option_some_field(fc, opt_ty.as_ref(), 0);
+
+    let loop_addr = fc.emit(Op::Loop(0));
+    fc.enter_loop();
+    fc.begin_scope();
+
+    // Is the left value `Some`? (`IsEnum` is false for `Value::None`.)
+    fc.emit(Op::GetLocal(ltmp));
+    fc.emit(Op::IsEnum(e_const, v_const, some_disc));
+    let a_not_some = fc.emit_jump(Op::If(0));
+    fc.emit(Op::PopN(1)); // left is Some; discard the peeked copy
+    // Is the right value also `Some`?
+    fc.emit(Op::GetLocal(rtmp));
+    fc.emit(Op::IsEnum(e_const, v_const, some_disc));
+    let b_not_some = fc.emit_jump(Op::If(0));
+    fc.emit(Op::PopN(1)); // both Some; discard the peeked copy
+    // Both Some: compare the payloads.
+    fc.emit(Op::GetLocal(ltmp));
+    fc.emit(Op::GetEnumField(some_field));
+    fc.emit(Op::GetLocal(rtmp));
+    fc.emit(Op::GetEnumField(some_field));
+    match &payload_ty {
+        Some(t) if composite_needs_fieldwise_eq(t, &fc.type_info) => {
+            let r2 = fc.declare_local("__eqo_r");
+            let l2 = fc.declare_local("__eqo_l");
+            fc.emit(Op::SetLocal(r2));
+            fc.emit(Op::SetLocal(l2));
+            emit_composite_fieldwise_eq(fc, t, l2, r2)?;
+        }
+        _ => {
+            fc.emit(Op::CmpEq);
+        }
+    }
+    let br_both = fc.emit_jump(Op::Break(0));
+    fc.loop_breaks
+        .last_mut()
+        .expect("inside option eq loop")
+        .push(br_both);
+    // Left Some, right not Some: fall back to `CmpEq` (yields false).
+    fc.patch_jump(b_not_some);
+    fc.emit(Op::EndIf);
+    fc.emit(Op::PopN(1)); // discard the peeked right value
+    fc.emit(Op::GetLocal(ltmp));
+    fc.emit(Op::GetLocal(rtmp));
+    fc.emit(Op::CmpEq);
+    let br_anb = fc.emit_jump(Op::Break(0));
+    fc.loop_breaks
+        .last_mut()
+        .expect("inside option eq loop")
+        .push(br_anb);
+    // Left not Some (it is `None`): `CmpEq` handles None==None and None==Some.
+    fc.patch_jump(a_not_some);
+    fc.emit(Op::EndIf);
+    fc.emit(Op::PopN(1)); // discard the peeked left value
+    fc.emit(Op::GetLocal(ltmp));
+    fc.emit(Op::GetLocal(rtmp));
+    fc.emit(Op::CmpEq);
+    let br_an = fc.emit_jump(Op::Break(0));
+    fc.loop_breaks
+        .last_mut()
+        .expect("inside option eq loop")
+        .push(br_an);
+
+    fc.end_scope();
+    let endloop_addr = fc.emit(Op::EndLoop(0));
+    let after_loop = (loop_addr + 1) as u16;
+    if let Op::EndLoop(a) = &mut fc.chunk.ops[endloop_addr] {
+        *a = after_loop;
+    }
+    let after_endloop = fc.chunk.ops.len() as u16;
+    if let Op::Loop(a) = &mut fc.chunk.ops[loop_addr] {
+        *a = after_endloop;
+    }
+    fc.exit_loop();
+    Ok(())
+}
+
 fn emit_enum_fieldwise_eq(
     fc: &mut FuncCompiler,
     enum_name: &str,
@@ -4334,6 +4458,44 @@ fn named_type_name(ty: Option<&TypeExpr>) -> Option<&str> {
 /// field kind when the variant's whole payload is flat-eligible scalars and
 /// the offset fits the sixteen-bit operand; otherwise the boxed positional
 /// form. Mirrors `enum_with_widths`, so the access form matches the body.
+/// The payload type `T` of an `Option<T>` scrutinee, or `None` if `ty` is not
+/// an `Option` (B28 P3 item 5 C4).
+fn option_inner(ty: Option<&TypeExpr>) -> Option<TypeExpr> {
+    match ty {
+        Some(TypeExpr::Option(inner, _)) => Some((**inner).clone()),
+        _ => None,
+    }
+}
+
+/// The baked [`EnumField`] for extracting `Option::Some`'s single payload
+/// (B28 P3 item 5 C4). A flat `Option<T>` body is `[disc word][T]`, so the
+/// payload sits at offset `word_bytes`; the kind comes from `T`, recovered
+/// from the scrutinee type since `Option` is generic and absent from the type
+/// tables. A non-flat `T` (or an unrecoverable scrutinee type) yields the
+/// boxed form, which agrees with the boxed construction fallback.
+fn option_some_field(fc: &FuncCompiler, ty: Option<&TypeExpr>, index: usize) -> EnumField {
+    let boxed = EnumField::Boxed { index: index as u8 };
+    let wb = fc.type_info.word_bytes;
+    if wb == 0 || index != 0 || wb > u16::MAX as usize {
+        return boxed;
+    }
+    let Some(t) = option_inner(ty) else {
+        return boxed;
+    };
+    match classify_flat_field(&t, &fc.type_info) {
+        FlatFieldForm::Scalar(kind) => EnumField::Flat {
+            offset: wb as u16,
+            kind,
+        },
+        FlatFieldForm::Nested(size, variant) => EnumField::FlatNested {
+            offset: wb as u16,
+            size,
+            variant,
+        },
+        FlatFieldForm::NotFlat => boxed,
+    }
+}
+
 fn enum_field_access(
     fc: &mut FuncCompiler,
     type_name: &str,
@@ -6329,14 +6491,38 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
             // sums and retires the old `min_payload`-via-stack push (B28 P4).
             // A non-uniform enum bakes the boxed form with a template holding
             // the type and variant names.
-            let ty = TypeExpr::Named(enum_name.to_string(), Vec::new(), Span::default());
+            //
+            // `Option::Some(x)` flattens like any enum (B28 P3 item 5 C4).
+            // `Option` is generic and absent from the type tables, so build
+            // the concrete `Option<T>` type from the payload's inferred type
+            // to drive the flat layout (`Named("Option")` would not resolve),
+            // with the fixed discriminant `Some = 1`. If the payload type is
+            // not recoverable the boxed fallback (`byte_size == None`) applies.
+            // `Option::None` is not handled here: it has no payload and
+            // materialises to the scalar `Value::None`.
+            let opt_some_payload = if enum_name == "Option" && variant == "Some" {
+                args.first().and_then(|a| infer_expr_type(fc, a))
+            } else {
+                None
+            };
+            let (ty, disc_override) = match opt_some_payload {
+                Some(payload_ty) => (
+                    TypeExpr::Option(Box::new(payload_ty), Span::default()),
+                    Some(1i64),
+                ),
+                None => (
+                    TypeExpr::Named(enum_name.to_string(), Vec::new(), Span::default()),
+                    None,
+                ),
+            };
             let byte_size = flat_alloc_bytes(&ty, &fc.type_info);
-            let disc = fc
-                .type_info
-                .enum_variant_order
-                .get(enum_name)
-                .and_then(|vs| vs.iter().find(|(n, _)| n == variant).map(|(_, d)| *d))
-                .unwrap_or(0);
+            let disc = disc_override.unwrap_or_else(|| {
+                fc.type_info
+                    .enum_variant_order
+                    .get(enum_name)
+                    .and_then(|vs| vs.iter().find(|(n, _)| n == variant).map(|(_, d)| *d))
+                    .unwrap_or(0)
+            });
             match byte_size {
                 Some(byte_size) => {
                     if type_may_intern_opaque(&ty, &fc.type_info) {
@@ -7951,12 +8137,19 @@ fn compile_pattern_test(
             // The variant discriminant lets the test compare a flat enum's
             // leading discriminant word (B28 P2); the boxed body still
             // compares the names.
-            let disc = fc
-                .type_info
-                .enum_variant_order
-                .get(enum_name)
-                .and_then(|vs| vs.iter().find(|(n, _)| n == variant).map(|(_, d)| *d))
-                .unwrap_or(0);
+            // `Option::Some` flattens (B28 P3 item 5 C4) with the fixed
+            // discriminant 1; for a flat body `IsEnum` compares the leading
+            // discriminant word, so it must match construction.
+            let is_option_some = enum_name == "Option" && variant == "Some";
+            let disc = if is_option_some {
+                1
+            } else {
+                fc.type_info
+                    .enum_variant_order
+                    .get(enum_name)
+                    .and_then(|vs| vs.iter().find(|(n, _)| n == variant).map(|(_, d)| *d))
+                    .unwrap_or(0)
+            };
             let d_const = fc.add_constant(Value::Int(disc));
             fc.emit(Op::IsEnum(e_const, v_const, d_const));
             fail_addrs.push(fc.emit_jump(Op::If(0)));
@@ -7969,16 +8162,26 @@ fn compile_pattern_test(
                 }
                 let temp = fc.declare_local(&format!("__enum_field{}", i));
                 fc.emit(Op::GetLocal(value_slot));
-                let efield = enum_field_access(fc, enum_name, variant, i);
+                // `Option::Some`'s payload type comes from the scrutinee
+                // `Option<T>` (it is not in the type tables); other enums look
+                // up their variant payloads.
+                let efield = if is_option_some {
+                    option_some_field(fc, ty, i)
+                } else {
+                    enum_field_access(fc, enum_name, variant, i)
+                };
                 fc.emit(Op::GetEnumField(efield));
                 fc.emit(Op::SetLocal(temp));
-                let sub_ty = fc
-                    .type_info
-                    .enums
-                    .get(enum_name)
-                    .and_then(|m| m.get(variant))
-                    .and_then(|payloads| payloads.get(i))
-                    .cloned();
+                let sub_ty = if is_option_some {
+                    option_inner(ty)
+                } else {
+                    fc.type_info
+                        .enums
+                        .get(enum_name)
+                        .and_then(|m| m.get(variant))
+                        .and_then(|payloads| payloads.get(i))
+                        .cloned()
+                };
                 let sub_fails = compile_pattern_test(fc, sub_pat, temp, sub_ty.as_ref())?;
                 fail_addrs.extend(sub_fails);
             }
@@ -8063,21 +8266,32 @@ fn compile_pattern_bind_typed(
             // Nothing to bind.
         }
         Pattern::Enum(enum_name, variant, sub_pats, _) => {
+            // `Option::Some` flattens (B28 P3 item 5 C4); its payload type
+            // comes from the scrutinee `Option<T>` since `Option` is generic
+            // and absent from the type tables.
+            let is_option_some = enum_name == "Option" && variant == "Some";
             // For enum sub-pattern bindings, look up the variant's
             // payload types from the type info when available.
-            let payload_types: Vec<Option<TypeExpr>> = fc
-                .type_info
-                .enums
-                .get(enum_name)
-                .and_then(|variants| variants.get(variant))
-                .map(|tys| tys.iter().cloned().map(Some).collect())
-                .unwrap_or_else(|| sub_pats.iter().map(|_| None).collect());
+            let payload_types: Vec<Option<TypeExpr>> = if is_option_some {
+                alloc::vec![option_inner(ty.as_ref())]
+            } else {
+                fc.type_info
+                    .enums
+                    .get(enum_name)
+                    .and_then(|variants| variants.get(variant))
+                    .map(|tys| tys.iter().cloned().map(Some).collect())
+                    .unwrap_or_else(|| sub_pats.iter().map(|_| None).collect())
+            };
             for (i, sub_pat) in sub_pats.iter().enumerate() {
                 if matches!(sub_pat, Pattern::Wildcard(_) | Pattern::Literal(_, _)) {
                     continue;
                 }
                 fc.emit(Op::GetLocal(value_slot));
-                let efield = enum_field_access(fc, enum_name, variant, i);
+                let efield = if is_option_some {
+                    option_some_field(fc, ty.as_ref(), i)
+                } else {
+                    enum_field_access(fc, enum_name, variant, i)
+                };
                 fc.emit(Op::GetEnumField(efield));
                 let sub_ty = payload_types.get(i).cloned().unwrap_or(None);
                 if let Pattern::Variable(name, _) = sub_pat {
