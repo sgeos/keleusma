@@ -37,6 +37,20 @@ use crate::opaque::HostOpaque;
 use crate::vm::VmError;
 use crate::word::Word;
 
+/// Error for decoding a flat composite whose arena body no longer resolves
+/// because a `RESET` advanced the epoch (B28 P3 item 5 C3). Under the
+/// read-before-resume contract a yielded or returned composite stays
+/// arena-resident, so the host must decode it before the next `resume()` or
+/// before dropping the VM; decoding afterward returns this clean error rather
+/// than panicking. Public because the `#[derive(KeleusmaType)]` macro emits
+/// calls to it.
+pub fn stale_flat_decode() -> VmError {
+    VmError::TypeError(alloc::string::String::from(
+        "flat composite body read after the arena was reset; decode a yielded or \
+         returned composite before the next resume (read-before-resume)",
+    ))
+}
+
 /// Resolution context for decoding a flat composite's reference fields at
 /// the host boundary (B28 P3).
 ///
@@ -566,7 +580,13 @@ impl<W: Word, F: Float, T: KeleusmaType<W, F> + Clone, const N: usize> KeleusmaT
                 })
             }
             GenericValue::Array(ArrayBody::Flat(fc)) => {
-                Self::from_flat_bytes_ctx(fc.as_bytes(), ctx.word_bytes, ctx.float_bytes, ctx)
+                // Resolve against the arena rather than assuming an `Inline`
+                // body, so decode works on an arena-resident value (a yielded
+                // or returned composite under the read-before-resume contract,
+                // B28 P3 item 5 C3). A stale body (read after a RESET) is a
+                // clean error, not a panic.
+                let bytes = fc.resolve(ctx.arena).map_err(|_| stale_flat_decode())?;
+                Self::from_flat_bytes_ctx(bytes, ctx.word_bytes, ctx.float_bytes, ctx)
             }
             other => Err(VmError::TypeError(format!(
                 "expected array, got {}",
@@ -712,7 +732,8 @@ macro_rules! impl_tuple {
                         Ok(($($name::from_value_ctx(&items[$idx], __ctx)?,)*))
                     }
                     GenericValue::Tuple(crate::bytecode::TupleBody::Flat(fc)) => {
-                        Self::from_flat_bytes_ctx(fc.as_bytes(), __ctx.word_bytes, __ctx.float_bytes, __ctx)
+                        let bytes = fc.resolve(__ctx.arena).map_err(|_| crate::marshall::stale_flat_decode())?;
+                        Self::from_flat_bytes_ctx(bytes, __ctx.word_bytes, __ctx.float_bytes, __ctx)
                     }
                     other => Err(VmError::TypeError(format!(
                         "expected tuple, got {}",

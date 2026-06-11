@@ -281,9 +281,15 @@ fn derive_struct_body(_name: &Ident, name_str: &str, data: &DataStruct) -> Token
                         ) => {
                             // Read at the module's packed widths from the
                             // context, which differ from the host `Word`
-                            // width on a narrow-word build (B28 P3).
+                            // width on a narrow-word build (B28 P3). Resolve
+                            // against the arena so decode works on an
+                            // arena-resident value (read-before-resume,
+                            // B28 P3 item 5 C3).
+                            let __bytes = __fc
+                                .resolve(__ctx.arena)
+                                .map_err(|_| ::keleusma::marshall::stale_flat_decode())?;
                             <Self as ::keleusma::KeleusmaType<__KW, __KF>>::from_flat_bytes_ctx(
-                                __fc.as_bytes(), __ctx.word_bytes, __ctx.float_bytes, __ctx,
+                                __bytes, __ctx.word_bytes, __ctx.float_bytes, __ctx,
                             )
                         }
                         other => ::core::result::Result::Err(::keleusma::VmError::TypeError(
@@ -840,8 +846,13 @@ fn derive_enum_body(_name: &Ident, name_str: &str, data: &DataEnum) -> TokenStre
                     }
                 }
                 ::keleusma::GenericValue::Enum(::keleusma::bytecode::EnumBody::Flat(__fc)) => {
+                    // Resolve against the arena so decode works on an
+                    // arena-resident value (read-before-resume, B28 P3 item 5 C3).
+                    let __bytes = __fc
+                        .resolve(__ctx.arena)
+                        .map_err(|_| ::keleusma::marshall::stale_flat_decode())?;
                     <Self as ::keleusma::KeleusmaType<__KW, __KF>>::from_flat_bytes_ctx(
-                        __fc.as_bytes(), __ctx.word_bytes, __ctx.float_bytes, __ctx,
+                        __bytes, __ctx.word_bytes, __ctx.float_bytes, __ctx,
                     )
                 }
                 other => ::core::result::Result::Err(::keleusma::VmError::TypeError(

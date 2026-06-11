@@ -81,6 +81,46 @@ fn decode_flat_struct_with_opaque_field() {
     assert_eq!(typed.label, "decoded");
 }
 
+#[derive(KeleusmaType, PartialEq, Debug)]
+struct Pair {
+    a: i64,
+    b: i64,
+}
+
+#[test]
+fn decode_arena_resident_flat_struct() {
+    // The read-before-resume keystone (B28 P3 item 5 C3): a composite whose
+    // flat body lives in the arena (the state a yielded/returned value is in
+    // once boundary materialisation is removed) must decode through the
+    // arena-aware `resolve` path. Before this change the derived decode called
+    // `FlatComposite::as_bytes`, which panics on an arena body; this test
+    // would panic without the keystone and passes with it.
+    use keleusma::bytecode::{GenericValue, StructBody};
+    let arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+    let v = Value::struct_value(
+        "Pair".into(),
+        vec![
+            ("a".into(), GenericValue::Int(3)),
+            ("b".into(), GenericValue::Int(4)),
+        ],
+    );
+    // Migrate the flat body into the arena's top region.
+    let v = v.into_arena_body(&arena).expect("migrate to arena");
+    assert!(
+        matches!(&v, GenericValue::Struct(StructBody::Flat(_))),
+        "expected a flat struct body"
+    );
+    let ctx = keleusma::RefContext {
+        arena: &arena,
+        opaques: &[],
+        word_bytes: 8,
+        float_bytes: 8,
+        ref_epoch: arena.epoch(),
+    };
+    let p = Pair::from_value_ctx(&v, &ctx).expect("decode arena-resident flat struct");
+    assert_eq!(p, Pair { a: 3, b: 4 });
+}
+
 #[test]
 fn native_receives_struct_with_text_field() {
     // A register_fn native takes a struct argument with a Text field; the
