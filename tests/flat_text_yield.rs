@@ -83,6 +83,39 @@ fn yielding_struct_holding_text_struct_is_rejected() {
     );
 }
 
+#[cfg(not(any(
+    feature = "narrow-word-8",
+    feature = "narrow-word-16",
+    feature = "narrow-word-32"
+)))]
+#[test]
+fn yielding_text_tuple_is_rejected() {
+    // A tuple with a Text element now flattens its text into the body
+    // (B28 P3 item 5 C4), the same as a struct, so the yield is rejected at
+    // compile time by `layout_has_flat_text` rather than the runtime
+    // `contains_dynstr` walk.
+    let src = "loop main(seed: Word) -> (Word, Text) { yield (seed, \"hi\") }";
+    assert!(
+        !compiles(src),
+        "yielding a tuple with a flat Text element must be rejected"
+    );
+}
+
+#[cfg(not(any(
+    feature = "narrow-word-8",
+    feature = "narrow-word-16",
+    feature = "narrow-word-32"
+)))]
+#[test]
+fn yielding_text_array_is_rejected() {
+    // An array of Text flattens likewise (B28 P3 item 5 C4).
+    let src = "loop main(seed: Word) -> [Text; 2] { yield [\"a\", \"b\"] }";
+    assert!(
+        !compiles(src),
+        "yielding an array of flat Text must be rejected"
+    );
+}
+
 #[test]
 fn yielding_bare_static_string_still_compiles() {
     // A bare static string is rodata, not a dynamic arena string, and is

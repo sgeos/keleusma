@@ -9796,7 +9796,18 @@ mod tests {
         assert!(!Value::Int(1).contains_dynstr());
         assert!(!Value::StaticStr(String::from("hi")).contains_dynstr());
         assert!(kstr.contains_dynstr());
-        assert!(Value::tuple(alloc::vec![Value::Int(1), kstr.clone()]).contains_dynstr());
+        // A `KStr` tuple element now flattens (B28 P3 item 5 C4); its
+        // cross-yield protection is the compile-time `layout_has_flat_text`
+        // check, not the runtime `contains_dynstr` walk, which reads only
+        // boxed bodies. So a boxed tuple holding a `KStr` is detected here,
+        // while a flat-text tuple is not (the same as a flat-text struct).
+        assert!(
+            Value::Tuple(crate::bytecode::TupleBody::Boxed(alloc::vec![
+                Value::Int(1),
+                kstr.clone()
+            ]))
+            .contains_dynstr()
+        );
         assert!(
             !Value::tuple(alloc::vec![
                 Value::Int(1),

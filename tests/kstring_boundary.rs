@@ -194,10 +194,18 @@ fn value_kstr_counts_as_dynstr_for_cross_yield_prohibition() {
 }
 
 #[test]
-fn value_kstr_inside_tuple_is_detected() {
+fn value_kstr_inside_boxed_tuple_is_detected() {
+    // A `KStr` tuple element now flattens (B28 P3 item 5 C4); its cross-yield
+    // protection is the compile-time `layout_has_flat_text` check rather than
+    // the runtime `contains_dynstr` walk, which reads only boxed bodies. A
+    // boxed tuple holding a `KStr` (a host-built tuple, or `Option`) is still
+    // detected here.
     let arena = Arena::with_capacity(64);
     let handle = KString::alloc(&arena, "y").unwrap();
-    let v = Value::tuple(alloc::vec![Value::Int(1), Value::KStr(handle)]);
+    let v = Value::Tuple(keleusma::bytecode::TupleBody::Boxed(alloc::vec![
+        Value::Int(1),
+        Value::KStr(handle),
+    ]));
     assert!(v.contains_dynstr());
 }
 

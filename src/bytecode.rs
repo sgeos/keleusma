@@ -492,6 +492,12 @@ pub(crate) fn flat_field_size<W: crate::word::Word, F: crate::float::Float>(
     if let Some(kind) = flat_tuple_scalar_kind(v) {
         return Some(kind.size_in_bytes(word_bytes, float_bytes));
     }
+    // A `StaticStr` is not directly packable (it has no arena `(ptr, len)`
+    // handle); the VM construct path converts it to a `KStr` before packing,
+    // and `flat_tuple_scalar_kind` already reports a `KStr` as `Text`. A
+    // `StaticStr` reaching here through a host or constant path with no arena
+    // therefore stays boxed via `try_pack_flat` returning `None` (B28 P3
+    // item 5 C4).
     flat_body_bytes(v).map(|b| b.len())
 }
 
@@ -515,6 +521,16 @@ pub(crate) fn flat_tuple_element_with_refs<W: crate::word::Word, F: crate::float
 ) -> bool {
     match v {
         GenericValue::Opaque(_) => true,
+        // A `Text` element (a `StaticStr` literal or a `KStr`) flattens to a
+        // two-word `(ptr, len)` handle, the same representation as a flat
+        // `Text` struct field (B28 P3 item 5 C4). It is flat-eligible only
+        // when the word slot is at least the host pointer width, matching the
+        // compiler's `classify_flat_field` narrow-word gate; a narrow-word
+        // build keeps text boxed. A flat-text tuple/array is then subject to
+        // the same cross-yield prohibition as a flat-text struct.
+        GenericValue::StaticStr(_) | GenericValue::KStr(_) => {
+            word_bytes >= core::mem::size_of::<usize>()
+        }
         _ => flat_field_size(v, word_bytes, float_bytes).is_some(),
     }
 }
@@ -585,20 +601,15 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
         word_bytes: usize,
         float_bytes: usize,
     ) -> Self {
-        // A text element keeps the tuple boxed (B28 P3): flattening it would
-        // hide the `KStr` from the `materialise_kstrings`/`contains_dynstr`
-        // lifecycle and remove the ability to yield a static-text tuple.
-        // Opaque is flat (B28 P3 item 3): the VM interns it to a one-word
-        // index before calling here, so an interned element is an `Int` and
-        // packs flat; a host- or constant-built tuple that still carries an
-        // `Opaque` cannot intern it and stays boxed via `try_pack_flat`
-        // returning `None`, the same host/VM gap struct and enum have.
-        if elements
-            .iter()
-            .any(|e| matches!(e, Self::StaticStr(_) | Self::KStr(_)))
-        {
-            return Self::Tuple(TupleBody::Boxed(elements));
-        }
+        // A `KStr` text element flattens to a two-word `(ptr, len)` handle,
+        // like a struct's text field (B28 P3 item 5 C4): `try_pack_flat`
+        // packs it. A `StaticStr` is not directly packable (no arena handle):
+        // the VM converts it to a `KStr` before calling here, so a `StaticStr`
+        // surviving to this point came through a host or constant path with
+        // no arena and stays boxed via `try_pack_flat` returning `None`, the
+        // same host/VM gap struct and enum have. `Opaque` is similar: the VM
+        // interns it to a one-word `Int` index before calling here, and a
+        // host-built `Opaque` stays boxed.
         // A tuple has no padding (no minimum), so the packed size is exact.
         match Self::try_pack_flat(elements.iter(), 0, word_bytes, float_bytes) {
             Some(body) => Self::Tuple(TupleBody::Flat(body)),
@@ -633,14 +644,10 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
         word_bytes: usize,
         float_bytes: usize,
     ) -> Self {
-        // A text element keeps the array boxed (B28 P3); opaque is flat (B28
-        // P3 item 3); see `tuple_with_widths`.
-        if elements
-            .iter()
-            .any(|e| matches!(e, Self::StaticStr(_) | Self::KStr(_)))
-        {
-            return Self::Array(ArrayBody::Boxed(elements));
-        }
+        // A `KStr` text element flattens to a two-word handle (B28 P3 item 5
+        // C4); `try_pack_flat` packs it. A `StaticStr` or host `Opaque` with
+        // no arena handle stays boxed via `try_pack_flat` returning `None`;
+        // see `tuple_with_widths`.
         match Self::try_pack_flat(elements.iter(), 0, word_bytes, float_bytes) {
             Some(body) => Self::Array(ArrayBody::Flat(body)),
             None => Self::Array(ArrayBody::Boxed(elements)),
@@ -3800,9 +3807,16 @@ mod materialise_kstrings_tests {
 
     #[test]
     fn tuple_walks_recursively() {
+        // A `KStr` tuple element now flattens (B28 P3 item 5 C4), so build an
+        // explicit boxed tuple to exercise the recursive `materialise_kstrings`
+        // walk that still applies to boxed bodies (host-built tuples, `Option`).
         let arena = make_arena();
         let handle = KString::alloc(&arena, "inner").expect("alloc");
-        let v = V::tuple(alloc::vec![V::Int(1), V::KStr(handle), V::Bool(false),]);
+        let v = V::Tuple(TupleBody::Boxed(alloc::vec![
+            V::Int(1),
+            V::KStr(handle),
+            V::Bool(false),
+        ]));
         let materialised = v.materialise_kstrings(&arena);
         match materialised {
             V::Tuple(items) => {

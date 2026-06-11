@@ -3751,14 +3751,20 @@ fn layout_has_flat_text(d: &crate::value_layout::LayoutDescriptor, word_bytes: u
             ps.iter()
                 .any(|p| is_flat_text(p) || layout_has_flat_text(p, word_bytes))
         }),
-        // `Option` (an enum descriptor), tuples, and arrays box a direct
-        // `Text` element, so a direct `Text` is not flagged; recurse to find
-        // a struct or enum below.
+        // `Option` (an enum descriptor) still boxes a direct `Text` payload,
+        // so a direct `Text` there is not flagged; recurse to find a struct,
+        // enum, tuple, or array with flat text below.
         L::Enum { variants, .. } => variants
             .iter()
             .any(|(_, ps)| ps.iter().any(|p| layout_has_flat_text(p, word_bytes))),
-        L::Tuple(elems) => elems.iter().any(|e| layout_has_flat_text(e, word_bytes)),
-        L::Array { element, .. } => layout_has_flat_text(element, word_bytes),
+        // Tuples and arrays now flatten a direct `Text` element (B28 P3 item
+        // 5 C4), so a direct flat `Text` is flagged, like a struct field.
+        L::Tuple(elems) => elems
+            .iter()
+            .any(|e| is_flat_text(e) || layout_has_flat_text(e, word_bytes)),
+        L::Array { element, .. } => {
+            is_flat_text(element) || layout_has_flat_text(element, word_bytes)
+        }
         L::Scalar(_) => false,
     }
 }
@@ -3819,9 +3825,10 @@ fn elem_may_intern_opaque(fc: &FuncCompiler, elem: &Expr) -> bool {
 /// well-typed program's access form always agrees with the body.
 fn array_elem_operand(elem_ty: Option<&TypeExpr>, ti: &TypeInfo) -> ArrayElem {
     match elem_ty.map(|ty| classify_flat_field(ty, ti)) {
-        // Text keeps the array boxed (the value-side constructor does too, to
-        // preserve the KStr lifecycle); opaque is flat (B28 P3 item 3).
-        Some(FlatFieldForm::Scalar(crate::value_layout::ScalarKind::Text)) => ArrayElem::Boxed,
+        // A text element flattens to a two-word handle like a struct's text
+        // field (B28 P3 item 5 C4); `classify_flat_field` already applies the
+        // narrow-word gate, reporting `NotFlat` (so the array boxes) when the
+        // word is narrower than a host pointer.
         Some(FlatFieldForm::Scalar(kind)) => ArrayElem::Flat { kind },
         Some(FlatFieldForm::Nested(size, variant)) => ArrayElem::FlatNested { size, variant },
         _ => ArrayElem::Boxed,
@@ -3859,15 +3866,11 @@ fn tuple_field_access(
         let Some(size) = type_flat_size(ty, &fc.type_info) else {
             return boxed;
         };
-        // A text element keeps the whole tuple boxed (the value-side
-        // constructor does too, to preserve the KStr lifecycle); opaque is
-        // flat (B28 P3 item 3).
-        if matches!(
-            classify_flat_field(ty, &fc.type_info),
-            FlatFieldForm::Scalar(crate::value_layout::ScalarKind::Text)
-        ) {
-            return boxed;
-        }
+        // A text element flattens to a two-word handle like a struct's text
+        // field (B28 P3 item 5 C4); `classify_flat_field` reports it as a
+        // `Scalar(Text)` and applies the narrow-word gate (returning
+        // `NotFlat`, so the tuple boxes, when the word is narrower than a
+        // host pointer).
         if i == index {
             field_at = Some((offset, classify_flat_field(ty, &fc.type_info)));
         }
