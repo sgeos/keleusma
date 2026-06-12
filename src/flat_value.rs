@@ -241,6 +241,58 @@ impl FlatComposite {
         }
     }
 
+    /// Build a body of `size` bytes directly in the arena's top ephemeral
+    /// head, with no intermediate global-heap `Inline` scratch (B28 P3 item 5
+    /// C-residual 3b). The `fill` closure receives the freshly allocated
+    /// destination slice and packs every byte: the arena returns
+    /// *uninitialised* storage, so `fill` is responsible for writing the whole
+    /// `size`-byte range (the packed fields and any trailing padding slack).
+    ///
+    /// A zero-length body needs no allocation and has no stable pointer, so it
+    /// is returned as an empty `Inline` body (consistent with
+    /// [`FlatComposite::in_arena`]); an empty `Vec` performs no global-heap
+    /// allocation. A non-empty body is allocated from the arena top and
+    /// returned as an `Arena` handle capturing the current epoch, exactly like
+    /// a body migrated through `in_arena` but without the copy from an owned
+    /// buffer.
+    ///
+    /// `fill` returns `Err(())` only on an internal inconsistency a correct
+    /// caller never produces (for example a freshly constructed child body
+    /// failing to resolve, which cannot happen because no `RESET` intervenes
+    /// between a child's construction and its parent's). On that error the
+    /// already-reserved arena bytes are abandoned to the next `RESET` and
+    /// `None` is returned so the caller can fall back.
+    pub fn build_in_arena(
+        arena: &Arena,
+        size: usize,
+        fill: impl FnOnce(&mut [u8]) -> Result<(), ()>,
+    ) -> Result<Option<Self>, AllocError> {
+        if size == 0 {
+            return Ok(Some(Self::Inline {
+                bytes: Vec::new(),
+                epoch: 0,
+            }));
+        }
+        let buffer = arena.alloc_top_bytes(size)?;
+        let dst_ptr = buffer.as_ptr() as *mut u8;
+        // SAFETY: `buffer` is a unique, freshly allocated run of `size` bytes
+        // from the arena's top head; no other reference aliases this range
+        // until the next reset. The bytes are uninitialised, so `fill` must
+        // write all of them, which the caller's packer does.
+        let dst = unsafe { core::slice::from_raw_parts_mut(dst_ptr, size) };
+        if fill(dst).is_err() {
+            return Ok(None);
+        }
+        let raw: *mut [u8] = core::ptr::slice_from_raw_parts_mut(dst_ptr, size);
+        // SAFETY: `raw` is non-null because `dst_ptr` came from a successful
+        // arena allocation.
+        let nn = unsafe { NonNull::new_unchecked(raw) };
+        // SAFETY: `nn` references storage in the arena's top region freshly
+        // allocated under the current epoch.
+        let handle = unsafe { ArenaHandle::from_raw_parts(nn, arena.epoch()) };
+        Ok(Some(Self::Arena(handle)))
+    }
+
     /// Copy an `Arena` body's bytes back into an owned `Inline` body
     /// (B28 P2). An `Inline` body is returned unchanged. A stale `Arena`
     /// body (its epoch no longer matches) yields an empty body, which is

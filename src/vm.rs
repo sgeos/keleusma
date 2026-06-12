@@ -3941,11 +3941,15 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                         return Err(VmError::StackUnderflow);
                     }
                     let arena = self.arena;
-                    let mut values: Vec<crate::bytecode::GenericValue<W, F>> = self
-                        .stack
-                        .drain(self.stack.len() - count..)
-                        .map(|v| v.materialized(arena))
-                        .collect();
+                    // Drain the operands without materialising them to owned
+                    // `Inline` bodies. The flat path packs them directly into
+                    // the arena (resolving any nested arena child in place), so
+                    // the former per-operand `materialized` (Arena -> global
+                    // heap `Inline`) read-back is gone; only the boxed path,
+                    // which stores the operands as separate values, materialises
+                    // them (B28 P3 item 5 C-residual 3b).
+                    let mut values: Vec<crate::bytecode::GenericValue<W, F>> =
+                        self.stack.drain(self.stack.len() - count..).collect();
                     let wb = self.module_word_bytes();
                     let fb = self.module_float_bytes();
                     // Intern opaque fields on the flat construction path
@@ -4009,55 +4013,108 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                             }
                         }
                     }
-                    let value = match operand {
-                        // Tuple and array are value-driven: their element
-                        // types are inferred at compile time and may be
-                        // unknown, so the flat-or-boxed decision is made from
-                        // the runtime values (the shared constructor), which
-                        // agrees with the type-driven access by the same
-                        // invariant the legacy ops relied on (B28 P4). The
-                        // operand `byte_size` is the verifier annotation only.
-                        NCO::Flat {
-                            kind: CK::Tuple, ..
-                        } => crate::bytecode::GenericValue::tuple_with_widths(values, wb, fb),
-                        NCO::Flat {
-                            kind: CK::Array, ..
-                        } => crate::bytecode::GenericValue::array_with_widths(values, wb, fb),
-                        // Struct and enum name their type, so the compiler's
-                        // flat decision is reliable and operand-driven: pack
-                        // into the baked `byte_size` and wrap as `kind`.
-                        NCO::Flat {
-                            kind, byte_size, ..
-                        } => crate::bytecode::GenericValue::new_composite_flat(
-                            kind,
-                            values,
-                            byte_size as usize,
-                            wb,
-                            fb,
+                    use crate::bytecode::{ArrayBody, EnumBody, StructBody, TupleBody};
+                    let value = if flat {
+                        // Pack the body directly into the arena. For a tuple or
+                        // array the size is the value-driven sum of its element
+                        // sizes (the operand `byte_size` is the verifier
+                        // annotation only, so `min_bytes` is zero, no padding);
+                        // for a struct or enum it is the compiler-baked
+                        // `byte_size`, which pads an enum to its largest variant
+                        // so every value of a uniformly-flat enum shares one
+                        // body size.
+                        let min_bytes = match operand {
+                            NCO::Flat {
+                                kind: CK::Tuple | CK::Array,
+                                ..
+                            } => 0usize,
+                            NCO::Flat { byte_size, .. } => byte_size as usize,
+                            NCO::Boxed { .. } => 0usize,
+                        };
+                        let packed = crate::bytecode::GenericValue::pack_flat_in_arena(
+                            &values, min_bytes, wb, fb, arena,
                         )
-                        .ok_or_else(|| {
-                            VmError::InvalidBytecode(String::from(
-                                "NewComposite flat operand on non-flat values",
-                            ))
-                        })?,
-                        NCO::Boxed { kind, meta, .. } => {
-                            // Tuple/array boxed need no metadata; struct/enum
-                            // read the (reused) template for the type name and
-                            // field names (or, for an enum, the variant name).
-                            let (type_name, names) = match kind {
-                                CK::Struct | CK::Enum => {
-                                    self.struct_template(chunk_idx, meta as usize)
+                        .map_err(|_| out_of_arena_push("composite body", arena.capacity()))?;
+                        let kind = operand.kind();
+                        match packed {
+                            Some(fc) => match kind {
+                                CK::Tuple => {
+                                    crate::bytecode::GenericValue::Tuple(TupleBody::Flat(fc))
                                 }
-                                CK::Tuple | CK::Array => (String::new(), Vec::new()),
-                            };
-                            crate::bytecode::GenericValue::new_composite_boxed(
-                                kind, type_name, names, values,
-                            )
+                                CK::Array => {
+                                    crate::bytecode::GenericValue::Array(ArrayBody::Flat(fc))
+                                }
+                                CK::Struct => {
+                                    crate::bytecode::GenericValue::Struct(StructBody::Flat(fc))
+                                }
+                                CK::Enum => crate::bytecode::GenericValue::Enum(EnumBody::Flat(fc)),
+                            },
+                            // A value-driven tuple or array that exceeded the
+                            // sixteen-bit access offset falls back to the boxed
+                            // body (its elements are materialised so the boxed
+                            // container is self-contained). A struct or enum
+                            // Flat operand is statically flat, so a packing
+                            // failure there is malformed bytecode.
+                            None => match kind {
+                                CK::Tuple => {
+                                    crate::bytecode::GenericValue::Tuple(TupleBody::Boxed(
+                                        values.into_iter().map(|v| v.materialized(arena)).collect(),
+                                    ))
+                                }
+                                CK::Array => {
+                                    crate::bytecode::GenericValue::Array(ArrayBody::Boxed(
+                                        values.into_iter().map(|v| v.materialized(arena)).collect(),
+                                    ))
+                                }
+                                CK::Struct | CK::Enum => {
+                                    return Err(VmError::InvalidBytecode(String::from(
+                                        "NewComposite flat operand on non-flat values",
+                                    )));
+                                }
+                            },
+                        }
+                    } else {
+                        // The boxed path stores the operands as separate values,
+                        // so detach any ephemeral arena child to an owned body
+                        // first; the boxed container then outlives the next
+                        // `RESET` without a dangling handle.
+                        let values: Vec<crate::bytecode::GenericValue<W, F>> =
+                            values.into_iter().map(|v| v.materialized(arena)).collect();
+                        match operand {
+                            NCO::Boxed { kind, meta, .. } => {
+                                // Tuple/array boxed need no metadata; struct/enum
+                                // read the (reused) template for the type name
+                                // and field names (or, for an enum, the variant
+                                // name).
+                                let (type_name, names) = match kind {
+                                    CK::Struct | CK::Enum => {
+                                        self.struct_template(chunk_idx, meta as usize)
+                                    }
+                                    CK::Tuple | CK::Array => (String::new(), Vec::new()),
+                                };
+                                crate::bytecode::GenericValue::new_composite_boxed(
+                                    kind, type_name, names, values,
+                                )
+                            }
+                            // A value-driven tuple or array Flat operand whose
+                            // elements are not all flat-eligible (a reference
+                            // element the lightweight inference cannot flatten)
+                            // boxes its elements.
+                            NCO::Flat {
+                                kind: CK::Tuple, ..
+                            } => crate::bytecode::GenericValue::Tuple(TupleBody::Boxed(values)),
+                            NCO::Flat {
+                                kind: CK::Array, ..
+                            } => crate::bytecode::GenericValue::Array(ArrayBody::Boxed(values)),
+                            // A struct or enum Flat operand always takes the flat
+                            // path above, so the non-flat branch never sees one.
+                            NCO::Flat { .. } => {
+                                return Err(VmError::InvalidBytecode(String::from(
+                                    "NewComposite non-flat struct or enum operand",
+                                )));
+                            }
                         }
                     };
-                    let value = value
-                        .into_arena_body(arena)
-                        .map_err(|_| out_of_arena_push("composite body", arena.capacity()))?;
                     sp!(self, value);
                 }
                 Op::GetField(field) => {

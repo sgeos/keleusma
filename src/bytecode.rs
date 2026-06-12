@@ -498,7 +498,13 @@ pub(crate) fn flat_field_size<W: crate::word::Word, F: crate::float::Float>(
     // `StaticStr` reaching here through a host or constant path with no arena
     // therefore stays boxed via `try_pack_flat` returning `None` (B28 P3
     // item 5 C4).
-    flat_body_bytes(v).map(|b| b.len())
+    //
+    // A nested flat composite contributes its body length. `byte_len` reads
+    // the length of both an `Inline` and an `Arena` body without the arena, so
+    // this size query is safe on an arena-resident child (the arena-direct
+    // construction path packs un-materialised children; B28 P3 item 5
+    // C-residual 3b), unlike the byte-borrowing `flat_body_bytes`.
+    flat_composite_ref(v).map(|fc| fc.byte_len())
 }
 
 /// Whether `v` is flat-eligible as a tuple or array element including the
@@ -560,6 +566,25 @@ pub(crate) fn flat_body_bytes<W: crate::word::Word, F: crate::float::Float>(
         | GenericValue::Array(ArrayBody::Flat(fc))
         | GenericValue::Struct(StructBody::Flat(fc))
         | GenericValue::Enum(EnumBody::Flat(fc)) => Some(fc.as_bytes()),
+        _ => None,
+    }
+}
+
+/// The flat composite body of a `Flat`-bodied tuple, array, struct, or enum,
+/// or `None` for a boxed composite or a non-composite. Unlike
+/// [`flat_body_bytes`] this borrows the [`crate::flat_value::FlatComposite`]
+/// itself rather than its bytes, so the caller chooses an arena-aware read
+/// (`resolve`) or a length query (`byte_len`) that works on both an `Inline`
+/// and an `Arena` body. Used by the arena-direct construction packer, which
+/// inlines un-materialised arena children (B28 P3 item 5 C-residual 3b).
+pub(crate) fn flat_composite_ref<W: crate::word::Word, F: crate::float::Float>(
+    v: &GenericValue<W, F>,
+) -> Option<&crate::flat_value::FlatComposite> {
+    match v {
+        GenericValue::Tuple(TupleBody::Flat(fc))
+        | GenericValue::Array(ArrayBody::Flat(fc))
+        | GenericValue::Struct(StructBody::Flat(fc))
+        | GenericValue::Enum(EnumBody::Flat(fc)) => Some(fc),
         _ => None,
     }
 }
@@ -1036,6 +1061,80 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
             return None;
         }
         Some(crate::flat_value::FlatComposite::from_bytes(buf))
+    }
+
+    /// Pack `values` into a flat byte body built *directly in the arena*,
+    /// padded to at least `min_bytes`, with no intermediate global-heap
+    /// `Inline` scratch (B28 P3 item 5 C-residual 3b). The arena-resident
+    /// analogue of [`GenericValue::try_pack_flat`], used by the VM
+    /// `Op::NewComposite` handler so a freshly constructed composite carries no
+    /// global-heap allocation, satisfying the no-global-heap-for-ephemeral
+    /// directive directly rather than building an owned body and migrating it.
+    ///
+    /// Returns `Ok(None)` when any value is not flat-eligible (a reference or
+    /// boxed field) or the packed body exceeds the sixteen-bit access offset,
+    /// in which case the caller falls back to the boxed body, exactly as
+    /// `try_pack_flat`. Returns `Err(AllocError)` when the arena top head
+    /// cannot satisfy the allocation.
+    ///
+    /// The fields are packed contiguously in order at running offsets (the
+    /// flat model has no inter-field padding), so the `[0, packed)` prefix is
+    /// written exactly once by the fields and the `[packed, size)` slack is
+    /// zero-filled; together they cover every byte of the uninitialised arena
+    /// allocation. A nested child is inlined by resolving its arena bytes and
+    /// copying them into the parent's destination, never through an owned
+    /// `Inline` intermediate.
+    pub fn pack_flat_in_arena(
+        values: &[Self],
+        min_bytes: usize,
+        word_bytes: usize,
+        float_bytes: usize,
+        arena: &keleusma_arena::Arena,
+    ) -> Result<Option<crate::flat_value::FlatComposite>, allocator_api2::alloc::AllocError> {
+        // Size and eligibility first, with no allocation: `flat_field_size`
+        // reads a nested child's length through `byte_len`, which is valid for
+        // both an `Inline` and an `Arena` body, so this is safe on the
+        // un-materialised arena children the VM packs here.
+        let mut size = 0usize;
+        for v in values {
+            match flat_field_size(v, word_bytes, float_bytes) {
+                Some(n) => size += n,
+                None => return Ok(None),
+            }
+        }
+        if size < min_bytes {
+            size = min_bytes;
+        }
+        if size > u16::MAX as usize {
+            return Ok(None);
+        }
+        crate::flat_value::FlatComposite::build_in_arena(arena, size, |dst| {
+            let mut off = 0usize;
+            for v in values {
+                if let Some(kind) = flat_tuple_scalar_kind(v) {
+                    let field = kind.size_in_bytes(word_bytes, float_bytes);
+                    v.write_scalar_le(dst, off, word_bytes, float_bytes);
+                    off += field;
+                } else if let Some(fc) = flat_composite_ref(v) {
+                    // A freshly constructed child resolves under the current
+                    // epoch (no `RESET` intervenes); an unexpected stale child
+                    // aborts the build (`Err(())` -> `None`, caller boxes).
+                    let bytes = fc.resolve(arena).map_err(|_| ())?;
+                    dst[off..off + bytes.len()].copy_from_slice(bytes);
+                    off += bytes.len();
+                } else {
+                    // Not flat-eligible; eligibility was checked above, so this
+                    // is unreachable for a correct caller.
+                    return Err(());
+                }
+            }
+            // Zero the trailing padding slack (an enum padded to its largest
+            // variant); the arena storage was uninitialised.
+            for b in dst[off..size].iter_mut() {
+                *b = 0;
+            }
+            Ok(())
+        })
     }
 
     /// Read a fixed-size scalar of `kind` from `src` at `offset` (B28
