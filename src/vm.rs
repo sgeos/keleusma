@@ -502,8 +502,11 @@ fn reject_untyped_flat_composite_cmp<W: crate::word::Word, F: crate::float::Floa
     // compare, so it is safe (and necessary: a flat `Option::Some` matched
     // against `Value::None` in an `Option::None` arm reaches here, B28 P3
     // item 5 C4).
-    if crate::bytecode::flat_body_bytes(a).is_some()
-        && crate::bytecode::flat_body_bytes(b).is_some()
+    // A variant check, not a byte read, so it is valid on an arena-resident
+    // body without first copying it out (B28 P3 item 5 zero-copy); the byte
+    // body is never read here.
+    if crate::bytecode::flat_composite_ref(a).is_some()
+        && crate::bytecode::flat_composite_ref(b).is_some()
     {
         return Err(VmError::TypeError(alloc::string::String::from(
             "cannot compare a flat composite whose type the compiler could not \
@@ -3705,25 +3708,25 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                 }
 
                 Op::CmpEq => {
-                    // Materialise arena-resident composite bodies to inline so
-                    // equality compares content, not handles (B28 P2). The
+                    // No copy out of the arena (B28 P3 item 5 zero-copy). The
                     // compiler emits every nameable composite comparison
                     // field-wise, so a flat composite reaching `CmpEq` is one
                     // whose type the compiler could not determine (an
-                    // unsignatured native's composite result). A raw-byte
-                    // compare of such a body would silently mishandle IEEE
-                    // floats, so fault instead (B28 P3 item 5). Scalars and
-                    // boxed composites are unaffected.
-                    let arena = self.arena;
-                    let b = self.pop()?.materialized(arena);
-                    let a = self.pop()?.materialized(arena);
+                    // unsignatured native's composite result); a raw-byte
+                    // compare would silently mishandle IEEE floats, so two flat
+                    // composites fault here on a variant check. Every surviving
+                    // pair (a scalar, a flat composite against a non-composite,
+                    // or a boxed composite) reaches a `PartialEq` arm that never
+                    // reads a flat body, so the arena body is never dereferenced
+                    // without the arena.
+                    let b = self.pop()?;
+                    let a = self.pop()?;
                     reject_untyped_flat_composite_cmp(&a, &b)?;
                     sp!(self, crate::bytecode::GenericValue::Bool(a == b));
                 }
                 Op::CmpNe => {
-                    let arena = self.arena;
-                    let b = self.pop()?.materialized(arena);
-                    let a = self.pop()?.materialized(arena);
+                    let b = self.pop()?;
+                    let a = self.pop()?;
                     reject_untyped_flat_composite_cmp(&a, &b)?;
                     sp!(self, crate::bytecode::GenericValue::Bool(a != b));
                 }
