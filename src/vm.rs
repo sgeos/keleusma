@@ -5571,17 +5571,15 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                     if self.stack.len() < n {
                         return Err(VmError::StackUnderflow);
                     }
-                    // Materialise arena-resident composite arguments to inline
-                    // bodies before handing them to the native: host
-                    // marshalling (`from_value`) reads composite bytes with no
-                    // arena, so an arena body must be copied out first (B28
-                    // P2 arena residence).
+                    // Native arguments stay arena-resident: the native wrapper
+                    // decodes each one through `from_value_ctx` with a
+                    // `RefContext` built from the `NativeCtx`, which resolves an
+                    // arena composite body in place, so no copy to an owned
+                    // `Inline` body is needed (B28 P3 item 5 zero-copy; the
+                    // earlier `from_value` boundary required the copy).
                     let arena = self.arena;
-                    let args: Vec<crate::bytecode::GenericValue<W, F>> = self
-                        .stack
-                        .drain(self.stack.len() - n..)
-                        .map(|v| v.materialized(arena))
-                        .collect();
+                    let args: Vec<crate::bytecode::GenericValue<W, F>> =
+                        self.stack.drain(self.stack.len() - n..).collect();
                     let native_name = self.native_name(idx as usize).ok_or_else(|| {
                         VmError::InvalidBytecode(format!("invalid native index: {}", idx))
                     })?;
