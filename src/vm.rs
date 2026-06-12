@@ -4151,13 +4151,20 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                                 // The child inherits the parent's epoch so its
                                 // own Text reads resolve stale after a RESET
                                 // (B28 P3 item 1).
-                                let ep = fc.ref_epoch();
-                                let body =
-                                    fc.resolve(self.arena).map_err(|_| stale_arena_body())?;
-                                let bytes = &body[offset as usize..offset as usize + size as usize];
-                                let val = crate::bytecode::GenericValue::from_flat_nested_bytes(
-                                    bytes, variant, ep,
-                                );
+                                // Zero-copy view of the nested child: an arena
+                                // parent yields a sub-handle into its own arena
+                                // storage, allocating nothing (B28 P3 item 5
+                                // C-residual 3b). The child shares the parent's
+                                // epoch, so a flat Text field still resolves
+                                // Stale after a RESET.
+                                let val = crate::bytecode::GenericValue::flat_nested_field(
+                                    fc,
+                                    offset as usize,
+                                    size as usize,
+                                    variant,
+                                    self.arena,
+                                )
+                                .map_err(|_| stale_arena_body())?;
                                 sp!(self, val);
                             }
                             (StructField::Boxed { name_const }, StructBody::Boxed(b)) => {
@@ -4259,21 +4266,21 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                                     // re-wrap it, inheriting the parent epoch
                                     // (B28 P3 item 1).
                                     let esize = size as usize;
-                                    let ep = fc.ref_epoch();
-                                    let body =
-                                        fc.resolve(self.arena).map_err(|_| stale_arena_body())?;
-                                    let len = body.len().checked_div(esize).unwrap_or(0);
+                                    // `byte_len` reads the body length for both
+                                    // forms without the arena, so the bounds
+                                    // check needs no resolve; the child is then
+                                    // viewed in place (B28 P3 item 5 C-residual
+                                    // 3b).
+                                    let len = fc.byte_len().checked_div(esize).unwrap_or(0);
                                     if idx < 0 || idx as usize >= len {
                                         return Err(VmError::IndexOutOfBounds(idx, len));
                                     }
                                     let off = idx as usize * esize;
-                                    let bytes = &body[off..off + esize];
-                                    sp!(
-                                        self,
-                                        crate::bytecode::GenericValue::from_flat_nested_bytes(
-                                            bytes, variant, ep,
-                                        )
-                                    );
+                                    let val = crate::bytecode::GenericValue::flat_nested_field(
+                                        fc, off, esize, variant, self.arena,
+                                    )
+                                    .map_err(|_| stale_arena_body())?;
+                                    sp!(self, val);
                                 }
                                 // Construction and access agree on the body
                                 // representation by static type, so a form
@@ -4334,13 +4341,20 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                                 // Extract the nested child's body and re-wrap
                                 // it as a flat composite, inheriting the parent
                                 // epoch (B28 P3 item 1).
-                                let ep = fc.ref_epoch();
-                                let body =
-                                    fc.resolve(self.arena).map_err(|_| stale_arena_body())?;
-                                let bytes = &body[offset as usize..offset as usize + size as usize];
-                                let val = crate::bytecode::GenericValue::from_flat_nested_bytes(
-                                    bytes, variant, ep,
-                                );
+                                // Zero-copy view of the nested child: an arena
+                                // parent yields a sub-handle into its own arena
+                                // storage, allocating nothing (B28 P3 item 5
+                                // C-residual 3b). The child shares the parent's
+                                // epoch, so a flat Text field still resolves
+                                // Stale after a RESET.
+                                let val = crate::bytecode::GenericValue::flat_nested_field(
+                                    fc,
+                                    offset as usize,
+                                    size as usize,
+                                    variant,
+                                    self.arena,
+                                )
+                                .map_err(|_| stale_arena_body())?;
                                 sp!(self, val);
                             }
                             // Construction and access agree on the body
@@ -4404,13 +4418,20 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                                 // (past the discriminant word) and re-wrap it
                                 // as a flat composite, inheriting the parent
                                 // epoch (B28 P3 item 1).
-                                let ep = fc.ref_epoch();
-                                let body =
-                                    fc.resolve(self.arena).map_err(|_| stale_arena_body())?;
-                                let bytes = &body[offset as usize..offset as usize + size as usize];
-                                let val = crate::bytecode::GenericValue::from_flat_nested_bytes(
-                                    bytes, variant, ep,
-                                );
+                                // Zero-copy view of the nested child: an arena
+                                // parent yields a sub-handle into its own arena
+                                // storage, allocating nothing (B28 P3 item 5
+                                // C-residual 3b). The child shares the parent's
+                                // epoch, so a flat Text field still resolves
+                                // Stale after a RESET.
+                                let val = crate::bytecode::GenericValue::flat_nested_field(
+                                    fc,
+                                    offset as usize,
+                                    size as usize,
+                                    variant,
+                                    self.arena,
+                                )
+                                .map_err(|_| stale_arena_body())?;
                                 sp!(self, val);
                             }
                             // Construction and access agree on the body

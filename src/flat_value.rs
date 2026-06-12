@@ -315,6 +315,49 @@ impl FlatComposite {
         }
     }
 
+    /// View a nested child composite occupying `[offset, offset + len)` of
+    /// this body, without copying when the parent is arena-resident (B28 P3
+    /// item 5 C-residual 3b). A nested field access extracts the child body;
+    /// for an `Arena` parent the child is a sub-range of the parent's single
+    /// arena allocation, so it is returned as a sub-handle pointing into the
+    /// parent at `parent_ptr + offset` with the parent's epoch, sharing the
+    /// parent's storage and going stale exactly when the parent does. An
+    /// `Inline` parent (a host or constant body with no arena allocation) copies
+    /// the child bytes into an owned body, inheriting the parent epoch so the
+    /// child's own flat `Text` field resolves `Stale` after a `RESET`.
+    ///
+    /// Returns [`Stale`] if an `Arena` parent no longer resolves, which a
+    /// correct caller never observes (the parent was just on the operand
+    /// stack). The compiler-baked `offset`/`len` always lie within the body.
+    pub fn nested_view(&self, offset: usize, len: usize, arena: &Arena) -> Result<Self, Stale> {
+        match self {
+            Self::Inline { bytes, epoch } => Ok(Self::Inline {
+                bytes: bytes[offset..offset + len].to_vec(),
+                epoch: *epoch,
+            }),
+            Self::Arena(handle) => {
+                let base = handle.get(arena)?;
+                debug_assert!(
+                    offset + len <= base.len(),
+                    "nested view out of bounds: {offset}+{len} > {}",
+                    base.len()
+                );
+                // SAFETY: `offset + len <= base.len()` (a compiler-baked field
+                // range), so `base.as_ptr().add(offset)` is in bounds and the
+                // `len`-byte sub-slice lies within the parent's allocation.
+                let child_ptr = unsafe { base.as_ptr().add(offset) } as *mut u8;
+                let raw: *mut [u8] = core::ptr::slice_from_raw_parts_mut(child_ptr, len);
+                // SAFETY: `child_ptr` is derived from a non-null arena pointer.
+                let nn = unsafe { NonNull::new_unchecked(raw) };
+                // SAFETY: the sub-range lives in the same arena allocation under
+                // the same epoch as the parent handle, so it is valid for as
+                // long as the parent is.
+                let child = unsafe { ArenaHandle::from_raw_parts(nn, handle.epoch()) };
+                Ok(Self::Arena(child))
+            }
+        }
+    }
+
     /// Resolve the body to its bytes against `arena` (B28 P2). An `Inline`
     /// body is read directly and is always valid; an `Arena` body resolves
     /// its handle, returning [`Stale`] if a `RESET` advanced the epoch

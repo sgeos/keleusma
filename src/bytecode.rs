@@ -895,6 +895,33 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
     /// access handler slices the child body out of the parent and calls
     /// this to materialise the field value. The bytes are copied into a
     /// fresh body, so the result is independent of the parent.
+    /// Extract a nested child composite occupying `[offset, offset + size)` of
+    /// `parent`, as a flat composite `Value` of `variant` kind, viewing the
+    /// child in place when the parent is arena-resident (B28 P3 item 5
+    /// C-residual 3b). The arena-aware successor to
+    /// [`GenericValue::from_flat_nested_bytes`]: rather than copying the child
+    /// bytes into an owned `Inline` body on every nested field access, an
+    /// arena parent yields a zero-copy sub-handle into its own storage (see
+    /// [`crate::flat_value::FlatComposite::nested_view`]), so a nested access
+    /// allocates nothing. Returns [`keleusma_arena::Stale`] only if an arena
+    /// parent no longer resolves, which a correct caller never observes.
+    pub fn flat_nested_field(
+        parent: &crate::flat_value::FlatComposite,
+        offset: usize,
+        size: usize,
+        variant: crate::value_layout::CompositeKind,
+        arena: &keleusma_arena::Arena,
+    ) -> Result<Self, keleusma_arena::Stale> {
+        use crate::value_layout::CompositeKind as C;
+        let fc = parent.nested_view(offset, size, arena)?;
+        Ok(match variant {
+            C::Tuple => Self::Tuple(TupleBody::Flat(fc)),
+            C::Array => Self::Array(ArrayBody::Flat(fc)),
+            C::Struct => Self::Struct(StructBody::Flat(fc)),
+            C::Enum => Self::Enum(EnumBody::Flat(fc)),
+        })
+    }
+
     pub fn from_flat_nested_bytes(
         bytes: &[u8],
         variant: crate::value_layout::CompositeKind,
