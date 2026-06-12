@@ -663,6 +663,35 @@ impl Arena {
         u64::MAX - self.epoch.get()
     }
 
+    /// Whether a handle whose data pointer is `addr` and whose captured epoch
+    /// is `handle_epoch` still addresses live storage, decided by the region
+    /// the pointer falls in rather than by the epoch alone.
+    ///
+    /// A pointer into the ephemeral dual-headed region, the range
+    /// `[persistent_capacity, capacity)`, is epoch-gated, because a reset
+    /// reclaims that region and advances the epoch. A pointer into the
+    /// persistent region `[0, persistent_capacity)`, or into memory this arena
+    /// does not own at all (host data or rodata reached through a flat
+    /// composite body that points outside the arena), is always live, because
+    /// a reset never reclaims those bytes.
+    ///
+    /// This is the primitive that lets a flat composite body be a single
+    /// pointer that reads its bytes in place wherever they live, rather than
+    /// copying persistent, host, or rodata bytes into the ephemeral region to
+    /// give them an epoch (B28 P3 item 5). Ephemeral handles keep the exact
+    /// epoch-gated behaviour they had before, so existing producers are
+    /// unaffected.
+    pub(crate) fn addr_is_live(&self, addr: usize, handle_epoch: u64) -> bool {
+        let base = self.buffer.as_ptr() as usize;
+        let persistent_end = base.wrapping_add(self.persistent_capacity.get());
+        let cap_end = base.wrapping_add(self.capacity);
+        if addr >= persistent_end && addr < cap_end {
+            handle_epoch == self.epoch.get()
+        } else {
+            true
+        }
+    }
+
     /// Reset the epoch counter to zero.
     ///
     /// Recovery path for [`EpochSaturated`]. Resets bump pointers as
@@ -1072,12 +1101,19 @@ impl<T: ?Sized> ArenaHandle<T> {
     /// dereference memory that is not the original allocation. This
     /// would be unsound if the wrong arena's epoch happened to match.
     pub fn get<'a>(&self, arena: &'a Arena) -> Result<&'a T, Stale> {
-        if arena.epoch() != self.epoch {
+        // Validity is decided by the region the pointer falls in, not by the
+        // epoch alone (B28 P3 item 5). An ephemeral pointer is epoch-gated,
+        // exactly as before; a pointer into the persistent region or into
+        // memory outside this arena is always live because a reset never
+        // reclaims it. The address is the thin (data) part of the pointer.
+        let addr = self.ptr.as_ptr() as *const () as usize;
+        if !arena.addr_is_live(addr, self.epoch) {
             return Err(Stale);
         }
-        // SAFETY: The handle was issued under the current epoch. The
-        // arena guarantees that allocated regions remain intact until
-        // the next reset, which advances the epoch.
+        // SAFETY: The pointer addresses live storage per the region check
+        // above: an ephemeral handle under the current epoch, or a persistent
+        // or external pointer the arena never reclaims. The arena guarantees
+        // allocated regions remain intact until reclaimed.
         Ok(unsafe { self.ptr.as_ref() })
     }
 
@@ -1675,5 +1711,63 @@ mod tests {
         assert_eq!(arena.persistent_capacity(), 64);
         assert_eq!(arena.bottom_used(), 0);
         assert_eq!(arena.dual_headed_capacity(), 192);
+    }
+
+    // -- Region-aware handle validity (B28 P3 item 5) --
+
+    #[cfg(feature = "alloc")]
+    #[test]
+    fn ephemeral_handle_still_goes_stale_after_reset() {
+        // A handle into the ephemeral top region keeps the exact epoch-gated
+        // behaviour it had before the region-aware check: a RESET reclaims the
+        // region and the handle is stale.
+        let mut arena = Arena::with_capacity(128);
+        let buffer = arena.alloc_top_bytes(8).unwrap();
+        let handle: ArenaHandle<[u8]> =
+            unsafe { ArenaHandle::from_raw_parts(buffer, arena.epoch()) };
+        assert!(handle.get(&arena).is_ok());
+        arena.reset().unwrap();
+        assert!(matches!(handle.get(&arena), Err(Stale)));
+    }
+
+    #[cfg(feature = "alloc")]
+    #[test]
+    fn persistent_region_handle_survives_reset() {
+        // A handle into the persistent region survives a RESET, because the
+        // region is never reclaimed. This is what lets a private persistent
+        // flat composite body be read in place across iterations.
+        let mut arena = Arena::with_capacity(128);
+        arena.resize_persistent(16).unwrap();
+        let ptr =
+            core::ptr::NonNull::slice_from_raw_parts(arena.persistent_ptr(), 8);
+        let handle: ArenaHandle<[u8]> =
+            unsafe { ArenaHandle::from_raw_parts(ptr, arena.epoch()) };
+        assert!(handle.get(&arena).is_ok());
+        arena.reset().unwrap();
+        assert!(
+            handle.get(&arena).is_ok(),
+            "a persistent-region handle must survive RESET"
+        );
+    }
+
+    #[cfg(feature = "alloc")]
+    #[test]
+    fn external_pointer_handle_is_always_live() {
+        // A handle that points outside the arena entirely (host memory or
+        // rodata reached through a flat composite) is always live, because a
+        // RESET never reclaims memory the arena does not own. This is what lets
+        // a shared or const flat composite body be read in place with no copy.
+        let mut arena = Arena::with_capacity(128);
+        let external: [u8; 4] = [1, 2, 3, 4];
+        let ptr: core::ptr::NonNull<[u8]> = core::ptr::NonNull::from(&external[..]);
+        let handle: ArenaHandle<[u8]> =
+            unsafe { ArenaHandle::from_raw_parts(ptr, arena.epoch()) };
+        assert_eq!(handle.get(&arena).unwrap(), &[1, 2, 3, 4]);
+        arena.reset().unwrap();
+        assert_eq!(
+            handle.get(&arena).unwrap(),
+            &[1, 2, 3, 4],
+            "an external pointer must stay live across RESET"
+        );
     }
 }
