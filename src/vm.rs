@@ -5605,6 +5605,14 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                     if reify {
                         match result {
                             Ok(v) => {
+                                // Migrate a host-returned flat composite into
+                                // the arena so an ephemeral native result
+                                // carries no global-heap body (B28 P3 item 5
+                                // zero-copy). A scalar, string, opaque, or
+                                // boxed value is returned unchanged.
+                                let v = v.into_arena_body(arena).map_err(|_| {
+                                    out_of_arena_push("native result", arena.capacity())
+                                })?;
                                 // Success: value, then flag 0.
                                 sp!(self, v);
                                 sp!(self, crate::bytecode::GenericValue::Int(W::default()));
@@ -5635,7 +5643,13 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                             Err(e) => return Err(e),
                         }
                     } else {
-                        sp!(self, result?);
+                        // Migrate a host-returned flat composite into the arena
+                        // (B28 P3 item 5 zero-copy); no-op for a scalar,
+                        // string, opaque, or boxed value.
+                        let v = result?.into_arena_body(arena).map_err(|_| {
+                            out_of_arena_push("native result", arena.capacity())
+                        })?;
+                        sp!(self, v);
                     }
                 }
             }
