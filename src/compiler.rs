@@ -1328,7 +1328,12 @@ pub fn compile_with_options(
             let mut fields = Vec::new();
             for field in &decl.fields {
                 let mut visiting: BTreeSet<String> = BTreeSet::new();
-                validate_data_field_type(&field.type_expr, &program.types, &mut visiting)?;
+                validate_data_field_type(
+                    &field.type_expr,
+                    &program.types,
+                    pass_visibility,
+                    &mut visiting,
+                )?;
                 fields.push((field.name.clone(), data_slot_idx));
                 // Array-typed fields expand into consecutive slots, one
                 // per scalar element. Scalar and other composite types
@@ -2908,6 +2913,7 @@ fn emit_data_indexed_write(
 fn validate_data_field_type(
     type_expr: &TypeExpr,
     types: &[TypeDef],
+    visibility: DataVisibility,
     visiting: &mut BTreeSet<String>,
 ) -> Result<(), CompileError> {
     match type_expr {
@@ -2917,24 +2923,45 @@ fn validate_data_field_type(
             | PrimType::Fixed(_)
             | PrimType::Float
             | PrimType::Bool => Ok(()),
-            PrimType::Text => Err(CompileError {
-                message: String::from(
-                    "data field type Text is not admissible: variable-length \
-                     types cannot be inlined into the data segment",
-                ),
-                span: *span,
-            }),
+            // A flat `Text` field is a fixed two-word `(ptr, len)` handle, so
+            // it has a statically known size in the body and is admissible in
+            // a `private` data segment (B28 P3 item 4). A static-string field
+            // points at immortal rodata and survives RESET in place; a dynamic
+            // string field points at the ephemeral arena and resolves cleanly
+            // stale after RESET through the epoch backstop, so it is never a
+            // dangling read. A `shared` data field is the host-script boundary
+            // and keeps the prior rejection: a host-owned text slot is not yet
+            // wired through the marshalling boundary.
+            // `Const` is not reached through this validator (the caller
+            // iterates only the `Shared` and `Private` passes; const data is
+            // validated with literal initializers elsewhere), but const text
+            // is a rodata literal and is grouped with `Private` for a
+            // meaningful, exhaustive match.
+            PrimType::Text => match visibility {
+                DataVisibility::Private | DataVisibility::Const => Ok(()),
+                DataVisibility::Shared => Err(CompileError {
+                    message: String::from(
+                        "data field type Text is not admissible in a `shared` data \
+                         segment: a host-owned text slot is not yet supported",
+                    ),
+                    span: *span,
+                }),
+            },
         },
         TypeExpr::Unit(_) => Ok(()),
         TypeExpr::Tuple(elems, _) => {
             for elem in elems {
-                validate_data_field_type(elem, types, visiting)?;
+                validate_data_field_type(elem, types, visibility, visiting)?;
             }
             Ok(())
         }
-        TypeExpr::Array(elem, _len, _) => validate_data_field_type(elem, types, visiting),
-        TypeExpr::Option(inner, _) => validate_data_field_type(inner, types, visiting),
-        TypeExpr::Labelled(inner, _, _) => validate_data_field_type(inner, types, visiting),
+        TypeExpr::Array(elem, _len, _) => {
+            validate_data_field_type(elem, types, visibility, visiting)
+        }
+        TypeExpr::Option(inner, _) => validate_data_field_type(inner, types, visibility, visiting),
+        TypeExpr::Labelled(inner, _, _) => {
+            validate_data_field_type(inner, types, visibility, visiting)
+        }
         // Negative information-flow labels are admissible on data
         // field types. A `shared data` field is the host-script
         // boundary; a `private data` field is the yield-resume
@@ -2945,7 +2972,9 @@ fn validate_data_field_type(
         // The top-level-only rule is enforced by the type
         // checker's `validate_no_nested_negative_labels` invoked
         // on each field's type expression at the data-decl pass.
-        TypeExpr::NegativeLabelled(inner, _, _) => validate_data_field_type(inner, types, visiting),
+        TypeExpr::NegativeLabelled(inner, _, _) => {
+            validate_data_field_type(inner, types, visibility, visiting)
+        }
         TypeExpr::Named(name, _args, span) => {
             if visiting.contains(name) {
                 return Err(CompileError {
@@ -2966,7 +2995,7 @@ fn validate_data_field_type(
                 Some(TypeDef::Struct(s)) => {
                     visiting.insert(name.clone());
                     for field in &s.fields {
-                        validate_data_field_type(&field.type_expr, types, visiting)?;
+                        validate_data_field_type(&field.type_expr, types, visibility, visiting)?;
                     }
                     visiting.remove(name);
                     Ok(())
@@ -2975,7 +3004,7 @@ fn validate_data_field_type(
                     visiting.insert(name.clone());
                     for variant in &e.variants {
                         for ftype in &variant.fields {
-                            validate_data_field_type(ftype, types, visiting)?;
+                            validate_data_field_type(ftype, types, visibility, visiting)?;
                         }
                     }
                     visiting.remove(name);
@@ -2983,7 +3012,7 @@ fn validate_data_field_type(
                 }
                 Some(TypeDef::Newtype(n)) => {
                     visiting.insert(name.clone());
-                    validate_data_field_type(&n.underlying, types, visiting)?;
+                    validate_data_field_type(&n.underlying, types, visibility, visiting)?;
                     visiting.remove(name);
                     Ok(())
                 }

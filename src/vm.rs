@@ -1236,6 +1236,35 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         }
     }
 
+    /// Find a module string constant whose content equals `content` and return
+    /// the stable `(address, len)` of its bytes inside the immortal bytecode
+    /// image, the runtime rodata (B28 P3 item 4).
+    ///
+    /// Any constant of equal content is a valid source, because strings are
+    /// immutable and compared by value, so the search spans every chunk rather
+    /// than threading the originating constant index through the value
+    /// pipeline. It returns `None` when no constant matches, which is the
+    /// dynamic case the caller copies into the ephemeral arena instead.
+    ///
+    /// The cost is a scan of the module's string constants, a count fixed at
+    /// compile time, so the worst-case execution time stays bounded. The
+    /// returned address is valid for the VM's lifetime while the bytecode image
+    /// is not replaced by a hot swap, which the swap path screens by zeroing
+    /// surviving persistent bodies.
+    fn static_str_image_ref(&self, content: &str) -> Option<(usize, usize)> {
+        for chunk in self.archived().chunks.iter() {
+            for c in chunk.constants.iter() {
+                if let crate::bytecode::ArchivedConstValue::StaticStr(s) = c
+                    && s.as_str() == content
+                {
+                    let bytes = s.as_str().as_bytes();
+                    return Some((bytes.as_ptr() as usize, bytes.len()));
+                }
+            }
+        }
+        None
+    }
+
     /// Look up a struct template's type name and field names.
     fn struct_template(
         &self,
@@ -4122,15 +4151,42 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                                         idx as i64,
                                     ));
                                 }
-                                // A heap-owned static string is copied into
-                                // the arena so the flat field can hold a
-                                // (ptr, len) reference; it becomes a `KStr`
-                                // the packer writes as two words (B28 P3).
+                                // A static string field becomes a flat
+                                // (ptr, len) `KStr` the packer writes as two
+                                // words (B28 P3). When the string matches a
+                                // module constant, the handle points at the
+                                // immortal bytecode image (rodata) with no
+                                // arena allocation, so the field survives RESET
+                                // and crosses the yield boundary (B28 P3 item
+                                // 4); region-aware validity treats an
+                                // out-of-arena address as always live.
+                                // Otherwise the string is dynamic and is copied
+                                // into the ephemeral arena, where it is valid
+                                // only within the iteration.
                                 crate::bytecode::GenericValue::StaticStr(s) => {
-                                    let ks =
+                                    let ks = if let Some((addr, len)) = self.static_str_image_ref(s)
+                                    {
+                                        // SAFETY: `addr` addresses `len` valid
+                                        // UTF-8 bytes inside `self.bytecode`,
+                                        // which the VM owns for its lifetime
+                                        // and only a hot swap replaces. The
+                                        // bytes are read-only; the handle is
+                                        // never written through. The epoch is
+                                        // immaterial because the address is
+                                        // outside the ephemeral region, so
+                                        // `addr_is_live` short-circuits to true.
+                                        unsafe {
+                                            crate::kstring::KString::from_raw_parts(
+                                                addr,
+                                                len,
+                                                arena.epoch(),
+                                            )
+                                        }
+                                    } else {
                                         crate::kstring::KString::alloc(arena, s).map_err(|_| {
                                             out_of_arena_push("flat text field", arena.capacity())
-                                        })?;
+                                        })?
+                                    };
                                     *v = crate::bytecode::GenericValue::KStr(ks);
                                 }
                                 _ => {}
