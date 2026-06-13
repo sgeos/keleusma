@@ -513,6 +513,34 @@ impl Arena {
         }
     }
 
+    /// Overwrite `[start, start + len)` of the persistent region with zeros.
+    /// Does not touch the dual-headed region, the bump pointers, or the epoch.
+    /// A range that does not lie wholly within `[0, persistent_capacity)` is
+    /// rejected, leaving the arena unchanged.
+    ///
+    /// Used on a module swap to clear the persistent composite body pool tail
+    /// that follows the private-slot array, so a surviving flat body cannot be
+    /// read after its referenced rodata bytes are freed (B28 P3 item 4). A flat
+    /// Text field in a zeroed body decodes as `(ptr=0, len=0)`, which the read
+    /// path screens as an empty string rather than dereferencing null.
+    pub fn zero_persistent_range(&mut self, start: usize, len: usize) -> Result<(), ResizeError> {
+        let pcap = self.persistent_capacity.get();
+        match start.checked_add(len) {
+            Some(end) if end <= pcap => {
+                if len > 0 {
+                    // SAFETY: `start + len <= persistent_capacity <= capacity`,
+                    // so the range lies wholly within the buffer, which is
+                    // valid for writes of `capacity` bytes.
+                    unsafe {
+                        core::ptr::write_bytes(self.buffer.as_ptr().add(start), 0, len);
+                    }
+                }
+                Ok(())
+            }
+            _ => Err(ResizeError::ExceedsCapacity),
+        }
+    }
+
     /// Overwrite the dual-headed region with zeros and fully reset
     /// it. Advances the epoch.
     ///
@@ -690,6 +718,24 @@ impl Arena {
         } else {
             true
         }
+    }
+
+    /// Whether `addr` falls in the ephemeral dual-headed region, the range
+    /// `[persistent_capacity, capacity)` that a reset reclaims.
+    ///
+    /// This is the region-membership test [`Arena::addr_is_live`] uses to
+    /// decide which pointers are epoch-gated, exposed so a caller can reject a
+    /// pointer that would be reclaimed at the next reset before it is allowed
+    /// to escape a reset boundary. A pointer into the persistent region, or
+    /// into memory this arena does not own at all (host data or rodata reached
+    /// through a flat composite body), is not ephemeral and survives a reset
+    /// (B28 P3 item 4). A null pointer is not ephemeral; it addresses no
+    /// storage and must be screened separately by the caller.
+    pub fn addr_is_ephemeral(&self, addr: usize) -> bool {
+        let base = self.buffer.as_ptr() as usize;
+        let persistent_end = base.wrapping_add(self.persistent_capacity.get());
+        let cap_end = base.wrapping_add(self.capacity);
+        addr >= persistent_end && addr < cap_end
     }
 
     /// Reset the epoch counter to zero.
@@ -1587,6 +1633,61 @@ mod tests {
         ));
         // State unchanged on rejection.
         assert_eq!(arena.persistent_capacity(), 0);
+    }
+
+    #[cfg(feature = "alloc")]
+    #[test]
+    fn addr_is_ephemeral_partitions_by_region() {
+        let mut arena = Arena::with_capacity(64);
+        arena.resize_persistent(16).unwrap();
+        let base = arena.persistent_ptr().as_ptr() as usize;
+        // A persistent-region address is not ephemeral.
+        assert!(!arena.addr_is_ephemeral(base));
+        assert!(!arena.addr_is_ephemeral(base + 15));
+        // The first ephemeral byte and an interior ephemeral byte are.
+        assert!(arena.addr_is_ephemeral(base + 16));
+        assert!(arena.addr_is_ephemeral(base + 63));
+        // The byte just past capacity is not ephemeral.
+        assert!(!arena.addr_is_ephemeral(base + 64));
+        // A null address is never ephemeral (it addresses no storage).
+        assert!(!arena.addr_is_ephemeral(0));
+        // An address far outside the arena (rodata-like) is not ephemeral.
+        assert!(!arena.addr_is_ephemeral(base.wrapping_add(1 << 40)));
+    }
+
+    #[cfg(feature = "alloc")]
+    #[test]
+    fn zero_persistent_range_clears_only_the_named_subrange() {
+        let mut arena = Arena::with_capacity(64);
+        arena.resize_persistent(16).unwrap();
+        let ptr = arena.persistent_ptr();
+        unsafe {
+            core::ptr::write_bytes(ptr.as_ptr(), 0xFF, 16);
+        }
+        // Zero only [8, 16); the first eight bytes stay 0xFF.
+        arena.zero_persistent_range(8, 8).unwrap();
+        unsafe {
+            for i in 0..8 {
+                assert_eq!(core::ptr::read(ptr.as_ptr().add(i)), 0xFF, "byte {i}");
+            }
+            for i in 8..16 {
+                assert_eq!(core::ptr::read(ptr.as_ptr().add(i)), 0, "byte {i}");
+            }
+        }
+        // A range past the persistent capacity is rejected and writes nothing.
+        assert!(matches!(
+            arena.zero_persistent_range(12, 8),
+            Err(ResizeError::ExceedsCapacity)
+        ));
+        unsafe {
+            for i in 0..8 {
+                assert_eq!(
+                    core::ptr::read(ptr.as_ptr().add(i)),
+                    0xFF,
+                    "byte {i} after reject"
+                );
+            }
+        }
     }
 
     #[cfg(feature = "alloc")]

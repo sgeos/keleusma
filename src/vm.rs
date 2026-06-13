@@ -2354,6 +2354,17 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
             };
             let ptr = read_word(offset);
             let len = read_word(offset + word_bytes);
+            // A null data pointer is not a live allocation; it is the value a
+            // zero-filled body decodes to (for example the persistent composite
+            // body pool cleared on a module swap, B28 P3 item 4). Screen it as
+            // an empty string rather than building a handle that
+            // `addr_is_live` would treat as always-live (a null address is
+            // outside the ephemeral region) and then dereference.
+            if ptr == 0 {
+                return Ok(crate::bytecode::GenericValue::StaticStr(
+                    alloc::string::String::new(),
+                ));
+            }
             // SAFETY: `(ptr, len)` were packed from a `KStr` handle issued
             // under `ref_epoch`. The rebuilt handle carries that epoch, so
             // its `get` dereferences the region only while the arena epoch
