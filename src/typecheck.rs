@@ -975,6 +975,22 @@ struct Ctx {
     /// [`crate::target::Target::fixed_default_frac_bits`] before
     /// running the passes.
     fixed_default_frac_bits: u8,
+    /// When true, the per-function expression-type recording pass is active
+    /// (B28 P3 item 5). Set by the recording entry point used for the
+    /// post-monomorphization check; the generic pre-monomorphization check
+    /// leaves it false.
+    record_types: bool,
+    /// Per-function buffer of resolved expression types, keyed by span and
+    /// reset at each function. A span that receives two different concrete
+    /// types is recorded in `fn_type_conflicts` and omitted, preserving the
+    /// accurate-or-None guarantee.
+    current_fn_types: BTreeMap<crate::token::Span, TypeExpr>,
+    /// Spans in the current function that received conflicting concrete types
+    /// and are therefore excluded from the authoritative table.
+    fn_type_conflicts: BTreeSet<crate::token::Span>,
+    /// Accumulated authoritative tables, keyed by function name. Moved into
+    /// `Program::fn_expr_types` at the end of the recording check.
+    fn_tables: BTreeMap<String, BTreeMap<crate::token::Span, TypeExpr>>,
 }
 
 impl Ctx {
@@ -1003,6 +1019,10 @@ impl Ctx {
             vargen: VarGen::default(),
             subst: Subst::new(),
             fixed_default_frac_bits: DEFAULT_FIXED_FRAC_BITS,
+            record_types: false,
+            current_fn_types: BTreeMap::new(),
+            fn_type_conflicts: BTreeSet::new(),
+            fn_tables: BTreeMap::new(),
         }
     }
 
@@ -1219,6 +1239,45 @@ fn type_to_expr(ty: &Type, span: crate::token::Span) -> Option<TypeExpr> {
     }
 }
 
+/// Convert a fully-resolved [`Type`] to a [`TypeExpr`], including composites,
+/// for the authoritative per-function expression-type table (B28 P3 item 5).
+///
+/// Unlike [`type_to_expr`] (primitives only, used for parameter writeback),
+/// this also converts tuples, arrays, options, structs, enums, newtypes, and
+/// opaque names, which is exactly what the compiler needs to bake flat access
+/// and field-wise equality. It strips information-flow labels (the runtime
+/// representation matches the underlying) and returns `None` for any type that
+/// still contains an unresolved inference variable, so a span whose type did
+/// not fully resolve is simply omitted and the compiler falls back to its
+/// structural inference. A struct/enum name is emitted with no type arguments
+/// because after monomorphization the name is the concrete mangled name, which
+/// is how the compiler keys its type tables (mirroring `infer_expr_type`).
+fn type_to_expr_full(ty: &Type, span: crate::token::Span) -> Option<TypeExpr> {
+    Some(match ty {
+        Type::Byte => TypeExpr::Prim(PrimType::Byte, span),
+        Type::Word => TypeExpr::Prim(PrimType::Word, span),
+        Type::Fixed(n) => TypeExpr::Prim(PrimType::Fixed(Some(*n)), span),
+        Type::Float => TypeExpr::Prim(PrimType::Float, span),
+        Type::Bool => TypeExpr::Prim(PrimType::Bool, span),
+        Type::Unit => TypeExpr::Unit(span),
+        Type::Str => TypeExpr::Prim(PrimType::Text, span),
+        Type::Tuple(ts) => {
+            let elems = ts
+                .iter()
+                .map(|t| type_to_expr_full(t, span))
+                .collect::<Option<Vec<_>>>()?;
+            TypeExpr::Tuple(elems, span)
+        }
+        Type::Array(elem, n) => TypeExpr::Array(Box::new(type_to_expr_full(elem, span)?), *n, span),
+        Type::Option(inner) => TypeExpr::Option(Box::new(type_to_expr_full(inner, span)?), span),
+        Type::Struct(name, _) | Type::Enum(name, _) | Type::Newtype(name) | Type::Opaque(name) => {
+            TypeExpr::Named(name.clone(), Vec::new(), span)
+        }
+        Type::Labelled(inner, _) => return type_to_expr_full(inner, span),
+        Type::Var(_) => return None,
+    })
+}
+
 /// Target-aware type-check entry point. Identical to [`check`]
 /// except that the surface form `Fixed` without `<N>` resolves
 /// to the target's
@@ -1233,6 +1292,23 @@ pub fn check_with_target(
 ) -> Result<(), TypeError> {
     let mut ctx = Ctx::new();
     ctx.fixed_default_frac_bits = target.fixed_default_frac_bits();
+    run_check(program, ctx)
+}
+
+/// Type-check, additionally recording the authoritative per-function
+/// expression-type table into `program.fn_expr_types` (B28 P3 item 5).
+///
+/// Intended for the compiler's post-monomorphization check, where every
+/// function is a concrete specialization, so the recorded types are concrete
+/// and the per-function span keys do not collide across specializations. The
+/// pre-monomorphization check uses the non-recording [`check_with_target`].
+pub fn check_with_target_recording(
+    program: &mut Program,
+    target: crate::target::Target,
+) -> Result<(), TypeError> {
+    let mut ctx = Ctx::new();
+    ctx.fixed_default_frac_bits = target.fixed_default_frac_bits();
+    ctx.record_types = true;
     run_check(program, ctx)
 }
 
@@ -1887,6 +1963,10 @@ fn run_check(program: &mut Program, mut ctx: Ctx) -> Result<(), TypeError> {
         }
     }
 
+    // Publish the authoritative per-function expression-type tables built by
+    // the recording pass into the program for the compiler to consult (B28 P3
+    // item 5). Empty when recording was not requested.
+    program.fn_expr_types = core::mem::take(&mut ctx.fn_tables);
     Ok(())
 }
 
@@ -1911,6 +1991,13 @@ fn check_function(ctx: &mut Ctx, func: &mut FunctionDef) -> Result<(), TypeError
     // across functions because variable identifiers are unique even
     // after substitution snapshots.
     let subst_snapshot = ctx.subst.clone();
+    // Reset the per-function expression-type recording buffers (B28 P3
+    // item 5). Spans are unique within one function, so each function gets a
+    // fresh table.
+    if ctx.record_types {
+        ctx.current_fn_types.clear();
+        ctx.fn_type_conflicts.clear();
+    }
     ctx.push_scope();
     let return_type = ctx
         .functions
@@ -2005,6 +2092,17 @@ fn check_function(ctx: &mut Ctx, func: &mut FunctionDef) -> Result<(), TypeError
         for p in sig.params.iter_mut() {
             *p = p.apply(&ctx.subst);
         }
+    }
+    // Finalize this function's authoritative expression-type table before the
+    // substitution is rolled back, so any types still recorded with this
+    // function's local variables are resolved (B28 P3 item 5). The buffer
+    // already holds resolved `TypeExpr`s; move them under the function name.
+    // Re-resolving with the now-complete substitution is unnecessary because
+    // each entry was converted only when fully resolved, but conflicting spans
+    // were already excluded.
+    if ctx.record_types && !ctx.current_fn_types.is_empty() {
+        let table = core::mem::take(&mut ctx.current_fn_types);
+        ctx.fn_tables.insert(func.name.clone(), table);
     }
     // Roll back the substitution to the snapshot so type variables
     // local to this function do not leak into the next function's
@@ -3359,7 +3457,39 @@ fn check_stmt(ctx: &mut Ctx, stmt: &mut Stmt) -> Result<(), TypeError> {
     }
 }
 
+/// Infer an expression's type, and (when the recording pass is active)
+/// record its resolved type into the current function's authoritative table
+/// keyed by the expression's span (B28 P3 item 5).
+///
+/// Recursive calls go through this wrapper, so every sub-expression is
+/// recorded. The type is resolved with the current substitution and converted
+/// to a `TypeExpr`; a type that does not fully resolve is skipped. If two
+/// distinct expressions share a span (a synthetic node aliasing a source span)
+/// and produce different concrete types, the span is marked conflicting and
+/// excluded, so the table never hands the compiler a wrong type.
 fn type_of_expr(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError> {
+    let ty = type_of_expr_inner(ctx, expr)?;
+    if ctx.record_types {
+        let span = expr.span();
+        let resolved = ty.apply(&ctx.subst);
+        if let Some(te) = type_to_expr_full(&resolved, span)
+            && !ctx.fn_type_conflicts.contains(&span)
+        {
+            match ctx.current_fn_types.get(&span) {
+                Some(existing) if *existing != te => {
+                    ctx.current_fn_types.remove(&span);
+                    ctx.fn_type_conflicts.insert(span);
+                }
+                _ => {
+                    ctx.current_fn_types.insert(span, te);
+                }
+            }
+        }
+    }
+    Ok(ty)
+}
+
+fn type_of_expr_inner(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError> {
     match expr {
         Expr::Literal { value, .. } => Ok(match value {
             Literal::Int(_) => Type::Word,

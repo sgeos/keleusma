@@ -2,7 +2,7 @@ extern crate alloc;
 use alloc::string::String;
 
 /// Source location for error reporting.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
 pub struct Span {
     /// Byte offset of the token start in the source.
     pub start: usize,

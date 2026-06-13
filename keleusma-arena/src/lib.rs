@@ -1738,10 +1738,8 @@ mod tests {
         // flat composite body be read in place across iterations.
         let mut arena = Arena::with_capacity(128);
         arena.resize_persistent(16).unwrap();
-        let ptr =
-            core::ptr::NonNull::slice_from_raw_parts(arena.persistent_ptr(), 8);
-        let handle: ArenaHandle<[u8]> =
-            unsafe { ArenaHandle::from_raw_parts(ptr, arena.epoch()) };
+        let ptr = core::ptr::NonNull::slice_from_raw_parts(arena.persistent_ptr(), 8);
+        let handle: ArenaHandle<[u8]> = unsafe { ArenaHandle::from_raw_parts(ptr, arena.epoch()) };
         assert!(handle.get(&arena).is_ok());
         arena.reset().unwrap();
         assert!(
@@ -1760,8 +1758,7 @@ mod tests {
         let mut arena = Arena::with_capacity(128);
         let external: [u8; 4] = [1, 2, 3, 4];
         let ptr: core::ptr::NonNull<[u8]> = core::ptr::NonNull::from(&external[..]);
-        let handle: ArenaHandle<[u8]> =
-            unsafe { ArenaHandle::from_raw_parts(ptr, arena.epoch()) };
+        let handle: ArenaHandle<[u8]> = unsafe { ArenaHandle::from_raw_parts(ptr, arena.epoch()) };
         assert_eq!(handle.get(&arena).unwrap(), &[1, 2, 3, 4]);
         arena.reset().unwrap();
         assert_eq!(

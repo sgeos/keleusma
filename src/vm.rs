@@ -5647,9 +5647,9 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                         // Migrate a host-returned flat composite into the arena
                         // (B28 P3 item 5 zero-copy); no-op for a scalar,
                         // string, opaque, or boxed value.
-                        let v = result?.into_arena_body(arena).map_err(|_| {
-                            out_of_arena_push("native result", arena.capacity())
-                        })?;
+                        let v = result?
+                            .into_arena_body(arena)
+                            .map_err(|_| out_of_arena_push("native result", arena.capacity()))?;
                         sp!(self, v);
                     }
                 }

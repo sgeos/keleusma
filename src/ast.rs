@@ -22,6 +22,20 @@ pub struct Program {
     pub impls: Vec<ImplBlock>,
     /// Span of the source file.
     pub span: Span,
+    /// Authoritative per-function expression types recorded by the type
+    /// checker (B28 P3 item 5). Outer key is the function name (the mangled
+    /// specialization name after monomorphization, so two specializations of
+    /// one generic are distinct keys); inner key is an expression's source
+    /// span, unique within a function. The compiler consults this to recover
+    /// an expression's type for flat-access baking and field-wise equality,
+    /// falling back to its structural `infer_expr_type` when the table has no
+    /// entry. Empty until the type checker's recording pass runs over the
+    /// monomorphized program; a parsed-but-unchecked program carries an empty
+    /// map, so parse-comparison tests are unaffected. A span that received two
+    /// different concrete types is omitted, preserving the accurate-or-None
+    /// guarantee.
+    pub fn_expr_types:
+        alloc::collections::BTreeMap<String, alloc::collections::BTreeMap<Span, TypeExpr>>,
 }
 
 /// A trait declaration.

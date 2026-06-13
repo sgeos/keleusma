@@ -162,6 +162,15 @@ struct FuncCompiler {
     /// Static type information used by the for-in iteration bound
     /// inference and similar narrow optimizations.
     type_info: TypeInfo,
+    /// Authoritative resolved types for this function's expressions, keyed by
+    /// source span, recorded by the post-monomorphization type-check pass
+    /// (B28 P3 item 5). `infer_expr_type` consults this first and falls back to
+    /// its structural inference, so a present entry is always correct and an
+    /// absent one is handled exactly as before. Empty for a function the
+    /// recording pass did not table (for example an overloaded head whose name
+    /// another head's table overwrote), which is safe because the lookup then
+    /// misses and the structural path runs.
+    expr_types: BTreeMap<crate::token::Span, TypeExpr>,
     /// Map from local slot to its compile-time integer value, for
     /// the subset of let-bound locals whose value expression
     /// constant-folds to an integer. Used by the refinement-
@@ -463,6 +472,7 @@ impl FuncCompiler {
         data_fields: BTreeMap<String, Vec<(String, u16)>>,
         const_fields: BTreeMap<String, BTreeMap<String, crate::bytecode::ConstValue>>,
         type_info: TypeInfo,
+        expr_types: BTreeMap<crate::token::Span, TypeExpr>,
         emit_debug: bool,
     ) -> Self {
         Self {
@@ -487,6 +497,7 @@ impl FuncCompiler {
             data_fields,
             const_fields,
             type_info,
+            expr_types,
             local_const_values: BTreeMap::new(),
             local_ranges: BTreeMap::new(),
             emit_debug,
@@ -1137,10 +1148,17 @@ pub fn compile_with_options(
     // and rely on runtime polymorphism through the Value tag.
     let (mut owned, generic_provenance) = crate::monomorphize::monomorphize_with_provenance(owned);
     // Re-typecheck the monomorphized program so specialized bodies
-    // benefit from concrete-type method resolution.
-    crate::typecheck::check_with_target(&mut owned, *target).map_err(|e| CompileError {
-        message: format!("type error after monomorphization: {}", e.message),
-        span: e.span,
+    // benefit from concrete-type method resolution. This pass also records
+    // the authoritative per-function expression-type table into
+    // `owned.fn_expr_types`, which the compiler consults for flat-access
+    // baking (B28 P3 item 5). It runs post-monomorphization so every function
+    // is a concrete specialization and the per-function span keys are
+    // collision-free.
+    crate::typecheck::check_with_target_recording(&mut owned, *target).map_err(|e| {
+        CompileError {
+            message: format!("type error after monomorphization: {}", e.message),
+            span: e.span,
+        }
     })?;
     // V0.2.0 Consolidation Phase 4 retired the closure-hoisting
     // pass and the four closure opcodes (`Op::PushFunc`,
@@ -1545,6 +1563,7 @@ pub fn compile_with_options(
             &data_fields,
             &const_fields,
             &type_info,
+            &program.fn_expr_types,
             options.emit_debug,
             generic_origin,
         )?;
@@ -2978,6 +2997,7 @@ fn compile_function_group(
     data_fields: &BTreeMap<String, Vec<(String, u16)>>,
     const_fields: &BTreeMap<String, BTreeMap<String, crate::bytecode::ConstValue>>,
     type_info: &TypeInfo,
+    fn_expr_types: &BTreeMap<String, BTreeMap<crate::token::Span, TypeExpr>>,
     emit_debug: bool,
     generic_origin: Option<(&str, &str)>,
 ) -> Result<(Chunk, bool), CompileError> {
@@ -3026,6 +3046,11 @@ fn compile_function_group(
         data_fields.clone(),
         const_fields.clone(),
         type_info.clone(),
+        // This group's authoritative expression-type table (B28 P3 item 5),
+        // keyed by the group name (the mangled specialization name after
+        // monomorphization). Absent for a group the recording pass did not
+        // table, in which case the structural inference path runs.
+        fn_expr_types.get(name).cloned().unwrap_or_default(),
         emit_debug,
     );
     fc.chunk.param_count = param_count;
@@ -3472,6 +3497,16 @@ fn infer_arm_body_type(
 }
 
 fn infer_expr_type(fc: &FuncCompiler, expr: &Expr) -> Option<TypeExpr> {
+    // Consult the authoritative per-function type table first (B28 P3 item 5).
+    // It is recorded by the post-monomorphization type-check pass, so an entry
+    // is the concrete resolved type for this exact expression and is preferred
+    // over the structural inference below. A missing entry (an expression the
+    // pass could not fully resolve, or a span excluded as ambiguous) falls
+    // through to the structural path, preserving the accurate-or-None
+    // behaviour.
+    if let Some(ty) = fc.expr_types.get(&expr.span()) {
+        return Some(ty.clone());
+    }
     match expr {
         Expr::StructInit { name, span, .. } => {
             Some(TypeExpr::Named(name.clone(), Vec::new(), *span))

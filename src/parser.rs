@@ -286,6 +286,9 @@ impl<'a> Parser<'a> {
             traits,
             impls,
             span: merge_spans(start, end),
+            // Populated by the type checker's recording pass (B28 P3 item 5);
+            // empty at parse time.
+            fn_expr_types: alloc::collections::BTreeMap::new(),
         })
     }
 
