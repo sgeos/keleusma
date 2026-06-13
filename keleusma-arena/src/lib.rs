@@ -523,7 +523,14 @@ impl Arena {
     /// read after its referenced rodata bytes are freed (B28 P3 item 4). A flat
     /// Text field in a zeroed body decodes as `(ptr=0, len=0)`, which the read
     /// path screens as an empty string rather than dereferencing null.
-    pub fn zero_persistent_range(&mut self, start: usize, len: usize) -> Result<(), ResizeError> {
+    ///
+    /// Takes `&self` because the persistent region is written through raw
+    /// pointers under shared borrow elsewhere (the VM holds the arena by shared
+    /// reference and persists composite bodies through `persistent_ptr`), so a
+    /// shared-borrow zero matches that access pattern. It is the caller's
+    /// responsibility, upheld by the single-threaded VM, that no live `&[u8]`
+    /// to the zeroed bytes is held across the write.
+    pub fn zero_persistent_range(&self, start: usize, len: usize) -> Result<(), ResizeError> {
         let pcap = self.persistent_capacity.get();
         match start.checked_add(len) {
             Some(end) if end <= pcap => {

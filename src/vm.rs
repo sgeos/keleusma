@@ -2665,11 +2665,18 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         };
         let new_private_storage =
             new_private as usize * core::mem::size_of::<crate::bytecode::GenericValue<W, F>>();
-        if self.arena.persistent_capacity() < new_private_storage {
+        // The persistent region must hold the new module's private-slot array
+        // plus its persistent composite body pool (B28 P3 item 3a). Checking
+        // both here surfaces an undersized arena before the swap commits.
+        let new_required_persistent =
+            new_private_storage + new_module.persistent_composite_bytes as usize;
+        if self.arena.persistent_capacity() < new_required_persistent {
             return Err(VmError::VerifyError(format!(
-                "arena persistent_capacity ({} bytes) is too small for new module's private data ({} bytes); resize before hot swap",
+                "arena persistent_capacity ({} bytes) is too small for new module's private data ({} bytes: {} bytes of slots plus {} bytes of persistent composite bodies); resize before hot swap",
                 self.arena.persistent_capacity(),
+                new_required_persistent,
                 new_private_storage,
+                new_module.persistent_composite_bytes,
             )));
         }
         // Drop the old private slots. Each was initialised at
@@ -2741,6 +2748,26 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                     base.add(i).write(val);
                 }
             }
+        }
+        // Clear the persistent composite body pool that follows the new
+        // private-slot array (B28 P3 item 4). The old module's bytecode image
+        // was just replaced, so any surviving persistent composite body that
+        // embedded a rodata `(ptr, len)` into the freed image now dangles. The
+        // body pool is not re-initialised by the private-slot writes above (it
+        // holds composite bodies, not slot `Value`s), so it must be zeroed
+        // explicitly. A zeroed body decodes its flat Text fields as
+        // `(ptr=0, len=0)`, which the read path screens as an empty string, so
+        // the new module reads a clean empty body rather than dereferencing the
+        // freed image. The new module re-persists each composite slot on its
+        // first write. The range is `[new_private_storage, persistent_capacity)`
+        // because the new module reads composite bodies only within its own
+        // pool, which lies in that tail; the leading slot array was just
+        // overwritten.
+        let pcap = self.arena.persistent_capacity();
+        if pcap > new_private_storage {
+            let _ = self
+                .arena
+                .zero_persistent_range(new_private_storage, pcap - new_private_storage);
         }
         // `full_reset_arena_internal` drops and recreates the
         // arena-backed stacks before clearing both ends. The

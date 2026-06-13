@@ -137,3 +137,55 @@ fn private_dynamic_text_struct_faults_stale_after_reset() {
         other => panic!("iter 2 expected a stale TypeError, got {:?}", other),
     }
 }
+
+#[test]
+fn private_static_text_module_hot_swaps_cleanly() {
+    // A module that writes a static-text composite into a private slot is hot
+    // swapped, then runs again. This pins that the item-4 rodata residence and
+    // the persistent composite body pool survive a swap soundly: the swap drops
+    // and re-initialises every private slot (severing any link to the old
+    // pool body) and zeros the composite body pool tail, so the old module's
+    // bytecode image, freed by the swap, is never dereferenced. The swapped-in
+    // module writes its slot fresh and reads back the correct rodata text.
+    let src = "use host::slen(Text) -> Word\n\
+               struct S { msg: Text, n: Word }\n\
+               private data d { s: S }\n\
+               loop main(seed: Word) -> Word { \
+                   if seed == 0 { d.s = S { msg: \"alpha\", n: 1 }; }; \
+                   let _ = yield host::slen(d.s.msg); \
+                   0 \
+               }";
+    let compile_module =
+        || compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+    let m = compile_module();
+    let need = required_persistent_capacity_for(&m);
+    let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
+    arena.resize_persistent(need).expect("resize_persistent");
+    let mut vm = Vm::new(m, &arena).expect("verify");
+    vm.register_fn("host::slen", |s: String| -> i64 { s.len() as i64 });
+
+    // Run the first module: write the static text, yield its length (5).
+    match vm.call(&[Value::Int(0)]).expect("call") {
+        VmState::Yielded(Value::Int(n)) => assert_eq!(n, 5, "pre-swap text length"),
+        other => panic!("pre-swap expected Yielded(5), got {:?}", other),
+    }
+    match vm.resume(Value::Int(1)).expect("resume") {
+        VmState::Reset => {}
+        other => panic!("expected Reset, got {:?}", other),
+    }
+
+    // Hot swap to a fresh copy of the same module. The one private composite
+    // slot is re-initialised to Unit; the swapped-in module writes it fresh
+    // before reading. This frees the old bytecode image, so a read of a
+    // surviving old pool body would dereference freed memory; the swap-time
+    // zeroing and the slot re-initialisation prevent that.
+    vm.replace_module(compile_module(), alloc::vec![Value::Unit])
+        .expect("hot swap");
+
+    // The swapped-in module runs cleanly: it writes its slot fresh on seed 0
+    // and reads back the correct rodata text length (5).
+    match vm.call(&[Value::Int(0)]).expect("post-swap call") {
+        VmState::Yielded(Value::Int(n)) => assert_eq!(n, 5, "post-swap text length"),
+        other => panic!("post-swap expected Yielded(5), got {:?}", other),
+    }
+}
