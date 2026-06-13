@@ -8,6 +8,25 @@ AI to Human communication channel.
 
 ## Last Updated
 
+**Date**: 2026-06-13 (session 8)
+
+**Item 3a is complete end to end on `feat-flat-typed-codegen`. All four gates green** (default workspace 1140 lib + integration, `--all-features`, `--features signatures`, clippy `--tests --workspace --all-features -D warnings`, `cargo fmt --check`). A private `.data` slot holding a flat composite now stores its body in the arena persistent region and survives RESET in place. The behavior-delivering sub-step 3 landed on top of the session-7 foundation (`Module::persistent_composite_bytes` at framing-header offset 60, `required_persistent_capacity_for` accounting):
+
+- New `Op::SetDataComposite(slot, rel_offset)`, wire id 70, on the existing `u16_u16` operand encoding shared with `GetDataIndexed`/`SetDataIndexed`. No wire-format-structure change, `BYTECODE_VERSION` stays 1.
+- The compiler assigns each private composite slot a fixed `.data`-style body offset (`persistent_composite_offsets`, computed before the codegen loop) and `compile_data_field_write` emits `SetDataComposite` for a mapped slot in place of `SetData`.
+- The VM `persist_composite_body` copies the body once to `private_storage + rel_offset` and stores a region-aware `ArenaHandle` (`bae1611` keeps it valid across RESET); `rewrap_flat_body` rebuilds the typed wrapper. `GetData` reads in place. The construction-time persistent-capacity check accounts for the pool.
+- `tests/persistent_data.rs` (4) pins write-then-read for struct, tuple, nested-struct slots, and survival across a RESET (write on iteration 1, read-only restarted stream still yields 33).
+
+Three follow-on fixes the new opcode exposed, all in this session: the private-data mutation-detection pass counted only `SetData`/`SetDataIndexed` so a composite write was a false "never mutated" rejection (added the `SetDataComposite` arm); the two calibrated cost models in `keleusma-bench/measured_cost_models/` were non-exhaustive (grouped `SetDataComposite` with the 164-cycle bulk-write class); the `wire_format::opcode_id_of_matches_table` self-consistency test needed the id-70 case. A stray `Module` fixture in `keleusma-bench/src/lib.rs` also needed the `persistent_composite_bytes: 0` field.
+
+Arrays-of-composites in private slots remain deferred (the offset map skips multi-slot fields, which fall back to `SetData`).
+
+**Remaining residuals, dependency order now that 3a is done.** Item 4 (`StaticStr` to rodata for flat `Text`) can reuse 3a's persistent pool to keep static-text composites yield-valid. Items 2 (collapse `FlatComposite` to a single arena handle, slot 40 to 32) and 1 (thin-box or remove the `Boxed` body variants) both require deleting the owned `Inline` form, which the data-slot persistent path no longer blocks. Item 5 (typed codegen) is already done (session 7). Phase D (whole-arena snapshot) follows.
+
+**Operational note (session 8).** Running two `cargo test` invocations against one `target/` concurrently deadlocked both for 30 minutes (build-dir lock, zero `rustc` workers, no output); kill and run gates sequentially. The diagnosis was confirmed by inspecting child processes and the running test-harness binary.
+
+---
+
 **Date**: 2026-06-12 (session 7)
 
 **Design pivot, operator directed: zero-copy in-place flat composite bodies.** The earlier "collapse `FlatComposite` to one arena variant" framing is superseded by a zero-copy model derived from 6502 and NES native code generation and from satellite and aircraft control loop requirements. A flat composite is a base address and a length, exactly like a struct in native code. Field access already loads from `base + offset`, so the bytes are read in place wherever they live and are never copied to be read. The body simply points at where the bytes already are. An ephemeral body points into the arena top region and is reclaimed at RESET. A private persistent body points into the arena persistent region and survives RESET. A shared body points into host memory, which the host owns. A const body points into rodata. The corrected memory model, operator stated: ephemeral stack and heap are specifically not meant to survive RESET, only private persistent data survives RESET, shared persistent data is host owned and borrowed so it survives implicitly, and const data lives in rodata so it survives implicitly.

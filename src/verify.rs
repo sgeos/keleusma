@@ -1791,7 +1791,7 @@ fn op_depth_effect(op: &Op, _chunk: &Chunk) -> (i32, i32) {
     match op {
         Op::Const(_) | Op::GetLocal(_) | Op::GetData(_) | Op::PushImmediate(_) => (0, 1),
         Op::Dup => (1, 1),
-        Op::SetLocal(_) | Op::SetData(_) => (1, -1),
+        Op::SetLocal(_) | Op::SetData(_) | Op::SetDataComposite(_, _) => (1, -1),
         Op::GetDataIndexed(_, _) => (1, 0),
         Op::SetDataIndexed(_, _) => (2, -2),
         Op::BoundsCheck(_) => (1, 0),
@@ -2241,6 +2241,36 @@ fn verify_chunk(
                             message: alloc::format!(
                                 "{} at {} references slot {} but data layout has {} slot(s)",
                                 op_name,
+                                ip,
+                                idx,
+                                data_len
+                            ),
+                        });
+                    }
+                    record(ip, P1, "data-slot-index-in-range");
+                }
+                Op::SetDataComposite(slot, _offset) => {
+                    // Same slot-bounds obligation as `SetData`; the second
+                    // immediate is a compiler-assigned persistent body offset,
+                    // bounded by construction, and carries no extra obligation
+                    // here (B28 P3 item 5, item 3a).
+                    let idx = *slot as usize;
+                    let data_len = module.data_layout.as_ref().map_or(0, |dl| dl.slots.len());
+                    if data_len == 0 {
+                        return Err(VerifyError {
+                            chunk_name: name.clone(),
+                            message: alloc::format!(
+                                "SetDataComposite at {} but module has no data layout declared",
+                                ip
+                            ),
+                        });
+                    }
+                    record(ip, P1, "data-slot-layout-declared");
+                    if idx >= data_len {
+                        return Err(VerifyError {
+                            chunk_name: name.clone(),
+                            message: alloc::format!(
+                                "SetDataComposite at {} references slot {} but data layout has {} slot(s)",
                                 ip,
                                 idx,
                                 data_len

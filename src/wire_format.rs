@@ -481,6 +481,7 @@ const OPCODE_ID_TABLE: &[(&str, u8)] = &[
     ("CallVerifiedNative", 67),
     ("CallExternalNative", 68),
     ("NewComposite", 69),
+    ("SetDataComposite", 70),
 ];
 
 /// Return the wire-format identifier for an `Op` variant.
@@ -493,6 +494,7 @@ pub fn opcode_id_of(op: &Op) -> OpcodeId {
         Op::SetData(_) => 4,
         Op::GetDataIndexed(_, _) => 5,
         Op::SetDataIndexed(_, _) => 6,
+        Op::SetDataComposite(_, _) => 70,
         Op::BoundsCheck(_) => 7,
         Op::Add => 8,
         Op::Sub => 9,
@@ -741,7 +743,7 @@ pub fn encode_op(
 
         // Pool-using shapes. Append the entry and store the index
         // in the inline operand bytes.
-        Op::GetDataIndexed(a, b) | Op::SetDataIndexed(a, b) => {
+        Op::GetDataIndexed(a, b) | Op::SetDataIndexed(a, b) | Op::SetDataComposite(a, b) => {
             let idx = pool.len();
             if idx >= MAX_POOL_ENTRIES {
                 return Err(WireFormatError::OperandPoolIndexOverflow);
@@ -833,6 +835,10 @@ pub fn decode_op(record: OpcodeRecord, pool: &[OperandPoolEntry]) -> Result<Op, 
         6 => {
             let (a, b) = decode_pool_u16_u16(record, pool)?;
             Op::SetDataIndexed(a, b)
+        }
+        70 => {
+            let (a, b) = decode_pool_u16_u16(record, pool)?;
+            Op::SetDataComposite(a, b)
         }
         7 => Op::BoundsCheck(record.operand_u16()),
         8 => Op::Add,
@@ -2601,6 +2607,7 @@ mod tests {
                 }),
                 69,
             ),
+            (Op::SetDataComposite(0, 0), 70),
         ];
         for (op, expected) in cases {
             assert_eq!(

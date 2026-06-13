@@ -518,6 +518,24 @@ fn reject_untyped_flat_composite_cmp<W: crate::word::Word, F: crate::float::Floa
     Ok(())
 }
 
+/// Replace a flat composite value's body with `fc`, preserving its kind
+/// (B28 P3 item 5, item 3a). Used to rewrap a value whose body was copied into
+/// the arena persistent region. A non-flat-composite value is returned
+/// unchanged, which a correct caller never passes.
+fn rewrap_flat_body<W: crate::word::Word, F: crate::float::Float>(
+    val: crate::bytecode::GenericValue<W, F>,
+    fc: crate::flat_value::FlatComposite,
+) -> crate::bytecode::GenericValue<W, F> {
+    use crate::bytecode::{ArrayBody, EnumBody, GenericValue, StructBody, TupleBody};
+    match val {
+        GenericValue::Tuple(TupleBody::Flat(_)) => GenericValue::Tuple(TupleBody::Flat(fc)),
+        GenericValue::Array(ArrayBody::Flat(_)) => GenericValue::Array(ArrayBody::Flat(fc)),
+        GenericValue::Struct(StructBody::Flat(_)) => GenericValue::Struct(StructBody::Flat(fc)),
+        GenericValue::Enum(EnumBody::Flat(_)) => GenericValue::Enum(EnumBody::Flat(fc)),
+        other => other,
+    }
+}
+
 fn out_of_arena_push(region: &str, capacity: usize) -> VmError {
     use alloc::format;
     VmError::OutOfArena(format!(
@@ -1853,13 +1871,21 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         };
         let private_storage_bytes =
             private_count as usize * core::mem::size_of::<crate::bytecode::GenericValue<W, F>>();
-        if arena.persistent_capacity() < private_storage_bytes {
+        // The persistent region must also hold the private composite body pool
+        // that follows the slot array (B28 P3 item 5, item 3a). Rejecting an
+        // undersized arena here surfaces the error at construction; the
+        // per-write bounds check in `persist_composite_body` is the soundness
+        // guard regardless.
+        let required_persistent =
+            private_storage_bytes + module.persistent_composite_bytes as usize;
+        if arena.persistent_capacity() < required_persistent {
             return Err(VmError::VerifyError(alloc::format!(
-                "arena persistent_capacity ({} bytes) is too small for module's private data ({} bytes; {} slot(s) at {} bytes each); call `arena.resize_persistent(required_persistent_capacity_for(&module))` before constructing the VM",
+                "arena persistent_capacity ({} bytes) is too small for module's private data ({} bytes: {} slot(s) at {} bytes each plus {} bytes of persistent composite bodies); call `arena.resize_persistent(required_persistent_capacity_for(&module))` before constructing the VM",
                 arena.persistent_capacity(),
-                private_storage_bytes,
+                required_persistent,
                 private_count,
                 core::mem::size_of::<crate::bytecode::GenericValue<W, F>>(),
+                module.persistent_composite_bytes,
             )));
         }
         // Initialise each private slot to crate::bytecode::GenericValue::Unit via
@@ -1968,6 +1994,60 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                 *base.add(private_idx) = value;
             }
         }
+    }
+
+    /// Copy a flat composite's body into the arena persistent region at the
+    /// compiler-assigned fixed offset and return the value rewrapped with a
+    /// region-aware persistent handle (B28 P3 item 5, item 3a).
+    ///
+    /// `rel_offset` is the body's offset within the persistent composite body
+    /// pool, which follows the private-slot `Value` array. The body is copied
+    /// once into that fixed `.data`-style location. The resulting handle points
+    /// into the persistent region, which a RESET never reclaims, so
+    /// region-aware validity keeps it live across iterations with no global
+    /// heap. The caller has verified `val` is a flat composite.
+    fn persist_composite_body(
+        &self,
+        val: crate::bytecode::GenericValue<W, F>,
+        rel_offset: usize,
+    ) -> Result<crate::bytecode::GenericValue<W, F>, VmError> {
+        let private_storage = self.private_slot_count as usize
+            * core::mem::size_of::<crate::bytecode::GenericValue<W, F>>();
+        let dst_off = private_storage + rel_offset;
+        let handle = {
+            let fc = crate::bytecode::flat_composite_ref(&val)
+                .expect("persist_composite_body called on a non-flat-composite value");
+            let bytes = fc.resolve(self.arena).map_err(|_| stale_arena_body())?;
+            let len = bytes.len();
+            if dst_off
+                .checked_add(len)
+                .is_none_or(|end| end > self.arena.persistent_capacity())
+            {
+                return Err(out_of_arena_push(
+                    "persistent composite data slot",
+                    self.arena.capacity(),
+                ));
+            }
+            let base = self.arena.persistent_ptr().as_ptr();
+            // SAFETY: `dst_off + len <= persistent_capacity`, so the destination
+            // lies wholly within the persistent region. It is disjoint from the
+            // source (the value's arena-top or inline body) because the
+            // compiler assigns each private composite slot a distinct pool
+            // offset and the persistent region is a different arena range, so
+            // the copy does not overlap.
+            let dst = unsafe { base.add(dst_off) };
+            unsafe { core::ptr::copy_nonoverlapping(bytes.as_ptr(), dst, len) };
+            let raw: *mut [u8] = core::ptr::slice_from_raw_parts_mut(dst, len);
+            // SAFETY: `dst` is a freshly written, non-null pointer into the
+            // persistent region addressing `len` initialised bytes.
+            let nn = unsafe { core::ptr::NonNull::new_unchecked(raw) };
+            // SAFETY: the bytes live in the persistent region, which a RESET
+            // never reclaims, so the handle stays valid (region-aware validity
+            // treats a persistent pointer as always live).
+            unsafe { keleusma_arena::ArenaHandle::from_raw_parts(nn, self.arena.epoch()) }
+        };
+        let persistent = crate::flat_value::FlatComposite::Arena(handle);
+        Ok(rewrap_flat_body(val, persistent))
     }
 
     /// Number of shared data slots declared in the loaded module.
@@ -3496,6 +3576,30 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                     // handle would dangle after the next RESET (B28 P2).
                     let val = self.pop()?.materialized(self.arena);
                     self.write_data_slot(idx, val);
+                }
+                Op::SetDataComposite(slot, rel_offset) => {
+                    // Store a flat composite into a private persistent slot by
+                    // copying its body into the arena persistent region at the
+                    // compiler-assigned fixed offset, then storing a
+                    // region-aware handle that survives RESET in place (B28 P3
+                    // item 5, item 3a). No global-heap Inline body.
+                    let idx = slot as usize;
+                    let total = self.data_len();
+                    if idx >= total {
+                        return Err(VmError::InvalidBytecode(format!(
+                            "data slot index {} out of bounds",
+                            idx
+                        )));
+                    }
+                    let val = self.pop()?;
+                    if crate::bytecode::flat_composite_ref(&val).is_some() {
+                        let persistent = self.persist_composite_body(val, rel_offset as usize)?;
+                        self.write_data_slot(idx, persistent);
+                    } else {
+                        // The compiler only emits this op for a flat composite
+                        // slot; a non-flat value here is defensive fallback.
+                        self.write_data_slot(idx, val.materialized(self.arena));
+                    }
                 }
                 Op::GetDataIndexed(base, len) => {
                     let index = match self.pop()? {

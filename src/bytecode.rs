@@ -1790,6 +1790,18 @@ pub enum Op {
     GetData(u16),
     /// Pop value and store into data segment slot.
     SetData(u16),
+    /// Pop a flat composite value and store it into a private persistent
+    /// data slot, copying its body into the arena persistent region at a
+    /// compiler-assigned fixed offset (B28 P3 item 5, item 3a). The first
+    /// immediate is the unified data slot index, the second is the body's
+    /// byte offset within the persistent composite body pool (which follows
+    /// the private-slot `Value` array). The runtime copies the body once into
+    /// that fixed location, builds a region-aware arena handle that survives
+    /// RESET in place, and stores the composite there, so the body lives at a
+    /// static, inspectable `.data`-style address rather than on the global
+    /// heap. Emitted by the compiler in place of [`Op::SetData`] when the slot
+    /// holds a flat composite.
+    SetDataComposite(u16, u16),
 
     /// Indexed read from a data-segment array. The first immediate is
     /// the array's base slot, the second is the array's total slot
@@ -2296,6 +2308,7 @@ pub fn nominal_op_cycles(op: &Op) -> u32 {
         | Op::SetLocal(_)
         | Op::GetData(_)
         | Op::SetData(_)
+        | Op::SetDataComposite(_, _)
         | Op::Dup
         | Op::Not => 1,
 
@@ -2420,7 +2433,7 @@ impl Op {
             | Op::CmpLe
             | Op::CmpGe => 0,
 
-            Op::SetLocal(_) | Op::SetData(_) => 0,
+            Op::SetLocal(_) | Op::SetData(_) | Op::SetDataComposite(_, _) => 0,
 
             // GetDataIndexed pops one index, pushes one value.
             Op::GetDataIndexed(_, _) => 1,
@@ -2505,7 +2518,7 @@ impl Op {
             | Op::CmpLe
             | Op::CmpGe => 1,
 
-            Op::SetLocal(_) | Op::SetData(_) => 1,
+            Op::SetLocal(_) | Op::SetData(_) | Op::SetDataComposite(_, _) => 1,
 
             // GetDataIndexed pops the index, SetDataIndexed pops the
             // index then the value, BoundsCheck does not pop.

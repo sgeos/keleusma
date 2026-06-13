@@ -171,6 +171,14 @@ struct FuncCompiler {
     /// another head's table overwrote), which is safe because the lookup then
     /// misses and the structural path runs.
     expr_types: BTreeMap<crate::token::Span, TypeExpr>,
+    /// Private composite data slots that store their body in the arena
+    /// persistent region, mapping the unified slot index to its fixed body
+    /// offset within the persistent composite pool (B28 P3 item 5, item 3a). A
+    /// write to a slot in this map compiles to [`Op::SetDataComposite`] with the
+    /// baked offset; a slot absent from it uses [`Op::SetData`] as before. This
+    /// is the same map across all functions in the module (the persistent
+    /// layout is module-wide).
+    persistent_composite_offsets: BTreeMap<u16, u16>,
     /// Map from local slot to its compile-time integer value, for
     /// the subset of let-bound locals whose value expression
     /// constant-folds to an integer. Used by the refinement-
@@ -473,6 +481,7 @@ impl FuncCompiler {
         const_fields: BTreeMap<String, BTreeMap<String, crate::bytecode::ConstValue>>,
         type_info: TypeInfo,
         expr_types: BTreeMap<crate::token::Span, TypeExpr>,
+        persistent_composite_offsets: BTreeMap<u16, u16>,
         emit_debug: bool,
     ) -> Self {
         Self {
@@ -498,6 +507,7 @@ impl FuncCompiler {
             const_fields,
             type_info,
             expr_types,
+            persistent_composite_offsets,
             local_const_values: BTreeMap::new(),
             local_ranges: BTreeMap::new(),
             emit_debug,
@@ -1539,6 +1549,45 @@ pub fn compile_with_options(
     let function_summaries = compute_function_return_ranges(program, &type_info);
     type_info.function_return_ranges = function_summaries;
 
+    // Lay out the persistent composite body pool and record each single
+    // composite private slot's fixed body offset (B28 P3 item 5, item 3a).
+    // Private slots take unified indices starting at `shared_count`, in the
+    // same declaration order the slot table used, so the unified index and the
+    // cumulative body offset are produced by one walk. The total sizes the
+    // pool, declared in the module header; the offset map drives the
+    // `SetDataComposite` emission below. A slot whose offset would exceed the
+    // sixteen-bit op operand is omitted and falls back to the inline path.
+    // Arrays are deferred (zero body bytes), so they neither size the pool nor
+    // enter the map. Computed before the codegen loop so the map is available
+    // to emission.
+    let (persistent_composite_bytes, persistent_composite_offsets) = {
+        let mut total: u32 = 0;
+        let mut offsets: BTreeMap<u16, u16> = BTreeMap::new();
+        let mut slot_idx: u32 = shared_count;
+        for decl in &program.data_decls {
+            if !matches!(decl.visibility, crate::ast::DataVisibility::Private) {
+                continue;
+            }
+            for field in &decl.fields {
+                let n = slots_for_data_type(&field.type_expr) as u32;
+                let body = data_field_pool_bytes(&field.type_expr, &type_info);
+                // If either index does not fit a u16 the slot is left out of
+                // the map and uses `SetData` (the inline path); the pool total
+                // is not advanced for it.
+                if n == 1
+                    && body > 0
+                    && let (Ok(slot_u16), Ok(off_u16)) =
+                        (u16::try_from(slot_idx), u16::try_from(total))
+                {
+                    offsets.insert(slot_u16, off_u16);
+                    total = total.saturating_add(body as u32);
+                }
+                slot_idx = slot_idx.saturating_add(n);
+            }
+        }
+        (total, offsets)
+    };
+
     // Compile each function group. After emission, enforce the
     // V0.2.0 Phase 6 chunk-size limit: any chunk whose op count
     // exceeds `CHUNK_SIZE_HARD_LIMIT` is rejected as a
@@ -1564,6 +1613,7 @@ pub fn compile_with_options(
             &const_fields,
             &type_info,
             &program.fn_expr_types,
+            &persistent_composite_offsets,
             options.emit_debug,
             generic_origin,
         )?;
@@ -1616,6 +1666,9 @@ pub fn compile_with_options(
                         crate::bytecode::Op::SetData(slot) => {
                             written.insert(*slot);
                         }
+                        crate::bytecode::Op::SetDataComposite(slot, _) => {
+                            written.insert(*slot);
+                        }
                         crate::bytecode::Op::SetDataIndexed(base, len) => {
                             for k in 0..*len {
                                 written.insert(base.saturating_add(k));
@@ -1658,20 +1711,6 @@ pub fn compile_with_options(
     // survives RESET in place; a scalar slot stores its value inline and needs
     // no body. `program` here is the monomorphized program, so field types are
     // concrete and `type_info` resolves their layouts.
-    let persistent_composite_bytes: u32 = {
-        let mut total: u64 = 0;
-        for decl in &program.data_decls {
-            if !matches!(decl.visibility, crate::ast::DataVisibility::Private) {
-                continue;
-            }
-            for field in &decl.fields {
-                total = total
-                    .saturating_add(data_field_pool_bytes(&field.type_expr, &type_info) as u64);
-            }
-        }
-        total.min(u32::MAX as u64) as u32
-    };
-
     #[cfg_attr(not(feature = "verify"), allow(unused_mut))]
     let mut module = Module {
         schema_hash: crate::bytecode::compute_schema_hash(data_layout.as_ref()),
@@ -3021,6 +3060,7 @@ fn compile_function_group(
     const_fields: &BTreeMap<String, BTreeMap<String, crate::bytecode::ConstValue>>,
     type_info: &TypeInfo,
     fn_expr_types: &BTreeMap<String, BTreeMap<crate::token::Span, TypeExpr>>,
+    persistent_composite_offsets: &BTreeMap<u16, u16>,
     emit_debug: bool,
     generic_origin: Option<(&str, &str)>,
 ) -> Result<(Chunk, bool), CompileError> {
@@ -3074,6 +3114,9 @@ fn compile_function_group(
         // monomorphization). Absent for a group the recording pass did not
         // table, in which case the structural inference path runs.
         fn_expr_types.get(name).cloned().unwrap_or_default(),
+        // The module-wide private-composite persistent layout (B28 P3 item 5,
+        // item 3a); the same map for every function.
+        persistent_composite_offsets.clone(),
         emit_debug,
     );
     fc.chunk.param_count = param_count;
@@ -3317,7 +3360,14 @@ fn compile_data_field_assign(
             span,
         })?;
     compile_expr(fc, value)?;
-    fc.emit(Op::SetData(slot));
+    // A private slot that holds a flat composite stores its body in the arena
+    // persistent region at a compiler-assigned fixed offset (B28 P3 item 5,
+    // item 3a); other slots use the inline `SetData` path.
+    if let Some(&rel_offset) = fc.persistent_composite_offsets.get(&slot) {
+        fc.emit(Op::SetDataComposite(slot, rel_offset));
+    } else {
+        fc.emit(Op::SetData(slot));
+    }
     Ok(())
 }
 
@@ -3724,18 +3774,21 @@ fn type_flat_size(ty: &TypeExpr, ti: &TypeInfo) -> Option<usize> {
 /// the given type requires (B28 P3 item 5, item 3a).
 ///
 /// A scalar field stores its value inline in the slot's `Value` cell and needs
-/// no separate body, so it contributes zero. A composite field (struct, tuple,
-/// enum, option) that flattens contributes its flat body size; a non-flat
-/// (reference-bearing) composite contributes zero because it is not stored as a
-/// flat body in the persistent pool. An array field expands to one slot per
-/// element, so it contributes `count` times its element's per-slot body bytes,
-/// recursing for arrays of composites and arrays of arrays.
+/// no separate body, so it contributes zero. A single composite field (struct,
+/// tuple, enum, option) that flattens contributes its flat body size; a
+/// non-flat (reference-bearing) composite contributes zero because it is not
+/// stored as a flat body in the persistent pool. An array field is deferred in
+/// this increment and contributes zero: an array of composites keeps the prior
+/// per-element behaviour, so it is not yet placed in the persistent pool. The
+/// pool total and the per-slot offset map are computed from this function, so
+/// they cover exactly the single-composite slots and stay consistent.
 fn data_field_pool_bytes(ty: &TypeExpr, ti: &TypeInfo) -> usize {
     match ty {
-        TypeExpr::Array(elem, len, _) => {
-            let per = data_field_pool_bytes(elem, ti);
-            (*len).max(0) as usize * per
-        }
+        // Arrays of composites are deferred to a follow-up; they retain the
+        // prior per-element representation and are not pooled (B28 P3 item 5,
+        // item 3a). Contributing zero keeps the pool total and the offset map
+        // aligned on the single-composite slots only.
+        TypeExpr::Array(_, _, _) => 0,
         _ => match ti.layout_context().layout_for(ty) {
             Ok(crate::value_layout::LayoutDescriptor::Scalar(_)) => 0,
             Ok(layout) => layout

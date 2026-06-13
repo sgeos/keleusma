@@ -214,6 +214,7 @@ fn build_benchmark_chunk(pattern: &[Op], constants: &[ConstValue], repetitions: 
         wcet_cycles: 0,
         wcmu_bytes: 0,
         aux_arena_bytes: 0,
+        persistent_composite_bytes: 0,
         flags: 0,
         shared_data_bytes: 0,
         private_data_bytes: 0,
