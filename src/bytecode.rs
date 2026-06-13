@@ -1093,7 +1093,7 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
     /// Pack `values` into a flat byte body built *directly in the arena*,
     /// padded to at least `min_bytes`, with no intermediate global-heap
     /// `Inline` scratch (B28 P3 item 5 C-residual 3b). The arena-resident
-    /// analogue of [`GenericValue::try_pack_flat`], used by the VM
+    /// analogue of `GenericValue::try_pack_flat`, used by the VM
     /// `Op::NewComposite` handler so a freshly constructed composite carries no
     /// global-heap allocation, satisfying the no-global-heap-for-ephemeral
     /// directive directly rather than building an owned body and migrating it.
