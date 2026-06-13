@@ -2845,6 +2845,19 @@ pub struct Module {
     /// the module needs no such tracking memory. Carried in the framing
     /// header's reserved word at offset 56.
     pub aux_arena_bytes: u32,
+    /// Total bytes of persistent flat-composite body storage the private
+    /// `.data` slots require in the arena's persistent region (B28 P3 item 5,
+    /// item 3a). A private data slot holding a flat composite (struct, tuple,
+    /// enum, or an array element thereof) stores its body in this persistent
+    /// pool so it survives RESET in place, rather than on the global heap. The
+    /// value is the sum over private composite slots of each slot's flat body
+    /// size; `0` means no private slot holds a flat composite. The host adds
+    /// this to the arena's persistent capacity (`required_persistent_capacity_for`
+    /// accounts for it). Carried in the framing header's formerly-reserved word
+    /// at offset 60; a `0` value leaves the header bytes identical to the prior
+    /// reserved zero-fill, so existing bytecode without private composite slots
+    /// is byte-unchanged.
+    pub persistent_composite_bytes: u32,
     /// Bit flags describing static properties of the module.
     /// Currently defined bits.
     ///

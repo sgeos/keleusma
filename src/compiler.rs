@@ -1652,6 +1652,26 @@ pub fn compile_with_options(
         }
     }
 
+    // Sum the persistent flat-composite body storage the private `.data`
+    // slots need (B28 P3 item 5, item 3a). A private slot holding a flat
+    // composite stores its body in the arena's persistent region so it
+    // survives RESET in place; a scalar slot stores its value inline and needs
+    // no body. `program` here is the monomorphized program, so field types are
+    // concrete and `type_info` resolves their layouts.
+    let persistent_composite_bytes: u32 = {
+        let mut total: u64 = 0;
+        for decl in &program.data_decls {
+            if !matches!(decl.visibility, crate::ast::DataVisibility::Private) {
+                continue;
+            }
+            for field in &decl.fields {
+                total = total
+                    .saturating_add(data_field_pool_bytes(&field.type_expr, &type_info) as u64);
+            }
+        }
+        total.min(u32::MAX as u64) as u32
+    };
+
     #[cfg_attr(not(feature = "verify"), allow(unused_mut))]
     let mut module = Module {
         schema_hash: crate::bytecode::compute_schema_hash(data_layout.as_ref()),
@@ -1669,6 +1689,9 @@ pub fn compile_with_options(
         // when the relocation of those lists into the arena lands (B28 P3
         // item 5, Phase C); zero until then.
         aux_arena_bytes: 0,
+        // Persistent flat-composite body pool for private `.data` slots (B28
+        // P3 item 5, item 3a). Summed over private fields below.
+        persistent_composite_bytes,
         // Flags is populated by the verifier (under `verify`
         // feature) at end of compile_with_target. The shared
         // and private byte counts mirror the partition computed
@@ -3695,6 +3718,32 @@ fn type_flat_size(ty: &TypeExpr, ti: &TypeInfo) -> Option<usize> {
         .layout_for(ty)
         .ok()?
         .flat_byte_size(ti.word_bytes, ti.float_bytes)
+}
+
+/// Bytes of persistent flat-composite body storage a private `.data` field of
+/// the given type requires (B28 P3 item 5, item 3a).
+///
+/// A scalar field stores its value inline in the slot's `Value` cell and needs
+/// no separate body, so it contributes zero. A composite field (struct, tuple,
+/// enum, option) that flattens contributes its flat body size; a non-flat
+/// (reference-bearing) composite contributes zero because it is not stored as a
+/// flat body in the persistent pool. An array field expands to one slot per
+/// element, so it contributes `count` times its element's per-slot body bytes,
+/// recursing for arrays of composites and arrays of arrays.
+fn data_field_pool_bytes(ty: &TypeExpr, ti: &TypeInfo) -> usize {
+    match ty {
+        TypeExpr::Array(elem, len, _) => {
+            let per = data_field_pool_bytes(elem, ti);
+            (*len).max(0) as usize * per
+        }
+        _ => match ti.layout_context().layout_for(ty) {
+            Ok(crate::value_layout::LayoutDescriptor::Scalar(_)) => 0,
+            Ok(layout) => layout
+                .flat_byte_size(ti.word_bytes, ti.float_bytes)
+                .unwrap_or(0),
+            Err(_) => 0,
+        },
+    }
 }
 
 /// The flat allocation byte size of a composite type for the

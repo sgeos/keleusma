@@ -1040,7 +1040,13 @@ pub fn required_persistent_capacity_for_generic<W: crate::word::Word, F: crate::
             .filter(|s| matches!(s.visibility, crate::bytecode::SlotVisibility::Private))
             .count()
     });
+    // The private-slot `Value` array, plus the persistent flat-composite body
+    // pool those slots need (B28 P3 item 5, item 3a). A private slot holding a
+    // flat composite stores its body in the pool, which follows the slot array
+    // in the persistent region and survives RESET in place. `0` for a module
+    // with no private composite slots, so this is unchanged for such modules.
     private_count * core::mem::size_of::<crate::bytecode::GenericValue<W, F>>()
+        + module.persistent_composite_bytes as usize
 }
 
 /// Number of shared `.data` slots declared in `module`. The shared
@@ -9832,6 +9838,7 @@ mod tests {
             wcet_cycles: 0,
             wcmu_bytes: 0,
             aux_arena_bytes: 0,
+            persistent_composite_bytes: 0,
             flags: 0,
             shared_data_bytes: 0,
             private_data_bytes: 0,
@@ -9873,6 +9880,7 @@ mod tests {
             wcet_cycles: 0,
             wcmu_bytes: 0,
             aux_arena_bytes: 0,
+            persistent_composite_bytes: 0,
             flags: 0,
             shared_data_bytes: 0,
             private_data_bytes: 0,
@@ -11172,6 +11180,7 @@ mod tests {
             wcet_cycles: 0,
             wcmu_bytes: 0,
             aux_arena_bytes: 0,
+            persistent_composite_bytes: 0,
         };
 
         let analyses = crate::verify::module_chunk_text_analyses(&module).expect("analyse");

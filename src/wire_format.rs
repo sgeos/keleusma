@@ -1664,7 +1664,11 @@ fn assemble_wire_bytes(
     // Phase C). Occupies the formerly-reserved word at offset 56; a `0`
     // value leaves the bytes identical to the prior reserved zero-fill.
     buf.extend_from_slice(&module.aux_arena_bytes.to_le_bytes()); // offsets 56..60
-    buf.extend_from_slice(&[0u8; 4]); // reserved at offsets 60..64
+    // Persistent flat-composite body pool size for private `.data` slots
+    // (B28 P3 item 5, item 3a). Occupies the formerly-reserved word at offset
+    // 60; a `0` value leaves the bytes identical to the prior reserved
+    // zero-fill, so a module with no private composite slots is byte-unchanged.
+    buf.extend_from_slice(&module.persistent_composite_bytes.to_le_bytes()); // offsets 60..64
     debug_assert_eq!(buf.len(), WIRE_FORMAT_HEADER_BYTES);
 
     // Signature extension. The signature payload is zero-filled
@@ -2277,17 +2281,14 @@ pub fn module_from_wire_bytes(bytes: &[u8]) -> Result<Module, LoadError> {
         u32::from_le_bytes([bytes[44], bytes[45], bytes[46], bytes[47]]) as usize;
     let aux_body_offset = u32::from_le_bytes([bytes[48], bytes[49], bytes[50], bytes[51]]) as usize;
     let aux_body_length = u32::from_le_bytes([bytes[52], bytes[53], bytes[54], bytes[55]]) as usize;
-    // Offsets 56..60 now carry the runtime ephemeral tracking-list
-    // pre-size figure (B28 P3 item 5, Phase C); offsets 60..64 stay
-    // reserved and must be zero.
+    // Offsets 56..60 carry the runtime ephemeral tracking-list pre-size
+    // figure (B28 P3 item 5, Phase C); offsets 60..64 carry the persistent
+    // flat-composite body pool size for private `.data` slots (item 3a). A
+    // module without private composite slots leaves offset 60 at zero, matching
+    // the prior reserved zero-fill.
     let aux_arena_bytes = u32::from_le_bytes([bytes[56], bytes[57], bytes[58], bytes[59]]);
-    let reserved_b = u32::from_le_bytes([bytes[60], bytes[61], bytes[62], bytes[63]]);
-    if reserved_b != 0 {
-        return Err(LoadError::Codec(format!(
-            "wire format header reserved field at offset 60 must be zero; got {:#010x}",
-            reserved_b,
-        )));
-    }
+    let persistent_composite_bytes =
+        u32::from_le_bytes([bytes[60], bytes[61], bytes[62], bytes[63]]);
     // Signature-extension consistency. Reuse `parse_wire_sections`'
     // logic by inlining the same check.
     let signed = (flags & FLAG_REQUIRES_SIGNATURE) != 0;
@@ -2478,6 +2479,8 @@ pub fn module_from_wire_bytes(bytes: &[u8]) -> Result<Module, LoadError> {
         // Carried only in the framing header (CRC-covered) at offset 56,
         // not mirrored in the auxiliary body (B28 P3 item 5, Phase C).
         aux_arena_bytes,
+        // Carried in the framing header at offset 60 (B28 P3 item 5, item 3a).
+        persistent_composite_bytes,
         flags: aux.flags,
         shared_data_bytes: aux.shared_data_bytes,
         private_data_bytes: aux.private_data_bytes,
@@ -2929,6 +2932,7 @@ mod tests {
             wcet_cycles: 0,
             wcmu_bytes: 0,
             aux_arena_bytes: 0,
+            persistent_composite_bytes: 0,
             flags: 0,
             shared_data_bytes: 0,
             private_data_bytes: 0,
@@ -2974,6 +2978,7 @@ mod tests {
             wcet_cycles: 0,
             wcmu_bytes: 0,
             aux_arena_bytes: 0,
+            persistent_composite_bytes: 0,
             flags: 0,
             shared_data_bytes: 0,
             private_data_bytes: 0,
@@ -3119,6 +3124,7 @@ mod tests {
             wcet_cycles: 0,
             wcmu_bytes: 0,
             aux_arena_bytes: 0,
+            persistent_composite_bytes: 0,
             flags: 0,
             shared_data_bytes: 0,
             private_data_bytes: 0,
@@ -3170,6 +3176,7 @@ mod tests {
             wcet_cycles: 0,
             wcmu_bytes: 0,
             aux_arena_bytes: 0,
+            persistent_composite_bytes: 0,
             flags: 0,
             shared_data_bytes: 0,
             private_data_bytes: 0,
@@ -3212,6 +3219,7 @@ mod tests {
             wcet_cycles: 0,
             wcmu_bytes: 0,
             aux_arena_bytes: 0,
+            persistent_composite_bytes: 0,
             flags: 0,
             shared_data_bytes: 0,
             private_data_bytes: 0,
