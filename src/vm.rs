@@ -10102,11 +10102,12 @@ mod tests {
         assert!(!Value::Int(1).contains_dynstr());
         assert!(!Value::StaticStr(String::from("hi")).contains_dynstr());
         assert!(kstr.contains_dynstr());
-        // A `KStr` tuple element now flattens (B28 P3 item 5 C4); its
-        // cross-yield protection is the compile-time `layout_has_flat_text`
-        // check, not the runtime `contains_dynstr` walk, which reads only
-        // boxed bodies. So a boxed tuple holding a `KStr` is detected here,
-        // while a flat-text tuple is not (the same as a flat-text struct).
+        // A `KStr` tuple element now flattens (B28 P3 item 5 C4). The runtime
+        // `contains_dynstr` walk reads only boxed bodies, so a boxed tuple
+        // holding a `KStr` is detected here, while a flat-text tuple is not
+        // (the same as a flat-text struct). Flat-text composites are governed
+        // by the read-before-resume contract rather than a cross-yield
+        // rejection (B28 P3 item 4).
         assert!(
             Value::Tuple(crate::bytecode::TupleBody::Boxed(alloc::vec![
                 Value::Int(1),
