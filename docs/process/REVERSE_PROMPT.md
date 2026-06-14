@@ -8,6 +8,25 @@ AI to Human communication channel.
 
 ## Last Updated
 
+**Date**: 2026-06-14 (session 9)
+
+**Item 4 (StaticStr to rodata for flat Text fields) is complete end to end on `feat-flat-text-rodata`** (cut from `feat-flat-memory-model` at `806eb49`, which was pushed earlier this work). Five increments, each green on all four gates (default workspace, `--all-features`, `--features signatures` all `--no-fail-fast`, clippy `--tests --workspace --all-features -D warnings`, `cargo fmt`):
+- `427a44a` increment 1: `Arena::addr_is_ephemeral`, `Arena::zero_persistent_range` (`&self`), null-safe flat Text read. Behavior-neutral foundation.
+- `b2aa9c8` increment 2: `validate_data_field_type` admits `Text` in `private` data (flat Text is a fixed two-word handle); a static string field points at the immortal bytecode image. `tests/flat_text_persistent.rs` (static survives RESET, dynamic faults clean-stale, hot-swap clean).
+- `556192a` increment 3: swap capacity check counts the persistent composite pool, and the pool tail is zeroed on swap. The dangling-rodata read is NOT reachable (slot re-init severs the link); zeroing is defense-in-depth.
+- `9f824a5` increment 4: the compile-time flat-text yield rejection is lifted (full relaxation under read-before-resume). `tests/flat_text_rodata_yield.rs`, `tests/flat_text_yield.rs` rewritten.
+- `ee3395b` increment 5: a string constant loads as a zero-copy rodata `KStr` (`chunk_const`), the 6502/NES "bake the ROM address" model. `Op::CmpEq`/`CmpNe` compare strings by content (required now that `"a" == "a"` is two handles); `Op::Yield` rejects only ephemeral strings; the interim O(k) construction scan is removed so `NewComposite` is WCET-flat. CLI `println` and the rogue example resolve a `KStr` through the arena. `tests/const_string_eq.rs`.
+
+**Operator decisions locked this session.** (1) Static-string bytes live in rodata (the bytecode image), not an arena copy, resolving the tension between "const lives in rodata" and "everything in the arena" in favour of rodata. (2) The yield boundary fully relaxes and relies on read-before-resume plus the clean stale-fault backstop, accepting a deliberate policy asymmetry (a bare dynamic string is still rejected at yield, but dynamic text inside a flat composite is admitted under the contract). (3) The WCET hardening goes all the way to compile-time resolution (const string is a rodata handle from `Op::Const`), the strongest of four options, eliminating the construction scan entirely.
+
+**Audit against the operator's bar (WCET/WCMU available + sound, 6502/NES + aerospace sane): PASSES.** WCMU stays sound (a rodata const string uses zero arena bytes, so the text-heap bound is a safe over-estimate; no verifier change). WCET stays available and is now tighter (the construction scan is gone, `NewComposite` is flat-cost, const loads do not allocate). The rodata model is 6502/NES-native; read-before-resume plus clean stale faults (never UB) plus pre-allocation at init are aerospace-sane. A correction recorded for honesty: increment 2 was at one point described as introducing a latent hot-swap use-after-free; on tracing `replace_module_inner` that read was found NOT reachable (slot re-initialisation severs the link), so increment 3's zeroing is hygiene/defense-in-depth, not a reachable-UB fix.
+
+**Not yet merged or pushed.** `feat-flat-text-rodata` is local-only at `ee3395b`; the prior push was of `feat-flat-memory-model` at `806eb49`. Merge/push awaits operator instruction.
+
+**Remaining B28 residuals, dependency order.** Item 5 (typed codegen) and item 3a (persistent composite slots) are done (session 7/8); item 4 is done (this session). Remaining: item 2 (collapse `FlatComposite` to a single arena handle, slot 40 to 32) and item 1 (thin-box or remove the `Boxed` body variants), both of which require deleting the owned `Inline` form. Then Phase D (whole-arena snapshot).
+
+---
+
 **Date**: 2026-06-13 (session 8)
 
 **Item 3a is complete end to end on `feat-flat-typed-codegen`. All four gates green** (default workspace 1140 lib + integration, `--all-features`, `--features signatures`, clippy `--tests --workspace --all-features -D warnings`, `cargo fmt --check`). A private `.data` slot holding a flat composite now stores its body in the arena persistent region and survives RESET in place. The behavior-delivering sub-step 3 landed on top of the session-7 foundation (`Module::persistent_composite_bytes` at framing-header offset 60, `required_persistent_capacity_for` accounting):
