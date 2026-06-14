@@ -1012,6 +1012,27 @@ pub struct GenericVm<
     /// Pre-sized opaque-registry reservation, in `Arc` elements. See
     /// [`Self::reserved_operand_slots`].
     reserved_opaque_capacity: usize,
+    /// VM-owned, read-only pool of materialised scalar const-composite
+    /// bodies (B28 P3 item 2, Increment 2). A transitively-scalar const
+    /// composite (no string or opaque leaf) is packed once at construction
+    /// into a boxed byte body here, outside the arena, and lives for the
+    /// VM's lifetime. This is the const-as-rodata model: const bodies sit
+    /// alongside the bytecode image, not in the arena, so they consume no
+    /// arena capacity and do not enter the arena WCMU bound (the same model
+    /// as a rodata `KStr` pointing into the immortal image). A boxed body's
+    /// heap buffer is stable across `Vec` growth, so a handle minted into it
+    /// stays valid. The `Box<[u8]>` holds plain bytes with no inner `Drop`,
+    /// so the pool frees cleanly when the VM drops.
+    const_pool: alloc::vec::Vec<alloc::boxed::Box<[u8]>>,
+    /// Per-`(chunk, const)` cached const-composite template, indexed
+    /// `const_templates[chunk_idx][const_idx]` (B28 P3 item 2, Increment 2).
+    /// `Some` for a pooled scalar const composite, whose `Flat(Arena)` body
+    /// points into [`Self::const_pool`]; `None` for a constant that is not a
+    /// pooled composite (a scalar, a string, or a string/opaque-bearing boxed
+    /// composite). `chunk_const` returns a clone of the template, which copies
+    /// only the two-word arena handle, so a composite const load is
+    /// allocation-free and WCET-flat.
+    const_templates: alloc::vec::Vec<alloc::vec::Vec<Option<crate::bytecode::GenericValue<W, F>>>>,
     /// Host-supplied trust matrix for cryptographic module
     /// signatures. Populated through
     /// [`Self::register_verifying_key`] before the host hot-swaps
@@ -1196,6 +1217,20 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
             // read, so no `KStr` minted against the old image survives a swap.
             let ks = unsafe { crate::kstring::KString::from_raw_parts(addr, len, 0) };
             return crate::bytecode::GenericValue::KStr(ks);
+        }
+        // A pooled scalar const composite returns a clone of its cached
+        // template, whose flat body points into the VM-owned const pool (B28
+        // P3 item 2, Increment 2). The clone copies only the two-word arena
+        // handle, so the load is allocation-free and WCET-flat; the body bytes
+        // live once in the pool for the VM's lifetime. A constant that was not
+        // pooled (a scalar, a string, or a string/opaque-bearing boxed
+        // composite) falls through to direct materialisation below.
+        if let Some(Some(template)) = self
+            .const_templates
+            .get(chunk_idx)
+            .and_then(|row| row.get(idx))
+        {
+            return template.clone();
         }
         // Materialise constants at the module-declared scalar widths so a
         // constant tuple's flat body matches the offsets the compiler
@@ -1780,7 +1815,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         frames
             .try_reserve(MIN_FRAMES_RESERVE)
             .map_err(|_| out_of_arena_min(arena.capacity()))?;
-        Ok(Self {
+        let mut vm = Self {
             bytecode: BytecodeStore::Borrowed(bytes),
             _phantom_a: core::marker::PhantomData,
             decoded_ops,
@@ -1800,9 +1835,16 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
             reserved_operand_slots: MIN_STACK_RESERVE_SLOTS,
             reserved_frame_depth: MIN_FRAMES_RESERVE,
             reserved_opaque_capacity: 0,
+            const_pool: alloc::vec::Vec::new(),
+            const_templates: alloc::vec::Vec::new(),
             #[cfg(feature = "signatures")]
             verifying_keys: Vec::new(),
-        })
+        };
+        // The trust-skip view path also pools scalar const composites so a
+        // composite const load is allocation-free here too; the build reads
+        // only the trusted archived constant pool (B28 P3 item 2, Increment 2).
+        vm.build_const_pool();
+        Ok(vm)
     }
 
     /// Construct the VM struct without running any verification.
@@ -1960,7 +2002,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         let ephemeral_opaques = pre_sized_bottom_vec::<
             alloc::sync::Arc<dyn crate::opaque::HostOpaque>,
         >(arena, reserve_opaque)?;
-        Ok(Self {
+        let mut vm = Self {
             bytecode: BytecodeStore::Owned(aligned),
             _phantom_a: core::marker::PhantomData,
             decoded_ops,
@@ -1980,9 +2022,15 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
             reserved_operand_slots: reserve_slots,
             reserved_frame_depth: reserve_frames,
             reserved_opaque_capacity: reserve_opaque,
+            const_pool: alloc::vec::Vec::new(),
+            const_templates: alloc::vec::Vec::new(),
             #[cfg(feature = "signatures")]
             verifying_keys: Vec::new(),
-        })
+        };
+        // Materialise scalar const composites into the VM-owned rodata pool
+        // now that the bytecode image is in place (B28 P3 item 2, Increment 2).
+        vm.build_const_pool();
+        Ok(vm)
     }
 
     /// Read a data slot's current value, cloning. Dispatches by
@@ -2080,6 +2128,117 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         };
         let persistent = crate::flat_value::FlatComposite::Arena(handle);
         Ok(rewrap_flat_body(val, persistent))
+    }
+
+    /// Materialise every scalar const composite once into the VM-owned const
+    /// pool and cache a per-`(chunk, const)` template that loads it
+    /// allocation-free (B28 P3 item 2, Increment 2).
+    ///
+    /// Called once at construction and again at each hot swap, after the new
+    /// bytecode image is in place, so the templates reference the current
+    /// module's constants. Both `const_pool` and `const_templates` are rebuilt
+    /// wholesale; the previous pool's boxes are freed when the fields are
+    /// reassigned. The build reads only the archived constant pool and writes
+    /// no arena memory, so the const bodies stay outside the arena (const as
+    /// rodata).
+    fn build_const_pool(&mut self) {
+        // Materialise at the module-declared scalar widths so a pooled body
+        // matches the offsets the compiler baked into the access ops, exactly
+        // as the direct `value_from_archived` path does.
+        let wbytes = self.module_word_bytes();
+        let fbytes = self.module_float_bytes();
+        let mut pool: alloc::vec::Vec<alloc::boxed::Box<[u8]>> = alloc::vec::Vec::new();
+        let mut templates: alloc::vec::Vec<
+            alloc::vec::Vec<Option<crate::bytecode::GenericValue<W, F>>>,
+        > = alloc::vec::Vec::new();
+        {
+            // Immutable borrow of the archived bytecode for the build. The
+            // local `pool`/`templates` are written here, then moved into
+            // `self` once the borrow ends, avoiding an aliasing conflict with
+            // the `&self.bytecode` that `archived()` holds.
+            let chunks = &self.archived().chunks;
+            for chunk in chunks.iter() {
+                let mut row: alloc::vec::Vec<Option<crate::bytecode::GenericValue<W, F>>> =
+                    alloc::vec::Vec::with_capacity(chunk.constants.len());
+                for c in chunk.constants.iter() {
+                    row.push(Self::pool_const_template(c, wbytes, fbytes, &mut pool));
+                }
+                templates.push(row);
+            }
+        }
+        self.const_pool = pool;
+        self.const_templates = templates;
+    }
+
+    /// Pack one constant into the const pool if it is a transitively-scalar
+    /// composite, returning the template that loads it (B28 P3 item 2,
+    /// Increment 2). Returns `None` for any constant that is not pooled.
+    ///
+    /// A scalar or string constant is loaded directly and is never pooled. A
+    /// composite that contains a string or opaque leaf materialises `Boxed`
+    /// (it has no flat body to relocate) and is also not pooled; it keeps its
+    /// existing direct-materialisation path. Only a `Flat(Inline)` composite
+    /// with a non-empty body is relocated into a boxed pool body, whose handle
+    /// is then returned as an `Arena` body. An empty composite body needs no
+    /// handle and is left to the direct path.
+    fn pool_const_template(
+        c: &crate::bytecode::ArchivedConstValue,
+        word_bytes: usize,
+        float_bytes: usize,
+        pool: &mut alloc::vec::Vec<alloc::boxed::Box<[u8]>>,
+    ) -> Option<crate::bytecode::GenericValue<W, F>> {
+        use crate::bytecode::ArchivedConstValue as A;
+        // Only a composite constant can carry a flat body; a scalar or string
+        // constant short-circuits without the materialisation cost.
+        if !matches!(
+            c,
+            A::Tuple(_) | A::Array(_) | A::Struct { .. } | A::Enum { .. }
+        ) {
+            return None;
+        }
+        let v = crate::bytecode::value_from_archived::<W, F>(c, word_bytes, float_bytes);
+        // A transitively-scalar composite materialises `Flat(Inline)`; a
+        // string- or opaque-bearing one stays `Boxed`. `flat_body_bytes`
+        // returns the inline bytes only for the former, so a `None` here means
+        // the constant keeps its direct path.
+        let bx: alloc::boxed::Box<[u8]> = match crate::bytecode::flat_body_bytes(&v) {
+            Some(bytes) if !bytes.is_empty() => alloc::boxed::Box::from(bytes),
+            _ => return None,
+        };
+        let ptr = bx.as_ptr() as *mut u8;
+        let len = bx.len();
+        pool.push(bx);
+        // SAFETY: `ptr`/`len` address the `len` initialised bytes of the boxed
+        // body just moved into `pool`, which the VM owns for its whole
+        // lifetime. The box's heap buffer does not move when `pool` grows, so
+        // the handle stays valid. The address lies in a separate heap
+        // allocation outside the arena buffer, so region-aware validity treats
+        // it as always live regardless of epoch; a sentinel zero epoch
+        // documents that this is epoch-independent rodata, the same model as a
+        // rodata `KStr` pointing into the bytecode image.
+        let handle = unsafe {
+            let raw: *mut [u8] = core::ptr::slice_from_raw_parts_mut(ptr, len);
+            let nn = core::ptr::NonNull::new_unchecked(raw);
+            keleusma_arena::ArenaHandle::<[u8]>::from_raw_parts(nn, 0)
+        };
+        Some(rewrap_flat_body(
+            v,
+            crate::flat_value::FlatComposite::Arena(handle),
+        ))
+    }
+
+    /// Total bytes of the VM-owned const-composite body pool (B28 P3 item 2,
+    /// Increment 2).
+    ///
+    /// These bodies are materialised once at construction (and rebuilt at each
+    /// hot swap) and live for the VM's lifetime outside the arena, so they
+    /// consume no arena capacity and are not part of the arena worst-case
+    /// memory bound. This accessor reports their footprint separately, the way
+    /// a host accounts for the bytecode image, so the complete worst-case
+    /// memory picture stays available. Returns zero for a module with no
+    /// transitively-scalar const composites.
+    pub fn const_pool_bytes(&self) -> usize {
+        self.const_pool.iter().map(|b| b.len()).sum()
     }
 
     /// Number of shared data slots declared in the loaded module.
@@ -2776,6 +2935,14 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         // arena-backed stacks before clearing both ends. The
         // persistent region is preserved through the reset.
         let _ = self.full_reset_arena_internal();
+        // Rebuild the const pool for the swapped-in module (B28 P3 item 2,
+        // Increment 2). The old templates referenced the retired image's
+        // constants and the old pool boxes; rebuilding reassigns both fields,
+        // freeing the old boxes. This runs after `full_reset_arena_internal`
+        // has cleared the operand stack, so no live clone of an old template
+        // can reference a freed box at the moment it is dropped (and a dropped
+        // `Flat(Arena)` handle reads no bytes in any case).
+        self.build_const_pool();
         self.started = false;
 
         Ok(())
@@ -11605,6 +11772,134 @@ mod tests {
         match vm.call(&[]).expect("call") {
             VmState::Finished(Value::Int(v)) => assert_eq!(v, 60),
             other => panic!("expected Int(60), got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn const_composite_pools_a_scalar_composite() {
+        // A transitively-scalar const composite is pooled off-arena, so
+        // `const_pool_bytes` reports a non-empty flat body (its exact size is
+        // two `Word`s, which is width-dependent, so the assertion checks only
+        // that the scalar composite was pooled, not a fixed byte count). The
+        // field reads still resolve through the pooled `Arena` handle (B28 P3
+        // item 2, Increment 2).
+        let src = "\
+            struct Point { x: Word, y: Word }\n\
+            const data origin {\n\
+                pt: Point = Point { x: 3, y: 4 },\n\
+            }\n\
+            fn main() -> Word { origin.pt.x + origin.pt.y }";
+        let tokens = tokenize(src).expect("lex");
+        let program = parse(&tokens).expect("parse");
+        let module = compile(&program).expect("compile");
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let mut vm = Vm::new(module, &arena).expect("verify");
+        assert!(
+            vm.const_pool_bytes() > 0,
+            "expected the scalar const struct to be pooled, got {} bytes",
+            vm.const_pool_bytes()
+        );
+        match vm.call(&[]).expect("call") {
+            VmState::Finished(Value::Int(v)) => assert_eq!(v, 7),
+            other => panic!("expected Int(7), got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn const_composite_pool_empty_without_composites() {
+        // A scalar const field bakes a scalar constant, not a composite, so
+        // nothing is pooled and the off-arena pool reports zero bytes (B28 P3
+        // item 2, Increment 2).
+        let src = "\
+            const data c {\n\
+                n: Word = 42,\n\
+            }\n\
+            fn main() -> Word { c.n }";
+        let tokens = tokenize(src).expect("lex");
+        let program = parse(&tokens).expect("parse");
+        let module = compile(&program).expect("compile");
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let mut vm = Vm::new(module, &arena).expect("verify");
+        assert_eq!(vm.const_pool_bytes(), 0);
+        match vm.call(&[]).expect("call") {
+            VmState::Finished(Value::Int(v)) => assert_eq!(v, 42),
+            other => panic!("expected Int(42), got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn const_composite_survives_reset() {
+        // The pooled const body lives outside the arena for the VM's
+        // lifetime, so a stream that reads a const composite field on every
+        // iteration reads it correctly after a RESET, when the arena's
+        // ephemeral region has been reclaimed (B28 P3 item 2, Increment 2).
+        let src = "\
+            struct Point { x: Word, y: Word }\n\
+            const data origin {\n\
+                pt: Point = Point { x: 3, y: 4 },\n\
+            }\n\
+            loop main(tick: Word) -> Word {\n\
+                let next = yield origin.pt.x + origin.pt.y;\n\
+                next\n\
+            }";
+        let tokens = tokenize(src).expect("lex");
+        let program = parse(&tokens).expect("parse");
+        let module = compile(&program).expect("compile");
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let mut vm = Vm::new(module, &arena).expect("verify");
+
+        // Iteration 1: read the const composite, yield 3 + 4 = 7.
+        match vm.call(&[Value::Int(0)]).expect("call") {
+            VmState::Yielded(v) => assert_eq!(v, Value::Int(7)),
+            other => panic!("expected yield 7, got {:?}", other),
+        }
+        // Resume drives the stream to its RESET, reclaiming the ephemeral
+        // arena region. The pooled const body is off-arena and untouched.
+        match vm.resume(Value::Int(0)).expect("resume") {
+            VmState::Reset => {}
+            other => panic!("expected reset, got {:?}", other),
+        }
+        // Iteration 2 restarts the stream and re-reads the const composite
+        // after the RESET, proving the pooled handle stays live.
+        match vm.resume(Value::Int(0)).expect("resume") {
+            VmState::Yielded(v) => assert_eq!(v, Value::Int(7)),
+            other => panic!("expected yield 7 after reset, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn const_composite_pool_rebuilt_on_hot_swap() {
+        // A hot swap rebuilds the const pool for the new module. The retired
+        // module's pooled body is freed and the swapped-in module's const
+        // composite reads correctly through its own freshly-pooled handle
+        // (B28 P3 item 2, Increment 2).
+        let src_a = "\
+            struct P { x: Word, y: Word }\n\
+            const data o {\n\
+                p: P = P { x: 3, y: 4 },\n\
+            }\n\
+            fn main() -> Word { o.p.x + o.p.y }";
+        let src_b = "\
+            struct P { x: Word, y: Word }\n\
+            const data o {\n\
+                p: P = P { x: 10, y: 20 },\n\
+            }\n\
+            fn main() -> Word { o.p.x + o.p.y }";
+        let mod_a = build_module(src_a);
+        let mod_b = build_module(src_b);
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let mut vm = Vm::new(mod_a, &arena).unwrap();
+        assert!(vm.const_pool_bytes() > 0);
+        match vm.call(&[]).unwrap() {
+            VmState::Finished(v) => assert_eq!(v, Value::Int(7)),
+            other => panic!("expected Int(7), got {:?}", other),
+        }
+
+        vm.replace_module(mod_b, alloc::vec![]).unwrap();
+        assert!(vm.const_pool_bytes() > 0);
+        match vm.call(&[]).unwrap() {
+            VmState::Finished(v) => assert_eq!(v, Value::Int(30)),
+            other => panic!("expected Int(30) after swap, got {:?}", other),
         }
     }
 

@@ -8,6 +8,24 @@ AI to Human communication channel.
 
 ## Last Updated
 
+**Date**: 2026-06-14 (session 11)
+
+**B28 item 2 Increment 2 complete on `feat-flat-const-pool`** (cut from `feat-flat-memory-model` at `9d99a70`). All four gates green: clippy `--tests --workspace --all-features -D warnings` and `cargo fmt` clean, default workspace (1144 lib + integration), `--features signatures` (1112 lib), and `--all-features` (narrow-word-8).
+
+**Design decision this session, operator chosen.** The scalar const-composite pool lives in VM-owned memory OUTSIDE the arena (Design B), not in the arena persistent region (Design A, the session-10 locked plan). I surfaced the fork because item 4 established that rodata lives in the VM-owned bytecode image outside the arena with zero arena bytes, and the operator's stated memory model places const in `.rodata`, not the arena persistent region. Design B keeps the arena WCMU bound tight (no const bytes counted against the arena), matches the 6502/NES ROM model, and reuses item 4's region-aware always-live handle precedent. The operator selected it.
+
+**Material scope finding.** A string- or opaque-bearing const composite materialises `Boxed` (it has no flat body to relocate, because `try_pack_flat` rejects a non-flat-eligible field and a `StaticStr` is not flat-eligible without an arena). So only transitively-scalar const composites reach the pool, and the pool holds pure position-independent bytes with no rodata pointers. This both narrows the increment and removes any flat-Text-rodata-dangle hazard from the pool.
+
+**What landed (all in `src/vm.rs`).** Two VM fields: `const_pool` (owns boxed scalar const-composite bodies, off-arena) and `const_templates` (per-`(chunk, const)` cached `Flat(Arena)` load template). `build_const_pool`/`pool_const_template` materialise each composite constant once at construction, relocate a transitively-scalar `Flat(Inline)` body into a boxed pool body, and mint a region-aware always-live handle (sentinel zero epoch, the rodata `KStr` model). `chunk_const` returns a clone of the template (copies only the two-word handle), so a composite const load is allocation-free and WCET-flat, replacing the prior per-load global-heap `Inline`. Both construction sites (`construct`, the trust-skip `view_bytes_zero_copy`) and the hot-swap path build or rebuild the pool; on swap the rebuild runs after the operand stack is cleared so no live clone references a freed box. New `const_pool_bytes()` reports the off-arena footprint separately, keeping the WCMU picture complete without counting const against the arena. No verifier arena-sizing change, no wire-format change, `BYTECODE_VERSION` stays 1. Four new vm tests plus the existing `const_data_*_initializer` suite (now arena-resident).
+
+**Honest carry-forward for Increment 5.** Design B means `value_from_archived` still builds a transient `Inline` as pool scratch before the relocation. So the eventual `Inline` deletion (Increment 5, the slot 40 to 32 collapse) will need `value_from_archived` to build into a `Box` directly. That is an Increment 5 concern, recorded so it is not lost; it does not affect Increments 3 or 4.
+
+**Next: Increment 3 (arena-aware `into_value` at the native-result boundary), scoped this session.** The `from_value` direction already has the arena-aware `_ctx` family; the gap is the producing direction. Host `into_value` for a composite (`Vec<T>` at `marshall.rs:513`, the tuple macro at `marshall.rs:677`, the `keleusma-macros` derive, `Option` at `marshall.rs:458`) builds through the no-arena `*_with_widths` packers, emitting `Inline`; the VM then relocates a native result via `into_arena_body` at `vm.rs:5980` (reify path) and `vm.rs:6017` (plain path). Increment 3 adds a producing `_ctx` family symmetric to `from_value_ctx`, builds composites directly in the arena via the session-7 `pack_flat_in_arena` keystone (`bytecode.rs:1138`), and routes the native boundary through it, removing the transient `Inline` and the `into_arena_body` relocation. The `IntoNativeFn` wrapper closures already carry `__ctx: &NativeCtx` (`marshall.rs:819`, `851`), so the arena is in scope at the result-marshalling line. Increment 4 then routes the shared-data-slot `materialized` sites (`vm.rs:3814`, `3838`, `3881`) and the boxed-fallback `materialized` sites (`vm.rs:4430`, `4435`, `4451`) off the global heap; Increment 5 is the collapse; Increment 6 retires `materialized`/`to_inline`.
+
+The locked directives and process discipline from session 10 (below) remain in force.
+
+---
+
 **Date**: 2026-06-14 (session 10)
 
 **B28 finalization started on `feat-flat-finalize`** (cut from `feat-flat-memory-model` at `f90c25d`, which was merged and pushed this session). The operator directed proceeding with items 1, 2, and the WCET/WCMU accuracy issues. Status:
