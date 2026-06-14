@@ -137,28 +137,38 @@ pub type Value = GenericValue<i64, f64>;
 pub enum TupleBody<W: crate::word::Word, F: crate::float::Float> {
     /// Flat bytes; fields read at compiler-baked offsets.
     Flat(crate::flat_value::FlatComposite),
-    /// Boxed elements (pre-B28 representation; removed in P3).
-    Boxed(alloc::vec::Vec<GenericValue<W, F>>),
+    /// Boxed elements (the pre-B28 reference/float/oversize fallback). The
+    /// `Vec` is heap-boxed so this variant costs one pointer rather than a
+    /// 24-byte `Vec` inline, keeping `GenericValue` at the 32-byte slot
+    /// (B28 P3 item 1).
+    Boxed(alloc::boxed::Box<alloc::vec::Vec<GenericValue<W, F>>>),
 }
 
 impl<W: crate::word::Word, F: crate::float::Float> TupleBody<W, F> {
-    /// The boxed elements. Panics on the `Flat` form, which the VM
-    /// `NewTuple` handler does not yet construct in B28 P2; once it does,
-    /// the callers of this helper move to reading flat bytes at baked
-    /// offsets instead.
+    /// Construct a boxed tuple body, heap-boxing the element vector.
+    pub fn boxed(elements: alloc::vec::Vec<GenericValue<W, F>>) -> Self {
+        Self::Boxed(alloc::boxed::Box::new(elements))
+    }
+
+    /// The boxed elements. Panics on the `Flat` form, which carries no
+    /// per-element values; flat-tuple reads go through `Op::GetTupleField`
+    /// with the baked field kind instead.
     pub fn elements(&self) -> &[GenericValue<W, F>] {
         match self {
             Self::Boxed(v) => v,
-            Self::Flat(_) => unreachable!("flat tuple body is not constructed yet (B28 P2)"),
+            Self::Flat(_) => {
+                unreachable!("flat tuple body has no element values; read via GetTupleField")
+            }
         }
     }
 
-    /// The boxed elements by value. Panics on the `Flat` form, not yet
-    /// constructed in B28 P2.
+    /// The boxed elements by value. Panics on the `Flat` form.
     pub fn into_elements(self) -> alloc::vec::Vec<GenericValue<W, F>> {
         match self {
-            Self::Boxed(v) => v,
-            Self::Flat(_) => unreachable!("flat tuple body is not constructed yet (B28 P2)"),
+            Self::Boxed(v) => *v,
+            Self::Flat(_) => {
+                unreachable!("flat tuple body has no element values; read via GetTupleField")
+            }
         }
     }
 }
@@ -175,11 +185,19 @@ impl<W: crate::word::Word, F: crate::float::Float> TupleBody<W, F> {
 pub enum ArrayBody<W: crate::word::Word, F: crate::float::Float> {
     /// Flat bytes; elements read at `index * element_size`.
     Flat(crate::flat_value::FlatComposite),
-    /// Boxed elements (pre-B28 representation; removed in P3).
-    Boxed(alloc::vec::Vec<GenericValue<W, F>>),
+    /// Boxed elements (the pre-B28 reference/float/oversize fallback). The
+    /// `Vec` is heap-boxed so this variant costs one pointer rather than a
+    /// 24-byte `Vec` inline, keeping `GenericValue` at the 32-byte slot
+    /// (B28 P3 item 1).
+    Boxed(alloc::boxed::Box<alloc::vec::Vec<GenericValue<W, F>>>),
 }
 
 impl<W: crate::word::Word, F: crate::float::Float> ArrayBody<W, F> {
+    /// Construct a boxed array body, heap-boxing the element vector.
+    pub fn boxed(elements: alloc::vec::Vec<GenericValue<W, F>>) -> Self {
+        Self::Boxed(alloc::boxed::Box::new(elements))
+    }
+
     /// The boxed elements. Panics on the `Flat` form, which carries no
     /// element kind; flat-array reads go through [`Op::GetIndex`] with the
     /// baked [`ArrayElem`] kind, or through the host marshalling boundary
@@ -199,7 +217,7 @@ impl<W: crate::word::Word, F: crate::float::Float> ArrayBody<W, F> {
     /// [`Self::elements`].
     pub fn into_elements(self) -> alloc::vec::Vec<GenericValue<W, F>> {
         match self {
-            Self::Boxed(v) => v,
+            Self::Boxed(v) => *v,
             Self::Flat(_) => {
                 unreachable!(
                     "flat array body has no element kind; read via GetIndex or marshalling"
@@ -638,7 +656,7 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
         // A tuple has no padding (no minimum), so the packed size is exact.
         match Self::try_pack_flat(elements.iter(), 0, word_bytes, float_bytes) {
             Some(body) => Self::Tuple(TupleBody::Flat(body)),
-            None => Self::Tuple(TupleBody::Boxed(elements)),
+            None => Self::Tuple(TupleBody::boxed(elements)),
         }
     }
 
@@ -675,7 +693,7 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
         // see `tuple_with_widths`.
         match Self::try_pack_flat(elements.iter(), 0, word_bytes, float_bytes) {
             Some(body) => Self::Array(ArrayBody::Flat(body)),
-            None => Self::Array(ArrayBody::Boxed(elements)),
+            None => Self::Array(ArrayBody::boxed(elements)),
         }
     }
 
@@ -877,8 +895,8 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
     ) -> Self {
         use crate::value_layout::CompositeKind as C;
         match kind {
-            C::Tuple => Self::Tuple(TupleBody::Boxed(values)),
-            C::Array => Self::Array(ArrayBody::Boxed(values)),
+            C::Tuple => Self::Tuple(TupleBody::boxed(values)),
+            C::Array => Self::Array(ArrayBody::boxed(values)),
             C::Struct => Self::Struct(StructBody::boxed(
                 type_name,
                 names.into_iter().zip(values).collect(),
@@ -996,11 +1014,17 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
                 Self::Struct(StructBody::Flat(fc.to_inline(arena)))
             }
             Self::Enum(EnumBody::Flat(fc)) => Self::Enum(EnumBody::Flat(fc.to_inline(arena))),
-            Self::Tuple(TupleBody::Boxed(elems)) => Self::Tuple(TupleBody::Boxed(
-                elems.into_iter().map(|e| e.materialized(arena)).collect(),
+            Self::Tuple(TupleBody::Boxed(elems)) => Self::Tuple(TupleBody::boxed(
+                (*elems)
+                    .into_iter()
+                    .map(|e| e.materialized(arena))
+                    .collect(),
             )),
-            Self::Array(ArrayBody::Boxed(elems)) => Self::Array(ArrayBody::Boxed(
-                elems.into_iter().map(|e| e.materialized(arena)).collect(),
+            Self::Array(ArrayBody::Boxed(elems)) => Self::Array(ArrayBody::boxed(
+                (*elems)
+                    .into_iter()
+                    .map(|e| e.materialized(arena))
+                    .collect(),
             )),
             Self::Struct(StructBody::Boxed(b)) => {
                 let BoxedStruct { type_name, fields } = *b;
@@ -3964,7 +3988,7 @@ mod materialise_kstrings_tests {
         // walk that still applies to boxed bodies (host-built tuples, `Option`).
         let arena = make_arena();
         let handle = KString::alloc(&arena, "inner").expect("alloc");
-        let v = V::Tuple(TupleBody::Boxed(alloc::vec![
+        let v = V::Tuple(TupleBody::boxed(alloc::vec![
             V::Int(1),
             V::KStr(handle),
             V::Bool(false),

@@ -202,7 +202,7 @@ fn value_kstr_inside_boxed_tuple_is_detected() {
     // detected here.
     let arena = Arena::with_capacity(64);
     let handle = KString::alloc(&arena, "y").unwrap();
-    let v = Value::Tuple(keleusma::bytecode::TupleBody::Boxed(alloc::vec![
+    let v = Value::Tuple(keleusma::bytecode::TupleBody::boxed(alloc::vec![
         Value::Int(1),
         Value::KStr(handle),
     ]));

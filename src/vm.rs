@@ -4259,12 +4259,12 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                             // failure there is malformed bytecode.
                             None => match kind {
                                 CK::Tuple => {
-                                    crate::bytecode::GenericValue::Tuple(TupleBody::Boxed(
+                                    crate::bytecode::GenericValue::Tuple(TupleBody::boxed(
                                         values.into_iter().map(|v| v.materialized(arena)).collect(),
                                     ))
                                 }
                                 CK::Array => {
-                                    crate::bytecode::GenericValue::Array(ArrayBody::Boxed(
+                                    crate::bytecode::GenericValue::Array(ArrayBody::boxed(
                                         values.into_iter().map(|v| v.materialized(arena)).collect(),
                                     ))
                                 }
@@ -4304,10 +4304,10 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                             // boxes its elements.
                             NCO::Flat {
                                 kind: CK::Tuple, ..
-                            } => crate::bytecode::GenericValue::Tuple(TupleBody::Boxed(values)),
+                            } => crate::bytecode::GenericValue::Tuple(TupleBody::boxed(values)),
                             NCO::Flat {
                                 kind: CK::Array, ..
-                            } => crate::bytecode::GenericValue::Array(ArrayBody::Boxed(values)),
+                            } => crate::bytecode::GenericValue::Array(ArrayBody::boxed(values)),
                             // A struct or enum Flat operand always takes the flat
                             // path above, so the non-flat branch never sees one.
                             NCO::Flat { .. } => {
@@ -10194,7 +10194,7 @@ mod tests {
         // by the read-before-resume contract rather than a cross-yield
         // rejection (B28 P3 item 4).
         assert!(
-            Value::Tuple(crate::bytecode::TupleBody::Boxed(alloc::vec![
+            Value::Tuple(crate::bytecode::TupleBody::boxed(alloc::vec![
                 Value::Int(1),
                 kstr.clone()
             ]))
