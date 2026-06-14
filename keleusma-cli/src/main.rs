@@ -1384,9 +1384,9 @@ fn execute_source_repl_silent(source: &str, shared_state: &mut Vec<Value>) -> Re
 /// and `shell::tick_interval` natives since REPL expressions do
 /// not need them.
 fn register_repl_natives<'a, 'arena>(vm: &mut Vm<'a, 'arena>) {
-    vm.register_native_closure("println", |args| {
+    vm.register_native_with_ctx_closure("println", |ctx, args| {
         if let Some(arg) = args.first() {
-            print_value_inline(arg);
+            print_value_inline_ctx(arg, ctx.arena);
         }
         println!();
         Ok(Value::Unit)
@@ -1656,9 +1656,9 @@ fn drive_to_completion(
     // Override the bundled println with one that writes to stdout.
     // The library default is a no-op suitable for no_std hosts; the
     // CLI is std-only and benefits from real output.
-    vm.register_native_closure("println", |args| {
+    vm.register_native_with_ctx_closure("println", |ctx, args| {
         if let Some(arg) = args.first() {
-            print_value_inline(arg);
+            print_value_inline_ctx(arg, ctx.arena);
         }
         println!();
         Ok(Value::Unit)
@@ -1989,6 +1989,22 @@ pub(crate) fn format_value(v: &Value) -> String {
 /// trailing newline.
 fn print_value_inline(v: &Value) {
     print!("{}", format_value(v));
+}
+
+/// Like [`print_value_inline`] but resolves a top-level `KStr` through the
+/// arena before printing. A string constant now loads as a rodata `KStr`
+/// rather than an owned `StaticStr` (B28 P3 item 4), so `println("x")` would
+/// otherwise render the handle through `format_value`'s debug fallback instead
+/// of the text. A stale handle prints a placeholder rather than dereferencing
+/// reclaimed memory.
+fn print_value_inline_ctx(v: &Value, arena: &Arena) {
+    match v {
+        Value::KStr(h) => match h.get(arena) {
+            Ok(s) => print!("{}", s),
+            Err(_) => print!("<stale KStr>"),
+        },
+        other => print_value_inline(other),
+    }
 }
 
 fn print_value(v: &Value, arena: &Arena) {

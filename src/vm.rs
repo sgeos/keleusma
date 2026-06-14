@@ -1165,6 +1165,38 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
     /// Materialize the constant at `(chunk_idx, idx)` from archived storage.
     fn chunk_const(&self, chunk_idx: usize, idx: usize) -> crate::bytecode::GenericValue<W, F> {
         let chunk = &self.archived().chunks[chunk_idx];
+        // A non-empty top-level string constant loads as a rodata-backed `KStr`
+        // pointing directly at the immortal bytecode image, not an owned
+        // `StaticStr` heap copy (B28 P3 item 4). This is zero-copy (no per-load
+        // allocation) and WCET-flat (no construction-time scan), the 6502/NES
+        // "bake the ROM address" model. An empty string returns an owned empty
+        // `StaticStr`, both to avoid resting on the non-null guarantee of the
+        // archived empty-string pointer and because an empty body needs no
+        // handle. A composite constant that contains strings still materialises
+        // through `value_from_archived` below; its string leaves become owned
+        // `StaticStr` there, which the flat packer copies into the arena as a
+        // genuinely-owned (host-like) string.
+        if let crate::bytecode::ArchivedConstValue::StaticStr(s) = &chunk.constants[idx] {
+            let bytes = s.as_str().as_bytes();
+            if bytes.is_empty() {
+                return crate::bytecode::GenericValue::StaticStr(alloc::string::String::new());
+            }
+            let addr = bytes.as_ptr() as usize;
+            let len = bytes.len();
+            // SAFETY: `addr` addresses `len` valid UTF-8 bytes inside
+            // `self.bytecode`, the immortal bytecode image the VM owns for its
+            // whole lifetime and which only a hot swap replaces. The bytes are
+            // read-only and the handle is never written through. The address
+            // lies outside the arena's ephemeral region, so `addr_is_live`
+            // short-circuits to true regardless of epoch and the handle never
+            // goes stale; a sentinel zero epoch documents that this is
+            // epoch-independent rodata. A hot swap reallocates the image, but
+            // `replace_module_inner` clears the operand stack and frames and
+            // zeroes the persistent composite pool before the new image is
+            // read, so no `KStr` minted against the old image survives a swap.
+            let ks = unsafe { crate::kstring::KString::from_raw_parts(addr, len, 0) };
+            return crate::bytecode::GenericValue::KStr(ks);
+        }
         // Materialise constants at the module-declared scalar widths so a
         // constant tuple's flat body matches the offsets the compiler
         // baked into its access instructions (B28 P2).
@@ -1234,35 +1266,6 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
             crate::bytecode::ArchivedConstValue::StaticStr(s) => Some(s.as_str().to_string()),
             _ => None,
         }
-    }
-
-    /// Find a module string constant whose content equals `content` and return
-    /// the stable `(address, len)` of its bytes inside the immortal bytecode
-    /// image, the runtime rodata (B28 P3 item 4).
-    ///
-    /// Any constant of equal content is a valid source, because strings are
-    /// immutable and compared by value, so the search spans every chunk rather
-    /// than threading the originating constant index through the value
-    /// pipeline. It returns `None` when no constant matches, which is the
-    /// dynamic case the caller copies into the ephemeral arena instead.
-    ///
-    /// The cost is a scan of the module's string constants, a count fixed at
-    /// compile time, so the worst-case execution time stays bounded. The
-    /// returned address is valid for the VM's lifetime while the bytecode image
-    /// is not replaced by a hot swap, which the swap path screens by zeroing
-    /// surviving persistent bodies.
-    fn static_str_image_ref(&self, content: &str) -> Option<(usize, usize)> {
-        for chunk in self.archived().chunks.iter() {
-            for c in chunk.constants.iter() {
-                if let crate::bytecode::ArchivedConstValue::StaticStr(s) = c
-                    && s.as_str() == content
-                {
-                    let bytes = s.as_str().as_bytes();
-                    return Some((bytes.as_ptr() as usize, bytes.len()));
-                }
-            }
-        }
-        None
     }
 
     /// Look up a struct template's type name and field names.
@@ -3898,14 +3901,26 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                     // without the arena.
                     let b = self.pop()?;
                     let a = self.pop()?;
-                    reject_untyped_flat_composite_cmp(&a, &b)?;
-                    sp!(self, crate::bytecode::GenericValue::Bool(a == b));
+                    // Two strings compare by content (resolved through the
+                    // arena), so a rodata or arena `KStr` is never compared by
+                    // handle identity (B28 P3 item 4). Other operands keep the
+                    // structural comparison.
+                    if let Some(eq) = self.string_content_eq(&a, &b)? {
+                        sp!(self, crate::bytecode::GenericValue::Bool(eq));
+                    } else {
+                        reject_untyped_flat_composite_cmp(&a, &b)?;
+                        sp!(self, crate::bytecode::GenericValue::Bool(a == b));
+                    }
                 }
                 Op::CmpNe => {
                     let b = self.pop()?;
                     let a = self.pop()?;
-                    reject_untyped_flat_composite_cmp(&a, &b)?;
-                    sp!(self, crate::bytecode::GenericValue::Bool(a != b));
+                    if let Some(eq) = self.string_content_eq(&a, &b)? {
+                        sp!(self, crate::bytecode::GenericValue::Bool(!eq));
+                    } else {
+                        reject_untyped_flat_composite_cmp(&a, &b)?;
+                        sp!(self, crate::bytecode::GenericValue::Bool(a != b));
+                    }
                 }
                 Op::CmpLt => self.compare_op(|ord| ord.is_lt())?,
                 Op::CmpGt => self.compare_op(|ord| ord.is_gt())?,
@@ -4080,18 +4095,20 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
 
                 Op::Yield => {
                     let output = self.pop()?;
-                    // Enforce cross-yield prohibition on dynamic strings (R31).
-                    // A dynamic string is an arena pointer. Allowing one across
-                    // the yield boundary would either require the host to
-                    // consume it before the next RESET or accept dangling
-                    // references after the arena is cleared. The runtime
-                    // structural check rejects yielded values that transitively
-                    // contain a dynamic string.
-                    if output.contains_dynstr() {
+                    // Reject a yielded value that transitively contains an
+                    // EPHEMERAL dynamic string (R31, B28 P3 item 4). An
+                    // ephemeral string is an arena pointer the next RESET
+                    // reclaims, so it would dangle after the boundary. A rodata
+                    // string constant, now a `KStr` pointing at the immortal
+                    // bytecode image, is outside the ephemeral region and is
+                    // free to cross. The check reads boxed bodies only; an
+                    // ephemeral flat Text field inside a composite is governed
+                    // by the read-before-resume contract instead.
+                    if self.value_has_ephemeral_str(&output) {
                         return Err(VmError::TypeError(String::from(
-                            "yielded value contains a dynamic string, which cannot \
-                             cross the yield boundary; use a static string or convert \
-                             to a non-string representation in the host",
+                            "yielded value contains a dynamic (ephemeral arena) string, \
+                             which cannot cross the yield boundary; use a static string \
+                             or convert to a non-string representation in the host",
                         )));
                     }
                     // Read-before-resume (B28 P3 item 5 C3): the yielded value
@@ -4178,42 +4195,20 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                                         idx as i64,
                                     ));
                                 }
-                                // A static string field becomes a flat
+                                // A genuinely-owned `StaticStr` (a host-supplied
+                                // string, not a constant load, which now arrives
+                                // already as a rodata `KStr`) is copied into the
+                                // ephemeral arena so the flat field can hold a
                                 // (ptr, len) `KStr` the packer writes as two
-                                // words (B28 P3). When the string matches a
-                                // module constant, the handle points at the
-                                // immortal bytecode image (rodata) with no
-                                // arena allocation, so the field survives RESET
-                                // and crosses the yield boundary (B28 P3 item
-                                // 4); region-aware validity treats an
-                                // out-of-arena address as always live.
-                                // Otherwise the string is dynamic and is copied
-                                // into the ephemeral arena, where it is valid
-                                // only within the iteration.
+                                // words (B28 P3 item 4). Such a string is dynamic
+                                // and valid only within the iteration. A `KStr`
+                                // operand, whether rodata or arena, is left as-is
+                                // by the wildcard arm and packed directly.
                                 crate::bytecode::GenericValue::StaticStr(s) => {
-                                    let ks = if let Some((addr, len)) = self.static_str_image_ref(s)
-                                    {
-                                        // SAFETY: `addr` addresses `len` valid
-                                        // UTF-8 bytes inside `self.bytecode`,
-                                        // which the VM owns for its lifetime
-                                        // and only a hot swap replaces. The
-                                        // bytes are read-only; the handle is
-                                        // never written through. The epoch is
-                                        // immaterial because the address is
-                                        // outside the ephemeral region, so
-                                        // `addr_is_live` short-circuits to true.
-                                        unsafe {
-                                            crate::kstring::KString::from_raw_parts(
-                                                addr,
-                                                len,
-                                                arena.epoch(),
-                                            )
-                                        }
-                                    } else {
+                                    let ks =
                                         crate::kstring::KString::alloc(arena, s).map_err(|_| {
                                             out_of_arena_push("flat text field", arena.capacity())
-                                        })?
-                                    };
+                                        })?;
                                     *v = crate::bytecode::GenericValue::KStr(ks);
                                 }
                                 _ => {}
@@ -5923,6 +5918,69 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         Ok(())
     }
 
+    /// Compare two values by string content when both are strings, returning
+    /// `Some(equal)` (B28 P3 item 4). Each operand is resolved through the
+    /// arena, so a `KStr` (a rodata or arena handle) compares by content rather
+    /// than by the handle identity the structural `PartialEq` would use; this
+    /// is required once a string constant loads as a rodata `KStr` rather than
+    /// an owned `StaticStr`, so `"a" == "a"` (two distinct handles) is still
+    /// content-correct. Returns `None` when the operands are not both strings,
+    /// so the caller falls back to the structural comparison.
+    fn string_content_eq(
+        &self,
+        a: &crate::bytecode::GenericValue<W, F>,
+        b: &crate::bytecode::GenericValue<W, F>,
+    ) -> Result<Option<bool>, VmError> {
+        use crate::bytecode::GenericValue::{KStr, StaticStr};
+        if matches!(a, StaticStr(_) | KStr(_)) && matches!(b, StaticStr(_) | KStr(_)) {
+            let stale =
+                || VmError::TypeError(String::from("KStr is stale (arena reset since allocation)"));
+            let xs = a
+                .as_str_with_arena(self.arena)
+                .map_err(|_| stale())?
+                .unwrap_or("");
+            let ys = b
+                .as_str_with_arena(self.arena)
+                .map_err(|_| stale())?
+                .unwrap_or("");
+            Ok(Some(xs == ys))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Whether a yielded value transitively contains an EPHEMERAL dynamic
+    /// string, the case the read-before-resume contract cannot cover because
+    /// the arena reclaims it at the iteration boundary (B28 P3 item 4).
+    ///
+    /// A `KStr` whose pointer lies outside the ephemeral region is immortal (a
+    /// rodata string constant or host-owned bytes) and is free to cross the
+    /// boundary, so only an ephemeral `KStr` is flagged. This mirrors the boxed-
+    /// only recursion of [`GenericValue::contains_dynstr`]; a flat body is not
+    /// read here, so an ephemeral flat Text field is governed by the read-
+    /// before-resume contract (the host decodes it before the next `resume()`)
+    /// rather than a yield-time rejection.
+    fn value_has_ephemeral_str(&self, v: &crate::bytecode::GenericValue<W, F>) -> bool {
+        use crate::bytecode::{ArrayBody, EnumBody, GenericValue, StructBody, TupleBody};
+        match v {
+            GenericValue::KStr(ks) => self.arena.addr_is_ephemeral(ks.raw_parts().0),
+            GenericValue::Tuple(TupleBody::Boxed(items)) => {
+                items.iter().any(|x| self.value_has_ephemeral_str(x))
+            }
+            GenericValue::Array(ArrayBody::Boxed(items)) => {
+                items.iter().any(|x| self.value_has_ephemeral_str(x))
+            }
+            GenericValue::Struct(StructBody::Boxed(b)) => b
+                .fields
+                .iter()
+                .any(|(_, x)| self.value_has_ephemeral_str(x)),
+            GenericValue::Enum(EnumBody::Boxed(b)) => {
+                b.fields.iter().any(|x| self.value_has_ephemeral_str(x))
+            }
+            _ => false,
+        }
+    }
+
     fn compare_op<Pred>(&mut self, pred: Pred) -> Result<(), VmError>
     where
         Pred: FnOnce(core::cmp::Ordering) -> bool,
@@ -6277,6 +6335,28 @@ mod tests {
                 panic!("unexpected breakpoint at chunk {} op {}", chunk, op)
             }
         }
+    }
+
+    /// Run `src` and resolve the finished value's string content to an owned
+    /// `String` while the VM and arena are still alive. A string constant now
+    /// loads as a rodata `KStr` pointing into the VM-owned bytecode image, so a
+    /// returned `Value` would dangle once the local VM drops; resolving here
+    /// captures the content first (B28 P3 item 4).
+    fn run_expect_text(src: &str, args: &[Value]) -> alloc::string::String {
+        use alloc::string::ToString;
+        let tokens = tokenize(src).expect("lex error");
+        let program = parse(&tokens).expect("parse error");
+        let module = compile(&program).expect("compile error");
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let mut vm = Vm::new(module, &arena).unwrap();
+        let v = match vm.call(args).unwrap() {
+            VmState::Finished(v) => v,
+            other => panic!("expected finished, got {:?}", other),
+        };
+        v.as_str_with_arena(&arena)
+            .expect("resolve string")
+            .unwrap_or("")
+            .to_string()
     }
 
     #[test]
@@ -8144,8 +8224,8 @@ mod tests {
 
     #[test]
     fn eval_string_literal() {
-        let val = run_expect("fn main() -> Text { \"hello\" }", &[]);
-        assert_eq!(val, Value::StaticStr(String::from("hello")));
+        let s = run_expect_text("fn main() -> Text { \"hello\" }", &[]);
+        assert_eq!(s, "hello");
     }
 
     #[test]
@@ -8456,20 +8536,20 @@ mod tests {
 
     #[test]
     fn eval_multiheaded_literal() {
-        let val = run_expect(
+        let s = run_expect_text(
             "fn classify(0) -> Text { \"zero\" }\nfn classify(x: Word) -> Text { \"other\" }\nfn main() -> Text { classify(0) }",
             &[],
         );
-        assert_eq!(val, Value::StaticStr(String::from("zero")));
+        assert_eq!(s, "zero");
     }
 
     #[test]
     fn eval_multiheaded_fallthrough() {
-        let val = run_expect(
+        let s = run_expect_text(
             "fn classify(0) -> Text { \"zero\" }\nfn classify(x: Word) -> Text { \"other\" }\nfn main() -> Text { classify(5) }",
             &[],
         );
-        assert_eq!(val, Value::StaticStr(String::from("other")));
+        assert_eq!(s, "other");
     }
 
     #[test]
@@ -8514,20 +8594,20 @@ mod tests {
 
     #[test]
     fn eval_match_literal() {
-        let val = run_expect(
+        let s = run_expect_text(
             "fn main() -> Text { let x = 1; match x { 1 => \"one\", 2 => \"two\", _ => \"other\" } }",
             &[],
         );
-        assert_eq!(val, Value::StaticStr(String::from("one")));
+        assert_eq!(s, "one");
     }
 
     #[test]
     fn eval_match_wildcard() {
-        let val = run_expect(
+        let s = run_expect_text(
             "fn main() -> Text { let x = 99; match x { 1 => \"one\", _ => \"other\" } }",
             &[],
         );
-        assert_eq!(val, Value::StaticStr(String::from("other")));
+        assert_eq!(s, "other");
     }
 
     #[test]
@@ -9306,7 +9386,12 @@ mod tests {
         let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
         let mut vm = Vm::new(module, &arena).unwrap();
         match vm.call(&[Value::Int(0)]).unwrap() {
-            VmState::Yielded(v) => assert_eq!(v, Value::StaticStr(String::from("static"))),
+            // A yielded string constant is now a rodata `KStr`; resolve its
+            // content through the arena while the VM is alive (B28 P3 item 4).
+            VmState::Yielded(v) => {
+                let s = v.as_str_with_arena(&arena).expect("resolve").unwrap_or("");
+                assert_eq!(s, "static");
+            }
             other => panic!("expected yield, got {:?}", other),
         }
     }

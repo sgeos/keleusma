@@ -354,7 +354,7 @@ fn load_bestiary() -> Result<(), Box<dyn std::error::Error>> {
         let state = vm
             .call(&[Value::Int(i as i64)])
             .map_err(|e| format!("bestiary entry {}: {:?}", i, e))?;
-        let name = leak_finished_static_str(state, i)?;
+        let name = leak_finished_static_str(state, i, &arena)?;
         table.push(read_bestiary_entry(&vm, name)?);
     }
     bestiary::install(table);
@@ -364,9 +364,19 @@ fn load_bestiary() -> Result<(), Box<dyn std::error::Error>> {
 fn leak_finished_static_str(
     state: VmState,
     id: usize,
+    arena: &Arena,
 ) -> Result<&'static str, Box<dyn std::error::Error>> {
     match state {
-        VmState::Finished(Value::StaticStr(s)) => Ok(Box::leak(s.into_boxed_str())),
+        // A returned string constant is now a rodata `KStr` rather than an
+        // owned `StaticStr` (B28 P3 item 4); resolve its content through the
+        // arena, then leak an owned copy for the program lifetime.
+        VmState::Finished(v) => {
+            let s = v
+                .as_str_with_arena(arena)
+                .map_err(|_| format!("bestiary entry {} name is stale", id))?
+                .ok_or_else(|| format!("bestiary entry {} returned a non-string", id))?;
+            Ok(Box::leak(String::from(s).into_boxed_str()))
+        }
         other => Err(format!("bestiary entry {} returned non-string: {:?}", id, other).into()),
     }
 }

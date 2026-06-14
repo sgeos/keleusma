@@ -675,8 +675,14 @@ fn bestiary_returns_name_as_text() {
     }
     let state = vm.call(&[Value::Int(0)]).expect("call 0");
     match state {
-        VmState::Finished(Value::StaticStr(s)) => assert_eq!(s, "Sewer Rat"),
-        other => panic!("expected Finished(StaticStr), got {:?}", other),
+        // A returned string constant is now a rodata `KStr` rather than an
+        // owned `StaticStr` (B28 P3 item 4); resolve its content through the
+        // arena while the VM is alive.
+        VmState::Finished(v) => {
+            let s = v.as_str_with_arena(&arena).expect("resolve").unwrap_or("");
+            assert_eq!(s, "Sewer Rat");
+        }
+        other => panic!("expected Finished, got {:?}", other),
     }
 }
 
