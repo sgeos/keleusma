@@ -106,6 +106,28 @@ pub trait KeleusmaType<W: Word, F: Float>: Sized {
     /// Convert from the Rust type into a runtime [`GenericValue`].
     fn into_value(self) -> GenericValue<W, F>;
 
+    /// Like [`KeleusmaType::into_value`] but building any flat composite body
+    /// directly in the arena rather than the global heap (B28 P3 item 2,
+    /// Increment 3).
+    ///
+    /// The default materialises through `into_value` then migrates the body to
+    /// the arena via `into_arena_body`, which is correct for every type (a
+    /// scalar, string, opaque, or boxed value is returned unchanged). A flat
+    /// composite type overrides this to pack straight into the arena through
+    /// the `*_in_arena` constructors, skipping the transient top-level
+    /// global-heap body. The native-result boundary calls this so an ephemeral
+    /// native return carries no global-heap composite body across a `loop`
+    /// iteration's `RESET`. The widths are the runtime's own, exactly as
+    /// `into_value` uses, so the packed bytes are identical to the
+    /// `into_value`-then-`into_arena_body` path; only the residence differs.
+    fn into_value_ctx(self, ctx: &RefContext<'_>) -> Result<GenericValue<W, F>, VmError> {
+        self.into_value().into_arena_body(ctx.arena).map_err(|_| {
+            VmError::OutOfArena(alloc::string::String::from(
+                "arena exhausted building a native result composite body",
+            ))
+        })
+    }
+
     /// The flat-composite scalar kind this type occupies when it is a
     /// tuple field, or `None` when it is not a flat-eligible scalar
     /// (B28 P2).
@@ -468,6 +490,17 @@ impl<W: Word, F: Float, T: KeleusmaType<W, F>> KeleusmaType<W, F> for Option<T> 
             other => T::from_value_ctx(other, ctx).map(Some),
         }
     }
+
+    fn into_value_ctx(self, ctx: &RefContext<'_>) -> Result<GenericValue<W, F>, VmError> {
+        // `Some(t)` is the bare inner value (the runtime treats any non-`None`
+        // as `Some`), so recurse into the inner type's arena-direct builder so
+        // a `Some(composite)` native result is arena-resident (B28 P3 item 2,
+        // Increment 3).
+        match self {
+            Some(t) => t.into_value_ctx(ctx),
+            Option::None => Ok(GenericValue::None),
+        }
+    }
 }
 
 // -- Fixed-length arrays --
@@ -519,6 +552,29 @@ impl<W: Word, F: Float, T: KeleusmaType<W, F> + Clone, const N: usize> KeleusmaT
             (1usize << <W as Word>::BITS_LOG2) / 8,
             (1usize << <F as Float>::BITS_LOG2) / 8,
         )
+    }
+
+    fn into_value_ctx(self, ctx: &RefContext<'_>) -> Result<GenericValue<W, F>, VmError> {
+        // Build the flat array body directly in the arena, eliminating the
+        // top-level global-heap `Inline` (B28 P3 item 2, Increment 3). Element
+        // values and the packing widths are the host runtime's own, exactly as
+        // `into_value` uses, so the body is byte-identical to the prior
+        // `into_value`-then-`into_arena_body` path and the result decodes the
+        // same way through `from_value`. (A narrower *module* word would call
+        // for module-width packing here, but that conflicts with the
+        // runtime-width `from_value` host decoder; reconciling the two is the
+        // separate narrow-word composite-width item noted in REVERSE_PROMPT.)
+        GenericValue::array_in_arena(
+            self.into_iter().map(|t| t.into_value()).collect(),
+            (1usize << <W as Word>::BITS_LOG2) / 8,
+            (1usize << <F as Float>::BITS_LOG2) / 8,
+            ctx.arena,
+        )
+        .map_err(|_| {
+            VmError::OutOfArena(alloc::string::String::from(
+                "arena exhausted building a native array result",
+            ))
+        })
     }
 
     fn flat_byte_size(word_bytes: usize, float_bytes: usize) -> Option<usize> {
@@ -686,6 +742,30 @@ macro_rules! impl_tuple {
                 )
             }
 
+            #[allow(non_snake_case)]
+            fn into_value_ctx(self, __ctx: &RefContext<'_>)
+                -> Result<GenericValue<W, FloatT>, VmError>
+            {
+                let ($($name,)*) = self;
+                // Build the flat tuple body directly in the arena, eliminating
+                // the top-level global-heap `Inline` (B28 P3 item 2, Increment
+                // 3). Element values and packing widths are the host runtime's
+                // own, so the body is byte-identical to `into_value` and
+                // decodes the same through `from_value` (see the array impl on
+                // the narrow-word module-width item).
+                GenericValue::tuple_in_arena(
+                    ::alloc::vec![$($name.into_value(),)*],
+                    (1usize << <W as Word>::BITS_LOG2) / 8,
+                    (1usize << <FloatT as Float>::BITS_LOG2) / 8,
+                    __ctx.arena,
+                )
+                .map_err(|_| {
+                    VmError::OutOfArena(::alloc::string::String::from(
+                        "arena exhausted building a native tuple result",
+                    ))
+                })
+            }
+
             #[allow(unused_assignments, unused_mut, unused_variables)]
             fn flat_byte_size(word_bytes: usize, float_bytes: usize) -> Option<usize> {
                 let mut total = 0usize;
@@ -832,7 +912,12 @@ macro_rules! impl_into_native_fn {
                         $(
                             let $name = <$name as KeleusmaType<W, FloatT>>::from_value_ctx(&args[$idx], &__rc)?;
                         )*
-                        Ok(self($($name,)*).into_value())
+                        // Build the result's composite body directly in the
+                        // arena through the producing `_ctx` family, so a native
+                        // composite return carries no global-heap body (B28 P3
+                        // item 2, Increment 3). The VM's later `into_arena_body`
+                        // is then a no-op on this already-arena result.
+                        <R as KeleusmaType<W, FloatT>>::into_value_ctx(self($($name,)*), &__rc)
                     },
                 )
             }
@@ -862,7 +947,12 @@ macro_rules! impl_into_native_fn {
                         $(
                             let $name = <$name as KeleusmaType<W, FloatT>>::from_value_ctx(&args[$idx], &__rc)?;
                         )*
-                        self($($name,)*).map(<R as KeleusmaType<W, FloatT>>::into_value)
+                        // Arena-direct result body on the Ok path (B28 P3 item
+                        // 2, Increment 3); the Err path surfaces the host error.
+                        self($($name,)*)
+                            .and_then(|__r| {
+                                <R as KeleusmaType<W, FloatT>>::into_value_ctx(__r, &__rc)
+                            })
                     },
                 )
             }

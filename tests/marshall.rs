@@ -535,6 +535,79 @@ fn register_fn_with_derived_struct_return() {
     }
 }
 
+// Gated off the narrow-word builds. The native result is packed at the host
+// runtime `Word` width (eight bytes), matching the `from_value` host decoder,
+// but under a narrow module word the script reads its fields at the narrower
+// width, so the field-reading assertion would mismatch. That produce/consume
+// width reconciliation (runtime-width `from_value` versus module-width script
+// access) is the separate narrow-word composite-width item noted in
+// REVERSE_PROMPT, not part of Increment 3; on the bundled runtime the widths
+// coincide and the arena-direct path is exercised fully.
+#[cfg(not(any(
+    feature = "narrow-word-8",
+    feature = "narrow-word-16",
+    feature = "narrow-word-32"
+)))]
+#[test]
+fn register_fn_returning_word_struct_builds_in_arena() {
+    // A native returning an all-`Word` flat struct builds its body directly in
+    // the arena through the derived `into_value_ctx` (B28 P3 item 2, Increment
+    // 3), rather than a global-heap `Inline` migrated afterward. The script
+    // reads both fields, proving the arena-resident result round-trips.
+    let arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+    let mut vm = build_vm(
+        "use host::pair() -> Pair\n\
+         struct Pair { a: Word, b: Word }\n\
+         fn main() -> Word { host::pair().a + host::pair().b }",
+        &arena,
+    );
+    vm.register_fn("host::pair", || -> Pair { Pair { a: 3, b: 4 } });
+    match vm.call(&[]).unwrap() {
+        VmState::Finished(v) => assert_eq!(v, Value::Int(7)),
+        other => panic!("expected Int(7), got {:?}", other),
+    }
+}
+
+// Gated off the narrow-word builds for the same reason as
+// `register_fn_returning_word_struct_builds_in_arena`.
+#[cfg(not(any(
+    feature = "narrow-word-8",
+    feature = "narrow-word-16",
+    feature = "narrow-word-32"
+)))]
+#[test]
+fn register_fn_returning_nested_struct_builds_in_arena() {
+    // A native returning a nested flat struct (a struct field and a tuple
+    // field) builds its body directly in the arena: the parent is packed
+    // through `struct_in_arena`, and the nested `Pair` and tuple are resolved
+    // and copied into the parent's single arena allocation, so the arena holds
+    // exactly one body (B28 P3 item 2, Increment 3). The script reads the
+    // nested fields, proving the layout and residence round-trip.
+    let arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+    let mut vm = build_vm(
+        "use host::make() -> Holder\n\
+         struct Pair { a: Word, b: Word }\n\
+         struct Holder { p: Pair, coords: (Word, Word), tag: Word }\n\
+         fn main() -> Word {\n\
+             host::make().p.a + host::make().p.b\n\
+             + host::make().coords.0 + host::make().coords.1\n\
+             + host::make().tag\n\
+         }",
+        &arena,
+    );
+    vm.register_fn("host::make", || -> Holder {
+        Holder {
+            p: Pair { a: 1, b: 2 },
+            coords: (3, 4),
+            tag: 5,
+        }
+    });
+    match vm.call(&[]).unwrap() {
+        VmState::Finished(v) => assert_eq!(v, Value::Int(15)),
+        other => panic!("expected Int(15), got {:?}", other),
+    }
+}
+
 #[test]
 fn untyped_native_composite_equality_faults_not_silently_wrong() {
     // An unsignatured native returns a composite the compiler cannot type, so

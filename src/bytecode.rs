@@ -799,6 +799,77 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
         }
     }
 
+    /// Arena-direct counterpart of [`GenericValue::tuple_with_widths`] (B28 P3
+    /// item 2, Increment 3).
+    ///
+    /// Packs a flat-eligible tuple body straight into the arena through
+    /// [`GenericValue::pack_flat_in_arena`], with no intermediate global-heap
+    /// `Inline`; a reference- or boxed-element tuple falls back to the boxed
+    /// body exactly as the global-heap constructor does. The host marshalling
+    /// boundary calls this so a native tuple result carries no global-heap
+    /// body. A nested composite element is still built by the global-heap
+    /// `into_value` and resolved-and-copied into the parent's single arena
+    /// allocation, so the arena footprint is exactly one body (no per-child
+    /// arena allocation, hence no change to the worst-case-memory accounting);
+    /// eliminating that transient child `Inline` is the Increment 5 collapse.
+    pub fn tuple_in_arena(
+        elements: alloc::vec::Vec<Self>,
+        word_bytes: usize,
+        float_bytes: usize,
+        arena: &keleusma_arena::Arena,
+    ) -> Result<Self, allocator_api2::alloc::AllocError> {
+        match Self::pack_flat_in_arena(&elements, 0, word_bytes, float_bytes, arena)? {
+            Some(body) => Ok(Self::Tuple(TupleBody::Flat(body))),
+            None => Ok(Self::Tuple(TupleBody::boxed(elements))),
+        }
+    }
+
+    /// Arena-direct counterpart of [`GenericValue::array_with_widths`] (B28 P3
+    /// item 2, Increment 3). See [`GenericValue::tuple_in_arena`].
+    pub fn array_in_arena(
+        elements: alloc::vec::Vec<Self>,
+        word_bytes: usize,
+        float_bytes: usize,
+        arena: &keleusma_arena::Arena,
+    ) -> Result<Self, allocator_api2::alloc::AllocError> {
+        match Self::pack_flat_in_arena(&elements, 0, word_bytes, float_bytes, arena)? {
+            Some(body) => Ok(Self::Array(ArrayBody::Flat(body))),
+            None => Ok(Self::Array(ArrayBody::boxed(elements))),
+        }
+    }
+
+    /// Arena-direct counterpart of [`GenericValue::struct_with_widths`] (B28 P3
+    /// item 2, Increment 3). See [`GenericValue::tuple_in_arena`]. The field
+    /// names are retained for the boxed fallback by unzipping before the pack
+    /// and rezipping only on the not-flat-eligible path.
+    pub fn struct_in_arena(
+        type_name: alloc::string::String,
+        fields: alloc::vec::Vec<(alloc::string::String, Self)>,
+        word_bytes: usize,
+        float_bytes: usize,
+        arena: &keleusma_arena::Arena,
+    ) -> Result<Self, allocator_api2::alloc::AllocError> {
+        let (names, values): (
+            alloc::vec::Vec<alloc::string::String>,
+            alloc::vec::Vec<Self>,
+        ) = fields.into_iter().unzip();
+        match Self::pack_flat_in_arena(&values, 0, word_bytes, float_bytes, arena)? {
+            Some(body) => Ok(Self::Struct(StructBody::Flat(body))),
+            None => Ok(Self::Struct(StructBody::boxed(
+                type_name,
+                names.into_iter().zip(values).collect(),
+            ))),
+        }
+    }
+
+    // Note: there is intentionally no `enum_in_arena` constructor. The
+    // `keleusma-macros` enum derive keeps the default `into_value_ctx`
+    // (materialise then `into_arena_body`) for now, so its native result still
+    // transits a transient `Inline`; an enum's eight-argument arena-direct
+    // constructor and the derive's matching arms are folded into the
+    // Increment 5 collapse, where the residual `Inline` producers are removed
+    // together (B28 P3 item 2).
+
     /// Write this fixed-size scalar's little-endian bytes into `dst` at
     /// `offset` (B28 P2). The width of an `Int`/`Fixed` is `word_bytes`
     /// and of a `Float` is `float_bytes`, taken from the runtime's

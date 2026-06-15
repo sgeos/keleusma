@@ -341,6 +341,45 @@ fn derive_struct_body(_name: &Ident, name_str: &str, data: &DataStruct) -> Token
                         (1usize << <__KF as ::keleusma::Float>::BITS_LOG2) / 8,
                     )
                 }
+
+                fn into_value_ctx(
+                    self,
+                    __ctx: &::keleusma::RefContext<'_>,
+                ) -> ::core::result::Result<
+                    ::keleusma::GenericValue<__KW, __KF>,
+                    ::keleusma::VmError,
+                > {
+                    let fields: ::alloc::vec::Vec<(
+                        ::alloc::string::String,
+                        ::keleusma::GenericValue<__KW, __KF>,
+                    )> = ::alloc::vec![
+                        #(
+                            (
+                                ::alloc::string::String::from(#field_name_strs),
+                                <#field_types as ::keleusma::KeleusmaType<__KW, __KF>>::into_value(self.#field_names),
+                            ),
+                        )*
+                    ];
+                    // Build the flat struct body directly in the arena,
+                    // eliminating the top-level global-heap `Inline` (B28 P3
+                    // item 2, Increment 3). Field values and packing widths are
+                    // the host runtime's own, so the body is byte-identical to
+                    // `into_value` and decodes the same through `from_value`
+                    // (the narrow-word module-width reconciliation is the
+                    // separate item noted in REVERSE_PROMPT).
+                    ::keleusma::GenericValue::struct_in_arena(
+                        ::alloc::string::String::from(#name_str),
+                        fields,
+                        (1usize << <__KW as ::keleusma::Word>::BITS_LOG2) / 8,
+                        (1usize << <__KF as ::keleusma::Float>::BITS_LOG2) / 8,
+                        __ctx.arena,
+                    )
+                    .map_err(|_| {
+                        ::keleusma::VmError::OutOfArena(::alloc::string::String::from(
+                            "arena exhausted building a native struct result",
+                        ))
+                    })
+                }
             }
         }
         Fields::Unnamed(_) => quote! {
