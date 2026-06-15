@@ -555,26 +555,28 @@ impl<W: Word, F: Float, T: KeleusmaType<W, F> + Clone, const N: usize> KeleusmaT
     }
 
     fn into_value_ctx(self, ctx: &RefContext<'_>) -> Result<GenericValue<W, F>, VmError> {
-        // Build the flat array body directly in the arena, eliminating the
-        // top-level global-heap `Inline` (B28 P3 item 2, Increment 3). Element
-        // values and the packing widths are the host runtime's own, exactly as
-        // `into_value` uses, so the body is byte-identical to the prior
-        // `into_value`-then-`into_arena_body` path and the result decodes the
-        // same way through `from_value`. (A narrower *module* word would call
-        // for module-width packing here, but that conflicts with the
-        // runtime-width `from_value` host decoder; reconciling the two is the
-        // separate narrow-word composite-width item noted in REVERSE_PROMPT.)
-        GenericValue::array_in_arena(
-            self.into_iter().map(|t| t.into_value()).collect(),
-            (1usize << <W as Word>::BITS_LOG2) / 8,
-            (1usize << <F as Float>::BITS_LOG2) / 8,
-            ctx.arena,
+        // Build the flat array body directly in the arena at the module widths
+        // from the context, casting each element from the host runtime width
+        // to the module width (B28 P3 item 2, Increment 3; B36). On a narrow
+        // build the module width is smaller, so the cast is the same wrapping
+        // overflow the VM applies to in-script narrow-word arithmetic; on the
+        // bundled runtime the widths coincide and it is identity. Elements
+        // recurse through `into_value_ctx` so a nested composite element is
+        // also arena-resident at the module widths; a scalar element resolves
+        // to the width-agnostic default, so only a composite element allocates.
+        // The matching decoder is `from_value_ctx`/`Vm::decode`, which reads at
+        // the module widths, not the runtime-width `from_value`.
+        let elems = self
+            .into_iter()
+            .map(|t| t.into_value_ctx(ctx))
+            .collect::<Result<Vec<GenericValue<W, F>>, VmError>>()?;
+        GenericValue::array_in_arena(elems, ctx.word_bytes, ctx.float_bytes, ctx.arena).map_err(
+            |_| {
+                VmError::OutOfArena(alloc::string::String::from(
+                    "arena exhausted building a native array result",
+                ))
+            },
         )
-        .map_err(|_| {
-            VmError::OutOfArena(alloc::string::String::from(
-                "arena exhausted building a native array result",
-            ))
-        })
     }
 
     fn flat_byte_size(word_bytes: usize, float_bytes: usize) -> Option<usize> {
@@ -747,16 +749,17 @@ macro_rules! impl_tuple {
                 -> Result<GenericValue<W, FloatT>, VmError>
             {
                 let ($($name,)*) = self;
-                // Build the flat tuple body directly in the arena, eliminating
-                // the top-level global-heap `Inline` (B28 P3 item 2, Increment
-                // 3). Element values and packing widths are the host runtime's
-                // own, so the body is byte-identical to `into_value` and
-                // decodes the same through `from_value` (see the array impl on
-                // the narrow-word module-width item).
+                // Build the flat tuple body directly in the arena at the
+                // module widths from the context, casting each element from
+                // the host runtime width to the module width (B28 P3 item 2,
+                // Increment 3; B36). Elements recurse through `into_value_ctx`
+                // so a nested composite element is also arena-resident at the
+                // module widths. The matching decoder is `from_value_ctx`/
+                // `Vm::decode` (see the array impl).
                 GenericValue::tuple_in_arena(
-                    ::alloc::vec![$($name.into_value(),)*],
-                    (1usize << <W as Word>::BITS_LOG2) / 8,
-                    (1usize << <FloatT as Float>::BITS_LOG2) / 8,
+                    ::alloc::vec![$($name.into_value_ctx(__ctx)?,)*],
+                    __ctx.word_bytes,
+                    __ctx.float_bytes,
                     __ctx.arena,
                 )
                 .map_err(|_| {

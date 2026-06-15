@@ -356,22 +356,23 @@ fn derive_struct_body(_name: &Ident, name_str: &str, data: &DataStruct) -> Token
                         #(
                             (
                                 ::alloc::string::String::from(#field_name_strs),
-                                <#field_types as ::keleusma::KeleusmaType<__KW, __KF>>::into_value(self.#field_names),
+                                <#field_types as ::keleusma::KeleusmaType<__KW, __KF>>::into_value_ctx(self.#field_names, __ctx)?,
                             ),
                         )*
                     ];
-                    // Build the flat struct body directly in the arena,
-                    // eliminating the top-level global-heap `Inline` (B28 P3
-                    // item 2, Increment 3). Field values and packing widths are
-                    // the host runtime's own, so the body is byte-identical to
-                    // `into_value` and decodes the same through `from_value`
-                    // (the narrow-word module-width reconciliation is the
-                    // separate item noted in REVERSE_PROMPT).
+                    // Build the flat struct body directly in the arena at the
+                    // module widths from the context, casting each field from
+                    // the host runtime width to the module width (B28 P3 item
+                    // 2, Increment 3; B36). Each field recurses through
+                    // `into_value_ctx` so a nested composite field is also
+                    // arena-resident at the module widths. The matching decoder
+                    // is `from_value_ctx`/`Vm::decode`, which reads at the
+                    // module widths, not the runtime-width `from_value`.
                     ::keleusma::GenericValue::struct_in_arena(
                         ::alloc::string::String::from(#name_str),
                         fields,
-                        (1usize << <__KW as ::keleusma::Word>::BITS_LOG2) / 8,
-                        (1usize << <__KF as ::keleusma::Float>::BITS_LOG2) / 8,
+                        __ctx.word_bytes,
+                        __ctx.float_bytes,
                         __ctx.arena,
                     )
                     .map_err(|_| {

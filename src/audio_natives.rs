@@ -253,13 +253,28 @@ mod tests {
         }
     }
 
-    /// Decode a `(Float, Float)` result through the host marshalling path.
-    /// A float-bearing tuple is flat (B28 P3 item 5), so its elements are read
-    /// from the flat byte body rather than a boxed `Vec`; `from_value` handles
-    /// both representations.
-    fn pan_pair(val: Value) -> (f64, f64) {
-        <(f64, f64) as crate::marshall::KeleusmaType<i64, f64>>::from_value(&val)
-            .expect("expected a (Float, Float) tuple")
+    /// Run a program returning a `(Float, Float)` tuple and decode it through
+    /// the context-aware `Vm::decode` while the VM is still alive.
+    ///
+    /// `Vm::decode` reads the flat body at the module-declared widths, which is
+    /// the canonical layout a native composite result is packed with (B28 item
+    /// 2 / B36). The arena-less, runtime-width `from_value` would misread the
+    /// body on a narrow-float build, where the module float is four bytes but
+    /// the host runtime float is eight; `Vm::decode` reads at the module width
+    /// and widens to the runtime `f64`, so it is correct on every build.
+    fn run_with_audio_pair(src: &str) -> (f64, f64) {
+        let tokens = tokenize(src).expect("lex error");
+        let program = parse(&tokens).expect("parse error");
+        let module = compile(&program).expect("compile error");
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let mut vm = Vm::new(module, &arena).unwrap();
+        register_audio_natives(&mut vm);
+        match vm.call(&[]).unwrap() {
+            VmState::Finished(v) => vm
+                .decode::<(f64, f64)>(&v)
+                .expect("expected a (Float, Float) tuple"),
+            other => panic!("expected a finished tuple, got {:?}", other),
+        }
     }
 
     fn assert_close(val: Value, expected: f64, tol: f64) {
@@ -456,19 +471,29 @@ mod tests {
 
     #[test]
     fn pan_law_centre() {
-        let val = run_with_audio(
+        let (l, r) = run_with_audio_pair(
             "use audio::pan_law\nfn main() -> (Float, Float) { audio::pan_law(0.0) }",
         );
-        let (l, r) = pan_pair(val);
         let target = core::f64::consts::FRAC_1_SQRT_2;
+        // The center gain is an irrational `1/sqrt(2)`. On a `narrow-float-32`
+        // build the module float is `f32`, so the native's `f64` result is cast
+        // to `f32` precision when packed into the tuple body and decoded back at
+        // the module width, which differs from the `f64` target by about
+        // `1e-8`; the tolerance loosens to an `f32`-appropriate bound there. On
+        // the bundled `f64` runtime the value is exact to `f64` precision and
+        // the tight bound holds (B36).
+        #[cfg(feature = "narrow-float-32")]
+        let tol = 1e-6;
+        #[cfg(not(feature = "narrow-float-32"))]
+        let tol = 1e-9;
         assert!(
-            (l - target).abs() < 1e-9,
+            (l - target).abs() < tol,
             "left expected ~{}, got {}",
             target,
             l
         );
         assert!(
-            (r - target).abs() < 1e-9,
+            (r - target).abs() < tol,
             "right expected ~{}, got {}",
             target,
             r
@@ -477,20 +502,18 @@ mod tests {
 
     #[test]
     fn pan_law_full_left() {
-        let val = run_with_audio(
+        let (l, r) = run_with_audio_pair(
             "use audio::pan_law\nfn main() -> (Float, Float) { audio::pan_law(-1.0) }",
         );
-        let (l, r) = pan_pair(val);
         assert!((l - 1.0).abs() < 1e-9, "left expected 1.0, got {}", l);
         assert!(r.abs() < 1e-9, "right expected 0.0, got {}", r);
     }
 
     #[test]
     fn pan_law_full_right() {
-        let val = run_with_audio(
+        let (l, r) = run_with_audio_pair(
             "use audio::pan_law\nfn main() -> (Float, Float) { audio::pan_law(1.0) }",
         );
-        let (l, r) = pan_pair(val);
         assert!(l.abs() < 1e-9, "left expected 0.0, got {}", l);
         assert!((r - 1.0).abs() < 1e-9, "right expected 1.0, got {}", r);
     }
@@ -498,10 +521,9 @@ mod tests {
     #[test]
     fn pan_law_clamps_out_of_range() {
         // pos = 2.0 clamps to 1.0, equivalent to full right.
-        let val = run_with_audio(
+        let (l, r) = run_with_audio_pair(
             "use audio::pan_law\nfn main() -> (Float, Float) { audio::pan_law(2.0) }",
         );
-        let (l, r) = pan_pair(val);
         assert!(l.abs() < 1e-9, "left expected 0.0, got {}", l);
         assert!((r - 1.0).abs() < 1e-9, "right expected 1.0, got {}", r);
     }

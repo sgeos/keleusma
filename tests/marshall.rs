@@ -535,25 +535,14 @@ fn register_fn_with_derived_struct_return() {
     }
 }
 
-// Gated off the narrow-word builds. The native result is packed at the host
-// runtime `Word` width (eight bytes), matching the `from_value` host decoder,
-// but under a narrow module word the script reads its fields at the narrower
-// width, so the field-reading assertion would mismatch. That produce/consume
-// width reconciliation (runtime-width `from_value` versus module-width script
-// access) is the separate narrow-word composite-width item noted in
-// REVERSE_PROMPT, not part of Increment 3; on the bundled runtime the widths
-// coincide and the arena-direct path is exercised fully.
-#[cfg(not(any(
-    feature = "narrow-word-8",
-    feature = "narrow-word-16",
-    feature = "narrow-word-32"
-)))]
 #[test]
 fn register_fn_returning_word_struct_builds_in_arena() {
     // A native returning an all-`Word` flat struct builds its body directly in
-    // the arena through the derived `into_value_ctx` (B28 P3 item 2, Increment
-    // 3), rather than a global-heap `Inline` migrated afterward. The script
-    // reads both fields, proving the arena-resident result round-trips.
+    // the arena through the derived `into_value_ctx` at the module widths (B28
+    // P3 item 2, Increment 3; B36), rather than a global-heap `Inline` migrated
+    // afterward. The script reads both fields, proving the arena-resident
+    // result round-trips on the bundled and narrow-word runtimes alike (the
+    // module-width cast keeps the layout the script reads).
     let arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
     let mut vm = build_vm(
         "use host::pair() -> Pair\n\
@@ -568,13 +557,6 @@ fn register_fn_returning_word_struct_builds_in_arena() {
     }
 }
 
-// Gated off the narrow-word builds for the same reason as
-// `register_fn_returning_word_struct_builds_in_arena`.
-#[cfg(not(any(
-    feature = "narrow-word-8",
-    feature = "narrow-word-16",
-    feature = "narrow-word-32"
-)))]
 #[test]
 fn register_fn_returning_nested_struct_builds_in_arena() {
     // A native returning a nested flat struct (a struct field and a tuple
