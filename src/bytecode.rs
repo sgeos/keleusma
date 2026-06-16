@@ -2729,6 +2729,36 @@ pub enum SlotVisibility {
     Private,
 }
 
+/// Per-shared-slot byte layout in the borrowed host buffer (B28 item 2
+/// shared-data re-architecture).
+///
+/// One entry per shared slot index, in the same order as the shared prefix of
+/// [`DataLayout::slots`]. An array field expands to one entry per element slot,
+/// so `Op::GetDataIndexed` resolves an element slot and the runtime reads its
+/// entry. For a shared slot the runtime reads or writes the host buffer at
+/// `offset` according to `kind`: a tag from
+/// [`crate::value_layout::ScalarKind::to_tag`] for a scalar slot, or
+/// [`SHARED_SLOT_COMPOSITE_TAG`] for a flat composite slot whose body is `len`
+/// bytes. The instruction set is unchanged; this table is how the existing
+/// `GetData`/`SetData` reach the buffer without a new opcode, the rad-hard
+/// minimal-ISA choice.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Archive, Serialize, Deserialize)]
+pub struct SharedSlotLayout {
+    /// Byte offset of this slot within the host buffer.
+    pub offset: u16,
+    /// `ScalarKind::to_tag` for a scalar slot, or [`SHARED_SLOT_COMPOSITE_TAG`]
+    /// for a flat composite slot.
+    pub kind: u8,
+    /// Flat composite body length in bytes for a composite slot; `0` for a
+    /// scalar slot.
+    pub len: u16,
+}
+
+/// [`SharedSlotLayout::kind`] value marking a flat composite slot, distinct
+/// from every `ScalarKind::to_tag` (which occupy `0..=7`); `255` is the codec's
+/// reserved non-kind sentinel.
+pub const SHARED_SLOT_COMPOSITE_TAG: u8 = 255;
+
 /// Data segment layout declaration.
 ///
 /// Defines the fixed-size, fixed-layout set of persistent values that
@@ -2739,6 +2769,10 @@ pub struct DataLayout {
     /// Named slots in declaration order. Slot index corresponds to
     /// the `GetData`/`SetData` operand.
     pub slots: Vec<DataSlot>,
+    /// Per-shared-slot byte layout in the host buffer, one entry per shared
+    /// slot in declaration order (B28 item 2). Empty when there are no shared
+    /// slots; the private slots that follow the shared prefix carry no entries.
+    pub shared_layout: Vec<SharedSlotLayout>,
 }
 
 /// A compiled function.

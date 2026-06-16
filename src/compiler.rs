@@ -1389,11 +1389,14 @@ pub fn compile_with_options(
     let private_count = private_slots.len() as u32;
     let mut data_layout_slots: Vec<DataSlot> = shared_slots;
     data_layout_slots.append(&mut private_slots);
-    let data_layout = if data_layout_slots.is_empty() {
+    // `shared_layout` is filled in below, once `type_info` is available to
+    // compute per-shared-slot byte offsets and kinds (B28 item 2).
+    let mut data_layout = if data_layout_slots.is_empty() {
         None
     } else {
         Some(DataLayout {
             slots: data_layout_slots,
+            shared_layout: Vec::new(),
         })
     };
 
@@ -1593,27 +1596,47 @@ pub fn compile_with_options(
         (total, offsets)
     };
 
-    // The shared data segment's true flat byte total (B28 item 2 shared-data
-    // re-architecture). The header field `shared_data_bytes` becomes the size
-    // of the borrowed host-owned buffer the embedder lends at `call`/`resume`,
-    // laid out as a flat struct at the module's scalar widths, replacing the
-    // prior slot-count-times-`VALUE_SLOT_SIZE_BYTES` figure. No runtime path
-    // reads it yet (the slot model is still active in this step); it is the
-    // contract the later shared-field lowering and the host buffer-sizing
-    // helpers consume.
-    let shared_data_flat_bytes: u32 = {
-        let mut total: u32 = 0;
+    // The shared data segment's flat byte total and its per-shared-slot layout
+    // table (B28 item 2 shared-data re-architecture). `shared_data_bytes` is the
+    // size of the borrowed host-owned buffer the embedder lends at
+    // `call`/`resume`, laid out as a flat struct at the module's scalar widths.
+    // The layout table gives each shared slot its byte offset and kind so the
+    // existing `GetData`/`SetData` reach the buffer with no new opcode (the
+    // rad-hard minimal-ISA choice); it is filled into `data_layout` below. No
+    // runtime path reads either yet (the slot model is still active in this
+    // step). The shared-field walk order matches the slot-assignment walk
+    // above, so the table is indexed by shared slot index.
+    let (shared_data_flat_bytes, shared_slot_layout): (
+        u32,
+        Vec<crate::bytecode::SharedSlotLayout>,
+    ) = {
+        let mut entries: Vec<crate::bytecode::SharedSlotLayout> = Vec::new();
+        let mut offset: u16 = 0;
         for decl in &program.data_decls {
             if !matches!(decl.visibility, crate::ast::DataVisibility::Shared) {
                 continue;
             }
             for field in &decl.fields {
-                let body = data_field_flat_bytes(&field.type_expr, &type_info) as u32;
-                total = total.saturating_add(body);
+                let consumed = push_shared_slot_layout(
+                    &field.type_expr,
+                    &type_info,
+                    offset,
+                    field.span,
+                    &mut entries,
+                )?;
+                offset = offset.checked_add(consumed).ok_or_else(|| CompileError {
+                    message: String::from(
+                        "shared data segment exceeds the 64KB flat host-buffer limit",
+                    ),
+                    span: field.span,
+                })?;
             }
         }
-        total
+        (offset as u32, entries)
     };
+    if let Some(dl) = data_layout.as_mut() {
+        dl.shared_layout = shared_slot_layout;
+    }
 
     // Compile each function group. After emission, enforce the
     // V0.2.0 Phase 6 chunk-size limit: any chunk whose op count
@@ -3852,22 +3875,101 @@ fn data_field_pool_bytes(ty: &TypeExpr, ti: &TypeInfo) -> usize {
     }
 }
 
-/// The full flat byte size a data field occupies in the shared data segment's
-/// host-owned buffer (B28 item 2 shared-data re-architecture).
+/// Append the shared-buffer layout entries for one shared field's type, in slot
+/// order, accumulating from `base_offset`, and return the bytes the field
+/// consumes (B28 item 2 shared-data re-architecture).
 ///
-/// Unlike [`data_field_pool_bytes`], which sizes only the private composite
-/// body pool and so contributes zero for scalars and arrays, this returns the
-/// full flat size of any data field type, scalar, array, tuple, struct, or
-/// enum, at the module's scalar widths. A reference-bearing or otherwise
-/// non-flat type contributes zero here; such a type in a shared field will be
-/// rejected when the shared lowering lands, since it cannot live in a flat
-/// host-owned buffer.
-fn data_field_flat_bytes(ty: &TypeExpr, ti: &TypeInfo) -> usize {
-    match ti.layout_context().layout_for(ty) {
-        Ok(layout) => layout
-            .flat_byte_size(ti.word_bytes, ti.float_bytes)
-            .unwrap_or(0),
-        Err(_) => 0,
+/// A scalar contributes one `Scalar` entry; an array expands to one entry per
+/// element slot (so `Op::GetDataIndexed` resolves an element slot whose entry
+/// the runtime reads); a flat composite contributes one `Composite` entry
+/// covering its whole flat body. A reference scalar (`Text` or opaque) or a
+/// composite that transitively carries a reference cannot live in a flat host
+/// buffer and is a compile error.
+fn push_shared_slot_layout(
+    ty: &TypeExpr,
+    ti: &TypeInfo,
+    base_offset: u16,
+    span: crate::token::Span,
+    out: &mut Vec<crate::bytecode::SharedSlotLayout>,
+) -> Result<u16, CompileError> {
+    let layout = ti
+        .layout_context()
+        .layout_for(ty)
+        .map_err(|_| CompileError {
+            message: String::from(
+                "shared data field has no statically known flat layout for the host buffer",
+            ),
+            span,
+        })?;
+    push_shared_layout_desc(&layout, ti, base_offset, span, out)
+}
+
+/// Recursive worker for [`push_shared_slot_layout`] over a resolved layout
+/// descriptor.
+fn push_shared_layout_desc(
+    layout: &crate::value_layout::LayoutDescriptor,
+    ti: &TypeInfo,
+    base_offset: u16,
+    span: crate::token::Span,
+    out: &mut Vec<crate::bytecode::SharedSlotLayout>,
+) -> Result<u16, CompileError> {
+    use crate::value_layout::{LayoutDescriptor as LD, ScalarKind};
+    let overflow = || CompileError {
+        message: String::from("shared data segment exceeds the 64KB flat host-buffer limit"),
+        span,
+    };
+    match layout {
+        LD::Scalar(kind) => {
+            if matches!(kind, ScalarKind::Text | ScalarKind::Opaque) {
+                return Err(CompileError {
+                    message: String::from(
+                        "shared data field of reference type (Text or opaque) cannot live in a \
+                         flat host buffer",
+                    ),
+                    span,
+                });
+            }
+            let size = u16::try_from(kind.size_in_bytes(ti.word_bytes, ti.float_bytes))
+                .map_err(|_| overflow())?;
+            out.push(crate::bytecode::SharedSlotLayout {
+                offset: base_offset,
+                kind: kind.to_tag(),
+                len: 0,
+            });
+            Ok(size)
+        }
+        LD::Array { element, count } => {
+            let mut off = base_offset;
+            let mut total: u16 = 0;
+            for _ in 0..*count {
+                let consumed = push_shared_layout_desc(element, ti, off, span, out)?;
+                off = off.checked_add(consumed).ok_or_else(overflow)?;
+                total = total.checked_add(consumed).ok_or_else(overflow)?;
+            }
+            Ok(total)
+        }
+        // A composite field (tuple, struct, enum) is a single slot whose body
+        // is its whole flat byte range. `flat_byte_size` is `None` when the
+        // composite transitively carries a reference leaf, which the host
+        // buffer cannot hold.
+        _ => {
+            let len = layout
+                .flat_byte_size(ti.word_bytes, ti.float_bytes)
+                .ok_or_else(|| CompileError {
+                    message: String::from(
+                        "shared data composite field is not flat (it carries a reference); not \
+                         admissible in a flat host buffer",
+                    ),
+                    span,
+                })?;
+            let len_u16 = u16::try_from(len).map_err(|_| overflow())?;
+            out.push(crate::bytecode::SharedSlotLayout {
+                offset: base_offset,
+                kind: crate::bytecode::SHARED_SLOT_COMPOSITE_TAG,
+                len: len_u16,
+            });
+            Ok(len_u16)
+        }
     }
 }
 

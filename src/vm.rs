@@ -9842,21 +9842,24 @@ mod tests {
         // `WireChunk::debug_pool_bytes` field added for B29 (strippable
         // debug metadata) and again for the `ConstValue::Enum`
         // `discriminant: Option<i64>` field added for B28 P2 (flat-enum
-        // constants): rkyv archives the wider `ConstValue` enum, which
-        // accounts for the increase to 244 bytes. Per B28 the format may
-        // change freely without a BYTECODE_VERSION bump (no production
-        // traction; programs are recompiled).
+        // constants), and again for the `DataLayout::shared_layout` table of
+        // the B28 item 2 shared-data re-architecture (the no-new-opcode
+        // per-shared-slot layout): rkyv reserves space for the wider
+        // `ArchivedDataLayout` inside `Option<DataLayout>` even when it is
+        // `None`, which accounts for the increase to 252 bytes. Per B28 the
+        // format may change freely without a BYTECODE_VERSION bump (no
+        // production traction; programs are recompiled).
         let expected: alloc::vec::Vec<u8> = alloc::vec![
-            75, 69, 76, 69, 1, 0, 64, 0, 244, 0, 0, 0, 6, 6, 6, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-            0, 0, 0, 0, 0, 64, 0, 0, 0, 8, 0, 0, 0, 72, 0, 0, 0, 0, 0, 0, 0, 72, 0, 0, 0, 168, 0,
+            75, 69, 76, 69, 1, 0, 64, 0, 252, 0, 0, 0, 6, 6, 6, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 64, 0, 0, 0, 8, 0, 0, 0, 72, 0, 0, 0, 0, 0, 0, 0, 72, 0, 0, 0, 176, 0,
             0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 159, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 1, 0,
             0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
             0, 0, 0, 0, 0, 0, 0, 0, 0, 109, 97, 105, 110, 255, 255, 255, 255, 200, 255, 255, 255,
             1, 0, 0, 0, 240, 255, 255, 255, 0, 0, 0, 0, 0, 0, 0, 0, 228, 255, 255, 255, 0, 0, 0, 0,
             0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 200, 255, 255, 255, 1, 0,
             0, 0, 248, 255, 255, 255, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-            0, 0, 0, 0, 6, 6, 6, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-            0, 0, 0, 210, 22, 68, 135,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 6, 6, 6, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 206, 69, 90, 134,
         ];
         let src = "fn main() -> Word { 1 }";
         let tokens = tokenize(src).expect("lex");
@@ -12005,6 +12008,63 @@ mod tests {
         assert_eq!(
             module.private_data_bytes,
             crate::bytecode::VALUE_SLOT_SIZE_BYTES
+        );
+    }
+
+    #[test]
+    fn shared_layout_table_in_module_and_wire() {
+        // The shared data segment carries a per-slot layout table (B28 item 2,
+        // the no-new-opcode mechanism): a scalar slot records its byte offset
+        // and `ScalarKind` tag; a composite slot records its offset and flat
+        // body length with the composite marker. The table survives the wire
+        // roundtrip. No opcodes are added.
+        let src = "\
+            data ctx { a: Word, pair: (Word, Word) }\n\
+            fn main() -> Word { ctx.a + ctx.pair.0 + ctx.pair.1 }";
+        let tokens = tokenize(src).expect("lex");
+        let program = parse(&tokens).expect("parse");
+        let module = compile(&program).expect("compile");
+        let wb = (1u32 << module.word_bits_log2) / 8;
+        let dl = module.data_layout.as_ref().expect("data layout");
+        assert_eq!(dl.shared_layout.len(), 2, "one entry per shared slot");
+        // Slot 0: scalar `Word` at offset 0, kind tag 3 (Int), no body length.
+        assert_eq!(dl.shared_layout[0].offset, 0);
+        assert_eq!(
+            dl.shared_layout[0].kind,
+            crate::value_layout::ScalarKind::Int.to_tag()
+        );
+        assert_eq!(dl.shared_layout[0].len, 0);
+        // Slot 1: composite `(Word, Word)` at offset `wb`, body `2*wb` bytes.
+        assert_eq!(dl.shared_layout[1].offset as u32, wb);
+        assert_eq!(
+            dl.shared_layout[1].kind,
+            crate::bytecode::SHARED_SLOT_COMPOSITE_TAG
+        );
+        assert_eq!(dl.shared_layout[1].len as u32, 2 * wb);
+        assert_eq!(module.shared_data_bytes, 3 * wb);
+        // Wire roundtrip preserves the table.
+        let bytes = module.to_bytes().expect("to_bytes");
+        let decoded = crate::bytecode::Module::from_bytes(&bytes).expect("from_bytes");
+        assert_eq!(
+            decoded.data_layout.as_ref().unwrap().shared_layout,
+            dl.shared_layout
+        );
+    }
+
+    #[test]
+    fn shared_data_text_field_rejected() {
+        // A reference-typed shared field cannot live in the flat host buffer
+        // (B28 item 2). `Text` in shared data is rejected at compile time.
+        let src = "\
+            data ctx { label: Text }\n\
+            fn main() -> Word { 0 }";
+        let tokens = tokenize(src).expect("lex");
+        let program = parse(&tokens).expect("parse");
+        let err = compile(&program).expect_err("shared Text must be rejected");
+        assert!(
+            err.message.contains("Text") || err.message.contains("reference"),
+            "unexpected error: {}",
+            err.message
         );
     }
 
