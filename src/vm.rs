@@ -12034,11 +12034,13 @@ mod tests {
             crate::value_layout::ScalarKind::Int.to_tag()
         );
         assert_eq!(dl.shared_layout[0].len, 0);
-        // Slot 1: composite `(Word, Word)` at offset `wb`, body `2*wb` bytes.
+        // Slot 1: composite `(Word, Word)` at offset `wb`, body `2*wb` bytes,
+        // tagged as a tuple via the composite flag plus the CompositeKind tag.
         assert_eq!(dl.shared_layout[1].offset as u32, wb);
         assert_eq!(
             dl.shared_layout[1].kind,
-            crate::bytecode::SHARED_SLOT_COMPOSITE_TAG
+            crate::bytecode::SHARED_SLOT_COMPOSITE_FLAG
+                | crate::value_layout::CompositeKind::Tuple.to_tag()
         );
         assert_eq!(dl.shared_layout[1].len as u32, 2 * wb);
         assert_eq!(module.shared_data_bytes, 3 * wb);

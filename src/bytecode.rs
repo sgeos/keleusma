@@ -2736,28 +2736,34 @@ pub enum SlotVisibility {
 /// [`DataLayout::slots`]. An array field expands to one entry per element slot,
 /// so `Op::GetDataIndexed` resolves an element slot and the runtime reads its
 /// entry. For a shared slot the runtime reads or writes the host buffer at
-/// `offset` according to `kind`: a tag from
-/// [`crate::value_layout::ScalarKind::to_tag`] for a scalar slot, or
-/// [`SHARED_SLOT_COMPOSITE_TAG`] for a flat composite slot whose body is `len`
-/// bytes. The instruction set is unchanged; this table is how the existing
+/// `offset` according to `kind`: a `crate::value_layout::ScalarKind::to_tag`
+/// for a scalar slot, or, when the [`SHARED_SLOT_COMPOSITE_FLAG`] high bit is
+/// set, a `CompositeKind::to_tag` in the low bits for a flat composite slot
+/// whose body is `len` bytes. The instruction set is unchanged; this table is
+/// how the existing
 /// `GetData`/`SetData` reach the buffer without a new opcode, the rad-hard
 /// minimal-ISA choice.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Archive, Serialize, Deserialize)]
 pub struct SharedSlotLayout {
     /// Byte offset of this slot within the host buffer.
     pub offset: u16,
-    /// `ScalarKind::to_tag` for a scalar slot, or [`SHARED_SLOT_COMPOSITE_TAG`]
-    /// for a flat composite slot.
+    /// Slot kind. When the [`SHARED_SLOT_COMPOSITE_FLAG`] high bit is clear,
+    /// this is a `crate::value_layout::ScalarKind::to_tag` (`0..=7`) for a
+    /// scalar slot. When the flag is set, the low seven bits are a
+    /// `crate::value_layout::CompositeKind::to_tag` so the runtime re-wraps a
+    /// copied-out shared composite as the correct `Tuple`/`Array`/`Struct`/
+    /// `Enum`, which the kind-sensitive flat access ops require.
     pub kind: u8,
     /// Flat composite body length in bytes for a composite slot; `0` for a
     /// scalar slot.
     pub len: u16,
 }
 
-/// [`SharedSlotLayout::kind`] value marking a flat composite slot, distinct
-/// from every `ScalarKind::to_tag` (which occupy `0..=7`); `255` is the codec's
-/// reserved non-kind sentinel.
-pub const SHARED_SLOT_COMPOSITE_TAG: u8 = 255;
+/// High bit of [`SharedSlotLayout::kind`] marking a flat composite slot. When
+/// set, the low seven bits carry the composite's `CompositeKind::to_tag`
+/// (`0..=3`); when clear, `kind` is a `ScalarKind::to_tag` (`0..=7`). The two
+/// scalar/composite tag spaces overlap, so this flag is the discriminator.
+pub const SHARED_SLOT_COMPOSITE_FLAG: u8 = 0x80;
 
 /// Data segment layout declaration.
 ///

@@ -3913,7 +3913,7 @@ fn push_shared_layout_desc(
     span: crate::token::Span,
     out: &mut Vec<crate::bytecode::SharedSlotLayout>,
 ) -> Result<u16, CompileError> {
-    use crate::value_layout::{LayoutDescriptor as LD, ScalarKind};
+    use crate::value_layout::{CompositeKind, LayoutDescriptor as LD, ScalarKind};
     let overflow = || CompileError {
         message: String::from("shared data segment exceeds the 64KB flat host-buffer limit"),
         span,
@@ -3949,10 +3949,18 @@ fn push_shared_layout_desc(
             Ok(total)
         }
         // A composite field (tuple, struct, enum) is a single slot whose body
-        // is its whole flat byte range. `flat_byte_size` is `None` when the
-        // composite transitively carries a reference leaf, which the host
-        // buffer cannot hold.
-        _ => {
+        // is its whole flat byte range. The composite kind is stored so the
+        // runtime re-wraps a copied-out shared composite correctly, which the
+        // kind-sensitive flat access ops require. `flat_byte_size` is `None`
+        // when the composite transitively carries a reference leaf, which the
+        // host buffer cannot hold.
+        LD::Tuple(_) | LD::Struct { .. } | LD::Enum { .. } => {
+            let composite_kind = match layout {
+                LD::Tuple(_) => CompositeKind::Tuple,
+                LD::Struct { .. } => CompositeKind::Struct,
+                LD::Enum { .. } => CompositeKind::Enum,
+                _ => unreachable!("matched Tuple/Struct/Enum above"),
+            };
             let len = layout
                 .flat_byte_size(ti.word_bytes, ti.float_bytes)
                 .ok_or_else(|| CompileError {
@@ -3965,7 +3973,7 @@ fn push_shared_layout_desc(
             let len_u16 = u16::try_from(len).map_err(|_| overflow())?;
             out.push(crate::bytecode::SharedSlotLayout {
                 offset: base_offset,
-                kind: crate::bytecode::SHARED_SLOT_COMPOSITE_TAG,
+                kind: crate::bytecode::SHARED_SLOT_COMPOSITE_FLAG | composite_kind.to_tag(),
                 len: len_u16,
             });
             Ok(len_u16)
