@@ -1593,6 +1593,28 @@ pub fn compile_with_options(
         (total, offsets)
     };
 
+    // The shared data segment's true flat byte total (B28 item 2 shared-data
+    // re-architecture). The header field `shared_data_bytes` becomes the size
+    // of the borrowed host-owned buffer the embedder lends at `call`/`resume`,
+    // laid out as a flat struct at the module's scalar widths, replacing the
+    // prior slot-count-times-`VALUE_SLOT_SIZE_BYTES` figure. No runtime path
+    // reads it yet (the slot model is still active in this step); it is the
+    // contract the later shared-field lowering and the host buffer-sizing
+    // helpers consume.
+    let shared_data_flat_bytes: u32 = {
+        let mut total: u32 = 0;
+        for decl in &program.data_decls {
+            if !matches!(decl.visibility, crate::ast::DataVisibility::Shared) {
+                continue;
+            }
+            for field in &decl.fields {
+                let body = data_field_flat_bytes(&field.type_expr, &type_info) as u32;
+                total = total.saturating_add(body);
+            }
+        }
+        total
+    };
+
     // Compile each function group. After emission, enforce the
     // V0.2.0 Phase 6 chunk-size limit: any chunk whose op count
     // exceeds `CHUNK_SIZE_HARD_LIMIT` is rejected as a
@@ -1737,12 +1759,14 @@ pub fn compile_with_options(
         // P3 item 5, item 3a). Summed over private fields below.
         persistent_composite_bytes,
         // Flags is populated by the verifier (under `verify`
-        // feature) at end of compile_with_target. The shared
-        // and private byte counts mirror the partition computed
-        // above; their sum equals the total data segment size in
-        // bytes (one Value-sized slot per slot).
+        // feature) at end of compile_with_target. `shared_data_bytes` is the
+        // true flat byte size of the borrowed host-owned shared buffer (B28
+        // item 2): the sum of each shared field's flat size at the module's
+        // scalar widths. `private_data_bytes` still mirrors the slot partition
+        // in `VALUE_SLOT_SIZE_BYTES` units, because private slots remain a
+        // `Value` array in the arena persistent region.
         flags: 0,
-        shared_data_bytes: shared_count.saturating_mul(crate::bytecode::VALUE_SLOT_SIZE_BYTES),
+        shared_data_bytes: shared_data_flat_bytes,
         private_data_bytes: private_count.saturating_mul(crate::bytecode::VALUE_SLOT_SIZE_BYTES),
     };
 
@@ -3825,6 +3849,25 @@ fn data_field_pool_bytes(ty: &TypeExpr, ti: &TypeInfo) -> usize {
                 .unwrap_or(0),
             Err(_) => 0,
         },
+    }
+}
+
+/// The full flat byte size a data field occupies in the shared data segment's
+/// host-owned buffer (B28 item 2 shared-data re-architecture).
+///
+/// Unlike [`data_field_pool_bytes`], which sizes only the private composite
+/// body pool and so contributes zero for scalars and arrays, this returns the
+/// full flat size of any data field type, scalar, array, tuple, struct, or
+/// enum, at the module's scalar widths. A reference-bearing or otherwise
+/// non-flat type contributes zero here; such a type in a shared field will be
+/// rejected when the shared lowering lands, since it cannot live in a flat
+/// host-owned buffer.
+fn data_field_flat_bytes(ty: &TypeExpr, ti: &TypeInfo) -> usize {
+    match ti.layout_context().layout_for(ty) {
+        Ok(layout) => layout
+            .flat_byte_size(ti.word_bytes, ti.float_bytes)
+            .unwrap_or(0),
+        Err(_) => 0,
     }
 }
 

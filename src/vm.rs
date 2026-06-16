@@ -11241,14 +11241,12 @@ mod tests {
         let tokens = tokenize(src).expect("lex");
         let program = parse(&tokens).expect("parse");
         let module = compile(&program).expect("compile");
-        // Two shared slots times the per-slot byte size. Asserted against
-        // the constant rather than a literal so it tracks the real
-        // `size_of::<Value>()` (B28 P3 item 5 size optimisation) instead of
-        // re-baking a stale figure.
-        assert_eq!(
-            module.shared_data_bytes,
-            2 * crate::bytecode::VALUE_SLOT_SIZE_BYTES
-        );
+        // Two shared `Word` fields laid out flat at the module's word width
+        // (B28 item 2: `shared_data_bytes` is the borrowed host buffer's flat
+        // size, not a slot-count-scaled figure). Computed from the module's
+        // declared width so it holds on narrow-word builds too.
+        let wb = (1u32 << module.word_bits_log2) / 8;
+        assert_eq!(module.shared_data_bytes, 2 * wb);
         assert_eq!(module.private_data_bytes, 0);
     }
 
@@ -11319,10 +11317,10 @@ mod tests {
         let tokens = tokenize(src).expect("lex");
         let program = parse(&tokens).expect("parse");
         let module = compile(&program).expect("compile");
-        assert_eq!(
-            module.shared_data_bytes,
-            crate::bytecode::VALUE_SLOT_SIZE_BYTES
-        );
+        // One shared `Word` field, flat-sized at the module word width (B28
+        // item 2). Private stays slot-scaled.
+        let wb = (1u32 << module.word_bits_log2) / 8;
+        assert_eq!(module.shared_data_bytes, wb);
         assert_eq!(
             module.private_data_bytes,
             2 * crate::bytecode::VALUE_SLOT_SIZE_BYTES
@@ -12000,10 +11998,10 @@ mod tests {
         let tokens = tokenize(src).expect("lex");
         let program = parse(&tokens).expect("parse");
         let module = compile(&program).expect("compile");
-        assert_eq!(
-            module.shared_data_bytes,
-            crate::bytecode::VALUE_SLOT_SIZE_BYTES
-        );
+        // One shared `Word` field, flat-sized at the module word width (B28
+        // item 2). Private stays slot-scaled.
+        let wb = (1u32 << module.word_bits_log2) / 8;
+        assert_eq!(module.shared_data_bytes, wb);
         assert_eq!(
             module.private_data_bytes,
             crate::bytecode::VALUE_SLOT_SIZE_BYTES
