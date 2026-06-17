@@ -1033,6 +1033,15 @@ pub struct GenericVm<
     /// only the two-word arena handle, so a composite const load is
     /// allocation-free and WCET-flat.
     const_templates: alloc::vec::Vec<alloc::vec::Vec<Option<crate::bytecode::GenericValue<W, F>>>>,
+    /// The host-owned shared-data buffer borrowed for the current
+    /// `call`/`resume`, or inactive (B28 item 2 shared-data
+    /// re-architecture). Set at the top of `call_with_shared`/
+    /// `resume_with_shared` from the `&mut [u8]` argument and cleared before
+    /// the entry point returns; a shared-slot access reads or writes the host
+    /// buffer through it when active, and falls back to the slot `data` vector
+    /// when inactive (the coexistence path for `set_data`-based hosts). All
+    /// raw-pointer unsafety is confined to [`crate::shared_buf::SharedBuf`].
+    shared_buf: crate::shared_buf::SharedBuf,
     /// Host-supplied trust matrix for cryptographic module
     /// signatures. Populated through
     /// [`Self::register_verifying_key`] before the host hot-swaps
@@ -1837,6 +1846,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
             reserved_opaque_capacity: 0,
             const_pool: alloc::vec::Vec::new(),
             const_templates: alloc::vec::Vec::new(),
+            shared_buf: crate::shared_buf::SharedBuf::new(),
             #[cfg(feature = "signatures")]
             verifying_keys: Vec::new(),
         };
@@ -2024,6 +2034,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
             reserved_opaque_capacity: reserve_opaque,
             const_pool: alloc::vec::Vec::new(),
             const_templates: alloc::vec::Vec::new(),
+            shared_buf: crate::shared_buf::SharedBuf::new(),
             #[cfg(feature = "signatures")]
             verifying_keys: Vec::new(),
         };
@@ -2037,21 +2048,88 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
     /// the unified slot index: indices below `shared_slot_count`
     /// resolve to the Vm-owned `data` vector; higher indices
     /// resolve to the arena's persistent region.
-    fn read_data_slot(&self, slot: usize) -> crate::bytecode::GenericValue<W, F> {
+    fn read_data_slot(&self, slot: usize) -> Result<crate::bytecode::GenericValue<W, F>, VmError> {
         if slot < self.shared_slot_count as usize {
-            self.data[slot].clone()
-        } else {
-            // SAFETY: the slot is within the partition checked at
-            // construction; the persistent region was initialised
-            // with `crate::bytecode::GenericValue::Unit` for every slot and updates flow
-            // through `write_data_slot`, so the pointee is always
-            // a valid `Value`.
-            unsafe {
-                let private_idx = slot - self.shared_slot_count as usize;
-                let base = self.arena.persistent_ptr().as_ptr()
-                    as *const crate::bytecode::GenericValue<W, F>;
-                (*base.add(private_idx)).clone()
+            // A shared slot reads the host buffer when one is borrowed (B28
+            // item 2); otherwise the slot `data` vector (the coexistence path
+            // for `set_data`-based hosts).
+            if self.shared_buf.is_active() {
+                return self.read_shared_from_buffer(slot);
             }
+            return Ok(self.data[slot].clone());
+        }
+        // SAFETY: the slot is within the partition checked at
+        // construction; the persistent region was initialised
+        // with `crate::bytecode::GenericValue::Unit` for every slot and updates flow
+        // through `write_data_slot`, so the pointee is always
+        // a valid `Value`.
+        unsafe {
+            let private_idx = slot - self.shared_slot_count as usize;
+            let base =
+                self.arena.persistent_ptr().as_ptr() as *const crate::bytecode::GenericValue<W, F>;
+            Ok((*base.add(private_idx)).clone())
+        }
+    }
+
+    /// The shared layout entry for a shared slot, as `(byte offset, kind tag,
+    /// composite body length)` copied out of the archived table so the borrow
+    /// of the bytecode image does not outlive the read (B28 item 2).
+    fn shared_layout_entry(&self, slot: usize) -> (usize, u8, usize) {
+        let dl = self
+            .archived()
+            .data_layout
+            .as_ref()
+            .expect("shared slot access requires a data layout");
+        let e = &dl.shared_layout[slot];
+        (
+            e.offset.to_native() as usize,
+            e.kind,
+            e.len.to_native() as usize,
+        )
+    }
+
+    /// Read a shared slot in place from the borrowed host buffer (B28 item 2).
+    /// A scalar slot decodes directly by offset (a plain owned value, no
+    /// pointer into the buffer). A composite slot copies its byte range into a
+    /// fresh arena body tagged with the current epoch, so the value is
+    /// RESET-scoped and can never outlive the host's borrow.
+    fn read_shared_from_buffer(
+        &self,
+        slot: usize,
+    ) -> Result<crate::bytecode::GenericValue<W, F>, VmError> {
+        use crate::bytecode::{ArrayBody, EnumBody, GenericValue, StructBody, TupleBody};
+        use crate::value_layout::{CompositeKind, ScalarKind};
+        let (offset, kind, len) = self.shared_layout_entry(slot);
+        let wb = self.module_word_bytes();
+        let fb = self.module_float_bytes();
+        let buf = self
+            .shared_buf
+            .bytes()
+            .expect("read_shared_from_buffer called with an active buffer");
+        if kind & crate::bytecode::SHARED_SLOT_COMPOSITE_FLAG == 0 {
+            let sk = ScalarKind::from_tag(kind)
+                .ok_or_else(|| VmError::InvalidBytecode(String::from("bad shared scalar kind")))?;
+            Ok(GenericValue::read_scalar_le(buf, offset, sk, wb, fb))
+        } else {
+            let ck = CompositeKind::from_tag(kind & !crate::bytecode::SHARED_SLOT_COMPOSITE_FLAG)
+                .ok_or_else(|| {
+                VmError::InvalidBytecode(String::from("bad shared composite kind"))
+            })?;
+            let src = &buf[offset..offset + len];
+            let fc = crate::flat_value::FlatComposite::build_in_arena(self.arena, len, |dst| {
+                dst.copy_from_slice(src);
+                Ok(())
+            })
+            .map_err(|_| out_of_arena_push("shared composite read", self.arena.capacity()))?
+            .ok_or_else(|| {
+                VmError::InvalidBytecode(String::from("shared composite body fill failed"))
+            })?;
+            Ok(match ck {
+                CompositeKind::Tuple => GenericValue::Tuple(TupleBody::Flat(fc)),
+                CompositeKind::Array => GenericValue::Array(ArrayBody::Flat(fc)),
+                CompositeKind::Struct => GenericValue::Struct(StructBody::Flat(fc)),
+                CompositeKind::Enum => GenericValue::Enum(EnumBody::Flat(fc)),
+            })
         }
     }
 
@@ -2059,20 +2137,75 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
     /// Assignment via `*ptr = value` drops the previous occupant,
     /// which is valid because every private slot is initialised
     /// to `crate::bytecode::GenericValue::Unit` at construction.
-    fn write_data_slot(&mut self, slot: usize, value: crate::bytecode::GenericValue<W, F>) {
+    fn write_data_slot(
+        &mut self,
+        slot: usize,
+        value: crate::bytecode::GenericValue<W, F>,
+    ) -> Result<(), VmError> {
         if slot < self.shared_slot_count as usize {
-            self.data[slot] = value;
-        } else {
-            // SAFETY: the slot is within the partition checked at
-            // construction; the pointee is a valid `Value` per
-            // the construction-time initialisation, so dropping
-            // it via the assignment is sound.
-            unsafe {
-                let private_idx = slot - self.shared_slot_count as usize;
-                let base = self.arena.persistent_ptr().as_ptr()
-                    as *mut crate::bytecode::GenericValue<W, F>;
-                *base.add(private_idx) = value;
+            // A shared slot writes the host buffer when one is borrowed (B28
+            // item 2); otherwise the slot `data` vector.
+            if self.shared_buf.is_active() {
+                return self.write_shared_to_buffer(slot, value);
             }
+            self.data[slot] = value;
+            return Ok(());
+        }
+        // SAFETY: the slot is within the partition checked at
+        // construction; the pointee is a valid `Value` per
+        // the construction-time initialisation, so dropping
+        // it via the assignment is sound.
+        unsafe {
+            let private_idx = slot - self.shared_slot_count as usize;
+            let base =
+                self.arena.persistent_ptr().as_ptr() as *mut crate::bytecode::GenericValue<W, F>;
+            *base.add(private_idx) = value;
+        }
+        Ok(())
+    }
+
+    /// Write a shared slot in place to the borrowed host buffer (B28 item 2).
+    /// A scalar writes directly by offset. A composite resolves its flat body
+    /// to an owned copy first, releasing the arena borrow before taking the
+    /// mutable buffer slice, then copies the bytes into the field; the owned
+    /// copy is the one transient allocation, on the rare composite-shared-write
+    /// path (the common case is scalar slots).
+    fn write_shared_to_buffer(
+        &mut self,
+        slot: usize,
+        value: crate::bytecode::GenericValue<W, F>,
+    ) -> Result<(), VmError> {
+        let (offset, kind, _len) = self.shared_layout_entry(slot);
+        let wb = self.module_word_bytes();
+        let fb = self.module_float_bytes();
+        if kind & crate::bytecode::SHARED_SLOT_COMPOSITE_FLAG == 0 {
+            // A scalar value writes its own bytes at the offset; the table kind
+            // is only needed on the read path to decode.
+            let buf = self
+                .shared_buf
+                .bytes_mut()
+                .expect("write_shared_to_buffer called with an active buffer");
+            value.write_scalar_le(buf, offset, wb, fb);
+            Ok(())
+        } else {
+            // Resolve the composite body to an owned copy so the `self.arena`
+            // borrow ends before the `&mut self` buffer slice is taken.
+            let body: alloc::vec::Vec<u8> = {
+                let fc = crate::bytecode::flat_composite_ref(&value).ok_or_else(|| {
+                    VmError::TypeError(String::from(
+                        "expected a flat composite for a shared composite slot",
+                    ))
+                })?;
+                fc.resolve(self.arena)
+                    .map_err(|_| stale_arena_body())?
+                    .to_vec()
+            };
+            let buf = self
+                .shared_buf
+                .bytes_mut()
+                .expect("write_shared_to_buffer called with an active buffer");
+            buf[offset..offset + body.len()].copy_from_slice(&body);
+            Ok(())
         }
     }
 
@@ -3378,6 +3511,30 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         &mut self,
         args: &[crate::bytecode::GenericValue<W, F>],
     ) -> Result<GenericVmState<W, F>, VmError> {
+        self.call_with_shared(&mut [], args)
+    }
+
+    /// Like [`Self::call`], but the host lends a mutable view of its shared
+    /// data buffer for the duration of the call (B28 item 2 shared-data
+    /// re-architecture). The buffer must be exactly the module's declared
+    /// `shared_data_bytes` long, or empty to use the slot model. The virtual
+    /// machine reads and writes shared fields in place through the buffer and
+    /// retains no reference to it past the return.
+    pub fn call_with_shared(
+        &mut self,
+        shared: &mut [u8],
+        args: &[crate::bytecode::GenericValue<W, F>],
+    ) -> Result<GenericVmState<W, F>, VmError> {
+        self.enter_shared(shared)?;
+        let result = self.call_after_enter(args);
+        self.shared_buf.clear();
+        result
+    }
+
+    fn call_after_enter(
+        &mut self,
+        args: &[crate::bytecode::GenericValue<W, F>],
+    ) -> Result<GenericVmState<W, F>, VmError> {
         let entry = self
             .archived()
             .entry_point
@@ -3385,6 +3542,28 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
             .map(|e| e.to_native() as usize)
             .ok_or_else(|| VmError::InvalidBytecode(String::from("no entry point")))?;
         self.call_function(entry, args)
+    }
+
+    /// Capture the host shared-data buffer for the current call, or, for an
+    /// empty slice, leave it inactive so shared access uses the slot model
+    /// (the coexistence path; B28 item 2). A non-empty buffer must match the
+    /// module's declared `shared_data_bytes`. Cleared before the entry point
+    /// returns so no captured pointer outlives the host's borrow.
+    fn enter_shared(&mut self, shared: &mut [u8]) -> Result<(), VmError> {
+        if shared.is_empty() {
+            self.shared_buf.clear();
+        } else {
+            let need = self.archived().shared_data_bytes.to_native() as usize;
+            if shared.len() != need {
+                return Err(VmError::NativeError(format!(
+                    "shared data buffer is {} bytes but the module declares {}",
+                    shared.len(),
+                    need
+                )));
+            }
+            self.shared_buf.set(shared);
+        }
+        Ok(())
     }
 
     /// Call a specific function by chunk index with the given arguments.
@@ -3512,6 +3691,30 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
 
     /// Resume execution after a yield or reset, providing the input value.
     pub fn resume(
+        &mut self,
+        input: crate::bytecode::GenericValue<W, F>,
+    ) -> Result<GenericVmState<W, F>, VmError> {
+        self.resume_with_shared(&mut [], input)
+    }
+
+    /// Like [`Self::resume`], but the host lends a mutable view of its shared
+    /// data buffer for the duration of the resume (B28 item 2). The buffer
+    /// rules match [`Self::call_with_shared`]: exactly `shared_data_bytes`
+    /// long, or empty for the slot model. Between resumes the host owns the
+    /// buffer and may swap, mutate, or drop it; the virtual machine retains no
+    /// reference across the yield.
+    pub fn resume_with_shared(
+        &mut self,
+        shared: &mut [u8],
+        input: crate::bytecode::GenericValue<W, F>,
+    ) -> Result<GenericVmState<W, F>, VmError> {
+        self.enter_shared(shared)?;
+        let result = self.resume_after_enter(input);
+        self.shared_buf.clear();
+        result
+    }
+
+    fn resume_after_enter(
         &mut self,
         input: crate::bytecode::GenericValue<W, F>,
     ) -> Result<GenericVmState<W, F>, VmError> {
@@ -3795,7 +3998,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                             idx
                         )));
                     }
-                    let val = self.read_data_slot(idx);
+                    let val = self.read_data_slot(idx)?;
                     sp!(self, val);
                 }
                 Op::SetData(slot) => {
@@ -3812,7 +4015,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                     // an inline (heap) body before storing it; otherwise its
                     // handle would dangle after the next RESET (B28 P2).
                     let val = self.pop()?.materialized(self.arena);
-                    self.write_data_slot(idx, val);
+                    self.write_data_slot(idx, val)?;
                 }
                 Op::SetDataComposite(slot, rel_offset) => {
                     // Store a flat composite into a private persistent slot by
@@ -3831,11 +4034,11 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                     let val = self.pop()?;
                     if crate::bytecode::flat_composite_ref(&val).is_some() {
                         let persistent = self.persist_composite_body(val, rel_offset as usize)?;
-                        self.write_data_slot(idx, persistent);
+                        self.write_data_slot(idx, persistent)?;
                     } else {
                         // The compiler only emits this op for a flat composite
                         // slot; a non-flat value here is defensive fallback.
-                        self.write_data_slot(idx, val.materialized(self.arena));
+                        self.write_data_slot(idx, val.materialized(self.arena))?;
                     }
                 }
                 Op::GetDataIndexed(base, len) => {
@@ -3859,7 +4062,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                             slot
                         )));
                     }
-                    let val = self.read_data_slot(slot);
+                    let val = self.read_data_slot(slot)?;
                     sp!(self, val);
                 }
                 Op::SetDataIndexed(base, len) => {
@@ -3887,7 +4090,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                             slot
                         )));
                     }
-                    self.write_data_slot(slot, val);
+                    self.write_data_slot(slot, val)?;
                 }
                 Op::BoundsCheck(bound) => {
                     // Peek the top of the stack; trap if it is not a
@@ -12068,6 +12271,93 @@ mod tests {
             "unexpected error: {}",
             err.message
         );
+    }
+
+    // Bundled runtime only: the test writes raw width-specific bytes into the
+    // host buffer, so the byte offsets assume an eight-byte word.
+    #[cfg(not(any(
+        feature = "narrow-word-8",
+        feature = "narrow-word-16",
+        feature = "narrow-word-32",
+        feature = "narrow-float-32"
+    )))]
+    #[test]
+    fn shared_data_read_write_through_host_buffer() {
+        // The host lends a byte buffer; the script reads and writes shared
+        // fields in place through it, including a composite read that copies
+        // out of the buffer, and the host owns the buffer across calls (B28
+        // item 2, step 3b).
+        let src = "\
+            data ctx { hp: Word, pos: (Word, Word) }\n\
+            fn main() -> Word { ctx.hp = ctx.hp + 100; ctx.hp + ctx.pos.0 + ctx.pos.1 }";
+        let tokens = tokenize(src).expect("lex");
+        let program = parse(&tokens).expect("parse");
+        let module = compile(&program).expect("compile");
+        let sdb = module.shared_data_bytes as usize;
+        assert_eq!(sdb, 3 * core::mem::size_of::<i64>(), "hp + a two-word pos");
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let mut vm = Vm::new(module, &arena).expect("verify");
+
+        // Host-owned buffer: hp=10 at offset 0, pos=(3,4) at offsets 8 and 16.
+        let mut buf = alloc::vec![0u8; sdb];
+        buf[0..8].copy_from_slice(&10i64.to_le_bytes());
+        buf[8..16].copy_from_slice(&3i64.to_le_bytes());
+        buf[16..24].copy_from_slice(&4i64.to_le_bytes());
+
+        // hp becomes 110 (written in place); returns 110 + 3 + 4 = 117.
+        match vm.call_with_shared(&mut buf, &[]).expect("call") {
+            VmState::Finished(Value::Int(v)) => assert_eq!(v, 117),
+            other => panic!("expected Int(117), got {:?}", other),
+        }
+        assert_eq!(
+            i64::from_le_bytes(buf[0..8].try_into().unwrap()),
+            110,
+            "the write reached the host buffer in place"
+        );
+
+        // The host owns the buffer across calls: a second call accumulates hp.
+        match vm.call_with_shared(&mut buf, &[]).expect("call 2") {
+            VmState::Finished(Value::Int(v)) => assert_eq!(v, 217),
+            other => panic!("expected Int(217), got {:?}", other),
+        }
+        assert_eq!(i64::from_le_bytes(buf[0..8].try_into().unwrap()), 210);
+
+        // A wrong-size buffer is rejected, not silently misread.
+        let mut wrong = alloc::vec![0u8; sdb - 1];
+        assert!(vm.call_with_shared(&mut wrong, &[]).is_err());
+    }
+
+    // Bundled runtime only (raw width-specific bytes; see the read/write test).
+    #[cfg(not(any(
+        feature = "narrow-word-8",
+        feature = "narrow-word-16",
+        feature = "narrow-word-32",
+        feature = "narrow-float-32"
+    )))]
+    #[test]
+    fn shared_data_composite_write_through_host_buffer() {
+        // Writing a composite shared field copies its flat bytes into the host
+        // buffer (the copy-in path); reading it back copies out (B28 item 2,
+        // step 3b).
+        let src = "\
+            data ctx { pos: (Word, Word) }\n\
+            fn main() -> Word { ctx.pos = (7, 8); ctx.pos.0 + ctx.pos.1 }";
+        let tokens = tokenize(src).expect("lex");
+        let program = parse(&tokens).expect("parse");
+        let module = compile(&program).expect("compile");
+        let sdb = module.shared_data_bytes as usize;
+        assert_eq!(sdb, 2 * core::mem::size_of::<i64>());
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let mut vm = Vm::new(module, &arena).expect("verify");
+
+        let mut buf = alloc::vec![0u8; sdb];
+        match vm.call_with_shared(&mut buf, &[]).expect("call") {
+            VmState::Finished(Value::Int(v)) => assert_eq!(v, 15),
+            other => panic!("expected Int(15), got {:?}", other),
+        }
+        // The composite write reached the host buffer in place.
+        assert_eq!(i64::from_le_bytes(buf[0..8].try_into().unwrap()), 7);
+        assert_eq!(i64::from_le_bytes(buf[8..16].try_into().unwrap()), 8);
     }
 
     #[test]

@@ -109,6 +109,10 @@ pub mod marshall;
 /// the [`opaque::host_arc`] constructor that produces
 /// `Value::Opaque(Arc<dyn HostOpaque>)`.
 pub mod opaque;
+/// The unsafe API layer for the borrowed host-owned shared-data buffer
+/// (B28 item 2). All raw-pointer code in the shared-data path is confined to
+/// [`shared_buf::SharedBuf`]; the rest of the runtime works with safe slices.
+pub mod shared_buf;
 /// Bundled utility natives. V0.2.0 ships only `println` here; other
 /// utilities are host-registered.
 pub mod utility_natives;
