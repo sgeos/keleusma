@@ -2705,12 +2705,12 @@ pub struct StructTemplate {
 pub struct DataSlot {
     /// Slot name (for host initialization and debugging).
     pub name: String,
-    /// Slot visibility to the host. Shared slots are accessible
-    /// through `Vm::set_data` and `Vm::get_data`. Private slots
-    /// are script-only; the host API rejects access. Both
-    /// persist across resets. Source declaration uses the
-    /// `shared` (default) and `private` modifiers on `data`
-    /// blocks.
+    /// Slot visibility to the host. Shared slots live in the borrowed
+    /// host-owned buffer and are read and written through
+    /// `Vm::get_shared`/`Vm::set_shared` (B28 item 2); private slots
+    /// live in the arena and are script-only. Both persist across
+    /// resets. Source declaration uses the `shared` (default) and
+    /// `private` modifiers on `data` blocks.
     pub visibility: SlotVisibility,
 }
 
@@ -2722,10 +2722,10 @@ pub struct DataSlot {
 /// bytecode body; it is not part of the framing header.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Archive, Serialize, Deserialize)]
 pub enum SlotVisibility {
-    /// Host-visible slot. The default. `Vm::set_data` and
-    /// `Vm::get_data` admit this slot.
+    /// Host-visible slot. The default. Lives in the borrowed host buffer;
+    /// `Vm::get_shared`/`Vm::set_shared` read and write it (B28 item 2).
     Shared,
-    /// Script-only slot. The host API rejects this slot.
+    /// Script-only slot. Lives in the arena; no host accessor.
     Private,
 }
 
@@ -3024,10 +3024,11 @@ pub struct Module {
     ///
     /// Mirrored in the framing header.
     pub flags: u8,
-    /// Bytes of shared data declared by this module. Shared
-    /// data lives in the Vm's owned slot storage and is
-    /// host-visible through `Vm::set_data` and `Vm::get_data`.
-    /// Survives RESET. Mirrored in the framing header.
+    /// Flat byte length of this module's shared data. Shared data is the
+    /// host-owned buffer borrowed at each call, sized to this value and
+    /// read or written through `Vm::get_shared`/`Vm::set_shared` (B28
+    /// item 2). Survives RESET in the host's buffer. Mirrored in the
+    /// framing header.
     pub shared_data_bytes: u32,
     /// Bytes of private data declared by this module. Private
     /// data lives in the arena's persistent (`.data`) region

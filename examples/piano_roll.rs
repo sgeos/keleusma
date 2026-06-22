@@ -292,11 +292,9 @@ const fn tick_us_for_bpm(bpm: u32) -> u64 {
 //                                addressable through
 //                                `state.rem[ch]`
 //
-// `fresh_data` zeros every slot before each `replace_module`
-// and `init_data` does the same at startup, so the new song's
-// `init` block always sees a clean slate and unused fields stay
-// at zero.
-const NUM_DATA_SLOTS: usize = 23;
+// Shared data lives in the host-owned buffer `shared`, which is re-sized and
+// zeroed on each `replace_module` so the new song's `init` block always sees a
+// clean slate and unused fields stay at zero (B28 item 2).
 
 // ---------------------------------------------------------------
 // Waveform types.
@@ -1001,7 +999,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                         // (if any) announces unconditionally.
                         reset_voices(&voices);
                         *last_song_name.lock().unwrap() = None;
-                        vm.replace_module(modules[active_song].clone(), fresh_data())
+                        // The song module declares no private data, so the
+                        // hot swap carries an empty private-data vec; the shared
+                        // state is the host buffer, re-sized and zeroed below.
+                        vm.replace_module(modules[active_song].clone(), Vec::new())
                             .map_err(|e| format!("replace_module: {:?}", e))?;
                         // Re-size and zero the host shared buffer for the new
                         // song so it starts from a clean shared state.
@@ -1061,10 +1062,6 @@ fn build_module(src: &str) -> Result<Module, Box<dyn std::error::Error>> {
     let tokens = tokenize(src).map_err(|e| format!("lex: {:?}", e))?;
     let program = parse(&tokens).map_err(|e| format!("parse: {:?}", e))?;
     Ok(compile(&program).map_err(|e| format!("compile: {:?}", e))?)
-}
-
-fn fresh_data() -> Vec<Value> {
-    (0..NUM_DATA_SLOTS).map(|_| Value::Int(0)).collect()
 }
 
 fn reset_voices(voices: &SharedVoices) {

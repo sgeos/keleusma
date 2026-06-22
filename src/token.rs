@@ -91,9 +91,10 @@ pub enum TokenKind {
     Pure,
     /// `data` block declaration keyword.
     Data,
-    /// `shared` modifier on a `data` declaration. Shared data is
-    /// host-visible through `Vm::set_data`/`Vm::get_data` and persists
-    /// across resets. Equivalent to today's bare `data` declaration;
+    /// `shared` modifier on a `data` declaration. Shared data is the
+    /// host-owned borrowed buffer, read and written through
+    /// `Vm::get_shared`/`Vm::set_shared`, and persists across resets in
+    /// the host's buffer. Equivalent to today's bare `data` declaration;
     /// the modifier is permitted explicitly for symmetry with
     /// `private` and for self-documenting code.
     Shared,

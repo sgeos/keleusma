@@ -2,6 +2,9 @@ extern crate alloc;
 use alloc::boxed::Box;
 use alloc::format;
 use alloc::string::String;
+// The `vec!` macro is used only by the test module; lib code uses the
+// fully-qualified `alloc::vec!`.
+#[cfg(test)]
 use alloc::vec;
 use alloc::vec::Vec;
 
@@ -923,14 +926,12 @@ pub struct GenericVm<
     /// Call-frame stack. Same arena-backed discipline as `stack`.
     frames: StackVec<'arena, CallFrame>,
     natives: Vec<NativeEntry<W, F>>,
-    /// Shared data slots. Survives across RESET boundaries.
-    data: Vec<crate::bytecode::GenericValue<W, F>>,
     /// Number of shared slots. Cached at construction from the
-    /// module's data layout. Equals `data.len()` for shared
-    /// slots; the unified slot index space partitions into
-    /// `[0, shared_slot_count)` (shared) and
+    /// module's data layout. Shared slots live in the host-owned buffer
+    /// borrowed for each call (B28 item 2), not in the VM. The unified slot
+    /// index space partitions into `[0, shared_slot_count)` (shared) and
     /// `[shared_slot_count, shared_slot_count + private_slot_count)`
-    /// (private).
+    /// (private, in the arena's persistent region).
     shared_slot_count: u16,
     /// Number of private slots. Cached at construction. Private
     /// slots live in the arena's persistent region starting at
@@ -1095,26 +1096,6 @@ pub fn required_persistent_capacity_for_generic<W: crate::word::Word, F: crate::
     // with no private composite slots, so this is unchanged for such modules.
     private_count * core::mem::size_of::<crate::bytecode::GenericValue<W, F>>()
         + module.persistent_composite_bytes as usize
-}
-
-/// Number of shared `.data` slots declared in `module`. The shared
-/// region lives inside the [`GenericVm`] itself as a
-/// `Vec<GenericValue>`, not in the arena; hosts read and write
-/// individual slots through [`GenericVm::set_data`] and
-/// [`GenericVm::get_data`]. This helper exposes the slot count so an
-/// embedder can pre-size a per-slot checkpoint buffer (for example
-/// the REPL's session-state buffer) without constructing the VM
-/// first.
-///
-/// The count matches `Self::shared_slot_count` after the VM is
-/// built from the same module.
-pub fn shared_slot_count_for(module: &crate::bytecode::Module) -> usize {
-    module.data_layout.as_ref().map_or(0, |dl| {
-        dl.slots
-            .iter()
-            .filter(|s| matches!(s.visibility, crate::bytecode::SlotVisibility::Shared))
-            .count()
-    })
 }
 
 /// Flat byte length of the borrowed shared-data buffer `module` expects
@@ -1818,7 +1799,6 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                 }
             }
         }
-        let data = vec![crate::bytecode::GenericValue::Unit; shared_count as usize];
         let decoded_ops = decode_all_ops(bytes)?;
         // The zero-copy view path receives raw bytes with no owned
         // `Module`, so the verifier's footprint analysis is not available
@@ -1842,7 +1822,6 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
             stack,
             frames,
             natives: Vec::new(),
-            data,
             shared_slot_count: shared_count,
             private_slot_count: private_count,
             arena,
@@ -2003,7 +1982,6 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                 }
             }
         }
-        let data = vec![crate::bytecode::GenericValue::Unit; shared_count as usize];
         let bytes = module.to_bytes()?;
         let mut aligned = rkyv::util::AlignedVec::<8>::with_capacity(bytes.len());
         aligned.extend_from_slice(&bytes);
@@ -2030,7 +2008,6 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
             stack,
             frames,
             natives: Vec::new(),
-            data,
             shared_slot_count: shared_count,
             private_slot_count: private_count,
             arena,
@@ -2061,13 +2038,10 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
     /// resolve to the arena's persistent region.
     fn read_data_slot(&self, slot: usize) -> Result<crate::bytecode::GenericValue<W, F>, VmError> {
         if slot < self.shared_slot_count as usize {
-            // A shared slot reads the host buffer when one is borrowed (B28
-            // item 2); otherwise the slot `data` vector (the coexistence path
-            // for `set_data`-based hosts).
-            if self.shared_buf.is_active() {
-                return self.read_shared_from_buffer(slot);
-            }
-            return Ok(self.data[slot].clone());
+            // A shared slot reads the borrowed host buffer (B28 item 2).
+            // `enter_shared` guarantees a module with shared slots is entered
+            // with an active buffer, so this is always reached with one.
+            return self.read_shared_from_buffer(slot);
         }
         // SAFETY: the slot is within the partition checked at
         // construction; the persistent region was initialised
@@ -2154,13 +2128,10 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         value: crate::bytecode::GenericValue<W, F>,
     ) -> Result<(), VmError> {
         if slot < self.shared_slot_count as usize {
-            // A shared slot writes the host buffer when one is borrowed (B28
-            // item 2); otherwise the slot `data` vector.
-            if self.shared_buf.is_active() {
-                return self.write_shared_to_buffer(slot, value);
-            }
-            self.data[slot] = value;
-            return Ok(());
+            // A shared slot writes the borrowed host buffer (B28 item 2);
+            // `enter_shared` guarantees an active buffer for any module with
+            // shared slots.
+            return self.write_shared_to_buffer(slot, value);
         }
         // SAFETY: the slot is within the partition checked at
         // construction; the pointee is a valid `Value` per
@@ -2385,81 +2356,15 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         self.const_pool.iter().map(|b| b.len()).sum()
     }
 
-    /// Number of shared data slots declared in the loaded module.
-    /// Slot indices `0..shared_slot_count` are host-accessible
-    /// through [`Self::set_data`] and [`Self::get_data`]; slot
-    /// indices beyond that range are private and reject host access.
-    /// Use this to size a host-side checkpoint buffer (for example
-    /// a REPL's per-evaluation persistence buffer) without keeping a
-    /// reference to the source module.
-    pub fn shared_slot_count(&self) -> usize {
-        self.shared_slot_count as usize
-    }
-
-    /// Set a data segment slot to an initial value.
-    ///
-    /// The host calls this before execution begins to populate the
-    /// persistent context. Returns an error if the slot index is out
-    /// of bounds.
-    pub fn set_data(
-        &mut self,
-        slot: usize,
-        value: crate::bytecode::GenericValue<W, F>,
-    ) -> Result<(), VmError> {
-        let total = self.data_len();
-        if slot >= total {
-            return Err(VmError::NativeError(format!(
-                "data slot index {} out of bounds (data segment has {} slots)",
-                slot, total
-            )));
-        }
-        if self.slot_is_private(slot) {
-            return Err(VmError::NativeError(format!(
-                "data slot {} is private and not accessible through the host API",
-                slot
-            )));
-        }
-        self.data[slot] = value;
-        Ok(())
-    }
-
-    /// Read a data segment slot value.
-    ///
-    /// Returns an error if the slot index is out of bounds or the
-    /// slot is declared `private` in the source. Private slots are
-    /// script-only and not exposed through the host API.
-    pub fn get_data(&self, slot: usize) -> Result<&crate::bytecode::GenericValue<W, F>, VmError> {
-        let total = self.data_len();
-        if slot >= total {
-            return Err(VmError::NativeError(format!(
-                "data slot index {} out of bounds (data segment has {} slots)",
-                slot, total
-            )));
-        }
-        if self.slot_is_private(slot) {
-            return Err(VmError::NativeError(format!(
-                "data slot {} is private and not accessible through the host API",
-                slot
-            )));
-        }
-        Ok(&self.data[slot])
-    }
-
-    /// True when the slot at `slot` is declared `private` in the
-    /// module's data layout. Used by [`Vm::set_data`] and
-    /// [`Vm::get_data`] to enforce the host-API boundary on private
-    /// slots. Out-of-bounds indices return false; the caller is
-    /// expected to have validated the bound before invoking this
-    /// helper (both call sites do).
-    fn slot_is_private(&self, slot: usize) -> bool {
-        slot >= self.shared_slot_count as usize && slot < self.data_len()
-    }
-
-    /// Return the number of slots in the current data segment.
-    ///
-    /// Useful for hosts that want to allocate a `Vec<crate::bytecode::GenericValue<W, F>>` of the correct
-    /// size without inspecting the `Module` directly.
-    pub fn data_len(&self) -> usize {
+    /// Total number of data slots in the loaded module (shared plus
+    /// private). Internal helper for the op-handler bounds checks; the
+    /// unified slot index space partitions into `[0, shared_slot_count)`
+    /// (shared, in the host buffer) and the rest (private, in the arena).
+    /// The retired `set_data`/`get_data`/`shared_slot_count` host API is gone;
+    /// hosts size the shared buffer with [`Self::shared_data_bytes`] and read
+    /// or write scalar shared fields with [`Self::get_shared`] /
+    /// [`Self::set_shared`] (B28 item 2).
+    fn data_len(&self) -> usize {
         self.shared_slot_count as usize + self.private_slot_count as usize
     }
 
@@ -2846,9 +2751,10 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
     /// - Bytecode store preserved.
     ///
     /// After this call, [`Vm::call`] starts a fresh iteration of the
-    /// entry point. Hosts that want to also reset the data segment
-    /// can follow with calls to [`Vm::set_data`] or replace the
-    /// module via [`Vm::replace_module`].
+    /// entry point. Private data lives in the arena and is preserved;
+    /// shared data is the host-owned buffer the host controls directly
+    /// (B28 item 2). To reset private data, replace the module via
+    /// [`Vm::replace_module`].
     ///
     /// This is the explicit recovery path (P3). Callers attest by
     /// invoking the method that they have inspected the error and
@@ -2871,12 +2777,13 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
     /// cannot overlap with running execution because that would require
     /// concurrent mutable access to `self`.
     ///
-    /// The new module is verified before replacement. The data segment
-    /// is replaced atomically with the host-supplied initial values
-    /// following Replace semantics, namely the host owns storage and
-    /// supplies whatever instance is appropriate for the new code
-    /// version. The supplied vector length must match the declared
-    /// slot count of the new module.
+    /// The new module is verified before replacement. `initial_data`
+    /// supplies only the new module's **private** data slots, in
+    /// declaration order; its length must equal the new module's private
+    /// slot count (pass an empty vec for a module with no private data).
+    /// Shared data is the host-owned buffer supplied at the next
+    /// [`Self::call_with_shared`], not a hot-swap input, so it persists
+    /// across the swap in the host's own buffer (B28 item 2).
     ///
     /// Frames and stack are cleared. The host should call `call` to
     /// start the new module's entry point. The old module's coroutine
@@ -3036,21 +2943,10 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
             .map_err(|e| VmError::VerifyError(format!("{}: {}", e.chunk_name, e.message)))?;
         }
 
-        let expected_len = new_module
-            .data_layout
-            .as_ref()
-            .map_or(0, |dl| dl.slots.len());
-        if initial_data.len() != expected_len {
-            return Err(VmError::InvalidBytecode(format!(
-                "data segment size mismatch: new module declares {} slot(s), host supplied {}",
-                expected_len,
-                initial_data.len()
-            )));
-        }
-        // Partition the new module's slots. Subsequent code
-        // splits `initial_data` accordingly so the shared portion
-        // populates the Vm-owned vector and the private portion
-        // populates the arena's persistent region.
+        // Partition the new module's slots. `initial_data` populates only the
+        // private partition (the arena's persistent region); shared data is the
+        // host-owned buffer supplied at the next call, not a hot-swap input
+        // (B28 item 2).
         let (new_shared, new_private) = match new_module.data_layout.as_ref() {
             None => (0u16, 0u16),
             Some(dl) => {
@@ -3077,6 +2973,13 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                 (shared, private_)
             }
         };
+        if initial_data.len() != new_private as usize {
+            return Err(VmError::InvalidBytecode(format!(
+                "private data segment size mismatch: new module declares {} private slot(s), host supplied {}",
+                new_private,
+                initial_data.len()
+            )));
+        }
         let new_private_storage =
             new_private as usize * core::mem::size_of::<crate::bytecode::GenericValue<W, F>>();
         // The persistent region must hold the new module's private-slot array
@@ -3111,14 +3014,9 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                 }
             }
         }
-        // Split the host-supplied initial values into the
-        // shared and private partitions. The compiler emits
-        // shared slots first in the unified index space, so the
-        // split is a contiguous prefix.
-        let mut iter = initial_data.into_iter();
-        let shared_init: Vec<crate::bytecode::GenericValue<W, F>> =
-            iter.by_ref().take(new_shared as usize).collect();
-        let private_init: Vec<crate::bytecode::GenericValue<W, F>> = iter.collect();
+        // The host-supplied initial values are exactly the new module's
+        // private slots; shared slots live in the borrowed buffer.
+        let private_init = initial_data;
 
         // Recompute the bottom-region footprint for the new module so the
         // `full_reset_arena_internal` below re-reserves the operand stack,
@@ -3138,7 +3036,6 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         let decoded_ops = decode_all_ops(aligned.as_slice())?;
         self.bytecode = BytecodeStore::Owned(aligned);
         self.decoded_ops = decoded_ops;
-        self.data = shared_init;
         self.shared_slot_count = new_shared;
         self.private_slot_count = new_private;
         // New bytecode means the native-classification check must
@@ -3663,23 +3560,28 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         self.call_function(entry, args)
     }
 
-    /// Capture the host shared-data buffer for the current call, or, for an
-    /// empty slice, leave it inactive so shared access uses the slot model
-    /// (the coexistence path; B28 item 2). A non-empty buffer must match the
-    /// module's declared `shared_data_bytes`. Cleared before the entry point
-    /// returns so no captured pointer outlives the host's borrow.
+    /// Capture the host shared-data buffer for the current call (B28 item 2).
+    ///
+    /// The buffer length must equal the module's declared `shared_data_bytes`.
+    /// A module with shared data therefore requires a non-empty buffer of the
+    /// exact size, so a shared-data module driven through the plain `call`
+    /// (which forwards an empty slice) is rejected rather than silently
+    /// reading uninitialised state. A module with no shared data
+    /// (`shared_data_bytes == 0`) takes the empty buffer the plain `call`
+    /// forwards. Cleared before the entry point returns so no captured pointer
+    /// outlives the host's borrow.
     fn enter_shared(&mut self, shared: &mut [u8]) -> Result<(), VmError> {
-        if shared.is_empty() {
+        let need = self.archived().shared_data_bytes.to_native() as usize;
+        if shared.len() != need {
+            return Err(VmError::NativeError(format!(
+                "shared data buffer is {} bytes but the module declares {}; drive a module with shared data through `call_with_shared`/`resume_with_shared` with a buffer of `shared_data_bytes()`",
+                shared.len(),
+                need
+            )));
+        }
+        if need == 0 {
             self.shared_buf.clear();
         } else {
-            let need = self.archived().shared_data_bytes.to_native() as usize;
-            if shared.len() != need {
-                return Err(VmError::NativeError(format!(
-                    "shared data buffer is {} bytes but the module declares {}",
-                    shared.len(),
-                    need
-                )));
-            }
             self.shared_buf.set(shared);
         }
         Ok(())
@@ -6745,10 +6647,10 @@ mod tests {
         );
         let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
         let mut vm = Vm::new(module, &arena).expect("vm constructs");
-        for slot in 0..3 {
-            vm.set_data(slot, Value::Int(0)).expect("init slot");
-        }
-        let err = vm.call(&[]).expect_err("out-of-bounds index traps");
+        let mut shared = vec![0u8; vm.shared_data_bytes()];
+        let err = vm
+            .call_with_shared(&mut shared, &[])
+            .expect_err("out-of-bounds index traps");
         assert!(matches!(err, VmError::IndexOutOfBounds(_, _)));
         let src = vm
             .fault_source_location()
@@ -9447,8 +9349,9 @@ mod tests {
         let module = compile(&program).expect("compile error");
         let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
         let mut vm = Vm::new(module, &arena).unwrap();
-        vm.set_data(0, Value::Int(42)).unwrap();
-        match vm.call(&[]).unwrap() {
+        let mut shared = vec![0u8; vm.shared_data_bytes()];
+        vm.set_shared(&mut shared, 0, Value::Int(42)).unwrap();
+        match vm.call_with_shared(&mut shared, &[]).unwrap() {
             VmState::Finished(v) => assert_eq!(v, Value::Int(42)),
             other => panic!("expected finished, got {:?}", other),
         }
@@ -9470,7 +9373,8 @@ mod tests {
         let module = compile(&program).expect("compile error");
         let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
         let mut vm = Vm::new(module, &arena).unwrap();
-        match vm.call(&[]).unwrap() {
+        let mut shared = vec![0u8; vm.shared_data_bytes()];
+        match vm.call_with_shared(&mut shared, &[]).unwrap() {
             VmState::Finished(v) => assert_eq!(v, Value::Int(100)),
             other => panic!("expected finished, got {:?}", other),
         }
@@ -9493,35 +9397,37 @@ mod tests {
         let module = compile(&program).expect("compile error");
         let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
         let mut vm = Vm::new(module, &arena).unwrap();
-        vm.set_data(0, Value::Int(0)).unwrap();
+        // Zeroed shared buffer; the script's counter starts at 0 and the host
+        // owns the buffer across the whole stream (B28 item 2).
+        let mut shared = vec![0u8; vm.shared_data_bytes()];
 
         // First call: counter 0 + 1 = 1, yield 1.
-        match vm.call(&[Value::Int(0)]).unwrap() {
+        match vm.call_with_shared(&mut shared, &[Value::Int(0)]).unwrap() {
             VmState::Yielded(v) => assert_eq!(v, Value::Int(1)),
             other => panic!("expected yield, got {:?}", other),
         }
 
         // Resume: reaches Reset. Counter is still 1.
-        match vm.resume(Value::Int(0)).unwrap() {
+        match vm.resume_with_shared(&mut shared, Value::Int(0)).unwrap() {
             VmState::Reset => {}
             other => panic!("expected reset, got {:?}", other),
         }
 
         // Resume after Reset: counter 1 + 1 = 2, yield 2.
         // Data survived the reset.
-        match vm.resume(Value::Int(0)).unwrap() {
+        match vm.resume_with_shared(&mut shared, Value::Int(0)).unwrap() {
             VmState::Yielded(v) => assert_eq!(v, Value::Int(2)),
             other => panic!("expected yield, got {:?}", other),
         }
 
         // Resume: reaches Reset.
-        match vm.resume(Value::Int(0)).unwrap() {
+        match vm.resume_with_shared(&mut shared, Value::Int(0)).unwrap() {
             VmState::Reset => {}
             other => panic!("expected reset, got {:?}", other),
         }
 
         // Resume after second Reset: counter 2 + 1 = 3.
-        match vm.resume(Value::Int(0)).unwrap() {
+        match vm.resume_with_shared(&mut shared, Value::Int(0)).unwrap() {
             VmState::Yielded(v) => assert_eq!(v, Value::Int(3)),
             other => panic!("expected yield, got {:?}", other),
         }
@@ -9545,15 +9451,16 @@ mod tests {
         let module = compile(&program).expect("compile error");
         let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
         let mut vm = Vm::new(module, &arena).unwrap();
+        let mut shared = vec![0u8; vm.shared_data_bytes()];
 
         // First yield: ctx.value = 99, yield 99.
-        match vm.call(&[Value::Int(0)]).unwrap() {
+        match vm.call_with_shared(&mut shared, &[Value::Int(0)]).unwrap() {
             VmState::Yielded(v) => assert_eq!(v, Value::Int(99)),
             other => panic!("expected yield, got {:?}", other),
         }
 
         // Second yield: ctx.value still 99, yield 99 + 1 = 100.
-        match vm.resume(Value::Int(0)).unwrap() {
+        match vm.resume_with_shared(&mut shared, Value::Int(0)).unwrap() {
             VmState::Yielded(v) => assert_eq!(v, Value::Int(100)),
             other => panic!("expected yield, got {:?}", other),
         }
@@ -9579,7 +9486,8 @@ mod tests {
         let module = compile(&program).expect("compile error");
         let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
         let mut vm = Vm::new(module, &arena).unwrap();
-        match vm.call(&[]).unwrap() {
+        let mut shared = vec![0u8; vm.shared_data_bytes()];
+        match vm.call_with_shared(&mut shared, &[]).unwrap() {
             VmState::Finished(v) => assert_eq!(v, Value::Int(60)),
             other => panic!("expected finished, got {:?}", other),
         }
@@ -9603,9 +9511,10 @@ mod tests {
         let module = compile(&program).expect("compile error");
         let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
         let mut vm = Vm::new(module, &arena).unwrap();
-        vm.set_data(0, Value::Int(100)).unwrap();
-        vm.set_data(1, Value::Int(200)).unwrap();
-        match vm.call(&[]).unwrap() {
+        let mut shared = vec![0u8; vm.shared_data_bytes()];
+        vm.set_shared(&mut shared, 0, Value::Int(100)).unwrap();
+        vm.set_shared(&mut shared, 1, Value::Int(200)).unwrap();
+        match vm.call_with_shared(&mut shared, &[]).unwrap() {
             VmState::Finished(v) => assert_eq!(v, Value::Int(300)),
             other => panic!("expected finished, got {:?}", other),
         }
@@ -9631,17 +9540,23 @@ mod tests {
 
         let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
         let mut vm = Vm::new(mod_a, &arena).unwrap();
-        vm.set_data(0, Value::Int(5)).unwrap();
-        match vm.call(&[]).unwrap() {
+        // The shared score lives in the host-owned buffer, which persists
+        // across the hot swap; the host preserves the value by reusing the
+        // same buffer rather than by passing it to `replace_module` (B28
+        // item 2).
+        let mut shared = vec![0u8; vm.shared_data_bytes()];
+        vm.set_shared(&mut shared, 0, Value::Int(5)).unwrap();
+        match vm.call_with_shared(&mut shared, &[]).unwrap() {
             VmState::Finished(v) => assert_eq!(v, Value::Int(15)),
             other => panic!("expected finished, got {:?}", other),
         }
 
-        // Hot swap to module B with the same value preserved by the host.
-        vm.replace_module(mod_b, alloc::vec![Value::Int(5)])
-            .unwrap();
+        // Hot swap to module B. `replace_module` takes only private initial
+        // data (here none); the shared buffer keeps score = 5.
+        vm.replace_module(mod_b, alloc::vec![]).unwrap();
+        shared.resize(vm.shared_data_bytes(), 0);
         assert_eq!(vm.data_len(), 1);
-        match vm.call(&[]).unwrap() {
+        match vm.call_with_shared(&mut shared, &[]).unwrap() {
             VmState::Finished(v) => assert_eq!(v, Value::Int(10)),
             other => panic!("expected finished, got {:?}", other),
         }
@@ -9696,17 +9611,21 @@ mod tests {
 
         let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
         let mut vm = Vm::new(mod_a, &arena).unwrap();
-        vm.set_data(0, Value::Int(7)).unwrap();
+        let mut shared = vec![0u8; vm.shared_data_bytes()];
+        vm.set_shared(&mut shared, 0, Value::Int(7)).unwrap();
         assert_eq!(vm.data_len(), 1);
 
-        vm.replace_module_unchecked(
-            mod_b,
-            alloc::vec![Value::Int(1), Value::Int(2), Value::Int(3)],
-        )
-        .unwrap();
+        // The new module declares no private data, so `replace_module` takes an
+        // empty vec; the wider shared layout is supplied through the resized
+        // host buffer (B28 item 2).
+        vm.replace_module_unchecked(mod_b, alloc::vec![]).unwrap();
+        shared.resize(vm.shared_data_bytes(), 0);
+        vm.set_shared(&mut shared, 0, Value::Int(1)).unwrap();
+        vm.set_shared(&mut shared, 1, Value::Int(2)).unwrap();
+        vm.set_shared(&mut shared, 2, Value::Int(3)).unwrap();
         assert_eq!(vm.data_len(), 3);
 
-        match vm.call(&[]).unwrap() {
+        match vm.call_with_shared(&mut shared, &[]).unwrap() {
             VmState::Finished(v) => assert_eq!(v, Value::Int(6)),
             other => panic!("expected finished, got {:?}", other),
         }
@@ -9774,10 +9693,11 @@ mod tests {
 
         let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
         let mut vm = Vm::new(mod_a, &arena).unwrap();
-        vm.set_data(0, Value::Int(5)).unwrap();
-        vm.replace_module(mod_b, alloc::vec![Value::Int(5)])
-            .unwrap();
-        match vm.call(&[]).unwrap() {
+        let mut shared = vec![0u8; vm.shared_data_bytes()];
+        vm.set_shared(&mut shared, 0, Value::Int(5)).unwrap();
+        vm.replace_module(mod_b, alloc::vec![]).unwrap();
+        shared.resize(vm.shared_data_bytes(), 0);
+        match vm.call_with_shared(&mut shared, &[]).unwrap() {
             VmState::Finished(v) => assert_eq!(v, Value::Int(6)),
             other => panic!("expected finished, got {:?}", other),
         }
@@ -9803,26 +9723,27 @@ mod tests {
 
         let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
         let mut vm = Vm::new(mod_a, &arena).unwrap();
-        vm.set_data(0, Value::Int(0)).unwrap();
+        let mut shared = vec![0u8; vm.shared_data_bytes()];
 
-        // Run module A: yield 1.
-        match vm.call(&[Value::Int(0)]).unwrap() {
+        // Run module A: yield 1 (the script writes n = 1 into the buffer).
+        match vm.call_with_shared(&mut shared, &[Value::Int(0)]).unwrap() {
             VmState::Yielded(v) => assert_eq!(v, Value::Int(1)),
             other => panic!("expected yield, got {:?}", other),
         }
 
         // Resume to reach Reset.
-        match vm.resume(Value::Int(0)).unwrap() {
+        match vm.resume_with_shared(&mut shared, Value::Int(0)).unwrap() {
             VmState::Reset => {}
             other => panic!("expected reset, got {:?}", other),
         }
 
-        // Hot swap to module B, host preserves n = 1.
-        vm.replace_module(mod_b, alloc::vec![Value::Int(1)])
-            .unwrap();
+        // Hot swap to module B. The host buffer keeps n = 1 across the swap;
+        // `replace_module` takes no private data.
+        vm.replace_module(mod_b, alloc::vec![]).unwrap();
+        shared.resize(vm.shared_data_bytes(), 0);
 
         // Run module B: yield 1 * 10 = 10.
-        match vm.call(&[Value::Int(0)]).unwrap() {
+        match vm.call_with_shared(&mut shared, &[Value::Int(0)]).unwrap() {
             VmState::Yielded(v) => assert_eq!(v, Value::Int(10)),
             other => panic!("expected yield, got {:?}", other),
         }
@@ -9840,24 +9761,27 @@ mod tests {
         // Start with v1, snapshot the value 5.
         let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
         let mut vm = Vm::new(mod_v1.clone(), &arena).unwrap();
-        vm.set_data(0, Value::Int(5)).unwrap();
-        match vm.call(&[]).unwrap() {
+        // The shared n = 5 lives in the host buffer and persists across both
+        // swaps; `replace_module` carries no private data here (B28 item 2).
+        let mut shared = vec![0u8; vm.shared_data_bytes()];
+        vm.set_shared(&mut shared, 0, Value::Int(5)).unwrap();
+        match vm.call_with_shared(&mut shared, &[]).unwrap() {
             VmState::Finished(v) => assert_eq!(v, Value::Int(6)),
             other => panic!("expected finished, got {:?}", other),
         }
 
         // Forward update to v2.
-        vm.replace_module(mod_v2, alloc::vec![Value::Int(5)])
-            .unwrap();
-        match vm.call(&[]).unwrap() {
+        vm.replace_module(mod_v2, alloc::vec![]).unwrap();
+        shared.resize(vm.shared_data_bytes(), 0);
+        match vm.call_with_shared(&mut shared, &[]).unwrap() {
             VmState::Finished(v) => assert_eq!(v, Value::Int(105)),
             other => panic!("expected finished, got {:?}", other),
         }
 
         // Rollback to v1 with the same value.
-        vm.replace_module(mod_v1, alloc::vec![Value::Int(5)])
-            .unwrap();
-        match vm.call(&[]).unwrap() {
+        vm.replace_module(mod_v1, alloc::vec![]).unwrap();
+        shared.resize(vm.shared_data_bytes(), 0);
+        match vm.call_with_shared(&mut shared, &[]).unwrap() {
             VmState::Finished(v) => assert_eq!(v, Value::Int(6)),
             other => panic!("expected finished, got {:?}", other),
         }
@@ -10737,10 +10661,11 @@ mod tests {
         let module = compile(&program).expect("compile");
         let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
         let mut vm = Vm::new(module, &arena).unwrap();
-        vm.set_data(0, Value::Int(5)).unwrap();
+        let mut shared = vec![0u8; vm.shared_data_bytes()];
+        vm.set_shared(&mut shared, 0, Value::Int(5)).unwrap();
 
         // First iteration: yield 6.
-        match vm.call(&[Value::Int(0)]).unwrap() {
+        match vm.call_with_shared(&mut shared, &[Value::Int(0)]).unwrap() {
             VmState::Yielded(Value::Int(6)) => {}
             other => panic!("expected yield 6, got {:?}", other),
         }
@@ -10754,11 +10679,11 @@ mod tests {
         // post-recovery state.
         vm.reset_after_error();
 
-        // Data segment preserved.
-        assert_eq!(vm.get_data(0).unwrap(), &Value::Int(6));
+        // The host buffer preserves the shared count across error recovery.
+        assert_eq!(vm.get_shared(&shared, 0).unwrap(), Value::Int(6));
 
         // Fresh call works.
-        match vm.call(&[Value::Int(0)]).unwrap() {
+        match vm.call_with_shared(&mut shared, &[Value::Int(0)]).unwrap() {
             VmState::Yielded(Value::Int(7)) => {}
             other => panic!("expected yield 7 after recovery, got {:?}", other),
         }
@@ -10998,8 +10923,8 @@ mod tests {
         let module = compile(&program).expect("compile");
         let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
         let mut vm = Vm::new(module, &arena).expect("verify");
-        vm.set_data(0, Value::Int(0)).expect("init sum");
-        match vm.call(&[]) {
+        let mut shared = vec![0u8; vm.shared_data_bytes()];
+        match vm.call_with_shared(&mut shared, &[]) {
             Ok(VmState::Finished(Value::Int(v))) => assert_eq!(v, 107),
             other => panic!("unexpected {:?}", other),
         }
@@ -11035,8 +10960,8 @@ mod tests {
         let module = compile(&program).expect("compile");
         let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
         let mut vm = Vm::new(module, &arena).expect("verify");
-        vm.set_data(0, Value::Int(0)).expect("init hits");
-        match vm.call(&[]) {
+        let mut shared = vec![0u8; vm.shared_data_bytes()];
+        match vm.call_with_shared(&mut shared, &[]) {
             Ok(VmState::Finished(Value::Int(v))) => assert_eq!(v, 107),
             other => panic!("unexpected {:?}", other),
         }
@@ -11068,8 +10993,8 @@ mod tests {
         let module = compile(&program).expect("compile");
         let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
         let mut vm = Vm::new(module, &arena).expect("verify");
-        vm.set_data(0, Value::Int(0)).expect("init total");
-        match vm.call(&[]) {
+        let mut shared = vec![0u8; vm.shared_data_bytes()];
+        match vm.call_with_shared(&mut shared, &[]) {
             Ok(VmState::Finished(Value::Int(v))) => {
                 // Sum of 1..=8 is 36.
                 assert_eq!(v, 36);
@@ -11459,19 +11384,17 @@ mod tests {
         let module = build_module(src);
         let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
         let mut vm = Vm::new(module, &arena).expect("verify");
-        for slot in 0..4 {
-            vm.set_data(slot, Value::Int(0)).expect("init slot");
-        }
-        match vm.call(&[]).expect("call") {
+        let mut shared = vec![0u8; vm.shared_data_bytes()];
+        match vm.call_with_shared(&mut shared, &[]).expect("call") {
             VmState::Finished(Value::Int(v)) => assert_eq!(v, 50),
             other => panic!("unexpected state: {:?}", other),
         }
-        // The slots were written through `Op::SetDataIndexed` and
-        // must persist after the call returns.
-        assert_eq!(vm.get_data(0).unwrap(), &Value::Int(10));
-        assert_eq!(vm.get_data(1).unwrap(), &Value::Int(20));
-        assert_eq!(vm.get_data(2).unwrap(), &Value::Int(30));
-        assert_eq!(vm.get_data(3).unwrap(), &Value::Int(40));
+        // The slots were written through `Op::SetDataIndexed` into the host
+        // buffer and persist there after the call returns.
+        assert_eq!(vm.get_shared(&shared, 0).unwrap(), Value::Int(10));
+        assert_eq!(vm.get_shared(&shared, 1).unwrap(), Value::Int(20));
+        assert_eq!(vm.get_shared(&shared, 2).unwrap(), Value::Int(30));
+        assert_eq!(vm.get_shared(&shared, 3).unwrap(), Value::Int(40));
     }
 
     #[test]
@@ -11485,10 +11408,10 @@ mod tests {
         let module = build_module(src);
         let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
         let mut vm = Vm::new(module, &arena).expect("verify");
-        for slot in 0..3 {
-            vm.set_data(slot, Value::Int(0)).expect("init slot");
-        }
-        let err = vm.call(&[]).expect_err("expected out-of-bounds trap");
+        let mut shared = vec![0u8; vm.shared_data_bytes()];
+        let err = vm
+            .call_with_shared(&mut shared, &[])
+            .expect_err("expected out-of-bounds trap");
         match err {
             VmError::IndexOutOfBounds(i, len) => {
                 assert_eq!(i, 5);
@@ -11517,18 +11440,16 @@ mod tests {
         let module = build_module(src);
         let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
         let mut vm = Vm::new(module, &arena).expect("verify");
-        for slot in 0..6 {
-            vm.set_data(slot, Value::Int(0)).expect("init slot");
-        }
-        match vm.call(&[]).expect("call") {
+        let mut shared = vec![0u8; vm.shared_data_bytes()];
+        match vm.call_with_shared(&mut shared, &[]).expect("call") {
             VmState::Finished(Value::Int(v)) => assert_eq!(v, 5),
             other => panic!("unexpected state: {:?}", other),
         }
         // Slot layout walks the inner dimension first: grid[0][0],
         // grid[0][1], grid[0][2], grid[1][0], grid[1][1], grid[1][2].
-        assert_eq!(vm.get_data(0).unwrap(), &Value::Int(1));
-        assert_eq!(vm.get_data(3).unwrap(), &Value::Int(4));
-        assert_eq!(vm.get_data(5).unwrap(), &Value::Int(6));
+        assert_eq!(vm.get_shared(&shared, 0).unwrap(), Value::Int(1));
+        assert_eq!(vm.get_shared(&shared, 3).unwrap(), Value::Int(4));
+        assert_eq!(vm.get_shared(&shared, 5).unwrap(), Value::Int(6));
     }
 
     #[test]
@@ -11543,10 +11464,10 @@ mod tests {
         let module = build_module(src);
         let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
         let mut vm = Vm::new(module, &arena).expect("verify");
-        for slot in 0..6 {
-            vm.set_data(slot, Value::Int(0)).expect("init slot");
-        }
-        let err = vm.call(&[]).expect_err("expected inner-bound trap");
+        let mut shared = vec![0u8; vm.shared_data_bytes()];
+        let err = vm
+            .call_with_shared(&mut shared, &[])
+            .expect_err("expected inner-bound trap");
         match err {
             VmError::IndexOutOfBounds(i, len) => {
                 assert_eq!(i, 5);
@@ -11593,47 +11514,6 @@ mod tests {
     }
 
     #[test]
-    fn shared_slot_count_for_returns_module_count() {
-        let src = "\
-            data ctx { a: Word, b: Word, c: Word }\n\
-            fn main() -> Word { ctx.a }";
-        let tokens = tokenize(src).expect("lex");
-        let program = parse(&tokens).expect("parse");
-        let module = compile(&program).expect("compile");
-        assert_eq!(shared_slot_count_for(&module), 3);
-    }
-
-    #[test]
-    fn shared_slot_count_excludes_private_slots() {
-        let src = "\
-            data sh { a: Word, b: Word }\n\
-            private data pv { x: Word, y: Word, z: Word }\n\
-            fn main() -> Word { pv.x = 1; pv.y = 2; pv.z = 3; sh.a + pv.x }";
-        let tokens = tokenize(src).expect("lex");
-        let program = parse(&tokens).expect("parse");
-        let module = compile(&program).expect("compile");
-        assert_eq!(shared_slot_count_for(&module), 2);
-    }
-
-    #[test]
-    fn vm_shared_slot_count_matches_module_helper() {
-        let src = "\
-            data ctx { a: Word, b: Word, c: Word, d: Word }\n\
-            fn main() -> Word { ctx.a }";
-        let tokens = tokenize(src).expect("lex");
-        let program = parse(&tokens).expect("parse");
-        let module = compile(&program).expect("compile");
-        let expected = shared_slot_count_for(&module);
-        let mut arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
-        arena
-            .resize_persistent(required_persistent_capacity_for(&module))
-            .expect("resize persistent");
-        let vm = Vm::new(module, &arena).expect("verify");
-        assert_eq!(vm.shared_slot_count(), expected);
-        assert_eq!(vm.shared_slot_count(), 4);
-    }
-
-    #[test]
     fn mixed_data_partitions_correctly() {
         let src = "\
             data shared_ctx { x: Word }\n\
@@ -11650,62 +11530,6 @@ mod tests {
             module.private_data_bytes,
             2 * crate::bytecode::VALUE_SLOT_SIZE_BYTES
         );
-    }
-
-    #[test]
-    fn set_data_rejects_private_slot() {
-        let src = "\
-            data shared_ctx { x: Word }\n\
-            private data priv_ctx { y: Word }\n\
-            fn main() -> Word { priv_ctx.y = 1; shared_ctx.x + priv_ctx.y }";
-        let tokens = tokenize(src).expect("lex");
-        let program = parse(&tokens).expect("parse");
-        let module = compile(&program).expect("compile");
-        let mut arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
-        arena
-            .resize_persistent(required_persistent_capacity_for(&module))
-            .expect("resize persistent");
-        let mut vm = Vm::new(module, &arena).expect("verify");
-        // Slot 0 is shared; should succeed.
-        vm.set_data(0, Value::Int(5)).expect("shared slot accepted");
-        // Slot 1 is private; should reject.
-        let err = vm
-            .set_data(1, Value::Int(7))
-            .expect_err("private slot must reject");
-        match err {
-            VmError::NativeError(msg) => {
-                assert!(
-                    msg.contains("private"),
-                    "expected 'private' in error: {}",
-                    msg
-                );
-            }
-            other => panic!("expected NativeError, got {:?}", other),
-        }
-    }
-
-    #[test]
-    fn get_data_rejects_private_slot() {
-        let src = "\
-            data shared_ctx { x: Word }\n\
-            private data priv_ctx { y: Word }\n\
-            fn main() -> Word { priv_ctx.y = 1; shared_ctx.x + priv_ctx.y }";
-        let tokens = tokenize(src).expect("lex");
-        let program = parse(&tokens).expect("parse");
-        let module = compile(&program).expect("compile");
-        let mut arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
-        arena
-            .resize_persistent(required_persistent_capacity_for(&module))
-            .expect("resize persistent");
-        let vm = Vm::new(module, &arena).expect("verify");
-        let _ok = vm.get_data(0).expect("shared slot accessible");
-        let err = vm.get_data(1).expect_err("private slot must reject");
-        match err {
-            VmError::NativeError(msg) => {
-                assert!(msg.contains("private"));
-            }
-            other => panic!("expected NativeError, got {:?}", other),
-        }
     }
 
     #[test]
@@ -12520,8 +12344,9 @@ mod tests {
         assert!(vm.set_shared(&mut buf, 1, Value::Int(0)).is_err());
 
         // An out-of-range slot and a wrong-size buffer are both rejected.
-        let shared_slots = vm.shared_slot_count();
-        assert!(vm.get_shared(&buf, shared_slots).is_err());
+        // The module declares two shared slots (hp at 0, pos at 1), so any
+        // larger index is out of range.
+        assert!(vm.get_shared(&buf, 99).is_err());
         let short = alloc::vec![0u8; sdb - 1];
         assert!(vm.get_shared(&short, 0).is_err());
     }

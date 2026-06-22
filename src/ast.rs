@@ -122,7 +122,8 @@ pub struct DataDecl {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DataVisibility {
     /// Shared with the host. Default when no modifier is present.
-    /// Host reads and writes through `Vm::set_data` and `Vm::get_data`.
+    /// Lives in the borrowed host-owned buffer; the host reads and writes
+    /// through `Vm::get_shared` and `Vm::set_shared` (B28 item 2).
     Shared,
     /// Private to the script. Lives in the arena's persistent region.
     /// No host API. Persists across resets.
