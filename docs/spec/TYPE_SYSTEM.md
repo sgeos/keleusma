@@ -31,7 +31,7 @@ Static strings reside in the read-only data section of the loaded code image. So
 |---|---|
 | Lifetime | Bound to the code image. Replaced at hot update with the rest of rodata. |
 | Allowed flow paths | Anywhere admissible. Function arguments, return values, dialogue type B, native function arguments and returns, local bindings. |
-| Data segment | Permitted at the bytecode level. Surface grammar does not expose static strings as `data` field types. The host may write static-string handles into data slots via `set_data` and is responsible for validity across hot updates. |
+| Data segment | Surface grammar does not expose static strings as `data` field types, and a shared composite carrying a `Text` (arena-pointer) field is rejected at compile time, because shared data is a flat host-owned byte buffer that cannot hold an arena pointer the host would dangle after RESET (B28 item 2). The host marshals strings separately rather than through shared slots. |
 | Mutability | Immutable. |
 | Cost | Fixed-size handle, no allocation at use site. |
 
@@ -225,7 +225,7 @@ The following type expressions are admissible as data segment field types.
 | `Option<T>` where `T` is admissible | Yes | Tag plus payload, fixed size. |
 | Nominal struct of admissible fields | Yes | Compositional. |
 | Nominal enum where all variants have admissible payloads | Yes | Discriminator plus the maximum-size payload. |
-| `StaticStr` | Conditional | Permitted at the bytecode level. Surface grammar does not currently expose static strings as data field types. The host may store static-string handles in data slots through `set_data` and bears responsibility for validity across hot updates. |
+| `StaticStr` | Conditional | Surface grammar does not currently expose static strings as data field types. A `Text` field in shared data is rejected at compile time, because the shared segment is a flat host-owned byte buffer that cannot hold an arena pointer (B28 item 2); the host marshals strings outside the shared slots. |
 | `DynStr` | No | Variable-length and arena-bound. Lifetime conflicts with cross-RESET persistence. |
 | Variable-length array | No | Variable length. |
 | Opaque types | Conditional | Admissible only if the host declares a fixed size for the type. Subject to future specification. |

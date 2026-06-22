@@ -29,11 +29,12 @@ the file:
 - `run` constructs the `Arena` and the `Vm`, the rest of Chapter 32.
 - `register_natives` registers sixteen natives with
   `register_native_closure`, the captured-state route of Chapter 33.
-- `init_data` seeds the data segment through `set_data`.
-- The main tick loop calls `resume`, matches `VmState`, and handles the
-  `Reset` case, the protocol of Chapter 34.
-- The `Reset` arm calls `replace_module` to swap songs, the hot swap of
-  Chapter 37.
+- The host allocates a zeroed shared-data buffer of `vm.shared_data_bytes()`
+  bytes and lends it to the script at each call.
+- The main tick loop calls `resume_with_shared`, matches `VmState`, and
+  handles the `Reset` case, the protocol of Chapter 34.
+- The `Reset` arm calls `replace_module` (with empty private data) to swap
+  songs and re-sizes the shared buffer, the hot swap of Chapter 37.
 
 The audio-synthesis code is everything else, and it is not about
 Keleusma at all. The `Mixer`, the `AudioCallback` implementation,

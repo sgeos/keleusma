@@ -40,7 +40,7 @@ Sixteen small-integer literals (`Int(0)` through `Int(15)`) are encoded inline. 
 
 ## Data Segment
 
-The unified slot index space partitions into shared slots `[0, shared_count)` and private slots `[shared_count, shared_count + private_count)`. Shared slots are host-accessible through `Vm::set_data`/`Vm::get_data` and live in the Vm's owned vector. Private slots are script-only and live in the arena's persistent region. The opcodes below admit both partitions; the runtime dispatches by comparing the slot index against the cached `shared_slot_count`. Const data fields do not consume a slot; field reads compile to `Const` and writes are compile errors.
+The unified slot index space partitions into shared slots `[0, shared_count)` and private slots `[shared_count, shared_count + private_count)`. Shared slots live in the host-owned buffer borrowed at each call and are reached by the host through `Vm::get_shared`/`Vm::set_shared` (B28 item 2); private slots are script-only and live in the arena's persistent region. The opcodes below admit both partitions; the runtime dispatches by comparing the slot index against the cached `shared_slot_count`, sending a shared slot to the borrowed buffer by byte offset and a private slot to the arena. Const data fields do not consume a slot; field reads compile to `Const` and writes are compile errors.
 
 | Instruction | Operands | Cost | Description |
 |-------------|----------|------|-------------|

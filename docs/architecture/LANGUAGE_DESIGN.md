@@ -114,7 +114,7 @@ V0.2 partitions the data segment into three visibility classes that each have di
 
 | Class | Surface form | Storage | Host API | Lifecycle |
 |-------|--------------|---------|----------|-----------|
-| Shared | `shared data ctx { ... }` or `data ctx { ... }` | Vm-owned vector | `Vm::set_data`/`Vm::get_data` | Persists across RESET |
+| Shared | `shared data ctx { ... }` or `data ctx { ... }` | Host-owned `&mut [u8]` buffer borrowed per call | `Vm::shared_data_bytes` + `Vm::get_shared`/`Vm::set_shared` | Persists across RESET in the host's buffer |
 | Private | `private data state { ... }` | Arena's persistent region | Not exposed | Persists across RESET |
 | Const | `const data cfg { field: T = literal, ... }` | Per-chunk constant pool | Not applicable (immutable) | Identical to bytecode lifetime |
 

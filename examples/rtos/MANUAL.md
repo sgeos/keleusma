@@ -259,7 +259,7 @@ data state {
 }
 ```
 
-Equivalent to bare `data` in earlier versions. Shared data is host-visible through `Vm::set_data(slot, value)` and `Vm::get_data(slot)`. Storage is owned by the Vm. Survives RESET. The host populates initial values before `Vm::call`; the script reads and writes the same slots through `state.field` syntax.
+Equivalent to bare `data` in earlier versions. Shared data is a host-owned `&mut [u8]` buffer of `Vm::shared_data_bytes()` bytes, lent to the VM at each `Vm::call_with_shared`/`Vm::resume_with_shared` and read or written between calls through `Vm::get_shared`/`Vm::set_shared` (B28 item 2). The host owns the storage and it survives RESET in the host's buffer. The script reads and writes the same fields through `state.field` syntax. The kernel pairs each task with its own buffer (`Task::shared`) and lends it on every dispatch.
 
 ### Private data
 
@@ -269,7 +269,7 @@ private data state {
 }
 ```
 
-Private data lives in the arena's persistent region. The host has no API access; `Vm::set_data` and `Vm::get_data` reject private slot indices. The script reads and writes through `state.field` exactly like shared data. Survives RESET. The host must size the arena's persistent capacity before constructing the VM:
+Private data lives in the arena's persistent region. The host has no API access; the shared accessors `Vm::get_shared`/`Vm::set_shared` address only shared slots. The script reads and writes through `state.field` exactly like shared data. Survives RESET. The host must size the arena's persistent capacity before constructing the VM:
 
 ```rust
 arena.resize_persistent(vm::required_persistent_capacity_for(&module))?;

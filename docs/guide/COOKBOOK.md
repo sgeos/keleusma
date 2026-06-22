@@ -143,7 +143,7 @@ The pattern composes three techniques that are individually known but compose we
 
 **Multi-headed dispatch encoding a constant table.** Keleusma admits multi-headed function definitions with integer-pattern parameters. One head per entry, each body assigning the entry's fields, is functionally equivalent to a constant array. The encoding is verifier-friendly because every body is straight-line code. Prolog facts and Erlang or Elixir pattern matching are close analogues.
 
-**Data segment as host-script I/O struct.** The data segment is normally the place where a `loop main` script preserves state across resumes. Repurposing it for one-shot pure functions as an output struct works because `get_data` and `set_data` are already part of the host boundary. The script reads the input through its function argument and writes outputs through `state.field = ...` assignments.
+**Data segment as host-script I/O struct.** The data segment is normally the place where a `loop main` script preserves state across resumes. Repurposing it for one-shot pure functions as an output struct works because the host lends the shared segment as a buffer at each call and reads scalar fields out of it afterward through `get_shared`. The script reads the input through its function argument and writes outputs through `state.field = ...` assignments.
 
 **Negative-index size discovery.** The loader resolves negative indices to `count + n` (Python sequence convention). Calling `fn main(-1)` writes the last entry's fields, including an `id` slot equal to `count - 1`. The host reads the `id` slot to learn the table size with one call, sizes its cache from that, and asserts the value against any parallel host-side constant. This avoids hard-coding the count in the Rust source.
 
@@ -185,25 +185,28 @@ pub fn colours() -> &'static [Colour] {
 }
 
 fn load_colours(vm: &mut Vm) -> Result<(), Box<dyn std::error::Error>> {
+    // The host lends a zeroed shared buffer; the script writes its fields into
+    // it and the host reads them back out (B28 item 2).
+    let mut shared = vec![0u8; vm.shared_data_bytes()];
     // Discover the count by calling with -1.
-    vm.call(&[Value::Int(-1)])?;
-    let count = read_int(vm, 0)? as usize + 1;
+    vm.call_with_shared(&mut shared, &[Value::Int(-1)])?;
+    let count = read_int(vm, &shared, 0)? as usize + 1;
     let mut table = Vec::with_capacity(count);
     for i in 0..count {
-        vm.call(&[Value::Int(i as i64)])?;
+        vm.call_with_shared(&mut shared, &[Value::Int(i as i64)])?;
         table.push(Colour {
-            r: read_int(vm, 1)? as u8,
-            g: read_int(vm, 2)? as u8,
-            b: read_int(vm, 3)? as u8,
+            r: read_int(vm, &shared, 1)? as u8,
+            g: read_int(vm, &shared, 2)? as u8,
+            b: read_int(vm, &shared, 3)? as u8,
         });
     }
     let _ = COLOURS.set(table);
     Ok(())
 }
 
-fn read_int(vm: &Vm, slot: usize) -> Result<i64, Box<dyn std::error::Error>> {
-    match vm.get_data(slot)? {
-        Value::Int(n) => Ok(*n),
+fn read_int(vm: &Vm, shared: &[u8], slot: usize) -> Result<i64, Box<dyn std::error::Error>> {
+    match vm.get_shared(shared, slot)? {
+        Value::Int(n) => Ok(n),
         other => Err(format!("expected Int at slot {}, got {:?}", slot, other).into()),
     }
 }

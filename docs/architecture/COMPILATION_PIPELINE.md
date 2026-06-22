@@ -150,19 +150,21 @@ let module = compile(&program)?;
 let arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
 let mut vm = Vm::new(module, &arena)?;
 // Register native functions.
-// Initialize data segment slots if the module declares a data block.
+// Lend the script a host-owned shared-data buffer for the call. Seed any
+// scalar fields the script reads through `set_shared`.
+let mut shared = vec![0u8; vm.shared_data_bytes()];
 for (slot, value) in initial_values.iter().enumerate() {
-    vm.set_data(slot, value.clone())?;
+    vm.set_shared(&mut shared, slot, value.clone())?;
 }
 // Drive coroutine execution.
-match vm.call(&[])? {
+match vm.call_with_shared(&mut shared, &[])? {
     VmState::Yielded(output) => { /* host processes output */ }
     VmState::Reset => { /* host may hot swap or resume */ }
     VmState::Finished(value) => { /* terminal result */ }
 }
 ```
 
-`Vm::new()` runs structural verification and the WCMU/WCET resource-bounds check; either failing returns a `VmError`. The data segment is allocated to match the declared layout slot count and zero-initialized to `Value::Unit`. The host calls `set_data` to populate slots before execution begins.
+`Vm::new()` runs structural verification and the WCMU/WCET resource-bounds check; either failing returns a `VmError`. Private data slots are zero-initialized in the arena; shared data is the host-owned buffer, sized to `Vm::shared_data_bytes()` and lent at each `call_with_shared`. The host seeds scalar shared fields through `set_shared` before execution begins (B28 item 2).
 
 Native functions are registered via `Vm::register_fn` for the ergonomic typed registration that handles arity, type coercion, and return wrapping automatically. Argument and return types must implement `KeleusmaType`, which the `#[derive(KeleusmaType)]` macro provides for host structs and enums. Use `Vm::register_fn_fallible` when the host function returns `Result<R, VmError>`. The lower-level `register_native` and `register_native_closure` remain available for functions that must inspect arbitrary `Value` variants.
 
