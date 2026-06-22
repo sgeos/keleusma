@@ -46,7 +46,7 @@ use sdl3::pixels::Color;
 use keleusma::vm::{DEFAULT_ARENA_CAPACITY, Vm, VmState};
 use keleusma::{Arena, Value};
 
-use crate::ai::{AiModules, AiPool, AiPoolHandle, compile_disk, compile_embedded, zero_data_slots};
+use crate::ai::{AiModules, AiPool, AiPoolHandle, compile_disk, compile_embedded};
 use crate::input::Command;
 use crate::natives::push_msg;
 use crate::render::{GameOver, Renderer};
@@ -142,7 +142,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let dungen_module = compile_embedded("rogue_dungen.kel")?;
     let mut dungen_vm =
         Vm::new(dungen_module, &dungen_arena).map_err(|e| format!("vm new: {:?}", e))?;
-    zero_data_slots(&mut dungen_vm);
+    // Persistent host-owned shared-data buffer for the dungeon generator (B28
+    // item 2). The generator's shared state carries across floors exactly as
+    // the prior slot model did, because the same buffer is lent on each call.
+    let mut dungen_shared = vec![0u8; dungen_vm.shared_data_bytes()];
     natives::register_natives(&mut dungen_vm, &world);
 
     // Build the artificial-intelligence virtual-machine pool.
@@ -162,12 +165,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let game_arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
     let game_module = compile_embedded("rogue_game.kel")?;
     let mut game_vm = Vm::new(game_module, &game_arena).map_err(|e| format!("vm new: {:?}", e))?;
-    zero_data_slots(&mut game_vm);
+    // The game-tick script declares no shared data, so it needs no host
+    // buffer; its plain `call`/`resume` path suffices (B28 item 2).
     natives::register_game_natives(&mut game_vm, &world, &ai_pool);
     let mut game_started = false;
 
     // Generate the first floor.
-    run_dungen(&mut dungen_vm, 1)?;
+    run_dungen(&mut dungen_vm, &mut dungen_shared, 1)?;
     push_msg(&world, "Welcome, brave adventurer.");
     world.lock().unwrap().recompute_fov();
 
@@ -185,7 +189,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     if game_over.is_some() {
                         match keycode {
                             sdl3::keyboard::Keycode::R => {
-                                restart_run(&world, &mut dungen_vm, &ai_pool)?;
+                                restart_run(&world, &mut dungen_vm, &mut dungen_shared, &ai_pool)?;
                                 game_over = None;
                             }
                             sdl3::keyboard::Keycode::Q | sdl3::keyboard::Keycode::Escape => {
@@ -199,7 +203,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         match cmd {
                             Command::Quit => break 'running,
                             Command::Reload => {
-                                reload_scripts(&world, &mut dungen_vm, &dungen_arena, &ai_pool);
+                                reload_scripts(
+                                    &world,
+                                    &mut dungen_vm,
+                                    &mut dungen_shared,
+                                    &dungen_arena,
+                                    &ai_pool,
+                                );
                             }
                             other => {
                                 let cmd_code = encode_command(other);
@@ -208,7 +218,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 match outcome {
                                     0 => {}
                                     1 => {
-                                        descend_floor(&world, &mut dungen_vm, &ai_pool)?;
+                                        descend_floor(
+                                            &world,
+                                            &mut dungen_vm,
+                                            &mut dungen_shared,
+                                            &ai_pool,
+                                        )?;
                                     }
                                     2 => {
                                         push_msg(&world, "You step into the light. You win!");
@@ -304,6 +319,7 @@ fn run_game_tick(
 fn restart_run<'a1, 'b1>(
     world: &natives::WorldHandle,
     dungen_vm: &mut Vm<'a1, 'b1>,
+    dungen_shared: &mut [u8],
     ai_pool: &ai::AiPoolHandle,
 ) -> Result<(), Box<dyn std::error::Error>>
 where
@@ -311,7 +327,7 @@ where
 {
     *world.lock().unwrap() = World::new();
     push_msg(world, "A new dungeon spreads before you.");
-    run_dungen(dungen_vm, 1)?;
+    run_dungen(dungen_vm, dungen_shared, 1)?;
     world.lock().unwrap().recompute_fov();
     ai_pool.lock().unwrap().reset_loop_main_data();
     Ok(())
@@ -332,11 +348,13 @@ fn load_bestiary() -> Result<(), Box<dyn std::error::Error>> {
     let arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
     let module = compile_embedded("rogue_bestiary.kel")?;
     let mut vm = Vm::new(module, &arena).map_err(|e| format!("bestiary vm new: {:?}", e))?;
-    zero_data_slots(&mut vm);
+    // Lend the script a zeroed host-owned shared buffer for the whole load
+    // (B28 item 2); each entry's fields are written into it and read back.
+    let mut shared = vec![0u8; vm.shared_data_bytes()];
     // Discovery: ask the script for the last entry.
-    vm.call(&[Value::Int(-1)])
+    vm.call_with_shared(&mut shared, &[Value::Int(-1)])
         .map_err(|e| format!("bestiary discovery: {:?}", e))?;
-    let last_id = read_data_int(&vm, 0)? as usize;
+    let last_id = read_data_int(&vm, &shared, 0)? as usize;
     let count = last_id + 1;
     assert_eq!(
         count,
@@ -352,10 +370,10 @@ fn load_bestiary() -> Result<(), Box<dyn std::error::Error>> {
     let mut table = Vec::with_capacity(count);
     for i in 0..count {
         let state = vm
-            .call(&[Value::Int(i as i64)])
+            .call_with_shared(&mut shared, &[Value::Int(i as i64)])
             .map_err(|e| format!("bestiary entry {}: {:?}", i, e))?;
         let name = leak_finished_static_str(state, i, &arena)?;
-        table.push(read_bestiary_entry(&vm, name)?);
+        table.push(read_bestiary_entry(&vm, &shared, name)?);
     }
     bestiary::install(table);
     Ok(())
@@ -381,18 +399,19 @@ fn leak_finished_static_str(
     }
 }
 
-fn read_data_int(vm: &Vm, slot: usize) -> Result<i64, Box<dyn std::error::Error>> {
+fn read_data_int(vm: &Vm, shared: &[u8], slot: usize) -> Result<i64, Box<dyn std::error::Error>> {
     match vm
-        .get_data(slot)
-        .map_err(|e| format!("get_data({}): {:?}", slot, e))?
+        .get_shared(shared, slot)
+        .map_err(|e| format!("get_shared({}): {:?}", slot, e))?
     {
-        Value::Int(n) => Ok(*n),
+        Value::Int(n) => Ok(n),
         other => Err(format!("expected Int at slot {}, got {:?}", slot, other).into()),
     }
 }
 
 fn read_bestiary_entry(
     vm: &Vm,
+    shared: &[u8],
     name: &'static str,
 ) -> Result<bestiary::MonsterKind, Box<dyn std::error::Error>> {
     // Slot order mirrors the data-segment declaration in
@@ -400,7 +419,7 @@ fn read_bestiary_entry(
     // enums by ordinal, and copies the rest as integers. The
     // `name` argument is the script's return value for this
     // entry, leaked to `&'static str` by the caller.
-    let r = |s| read_data_int(vm, s);
+    let r = |s| read_data_int(vm, shared, s);
     Ok(bestiary::MonsterKind {
         name,
         shape: bestiary::Shape::from_ord(r(1)?),
@@ -428,35 +447,44 @@ fn load_gear() -> Result<(), Box<dyn std::error::Error>> {
     let arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
     let module = compile_embedded("rogue_gear.kel")?;
     let mut vm = Vm::new(module, &arena).map_err(|e| format!("gear vm new: {:?}", e))?;
-    zero_data_slots(&mut vm);
-    let weapon_count = load_gear_table(&mut vm, 0)?;
+    // One host-owned shared buffer for the whole gear load (B28 item 2).
+    let mut shared = vec![0u8; vm.shared_data_bytes()];
+    let weapon_count = load_gear_table(&mut vm, &mut shared, 0)?;
     let mut damages = Vec::with_capacity(weapon_count);
     for i in 0..weapon_count {
-        vm.call(&[Value::Int(0), Value::Int(i as i64)])
+        vm.call_with_shared(&mut shared, &[Value::Int(0), Value::Int(i as i64)])
             .map_err(|e| format!("gear weapon {}: {:?}", i, e))?;
-        damages.push(read_data_int(&vm, 1)? as i32);
+        damages.push(read_data_int(&vm, &shared, 1)? as i32);
     }
     items::install_weapons(&damages);
-    let armor_count = load_gear_table(&mut vm, 1)?;
+    let armor_count = load_gear_table(&mut vm, &mut shared, 1)?;
     let mut defenses = Vec::with_capacity(armor_count);
     for i in 0..armor_count {
-        vm.call(&[Value::Int(1), Value::Int(i as i64)])
+        vm.call_with_shared(&mut shared, &[Value::Int(1), Value::Int(i as i64)])
             .map_err(|e| format!("gear armor {}: {:?}", i, e))?;
-        defenses.push(read_data_int(&vm, 1)? as i32);
+        defenses.push(read_data_int(&vm, &shared, 1)? as i32);
     }
     items::install_armors(&defenses);
     Ok(())
 }
 
-fn load_gear_table(vm: &mut Vm, table: i64) -> Result<usize, Box<dyn std::error::Error>> {
-    vm.call(&[Value::Int(table), Value::Int(-1)])
+fn load_gear_table(
+    vm: &mut Vm,
+    shared: &mut [u8],
+    table: i64,
+) -> Result<usize, Box<dyn std::error::Error>> {
+    vm.call_with_shared(shared, &[Value::Int(table), Value::Int(-1)])
         .map_err(|e| format!("gear discovery table {}: {:?}", table, e))?;
-    Ok(read_data_int(vm, 0)? as usize + 1)
+    Ok(read_data_int(vm, shared, 0)? as usize + 1)
 }
 
-fn run_dungen(vm: &mut Vm, floor: i64) -> Result<(), Box<dyn std::error::Error>> {
+fn run_dungen(
+    vm: &mut Vm,
+    shared: &mut [u8],
+    floor: i64,
+) -> Result<(), Box<dyn std::error::Error>> {
     match vm
-        .call(&[Value::Int(floor)])
+        .call_with_shared(shared, &[Value::Int(floor)])
         .map_err(|e| format!("dungen vm: {:?}", e))?
     {
         VmState::Finished(_) => Ok(()),
@@ -479,6 +507,7 @@ fn run_dungen(vm: &mut Vm, floor: i64) -> Result<(), Box<dyn std::error::Error>>
 fn reload_scripts<'a, 'd>(
     world: &natives::WorldHandle,
     dungen_vm: &mut Vm<'a, 'd>,
+    dungen_shared: &mut Vec<u8>,
     dungen_arena: &'d Arena,
     ai_pool: &AiPoolHandle,
 ) where
@@ -504,7 +533,10 @@ fn reload_scripts<'a, 'd>(
             );
         }
     };
-    zero_data_slots(dungen_vm);
+    // Re-size and clear the dungen shared buffer for the reloaded module; the
+    // hot-swapped generator starts from zeroed shared state.
+    dungen_shared.clear();
+    dungen_shared.resize(dungen_vm.shared_data_bytes(), 0);
     natives::register_natives(dungen_vm, world);
     // Swap every artificial-intelligence and item virtual
     // machine.
@@ -521,6 +553,7 @@ fn reload_scripts<'a, 'd>(
 fn descend_floor(
     world: &Arc<Mutex<World>>,
     dungen_vm: &mut Vm,
+    dungen_shared: &mut [u8],
     ai_pool: &AiPoolHandle,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let snapshot = {
@@ -549,7 +582,7 @@ fn descend_floor(
         world,
         format!("You descend to floor {}. You feel stronger.", floor),
     );
-    run_dungen(dungen_vm, floor)?;
+    run_dungen(dungen_vm, dungen_shared, floor)?;
     world.lock().unwrap().recompute_fov();
     Ok(())
 }

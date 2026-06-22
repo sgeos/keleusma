@@ -166,15 +166,6 @@ pub fn compile_disk(name: &str) -> Result<Module, Box<dyn std::error::Error>> {
     build_module(&src)
 }
 
-/// Zero every slot in a virtual machine's data segment. Used at
-/// startup to ensure a deterministic initial state and on
-/// restart to drop archetype memory carried from the prior run.
-pub fn zero_data_slots<'a, 'b>(vm: &mut Vm<'a, 'b>) {
-    for slot in 0..vm.data_len() {
-        let _ = vm.set_data(slot, Value::Int(0));
-    }
-}
-
 /// Five-element tuple returned by item-effect scripts: hp delta,
 /// max-hp delta, skill delta, status code, status argument.
 pub type EffectTuple = (i64, i64, i64, i64, i64);
@@ -254,6 +245,14 @@ pub struct AiPool {
     tracker_started: bool,
     /// Same flag for the Hunter `loop main` archetype.
     hunter_started: bool,
+    /// Persistent host-owned shared-data buffers for the three `loop main`
+    /// archetypes (B28 item 2). Each is lent to its virtual machine on every
+    /// turn so the script's shared state survives across resumes, and is
+    /// zeroed on restart by [`AiPool::reset_loop_main_data`]. A buffer is
+    /// empty when its archetype declares no shared data.
+    boss_shared: Vec<u8>,
+    tracker_shared: Vec<u8>,
+    hunter_shared: Vec<u8>,
 }
 
 impl AiPool {
@@ -288,6 +287,9 @@ impl AiPool {
         let mut scroll_apply = build_vm(modules.scroll_apply, leak_arena(), world, false)?;
         crate::natives::register_consume_natives(&mut consume, world);
         crate::natives::register_scroll_apply_natives(&mut scroll_apply, world);
+        let boss_shared = vec![0u8; boss.shared_data_bytes()];
+        let tracker_shared = vec![0u8; tracker.shared_data_bytes()];
+        let hunter_shared = vec![0u8; hunter.shared_data_bytes()];
         Ok(Self {
             idle,
             chaser,
@@ -312,6 +314,9 @@ impl AiPool {
             boss_started: false,
             tracker_started: false,
             hunter_started: false,
+            boss_shared,
+            tracker_shared,
+            hunter_shared,
         })
     }
 
@@ -353,6 +358,12 @@ impl AiPool {
         self.boss_started = false;
         self.tracker_started = false;
         self.hunter_started = false;
+        // Re-size the shared buffers to the freshly built modules and clear
+        // them; a hot reload starts each loop-main archetype's shared state
+        // from zero.
+        self.boss_shared = vec![0u8; self.boss.shared_data_bytes()];
+        self.tracker_shared = vec![0u8; self.tracker.shared_data_bytes()];
+        self.hunter_shared = vec![0u8; self.hunter.shared_data_bytes()];
         Ok(())
     }
 
@@ -377,8 +388,12 @@ impl AiPool {
     /// position is unchanged; the next resume re-enters the
     /// loop body and reads the zeroed state.
     pub fn reset_loop_main_data(&mut self) {
-        for vm in [&mut self.boss, &mut self.tracker, &mut self.hunter] {
-            zero_data_slots(vm);
+        for buf in [
+            &mut self.boss_shared,
+            &mut self.tracker_shared,
+            &mut self.hunter_shared,
+        ] {
+            buf.iter_mut().for_each(|b| *b = 0);
         }
     }
 
@@ -592,16 +607,32 @@ impl AiPool {
             Value::Int(py as i64),
             Value::Int(if sees { 1 } else { 0 }),
         ]);
-        let (vm, started_flag): (&mut Vm<'static, 'static>, &mut bool) = match kind {
-            LoopMainKind::Boss => (&mut self.boss, &mut self.boss_started),
-            LoopMainKind::Tracker => (&mut self.tracker, &mut self.tracker_started),
-            LoopMainKind::Hunter => (&mut self.hunter, &mut self.hunter_started),
-        };
+        let (vm, started_flag, shared): (&mut Vm<'static, 'static>, &mut bool, &mut Vec<u8>) =
+            match kind {
+                LoopMainKind::Boss => (
+                    &mut self.boss,
+                    &mut self.boss_started,
+                    &mut self.boss_shared,
+                ),
+                LoopMainKind::Tracker => (
+                    &mut self.tracker,
+                    &mut self.tracker_started,
+                    &mut self.tracker_shared,
+                ),
+                LoopMainKind::Hunter => (
+                    &mut self.hunter,
+                    &mut self.hunter_started,
+                    &mut self.hunter_shared,
+                ),
+            };
+        // Lend the archetype's persistent shared buffer for this turn; the
+        // script reads and writes it in place, so its shared state carries
+        // across resumes (B28 item 2).
         let mut state = if *started_flag {
-            vm.resume(input.clone())
+            vm.resume_with_shared(shared, input.clone())
         } else {
             *started_flag = true;
-            vm.call(std::slice::from_ref(&input))
+            vm.call_with_shared(shared, std::slice::from_ref(&input))
         }
         .map_err(|e| format!("loop main vm: {:?}", e))?;
         for _ in 0..16 {
@@ -612,7 +643,7 @@ impl AiPool {
                 }
                 VmState::Reset => {
                     state = vm
-                        .resume(input.clone())
+                        .resume_with_shared(shared, input.clone())
                         .map_err(|e| format!("loop main vm: {:?}", e))?;
                 }
                 VmState::Finished(_) => return Err("loop main vm finished unexpectedly".into()),
@@ -837,7 +868,8 @@ fn build_vm(
     needs_rng: bool,
 ) -> Result<Vm<'static, 'static>, Box<dyn std::error::Error>> {
     let mut vm = Vm::new(module, arena).map_err(|e| format!("vm new: {:?}", e))?;
-    zero_data_slots(&mut vm);
+    // Shared data, where an archetype declares it, is held in a host-owned
+    // buffer allocated zeroed by the pool (B28 item 2); no slot zeroing here.
     if needs_rng {
         register_rng(&mut vm, world);
     }

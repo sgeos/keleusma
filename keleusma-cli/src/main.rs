@@ -904,7 +904,12 @@ fn repl_subcommand(_args: &[String]) -> ExitCode {
     // VM does not yet expose. The REPL therefore documents private
     // data as eval-local; users wanting persistent state should
     // declare a `shared data` block.
-    let mut shared_state: Vec<Value> = Vec::new();
+    // The REPL's persistent shared-data buffer (B28 item 2). The buffer is
+    // host-owned and lent to each evaluation; it grows and zero-extends as
+    // later declarations add shared fields. Because the REPL prefix is
+    // append-only, a field's byte offset is stable across evaluations, so
+    // growth preserves prior fields and zero-initialises new ones.
+    let mut shared_state: Vec<u8> = Vec::new();
 
     loop {
         {
@@ -996,7 +1001,7 @@ fn is_declaration(line: &str) -> bool {
     starters.iter().any(|s| line.starts_with(s))
 }
 
-fn evaluate_repl_input(prefix: &mut String, shared_state: &mut Vec<Value>, line: &str) {
+fn evaluate_repl_input(prefix: &mut String, shared_state: &mut Vec<u8>, line: &str) {
     if is_declaration(line) {
         // Tentatively append; verify it parses and compiles within
         // the prefix before committing.
@@ -1324,7 +1329,7 @@ fn execute_source(source: &str, loop_config: &LoopRunnerConfig) -> Result<(), St
 /// returns a sentinel `Word 0` purely to satisfy the entry-point
 /// signature; the actual value the operator wants to see is
 /// printed earlier by the wrapper's call to `println(expr)`.
-fn execute_source_repl_silent(source: &str, shared_state: &mut Vec<Value>) -> Result<(), String> {
+fn execute_source_repl_silent(source: &str, shared_state: &mut Vec<u8>) -> Result<(), String> {
     let module = compile_source(source)?;
     let entry_kind = detect_entry_kind(&module)?;
     if !matches!(entry_kind, EntryKind::AtomicFn) {
@@ -1341,32 +1346,18 @@ fn execute_source_repl_silent(source: &str, shared_state: &mut Vec<Value>) -> Re
     let mut vm = Vm::new(module, &arena).map_err(|e| format!("verify: {:?}", e))?;
     register_repl_natives(&mut vm);
 
-    // Restore prior shared-data values before the expression runs.
-    // The REPL prefix is append-only, so slot indices in
-    // `0..min(prior, current)` are stable across evaluations. New
-    // slots added by the latest declaration keep their default
-    // initial values from `Vm::new`.
-    let current_shared = vm.shared_slot_count();
-    let restore_count = shared_state.len().min(current_shared);
-    for (i, value) in shared_state.iter().take(restore_count).enumerate() {
-        vm.set_data(i, value.clone())
-            .map_err(|e| format!("restoring shared slot {} from prior REPL state: {:?}", i, e))?;
-    }
-
-    let result = vm.call(&[]).map_err(|e| format!("vm: {:?}", e))?;
-
-    // Snapshot the current shared-data values for the next round.
-    // Materialise KString variants into StaticStr so the snapshot
-    // does not retain arena handles that go stale when the source
-    // Vm is dropped after this function returns.
-    let mut next_state: Vec<Value> = Vec::with_capacity(current_shared);
-    for i in 0..current_shared {
-        let value = vm
-            .get_data(i)
-            .map_err(|e| format!("snapshotting shared slot {} after eval: {:?}", i, e))?;
-        next_state.push(value.materialise_kstrings(&arena));
-    }
-    *shared_state = next_state;
+    // Resize the persistent shared buffer to this module's flat layout and
+    // lend it to the run (B28 item 2). The REPL prefix is append-only, so a
+    // shared field's byte offset is stable across evaluations; `resize`
+    // preserves prior fields' bytes and zero-initialises newly declared
+    // fields, matching the prior slot model's "new slots keep their default
+    // initial values". The run mutates the buffer in place, so on return it
+    // already holds the next round's shared state -- no snapshot pass, and no
+    // arena handles to materialise, because the buffer is pure bytes.
+    shared_state.resize(vm.shared_data_bytes(), 0);
+    let result = vm
+        .call_with_shared(shared_state.as_mut_slice(), &[])
+        .map_err(|e| format!("vm: {:?}", e))?;
 
     match result {
         VmState::Finished(_) => Ok(()),
@@ -1710,7 +1701,14 @@ fn drive_to_completion(
 /// returned value and returns. Yielded or Reset states from an
 /// atomic fn are unexpected and produce an error.
 fn drive_atomic_fn(vm: &mut Vm, arena: &Arena) -> Result<(), String> {
-    match vm.call(&[]).map_err(|e| format!("vm: {:?}", e))? {
+    // Lend the script a zeroed host-owned shared-data buffer for this run
+    // (B28 item 2). A module with no shared data needs a zero-length buffer,
+    // for which `call_with_shared` behaves exactly like `call`.
+    let mut shared = vec![0u8; vm.shared_data_bytes()];
+    match vm
+        .call_with_shared(&mut shared, &[])
+        .map_err(|e| format!("vm: {:?}", e))?
+    {
         VmState::Finished(v) => {
             print_value(&v, arena);
             Ok(())
@@ -1750,8 +1748,12 @@ fn drive_atomic_fn(vm: &mut Vm, arena: &Arena) -> Result<(), String> {
 fn drive_loop_main(vm: &mut Vm, _arena: &Arena, config: &LoopRunnerConfig) -> Result<(), String> {
     let mut tick: i64 = 1;
     let mut iteration_start = Instant::now();
+    // One host-owned shared buffer for the whole stream; the script reads and
+    // writes it in place each tick, so shared state persists across resumes
+    // (B28 item 2). Zero-length when the module has no shared data.
+    let mut shared = vec![0u8; vm.shared_data_bytes()];
     let mut state = vm
-        .call(&[Value::Int(tick)])
+        .call_with_shared(&mut shared, &[Value::Int(tick)])
         .map_err(|e| format!("vm: {:?}", e))?;
     loop {
         match state {
@@ -1778,7 +1780,7 @@ fn drive_loop_main(vm: &mut Vm, _arena: &Arena, config: &LoopRunnerConfig) -> Re
                 apply_tick_interval(elapsed, config);
                 iteration_start = Instant::now();
                 state = vm
-                    .resume(Value::Int(tick))
+                    .resume_with_shared(&mut shared, Value::Int(tick))
                     .map_err(|e| format!("vm: {:?}", e))?;
             }
             VmState::BreakpointHit { chunk, op } => {
@@ -1798,7 +1800,7 @@ fn drive_loop_main(vm: &mut Vm, _arena: &Arena, config: &LoopRunnerConfig) -> Re
                 apply_tick_interval(elapsed, config);
                 iteration_start = Instant::now();
                 state = vm
-                    .resume(Value::Int(tick))
+                    .resume_with_shared(&mut shared, Value::Int(tick))
                     .map_err(|e| format!("vm: {:?}", e))?;
             }
         }
@@ -1815,8 +1817,10 @@ fn drive_loop_main(vm: &mut Vm, _arena: &Arena, config: &LoopRunnerConfig) -> Re
 fn drive_yield_main(vm: &mut Vm, _arena: &Arena, config: &LoopRunnerConfig) -> Result<(), String> {
     let mut tick: i64 = 1;
     let mut iteration_start = Instant::now();
+    // One host-owned shared buffer for the whole stream (B28 item 2).
+    let mut shared = vec![0u8; vm.shared_data_bytes()];
     let mut state = vm
-        .call(&[Value::Int(tick)])
+        .call_with_shared(&mut shared, &[Value::Int(tick)])
         .map_err(|e| format!("vm: {:?}", e))?;
     loop {
         match state {
@@ -1844,7 +1848,7 @@ fn drive_yield_main(vm: &mut Vm, _arena: &Arena, config: &LoopRunnerConfig) -> R
                 apply_tick_interval(elapsed, config);
                 iteration_start = Instant::now();
                 state = vm
-                    .resume(Value::Int(tick))
+                    .resume_with_shared(&mut shared, Value::Int(tick))
                     .map_err(|e| format!("vm: {:?}", e))?;
             }
             VmState::BreakpointHit { chunk, op } => {
@@ -1858,7 +1862,7 @@ fn drive_yield_main(vm: &mut Vm, _arena: &Arena, config: &LoopRunnerConfig) -> R
                 apply_tick_interval(elapsed, config);
                 iteration_start = Instant::now();
                 state = vm
-                    .resume(Value::Int(tick))
+                    .resume_with_shared(&mut shared, Value::Int(tick))
                     .map_err(|e| format!("vm: {:?}", e))?;
             }
         }

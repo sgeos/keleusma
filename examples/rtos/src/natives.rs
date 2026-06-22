@@ -97,21 +97,23 @@ pub enum StatusErrorCode {
 /// Build a `Status::Ok` value. The empty `fields` vector
 /// matches the prelude declaration `Ok = 0` (no payload).
 fn status_ok() -> Value {
-    Value::Enum {
-        type_name: String::from("Status"),
-        variant: String::from("Ok"),
-        fields: Vec::new(),
-    }
+    // `Status::Ok = 0` with no payload. Built through the single enum
+    // constructor so the host value shares the flat representation the
+    // compiler bakes for script-built `Status::Ok` (B28 P2).
+    Value::enum_value(String::from("Status"), String::from("Ok"), 0, Vec::new())
 }
 
 /// Build a `Status::Err(code)` value. The payload is the
 /// `StatusErrorCode` discriminant as a Word.
 fn status_err(code: StatusErrorCode) -> Value {
-    Value::Enum {
-        type_name: String::from("Status"),
-        variant: String::from("Err"),
-        fields: vec![Value::Int(code as i64)],
-    }
+    // `Status::Err(Word) = 1`; the payload is the `StatusErrorCode`
+    // discriminant as a Word (B28 P2).
+    Value::enum_value(
+        String::from("Status"),
+        String::from("Err"),
+        1,
+        vec![Value::Int(code as i64)],
+    )
 }
 
 /// Register every native the kernel's tasks expect. Call once

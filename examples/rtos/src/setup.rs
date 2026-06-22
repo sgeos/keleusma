@@ -37,7 +37,6 @@ use alloc::boxed::Box;
 use alloc::format;
 use alloc::string::String;
 
-use keleusma::bytecode::Value;
 #[cfg(feature = "keleusma-compile")]
 use keleusma::compiler::compile;
 #[cfg(feature = "keleusma-compile")]
@@ -380,9 +379,10 @@ fn finish_build_task<P: Platform>(
     let arena: &'static Arena = Box::leak(Box::new(Arena::with_capacity(arena_capacity)));
     let mut vm: Vm<'static, 'static> =
         Vm::new(module, arena).map_err(|e| format!("vm new for {}: {:?}", name, e))?;
-    for slot in 0..vm.data_len() {
-        let _ = vm.set_data(slot, Value::Int(0));
-    }
+    // Host-owned shared-data buffer for this task, zeroed for the script's
+    // first observation of each shared field (B28 item 2). Empty when the
+    // task declares no shared data.
+    let shared = alloc::vec![0u8; vm.shared_data_bytes()];
     // The utility natives that back f-string interpolation
     // (`to_string`, `concat`, `slice`, `length`, `println`) are
     // no longer registered. Task scripts compile without the
@@ -394,6 +394,7 @@ fn finish_build_task<P: Platform>(
     Ok(Task {
         name,
         vm,
+        shared,
         state: TaskState::Ready(WakeReason::FirstRun),
         started: false,
         wcet_budget_cycles,

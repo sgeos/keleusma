@@ -60,6 +60,12 @@ pub enum WakeReason {
 pub struct Task {
     pub name: &'static str,
     pub vm: Vm<'static, 'static>,
+    /// Host-owned shared-data buffer lent to this task's virtual machine on
+    /// every dispatch (B28 item 2). Sized to the task module's
+    /// `shared_data_bytes` at construction; the script reads and writes it in
+    /// place, so its shared state persists across yields. Empty when the task
+    /// declares no shared data.
+    pub shared: Vec<u8>,
     pub state: TaskState,
     pub started: bool,
     /// Maximum declared WCET in pipelined cycles per yield slice
@@ -237,11 +243,17 @@ impl<P: Platform> Kernel<P> {
             _ => unreachable!("dispatch called on non-ready task"),
         };
         let reason_value = Value::Int(reason as i64);
-        let result = if self.tasks[i].started {
-            self.tasks[i].vm.resume(reason_value)
-        } else {
-            self.tasks[i].started = true;
-            self.tasks[i].vm.call(&[reason_value])
+        // Lend the task its persistent shared buffer for this slice. Scope the
+        // split borrow of the vm and buffer fields so it ends before the match
+        // re-borrows the task (B28 item 2).
+        let result = {
+            let task = &mut self.tasks[i];
+            if task.started {
+                task.vm.resume_with_shared(&mut task.shared, reason_value)
+            } else {
+                task.started = true;
+                task.vm.call_with_shared(&mut task.shared, &[reason_value])
+            }
         };
         match result {
             Ok(VmState::Yielded(val)) => {

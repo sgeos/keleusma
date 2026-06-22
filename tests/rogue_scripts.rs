@@ -325,9 +325,7 @@ fn ai_tracker_chases_when_seen() {
     let module = build(SRC_AI_TRACKER);
     let arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
     let mut vm = Vm::new(module, &arena).expect("vm new");
-    for slot in 0..vm.data_len() {
-        vm.set_data(slot, Value::Int(0)).expect("set_data");
-    }
+    let mut shared = vec![0u8; vm.shared_data_bytes()];
     let input = Value::tuple(vec![
         Value::Int(5),
         Value::Int(5),
@@ -335,7 +333,7 @@ fn ai_tracker_chases_when_seen() {
         Value::Int(10),
         Value::Int(1),
     ]);
-    let result = vm.call(&[input]).expect("vm call");
+    let result = vm.call_with_shared(&mut shared, &[input]).expect("vm call");
     match result {
         VmState::Yielded(ref v @ Value::Tuple(_)) => {
             let c = word_tuple(&arena, v);
@@ -357,9 +355,7 @@ fn ai_tracker_pursues_last_known_when_unseen() {
     let module = build(SRC_AI_TRACKER);
     let arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
     let mut vm = Vm::new(module, &arena).expect("vm new");
-    for slot in 0..vm.data_len() {
-        vm.set_data(slot, Value::Int(0)).expect("set_data");
-    }
+    let mut shared = vec![0u8; vm.shared_data_bytes()];
     // First turn: player visible at (10, 10). Tracker chases and
     // records the last known position.
     let visible_input = Value::tuple(vec![
@@ -369,7 +365,8 @@ fn ai_tracker_pursues_last_known_when_unseen() {
         Value::Int(10),
         Value::Int(1),
     ]);
-    vm.call(&[visible_input]).expect("vm call");
+    vm.call_with_shared(&mut shared, &[visible_input])
+        .expect("vm call");
     // Loop main wraps; the host walks past Reset to the next
     // Yielded with a fresh input. Second turn: player not
     // visible. Tracker should move toward the stored last
@@ -381,7 +378,9 @@ fn ai_tracker_pursues_last_known_when_unseen() {
         Value::Int(0),
         Value::Int(0),
     ]);
-    let mut state = vm.resume(unseen_input.clone()).expect("vm resume");
+    let mut state = vm
+        .resume_with_shared(&mut shared, unseen_input.clone())
+        .expect("vm resume");
     for _ in 0..16 {
         match state {
             VmState::Yielded(ref v @ Value::Tuple(_)) => {
@@ -392,7 +391,9 @@ fn ai_tracker_pursues_last_known_when_unseen() {
                 return;
             }
             VmState::Reset => {
-                state = vm.resume(unseen_input.clone()).expect("vm resume");
+                state = vm
+                    .resume_with_shared(&mut shared, unseen_input.clone())
+                    .expect("vm resume");
             }
             other => panic!("expected Yielded or Reset, got {:?}", other),
         }
@@ -593,9 +594,7 @@ fn game_tick_runs_with_stubbed_natives() {
     let module = build(SRC_GAME);
     let arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
     let mut vm = Vm::new(module, &arena).expect("vm new");
-    for slot in 0..vm.data_len() {
-        vm.set_data(slot, Value::Int(0)).expect("set_data");
-    }
+    let mut shared = vec![0u8; vm.shared_data_bytes()];
 
     let monster_calls = std::rc::Rc::new(RefCell::new(0_i64));
     let book_calls = std::rc::Rc::new(RefCell::new(0_i64));
@@ -625,7 +624,9 @@ fn game_tick_runs_with_stubbed_natives() {
         }),
     );
 
-    let result = vm.call(&[Value::Int(0)]).expect("vm call");
+    let result = vm
+        .call_with_shared(&mut shared, &[Value::Int(0)])
+        .expect("vm call");
     match result {
         VmState::Yielded(Value::Int(outcome)) => {
             assert_eq!(outcome, 0, "first turn should yield continue");
@@ -654,12 +655,11 @@ fn bestiary_negative_one_returns_last_entry() {
     let module = build(SRC_BESTIARY);
     let arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
     let mut vm = Vm::new(module, &arena).expect("vm new");
-    for slot in 0..vm.data_len() {
-        vm.set_data(slot, Value::Int(0)).expect("set_data");
-    }
-    vm.call(&[Value::Int(-1)]).expect("call -1");
-    let last_id = match vm.get_data(0).expect("get_data id") {
-        Value::Int(n) => *n,
+    let mut shared = vec![0u8; vm.shared_data_bytes()];
+    vm.call_with_shared(&mut shared, &[Value::Int(-1)])
+        .expect("call -1");
+    let last_id = match vm.get_shared(&shared, 0).expect("get_shared id") {
+        Value::Int(n) => n,
         other => panic!("expected Int, got {:?}", other),
     };
     assert_eq!(last_id, 99, "the bestiary ships with one hundred entries");
@@ -670,10 +670,10 @@ fn bestiary_returns_name_as_text() {
     let module = build(SRC_BESTIARY);
     let arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
     let mut vm = Vm::new(module, &arena).expect("vm new");
-    for slot in 0..vm.data_len() {
-        vm.set_data(slot, Value::Int(0)).expect("set_data");
-    }
-    let state = vm.call(&[Value::Int(0)]).expect("call 0");
+    let mut shared = vec![0u8; vm.shared_data_bytes()];
+    let state = vm
+        .call_with_shared(&mut shared, &[Value::Int(0)])
+        .expect("call 0");
     match state {
         // A returned string constant is now a rodata `KStr` rather than an
         // owned `StaticStr` (B28 P3 item 4); resolve its content through the
@@ -693,13 +693,12 @@ fn bestiary_corpse_data_derived_from_shape() {
     let module = build(SRC_BESTIARY);
     let arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
     let mut vm = Vm::new(module, &arena).expect("vm new");
-    for slot in 0..vm.data_len() {
-        vm.set_data(slot, Value::Int(0)).expect("set_data");
-    }
-    vm.call(&[Value::Int(0)]).expect("call 0");
+    let mut shared = vec![0u8; vm.shared_data_bytes()];
+    vm.call_with_shared(&mut shared, &[Value::Int(0)])
+        .expect("call 0");
     let read = |slot: usize| -> i64 {
-        match vm.get_data(slot).expect("get_data") {
-            Value::Int(n) => *n,
+        match vm.get_shared(&shared, slot).expect("get_shared") {
+            Value::Int(n) => n,
             _ => panic!(),
         }
     };
@@ -713,15 +712,14 @@ fn bestiary_entry_zero_is_sewer_rat_stats() {
     let module = build(SRC_BESTIARY);
     let arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
     let mut vm = Vm::new(module, &arena).expect("vm new");
-    for slot in 0..vm.data_len() {
-        vm.set_data(slot, Value::Int(0)).expect("set_data");
-    }
-    vm.call(&[Value::Int(0)]).expect("call 0");
+    let mut shared = vec![0u8; vm.shared_data_bytes()];
+    vm.call_with_shared(&mut shared, &[Value::Int(0)])
+        .expect("call 0");
     // Sewer Rat: shape Tiny=0, max_hp=3, ai Chaser=2,
     // first_floor=1, score=1. See rogue_bestiary.kel entry 0.
     let read = |slot: usize| -> i64 {
-        match vm.get_data(slot).expect("get_data") {
-            Value::Int(n) => *n,
+        match vm.get_shared(&shared, slot).expect("get_shared") {
+            Value::Int(n) => n,
             _ => panic!(),
         }
     };
@@ -743,13 +741,12 @@ fn gear_weapon_zero_is_fists_damage_two() {
     let module = build(SRC_GEAR);
     let arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
     let mut vm = Vm::new(module, &arena).expect("vm new");
-    for slot in 0..vm.data_len() {
-        vm.set_data(slot, Value::Int(0)).expect("set_data");
-    }
+    let mut shared = vec![0u8; vm.shared_data_bytes()];
     // table 0 = weapons, tier 0 = fists, damage 2.
-    vm.call(&[Value::Int(0), Value::Int(0)]).expect("call");
-    let value = match vm.get_data(1).expect("get_data") {
-        Value::Int(n) => *n,
+    vm.call_with_shared(&mut shared, &[Value::Int(0), Value::Int(0)])
+        .expect("call");
+    let value = match vm.get_shared(&shared, 1).expect("get_shared") {
+        Value::Int(n) => n,
         _ => panic!(),
     };
     assert_eq!(value, 2, "fists damage");
@@ -760,14 +757,13 @@ fn gear_armor_negative_one_is_last_guard_defense_forty() {
     let module = build(SRC_GEAR);
     let arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
     let mut vm = Vm::new(module, &arena).expect("vm new");
-    for slot in 0..vm.data_len() {
-        vm.set_data(slot, Value::Int(0)).expect("set_data");
-    }
+    let mut shared = vec![0u8; vm.shared_data_bytes()];
     // table 1 = armors, tier -1 = last guard, defense 40.
-    vm.call(&[Value::Int(1), Value::Int(-1)]).expect("call");
+    vm.call_with_shared(&mut shared, &[Value::Int(1), Value::Int(-1)])
+        .expect("call");
     let read = |slot: usize| -> i64 {
-        match vm.get_data(slot).expect("get_data") {
-            Value::Int(n) => *n,
+        match vm.get_shared(&shared, slot).expect("get_shared") {
+            Value::Int(n) => n,
             _ => panic!(),
         }
     };
@@ -782,7 +778,10 @@ fn dungen_runs_floor_1() {
     let mut vm = Vm::new(module, &arena).expect("vm new");
     let stub = Arc::new(Mutex::new(DungenStub::new()));
     register_dungen_stub(&mut vm, &stub);
-    let result = vm.call(&[Value::Int(1)]).expect("vm call");
+    let mut shared = vec![0u8; vm.shared_data_bytes()];
+    let result = vm
+        .call_with_shared(&mut shared, &[Value::Int(1)])
+        .expect("vm call");
     match result {
         VmState::Finished(_) => {}
         other => panic!("expected Finished, got {:?}", other),
@@ -978,7 +977,7 @@ fn call_boss_first(
     px: i64,
     py: i64,
     sees: i64,
-) -> (i64, i64, i64, Vm<'static, 'static>, Arena) {
+) -> (i64, i64, i64, Vm<'static, 'static>, Vec<u8>) {
     let module = build(SRC_AI_BOSS);
     // The arena and vm need to escape this helper for callers
     // that want to resume. Return them by value.
@@ -989,9 +988,9 @@ fn call_boss_first(
     // leak is irrelevant.
     let arena_ref: &'static Arena = Box::leak(Box::new(arena));
     let mut vm: Vm<'static, 'static> = Vm::new(module, arena_ref).expect("vm new");
-    for slot in 0..vm.data_len() {
-        vm.set_data(slot, Value::Int(0)).expect("set_data");
-    }
+    // The boss shared buffer travels with the returned vm so a caller can
+    // resume against the same persistent shared state (B28 item 2).
+    let mut shared = vec![0u8; vm.shared_data_bytes()];
     let input = Value::tuple(vec![
         Value::Int(mx),
         Value::Int(my),
@@ -999,7 +998,7 @@ fn call_boss_first(
         Value::Int(py),
         Value::Int(sees),
     ]);
-    let result = vm.call(&[input]).expect("vm call");
+    let result = vm.call_with_shared(&mut shared, &[input]).expect("vm call");
     let triple = match result {
         VmState::Yielded(ref v @ Value::Tuple(_)) => {
             let c = word_tuple(arena_ref, v);
@@ -1008,8 +1007,7 @@ fn call_boss_first(
         }
         other => panic!("expected Yielded triple, got {:?}", other),
     };
-    let dummy_arena = Arena::with_capacity(0);
-    (triple.0, triple.1, triple.2, vm, dummy_arena)
+    (triple.0, triple.1, triple.2, vm, shared)
 }
 
 #[test]
@@ -1020,7 +1018,7 @@ fn call_boss_first(
 )))]
 fn ai_boss_first_turn_attacks_at_range_when_distant() {
     // Phase zero is a ranged attack when the player is visible.
-    let (action, tx, ty, _vm, _arena) = call_boss_first(5, 5, 12, 12, 1);
+    let (action, tx, ty, _vm, _shared) = call_boss_first(5, 5, 12, 12, 1);
     assert_eq!(action, 2);
     assert_eq!((tx, ty), (12, 12));
 }
@@ -1032,7 +1030,7 @@ fn ai_boss_first_turn_attacks_at_range_when_distant() {
     feature = "narrow-word-32"
 )))]
 fn ai_boss_first_turn_waits_when_unseen() {
-    let (action, _tx, _ty, _vm, _arena) = call_boss_first(5, 5, 12, 12, 0);
+    let (action, _tx, _ty, _vm, _shared) = call_boss_first(5, 5, 12, 12, 0);
     assert_eq!(action, 0);
 }
 
@@ -1047,7 +1045,7 @@ fn ai_boss_second_turn_chases() {
     // turn lands on phase one which is a chase step. `loop main`
     // emits Reset at the body's wrap point so the helper loops
     // past Reset until the next Yielded.
-    let (_a1, _x1, _y1, mut vm, _arena) = call_boss_first(5, 5, 12, 12, 1);
+    let (_a1, _x1, _y1, mut vm, mut shared) = call_boss_first(5, 5, 12, 12, 1);
     let input = Value::tuple(vec![
         Value::Int(5),
         Value::Int(5),
@@ -1055,7 +1053,9 @@ fn ai_boss_second_turn_chases() {
         Value::Int(12),
         Value::Int(1),
     ]);
-    let mut state = vm.resume(input.clone()).expect("vm resume");
+    let mut state = vm
+        .resume_with_shared(&mut shared, input.clone())
+        .expect("vm resume");
     for _ in 0..16 {
         match state {
             VmState::Yielded(ref v @ Value::Tuple(_)) => {
@@ -1066,7 +1066,9 @@ fn ai_boss_second_turn_chases() {
                 return;
             }
             VmState::Reset => {
-                state = vm.resume(input.clone()).expect("vm resume after reset");
+                state = vm
+                    .resume_with_shared(&mut shared, input.clone())
+                    .expect("vm resume after reset");
             }
             other => panic!("expected Yielded or Reset, got {:?}", other),
         }
@@ -1236,7 +1238,9 @@ fn dungen_runs_floor_100_places_exit() {
     let mut vm = Vm::new(module, &arena).expect("vm new");
     let stub = Arc::new(Mutex::new(DungenStub::new()));
     register_dungen_stub(&mut vm, &stub);
-    vm.call(&[Value::Int(100)]).expect("vm call");
+    let mut shared = vec![0u8; vm.shared_data_bytes()];
+    vm.call_with_shared(&mut shared, &[Value::Int(100)])
+        .expect("vm call");
     let st = stub.lock().unwrap();
     assert!(st.place_exit.is_some(), "floor 100 should place the exit");
     assert!(

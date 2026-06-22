@@ -801,7 +801,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut vm =
         Vm::new(modules[active_song].clone(), &arena).map_err(|e| format!("verify: {:?}", e))?;
 
-    init_data(&mut vm)?;
+    // Host-owned shared-data buffer lent to the score sequencer on every tick
+    // (B28 item 2). Zeroed for the song's first observation of each field, and
+    // re-sized and re-zeroed on each song hot-swap below.
+    let mut shared = vec![0u8; vm.shared_data_bytes()];
 
     let voices: SharedVoices = Arc::new(Mutex::new(default_voices()));
 
@@ -884,7 +887,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     println!("[ now playing song 0 ]");
 
     match vm
-        .call(&[Value::Int(0)])
+        .call_with_shared(&mut shared, &[Value::Int(0)])
         .map_err(|e| format!("vm call: {:?}", e))?
     {
         VmState::Yielded(_) => {}
@@ -975,7 +978,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
 
         loop {
             let state = vm
-                .resume(Value::Int(tick))
+                .resume_with_shared(&mut shared, Value::Int(tick))
                 .map_err(|e| format!("vm resume: {:?}", e))?;
             match state {
                 VmState::Yielded(_) => break,
@@ -1000,6 +1003,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                         *last_song_name.lock().unwrap() = None;
                         vm.replace_module(modules[active_song].clone(), fresh_data())
                             .map_err(|e| format!("replace_module: {:?}", e))?;
+                        // Re-size and zero the host shared buffer for the new
+                        // song so it starts from a clean shared state.
+                        shared.clear();
+                        shared.resize(vm.shared_data_bytes(), 0);
                         let label = if restart_in_place {
                             "restarted"
                         } else {
@@ -1023,7 +1030,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                         // sequence at lines 856..865.
                         tick = 0;
                         match vm
-                            .call(&[Value::Int(tick)])
+                            .call_with_shared(&mut shared, &[Value::Int(tick)])
                             .map_err(|e| format!("vm call after swap: {:?}", e))?
                         {
                             VmState::Yielded(_) => break,
@@ -1054,14 +1061,6 @@ fn build_module(src: &str) -> Result<Module, Box<dyn std::error::Error>> {
     let tokens = tokenize(src).map_err(|e| format!("lex: {:?}", e))?;
     let program = parse(&tokens).map_err(|e| format!("parse: {:?}", e))?;
     Ok(compile(&program).map_err(|e| format!("compile: {:?}", e))?)
-}
-
-fn init_data(vm: &mut Vm) -> Result<(), Box<dyn std::error::Error>> {
-    for slot in 0..NUM_DATA_SLOTS {
-        vm.set_data(slot, Value::Int(0))
-            .map_err(|e| format!("set_data: {:?}", e))?;
-    }
-    Ok(())
 }
 
 fn fresh_data() -> Vec<Value> {
