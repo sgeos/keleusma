@@ -12,12 +12,16 @@
 //! module. The safe-signature methods below are sound provided the virtual
 //! machine upholds one invariant, discharged entirely at the call boundary:
 //!
-//! - [`SharedBuf::set`] is called from a `&mut [u8]` entry-point argument whose
-//!   borrow outlives every [`SharedBuf::bytes`] and [`SharedBuf::bytes_mut`]
-//!   call, and [`SharedBuf::clear`] runs before that entry point returns, so a
-//!   captured pointer is never dereferenced after its borrow ends.
+//! - [`set`](crate::shared_buf::SharedBuf::set) is called from a `&mut [u8]`
+//!   entry-point argument whose borrow outlives every
+//!   [`bytes`](crate::shared_buf::SharedBuf::bytes) and
+//!   [`bytes_mut`](crate::shared_buf::SharedBuf::bytes_mut) call, and
+//!   [`clear`](crate::shared_buf::SharedBuf::clear) runs before that entry
+//!   point returns, so a captured pointer is never dereferenced after its
+//!   borrow ends.
 //! - No two slices obtained from this buffer are held at the same time, so the
-//!   `&mut` slice from [`SharedBuf::bytes_mut`] is never aliased.
+//!   `&mut` slice from [`bytes_mut`](crate::shared_buf::SharedBuf::bytes_mut) is
+//!   never aliased.
 //!
 //! Under that invariant the captured pointer addresses `len` valid,
 //! exclusively borrowed bytes at every dereference, so reconstructing the
