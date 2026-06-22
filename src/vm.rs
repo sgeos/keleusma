@@ -1117,6 +1117,17 @@ pub fn shared_slot_count_for(module: &crate::bytecode::Module) -> usize {
     })
 }
 
+/// Flat byte length of the borrowed shared-data buffer `module` expects
+/// (B28 item 2), without constructing the VM first.
+///
+/// An embedder uses this to pre-size the host-owned `&mut [u8]` it lends to
+/// [`GenericVm::call_with_shared`], for example to allocate the buffer before
+/// the arena and VM exist. Matches [`GenericVm::shared_data_bytes`] for a VM
+/// built from the same module.
+pub fn shared_data_bytes_for(module: &crate::bytecode::Module) -> usize {
+    module.shared_data_bytes as usize
+}
+
 impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::float::Float> Drop
     for GenericVm<'a, 'arena, W, A, F>
 {
@@ -2450,6 +2461,114 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
     /// size without inspecting the `Module` directly.
     pub fn data_len(&self) -> usize {
         self.shared_slot_count as usize + self.private_slot_count as usize
+    }
+
+    /// Flat byte length of the borrowed shared-data buffer this module
+    /// expects (B28 item 2).
+    ///
+    /// The host allocates a `&mut [u8]` of exactly this length, zero-initialised
+    /// for the program's first observation of each field, and lends it to the VM
+    /// at every [`Self::call_with_shared`] / [`Self::resume_with_shared`]. The
+    /// VM reads and writes shared fields in place by byte offset and retains no
+    /// pointer into the buffer across a yield, so the host owns the buffer and
+    /// may swap, mutate, or drop it between resumes. Returns `0` for a module
+    /// with no shared data, for which the plain [`Self::call`] / [`Self::resume`]
+    /// entry points suffice.
+    ///
+    /// Matches [`shared_data_bytes_for`] computed from the same module.
+    pub fn shared_data_bytes(&self) -> usize {
+        self.archived().shared_data_bytes.to_native() as usize
+    }
+
+    /// Read a scalar shared field out of a host-owned buffer between runs
+    /// (B28 item 2).
+    ///
+    /// `buf` must be the module's [`Self::shared_data_bytes`] buffer; `slot` is
+    /// a shared slot index in `[0, shared_slot_count)`. The field is decoded at
+    /// the module's declared widths into an owned scalar `Value`, so the result
+    /// carries no pointer into `buf`. This is the host-side counterpart to a
+    /// script's `shared.field` read and replaces the retired per-slot
+    /// `get_data` for the borrowed-buffer model.
+    ///
+    /// Errors when `slot` is out of range, names a private slot (private slots
+    /// are script-only), when `buf` is the wrong length, or when the slot is a
+    /// composite. Whole-composite shared fields are accessed from the script,
+    /// not through this per-slot host accessor.
+    pub fn get_shared(
+        &self,
+        buf: &[u8],
+        slot: usize,
+    ) -> Result<crate::bytecode::GenericValue<W, F>, VmError> {
+        use crate::value_layout::ScalarKind;
+        self.check_host_shared_slot(buf, slot)?;
+        let (offset, kind, _len) = self.shared_layout_entry(slot);
+        if kind & crate::bytecode::SHARED_SLOT_COMPOSITE_FLAG != 0 {
+            return Err(VmError::NativeError(format!(
+                "shared slot {} is a composite; composite shared fields are accessed from the script, not the per-slot host API",
+                slot
+            )));
+        }
+        let sk = ScalarKind::from_tag(kind)
+            .ok_or_else(|| VmError::InvalidBytecode(String::from("bad shared scalar kind")))?;
+        Ok(crate::bytecode::GenericValue::read_scalar_le(
+            buf,
+            offset,
+            sk,
+            self.module_word_bytes(),
+            self.module_float_bytes(),
+        ))
+    }
+
+    /// Write a scalar shared field into a host-owned buffer between runs
+    /// (B28 item 2).
+    ///
+    /// The dual of [`Self::get_shared`]: the same slot, range, and width rules
+    /// apply, and `value` is encoded at the module's declared widths at the
+    /// field's offset. Replaces the retired per-slot `set_data` for the
+    /// borrowed-buffer model. Errors on the same conditions as
+    /// [`Self::get_shared`].
+    pub fn set_shared(
+        &self,
+        buf: &mut [u8],
+        slot: usize,
+        value: crate::bytecode::GenericValue<W, F>,
+    ) -> Result<(), VmError> {
+        self.check_host_shared_slot(buf, slot)?;
+        let (offset, kind, _len) = self.shared_layout_entry(slot);
+        if kind & crate::bytecode::SHARED_SLOT_COMPOSITE_FLAG != 0 {
+            return Err(VmError::NativeError(format!(
+                "shared slot {} is a composite; composite shared fields are written from the script, not the per-slot host API",
+                slot
+            )));
+        }
+        value.write_scalar_le(
+            buf,
+            offset,
+            self.module_word_bytes(),
+            self.module_float_bytes(),
+        );
+        Ok(())
+    }
+
+    /// Shared bounds, visibility, and buffer-length checks common to
+    /// [`Self::get_shared`] and [`Self::set_shared`]. Rejects a private or
+    /// out-of-range slot and a wrong-size buffer before any offset arithmetic.
+    fn check_host_shared_slot(&self, buf: &[u8], slot: usize) -> Result<(), VmError> {
+        if slot >= self.shared_slot_count as usize {
+            return Err(VmError::NativeError(format!(
+                "shared slot index {} out of range (module has {} shared slots)",
+                slot, self.shared_slot_count
+            )));
+        }
+        let need = self.shared_data_bytes();
+        if buf.len() != need {
+            return Err(VmError::NativeError(format!(
+                "shared buffer length {} does not match module's shared_data_bytes {}",
+                buf.len(),
+                need
+            )));
+        }
+        Ok(())
     }
 
     /// Borrow the VM's arena.
@@ -12358,6 +12477,53 @@ mod tests {
         // The composite write reached the host buffer in place.
         assert_eq!(i64::from_le_bytes(buf[0..8].try_into().unwrap()), 7);
         assert_eq!(i64::from_le_bytes(buf[8..16].try_into().unwrap()), 8);
+    }
+
+    // Bundled runtime only (raw width-specific bytes; see the read/write test).
+    #[cfg(not(any(
+        feature = "narrow-word-8",
+        feature = "narrow-word-16",
+        feature = "narrow-word-32",
+        feature = "narrow-float-32"
+    )))]
+    #[test]
+    fn host_get_set_shared_round_trips_scalar_fields() {
+        // The host-side per-slot accessors read and write scalar shared fields
+        // through a host-owned buffer between runs (B28 item 2, step 4),
+        // replacing the retired set_data / get_data for the buffer model.
+        let src = "\
+            data ctx { hp: Word, pos: (Word, Word) }\n\
+            fn main() -> Word { ctx.hp + ctx.pos.0 + ctx.pos.1 }";
+        let tokens = tokenize(src).expect("lex");
+        let program = parse(&tokens).expect("parse");
+        let module = compile(&program).expect("compile");
+        let sdb = module.shared_data_bytes as usize;
+        assert_eq!(crate::vm::shared_data_bytes_for(&module), sdb);
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let vm = Vm::new(module, &arena).expect("verify");
+        assert_eq!(vm.shared_data_bytes(), sdb);
+
+        // Slot 0 is the scalar hp; set it through the host accessor.
+        let mut buf = alloc::vec![0u8; sdb];
+        vm.set_shared(&mut buf, 0, Value::Int(42)).expect("set hp");
+        assert_eq!(i64::from_le_bytes(buf[0..8].try_into().unwrap()), 42);
+        match vm.get_shared(&buf, 0).expect("get hp") {
+            Value::Int(v) => assert_eq!(v, 42),
+            other => panic!("expected Int(42), got {:?}", other),
+        }
+
+        // The composite pos slot is rejected through the per-slot host API.
+        assert!(
+            vm.get_shared(&buf, 1).is_err(),
+            "a composite shared slot is not a per-slot host scalar"
+        );
+        assert!(vm.set_shared(&mut buf, 1, Value::Int(0)).is_err());
+
+        // An out-of-range slot and a wrong-size buffer are both rejected.
+        let shared_slots = vm.shared_slot_count();
+        assert!(vm.get_shared(&buf, shared_slots).is_err());
+        let short = alloc::vec![0u8; sdb - 1];
+        assert!(vm.get_shared(&short, 0).is_err());
     }
 
     #[test]
