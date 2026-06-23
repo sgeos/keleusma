@@ -2765,6 +2765,30 @@ pub struct SharedSlotLayout {
 /// scalar/composite tag spaces overlap, so this flag is the discriminator.
 pub const SHARED_SLOT_COMPOSITE_FLAG: u8 = 0x80;
 
+/// Persistent-pool placement of one private composite data slot (B28 item 2
+/// step 6A).
+///
+/// One entry per private slot that holds a flat composite body, single
+/// composite fields and every element slot of an array-of-composite field
+/// alike. The `offset` is the body's byte offset within the persistent
+/// composite pool that follows the private-slot `Value` array in the arena
+/// persistent region. At a flat-composite private write the runtime copies the
+/// body into that fixed location and stores a region-aware handle that survives
+/// RESET in place, so no private composite write needs a global-heap owned
+/// body. This is the linker-style fixed-address placement of program state, the
+/// 6502/NES and aerospace-control-loop model: every composite slot, including
+/// array elements, has a statically baked address. Entries are sorted ascending
+/// by `slot` so the runtime resolves a slot by binary search.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Archive, Serialize, Deserialize)]
+pub struct PrivateCompositeSlot {
+    /// Unified data-slot index (shared slots precede private slots).
+    pub slot: u16,
+    /// Byte offset of this slot's flat composite body within the persistent
+    /// composite pool. A `u32` rather than a `u16` so the pool is not bounded
+    /// to 64 KB; the access ops carry no offset, the runtime reads it here.
+    pub offset: u32,
+}
+
 /// Data segment layout declaration.
 ///
 /// Defines the fixed-size, fixed-layout set of persistent values that
@@ -2779,6 +2803,15 @@ pub struct DataLayout {
     /// slot in declaration order (B28 item 2). Empty when there are no shared
     /// slots; the private slots that follow the shared prefix carry no entries.
     pub shared_layout: Vec<SharedSlotLayout>,
+    /// Persistent-pool placement of each private slot that holds a flat
+    /// composite body, single composite fields and array-of-composite element
+    /// slots alike (B28 item 2 step 6A). Sorted ascending by slot. Empty for a
+    /// module with no private composite slots, so the wire form is unchanged
+    /// for such modules. The runtime persists a flat-composite private write
+    /// into the pool at the entry's offset; a private composite slot absent
+    /// from this table is an empty (zero-byte) composite that needs no pool
+    /// home.
+    pub private_composite_layout: Vec<PrivateCompositeSlot>,
 }
 
 /// A compiled function.

@@ -3534,6 +3534,7 @@ mod tests {
                     visibility: crate::bytecode::SlotVisibility::Shared,
                 }],
                 shared_layout: Vec::new(),
+                private_composite_layout: Vec::new(),
             }),
         };
         let err = verify(&module).unwrap_err();
@@ -3590,6 +3591,7 @@ mod tests {
                     },
                 ],
                 shared_layout: Vec::new(),
+                private_composite_layout: Vec::new(),
             }),
         };
         assert!(verify(&module).is_ok());

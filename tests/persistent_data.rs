@@ -96,3 +96,67 @@ fn private_composite_survives_reset() {
         other => panic!("iter 2 expected Yielded(33), got {:?}", other),
     }
 }
+
+#[test]
+fn private_array_of_struct_write_then_read() {
+    // An array-of-composite private field: each element slot is a flat
+    // composite that B28 item 2 step 6A places in the persistent composite pool
+    // through the private-composite layout table (the linker-style fixed-address
+    // model), persisted at the `Op::SetDataIndexed` write with no global-heap
+    // body. Distinct elements must occupy distinct pool offsets, so writing two
+    // elements and summing their fields reads each back independently.
+    let src = "struct Point { x: Word, y: Word }\n\
+               private data d { arr: [Point; 4] }\n\
+               fn main() -> Word { \
+                   d.arr[0] = Point { x: 1, y: 2 }; \
+                   d.arr[3] = Point { x: 30, y: 40 }; \
+                   d.arr[0].x + d.arr[0].y + d.arr[3].x + d.arr[3].y }";
+    assert_eq!(run_word(src), 1 + 2 + 30 + 40);
+}
+
+#[test]
+fn private_array_of_struct_survives_reset() {
+    // The array-element pool bodies must survive a RESET in place, exactly as a
+    // single composite slot does (B28 item 2 step 6A). Iteration 1 writes two
+    // elements; the restarted stream reads them without rewriting, so a correct
+    // read requires both element bodies to have survived the RESET at their
+    // distinct persistent pool offsets.
+    let src = "struct Point { x: Word, y: Word }\n\
+               private data d { arr: [Point; 4] }\n\
+               loop main(seed: Word) -> Word { \
+                   if seed == 0 { \
+                       d.arr[1] = Point { x: 5, y: 6 }; \
+                       d.arr[2] = Point { x: 7, y: 8 }; \
+                   }; \
+                   let _ = yield d.arr[1].x + d.arr[1].y + d.arr[2].x + d.arr[2].y; \
+                   0 \
+               }";
+    let m = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+    let need = required_persistent_capacity_for(&m);
+    let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
+    arena.resize_persistent(need).expect("resize_persistent");
+    let mut vm = Vm::new(m, &arena).expect("verify");
+    // Sum kept within the 8-bit range so the assertion holds under the
+    // narrow-word-8 runtime (`--all-features`), where integer arithmetic wraps
+    // at eight bits. The distinct element values still prove distinct pool
+    // offsets per element slot.
+    let want = 5 + 6 + 7 + 8;
+    // First call writes the two element slots, yields their field sum.
+    match vm.call(&[Value::Int(0)]).expect("call") {
+        VmState::Yielded(Value::Int(n)) => assert_eq!(n, want),
+        other => panic!("iter 1 expected Yielded({want}), got {:?}", other),
+    }
+    // Resume past the yield: the body end RESETs the ephemeral arena.
+    match vm.resume(Value::Int(1)).expect("resume") {
+        VmState::Reset => {}
+        other => panic!("expected Reset at loop body end, got {:?}", other),
+    }
+    // Restart with seed 1: no rewrite, so the reads must observe both element
+    // bodies surviving the RESET at their distinct pool offsets.
+    match vm.resume(Value::Int(1)).expect("resume") {
+        VmState::Yielded(Value::Int(n)) => {
+            assert_eq!(n, want, "array-of-composite elements must survive RESET")
+        }
+        other => panic!("iter 2 expected Yielded({want}), got {:?}", other),
+    }
+}

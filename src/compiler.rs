@@ -1397,6 +1397,7 @@ pub fn compile_with_options(
         Some(DataLayout {
             slots: data_layout_slots,
             shared_layout: Vec::new(),
+            private_composite_layout: Vec::new(),
         })
     };
 
@@ -1568,9 +1569,26 @@ pub fn compile_with_options(
     // Arrays are deferred (zero body bytes), so they neither size the pool nor
     // enter the map. Computed before the codegen loop so the map is available
     // to emission.
-    let (persistent_composite_bytes, persistent_composite_offsets) = {
+    // Two cooperating placements drive the persistent composite pool, both
+    // copying a flat composite body into the pool through
+    // `persist_composite_body` so no private composite write needs a
+    // global-heap owned body (B28 item 2 step 6A). `persistent_composite_offsets`
+    // maps a single composite field whose offset fits the sixteen-bit
+    // `SetDataComposite` operand and drives that op's emission (item 3a, the
+    // common small case). `private_composite_layout` carries every other private
+    // composite slot, an array-of-composite element slot or an offset-overflow
+    // single slot, keyed by slot index with a `u32` offset the runtime reads at
+    // a flat-composite write through the plain `SetData`/`SetDataIndexed` path,
+    // with no baked operand. Both share one running `total` so the offsets never
+    // collide, and `total` sizes the pool declared in the module header. This is
+    // the linker-style fixed-address placement of program state: every private
+    // composite slot, array elements included, has a statically baked pool
+    // address. Computed before the codegen loop so the offset map is available
+    // to `SetDataComposite` emission.
+    let (persistent_composite_bytes, persistent_composite_offsets, private_composite_layout) = {
         let mut total: u32 = 0;
         let mut offsets: BTreeMap<u16, u16> = BTreeMap::new();
+        let mut table: Vec<crate::bytecode::PrivateCompositeSlot> = Vec::new();
         let mut slot_idx: u32 = shared_count;
         for decl in &program.data_decls {
             if !matches!(decl.visibility, crate::ast::DataVisibility::Private) {
@@ -1578,22 +1596,51 @@ pub fn compile_with_options(
             }
             for field in &decl.fields {
                 let n = slots_for_data_type(&field.type_expr) as u32;
-                let body = data_field_pool_bytes(&field.type_expr, &type_info);
-                // If either index does not fit a u16 the slot is left out of
-                // the map and uses `SetData` (the inline path); the pool total
-                // is not advanced for it.
-                if n == 1
-                    && body > 0
-                    && let (Ok(slot_u16), Ok(off_u16)) =
-                        (u16::try_from(slot_idx), u16::try_from(total))
-                {
-                    offsets.insert(slot_u16, off_u16);
-                    total = total.saturating_add(body as u32);
+                // The flat composite body size of the leaf element. A single
+                // composite field is its own leaf (`n == 1`); an
+                // array-of-composite field has `n` element slots each of the
+                // innermost element's body size. A scalar or array-of-scalar
+                // leaf is `0` and reserves no pool, its slots storing scalars.
+                let leaf = innermost_non_array_type(&field.type_expr);
+                let body = data_field_pool_bytes(leaf, &type_info);
+                if body > 0 {
+                    if n == 1 {
+                        // A single composite field: prefer the sixteen-bit
+                        // `SetDataComposite` operand path; fall back to the
+                        // table when the offset would overflow `u16`.
+                        match (u16::try_from(slot_idx), u16::try_from(total)) {
+                            (Ok(slot_u16), Ok(off_u16)) => {
+                                offsets.insert(slot_u16, off_u16);
+                            }
+                            (Ok(slot_u16), Err(_)) => {
+                                table.push(crate::bytecode::PrivateCompositeSlot {
+                                    slot: slot_u16,
+                                    offset: total,
+                                });
+                            }
+                            _ => {}
+                        }
+                        total = total.saturating_add(body as u32);
+                    } else {
+                        // An array-of-composite field: every element slot is a
+                        // composite of `body` bytes at a distinct pool offset,
+                        // carried in the table and resolved by slot at the
+                        // `SetDataIndexed` write.
+                        for k in 0..n {
+                            if let Ok(slot_u16) = u16::try_from(slot_idx + k) {
+                                table.push(crate::bytecode::PrivateCompositeSlot {
+                                    slot: slot_u16,
+                                    offset: total,
+                                });
+                            }
+                            total = total.saturating_add(body as u32);
+                        }
+                    }
                 }
                 slot_idx = slot_idx.saturating_add(n);
             }
         }
-        (total, offsets)
+        (total, offsets, table)
     };
 
     // The shared data segment's flat byte total and its per-shared-slot layout
@@ -1636,6 +1683,7 @@ pub fn compile_with_options(
     };
     if let Some(dl) = data_layout.as_mut() {
         dl.shared_layout = shared_slot_layout;
+        dl.private_composite_layout = private_composite_layout;
     }
 
     // Compile each function group. After emission, enforce the
@@ -3858,12 +3906,24 @@ fn type_flat_size(ty: &TypeExpr, ti: &TypeInfo) -> Option<usize> {
 /// per-element behaviour, so it is not yet placed in the persistent pool. The
 /// pool total and the per-slot offset map are computed from this function, so
 /// they cover exactly the single-composite slots and stay consistent.
+/// Peel array layers to the innermost non-array element type (B28 item 2 step
+/// 6A). `[[Point; 2]; 3]` yields `Point`; a non-array type is returned
+/// unchanged. Used to find the leaf element of a data field so its flat
+/// composite body size sizes the persistent pool for every array element slot.
+fn innermost_non_array_type(ty: &TypeExpr) -> &TypeExpr {
+    let mut cur = ty;
+    while let TypeExpr::Array(elem, _, _) = cur {
+        cur = elem;
+    }
+    cur
+}
+
 fn data_field_pool_bytes(ty: &TypeExpr, ti: &TypeInfo) -> usize {
     match ty {
-        // Arrays of composites are deferred to a follow-up; they retain the
-        // prior per-element representation and are not pooled (B28 P3 item 5,
-        // item 3a). Contributing zero keeps the pool total and the offset map
-        // aligned on the single-composite slots only.
+        // Callers pass the leaf element type (via `innermost_non_array_type`),
+        // so an array never reaches here; a defensive `0` keeps the function
+        // total over a bare array type (B28 item 2 step 6A generalised the pool
+        // to array-of-composite element slots).
         TypeExpr::Array(_, _, _) => 0,
         _ => match ti.layout_context().layout_for(ty) {
             Ok(crate::value_layout::LayoutDescriptor::Scalar(_)) => 0,

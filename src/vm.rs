@@ -2056,6 +2056,22 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         }
     }
 
+    /// The persistent composite pool offset for a private slot that holds a
+    /// flat composite body recorded in the module's private-composite layout
+    /// table (B28 item 2 step 6A). `None` for a scalar slot, an empty composite
+    /// slot, or a single composite slot whose body is placed through the
+    /// `SetDataComposite` baked operand instead of this table. The table is
+    /// sorted ascending by slot, so this binary-searches it.
+    fn private_composite_pool_offset(&self, slot: usize) -> Option<usize> {
+        let dl = self.archived().data_layout.as_ref()?;
+        let slot_u16 = u16::try_from(slot).ok()?;
+        let table = &dl.private_composite_layout;
+        table
+            .binary_search_by_key(&slot_u16, |e| e.slot.to_native())
+            .ok()
+            .map(|i| table[i].offset.to_native() as usize)
+    }
+
     /// The shared layout entry for a shared slot, as `(byte offset, kind tag,
     /// composite body length)` copied out of the archived table so the borrow
     /// of the bytecode image does not outlive the read (B28 item 2).
@@ -2133,6 +2149,23 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
             // shared slots.
             return self.write_shared_to_buffer(slot, value);
         }
+        // A private slot holding a flat composite copies its body into the
+        // persistent composite pool at the compiler-baked offset and stores a
+        // region-aware handle that survives RESET in place (B28 item 2 step
+        // 6A), so no private composite write needs a global-heap owned body. An
+        // array-of-composite element or an offset-overflow single slot arrives
+        // here raw and is persisted by its table offset; a single composite
+        // field with a sixteen-bit offset took the `Op::SetDataComposite`
+        // operand path and arrives already persistent (its slot is absent from
+        // this table). A scalar, an empty composite, or a boxed value has no
+        // table entry and is stored directly.
+        let to_store = if crate::bytecode::flat_composite_ref(&value).is_some()
+            && let Some(off) = self.private_composite_pool_offset(slot)
+        {
+            self.persist_composite_body(value, off)?
+        } else {
+            value
+        };
         // SAFETY: the slot is within the partition checked at
         // construction; the pointee is a valid `Value` per
         // the construction-time initialisation, so dropping
@@ -2141,7 +2174,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
             let private_idx = slot - self.shared_slot_count as usize;
             let base =
                 self.arena.persistent_ptr().as_ptr() as *mut crate::bytecode::GenericValue<W, F>;
-            *base.add(private_idx) = value;
+            *base.add(private_idx) = to_store;
         }
         Ok(())
     }
@@ -4032,10 +4065,12 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                         )));
                     }
                     // A data slot lives in the persistent region and survives
-                    // RESET, so detach any ephemeral arena composite body to
-                    // an inline (heap) body before storing it; otherwise its
-                    // handle would dangle after the next RESET (B28 P2).
-                    let val = self.pop()?.materialized(self.arena);
+                    // RESET. `write_data_slot` persists a flat composite body
+                    // into the persistent composite pool at its compiler-baked
+                    // offset (B28 item 2 step 6A), so no ephemeral arena handle
+                    // is stored in a persistent slot and no global-heap owned
+                    // body is needed; a scalar is stored directly.
+                    let val = self.pop()?;
                     self.write_data_slot(idx, val)?;
                 }
                 Op::SetDataComposite(slot, rel_offset) => {
@@ -4099,10 +4134,13 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                     if index.to_i64() < 0 || index.to_i64() >= len as i64 {
                         return Err(VmError::IndexOutOfBounds(index.to_i64(), len as usize));
                     }
-                    // Detach an ephemeral arena composite to inline before
-                    // storing it in a persistent data slot (B28 P2; see
-                    // `Op::SetData`).
-                    let val = self.pop()?.materialized(self.arena);
+                    // `write_data_slot` persists a flat composite element into
+                    // the persistent composite pool at the element slot's
+                    // compiler-baked offset (B28 item 2 step 6A); an
+                    // array-of-composite element therefore survives RESET in
+                    // place with no global-heap owned body. A scalar element is
+                    // stored directly.
+                    let val = self.pop()?;
                     let slot = base as usize + index.to_i64() as usize;
                     let total = self.data_len();
                     if slot >= total {
@@ -10092,20 +10130,25 @@ mod tests {
         // the B28 item 2 shared-data re-architecture (the no-new-opcode
         // per-shared-slot layout): rkyv reserves space for the wider
         // `ArchivedDataLayout` inside `Option<DataLayout>` even when it is
-        // `None`, which accounts for the increase to 252 bytes. Per B28 the
-        // format may change freely without a BYTECODE_VERSION bump (no
-        // production traction; programs are recompiled).
+        // `None`, which accounted for the increase to 252 bytes, and again for
+        // the `DataLayout::private_composite_layout` table of B28 item 2 step
+        // 6A (the linker-style fixed-address placement of every private
+        // composite slot, array elements included): rkyv reserves one more
+        // `ArchivedVec` (8 bytes) in the inline `ArchivedDataLayout` even when
+        // `None`, raising the total to 260 bytes. Per B28 the format may change
+        // freely without a BYTECODE_VERSION bump (no production traction;
+        // programs are recompiled).
         let expected: alloc::vec::Vec<u8> = alloc::vec![
-            75, 69, 76, 69, 1, 0, 64, 0, 252, 0, 0, 0, 6, 6, 6, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-            0, 0, 0, 0, 0, 64, 0, 0, 0, 8, 0, 0, 0, 72, 0, 0, 0, 0, 0, 0, 0, 72, 0, 0, 0, 176, 0,
+            75, 69, 76, 69, 1, 0, 64, 0, 4, 1, 0, 0, 6, 6, 6, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 64, 0, 0, 0, 8, 0, 0, 0, 72, 0, 0, 0, 0, 0, 0, 0, 72, 0, 0, 0, 184, 0,
             0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 159, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 1, 0,
             0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
             0, 0, 0, 0, 0, 0, 0, 0, 0, 109, 97, 105, 110, 255, 255, 255, 255, 200, 255, 255, 255,
             1, 0, 0, 0, 240, 255, 255, 255, 0, 0, 0, 0, 0, 0, 0, 0, 228, 255, 255, 255, 0, 0, 0, 0,
             0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 200, 255, 255, 255, 1, 0,
             0, 0, 248, 255, 255, 255, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 6, 6, 6, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0,
-            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 206, 69, 90, 134,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 6, 6, 6, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 199, 226, 93, 51,
         ];
         let src = "fn main() -> Word { 1 }";
         let tokens = tokenize(src).expect("lex");
