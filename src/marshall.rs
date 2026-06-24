@@ -527,14 +527,15 @@ impl<W: Word, F: Float, T: KeleusmaType<W, F> + Clone, const N: usize> KeleusmaT
                     VmError::TypeError(format!("failed to convert array of length {}", N))
                 })
             }
-            // A flat array body is pure bytes; the element type `T` supplies
-            // its flat byte size so each element (a scalar or a nested flat
-            // composite) is read at its packed offset (B28 P2). Runtime
-            // widths match the module widths on the bundled runtime.
-            GenericValue::Array(ArrayBody::Flat(fc)) => {
-                let word_bytes = (1usize << <W as Word>::BITS_LOG2) / 8;
-                let float_bytes = (1usize << <F as Float>::BITS_LOG2) / 8;
-                Self::from_flat_bytes(fc.as_bytes(), word_bytes, float_bytes)
+            // A flat array body is an arena region handle (B28 item 2 step 6B),
+            // which the arena-less `from_value` cannot read. The runtime native
+            // boundary decodes through `from_value_ctx`, which resolves the body
+            // against the arena; the bare `from_value` is a bundled convenience
+            // for boxed or scalar values only (B36).
+            GenericValue::Array(ArrayBody::Flat(_)) => {
+                Err(VmError::TypeError(alloc::string::String::from(
+                    "cannot decode a flat (arena) array without an arena; use from_value_ctx",
+                )))
             }
             other => Err(VmError::TypeError(format!(
                 "expected array, got {}",
@@ -713,16 +714,16 @@ macro_rules! impl_tuple {
                     // A flat tuple body is pure bytes; the Rust element
                     // types supply the per-field kinds so each scalar is
                     // read at its packed offset (B28 P2). Runtime widths
-                    // match the module widths on the bundled runtime.
-                    // A flat tuple body is pure bytes; the Rust element types
-                    // supply their flat sizes so each field (a scalar or a
-                    // nested flat composite) is read at its packed offset
-                    // (B28 P2). Runtime widths match the module widths on the
-                    // bundled runtime.
-                    GenericValue::Tuple(crate::bytecode::TupleBody::Flat(fc)) => {
-                        let word_bytes = (1usize << <W as Word>::BITS_LOG2) / 8;
-                        let float_bytes = (1usize << <FloatT as Float>::BITS_LOG2) / 8;
-                        Self::from_flat_bytes(fc.as_bytes(), word_bytes, float_bytes)
+                    // A flat tuple body is an arena region handle (B28 item 2
+                    // step 6B), which the arena-less `from_value` cannot read;
+                    // the runtime native boundary decodes through
+                    // `from_value_ctx` (which resolves the body against the
+                    // arena). The bare `from_value` is a bundled convenience for
+                    // boxed or scalar values only (B36).
+                    GenericValue::Tuple(crate::bytecode::TupleBody::Flat(_)) => {
+                        Err(VmError::TypeError(alloc::string::String::from(
+                            "cannot decode a flat (arena) tuple without an arena; use from_value_ctx",
+                        )))
                     }
                     other => Err(VmError::TypeError(format!(
                         "expected tuple, got {}",
@@ -1040,11 +1041,12 @@ mod tests {
     fn tuple_roundtrip() {
         let t = (1i64, 2.0f64, true);
         let v = <(i64, f64, bool) as KeleusmaType<i64, f64>>::into_value(t);
-        // Every element (including the Float) is flat-eligible (B28 P3 item 5),
-        // so the tuple marshals to the flat byte body, not a boxed `Vec`.
+        // The arena-less host `into_value` produces the boxed representation
+        // (B28 item 2 step 6B); a flat arena body needs the `into_value_ctx`
+        // boundary. The boxed body round-trips through the bare `from_value`.
         assert!(matches!(
             &v,
-            Value::Tuple(crate::bytecode::TupleBody::Flat(_))
+            Value::Tuple(crate::bytecode::TupleBody::Boxed(_))
         ));
         let r: (i64, f64, bool) =
             <(i64, f64, bool) as KeleusmaType<i64, f64>>::from_value(&v).unwrap();
@@ -1060,47 +1062,51 @@ mod tests {
     }
 
     #[test]
-    fn scalar_array_into_value_uses_flat_body() {
-        // A transitively-scalar array marshals to the flat byte body
-        // (B28 P2), so the host and the runtime agree on representation.
+    fn scalar_array_into_value_uses_boxed_body() {
+        // The arena-less host `into_value` produces the boxed representation
+        // (B28 item 2 step 6B); the runtime builds the flat arena body through
+        // `into_value_ctx`/`*_in_arena`. Composite equality is field-wise, so
+        // the two representations compare equal.
         use crate::bytecode::ArrayBody;
         let v = <[i64; 3] as KeleusmaType<i64, f64>>::into_value([1, 2, 3]);
-        assert!(matches!(v, Value::Array(ArrayBody::Flat(_))));
+        assert!(matches!(v, Value::Array(ArrayBody::Boxed(_))));
     }
 
     #[test]
-    fn byte_array_roundtrips_through_flat_body() {
-        // A one-byte element kind exercises the flat read/write offset
-        // arithmetic at a non-word stride (B28 P2).
+    fn byte_array_roundtrips_through_boxed_body() {
+        // The host `into_value` produces the boxed body (B28 item 2 step 6B);
+        // the bare `from_value` reads it back, round-tripping the elements.
         use crate::bytecode::ArrayBody;
         let a: [u8; 4] = [1, 2, 250, 255];
         let v = <[u8; 4] as KeleusmaType<i64, f64>>::into_value(a);
-        assert!(matches!(v, Value::Array(ArrayBody::Flat(_))));
+        assert!(matches!(v, Value::Array(ArrayBody::Boxed(_))));
         let r: [u8; 4] = <[u8; 4] as KeleusmaType<i64, f64>>::from_value(&v).unwrap();
         assert_eq!(r, [1, 2, 250, 255]);
     }
 
     #[test]
-    fn struct_value_chooses_flat_or_boxed_body() {
-        // An all-scalar struct uses the flat byte body; a reference field
-        // forces the boxed body (B28 P2).
+    fn struct_value_uses_boxed_body_without_arena() {
+        // The arena-less `struct_value` (host `into_value`) produces the boxed
+        // representation for every struct since B28 item 2 step 6B, scalar or
+        // reference-bearing alike; the flat arena body is built only through the
+        // runtime's arena-direct path.
         use crate::bytecode::StructBody;
-        let flat = Value::struct_value(
+        let scalar = Value::struct_value(
             ::alloc::string::String::from("P"),
             ::alloc::vec![
                 (::alloc::string::String::from("a"), Value::Int(1)),
                 (::alloc::string::String::from("b"), Value::Int(2)),
             ],
         );
-        assert!(matches!(flat, Value::Struct(StructBody::Flat(_))));
-        let boxed = Value::struct_value(
+        assert!(matches!(scalar, Value::Struct(StructBody::Boxed { .. })));
+        let reference = Value::struct_value(
             ::alloc::string::String::from("Q"),
             ::alloc::vec![(
                 ::alloc::string::String::from("s"),
                 Value::StaticStr(::alloc::string::String::from("x")),
             )],
         );
-        assert!(matches!(boxed, Value::Struct(StructBody::Boxed { .. })));
+        assert!(matches!(reference, Value::Struct(StructBody::Boxed { .. })));
     }
 
     #[test]

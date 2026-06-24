@@ -38,8 +38,8 @@ fn run(src: &str) -> (Value, Arena) {
 }
 
 fn run_word(src: &str) -> i64 {
-    let (v, arena) = run(src);
-    match v.materialized(&arena) {
+    let (v, _arena) = run(src);
+    match v {
         Value::Int(n) => n,
         other => panic!("expected Int, got {:?}", other),
     }

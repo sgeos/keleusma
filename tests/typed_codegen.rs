@@ -33,7 +33,7 @@ fn run_word(src: &str) -> i64 {
             other => panic!("expected finished, got {:?}", other),
         }
     };
-    match v.materialized(&arena) {
+    match v {
         Value::Int(n) => n,
         other => panic!("expected Int, got {:?}", other),
     }

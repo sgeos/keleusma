@@ -2335,24 +2335,29 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         float_bytes: usize,
         pool: &mut alloc::vec::Vec<alloc::boxed::Box<[u8]>>,
     ) -> Option<crate::bytecode::GenericValue<W, F>> {
-        use crate::bytecode::ArchivedConstValue as A;
+        use crate::bytecode::{
+            ArchivedConstValue as A, ArrayBody, EnumBody, StructBody, TupleBody,
+        };
         // Only a composite constant can carry a flat body; a scalar or string
-        // constant short-circuits without the materialisation cost.
+        // constant short-circuits without the packing cost.
         if !matches!(
             c,
             A::Tuple(_) | A::Array(_) | A::Struct { .. } | A::Enum { .. }
         ) {
             return None;
         }
-        let v = crate::bytecode::value_from_archived::<W, F>(c, word_bytes, float_bytes);
-        // A transitively-scalar composite materialises `Flat(Inline)`; a
-        // string- or opaque-bearing one stays `Boxed`. `flat_body_bytes`
-        // returns the inline bytes only for the former, so a `None` here means
-        // the constant keeps its direct path.
-        let bx: alloc::boxed::Box<[u8]> = match crate::bytecode::flat_body_bytes(&v) {
-            Some(bytes) if !bytes.is_empty() => alloc::boxed::Box::from(bytes),
-            _ => return None,
-        };
+        // Pack the flat body bytes directly from the archived constant (B28 item
+        // 2 step 6B), with no owned `Inline` intermediate. A transitively-scalar
+        // composite yields `Some(bytes)`; a string- or opaque-bearing one (or an
+        // enum with an unresolved discriminant) yields `None` and keeps its
+        // boxed direct path. An empty body needs no pooled allocation and is
+        // left to the direct path (it materialises as the always-valid `Empty`
+        // body).
+        let bytes = crate::bytecode::const_flat_bytes(c, word_bytes, float_bytes)?;
+        if bytes.is_empty() {
+            return None;
+        }
+        let bx: alloc::boxed::Box<[u8]> = alloc::boxed::Box::from(bytes.as_slice());
         let ptr = bx.as_ptr() as *mut u8;
         let len = bx.len();
         pool.push(bx);
@@ -2369,10 +2374,17 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
             let nn = core::ptr::NonNull::new_unchecked(raw);
             keleusma_arena::ArenaHandle::<[u8]>::from_raw_parts(nn, 0)
         };
-        Some(rewrap_flat_body(
-            v,
-            crate::flat_value::FlatComposite::Arena(handle),
-        ))
+        let body = crate::flat_value::FlatComposite::Arena(handle);
+        // Wrap the pooled body as the matching composite kind, read from the
+        // archived constant's shape (the kind the baked access ops expect).
+        Some(match c {
+            A::Tuple(_) => crate::bytecode::GenericValue::Tuple(TupleBody::Flat(body)),
+            A::Array(_) => crate::bytecode::GenericValue::Array(ArrayBody::Flat(body)),
+            A::Struct { .. } => crate::bytecode::GenericValue::Struct(StructBody::Flat(body)),
+            A::Enum { .. } => crate::bytecode::GenericValue::Enum(EnumBody::Flat(body)),
+            // The leading `matches!` guard excludes every non-composite kind.
+            _ => unreachable!("pool_const_template guarded to composite constants"),
+        })
     }
 
     /// Total bytes of the VM-owned const-composite body pool (B28 P3 item 2,
@@ -3676,9 +3688,23 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         }
 
         let base = self.stack.len();
-        // Push arguments as the first local slots.
+        // Push arguments as the first local slots. A host-built composite
+        // argument is canonicalised to an arena-resident flat body so the
+        // script's compiler-baked flat field access can read it; the host
+        // constructors produce the boxed representation, which flat access
+        // rejects (B28 item 2 step 6B). The widths are the module widths, the
+        // cast contract of `from_value_ctx` (B36). A scalar or reference
+        // argument, and a reference-bearing composite that stays boxed, are
+        // returned unchanged.
+        let arena = self.arena;
+        let wb = self.module_word_bytes();
+        let fb = self.module_float_bytes();
         for arg in args {
-            sp!(self, arg.clone());
+            let arg = arg
+                .clone()
+                .into_arena_canonical(wb, fb, arena)
+                .map_err(|_| out_of_arena_push("composite argument", arena.capacity()))?;
+            sp!(self, arg);
         }
         // Extend stack for remaining local slots.
         let extra = local_count - args.len();
@@ -3775,6 +3801,18 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         if !self.started || self.frames.is_empty() {
             return Err(VmError::NotSuspended);
         }
+        // Canonicalise a host-built composite resume value to an arena-resident
+        // flat body, the same VM-entry treatment `call_function` applies to its
+        // arguments, so the script's flat-baked field access reads the resumed
+        // value (B28 item 2 step 6B). At module widths (the `from_value_ctx`
+        // cast contract, B36). Scalars and reference-bearing composites pass
+        // through unchanged.
+        let arena = self.arena;
+        let wb = self.module_word_bytes();
+        let fb = self.module_float_bytes();
+        let input = input
+            .into_arena_canonical(wb, fb, arena)
+            .map_err(|_| out_of_arena_push("composite resume value", arena.capacity()))?;
         // For stream functions, update the parameter slot with the new input.
         // This ensures the next iteration sees the latest input.
         if let Some(base_frame) = self.frames.first().copied() {
@@ -4093,8 +4131,12 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                         self.write_data_slot(idx, persistent)?;
                     } else {
                         // The compiler only emits this op for a flat composite
-                        // slot; a non-flat value here is defensive fallback.
-                        self.write_data_slot(idx, val.materialized(self.arena))?;
+                        // slot; a non-flat (boxed) value here is a defensive
+                        // fallback stored as-is. Its children are arena-resident
+                        // from construction; a boxed value placed in a persistent
+                        // slot resolves cleanly stale after a RESET rather than
+                        // dereferencing reclaimed memory (B28 item 2 step 6B).
+                        self.write_data_slot(idx, val)?;
                     }
                 }
                 Op::GetDataIndexed(base, len) => {
@@ -4682,20 +4724,20 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                             },
                             // A value-driven tuple or array that exceeded the
                             // sixteen-bit access offset falls back to the boxed
-                            // body (its elements are materialised so the boxed
-                            // container is self-contained). A struct or enum
-                            // Flat operand is statically flat, so a packing
-                            // failure there is malformed bytecode.
+                            // body. Its elements are already arena-resident from
+                            // construction (B28 item 2 step 6B removed the owned
+                            // `Inline` form), so they are stored directly; a
+                            // boxed container held across a `RESET` resolves its
+                            // children cleanly stale rather than dereferencing
+                            // reclaimed memory. A struct or enum Flat operand is
+                            // statically flat, so a packing failure there is
+                            // malformed bytecode.
                             None => match kind {
                                 CK::Tuple => {
-                                    crate::bytecode::GenericValue::Tuple(TupleBody::boxed(
-                                        values.into_iter().map(|v| v.materialized(arena)).collect(),
-                                    ))
+                                    crate::bytecode::GenericValue::Tuple(TupleBody::boxed(values))
                                 }
                                 CK::Array => {
-                                    crate::bytecode::GenericValue::Array(ArrayBody::boxed(
-                                        values.into_iter().map(|v| v.materialized(arena)).collect(),
-                                    ))
+                                    crate::bytecode::GenericValue::Array(ArrayBody::boxed(values))
                                 }
                                 CK::Struct | CK::Enum => {
                                     return Err(VmError::InvalidBytecode(String::from(
@@ -4705,12 +4747,11 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                             },
                         }
                     } else {
-                        // The boxed path stores the operands as separate values,
-                        // so detach any ephemeral arena child to an owned body
-                        // first; the boxed container then outlives the next
-                        // `RESET` without a dangling handle.
-                        let values: Vec<crate::bytecode::GenericValue<W, F>> =
-                            values.into_iter().map(|v| v.materialized(arena)).collect();
+                        // The boxed path stores the operands as separate values.
+                        // They are already arena-resident from construction (B28
+                        // item 2 step 6B removed the owned `Inline` form), so the
+                        // boxed container holds them directly; one held across a
+                        // `RESET` resolves its children cleanly stale.
                         match operand {
                             NCO::Boxed { kind, meta, .. } => {
                                 // Tuple/array boxed need no metadata; struct/enum
@@ -6224,22 +6265,31 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                                 native_name
                             ))
                         })?;
+                    let wb = self.module_word_bytes();
+                    let fb = self.module_float_bytes();
                     let ctx = NativeCtx {
                         arena: self.arena,
                         opaques: &self.ephemeral_opaques,
-                        word_bytes: self.module_word_bytes(),
-                        float_bytes: self.module_float_bytes(),
+                        word_bytes: wb,
+                        float_bytes: fb,
                     };
                     let result = (entry.func)(&ctx, &args);
                     if reify {
                         match result {
                             Ok(v) => {
-                                // Migrate a host-returned flat composite into
-                                // the arena so an ephemeral native result
-                                // carries no global-heap body (B28 P3 item 5
-                                // zero-copy). A scalar, string, opaque, or
-                                // boxed value is returned unchanged.
-                                let v = v.into_arena_body(arena).map_err(|_| {
+                                // Canonicalise a host-returned composite into an
+                                // arena-resident flat body, the same VM-entry
+                                // treatment call arguments and resume values
+                                // receive (B28 item 2 step 6B). A raw-closure
+                                // native that builds a transitively-scalar
+                                // struct/tuple/array/enum with no arena returns
+                                // the boxed form, which the script's flat-baked
+                                // access rejects; canonicalisation re-packs it
+                                // flat. An already-flat result (the `_ctx`
+                                // marshalling path), a scalar, string, opaque,
+                                // or a reference-bearing composite that stays
+                                // boxed is returned unchanged.
+                                let v = v.into_arena_canonical(wb, fb, arena).map_err(|_| {
                                     out_of_arena_push("native result", arena.capacity())
                                 })?;
                                 // Success: value, then flag 0.
@@ -6272,11 +6322,12 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                             Err(e) => return Err(e),
                         }
                     } else {
-                        // Migrate a host-returned flat composite into the arena
-                        // (B28 P3 item 5 zero-copy); no-op for a scalar,
-                        // string, opaque, or boxed value.
+                        // Canonicalise a host-returned composite into an
+                        // arena-resident flat body (B28 item 2 step 6B; see the
+                        // reify arm above). No-op for a scalar, string, opaque,
+                        // already-flat, or reference-bearing boxed value.
                         let v = result?
-                            .into_arena_body(arena)
+                            .into_arena_canonical(wb, fb, arena)
                             .map_err(|_| out_of_arena_push("native result", arena.capacity()))?;
                         sp!(self, v);
                     }
@@ -8924,6 +8975,111 @@ mod tests {
     }
 
     #[test]
+    fn host_built_composite_call_arguments_round_trip_through_flat_access() {
+        // The coverage the B28 item 2 step 6B blocker demands: a function
+        // takes a named struct and a named enum argument, both built by the
+        // host with no arena (so the boxed representation), and reads the
+        // fields back through the compiler-baked flat field access. The
+        // VM-entry canonicalisation re-packs each boxed argument into an
+        // arena-flat body that flat access can read; the nested inner struct
+        // exercises the bottom-up recursion (the inner boxed struct is
+        // flattened first so the outer can flatten).
+        let src = "\
+            struct Inner { a: Word, b: Word }\n\
+            struct Outer { inner: Inner, c: Word }\n\
+            enum Tag { A(Word), B }\n\
+            fn main(o: Outer, t: Tag) -> Word {\n\
+                let base = o.inner.a + o.inner.b + o.c;\n\
+                match t {\n\
+                    Tag::A(v) => base + v,\n\
+                    Tag::B => base,\n\
+                }\n\
+            }\
+        ";
+        let module =
+            compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let mut vm = Vm::new(module, &arena).unwrap();
+        let inner = Value::struct_value(
+            String::from("Inner"),
+            alloc::vec![
+                (String::from("a"), Value::Int(10)),
+                (String::from("b"), Value::Int(20)),
+            ],
+        );
+        let outer = Value::struct_value(
+            String::from("Outer"),
+            alloc::vec![
+                (String::from("inner"), inner),
+                (String::from("c"), Value::Int(30)),
+            ],
+        );
+        // `Tag::A` is discriminant 0; the host supplies the discriminant.
+        let tag = Value::enum_value(
+            String::from("Tag"),
+            String::from("A"),
+            0,
+            alloc::vec![Value::Int(5)],
+        );
+        match vm.call(&[outer, tag]).unwrap() {
+            // 10 + 20 + 30 + 5 = 65.
+            VmState::Finished(v) => assert_eq!(v, Value::Int(65)),
+            other => panic!("expected finished, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn host_built_struct_resume_value_round_trips_through_flat_access() {
+        // The resume-value half of the canonicalisation: a stream is resumed
+        // with a host-built (boxed) struct and reads its fields through flat
+        // access (B28 item 2 step 6B). The first yield reads the call
+        // argument's fields; the second yield reads the resumed value's
+        // fields, confirming both VM-entry sites canonicalise. The resume
+        // binding is annotated `let r: Cmd` so the compiler bakes flat field
+        // access for it: a bare `yield` binding leaves the type un-inferred,
+        // which bakes the boxed by-name access form, and the field-wise
+        // dispatch is then a separate compiler concern independent of this
+        // canonicalisation. The enum-via-`match` resume path needs no
+        // annotation because the pattern names the type (see
+        // `resume_err_propagates_through_enum_reply`).
+        let src = "\
+            struct Cmd { kind: Word, amount: Word }\n\
+            loop main(c: Cmd) -> Word {\n\
+                let r: Cmd = yield c.kind + c.amount;\n\
+                yield r.kind + r.amount\n\
+            }\
+        ";
+        let module =
+            compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let mut vm = Vm::new(module, &arena).unwrap();
+        let initial = Value::struct_value(
+            String::from("Cmd"),
+            alloc::vec![
+                (String::from("kind"), Value::Int(7)),
+                (String::from("amount"), Value::Int(3)),
+            ],
+        );
+        match vm.call(&[initial]).unwrap() {
+            // 7 + 3 = 10.
+            VmState::Yielded(v) => assert_eq!(v, Value::Int(10)),
+            other => panic!("expected first yield, got {:?}", other),
+        }
+        let resumed = Value::struct_value(
+            String::from("Cmd"),
+            alloc::vec![
+                (String::from("kind"), Value::Int(100)),
+                (String::from("amount"), Value::Int(5)),
+            ],
+        );
+        match vm.resume(resumed).unwrap() {
+            // 100 + 5 = 105, read from the resumed value's fields.
+            VmState::Yielded(v) => assert_eq!(v, Value::Int(105)),
+            other => panic!("expected second yield, got {:?}", other),
+        }
+    }
+
+    #[test]
     fn resume_err_passes_through_with_value_none() {
         // The simplest error pattern: the script types its input as
         // a value that may be `None`. The host resumes with
@@ -10678,10 +10834,13 @@ mod tests {
             ))
             .contains_dynstr()
         );
-        // The flat form of the same struct is not flagged: its text field is
-        // a two-word arena reference, not a walked `KStr`.
+        // The arena-less `struct_value` now produces the boxed representation
+        // (B28 item 2 step 6B), so its `KStr` field is walked and flagged, the
+        // same as the explicit boxed struct above. The flat form (built only
+        // through the runtime's arena-direct path) keeps its text as a two-word
+        // arena reference that `contains_dynstr` does not read.
         assert!(
-            !Value::struct_value(String::from("Foo"), alloc::vec![(String::from("x"), kstr)])
+            Value::struct_value(String::from("Foo"), alloc::vec![(String::from("x"), kstr)])
                 .contains_dynstr()
         );
     }

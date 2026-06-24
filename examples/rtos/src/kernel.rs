@@ -255,9 +255,12 @@ impl<P: Platform> Kernel<P> {
                 task.vm.call_with_shared(&mut task.shared, &[reason_value])
             }
         };
+        // The task VM's arena outlives this borrow (`arena()` returns the
+        // arena's own lifetime), so a flat tuple yield resolves against it.
+        let arena = self.tasks[i].vm.arena();
         match result {
             Ok(VmState::Yielded(val)) => {
-                if let Some((r, payload)) = tuple_pair(&val) {
+                if let Some((r, payload)) = tuple_pair(&val, arena) {
                     self.tasks[i].state = match r {
                         0 => TaskState::SleepingUntil(payload as u64),
                         1 => TaskState::Ready(WakeReason::Timer),
@@ -365,7 +368,7 @@ fn extract_int(v: &Value) -> i64 {
 /// (B28); each field is read back at its packed offset using the bundled
 /// runtime's eight-byte word, the same decode the marshalling layer uses.
 /// The boxed body is also accepted. Returns `None` for any other shape.
-fn tuple_pair(v: &Value) -> Option<(i64, i64)> {
+fn tuple_pair(v: &Value, arena: &keleusma::Arena) -> Option<(i64, i64)> {
     use keleusma::bytecode::TupleBody;
     use keleusma::value_layout::ScalarKind;
     // Bundled runtime widths: `Value = GenericValue<i64, f64>`.
@@ -376,7 +379,9 @@ fn tuple_pair(v: &Value) -> Option<(i64, i64)> {
             Some((extract_int(&items[0]), extract_int(&items[1])))
         }
         Value::Tuple(TupleBody::Flat(fc)) => {
-            let bytes = fc.as_bytes();
+            // A flat tuple body is an arena region handle (B28 item 2 step 6B);
+            // resolve it against the task VM's arena, valid until the next reset.
+            let bytes = fc.resolve(arena).ok()?;
             if bytes.len() != 2 * WORD_BYTES {
                 return None;
             }

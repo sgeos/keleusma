@@ -92,9 +92,12 @@ fn decode_arena_resident_flat_struct() {
     // The read-before-resume keystone (B28 P3 item 5 C3): a composite whose
     // flat body lives in the arena (the state a yielded/returned value is in
     // once boundary materialisation is removed) must decode through the
-    // arena-aware `resolve` path. Before this change the derived decode called
-    // `FlatComposite::as_bytes`, which panics on an arena body; this test
-    // would panic without the keystone and passes with it.
+    // arena-aware `resolve` path. Since the `Inline` form was removed (B28 item
+    // 2 step 6B), the arena-less host constructor produces the boxed
+    // representation, and `into_arena_canonical` is the path that re-packs a
+    // host composite into a flat arena body (the same canonicalisation the VM
+    // applies to call arguments and resume values). The decode then resolves
+    // the flat body through the arena rather than the gone `as_bytes`.
     use keleusma::bytecode::{GenericValue, StructBody};
     let arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
     let v = Value::struct_value(
@@ -104,8 +107,10 @@ fn decode_arena_resident_flat_struct() {
             ("b".into(), GenericValue::Int(4)),
         ],
     );
-    // Migrate the flat body into the arena's top region.
-    let v = v.into_arena_body(&arena).expect("migrate to arena");
+    // Canonicalise the host-built (boxed) struct into a flat arena body.
+    let v = v
+        .into_arena_canonical(8, 8, &arena)
+        .expect("canonicalise into arena");
     assert!(
         matches!(&v, GenericValue::Struct(StructBody::Flat(_))),
         "expected a flat struct body"

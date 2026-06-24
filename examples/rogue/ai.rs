@@ -566,6 +566,10 @@ impl AiPool {
             return self.dispatch_loop_main(LoopMainKind::Hunter, mx, my, px, py, sees);
         }
         let vm = self.vm_for(ai);
+        // The VM's arena outlives this borrow (`arena()` returns the arena's
+        // own `'static` lifetime); a flat tuple result resolves against it
+        // (B28 item 2 step 6B).
+        let arena = vm.arena();
         let args = [
             Value::Int(mx as i64),
             Value::Int(my as i64),
@@ -576,7 +580,7 @@ impl AiPool {
         let result = vm.call(&args).map_err(|e| format!("ai vm: {:?}", e))?;
         match result {
             VmState::Finished(val @ Value::Tuple(_)) => {
-                let t = tuple_ints(&val, 3)?;
+                let t = tuple_ints(&val, 3, arena)?;
                 Ok(decode_action(t[0], t[1], t[2]))
             }
             other => Err(format!("ai vm returned unexpected shape: {:?}", other).into()),
@@ -625,6 +629,10 @@ impl AiPool {
                     &mut self.hunter_shared,
                 ),
             };
+        // The VM's arena outlives this borrow (`arena()` returns the arena's
+        // own `'static` lifetime); a flat tuple yield resolves against it
+        // (B28 item 2 step 6B).
+        let arena = vm.arena();
         // Lend the archetype's persistent shared buffer for this turn; the
         // script reads and writes it in place, so its shared state carries
         // across resumes (B28 item 2).
@@ -638,7 +646,7 @@ impl AiPool {
         for _ in 0..16 {
             match state {
                 VmState::Yielded(val @ Value::Tuple(_)) => {
-                    let t = tuple_ints(&val, 3)?;
+                    let t = tuple_ints(&val, 3, arena)?;
                     return Ok(decode_action(t[0], t[1], t[2]));
                 }
                 VmState::Reset => {
@@ -680,7 +688,11 @@ fn expect_int(v: &Value) -> Result<i64, Box<dyn std::error::Error>> {
 /// at its packed offset using the bundled runtime's eight-byte word, the
 /// same width the marshalling layer applies. The boxed body, used when a
 /// tuple is not all flat scalars, is also accepted.
-fn tuple_ints(v: &Value, expected: usize) -> Result<Vec<i64>, Box<dyn std::error::Error>> {
+fn tuple_ints(
+    v: &Value,
+    expected: usize,
+    arena: &Arena,
+) -> Result<Vec<i64>, Box<dyn std::error::Error>> {
     use keleusma::bytecode::TupleBody;
     use keleusma::value_layout::ScalarKind;
     // Bundled runtime widths: `Value = GenericValue<i64, f64>`.
@@ -691,7 +703,12 @@ fn tuple_ints(v: &Value, expected: usize) -> Result<Vec<i64>, Box<dyn std::error
             items.iter().map(expect_int).collect::<Result<_, _>>()?
         }
         Value::Tuple(TupleBody::Flat(fc)) => {
-            let bytes = fc.as_bytes();
+            // A flat tuple body is an arena region handle (B28 item 2 step 6B);
+            // resolve it against the same arena the VM returned it in, valid
+            // until the next reset (read-before-resume).
+            let bytes = fc
+                .resolve(arena)
+                .map_err(|_| "flat tuple body is stale (arena reset)")?;
             if bytes.len() != expected * WORD_BYTES {
                 return Err(format!(
                     "expected a flat tuple of {} words, got {} bytes",
@@ -727,9 +744,10 @@ fn unpack_finished_ints(
     result: VmState,
     name: &str,
     n: usize,
+    arena: &Arena,
 ) -> Result<Vec<i64>, Box<dyn std::error::Error>> {
     match result {
-        VmState::Finished(val @ Value::Tuple(_)) => tuple_ints(&val, n)
+        VmState::Finished(val @ Value::Tuple(_)) => tuple_ints(&val, n, arena)
             .map_err(|e| format!("{} vm returned unexpected shape: {}", name, e).into()),
         other => Err(format!("{} vm returned unexpected shape: {:?}", name, other).into()),
     }
@@ -744,10 +762,13 @@ fn unpack_finished_int(result: VmState, name: &str) -> Result<i64, Box<dyn std::
     }
 }
 
-fn unpack_5_tuple(result: VmState) -> Result<EffectTuple, Box<dyn std::error::Error>> {
+fn unpack_5_tuple(
+    result: VmState,
+    arena: &Arena,
+) -> Result<EffectTuple, Box<dyn std::error::Error>> {
     match result {
         VmState::Finished(val @ Value::Tuple(_)) => {
-            let t = tuple_ints(&val, 5)?;
+            let t = tuple_ints(&val, 5, arena)?;
             Ok((t[0], t[1], t[2], t[3], t[4]))
         }
         other => Err(format!("expected 5-tuple, got {:?}", other).into()),
@@ -781,7 +802,8 @@ fn call_pure_ints(
     args: &[i64],
     n: usize,
 ) -> Result<Vec<i64>, Box<dyn std::error::Error>> {
-    unpack_finished_ints(call_pure(vm, name, args)?, name, n)
+    let state = call_pure(vm, name, args)?;
+    unpack_finished_ints(state, name, n, vm.arena())
 }
 
 fn call_pure_5(
@@ -789,7 +811,8 @@ fn call_pure_5(
     name: &str,
     args: &[i64],
 ) -> Result<EffectTuple, Box<dyn std::error::Error>> {
-    unpack_5_tuple(call_pure(vm, name, args)?)
+    let state = call_pure(vm, name, args)?;
+    unpack_5_tuple(state, vm.arena())
 }
 
 /// Leak a fresh arena so the host can reference it for the

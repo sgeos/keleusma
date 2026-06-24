@@ -24,7 +24,11 @@ fn run(src: &str) -> Value {
     let arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
     let mut vm = Vm::new(m, &arena).expect("verify");
     match vm.call(&[]).expect("call") {
-        VmState::Finished(v) => v.materialized(&arena),
+        // These programs return either a scalar `Word` or an `Option` (which is
+        // always the boxed representation), neither of which carries an arena
+        // handle, so the value is safe to return after this scope's `arena`
+        // drops (B28 item 2 step 6B removed the owned `Inline` materialise step).
+        VmState::Finished(v) => v,
         other => panic!("expected finished, got {:?}", other),
     }
 }

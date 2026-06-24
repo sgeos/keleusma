@@ -20,7 +20,31 @@ use keleusma::compiler::compile;
 use keleusma::lexer::tokenize;
 use keleusma::parser::parse;
 use keleusma::vm::{DEFAULT_ARENA_CAPACITY, Vm, VmState};
-use keleusma::{KeleusmaError, KeleusmaType, Value, VmError};
+use keleusma::{KeleusmaError, KeleusmaType, RefContext, Value, VmError};
+
+/// Build the canonical arena-flat body of a host value through the exact path
+/// the VM applies to a host argument or native result (B28 item 2 step 6B): the
+/// arena-less `into_value` is boxed, and `into_arena_canonical` re-packs it flat
+/// at the bundled 64-bit runtime widths. These flat-marshalling tests build the
+/// flat body the way the runtime does, since the flat representation now
+/// requires an arena.
+fn flatten_in_arena<T: KeleusmaType<i64, f64>>(v: T, arena: &Arena) -> Value {
+    v.into_value()
+        .into_arena_canonical(8, 8, arena)
+        .expect("canonicalise host value into arena")
+}
+
+/// A `RefContext` at the bundled 64-bit runtime widths for decoding an
+/// arena-resident flat body through `from_value_ctx`.
+fn bundled_ctx(arena: &Arena) -> RefContext<'_> {
+    RefContext {
+        arena,
+        opaques: &[],
+        word_bytes: 8,
+        float_bytes: 8,
+        ref_epoch: arena.epoch(),
+    }
+}
 
 // -- Derive on structs --
 
@@ -81,11 +105,14 @@ fn derive_struct_roundtrip() {
 #[test]
 fn derive_flat_struct_roundtrips_through_flat_body() {
     use keleusma::bytecode::StructBody;
+    let arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
     let p = Pair { a: 7, b: 9 };
-    let v: Value = p.clone().into_value();
-    // An all-Word struct marshals to the flat byte body (B28 P2).
+    // An all-Word struct reaches the flat byte body through the arena: the
+    // arena-less `into_value` is boxed and `into_arena_canonical` re-packs it
+    // flat, the path the VM applies to a host value (B28 item 2 step 6B).
+    let v = flatten_in_arena(p.clone(), &arena);
     assert!(matches!(v, Value::Struct(StructBody::Flat(_))));
-    let recovered = Pair::from_value(&v).unwrap();
+    let recovered = Pair::from_value_ctx(&v, &bundled_ctx(&arena)).unwrap();
     assert_eq!(recovered, p);
 }
 
@@ -108,14 +135,18 @@ fn derive_nested_flat_struct_and_tuple_roundtrip() {
     // and a flat tuple) inlines them into one flat byte body and reads them
     // back, recursing through the nested layout (B28 P2). Before nested
     // inlining this round-tripped via the boxed path; it must still hold.
+    let arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
     let h = Holder {
         p: Pair { a: 11, b: 22 },
         coords: (3, 4),
         tag: 99,
     };
-    let v: Value = h.clone().into_value();
+    // `into_arena_canonical` recurses bottom-up, flattening the nested struct
+    // and tuple first so the parent packs them into one flat body (B28 item 2
+    // step 6B).
+    let v = flatten_in_arena(h.clone(), &arena);
     assert!(matches!(v, Value::Struct(StructBody::Flat(_))));
-    let recovered = Holder::from_value(&v).unwrap();
+    let recovered = Holder::from_value_ctx(&v, &bundled_ctx(&arena)).unwrap();
     assert_eq!(recovered, h);
 }
 
@@ -125,10 +156,11 @@ fn derive_uniform_flat_enum_pads_and_roundtrips() {
     // Every variant of a uniformly-flat enum marshals to a flat body of one
     // fixed size (padded to the largest variant), so nesting it is sound and
     // padding-tolerant equality preserves round-trips (B28 P2).
+    let arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
     for s in [Signal::Off, Signal::On(7), Signal::Span { lo: 1, hi: 9 }] {
-        let v = s.clone().into_value();
+        let v = flatten_in_arena(s.clone(), &arena);
         assert!(matches!(v, Value::Enum(EnumBody::Flat(_))));
-        assert_eq!(Signal::from_value(&v).unwrap(), s);
+        assert_eq!(Signal::from_value_ctx(&v, &bundled_ctx(&arena)).unwrap(), s);
     }
 }
 
@@ -138,14 +170,21 @@ fn derive_struct_nesting_flat_enum_roundtrips() {
     // A flat struct nesting a uniformly-flat enum field inlines the enum's
     // fixed-size body and reads it back; the host-built slot size matches
     // what the compiler bakes for a script (B28 P2).
+    let arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
     for sig in [Signal::Off, Signal::On(5), Signal::Span { lo: 2, hi: 8 }] {
         let c = Carrier {
             sig: sig.clone(),
             n: 42,
         };
-        let v: Value = c.clone().into_value();
+        // The nested enum is padded to its largest-variant size (the
+        // `min_payload` re-flattening hint) so `n` sits at a stable offset
+        // regardless of the variant (B28 item 2 step 6B).
+        let v = flatten_in_arena(c.clone(), &arena);
         assert!(matches!(v, Value::Struct(StructBody::Flat(_))));
-        assert_eq!(Carrier::from_value(&v).unwrap(), c);
+        assert_eq!(
+            Carrier::from_value_ctx(&v, &bundled_ctx(&arena)).unwrap(),
+            c
+        );
     }
 }
 
@@ -235,24 +274,33 @@ fn derive_enum_marshals_flat_per_variant() {
     // body, matching the flat access the compiler bakes. A float-bearing
     // variant is flat too and is compared field-wise. Both directions
     // round-trip.
-    let active = Status::Active(42).into_value();
-    assert!(matches!(active, Value::Enum(EnumBody::Flat(_))));
-    assert_eq!(Status::from_value(&active).unwrap(), Status::Active(42));
+    let arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+    let ctx = bundled_ctx(&arena);
 
-    let range = Status::Range { start: 1, end: 10 }.into_value();
+    let active = flatten_in_arena(Status::Active(42), &arena);
+    assert!(matches!(active, Value::Enum(EnumBody::Flat(_))));
+    assert_eq!(
+        Status::from_value_ctx(&active, &ctx).unwrap(),
+        Status::Active(42)
+    );
+
+    let range = flatten_in_arena(Status::Range { start: 1, end: 10 }, &arena);
     assert!(matches!(range, Value::Enum(EnumBody::Flat(_))));
     assert_eq!(
-        Status::from_value(&range).unwrap(),
+        Status::from_value_ctx(&range, &ctx).unwrap(),
         Status::Range { start: 1, end: 10 }
     );
 
-    let idle = Status::Idle.into_value();
+    let idle = flatten_in_arena(Status::Idle, &arena);
     assert!(matches!(idle, Value::Enum(EnumBody::Flat(_))));
-    assert_eq!(Status::from_value(&idle).unwrap(), Status::Idle);
+    assert_eq!(Status::from_value_ctx(&idle, &ctx).unwrap(), Status::Idle);
 
-    let pair = Status::Pair(7, 2.5).into_value();
+    let pair = flatten_in_arena(Status::Pair(7, 2.5), &arena);
     assert!(matches!(pair, Value::Enum(EnumBody::Flat(_))));
-    assert_eq!(Status::from_value(&pair).unwrap(), Status::Pair(7, 2.5));
+    assert_eq!(
+        Status::from_value_ctx(&pair, &ctx).unwrap(),
+        Status::Pair(7, 2.5)
+    );
 }
 
 #[test]

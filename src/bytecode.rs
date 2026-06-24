@@ -120,6 +120,16 @@ pub enum ConstValue {
 /// stack.
 pub type Value = GenericValue<i64, f64>;
 
+// The bundled `Value` slot is 32 bytes, the close of B28 item 2. The
+// single-variant `FlatComposite` (a `NonNull`-bearing arena handle) keeps its
+// pointer niche exposed for the body enums to reuse for their `Flat`/`Boxed`
+// discriminant; a second data-less variant would spend that niche and pin the
+// slot at 40. This static assertion fails the build if the layout regresses.
+const _: () = assert!(
+    core::mem::size_of::<Value>() == 32,
+    "Value slot must be 32 bytes (B28 item 2 step 6B); a layout change regressed it"
+);
+
 /// Parametric runtime-value type. The bundled `Vm` uses
 /// `GenericValue<i64, f64>` aliased as `Value`; sub-64-bit
 /// runtimes use a different specialization. The `W: Word` and
@@ -295,26 +305,90 @@ pub enum EnumBody<W: crate::word::Word, F: crate::float::Float> {
 /// Heap payload of a non-flat enum value. Boxed inside [`EnumBody::Boxed`]
 /// to keep `GenericValue` small. Transitional representation removed when
 /// boxed bodies relocate into the arena (B28 P3 item 5 C4).
-#[derive(Debug, Clone, PartialEq)]
+///
+/// The `disc` and `min_payload` fields are re-flattening hints so a boxed enum
+/// can be re-packed to the `[disc word][payload]` arena body the compiler-baked
+/// flat access ops expect (B28 item 2 step 6B; see
+/// [`GenericValue::into_arena_canonical`]). `disc` is the variant discriminant;
+/// `min_payload` is the largest-variant payload size in bytes for a uniformly
+/// flat enum (zero otherwise), which pads the flat body to a fixed size so the
+/// enum nests in a parent composite at a stable slot. Both are hints, not part
+/// of value identity: the discriminant is uniquely determined by the
+/// (`type_name`, `variant`) pair and the padding is a layout detail, so both are
+/// deliberately excluded from equality to keep a host-built value comparable to
+/// a script-built value of the same variant regardless of how each populated the
+/// hints.
+#[derive(Debug, Clone)]
 pub struct BoxedEnum<W: crate::word::Word, F: crate::float::Float> {
     /// Name of the enum type.
     pub type_name: alloc::string::String,
     /// Name of the variant.
     pub variant: alloc::string::String,
+    /// Variant discriminant, a re-flattening hint (see the type docs).
+    pub disc: i64,
+    /// Largest-variant payload size in bytes for a uniformly flat enum (zero
+    /// otherwise), the padding re-flattening hint (see the type docs).
+    pub min_payload: usize,
     /// Positional payload values; empty for a unit variant.
     pub fields: alloc::vec::Vec<GenericValue<W, F>>,
 }
 
+impl<W: crate::word::Word, F: crate::float::Float> PartialEq for BoxedEnum<W, F> {
+    /// Equality ignores the `disc`/`min_payload` re-flattening hints; two boxed
+    /// enums are equal when their type, variant, and payload match.
+    fn eq(&self, other: &Self) -> bool {
+        self.type_name == other.type_name
+            && self.variant == other.variant
+            && self.fields == other.fields
+    }
+}
+
 impl<W: crate::word::Word, F: crate::float::Float> EnumBody<W, F> {
-    /// Build an [`EnumBody::Boxed`] from its parts, boxing the payload.
+    /// Build an [`EnumBody::Boxed`] from its parts, boxing the payload. The
+    /// re-flattening hints default to zero; this is correct for every caller
+    /// whose value is read through the boxed access ops or whose payload is not
+    /// flat-eligible (a reference-bearing enum stays boxed under
+    /// [`GenericValue::into_arena_canonical`], where the hints would be used).
+    /// A caller whose value may be canonicalised to a flat body must use
+    /// [`Self::boxed_with_disc`] or [`Self::boxed_with_layout`].
     pub fn boxed(
         type_name: alloc::string::String,
         variant: alloc::string::String,
         fields: alloc::vec::Vec<GenericValue<W, F>>,
     ) -> Self {
+        Self::boxed_with_layout(type_name, variant, 0, 0, fields)
+    }
+
+    /// Build an [`EnumBody::Boxed`] recording the variant discriminant, with no
+    /// padding hint (B28 item 2 step 6B). For a top-level (not nested) host enum
+    /// such as the ad-hoc [`GenericValue::enum_value`], whose flat body is
+    /// variant-sized and read directly.
+    pub fn boxed_with_disc(
+        type_name: alloc::string::String,
+        variant: alloc::string::String,
+        disc: i64,
+        fields: alloc::vec::Vec<GenericValue<W, F>>,
+    ) -> Self {
+        Self::boxed_with_layout(type_name, variant, disc, 0, fields)
+    }
+
+    /// Build an [`EnumBody::Boxed`] recording both re-flattening hints (B28 item
+    /// 2 step 6B): the discriminant and the largest-variant payload byte size
+    /// that pads the flat body for nesting. Used by the width-aware enum
+    /// constructor, whose value the script may read through flat-baked access
+    /// ops after [`GenericValue::into_arena_canonical`].
+    pub fn boxed_with_layout(
+        type_name: alloc::string::String,
+        variant: alloc::string::String,
+        disc: i64,
+        min_payload: usize,
+        fields: alloc::vec::Vec<GenericValue<W, F>>,
+    ) -> Self {
         Self::Boxed(alloc::boxed::Box::new(BoxedEnum {
             type_name,
             variant,
+            disc,
+            min_payload,
             fields,
         }))
     }
@@ -573,27 +647,11 @@ fn flat_enum_bytes_eq(a: &[u8], b: &[u8]) -> bool {
     a[..m] == b[..m] && a[m..].iter().all(|&x| x == 0) && b[m..].iter().all(|&x| x == 0)
 }
 
-/// The flat byte body of a composite value in its `Flat` representation,
-/// or `None` for a boxed composite or a non-composite (B28 P2 nested
-/// inlining). Callers inline these bytes into a parent composite body.
-pub(crate) fn flat_body_bytes<W: crate::word::Word, F: crate::float::Float>(
-    v: &GenericValue<W, F>,
-) -> Option<&[u8]> {
-    match v {
-        GenericValue::Tuple(TupleBody::Flat(fc))
-        | GenericValue::Array(ArrayBody::Flat(fc))
-        | GenericValue::Struct(StructBody::Flat(fc))
-        | GenericValue::Enum(EnumBody::Flat(fc)) => Some(fc.as_bytes()),
-        _ => None,
-    }
-}
-
 /// The flat composite body of a `Flat`-bodied tuple, array, struct, or enum,
-/// or `None` for a boxed composite or a non-composite. Unlike
-/// [`flat_body_bytes`] this borrows the [`crate::flat_value::FlatComposite`]
-/// itself rather than its bytes, so the caller chooses an arena-aware read
-/// (`resolve`) or a length query (`byte_len`) that works on both an `Inline`
-/// and an `Arena` body. Used by the arena-direct construction packer, which
+/// or `None` for a boxed composite or a non-composite. Borrows the
+/// [`crate::flat_value::FlatComposite`] itself rather than its bytes, so the
+/// caller chooses an arena-aware read (`resolve`) or an arena-less length query
+/// (`byte_len`). Used by the arena-direct construction packer, which
 /// inlines un-materialised arena children (B28 P3 item 5 C-residual 3b).
 pub(crate) fn flat_composite_ref<W: crate::word::Word, F: crate::float::Float>(
     v: &GenericValue<W, F>,
@@ -644,20 +702,16 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
         word_bytes: usize,
         float_bytes: usize,
     ) -> Self {
-        // A `KStr` text element flattens to a two-word `(ptr, len)` handle,
-        // like a struct's text field (B28 P3 item 5 C4): `try_pack_flat`
-        // packs it. A `StaticStr` is not directly packable (no arena handle):
-        // the VM converts it to a `KStr` before calling here, so a `StaticStr`
-        // surviving to this point came through a host or constant path with
-        // no arena and stays boxed via `try_pack_flat` returning `None`, the
-        // same host/VM gap struct and enum have. `Opaque` is similar: the VM
-        // interns it to a one-word `Int` index before calling here, and a
-        // host-built `Opaque` stays boxed.
-        // A tuple has no padding (no minimum), so the packed size is exact.
-        match Self::try_pack_flat(elements.iter(), 0, word_bytes, float_bytes) {
-            Some(body) => Self::Tuple(TupleBody::Flat(body)),
-            None => Self::Tuple(TupleBody::boxed(elements)),
-        }
+        // No arena is available here (B28 item 2 step 6B), so a flat body has
+        // nowhere to live: the owned `Inline` form is gone and every flat body
+        // is an arena region handle. The no-arena path therefore produces the
+        // boxed representation. The runtime builds flat composites through the
+        // arena-direct `*_in_arena` family instead, and a host that wants a flat
+        // arena body uses the `into_value_ctx` boundary (B36); composite
+        // equality is field-wise, so the boxed host representation compares
+        // equal to a flat runtime one of the same type.
+        let _ = (word_bytes, float_bytes);
+        Self::Tuple(TupleBody::boxed(elements))
     }
 
     /// Construct an array value at the runtime's own scalar widths,
@@ -687,14 +741,10 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
         word_bytes: usize,
         float_bytes: usize,
     ) -> Self {
-        // A `KStr` text element flattens to a two-word handle (B28 P3 item 5
-        // C4); `try_pack_flat` packs it. A `StaticStr` or host `Opaque` with
-        // no arena handle stays boxed via `try_pack_flat` returning `None`;
-        // see `tuple_with_widths`.
-        match Self::try_pack_flat(elements.iter(), 0, word_bytes, float_bytes) {
-            Some(body) => Self::Array(ArrayBody::Flat(body)),
-            None => Self::Array(ArrayBody::boxed(elements)),
-        }
+        // No arena here, so the no-arena path is boxed; see `tuple_with_widths`
+        // (B28 item 2 step 6B). The runtime builds arrays through `array_in_arena`.
+        let _ = (word_bytes, float_bytes);
+        Self::Array(ArrayBody::boxed(elements))
     }
 
     /// Construct a struct value at the runtime's own scalar widths,
@@ -727,10 +777,10 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
         word_bytes: usize,
         float_bytes: usize,
     ) -> Self {
-        match Self::try_pack_flat(fields.iter().map(|(_, v)| v), 0, word_bytes, float_bytes) {
-            Some(body) => Self::Struct(StructBody::Flat(body)),
-            None => Self::Struct(StructBody::boxed(type_name, fields)),
-        }
+        // No arena here, so the no-arena path is boxed; see `tuple_with_widths`
+        // (B28 item 2 step 6B). The runtime builds structs through `struct_in_arena`.
+        let _ = (word_bytes, float_bytes);
+        Self::Struct(StructBody::boxed(type_name, fields))
     }
 
     /// Construct an enum value at the runtime's own scalar widths, choosing
@@ -751,16 +801,15 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
         Self::enum_with_widths(type_name, variant, disc, fields, 0, word_bytes, float_bytes)
     }
 
-    /// Construct an enum value, choosing the flat byte body for a
-    /// transitively-scalar payload and the boxed body otherwise, using the
-    /// given scalar widths (B28 P2).
-    ///
-    /// The single choke point for enum construction, so the VM `NewEnum`
-    /// handler, constant materialisation, and host marshalling agree on the
-    /// representation. The flat body is `[disc: word_bytes][payload]`: the
-    /// discriminant is written as a `Word` at offset zero, then the payload
-    /// fields are packed in declaration order. A payload field that is not
-    /// a flat-eligible scalar forces the boxed body.
+    /// Construct an enum value at the given scalar widths (B28 P2). No arena is
+    /// available here, so the no-arena path produces the boxed representation
+    /// (B28 item 2 step 6B); the owned `Inline` flat body is gone and every flat
+    /// body is an arena region handle. The runtime builds flat enums through the
+    /// arena-direct path, and host/const enums stay boxed, which composite
+    /// equality (field-wise) and the boxed access ops handle. `disc`,
+    /// `min_payload`, and the widths are accepted for signature compatibility
+    /// with the callers and are not needed by the boxed body, which records the
+    /// `variant` name from which the discriminant is recovered.
     pub fn enum_with_widths(
         type_name: alloc::string::String,
         variant: alloc::string::String,
@@ -770,33 +819,19 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
         word_bytes: usize,
         float_bytes: usize,
     ) -> Self {
-        // The built-in `Option` enum is generic and is not registered in
-        // the compiler's enum type tables, so the access ops bake the boxed
-        // form for it; keep its construction boxed too, so the two agree
-        // (B28 P2). `Option::None` is the separate `Value::None`; only
-        // `Option::Some` reaches here.
-        if type_name == "Option" {
-            return Self::Enum(EnumBody::boxed(type_name, variant, fields));
-        }
-        // The flat enum body is `[disc word][payload]`. The discriminant is
-        // the first packed field (an `Int` written as a `Word`), matching
-        // the `Enum as Word` cast and what `Op::IsEnum` reads. `min_payload`
-        // is the type's largest-variant payload, baked by the compiler so
-        // every value of a uniformly-flat enum shares one fixed body size,
-        // which a nested enum field's fixed slot requires (B28 P2). The
-        // padded body is `word + min_payload`; the trailing slot is zero
-        // padding, which padding-tolerant equality tolerates.
-        let disc_value = Self::Int(<W as crate::word::Word>::from_i64_wrap(disc));
-        let min_bytes = word_bytes + min_payload;
-        match Self::try_pack_flat(
-            core::iter::once(&disc_value).chain(fields.iter()),
-            min_bytes,
-            word_bytes,
-            float_bytes,
-        ) {
-            Some(body) => Self::Enum(EnumBody::Flat(body)),
-            None => Self::Enum(EnumBody::boxed(type_name, variant, fields)),
-        }
+        // No arena here, so the body is boxed; the discriminant and the
+        // largest-variant payload size are recorded so the VM-entry
+        // `into_arena_canonical` can re-flatten a host enum argument to the
+        // `[disc word][payload]` form flat access expects, padded for nesting
+        // (B28 item 2 step 6B).
+        let _ = (word_bytes, float_bytes);
+        Self::Enum(EnumBody::boxed_with_layout(
+            type_name,
+            variant,
+            disc,
+            min_payload,
+            fields,
+        ))
     }
 
     /// Arena-direct counterpart of [`GenericValue::tuple_with_widths`] (B28 P3
@@ -862,13 +897,153 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
         }
     }
 
-    // Note: there is intentionally no `enum_in_arena` constructor. The
-    // `keleusma-macros` enum derive keeps the default `into_value_ctx`
-    // (materialise then `into_arena_body`) for now, so its native result still
-    // transits a transient `Inline`; an enum's eight-argument arena-direct
-    // constructor and the derive's matching arms are folded into the
-    // Increment 5 collapse, where the residual `Inline` producers are removed
-    // together (B28 P3 item 2).
+    /// Arena-direct enum constructor (B28 item 2 step 6B). Packs a flat enum
+    /// body `[disc word][payload]` straight into the arena, matching the layout
+    /// [`GenericValue::enum_with_widths`] produced before the `Inline` form was
+    /// removed and what [`Op::IsEnum`]/[`Op::GetEnumField`] read. The
+    /// discriminant is the leading `Word`; the payload packs in declaration
+    /// order with no variant padding (`min_bytes` is the discriminant word
+    /// alone), which a host-built value not inlined into a fixed parent slot
+    /// permits. A reference- or float-bearing payload is not flat-eligible and
+    /// falls back to the boxed body. The built-in generic `Option` is kept
+    /// boxed by the caller, since its access is baked boxed.
+    // An enum's flat body needs its name, variant, discriminant, padding hint,
+    // payload, the two scalar widths, and the arena; the eight parameters are
+    // irreducible (the names and variant feed the boxed fallback, the rest the
+    // flat pack), so the arity lint is allowed here, as the pre-6B note on this
+    // constructor anticipated.
+    #[allow(clippy::too_many_arguments)]
+    pub fn enum_in_arena(
+        type_name: alloc::string::String,
+        variant: alloc::string::String,
+        disc: i64,
+        min_payload: usize,
+        fields: alloc::vec::Vec<Self>,
+        word_bytes: usize,
+        float_bytes: usize,
+        arena: &keleusma_arena::Arena,
+    ) -> Result<Self, allocator_api2::alloc::AllocError> {
+        let disc_value = Self::Int(<W as crate::word::Word>::from_i64_wrap(disc));
+        let mut values: alloc::vec::Vec<Self> = alloc::vec::Vec::with_capacity(fields.len() + 1);
+        values.push(disc_value);
+        values.extend(fields);
+        // `min_bytes == word_bytes + min_payload`: the discriminant word plus
+        // the largest-variant payload, so every value of a uniformly flat enum
+        // shares one fixed body size and nests in a parent at a stable slot
+        // (matching the body `enum_with_widths` produced before the `Inline`
+        // form was removed). A top-level host enum has `min_payload == 0` and is
+        // variant-sized.
+        let min_bytes = word_bytes + min_payload;
+        match Self::pack_flat_in_arena(&values, min_bytes, word_bytes, float_bytes, arena)? {
+            Some(body) => Ok(Self::Enum(EnumBody::Flat(body))),
+            None => {
+                // Not flat-eligible: rebuild the boxed body, dropping the
+                // leading discriminant word back into the recorded hint.
+                let mut it = values.into_iter();
+                it.next();
+                let fields: alloc::vec::Vec<Self> = it.collect();
+                Ok(Self::Enum(EnumBody::boxed_with_layout(
+                    type_name,
+                    variant,
+                    disc,
+                    min_payload,
+                    fields,
+                )))
+            }
+        }
+    }
+
+    /// Re-pack a host-built boxed composite into an arena-resident flat body so
+    /// the compiler-baked flat field-access ops can read it (B28 item 2 step
+    /// 6B). The arena-less host constructors ([`Self::enum_with_widths`] and
+    /// kin, the `KeleusmaType` derive's no-arena `from_value`) can only produce
+    /// the boxed representation, but a script reads a host-provided composite
+    /// argument through flat-baked ops ([`Op::GetField`]/[`Op::GetTupleField`]/
+    /// [`Op::GetEnumField`]) that reject a boxed body. This canonicalisation
+    /// runs at the VM entry points (call arguments and the resume value) where
+    /// the arena is available. It recurses bottom-up, so a nested boxed child
+    /// becomes flat first and lets its parent flatten.
+    ///
+    /// A scalar, reference, already-flat, `Unit`, or `None` value is returned
+    /// unchanged. A composite whose payload is not flat-eligible (a reference-
+    /// or float-bearing field, or an `Option`) stays boxed and is read through
+    /// the boxed access ops, which tolerate it. Widths are the MODULE widths,
+    /// so a narrow-word build casts each host scalar to the module width
+    /// exactly as [`crate::marshall::KeleusmaType::from_value_ctx`] does (B36);
+    /// the cast cannot widen because the loader requires module width at most
+    /// runtime width.
+    pub fn into_arena_canonical(
+        self,
+        word_bytes: usize,
+        float_bytes: usize,
+        arena: &keleusma_arena::Arena,
+    ) -> Result<Self, allocator_api2::alloc::AllocError> {
+        match self {
+            Self::Tuple(TupleBody::Boxed(elems)) => {
+                let elems = (*elems)
+                    .into_iter()
+                    .map(|v| v.into_arena_canonical(word_bytes, float_bytes, arena))
+                    .collect::<Result<alloc::vec::Vec<_>, _>>()?;
+                Self::tuple_in_arena(elems, word_bytes, float_bytes, arena)
+            }
+            Self::Array(ArrayBody::Boxed(elems)) => {
+                let elems = (*elems)
+                    .into_iter()
+                    .map(|v| v.into_arena_canonical(word_bytes, float_bytes, arena))
+                    .collect::<Result<alloc::vec::Vec<_>, _>>()?;
+                Self::array_in_arena(elems, word_bytes, float_bytes, arena)
+            }
+            Self::Struct(StructBody::Boxed(b)) => {
+                let BoxedStruct { type_name, fields } = *b;
+                let fields = fields
+                    .into_iter()
+                    .map(|(k, v)| {
+                        Ok::<_, allocator_api2::alloc::AllocError>((
+                            k,
+                            v.into_arena_canonical(word_bytes, float_bytes, arena)?,
+                        ))
+                    })
+                    .collect::<Result<alloc::vec::Vec<_>, _>>()?;
+                Self::struct_in_arena(type_name, fields, word_bytes, float_bytes, arena)
+            }
+            Self::Enum(EnumBody::Boxed(b)) => {
+                let BoxedEnum {
+                    type_name,
+                    variant,
+                    disc,
+                    min_payload,
+                    fields,
+                } = *b;
+                // `Option` is generic and not in the compiler's enum type
+                // tables, so its access is baked boxed; keep it boxed to match
+                // (B28 P2), preserving the re-flattening hints.
+                if type_name == "Option" {
+                    return Ok(Self::Enum(EnumBody::boxed_with_layout(
+                        type_name,
+                        variant,
+                        disc,
+                        min_payload,
+                        fields,
+                    )));
+                }
+                let fields = fields
+                    .into_iter()
+                    .map(|v| v.into_arena_canonical(word_bytes, float_bytes, arena))
+                    .collect::<Result<alloc::vec::Vec<_>, _>>()?;
+                Self::enum_in_arena(
+                    type_name,
+                    variant,
+                    disc,
+                    min_payload,
+                    fields,
+                    word_bytes,
+                    float_bytes,
+                    arena,
+                )
+            }
+            other => Ok(other),
+        }
+    }
 
     /// Write this fixed-size scalar's little-endian bytes into `dst` at
     /// `offset` (B28 P2). The width of an `Int`/`Fixed` is `word_bytes`
@@ -928,30 +1103,6 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
         }
     }
 
-    /// Build a flat composite of `kind` from `values`, allocating
-    /// `byte_size` bytes (B28 P4). The values are packed in order (for an
-    /// enum the first is the discriminant word) and the body is padded to
-    /// `byte_size`; the result is wrapped as the matching composite kind.
-    /// Returns `None` if any value is not flat-eligible, which a correct
-    /// compiler never produces for a `Flat` operand (the type is statically
-    /// flat). The single flat-construction choke point for `Op::NewComposite`.
-    pub fn new_composite_flat(
-        kind: crate::value_layout::CompositeKind,
-        values: alloc::vec::Vec<Self>,
-        byte_size: usize,
-        word_bytes: usize,
-        float_bytes: usize,
-    ) -> Option<Self> {
-        use crate::value_layout::CompositeKind as C;
-        let fc = Self::try_pack_flat(values.iter(), byte_size, word_bytes, float_bytes)?;
-        Some(match kind {
-            C::Tuple => Self::Tuple(TupleBody::Flat(fc)),
-            C::Array => Self::Array(ArrayBody::Flat(fc)),
-            C::Struct => Self::Struct(StructBody::Flat(fc)),
-            C::Enum => Self::Enum(EnumBody::Flat(fc)),
-        })
-    }
-
     /// Build a boxed composite of `kind` from `values` (B28 P4). For a
     /// struct the `names` are the field names (declaration order); for an
     /// enum `names[0]` is the variant name and `type_name` the enum name; a
@@ -986,11 +1137,8 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
     /// fresh body, so the result is independent of the parent.
     /// Extract a nested child composite occupying `[offset, offset + size)` of
     /// `parent`, as a flat composite `Value` of `variant` kind, viewing the
-    /// child in place when the parent is arena-resident (B28 P3 item 5
-    /// C-residual 3b). The arena-aware successor to
-    /// [`GenericValue::from_flat_nested_bytes`]: rather than copying the child
-    /// bytes into an owned `Inline` body on every nested field access, an
-    /// arena parent yields a zero-copy sub-handle into its own storage (see
+    /// child in place (B28 P3 item 5 C-residual 3b). The arena parent yields a
+    /// zero-copy sub-handle into its own storage (see
     /// [`crate::flat_value::FlatComposite::nested_view`]), so a nested access
     /// allocates nothing. Returns [`keleusma_arena::Stale`] only if an arena
     /// parent no longer resolves, which a correct caller never observes.
@@ -1009,24 +1157,6 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
             C::Struct => Self::Struct(StructBody::Flat(fc)),
             C::Enum => Self::Enum(EnumBody::Flat(fc)),
         })
-    }
-
-    pub fn from_flat_nested_bytes(
-        bytes: &[u8],
-        variant: crate::value_layout::CompositeKind,
-        epoch: u64,
-    ) -> Self {
-        use crate::value_layout::CompositeKind as C;
-        // The child inherits the parent body's epoch so its own flat `Text`
-        // field reattaches that epoch on read and resolves `Stale` after a
-        // `RESET` rather than dereferencing reclaimed memory (B28 P3 item 1).
-        let fc = crate::flat_value::FlatComposite::from_bytes_with_epoch(bytes.to_vec(), epoch);
-        match variant {
-            C::Tuple => Self::Tuple(TupleBody::Flat(fc)),
-            C::Array => Self::Array(ArrayBody::Flat(fc)),
-            C::Struct => Self::Struct(StructBody::Flat(fc)),
-            C::Enum => Self::Enum(EnumBody::Flat(fc)),
-        }
     }
 
     /// Migrate a flat composite value's body to the arena's top ephemeral
@@ -1077,127 +1207,19 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
         }
     }
 
-    pub fn materialized(self, arena: &keleusma_arena::Arena) -> Self {
-        match self {
-            Self::Tuple(TupleBody::Flat(fc)) => Self::Tuple(TupleBody::Flat(fc.to_inline(arena))),
-            Self::Array(ArrayBody::Flat(fc)) => Self::Array(ArrayBody::Flat(fc.to_inline(arena))),
-            Self::Struct(StructBody::Flat(fc)) => {
-                Self::Struct(StructBody::Flat(fc.to_inline(arena)))
-            }
-            Self::Enum(EnumBody::Flat(fc)) => Self::Enum(EnumBody::Flat(fc.to_inline(arena))),
-            Self::Tuple(TupleBody::Boxed(elems)) => Self::Tuple(TupleBody::boxed(
-                (*elems)
-                    .into_iter()
-                    .map(|e| e.materialized(arena))
-                    .collect(),
-            )),
-            Self::Array(ArrayBody::Boxed(elems)) => Self::Array(ArrayBody::boxed(
-                (*elems)
-                    .into_iter()
-                    .map(|e| e.materialized(arena))
-                    .collect(),
-            )),
-            Self::Struct(StructBody::Boxed(b)) => {
-                let BoxedStruct { type_name, fields } = *b;
-                Self::Struct(StructBody::boxed(
-                    type_name,
-                    fields
-                        .into_iter()
-                        .map(|(n, v)| (n, v.materialized(arena)))
-                        .collect(),
-                ))
-            }
-            Self::Enum(EnumBody::Boxed(b)) => {
-                let BoxedEnum {
-                    type_name,
-                    variant,
-                    fields,
-                } = *b;
-                Self::Enum(EnumBody::boxed(
-                    type_name,
-                    variant,
-                    fields.into_iter().map(|e| e.materialized(arena)).collect(),
-                ))
-            }
-            other => other,
-        }
-    }
-
-    /// Append a flat composite field's bytes to `buf`: a scalar's
-    /// little-endian bytes or a nested flat composite's body bytes (B28
-    /// P2). The caller has verified flat eligibility through
-    /// `flat_field_size`, so a value that is neither a flat scalar nor a
-    /// flat composite never reaches here. Appending (rather than writing at
-    /// a pre-zeroed offset) means the packed region is written exactly
-    /// once; only the trailing slack (an enum's padding to the largest
-    /// variant) is zero-filled by the caller (B28 P4 alloc model).
-    fn push_flat_field(
-        &self,
-        buf: &mut alloc::vec::Vec<u8>,
-        word_bytes: usize,
-        float_bytes: usize,
-    ) {
-        if flat_tuple_scalar_kind(self).is_some() {
-            let start = buf.len();
-            let size = flat_tuple_scalar_kind(self)
-                .expect("scalar checked")
-                .size_in_bytes(word_bytes, float_bytes);
-            buf.resize(start + size, 0);
-            self.write_scalar_le(buf, start, word_bytes, float_bytes);
-        } else if let Some(bytes) = flat_body_bytes(self) {
-            buf.extend_from_slice(bytes);
-        }
-    }
-
-    /// Pack `values` into a flat byte body, padded to at least `min_bytes`
-    /// (B28 P4). Returns `None` if any value is not flat-eligible (a
-    /// reference or float field) or the packed body exceeds the sixteen-bit
-    /// access offset, in which case the caller falls back to the boxed body.
-    ///
-    /// The fields are appended in order, so each packed byte is written
-    /// exactly once; the body is then grown to `min_bytes` with zeros,
-    /// which is the only zero-fill and is non-empty solely for an enum
-    /// padded to its largest variant. `min_bytes` is the explicit
-    /// allocation size the compiler bakes and the worst-case-memory-usage
-    /// verifier sums.
-    fn try_pack_flat<'a, I>(
-        values: I,
-        min_bytes: usize,
-        word_bytes: usize,
-        float_bytes: usize,
-    ) -> Option<crate::flat_value::FlatComposite>
-    where
-        I: IntoIterator<Item = &'a Self>,
-        Self: 'a,
-    {
-        let mut buf = alloc::vec::Vec::new();
-        for v in values {
-            flat_field_size(v, word_bytes, float_bytes)?;
-            v.push_flat_field(&mut buf, word_bytes, float_bytes);
-        }
-        // Grow to the minimum (the enum padding slack); never shrink.
-        if buf.len() < min_bytes {
-            buf.resize(min_bytes, 0);
-        }
-        if buf.len() > u16::MAX as usize {
-            return None;
-        }
-        Some(crate::flat_value::FlatComposite::from_bytes(buf))
-    }
-
     /// Pack `values` into a flat byte body built *directly in the arena*,
-    /// padded to at least `min_bytes`, with no intermediate global-heap
-    /// `Inline` scratch (B28 P3 item 5 C-residual 3b). The arena-resident
-    /// analogue of `GenericValue::try_pack_flat`, used by the VM
-    /// `Op::NewComposite` handler so a freshly constructed composite carries no
-    /// global-heap allocation, satisfying the no-global-heap-for-ephemeral
-    /// directive directly rather than building an owned body and migrating it.
+    /// padded to at least `min_bytes` (B28 P3 item 5 C-residual 3b). Used by
+    /// the VM `Op::NewComposite` handler so a freshly constructed composite is
+    /// arena-resident with no global-heap allocation. Since B28 item 2 step 6B
+    /// this is the only flat-packing path; the owned-bytes `Inline` form and
+    /// its `try_pack_flat` packer are gone, so a no-arena caller (host
+    /// marshalling, constants) uses the boxed representation or the const pool
+    /// instead.
     ///
     /// Returns `Ok(None)` when any value is not flat-eligible (a reference or
     /// boxed field) or the packed body exceeds the sixteen-bit access offset,
-    /// in which case the caller falls back to the boxed body, exactly as
-    /// `try_pack_flat`. Returns `Err(AllocError)` when the arena top head
-    /// cannot satisfy the allocation.
+    /// in which case the caller falls back to the boxed body. Returns
+    /// `Err(AllocError)` when the arena top head cannot satisfy the allocation.
     ///
     /// The fields are packed contiguously in order at running offsets (the
     /// flat model has no inter-field padding), so the `[0, packed)` prefix is
@@ -1374,9 +1396,11 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
             ),
             // A flat enum is transitively scalar and holds no KStr.
             Self::Enum(EnumBody::Flat(_)) => self.clone(),
-            Self::Enum(EnumBody::Boxed(b)) => Self::Enum(EnumBody::boxed(
+            Self::Enum(EnumBody::Boxed(b)) => Self::Enum(EnumBody::boxed_with_layout(
                 b.type_name.clone(),
                 b.variant.clone(),
+                b.disc,
+                b.min_payload,
                 b.fields
                     .iter()
                     .map(|v| v.materialise_kstrings(arena))
@@ -3586,15 +3610,18 @@ impl ConstValue {
                 Err("a flat struct cannot be converted to a compile-time constant")
             }
             Value::Enum(EnumBody::Boxed(b)) => {
+                // The `disc` re-flattening hint is intentionally not recovered
+                // here: a script-built boxed enum carries the default-zero hint,
+                // which would be wrong for a non-zero variant, so constant
+                // folding stays variant-name-keyed and boxed (B28 P2).
                 let BoxedEnum {
                     type_name,
                     variant,
                     fields,
+                    ..
                 } = *b;
                 let cfields: Result<Vec<_>, _> =
                     fields.into_iter().map(ConstValue::try_from_value).collect();
-                // A boxed runtime enum carries no discriminant to recover,
-                // so the constant materialises boxed (B28 P2).
                 Ok(ConstValue::Enum {
                     type_name,
                     variant,
@@ -3713,6 +3740,87 @@ impl PartialEq for ConstValue {
             _ => false,
         }
     }
+}
+
+/// Pack a transitively-scalar const composite's flat body bytes directly,
+/// for the VM const-composite pool (B28 item 2 step 6B).
+///
+/// Returns `None` when the constant transitively carries a reference (a static
+/// string or opaque) or an enum with an unresolved discriminant, which has no
+/// flat body and keeps the boxed const path. The byte layout mirrors what the
+/// arena packer ([`GenericValue::write_scalar_le`] via
+/// [`GenericValue::pack_flat_in_arena`]) produces, so the compiler-baked access
+/// offsets read a pooled const body correctly: each scalar little-endian at the
+/// module scalar width, an enum as `[disc word][payload]`, and composites
+/// concatenated with no inter-field padding (a const enum is variant-sized,
+/// `min_payload` 0, which padding-tolerant flat-enum equality tolerates). This
+/// replaces the former path of materialising a `Flat(Inline)` body and copying
+/// its bytes out, now that the owned `Inline` form is gone.
+pub(crate) fn const_flat_bytes(
+    c: &ArchivedConstValue,
+    word_bytes: usize,
+    float_bytes: usize,
+) -> Option<alloc::vec::Vec<u8>> {
+    let mut buf = alloc::vec::Vec::new();
+    const_flat_bytes_into(c, word_bytes, float_bytes, &mut buf)?;
+    Some(buf)
+}
+
+fn const_flat_bytes_into(
+    c: &ArchivedConstValue,
+    word_bytes: usize,
+    float_bytes: usize,
+    buf: &mut alloc::vec::Vec<u8>,
+) -> Option<()> {
+    use ArchivedConstValue as A;
+    match c {
+        A::Unit => {}
+        A::Bool(b) => buf.push(u8::from(*b)),
+        A::Byte(b) => buf.push(*b),
+        A::Int(i) | A::Fixed(i) => {
+            let le = i.to_native().to_le_bytes();
+            buf.extend_from_slice(&le[..word_bytes]);
+        }
+        #[cfg(feature = "floats")]
+        A::Float(f) => {
+            let v = f.to_native();
+            match float_bytes {
+                8 => buf.extend_from_slice(&v.to_le_bytes()),
+                4 => buf.extend_from_slice(&(v as f32).to_le_bytes()),
+                _ => return None,
+            }
+        }
+        // A reference leaf has no position-independent flat body.
+        A::StaticStr(_) => return None,
+        // `Option::None` is the boxed `Option` representation (the access ops
+        // bake the boxed form for the generic `Option`), so a const carrying it
+        // is not flat-poolable.
+        A::None => return None,
+        A::Tuple(items) | A::Array(items) => {
+            for it in items.iter() {
+                const_flat_bytes_into(it, word_bytes, float_bytes, buf)?;
+            }
+        }
+        A::Struct { fields, .. } => {
+            for kv in fields.iter() {
+                const_flat_bytes_into(&kv.1, word_bytes, float_bytes, buf)?;
+            }
+        }
+        A::Enum {
+            discriminant,
+            fields,
+            ..
+        } => {
+            // An unresolved discriminant has no flat body (it stays boxed).
+            let disc = discriminant.as_ref()?.to_native();
+            let le = disc.to_le_bytes();
+            buf.extend_from_slice(&le[..word_bytes]);
+            for f in fields.iter() {
+                const_flat_bytes_into(f, word_bytes, float_bytes, buf)?;
+            }
+        }
+    }
+    Some(())
 }
 
 /// Convert an archived `ConstValue` to its owned [`Value`] form.

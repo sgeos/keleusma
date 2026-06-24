@@ -238,13 +238,12 @@ mod tests {
         let mut vm = Vm::new(module, &arena).unwrap();
         register_audio_natives(&mut vm);
         match vm.call(&[]).unwrap() {
-            // Read-before-resume: a returned composite is arena-resident, so
-            // decode it (here, copy it to an owned body) before this scope's
-            // `arena` drops (B28 P3 item 5). A native result is now migrated
-            // into the arena rather than left on the global heap, so the
-            // returned tuple is an arena body the arena-less `from_value`
-            // cannot read without this step.
-            VmState::Finished(v) => v.materialized(&arena),
+            // This helper serves tests whose program returns a scalar, for which
+            // the value carries no arena reference and is safe to return after
+            // this scope's `arena` drops. A program returning a composite (an
+            // arena-resident flat body since B28 item 2 step 6B) must decode it
+            // while the VM is alive through `run_with_audio_pair`/`Vm::decode`.
+            VmState::Finished(v) => v,
             VmState::Yielded(v) => panic!("unexpected yield: {:?}", v),
             VmState::Reset => panic!("unexpected reset"),
             VmState::BreakpointHit { chunk, op } => {

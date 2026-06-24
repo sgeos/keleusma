@@ -208,17 +208,20 @@ fn derive_struct_body(_name: &Ident, name_str: &str, data: &DataStruct) -> Token
                             )*
                             ::core::result::Result::Ok(Self { #(#field_names),* })
                         }
-                        // A flat struct body is pure bytes; the field types
-                        // supply their flat sizes, read at the packed offsets
-                        // in declaration order, recursing through nested flat
-                        // composites (B28 P2).
+                        // A flat struct body is an arena region handle (B28
+                        // item 2 step 6B), which the arena-less `from_value`
+                        // cannot read; the runtime native boundary decodes
+                        // through `from_value_ctx`, which resolves the body
+                        // against the arena. The bare `from_value` is a bundled
+                        // convenience for the boxed representation only (B36).
                         ::keleusma::GenericValue::Struct(
-                            ::keleusma::bytecode::StructBody::Flat(__fc)
-                        ) => {
-                            let __wb = (1usize << <__KW as ::keleusma::Word>::BITS_LOG2) / 8;
-                            let __fb = (1usize << <__KF as ::keleusma::Float>::BITS_LOG2) / 8;
-                            <Self as ::keleusma::KeleusmaType<__KW, __KF>>::from_flat_bytes(__fc.as_bytes(), __wb, __fb)
-                        }
+                            ::keleusma::bytecode::StructBody::Flat(_)
+                        ) => ::core::result::Result::Err(::keleusma::VmError::TypeError(
+                            ::alloc::format!(
+                                "cannot decode flat (arena) struct `{}` without an arena; use from_value_ctx",
+                                #name_str
+                            )
+                        )),
                         other => ::core::result::Result::Err(::keleusma::VmError::TypeError(
                             ::alloc::format!("expected struct `{}`, got {}", #name_str, other.type_name())
                         )),
@@ -820,13 +823,19 @@ fn derive_enum_body(_name: &Ident, name_str: &str, data: &DataEnum) -> TokenStre
                         )),
                     }
                 }
-                // A flat enum body carries no type name; the read is shared
-                // with `from_flat_bytes`, which the leading discriminant word
-                // drives (B28 P2).
-                ::keleusma::GenericValue::Enum(::keleusma::bytecode::EnumBody::Flat(__fc)) => {
-                    let __wb = (1usize << <__KW as ::keleusma::Word>::BITS_LOG2) / 8;
-                    let __fb = (1usize << <__KF as ::keleusma::Float>::BITS_LOG2) / 8;
-                    <Self as ::keleusma::KeleusmaType<__KW, __KF>>::from_flat_bytes(__fc.as_bytes(), __wb, __fb)
+                // A flat enum body is an arena region handle (B28 item 2 step
+                // 6B), which the arena-less `from_value` cannot read; the
+                // runtime native boundary decodes through `from_value_ctx`,
+                // which resolves the body against the arena. The bare
+                // `from_value` is a bundled convenience for the boxed
+                // representation only (B36).
+                ::keleusma::GenericValue::Enum(::keleusma::bytecode::EnumBody::Flat(_)) => {
+                    ::core::result::Result::Err(::keleusma::VmError::TypeError(
+                        ::alloc::format!(
+                            "cannot decode flat (arena) enum `{}` without an arena; use from_value_ctx",
+                            #name_str
+                        )
+                    ))
                 }
                 other => ::core::result::Result::Err(::keleusma::VmError::TypeError(
                     ::alloc::format!("expected enum `{}`, got {}", #name_str, other.type_name())
