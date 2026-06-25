@@ -58,16 +58,20 @@ fn report_module_wcet(module: &keleusma::bytecode::Module) -> Option<(u32, u32)>
             continue;
         }
         found_stream = true;
+        // Script-only per-iteration WCET; no native attestations (#50).
         if let Ok(n) = keleusma::verify::wcet_stream_iteration_with_cost_model(
             chunk,
             &keleusma::bytecode::NOMINAL_COST_MODEL,
+            &[],
         ) && n > nominal_max
         {
             nominal_max = n;
         }
-        if let Ok(m) =
-            keleusma::verify::wcet_stream_iteration_with_cost_model(chunk, &MEASURED_COST_MODEL)
-            && m > measured_max
+        if let Ok(m) = keleusma::verify::wcet_stream_iteration_with_cost_model(
+            chunk,
+            &MEASURED_COST_MODEL,
+            &[],
+        ) && m > measured_max
         {
             measured_max = m;
         }

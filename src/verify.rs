@@ -959,14 +959,69 @@ pub fn wcmu_stream_iteration_with_value_slot_bytes(
     Ok((stack_bytes, body_heap))
 }
 
+/// Per-op WCET extra cycles for a chunk: the #49 text-length term plus, for
+/// each verified-native call op, the host-attested per-call WCET body cost from
+/// `native_bounds` (#50). Folding the verified-native body into the per-op
+/// table lets [`wcet_region`] scale it by loop multiplicity exactly like the
+/// script ops, symmetric with how the WCMU pass sums a verified native's
+/// per-call bytes over its call sites. An empty `native_bounds` yields the
+/// text-only table (the script-only WCET path). External natives are not folded
+/// here; their per-iteration contribution is added once per chunk by
+/// [`external_native_wcet`], because an external native's invocation count is
+/// host-attested rather than derived from the loop structure.
+fn chunk_wcet_extra(
+    chunk: &Chunk,
+    cost_model: &crate::bytecode::CostModel,
+    native_bounds: &[NativeIterationBound],
+) -> Vec<u32> {
+    let mut extra = crate::text_size::chunk_text_wcet_cycles(chunk, cost_model.text_byte_cycles);
+    if !native_bounds.is_empty() {
+        for (ip, op) in chunk.ops.iter().enumerate() {
+            if let Op::CallVerifiedNative(idx, _) = op
+                && let Some(b) = native_bounds.get(*idx as usize)
+            {
+                extra[ip] = extra[ip].saturating_add(b.per_call_wcet_cycles);
+            }
+        }
+    }
+    extra
+}
+
+/// Once-per-chunk external-native WCET contribution (#50): for each unique
+/// external native called in the chunk, `max_invocations * per_call_wcet`. This
+/// mirrors the external-native WCMU contribution in [`module_wcmu_with_bounds`]:
+/// an external native (`use external module::name`) carries a host-attested
+/// per-iteration invocation count rather than a statically countable call-site
+/// count, so its body cost is added once per chunk against that attestation, not
+/// scaled by loop structure. Deduplication keeps the bound independent of the
+/// static call-site count.
+fn external_native_wcet(chunk: &Chunk, native_bounds: &[NativeIterationBound]) -> u32 {
+    let mut seen: alloc::collections::BTreeSet<u16> = alloc::collections::BTreeSet::new();
+    let mut total: u32 = 0;
+    for op in &chunk.ops {
+        if let Op::CallExternalNative(idx, _) = op
+            && seen.insert(*idx)
+            && let Some(b) = native_bounds.get(*idx as usize)
+            && let Some(max_inv) = b.max_invocations
+        {
+            total = total.saturating_add(b.per_call_wcet_cycles.saturating_mul(max_inv));
+        }
+    }
+    total
+}
+
 /// Compute the worst-case execution cost of one full Stream iteration
 /// (from Stream to Reset), taking the maximum cost branch at each
 /// control flow join.
 ///
 /// Returns the worst-case cost as a unitless integer. Returns an error
 /// if the chunk is not a Stream block type or lacks Stream/Reset.
+///
+/// This is the script-only bound: an `Op::Call` and a native call contribute
+/// their dispatch cycles only, not the callee body. The host-attested native
+/// body time is included by [`module_wcet_with_bounds`].
 pub fn wcet_stream_iteration(chunk: &Chunk) -> Result<u32, VerifyError> {
-    wcet_stream_iteration_with_cost_model(chunk, &crate::bytecode::NOMINAL_COST_MODEL)
+    wcet_stream_iteration_with_cost_model(chunk, &crate::bytecode::NOMINAL_COST_MODEL, &[])
 }
 
 /// Variant of [`wcet_stream_iteration`] that uses a host-supplied
@@ -979,6 +1034,7 @@ pub fn wcet_stream_iteration(chunk: &Chunk) -> Result<u32, VerifyError> {
 pub fn wcet_stream_iteration_with_cost_model(
     chunk: &Chunk,
     cost_model: &crate::bytecode::CostModel,
+    native_bounds: &[NativeIterationBound],
 ) -> Result<u32, VerifyError> {
     if chunk.block_type != BlockType::Stream {
         return Err(VerifyError {
@@ -1004,7 +1060,7 @@ pub fn wcet_stream_iteration_with_cost_model(
         })?;
 
     let mut break_costs: Vec<u32> = Vec::new();
-    let wcet_extra = crate::text_size::chunk_text_wcet_cycles(chunk, cost_model.text_byte_cycles);
+    let wcet_extra = chunk_wcet_extra(chunk, cost_model, native_bounds);
     let body_cost = wcet_region(
         chunk,
         stream_pos + 1,
@@ -1015,11 +1071,14 @@ pub fn wcet_stream_iteration_with_cost_model(
         &wcet_extra,
     )?;
 
-    // Include Stream and Reset instruction costs.
+    // Include Stream and Reset instruction costs, plus the once-per-chunk
+    // external-native body contribution (#50).
     let overhead = cost_model.cycles(&ops[stream_pos]) + cost_model.cycles(&ops[reset_pos]);
     let region_cost = body_cost.unwrap_or(0);
 
-    Ok(overhead + region_cost)
+    Ok(overhead
+        .saturating_add(region_cost)
+        .saturating_add(external_native_wcet(chunk, native_bounds)))
 }
 
 /// Compute the worst-case execution cost of a non-Stream chunk's whole
@@ -1057,7 +1116,7 @@ pub fn wcet_stream_iteration_with_cost_model(
 /// `Stream` chunk (use [`wcet_stream_iteration`]) or if a loop lacks a
 /// statically extractable iteration bound.
 pub fn wcet_whole_chunk(chunk: &Chunk) -> Result<u32, VerifyError> {
-    wcet_whole_chunk_with_cost_model(chunk, &crate::bytecode::NOMINAL_COST_MODEL)
+    wcet_whole_chunk_with_cost_model(chunk, &crate::bytecode::NOMINAL_COST_MODEL, &[])
 }
 
 /// Variant of [`wcet_whole_chunk`] that uses a host-supplied cost model.
@@ -1066,6 +1125,7 @@ pub fn wcet_whole_chunk(chunk: &Chunk) -> Result<u32, VerifyError> {
 pub fn wcet_whole_chunk_with_cost_model(
     chunk: &Chunk,
     cost_model: &crate::bytecode::CostModel,
+    native_bounds: &[NativeIterationBound],
 ) -> Result<u32, VerifyError> {
     if chunk.block_type == BlockType::Stream {
         return Err(VerifyError {
@@ -1073,12 +1133,15 @@ pub fn wcet_whole_chunk_with_cost_model(
             message: String::from("wcet_whole_chunk requires a non-Stream block"),
         });
     }
+    // The once-per-chunk external-native body contribution (#50) applies to
+    // either path below.
+    let external = external_native_wcet(chunk, native_bounds);
     // A Reentrant chunk's per-resume WCET is the exact maximum inter-yield
     // segment cost when the yields are top-level.
     if chunk.block_type == BlockType::Reentrant
-        && let Some(segmented) = reentrant_segmented_wcet(chunk, cost_model)?
+        && let Some(segmented) = reentrant_segmented_wcet(chunk, cost_model, native_bounds)?
     {
-        return Ok(segmented);
+        return Ok(segmented.saturating_add(external));
     }
     // Otherwise: the whole-body cost. For a Reentrant chunk, clamp
     // provably-productive yield-loops to one iteration (a sound per-resume
@@ -1086,7 +1149,7 @@ pub fn wcet_whole_chunk_with_cost_model(
     // clamp applies.
     let clamp = chunk.block_type == BlockType::Reentrant;
     let mut break_costs: Vec<u32> = Vec::new();
-    let wcet_extra = crate::text_size::chunk_text_wcet_cycles(chunk, cost_model.text_byte_cycles);
+    let wcet_extra = chunk_wcet_extra(chunk, cost_model, native_bounds);
     let body_cost = wcet_region(
         chunk,
         0,
@@ -1096,7 +1159,38 @@ pub fn wcet_whole_chunk_with_cost_model(
         clamp,
         &wcet_extra,
     )?;
-    Ok(body_cost.unwrap_or(0))
+    Ok(body_cost.unwrap_or(0).saturating_add(external))
+}
+
+/// Per-chunk worst-case execution time including host-attested native body time
+/// (#50). Returns a vector parallel to `module.chunks`: each entry is the
+/// chunk's WCET in the cost model's unitless cycle space, with a `Stream`
+/// chunk's per-iteration WCET and a `Func`/`Reentrant` chunk's per-call /
+/// per-resume WCET each folding in the attested native body cost — a verified
+/// native's per-call WCET summed over its call sites (scaled by loop
+/// multiplicity), and an external native's `max_invocations * per_call_wcet`
+/// once per chunk. This is the symmetric WCET counterpart of
+/// [`module_wcmu_with_bounds`]; the host obtains `bounds` from its native
+/// attestations (`Vm::set_native_bounds`).
+///
+/// Like the per-chunk WCET functions, the bound is shallow with respect to
+/// script-to-script calls (an `Op::Call` contributes its dispatch cycle, not the
+/// callee body); only direct native calls fold in attested body time. A chunk
+/// whose WCET is not statically boundable (an unbounded-length text op, or a
+/// loop without an extractable iteration bound) yields `Err`.
+pub fn module_wcet_with_bounds(
+    module: &Module,
+    bounds: &[NativeIterationBound],
+    cost_model: &crate::bytecode::CostModel,
+) -> Result<Vec<u32>, VerifyError> {
+    module
+        .chunks
+        .iter()
+        .map(|chunk| match chunk.block_type {
+            BlockType::Stream => wcet_stream_iteration_with_cost_model(chunk, cost_model, bounds),
+            _ => wcet_whole_chunk_with_cost_model(chunk, cost_model, bounds),
+        })
+        .collect()
 }
 
 /// The worst-case execution cost of a single resumption of a
@@ -1116,6 +1210,7 @@ pub fn wcet_whole_chunk_with_cost_model(
 fn reentrant_segmented_wcet(
     chunk: &Chunk,
     cost_model: &crate::bytecode::CostModel,
+    native_bounds: &[NativeIterationBound],
 ) -> Result<Option<u32>, VerifyError> {
     // Collect Yield positions, bailing to None if any is nested.
     let mut depth: i32 = 0;
@@ -1140,7 +1235,7 @@ fn reentrant_segmented_wcet(
     }
 
     let len = chunk.ops.len();
-    let wcet_extra = crate::text_size::chunk_text_wcet_cycles(chunk, cost_model.text_byte_cycles);
+    let wcet_extra = chunk_wcet_extra(chunk, cost_model, native_bounds);
     let mut max_cost: u32 = 0;
     let mut seg_start: usize = 0;
     // Each segment ends just past its terminating yield, so the yield
@@ -1403,6 +1498,13 @@ pub struct NativeIterationBound {
     /// external natives (multiplied by `max_invocations` once
     /// per chunk).
     pub per_call_wcmu_bytes: u32,
+    /// Per-call worst-case execution time in the unitless cost space of
+    /// `Op::cost()`, from the host attestation (`Vm::set_native_bounds`,
+    /// default `DEFAULT_NATIVE_WCET`). The WCET pass adds it for the native's
+    /// body, symmetric with `per_call_wcmu_bytes`: summed over static call sites
+    /// for a verified native (scaled by loop multiplicity) and multiplied by
+    /// `max_invocations` once per chunk for an external native (#50).
+    pub per_call_wcet_cycles: u32,
     /// `None` for verified natives. `Some(n)` for external
     /// natives where `n` is the host-attested upper bound on
     /// per-iteration invocations.
@@ -2945,7 +3047,7 @@ mod tests {
             ],
             BlockType::Reentrant,
         );
-        let segmented = reentrant_segmented_wcet(&reentrant, cm)
+        let segmented = reentrant_segmented_wcet(&reentrant, cm, &[])
             .expect("no loop bound error")
             .expect("top-level yields segment");
         // Whole-body cumulative cost for comparison.
@@ -3017,9 +3119,9 @@ mod tests {
             BlockType::Reentrant,
         );
         // The yield is nested, so the top-level segment split declines.
-        assert_eq!(reentrant_segmented_wcet(&chunk, cm).unwrap(), None);
+        assert_eq!(reentrant_segmented_wcet(&chunk, cm, &[]).unwrap(), None);
         // The clamped per-resume cost succeeds (loop counted once).
-        let clamped = wcet_whole_chunk_with_cost_model(&chunk, cm)
+        let clamped = wcet_whole_chunk_with_cost_model(&chunk, cm, &[])
             .expect("clamp succeeds for productive loop");
         assert!(clamped > 0);
         // Without the clamp, the unbounded loop has no extractable
@@ -3057,10 +3159,77 @@ mod tests {
             BlockType::Reentrant,
         );
         assert_eq!(
-            reentrant_segmented_wcet(&nested, cm).expect("no bound error"),
+            reentrant_segmented_wcet(&nested, cm, &[]).expect("no bound error"),
             None,
             "a nested yield declines per-segment analysis"
         );
+    }
+
+    #[test]
+    fn external_native_wcet_dedups_and_multiplies_by_invocations() {
+        // An external native's per-iteration WCET contribution is
+        // `max_invocations * per_call_wcet`, counted once per chunk regardless
+        // of the static call-site count (#50). A verified native (no
+        // `max_invocations`) contributes nothing through this once-per-chunk
+        // path; it is folded per call site by `chunk_wcet_extra` instead.
+        let chunk = make_chunk(
+            "main",
+            alloc::vec![
+                Op::CallExternalNative(0, 0),
+                Op::PopN(1),
+                Op::CallExternalNative(0, 0),
+                Op::PopN(1),
+                Op::CallVerifiedNative(1, 0),
+                Op::PopN(1),
+                Op::Return,
+            ],
+            BlockType::Func,
+        );
+        let bounds = alloc::vec![
+            NativeIterationBound {
+                per_call_wcmu_bytes: 0,
+                per_call_wcet_cycles: 50,
+                max_invocations: Some(4),
+            },
+            NativeIterationBound {
+                per_call_wcmu_bytes: 0,
+                per_call_wcet_cycles: 100,
+                max_invocations: None,
+            },
+        ];
+        // 50 * 4 = 200, counted once despite two call sites; the verified
+        // native contributes 0 here.
+        assert_eq!(external_native_wcet(&chunk, &bounds), 200);
+    }
+
+    #[test]
+    fn chunk_wcet_extra_folds_verified_native_per_call_at_each_site() {
+        // A verified native's per-call WCET is added to the per-op extra table
+        // at each of its call sites, so `wcet_region` scales it by loop
+        // multiplicity (#50).
+        let chunk = make_chunk(
+            "main",
+            alloc::vec![
+                Op::CallVerifiedNative(0, 0),
+                Op::PopN(1),
+                Op::CallVerifiedNative(0, 0),
+                Op::PopN(1),
+                Op::Return,
+            ],
+            BlockType::Func,
+        );
+        let bounds = alloc::vec![NativeIterationBound {
+            per_call_wcmu_bytes: 0,
+            per_call_wcet_cycles: 100,
+            max_invocations: None,
+        }];
+        let extra = chunk_wcet_extra(&chunk, &crate::bytecode::NOMINAL_COST_MODEL, &bounds);
+        assert_eq!(extra[0], 100, "first verified-native call site");
+        assert_eq!(extra[2], 100, "second verified-native call site");
+        assert_eq!(extra[1], 0, "non-call op contributes no native cost");
+        // With no bounds, the verified-native cost is not folded (script-only).
+        let none = chunk_wcet_extra(&chunk, &crate::bytecode::NOMINAL_COST_MODEL, &[]);
+        assert_eq!(none[0], 0);
     }
 
     #[test]
@@ -4064,6 +4233,7 @@ mod tests {
 
         let bounds = alloc::vec![NativeIterationBound {
             per_call_wcmu_bytes: 100,
+            per_call_wcet_cycles: 0,
             max_invocations: None,
         }];
         let results =
@@ -4099,6 +4269,7 @@ mod tests {
 
         let bounds = alloc::vec![NativeIterationBound {
             per_call_wcmu_bytes: 100,
+            per_call_wcet_cycles: 0,
             max_invocations: Some(50),
         }];
         let results =
@@ -4136,10 +4307,12 @@ mod tests {
         let bounds = alloc::vec![
             NativeIterationBound {
                 per_call_wcmu_bytes: 256,
+                per_call_wcet_cycles: 0,
                 max_invocations: None,
             },
             NativeIterationBound {
                 per_call_wcmu_bytes: 64,
+                per_call_wcet_cycles: 0,
                 max_invocations: Some(10),
             },
         ];

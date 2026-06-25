@@ -3423,6 +3423,39 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         Ok(max_total)
     }
 
+    /// Worst-case execution time of one Stream iteration including host-attested
+    /// native body time, the WCET counterpart of [`Vm::auto_arena_capacity`]
+    /// (#50).
+    ///
+    /// Returns the maximum per-iteration WCET across the module's Stream chunks
+    /// in the nominal cost model's unitless cycle space (the same scale as
+    /// `Op::cost`), with each native call folding in its attested per-call WCET
+    /// (`Vm::set_native_bounds`, default [`DEFAULT_NATIVE_WCET`]): a verified
+    /// native's per-call WCET is summed over its call sites and scaled by loop
+    /// multiplicity, an external native's is `max_invocations * per_call` once
+    /// per chunk. The module's compile-time `wcet_cycles` header is the
+    /// script-only bound (natives are not known at compile time); this method is
+    /// how a host folds in native body time after registration. Returns zero if
+    /// the module has no Stream chunk, and an error if any Stream chunk's WCET is
+    /// not statically boundable.
+    ///
+    /// Available only when the `verify` feature is enabled.
+    #[cfg(feature = "verify")]
+    pub fn wcet_per_iteration(&self) -> Result<u32, VmError> {
+        let module = self.module_owned()?;
+        let bounds = self.native_iteration_bounds();
+        let per_chunk =
+            verify::module_wcet_with_bounds(&module, &bounds, &crate::bytecode::NOMINAL_COST_MODEL)
+                .map_err(|e| VmError::VerifyError(format!("{}: {}", e.chunk_name, e.message)))?;
+        let mut max_wcet: u32 = 0;
+        for (chunk_idx, chunk) in module.chunks.iter().enumerate() {
+            if chunk.block_type == crate::bytecode::BlockType::Stream {
+                max_wcet = max_wcet.max(per_chunk[chunk_idx]);
+            }
+        }
+        Ok(max_wcet)
+    }
+
     /// Build per-native attestations for the verifier. Verified
     /// natives carry `max_invocations: None` and the
     /// `wcmu_bytes` field set by `set_native_bounds` or the
@@ -3435,6 +3468,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
             .iter()
             .map(|n| verify::NativeIterationBound {
                 per_call_wcmu_bytes: n.wcmu_bytes,
+                per_call_wcet_cycles: n.wcet,
                 max_invocations: match n.classification {
                     NativeClassification::Verified => None,
                     NativeClassification::External => {

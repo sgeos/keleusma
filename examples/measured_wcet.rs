@@ -82,10 +82,12 @@ fn main() {
         }
         found_stream = true;
 
-        let nominal_cycles = wcet_stream_iteration_with_cost_model(chunk, &NOMINAL_COST_MODEL)
+        // The script-only per-iteration WCET (no native attestations, #50).
+        let nominal_cycles = wcet_stream_iteration_with_cost_model(chunk, &NOMINAL_COST_MODEL, &[])
             .expect("nominal wcet");
-        let measured_cycles = wcet_stream_iteration_with_cost_model(chunk, &MEASURED_COST_MODEL)
-            .expect("measured wcet");
+        let measured_cycles =
+            wcet_stream_iteration_with_cost_model(chunk, &MEASURED_COST_MODEL, &[])
+                .expect("measured wcet");
 
         let ratio = measured_cycles as f64 / nominal_cycles as f64;
         println!(
