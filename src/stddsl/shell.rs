@@ -95,7 +95,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use crate::address::Address;
 use crate::bytecode::GenericValue;
 use crate::float::Float;
-use crate::vm::{GenericVm, VmError};
+use crate::vm::{GenericVm, NativeCtx, VmError};
 use crate::word::Word;
 
 std::thread_local! {
@@ -167,32 +167,73 @@ pub fn register<'a, 'arena, W: Word, A: Address, F: Float>(
     // The KeleusmaType marshalling family does not currently
     // support `String` arguments or tuple return types, so the
     // shell natives use the lower-level `register_native` entry
-    // point and pattern-match on `GenericValue` directly.
-    vm.register_native("shell::getenv", getenv_native::<W, F>);
-    vm.register_native("shell::has_env", has_env_native::<W, F>);
-    vm.register_native("shell::run", run_native::<W, F>);
-    vm.register_native("shell::run_full", run_full_native::<W, F>);
-    vm.register_native("shell::run_checked", run_checked_native::<W, F>);
+    // point and pattern-match on `GenericValue` directly. Natives
+    // that take a `Text` argument register through
+    // `register_native_with_ctx`: a script-computed string arrives as
+    // an arena-resident `KStr`, which only resolves with the arena
+    // borrowed through the native context (B28). Natives with no text
+    // argument keep the context-free registration.
+    vm.register_native_with_ctx("shell::getenv", getenv_native::<W, F>);
+    vm.register_native_with_ctx("shell::has_env", has_env_native::<W, F>);
+    vm.register_native_with_ctx("shell::run", run_native::<W, F>);
+    vm.register_native_with_ctx("shell::run_full", run_full_native::<W, F>);
+    vm.register_native_with_ctx("shell::run_checked", run_checked_native::<W, F>);
     vm.register_native("shell::exit", exit_native::<W, F>);
     vm.register_native("shell::sleep_ms", sleep_ms_native::<W, F>);
     vm.register_native("shell::now_unix_ms", now_unix_ms_native::<W, F>);
-    vm.register_native("shell::read_file", read_file_native::<W, F>);
-    vm.register_native("shell::write_file", write_file_native::<W, F>);
-    vm.register_native("shell::append_file", append_file_native::<W, F>);
-    vm.register_native("shell::file_exists", file_exists_native::<W, F>);
-    vm.register_native("shell::write_err", write_err_native::<W, F>);
-    vm.register_native("shell::writeln_err", writeln_err_native::<W, F>);
+    vm.register_native_with_ctx("shell::read_file", read_file_native::<W, F>);
+    vm.register_native_with_ctx("shell::write_file", write_file_native::<W, F>);
+    vm.register_native_with_ctx("shell::append_file", append_file_native::<W, F>);
+    vm.register_native_with_ctx("shell::file_exists", file_exists_native::<W, F>);
+    vm.register_native_with_ctx("shell::write_err", write_err_native::<W, F>);
+    vm.register_native_with_ctx("shell::writeln_err", writeln_err_native::<W, F>);
     vm.register_native("shell::pid", pid_native::<W, F>);
     vm.register_native("shell::hostname", hostname_native::<W, F>);
     vm.register_native("shell::arg_count", arg_count_native::<W, F>);
     vm.register_native("shell::arg", arg_native::<W, F>);
-    vm.register_native("shell::setenv", setenv_native::<W, F>);
+    vm.register_native_with_ctx("shell::setenv", setenv_native::<W, F>);
     vm.register_native("shell::pwd", pwd_native::<W, F>);
-    vm.register_native("shell::cd", cd_native::<W, F>);
-    vm.register_native("shell::run_timeout", run_timeout_native::<W, F>);
+    vm.register_native_with_ctx("shell::cd", cd_native::<W, F>);
+    vm.register_native_with_ctx("shell::run_timeout", run_timeout_native::<W, F>);
+}
+
+/// Resolve argument `idx` as a UTF-8 string, resolving an arena-resident
+/// `KStr` through the native context.
+///
+/// A shell native receives a text argument as either a `StaticStr` (a
+/// string literal) or a `KStr` (a value the script computed, for example
+/// by concatenation). The context-free [`GenericValue::as_str`] resolves
+/// only the former; a dynamic string needs the arena borrowed through
+/// [`NativeCtx`] to read its bytes (B28). The resolved bytes are copied
+/// into an owned `String` so the arena borrow ends before the native
+/// allocates any result, keeping the call free of aliasing between the
+/// argument read and a result write.
+///
+/// `expect_label` is the leading clause of the type-mismatch message,
+/// for example `"shell::run: expected Text"`; the produced error appends
+/// `", got <type>"` to match the historical wording.
+fn arg_str<W: Word, F: Float>(
+    ctx: &NativeCtx<'_>,
+    args: &[GenericValue<W, F>],
+    idx: usize,
+    expect_label: &str,
+) -> Result<std::string::String, VmError> {
+    match args[idx].as_str_with_arena(ctx.arena) {
+        Ok(std::option::Option::Some(s)) => Ok(std::string::String::from(s)),
+        Ok(std::option::Option::None) => Err(VmError::TypeError(std::format!(
+            "{}, got {}",
+            expect_label,
+            args[idx].type_name()
+        ))),
+        Err(_) => Err(VmError::TypeError(std::format!(
+            "{}, got a stale dynamic string (arena reset since it was produced)",
+            expect_label
+        ))),
+    }
 }
 
 fn has_env_native<W: Word, F: Float>(
+    ctx: &NativeCtx<'_>,
     args: &[GenericValue<W, F>],
 ) -> Result<GenericValue<W, F>, VmError> {
     if args.len() != 1 {
@@ -200,12 +241,8 @@ fn has_env_native<W: Word, F: Float>(
             "shell::has_env: expected exactly one argument",
         )));
     }
-    let name: &str = args[0].as_str().ok_or_else(|| {
-        VmError::TypeError(std::format!(
-            "shell::has_env: expected Text, got {}",
-            args[0].type_name()
-        ))
-    })?;
+    let name = arg_str(ctx, args, 0, "shell::has_env: expected Text")?;
+    let name: &str = &name;
     Ok(GenericValue::Bool(std::env::var(name).is_ok()))
 }
 
@@ -230,6 +267,7 @@ fn exit_native<W: Word, F: Float>(
 }
 
 fn getenv_native<W: Word, F: Float>(
+    ctx: &NativeCtx<'_>,
     args: &[GenericValue<W, F>],
 ) -> Result<GenericValue<W, F>, VmError> {
     if args.len() != 1 {
@@ -237,12 +275,8 @@ fn getenv_native<W: Word, F: Float>(
             "shell::getenv: expected exactly one argument",
         )));
     }
-    let name: &str = args[0].as_str().ok_or_else(|| {
-        VmError::TypeError(std::format!(
-            "shell::getenv: expected Text, got {}",
-            args[0].type_name()
-        ))
-    })?;
+    let name = arg_str(ctx, args, 0, "shell::getenv: expected Text")?;
+    let name: &str = &name;
     match std::env::var(name) {
         Ok(value) => Ok(GenericValue::Enum(crate::bytecode::EnumBody::boxed(
             std::string::String::from("Option"),
@@ -258,6 +292,7 @@ fn getenv_native<W: Word, F: Float>(
 }
 
 fn run_native<W: Word, F: Float>(
+    ctx: &NativeCtx<'_>,
     args: &[GenericValue<W, F>],
 ) -> Result<GenericValue<W, F>, VmError> {
     if args.len() != 1 {
@@ -265,12 +300,8 @@ fn run_native<W: Word, F: Float>(
             "shell::run: expected exactly one argument",
         )));
     }
-    let cmd: &str = args[0].as_str().ok_or_else(|| {
-        VmError::TypeError(std::format!(
-            "shell::run: expected Text, got {}",
-            args[0].type_name()
-        ))
-    })?;
+    let cmd = arg_str(ctx, args, 0, "shell::run: expected Text")?;
+    let cmd: &str = &cmd;
     let output = Command::new("sh")
         .arg("-c")
         .arg(cmd)
@@ -285,6 +316,7 @@ fn run_native<W: Word, F: Float>(
 }
 
 fn run_full_native<W: Word, F: Float>(
+    ctx: &NativeCtx<'_>,
     args: &[GenericValue<W, F>],
 ) -> Result<GenericValue<W, F>, VmError> {
     if args.len() != 1 {
@@ -292,12 +324,8 @@ fn run_full_native<W: Word, F: Float>(
             "shell::run_full: expected exactly one argument",
         )));
     }
-    let cmd: &str = args[0].as_str().ok_or_else(|| {
-        VmError::TypeError(std::format!(
-            "shell::run_full: expected Text, got {}",
-            args[0].type_name()
-        ))
-    })?;
+    let cmd = arg_str(ctx, args, 0, "shell::run_full: expected Text")?;
+    let cmd: &str = &cmd;
     let output = Command::new("sh")
         .arg("-c")
         .arg(cmd)
@@ -316,6 +344,7 @@ fn run_full_native<W: Word, F: Float>(
 }
 
 fn run_checked_native<W: Word, F: Float>(
+    ctx: &NativeCtx<'_>,
     args: &[GenericValue<W, F>],
 ) -> Result<GenericValue<W, F>, VmError> {
     if args.len() != 1 {
@@ -323,12 +352,8 @@ fn run_checked_native<W: Word, F: Float>(
             "shell::run_checked: expected exactly one argument",
         )));
     }
-    let cmd: &str = args[0].as_str().ok_or_else(|| {
-        VmError::TypeError(std::format!(
-            "shell::run_checked: expected Text, got {}",
-            args[0].type_name()
-        ))
-    })?;
+    let cmd = arg_str(ctx, args, 0, "shell::run_checked: expected Text")?;
+    let cmd: &str = &cmd;
     let output = Command::new("sh")
         .arg("-c")
         .arg(cmd)
@@ -399,6 +424,7 @@ fn now_unix_ms_native<W: Word, F: Float>(
 }
 
 fn read_file_native<W: Word, F: Float>(
+    ctx: &NativeCtx<'_>,
     args: &[GenericValue<W, F>],
 ) -> Result<GenericValue<W, F>, VmError> {
     if args.len() != 1 {
@@ -406,12 +432,8 @@ fn read_file_native<W: Word, F: Float>(
             "shell::read_file: expected exactly one argument",
         )));
     }
-    let path: &str = args[0].as_str().ok_or_else(|| {
-        VmError::TypeError(std::format!(
-            "shell::read_file: expected Text, got {}",
-            args[0].type_name()
-        ))
-    })?;
+    let path = arg_str(ctx, args, 0, "shell::read_file: expected Text")?;
+    let path: &str = &path;
     let bytes = std::fs::read(path)
         .map_err(|e| VmError::NativeError(std::format!("shell::read_file: {}: {}", path, e)))?;
     let text = std::string::String::from_utf8(bytes).map_err(|e| {
@@ -425,6 +447,7 @@ fn read_file_native<W: Word, F: Float>(
 }
 
 fn write_file_native<W: Word, F: Float>(
+    ctx: &NativeCtx<'_>,
     args: &[GenericValue<W, F>],
 ) -> Result<GenericValue<W, F>, VmError> {
     if args.len() != 2 {
@@ -432,24 +455,17 @@ fn write_file_native<W: Word, F: Float>(
             "shell::write_file: expected exactly two arguments",
         )));
     }
-    let path: &str = args[0].as_str().ok_or_else(|| {
-        VmError::TypeError(std::format!(
-            "shell::write_file: expected Text for path, got {}",
-            args[0].type_name()
-        ))
-    })?;
-    let content: &str = args[1].as_str().ok_or_else(|| {
-        VmError::TypeError(std::format!(
-            "shell::write_file: expected Text for content, got {}",
-            args[1].type_name()
-        ))
-    })?;
+    let path = arg_str(ctx, args, 0, "shell::write_file: expected Text for path")?;
+    let path: &str = &path;
+    let content = arg_str(ctx, args, 1, "shell::write_file: expected Text for content")?;
+    let content: &str = &content;
     std::fs::write(path, content)
         .map_err(|e| VmError::NativeError(std::format!("shell::write_file: {}: {}", path, e)))?;
     Ok(GenericValue::Unit)
 }
 
 fn append_file_native<W: Word, F: Float>(
+    ctx: &NativeCtx<'_>,
     args: &[GenericValue<W, F>],
 ) -> Result<GenericValue<W, F>, VmError> {
     if args.len() != 2 {
@@ -457,18 +473,15 @@ fn append_file_native<W: Word, F: Float>(
             "shell::append_file: expected exactly two arguments",
         )));
     }
-    let path: &str = args[0].as_str().ok_or_else(|| {
-        VmError::TypeError(std::format!(
-            "shell::append_file: expected Text for path, got {}",
-            args[0].type_name()
-        ))
-    })?;
-    let content: &str = args[1].as_str().ok_or_else(|| {
-        VmError::TypeError(std::format!(
-            "shell::append_file: expected Text for content, got {}",
-            args[1].type_name()
-        ))
-    })?;
+    let path = arg_str(ctx, args, 0, "shell::append_file: expected Text for path")?;
+    let path: &str = &path;
+    let content = arg_str(
+        ctx,
+        args,
+        1,
+        "shell::append_file: expected Text for content",
+    )?;
+    let content: &str = &content;
     let mut file = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
@@ -483,6 +496,7 @@ fn append_file_native<W: Word, F: Float>(
 }
 
 fn file_exists_native<W: Word, F: Float>(
+    ctx: &NativeCtx<'_>,
     args: &[GenericValue<W, F>],
 ) -> Result<GenericValue<W, F>, VmError> {
     if args.len() != 1 {
@@ -490,16 +504,13 @@ fn file_exists_native<W: Word, F: Float>(
             "shell::file_exists: expected exactly one argument",
         )));
     }
-    let path: &str = args[0].as_str().ok_or_else(|| {
-        VmError::TypeError(std::format!(
-            "shell::file_exists: expected Text, got {}",
-            args[0].type_name()
-        ))
-    })?;
+    let path = arg_str(ctx, args, 0, "shell::file_exists: expected Text")?;
+    let path: &str = &path;
     Ok(GenericValue::Bool(std::path::Path::new(path).exists()))
 }
 
 fn write_err_native<W: Word, F: Float>(
+    ctx: &NativeCtx<'_>,
     args: &[GenericValue<W, F>],
 ) -> Result<GenericValue<W, F>, VmError> {
     if args.len() != 1 {
@@ -507,12 +518,8 @@ fn write_err_native<W: Word, F: Float>(
             "shell::write_err: expected exactly one argument",
         )));
     }
-    let text: &str = args[0].as_str().ok_or_else(|| {
-        VmError::TypeError(std::format!(
-            "shell::write_err: expected Text, got {}",
-            args[0].type_name()
-        ))
-    })?;
+    let text = arg_str(ctx, args, 0, "shell::write_err: expected Text")?;
+    let text: &str = &text;
     let stderr = std::io::stderr();
     let mut handle = stderr.lock();
     handle
@@ -522,6 +529,7 @@ fn write_err_native<W: Word, F: Float>(
 }
 
 fn writeln_err_native<W: Word, F: Float>(
+    ctx: &NativeCtx<'_>,
     args: &[GenericValue<W, F>],
 ) -> Result<GenericValue<W, F>, VmError> {
     if args.len() != 1 {
@@ -529,12 +537,8 @@ fn writeln_err_native<W: Word, F: Float>(
             "shell::writeln_err: expected exactly one argument",
         )));
     }
-    let text: &str = args[0].as_str().ok_or_else(|| {
-        VmError::TypeError(std::format!(
-            "shell::writeln_err: expected Text, got {}",
-            args[0].type_name()
-        ))
-    })?;
+    let text = arg_str(ctx, args, 0, "shell::writeln_err: expected Text")?;
+    let text: &str = &text;
     let stderr = std::io::stderr();
     let mut handle = stderr.lock();
     writeln!(handle, "{}", text)
@@ -626,6 +630,7 @@ fn arg_native<W: Word, F: Float>(
 }
 
 fn setenv_native<W: Word, F: Float>(
+    ctx: &NativeCtx<'_>,
     args: &[GenericValue<W, F>],
 ) -> Result<GenericValue<W, F>, VmError> {
     if args.len() != 2 {
@@ -633,18 +638,10 @@ fn setenv_native<W: Word, F: Float>(
             "shell::setenv: expected exactly two arguments",
         )));
     }
-    let name: &str = args[0].as_str().ok_or_else(|| {
-        VmError::TypeError(std::format!(
-            "shell::setenv: expected Text for name, got {}",
-            args[0].type_name()
-        ))
-    })?;
-    let value: &str = args[1].as_str().ok_or_else(|| {
-        VmError::TypeError(std::format!(
-            "shell::setenv: expected Text for value, got {}",
-            args[1].type_name()
-        ))
-    })?;
+    let name = arg_str(ctx, args, 0, "shell::setenv: expected Text for name")?;
+    let name: &str = &name;
+    let value = arg_str(ctx, args, 1, "shell::setenv: expected Text for value")?;
+    let value: &str = &value;
     // SAFETY: set_var is marked unsafe in the 2024 edition
     // because concurrent modification of the process environment
     // is unsound on some platforms. The Keleusma VM is
@@ -673,6 +670,7 @@ fn pwd_native<W: Word, F: Float>(
 }
 
 fn cd_native<W: Word, F: Float>(
+    ctx: &NativeCtx<'_>,
     args: &[GenericValue<W, F>],
 ) -> Result<GenericValue<W, F>, VmError> {
     if args.len() != 1 {
@@ -680,18 +678,15 @@ fn cd_native<W: Word, F: Float>(
             "shell::cd: expected exactly one argument",
         )));
     }
-    let path: &str = args[0].as_str().ok_or_else(|| {
-        VmError::TypeError(std::format!(
-            "shell::cd: expected Text, got {}",
-            args[0].type_name()
-        ))
-    })?;
+    let path = arg_str(ctx, args, 0, "shell::cd: expected Text")?;
+    let path: &str = &path;
     std::env::set_current_dir(path)
         .map_err(|e| VmError::NativeError(std::format!("shell::cd: {}: {}", path, e)))?;
     Ok(GenericValue::Unit)
 }
 
 fn run_timeout_native<W: Word, F: Float>(
+    ctx: &NativeCtx<'_>,
     args: &[GenericValue<W, F>],
 ) -> Result<GenericValue<W, F>, VmError> {
     if args.len() != 2 {
@@ -699,12 +694,8 @@ fn run_timeout_native<W: Word, F: Float>(
             "shell::run_timeout: expected exactly two arguments",
         )));
     }
-    let cmd: &str = args[0].as_str().ok_or_else(|| {
-        VmError::TypeError(std::format!(
-            "shell::run_timeout: expected Text for cmd, got {}",
-            args[0].type_name()
-        ))
-    })?;
+    let cmd = arg_str(ctx, args, 0, "shell::run_timeout: expected Text for cmd")?;
+    let cmd: &str = &cmd;
     let ms = match args[1] {
         GenericValue::Int(n) => W::to_i64(n),
         ref v => {
@@ -777,6 +768,39 @@ mod tests {
     use std::string::ToString;
 
     type V = GenericValue<i64, f64>;
+
+    // A throwaway arena to back a `NativeCtx` for the ctx-taking shell
+    // natives. The direct-call tests pass only `StaticStr` arguments,
+    // which `arg_str` resolves without reading the arena, so the
+    // capacity is irrelevant; the arena exists only to satisfy the
+    // borrow in `NativeCtx`.
+    fn test_ctx(arena: &keleusma_arena::Arena) -> NativeCtx<'_> {
+        NativeCtx {
+            arena,
+            opaques: &[],
+            word_bytes: 8,
+            float_bytes: 8,
+        }
+    }
+
+    #[test]
+    fn ctx_native_resolves_dynamic_kstr_argument() {
+        // A script-computed string reaches a native as an arena-resident
+        // `KStr`, not a `StaticStr`. Before the B28 argument fix the shell
+        // natives resolved only `StaticStr` and rejected a `KStr` with
+        // "expected Text". Build a `KStr` directly and confirm a ctx-taking
+        // native resolves it through the arena instead of trapping.
+        let arena = keleusma_arena::Arena::with_capacity(4096);
+        let ctx = test_ctx(&arena);
+        let handle = crate::kstring::KString::alloc(&arena, "KELEUSMA_SHELL_KSTR_TEST_UNSET")
+            .expect("alloc kstr");
+        let result =
+            has_env_native::<i64, f64>(&ctx, &[V::KStr(handle)]).expect("has_env resolves KStr");
+        // The variable is unset, so the value is `Bool(false)`. The point of
+        // the test is that resolution succeeds rather than raising a
+        // `TypeError`.
+        assert!(matches!(result, V::Bool(false)));
+    }
 
     // Extract the inner string from an `Option::Some(Text)` returned
     // by `shell::arg`, panicking on any other shape.
@@ -859,9 +883,13 @@ mod tests {
 
     #[test]
     fn run_full_returns_stdout_and_stderr() {
-        let result =
-            run_full_native::<i64, f64>(&[V::StaticStr("printf out; printf err 1>&2".to_string())])
-                .expect("run_full");
+        let arena = keleusma_arena::Arena::with_capacity(4096);
+        let ctx = test_ctx(&arena);
+        let result = run_full_native::<i64, f64>(
+            &ctx,
+            &[V::StaticStr("printf out; printf err 1>&2".to_string())],
+        )
+        .expect("run_full");
         match result {
             V::Tuple(items) => {
                 let items = items.elements();
@@ -881,8 +909,10 @@ mod tests {
 
     #[test]
     fn run_full_propagates_exit_code() {
-        let result =
-            run_full_native::<i64, f64>(&[V::StaticStr("exit 7".to_string())]).expect("run_full");
+        let arena = keleusma_arena::Arena::with_capacity(4096);
+        let ctx = test_ctx(&arena);
+        let result = run_full_native::<i64, f64>(&ctx, &[V::StaticStr("exit 7".to_string())])
+            .expect("run_full");
         match result {
             V::Tuple(items) => assert!(matches!(items.elements()[0], V::Int(7))),
             other => panic!("wrong variant: {:?}", other),
@@ -891,7 +921,9 @@ mod tests {
 
     #[test]
     fn run_full_rejects_wrong_arity() {
-        let err = run_full_native::<i64, f64>(&[]).expect_err("arity");
+        let arena = keleusma_arena::Arena::with_capacity(4096);
+        let ctx = test_ctx(&arena);
+        let err = run_full_native::<i64, f64>(&ctx, &[]).expect_err("arity");
         match err {
             VmError::NativeError(m) => assert!(m.contains("expected exactly one")),
             other => panic!("wrong variant: {:?}", other),
@@ -946,12 +978,14 @@ mod tests {
         tmp_path.push("keleusma_shell_test_exists.txt");
         let path_str = tmp_path.to_string_lossy().to_string();
         let _ = std::fs::remove_file(&tmp_path);
-        let none =
-            file_exists_native::<i64, f64>(&[V::StaticStr(path_str.clone())]).expect("file_exists");
+        let arena = keleusma_arena::Arena::with_capacity(4096);
+        let ctx = test_ctx(&arena);
+        let none = file_exists_native::<i64, f64>(&ctx, &[V::StaticStr(path_str.clone())])
+            .expect("file_exists");
         assert!(matches!(none, V::Bool(false)));
         std::fs::write(&tmp_path, b"").expect("write tmp");
-        let some =
-            file_exists_native::<i64, f64>(&[V::StaticStr(path_str.clone())]).expect("file_exists");
+        let some = file_exists_native::<i64, f64>(&ctx, &[V::StaticStr(path_str.clone())])
+            .expect("file_exists");
         assert!(matches!(some, V::Bool(true)));
         let _ = std::fs::remove_file(&tmp_path);
     }
@@ -962,20 +996,29 @@ mod tests {
         tmp_path.push("keleusma_shell_test_io.txt");
         let path_str = tmp_path.to_string_lossy().to_string();
         let _ = std::fs::remove_file(&tmp_path);
+        let arena = keleusma_arena::Arena::with_capacity(4096);
+        let ctx = test_ctx(&arena);
 
-        write_file_native::<i64, f64>(&[
-            V::StaticStr(path_str.clone()),
-            V::StaticStr(std::string::String::from("first\n")),
-        ])
+        write_file_native::<i64, f64>(
+            &ctx,
+            &[
+                V::StaticStr(path_str.clone()),
+                V::StaticStr(std::string::String::from("first\n")),
+            ],
+        )
         .expect("write");
 
-        append_file_native::<i64, f64>(&[
-            V::StaticStr(path_str.clone()),
-            V::StaticStr(std::string::String::from("second\n")),
-        ])
+        append_file_native::<i64, f64>(
+            &ctx,
+            &[
+                V::StaticStr(path_str.clone()),
+                V::StaticStr(std::string::String::from("second\n")),
+            ],
+        )
         .expect("append");
 
-        let result = read_file_native::<i64, f64>(&[V::StaticStr(path_str.clone())]).expect("read");
+        let result =
+            read_file_native::<i64, f64>(&ctx, &[V::StaticStr(path_str.clone())]).expect("read");
         match result {
             V::StaticStr(s) => assert_eq!(s, "first\nsecond\n"),
             other => panic!("wrong variant: {:?}", other),
@@ -985,9 +1028,14 @@ mod tests {
 
     #[test]
     fn read_file_traps_on_missing() {
-        let err = read_file_native::<i64, f64>(&[V::StaticStr(std::string::String::from(
-            "/nonexistent/keleusma_shell_test_missing.txt",
-        ))])
+        let arena = keleusma_arena::Arena::with_capacity(4096);
+        let ctx = test_ctx(&arena);
+        let err = read_file_native::<i64, f64>(
+            &ctx,
+            &[V::StaticStr(std::string::String::from(
+                "/nonexistent/keleusma_shell_test_missing.txt",
+            ))],
+        )
         .expect_err("missing");
         match err {
             VmError::NativeError(m) => assert!(m.contains("/nonexistent")),
@@ -997,8 +1045,11 @@ mod tests {
 
     #[test]
     fn write_file_rejects_arity() {
-        let err = write_file_native::<i64, f64>(&[V::StaticStr(std::string::String::from("x"))])
-            .expect_err("arity");
+        let arena = keleusma_arena::Arena::with_capacity(4096);
+        let ctx = test_ctx(&arena);
+        let err =
+            write_file_native::<i64, f64>(&ctx, &[V::StaticStr(std::string::String::from("x"))])
+                .expect_err("arity");
         match err {
             VmError::NativeError(m) => assert!(m.contains("two")),
             other => panic!("wrong variant: {:?}", other),
