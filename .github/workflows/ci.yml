@@ -24,7 +24,14 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
-      - run: cargo test --workspace
+      # nextest runs the workspace's two dozen test binaries in parallel; the
+      # `ci` profile (.config/nextest.toml) retries to absorb the known
+      # temp-file-race flake. Doc-tests run separately (nextest skips them).
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: nextest
+      - run: cargo nextest run --profile ci --workspace
+      - run: cargo test --workspace --doc
 
   test-no-default-features:
     name: Test (no default features)
@@ -32,7 +39,11 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
-      - run: cargo test -p keleusma --no-default-features
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: nextest
+      - run: cargo nextest run --profile ci -p keleusma --no-default-features
+      - run: cargo test -p keleusma --no-default-features --doc
 
   test-signatures:
     name: Test (signatures feature)
@@ -40,7 +51,11 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
-      - run: cargo test -p keleusma --features signatures
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: nextest
+      - run: cargo nextest run --profile ci -p keleusma --features signatures
+      - run: cargo test -p keleusma --features signatures --doc
 
   test-broad-features:
     name: Test (broad features)
@@ -55,7 +70,11 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
-      - run: cargo test -p keleusma --features signatures,shell
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: nextest
+      - run: cargo nextest run --profile ci -p keleusma --features signatures,shell
+      - run: cargo test -p keleusma --features signatures,shell --doc
 
   test-bench:
     name: Test (keleusma-bench)
@@ -63,8 +82,13 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: nextest
       - name: Default features
-        run: cargo test -p keleusma-bench
+        run: |
+          cargo nextest run --profile ci -p keleusma-bench
+          cargo test -p keleusma-bench --doc
       - name: No default features
         run: cargo build -p keleusma-bench --no-default-features
 

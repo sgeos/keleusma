@@ -7,10 +7,27 @@ Contributions are welcome. Issues, pull requests, and documentation patches are 
 ```sh
 git clone https://github.com/sgeos/keleusma
 cd keleusma
-cargo test --workspace
+cargo install cargo-nextest --locked   # recommended: parallel test runner
+cargo nextest run --workspace          # or: cargo test --workspace
 ```
 
-Approximately 826 library tests run in around twenty seconds on a modern laptop. See [`docs/process/PROCESS_STRATEGY.md`](docs/process/PROCESS_STRATEGY.md) for the broader development process and [`docs/process/GIT_STRATEGY.md`](docs/process/GIT_STRATEGY.md) for the branching model.
+The keleusma library carries roughly 1,150 unit tests plus two dozen integration-test binaries. See [`docs/process/PROCESS_STRATEGY.md`](docs/process/PROCESS_STRATEGY.md) for the broader development process and [`docs/process/GIT_STRATEGY.md`](docs/process/GIT_STRATEGY.md) for the branching model.
+
+## Fast local iteration
+
+The full gate (every crate, every feature set, clippy, fmt, doc) is correct but heavy. For the inner edit-compile-test loop, use the tiered [`cargo` aliases](.cargo/config.toml), fastest to slowest:
+
+```sh
+cargo qc     # type-check the whole workspace, no codegen (compile-error feedback)
+cargo tl     # run only the keleusma library unit tests (seconds after compile)
+cargo lint   # the exact clippy invocation CI gates on
+cargo tn     # the full workspace suite under nextest (parallel; needs cargo-nextest)
+cargo tw     # the full workspace suite under cargo's serial runner
+```
+
+Install [`cargo-nextest`](https://nexte.st) (`cargo install cargo-nextest --locked`) to run the integration-test binaries in parallel rather than one at a time; the workspace has two dozen of them. nextest does not run doc-tests, so the full check pairs `cargo nextest run --workspace` with `cargo test --workspace --doc`. Reserve the full gate below for before opening a pull request; the pre-push hook runs it automatically.
+
+The default nextest profile caps the run at four concurrent test processes (`test-threads` in [`.config/nextest.toml`](.config/nextest.toml)). Each test process maps the `keleusma-arena` crate's large virtual address reservation, and on macOS enough concurrent reservations wedge the run through a kernel virtual-memory-accounting limit. Four processes stay under that limit and still finish the library suite in a few seconds. The `ci` profile omits the cap because Linux overcommits virtual memory and does not hit the wedge.
 
 ## Branching and commits
 
@@ -38,7 +55,8 @@ When AI assistance contributed, add the `Co-Authored-By` trailer.
 ## Before opening a pull request
 
 ```sh
-cargo test --workspace
+cargo nextest run --workspace   # parallel; or: cargo test --workspace
+cargo test --workspace --doc    # nextest does not run doc-tests
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
 RUSTDOCFLAGS="-D warnings -A rustdoc::redundant-explicit-links" \
@@ -46,7 +64,7 @@ RUSTDOCFLAGS="-D warnings -A rustdoc::redundant-explicit-links" \
 cargo run -q -p keleusma-cli -- run scripts/check-md-links.kel
 ```
 
-All five must pass. The last verifies that relative links between
+All of these must pass. The last verifies that relative links between
 Markdown files resolve to existing files. It is itself a Keleusma
 script, [`scripts/check-md-links.kel`](scripts/check-md-links.kel), run
 through the CLI; it orchestrates POSIX tools through `shell::run` and
@@ -55,7 +73,7 @@ implementation remains in the git history at `scripts/check-md-links.sh`. CI run
 
 ## Automated pre-push hook
 
-These five checks also run automatically before every `git push` through a [cargo-husky](https://github.com/rhysd/cargo-husky) pre-push hook. The hook is version-controlled at [`.cargo-husky/hooks/pre-push`](.cargo-husky/hooks/pre-push) and cargo-husky installs it into `.git/hooks/` the next time the dev-dependencies compile, for example on the first `cargo test --workspace` after cloning. No manual setup step is required.
+These checks also run automatically before every `git push` through a [cargo-husky](https://github.com/rhysd/cargo-husky) pre-push hook. The hook is version-controlled at [`.cargo-husky/hooks/pre-push`](.cargo-husky/hooks/pre-push) and cargo-husky installs it into `.git/hooks/` the next time the dev-dependencies compile, for example on the first `cargo test --workspace` after cloning. No manual setup step is required. The hook runs the test step under `cargo nextest` (parallel) when it is installed and falls back to `cargo test --workspace` otherwise, so installing `cargo-nextest` makes the push gate substantially faster.
 
 The hook fails the push if any check fails. To push a work-in-progress branch without running it, bypass with `git push --no-verify`. If the CI feature set or the checklist above changes, update the hook script to match.
 

@@ -14,8 +14,20 @@
 
 set -eu
 
-echo "pre-push: cargo test --workspace"
-cargo test --workspace
+# Tests: run the binaries in parallel with cargo-nextest when it is installed
+# (each integration-test file is a separate binary, and nextest runs them
+# concurrently instead of one-at-a-time). nextest does not execute doc-tests, so
+# run those separately. Fall back to the serial `cargo test` if nextest is not
+# installed (install it with: cargo install cargo-nextest --locked).
+if cargo nextest --version >/dev/null 2>&1; then
+    echo "pre-push: cargo nextest run --workspace (parallel)"
+    cargo nextest run --workspace
+    echo "pre-push: cargo test --workspace --doc (doc-tests)"
+    cargo test --workspace --doc
+else
+    echo "pre-push: cargo test --workspace (install cargo-nextest for a parallel run)"
+    cargo test --workspace
+fi
 
 echo "pre-push: cargo fmt --all -- --check"
 cargo fmt --all -- --check

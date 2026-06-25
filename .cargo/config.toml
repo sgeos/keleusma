@@ -1,0 +1,22 @@
+# Developer convenience aliases for a tiered local test loop.
+#
+# The pre-push hook and CI run the full gate (every crate, every feature set,
+# clippy, fmt, doc). That is the right bar before code leaves the machine, but
+# it is far too heavy for the inner edit-compile-test loop. Use the fast
+# commands below while iterating and reserve the full run for pre-PR.
+#
+# Inner loop, fastest to slowest:
+#   cargo qc   -- type-check everything, no codegen (compile-error feedback)
+#   cargo tl   -- run only the keleusma lib unit tests (seconds after compile)
+#   cargo lint -- the exact clippy invocation CI gates on
+#   cargo tw   -- the full workspace test run (what the hook/CI execute)
+#
+# `tn` runs the whole suite under cargo-nextest, which executes the 24
+# integration-test binaries in parallel rather than one at a time; it is a
+# no-op alias unless `cargo install cargo-nextest` has been run.
+[alias]
+qc = "check --workspace --all-targets"
+tl = "test --lib"
+lint = "clippy --workspace --all-targets -- -D warnings"
+tw = "test --workspace"
+tn = "nextest run --workspace"
