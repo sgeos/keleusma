@@ -291,6 +291,80 @@ pub fn analyze_chunk_text(chunk: &Chunk, callee_returns_text: &[bool]) -> ChunkT
     }
 }
 
+/// Per-op WCET extra cycles from text-length-dependent string operations (#49).
+///
+/// Returns a vector parallel to `chunk.ops`: entry `i` is the extra WCET cycles
+/// op `i` incurs beyond its flat `op_cycles` cost because it runs in time
+/// proportional to a string length, which the per-opcode table cannot capture.
+/// A text comparison (`Op::CmpEq`/`Op::CmpNe`) costs
+/// `text_byte_cycles * min(len_a, len_b)` (the VM compares length-first through
+/// `string_content_eq`, so the shorter operand bounds the work); a text
+/// concatenation (`Op::Add` on text) costs `text_byte_cycles * (len_a + len_b)`;
+/// `Op::Len` on text costs `text_byte_cycles * len`. Every other op contributes
+/// `0`. An entry of `u32::MAX` marks a text op whose length cannot be statically
+/// bounded (a comparison of two unbounded operands, or a concatenation or
+/// `Len` of an unbounded operand); the WCET pass rejects such a chunk as
+/// non-boundable.
+///
+/// The analysis maintains the same per-slot [`TextSize`] abstract stack and
+/// locals as [`analyze_chunk_text`], reusing its stack discipline through
+/// [`TextAnalysis::apply_op`] for ops that are not length-bearing. It differs in
+/// two ways tuned for WCET rather than the heap over-approximation: a `Const`
+/// string literal keeps its `Known` length even inside a loop or branch (a
+/// literal's bytes are fixed, so `if x == "admin"` in a loop stays bounded via
+/// the `min` against the literal), and it emits the per-op cycle term above.
+/// Loop-carried and derived text still saturate to `Unbounded` inside control
+/// flow, so an accumulation `s = s + x` or a comparison of two such values is
+/// rejected.
+pub fn chunk_text_wcet_cycles(chunk: &Chunk, text_byte_cycles: u32) -> alloc::vec::Vec<u32> {
+    let mut state = TextAnalysis::new(chunk.local_count as usize);
+    let mut out: alloc::vec::Vec<u32> = alloc::vec::Vec::with_capacity(chunk.ops.len());
+    let mut loop_depth: u32 = 0;
+    let mut branch_depth: u32 = 0;
+    for op in &chunk.ops {
+        match op {
+            Op::Loop(_) => loop_depth = loop_depth.saturating_add(1),
+            Op::If(_) => branch_depth = branch_depth.saturating_add(1),
+            _ => {}
+        }
+        let conservative = loop_depth > 0 || branch_depth > 0;
+        out.push(state.apply_op_wcet(op, chunk, conservative, text_byte_cycles));
+        match op {
+            Op::EndLoop(_) => loop_depth = loop_depth.saturating_sub(1),
+            Op::EndIf => branch_depth = branch_depth.saturating_sub(1),
+            _ => {}
+        }
+    }
+    out
+}
+
+/// WCET cycles for a text operand of statically-known or unbounded length.
+/// `Known(n)` is `text_byte_cycles * n`; `Unbounded` is `u32::MAX`; `NotText`
+/// is zero (no text work).
+fn len_cycles(t: TextSize, text_byte_cycles: u32) -> u32 {
+    match t {
+        TextSize::Known(n) => text_byte_cycles.saturating_mul(n),
+        TextSize::Unbounded => u32::MAX,
+        TextSize::NotText => 0,
+    }
+}
+
+/// WCET cycles for a text comparison, bounded by the shorter operand (the VM
+/// compares length-first). Either operand being `Known` bounds the work; only
+/// two `Unbounded` operands are non-boundable (`u32::MAX`).
+fn min_len_cycles(a: TextSize, b: TextSize, text_byte_cycles: u32) -> u32 {
+    match (a, b) {
+        (TextSize::Known(x), TextSize::Known(y)) => text_byte_cycles.saturating_mul(x.min(y)),
+        (TextSize::Known(n), TextSize::Unbounded) | (TextSize::Unbounded, TextSize::Known(n)) => {
+            text_byte_cycles.saturating_mul(n)
+        }
+        (TextSize::Unbounded, TextSize::Unbounded) => u32::MAX,
+        // A `NotText` operand means a non-text comparison by the type-checker
+        // invariant; the caller filters those before reaching here.
+        _ => 0,
+    }
+}
+
 /// Internal abstract state for `chunk_text_heap_alloc`.
 ///
 /// Mirrors the operand stack and local-variable bindings as
@@ -508,6 +582,98 @@ impl TextAnalysis {
                 for _ in 0..growth {
                     self.push(TextSize::NotText);
                 }
+                0
+            }
+        }
+    }
+
+    /// Stack-effect of `op` for the WCET length walk, returning the op's extra
+    /// WCET cycles (#49). Mirrors [`Self::apply_op`]'s stack discipline but: a
+    /// `Const` string literal is not saturated under `conservative` (its byte
+    /// length is fixed regardless of control flow), and `Op::CmpEq`/`Op::CmpNe`,
+    /// `Op::Add` on text, and `Op::Len` on text emit the length-scaled cycle
+    /// term (`u32::MAX` for an unbounded length). Every op that does not bear a
+    /// text length delegates to [`Self::apply_op`] for the identical stack
+    /// discipline and contributes zero cycles; the heap byte total that delegate
+    /// returns is discarded.
+    fn apply_op_wcet(
+        &mut self,
+        op: &Op,
+        chunk: &Chunk,
+        conservative: bool,
+        text_byte_cycles: u32,
+    ) -> u32 {
+        let sat = |size: TextSize| -> TextSize {
+            if conservative {
+                match size {
+                    TextSize::NotText => TextSize::NotText,
+                    _ => TextSize::Unbounded,
+                }
+            } else {
+                size
+            }
+        };
+        match op {
+            // A string literal keeps its Known length through control flow; its
+            // bytes are fixed, so a comparison against it stays bounded even
+            // inside a loop. This is the one place the WCET walk diverges from
+            // the saturating heap walk.
+            Op::Const(idx) => {
+                let size = match chunk.constants.get(*idx as usize) {
+                    Some(ConstValue::StaticStr(s)) => {
+                        let len = u32::try_from(s.len()).unwrap_or(u32::MAX - 1);
+                        TextSize::Known(len.min(u32::MAX - 1))
+                    }
+                    _ => TextSize::NotText,
+                };
+                self.push(size);
+                0
+            }
+            Op::Add => {
+                let b = self.pop();
+                let a = self.pop();
+                // By the type-checker invariant both operands of a well-typed
+                // Add share a type, so a single NotText operand means a non-text
+                // (numeric) Add: no text work, NotText result.
+                if matches!(a, TextSize::NotText) || matches!(b, TextSize::NotText) {
+                    self.push(TextSize::NotText);
+                    0
+                } else {
+                    let result = a.saturating_add(b);
+                    self.push(sat(result));
+                    // Concatenation copies both operands.
+                    len_cycles(result, text_byte_cycles)
+                }
+            }
+            Op::CmpEq | Op::CmpNe => {
+                let b = self.pop();
+                let a = self.pop();
+                // The comparison produces a Bool.
+                self.push(TextSize::NotText);
+                // A NotText operand means a non-text comparison by the
+                // type-checker invariant (both operands share a type); only a
+                // text-vs-text comparison bears a length cost.
+                if matches!(a, TextSize::NotText) || matches!(b, TextSize::NotText) {
+                    0
+                } else {
+                    min_len_cycles(a, b, text_byte_cycles)
+                }
+            }
+            Op::Len => {
+                let a = self.pop();
+                // Len yields an Int. Only Len on text walks the bytes
+                // (`chars().count()`); Len on a boxed array/tuple is O(1), which
+                // `len_cycles(NotText)` reports as zero.
+                self.push(TextSize::NotText);
+                len_cycles(a, text_byte_cycles)
+            }
+            // Every other op carries no text length; reuse the shared stack
+            // discipline (which saturates loop-carried values as today) and
+            // contribute zero cycles. `callee_returns_text` is empty here, so a
+            // Call result is conservatively `Unbounded`, which a downstream text
+            // op then rejects.
+            _ => {
+                let _ = self.apply_op(op, chunk, conservative, &[]);
                 0
             }
         }
@@ -750,5 +916,85 @@ mod tests {
             size = size.saturating_add(size);
             assert_eq!(size, TextSize::Unbounded);
         }
+    }
+
+    fn stream_chunk(ops: alloc::vec::Vec<Op>, constants: alloc::vec::Vec<ConstValue>) -> Chunk {
+        Chunk {
+            name: alloc::string::String::from("main"),
+            ops,
+            constants,
+            struct_templates: alloc::vec::Vec::new(),
+            local_count: 0,
+            param_count: 0,
+            block_type: crate::bytecode::BlockType::Stream,
+            param_types: alloc::vec::Vec::new(),
+            debug_pool: None,
+        }
+    }
+
+    #[test]
+    fn wcet_literal_comparison_stays_known_inside_a_loop() {
+        // The Option-A refinement (#49): inside a loop body a `Const` string
+        // literal keeps its `Known` length rather than saturating to
+        // `Unbounded` the way the heap walk treats loop-carried values, so a
+        // comparison against it is bounded. Two five-byte literals compared in a
+        // loop cost `min(5, 5) = 5` cycles, not `u32::MAX`.
+        let chunk = stream_chunk(
+            alloc::vec![
+                Op::Loop(6),
+                Op::Const(0),
+                Op::Const(1),
+                Op::CmpEq,
+                Op::PopN(1),
+                Op::EndLoop(0),
+            ],
+            alloc::vec![
+                ConstValue::StaticStr(alloc::string::String::from("admin")),
+                ConstValue::StaticStr(alloc::string::String::from("admin")),
+            ],
+        );
+        let cycles = chunk_text_wcet_cycles(&chunk, 1);
+        assert_eq!(
+            cycles[3], 5,
+            "CmpEq of two five-byte literals in a loop costs min(5,5), not unbounded"
+        );
+    }
+
+    #[test]
+    fn wcet_comparison_of_two_unbounded_texts_is_unbounded() {
+        // Two native-returned texts (`Unbounded`) compared cannot be bounded;
+        // the op's WCET term is `u32::MAX`, which the verifier rejects.
+        let chunk = stream_chunk(
+            alloc::vec![
+                Op::CallExternalNative(0, 0),
+                Op::CallExternalNative(0, 0),
+                Op::CmpEq,
+                Op::PopN(1),
+            ],
+            alloc::vec::Vec::new(),
+        );
+        let cycles = chunk_text_wcet_cycles(&chunk, 1);
+        assert_eq!(
+            cycles[2],
+            u32::MAX,
+            "two unbounded operands are non-boundable"
+        );
+    }
+
+    #[test]
+    fn wcet_comparison_against_a_literal_is_bounded_by_the_literal() {
+        // A native text (`Unbounded`) compared against a four-byte literal is
+        // bounded at four cycles: the shorter operand caps the work.
+        let chunk = stream_chunk(
+            alloc::vec![
+                Op::CallExternalNative(0, 0),
+                Op::Const(0),
+                Op::CmpEq,
+                Op::PopN(1),
+            ],
+            alloc::vec![ConstValue::StaticStr(alloc::string::String::from("yyyy"))],
+        );
+        let cycles = chunk_text_wcet_cycles(&chunk, 1);
+        assert_eq!(cycles[2], 4, "min(unbounded, 4) = 4");
     }
 }

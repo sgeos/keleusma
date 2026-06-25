@@ -144,6 +144,33 @@ fn loop_body_all_paths_yield_no_inner_loop(ops: &[Op], start: usize, end: usize)
     )
 }
 
+/// Flat plus length-dependent WCET cycles for the op at `ip` (#49). The flat
+/// per-opcode cost from `cost_model` plus the per-op text-length term in
+/// `wcet_extra` (computed once per chunk by
+/// [`crate::text_size::chunk_text_wcet_cycles`]). A `u32::MAX` term marks a text
+/// operation whose length cannot be statically bounded; the WCET is then
+/// non-boundable and the chunk is rejected, the conservative-verification
+/// stance applied to length-dependent string operations.
+fn op_wcet_cycles(
+    chunk: &Chunk,
+    ip: usize,
+    cost_model: &crate::bytecode::CostModel,
+    wcet_extra: &[u32],
+) -> Result<u32, VerifyError> {
+    let extra = wcet_extra.get(ip).copied().unwrap_or(0);
+    if extra == u32::MAX {
+        return Err(VerifyError {
+            chunk_name: chunk.name.clone(),
+            message: alloc::format!(
+                "text operation at instruction {} runs in time proportional to an \
+                 unbounded-length string; WCET cannot be statically bounded",
+                ip
+            ),
+        });
+    }
+    Ok(cost_model.cycles(&chunk.ops[ip]).saturating_add(extra))
+}
+
 fn wcet_region(
     chunk: &Chunk,
     start: usize,
@@ -151,6 +178,7 @@ fn wcet_region(
     break_costs: &mut Vec<u32>,
     cost_model: &crate::bytecode::CostModel,
     clamp_productive_yield_loops: bool,
+    wcet_extra: &[u32],
 ) -> Result<Option<u32>, VerifyError> {
     let ops = &chunk.ops;
     let mut cost: u32 = 0;
@@ -159,7 +187,7 @@ fn wcet_region(
     while ip < end {
         match &ops[ip] {
             Op::Break(_) => {
-                cost += cost_model.cycles(&ops[ip]);
+                cost = cost.saturating_add(op_wcet_cycles(chunk, ip, cost_model, wcet_extra)?);
                 break_costs.push(cost);
                 return Ok(None);
             }
@@ -167,17 +195,17 @@ fn wcet_region(
                 // Trap halts execution. Treat as path-exit. Does not
                 // push to break_costs because it does not transfer
                 // control to the enclosing loop.
-                cost += cost_model.cycles(&ops[ip]);
+                cost = cost.saturating_add(op_wcet_cycles(chunk, ip, cost_model, wcet_extra)?);
                 let _ = cost;
                 return Ok(None);
             }
             Op::BreakIf(_) => {
-                cost += cost_model.cycles(&ops[ip]);
+                cost = cost.saturating_add(op_wcet_cycles(chunk, ip, cost_model, wcet_extra)?);
                 break_costs.push(cost);
                 ip += 1;
             }
             Op::If(target) => {
-                cost += cost_model.cycles(&ops[ip]);
+                cost = cost.saturating_add(op_wcet_cycles(chunk, ip, cost_model, wcet_extra)?);
                 let target = *target as usize;
                 if target > 0 && matches!(&ops[target - 1], Op::Else(_)) {
                     let endif_pos = if let Op::Else(e) = &ops[target - 1] {
@@ -192,6 +220,7 @@ fn wcet_region(
                         break_costs,
                         cost_model,
                         clamp_productive_yield_loops,
+                        wcet_extra,
                     )?;
                     let else_cost = wcet_region(
                         chunk,
@@ -200,6 +229,7 @@ fn wcet_region(
                         break_costs,
                         cost_model,
                         clamp_productive_yield_loops,
+                        wcet_extra,
                     )?;
                     let branch_cost = match (then_cost, else_cost) {
                         (Some(a), Some(b)) => Some(if a > b { a } else { b }),
@@ -217,6 +247,7 @@ fn wcet_region(
                         break_costs,
                         cost_model,
                         clamp_productive_yield_loops,
+                        wcet_extra,
                     )?;
                     // False path has zero additional cost (skips to EndIf).
                     // Worst case is the then-body if it is more expensive.
@@ -230,7 +261,7 @@ fn wcet_region(
                 }
             }
             Op::Loop(target) => {
-                cost += cost_model.cycles(&ops[ip]);
+                cost = cost.saturating_add(op_wcet_cycles(chunk, ip, cost_model, wcet_extra)?);
                 let loop_exit_target = *target as usize;
                 let endloop_ip = loop_exit_target - 1;
                 let mut loop_break_costs: Vec<u32> = Vec::new();
@@ -241,6 +272,7 @@ fn wcet_region(
                     &mut loop_break_costs,
                     cost_model,
                     clamp_productive_yield_loops,
+                    wcet_extra,
                 )?;
                 if loop_break_costs.is_empty() && body_cost.is_none() {
                     return Ok(None);
@@ -291,7 +323,7 @@ fn wcet_region(
                 ip += 1;
             }
             _ => {
-                cost += cost_model.cycles(&ops[ip]);
+                cost = cost.saturating_add(op_wcet_cycles(chunk, ip, cost_model, wcet_extra)?);
                 ip += 1;
             }
         }
@@ -972,6 +1004,7 @@ pub fn wcet_stream_iteration_with_cost_model(
         })?;
 
     let mut break_costs: Vec<u32> = Vec::new();
+    let wcet_extra = crate::text_size::chunk_text_wcet_cycles(chunk, cost_model.text_byte_cycles);
     let body_cost = wcet_region(
         chunk,
         stream_pos + 1,
@@ -979,6 +1012,7 @@ pub fn wcet_stream_iteration_with_cost_model(
         &mut break_costs,
         cost_model,
         false,
+        &wcet_extra,
     )?;
 
     // Include Stream and Reset instruction costs.
@@ -1052,6 +1086,7 @@ pub fn wcet_whole_chunk_with_cost_model(
     // clamp applies.
     let clamp = chunk.block_type == BlockType::Reentrant;
     let mut break_costs: Vec<u32> = Vec::new();
+    let wcet_extra = crate::text_size::chunk_text_wcet_cycles(chunk, cost_model.text_byte_cycles);
     let body_cost = wcet_region(
         chunk,
         0,
@@ -1059,6 +1094,7 @@ pub fn wcet_whole_chunk_with_cost_model(
         &mut break_costs,
         cost_model,
         clamp,
+        &wcet_extra,
     )?;
     Ok(body_cost.unwrap_or(0))
 }
@@ -1104,6 +1140,7 @@ fn reentrant_segmented_wcet(
     }
 
     let len = chunk.ops.len();
+    let wcet_extra = crate::text_size::chunk_text_wcet_cycles(chunk, cost_model.text_byte_cycles);
     let mut max_cost: u32 = 0;
     let mut seg_start: usize = 0;
     // Each segment ends just past its terminating yield, so the yield
@@ -1113,14 +1150,31 @@ fn reentrant_segmented_wcet(
     // productivity clamp applies (pass `false`).
     for &y in &yields {
         let mut break_costs: Vec<u32> = Vec::new();
-        let c =
-            wcet_region(chunk, seg_start, y + 1, &mut break_costs, cost_model, false)?.unwrap_or(0);
+        let c = wcet_region(
+            chunk,
+            seg_start,
+            y + 1,
+            &mut break_costs,
+            cost_model,
+            false,
+            &wcet_extra,
+        )?
+        .unwrap_or(0);
         max_cost = max_cost.max(c);
         seg_start = y + 1;
     }
     // The final segment runs from after the last yield to the end.
     let mut break_costs: Vec<u32> = Vec::new();
-    let c = wcet_region(chunk, seg_start, len, &mut break_costs, cost_model, false)?.unwrap_or(0);
+    let c = wcet_region(
+        chunk,
+        seg_start,
+        len,
+        &mut break_costs,
+        cost_model,
+        false,
+        &wcet_extra,
+    )?
+    .unwrap_or(0);
     max_cost = max_cost.max(c);
     Ok(Some(max_cost))
 }
@@ -2896,9 +2950,18 @@ mod tests {
             .expect("top-level yields segment");
         // Whole-body cumulative cost for comparison.
         let mut breaks = Vec::new();
-        let cumulative = wcet_region(&reentrant, 0, reentrant.ops.len(), &mut breaks, cm, false)
-            .unwrap()
-            .unwrap_or(0);
+        let extra = crate::text_size::chunk_text_wcet_cycles(&reentrant, cm.text_byte_cycles);
+        let cumulative = wcet_region(
+            &reentrant,
+            0,
+            reentrant.ops.len(),
+            &mut breaks,
+            cm,
+            false,
+            &extra,
+        )
+        .unwrap()
+        .unwrap_or(0);
         assert!(
             segmented < cumulative,
             "per-segment max {segmented} should be tighter than cumulative {cumulative}"
@@ -2964,8 +3027,9 @@ mod tests {
         // the unclamped path a Func chunk (or the old behaviour) would
         // take.
         let mut breaks = Vec::new();
+        let extra = crate::text_size::chunk_text_wcet_cycles(&chunk, cm.text_byte_cycles);
         assert!(
-            wcet_region(&chunk, 0, chunk.ops.len(), &mut breaks, cm, false).is_err(),
+            wcet_region(&chunk, 0, chunk.ops.len(), &mut breaks, cm, false, &extra).is_err(),
             "unclamped whole-body cost requires a for-range bound"
         );
     }

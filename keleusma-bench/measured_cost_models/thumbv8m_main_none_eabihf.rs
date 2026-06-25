@@ -131,4 +131,6 @@ pub fn measured_op_cycles(op: &keleusma::bytecode::Op) -> u32 {
 pub const MEASURED_COST_MODEL: keleusma::CostModel = keleusma::CostModel {
     value_slot_bytes: keleusma::VALUE_SLOT_SIZE_BYTES,
     op_cycles: measured_op_cycles,
+    // Not separately measured; nominal one-cycle-per-byte default (#49).
+    text_byte_cycles: 1,
 };

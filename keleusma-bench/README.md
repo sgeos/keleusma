@@ -44,6 +44,7 @@ include!("measured_cost_model.rs");
 let model = CostModel {
     value_slot_bytes: VALUE_SLOT_SIZE_BYTES,
     op_cycles: measured_op_cycles,
+    text_byte_cycles: 1, // per-text-byte WCET cost (#49); nominal default
 };
 ```
 

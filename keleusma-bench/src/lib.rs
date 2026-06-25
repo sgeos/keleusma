@@ -667,6 +667,10 @@ pub fn emit_cost_model_source(
     out.push_str("pub const MEASURED_COST_MODEL: keleusma::CostModel = keleusma::CostModel {\n");
     out.push_str("    value_slot_bytes: keleusma::VALUE_SLOT_SIZE_BYTES,\n");
     out.push_str("    op_cycles: measured_op_cycles,\n");
+    // The per-text-byte WCET cost (#49) is not yet separately benchmarked; emit
+    // the nominal one-cycle-per-byte default. A future bench can measure it.
+    out.push_str("    // Not separately measured; nominal one-cycle-per-byte default (#49).\n");
+    out.push_str("    text_byte_cycles: 1,\n");
     out.push_str("};\n");
 
     out

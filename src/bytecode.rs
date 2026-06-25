@@ -2327,6 +2327,19 @@ pub struct CostModel {
     /// values are relative weights rather than measured cycles.
     /// Hosts override this for measured per-target cycle tables.
     pub op_cycles: fn(&Op) -> u32,
+
+    /// Extra WCET cycles charged per text byte for an O(length) string
+    /// operation (#49). A text comparison (`Op::CmpEq`/`Op::CmpNe`),
+    /// concatenation (`Op::Add` on text), and `Op::Len` on text run in time
+    /// proportional to the operand length, which `op_cycles` does not capture
+    /// because the flat per-opcode table is length-independent. The verifier's
+    /// WCET pass multiplies this by the statically-bounded operand length (the
+    /// shorter operand for a comparison, the sum for a concatenation) and adds
+    /// it to the flat cost; a text operation whose length cannot be statically
+    /// bounded is rejected as non-boundable. The nominal value is one cycle per
+    /// byte, the data-movement scale; a measured cost model may override it, and
+    /// it is not yet separately calibrated by `keleusma-bench`.
+    pub text_byte_cycles: u32,
 }
 
 impl CostModel {
@@ -2414,6 +2427,8 @@ fn add_text_heap_alloc_bytes(ctx: &OpCostContext) -> u32 {
 pub const NOMINAL_COST_MODEL: CostModel = CostModel {
     value_slot_bytes: VALUE_SLOT_SIZE_BYTES,
     op_cycles: nominal_op_cycles,
+    // One cycle per text byte, the data-movement scale (#49).
+    text_byte_cycles: 1,
 };
 
 /// The pipelined-cycle cost table used by [`NOMINAL_COST_MODEL`].
@@ -3951,6 +3966,7 @@ mod cost_model_tests {
         let model = CostModel {
             value_slot_bytes: 8,
             op_cycles: nominal_op_cycles,
+            text_byte_cycles: 1,
         };
         assert_eq!(model.slots_to_bytes(0), 0);
         assert_eq!(model.slots_to_bytes(1), 8);
@@ -3968,6 +3984,7 @@ mod cost_model_tests {
         let custom = CostModel {
             value_slot_bytes: VALUE_SLOT_SIZE_BYTES / 2,
             op_cycles: nominal_op_cycles,
+            text_byte_cycles: 1,
         };
         let chunk = Chunk {
             name: alloc::string::String::from("test"),
@@ -4003,6 +4020,7 @@ mod cost_model_tests {
         let custom = CostModel {
             value_slot_bytes: VALUE_SLOT_SIZE_BYTES,
             op_cycles: flat_hundred,
+            text_byte_cycles: 1,
         };
         assert_eq!(custom.cycles(&Op::Add), 100);
         assert_eq!(custom.cycles(&Op::PushImmediate(0)), 100);
