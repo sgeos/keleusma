@@ -308,7 +308,7 @@ pub fn analyze_chunk_text(chunk: &Chunk, callee_returns_text: &[bool]) -> ChunkT
 ///
 /// The analysis maintains the same per-slot [`TextSize`] abstract stack and
 /// locals as [`analyze_chunk_text`], reusing its stack discipline through
-/// [`TextAnalysis::apply_op`] for ops that are not length-bearing. It differs in
+/// `TextAnalysis::apply_op` for ops that are not length-bearing. It differs in
 /// two ways tuned for WCET rather than the heap over-approximation: a `Const`
 /// string literal keeps its `Known` length even inside a loop or branch (a
 /// literal's bytes are fixed, so `if x == "admin"` in a loop stays bounded via
