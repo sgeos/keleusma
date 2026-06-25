@@ -466,6 +466,13 @@ struct CallResolver<'a> {
     /// Per-native WCMU bytes from host attestation. Indexed by native
     /// function entry index.
     native_wcmu: &'a [u32],
+    /// The module's shared-slot layout, indexed by shared slot. Used to size
+    /// the arena copy-out a `GetData` on a flat composite shared slot performs
+    /// (B28 item 2 / task #57). Empty on the local-only analysis path
+    /// ([`CallResolver::empty`]), which therefore under-counts a composite
+    /// shared read; only the module-level [`module_wcmu`] path, the
+    /// soundness-critical bound, carries the layout.
+    shared_layout: &'a [crate::bytecode::SharedSlotLayout],
 }
 
 impl<'a> CallResolver<'a> {
@@ -475,6 +482,7 @@ impl<'a> CallResolver<'a> {
         Self {
             chunk_wcmu: &[],
             native_wcmu: &[],
+            shared_layout: &[],
         }
     }
 
@@ -487,6 +495,48 @@ impl<'a> CallResolver<'a> {
 
     fn resolve_native(&self, idx: u16) -> u32 {
         self.native_wcmu.get(idx as usize).copied().unwrap_or(0)
+    }
+}
+
+/// Per-op arena heap allocation for the WCMU walk: the op's own construction
+/// allocation ([`crate::bytecode::Op::heap_alloc`]) plus the shared-composite
+/// copy-out a `GetData`/`GetDataIndexed` performs when it reads a flat composite
+/// shared slot (B28 item 2 / task #57). Both accumulate in the arena top region
+/// across a Stream iteration, so they sum, and the loop-multiplicity walk in
+/// [`wcmu_region`] scales them by iteration count.
+fn op_iteration_heap(op: &Op, chunk: &Chunk, resolver: &CallResolver) -> u32 {
+    op.heap_alloc(chunk)
+        .saturating_add(shared_composite_copyout_bytes(op, resolver.shared_layout))
+}
+
+/// Bytes the shared-composite copy-out allocates for `op` (task #57).
+///
+/// A `GetData` that reads a flat composite shared slot copies the body out of
+/// the borrowed host buffer into a fresh arena body of the slot's `len` bytes
+/// (`crate::vm::GenericVm::read_shared_from_buffer`); that per-read allocation is
+/// a per-iteration arena cost the WCMU bound must include. A scalar shared slot,
+/// a private slot (read in place from the arena persistent region), and every
+/// non-data op allocate nothing here. Shared arrays-of-composites are rejected
+/// at compile time, so a `GetDataIndexed` over a shared slot reads scalars only;
+/// the element range is scanned defensively and contributes its largest
+/// composite copy-out, which is zero for a well-formed module.
+fn shared_composite_copyout_bytes(
+    op: &Op,
+    shared_layout: &[crate::bytecode::SharedSlotLayout],
+) -> u32 {
+    let slot_copyout = |slot: usize| -> u32 {
+        shared_layout
+            .get(slot)
+            .filter(|e| e.kind & crate::bytecode::SHARED_SLOT_COMPOSITE_FLAG != 0)
+            .map_or(0, |e| e.len as u32)
+    };
+    match op {
+        Op::GetData(slot) => slot_copyout(*slot as usize),
+        Op::GetDataIndexed(base, len) => (0..*len as usize)
+            .map(|i| slot_copyout(*base as usize + i))
+            .max()
+            .unwrap_or(0),
+        _ => 0,
     }
 }
 
@@ -531,7 +581,7 @@ fn wcmu_region(
                 let growth = op.stack_growth() as i32;
                 let during_peak = (current_offset + growth).max(0) as u32;
                 peak = peak.max(during_peak);
-                heap = heap.saturating_add(op.heap_alloc(chunk));
+                heap = heap.saturating_add(op_iteration_heap(op, chunk, resolver));
                 current_offset += growth - shrink;
                 break_results.push(McuResult {
                     peak_above_initial: peak,
@@ -549,7 +599,7 @@ fn wcmu_region(
                 let growth = op.stack_growth() as i32;
                 let during_peak = (current_offset + growth).max(0) as u32;
                 peak = peak.max(during_peak);
-                heap = heap.saturating_add(op.heap_alloc(chunk));
+                heap = heap.saturating_add(op_iteration_heap(op, chunk, resolver));
                 current_offset += growth - shrink;
                 let _ = current_offset;
                 let _ = peak;
@@ -561,7 +611,7 @@ fn wcmu_region(
                 let growth = op.stack_growth() as i32;
                 let during_peak = (current_offset + growth).max(0) as u32;
                 peak = peak.max(during_peak);
-                heap = heap.saturating_add(op.heap_alloc(chunk));
+                heap = heap.saturating_add(op_iteration_heap(op, chunk, resolver));
                 current_offset += growth - shrink;
                 break_results.push(McuResult {
                     peak_above_initial: peak,
@@ -576,7 +626,7 @@ fn wcmu_region(
                 let growth = op.stack_growth() as i32;
                 let during_peak = (current_offset + growth).max(0) as u32;
                 peak = peak.max(during_peak);
-                heap = heap.saturating_add(op.heap_alloc(chunk));
+                heap = heap.saturating_add(op_iteration_heap(op, chunk, resolver));
                 current_offset += growth - shrink;
 
                 let target = *target as usize;
@@ -652,7 +702,7 @@ fn wcmu_region(
                 let growth = op.stack_growth() as i32;
                 let during_peak = (current_offset + growth).max(0) as u32;
                 peak = peak.max(during_peak);
-                heap = heap.saturating_add(op.heap_alloc(chunk));
+                heap = heap.saturating_add(op_iteration_heap(op, chunk, resolver));
                 current_offset += growth - shrink;
 
                 let loop_exit_target = *target as usize;
@@ -753,7 +803,7 @@ fn wcmu_region(
                 let growth = op.stack_growth() as i32;
                 let during_peak = (current_offset + growth).max(0) as u32;
                 peak = peak.max(during_peak);
-                heap = heap.saturating_add(op.heap_alloc(chunk));
+                heap = heap.saturating_add(op_iteration_heap(op, chunk, resolver));
                 current_offset += growth - shrink;
                 ip += 1;
             }
@@ -1183,6 +1233,10 @@ pub fn module_wcmu_with_value_slot_bytes(
         let resolver = CallResolver {
             chunk_wcmu: &chunk_wcmu,
             native_wcmu,
+            shared_layout: module
+                .data_layout
+                .as_ref()
+                .map_or(&[], |dl| &dl.shared_layout),
         };
         let (wcmu_result, returns_text) =
             compute_chunk_wcmu(chunk, &resolver, &chunk_returns_text, value_slot_bytes)?;
@@ -1342,6 +1396,10 @@ pub fn module_wcmu_with_bounds(
         let resolver = CallResolver {
             chunk_wcmu: &chunk_wcmu,
             native_wcmu: &per_site_native_wcmu,
+            shared_layout: module
+                .data_layout
+                .as_ref()
+                .map_or(&[], |dl| &dl.shared_layout),
         };
         let (mut wcmu_result, returns_text) =
             compute_chunk_wcmu(chunk, &resolver, &chunk_returns_text, value_slot_bytes)?;

@@ -113,3 +113,53 @@ fn stream_with_heap_runs_at_auto_capacity_with_zero_margin() {
         other => panic!("expected a yield, got {:?}", other),
     }
 }
+
+#[test]
+fn wcmu_counts_composite_shared_read_copyout() {
+    // A Stream that reads a whole composite shared slot copies the body out of
+    // the borrowed host buffer into the arena on each read
+    // (`read_shared_from_buffer`); the WCMU heap bound must include that
+    // allocation (B28 item 2 / task #57). Before the fix `GetData` reported zero
+    // heap, so a composite-shared-reading Stream under-counted its worst-case
+    // memory by the copy-out size. The whole-composite read goes through the
+    // module-level analysis, which carries the shared-slot layout the copy-out
+    // size is read from.
+    let module = compile_src(
+        "data s { pos: (Word, Word) }\n\
+         loop main(seed: Word) -> Word { let p = s.pos; yield p.0 + p.1 + seed }",
+    );
+    let word = (1usize << module.word_bits_log2) / 8;
+    let per_chunk = verify::module_wcmu(&module, &[]).expect("module wcmu");
+    let main_idx = module
+        .chunks
+        .iter()
+        .position(|c| c.name == "main")
+        .expect("main chunk");
+    let (_, heap) = per_chunk[main_idx];
+    // The only per-iteration arena allocation is the copy-out of the two-word
+    // `pos` tuple; `p` is read from shared, not constructed, so nothing else
+    // allocates.
+    assert_eq!(
+        heap,
+        (2 * word) as u32,
+        "Stream heap must include the {}-byte composite shared-read copy-out",
+        2 * word
+    );
+
+    // A baseline Stream that touches no composite shared slot allocates nothing,
+    // confirming the copy-out is the sole contributor above.
+    let baseline = compile_src(
+        "data s { hp: Word }\n\
+         loop main(seed: Word) -> Word { yield s.hp + seed }",
+    );
+    let base_chunk = verify::module_wcmu(&baseline, &[]).expect("baseline wcmu");
+    let base_idx = baseline
+        .chunks
+        .iter()
+        .position(|c| c.name == "main")
+        .expect("main chunk");
+    assert_eq!(
+        base_chunk[base_idx].1, 0,
+        "a scalar shared read copies nothing out"
+    );
+}
