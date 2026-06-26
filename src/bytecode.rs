@@ -1014,17 +1014,36 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
                     min_payload,
                     fields,
                 } = *b;
-                // `Option` is generic and not in the compiler's enum type
-                // tables, so its access is baked boxed; keep it boxed to match
-                // (B28 P2), preserving the re-flattening hints.
+                // `Option::Some` flattens like any enum (B28 P3 item 5 C4): the
+                // compiler bakes flat construction and flat access for
+                // `Option<T>` when `T` is a flat field, with the fixed
+                // discriminant `Some == 1`. An earlier branch kept `Option`
+                // boxed on the B28 P2 assumption that its access was baked
+                // boxed, which left a native-returned `Option<Text>` boxed
+                // against flat-baked access (B37). Promote the payload and
+                // flatten with the `Option` discriminant; `enum_in_arena` falls
+                // back to boxed when the payload is not flat-eligible, matching
+                // the compiler's boxed access for `Option<non-flat>`. The
+                // discriminant carried by an unsignatured native's `EnumBody`
+                // is not reliable (the no-arena constructor records `0`), so the
+                // fixed `Some == 1` convention is applied here rather than
+                // trusting `disc`. `Option::None` is the scalar `Value::None`
+                // and never reaches this arm.
                 if type_name == "Option" {
-                    return Ok(Self::Enum(EnumBody::boxed_with_layout(
+                    let fields = fields
+                        .into_iter()
+                        .map(|v| v.into_arena_canonical_field(word_bytes, float_bytes, arena))
+                        .collect::<Result<alloc::vec::Vec<_>, _>>()?;
+                    return Self::enum_in_arena(
                         type_name,
                         variant,
-                        disc,
+                        1,
                         min_payload,
                         fields,
-                    )));
+                        word_bytes,
+                        float_bytes,
+                        arena,
+                    );
                 }
                 let fields = fields
                     .into_iter()
