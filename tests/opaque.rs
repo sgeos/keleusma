@@ -194,3 +194,68 @@ fn downcast_ref_returns_none_on_type_mismatch() {
     assert!(arc.as_ref().downcast_ref::<Other>().is_none());
     assert!(arc.as_ref().downcast_ref::<Handle>().is_some());
 }
+
+#[cfg(all(feature = "compile", feature = "verify"))]
+#[test]
+fn opaque_materialises_across_the_yield_boundary() {
+    // B33: the operand stack carries an opaque as a POD `OpaqueRef` index, not
+    // an `Arc`. A native-produced opaque is interned to the index on return,
+    // flows through the stack and the `yield`, and must materialise back to an
+    // `Arc` for the host at the yield boundary so host code can pattern-match
+    // `Value::Opaque` directly. The label surviving proves the same host object
+    // crosses; resuming re-enters the loop and yields again, exercising the
+    // resume path and the registry clear on RESET.
+    let src = "use make_handle\n\
+               loop main(seed: Word) -> Handle { yield make_handle() }";
+    let tokens = tokenize(src).expect("lex");
+    let program = parse(&tokens).expect("parse");
+    let module = compile(&program).expect("compile");
+    let arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+    let mut vm = Vm::new(module, &arena).expect("verify");
+    vm.register_native("make_handle", |_args| {
+        Ok(Value::Opaque(host_arc(Handle {
+            label: alloc::string::String::from("yielded"),
+        })))
+    });
+    let label = |s: VmState| -> alloc::string::String {
+        match s {
+            VmState::Yielded(Value::Opaque(o)) => o
+                .as_ref()
+                .downcast_ref::<Handle>()
+                .expect("downcast Handle")
+                .label
+                .clone(),
+            other => panic!("expected yielded opaque, got {:?}", other),
+        }
+    };
+    // The loop yields on the first call, which is the path B33 changes.
+    // (Resume RESETs the arena and clears the opaque registry before the next
+    // iteration, returning `Reset`, a separate mechanism.)
+    assert_eq!(label(vm.call(&[Value::Int(0)]).expect("call")), "yielded");
+}
+
+#[cfg(all(feature = "compile", feature = "verify"))]
+#[test]
+fn host_supplied_opaque_argument_round_trips() {
+    // B33: a host `call` argument that is opaque is interned to the POD index
+    // form for the operand stack, then materialised back to an `Arc` when it is
+    // returned to the host. The same host object survives both conversions.
+    let src = "fn main(h: Handle) -> Handle { h }";
+    let tokens = tokenize(src).expect("lex");
+    let program = parse(&tokens).expect("parse");
+    let module = compile(&program).expect("compile");
+    let arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+    let mut vm = Vm::new(module, &arena).expect("verify");
+    let r = vm
+        .call(&[Value::Opaque(host_arc(Handle {
+            label: alloc::string::String::from("passed"),
+        }))])
+        .expect("call");
+    match r {
+        VmState::Finished(Value::Opaque(o)) => assert_eq!(
+            o.as_ref().downcast_ref::<Handle>().expect("downcast").label,
+            "passed"
+        ),
+        other => panic!("expected finished opaque, got {:?}", other),
+    }
+}

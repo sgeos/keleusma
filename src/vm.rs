@@ -2690,6 +2690,134 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
             .map(alloc::sync::Arc::clone)
     }
 
+    /// Materialise the internal `OpaqueRef` index form back into the host
+    /// `Opaque(Arc)` form, recursively through boxed composites (B33).
+    ///
+    /// Applied at every boundary where a value crosses into host hands (native
+    /// arguments, yield/finish, decode), so host code only ever observes
+    /// `Value::Opaque(Arc)`. A flat composite carries its opaque as a byte
+    /// index that `decode`/marshalling resolve through the `RefContext`, so a
+    /// flat body passes through unchanged. An index that fails to resolve (a
+    /// corrupt body, which a well-formed value never produces) is left as the
+    /// ref rather than fabricated. The boxed bodies are rebuilt with the
+    /// explicit boxed constructors so the body kind is preserved.
+    fn materialise_opaque_refs(
+        &self,
+        value: crate::bytecode::GenericValue<W, F>,
+    ) -> crate::bytecode::GenericValue<W, F> {
+        use crate::bytecode::{
+            ArrayBody, BoxedEnum, BoxedStruct, EnumBody, GenericValue as G, StructBody, TupleBody,
+        };
+        match value {
+            G::OpaqueRef(i) => match self.resolve_ephemeral_opaque(i as usize) {
+                Some(arc) => G::Opaque(arc),
+                None => G::OpaqueRef(i),
+            },
+            G::Tuple(TupleBody::Boxed(items)) => G::Tuple(TupleBody::boxed(
+                (*items)
+                    .into_iter()
+                    .map(|e| self.materialise_opaque_refs(e))
+                    .collect(),
+            )),
+            G::Array(ArrayBody::Boxed(items)) => G::Array(ArrayBody::boxed(
+                (*items)
+                    .into_iter()
+                    .map(|e| self.materialise_opaque_refs(e))
+                    .collect(),
+            )),
+            G::Struct(StructBody::Boxed(b)) => {
+                let BoxedStruct { type_name, fields } = *b;
+                G::Struct(StructBody::boxed(
+                    type_name,
+                    fields
+                        .into_iter()
+                        .map(|(k, e)| (k, self.materialise_opaque_refs(e)))
+                        .collect(),
+                ))
+            }
+            G::Enum(EnumBody::Boxed(b)) => {
+                let BoxedEnum {
+                    type_name,
+                    variant,
+                    disc,
+                    min_payload,
+                    fields,
+                } = *b;
+                G::Enum(EnumBody::boxed_with_layout(
+                    type_name,
+                    variant,
+                    disc,
+                    min_payload,
+                    fields
+                        .into_iter()
+                        .map(|e| self.materialise_opaque_refs(e))
+                        .collect(),
+                ))
+            }
+            other => other,
+        }
+    }
+
+    /// Intern host `Opaque(Arc)` values, replacing each with its POD
+    /// `OpaqueRef` index, recursively through boxed composites (B33). The
+    /// inverse of [`Self::materialise_opaque_refs`], applied where a
+    /// host-supplied value enters the VM (a native result, a host `call` or
+    /// `resume` argument), so nothing global-heap-bearing reaches the operand
+    /// stack.
+    fn intern_opaque_arcs(
+        &mut self,
+        value: crate::bytecode::GenericValue<W, F>,
+    ) -> crate::bytecode::GenericValue<W, F> {
+        use crate::bytecode::{
+            ArrayBody, BoxedEnum, BoxedStruct, EnumBody, GenericValue as G, StructBody, TupleBody,
+        };
+        match value {
+            G::Opaque(arc) => G::OpaqueRef(self.intern_ephemeral_opaque(arc) as u32),
+            G::Tuple(TupleBody::Boxed(items)) => G::Tuple(TupleBody::boxed(
+                (*items)
+                    .into_iter()
+                    .map(|e| self.intern_opaque_arcs(e))
+                    .collect(),
+            )),
+            G::Array(ArrayBody::Boxed(items)) => G::Array(ArrayBody::boxed(
+                (*items)
+                    .into_iter()
+                    .map(|e| self.intern_opaque_arcs(e))
+                    .collect(),
+            )),
+            G::Struct(StructBody::Boxed(b)) => {
+                let BoxedStruct { type_name, fields } = *b;
+                G::Struct(StructBody::boxed(
+                    type_name,
+                    fields
+                        .into_iter()
+                        .map(|(k, e)| (k, self.intern_opaque_arcs(e)))
+                        .collect(),
+                ))
+            }
+            G::Enum(EnumBody::Boxed(b)) => {
+                let BoxedEnum {
+                    type_name,
+                    variant,
+                    disc,
+                    min_payload,
+                    fields,
+                } = *b;
+                G::Enum(EnumBody::boxed_with_layout(
+                    type_name,
+                    variant,
+                    disc,
+                    min_payload,
+                    fields
+                        .into_iter()
+                        .map(|e| self.intern_opaque_arcs(e))
+                        .collect(),
+                ))
+            }
+            other => other,
+        }
+    }
+
     /// Read a flat scalar field at `offset` of kind `kind` from a resolved
     /// composite body, resolving an `Opaque` field's stored `word_bytes`
     /// index back to its `Arc` through the ephemeral registry (B28 P3).
@@ -2720,14 +2848,12 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                 crate::bytecode::GenericValue::Int(w) => w.to_i64() as usize,
                 _ => unreachable!("read_scalar_le with Int kind yields Int"),
             };
-            return self
-                .resolve_ephemeral_opaque(index)
-                .map(crate::bytecode::GenericValue::Opaque)
-                .ok_or_else(|| {
-                    VmError::InvalidBytecode(String::from(
-                        "opaque field index does not resolve (stale or out of range)",
-                    ))
-                });
+            // B33: push the POD index form rather than resolving the `Arc`,
+            // so the operand stack holds no global-heap pointer. The `Arc` is
+            // materialised from the index only at a host boundary (native
+            // call, yield, decode), where the registry is in hand and the
+            // index is bounds-checked.
+            return Ok(crate::bytecode::GenericValue::OpaqueRef(index as u32));
         }
         if matches!(kind, ScalarKind::Text) {
             // A flat Text field is two words: the arena data pointer then
@@ -3738,6 +3864,9 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                 .clone()
                 .into_arena_canonical(wb, fb, arena)
                 .map_err(|_| out_of_arena_push("composite argument", arena.capacity()))?;
+            // Intern a host-supplied opaque argument to the POD index form
+            // before it reaches the operand stack (B33).
+            let arg = self.intern_opaque_arcs(arg);
             sp!(self, arg);
         }
         // Extend stack for remaining local slots.
@@ -3847,6 +3976,8 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         let input = input
             .into_arena_canonical(wb, fb, arena)
             .map_err(|_| out_of_arena_push("composite resume value", arena.capacity()))?;
+        // Intern a host-supplied opaque resume value to the POD index form (B33).
+        let input = self.intern_opaque_arcs(input);
         // For stream functions, update the parameter slot with the new input.
         // This ensures the next iteration sees the latest input.
         if let Some(base_frame) = self.frames.first().copied() {
@@ -4067,7 +4198,12 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                     // global heap. The host decodes it through `Vm::decode`
                     // before the next `resume()` or before dropping the VM; a
                     // later read resolves to a clean stale error, never UB.
-                    return Ok(GenericVmState::Finished(result));
+                    // Opaque indices are materialised to `Arc` so host code can
+                    // pattern-match `Value::Opaque` directly without `decode`
+                    // (B33); flat composites and `KStr` stay arena-resident.
+                    return Ok(GenericVmState::Finished(
+                        self.materialise_opaque_refs(result),
+                    ));
                 }
                 sp!(self, result);
                 continue;
@@ -4592,8 +4728,11 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                     if self.frames.is_empty() {
                         // Read-before-resume (B28 P3 item 5 C3): the returned
                         // value stays arena-resident. The host decodes it before
-                        // the next `resume()` or before dropping the VM.
-                        return Ok(GenericVmState::Finished(result));
+                        // the next `resume()` or before dropping the VM. Opaque
+                        // indices materialise to `Arc` (B33).
+                        return Ok(GenericVmState::Finished(
+                            self.materialise_opaque_refs(result),
+                        ));
                     }
                     sp!(self, result);
                 }
@@ -4620,8 +4759,11 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                     // stays arena-resident rather than being copied to the
                     // global heap. The host must decode it (`Vm::decode`)
                     // before the next `resume()`, which RESETs the arena; a
-                    // read afterward resolves to a clean stale error.
-                    return Ok(GenericVmState::Yielded(output));
+                    // read afterward resolves to a clean stale error. Opaque
+                    // indices materialise to `Arc` (B33).
+                    return Ok(GenericVmState::Yielded(
+                        self.materialise_opaque_refs(output),
+                    ));
                 }
 
                 Op::Dup => {
@@ -4692,7 +4834,17 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                     if flat {
                         for v in values.iter_mut() {
                             match v {
-                                // Opaque interns to a one-word registry index.
+                                // An opaque on the stack is the POD registry
+                                // index (B33); convert it to the one-word `Int`
+                                // the packer writes, with no re-intern.
+                                crate::bytecode::GenericValue::OpaqueRef(idx) => {
+                                    *v = crate::bytecode::GenericValue::Int(W::from_i64_wrap(
+                                        *idx as i64,
+                                    ));
+                                }
+                                // Defensive: a raw `Opaque` `Arc` reaching the
+                                // pack path (not via the operand stack, which
+                                // carries `OpaqueRef`) interns to its index.
                                 crate::bytecode::GenericValue::Opaque(arc) => {
                                     let idx =
                                         self.intern_ephemeral_opaque(alloc::sync::Arc::clone(arc));
@@ -6284,8 +6436,17 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                     // `Inline` body is needed (B28 P3 item 5 zero-copy; the
                     // earlier `from_value` boundary required the copy).
                     let arena = self.arena;
-                    let args: Vec<crate::bytecode::GenericValue<W, F>> =
+                    let drained: Vec<crate::bytecode::GenericValue<W, F>> =
                         self.stack.drain(self.stack.len() - n..).collect();
+                    // Materialise each opaque argument's registry index back to
+                    // its `Arc` so the native receives `Value::Opaque(Arc)`; the
+                    // operand stack carries the POD `OpaqueRef` form (B33). A
+                    // flat composite argument keeps its byte index, which the
+                    // marshalling `RefContext` resolves through `ctx.opaques`.
+                    let args: Vec<crate::bytecode::GenericValue<W, F>> = drained
+                        .into_iter()
+                        .map(|a| self.materialise_opaque_refs(a))
+                        .collect();
                     let native_name = self.native_name(idx as usize).ok_or_else(|| {
                         VmError::InvalidBytecode(format!("invalid native index: {}", idx))
                     })?;
@@ -6326,6 +6487,10 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                                 let v = v.into_arena_canonical(wb, fb, arena).map_err(|_| {
                                     out_of_arena_push("native result", arena.capacity())
                                 })?;
+                                // Intern any host `Opaque(Arc)` the result
+                                // carries into the registry, so the stack form
+                                // is the POD `OpaqueRef` index (B33).
+                                let v = self.intern_opaque_arcs(v);
                                 // Success: value, then flag 0.
                                 sp!(self, v);
                                 sp!(self, crate::bytecode::GenericValue::Int(W::default()));
@@ -6363,6 +6528,9 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                         let v = result?
                             .into_arena_canonical(wb, fb, arena)
                             .map_err(|_| out_of_arena_push("native result", arena.capacity()))?;
+                        // Intern host `Opaque(Arc)` values to the POD index
+                        // form for the operand stack (B33).
+                        let v = self.intern_opaque_arcs(v);
                         sp!(self, v);
                     }
                 }

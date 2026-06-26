@@ -468,6 +468,23 @@ pub enum GenericValue<W: crate::word::Word, F: crate::float::Float> {
     /// [`crate::vm::Vm::set_native_bounds`].
     Opaque(alloc::sync::Arc<dyn crate::opaque::HostOpaque>),
 
+    /// Internal POD index form of an opaque host reference (B33).
+    ///
+    /// An opaque value on the operand stack and as a boxed-composite
+    /// element is carried as this `u32` index into the VM's
+    /// `ephemeral_opaques` registry, not as the `Drop`-bearing
+    /// [`Self::Opaque`] `Arc`. The operand stack is arena-resident, so this
+    /// keeps it free of global-heap pointers, which the snapshot and
+    /// no-global-heap goals require. The `Arc` is materialised back from
+    /// the index only at host boundaries (native call, yield, decode).
+    ///
+    /// Equality is index equality, which coincides with `Arc` pointer
+    /// identity because interning deduplicates by pointer (see
+    /// [`crate::vm::Vm`]'s `intern_ephemeral_opaque`). Host code never
+    /// observes this variant: the boundary walks convert it to
+    /// [`Self::Opaque`] before a value crosses into host hands.
+    OpaqueRef(u32),
+
     /// Phantom variant kept only when the `floats` feature is
     /// disabled, so the `F` type parameter is referenced non-
     /// recursively. Never constructed at runtime; pattern
@@ -527,6 +544,10 @@ impl<W: crate::word::Word, F: crate::float::Float> PartialEq for GenericValue<W,
             // matches the convention for host-managed references
             // and avoids requiring `Eq` on the host's opaque type.
             (Self::Opaque(a), Self::Opaque(b)) => alloc::sync::Arc::ptr_eq(a, b),
+            // OpaqueRef equality is index equality. Interning deduplicates by
+            // `Arc` pointer identity, so equal indices coincide with the same
+            // host object, matching the `Opaque` arm above (B33).
+            (Self::OpaqueRef(a), Self::OpaqueRef(b)) => a == b,
             _ => false,
         }
     }
@@ -618,7 +639,10 @@ pub(crate) fn flat_tuple_element_with_refs<W: crate::word::Word, F: crate::float
     float_bytes: usize,
 ) -> bool {
     match v {
-        GenericValue::Opaque(_) => true,
+        // Both the host `Arc` form and the internal index form are opaque and
+        // flat-eligible; the pack path converts either to the one-word index
+        // (B33).
+        GenericValue::Opaque(_) | GenericValue::OpaqueRef(_) => true,
         // A `Text` element (a `StaticStr` literal or a `KStr`) flattens to a
         // two-word `(ptr, len)` handle, the same representation as a flat
         // `Text` struct field (B28 P3 item 5 C4). It is flat-eligible only
@@ -1495,6 +1519,10 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
             // host's specific name read it through
             // [`GenericValue::opaque_type_name`].
             Self::Opaque(_) => "Opaque",
+            // The internal index form names the same surface type. Resolving
+            // the host-specific name needs the registry; diagnostics use the
+            // generic literal, as for `Opaque` above (B33).
+            Self::OpaqueRef(_) => "Opaque",
             #[cfg(not(feature = "floats"))]
             Self::_PhantomFloat(_) => unreachable!("_PhantomFloat is never constructed"),
         }
@@ -3657,6 +3685,7 @@ impl ConstValue {
             Value::StaticStr(s) => Ok(ConstValue::StaticStr(s)),
             Value::KStr(_) => Err("KStr cannot be a compile-time constant"),
             Value::Opaque(_) => Err("Opaque cannot be a compile-time constant"),
+            Value::OpaqueRef(_) => Err("Opaque cannot be a compile-time constant"),
             Value::Tuple(items) => items
                 .into_elements()
                 .into_iter()

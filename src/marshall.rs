@@ -422,6 +422,27 @@ impl<W: Word, F: Float> KeleusmaType<W, F> for Arc<dyn HostOpaque> {
         }
     }
 
+    fn from_value_ctx(v: &GenericValue<W, F>, ctx: &RefContext<'_>) -> Result<Self, VmError> {
+        match v {
+            GenericValue::Opaque(o) => Ok(Arc::clone(o)),
+            // The internal POD index form resolves through the context's
+            // registry (B33). A value is normally materialised to `Opaque`
+            // at the yield boundary, but a host decode of one still carrying
+            // the index form resolves cleanly here.
+            GenericValue::OpaqueRef(i) => {
+                ctx.opaques.get(*i as usize).map(Arc::clone).ok_or_else(|| {
+                    VmError::InvalidBytecode(alloc::string::String::from(
+                        "opaque index does not resolve (stale or out of range)",
+                    ))
+                })
+            }
+            other => Err(VmError::TypeError(format!(
+                "expected opaque, got {}",
+                other.type_name()
+            ))),
+        }
+    }
+
     fn into_value(self) -> GenericValue<W, F> {
         GenericValue::Opaque(self)
     }

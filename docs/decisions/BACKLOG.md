@@ -1447,7 +1447,7 @@ B28 P2 onwards needs this feature to migrate composite Value internal storage fr
 - B33 (opaque values as indices) complements this feature for the Arc-bearing case.
 - The existing `KString` API in `keleusma::kstring` is the prior art for the handle pattern; the builder pattern is new.
 
-## B33. Opaque values stored as indices into per-VM Vecs
+## ~~B33. Opaque values stored as indices into per-VM Vecs~~ (Resolved for V0.2.1; persistent registry deliberately omitted, no consumer)
 
 `Value::Opaque(Arc<dyn HostOpaque>)` carries a fat `Arc` pointer (16 bytes on 64-bit). The `Arc` is Drop-bearing; dropping it decrements the host object's refcount. This prevents Opaque fields from being stored in arena byte buffers (B32) because the arena reset reclaims the bytes without running any Drop, leaking the refcount. For B28's "everything in arena" property to hold across all composite Value variants, Opaque needs a POD-shaped runtime representation that the arena can hold safely.
 
@@ -1525,6 +1525,16 @@ B28 P2 onwards. Without this feature, B28 must use a hybrid Flat-plus-Boxed repr
 
 - B28 (runtime composite Value representation aligned with the language guarantee) is the immediate consumer.
 - B32 (arena bytes-builder) is the complement: B32 provides the byte buffer; B33 provides the POD opaque representation that fits in it.
+
+### Resolved (2026-06-26)
+
+The design above predated the B28 P3 "opaque registry tightening", which already built the ephemeral half: a single arena-resident `ephemeral_opaques` registry (`StackVec` in the arena, cleared at RESET), with `intern_ephemeral_opaque`/`resolve_ephemeral_opaque`, so an opaque field inside a flat composite is already a one-word byte index rather than the `Drop`-bearing `Arc`. The remaining residual, the operand stack itself still carrying `Value::Opaque(Arc)` (an arena-resident stack holding a global-heap pointer, which the snapshot and no-global-heap goals forbid), was closed here.
+
+A new internal `GenericValue::OpaqueRef(u32)` variant is the POD index form. The operand stack and boxed-composite elements carry `OpaqueRef`; the host `Value::Opaque(Arc)` form survives only at boundaries, so host code that matches `Value::Opaque` is unaffected. Four VM boundary walks convert: a native-call argument materialises `OpaqueRef` to `Arc` (the native receives the `Arc`), a native result interns `Arc` to `OpaqueRef`, the yield/finish boundary materialises so host code can pattern-match `Value::Opaque` without `decode`, and a host `call`/`resume` argument interns. `read_flat_scalar` now pushes the index form instead of resolving, `NewComposite` packs the index directly, equality is index equality (which coincides with `Arc` pointer identity because interning deduplicates by pointer), and `type_name` is unchanged because it already returned the generic `"Opaque"`. The marshalling `Arc::from_value_ctx` resolves a bare `OpaqueRef` through the context as a defensive path for `decode`.
+
+The two-registry design and the `OpaqueRef::Persistent` arm are deliberately **not** built: a data-segment field type rejects `String` and opaque named types at compile time (`validate_data_field_type`), so no opaque can reach `private data` and persist across a RESET. The single ephemeral registry suffices; if a future feature admits opaque in persistent data, the persistent registry and a tag are the natural extension.
+
+Tests: `tests/opaque.rs` gains `opaque_materialises_across_the_yield_boundary` and `host_supplied_opaque_argument_round_trips`; the existing flat-composite, decode, and interning tests cover the read/pack and native paths. Validated under default features: the library suite (1116), the opaque suite with the two new boundary tests (8), and the flat-reference, decode, and interning integration suites (12), plus `cargo fmt`. Clippy, narrow-word compilation, signatures, the doc gate, and Miri over the opaque suite are run at `-j 1` in the session's memory-constrained build environment.
 
 ## B34. keleusma-macros extension for shared-data flat-byte layout
 
