@@ -982,14 +982,14 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
             Self::Tuple(TupleBody::Boxed(elems)) => {
                 let elems = (*elems)
                     .into_iter()
-                    .map(|v| v.into_arena_canonical(word_bytes, float_bytes, arena))
+                    .map(|v| v.into_arena_canonical_field(word_bytes, float_bytes, arena))
                     .collect::<Result<alloc::vec::Vec<_>, _>>()?;
                 Self::tuple_in_arena(elems, word_bytes, float_bytes, arena)
             }
             Self::Array(ArrayBody::Boxed(elems)) => {
                 let elems = (*elems)
                     .into_iter()
-                    .map(|v| v.into_arena_canonical(word_bytes, float_bytes, arena))
+                    .map(|v| v.into_arena_canonical_field(word_bytes, float_bytes, arena))
                     .collect::<Result<alloc::vec::Vec<_>, _>>()?;
                 Self::array_in_arena(elems, word_bytes, float_bytes, arena)
             }
@@ -1000,7 +1000,7 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
                     .map(|(k, v)| {
                         Ok::<_, allocator_api2::alloc::AllocError>((
                             k,
-                            v.into_arena_canonical(word_bytes, float_bytes, arena)?,
+                            v.into_arena_canonical_field(word_bytes, float_bytes, arena)?,
                         ))
                     })
                     .collect::<Result<alloc::vec::Vec<_>, _>>()?;
@@ -1028,7 +1028,7 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
                 }
                 let fields = fields
                     .into_iter()
-                    .map(|v| v.into_arena_canonical(word_bytes, float_bytes, arena))
+                    .map(|v| v.into_arena_canonical_field(word_bytes, float_bytes, arena))
                     .collect::<Result<alloc::vec::Vec<_>, _>>()?;
                 Self::enum_in_arena(
                     type_name,
@@ -1040,6 +1040,49 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
                     float_bytes,
                     arena,
                 )
+            }
+            other => Ok(other),
+        }
+    }
+
+    /// Canonicalise a composite *field* for flat packing (B28, B37).
+    ///
+    /// First canonicalises the field through [`Self::into_arena_canonical`]
+    /// (flattening a nested composite), then promotes an owned `StaticStr`
+    /// to an arena `KStr`. The promotion is what lets a text-bearing
+    /// composite pack flat: the compiler classifies a `Text` field as a flat
+    /// `(ptr, len)` when the module word slot holds a host pointer
+    /// (`classify_flat_field`), and the value-side packer
+    /// ([`Self::pack_flat_in_arena`] via `flat_field_size`) treats a `KStr`,
+    /// but not a `StaticStr`, as that flat field. An unsignatured native that
+    /// builds its result with no arena returns a boxed composite whose text
+    /// is a `StaticStr`; without this promotion the result stays boxed and
+    /// mismatches the compiler's baked flat access (`InvalidBytecode` at the
+    /// `GetTupleField`/`GetStructField` access). Promoting the field here
+    /// makes a native-returned composite identical to the one the in-script
+    /// `NewComposite` path builds for the same type.
+    ///
+    /// Only a composite *field* is promoted, not a top-level bare `StaticStr`
+    /// return: a bare string is read directly, never through baked flat
+    /// composite access, so leaving it owned avoids a needless arena copy.
+    ///
+    /// The promotion is gated on `word_bytes >= host pointer width`, the same
+    /// condition `classify_flat_field` uses to admit a flat `Text` field. On a
+    /// narrow-word build the compiler keeps `Text` boxed and bakes boxed
+    /// access, so the `StaticStr` is left owned and the composite stays boxed,
+    /// matching that access. Without the gate the field would promote to a
+    /// `KStr` and the composite would pack flat against a boxed access,
+    /// reintroducing the very mismatch this repair removes, on narrow targets.
+    fn into_arena_canonical_field(
+        self,
+        word_bytes: usize,
+        float_bytes: usize,
+        arena: &keleusma_arena::Arena,
+    ) -> Result<Self, allocator_api2::alloc::AllocError> {
+        match self.into_arena_canonical(word_bytes, float_bytes, arena)? {
+            Self::StaticStr(s) if word_bytes >= core::mem::size_of::<usize>() => {
+                let ks = crate::kstring::KString::alloc(arena, &s)?;
+                Ok(Self::KStr(ks))
             }
             other => Ok(other),
         }

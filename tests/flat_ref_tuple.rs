@@ -66,6 +66,38 @@ fn array_of_opaque_flattens_and_indexes() {
 }
 
 #[test]
+fn native_returning_word_text_tuple_flattens_and_destructures() {
+    // B37 regression. An unsignatured native that returns a `(Word, Text)`
+    // tuple builds a boxed body with a `StaticStr` element (no arena at
+    // `Value::tuple`). The compiler bakes flat access for the declared
+    // `(Word, Text)` return, since `Text` is a flat field at the host word
+    // width. Before the native-result canonicalisation promoted the
+    // `StaticStr` field to an arena `KStr`, the boxed body mismatched the flat
+    // access and raised `InvalidBytecode("GetTupleField operand form does not
+    // match tuple body")`. Now the result flattens, both fields read back, and
+    // the text resolves through the marshalling boundary.
+    let src = "use cmd() -> (Word, Text)\n\
+               use tlen(Text) -> Word\n\
+               fn main() -> Word { let t = cmd(); t.0 + tlen(t.1) }";
+    let tokens = tokenize(src).expect("lex");
+    let program = parse(&tokens).expect("parse");
+    let module = compile(&program).expect("compile");
+    let arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+    let mut vm = Vm::new(module, &arena).expect("verify");
+    vm.register_native("cmd", |_| {
+        Ok(Value::tuple(alloc::vec![
+            Value::Int(5),
+            Value::StaticStr(alloc::string::String::from("abc")),
+        ]))
+    });
+    vm.register_fn("tlen", |s: alloc::string::String| -> i64 { s.len() as i64 });
+    match vm.call(&[]).expect("call") {
+        VmState::Finished(v) => assert_eq!(v, Value::Int(8)),
+        other => panic!("expected finished, got {:?}", other),
+    }
+}
+
+#[test]
 fn tuple_with_opaque_and_trailing_scalars_offsets() {
     // The opaque occupies one word; the two trailing scalars must read back
     // at their post-opaque offsets. The asymmetric weight on `t.1`
