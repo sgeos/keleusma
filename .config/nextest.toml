@@ -19,15 +19,16 @@
 fail-fast = false
 # Print failing-test output inline as it happens.
 failure-output = "immediate"
-# Bound the concurrent process count. nextest runs one process per test, and
-# every Keleusma test process maps the keleusma-arena's large virtual address
-# region (hundreds of gigabytes of reservation). On macOS, enough of those
-# concurrent reservations exhausts a kernel VM-accounting resource and the whole
-# run wedges (every process at 0% CPU). Four concurrent processes stay well
-# under that limit and still run the ~1,150 library tests in under three
-# seconds. This cap is a local-development (macOS) workaround; the `ci` profile
-# below deliberately omits it because Linux overcommits virtual memory and does
-# not hit the wedge, so CI keeps full parallelism.
+# Bound the concurrent test-process count to limit peak memory. nextest runs one
+# process per test, so the whole library and integration suite would otherwise
+# spawn a large number of processes at once; on a memory-constrained host the
+# combined footprint plus parallel `rustc` compilation can exhaust RAM and swap
+# and wedge the run (processes blocked on memory at 0% CPU). Four concurrent
+# processes keep peak memory modest while still running the ~1,150 library tests
+# in a few seconds. The `ci` profile below omits the cap because the CI runners
+# have ample memory headroom. (An earlier version of this comment attributed the
+# wedge to a large keleusma-arena virtual reservation; that was wrong. The arena
+# is a plain heap allocation of `capacity` bytes, 64 KiB by default. See B39.)
 test-threads = 4
 
 # A profile for CI: same coverage, with a couple of retries to absorb the known

@@ -27,7 +27,7 @@ cargo tw     # the full workspace suite under cargo's serial runner
 
 Install [`cargo-nextest`](https://nexte.st) (`cargo install cargo-nextest --locked`) to run the integration-test binaries in parallel rather than one at a time; the workspace has two dozen of them. nextest does not run doc-tests, so the full check pairs `cargo nextest run --workspace` with `cargo test --workspace --doc`. Reserve the full gate below for before opening a pull request; the pre-push hook runs it automatically.
 
-The default nextest profile caps the run at four concurrent test processes (`test-threads` in [`.config/nextest.toml`](.config/nextest.toml)). Each test process maps the `keleusma-arena` crate's large virtual address reservation, and on macOS enough concurrent reservations wedge the run through a kernel virtual-memory-accounting limit. Four processes stay under that limit and still finish the library suite in a few seconds. The `ci` profile omits the cap because Linux overcommits virtual memory and does not hit the wedge.
+The default nextest profile caps the run at four concurrent test processes (`test-threads` in [`.config/nextest.toml`](.config/nextest.toml)). nextest runs one process per test, so the full suite would otherwise spawn many at once; on a memory-constrained host the combined footprint plus parallel compilation can exhaust RAM and swap and wedge the run. Four processes keep peak memory modest while still finishing the library suite in a few seconds. The `ci` profile omits the cap because the CI runners have ample memory.
 
 ## Branching and commits
 
