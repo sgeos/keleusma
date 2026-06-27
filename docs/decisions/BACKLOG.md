@@ -1895,7 +1895,7 @@ B38 also cannot be implemented in isolation: `materialise_kstrings` takes only `
 
 Resolution: defer B38 to the snapshot/Phase D effort, where the value-transport boundary and the layout mechanism are introduced together; the layout-aware walk (unified for `Text` and `OpaqueRef`) is then part of that feature rather than standalone infrastructure ahead of it. This is the same forward-looking-ahead-of-its-consumer situation as B33's deliberately-omitted persistent registry.
 
-## B39. Correct the false arena-reservation rationale for the nextest concurrency cap
+## ~~B39. Correct the false arena-reservation rationale for the nextest concurrency cap~~ (Resolved 2026-06-26)
 
 Filed 2026-06-26. An earlier diagnosis, repeated in the `.config/nextest.toml` and `CONTRIBUTING.md` comments added in `d1bc4e1`, claimed that `keleusma-arena` reserves a very large virtual region, on the order of hundreds of gigabytes per process, and that concurrent arena-mapping test processes therefore exhaust memory. That claim is false and must be corrected wherever it appears.
 
@@ -1909,3 +1909,5 @@ Filed 2026-06-26. An earlier diagnosis, repeated in the `.config/nextest.toml` a
 2. Operationally, do not run multiple full-gate builds concurrently, and prefer serial test execution when host memory is constrained.
 
 There is no arena change to make. This entry exists to retract the incorrect claim and points at the comment corrections.
+
+**Resolved (2026-06-26).** Both actions are complete in commit `0c6e299`: the `.config/nextest.toml` and `CONTRIBUTING.md` comments now state the memory rationale and explicitly retract the arena-reservation claim, and the `test-threads = 4` cap is kept. The single-gate nextest runs earlier in the session succeeded repeatedly; the wedges occurred only when several heavy builds overlapped, so the cap plus serial discipline is an adequate mitigation. Whether to harden the gate further (a memory-aware runner, or reverting to serial `cargo test`) is a separate operational question, not an arena defect, and is left open as a note rather than tracked work.
