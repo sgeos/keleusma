@@ -164,11 +164,15 @@ fn script_arg_at(index: usize) -> std::option::Option<std::string::String> {
 pub fn register<'a, 'arena, W: Word, A: Address, F: Float>(
     vm: &mut GenericVm<'a, 'arena, W, A, F>,
 ) {
-    // The KeleusmaType marshalling family does not currently
-    // support `String` arguments or tuple return types, so the
-    // shell natives use the lower-level `register_native` entry
-    // point and pattern-match on `GenericValue` directly. Natives
-    // that take a `Text` argument register through
+    // The shell natives register through the lower-level
+    // `register_native`/`register_native_with_ctx` entry points and
+    // pattern-match on `GenericValue` directly, rather than the typed
+    // `register_fn` marshalling family. (The marshalling family does now
+    // support `String` arguments and tuple/composite return types since
+    // B28, so these could be migrated to signatured `register_fn`; the
+    // value-driven flatten already handles their tuple and `Option`
+    // returns, so the migration is cleanup, not a correctness need.)
+    // Natives that take a `Text` argument register through
     // `register_native_with_ctx`: a script-computed string arrives as
     // an arena-resident `KStr`, which only resolves with the arena
     // borrowed through the native context (B28). Natives with no text

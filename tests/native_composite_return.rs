@@ -19,7 +19,17 @@ use keleusma::compiler::compile;
 use keleusma::lexer::tokenize;
 use keleusma::parser::parse;
 use keleusma::vm::{DEFAULT_ARENA_CAPACITY, Vm, VmState};
-use keleusma::{Arena, Value};
+use keleusma::{Arena, KeleusmaType, Value};
+
+// A host enum mirroring `enum Msg { Note(Word, Word), Code(Word) }` for the
+// signatured-native test below. `Note` is the larger, first variant; `Code` is
+// the smaller, second variant that an unsignatured native cannot return
+// correctly (B37).
+#[derive(KeleusmaType, Debug, Clone, PartialEq)]
+enum Msg {
+    Note(i64, i64),
+    Code(i64),
+}
 
 #[test]
 fn native_struct_with_text_field_flattens_and_reads() {
@@ -133,6 +143,30 @@ fn native_enum_smaller_later_variant_known_limitation() {
             vec![Value::Int(7)],
         )))
     });
+    match vm.call(&[]).expect("call") {
+        VmState::Finished(v) => assert_eq!(v, Value::Int(7)),
+        other => panic!("expected finished, got {:?}", other),
+    }
+}
+
+#[test]
+fn signatured_native_returns_smaller_enum_variant_correctly() {
+    // B37 signatured-native direction. The unsignatured native above silently
+    // misreads a non-first, non-largest enum variant, because the arena-less
+    // `EnumBody::boxed` loses the discriminant and the largest-variant padding.
+    // A SIGNATURED native registered through `register_fn` marshals its result
+    // through the declared type's `into_value_ctx` (B28 P3), which supplies the
+    // correct discriminant and padding from the type, so the smaller variant
+    // reads back. This is the strategic fix the value-driven flatten cannot
+    // reach, and it needs no further marshalling work: composite returns are
+    // already supported by the marshalling family.
+    let src = "use code() -> Msg\n\
+               enum Msg { Note(Word, Word), Code(Word) }\n\
+               fn main() -> Word { let m = code(); match m { Msg::Note(a, b) => a + b, Msg::Code(n) => n } }";
+    let module = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+    let arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+    let mut vm = Vm::new(module, &arena).expect("verify");
+    vm.register_fn("code", || -> Msg { Msg::Code(7) });
     match vm.call(&[]).expect("call") {
         VmState::Finished(v) => assert_eq!(v, Value::Int(7)),
         other => panic!("expected finished, got {:?}", other),
