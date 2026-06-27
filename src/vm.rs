@@ -2500,6 +2500,74 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         Ok(())
     }
 
+    /// Write a host value mirroring the whole `shared data` segment into the
+    /// buffer at the module's flat widths (B34).
+    ///
+    /// `T` derives [`crate::marshall::KeleusmaType`] and must match the
+    /// segment's field types and declaration order; its flat byte size must
+    /// equal [`Self::shared_data_bytes`], validated here. Unlike the per-slot
+    /// [`Self::set_shared`] (scalar-only), this writes composite shared fields
+    /// too, so a host can seed the entire segment in one call. The data-segment
+    /// rules reject `Text` and opaque fields, so `T` is purely scalar and
+    /// scalar-composite and the write needs no arena.
+    pub fn marshal_shared_into<T: crate::marshall::KeleusmaType<W, F>>(
+        &self,
+        value: T,
+        buf: &mut [u8],
+    ) -> Result<(), VmError> {
+        let wb = self.module_word_bytes();
+        let fb = self.module_float_bytes();
+        self.check_shared_marshal_layout::<T>(buf, wb, fb)?;
+        <T as crate::marshall::KeleusmaType<W, F>>::to_flat_bytes(value, buf, wb, fb)
+    }
+
+    /// Read a host value mirroring the whole `shared data` segment from the
+    /// buffer at the module's flat widths (B34); the dual of
+    /// [`Self::marshal_shared_into`].
+    pub fn unmarshal_shared<T: crate::marshall::KeleusmaType<W, F>>(
+        &self,
+        buf: &[u8],
+    ) -> Result<T, VmError> {
+        let wb = self.module_word_bytes();
+        let fb = self.module_float_bytes();
+        self.check_shared_marshal_layout::<T>(buf, wb, fb)?;
+        <T as crate::marshall::KeleusmaType<W, F>>::from_flat_bytes(buf, wb, fb)
+    }
+
+    /// Validate that `T`'s flat layout matches the module's shared segment and
+    /// that `buf` is the right length (B34, the original "validate against the
+    /// keleusma layout"). A flat-size mismatch surfaces here as a clear error
+    /// rather than a silent wrong read or write.
+    fn check_shared_marshal_layout<T: crate::marshall::KeleusmaType<W, F>>(
+        &self,
+        buf: &[u8],
+        wb: usize,
+        fb: usize,
+    ) -> Result<(), VmError> {
+        let need = self.shared_data_bytes();
+        let have = <T as crate::marshall::KeleusmaType<W, F>>::flat_byte_size(wb, fb).ok_or_else(
+            || {
+                VmError::TypeError(String::from(
+                    "host type is not flat-eligible for shared-data marshalling",
+                ))
+            },
+        )?;
+        if have != need {
+            return Err(VmError::TypeError(format!(
+                "host type flat size {} does not match module's shared_data_bytes {}",
+                have, need
+            )));
+        }
+        if buf.len() != need {
+            return Err(VmError::NativeError(format!(
+                "shared buffer length {} does not match module's shared_data_bytes {}",
+                buf.len(),
+                need
+            )));
+        }
+        Ok(())
+    }
+
     /// Shared bounds, visibility, and buffer-length checks common to
     /// [`Self::get_shared`] and [`Self::set_shared`]. Rejects a private or
     /// out-of-range slot and a wrong-size buffer before any offset arithmetic.

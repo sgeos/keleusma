@@ -203,6 +203,44 @@ pub trait KeleusmaType<W: Word, F: Float>: Sized {
         let _ = ctx;
         Self::from_flat_bytes(bytes, word_bytes, float_bytes)
     }
+
+    /// Write this type's flat body into `dst` starting at offset 0 (B34), the
+    /// write mirror of [`KeleusmaType::from_flat_bytes`].
+    ///
+    /// The default writes a single fixed-size flat scalar through
+    /// `write_scalar_le`. A reference kind (`Text`/`Opaque`, which need the
+    /// arena or the opaque registry and cannot reach a data segment) and a type
+    /// with no flat scalar kind both return a [`VmError::TypeError`]. Flat
+    /// composites override this (the `[T; N]` and tuple impls, the `Option`
+    /// impl, and the derive macro) to write each field at its packed offset,
+    /// recursing through nested composites. `Vm::marshal_shared_into` uses it to
+    /// write a host struct mirroring a `shared data` segment into the buffer.
+    fn to_flat_bytes(
+        self,
+        dst: &mut [u8],
+        word_bytes: usize,
+        float_bytes: usize,
+    ) -> Result<(), VmError>
+    where
+        Self: Sized,
+    {
+        use crate::value_layout::ScalarKind;
+        match Self::flat_field_kind() {
+            Some(ScalarKind::Text) | Some(ScalarKind::Opaque) => {
+                Err(VmError::TypeError(alloc::string::String::from(
+                    "reference field (Text or Opaque) cannot be written to a flat host buffer",
+                )))
+            }
+            Some(_) => {
+                self.into_value()
+                    .write_scalar_le(dst, 0, word_bytes, float_bytes);
+                Ok(())
+            }
+            None => Err(VmError::TypeError(alloc::string::String::from(
+                "type has no flat byte representation",
+            ))),
+        }
+    }
 }
 
 // -- Primitive impls --
@@ -522,6 +560,141 @@ impl<W: Word, F: Float, T: KeleusmaType<W, F>> KeleusmaType<W, F> for Option<T> 
             Option::None => Ok(GenericValue::None),
         }
     }
+
+    // Flat-byte layout (B34). The value form above is the bare inner value (no
+    // discriminant), but the compiler lays `Option<T>` flat as a discriminant
+    // word plus the `Some` payload, padded to `word + payload_max` (`None` = 0,
+    // `Some` = 1; value_layout.rs `flat_byte_size`). These methods read and
+    // write that disc-tagged flat form, so a host struct with an `Option` field
+    // round-trips through the shared-data buffer and a flat composite with an
+    // `Option` field decodes at the host boundary.
+    fn flat_byte_size(word_bytes: usize, float_bytes: usize) -> Option<usize> {
+        Some(word_bytes + T::flat_byte_size(word_bytes, float_bytes)?)
+    }
+
+    fn from_flat_bytes(
+        bytes: &[u8],
+        word_bytes: usize,
+        float_bytes: usize,
+    ) -> Result<Self, VmError> {
+        match read_flat_disc::<W, F>(bytes, word_bytes, float_bytes)? {
+            0 => Ok(Option::None),
+            1 => {
+                let psize = option_payload_size::<W, F, T>(word_bytes, float_bytes)?;
+                Ok(Some(T::from_flat_bytes(
+                    &bytes[word_bytes..word_bytes + psize],
+                    word_bytes,
+                    float_bytes,
+                )?))
+            }
+            other => Err(VmError::TypeError(format!(
+                "unknown Option discriminant {}",
+                other
+            ))),
+        }
+    }
+
+    fn to_flat_bytes(
+        self,
+        dst: &mut [u8],
+        word_bytes: usize,
+        float_bytes: usize,
+    ) -> Result<(), VmError> {
+        match self {
+            Option::None => {
+                write_flat_disc::<W, F>(dst, 0, word_bytes, float_bytes);
+                for b in dst[word_bytes..].iter_mut() {
+                    *b = 0;
+                }
+                Ok(())
+            }
+            Some(t) => {
+                write_flat_disc::<W, F>(dst, 1, word_bytes, float_bytes);
+                let psize = option_payload_size::<W, F, T>(word_bytes, float_bytes)?;
+                t.to_flat_bytes(
+                    &mut dst[word_bytes..word_bytes + psize],
+                    word_bytes,
+                    float_bytes,
+                )?;
+                for b in dst[word_bytes + psize..].iter_mut() {
+                    *b = 0;
+                }
+                Ok(())
+            }
+        }
+    }
+
+    fn from_flat_bytes_ctx(
+        bytes: &[u8],
+        word_bytes: usize,
+        float_bytes: usize,
+        ctx: &RefContext<'_>,
+    ) -> Result<Self, VmError> {
+        match read_flat_disc::<W, F>(bytes, word_bytes, float_bytes)? {
+            0 => Ok(Option::None),
+            1 => {
+                let psize = option_payload_size::<W, F, T>(word_bytes, float_bytes)?;
+                Ok(Some(T::from_flat_bytes_ctx(
+                    &bytes[word_bytes..word_bytes + psize],
+                    word_bytes,
+                    float_bytes,
+                    ctx,
+                )?))
+            }
+            other => Err(VmError::TypeError(format!(
+                "unknown Option discriminant {}",
+                other
+            ))),
+        }
+    }
+}
+
+/// Read the leading discriminant word of a flat enum body as `i64` (B34).
+fn read_flat_disc<W: Word, F: Float>(
+    bytes: &[u8],
+    word_bytes: usize,
+    float_bytes: usize,
+) -> Result<i64, VmError> {
+    match GenericValue::<W, F>::read_scalar_le(
+        bytes,
+        0,
+        crate::value_layout::ScalarKind::Int,
+        word_bytes,
+        float_bytes,
+    ) {
+        GenericValue::Int(w) => Ok(W::to_i64(w)),
+        _ => Err(VmError::TypeError(alloc::string::String::from(
+            "flat enum discriminant is not an Int",
+        ))),
+    }
+}
+
+/// Write a flat enum discriminant word at offset 0 (B34).
+fn write_flat_disc<W: Word, F: Float>(
+    dst: &mut [u8],
+    disc: i64,
+    word_bytes: usize,
+    float_bytes: usize,
+) {
+    GenericValue::<W, F>::Int(W::from_i64_wrap(disc)).write_scalar_le(
+        dst,
+        0,
+        word_bytes,
+        float_bytes,
+    );
+}
+
+/// The flat byte size of an `Option`'s `Some` payload, or a `TypeError` when
+/// the payload type is not flat-eligible (B34).
+fn option_payload_size<W: Word, F: Float, T: KeleusmaType<W, F>>(
+    word_bytes: usize,
+    float_bytes: usize,
+) -> Result<usize, VmError> {
+    T::flat_byte_size(word_bytes, float_bytes).ok_or_else(|| {
+        VmError::TypeError(alloc::string::String::from(
+            "Option payload type is not flat-eligible",
+        ))
+    })
 }
 
 // -- Fixed-length arrays --
@@ -638,6 +811,26 @@ impl<W: Word, F: Float, T: KeleusmaType<W, F> + Clone, const N: usize> KeleusmaT
         converted
             .try_into()
             .map_err(|_| VmError::TypeError(format!("failed to convert array of length {}", N)))
+    }
+
+    fn to_flat_bytes(
+        self,
+        dst: &mut [u8],
+        word_bytes: usize,
+        float_bytes: usize,
+    ) -> Result<(), VmError> {
+        let esize = <T as KeleusmaType<W, F>>::flat_byte_size(word_bytes, float_bytes).ok_or_else(
+            || {
+                VmError::TypeError(alloc::string::String::from(
+                    "flat array element type is not flat-eligible",
+                ))
+            },
+        )?;
+        for (i, t) in self.into_iter().enumerate() {
+            let lo = i * esize;
+            t.to_flat_bytes(&mut dst[lo..lo + esize], word_bytes, float_bytes)?;
+        }
+        Ok(())
     }
 
     fn from_value_ctx(v: &GenericValue<W, F>, ctx: &RefContext<'_>) -> Result<Self, VmError> {
@@ -820,6 +1013,27 @@ macro_rules! impl_tuple {
                         val
                     },
                 )*))
+            }
+
+            #[allow(unused_assignments, unused_mut, unused_variables, non_snake_case)]
+            fn to_flat_bytes(self, dst: &mut [u8], word_bytes: usize, float_bytes: usize)
+                -> Result<(), VmError>
+            {
+                let ($($name,)*) = self;
+                let mut offset = 0usize;
+                // Mirror of `from_flat_bytes`: write each element at the running
+                // packed offset in declaration order (B34).
+                $(
+                    {
+                        let size = <$name as KeleusmaType<W, FloatT>>::flat_byte_size(word_bytes, float_bytes)
+                            .ok_or_else(|| VmError::TypeError(::alloc::string::String::from(
+                                "flat tuple field is not flat-eligible",
+                            )))?;
+                        $name.to_flat_bytes(&mut dst[offset..offset + size], word_bytes, float_bytes)?;
+                        offset += size;
+                    }
+                )*
+                Ok(())
             }
 
             #[allow(clippy::unused_unit, unused_assignments, non_snake_case)]

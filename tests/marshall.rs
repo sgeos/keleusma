@@ -695,3 +695,122 @@ fn register_fn_argument_type_mismatch() {
         other => panic!("expected TypeError, got {:?}", other),
     }
 }
+
+// -- B34: whole-segment shared-data marshalling --
+
+// A host struct mirroring the `data state` segment below: a scalar, a tuple, a
+// fixed array, a nested flat struct, a nested uniformly-flat enum, and an
+// `Option`. The data-segment rules reject `Text`/opaque, so every field is
+// scalar or scalar-composite and the flat write needs no arena.
+// The script grammar admits unit and tuple-style enum variants, not
+// struct-style ones, so the segment enum uses tuple variants.
+#[derive(KeleusmaType, Debug, Clone, PartialEq)]
+enum Beacon {
+    Dark,
+    Lit(i64),
+    Range(i64, i64),
+}
+
+#[derive(KeleusmaType, Debug, Clone, PartialEq)]
+struct SharedState {
+    counter: i64,
+    coords: (i64, i64),
+    cells: [i64; 3],
+    pair: Pair,
+    sig: Beacon,
+    maybe: Option<i64>,
+}
+
+const SHARED_SEGMENT_SRC: &str = "\
+struct Pair { a: Word, b: Word }\n\
+enum Beacon { Dark, Lit(Word), Range(Word, Word) }\n\
+data state {\n\
+    counter: Word,\n\
+    coords: (Word, Word),\n\
+    cells: [Word; 3],\n\
+    pair: Pair,\n\
+    sig: Beacon,\n\
+    maybe: Option<Word>,\n\
+}\n\
+loop main(i: Word) -> Word { yield state.counter }";
+
+#[test]
+fn marshal_shared_round_trips_and_script_reads_it() {
+    // B34: a host struct mirroring the whole `data state` segment marshals into
+    // the buffer and back (covering scalar, tuple, array, nested struct, nested
+    // enum, and Option fields), and the script reads the marshalled `counter`
+    // at the segment's offset. The marshal succeeding proves the host flat
+    // layout equals the module's shared_data_bytes.
+    let tokens = tokenize(SHARED_SEGMENT_SRC).expect("lex");
+    let program = parse(&tokens).expect("parse");
+    let module = compile(&program).expect("compile");
+    let arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+    let mut vm = Vm::new(module, &arena).expect("verify");
+
+    let mut buf = vec![0u8; vm.shared_data_bytes()];
+    let state = SharedState {
+        counter: 5,
+        coords: (1, 2),
+        cells: [3, 4, 5],
+        pair: Pair { a: 6, b: 7 },
+        sig: Beacon::Range(8, 9),
+        maybe: Some(11),
+    };
+    vm.marshal_shared_into(state.clone(), &mut buf)
+        .expect("marshal");
+    let back: SharedState = vm.unmarshal_shared(&buf).expect("unmarshal");
+    assert_eq!(back, state, "round-trip must preserve every field");
+
+    // The script reads `state.counter` (offset 0) and yields it, proving the
+    // host wrote it where the script reads it.
+    match vm
+        .call_with_shared(&mut buf, &[Value::Int(0)])
+        .expect("call")
+    {
+        VmState::Yielded(Value::Int(n)) => assert_eq!(n, 5),
+        other => panic!("expected yielded counter, got {:?}", other),
+    }
+}
+
+#[test]
+fn marshal_shared_round_trips_other_variants() {
+    // The `On` enum variant (smaller than the largest, so padded) and a `None`
+    // option round-trip too.
+    let tokens = tokenize(SHARED_SEGMENT_SRC).expect("lex");
+    let program = parse(&tokens).expect("parse");
+    let module = compile(&program).expect("compile");
+    let arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+    let vm = Vm::new(module, &arena).expect("verify");
+    let mut buf = vec![0u8; vm.shared_data_bytes()];
+    let state = SharedState {
+        counter: -1,
+        coords: (0, 0),
+        cells: [0, 0, 0],
+        pair: Pair { a: 0, b: 0 },
+        sig: Beacon::Lit(42),
+        maybe: Option::None,
+    };
+    vm.marshal_shared_into(state.clone(), &mut buf)
+        .expect("marshal");
+    let back: SharedState = vm.unmarshal_shared(&buf).expect("unmarshal");
+    assert_eq!(back, state);
+}
+
+#[test]
+fn marshal_shared_rejects_layout_mismatch() {
+    // B34: a host type whose flat size differs from the segment is rejected,
+    // not silently mis-written. `Pair` (16 bytes) is smaller than the segment.
+    let tokens = tokenize(SHARED_SEGMENT_SRC).expect("lex");
+    let program = parse(&tokens).expect("parse");
+    let module = compile(&program).expect("compile");
+    let arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+    let vm = Vm::new(module, &arena).expect("verify");
+    let mut buf = vec![0u8; vm.shared_data_bytes()];
+    let err = vm
+        .marshal_shared_into(Pair { a: 1, b: 2 }, &mut buf)
+        .expect_err("layout mismatch must be rejected");
+    match err {
+        VmError::TypeError(m) => assert!(m.contains("does not match"), "msg: {m}"),
+        other => panic!("expected TypeError, got {:?}", other),
+    }
+}
