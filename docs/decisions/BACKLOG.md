@@ -1536,7 +1536,7 @@ The two-registry design and the `OpaqueRef::Persistent` arm are deliberately **n
 
 Tests: `tests/opaque.rs` gains `opaque_materialises_across_the_yield_boundary` and `host_supplied_opaque_argument_round_trips`; the existing flat-composite, decode, and interning tests cover the read/pack and native paths. Validated under default features: the library suite (1116), the opaque suite with the two new boundary tests (8), and the flat-reference, decode, and interning integration suites (12), plus `cargo fmt`. Clippy, narrow-word compilation, signatures, the doc gate, and Miri over the opaque suite are run at `-j 1` in the session's memory-constrained build environment.
 
-## B34. keleusma-macros extension for shared-data flat-byte layout
+## B34. keleusma-macros extension for shared-data flat-byte layout (re-scoped 2026-06-26; much of the original is superseded by B28)
 
 `#[derive(KeleusmaType)]` in `keleusma-macros` generates `impl KeleusmaType for T` blocks that marshall between host Rust types and the heap-allocated `Value` enum. Under B28's flat-byte composite-Value representation, the VM accesses host structs backing `shared data` declarations through byte offsets rather than through `Value` round-trips. The derive macro needs to additionally generate byte-layout information so the VM can read and write fields directly at the right offsets.
 
@@ -1584,6 +1584,27 @@ B28 P5 or P6, when shared `data` access integrates with the flat-byte runtime. U
 - B28 (runtime composite Value representation aligned with the language guarantee) is the immediate consumer.
 - The existing `keleusma-macros` crate is the implementation site.
 - The `#[derive(KeleusmaType)]` macro's current shape lives in `keleusma-macros/src/lib.rs`.
+
+### Re-scope (2026-06-26)
+
+A premise-check against the current `v0.2.1` state shows B28 already built most of what the original design proposed, and the forcing case above is obsolete.
+
+**Already done by B28.** Shared data is no longer a `Vec<Value>` round-trip; `set_data`/`get_data` are gone. It is a host-owned borrowed `&mut [u8]` buffer driven through `call_with_shared`/`resume_with_shared`, with `shared_data_bytes()`/`shared_data_bytes_for(module)` for sizing and per-slot scalar accessors `get_shared`/`set_shared`. The VM already holds the flat shared layout per slot (`shared_layout_entry` returns offset, kind, and size), so B34's "compile-time byte-layout descriptor" and "byte-level accessors" largely exist. The `#[derive(KeleusmaType)]` macro already generates the flat **read** side (`flat_byte_size`, `from_flat_bytes`, `from_flat_bytes_ctx`), which is effectively the byte-layout descriptor for a host type.
+
+**The real remaining gap.** A host cannot marshal a whole struct that mirrors the `shared data` segment to or from its buffer. `set_shared` is scalar-only and rejects composite slots (a composite shared field is written from the script, not the per-slot host API), so a host cannot seed or read a composite shared field at all. Two specific holes:
+
+1. `KeleusmaType` has no flat **write** method, only `from_flat_bytes` (read). There is no way to write a host type's flat bytes into a buffer.
+2. `Vm::marshal_shared_into<T>` / `unmarshal_shared<T>` do not exist.
+3. The host marshalling flat layout is **incomplete** relative to the script-side shared layout. `Option<T>` is admissible in a data segment and the script lays it out flat (discriminant plus payload), but the marshalling `Option` impl is not flat-eligible (`flat_field_kind` is `None`, and `into_value` treats `Some(t)` as the bare inner value with no discriminant). So the host and script flat layouts disagree for `Option`, and likely for any other admissible-but-not-yet-flat type.
+
+**Re-scoped plan, two tiers.**
+
+- **Tier 1 (about a day).** Add `KeleusmaType::to_flat_bytes` (a trait default for fixed scalars via `write_scalar_le`, erroring on the reference kinds `Text`/`Opaque` which need the arena and cannot reach a data segment anyway; overrides on `[T; N]` and the `impl_tuple` macro; generation in the derive macro for structs and enums, mirroring `from_flat_bytes`). Add `Vm::marshal_shared_into<T: KeleusmaType>(&self, value, buf)` and `Vm::unmarshal_shared<T>(&self, buf)`, each validating `T::flat_byte_size(module_word, module_float) == shared_data_bytes()` (the original "validate_against_keleusma_layout", surfaced as a clear error). Covers scalars, tuples, arrays, and nested derived structs and enums, the common shared-segment shapes.
+- **Tier 2.** Make `Option`, and any other admissible-but-not-flat type, flat-eligible in marshalling (discriminant plus payload) so the host marshalling layout fully matches the script-side shared layout.
+
+**Touchpoints.** `src/marshall.rs` (the trait method and the `[T; N]`/tuple/`Option` impls), `keleusma-macros/src/lib.rs` (generate `to_flat_bytes`), `src/vm.rs` (`marshal_shared_into`/`unmarshal_shared` plus the layout-match validation). Tests: round-trip a host struct mirroring a `shared data` segment through `marshal_shared_into` then `unmarshal_shared`, at i64/f64 and at narrow module widths, including a composite field; and a negative test for a byte-size mismatch.
+
+The original "extend the macro by roughly a factor of two" estimate no longer holds; the read side and the layout already exist. The realizable work is the write side plus the whole-struct shared helpers plus the `Option` flat-eligibility alignment.
 
 ## ~~B35. Partial Operation Handling~~ (Resolved for V0.2.x; native code generation lowering deferred to V0.4.0)
 
