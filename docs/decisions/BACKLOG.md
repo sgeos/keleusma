@@ -1863,7 +1863,7 @@ Verification: the `scripts/check-md-links.kel` gate, which destructures `shell::
 
 Two parts of this item are deliberately left open. First, the strategic host-side solution, direction (1), the signatured-native path through the marshalling family and the `keleusma-macros` derives, which depends on extending the marshalling family for composite and tuple return types (B34); the flatten above unblocks raw `register_native` hosts without it. Second, a flat text composite, whether native-returned or in-script, carries its `Text` as opaque `(ptr, len)` bytes with no layout, so the layout-blind `materialise_kstrings` and `contains_dynstr` treat a flat composite as scalar-only and do not materialise its text on a cross-arena snapshot (the REPL / hot-swap transport path). This limitation is pre-existing for in-script flat text composites and is now shared, not introduced, by native-returned ones; closing it needs a layout-aware walk or layout-carrying flat composites and is tracked separately as B38.
 
-## B38. Layout-aware materialisation of flat composite reference fields across a snapshot boundary
+## B38. Layout-aware materialisation of flat composite reference fields across a snapshot boundary (deferred to snapshot/Phase D; not reachable in V0.2.1)
 
 Surfaced by B37 (2026-06-25). A flat composite body is opaque bytes with no attached layout. The value-driven materialisation walks that run when a value is transported across a VM boundary, `GenericValue::materialise_kstrings` for `Text` today and the analogous `OpaqueRef`-to-`Arc` yield walk that B33 will add, are layout-blind. They recurse through boxed composites by walking `Value` fields, but they treat a flat composite (`TupleBody::Flat`, `ArrayBody::Flat`, `StructBody::Flat`, `EnumBody::Flat`) as transitively scalar and clone it unchanged. A flat body that holds a `Text` field as a `(ptr, len)` arena reference, or under B33 an `OpaqueRef` index, is therefore not materialised.
 
@@ -1882,6 +1882,18 @@ Surfaced by B37 (2026-06-25). A flat composite body is opaque bytes with no atta
 - B33 adds the `OpaqueRef`-to-`Arc` yield walk, which faces the identical layout-blindness over flat bodies; the two materialisation walks should be unified rather than written twice.
 - B34 supplies the `LayoutDescriptor` machinery that direction one reuses, so B38 is smaller once B33 and B34 land.
 - B37 is the origin and the immediate motivation.
+
+### Disposition (2026-06-26): not reachable in V0.2.1, deferred to snapshot/Phase D
+
+A premise-check found the symptom unreachable in the current codebase, so no fix is built now.
+
+- `materialise_kstrings` is `pub` but has no callers anywhere in `src/`, `examples/`, or `keleusma-cli/`, only its own recursion and its tests. `contains_dynstr` is the same. Neither is on a live VM path.
+- There is no snapshot or cross-arena restore mechanism (no `snapshot`/`restore`/relocatable code; Phase D is unimplemented). B38's symptom is a flat composite's text reading stale *across a snapshot*, and that boundary does not exist.
+- The one live, layout-blind guard, `value_has_ephemeral_str` (the yield boundary), is intentionally so. A flat `Text` field is epoch-tagged, so a flat-text composite crossing the yield boundary is governed by read-before-resume: the host decodes it before the next RESET, and a later read resolves cleanly Stale (an empty string), never undefined behaviour. Making the guard reject it would break intended behaviour, not fix a bug.
+
+B38 also cannot be implemented in isolation: `materialise_kstrings` takes only `&arena`, and a flat composite body is opaque bytes with no attached layout, so walking its `Text`/`OpaqueRef` fields requires either attaching layout to flat bodies or threading the type in at the call site, and there is no call site to thread it from. The layout-availability mechanism is exactly what the snapshot (Phase D) feature would establish. Building the walk now would be dead, untestable, speculative code with no consumer.
+
+Resolution: defer B38 to the snapshot/Phase D effort, where the value-transport boundary and the layout mechanism are introduced together; the layout-aware walk (unified for `Text` and `OpaqueRef`) is then part of that feature rather than standalone infrastructure ahead of it. This is the same forward-looking-ahead-of-its-consumer situation as B33's deliberately-omitted persistent registry.
 
 ## B39. Correct the false arena-reservation rationale for the nextest concurrency cap
 
