@@ -843,7 +843,7 @@ The work is mechanical once the forcing case pins the design endpoint. The V0.2.
 - `RA.14` in `tmp/research/rtos_api/ra_14_ifc_labels.md` outlines the RTOS-level IFC discipline this entry would compose with.
 - The hierarchical control scenarios are the operational shape whose audit and hot-swap concerns this entry would address.
 
-## B26. Arena-resident persistent region for composite data values
+## ~~B26. Arena-resident persistent region for composite data values~~ (Resolved through B28, V0.2.1)
 
 > **Status: resolved through B28 (V0.2.1, 2026-06-24).** B28's flat-byte composite representation makes a private `.data` composite pure bytes in the arena's persistent region (P3 item 3a baked the per-slot persistent pool offsets, 6A generalised them to array elements, and 6B removed the last owned-bytes form). The persistent region is now byte-self-contained, so the byte-snapshot patterns this entry wanted are sound and B26's Path C is the natural outcome. Retained as the symptom-level design record.
 
@@ -942,7 +942,7 @@ The work is mechanical once the design decision is locked in. The forcing case d
 - The 2026-05-23 commit `92b994c` (REPL shared data persistence) is the operational use case that surfaced the mismatch.
 - `keleusma-arena` already depends on `allocator-api2`, so Path B's plumbing prerequisite is already in place if the project pursues that route instead.
 
-## B27. Arena-resident transient region for composite Value bodies
+## ~~B27. Arena-resident transient region for composite Value bodies~~ (Resolved through B28, V0.2.1)
 
 > **Status: resolved through B28 (V0.2.1, 2026-06-24).** B28 packs ephemeral composite bodies directly into the arena's top region (`FlatComposite::build_in_arena` / `pack_flat_in_arena`); the `Vec`/`String` global-heap bodies this entry describes are gone, so composite construction is bump-allocator-style with no global allocator, and the arena-as-sole-allocator property R32 promised is delivered. Embedded targets without a global allocator can run composite-building scripts. Retained as the symptom-level design record.
 
@@ -1034,7 +1034,7 @@ A V0.4.x or V0.5.x deployment to an embedded target with no global allocator (or
 - `keleusma-arena` already implements an `Allocator` shape for KString; B27 generalises the same mechanism to composite Vec and String bodies.
 - The hierarchical control scenarios are the operational shape that benefits from the deterministic-allocator property.
 
-## B28. Runtime composite Value representation aligned with the language guarantee
+## ~~B28. Runtime composite Value representation aligned with the language guarantee~~ (Resolved for V0.2.1; all phases P0-P5 complete)
 
 > **Status: resolved (V0.2.1, 2026-06-24). All phases complete; the entry is retained as the design record.** P0 through P4 landed, P3's reference-field and representation items (1 thin-box boxed bodies, 2 the `FlatComposite::Inline` deletion and `Value` 40-to-32 collapse, 3a persistent composite data slots, 4 `StaticStr` to rodata, 5 typed codegen) all landed, the shared-data re-architecture replaced the `set_data`/`get_data` slot vector with a host-owned borrowed `&mut [u8]` buffer, and 6A baked the private-composite layout table so 6B could delete `Inline`. The live ISA is **66 opcodes** (P4 retired the four V0.2.0 construct opcodes, wire ids 34-37, in favour of `NewComposite`, wire id 69; maximum live id 69), `BYTECODE_VERSION` stays at 1, and `Value` is 32 bytes (pinned by a `const` assertion). P5 (this closure) reconciled the documentation and marked B26 and B27 resolved through B28; the hot-swap migration shipped as the strict-schema-check plus host-owned Replace model documented in `EXECUTION_MODEL.md`, which superseded the offset-to-offset migration-table sketch below. The composite runtime now matches the language's fixed-size guarantee. The plan was revised after a design pass that established four things. No opcode is added or removed; the operands of the composite ops are re-specified so the compiler can bake field offsets and kinds into the access instructions, which is permitted because byte-code compatibility is not a goal. No layout table or template is emitted into the artifact and none lives at run time; the compiler's transient layout (`layout_pass`) is dissolved into the baked offsets and the worst-case-memory-usage bound, and the composite value is pure bytes. Byte-code compatibility with V0.2.0 is **not** a goal; the byte code may break freely and is simply recompiled, and `BYTECODE_VERSION` stays at 1 only for lack of production traction. Because offsets are baked, the only remaining suboptimality of the Rust runtime is the tagged scalar operand stack; making that untyped is the one flat-machine step deferred to the V0.4 native-code-generation ISA redesign, recorded below under *Deferred ISA redesign*.
 
@@ -1368,7 +1368,7 @@ Ten items deferred during the V0.2.1 `keleusma run-tasks <manifest.toml>` implem
 - Item 7 (typed event payloads) and item 8 (ABI compatibility) compose: typed payloads make ABI checking meaningful.
 - Item 5 (preemption) is intentionally excluded from the cooperative model. The forcing case is a deployment shape that needs preemption; the response is "use a different host" rather than "extend the runner".
 
-## B32. Arena bytes-builder feature in keleusma-arena
+## ~~B32. Arena bytes-builder feature in keleusma-arena~~ (Obsolete for V0.2.1; premature spec, prototype reverted, no consumer)
 
 > **Status: obsolete (V0.2.1).** This entry was a premature spec. It assumed B28's flat-byte composite path writes into arena memory incrementally during construction and therefore needs a stateful, bounds-checked builder. The actual consumer does not: `GenericValue::try_pack_flat` assembles the complete body in a `Vec<u8>` (the `byte_size` is known up front, baked by P4), and `FlatComposite::in_arena` then migrates it with a single one-shot `alloc_top_bytes` + `copy_nonoverlapping` + `ArenaHandle::from_raw_parts`, the same pattern `KString::alloc` uses. The existing `alloc_top_bytes` (which returns a writable `NonNull<[u8]>`) plus `ArenaHandle::from_raw_parts`/`get` already provide everything the flat-byte work needs, including the epoch-stamped stale check that is the only safety mechanism beyond raw memory. B33 and P3 only widen flat-eligibility and flow through the same pack-then-copy choke point, so they do not need a builder either. A prototype builder was implemented and then reverted (it had no consumer). The only residual is that `in_arena` and `KString::alloc` share near-identical `unsafe`; if that duplication ever justifies a fix it is a private helper extracted at the third caller, not a public arena API. No action.
 
