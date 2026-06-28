@@ -30,7 +30,11 @@ the file:
 - `register_natives` registers sixteen natives with
   `register_native_closure`, the captured-state route of Chapter 33.
 - The host allocates a zeroed shared-data buffer of `vm.shared_data_bytes()`
-  bytes and lends it to the script at each call.
+  bytes and lends it to the script at each call. Per-field scalar access uses
+  `vm.get_shared`/`vm.set_shared`; to seed or read the whole segment at once,
+  including composite fields, a host struct that mirrors the segment and
+  derives `KeleusmaType` round-trips through `vm.marshal_shared_into` and
+  `vm.unmarshal_shared` (B34).
 - The main tick loop calls `resume_with_shared`, matches `VmState`, and
   handles the `Reset` case, the protocol of Chapter 34.
 - The `Reset` arm calls `replace_module` (with empty private data) to swap

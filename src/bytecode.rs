@@ -483,6 +483,10 @@ pub enum GenericValue<W: crate::word::Word, F: crate::float::Float> {
     /// [`crate::vm::Vm`]'s `intern_ephemeral_opaque`). Host code never
     /// observes this variant: the boundary walks convert it to
     /// [`Self::Opaque`] before a value crosses into host hands.
+    ///
+    /// Hidden from the public surface because it is an internal runtime form;
+    /// host code only ever observes [`Self::Opaque`].
+    #[doc(hidden)]
     OpaqueRef(u32),
 
     /// Phantom variant kept only when the `floats` feature is
