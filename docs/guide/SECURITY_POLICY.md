@@ -225,6 +225,30 @@ loop main(tick: Word) -> Word {
 
 This approach is appropriate when memory residency is part of the requirement (see above). It also preserves the signed-and-encrypted delivery model end-to-end; the script never exits and is never relaunched.
 
+## Key compromise, revocation, and rotation
+
+The model rests on two private keys whose consequences on compromise are very different. An operator should understand the asymmetry and protect each key accordingly.
+
+### The two private keys and their blast radii
+
+- **The signing seed (`sign.seed`, held by the producer) is the critical secret.** Every host that enrols the corresponding verifying key trusts anything signed by it. A leaked signing seed lets an adversary forge artefacts that pass strict-signing verification on the entire fleet, a total loss of authenticity across every deployment that enrolled the key. Protect it the most. Keep it on an offline or air-gapped signing host, restrict access to the smallest possible set of operators, and prefer a hardware security module or equivalent where the threat model warrants it. This is the single most consequential secret in the system, and the leaked-signing-key case is the one that undermines the whole model.
+- **A decryption seed (`dest.seed`, held by a recipient) has a bounded blast radius.** A leaked decryption seed lets an adversary read artefacts encrypted to that one recipient, and only that recipient. Artefacts for other recipients stay confidential, as noted under the air-gapped scenario above. There is no forward secrecy at the recipient-key level, so a leaked decryption seed also exposes any past artefacts encrypted to it that an adversary retained, not only future ones. Generate each recipient's keypair on the recipient host so the seed never transmits, and rely on the mode-0600 permissions `keygen` sets on Unix.
+
+### No expiry, and revocation is manual
+
+Enrolled keys are raw Ed25519 and X25519 keys with no embedded validity period, so an enrolled key is trusted until an operator removes it. There is no certificate-revocation list and no online revocation check; that is inherent to the air-gapped enrolled-key model. Revoking a key therefore means removing its file from the trust store or decryption-key store on every affected host, one host at a time, and the revocation takes effect on a host only once that host has been updated. Plan for this latency. A fleet-wide revocation is a deployment operation, not an instant broadcast.
+
+### Rotation procedure
+
+Rotate on a schedule as a matter of policy, and immediately on suspected compromise. Signing-key rotation is:
+
+1. Generate a new signing keypair on the signing host (`keleusma keygen --seed sign.v2.seed --public sign.v2.pub`).
+2. Distribute the new verifying key and enrol it in every host's trust store, authenticated out of band (see the residual-risk note on enrolment authenticity), keeping the old key enrolled during the transition.
+3. Re-sign the artefacts that must remain runnable with the new key.
+4. Once every host carries the new key and every live artefact is re-signed, remove the old verifying key from every trust store. The old signing seed is then powerless and should be destroyed.
+
+Decryption-key rotation is symmetric. Generate a new recipient keypair on the recipient host, distribute the new public key to producers, re-encrypt the artefacts that recipient still needs, and remove the old decryption seed once nothing in flight is encrypted to it.
+
 ## Trust model
 
 **Trusted components**:
@@ -243,6 +267,10 @@ This approach is appropriate when memory residency is part of the requirement (s
 
 - An adversary with memory access on the running runtime can recover decrypted plaintext from RAM after the decryption step. Closing this gap requires hardware isolation (TrustZone-M on Cortex-M55, equivalent on other platforms). This work is tracked as B24 in [`docs/decisions/BACKLOG.md`](../decisions/BACKLOG.md).
 - Side-channel attacks against the cryptographic operations (timing, power analysis) are out of scope for the current implementation. The pure-Rust crypto crates (`ed25519-dalek`, `x25519-dalek`, `aes-gcm`) provide constant-time implementations of the core primitives but the broader host environment may leak through other channels.
+- No anti-replay or freshness binding. A signature attests origin and integrity, not recency. An artefact carries no timestamp, sequence number, or nonce that the host checks, and the host keeps no record of artefacts it has already run, so an adversary who retained a previously valid artefact can re-deliver it and the host will verify and run it. Where running a superseded but once-valid artefact is harmful, for example an old mission or workflow script, enforce freshness outside the model: deliver over an integrity-controlled channel, rotate the signing key between supersessions so the old artefact stops verifying, or track artefact hashes host-side.
+- Classical, not post-quantum, cryptography. Ed25519 and X25519 are not quantum-resistant. An adversary who records encrypted artefacts today could decrypt them once a cryptographically relevant quantum computer exists, the harvest-now-decrypt-later threat, which matters for long-lived confidential payloads. The wire format reserves a `scheme_id` byte for migration to a post-quantum scheme without an ABI break, but no such scheme is implemented today.
+- Enrolment authenticity is the operator's responsibility. The trust stores protect against tampering after enrolment, but the initial public-key exchange must be authenticated out of band. Enrolling a verifying key an adversary substituted makes the fleet trust the adversary's signatures, and encrypting to a recipient public key an adversary substituted discloses the payload to the adversary. Verify key provenance, by fingerprint comparison over a separate channel, a trusted courier, or an existing trust anchor, before enrolment.
+- Metadata is not concealed. Artefact size, delivery timing, and the `recipient_key_id` carried in an encrypted artefact's header are visible to anyone who observes the channel. The contents are protected; the fact and shape of a delivery are not. This is minor for physical air-gapped transfer and more relevant over an observable network.
 
 ## Cross-references
 
