@@ -256,6 +256,11 @@ pub enum ResizeError {
     /// machinery cannot advance further. Recover through
     /// [`Arena::force_reset_epoch`].
     EpochSaturated,
+    /// A grow requested through [`Arena::resize_persistent_capacity`]
+    /// would push the bottom dual-headed head past the top head, so the
+    /// two regions would overlap. The arena is left unchanged. The
+    /// caller should free dual-headed space or size the arena larger.
+    DualHeadedOverlap,
 }
 
 // SAFETY: The arena uses `Cell` for interior mutability of the bump
@@ -491,6 +496,80 @@ impl Arena {
         self.top_top.set(self.capacity);
         self.bottom_peak.set(new_size);
         self.top_peak_low.set(self.capacity);
+        self.epoch.set(next);
+        Ok(())
+    }
+
+    /// Resize the persistent (`.data`) region in place, preserving its
+    /// contents and relocating the bottom dual-headed region.
+    ///
+    /// Unlike [`Arena::resize_persistent`], which repositions both heads
+    /// to the new partition and discards the dual-headed contents, this
+    /// call preserves the persistent prefix `[0, min(old, new_size))` and
+    /// moves the bottom dual-headed bytes by the delta so they survive the
+    /// resize. A grow pushes the bottom head up, a shrink pulls it down.
+    /// The top head is anchored at the buffer ceiling and does not move.
+    ///
+    /// Returns [`ResizeError::ExceedsCapacity`] if `new_size` exceeds the
+    /// total capacity, and [`ResizeError::DualHeadedOverlap`] if a grow
+    /// would push the bottom head past the top head. In both cases the
+    /// arena is left unchanged. A saturated epoch returns
+    /// [`ResizeError::EpochSaturated`], also leaving the arena unchanged.
+    ///
+    /// On success the epoch advances, so any [`ArenaHandle`] issued before
+    /// the call reads as [`Stale`] rather than returning relocated bytes.
+    /// The bytes newly absorbed into the persistent region on a grow,
+    /// `[old, new_size)`, are not zeroed; the caller initialises them. Use
+    /// [`Arena::zero_persistent_range`] for calloc-style semantics.
+    ///
+    /// Memory-safe unconditionally, because the epoch advance invalidates
+    /// outstanding handles. A caller that intends the relocated dual-headed
+    /// bytes to remain reachable through a fresh read must hold no live
+    /// borrow into the dual-headed region across the call.
+    pub fn resize_persistent_capacity(&mut self, new_size: usize) -> Result<(), ResizeError> {
+        if new_size > self.capacity {
+            return Err(ResizeError::ExceedsCapacity);
+        }
+        let old = self.persistent_capacity.get();
+        if new_size == old {
+            return Ok(());
+        }
+        // Invariant: the bottom head never sits below the persistent
+        // boundary (`bottom_top >= persistent_capacity`), so the live
+        // bottom length is non-negative.
+        let bottom_top = self.bottom_top.get();
+        let bottom_len = bottom_top - old;
+        let new_bottom_top = new_size + bottom_len;
+        // A grow must not push the relocated bottom head past the top head.
+        // On a shrink `new_bottom_top < bottom_top <= top_top`, so the
+        // check binds only for a grow.
+        if new_bottom_top > self.top_top.get() {
+            return Err(ResizeError::DualHeadedOverlap);
+        }
+        // Validate the epoch advance before any mutation so a saturated
+        // epoch leaves the arena unchanged.
+        let next = self
+            .epoch
+            .get()
+            .checked_add(1)
+            .ok_or(ResizeError::EpochSaturated)?;
+        if bottom_len > 0 {
+            // SAFETY: `buffer` is valid for `capacity` bytes. The source
+            // `[old, bottom_top)` and destination `[new_size,
+            // new_bottom_top)` both lie within `[0, top_top) <= [0,
+            // capacity)`, guaranteed by the overlap check above. The two
+            // ranges may overlap, so `copy` (memmove semantics) is used.
+            unsafe {
+                let base = self.buffer.as_ptr();
+                core::ptr::copy(base.add(old), base.add(new_size), bottom_len);
+            }
+        }
+        self.persistent_capacity.set(new_size);
+        self.bottom_top.set(new_bottom_top);
+        // Reset the bottom watermark to the post-relocation head, matching
+        // the reconfiguration semantics of `resize_persistent`. The top
+        // head and its watermark are untouched.
+        self.bottom_peak.set(new_bottom_top);
         self.epoch.set(next);
         Ok(())
     }
@@ -1640,6 +1719,124 @@ mod tests {
         ));
         // State unchanged on rejection.
         assert_eq!(arena.persistent_capacity(), 0);
+    }
+
+    #[cfg(feature = "alloc")]
+    #[test]
+    fn resize_persistent_capacity_grow_preserves_and_relocates() {
+        let mut arena = Arena::with_capacity(256);
+        // Establish a 16-byte persistent region and fill it with a marker.
+        arena.resize_persistent(16).unwrap();
+        let base = arena.persistent_ptr().as_ptr();
+        unsafe { core::ptr::write_bytes(base, 0xAB, 16) };
+        // Allocate 8 bottom bytes and stamp them with a distinct pattern.
+        let a = arena.alloc_bottom_bytes(8).unwrap();
+        unsafe { core::ptr::write_bytes(a.as_ptr() as *mut u8, 0xCD, 8) };
+        assert_eq!(arena.bottom_used(), 8);
+        let epoch_before = arena.epoch();
+        // Grow the persistent region by 16 bytes.
+        arena.resize_persistent_capacity(32).unwrap();
+        assert_eq!(arena.persistent_capacity(), 32);
+        // The persistent prefix [0, 16) is preserved.
+        unsafe {
+            for i in 0..16 {
+                assert_eq!(core::ptr::read(base.add(i)), 0xAB, "persistent byte {i}");
+            }
+        }
+        // Bottom usage is unchanged; the bottom region shifted up by 16.
+        assert_eq!(arena.bottom_used(), 8);
+        // The relocated bottom bytes now live at offset 32.
+        unsafe {
+            for i in 0..8 {
+                assert_eq!(
+                    core::ptr::read(base.add(32 + i)),
+                    0xCD,
+                    "relocated byte {i}"
+                );
+            }
+        }
+        // The epoch advanced once.
+        assert_eq!(arena.epoch(), epoch_before + 1);
+    }
+
+    #[cfg(feature = "alloc")]
+    #[test]
+    fn resize_persistent_capacity_shrink_pulls_bottom_down() {
+        let mut arena = Arena::with_capacity(256);
+        arena.resize_persistent(32).unwrap();
+        let base = arena.persistent_ptr().as_ptr();
+        let a = arena.alloc_bottom_bytes(8).unwrap();
+        unsafe { core::ptr::write_bytes(a.as_ptr() as *mut u8, 0xEE, 8) };
+        assert_eq!(arena.bottom_used(), 8);
+        // Shrink the persistent region to 16 bytes; the bottom region
+        // follows it down.
+        arena.resize_persistent_capacity(16).unwrap();
+        assert_eq!(arena.persistent_capacity(), 16);
+        assert_eq!(arena.bottom_used(), 8);
+        unsafe {
+            for i in 0..8 {
+                assert_eq!(core::ptr::read(base.add(16 + i)), 0xEE, "byte {i}");
+            }
+        }
+    }
+
+    #[cfg(feature = "alloc")]
+    #[test]
+    fn resize_persistent_capacity_grow_overlap_errors_and_leaves_unchanged() {
+        let mut arena = Arena::with_capacity(64);
+        arena.resize_persistent(16).unwrap();
+        // Consume the dual-headed region from both ends so a grow would
+        // collide the heads: bottom uses 8, top uses 40, free = 0.
+        let _a = arena.alloc_bottom_bytes(8).unwrap();
+        let _t = arena.alloc_top_bytes(40).unwrap();
+        let epoch_before = arena.epoch();
+        assert!(matches!(
+            arena.resize_persistent_capacity(17),
+            Err(ResizeError::DualHeadedOverlap)
+        ));
+        // State unchanged on rejection.
+        assert_eq!(arena.persistent_capacity(), 16);
+        assert_eq!(arena.epoch(), epoch_before);
+    }
+
+    #[cfg(feature = "alloc")]
+    #[test]
+    fn resize_persistent_capacity_rejects_oversize_unchanged() {
+        let mut arena = Arena::with_capacity(64);
+        arena.resize_persistent(16).unwrap();
+        let epoch_before = arena.epoch();
+        assert!(matches!(
+            arena.resize_persistent_capacity(65),
+            Err(ResizeError::ExceedsCapacity)
+        ));
+        assert_eq!(arena.persistent_capacity(), 16);
+        assert_eq!(arena.epoch(), epoch_before);
+    }
+
+    #[cfg(feature = "alloc")]
+    #[test]
+    fn resize_persistent_capacity_noop_when_unchanged_keeps_epoch() {
+        let mut arena = Arena::with_capacity(64);
+        arena.resize_persistent(16).unwrap();
+        let epoch_before = arena.epoch();
+        arena.resize_persistent_capacity(16).unwrap();
+        assert_eq!(arena.persistent_capacity(), 16);
+        // A no-op resize does not churn the epoch.
+        assert_eq!(arena.epoch(), epoch_before);
+    }
+
+    #[cfg(feature = "alloc")]
+    #[test]
+    fn resize_persistent_capacity_invalidates_outstanding_handles() {
+        let mut arena = Arena::with_capacity(256);
+        arena.resize_persistent(16).unwrap();
+        let handle = alloc_u64(&arena, 9);
+        assert_eq!(*handle.get(&arena).unwrap(), 9);
+        // Growing the persistent region advances the epoch, so a handle
+        // issued before the resize reads stale rather than returning
+        // relocated bytes.
+        arena.resize_persistent_capacity(32).unwrap();
+        assert!(matches!(handle.get(&arena), Err(Stale)));
     }
 
     #[cfg(feature = "alloc")]
