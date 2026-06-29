@@ -935,7 +935,12 @@ fn repl_subcommand(_args: &[String]) -> ExitCode {
             continue;
         }
         if let Some(stripped) = line.strip_prefix(':') {
-            match stripped {
+            // Split a colon command into its verb and optional argument so
+            // `:save program.kel` and `:load program.kel` carry a filename.
+            let mut parts = stripped.splitn(2, char::is_whitespace);
+            let cmd = parts.next().unwrap_or("");
+            let arg = parts.next().map(str::trim).unwrap_or("");
+            match cmd {
                 "quit" | "q" | "exit" => return ExitCode::SUCCESS,
                 "help" | "h" => print_repl_help(),
                 "reset" => {
@@ -950,6 +955,8 @@ fn repl_subcommand(_args: &[String]) -> ExitCode {
                         println!("{}", prefix);
                     }
                 }
+                "save" => repl_save(&prefix, arg),
+                "load" => repl_load(&mut prefix, &mut shared_state, arg),
                 other => {
                     eprintln!("error: unknown REPL command `:{}`", other);
                 }
@@ -966,12 +973,69 @@ fn print_repl_help() {
     println!("  :quit, :q, :exit        Exit the REPL");
     println!("  :reset                  Clear the session prefix");
     println!("  :show                   Display the current session prefix");
+    println!("  :save <file>            Write the session program to a .kel file");
+    println!("  :load <file>            Replace the session with a .kel file's contents");
     println!();
     println!("Otherwise, type:");
     println!("  An expression to evaluate it (`1 + 2`, `double(21)`)");
     println!(
         "  A declaration to add to the session prefix (`fn`, `struct`, `enum`, `trait`, `impl`, `use`)"
     );
+}
+
+/// Write the accumulated session program to `path` as Keleusma source.
+/// The session program is the declaration prefix the user has built up;
+/// saving it produces a `.kel` file that can be `:load`ed or run directly.
+fn repl_save(prefix: &str, path: &str) {
+    if path.is_empty() {
+        eprintln!("error: :save requires a filename, e.g. `:save program.kel`");
+        return;
+    }
+    // Write the prefix with a trailing newline so the saved file is a
+    // well-formed text file.
+    let mut contents = prefix.trim_end().to_string();
+    contents.push('\n');
+    match std::fs::write(path, &contents) {
+        Ok(()) => println!(
+            "saved session to {} ({} line(s))",
+            path,
+            prefix.lines().count()
+        ),
+        Err(e) => eprintln!("error: writing {}: {}", path, e),
+    }
+}
+
+/// Replace the active session with the contents of the Keleusma source
+/// file at `path`. The shared-data buffer is cleared so the loaded
+/// program starts from a clean state. A compile probe reports whether the
+/// loaded program is well-formed, which is the per-load feedback.
+fn repl_load(prefix: &mut String, shared_state: &mut Vec<u8>, path: &str) {
+    if path.is_empty() {
+        eprintln!("error: :load requires a filename, e.g. `:load program.kel`");
+        return;
+    }
+    let contents = match std::fs::read_to_string(path) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("error: reading {}: {}", path, e);
+            return;
+        }
+    };
+    *prefix = contents.trim_end().to_string();
+    shared_state.clear();
+    // Probe the loaded program so the user sees immediately whether it
+    // compiles. A program carrying its own `main` is probed as is; one
+    // without is probed under a trivial `main`, matching the declaration
+    // path in `evaluate_repl_input`.
+    let probe = if has_main(prefix) {
+        prefix.clone()
+    } else {
+        format!("{}\n\nfn main() -> Word {{ 0 }}\n", prefix)
+    };
+    match compile_source(&probe) {
+        Ok(_) => println!("loaded {} ({} line(s))", path, prefix.lines().count()),
+        Err(e) => eprintln!("loaded {} with errors:\n{}", path, e),
+    }
 }
 
 /// Decide whether a REPL line is a declaration (added to the prefix)
