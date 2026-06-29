@@ -8,6 +8,19 @@ AI to Human communication channel.
 
 ## Last Updated
 
+**Date**: 2026-06-29 (session 17)
+
+**REPL SAVE/LOAD AND THE ARENA PRESERVING-RESIZE PRIMITIVE ARE MERGED TO `v0.2.1` (`2447354`, pushed to `origin`); `:run`/`:resume` COROUTINE STEPPING IS UNDERWAY ON `feat-cli-repl-resume`.**
+
+- **`keleusma-arena` `resize_persistent_capacity`** (`8a33661`). An in-place persistent-region resize that preserves the persistent prefix `[0, min(old, new))` and relocates the bottom dual-headed region by the delta, the preserving counterpart to `resize_persistent`. A grow pushes the bottom head up, a shrink pulls it down, and a grow that would collide the heads returns the new `ResizeError::DualHeadedOverlap` without mutating. The epoch advances so outstanding handles read `Stale`. Six tests plus miri over the unsafe relocation.
+- **REPL `:save` / `:load`** (`2447354`). `:save <file>` writes the session program to a `.kel` file; `:load <file>` replaces the session and compile-probes it for feedback. This is the whole of the clarified REPL goal: build a program line by line, get feedback, save and reload it, for learning and experimentation.
+- **Design pivot (operator-led).** The session opened pursuing cross-REPL-line persistence (snapshots, a long-lived adopt-arena, an in-arena region mover). The operator reframed the goal as build-a-program-with-feedback, under which re-running the accumulated program reproduces state and none of that machinery is needed. The `resize_persistent_capacity` primitive was explicitly kept as a general arena capability even though it is off the REPL path; the adopt-flag and snapshot ideas were dropped as means that did not serve the goal.
+- **Push quirk.** Pushing `v0.2.1` ran the pre-push gate green (nextest, `cargo doc`, the markdown-link check) but the transfer died with SIGPIPE (exit 141) until run with `--no-verify` after the gate had passed. Verification was complete, only the transfer was failing. Worth watching on future pushes.
+
+**Intended next step.** Implement `:run` and `:resume [value]` on `feat-cli-repl-resume`. `:run` compiles the session, starts a `loop`/`yield` program, runs to the first yield, and prints the yielded value and the decoded shared-data state; `:resume [value]` advances to the next yield. The load-bearing piece is holding a live, suspended `Vm` across REPL commands, which is self-referential because the `Vm` borrows its `Arena`; the planned shape is a session-long arena created once with an `Option<Vm>` for the current coroutine. No VM or arena runtime change is expected.
+
+---
+
 **Date**: 2026-06-28 (session 16)
 
 **B33, B34, AND B37 LANDED; B38 AND B39 DISPOSITIONED; THE `feat-flat-composite-marshalling` WORK IS MERGED ONTO `v0.2.1` AND SYNCED TO `origin`.** Branch `v0.2.1` is at `642ba19`, equal to `origin/v0.2.1`. The full workspace gate is green at `-j1` (default, `--features signatures`, `--all-features`, `clippy --tests --workspace --all-features -D warnings`, `cargo fmt --check`). `BYTECODE_VERSION` stays 1; the ISA stays at 66 opcodes; no wire-format change. V0.2.1 remains unreleased (`CHANGELOG.md` still carries an `[Unreleased]` section).
