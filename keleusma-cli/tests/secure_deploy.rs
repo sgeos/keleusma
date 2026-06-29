@@ -321,8 +321,12 @@ fn strict_mode_rejects_artifact_signed_by_non_enrolled_key() {
         "non-enrolled-signer artifact should be rejected; stdout: {}",
         r.stdout
     );
-    // The refusal is a strict-mode policy error. The precise wording
-    // (signature failure versus decryption-key mismatch) is tightened by the
-    // diagnostic-clarity fix; this pins that the artifact is refused.
-    assert!(r.stderr.contains("strict mode"), "stderr: {}", r.stderr);
+    // The refusal must name the actual cause: the artefact decrypted (the
+    // recipient key matched), so this is a signature-provenance failure, not
+    // a missing decryption key. The diagnostic-clarity fix distinguishes them.
+    assert!(
+        r.stderr.contains("signature is not from an enrolled key"),
+        "stderr: {}",
+        r.stderr
+    );
 }

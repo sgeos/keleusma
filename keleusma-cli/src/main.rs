@@ -1866,9 +1866,15 @@ pub(crate) fn load_module(
                 "encrypted bytecode requires --decryption-key or an enrolled decryption-key store",
             ));
         }
-        // Try each decryption key. The right key matches the
-        // recipient_key_id; mismatched keys produce WrongRecipient.
+        // Try each decryption key. A key whose `recipient_key_id` does not
+        // match the artefact produces `WrongRecipient`; a key that decrypts
+        // the artefact but whose embedded signature is not from an enrolled
+        // verifying key produces `InvalidSignature`. Those two failures mean
+        // very different things to an operator -- a key-set problem versus an
+        // untrusted-provenance problem -- so they are reported distinctly
+        // rather than both as "no decryption key matches".
         let mut last_err: Option<keleusma::bytecode::LoadError> = None;
+        let mut signature_rejected = false;
         for key in decryption_keys {
             match keleusma::wire_format::decrypt_encrypted_signed_to_signed_bytes(
                 bytes,
@@ -1884,15 +1890,28 @@ pub(crate) fn load_module(
                     module.flags &= !keleusma::wire_format::FLAG_REQUIRES_SIGNATURE;
                     return Ok(module);
                 }
-                Err(e) => last_err = Some(e),
+                Err(e) => {
+                    // An `InvalidSignature` means a key did decrypt the
+                    // artefact, so the failure is provenance, not the key set.
+                    if matches!(e, keleusma::bytecode::LoadError::InvalidSignature) {
+                        signature_rejected = true;
+                    }
+                    last_err = Some(e);
+                }
             }
         }
         let err = last_err.expect("at least one key attempted");
         Err(if policy.strict_encryption {
-            format!(
-                "strict mode: no enrolled decryption key matches the artefact ({:?})",
-                err
-            )
+            if signature_rejected {
+                String::from(
+                    "strict mode: artefact decrypted but its signature is not from an enrolled key (InvalidSignature)",
+                )
+            } else {
+                format!(
+                    "strict mode: no enrolled decryption key matches the artefact ({:?})",
+                    err
+                )
+            }
         } else {
             format!("decrypt_encrypted_signed_to_signed_bytes: {:?}", err)
         })
