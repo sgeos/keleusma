@@ -298,25 +298,62 @@ impl Arena {
     #[cfg(feature = "alloc")]
     #[cfg_attr(docsrs, doc(cfg(feature = "alloc")))]
     pub fn with_capacity(capacity: usize) -> Self {
-        use alloc::alloc::{Layout as AllocLayout, alloc_zeroed, handle_alloc_error};
+        use alloc::alloc::{Layout as AllocLayout, handle_alloc_error};
+        // Delegate to the fallible constructor and preserve the
+        // abort-on-allocation-failure contract: a null allocation aborts
+        // through the standard handler and an invalid layout panics,
+        // exactly as the direct implementation did.
+        Self::try_with_capacity(capacity).unwrap_or_else(|_| {
+            let layout = AllocLayout::from_size_align(capacity, 16).expect("invalid arena layout");
+            handle_alloc_error(layout)
+        })
+    }
+
+    /// Create an arena backed by a freshly allocated heap buffer of the
+    /// given byte capacity, returning [`AllocError`] instead of aborting
+    /// when the allocation cannot be satisfied.
+    ///
+    /// This is the fallible counterpart to [`Arena::with_capacity`]. A host
+    /// application is the right place to surface an out-of-memory condition
+    /// as a diagnostic and a controlled exit rather than the
+    /// `handle_alloc_error` abort that `with_capacity` triggers. A
+    /// memory-constrained deployment that sizes an arena from a worst-case
+    /// bound, and so may legitimately request more than the host can
+    /// provide, should use this entry point.
+    ///
+    /// Available only with the `alloc` feature. The buffer is zeroed at
+    /// construction and allocated with 16-byte alignment, as for
+    /// `with_capacity`. A capacity of zero never fails and yields an arena
+    /// that satisfies only zero-size allocation requests.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use keleusma_arena::Arena;
+    ///
+    /// let arena = Arena::try_with_capacity(1024).expect("1 KiB is available");
+    /// assert_eq!(arena.capacity(), 1024);
+    /// ```
+    #[cfg(feature = "alloc")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "alloc")))]
+    pub fn try_with_capacity(capacity: usize) -> Result<Self, AllocError> {
+        use alloc::alloc::{Layout as AllocLayout, alloc_zeroed};
 
         let buffer = if capacity == 0 {
             NonNull::<u8>::dangling()
         } else {
-            // Allocate a 16-byte-aligned buffer. The alignment covers
-            // every standard primitive type and gives the arena
-            // predictable behavior across allocators that may otherwise
-            // return only minimally-aligned memory for byte allocations.
-            let layout = AllocLayout::from_size_align(capacity, 16).expect("invalid arena layout");
+            // Allocate a 16-byte-aligned buffer. The alignment covers every
+            // standard primitive type and gives the arena predictable
+            // behavior across allocators that may otherwise return only
+            // minimally-aligned memory for byte allocations. An invalid
+            // layout (capacity overflowing the address space) and a null
+            // allocation both surface as `AllocError` rather than aborting.
+            let layout = AllocLayout::from_size_align(capacity, 16).map_err(|_| AllocError)?;
             // SAFETY: `layout` has non-zero size because `capacity > 0`.
             let raw = unsafe { alloc_zeroed(layout) };
-            if raw.is_null() {
-                handle_alloc_error(layout);
-            }
-            // SAFETY: `alloc_zeroed` returned non-null on success.
-            unsafe { NonNull::new_unchecked(raw) }
+            NonNull::new(raw).ok_or(AllocError)?
         };
-        Self {
+        Ok(Self {
             buffer,
             capacity,
             persistent_capacity: Cell::new(0),
@@ -326,7 +363,7 @@ impl Arena {
             top_peak_low: Cell::new(capacity),
             epoch: Cell::new(0),
             storage: Storage::Owned,
-        }
+        })
     }
 
     /// Create an arena backed by a static buffer.
@@ -1837,6 +1874,34 @@ mod tests {
         // relocated bytes.
         arena.resize_persistent_capacity(32).unwrap();
         assert!(matches!(handle.get(&arena), Err(Stale)));
+    }
+
+    #[cfg(feature = "alloc")]
+    #[test]
+    fn try_with_capacity_succeeds_for_a_reasonable_size() {
+        let arena = Arena::try_with_capacity(4096).expect("4 KiB is available");
+        assert_eq!(arena.capacity(), 4096);
+        assert_eq!(arena.free(), 4096);
+    }
+
+    #[cfg(feature = "alloc")]
+    #[test]
+    fn try_with_capacity_zero_is_always_ok() {
+        let arena = Arena::try_with_capacity(0).expect("zero capacity never fails");
+        assert_eq!(arena.capacity(), 0);
+    }
+
+    #[cfg(feature = "alloc")]
+    #[test]
+    fn try_with_capacity_fails_cleanly_on_an_impossible_size() {
+        // A capacity at the top of the address space cannot be allocated and
+        // its layout is invalid; `try_with_capacity` returns an error rather
+        // than aborting the process, which is the whole point of the fallible
+        // entry point.
+        assert!(matches!(
+            Arena::try_with_capacity(usize::MAX),
+            Err(AllocError)
+        ));
     }
 
     #[cfg(feature = "alloc")]
