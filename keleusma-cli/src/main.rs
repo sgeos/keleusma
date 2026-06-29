@@ -957,6 +957,7 @@ fn repl_subcommand(_args: &[String]) -> ExitCode {
                 }
                 "save" => repl_save(&prefix, arg),
                 "load" => repl_load(&mut prefix, &mut shared_state, arg),
+                "run" => repl_run(&prefix),
                 other => {
                     eprintln!("error: unknown REPL command `:{}`", other);
                 }
@@ -975,6 +976,7 @@ fn print_repl_help() {
     println!("  :show                   Display the current session prefix");
     println!("  :save <file>            Write the session program to a .kel file");
     println!("  :load <file>            Replace the session with a .kel file's contents");
+    println!("  :run                    Run the session program; step a loop/yield main");
     println!();
     println!("Otherwise, type:");
     println!("  An expression to evaluate it (`1 + 2`, `double(21)`)");
@@ -1035,6 +1037,234 @@ fn repl_load(prefix: &mut String, shared_state: &mut Vec<u8>, path: &str) {
     match compile_source(&probe) {
         Ok(_) => println!("loaded {} ({} line(s))", path, prefix.lines().count()),
         Err(e) => eprintln!("loaded {} with errors:\n{}", path, e),
+    }
+}
+
+/// Print the decoded shared-data state, one `name = value` per scalar
+/// shared slot. Composite shared slots are noted rather than decoded,
+/// since the per-slot host API decodes scalars only. Shared slots occupy
+/// the low unified indices `[0, names.len())` (the compiler emits them
+/// shared-first), so the i-th name pairs with `get_shared(buf, i)`.
+fn print_shared_state(vm: &Vm, names: &[String], shared: &[u8]) {
+    if names.is_empty() {
+        return;
+    }
+    print!("  shared:");
+    for (i, name) in names.iter().enumerate() {
+        if i > 0 {
+            print!(",");
+        }
+        match vm.get_shared(shared, i) {
+            Ok(v) => {
+                print!(" {} = ", name);
+                print_value_inline(&v);
+            }
+            Err(_) => print!(" {} = <composite>", name),
+        }
+    }
+    println!();
+}
+
+/// Run the session program interactively (`:run`). For a `loop`/`yield`
+/// main this starts the coroutine, runs to the first yield, prints the
+/// yielded value and the shared-data state, and enters a stepping
+/// sub-prompt where `:resume [tick]` advances to the next yield and
+/// `:stop` exits. For an atomic `fn main` it runs once and prints the
+/// result. The arena and VM are locals of this scope, so the suspended
+/// coroutine lives only while stepping and drops cleanly on exit; this
+/// sidesteps storing a `Vm` (which borrows its `Arena`) across the outer
+/// REPL loop.
+fn repl_run(prefix: &str) {
+    if !has_main(prefix) {
+        eprintln!(
+            "error: :run needs a `main`; define `loop main(tick: Word) -> Word {{ ... yield ... }}` (or `fn main`, `yield main`)"
+        );
+        return;
+    }
+    let module = match compile_source(prefix) {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("error: {}", e);
+            return;
+        }
+    };
+    let entry_kind = match detect_entry_kind(&module) {
+        Ok(k) => k,
+        Err(e) => {
+            eprintln!("error: {}", e);
+            return;
+        }
+    };
+    // Capture shared field names before the module moves into the VM, so the
+    // stepping sub-prompt can render the shared-data state by name. Shared
+    // slots are emitted shared-first, so this order matches the get_shared
+    // index space.
+    let shared_names: Vec<String> = module
+        .data_layout
+        .as_ref()
+        .map(|dl| {
+            dl.slots
+                .iter()
+                .filter(|s| matches!(s.visibility, keleusma::bytecode::SlotVisibility::Shared))
+                .map(|s| s.name.clone())
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let persistent_bytes = keleusma::vm::required_persistent_capacity_for(&module);
+    let transient_bytes =
+        keleusma::vm::auto_arena_capacity_for(&module, &[]).unwrap_or(DEFAULT_ARENA_CAPACITY);
+    let total = (persistent_bytes + transient_bytes).max(DEFAULT_ARENA_CAPACITY);
+    let mut arena = Arena::with_capacity(total);
+    if let Err(e) = arena.resize_persistent(persistent_bytes) {
+        eprintln!("error: arena: resize_persistent: {:?}", e);
+        return;
+    }
+    let mut vm = match Vm::new(module, &arena) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("error: verify: {:?}", e);
+            return;
+        }
+    };
+    register_repl_natives(&mut vm);
+    let mut shared = vec![0u8; vm.shared_data_bytes()];
+
+    // Atomic fn: run once and print the result; no stepping.
+    if matches!(entry_kind, EntryKind::AtomicFn) {
+        match vm.call_with_shared(&mut shared, &[]) {
+            Ok(VmState::Finished(v)) => {
+                print!("=> ");
+                print_value_inline_ctx(&v, &arena);
+                println!();
+            }
+            Ok(other) => eprintln!("error: fn main did not finish cleanly: {:?}", other),
+            Err(e) => eprintln!("error: vm: {:?}", e),
+        }
+        return;
+    }
+
+    // Stream stepping for loop/yield main. Run to the first yield, drive
+    // transparently through `Reset` boundaries (the loop re-entry the VM
+    // surfaces between iterations), and read :resume/:stop from a sub-prompt.
+    // Tick convention: the loop yields a Word and the next resume value is
+    // that Word + 1.
+    println!(
+        "stepping {}; :resume [tick] to advance, :stop to exit",
+        match entry_kind {
+            EntryKind::LoopMain => "loop main",
+            EntryKind::YieldMain => "yield main",
+            EntryKind::AtomicFn => "fn main",
+        }
+    );
+    let stdin = io::stdin();
+    let mut tick: i64 = 1;
+    let mut state = match vm.call_with_shared(&mut shared, &[Value::Int(tick)]) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("error: vm: {:?}", e);
+            return;
+        }
+    };
+    loop {
+        // Drive through Reset boundaries to the next yield or finish, so one
+        // :resume always advances to the next yielded value rather than to an
+        // intermediate loop re-entry. Resets resume with the current tick.
+        while matches!(state, VmState::Reset) {
+            state = match vm.resume_with_shared(&mut shared, Value::Int(tick)) {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("error: vm: {:?}", e);
+                    return;
+                }
+            };
+        }
+        // Present the current state once.
+        match &state {
+            VmState::Yielded(v) => {
+                print!("yield => ");
+                print_value_inline_ctx(v, &arena);
+                println!();
+                print_shared_state(&vm, &shared_names, &shared);
+                tick = if let Value::Int(n) = v {
+                    n.wrapping_add(1)
+                } else {
+                    tick.wrapping_add(1)
+                };
+            }
+            VmState::Finished(v) => {
+                print!("finished => ");
+                print_value_inline_ctx(v, &arena);
+                println!();
+                print_shared_state(&vm, &shared_names, &shared);
+                return;
+            }
+            VmState::BreakpointHit { chunk, op } => {
+                eprintln!("error: unexpected breakpoint at chunk {} op {}", chunk, op);
+                return;
+            }
+            VmState::Reset => unreachable!("reset states are drained above"),
+        }
+        // Sub-prompt: read commands until a :resume produces the next state.
+        let next = loop {
+            print!("loop> ");
+            let _ = io::stdout().flush();
+            let mut line = String::new();
+            match stdin.lock().read_line(&mut line) {
+                Ok(0) => {
+                    println!();
+                    return;
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    eprintln!("error: reading input: {}", e);
+                    return;
+                }
+            }
+            let cmd = line.trim();
+            let body = cmd.strip_prefix(':').unwrap_or(cmd);
+            let mut it = body.splitn(2, char::is_whitespace);
+            let verb = it.next().unwrap_or("");
+            let arg = it.next().map(str::trim).unwrap_or("");
+            match verb {
+                "" | "resume" | "r" | "step" | "s" => {
+                    if !arg.is_empty() {
+                        match arg.parse::<i64>() {
+                            Ok(n) => tick = n,
+                            Err(_) => {
+                                eprintln!("error: :resume expects an integer tick; got `{}`", arg);
+                                continue;
+                            }
+                        }
+                    }
+                    match vm.resume_with_shared(&mut shared, Value::Int(tick)) {
+                        Ok(s) => break s,
+                        Err(e) => {
+                            eprintln!("error: vm: {:?}", e);
+                            return;
+                        }
+                    }
+                }
+                "stop" | "quit" | "q" | "exit" => {
+                    println!("stopped stepping");
+                    return;
+                }
+                "shared" => print_shared_state(&vm, &shared_names, &shared),
+                "help" | "h" => {
+                    println!("stepping commands:");
+                    println!(
+                        "  :resume [tick]   advance to the next yield (default = last yield + 1)"
+                    );
+                    println!("  :shared          re-print the shared-data state");
+                    println!("  :stop            exit stepping, back to the REPL");
+                }
+                other => eprintln!(
+                    "unknown stepping command `:{}`; :resume to step, :stop to exit",
+                    other
+                ),
+            }
+        };
+        state = next;
     }
 }
 
