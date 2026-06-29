@@ -202,6 +202,10 @@ Pattern: run a Keleusma loop daemon with a small footprint (single-digit megabyt
 
 The default zero-interval behaviour spins as fast as the script yields, which is appropriate for batch processing but not for memory-resident-on-call deployments. Set an explicit interval (`--tick-interval 30s`, `--tick-interval 5m`, depending on cadence needs) when running as a memory-resident daemon.
 
+### Failing cleanly under memory pressure
+
+The runner also fails cleanly when a host genuinely cannot satisfy a program's memory. A verified program's worst-case arena is bounded and known, so the CLI sizes the arena to that bound and allocates it fallibly. A host that cannot provide it exits with an `out of memory: this program needs an N-byte arena` diagnostic and a non-zero status rather than aborting with `SIGABRT`, so a supervisor or orchestrator can observe and react. To provision or qualify a host in advance, `keleusma run <file> --print-memory` reports the program's worst-case arena footprint, the total along with its persistent and transient parts, and exits without running.
+
 ### Cadences longer than four weeks
 
 The `--tick-interval` flag rejects intervals longer than four weeks. Operators with monthly or quarterly cadences have two options.

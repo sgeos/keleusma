@@ -101,6 +101,10 @@ fn main() -> ExitCode {
                     &decrypting,
                     &ctx,
                     &LoopRunnerConfig::default(),
+                    // The shebang/shorthand form treats every token after the
+                    // path as a script argument, so it does not parse CLI run
+                    // flags such as --print-memory.
+                    false,
                 )
             } else {
                 eprintln!("error: unknown subcommand or missing file `{}`", other);
@@ -121,7 +125,7 @@ fn print_help() {
     println!("Subcommands:");
     println!("  run <file> [--verifying-key <keyfile> ...]");
     println!("             [--decryption-key <keyfile> ...]");
-    println!("             [--tick-interval <duration>] [--quiet]");
+    println!("             [--tick-interval <duration>] [--quiet] [--print-memory]");
     println!("                                    Compile and execute a script.");
     println!("                                    Pass --verifying-key (repeatable) to verify");
     println!("                                    signed compiled bytecode against the");
@@ -132,7 +136,9 @@ fn print_help() {
     println!("                                    100ms, 1s, 1m, 1h, 1d, 1w. Maximum four");
     println!("                                    weeks. --quiet suppresses the stderr warning");
     println!("                                    that fires when an iteration exceeds the");
-    println!("                                    configured interval.");
+    println!("                                    configured interval. --print-memory reports the");
+    println!("                                    program's worst-case arena footprint and exits");
+    println!("                                    without running, for provisioning a host.");
     println!("  compile <file> [-o <output>] [--signing-key <keyfile>]");
     println!("                 [--encryption-key <keyfile>] [--target <name>] [--debug]");
     println!("                                    Compile to bytecode. With --debug, emit");
@@ -239,6 +245,9 @@ fn run_subcommand(args: &[String]) -> ExitCode {
     let mut command_line_keys: Vec<ed25519_dalek::VerifyingKey> = Vec::new();
     let mut command_line_decryption_keys: Vec<[u8; X25519_PRIVATE_KEY_LEN]> = Vec::new();
     let mut loop_config = LoopRunnerConfig::default();
+    // When set by `--print-memory`, report the program's worst-case arena
+    // footprint and exit instead of running it.
+    let mut print_memory = false;
     // Positional arguments the launcher passed after the script path.
     // These become the script's own argument vector (after the script
     // path itself) exposed through `shell::arg`/`shell::arg_count`.
@@ -302,6 +311,10 @@ fn run_subcommand(args: &[String]) -> ExitCode {
                 loop_config.quiet = true;
                 i += 1;
             }
+            "--print-memory" => {
+                print_memory = true;
+                i += 1;
+            }
             // Explicit terminator: everything after `--` is a script
             // argument, even if it looks like a CLI option. This lets a
             // script receive arguments such as `--verbose` without the
@@ -363,7 +376,14 @@ fn run_subcommand(args: &[String]) -> ExitCode {
     argv.extend(script_args);
     stddsl::shell::set_script_args(argv);
 
-    run_file(path, &verifying_keys, &decryption_keys, &ctx, &loop_config)
+    run_file(
+        path,
+        &verifying_keys,
+        &decryption_keys,
+        &ctx,
+        &loop_config,
+        print_memory,
+    )
 }
 
 fn run_file(
@@ -372,6 +392,7 @@ fn run_file(
     decryption_keys: &[[u8; X25519_PRIVATE_KEY_LEN]],
     policy: &PolicyContext,
     loop_config: &LoopRunnerConfig,
+    print_memory: bool,
 ) -> ExitCode {
     let bytes = match fs::read(path) {
         Ok(b) => b,
@@ -384,7 +405,14 @@ fn run_file(
     // a leading shebang line, so check both at offset 0 and after a
     // `#!...\n` envelope.
     let result = if looks_like_bytecode(&bytes) {
-        execute_bytecode(&bytes, verifying_keys, decryption_keys, policy, loop_config)
+        execute_bytecode(
+            &bytes,
+            verifying_keys,
+            decryption_keys,
+            policy,
+            loop_config,
+            print_memory,
+        )
     } else if policy.strict_signing || policy.strict_encryption {
         eprintln!(
             "error: strict mode: source execution disabled; compile{} the source before running",
@@ -412,7 +440,7 @@ fn run_file(
                 return ExitCode::FAILURE;
             }
         };
-        execute_source(source, loop_config)
+        execute_source(source, loop_config, print_memory)
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -1593,21 +1621,59 @@ fn parse_target_name(name: &str) -> Result<keleusma::target::Target, String> {
     }
 }
 
+/// Worst-case arena byte sizing for `module`: the persistent (`.data`)
+/// region, the transient stream-iteration region, and the total floored at
+/// the working minimum. The total is the arena the runner allocates.
+fn module_arena_sizing(module: &keleusma::bytecode::Module) -> (usize, usize, usize) {
+    let persistent = keleusma::vm::required_persistent_capacity_for(module);
+    let transient =
+        keleusma::vm::auto_arena_capacity_for(module, &[]).unwrap_or(DEFAULT_ARENA_CAPACITY);
+    let total = (persistent + transient).max(DEFAULT_ARENA_CAPACITY);
+    (persistent, transient, total)
+}
+
+/// Allocate the worst-case arena for `module` and size its persistent
+/// region. An out-of-memory condition becomes a returned `Err` -- surfaced
+/// by the caller as a diagnostic and a non-zero exit -- rather than the
+/// default `handle_alloc_error` abort. This is the memory-pressure
+/// robustness point: a host that cannot provide the program's bounded arena
+/// fails actionably rather than with `SIGABRT`.
+fn allocate_module_arena(module: &keleusma::bytecode::Module) -> Result<Arena, String> {
+    let (persistent, _transient, total) = module_arena_sizing(module);
+    let mut arena = Arena::try_with_capacity(total).map_err(|_| {
+        format!("out of memory: this program needs a {total}-byte arena, which this host cannot allocate")
+    })?;
+    arena
+        .resize_persistent(persistent)
+        .map_err(|e| format!("arena: resize_persistent: {:?}", e))?;
+    Ok(arena)
+}
+
+/// Print the worst-case arena footprint for `module` to stdout. Backs
+/// `run --print-memory`, so an operator can size or qualify a host before
+/// deploying, turning the static worst-case-memory bound into an
+/// operational figure.
+fn print_module_memory(module: &keleusma::bytecode::Module) {
+    let (persistent, transient, total) = module_arena_sizing(module);
+    println!("arena: {total} bytes total (persistent {persistent}, transient {transient})");
+}
+
 /// Run a source program through compile and execute. The runner
 /// pre-registers utility and math natives so scripts can use
 /// `to_string`, `length`, `concat`, `slice`, `println`, and the
 /// `math::*` family without explicit registration.
-fn execute_source(source: &str, loop_config: &LoopRunnerConfig) -> Result<(), String> {
+fn execute_source(
+    source: &str,
+    loop_config: &LoopRunnerConfig,
+    print_memory: bool,
+) -> Result<(), String> {
     let module = compile_source(source)?;
+    if print_memory {
+        print_module_memory(&module);
+        return Ok(());
+    }
     let entry_kind = detect_entry_kind(&module)?;
-    let persistent_bytes = keleusma::vm::required_persistent_capacity_for(&module);
-    let transient_bytes =
-        keleusma::vm::auto_arena_capacity_for(&module, &[]).unwrap_or(DEFAULT_ARENA_CAPACITY);
-    let total = (persistent_bytes + transient_bytes).max(DEFAULT_ARENA_CAPACITY);
-    let mut arena = Arena::with_capacity(total);
-    arena
-        .resize_persistent(persistent_bytes)
-        .map_err(|e| format!("arena: resize_persistent: {:?}", e))?;
+    let arena = allocate_module_arena(&module)?;
     let mut vm = Vm::new(module, &arena).map_err(|e| format!("verify: {:?}", e))?;
     drive_to_completion(&mut vm, &arena, entry_kind, loop_config)
 }
@@ -1717,6 +1783,7 @@ fn execute_bytecode(
     decryption_keys: &[[u8; X25519_PRIVATE_KEY_LEN]],
     policy: &PolicyContext,
     loop_config: &LoopRunnerConfig,
+    print_memory: bool,
 ) -> Result<(), String> {
     let signed = keleusma::wire_format::header_requires_signature(bytes);
     let encrypted = keleusma::wire_format::header_requires_encryption(bytes);
@@ -1739,19 +1806,15 @@ fn execute_bytecode(
     // path based on the script's signature.
     let module = load_module(bytes, verifying_keys, decryption_keys, policy)?;
 
-    // Auto-size the arena based on the module's declared bounds.
-    // The persistent portion holds the script's `.data` section;
-    // the transient portion is sized to the worst-case stream-
-    // iteration usage. Fall back to DEFAULT_ARENA_CAPACITY for
-    // trivial modules to ensure a working minimum.
-    let persistent_bytes = keleusma::vm::required_persistent_capacity_for(&module);
-    let transient_bytes =
-        keleusma::vm::auto_arena_capacity_for(&module, &[]).unwrap_or(DEFAULT_ARENA_CAPACITY);
-    let total = (persistent_bytes + transient_bytes).max(DEFAULT_ARENA_CAPACITY);
-    let mut arena = Arena::with_capacity(total);
-    arena
-        .resize_persistent(persistent_bytes)
-        .map_err(|e| format!("arena: resize_persistent: {:?}", e))?;
+    if print_memory {
+        print_module_memory(&module);
+        return Ok(());
+    }
+
+    // Auto-size the arena from the module's declared bounds and allocate it
+    // fallibly, so a host that cannot provide the program's bounded arena
+    // fails with a diagnostic rather than aborting.
+    let arena = allocate_module_arena(&module)?;
 
     // Determine the script's entry-block kind. Loop main is driven
     // through the tick-counter convention; atomic fn main runs to
