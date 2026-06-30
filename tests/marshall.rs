@@ -95,6 +95,45 @@ struct Carrier {
 }
 
 #[test]
+fn flat_decode_rejects_a_short_body() {
+    // Audit finding 10: a flat composite body shorter than the decoding host
+    // type's layout returns a clean error instead of panicking on an
+    // out-of-bounds slice. A parent decoder slices a child field's byte range
+    // before the child runs its own checks, so the guard lives at the slice
+    // (`marshall::flat_subslice`, emitted by the derive). Reachable from
+    // attacker-shaped bytecode framing a composite smaller than the host type.
+
+    // `Pair` is two i64 words (16 bytes at the bundled widths); a 12-byte
+    // buffer is missing the second field.
+    assert!(
+        matches!(
+            <Pair as KeleusmaType<i64, f64>>::from_flat_bytes(&[0u8; 12], 8, 8),
+            Err(VmError::TypeError(_))
+        ),
+        "a 12-byte buffer is too short for a 16-byte Pair",
+    );
+
+    // A buffer shorter than the leading discriminant word: the disc read is
+    // total (it propagates the scalar-codec error rather than panicking).
+    assert!(
+        <Signal as KeleusmaType<i64, f64>>::from_flat_bytes(&[0u8; 4], 8, 8).is_err(),
+        "4 bytes is too short for the 8-byte discriminant word",
+    );
+
+    // A valid `On(i64)` discriminant (= 1) with no room for its payload word
+    // past the discriminant: the variant-field subslice guard rejects it.
+    let mut disc_only = [0u8; 8];
+    disc_only[0] = 1;
+    assert!(
+        matches!(
+            <Signal as KeleusmaType<i64, f64>>::from_flat_bytes(&disc_only, 8, 8),
+            Err(VmError::TypeError(_))
+        ),
+        "On(i64) needs a payload word past the discriminant",
+    );
+}
+
+#[test]
 fn derive_struct_roundtrip() {
     let p = Point { x: 3.0, y: 4.0 };
     let v: Value = p.clone().into_value();

@@ -249,7 +249,7 @@ fn derive_struct_body(_name: &Ident, name_str: &str, data: &DataStruct) -> Token
                                     ::alloc::format!("field `{}` of `{}` is not flat-eligible", #field_name_strs, #name_str)
                                 ))?;
                             let __val = <#field_types as ::keleusma::KeleusmaType<__KW, __KF>>::from_flat_bytes(
-                                &__bytes[__offset..__offset + __size], __wb, __fb,
+                                ::keleusma::marshall::flat_subslice(__bytes, __offset, __size)?, __wb, __fb,
                             )?;
                             __offset += __size;
                             __val
@@ -335,7 +335,7 @@ fn derive_struct_body(_name: &Ident, name_str: &str, data: &DataStruct) -> Token
                                     ::alloc::format!("field `{}` of `{}` is not flat-eligible", #field_name_strs, #name_str)
                                 ))?;
                             let __val = <#field_types as ::keleusma::KeleusmaType<__KW, __KF>>::from_flat_bytes_ctx(
-                                &__bytes[__offset..__offset + __size], __wb, __fb, __ctx,
+                                ::keleusma::marshall::flat_subslice(__bytes, __offset, __size)?, __wb, __fb, __ctx,
                             )?;
                             __offset += __size;
                             __val
@@ -662,7 +662,7 @@ fn derive_enum_body(_name: &Ident, name_str: &str, data: &DataEnum) -> TokenStre
                                             ::alloc::format!("flat field of `{}::{}` is not flat-eligible", #name_str, #v_str)
                                         ))?;
                                     let #bindings = <#types as ::keleusma::KeleusmaType<__KW, __KF>>::from_flat_bytes(
-                                        &__bytes[__off..__off + __size], __wb, __fb,
+                                        ::keleusma::marshall::flat_subslice(__bytes, __off, __size)?, __wb, __fb,
                                     )?;
                                     __off += __size;
                                     #bindings
@@ -686,7 +686,7 @@ fn derive_enum_body(_name: &Ident, name_str: &str, data: &DataEnum) -> TokenStre
                                             ::alloc::format!("flat field of `{}::{}` is not flat-eligible", #name_str, #v_str)
                                         ))?;
                                     let __val = <#types as ::keleusma::KeleusmaType<__KW, __KF>>::from_flat_bytes(
-                                        &__bytes[__off..__off + __size], __wb, __fb,
+                                        ::keleusma::marshall::flat_subslice(__bytes, __off, __size)?, __wb, __fb,
                                     )?;
                                     __off += __size;
                                     __val
@@ -717,7 +717,7 @@ fn derive_enum_body(_name: &Ident, name_str: &str, data: &DataEnum) -> TokenStre
                     Self::#v_ident => {
                         ::keleusma::GenericValue::<__KW, __KF>::Int(
                             <__KW as ::keleusma::Word>::from_i64_wrap(#disc)
-                        ).write_scalar_le(__dst, 0, __wb, __fb);
+                        ).write_scalar_le(__dst, 0, __wb, __fb)?;
                         for __b in __dst[__wb..].iter_mut() { *__b = 0; }
                         ::core::result::Result::Ok(())
                     }
@@ -731,7 +731,7 @@ fn derive_enum_body(_name: &Ident, name_str: &str, data: &DataEnum) -> TokenStre
                         Self::#v_ident(#(#bindings),*) => {
                             ::keleusma::GenericValue::<__KW, __KF>::Int(
                                 <__KW as ::keleusma::Word>::from_i64_wrap(#disc)
-                            ).write_scalar_le(__dst, 0, __wb, __fb);
+                            ).write_scalar_le(__dst, 0, __wb, __fb)?;
                             let mut __off = __wb;
                             #(
                                 {
@@ -758,7 +758,7 @@ fn derive_enum_body(_name: &Ident, name_str: &str, data: &DataEnum) -> TokenStre
                         Self::#v_ident { #(#names),* } => {
                             ::keleusma::GenericValue::<__KW, __KF>::Int(
                                 <__KW as ::keleusma::Word>::from_i64_wrap(#disc)
-                            ).write_scalar_le(__dst, 0, __wb, __fb);
+                            ).write_scalar_le(__dst, 0, __wb, __fb)?;
                             let mut __off = __wb;
                             #(
                                 {
@@ -873,7 +873,7 @@ fn derive_enum_body(_name: &Ident, name_str: &str, data: &DataEnum) -> TokenStre
                                             ::alloc::format!("flat field of `{}::{}` is not flat-eligible", #name_str, #v_str)
                                         ))?;
                                     let #bindings = <#types as ::keleusma::KeleusmaType<__KW, __KF>>::from_flat_bytes_ctx(
-                                        &__bytes[__off..__off + __size], __wb, __fb, __ctx,
+                                        ::keleusma::marshall::flat_subslice(__bytes, __off, __size)?, __wb, __fb, __ctx,
                                     )?;
                                     __off += __size;
                                     #bindings
@@ -897,7 +897,7 @@ fn derive_enum_body(_name: &Ident, name_str: &str, data: &DataEnum) -> TokenStre
                                             ::alloc::format!("flat field of `{}::{}` is not flat-eligible", #name_str, #v_str)
                                         ))?;
                                     let __val = <#types as ::keleusma::KeleusmaType<__KW, __KF>>::from_flat_bytes_ctx(
-                                        &__bytes[__off..__off + __size], __wb, __fb, __ctx,
+                                        ::keleusma::marshall::flat_subslice(__bytes, __off, __size)?, __wb, __fb, __ctx,
                                     )?;
                                     __off += __size;
                                     __val
@@ -965,7 +965,7 @@ fn derive_enum_body(_name: &Ident, name_str: &str, data: &DataEnum) -> TokenStre
             // nested flat composites (B28 P2).
             let __disc = match ::keleusma::GenericValue::<__KW, __KF>::read_scalar_le(
                 __bytes, 0, ::keleusma::value_layout::ScalarKind::Int, __wb, __fb,
-            ) {
+            )? {
                 ::keleusma::GenericValue::Int(w) => <__KW as ::keleusma::Word>::to_i64(w),
                 _ => {
                     return ::core::result::Result::Err(::keleusma::VmError::TypeError(
@@ -1028,7 +1028,7 @@ fn derive_enum_body(_name: &Ident, name_str: &str, data: &DataEnum) -> TokenStre
         {
             let __disc = match ::keleusma::GenericValue::<__KW, __KF>::read_scalar_le(
                 __bytes, 0, ::keleusma::value_layout::ScalarKind::Int, __wb, __fb,
-            ) {
+            )? {
                 ::keleusma::GenericValue::Int(w) => <__KW as ::keleusma::Word>::to_i64(w),
                 _ => {
                     return ::core::result::Result::Err(::keleusma::VmError::TypeError(

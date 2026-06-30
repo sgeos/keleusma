@@ -50,12 +50,14 @@ fn word_tuple(arena: &keleusma::Arena, v: &Value) -> Vec<i64> {
                 .resolve(arena)
                 .expect("flat tuple body resolves (read-before-resume)");
             (0..bytes.len() / 8)
-                .map(
-                    |i| match Value::read_scalar_le(bytes, i * 8, ScalarKind::Int, 8, 8) {
+                .map(|i| {
+                    match Value::read_scalar_le(bytes, i * 8, ScalarKind::Int, 8, 8)
+                        .expect("flat tuple element decodes")
+                    {
                         Value::Int(n) => n,
                         other => panic!("non-int flat tuple element: {:?}", other),
-                    },
-                )
+                    }
+                })
                 .collect()
         }
         other => panic!("expected a Word tuple, got {:?}", other),

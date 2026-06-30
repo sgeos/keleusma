@@ -421,13 +421,13 @@ impl<W: Word, F: Float> KeleusmaType<W, F> for alloc::string::String {
         _float_bytes: usize,
         ctx: &RefContext<'_>,
     ) -> Result<Self, VmError> {
-        let read_word = |o: usize| -> usize {
+        let read_word = |o: usize| -> Result<usize, VmError> {
             let mut buf = [0u8; 8];
-            buf[..word_bytes].copy_from_slice(&bytes[o..o + word_bytes]);
-            u64::from_le_bytes(buf) as usize
+            buf[..word_bytes].copy_from_slice(flat_subslice(bytes, o, word_bytes)?);
+            Ok(u64::from_le_bytes(buf) as usize)
         };
-        let ptr = read_word(0);
-        let len = read_word(word_bytes);
+        let ptr = read_word(0)?;
+        let len = read_word(word_bytes)?;
         // SAFETY: the (ptr, len) was packed from a KString issued under the
         // composite body's originating epoch (`ctx.ref_epoch`). Rebuilding
         // with that epoch (not the current arena epoch) means the `get`
@@ -506,7 +506,7 @@ impl<W: Word, F: Float> KeleusmaType<W, F> for Arc<dyn HostOpaque> {
         ctx: &RefContext<'_>,
     ) -> Result<Self, VmError> {
         let mut buf = [0u8; 8];
-        buf[..word_bytes].copy_from_slice(&bytes[0..word_bytes]);
+        buf[..word_bytes].copy_from_slice(flat_subslice(bytes, 0, word_bytes)?);
         let index = u64::from_le_bytes(buf) as usize;
         ctx.opaques.get(index).map(Arc::clone).ok_or_else(|| {
             VmError::InvalidBytecode(alloc::string::String::from(
@@ -582,7 +582,7 @@ impl<W: Word, F: Float, T: KeleusmaType<W, F>> KeleusmaType<W, F> for Option<T> 
             1 => {
                 let psize = option_payload_size::<W, F, T>(word_bytes, float_bytes)?;
                 Ok(Some(T::from_flat_bytes(
-                    &bytes[word_bytes..word_bytes + psize],
+                    flat_subslice(bytes, word_bytes, psize)?,
                     word_bytes,
                     float_bytes,
                 )?))
@@ -635,7 +635,7 @@ impl<W: Word, F: Float, T: KeleusmaType<W, F>> KeleusmaType<W, F> for Option<T> 
             1 => {
                 let psize = option_payload_size::<W, F, T>(word_bytes, float_bytes)?;
                 Ok(Some(T::from_flat_bytes_ctx(
-                    &bytes[word_bytes..word_bytes + psize],
+                    flat_subslice(bytes, word_bytes, psize)?,
                     word_bytes,
                     float_bytes,
                     ctx,
@@ -650,6 +650,30 @@ impl<W: Word, F: Float, T: KeleusmaType<W, F>> KeleusmaType<W, F> for Option<T> 
 }
 
 /// Read the leading discriminant word of a flat enum body as `i64` (B34).
+/// Borrow a `len`-byte subslice of a flat composite body at `lo`, or a
+/// [`VmError::TypeError`] when the body is shorter than its declared layout
+/// (audit finding 10).
+///
+/// Replaces the unchecked `&bytes[lo..lo + len]` indexing in the flat
+/// composite decoders. The unchecked form panicked on a body shorter than
+/// the host type expects, which is reachable from attacker-shaped bytecode
+/// that packs a composite whose framed `byte_size` is smaller than the
+/// decoding host type. A parent decoder slices a child's field range before
+/// the child runs its own checks, so the bound must be enforced at the slice.
+///
+/// `#[doc(hidden)] pub` so the `KeleusmaType` derive in `keleusma-macros` can
+/// emit `::keleusma::marshall::flat_subslice(...)` in host crates.
+#[doc(hidden)]
+pub fn flat_subslice(bytes: &[u8], lo: usize, len: usize) -> Result<&[u8], VmError> {
+    lo.checked_add(len)
+        .and_then(|hi| bytes.get(lo..hi))
+        .ok_or_else(|| {
+            VmError::TypeError(alloc::string::String::from(
+                "flat composite body is shorter than its declared layout",
+            ))
+        })
+}
+
 fn read_flat_disc<W: Word, F: Float>(
     bytes: &[u8],
     word_bytes: usize,
@@ -1004,7 +1028,7 @@ macro_rules! impl_tuple {
                                 "flat tuple field is not flat-eligible",
                             )))?;
                         let val = <$name as KeleusmaType<W, FloatT>>::from_flat_bytes(
-                            &bytes[offset..offset + size], word_bytes, float_bytes,
+                            flat_subslice(bytes, offset, size)?, word_bytes, float_bytes,
                         )?;
                         offset += size;
                         val
@@ -1070,7 +1094,7 @@ macro_rules! impl_tuple {
                                 "flat tuple field is not flat-eligible",
                             )))?;
                         let val = <$name as KeleusmaType<W, FloatT>>::from_flat_bytes_ctx(
-                            &bytes[offset..offset + size], word_bytes, float_bytes, __ctx,
+                            flat_subslice(bytes, offset, size)?, word_bytes, float_bytes, __ctx,
                         )?;
                         offset += size;
                         val

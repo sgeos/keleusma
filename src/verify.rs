@@ -2666,15 +2666,12 @@ fn verify_chunk(
                 // finding 13). Boxed tuples and arrays carry no metadata, and a
                 // flat operand is validated by its baked byte size.
                 Op::NewComposite(crate::bytecode::NewCompositeOperand::Boxed {
-                    kind,
+                    kind:
+                        crate::value_layout::CompositeKind::Struct
+                        | crate::value_layout::CompositeKind::Enum,
                     meta,
                     ..
-                }) if matches!(
-                    kind,
-                    crate::value_layout::CompositeKind::Struct
-                        | crate::value_layout::CompositeKind::Enum
-                ) =>
-                {
+                }) => {
                     let len = chunk.struct_templates.len();
                     if *meta as usize >= len {
                         return Err(VerifyError {
