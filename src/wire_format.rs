@@ -1296,7 +1296,7 @@ pub struct WireAuxBody {
 /// the bytecode after an executable shebang; the strip returns
 /// the slice past the first `\n`. Bytes without the prefix pass
 /// through unchanged.
-fn strip_shebang_prefix(bytes: &[u8]) -> &[u8] {
+pub(crate) fn strip_shebang_prefix(bytes: &[u8]) -> &[u8] {
     if bytes.starts_with(b"#!") {
         if let Some(newline_pos) = bytes.iter().position(|&b| b == b'\n') {
             &bytes[newline_pos + 1..]

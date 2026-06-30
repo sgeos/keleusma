@@ -1761,6 +1761,16 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         bytes: &'a [u8],
         arena: &'arena keleusma_arena::Arena,
     ) -> Result<Self, VmError> {
+        // Strip a leading shebang once, up front, so every read below operates
+        // on the same wire-format bytes: framing validation, the width check at
+        // bytes 12-14, op decode, and -- critically -- the slice stored in
+        // `BytecodeStore::Borrowed`, which `archived()` later reads the aux-body
+        // offset and length from. Validating the stripped slice while storing
+        // the unstripped one was the desync that drove `rkyv::access_unchecked`
+        // over a mis-located region (V0.2.1 security audit, findings 8 and 15).
+        // `access_bytes` and `decode_all_ops` strip again internally, an
+        // idempotent no-op on already-stripped bytes.
+        let bytes = crate::wire_format::strip_shebang_prefix(bytes);
         // V0.2.0 Phase 7c routes zero-copy through the wire
         // format. `access_bytes` validates the framing and
         // returns the archived auxiliary body slice; we use the
@@ -10697,6 +10707,35 @@ mod tests {
         match vm.call(&[]).unwrap() {
             VmState::Finished(v) => assert_eq!(v, Value::Int(42)),
             other => panic!("expected finished, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn view_bytes_zero_copy_strips_a_shebang_prefix() {
+        // Findings 8/15: the zero-copy constructor strips the shebang before
+        // validating widths/framing and storing the slice, so the stored bytes
+        // that `archived()` reads aux-body offsets from are the wire-format
+        // bytes, not a shebang-mislocated region (`rkyv::access_unchecked` UB).
+        // The 24-byte shebang keeps the wire start 8-byte aligned inside the
+        // AlignedVec so the archived aux body stays aligned after stripping.
+        let src = "fn double(x: Word) -> Word { x * 2 }\nfn main() -> Word { double(21) }";
+        let module =
+            compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+        let bytes = module.to_bytes().expect("encode");
+        let shebang: &[u8] = b"#!/usr/bin/env keleusma\n"; // 24 bytes, keeps 8-byte alignment
+        let mut aligned = rkyv::util::AlignedVec::<8>::with_capacity(shebang.len() + bytes.len());
+        aligned.extend_from_slice(shebang);
+        aligned.extend_from_slice(&bytes);
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        // SAFETY: the bytes are a freshly compiled module behind a shebang.
+        let mut vm: Vm<'_, '_> =
+            unsafe { Vm::view_bytes_zero_copy(&aligned[..], &arena).expect("view shebang") };
+        match vm.call(&[]).unwrap() {
+            VmState::Finished(v) => assert_eq!(v, Value::Int(42)),
+            other => panic!(
+                "expected Finished(42) from shebang-prefixed zero-copy, got {:?}",
+                other
+            ),
         }
     }
 
