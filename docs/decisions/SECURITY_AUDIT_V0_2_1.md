@@ -35,6 +35,55 @@ test suite is red until the bugs are addressed or the probes are marked. A
 standing arrangement re-audits the delta against this baseline when the
 implementation reaches a clean checkpoint.
 
+### Remediation status (assessed 2026-06-29)
+
+The "not yet started" note above is the original record and is now superseded.
+B28 is complete, and remediation has begun. A finding-by-finding pass against the
+current `v0.2.1` tree (merge commit `aa6aa06`, branch `feat-audit-remediation`)
+gives **7 fixed, 3 partial, 20 open**. Of the twelve High findings, five are
+fixed and seven remain open. Status was assessed by reading the cited code and
+the `fix(audit)` commit record; the memory-unsafety items (5, 8, 15) are static
+verdicts pending a Miri or sanitizer confirmation.
+
+| # | Sev | Status | Note |
+|---|-----|--------|------|
+| 1 | High | Fixed | `21216d1` validates constant-pool indices in `verify_chunk` |
+| 2 | High | Open | local-slot indices still unvalidated against `local_count` |
+| 3 | High | Fixed | `87507ed` operand-stack-depth pass |
+| 4 | High | Fixed | `21216d1` call-arity check plus `checked_sub` |
+| 5 | High | Open | hot-swap drops old private slots before the fallible decode |
+| 6 | High | Partial | depth/const/arity checks added; locals and struct-template still omitted |
+| 7 | High | Fixed | `d9fd075` underflow guards in construct/call ops |
+| 8 | High | Open | zero-copy `archived()` reads offsets from the unstripped shebang slice |
+| 9 | High | Open | signature still gated on the self-asserted flag, not host policy |
+| 10 | High | Open | `read_scalar_le` not total; panics reachable from attacker bytecode |
+| 11 | High | Open | `GetTupleField` passes unverified offset/kind to `read_scalar_le` |
+| 12 | High | Open | `read_scalar_le` panics on Text/Opaque kinds the decoder accepts |
+| 13 | Med | Open | struct-template index unchecked in `NewComposite` |
+| 14 | Med | Open | flat-tuple field read uses unverified byte offset |
+| 15 | Med | Open | shebang desync (subset of 8) |
+| 16 | Med | Fixed | `checked_sub` in `Op::Call` |
+| 17 | Med | Partial | const ops validated; locals and templates still unguarded |
+| 18 | Med | Fixed | `checked_sub` in `Op::Call` |
+| 19 | Med | Open | `GetTupleField(Flat)` offset/kind unchecked |
+| 20 | Med | Open | `read_scalar_le`/`write_scalar_le` panic on bad kinds/widths |
+| 21 | Med | Open | `read_scalar_le` panics on short buffers |
+| 22 | Low | Open | `Vm::new` skips verification when the `verify` feature is off |
+| 23 | Low | Open | Ed25519 uses `verify()` not `verify_strict()` |
+| 24 | Low | Open | no contributory check on the ephemeral public key |
+| 25 | Low | Partial | flat-path Option fixed in B34; value path still collapses `Some(None)` |
+| 26 | Low | Open | recursion guard still uses `split("__")` |
+| 27 | Low | Open | struct/enum specialization passes unbounded |
+| 28 | Low | Open | unchecked usize arithmetic in `value_layout` |
+| 29 | Info | Open | `f64::from_value` coerces Int, lossy above 2^53 |
+| 30 | Info | Fixed | specialization-failure documentation corrected |
+
+Open High findings are 2, 5, 8, 9, 10, 11, and 12, plus partial 6 and 17. The
+remaining remediation-plan items are local-slot and struct-template index
+validation (closes 2, 13, 17), making `read_scalar_le`/`write_scalar_le` total
+(closes 10, 11, 12, 14, 19, 20, 21), transactional hot-swap (closes 5), and the
+signature host-policy plus shebang/zero-copy reconciliation (closes 8, 9, 15).
+
 ## Severity and category distribution
 
 | Severity | Count |
