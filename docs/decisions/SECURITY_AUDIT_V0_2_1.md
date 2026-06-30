@@ -39,7 +39,7 @@ implementation reaches a clean checkpoint.
 
 The "not yet started" note above is the original record and is now superseded.
 B28 is complete, and remediation is under way on `feat-audit-remediation`. As of
-the latest commits, the status is **22 fixed, 1 partial, 7 open**. All twelve High
+the latest commits, the status is **28 fixed, 1 partial, 1 open**. All twelve High
 findings are now fixed. Status was assessed by reading the cited code and the
 `fix(audit)` commit record. The three memory-unsafety items the audit flagged for
 dynamic confirmation (5, 8, 15) are fixed; the shebang/zero-copy fix is
@@ -73,13 +73,13 @@ and all-features, with `clippy --all-targets -D warnings` clean.
 | 20 | Med | Fixed | `24df9dd` both return `UnsupportedWidth` on bad kinds/widths |
 | 21 | Med | Fixed | `24df9dd` checked slicing returns `OutOfBounds` on short buffers |
 | 22 | Low | Open | `Vm::new` skips verification when the `verify` feature is off |
-| 23 | Low | Open | Ed25519 uses `verify()` not `verify_strict()` |
-| 24 | Low | Open | no contributory check on the ephemeral public key |
-| 25 | Low | Partial | flat-path Option fixed in B34; value path still collapses `Some(None)` |
-| 26 | Low | Open | recursion guard still uses `split("__")` |
-| 27 | Low | Open | struct/enum specialization passes unbounded |
-| 28 | Low | Open | unchecked usize arithmetic in `value_layout` |
-| 29 | Info | Open | `f64::from_value` coerces Int, lossy above 2^53 |
+| 23 | Low | Fixed | `5282209` `verify_module_signature` uses `verify_strict` |
+| 24 | Low | Fixed | `5282209` rejects a non-contributory (low-order) ephemeral key |
+| 25 | Low | Partial | flat-path Option fixed in B34; value path still collapses `Some(None)` (pending decision) |
+| 26 | Low | Fixed | `5282209` recovers the origin from the `specs` map, not `split("__")` |
+| 27 | Low | Fixed | `5282209` explicit `TYPE_SPECIALIZATION_LIMIT` on the struct/enum passes |
+| 28 | Low | Fixed | `5282209` saturating size/offset arithmetic in `value_layout` |
+| 29 | Info | Fixed | `5282209` `f64::from_value` errors above the ±2^53 safe-integer range |
 | 30 | Info | Fixed | specialization-failure documentation corrected |
 
 No High findings remain open. The done remediation items are the
@@ -88,9 +88,14 @@ operand-stack-depth pass (3, 4, 7, 16, 18), the operand-index validation
 shebang/zero-copy reconciliation (8, 15), the scalar-codec totality (11, 12, 14,
 19, 20, 21), the marshall/derive composite-body slice bounds-checks (10), and the
 verifier-completeness checks that close finding 6 (locals and struct-template, on
-top of the earlier depth/const/arity work). The remaining open items are the
-lower-severity cleanup (22-24, 26-29) plus partial finding 25 (the value-path
-`Some(None)` collapse); none are High.
+top of the earlier depth/const/arity work), and the low-severity cleanup
+(`verify_strict` 23, the contributory-key check 24, the monomorphizer origin
+lookup 26 and specialization cap 27, the saturating layout arithmetic 28, and the
+lossy-f64 guard 29). The remaining items, both pending a design decision and
+neither High, are finding 22 (gating the safe constructors behind `verify`, whose
+faithful realization cascades across the whole safe construction/load family) and
+partial finding 25 (the value-path `Some(None)` collapse, whose fix would change
+the host Option marshalling ABI).
 
 ## Severity and category distribution
 
