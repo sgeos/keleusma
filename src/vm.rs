@@ -3258,6 +3258,20 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                 new_module.persistent_composite_bytes,
             )));
         }
+        // Build the new bytecode image and decode its ops BEFORE touching any
+        // old state. These two `?` steps are the only remaining fallible work,
+        // so performing them first makes the swap transactional: a failure here
+        // returns with the current module fully intact, instead of dropping the
+        // old private slots and only then erroring, which left
+        // `private_slot_count` stale and made `Drop` double-drop the slots
+        // (V0.2.1 security audit, finding 5: hot-swap double-drop /
+        // use-after-free).
+        let bytes = new_module.to_bytes()?;
+        let mut aligned = rkyv::util::AlignedVec::<8>::with_capacity(bytes.len());
+        aligned.extend_from_slice(&bytes);
+        let decoded_ops = decode_all_ops(aligned.as_slice())?;
+
+        // Commit point: every step below is infallible.
         // Drop the old private slots. Each was initialised at
         // construction or at a prior hot swap and may hold owned
         // resources whose destructor must run.
@@ -3289,13 +3303,8 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         self.reserved_operand_slots = reserve_slots;
         self.reserved_frame_depth = reserve_frames;
         self.reserved_opaque_capacity = reserve_opaque;
-        // Serialize the new module to aligned bytes for archived
-        // access. The borrowed variant is replaced by an owned variant
-        // because hot swap takes an owned input.
-        let bytes = new_module.to_bytes()?;
-        let mut aligned = rkyv::util::AlignedVec::<8>::with_capacity(bytes.len());
-        aligned.extend_from_slice(&bytes);
-        let decoded_ops = decode_all_ops(aligned.as_slice())?;
+        // Install the new bytecode image and decoded ops built above (before
+        // the drop), so the swap is transactional.
         self.bytecode = BytecodeStore::Owned(aligned);
         self.decoded_ops = decoded_ops;
         self.shared_slot_count = new_shared;
@@ -13404,6 +13413,45 @@ mod tests {
             ),
             Err(other) => panic!("expected LoadError, got: {:?}", other),
             Ok(()) => panic!("unsigned hot-swap with registered keys must be rejected"),
+        }
+    }
+
+    #[cfg(feature = "signatures")]
+    #[test]
+    fn rejected_hot_swap_leaves_the_running_module_intact() {
+        // Finding 5: the hot swap is transactional. The fallible decode steps
+        // now run before the old private slots are dropped, so a rejected swap
+        // leaves the current module fully usable rather than corrupting VM
+        // state (the original bug left `private_slot_count` stale after an
+        // early drop, double-dropping on the next `Drop`). Here the swap is
+        // rejected by the signing policy; the original module must still run.
+        // The exact original trigger -- a `to_bytes`/`decode_all_ops` failure
+        // after the drop -- is not reachable on a valid module, so this checks
+        // the observable property the reorder guarantees.
+        use ed25519_dalek::SigningKey;
+        let verifying = SigningKey::from_bytes(&[11u8; 32]).verifying_key();
+        let module =
+            compile(&parse(&tokenize("fn main() -> Word { 1 }").expect("lex")).expect("parse"))
+                .expect("compile");
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let mut vm = Vm::new(module, &arena).expect("construct");
+        vm.register_verifying_key(verifying);
+        let swap =
+            compile(&parse(&tokenize("fn main() -> Word { 2 }").expect("lex")).expect("parse"))
+                .expect("compile");
+        let swap_bytes = swap.to_bytes().expect("encode");
+        assert!(
+            vm.replace_module_from_bytes(&swap_bytes, alloc::vec::Vec::new())
+                .is_err(),
+            "the unsigned swap should be rejected"
+        );
+        // The original module is intact and still runs after the rejected swap.
+        match vm.call(&[]).expect("run after rejected swap") {
+            VmState::Finished(v) => assert_eq!(v, Value::Int(1)),
+            other => panic!(
+                "expected Finished(1) after a rejected swap, got {:?}",
+                other
+            ),
         }
     }
 
