@@ -290,7 +290,22 @@ impl<W: Word, F: Float> KeleusmaType<W, F> for f64 {
     fn from_value(v: &GenericValue<W, F>) -> Result<Self, VmError> {
         match v {
             GenericValue::Float(f) => Ok(F::to_f64(*f)),
-            GenericValue::Int(n) => Ok(W::to_i64(*n) as f64),
+            GenericValue::Int(n) => {
+                // Coerce an Int to f64 only within the exactly-representable
+                // range. `|n| <= 2^53` is the f64 safe-integer bound; beyond it
+                // the cast rounds and would silently lose precision, so reject
+                // it rather than return a wrong value (audit finding 29).
+                const F64_SAFE_INT: i64 = 1 << 53;
+                let n = W::to_i64(*n);
+                if (-F64_SAFE_INT..=F64_SAFE_INT).contains(&n) {
+                    Ok(n as f64)
+                } else {
+                    Err(VmError::TypeError(format!(
+                        "Int {} exceeds the f64 safe-integer range (±2^53); coercion to Float would lose precision",
+                        n
+                    )))
+                }
+            }
             other => Err(VmError::TypeError(format!(
                 "expected Float, got {}",
                 other.type_name()

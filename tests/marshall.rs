@@ -134,6 +134,29 @@ fn flat_decode_rejects_a_short_body() {
 }
 
 #[test]
+fn f64_int_coercion_rejects_precision_loss() {
+    // Audit finding 29: an Int coerces to f64 only within the f64
+    // safe-integer range; beyond ±2^53 the cast would round, so from_value
+    // returns a TypeError instead of silently losing precision.
+    let exact = (1i64 << 53) - 1;
+    assert_eq!(
+        <f64 as KeleusmaType<i64, f64>>::from_value(&Value::Int(exact)).unwrap(),
+        exact as f64
+    );
+    // The boundary 2^53 is exactly representable and still coerces.
+    assert_eq!(
+        <f64 as KeleusmaType<i64, f64>>::from_value(&Value::Int(1i64 << 53)).unwrap(),
+        (1i64 << 53) as f64
+    );
+    // One past the boundary is odd and not representable: reject it.
+    let lossy = (1i64 << 53) + 1;
+    assert!(matches!(
+        <f64 as KeleusmaType<i64, f64>>::from_value(&Value::Int(lossy)),
+        Err(VmError::TypeError(_))
+    ));
+}
+
+#[test]
 fn derive_struct_roundtrip() {
     let p = Point { x: 3.0, y: 4.0 };
     let v: Value = p.clone().into_value();

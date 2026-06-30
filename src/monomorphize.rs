@@ -200,15 +200,22 @@ pub fn monomorphize_with_provenance(
         // Update per-function counts for any specializations
         // introduced by rewriting this function's body.
         if new_functions.len() > len_before {
+            // Recover each new specialization's origin from `specs`
+            // (the authoritative `(origin, type_args) -> mangled-name`
+            // map) rather than by splitting the mangled name on `__`.
+            // The `origin__type_args` shape is ambiguous when the origin
+            // itself contains `__`, so the split miscounted the origin
+            // and weakened the per-function recursion guard (audit
+            // finding 26).
+            let name_to_origin: BTreeMap<&str, &str> = specs
+                .iter()
+                .map(|((origin, _), mangled)| (mangled.as_str(), origin.as_str()))
+                .collect();
             for new_fn in &new_functions[len_before..] {
-                // The synthetic name is `origin__type_args`. Recover
-                // the origin by splitting on the first `__`.
-                let origin = new_fn
-                    .name
-                    .split("__")
-                    .next()
-                    .unwrap_or(&new_fn.name)
-                    .to_string();
+                let origin = name_to_origin
+                    .get(new_fn.name.as_str())
+                    .map(|s| (*s).to_string())
+                    .unwrap_or_else(|| new_fn.name.clone());
                 *per_fn_counts.entry(origin).or_insert(0) += 1;
             }
         }
@@ -262,6 +269,16 @@ pub fn monomorphize_with_provenance(
 /// the analogous struct pass. The mechanics mirror struct
 /// specialization, with variant payload types in place of struct
 /// field types.
+/// Explicit upper bound on the number of distinct generic struct or enum
+/// specializations a single pass may mint (audit finding 27). The pass already
+/// runs once over the function bodies and deduplicates through its `specs` map,
+/// so the count is bounded by the source size; this cap makes that bound
+/// explicit and auditable, mirroring the function-specialization loop's
+/// `SPECIALIZATION_LIMIT`. Beyond the cap a construction is left generic, so
+/// later type checking reports a clear error rather than the pass emitting an
+/// unbounded family of types.
+const TYPE_SPECIALIZATION_LIMIT: usize = 1024;
+
 fn specialize_enums(mut program: Program, fn_returns: &BTreeMap<String, TypeExpr>) -> Program {
     use crate::visitor::MutVisitor;
     let generic_enums: BTreeMap<String, EnumDef> = program
@@ -401,6 +418,10 @@ impl crate::visitor::MutVisitor for EnumSpecializer<'_> {
         let cache_key = (enum_name.clone(), canonical);
         let spec_name = if let Some(existing) = self.specs.get(&cache_key) {
             existing.clone()
+        } else if self.new_enums.len() >= TYPE_SPECIALIZATION_LIMIT {
+            // Explicit specialization cap reached (audit finding 27);
+            // leave the construction generic for a clean later error.
+            return;
         } else {
             let spec_name = mangle_struct(enum_name, &type_args);
             let specialized = specialize_enum(enum_def, &type_args, spec_name.clone());
@@ -646,6 +667,10 @@ impl crate::visitor::MutVisitor for StructSpecializer<'_> {
         let cache_key = (name.clone(), canonical);
         let spec_name = if let Some(existing) = self.specs.get(&cache_key) {
             existing.clone()
+        } else if self.new_structs.len() >= TYPE_SPECIALIZATION_LIMIT {
+            // Explicit specialization cap reached (audit finding 27);
+            // leave the construction generic for a clean later error.
+            return;
         } else {
             let spec_name = mangle_struct(name, &type_args);
             // Pass the in-progress specs so any nested generic

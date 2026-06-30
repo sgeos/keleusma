@@ -1837,8 +1837,6 @@ pub fn verify_module_signature(
     bytes: &[u8],
     keys: &[ed25519_dalek::VerifyingKey],
 ) -> Result<(), LoadError> {
-    use ed25519_dalek::Verifier;
-
     let bytes = strip_shebang_prefix(bytes);
     if bytes.len() < WIRE_FORMAT_HEADER_BYTES + WIRE_FORMAT_FOOTER_BYTES {
         return Err(LoadError::Truncated);
@@ -1875,8 +1873,13 @@ pub fn verify_module_signature(
 
     // Try each key. The first match wins; an empty key set
     // produces `InvalidSignature` (no host trust matrix → reject).
+    // `verify_strict` rejects the malleable forms `verify` admits (a
+    // non-canonical scalar `S`, or an `R`/`A` with a small-order
+    // component), so a signed module has a single canonical signature
+    // and a third party cannot mint a distinct one that still verifies
+    // (audit finding 23).
     for key in keys {
-        if key.verify(&message, &signature).is_ok() {
+        if key.verify_strict(&message, &signature).is_ok() {
             return Ok(());
         }
     }
