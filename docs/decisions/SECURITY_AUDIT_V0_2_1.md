@@ -38,32 +38,32 @@ implementation reaches a clean checkpoint.
 ### Remediation status (assessed 2026-06-29)
 
 The "not yet started" note above is the original record and is now superseded.
-B28 is complete, and remediation has begun. A finding-by-finding pass against the
-current `v0.2.1` tree (merge commit `aa6aa06`, branch `feat-audit-remediation`)
-gives **7 fixed, 3 partial, 20 open**. Of the twelve High findings, five are
-fixed and seven remain open. Status was assessed by reading the cited code and
-the `fix(audit)` commit record; the memory-unsafety items (5, 8, 15) are static
-verdicts pending a Miri or sanitizer confirmation.
+B28 is complete, and remediation is under way on `feat-audit-remediation`. As of
+the latest commits, the status is **12 fixed, 2 partial, 16 open**. Of the twelve
+High findings, seven are fixed, one is partial, and four remain open. Status was
+assessed by reading the cited code and the `fix(audit)` commit record; the
+remaining memory-unsafety items (8, 15) are static verdicts pending a Miri or
+sanitizer confirmation.
 
 | # | Sev | Status | Note |
 |---|-----|--------|------|
 | 1 | High | Fixed | `21216d1` validates constant-pool indices in `verify_chunk` |
-| 2 | High | Open | local-slot indices still unvalidated against `local_count` |
+| 2 | High | Fixed | `e35e816` validates local-slot indices against `local_count` |
 | 3 | High | Fixed | `87507ed` operand-stack-depth pass |
 | 4 | High | Fixed | `21216d1` call-arity check plus `checked_sub` |
-| 5 | High | Open | hot-swap drops old private slots before the fallible decode |
+| 5 | High | Fixed | `397e512` makes the swap transactional (fallible steps before the drop) |
 | 6 | High | Partial | depth/const/arity checks added; locals and struct-template still omitted |
 | 7 | High | Fixed | `d9fd075` underflow guards in construct/call ops |
 | 8 | High | Open | zero-copy `archived()` reads offsets from the unstripped shebang slice |
-| 9 | High | Open | signature still gated on the self-asserted flag, not host policy |
+| 9 | High | Fixed | `e30f7a3` enforces signing by host policy (non-empty trust matrix) |
 | 10 | High | Open | `read_scalar_le` not total; panics reachable from attacker bytecode |
 | 11 | High | Open | `GetTupleField` passes unverified offset/kind to `read_scalar_le` |
 | 12 | High | Open | `read_scalar_le` panics on Text/Opaque kinds the decoder accepts |
-| 13 | Med | Open | struct-template index unchecked in `NewComposite` |
+| 13 | Med | Fixed | `e35e816` validates the boxed `NewComposite` template index |
 | 14 | Med | Open | flat-tuple field read uses unverified byte offset |
 | 15 | Med | Open | shebang desync (subset of 8) |
 | 16 | Med | Fixed | `checked_sub` in `Op::Call` |
-| 17 | Med | Partial | const ops validated; locals and templates still unguarded |
+| 17 | Med | Fixed | `e35e816` adds the local and template index validation it required |
 | 18 | Med | Fixed | `checked_sub` in `Op::Call` |
 | 19 | Med | Open | `GetTupleField(Flat)` offset/kind unchecked |
 | 20 | Med | Open | `read_scalar_le`/`write_scalar_le` panic on bad kinds/widths |
@@ -78,11 +78,14 @@ verdicts pending a Miri or sanitizer confirmation.
 | 29 | Info | Open | `f64::from_value` coerces Int, lossy above 2^53 |
 | 30 | Info | Fixed | specialization-failure documentation corrected |
 
-Open High findings are 2, 5, 8, 9, 10, 11, and 12, plus partial 6 and 17. The
-remaining remediation-plan items are local-slot and struct-template index
-validation (closes 2, 13, 17), making `read_scalar_le`/`write_scalar_le` total
-(closes 10, 11, 12, 14, 19, 20, 21), transactional hot-swap (closes 5), and the
-signature host-policy plus shebang/zero-copy reconciliation (closes 8, 9, 15).
+Open High findings are 8, 10, 11, and 12, plus partial 6. The done remediation
+items are the operand-stack-depth pass (3, 4, 7, 16, 18), the operand-index
+validation (1, 2, 13, 17), the transactional hot-swap (5), and the signature
+host-policy (9). The remaining items are making `read_scalar_le`/`write_scalar_le`
+total (closes 10, 11, 12, 14, 19, 20, 21) and the shebang/zero-copy
+reconciliation (closes 8, 15); finding 6 stays partial until the flat-read safety
+lands, since `Vm::new_unchecked` still admits bytecode that can reach those
+panics. The lower-severity cleanup (22-30) remains.
 
 ## Severity and category distribution
 
