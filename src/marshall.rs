@@ -171,7 +171,7 @@ pub trait KeleusmaType<W: Word, F: Float>: Sized {
     ) -> Result<Self, VmError> {
         match Self::flat_field_kind() {
             Some(kind) => {
-                let v = GenericValue::read_scalar_le(bytes, 0, kind, word_bytes, float_bytes);
+                let v = GenericValue::read_scalar_le(bytes, 0, kind, word_bytes, float_bytes)?;
                 Self::from_value(&v)
             }
             None => Err(VmError::TypeError(alloc::string::String::from(
@@ -233,7 +233,7 @@ pub trait KeleusmaType<W: Word, F: Float>: Sized {
             }
             Some(_) => {
                 self.into_value()
-                    .write_scalar_le(dst, 0, word_bytes, float_bytes);
+                    .write_scalar_le(dst, 0, word_bytes, float_bytes)?;
                 Ok(())
             }
             None => Err(VmError::TypeError(alloc::string::String::from(
@@ -602,14 +602,14 @@ impl<W: Word, F: Float, T: KeleusmaType<W, F>> KeleusmaType<W, F> for Option<T> 
     ) -> Result<(), VmError> {
         match self {
             Option::None => {
-                write_flat_disc::<W, F>(dst, 0, word_bytes, float_bytes);
+                write_flat_disc::<W, F>(dst, 0, word_bytes, float_bytes)?;
                 for b in dst[word_bytes..].iter_mut() {
                     *b = 0;
                 }
                 Ok(())
             }
             Some(t) => {
-                write_flat_disc::<W, F>(dst, 1, word_bytes, float_bytes);
+                write_flat_disc::<W, F>(dst, 1, word_bytes, float_bytes)?;
                 let psize = option_payload_size::<W, F, T>(word_bytes, float_bytes)?;
                 t.to_flat_bytes(
                     &mut dst[word_bytes..word_bytes + psize],
@@ -661,7 +661,7 @@ fn read_flat_disc<W: Word, F: Float>(
         crate::value_layout::ScalarKind::Int,
         word_bytes,
         float_bytes,
-    ) {
+    )? {
         GenericValue::Int(w) => Ok(W::to_i64(w)),
         _ => Err(VmError::TypeError(alloc::string::String::from(
             "flat enum discriminant is not an Int",
@@ -675,13 +675,10 @@ fn write_flat_disc<W: Word, F: Float>(
     disc: i64,
     word_bytes: usize,
     float_bytes: usize,
-) {
-    GenericValue::<W, F>::Int(W::from_i64_wrap(disc)).write_scalar_le(
-        dst,
-        0,
-        word_bytes,
-        float_bytes,
-    );
+) -> Result<(), VmError> {
+    GenericValue::<W, F>::Int(W::from_i64_wrap(disc))
+        .write_scalar_le(dst, 0, word_bytes, float_bytes)
+        .map_err(VmError::from)
 }
 
 /// The flat byte size of an `Option`'s `Some` payload, or a `TypeError` when

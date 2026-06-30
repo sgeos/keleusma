@@ -134,6 +134,16 @@ impl From<crate::bytecode::LoadError> for VmError {
     }
 }
 
+impl From<crate::bytecode::ScalarError> for VmError {
+    fn from(e: crate::bytecode::ScalarError) -> Self {
+        // A bad flat scalar read or write -- an out-of-range offset, a
+        // reference kind on the fixed-scalar path, or an unsupported width --
+        // is malformed bytecode reaching the runtime (V0.2.1 audit, the
+        // read_scalar_le totality cluster).
+        VmError::InvalidBytecode(format!("flat scalar codec: {:?}", e))
+    }
+}
+
 /// Coarse policy category for a [`VmError`]. Used by hosts that want
 /// to make a single retry-or-halt decision without matching the
 /// full variant set.
@@ -2133,7 +2143,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         if kind & crate::bytecode::SHARED_SLOT_COMPOSITE_FLAG == 0 {
             let sk = ScalarKind::from_tag(kind)
                 .ok_or_else(|| VmError::InvalidBytecode(String::from("bad shared scalar kind")))?;
-            Ok(GenericValue::read_scalar_le(buf, offset, sk, wb, fb))
+            GenericValue::read_scalar_le(buf, offset, sk, wb, fb).map_err(VmError::from)
         } else {
             let ck = CompositeKind::from_tag(kind & !crate::bytecode::SHARED_SLOT_COMPOSITE_FLAG)
                 .ok_or_else(|| {
@@ -2223,7 +2233,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                 .shared_buf
                 .bytes_mut()
                 .expect("write_shared_to_buffer called with an active buffer");
-            value.write_scalar_le(buf, offset, wb, fb);
+            value.write_scalar_le(buf, offset, wb, fb)?;
             Ok(())
         } else {
             // Resolve the composite body to an owned copy so the `self.arena`
@@ -2483,13 +2493,14 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         }
         let sk = ScalarKind::from_tag(kind)
             .ok_or_else(|| VmError::InvalidBytecode(String::from("bad shared scalar kind")))?;
-        Ok(crate::bytecode::GenericValue::read_scalar_le(
+        crate::bytecode::GenericValue::read_scalar_le(
             buf,
             offset,
             sk,
             self.module_word_bytes(),
             self.module_float_bytes(),
-        ))
+        )
+        .map_err(VmError::from)
     }
 
     /// Write a scalar shared field into a host-owned buffer between runs
@@ -2519,7 +2530,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
             offset,
             self.module_word_bytes(),
             self.module_float_bytes(),
-        );
+        )?;
         Ok(())
     }
 
@@ -2935,7 +2946,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                 ScalarKind::Int,
                 word_bytes,
                 float_bytes,
-            ) {
+            )? {
                 crate::bytecode::GenericValue::Int(w) => w.to_i64() as usize,
                 _ => unreachable!("read_scalar_le with Int kind yields Int"),
             };
@@ -2983,13 +2994,8 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
             let ks = unsafe { crate::kstring::KString::from_raw_parts(ptr, len, ref_epoch) };
             return Ok(crate::bytecode::GenericValue::KStr(ks));
         }
-        Ok(crate::bytecode::GenericValue::read_scalar_le(
-            bytes,
-            offset,
-            kind,
-            word_bytes,
-            float_bytes,
-        ))
+        crate::bytecode::GenericValue::read_scalar_le(bytes, offset, kind, word_bytes, float_bytes)
+            .map_err(VmError::from)
     }
 
     /// Recover from a runtime error and return the VM to a clean
@@ -5545,7 +5551,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                                         crate::value_layout::ScalarKind::Int,
                                         wb,
                                         fb,
-                                    ) {
+                                    )? {
                                         crate::bytecode::GenericValue::Int(w) => {
                                             <W as crate::word::Word>::to_i64(w)
                                         }
