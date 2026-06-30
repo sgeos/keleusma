@@ -39,12 +39,15 @@ implementation reaches a clean checkpoint.
 
 The "not yet started" note above is the original record and is now superseded.
 B28 is complete, and remediation is under way on `feat-audit-remediation`. As of
-the latest commits, the status is **14 fixed, 2 partial, 14 open**. Of the twelve
-High findings, eight are fixed, one is partial, and three remain open. Status was
-assessed by reading the cited code and the `fix(audit)` commit record. The three
-memory-unsafety items the audit flagged for dynamic confirmation (5, 8, 15) are
-now fixed; the shebang/zero-copy fix is additionally exercised under Miri (Tree
-Borrows) over the zero-copy path.
+the latest commits, the status is **22 fixed, 1 partial, 7 open**. All twelve High
+findings are now fixed. Status was assessed by reading the cited code and the
+`fix(audit)` commit record. The three memory-unsafety items the audit flagged for
+dynamic confirmation (5, 8, 15) are fixed; the shebang/zero-copy fix is
+additionally exercised under Miri (Tree Borrows) over the zero-copy path. The
+flat-read cluster (6, 10, 11, 12, 14, 19, 20, 21) is closed by the scalar-codec
+totality (`24df9dd`), the marshall/derive slice bounds-checks (`af1b381`), and the
+verifier-completeness checks (`e35e816`); the gate is green on default, signatures,
+and all-features, with `clippy --all-targets -D warnings` clean.
 
 | # | Sev | Status | Note |
 |---|-----|--------|------|
@@ -53,22 +56,22 @@ Borrows) over the zero-copy path.
 | 3 | High | Fixed | `87507ed` operand-stack-depth pass |
 | 4 | High | Fixed | `21216d1` call-arity check plus `checked_sub` |
 | 5 | High | Fixed | `397e512` makes the swap transactional (fallible steps before the drop) |
-| 6 | High | Partial | depth/const/arity checks added; locals and struct-template still omitted |
+| 6 | High | Fixed | `e35e816` added the omitted local-slot and struct-template checks; the verifier-completeness set (depth, const, arity, locals, templates) is now in place |
 | 7 | High | Fixed | `d9fd075` underflow guards in construct/call ops |
 | 8 | High | Fixed | `38e4268` strips the shebang before validating and storing; Miri-clean |
 | 9 | High | Fixed | `e30f7a3` enforces signing by host policy (non-empty trust matrix) |
-| 10 | High | Open | `read_scalar_le` not total; panics reachable from attacker bytecode |
-| 11 | High | Open | `GetTupleField` passes unverified offset/kind to `read_scalar_le` |
-| 12 | High | Open | `read_scalar_le` panics on Text/Opaque kinds the decoder accepts |
+| 10 | High | Fixed | `af1b381` `flat_subslice` bounds-checks every composite-body slice in the marshall decoders and the derive |
+| 11 | High | Fixed | `24df9dd` codec total: an unverified offset/kind yields a clean `VmError`, not a panic (the verifier still does not statically validate flat offsets; safety is by codec totality) |
+| 12 | High | Fixed | `24df9dd` `read_scalar_le` returns `ReferenceKind` for Text/Opaque instead of panicking |
 | 13 | Med | Fixed | `e35e816` validates the boxed `NewComposite` template index |
-| 14 | Med | Open | flat-tuple field read uses unverified byte offset |
+| 14 | Med | Fixed | `24df9dd` codec total (the flat-tuple field read reaches a clean error, not a panic) |
 | 15 | Med | Fixed | `38e4268` (same shebang strip as finding 8) |
 | 16 | Med | Fixed | `checked_sub` in `Op::Call` |
 | 17 | Med | Fixed | `e35e816` adds the local and template index validation it required |
 | 18 | Med | Fixed | `checked_sub` in `Op::Call` |
-| 19 | Med | Open | `GetTupleField(Flat)` offset/kind unchecked |
-| 20 | Med | Open | `read_scalar_le`/`write_scalar_le` panic on bad kinds/widths |
-| 21 | Med | Open | `read_scalar_le` panics on short buffers |
+| 19 | Med | Fixed | `24df9dd` codec total (offset/kind reach a clean error, not a panic) |
+| 20 | Med | Fixed | `24df9dd` both return `UnsupportedWidth` on bad kinds/widths |
+| 21 | Med | Fixed | `24df9dd` checked slicing returns `OutOfBounds` on short buffers |
 | 22 | Low | Open | `Vm::new` skips verification when the `verify` feature is off |
 | 23 | Low | Open | Ed25519 uses `verify()` not `verify_strict()` |
 | 24 | Low | Open | no contributory check on the ephemeral public key |
@@ -79,14 +82,15 @@ Borrows) over the zero-copy path.
 | 29 | Info | Open | `f64::from_value` coerces Int, lossy above 2^53 |
 | 30 | Info | Fixed | specialization-failure documentation corrected |
 
-Open High findings are 10, 11, and 12, plus partial 6. The done remediation items
-are the operand-stack-depth pass (3, 4, 7, 16, 18), the operand-index validation
-(1, 2, 13, 17), the transactional hot-swap (5), the signature host-policy (9), and
-the shebang/zero-copy reconciliation (8, 15). The remaining item is making
-`read_scalar_le`/`write_scalar_le` total (closes 10, 11, 12, 14, 19, 20, 21);
-finding 6 stays partial until that flat-read safety lands, since
-`Vm::new_unchecked` still admits bytecode that can reach those panics. The
-lower-severity cleanup (22-30) remains.
+No High findings remain open. The done remediation items are the
+operand-stack-depth pass (3, 4, 7, 16, 18), the operand-index validation
+(1, 2, 13, 17), the transactional hot-swap (5), the signature host-policy (9), the
+shebang/zero-copy reconciliation (8, 15), the scalar-codec totality (11, 12, 14,
+19, 20, 21), the marshall/derive composite-body slice bounds-checks (10), and the
+verifier-completeness checks that close finding 6 (locals and struct-template, on
+top of the earlier depth/const/arity work). The remaining open items are the
+lower-severity cleanup (22-24, 26-29) plus partial finding 25 (the value-path
+`Some(None)` collapse); none are High.
 
 ## Severity and category distribution
 
