@@ -2637,6 +2637,58 @@ fn verify_chunk(
                     }
                     record(ip, P1, "fixed-frac-bits-in-range");
                 }
+                // Local-slot indices are dereferenced directly by the VM
+                // against the frame's local region. An out-of-range slot reads
+                // or writes past the declared locals, and in the `SetLocal`
+                // case can corrupt another call frame on the shared stack
+                // without panicking (audit finding 2). The locals are the
+                // first `local_count` slots of the frame, mirroring the
+                // `GetData`/`SetData` bound already enforced above.
+                Op::GetLocal(slot) | Op::SetLocal(slot) => {
+                    let nlocals = chunk.local_count as usize;
+                    if *slot as usize >= nlocals {
+                        return Err(VerifyError {
+                            chunk_name: name.clone(),
+                            message: alloc::format!(
+                                "{:?} at {} references local slot {} but the chunk declares {} local(s)",
+                                op,
+                                ip,
+                                slot,
+                                nlocals
+                            ),
+                        });
+                    }
+                    record(ip, P1, "local-slot-in-range");
+                }
+                // A boxed struct or enum construction reads the chunk's
+                // struct-template table for its type and field or variant
+                // names; an out-of-range `meta` index panics the VM (audit
+                // finding 13). Boxed tuples and arrays carry no metadata, and a
+                // flat operand is validated by its baked byte size.
+                Op::NewComposite(crate::bytecode::NewCompositeOperand::Boxed {
+                    kind,
+                    meta,
+                    ..
+                }) if matches!(
+                    kind,
+                    crate::value_layout::CompositeKind::Struct
+                        | crate::value_layout::CompositeKind::Enum
+                ) =>
+                {
+                    let len = chunk.struct_templates.len();
+                    if *meta as usize >= len {
+                        return Err(VerifyError {
+                            chunk_name: name.clone(),
+                            message: alloc::format!(
+                                "NewComposite at {} references struct/enum template {} but the chunk has {} template(s)",
+                                ip,
+                                meta,
+                                len
+                            ),
+                        });
+                    }
+                    record(ip, P1, "struct-template-index-in-range");
+                }
                 _ => {}
             }
         }
@@ -2822,6 +2874,19 @@ mod tests {
     }
 
     fn make_chunk(name: &str, ops: Vec<Op>, block_type: BlockType) -> Chunk {
+        // Derive `local_count` from the ops so the local-slot operand-index
+        // check (audit finding 2) is satisfied: a fixture that reads or writes
+        // local slot N declares at least N+1 locals, as a real compiled chunk
+        // would (the entry parameter occupies slot 0). Fixtures with no local
+        // ops keep `local_count` 0 and an unchanged WCMU bound.
+        let local_count = ops
+            .iter()
+            .filter_map(|op| match op {
+                Op::GetLocal(s) | Op::SetLocal(s) => Some(*s + 1),
+                _ => None,
+            })
+            .max()
+            .unwrap_or(0);
         Chunk {
             name: String::from(name),
             ops,
@@ -2830,7 +2895,7 @@ mod tests {
             // (audit finding 1). Constants do not affect the WCMU bound.
             constants: alloc::vec![crate::bytecode::ConstValue::Int(0)],
             struct_templates: Vec::new(),
-            local_count: 0,
+            local_count,
             param_count: 0,
             block_type,
             param_types: Vec::new(),
@@ -2856,6 +2921,48 @@ mod tests {
         assert!(
             verify(&module).is_err(),
             "expected the verifier to reject the out-of-range Const index"
+        );
+    }
+
+    // Audit remediation (finding 2). The verifier rejects a local-slot index
+    // beyond the chunk's declared `local_count`. A `SetLocal` past the locals
+    // could otherwise corrupt another call frame on the shared stack without
+    // panicking; this is silent intra-arena corruption from verified bytecode.
+    #[test]
+    fn local_slot_oob_index_rejected_by_verifier() {
+        let mut chunk = make_chunk("main", vec![Op::GetLocal(5), Op::Return], BlockType::Func);
+        chunk.local_count = 1; // slot 5 is out of range
+        let module = make_module(vec![chunk]);
+        assert!(
+            verify(&module).is_err(),
+            "expected the verifier to reject the out-of-range local slot"
+        );
+    }
+
+    // Audit remediation (finding 13). The verifier rejects an out-of-range
+    // struct/enum template index in a boxed `NewComposite`, which the VM would
+    // otherwise dereference (`struct_templates[meta]`) and panic on.
+    #[test]
+    fn struct_template_oob_index_rejected_by_verifier() {
+        use crate::bytecode::NewCompositeOperand;
+        use crate::value_layout::CompositeKind;
+        // `struct_templates` is empty (len 0), so meta 0 is out of range.
+        let chunk = make_chunk(
+            "main",
+            vec![
+                Op::NewComposite(NewCompositeOperand::Boxed {
+                    kind: CompositeKind::Struct,
+                    count: 0,
+                    meta: 0,
+                }),
+                Op::Return,
+            ],
+            BlockType::Func,
+        );
+        let module = make_module(vec![chunk]);
+        assert!(
+            verify(&module).is_err(),
+            "expected the verifier to reject the out-of-range struct template index"
         );
     }
 
