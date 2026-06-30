@@ -1552,8 +1552,13 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
     /// [`Self::register_verifying_key`] followed by
     /// [`Self::replace_module_from_bytes`] instead.
     ///
-    /// When the bytecode is unsigned, this function is equivalent
-    /// to [`Self::load_bytes`]; the trust matrix is ignored. When
+    /// When the bytecode is unsigned and the trust matrix is non-empty,
+    /// the module is rejected with
+    /// [`crate::bytecode::LoadError::InvalidSignature`]: a host that
+    /// supplies verifying keys requires signed execution, so enforcement
+    /// is a property of host policy, not of the artefact's self-asserted
+    /// flag bit (V0.2.1 security audit, finding 9). When the trust matrix
+    /// is empty, an unsigned module loads like [`Self::load_bytes`]. When
     /// the bytecode is signed, the signature is verified through
     /// [`crate::wire_format::verify_module_signature`] against
     /// every key in `verifying_keys`. The first matching key
@@ -1575,6 +1580,14 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         if signed {
             crate::wire_format::verify_module_signature(bytes, verifying_keys)
                 .map_err(VmError::from)?;
+        } else if !verifying_keys.is_empty() {
+            // Finding 9 (V0.2.1 security audit): signature enforcement is a
+            // host-policy decision, not a property of the self-asserted
+            // FLAG_REQUIRES_SIGNATURE bit. A non-empty trust matrix means the
+            // host requires signed execution, so an unsigned module -- which
+            // an adversary forges by clearing the flag bit and recomputing the
+            // CRC32 trailer -- is rejected rather than loaded.
+            return Err(VmError::from(crate::bytecode::LoadError::InvalidSignature));
         }
         let mut module = Module::from_bytes(bytes).map_err(VmError::from)?;
         // The signed-module gate in `Vm::new_with_options` would
@@ -3093,8 +3106,13 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
     /// produces [`crate::bytecode::LoadError::InvalidSignature`]
     /// and the existing module continues to run.
     ///
-    /// When the bytecode is unsigned, this method is equivalent
-    /// to decoding the bytes through [`Module::from_bytes`] and
+    /// When the bytecode is unsigned and the host has registered any
+    /// verifying key, the swap is rejected with
+    /// [`crate::bytecode::LoadError::InvalidSignature`] (V0.2.1 security
+    /// audit, finding 9): a registered trust matrix requires signed
+    /// hot-swaps, so enforcement does not depend on the artefact's
+    /// self-asserted flag bit. With no registered key, an unsigned swap is
+    /// equivalent to decoding the bytes through [`Module::from_bytes`] and
     /// calling [`Self::replace_module`].
     ///
     /// Requires the `signatures` cargo feature.
@@ -3107,6 +3125,11 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         if crate::wire_format::header_requires_signature(bytes) {
             crate::wire_format::verify_module_signature(bytes, &self.verifying_keys)
                 .map_err(VmError::from)?;
+        } else if !self.verifying_keys.is_empty() {
+            // Finding 9: a registered trust matrix requires signed hot-swaps.
+            // Reject an unsigned (or flag-cleared) module rather than trusting
+            // the self-asserted flag bit.
+            return Err(VmError::from(crate::bytecode::LoadError::InvalidSignature));
         }
         let new_module = Module::from_bytes(bytes).map_err(VmError::from)?;
         self.replace_module(new_module, initial_data)
@@ -13309,6 +13332,78 @@ mod tests {
             ),
             Err(other) => panic!("expected LoadError, got: {:?}", other),
             Ok(_) => panic!("expected LoadError, got Ok(_)"),
+        }
+    }
+
+    #[cfg(feature = "signatures")]
+    #[test]
+    fn load_signed_bytes_rejects_unsigned_when_trust_matrix_is_nonempty() {
+        // Finding 9 regression (V0.2.1 audit). A host that supplies verifying
+        // keys requires signed execution, so an unsigned module -- which an
+        // adversary forges from a signed one by clearing FLAG_REQUIRES_SIGNATURE
+        // and recomputing the CRC -- must be rejected, not loaded. Enforcement
+        // is host policy, not the artefact's self-asserted flag bit.
+        use ed25519_dalek::SigningKey;
+        let verifying = SigningKey::from_bytes(&[7u8; 32]).verifying_key();
+        let src = "fn main() -> Word { 42 }";
+        let module =
+            compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+        let bytes = module.to_bytes().expect("encode unsigned");
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        match Vm::load_signed_bytes(&bytes, &arena, &[verifying]) {
+            Err(VmError::LoadError(msg)) => assert!(
+                msg.contains("signature did not verify") || msg.contains("InvalidSignature"),
+                "expected a signature rejection for unsigned-with-keys, got: {}",
+                msg
+            ),
+            Err(other) => panic!("expected LoadError, got: {:?}", other),
+            Ok(_) => panic!("unsigned module with a non-empty trust matrix must be rejected"),
+        }
+    }
+
+    #[cfg(feature = "signatures")]
+    #[test]
+    fn load_signed_bytes_loads_unsigned_when_trust_matrix_is_empty() {
+        // The permissive contract is preserved: with no enrolled keys, an
+        // unsigned module loads like `load_bytes`.
+        let src = "fn main() -> Word { 5 }";
+        let module =
+            compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+        let bytes = module.to_bytes().expect("encode unsigned");
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let mut vm =
+            Vm::load_signed_bytes(&bytes, &arena, &[]).expect("unsigned + empty matrix loads");
+        match vm.call(&[]).unwrap() {
+            VmState::Finished(v) => assert_eq!(v, Value::Int(5)),
+            other => panic!("expected Finished(5), got {:?}", other),
+        }
+    }
+
+    #[cfg(feature = "signatures")]
+    #[test]
+    fn replace_module_from_bytes_rejects_unsigned_when_keys_registered() {
+        // Finding 9 regression for the hot-swap path. A registered trust matrix
+        // requires signed swaps; an unsigned module is rejected.
+        use ed25519_dalek::SigningKey;
+        let verifying = SigningKey::from_bytes(&[9u8; 32]).verifying_key();
+        let module =
+            compile(&parse(&tokenize("fn main() -> Word { 1 }").expect("lex")).expect("parse"))
+                .expect("compile");
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let mut vm = Vm::new(module, &arena).expect("construct");
+        vm.register_verifying_key(verifying);
+        let swap =
+            compile(&parse(&tokenize("fn main() -> Word { 2 }").expect("lex")).expect("parse"))
+                .expect("compile");
+        let swap_bytes = swap.to_bytes().expect("encode unsigned");
+        match vm.replace_module_from_bytes(&swap_bytes, alloc::vec::Vec::new()) {
+            Err(VmError::LoadError(msg)) => assert!(
+                msg.contains("signature did not verify") || msg.contains("InvalidSignature"),
+                "expected a signature rejection for unsigned hot-swap, got: {}",
+                msg
+            ),
+            Err(other) => panic!("expected LoadError, got: {:?}", other),
+            Ok(()) => panic!("unsigned hot-swap with registered keys must be rejected"),
         }
     }
 
