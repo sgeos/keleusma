@@ -39,7 +39,7 @@ implementation reaches a clean checkpoint.
 
 The "not yet started" note above is the original record and is now superseded.
 B28 is complete, and remediation is under way on `feat-audit-remediation`. As of
-the latest commits, the status is **29 fixed, 1 partial, 0 open**. All twelve High
+the latest commits, the status is **30 fixed, 0 partial, 0 open**. All twelve High
 findings are now fixed. Status was assessed by reading the cited code and the
 `fix(audit)` commit record. The three memory-unsafety items the audit flagged for
 dynamic confirmation (5, 8, 15) are fixed; the shebang/zero-copy fix is
@@ -75,7 +75,7 @@ and all-features, with `clippy --all-targets -D warnings` clean.
 | 22 | Low | Fixed | `2ec3d56` gates the safe construction/load family behind `verify`; no-verify builds use the explicit `unsafe` `*_unchecked` family |
 | 23 | Low | Fixed | `5282209` `verify_module_signature` uses `verify_strict` |
 | 24 | Low | Fixed | `5282209` rejects a non-contributory (low-order) ephemeral key |
-| 25 | Low | Partial | flat-path Option fixed in B34; value path still collapses `Some(None)` (pending decision) |
+| 25 | Low | Fixed | `0c7f5d5` wraps `Some` in the `Option::Some` enum shape on the value path; `Some(None)` no longer collapses (a nested-option native-return *flat-access* case remains a documented B28 limitation) |
 | 26 | Low | Fixed | `5282209` recovers the origin from the `specs` map, not `split("__")` |
 | 27 | Low | Fixed | `5282209` explicit `TYPE_SPECIALIZATION_LIMIT` on the struct/enum passes |
 | 28 | Low | Fixed | `5282209` saturating size/offset arithmetic in `value_layout` |
@@ -91,11 +91,16 @@ verifier-completeness checks that close finding 6 (locals and struct-template, o
 top of the earlier depth/const/arity work), and the low-severity cleanup
 (`verify_strict` 23, the contributory-key check 24, the monomorphizer origin
 lookup 26 and specialization cap 27, the saturating layout arithmetic 28, and the
-lossy-f64 guard 29), and the safe-constructor gating (finding 22, which gates the
-whole construction/load family behind `verify` and adds `load_signed_bytes_unchecked`
-and `load_encrypted_signed_bytes_unchecked` for the no-verify signed-load path). The
-only remaining item is partial finding 25 (the value-path `Some(None)` collapse); its
-fix changes the host Option marshalling ABI and is in progress.
+lossy-f64 guard 29), the safe-constructor gating (finding 22, which gates the whole
+construction/load family behind `verify` and adds `load_signed_bytes_unchecked` and
+`load_encrypted_signed_bytes_unchecked` for the no-verify signed-load path), and the
+value-path Option wrapping (finding 25, which wraps `Some` in the `Option::Some` enum
+shape so `Some(None)` no longer collapses). All thirty findings are now resolved. One
+documented residual limitation remains under finding 25: a native-returned *nested*
+option with an inner `None` does not flatten for in-script flat access (the inner
+`None` carries no `Option<T>` flat layout), which is a deeper B28 flat-layout concern
+than the value-path collapse the finding cited; such values still round-trip
+host-to-host.
 
 ## Severity and category distribution
 
