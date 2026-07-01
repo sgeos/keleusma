@@ -7231,6 +7231,24 @@ mod tests {
         }
     }
 
+    #[test]
+    fn generic_with_underscored_origin_name_specializes() {
+        // Finding 26 (V0.2.1 audit): the monomorphizer recovers a
+        // specialization's origin from the authoritative specs map, not by
+        // splitting the mangled `origin__type_args` name on "__". A generic whose
+        // own name contains "__" must still specialize correctly -- the old split
+        // recovered `foo` for `foo__bar`, misattributing its per-function
+        // specialization count. Exercised alongside a plain `foo` generic so a
+        // miscount would conflate the two origins' counts. Both must resolve.
+        let v = run_expect(
+            "fn foo__bar<T>(x: T) -> T { x }\n\
+             fn foo<T>(x: T) -> T { x }\n\
+             fn main() -> Word { foo__bar(5) + foo(7) }",
+            &[],
+        );
+        assert_eq!(v, Value::Int(12));
+    }
+
     /// Run `src` and resolve the finished value's string content to an owned
     /// `String` while the VM and arena are still alive. A string constant now
     /// loads as a rodata `KStr` pointing into the VM-owned bytecode image, so a
@@ -13527,6 +13545,141 @@ mod tests {
             VmState::Finished(v) => assert_eq!(v, Value::Int(5)),
             other => panic!("expected Finished(5), got {:?}", other),
         }
+    }
+
+    // -- No-verify signed-load path (audit finding 22). The `*_unchecked`
+    //    variants skip the WCMU resource-bounds check but still verify the
+    //    Ed25519 signature under the same host policy as the checked variants.
+
+    #[cfg(feature = "signatures")]
+    #[test]
+    fn load_signed_bytes_unchecked_verifies_signature_and_executes() {
+        use ed25519_dalek::SigningKey;
+        let signer = SigningKey::from_bytes(&[42u8; 32]);
+        let verifying = signer.verifying_key();
+        let src = "signed fn main() -> Word { 21 + 21 }";
+        let module =
+            compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+        let bytes =
+            crate::wire_format::module_to_signed_wire_bytes(&module, &signer).expect("sign");
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        // SAFETY: test-only; the unchecked path skips the WCMU bound while
+        // keeping signature verification, which is what this test exercises.
+        let mut vm = unsafe { Vm::load_signed_bytes_unchecked(&bytes, &arena, &[verifying]) }
+            .expect("load+verify");
+        assert_eq!(vm.verifying_keys_len(), 1);
+        match vm.call(&[]).unwrap() {
+            VmState::Finished(v) => assert_eq!(v, Value::Int(42)),
+            other => panic!("expected Finished(42), got {:?}", other),
+        }
+    }
+
+    #[cfg(feature = "signatures")]
+    #[test]
+    fn load_signed_bytes_unchecked_rejects_wrong_key() {
+        use ed25519_dalek::SigningKey;
+        let signer = SigningKey::from_bytes(&[42u8; 32]);
+        let wrong = SigningKey::from_bytes(&[43u8; 32]).verifying_key();
+        let src = "signed fn main() -> Word { 0 }";
+        let module =
+            compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+        let bytes =
+            crate::wire_format::module_to_signed_wire_bytes(&module, &signer).expect("sign");
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        // SAFETY: test-only.
+        match unsafe { Vm::load_signed_bytes_unchecked(&bytes, &arena, &[wrong]) } {
+            Err(VmError::LoadError(msg)) => assert!(
+                msg.contains("signature did not verify") || msg.contains("InvalidSignature"),
+                "expected InvalidSignature, got: {}",
+                msg
+            ),
+            Err(other) => panic!("expected LoadError, got: {:?}", other),
+            Ok(_) => panic!("expected LoadError, got Ok(_)"),
+        }
+    }
+
+    #[cfg(feature = "signatures")]
+    #[test]
+    fn load_signed_bytes_unchecked_rejects_unsigned_when_trust_matrix_is_nonempty() {
+        // Finding 9 must hold on the no-verify path too: an unsigned module with a
+        // non-empty trust matrix is rejected, not loaded.
+        use ed25519_dalek::SigningKey;
+        let verifying = SigningKey::from_bytes(&[7u8; 32]).verifying_key();
+        let src = "fn main() -> Word { 42 }";
+        let module =
+            compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+        let bytes = module.to_bytes().expect("encode unsigned");
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        // SAFETY: test-only.
+        match unsafe { Vm::load_signed_bytes_unchecked(&bytes, &arena, &[verifying]) } {
+            Err(VmError::LoadError(msg)) => assert!(
+                msg.contains("signature did not verify") || msg.contains("InvalidSignature"),
+                "expected a signature rejection for unsigned-with-keys, got: {}",
+                msg
+            ),
+            Err(other) => panic!("expected LoadError, got: {:?}", other),
+            Ok(_) => panic!("unsigned module with a non-empty trust matrix must be rejected"),
+        }
+    }
+
+    #[cfg(all(feature = "signatures", feature = "encryption"))]
+    #[test]
+    fn load_encrypted_signed_bytes_unchecked_verifies_and_decrypts() {
+        use ed25519_dalek::SigningKey;
+        let signer = SigningKey::from_bytes(&[101u8; 32]);
+        let verifying = signer.verifying_key();
+        let recipient_sk = [0xb0u8; 32];
+        let recipient_pk = crate::encryption::public_key_from_private(&recipient_sk);
+        let ephemeral_seed = [0xc0u8; 32];
+        let src = "signed fn main() -> Word { 99 }";
+        let module =
+            compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+        let bytes = crate::wire_format::module_to_encrypted_signed_wire_bytes(
+            &module,
+            &signer,
+            &recipient_pk,
+            &ephemeral_seed,
+        )
+        .expect("encrypt+sign");
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        // SAFETY: test-only; the unchecked path skips the WCMU bound while
+        // keeping signature verification and decryption.
+        let mut vm = unsafe {
+            Vm::load_encrypted_signed_bytes_unchecked(&bytes, &arena, &[verifying], &recipient_sk)
+        }
+        .expect("load+decrypt+verify");
+        match vm.call(&[]).expect("execute") {
+            VmState::Finished(Value::Int(99)) => (),
+            other => panic!("expected Finished(99), got {:?}", other),
+        }
+    }
+
+    #[cfg(all(feature = "signatures", feature = "encryption"))]
+    #[test]
+    fn load_encrypted_signed_bytes_unchecked_rejects_wrong_recipient() {
+        use ed25519_dalek::SigningKey;
+        let signer = SigningKey::from_bytes(&[102u8; 32]);
+        let verifying = signer.verifying_key();
+        let alice_sk = [0xd1u8; 32];
+        let alice_pk = crate::encryption::public_key_from_private(&alice_sk);
+        let bob_sk = [0xd2u8; 32];
+        let ephemeral_seed = [0xc1u8; 32];
+        let src = "signed fn main() -> Word { 7 }";
+        let module =
+            compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+        let bytes = crate::wire_format::module_to_encrypted_signed_wire_bytes(
+            &module,
+            &signer,
+            &alice_pk,
+            &ephemeral_seed,
+        )
+        .expect("encrypt+sign");
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        // SAFETY: test-only.
+        let result = unsafe {
+            Vm::load_encrypted_signed_bytes_unchecked(&bytes, &arena, &[verifying], &bob_sk)
+        };
+        assert!(result.is_err(), "expected wrong-recipient rejection");
     }
 
     #[cfg(feature = "signatures")]
