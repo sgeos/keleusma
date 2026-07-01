@@ -75,7 +75,7 @@ and all-features, with `clippy --all-targets -D warnings` clean.
 | 22 | Low | Fixed | `2ec3d56` gates the safe construction/load family behind `verify`; no-verify builds use the explicit `unsafe` `*_unchecked` family |
 | 23 | Low | Fixed | `5282209` `verify_module_signature` uses `verify_strict` |
 | 24 | Low | Fixed | `5282209` rejects a non-contributory (low-order) ephemeral key |
-| 25 | Low | Fixed | `0c7f5d5` wraps `Some` in the `Option::Some` enum shape on the value path; `Some(None)` no longer collapses (a nested-option native-return *flat-access* case remains a documented B28 limitation) |
+| 25 | Low | Fixed | `0c7f5d5`/`ae87165` wrap and flatten `Some` so `Some(None)` no longer collapses (value path and native flat body); the residual nested-`Option` *match* failure is a separately-tracked language-level bug (reproducible with no native), not a marshalling gap |
 | 26 | Low | Fixed | `5282209` recovers the origin from the `specs` map, not `split("__")` |
 | 27 | Low | Fixed | `5282209` explicit `TYPE_SPECIALIZATION_LIMIT` on the struct/enum passes |
 | 28 | Low | Fixed | `5282209` saturating size/offset arithmetic in `value_layout` |
@@ -94,13 +94,26 @@ lookup 26 and specialization cap 27, the saturating layout arithmetic 28, and th
 lossy-f64 guard 29), the safe-constructor gating (finding 22, which gates the whole
 construction/load family behind `verify` and adds `load_signed_bytes_unchecked` and
 `load_encrypted_signed_bytes_unchecked` for the no-verify signed-load path), and the
-value-path Option wrapping (finding 25, which wraps `Some` in the `Option::Some` enum
-shape so `Some(None)` no longer collapses). All thirty findings are now resolved. One
-documented residual limitation remains under finding 25: a native-returned *nested*
-option with an inner `None` does not flatten for in-script flat access (the inner
-`None` carries no `Option<T>` flat layout), which is a deeper B28 flat-layout concern
-than the value-path collapse the finding cited; such values still round-trip
-host-to-host.
+value-path and native flat-body Option wrapping (finding 25, which stops `Some(None)`
+collapsing and makes a native-returned flat-eligible `Option` byte-identical to the
+body a script constructs). All thirty findings are now resolved.
+
+The finding-25 investigation surfaced one separate, newly-discovered bug that is **not**
+a marshalling or memory-safety issue and is tracked for a follow-up: matching a nested
+`Option` whose inner value is `None` fails with a clean `NoMatchingArm`, reproducible in
+a pure script with no native involved, because the compiler lowers an `Option::None`
+pattern to a scalar `Value::None` check that does not recognize an extracted flat
+`[disc=0]` payload. It is a compiler/VM correctness concern (Option's dual scalar/flat
+`None` representation not composing under flat nesting), pinned by the
+`nested_option_match_is_a_language_limitation` test. Marshalling round-trips
+host-to-host correctly regardless.
+
+Pre-re-audit hardening added test coverage the fixes lacked: the finding-22
+`load_signed_bytes_unchecked` / `load_encrypted_signed_bytes_unchecked` paths (signature
+verification, wrong-key, finding-9 policy, decryption, wrong-recipient) and the
+finding-26 underscored-origin specialization guard. The finding-10 flat-read
+subslice and the finding-25 Option flat-body (`build_in_arena`) paths were
+additionally exercised clean under Miri (Tree Borrows).
 
 ## Severity and category distribution
 
