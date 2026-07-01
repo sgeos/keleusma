@@ -75,7 +75,7 @@ and all-features, with `clippy --all-targets -D warnings` clean.
 | 22 | Low | Fixed | `2ec3d56` gates the safe construction/load family behind `verify`; no-verify builds use the explicit `unsafe` `*_unchecked` family |
 | 23 | Low | Fixed | `5282209` `verify_module_signature` uses `verify_strict` |
 | 24 | Low | Fixed | `5282209` rejects a non-contributory (low-order) ephemeral key |
-| 25 | Low | Fixed | `0c7f5d5`/`ae87165` wrap and flatten `Some` so `Some(None)` no longer collapses (value path and native flat body); the residual nested-`Option` *match* failure is a separately-tracked language-level bug (reproducible with no native), not a marshalling gap |
+| 25 | Low | Fixed | `0c7f5d5`/`ae87165` wrap and flatten `Some` so `Some(None)` no longer collapses (value path and native flat body); `2a2c0ac` fixes the surfaced nested-`Option` *match* bug (`Option::None` now lowers through `IsEnum`) so nested options match end to end |
 | 26 | Low | Fixed | `5282209` recovers the origin from the `specs` map, not `split("__")` |
 | 27 | Low | Fixed | `5282209` explicit `TYPE_SPECIALIZATION_LIMIT` on the struct/enum passes |
 | 28 | Low | Fixed | `5282209` saturating size/offset arithmetic in `value_layout` |
@@ -98,15 +98,17 @@ value-path and native flat-body Option wrapping (finding 25, which stops `Some(N
 collapsing and makes a native-returned flat-eligible `Option` byte-identical to the
 body a script constructs). All thirty findings are now resolved.
 
-The finding-25 investigation surfaced one separate, newly-discovered bug that is **not**
-a marshalling or memory-safety issue and is tracked for a follow-up: matching a nested
-`Option` whose inner value is `None` fails with a clean `NoMatchingArm`, reproducible in
-a pure script with no native involved, because the compiler lowers an `Option::None`
-pattern to a scalar `Value::None` check that does not recognize an extracted flat
-`[disc=0]` payload. It is a compiler/VM correctness concern (Option's dual scalar/flat
-`None` representation not composing under flat nesting), pinned by the
-`nested_option_match_is_a_language_limitation` test. Marshalling round-trips
-host-to-host correctly regardless.
+The finding-25 investigation surfaced a separate compiler/VM correctness bug, since
+fixed in `2a2c0ac`: matching a nested `Option` whose inner value is `None` failed with a
+clean `NoMatchingArm` (reproducible in a pure script with no native involved), because
+the compiler lowered an `Option::None` pattern to a scalar `Value::None` comparison that
+did not recognize an extracted flat `[disc=0]` payload -- Option's dual scalar/flat
+`None` representation not composing under flat nesting. `Option::None` now lowers through
+the same `IsEnum` path as `Some` (discriminant 0), and the VM's `IsEnum` additionally
+treats a scalar `Value::None` as `Option::None`, so both representations match one
+lowering. The `nested_option_match_selects_inner_none` and
+`native_returning_some_none_preserves_outer_some` tests pin the corrected behavior end
+to end.
 
 Pre-re-audit hardening added test coverage the fixes lacked: the finding-22
 `load_signed_bytes_unchecked` / `load_encrypted_signed_bytes_unchecked` paths (signature
