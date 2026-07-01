@@ -157,6 +157,46 @@ fn f64_int_coercion_rejects_precision_loss() {
 }
 
 #[test]
+fn nested_option_ctx_round_trips_some_none() {
+    // Audit finding 25 on the arena-direct native-return path
+    // (into_value_ctx / from_value_ctx): Some(None) is distinguishable from
+    // None and the outer Some survives the round-trip.
+    let arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+    let ctx = bundled_ctx(&arena);
+    let v = Some(Option::<i64>::None).into_value_ctx(&ctx).unwrap();
+    assert_ne!(v, Value::None, "Some(None) must differ from None");
+    let recovered =
+        <Option<Option<i64>> as KeleusmaType<i64, f64>>::from_value_ctx(&v, &ctx).unwrap();
+    assert_eq!(recovered, Some(None));
+}
+
+#[test]
+fn native_returning_some_is_matched_by_script() {
+    // Audit finding 25, end-to-end for the flat-eligible case: a native returns
+    // Option<Word> = Some(7). The `into_value` wrapping produces the runtime's
+    // `Option::Some` enum shape, which `into_arena_canonical` flattens to the
+    // body the compiler's flat access expects, so the script matches `Some(x)`
+    // and binds the payload. (Before the fix the native produced a bare value
+    // that did not match the flat `Option::Some` access.)
+    let arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+    let mut vm = build_vm(
+        "use host::maybe() -> Option<Word>\n\
+         fn main() -> Word {\n\
+             match host::maybe() {\n\
+                 Option::Some(x) => x,\n\
+                 Option::None => 99,\n\
+             }\n\
+         }",
+        &arena,
+    );
+    vm.register_fn("host::maybe", || -> Option<i64> { Some(7) });
+    match vm.call(&[]).unwrap() {
+        VmState::Finished(Value::Int(n)) => assert_eq!(n, 7, "Some(7) payload must bind"),
+        other => panic!("expected Int(7), got {:?}", other),
+    }
+}
+
+#[test]
 fn derive_struct_roundtrip() {
     let p = Point { x: 3.0, y: 4.0 };
     let v: Value = p.clone().into_value();

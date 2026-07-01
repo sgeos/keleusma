@@ -537,23 +537,35 @@ impl<W: Word, F: Float, T: KeleusmaType<W, F>> KeleusmaType<W, F> for Option<T> 
     fn from_value(v: &GenericValue<W, F>) -> Result<Self, VmError> {
         match v {
             GenericValue::None => Ok(Option::None),
-            other => {
-                // The runtime represents Option::Some(x) as the inner value
-                // wrapped in a single-field struct named "Some" by the compiler
-                // when constructed via WrapSome. Here we accept either a
-                // direct inner value or the Some-wrapped form depending on
-                // how the host produced it. In practice, the compiler emits
-                // WrapSome which yields a Value variant that does not exist
-                // separately. The convention is that any non-None value
-                // is treated as Some. This matches the existing VM behavior.
-                T::from_value(other).map(Some)
+            // The `Option::Some` enum shape produced by `into_value` (and by the
+            // compiler for a boxed `Some`): unwrap its single payload field. This
+            // is what distinguishes `Some(None)` from `None` (audit finding 25).
+            GenericValue::Enum(crate::bytecode::EnumBody::Boxed(be))
+                if be.type_name == "Option" && be.variant == "Some" && be.fields.len() == 1 =>
+            {
+                Ok(Some(T::from_value(&be.fields[0])?))
             }
+            // Back-compat: a bare non-`None` value is treated as `Some` (the
+            // legacy convention). This cannot represent `Some(None)`, which is
+            // why `into_value` now wraps `Some` in the enum shape above.
+            other => T::from_value(other).map(Some),
         }
     }
 
     fn into_value(self) -> GenericValue<W, F> {
         match self {
-            Some(t) => t.into_value(),
+            // Wrap `Some(x)` in the runtime's `Option::Some` enum shape (a boxed
+            // single-field enum, discriminant 1) so it is distinguishable from
+            // `None` (`GenericValue::None`) and nested options round-trip (audit
+            // finding 25). This matches the shape the compiler emits for
+            // `Option::Some(x)` and that the VM's `IsEnum` matches, so a
+            // host-built `Some` is a first-class Option value to the script.
+            Some(t) => GenericValue::Enum(crate::bytecode::EnumBody::boxed_with_disc(
+                alloc::string::String::from("Option"),
+                alloc::string::String::from("Some"),
+                1,
+                alloc::vec![t.into_value()],
+            )),
             Option::None => GenericValue::None,
         }
     }
@@ -561,17 +573,39 @@ impl<W: Word, F: Float, T: KeleusmaType<W, F>> KeleusmaType<W, F> for Option<T> 
     fn from_value_ctx(v: &GenericValue<W, F>, ctx: &RefContext<'_>) -> Result<Self, VmError> {
         match v {
             GenericValue::None => Ok(Option::None),
+            GenericValue::Enum(crate::bytecode::EnumBody::Boxed(be))
+                if be.type_name == "Option" && be.variant == "Some" && be.fields.len() == 1 =>
+            {
+                Ok(Some(T::from_value_ctx(&be.fields[0], ctx)?))
+            }
             other => T::from_value_ctx(other, ctx).map(Some),
         }
     }
 
     fn into_value_ctx(self, ctx: &RefContext<'_>) -> Result<GenericValue<W, F>, VmError> {
-        // `Some(t)` is the bare inner value (the runtime treats any non-`None`
-        // as `Some`), so recurse into the inner type's arena-direct builder so
-        // a `Some(composite)` native result is arena-resident (B28 P3 item 2,
-        // Increment 3).
+        // Mirror of `into_value`: wrap `Some(t)` in the `Option::Some` enum shape
+        // so a native result distinguishes `Some(None)` from `None` and nested
+        // options round-trip through the value path (audit finding 25). The inner
+        // value is built through the arena-direct builder so a `Some(composite)`
+        // payload stays arena-resident (B28 P3 item 2, Increment 3).
+        //
+        // Known limitation: a native that returns a *nested* option whose inner
+        // value is `None` (e.g. `Some(None)`) and is then read by a script's
+        // *flat* `Option` access does not flatten correctly, because the inner
+        // `None` marshals to the scalar `GenericValue::None` and carries no
+        // `Option<T>` flat layout for the outer body to embed. Such values still
+        // round-trip host-to-host through `from_value_ctx`; only in-script flat
+        // access of a native-returned nested option is affected, which is a
+        // deeper B28 flat-layout concern than this value-path fix.
         match self {
-            Some(t) => t.into_value_ctx(ctx),
+            Some(t) => Ok(GenericValue::Enum(
+                crate::bytecode::EnumBody::boxed_with_disc(
+                    alloc::string::String::from("Option"),
+                    alloc::string::String::from("Some"),
+                    1,
+                    alloc::vec![t.into_value_ctx(ctx)?],
+                ),
+            )),
             Option::None => Ok(GenericValue::None),
         }
     }
@@ -1295,17 +1329,48 @@ mod tests {
 
     #[test]
     fn option_roundtrip() {
+        // `Some` is wrapped in the `Option::Some` enum shape (audit finding 25),
+        // distinguishable from `None`, and round-trips through into/from_value.
         let some = <Option<i64> as KeleusmaType<i64, f64>>::into_value(Some(42i64));
-        assert_eq!(some, Value::Int(42));
+        assert_ne!(some, Value::None);
+        assert_eq!(
+            <Option<i64> as KeleusmaType<i64, f64>>::from_value(&some).unwrap(),
+            Some(42)
+        );
         let none = <Option<i64> as KeleusmaType<i64, f64>>::into_value(Option::<i64>::None);
         assert_eq!(none, Value::None);
 
+        // A bare non-`None` value is still accepted as `Some` (legacy convention).
         let recovered: Option<i64> =
             <Option<i64> as KeleusmaType<i64, f64>>::from_value(&Value::Int(42)).unwrap();
         assert_eq!(recovered, Some(42));
         let recovered_none: Option<i64> =
             <Option<i64> as KeleusmaType<i64, f64>>::from_value(&Value::None).unwrap();
         assert_eq!(recovered_none, Option::None);
+    }
+
+    #[test]
+    fn nested_option_round_trips_some_none() {
+        // Audit finding 25: `Some(None)` no longer collapses to `None`; the
+        // outer `Some` survives the value-path round-trip.
+        type Oo = Option<Option<i64>>;
+        let some_none = <Oo as KeleusmaType<i64, f64>>::into_value(Some(None));
+        let none = <Oo as KeleusmaType<i64, f64>>::into_value(None);
+        assert_ne!(some_none, none, "Some(None) must differ from None");
+        assert_eq!(
+            <Oo as KeleusmaType<i64, f64>>::from_value(&some_none).unwrap(),
+            Some(None)
+        );
+        assert_eq!(
+            <Oo as KeleusmaType<i64, f64>>::from_value(&none).unwrap(),
+            None
+        );
+        // `Some(Some(x))` also round-trips through the nested enum wrapping.
+        let some_some = <Oo as KeleusmaType<i64, f64>>::into_value(Some(Some(7)));
+        assert_eq!(
+            <Oo as KeleusmaType<i64, f64>>::from_value(&some_some).unwrap(),
+            Some(Some(7))
+        );
     }
 
     #[test]
