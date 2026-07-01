@@ -39,7 +39,7 @@ implementation reaches a clean checkpoint.
 
 The "not yet started" note above is the original record and is now superseded.
 B28 is complete, and remediation is under way on `feat-audit-remediation`. As of
-the latest commits, the status is **28 fixed, 1 partial, 1 open**. All twelve High
+the latest commits, the status is **29 fixed, 1 partial, 0 open**. All twelve High
 findings are now fixed. Status was assessed by reading the cited code and the
 `fix(audit)` commit record. The three memory-unsafety items the audit flagged for
 dynamic confirmation (5, 8, 15) are fixed; the shebang/zero-copy fix is
@@ -72,7 +72,7 @@ and all-features, with `clippy --all-targets -D warnings` clean.
 | 19 | Med | Fixed | `24df9dd` codec total (offset/kind reach a clean error, not a panic) |
 | 20 | Med | Fixed | `24df9dd` both return `UnsupportedWidth` on bad kinds/widths |
 | 21 | Med | Fixed | `24df9dd` checked slicing returns `OutOfBounds` on short buffers |
-| 22 | Low | Open | `Vm::new` skips verification when the `verify` feature is off |
+| 22 | Low | Fixed | `2ec3d56` gates the safe construction/load family behind `verify`; no-verify builds use the explicit `unsafe` `*_unchecked` family |
 | 23 | Low | Fixed | `5282209` `verify_module_signature` uses `verify_strict` |
 | 24 | Low | Fixed | `5282209` rejects a non-contributory (low-order) ephemeral key |
 | 25 | Low | Partial | flat-path Option fixed in B34; value path still collapses `Some(None)` (pending decision) |
@@ -91,11 +91,11 @@ verifier-completeness checks that close finding 6 (locals and struct-template, o
 top of the earlier depth/const/arity work), and the low-severity cleanup
 (`verify_strict` 23, the contributory-key check 24, the monomorphizer origin
 lookup 26 and specialization cap 27, the saturating layout arithmetic 28, and the
-lossy-f64 guard 29). The remaining items, both pending a design decision and
-neither High, are finding 22 (gating the safe constructors behind `verify`, whose
-faithful realization cascades across the whole safe construction/load family) and
-partial finding 25 (the value-path `Some(None)` collapse, whose fix would change
-the host Option marshalling ABI).
+lossy-f64 guard 29), and the safe-constructor gating (finding 22, which gates the
+whole construction/load family behind `verify` and adds `load_signed_bytes_unchecked`
+and `load_encrypted_signed_bytes_unchecked` for the no-verify signed-load path). The
+only remaining item is partial finding 25 (the value-path `Some(None)` collapse); its
+fix changes the host Option marshalling ABI and is in progress.
 
 ## Severity and category distribution
 
