@@ -5659,6 +5659,21 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                             // expected variant (B28 P2).
                             Err(_) => false,
                         },
+                        // A scalar `Value::None` denotes `Option::None`. Recognize
+                        // it here so a top-level or host-returned Option None
+                        // matches the same `IsEnum(Option, None, 0)` test the
+                        // compiler now emits for the `None` pattern, alongside a
+                        // nested flat `[disc=0]` body handled by the Flat arm.
+                        // Without this, an extracted flat `Option` None payload
+                        // and a scalar `None` would need two different pattern
+                        // lowerings, which is the nested-`Option` match bug.
+                        crate::bytecode::GenericValue::None => {
+                            let expected_type =
+                                self.chunk_const_str(chunk_idx, enum_const as usize);
+                            let expected_var = self.chunk_const_str(chunk_idx, var_const as usize);
+                            expected_type.as_deref() == Some("Option")
+                                && expected_var.as_deref() == Some("None")
+                        }
                         _ => false,
                     };
                     sp!(self, crate::bytecode::GenericValue::Bool(matches));

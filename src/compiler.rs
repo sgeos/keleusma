@@ -8435,27 +8435,15 @@ fn compile_pattern_test(
             fail_addrs.push(fc.emit_jump(Op::If(0)));
         }
         Pattern::Enum(enum_name, variant, sub_pats, _) => {
-            // `Option::None` matches `Value::None` directly rather
-            // than going through `IsEnum`, because the compiler
-            // emits `Op::PushNone` for `Option::None` constructions
-            // and host-side natives return `Value::None` for the
-            // None case. The `IsEnum` check would fail against
-            // `Value::None` because it is not a `Value::Enum`.
-            //
-            // `Option::Some(p)` continues to use `IsEnum` because
-            // the compiler emits `Op::NewEnum` for `Option::Some(x)`,
-            // producing a `Value::Enum { type_name: "Option",
-            // variant: "Some", fields: [x] }`. Host-side natives
-            // that produce `Option::Some(v)` must construct the
-            // same `Value::Enum` shape.
-            if enum_name == "Option" && variant == "None" {
-                fc.emit(Op::GetLocal(value_slot));
-                fc.emit(Op::PushImmediate(3));
-                fc.emit(Op::CmpEq);
-                fail_addrs.push(fc.emit_jump(Op::If(0)));
-                return Ok(fail_addrs);
-            }
-
+            // Both `Option` variants go through `IsEnum`. `Option::Some(x)`
+            // flattens (or boxes) as an enum body with discriminant 1;
+            // `Option::None` is discriminant 0. `IsEnum` matches a flat `[disc]`
+            // body, a boxed enum by name, and -- for `Option::None` specifically
+            // -- the scalar `Value::None` a top-level or host-returned None uses
+            // (the VM's `IsEnum` handler special-cases it). Routing `None`
+            // through `IsEnum` rather than the old scalar `Value::None`
+            // comparison is what lets a nested flat `[disc=0]` Option payload,
+            // extracted from a flat parent, match `Option::None`.
             fc.emit(Op::GetLocal(value_slot));
             let e_const = fc.add_string_constant(enum_name);
             let v_const = fc.add_string_constant(variant);
@@ -8468,6 +8456,12 @@ fn compile_pattern_test(
             let is_option_some = enum_name == "Option" && variant == "Some";
             let disc = if is_option_some {
                 1
+            } else if enum_name == "Option" && variant == "None" {
+                // `Option::None` flattens with discriminant 0 (mirrors the
+                // `Some == 1` convention); the `IsEnum` test above then matches a
+                // flat `[disc=0]` body, and the VM additionally matches a scalar
+                // `Value::None` against `Option::None`.
+                0
             } else {
                 fc.type_info
                     .enum_variant_order
