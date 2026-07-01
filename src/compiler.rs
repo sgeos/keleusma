@@ -1696,6 +1696,10 @@ pub fn compile_with_options(
     let mut chunks: Vec<Chunk> = Vec::new();
     // Set when any chunk emits a flat composite that could intern a host
     // opaque; gates the opaque-registry arena bound below (B28 P3 item 5).
+    // Read only by the verify-gated WCMU aux-arena computation, so a no-verify
+    // build assigns but never reads it (matching the `unused_mut` allow at the
+    // chunk loop above).
+    #[cfg_attr(not(feature = "verify"), allow(unused_assignments, unused_variables))]
     let mut may_intern_opaque = false;
     for (name, defs) in &groups {
         let generic_origin = generic_provenance
@@ -1715,7 +1719,10 @@ pub fn compile_with_options(
             options.emit_debug,
             generic_origin,
         )?;
-        may_intern_opaque |= chunk_may_intern_opaque;
+        #[cfg_attr(not(feature = "verify"), allow(unused_assignments))]
+        {
+            may_intern_opaque |= chunk_may_intern_opaque;
+        }
         let span = defs
             .first()
             .map(|d| d.span)

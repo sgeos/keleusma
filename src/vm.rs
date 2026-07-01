@@ -1347,6 +1347,12 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
     /// structural verification on the module and resource bounds
     /// verification against the arena's capacity. Returns an error if
     /// either check fails.
+    ///
+    /// Gated behind the `verify` feature (audit finding 22): without it there
+    /// is no verifier to run, so a no-verify host must construct through the
+    /// explicitly `unsafe` [`Vm::new_unchecked`] rather than receive an
+    /// unverified VM through a safe constructor.
+    #[cfg(feature = "verify")]
     pub fn new(module: Module, arena: &'arena keleusma_arena::Arena) -> Result<Self, VmError> {
         let (vm, _warnings) = Self::new_with_options(module, arena, VmOptions::default())?;
         Ok(vm)
@@ -1370,6 +1376,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
     /// Under the default policy the vector is always empty because
     /// the function returns `Err` before reaching the construction
     /// step on overflow.
+    #[cfg(feature = "verify")]
     pub fn new_with_options(
         module: Module,
         arena: &'arena keleusma_arena::Arena,
@@ -1527,6 +1534,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
     /// originate from any addressable buffer including a file read,
     /// an in-memory `Vec<u8>`, or a `&'static [u8]` placed in
     /// `.rodata`. Runs full verification including resource bounds.
+    #[cfg(feature = "verify")]
     pub fn load_bytes(bytes: &[u8], arena: &'arena keleusma_arena::Arena) -> Result<Self, VmError> {
         // Signed bytecode requires either the `signatures` cargo
         // feature plus a trust matrix (use `Vm::load_signed_bytes`)
@@ -1580,7 +1588,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
     /// keys.
     ///
     /// Requires the `signatures` cargo feature.
-    #[cfg(feature = "signatures")]
+    #[cfg(all(feature = "signatures", feature = "verify"))]
     pub fn load_signed_bytes(
         bytes: &[u8],
         arena: &'arena keleusma_arena::Arena,
@@ -1615,6 +1623,47 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         Ok(vm)
     }
 
+    /// Load a signed module and skip resource-bounds verification.
+    ///
+    /// The Ed25519 signature is still verified against `verifying_keys`
+    /// under the same host policy as [`Vm::load_signed_bytes`] (a non-empty
+    /// trust matrix requires a valid signature); only the worst-case
+    /// resource-bounds check is skipped. This is the no-verify counterpart
+    /// to `load_signed_bytes` (audit finding 22): a host built without the
+    /// `verify` feature can still load signed bytecode while acknowledging
+    /// the dropped bound through the `unsafe` marker.
+    ///
+    /// # Safety
+    ///
+    /// Same contract as [`Vm::new_unchecked`]: the host attests that the
+    /// bytecode's worst-case stack and heap usage fit the arena, because the
+    /// resource-bounds analysis is not run. Structural verification still
+    /// runs when the `verify` feature is compiled in.
+    #[cfg(feature = "signatures")]
+    pub unsafe fn load_signed_bytes_unchecked(
+        bytes: &[u8],
+        arena: &'arena keleusma_arena::Arena,
+        verifying_keys: &[ed25519_dalek::VerifyingKey],
+    ) -> Result<Self, VmError> {
+        let signed = crate::wire_format::header_requires_signature(bytes);
+        if signed {
+            crate::wire_format::verify_module_signature(bytes, verifying_keys)
+                .map_err(VmError::from)?;
+        } else if !verifying_keys.is_empty() {
+            return Err(VmError::from(crate::bytecode::LoadError::InvalidSignature));
+        }
+        let mut module = Module::from_bytes(bytes).map_err(VmError::from)?;
+        let was_signed = (module.flags & crate::wire_format::FLAG_REQUIRES_SIGNATURE) != 0;
+        if was_signed {
+            module.flags &= !crate::wire_format::FLAG_REQUIRES_SIGNATURE;
+        }
+        let mut vm = unsafe { Self::new_unchecked(module, arena) }?;
+        for key in verifying_keys {
+            vm.verifying_keys.push(*key);
+        }
+        Ok(vm)
+    }
+
     /// Load a signed-and-encrypted module from a serialized byte
     /// slice. Verifies the Ed25519 signature, decrypts the body
     /// using the supplied X25519 private key, runs structural and
@@ -1637,7 +1686,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
     /// [`Self::replace_module_from_bytes`] inherits the same keys.
     ///
     /// Requires both the `signatures` and `encryption` cargo features.
-    #[cfg(all(feature = "signatures", feature = "encryption"))]
+    #[cfg(all(feature = "signatures", feature = "encryption", feature = "verify"))]
     pub fn load_encrypted_signed_bytes(
         bytes: &[u8],
         arena: &'arena keleusma_arena::Arena,
@@ -1678,6 +1727,52 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         Ok(vm)
     }
 
+    /// Load a signed-and-encrypted module and skip resource-bounds
+    /// verification.
+    ///
+    /// The no-verify counterpart to [`Vm::load_encrypted_signed_bytes`]
+    /// (audit finding 22): the Ed25519 signature is verified and the body
+    /// decrypted exactly as in the checked path; only the worst-case
+    /// resource-bounds check is skipped, which the `unsafe` marker records.
+    ///
+    /// Requires both the `signatures` and `encryption` cargo features.
+    ///
+    /// # Safety
+    ///
+    /// Same contract as [`Vm::new_unchecked`].
+    #[cfg(all(feature = "signatures", feature = "encryption"))]
+    pub unsafe fn load_encrypted_signed_bytes_unchecked(
+        bytes: &[u8],
+        arena: &'arena keleusma_arena::Arena,
+        verifying_keys: &[ed25519_dalek::VerifyingKey],
+        decryption_key: &[u8; crate::encryption::X25519_PRIVATE_KEY_LEN],
+    ) -> Result<Self, VmError> {
+        let encrypted = crate::wire_format::header_requires_encryption(bytes);
+        if !encrypted {
+            return Err(VmError::from(crate::bytecode::LoadError::Codec(
+                alloc::string::String::from(
+                    "load_encrypted_signed_bytes_unchecked called on bytes without FLAG_ENCRYPTED",
+                ),
+            )));
+        }
+        let signed_buf = crate::wire_format::decrypt_encrypted_signed_to_signed_bytes(
+            bytes,
+            verifying_keys,
+            decryption_key,
+        )
+        .map_err(VmError::from)?;
+        let mut module = Module::from_bytes(&signed_buf).map_err(VmError::from)?;
+        let was_signed = (module.flags & crate::wire_format::FLAG_REQUIRES_SIGNATURE) != 0;
+        if was_signed {
+            module.flags &= !crate::wire_format::FLAG_REQUIRES_SIGNATURE;
+        }
+        let mut vm = unsafe { Self::new_unchecked(module, arena) }?;
+        for key in verifying_keys {
+            vm.verifying_keys.push(*key);
+        }
+        Ok(vm)
+    }
+
     /// Load a module from a serialized byte slice and skip resource
     /// bounds verification.
     ///
@@ -1712,6 +1807,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
     /// iteration of P10. The current view path delivers in-place
     /// validation. The execution loop continues to operate on the
     /// deserialized owned `Module`.
+    #[cfg(feature = "verify")]
     pub fn view_bytes(bytes: &[u8], arena: &'arena keleusma_arena::Arena) -> Result<Self, VmError> {
         let module = Module::view_bytes(bytes)?;
         Self::new(module, arena)
