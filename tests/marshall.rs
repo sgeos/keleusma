@@ -173,11 +173,10 @@ fn nested_option_ctx_round_trips_some_none() {
 #[test]
 fn native_returning_some_is_matched_by_script() {
     // Audit finding 25, end-to-end for the flat-eligible case: a native returns
-    // Option<Word> = Some(7). The `into_value` wrapping produces the runtime's
-    // `Option::Some` enum shape, which `into_arena_canonical` flattens to the
-    // body the compiler's flat access expects, so the script matches `Some(x)`
-    // and binds the payload. (Before the fix the native produced a bare value
-    // that did not match the flat `Option::Some` access.)
+    // Option<Word> = Some(7). `into_value_ctx` builds the flat arena Option body
+    // the compiler's flat access expects, so the script matches `Some(x)` and
+    // binds the payload. (Before the fix the native produced a bare value that
+    // did not match the flat `Option::Some` access.)
     let arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
     let mut vm = build_vm(
         "use host::maybe() -> Option<Word>\n\
@@ -194,6 +193,76 @@ fn native_returning_some_is_matched_by_script() {
         VmState::Finished(Value::Int(n)) => assert_eq!(n, 7, "Some(7) payload must bind"),
         other => panic!("expected Int(7), got {:?}", other),
     }
+}
+
+#[test]
+#[ignore = "blocked by a language-level nested-Option match bug (see \
+            nested_option_match_is_a_language_limitation): reproducible in a \
+            pure script, independent of marshalling"]
+fn native_returning_some_none_preserves_outer_some() {
+    // Audit finding 25, the nested case end-to-end: a native returns
+    // Option<Option<Word>> = Some(None); a script matches it through flat access
+    // and should observe the outer Some (returning 2), not a collapsed None (3).
+    // The marshalling now produces the correct flat body (into_value_ctx via
+    // to_flat_bytes), but the inner `Option::None` match does not recognize the
+    // extracted flat `[disc=0]` payload -- a pre-existing language-level bug the
+    // sibling test documents. Unignore once that is fixed.
+    let arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+    let mut vm = build_vm(
+        "use host::maybe() -> Option<Option<Word>>\n\
+         fn main() -> Word {\n\
+             match host::maybe() {\n\
+                 Option::Some(inner) => match inner {\n\
+                     Option::Some(_x) => 1,\n\
+                     Option::None => 2,\n\
+                 },\n\
+                 Option::None => 3,\n\
+             }\n\
+         }",
+        &arena,
+    );
+    vm.register_fn("host::maybe", || -> Option<Option<i64>> { Some(None) });
+    match vm.call(&[]).unwrap() {
+        VmState::Finished(Value::Int(n)) => {
+            assert_eq!(
+                n, 2,
+                "outer Some must survive (2), not collapse to None (3)"
+            )
+        }
+        other => panic!("expected Int(2), got {:?}", other),
+    }
+}
+
+#[test]
+fn nested_option_match_is_a_language_limitation() {
+    // Documents the boundary of audit finding 25. A pure script (no native, no
+    // marshalling) that constructs and matches a nested option whose inner value
+    // is None does not select the inner `Option::None` arm: the extracted flat
+    // `Option<Word>` payload is a `[disc=0]` body, but the compiler lowers an
+    // `Option::None` pattern to a scalar `Value::None` (tag) check, so the two
+    // representations do not compose under flat nesting. This is a compiler/VM
+    // concern separate from the value-path marshalling finding 25 fixed. When
+    // the language bug is fixed this test should be updated to expect Int(2) and
+    // `native_returning_some_none_preserves_outer_some` unignored.
+    let arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+    let mut vm = build_vm(
+        "fn main() -> Word {\n\
+             let m = Option::Some(Option::None);\n\
+             match m {\n\
+                 Option::Some(inner) => match inner {\n\
+                     Option::Some(_x) => 1,\n\
+                     Option::None => 2,\n\
+                 },\n\
+                 Option::None => 3,\n\
+             }\n\
+         }",
+        &arena,
+    );
+    // Current (buggy) behavior: no inner arm matches the flat None payload.
+    assert!(
+        matches!(vm.call(&[]), Err(VmError::NoMatchingArm)),
+        "nested Option match currently fails; update when the language bug is fixed"
+    );
 }
 
 #[test]

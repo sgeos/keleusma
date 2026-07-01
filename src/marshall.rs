@@ -573,6 +573,15 @@ impl<W: Word, F: Float, T: KeleusmaType<W, F>> KeleusmaType<W, F> for Option<T> 
     fn from_value_ctx(v: &GenericValue<W, F>, ctx: &RefContext<'_>) -> Result<Self, VmError> {
         match v {
             GenericValue::None => Ok(Option::None),
+            // A flat Option body (produced by `into_value_ctx` for a flat-eligible
+            // option, or a yielded/returned flat option): resolve against the
+            // arena and decode through the type-driven flat path, which reads the
+            // discriminant and, for `Some`, the payload -- handling a nested
+            // `None` correctly (audit finding 25).
+            GenericValue::Enum(crate::bytecode::EnumBody::Flat(fc)) => {
+                let bytes = fc.resolve(ctx.arena).map_err(|_| stale_flat_decode())?;
+                Self::from_flat_bytes_ctx(bytes, ctx.word_bytes, ctx.float_bytes, ctx)
+            }
             GenericValue::Enum(crate::bytecode::EnumBody::Boxed(be))
                 if be.type_name == "Option" && be.variant == "Some" && be.fields.len() == 1 =>
             {
@@ -583,30 +592,60 @@ impl<W: Word, F: Float, T: KeleusmaType<W, F>> KeleusmaType<W, F> for Option<T> 
     }
 
     fn into_value_ctx(self, ctx: &RefContext<'_>) -> Result<GenericValue<W, F>, VmError> {
-        // Mirror of `into_value`: wrap `Some(t)` in the `Option::Some` enum shape
-        // so a native result distinguishes `Some(None)` from `None` and nested
-        // options round-trip through the value path (audit finding 25). The inner
-        // value is built through the arena-direct builder so a `Some(composite)`
-        // payload stays arena-resident (B28 P3 item 2, Increment 3).
+        // A native result must distinguish `Some(None)` from `None` and let
+        // nested options round-trip, including through a script's flat `Option`
+        // access (audit finding 25).
         //
-        // Known limitation: a native that returns a *nested* option whose inner
-        // value is `None` (e.g. `Some(None)`) and is then read by a script's
-        // *flat* `Option` access does not flatten correctly, because the inner
-        // `None` marshals to the scalar `GenericValue::None` and carries no
-        // `Option<T>` flat layout for the outer body to embed. Such values still
-        // round-trip host-to-host through `from_value_ctx`; only in-script flat
-        // access of a native-returned nested option is affected, which is a
-        // deeper B28 flat-layout concern than this value-path fix.
-        match self {
-            Some(t) => Ok(GenericValue::Enum(
-                crate::bytecode::EnumBody::boxed_with_disc(
-                    alloc::string::String::from("Option"),
-                    alloc::string::String::from("Some"),
-                    1,
-                    alloc::vec![t.into_value_ctx(ctx)?],
-                ),
-            )),
-            Option::None => Ok(GenericValue::None),
+        // Top-level `None` is the scalar `Value::None` (the compiler's Option
+        // None representation). `Some` is built one of two ways:
+        //
+        //   * flat-eligible `Option<T>` -> a real flat arena body written by the
+        //     type-driven `to_flat_bytes`, which encodes the discriminant and,
+        //     crucially, recurses through the payload so a nested `None` becomes
+        //     the flat `[disc=0][zeros]` its `Option<T>` layout requires rather
+        //     than a type-erased scalar `Value::None`. The result is byte-for-byte
+        //     the body a script constructs for the same value, so it round-trips
+        //     host-to-host and matches the compiler's flat access. (Matching a
+        //     *nested* `Some(None)` in a script still fails, but as a separate
+        //     language-level bug reproducible with no native at all -- the
+        //     `Option::None` pattern is lowered to a scalar `Value::None` check
+        //     that does not recognize an extracted flat `[disc=0]` payload; see
+        //     the `nested_option_match_is_a_language_limitation` test.)
+        //   * non-flat `T` -> the boxed `Option::Some` enum shape (discriminant
+        //     1), matching the compiler's boxed access for `Option<non-flat>`.
+        let wb = ctx.word_bytes;
+        let fb = ctx.float_bytes;
+        if matches!(self, Option::None) {
+            return Ok(GenericValue::None);
+        }
+        match Self::flat_byte_size(wb, fb) {
+            Some(size) => {
+                let fc = crate::flat_value::FlatComposite::build_in_arena(ctx.arena, size, |dst| {
+                    self.to_flat_bytes(dst, wb, fb).map_err(|_| ())
+                })
+                .map_err(|_| {
+                    VmError::OutOfArena(alloc::string::String::from(
+                        "arena exhausted building a flat Option native result",
+                    ))
+                })?
+                .ok_or_else(|| {
+                    VmError::TypeError(alloc::string::String::from(
+                        "flat Option payload is not flat-eligible",
+                    ))
+                })?;
+                Ok(GenericValue::Enum(crate::bytecode::EnumBody::Flat(fc)))
+            }
+            None => match self {
+                Some(t) => Ok(GenericValue::Enum(
+                    crate::bytecode::EnumBody::boxed_with_disc(
+                        alloc::string::String::from("Option"),
+                        alloc::string::String::from("Some"),
+                        1,
+                        alloc::vec![t.into_value_ctx(ctx)?],
+                    ),
+                )),
+                Option::None => unreachable!("None handled above"),
+            },
         }
     }
 
