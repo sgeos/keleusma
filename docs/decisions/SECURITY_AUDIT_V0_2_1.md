@@ -110,6 +110,17 @@ lowering. The `nested_option_match_selects_inner_none` and
 `native_returning_some_none_preserves_outer_some` tests pin the corrected behavior end
 to end.
 
+A related B37 residual was also fixed in `6ef55be`: an unsignatured native that returned
+a boxed enum through the arena-less `EnumBody::boxed` constructor (which defaults the
+discriminant to `0` and records no padding) silently misread a non-first, non-largest
+variant, with no error. Following Rust's model, where the discriminant is a property of
+the type rather than caller-asserted, the module now carries a per-enum `EnumLayout`
+table (variant discriminants plus padded-body size), and the VM rewrites a host-supplied
+boxed enum's hints from it before flattening, so the flat body is type-driven. The
+previously-`#[ignore]`d `native_enum_smaller_later_variant_reads_correctly` test now
+passes. The wire format grew one rkyv table (`WireAuxBody::enum_layouts`); `BYTECODE_VERSION`
+is unchanged per the B28 pre-release format policy.
+
 Pre-re-audit hardening added test coverage the fixes lacked: the finding-22
 `load_signed_bytes_unchecked` / `load_encrypted_signed_bytes_unchecked` paths (signature
 verification, wrong-key, finding-9 policy, decryption, wrong-recipient) and the
