@@ -1289,6 +1289,10 @@ pub struct WireAuxBody {
     /// Used by `Vm::replace_module` to reject schema-incompatible
     /// hot swaps.
     pub schema_hash: u32,
+    /// Per-enum-type layout descriptors; mirrors `Module::enum_layouts`
+    /// (B37). Rkyv-archived in the auxiliary body alongside the chunk
+    /// metadata.
+    pub enum_layouts: Vec<crate::bytecode::EnumLayout>,
 }
 
 /// Strip a `#!` shebang prefix from a byte slice. Wire-format
@@ -1559,6 +1563,7 @@ pub fn module_to_wire_bytes(module: &Module) -> Result<Vec<u8>, LoadError> {
     }
     let aux = WireAuxBody {
         chunks: wire_chunks,
+        enum_layouts: module.enum_layouts.clone(),
         native_names: module.native_names.clone(),
         entry_point: module.entry_point,
         data_layout: module.data_layout.clone(),
@@ -1768,6 +1773,7 @@ pub fn module_to_signed_wire_bytes(
     }
     let aux = WireAuxBody {
         chunks: wire_chunks,
+        enum_layouts: module.enum_layouts.clone(),
         native_names: module.native_names.clone(),
         entry_point: module.entry_point,
         data_layout: module.data_layout.clone(),
@@ -2477,6 +2483,7 @@ pub fn module_from_wire_bytes(bytes: &[u8]) -> Result<Module, LoadError> {
 
     Ok(Module {
         chunks,
+        enum_layouts: aux.enum_layouts,
         native_names: aux.native_names,
         entry_point: aux.entry_point,
         data_layout: aux.data_layout,
@@ -2934,6 +2941,7 @@ mod tests {
         Module {
             chunks: alloc::vec![chunk],
             native_names: alloc::vec::Vec::new(),
+            enum_layouts: alloc::vec::Vec::new(),
             entry_point: Some(0),
             data_layout: None,
             word_bits_log2: crate::bytecode::RUNTIME_WORD_BITS_LOG2,
@@ -2980,6 +2988,7 @@ mod tests {
         let module = Module {
             chunks: alloc::vec::Vec::new(),
             native_names: alloc::vec::Vec::new(),
+            enum_layouts: alloc::vec::Vec::new(),
             entry_point: None,
             data_layout: None,
             word_bits_log2: crate::bytecode::RUNTIME_WORD_BITS_LOG2,
@@ -3126,6 +3135,7 @@ mod tests {
         let module = Module {
             chunks: alloc::vec![body_chunk, if_chunk],
             native_names: alloc::vec::Vec::new(),
+            enum_layouts: alloc::vec::Vec::new(),
             entry_point: Some(0),
             data_layout: None,
             word_bits_log2: crate::bytecode::RUNTIME_WORD_BITS_LOG2,
@@ -3178,6 +3188,7 @@ mod tests {
         let module = Module {
             chunks: alloc::vec![chunk],
             native_names: alloc::vec::Vec::new(),
+            enum_layouts: alloc::vec::Vec::new(),
             entry_point: Some(0),
             data_layout: None,
             word_bits_log2: crate::bytecode::RUNTIME_WORD_BITS_LOG2,
@@ -3221,6 +3232,7 @@ mod tests {
         let module = Module {
             chunks: alloc::vec![chunk],
             native_names: alloc::vec::Vec::new(),
+            enum_layouts: alloc::vec::Vec::new(),
             entry_point: Some(0),
             data_layout: None,
             word_bits_log2: crate::bytecode::RUNTIME_WORD_BITS_LOG2,

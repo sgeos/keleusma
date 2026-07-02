@@ -1290,6 +1290,104 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         (1usize << self.archived().float_bits_log2) / 8
     }
 
+    /// The discriminant and padded-body payload size for `variant` of enum
+    /// `type_name`, from the module's [`crate::bytecode::EnumLayout`] table
+    /// (B37 / audit finding 25 follow-up), or `None` when the module declares no
+    /// such enum (a built-in like `Option`, or a host type absent from the
+    /// program's enums).
+    fn enum_variant_layout(&self, type_name: &str, variant: &str) -> Option<(i64, usize)> {
+        for el in self.archived().enum_layouts.iter() {
+            if el.type_name.as_str() == type_name {
+                let min_payload = el.min_payload.to_native() as usize;
+                let disc = el
+                    .variants
+                    .iter()
+                    .find(|v| v.name.as_str() == variant)
+                    .map(|v| v.disc.to_native())
+                    .unwrap_or(0);
+                return Some((disc, min_payload));
+            }
+        }
+        None
+    }
+
+    /// Make a host-supplied value's boxed enums type-driven before flattening
+    /// (B37 / audit finding 25 follow-up).
+    ///
+    /// An unsignatured native builds a boxed enum with the arena-less
+    /// [`crate::bytecode::EnumBody::boxed`], which defaults the discriminant to
+    /// `0` and records no padding, so flattening it against the compiler's baked
+    /// flat access silently misreads a non-first, non-largest variant. Here each
+    /// boxed enum's discriminant and padding are corrected from the module's
+    /// `enum_layouts`, the way a script-built or signatured-native value already
+    /// carries them, so the discriminant is derived from the type rather than
+    /// asserted by the caller. Recurses through boxed composite bodies; a flat
+    /// body is already correct bytes and is returned unchanged, as is a scalar.
+    ///
+    /// An enum absent from the table (a built-in `Option`, whose boxed hints the
+    /// marshalling layer already sets) keeps its existing hints rather than
+    /// having them reset, so this pass never degrades a correctly-built value.
+    fn correct_native_enum_hints(
+        &self,
+        v: crate::bytecode::GenericValue<W, F>,
+    ) -> crate::bytecode::GenericValue<W, F> {
+        use crate::bytecode::{
+            ArrayBody, BoxedEnum, BoxedStruct, EnumBody, GenericValue as G, StructBody, TupleBody,
+        };
+        match v {
+            G::Tuple(TupleBody::Boxed(items)) => G::Tuple(TupleBody::boxed(
+                items
+                    .into_iter()
+                    .map(|e| self.correct_native_enum_hints(e))
+                    .collect(),
+            )),
+            G::Array(ArrayBody::Boxed(items)) => G::Array(ArrayBody::boxed(
+                items
+                    .into_iter()
+                    .map(|e| self.correct_native_enum_hints(e))
+                    .collect(),
+            )),
+            G::Struct(StructBody::Boxed(b)) => {
+                let BoxedStruct { type_name, fields } = *b;
+                G::Struct(StructBody::boxed(
+                    type_name,
+                    fields
+                        .into_iter()
+                        .map(|(k, val)| (k, self.correct_native_enum_hints(val)))
+                        .collect(),
+                ))
+            }
+            G::Enum(EnumBody::Boxed(b)) => {
+                let BoxedEnum {
+                    type_name,
+                    variant,
+                    disc,
+                    min_payload,
+                    fields,
+                } = *b;
+                let fields: alloc::vec::Vec<_> = fields
+                    .into_iter()
+                    .map(|f| self.correct_native_enum_hints(f))
+                    .collect();
+                // Correct from the type table when the enum is known; otherwise
+                // preserve the value's own hints (do not reset to `boxed`, which
+                // would clobber a correctly-set discriminant such as
+                // `Option::Some == 1`).
+                let (disc, min_payload) = self
+                    .enum_variant_layout(&type_name, &variant)
+                    .unwrap_or((disc, min_payload));
+                G::Enum(EnumBody::boxed_with_layout(
+                    type_name,
+                    variant,
+                    disc,
+                    min_payload,
+                    fields,
+                ))
+            }
+            other => other,
+        }
+    }
+
     /// Test whether a chunk index is in range.
     fn chunk_count(&self) -> usize {
         self.archived().chunks.len()
@@ -4072,8 +4170,8 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         let wb = self.module_word_bytes();
         let fb = self.module_float_bytes();
         for arg in args {
-            let arg = arg
-                .clone()
+            let arg = self
+                .correct_native_enum_hints(arg.clone())
                 .into_arena_canonical(wb, fb, arena)
                 .map_err(|_| out_of_arena_push("composite argument", arena.capacity()))?;
             // Intern a host-supplied opaque argument to the POD index form
@@ -4185,7 +4283,8 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         let arena = self.arena;
         let wb = self.module_word_bytes();
         let fb = self.module_float_bytes();
-        let input = input
+        let input = self
+            .correct_native_enum_hints(input)
             .into_arena_canonical(wb, fb, arena)
             .map_err(|_| out_of_arena_push("composite resume value", arena.capacity()))?;
         // Intern a host-supplied opaque resume value to the POD index form (B33).
@@ -6711,9 +6810,12 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                                 // marshalling path), a scalar, string, opaque,
                                 // or a reference-bearing composite that stays
                                 // boxed is returned unchanged.
-                                let v = v.into_arena_canonical(wb, fb, arena).map_err(|_| {
-                                    out_of_arena_push("native result", arena.capacity())
-                                })?;
+                                let v = self
+                                    .correct_native_enum_hints(v)
+                                    .into_arena_canonical(wb, fb, arena)
+                                    .map_err(|_| {
+                                        out_of_arena_push("native result", arena.capacity())
+                                    })?;
                                 // Intern any host `Opaque(Arc)` the result
                                 // carries into the registry, so the stack form
                                 // is the POD `OpaqueRef` index (B33).
@@ -6752,7 +6854,8 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                         // arena-resident flat body (B28 item 2 step 6B; see the
                         // reify arm above). No-op for a scalar, string, opaque,
                         // already-flat, or reference-bearing boxed value.
-                        let v = result?
+                        let v = self
+                            .correct_native_enum_hints(result?)
                             .into_arena_canonical(wb, fb, arena)
                             .map_err(|_| out_of_arena_push("native result", arena.capacity()))?;
                         // Intern host `Opaque(Arc)` values to the POD index
@@ -10738,12 +10841,16 @@ mod tests {
         // 6A (the linker-style fixed-address placement of every private
         // composite slot, array elements included): rkyv reserves one more
         // `ArchivedVec` (8 bytes) in the inline `ArchivedDataLayout` even when
-        // `None`, raising the total to 260 bytes. Per B28 the format may change
-        // freely without a BYTECODE_VERSION bump (no production traction;
-        // programs are recompiled).
+        // `None`, raising the total to 260 bytes, and again for the
+        // `WireAuxBody::enum_layouts` table (B37 / audit finding 25 follow-up:
+        // the per-enum variant-discriminant and padded-body sizes that let the
+        // runtime make a native-returned enum's flat body type-driven), whose
+        // empty `ArchivedVec` adds 8 more bytes for a total of 268. Per B28 the
+        // format may change freely without a BYTECODE_VERSION bump (no
+        // production traction; programs are recompiled).
         let expected: alloc::vec::Vec<u8> = alloc::vec![
-            75, 69, 76, 69, 1, 0, 64, 0, 4, 1, 0, 0, 6, 6, 6, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-            0, 0, 0, 0, 0, 64, 0, 0, 0, 8, 0, 0, 0, 72, 0, 0, 0, 0, 0, 0, 0, 72, 0, 0, 0, 184, 0,
+            75, 69, 76, 69, 1, 0, 64, 0, 12, 1, 0, 0, 6, 6, 6, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 64, 0, 0, 0, 8, 0, 0, 0, 72, 0, 0, 0, 0, 0, 0, 0, 72, 0, 0, 0, 192, 0,
             0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 159, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 1, 0,
             0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
             0, 0, 0, 0, 0, 0, 0, 0, 0, 109, 97, 105, 110, 255, 255, 255, 255, 200, 255, 255, 255,
@@ -10751,7 +10858,8 @@ mod tests {
             0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 200, 255, 255, 255, 1, 0,
             0, 0, 248, 255, 255, 255, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
             0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 6, 6, 6, 0, 0, 0, 0, 0, 0,
-            0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 199, 226, 93, 51,
+            0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 176, 255, 255, 255, 0, 0, 0,
+            0, 91, 104, 111, 20,
         ];
         let src = "fn main() -> Word { 1 }";
         let tokens = tokenize(src).expect("lex");
@@ -11202,6 +11310,7 @@ mod tests {
         };
         let module = Module {
             schema_hash: 0,
+            enum_layouts: alloc::vec::Vec::new(),
             chunks: alloc::vec![chunk],
             native_names: alloc::vec![],
             entry_point: Some(0),
@@ -11244,6 +11353,7 @@ mod tests {
         };
         let module = Module {
             schema_hash: 0,
+            enum_layouts: alloc::vec::Vec::new(),
             chunks: alloc::vec![chunk],
             native_names: alloc::vec![],
             entry_point: Some(0),
@@ -12443,6 +12553,7 @@ mod tests {
 
         let module = Module {
             schema_hash: 0,
+            enum_layouts: alloc::vec::Vec::new(),
             chunks: alloc::vec![text_returning_chunk, int_returning_chunk],
             native_names: alloc::vec::Vec::new(),
             entry_point: Some(0),

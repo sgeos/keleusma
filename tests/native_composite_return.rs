@@ -113,23 +113,16 @@ fn native_enum_largest_text_variant_flattens_and_matches() {
 }
 
 #[test]
-#[ignore = "B37 residual: simple EnumBody::boxed loses the variant discriminant and \
-            padding, so a non-first, non-largest enum variant returned by an \
-            unsignatured native silently misreads. A native can work around it with \
-            EnumBody::boxed_with_layout(disc, min_payload); the signatured-native \
-            direction supplies both automatically."]
-fn native_enum_smaller_later_variant_known_limitation() {
-    // Documents a residual of the flatten direction for non-Option enums.
-    // `Code(Word)` is the second variant (discriminant 1) with a smaller payload
-    // than the first variant `Note(Text)`. The simple `EnumBody::boxed`
-    // constructor records discriminant 0 and no largest-variant padding hint,
-    // whereas the compiler bakes access against discriminant 1 and a
-    // `word + payload_max` body. The discriminant disagreement makes the match
-    // silently select `Note`, so this returns 0 rather than 7 (it does not even
-    // error). A native that supplies `boxed_with_layout(disc = 1,
-    // min_payload = <Text size>)` packs the correct body; the signatured-native
-    // direction recovers the enum type and does this automatically. Marked
-    // ignore until one of those lands.
+fn native_enum_smaller_later_variant_reads_correctly() {
+    // B37 / audit finding 25 follow-up, now fixed. `Code(Word)` is the second
+    // variant (discriminant 1) with a smaller payload than the first variant
+    // `Note(Text)`. The arena-less `EnumBody::boxed` constructor records
+    // discriminant 0 and no largest-variant padding, but the VM now corrects
+    // those hints from the module's `enum_layouts` before flattening (the
+    // discriminant is derived from the enum type, the way Rust lays out an
+    // enum, rather than asserted by the caller). So an unsignatured native that
+    // returns `Code(7)` through the bare `boxed` constructor now reads back as
+    // `Code(7)`, matching the compiler's baked flat access.
     let src = "use code() -> Msg\n\
                enum Msg { Note(Text), Code(Word) }\n\
                fn main() -> Word { let m = code(); match m { Msg::Note(_) => 0, Msg::Code(n) => n } }";

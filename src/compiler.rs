@@ -1819,6 +1819,7 @@ pub fn compile_with_options(
     #[cfg_attr(not(feature = "verify"), allow(unused_mut))]
     let mut module = Module {
         schema_hash: crate::bytecode::compute_schema_hash(data_layout.as_ref()),
+        enum_layouts: build_enum_layouts(&type_info),
         chunks,
         native_names,
         entry_point,
@@ -3899,6 +3900,42 @@ fn type_flat_size(ty: &TypeExpr, ti: &TypeInfo) -> Option<usize> {
         .layout_for(ty)
         .ok()?
         .flat_byte_size(ti.word_bytes, ti.float_bytes)
+}
+
+/// Build the per-enum-type layout descriptors the runtime uses to make an
+/// enum's flat body type-driven (B37 / audit finding 25 follow-up).
+///
+/// For each enum the module declares, records the variant discriminants (from
+/// the type checker's `enum_variant_order`) and the padded-body payload size at
+/// the module's widths. `min_payload` is `word + payload_max - word` for a
+/// uniformly-flat enum, taken from the same `flat_byte_size` predicate the
+/// construction and access paths use, so a runtime-corrected body agrees with
+/// the compiler's baked flat access. A non-flat enum records `min_payload = 0`:
+/// it stays boxed and is matched by name, so it needs no padding hint. The
+/// program is monomorphized here, so every enum name is concrete.
+fn build_enum_layouts(ti: &TypeInfo) -> Vec<crate::bytecode::EnumLayout> {
+    use crate::bytecode::{EnumLayout, EnumVariantDisc};
+    ti.enum_variant_order
+        .iter()
+        .map(|(enum_name, variants)| {
+            let ty = TypeExpr::Named(enum_name.clone(), Vec::new(), Span::default());
+            let min_payload = type_flat_size(&ty, ti)
+                .and_then(|total| total.checked_sub(ti.word_bytes))
+                .and_then(|payload_max| u32::try_from(payload_max).ok())
+                .unwrap_or(0);
+            EnumLayout {
+                type_name: enum_name.clone(),
+                variants: variants
+                    .iter()
+                    .map(|(name, disc)| EnumVariantDisc {
+                        name: name.clone(),
+                        disc: *disc,
+                    })
+                    .collect(),
+                min_payload,
+            }
+        })
+        .collect()
 }
 
 /// Bytes of persistent flat-composite body storage a private `.data` field of

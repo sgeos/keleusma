@@ -2878,6 +2878,41 @@ pub struct StructTemplate {
     pub field_names: Vec<String>,
 }
 
+/// One variant's name and discriminant within an [`EnumLayout`].
+#[derive(Debug, Clone, Archive, Serialize, Deserialize)]
+pub struct EnumVariantDisc {
+    /// Variant name.
+    pub name: String,
+    /// Variant discriminant (the flat body's leading word).
+    pub disc: i64,
+}
+
+/// Module-level layout descriptor for one enum type (B37 / audit finding 25
+/// follow-up).
+///
+/// Carries the type information the runtime needs to make an enum's flat body
+/// *type-driven* rather than caller-asserted: the discriminant for each
+/// variant and the padded-body payload size at the module's widths. The VM
+/// consults it when flattening a boxed enum value returned by an unsignatured
+/// native, correcting the discriminant and padding hints that the arena-less
+/// [`EnumBody::boxed`] constructor cannot supply, so the flat body matches the
+/// compiler's baked flat access exactly (the way a script-constructed value or
+/// a signatured native already does). Only uniformly-flat enums, which the
+/// compiler flattens, need the padding; a non-flat enum stays boxed and is
+/// matched by name.
+#[derive(Debug, Clone, Archive, Serialize, Deserialize)]
+pub struct EnumLayout {
+    /// Enum type name.
+    pub type_name: String,
+    /// Each variant's name and discriminant, in declaration order.
+    pub variants: Vec<EnumVariantDisc>,
+    /// Largest-variant payload size in bytes at the module's widths, the
+    /// `min_payload` padding hint for a uniformly-flat enum's fixed body size
+    /// (`word_bytes + min_payload`); `0` for a non-flat enum, which is not
+    /// flattened.
+    pub min_payload: u32,
+}
+
 /// A named slot in the data segment.
 #[derive(Debug, Clone, Archive, Serialize, Deserialize)]
 pub struct DataSlot {
@@ -3260,6 +3295,13 @@ pub struct Module {
     /// arena capacity) call
     /// [`crate::vm::Vm::replace_module_unchecked`] to bypass it.
     pub schema_hash: u32,
+    /// Per-enum-type layout descriptors (B37 / audit finding 25 follow-up).
+    /// Lets the VM make an enum's flat body type-driven: when flattening a
+    /// boxed enum returned by an unsignatured native, it looks up the variant's
+    /// true discriminant and the padded-body size here rather than trusting the
+    /// arena-less constructor's hints. Empty for a module that declares no
+    /// enums. See [`EnumLayout`].
+    pub enum_layouts: Vec<EnumLayout>,
 }
 
 /// Bit flags defined for [`Module::flags`].

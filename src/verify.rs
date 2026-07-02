@@ -2853,6 +2853,7 @@ mod tests {
     fn make_module(chunks: Vec<Chunk>) -> Module {
         Module {
             schema_hash: 0,
+            enum_layouts: alloc::vec::Vec::new(),
             chunks,
             native_names: Vec::new(),
             entry_point: Some(0),
@@ -3910,6 +3911,7 @@ mod tests {
         let chunk = make_chunk("main", vec![Op::GetData(5), Op::Return], BlockType::Func);
         let module = Module {
             schema_hash: 0,
+            enum_layouts: alloc::vec::Vec::new(),
             chunks: vec![chunk],
             native_names: Vec::new(),
             entry_point: Some(0),
@@ -3961,6 +3963,7 @@ mod tests {
         );
         let module = Module {
             schema_hash: 0,
+            enum_layouts: alloc::vec::Vec::new(),
             chunks: vec![chunk],
             native_names: Vec::new(),
             entry_point: Some(0),
