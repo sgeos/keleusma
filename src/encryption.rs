@@ -88,6 +88,13 @@ pub enum EncryptionError {
     /// not match the SHA-256 fingerprint of the local public key.
     /// The artefact was encrypted for a different recipient.
     WrongRecipient,
+    /// The ephemeral public key in the metadata is a low-order point,
+    /// so the X25519 agreement produced the all-zero shared secret
+    /// independent of the local private key (a non-contributory key).
+    /// An attacker can supply such a key to force a predictable shared
+    /// secret; the artefact is rejected rather than decrypted under it
+    /// (audit finding 24).
+    NonContributoryKey,
 }
 
 impl core::fmt::Display for EncryptionError {
@@ -97,6 +104,12 @@ impl core::fmt::Display for EncryptionError {
             Self::EncryptFailed(s) => write!(f, "AES-GCM encryption failed: {}", s),
             Self::DecryptFailed(s) => write!(f, "AES-GCM decryption failed: {}", s),
             Self::WrongRecipient => write!(f, "encrypted artefact is not for this recipient"),
+            Self::NonContributoryKey => {
+                write!(
+                    f,
+                    "ephemeral public key is a low-order (non-contributory) point"
+                )
+            }
         }
     }
 }
@@ -279,6 +292,15 @@ pub fn decrypt_from_metadata(
     let ephemeral_pk = PublicKey::from(metadata.ephemeral_public_key);
     let shared_secret = local_secret.diffie_hellman(&ephemeral_pk);
 
+    // Reject a low-order ephemeral key. `was_contributory()` is false
+    // when the agreement collapsed to the all-zero shared secret, which
+    // an attacker can force by supplying a small-order public key; under
+    // such a key the derived AES key is independent of the local secret
+    // (audit finding 24).
+    if !shared_secret.was_contributory() {
+        return Err(EncryptionError::NonContributoryKey);
+    }
+
     // Derive the AES-256 key with the same HKDF context the
     // encryption side used. The nonce is supplied directly from
     // metadata; HKDF derivation of the nonce on the encryption side
@@ -364,6 +386,28 @@ mod tests {
             decrypt_from_metadata(&metadata, &ciphertext, &recipient_sk).expect("decrypt");
 
         assert_eq!(decrypted, plaintext);
+    }
+
+    #[test]
+    fn low_order_ephemeral_key_is_rejected() {
+        // Audit finding 24: a low-order ephemeral public key forces the
+        // all-zero shared secret independent of the local private key, so
+        // `decrypt_from_metadata` rejects it rather than deriving an AES key
+        // under an attacker-predictable secret.
+        let recipient_sk = test_key(0x55);
+        let recipient_pk = public_key_from_private(&recipient_sk);
+        let ephemeral_seed = test_key(0x66);
+        let (mut metadata, ciphertext) =
+            encrypt_to_recipient(b"secret", &recipient_pk, &ephemeral_seed).expect("encrypt");
+
+        // Substitute a low-order (all-zero) point for the ephemeral key. The
+        // recipient_key_id still matches, so the contributory check -- not the
+        // recipient check -- is what must reject the artefact.
+        metadata.ephemeral_public_key = [0u8; 32];
+        assert!(matches!(
+            decrypt_from_metadata(&metadata, &ciphertext, &recipient_sk),
+            Err(EncryptionError::NonContributoryKey)
+        ));
     }
 
     #[test]

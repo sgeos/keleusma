@@ -377,8 +377,23 @@ fn finish_build_task<P: Platform>(
         ));
     }
     let arena: &'static Arena = Box::leak(Box::new(Arena::with_capacity(arena_capacity)));
+    // The keleusma crate gates the checked `Vm::new` behind its `verify`
+    // feature (audit finding 22): a safe constructor no longer silently
+    // skips verification. With `keleusma-verify` enabled the checked path
+    // runs structural and resource-bound verification; without it, the
+    // verifier is not compiled, so construction goes through the explicit
+    // `unsafe` trust-load.
+    #[cfg(feature = "keleusma-verify")]
     let mut vm: Vm<'static, 'static> =
         Vm::new(module, arena).map_err(|e| format!("vm new for {}: {:?}", name, e))?;
+    // SAFETY: with `keleusma-verify` off the host attests the bytecode's
+    // structural soundness and worst-case resource bounds out of band -- the
+    // precompiled bins emit bytecode through the verified build-time pipeline
+    // (build.rs), and the WCET budget check above bounds declared cost. The
+    // `unsafe` marker records the dropped runtime resource-bounds check.
+    #[cfg(not(feature = "keleusma-verify"))]
+    let mut vm: Vm<'static, 'static> = unsafe { Vm::new_unchecked(module, arena) }
+        .map_err(|e| format!("vm new for {}: {:?}", name, e))?;
     // Host-owned shared-data buffer for this task, zeroed for the script's
     // first observation of each shared field (B28 item 2). Empty when the
     // task declares no shared data.

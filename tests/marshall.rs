@@ -95,6 +95,169 @@ struct Carrier {
 }
 
 #[test]
+fn flat_decode_rejects_a_short_body() {
+    // Audit finding 10: a flat composite body shorter than the decoding host
+    // type's layout returns a clean error instead of panicking on an
+    // out-of-bounds slice. A parent decoder slices a child field's byte range
+    // before the child runs its own checks, so the guard lives at the slice
+    // (`marshall::flat_subslice`, emitted by the derive). Reachable from
+    // attacker-shaped bytecode framing a composite smaller than the host type.
+
+    // `Pair` is two i64 words (16 bytes at the bundled widths); a 12-byte
+    // buffer is missing the second field.
+    assert!(
+        matches!(
+            <Pair as KeleusmaType<i64, f64>>::from_flat_bytes(&[0u8; 12], 8, 8),
+            Err(VmError::TypeError(_))
+        ),
+        "a 12-byte buffer is too short for a 16-byte Pair",
+    );
+
+    // A buffer shorter than the leading discriminant word: the disc read is
+    // total (it propagates the scalar-codec error rather than panicking).
+    assert!(
+        <Signal as KeleusmaType<i64, f64>>::from_flat_bytes(&[0u8; 4], 8, 8).is_err(),
+        "4 bytes is too short for the 8-byte discriminant word",
+    );
+
+    // A valid `On(i64)` discriminant (= 1) with no room for its payload word
+    // past the discriminant: the variant-field subslice guard rejects it.
+    let mut disc_only = [0u8; 8];
+    disc_only[0] = 1;
+    assert!(
+        matches!(
+            <Signal as KeleusmaType<i64, f64>>::from_flat_bytes(&disc_only, 8, 8),
+            Err(VmError::TypeError(_))
+        ),
+        "On(i64) needs a payload word past the discriminant",
+    );
+}
+
+#[test]
+fn f64_int_coercion_rejects_precision_loss() {
+    // Audit finding 29: an Int coerces to f64 only within the f64
+    // safe-integer range; beyond ±2^53 the cast would round, so from_value
+    // returns a TypeError instead of silently losing precision.
+    let exact = (1i64 << 53) - 1;
+    assert_eq!(
+        <f64 as KeleusmaType<i64, f64>>::from_value(&Value::Int(exact)).unwrap(),
+        exact as f64
+    );
+    // The boundary 2^53 is exactly representable and still coerces.
+    assert_eq!(
+        <f64 as KeleusmaType<i64, f64>>::from_value(&Value::Int(1i64 << 53)).unwrap(),
+        (1i64 << 53) as f64
+    );
+    // One past the boundary is odd and not representable: reject it.
+    let lossy = (1i64 << 53) + 1;
+    assert!(matches!(
+        <f64 as KeleusmaType<i64, f64>>::from_value(&Value::Int(lossy)),
+        Err(VmError::TypeError(_))
+    ));
+}
+
+#[test]
+fn nested_option_ctx_round_trips_some_none() {
+    // Audit finding 25 on the arena-direct native-return path
+    // (into_value_ctx / from_value_ctx): Some(None) is distinguishable from
+    // None and the outer Some survives the round-trip.
+    let arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+    let ctx = bundled_ctx(&arena);
+    let v = Some(Option::<i64>::None).into_value_ctx(&ctx).unwrap();
+    assert_ne!(v, Value::None, "Some(None) must differ from None");
+    let recovered =
+        <Option<Option<i64>> as KeleusmaType<i64, f64>>::from_value_ctx(&v, &ctx).unwrap();
+    assert_eq!(recovered, Some(None));
+}
+
+#[test]
+fn native_returning_some_is_matched_by_script() {
+    // Audit finding 25, end-to-end for the flat-eligible case: a native returns
+    // Option<Word> = Some(7). `into_value_ctx` builds the flat arena Option body
+    // the compiler's flat access expects, so the script matches `Some(x)` and
+    // binds the payload. (Before the fix the native produced a bare value that
+    // did not match the flat `Option::Some` access.)
+    let arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+    let mut vm = build_vm(
+        "use host::maybe() -> Option<Word>\n\
+         fn main() -> Word {\n\
+             match host::maybe() {\n\
+                 Option::Some(x) => x,\n\
+                 Option::None => 99,\n\
+             }\n\
+         }",
+        &arena,
+    );
+    vm.register_fn("host::maybe", || -> Option<i64> { Some(7) });
+    match vm.call(&[]).unwrap() {
+        VmState::Finished(Value::Int(n)) => assert_eq!(n, 7, "Some(7) payload must bind"),
+        other => panic!("expected Int(7), got {:?}", other),
+    }
+}
+
+#[test]
+fn native_returning_some_none_preserves_outer_some() {
+    // Audit finding 25 plus the nested-Option match fix, end-to-end: a native
+    // returns Option<Option<Word>> = Some(None); a script matches it through
+    // flat access and observes the outer Some (returning 2), not a collapsed
+    // None (3). into_value_ctx builds the correct flat body, and the VM's IsEnum
+    // now matches the extracted flat [disc=0] inner payload as Option::None.
+    let arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+    let mut vm = build_vm(
+        "use host::maybe() -> Option<Option<Word>>\n\
+         fn main() -> Word {\n\
+             match host::maybe() {\n\
+                 Option::Some(inner) => match inner {\n\
+                     Option::Some(_x) => 1,\n\
+                     Option::None => 2,\n\
+                 },\n\
+                 Option::None => 3,\n\
+             }\n\
+         }",
+        &arena,
+    );
+    vm.register_fn("host::maybe", || -> Option<Option<i64>> { Some(None) });
+    match vm.call(&[]).unwrap() {
+        VmState::Finished(Value::Int(n)) => {
+            assert_eq!(
+                n, 2,
+                "outer Some must survive (2), not collapse to None (3)"
+            )
+        }
+        other => panic!("expected Int(2), got {:?}", other),
+    }
+}
+
+#[test]
+fn nested_option_match_selects_inner_none() {
+    // The nested-Option match fix, in a pure script (no native, no marshalling):
+    // matching a nested option whose inner value is None selects the inner
+    // Option::None arm (returning 2). Option::None is lowered to
+    // IsEnum(Option, None, 0), which matches both a scalar Value::None and a
+    // nested flat [disc=0] payload extracted from a flat parent -- previously
+    // the None pattern used a scalar Value::None comparison that the extracted
+    // flat payload failed.
+    let arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+    let mut vm = build_vm(
+        "fn main() -> Word {\n\
+             let m = Option::Some(Option::None);\n\
+             match m {\n\
+                 Option::Some(inner) => match inner {\n\
+                     Option::Some(_x) => 1,\n\
+                     Option::None => 2,\n\
+                 },\n\
+                 Option::None => 3,\n\
+             }\n\
+         }",
+        &arena,
+    );
+    match vm.call(&[]).unwrap() {
+        VmState::Finished(Value::Int(n)) => assert_eq!(n, 2, "inner None arm must be selected"),
+        other => panic!("expected Int(2), got {:?}", other),
+    }
+}
+
+#[test]
 fn derive_struct_roundtrip() {
     let p = Point { x: 3.0, y: 4.0 };
     let v: Value = p.clone().into_value();

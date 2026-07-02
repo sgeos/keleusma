@@ -1696,6 +1696,10 @@ pub fn compile_with_options(
     let mut chunks: Vec<Chunk> = Vec::new();
     // Set when any chunk emits a flat composite that could intern a host
     // opaque; gates the opaque-registry arena bound below (B28 P3 item 5).
+    // Read only by the verify-gated WCMU aux-arena computation, so a no-verify
+    // build assigns but never reads it (matching the `unused_mut` allow at the
+    // chunk loop above).
+    #[cfg_attr(not(feature = "verify"), allow(unused_assignments, unused_variables))]
     let mut may_intern_opaque = false;
     for (name, defs) in &groups {
         let generic_origin = generic_provenance
@@ -1715,7 +1719,10 @@ pub fn compile_with_options(
             options.emit_debug,
             generic_origin,
         )?;
-        may_intern_opaque |= chunk_may_intern_opaque;
+        #[cfg_attr(not(feature = "verify"), allow(unused_assignments))]
+        {
+            may_intern_opaque |= chunk_may_intern_opaque;
+        }
         let span = defs
             .first()
             .map(|d| d.span)
@@ -1812,6 +1819,7 @@ pub fn compile_with_options(
     #[cfg_attr(not(feature = "verify"), allow(unused_mut))]
     let mut module = Module {
         schema_hash: crate::bytecode::compute_schema_hash(data_layout.as_ref()),
+        enum_layouts: build_enum_layouts(&type_info),
         chunks,
         native_names,
         entry_point,
@@ -3892,6 +3900,42 @@ fn type_flat_size(ty: &TypeExpr, ti: &TypeInfo) -> Option<usize> {
         .layout_for(ty)
         .ok()?
         .flat_byte_size(ti.word_bytes, ti.float_bytes)
+}
+
+/// Build the per-enum-type layout descriptors the runtime uses to make an
+/// enum's flat body type-driven (B37 / audit finding 25 follow-up).
+///
+/// For each enum the module declares, records the variant discriminants (from
+/// the type checker's `enum_variant_order`) and the padded-body payload size at
+/// the module's widths. `min_payload` is `word + payload_max - word` for a
+/// uniformly-flat enum, taken from the same `flat_byte_size` predicate the
+/// construction and access paths use, so a runtime-corrected body agrees with
+/// the compiler's baked flat access. A non-flat enum records `min_payload = 0`:
+/// it stays boxed and is matched by name, so it needs no padding hint. The
+/// program is monomorphized here, so every enum name is concrete.
+fn build_enum_layouts(ti: &TypeInfo) -> Vec<crate::bytecode::EnumLayout> {
+    use crate::bytecode::{EnumLayout, EnumVariantDisc};
+    ti.enum_variant_order
+        .iter()
+        .map(|(enum_name, variants)| {
+            let ty = TypeExpr::Named(enum_name.clone(), Vec::new(), Span::default());
+            let min_payload = type_flat_size(&ty, ti)
+                .and_then(|total| total.checked_sub(ti.word_bytes))
+                .and_then(|payload_max| u32::try_from(payload_max).ok())
+                .unwrap_or(0);
+            EnumLayout {
+                type_name: enum_name.clone(),
+                variants: variants
+                    .iter()
+                    .map(|(name, disc)| EnumVariantDisc {
+                        name: name.clone(),
+                        disc: *disc,
+                    })
+                    .collect(),
+                min_payload,
+            }
+        })
+        .collect()
 }
 
 /// Bytes of persistent flat-composite body storage a private `.data` field of
@@ -8428,27 +8472,15 @@ fn compile_pattern_test(
             fail_addrs.push(fc.emit_jump(Op::If(0)));
         }
         Pattern::Enum(enum_name, variant, sub_pats, _) => {
-            // `Option::None` matches `Value::None` directly rather
-            // than going through `IsEnum`, because the compiler
-            // emits `Op::PushNone` for `Option::None` constructions
-            // and host-side natives return `Value::None` for the
-            // None case. The `IsEnum` check would fail against
-            // `Value::None` because it is not a `Value::Enum`.
-            //
-            // `Option::Some(p)` continues to use `IsEnum` because
-            // the compiler emits `Op::NewEnum` for `Option::Some(x)`,
-            // producing a `Value::Enum { type_name: "Option",
-            // variant: "Some", fields: [x] }`. Host-side natives
-            // that produce `Option::Some(v)` must construct the
-            // same `Value::Enum` shape.
-            if enum_name == "Option" && variant == "None" {
-                fc.emit(Op::GetLocal(value_slot));
-                fc.emit(Op::PushImmediate(3));
-                fc.emit(Op::CmpEq);
-                fail_addrs.push(fc.emit_jump(Op::If(0)));
-                return Ok(fail_addrs);
-            }
-
+            // Both `Option` variants go through `IsEnum`. `Option::Some(x)`
+            // flattens (or boxes) as an enum body with discriminant 1;
+            // `Option::None` is discriminant 0. `IsEnum` matches a flat `[disc]`
+            // body, a boxed enum by name, and -- for `Option::None` specifically
+            // -- the scalar `Value::None` a top-level or host-returned None uses
+            // (the VM's `IsEnum` handler special-cases it). Routing `None`
+            // through `IsEnum` rather than the old scalar `Value::None`
+            // comparison is what lets a nested flat `[disc=0]` Option payload,
+            // extracted from a flat parent, match `Option::None`.
             fc.emit(Op::GetLocal(value_slot));
             let e_const = fc.add_string_constant(enum_name);
             let v_const = fc.add_string_constant(variant);
@@ -8461,6 +8493,12 @@ fn compile_pattern_test(
             let is_option_some = enum_name == "Option" && variant == "Some";
             let disc = if is_option_some {
                 1
+            } else if enum_name == "Option" && variant == "None" {
+                // `Option::None` flattens with discriminant 0 (mirrors the
+                // `Some == 1` convention); the `IsEnum` test above then matches a
+                // flat `[disc=0]` body, and the VM additionally matches a scalar
+                // `Value::None` against `Option::None`.
+                0
             } else {
                 fc.type_info
                     .enum_variant_order

@@ -719,13 +719,17 @@ fn tuple_ints(
             }
             (0..expected)
                 .map(|i| {
-                    expect_int(&Value::read_scalar_le(
+                    let v = Value::read_scalar_le(
                         bytes,
                         i * WORD_BYTES,
                         ScalarKind::Int,
                         WORD_BYTES,
                         FLOAT_BYTES,
-                    ))
+                    )
+                    .map_err(|e| -> Box<dyn std::error::Error> {
+                        format!("flat tuple element decode failed: {:?}", e).into()
+                    })?;
+                    expect_int(&v)
                 })
                 .collect::<Result<_, _>>()?
         }

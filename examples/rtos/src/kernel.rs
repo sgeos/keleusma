@@ -386,20 +386,20 @@ fn tuple_pair(v: &Value, arena: &keleusma::Arena) -> Option<(i64, i64)> {
                 return None;
             }
             Some((
-                extract_int(&Value::read_scalar_le(
-                    bytes,
-                    0,
-                    ScalarKind::Int,
-                    WORD_BYTES,
-                    FLOAT_BYTES,
-                )),
-                extract_int(&Value::read_scalar_le(
-                    bytes,
-                    WORD_BYTES,
-                    ScalarKind::Int,
-                    WORD_BYTES,
-                    FLOAT_BYTES,
-                )),
+                extract_int(
+                    &Value::read_scalar_le(bytes, 0, ScalarKind::Int, WORD_BYTES, FLOAT_BYTES)
+                        .expect("guarded flat tuple element decodes"),
+                ),
+                extract_int(
+                    &Value::read_scalar_le(
+                        bytes,
+                        WORD_BYTES,
+                        ScalarKind::Int,
+                        WORD_BYTES,
+                        FLOAT_BYTES,
+                    )
+                    .expect("guarded flat tuple element decodes"),
+                ),
             ))
         }
         _ => None,

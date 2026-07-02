@@ -268,19 +268,24 @@ impl LayoutDescriptor {
     /// Total byte size of this composite under the supplied
     /// word and float widths.
     pub fn size_in_bytes(&self, word_bytes: usize, float_bytes: usize) -> usize {
+        // Saturating arithmetic throughout: a composite whose element
+        // count or field sum would overflow `usize` saturates to
+        // `usize::MAX` rather than wrapping to a small value that would
+        // under-allocate or mis-bound a slice downstream. A saturated
+        // size fails the next arena allocation cleanly (audit finding 28).
         match self {
             Self::Scalar(kind) => kind.size_in_bytes(word_bytes, float_bytes),
             Self::Tuple(elems) => elems
                 .iter()
                 .map(|e| e.size_in_bytes(word_bytes, float_bytes))
-                .sum(),
-            Self::Array { element, count } => {
-                element.size_in_bytes(word_bytes, float_bytes) * count
-            }
+                .fold(0usize, |a, b| a.saturating_add(b)),
+            Self::Array { element, count } => element
+                .size_in_bytes(word_bytes, float_bytes)
+                .saturating_mul(*count),
             Self::Struct { fields, .. } => fields
                 .iter()
                 .map(|(_, t)| t.size_in_bytes(word_bytes, float_bytes))
-                .sum(),
+                .fold(0usize, |a, b| a.saturating_add(b)),
             Self::Enum { variants, .. } => {
                 let payload_max = variants
                     .iter()
@@ -288,7 +293,7 @@ impl LayoutDescriptor {
                         payload
                             .iter()
                             .map(|t| t.size_in_bytes(word_bytes, float_bytes))
-                            .sum::<usize>()
+                            .fold(0usize, |a, b| a.saturating_add(b))
                     })
                     .max()
                     .unwrap_or(0);
@@ -299,7 +304,7 @@ impl LayoutDescriptor {
                 // largest variant so every value of the type shares one
                 // fixed size, which is what a nested enum field requires
                 // (B28 P2 nested inlining).
-                word_bytes + payload_max
+                word_bytes.saturating_add(payload_max)
             }
         }
     }
@@ -328,7 +333,7 @@ impl LayoutDescriptor {
                             .iter()
                             .take(index)
                             .map(|e| e.size_in_bytes(word_bytes, float_bytes))
-                            .sum(),
+                            .fold(0usize, |a, b| a.saturating_add(b)),
                     )
                 }
             }
@@ -341,7 +346,7 @@ impl LayoutDescriptor {
                             .iter()
                             .take(index)
                             .map(|(_, t)| t.size_in_bytes(word_bytes, float_bytes))
-                            .sum(),
+                            .fold(0usize, |a, b| a.saturating_add(b)),
                     )
                 }
             }
@@ -349,7 +354,11 @@ impl LayoutDescriptor {
                 if index >= *count {
                     None
                 } else {
-                    Some(element.size_in_bytes(word_bytes, float_bytes) * index)
+                    Some(
+                        element
+                            .size_in_bytes(word_bytes, float_bytes)
+                            .saturating_mul(index),
+                    )
                 }
             }
             Self::Scalar(_) | Self::Enum { .. } => None,
@@ -483,17 +492,19 @@ impl LayoutDescriptor {
             Self::Tuple(elems) => {
                 let mut total = 0usize;
                 for e in elems {
-                    total += e.flat_byte_size(word_bytes, float_bytes)?;
+                    total = total.saturating_add(e.flat_byte_size(word_bytes, float_bytes)?);
                 }
                 Some(total)
             }
-            Self::Array { element, count } => {
-                Some(count * element.flat_byte_size(word_bytes, float_bytes)?)
-            }
+            Self::Array { element, count } => Some(
+                element
+                    .flat_byte_size(word_bytes, float_bytes)?
+                    .saturating_mul(*count),
+            ),
             Self::Struct { fields, .. } => {
                 let mut total = 0usize;
                 for (_, t) in fields {
-                    total += t.flat_byte_size(word_bytes, float_bytes)?;
+                    total = total.saturating_add(t.flat_byte_size(word_bytes, float_bytes)?);
                 }
                 Some(total)
             }
@@ -510,13 +521,13 @@ impl LayoutDescriptor {
                 for (_, payload) in variants {
                     let mut sum = 0usize;
                     for p in payload {
-                        sum += p.flat_byte_size(word_bytes, float_bytes)?;
+                        sum = sum.saturating_add(p.flat_byte_size(word_bytes, float_bytes)?);
                     }
                     if sum > payload_max {
                         payload_max = sum;
                     }
                 }
-                Some(word_bytes + payload_max)
+                Some(word_bytes.saturating_add(payload_max))
             }
         }
     }
@@ -612,6 +623,19 @@ mod tests {
         };
         assert_eq!(layout.size_in_bytes(I64_BYTES, F64_BYTES), 64);
         assert_eq!(layout.size_in_bytes(I32_BYTES, F32_BYTES), 32);
+    }
+
+    #[test]
+    fn composite_size_saturates_instead_of_wrapping() {
+        // Audit finding 28: a pathological element count saturates the byte
+        // size to usize::MAX rather than wrapping around to a small value that
+        // would under-allocate or mis-bound a slice downstream.
+        let huge = LayoutDescriptor::Array {
+            element: Box::new(LayoutDescriptor::Scalar(ScalarKind::Int)),
+            count: usize::MAX,
+        };
+        assert_eq!(huge.size_in_bytes(I64_BYTES, F64_BYTES), usize::MAX);
+        assert_eq!(huge.flat_byte_size(I64_BYTES, F64_BYTES), Some(usize::MAX));
     }
 
     #[test]

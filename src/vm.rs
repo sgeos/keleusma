@@ -134,6 +134,16 @@ impl From<crate::bytecode::LoadError> for VmError {
     }
 }
 
+impl From<crate::bytecode::ScalarError> for VmError {
+    fn from(e: crate::bytecode::ScalarError) -> Self {
+        // A bad flat scalar read or write -- an out-of-range offset, a
+        // reference kind on the fixed-scalar path, or an unsupported width --
+        // is malformed bytecode reaching the runtime (V0.2.1 audit, the
+        // read_scalar_le totality cluster).
+        VmError::InvalidBytecode(format!("flat scalar codec: {:?}", e))
+    }
+}
+
 /// Coarse policy category for a [`VmError`]. Used by hosts that want
 /// to make a single retry-or-halt decision without matching the
 /// full variant set.
@@ -1280,6 +1290,104 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         (1usize << self.archived().float_bits_log2) / 8
     }
 
+    /// The discriminant and padded-body payload size for `variant` of enum
+    /// `type_name`, from the module's [`crate::bytecode::EnumLayout`] table
+    /// (B37 / audit finding 25 follow-up), or `None` when the module declares no
+    /// such enum (a built-in like `Option`, or a host type absent from the
+    /// program's enums).
+    fn enum_variant_layout(&self, type_name: &str, variant: &str) -> Option<(i64, usize)> {
+        for el in self.archived().enum_layouts.iter() {
+            if el.type_name.as_str() == type_name {
+                let min_payload = el.min_payload.to_native() as usize;
+                let disc = el
+                    .variants
+                    .iter()
+                    .find(|v| v.name.as_str() == variant)
+                    .map(|v| v.disc.to_native())
+                    .unwrap_or(0);
+                return Some((disc, min_payload));
+            }
+        }
+        None
+    }
+
+    /// Make a host-supplied value's boxed enums type-driven before flattening
+    /// (B37 / audit finding 25 follow-up).
+    ///
+    /// An unsignatured native builds a boxed enum with the arena-less
+    /// [`crate::bytecode::EnumBody::boxed`], which defaults the discriminant to
+    /// `0` and records no padding, so flattening it against the compiler's baked
+    /// flat access silently misreads a non-first, non-largest variant. Here each
+    /// boxed enum's discriminant and padding are corrected from the module's
+    /// `enum_layouts`, the way a script-built or signatured-native value already
+    /// carries them, so the discriminant is derived from the type rather than
+    /// asserted by the caller. Recurses through boxed composite bodies; a flat
+    /// body is already correct bytes and is returned unchanged, as is a scalar.
+    ///
+    /// An enum absent from the table (a built-in `Option`, whose boxed hints the
+    /// marshalling layer already sets) keeps its existing hints rather than
+    /// having them reset, so this pass never degrades a correctly-built value.
+    fn correct_native_enum_hints(
+        &self,
+        v: crate::bytecode::GenericValue<W, F>,
+    ) -> crate::bytecode::GenericValue<W, F> {
+        use crate::bytecode::{
+            ArrayBody, BoxedEnum, BoxedStruct, EnumBody, GenericValue as G, StructBody, TupleBody,
+        };
+        match v {
+            G::Tuple(TupleBody::Boxed(items)) => G::Tuple(TupleBody::boxed(
+                items
+                    .into_iter()
+                    .map(|e| self.correct_native_enum_hints(e))
+                    .collect(),
+            )),
+            G::Array(ArrayBody::Boxed(items)) => G::Array(ArrayBody::boxed(
+                items
+                    .into_iter()
+                    .map(|e| self.correct_native_enum_hints(e))
+                    .collect(),
+            )),
+            G::Struct(StructBody::Boxed(b)) => {
+                let BoxedStruct { type_name, fields } = *b;
+                G::Struct(StructBody::boxed(
+                    type_name,
+                    fields
+                        .into_iter()
+                        .map(|(k, val)| (k, self.correct_native_enum_hints(val)))
+                        .collect(),
+                ))
+            }
+            G::Enum(EnumBody::Boxed(b)) => {
+                let BoxedEnum {
+                    type_name,
+                    variant,
+                    disc,
+                    min_payload,
+                    fields,
+                } = *b;
+                let fields: alloc::vec::Vec<_> = fields
+                    .into_iter()
+                    .map(|f| self.correct_native_enum_hints(f))
+                    .collect();
+                // Correct from the type table when the enum is known; otherwise
+                // preserve the value's own hints (do not reset to `boxed`, which
+                // would clobber a correctly-set discriminant such as
+                // `Option::Some == 1`).
+                let (disc, min_payload) = self
+                    .enum_variant_layout(&type_name, &variant)
+                    .unwrap_or((disc, min_payload));
+                G::Enum(EnumBody::boxed_with_layout(
+                    type_name,
+                    variant,
+                    disc,
+                    min_payload,
+                    fields,
+                ))
+            }
+            other => other,
+        }
+    }
+
     /// Test whether a chunk index is in range.
     fn chunk_count(&self) -> usize {
         self.archived().chunks.len()
@@ -1337,6 +1445,12 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
     /// structural verification on the module and resource bounds
     /// verification against the arena's capacity. Returns an error if
     /// either check fails.
+    ///
+    /// Gated behind the `verify` feature (audit finding 22): without it there
+    /// is no verifier to run, so a no-verify host must construct through the
+    /// explicitly `unsafe` [`Vm::new_unchecked`] rather than receive an
+    /// unverified VM through a safe constructor.
+    #[cfg(feature = "verify")]
     pub fn new(module: Module, arena: &'arena keleusma_arena::Arena) -> Result<Self, VmError> {
         let (vm, _warnings) = Self::new_with_options(module, arena, VmOptions::default())?;
         Ok(vm)
@@ -1360,6 +1474,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
     /// Under the default policy the vector is always empty because
     /// the function returns `Err` before reaching the construction
     /// step on overflow.
+    #[cfg(feature = "verify")]
     pub fn new_with_options(
         module: Module,
         arena: &'arena keleusma_arena::Arena,
@@ -1517,6 +1632,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
     /// originate from any addressable buffer including a file read,
     /// an in-memory `Vec<u8>`, or a `&'static [u8]` placed in
     /// `.rodata`. Runs full verification including resource bounds.
+    #[cfg(feature = "verify")]
     pub fn load_bytes(bytes: &[u8], arena: &'arena keleusma_arena::Arena) -> Result<Self, VmError> {
         // Signed bytecode requires either the `signatures` cargo
         // feature plus a trust matrix (use `Vm::load_signed_bytes`)
@@ -1552,8 +1668,13 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
     /// [`Self::register_verifying_key`] followed by
     /// [`Self::replace_module_from_bytes`] instead.
     ///
-    /// When the bytecode is unsigned, this function is equivalent
-    /// to [`Self::load_bytes`]; the trust matrix is ignored. When
+    /// When the bytecode is unsigned and the trust matrix is non-empty,
+    /// the module is rejected with
+    /// [`crate::bytecode::LoadError::InvalidSignature`]: a host that
+    /// supplies verifying keys requires signed execution, so enforcement
+    /// is a property of host policy, not of the artefact's self-asserted
+    /// flag bit (V0.2.1 security audit, finding 9). When the trust matrix
+    /// is empty, an unsigned module loads like [`Self::load_bytes`]. When
     /// the bytecode is signed, the signature is verified through
     /// [`crate::wire_format::verify_module_signature`] against
     /// every key in `verifying_keys`. The first matching key
@@ -1565,7 +1686,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
     /// keys.
     ///
     /// Requires the `signatures` cargo feature.
-    #[cfg(feature = "signatures")]
+    #[cfg(all(feature = "signatures", feature = "verify"))]
     pub fn load_signed_bytes(
         bytes: &[u8],
         arena: &'arena keleusma_arena::Arena,
@@ -1575,6 +1696,14 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         if signed {
             crate::wire_format::verify_module_signature(bytes, verifying_keys)
                 .map_err(VmError::from)?;
+        } else if !verifying_keys.is_empty() {
+            // Finding 9 (V0.2.1 security audit): signature enforcement is a
+            // host-policy decision, not a property of the self-asserted
+            // FLAG_REQUIRES_SIGNATURE bit. A non-empty trust matrix means the
+            // host requires signed execution, so an unsigned module -- which
+            // an adversary forges by clearing the flag bit and recomputing the
+            // CRC32 trailer -- is rejected rather than loaded.
+            return Err(VmError::from(crate::bytecode::LoadError::InvalidSignature));
         }
         let mut module = Module::from_bytes(bytes).map_err(VmError::from)?;
         // The signed-module gate in `Vm::new_with_options` would
@@ -1586,6 +1715,47 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
             module.flags &= !crate::wire_format::FLAG_REQUIRES_SIGNATURE;
         }
         let mut vm = Self::new(module, arena)?;
+        for key in verifying_keys {
+            vm.verifying_keys.push(*key);
+        }
+        Ok(vm)
+    }
+
+    /// Load a signed module and skip resource-bounds verification.
+    ///
+    /// The Ed25519 signature is still verified against `verifying_keys`
+    /// under the same host policy as [`Vm::load_signed_bytes`] (a non-empty
+    /// trust matrix requires a valid signature); only the worst-case
+    /// resource-bounds check is skipped. This is the no-verify counterpart
+    /// to `load_signed_bytes` (audit finding 22): a host built without the
+    /// `verify` feature can still load signed bytecode while acknowledging
+    /// the dropped bound through the `unsafe` marker.
+    ///
+    /// # Safety
+    ///
+    /// Same contract as [`Vm::new_unchecked`]: the host attests that the
+    /// bytecode's worst-case stack and heap usage fit the arena, because the
+    /// resource-bounds analysis is not run. Structural verification still
+    /// runs when the `verify` feature is compiled in.
+    #[cfg(feature = "signatures")]
+    pub unsafe fn load_signed_bytes_unchecked(
+        bytes: &[u8],
+        arena: &'arena keleusma_arena::Arena,
+        verifying_keys: &[ed25519_dalek::VerifyingKey],
+    ) -> Result<Self, VmError> {
+        let signed = crate::wire_format::header_requires_signature(bytes);
+        if signed {
+            crate::wire_format::verify_module_signature(bytes, verifying_keys)
+                .map_err(VmError::from)?;
+        } else if !verifying_keys.is_empty() {
+            return Err(VmError::from(crate::bytecode::LoadError::InvalidSignature));
+        }
+        let mut module = Module::from_bytes(bytes).map_err(VmError::from)?;
+        let was_signed = (module.flags & crate::wire_format::FLAG_REQUIRES_SIGNATURE) != 0;
+        if was_signed {
+            module.flags &= !crate::wire_format::FLAG_REQUIRES_SIGNATURE;
+        }
+        let mut vm = unsafe { Self::new_unchecked(module, arena) }?;
         for key in verifying_keys {
             vm.verifying_keys.push(*key);
         }
@@ -1614,7 +1784,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
     /// [`Self::replace_module_from_bytes`] inherits the same keys.
     ///
     /// Requires both the `signatures` and `encryption` cargo features.
-    #[cfg(all(feature = "signatures", feature = "encryption"))]
+    #[cfg(all(feature = "signatures", feature = "encryption", feature = "verify"))]
     pub fn load_encrypted_signed_bytes(
         bytes: &[u8],
         arena: &'arena keleusma_arena::Arena,
@@ -1655,6 +1825,52 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         Ok(vm)
     }
 
+    /// Load a signed-and-encrypted module and skip resource-bounds
+    /// verification.
+    ///
+    /// The no-verify counterpart to [`Vm::load_encrypted_signed_bytes`]
+    /// (audit finding 22): the Ed25519 signature is verified and the body
+    /// decrypted exactly as in the checked path; only the worst-case
+    /// resource-bounds check is skipped, which the `unsafe` marker records.
+    ///
+    /// Requires both the `signatures` and `encryption` cargo features.
+    ///
+    /// # Safety
+    ///
+    /// Same contract as [`Vm::new_unchecked`].
+    #[cfg(all(feature = "signatures", feature = "encryption"))]
+    pub unsafe fn load_encrypted_signed_bytes_unchecked(
+        bytes: &[u8],
+        arena: &'arena keleusma_arena::Arena,
+        verifying_keys: &[ed25519_dalek::VerifyingKey],
+        decryption_key: &[u8; crate::encryption::X25519_PRIVATE_KEY_LEN],
+    ) -> Result<Self, VmError> {
+        let encrypted = crate::wire_format::header_requires_encryption(bytes);
+        if !encrypted {
+            return Err(VmError::from(crate::bytecode::LoadError::Codec(
+                alloc::string::String::from(
+                    "load_encrypted_signed_bytes_unchecked called on bytes without FLAG_ENCRYPTED",
+                ),
+            )));
+        }
+        let signed_buf = crate::wire_format::decrypt_encrypted_signed_to_signed_bytes(
+            bytes,
+            verifying_keys,
+            decryption_key,
+        )
+        .map_err(VmError::from)?;
+        let mut module = Module::from_bytes(&signed_buf).map_err(VmError::from)?;
+        let was_signed = (module.flags & crate::wire_format::FLAG_REQUIRES_SIGNATURE) != 0;
+        if was_signed {
+            module.flags &= !crate::wire_format::FLAG_REQUIRES_SIGNATURE;
+        }
+        let mut vm = unsafe { Self::new_unchecked(module, arena) }?;
+        for key in verifying_keys {
+            vm.verifying_keys.push(*key);
+        }
+        Ok(vm)
+    }
+
     /// Load a module from a serialized byte slice and skip resource
     /// bounds verification.
     ///
@@ -1689,6 +1905,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
     /// iteration of P10. The current view path delivers in-place
     /// validation. The execution loop continues to operate on the
     /// deserialized owned `Module`.
+    #[cfg(feature = "verify")]
     pub fn view_bytes(bytes: &[u8], arena: &'arena keleusma_arena::Arena) -> Result<Self, VmError> {
         let module = Module::view_bytes(bytes)?;
         Self::new(module, arena)
@@ -1748,6 +1965,16 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         bytes: &'a [u8],
         arena: &'arena keleusma_arena::Arena,
     ) -> Result<Self, VmError> {
+        // Strip a leading shebang once, up front, so every read below operates
+        // on the same wire-format bytes: framing validation, the width check at
+        // bytes 12-14, op decode, and -- critically -- the slice stored in
+        // `BytecodeStore::Borrowed`, which `archived()` later reads the aux-body
+        // offset and length from. Validating the stripped slice while storing
+        // the unstripped one was the desync that drove `rkyv::access_unchecked`
+        // over a mis-located region (V0.2.1 security audit, findings 8 and 15).
+        // `access_bytes` and `decode_all_ops` strip again internally, an
+        // idempotent no-op on already-stripped bytes.
+        let bytes = crate::wire_format::strip_shebang_prefix(bytes);
         // V0.2.0 Phase 7c routes zero-copy through the wire
         // format. `access_bytes` validates the framing and
         // returns the archived auxiliary body slice; we use the
@@ -2110,7 +2337,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         if kind & crate::bytecode::SHARED_SLOT_COMPOSITE_FLAG == 0 {
             let sk = ScalarKind::from_tag(kind)
                 .ok_or_else(|| VmError::InvalidBytecode(String::from("bad shared scalar kind")))?;
-            Ok(GenericValue::read_scalar_le(buf, offset, sk, wb, fb))
+            GenericValue::read_scalar_le(buf, offset, sk, wb, fb).map_err(VmError::from)
         } else {
             let ck = CompositeKind::from_tag(kind & !crate::bytecode::SHARED_SLOT_COMPOSITE_FLAG)
                 .ok_or_else(|| {
@@ -2200,7 +2427,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                 .shared_buf
                 .bytes_mut()
                 .expect("write_shared_to_buffer called with an active buffer");
-            value.write_scalar_le(buf, offset, wb, fb);
+            value.write_scalar_le(buf, offset, wb, fb)?;
             Ok(())
         } else {
             // Resolve the composite body to an owned copy so the `self.arena`
@@ -2460,13 +2687,14 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         }
         let sk = ScalarKind::from_tag(kind)
             .ok_or_else(|| VmError::InvalidBytecode(String::from("bad shared scalar kind")))?;
-        Ok(crate::bytecode::GenericValue::read_scalar_le(
+        crate::bytecode::GenericValue::read_scalar_le(
             buf,
             offset,
             sk,
             self.module_word_bytes(),
             self.module_float_bytes(),
-        ))
+        )
+        .map_err(VmError::from)
     }
 
     /// Write a scalar shared field into a host-owned buffer between runs
@@ -2496,7 +2724,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
             offset,
             self.module_word_bytes(),
             self.module_float_bytes(),
-        );
+        )?;
         Ok(())
     }
 
@@ -2912,7 +3140,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                 ScalarKind::Int,
                 word_bytes,
                 float_bytes,
-            ) {
+            )? {
                 crate::bytecode::GenericValue::Int(w) => w.to_i64() as usize,
                 _ => unreachable!("read_scalar_le with Int kind yields Int"),
             };
@@ -2960,13 +3188,8 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
             let ks = unsafe { crate::kstring::KString::from_raw_parts(ptr, len, ref_epoch) };
             return Ok(crate::bytecode::GenericValue::KStr(ks));
         }
-        Ok(crate::bytecode::GenericValue::read_scalar_le(
-            bytes,
-            offset,
-            kind,
-            word_bytes,
-            float_bytes,
-        ))
+        crate::bytecode::GenericValue::read_scalar_le(bytes, offset, kind, word_bytes, float_bytes)
+            .map_err(VmError::from)
     }
 
     /// Recover from a runtime error and return the VM to a clean
@@ -3093,8 +3316,13 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
     /// produces [`crate::bytecode::LoadError::InvalidSignature`]
     /// and the existing module continues to run.
     ///
-    /// When the bytecode is unsigned, this method is equivalent
-    /// to decoding the bytes through [`Module::from_bytes`] and
+    /// When the bytecode is unsigned and the host has registered any
+    /// verifying key, the swap is rejected with
+    /// [`crate::bytecode::LoadError::InvalidSignature`] (V0.2.1 security
+    /// audit, finding 9): a registered trust matrix requires signed
+    /// hot-swaps, so enforcement does not depend on the artefact's
+    /// self-asserted flag bit. With no registered key, an unsigned swap is
+    /// equivalent to decoding the bytes through [`Module::from_bytes`] and
     /// calling [`Self::replace_module`].
     ///
     /// Requires the `signatures` cargo feature.
@@ -3107,6 +3335,11 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         if crate::wire_format::header_requires_signature(bytes) {
             crate::wire_format::verify_module_signature(bytes, &self.verifying_keys)
                 .map_err(VmError::from)?;
+        } else if !self.verifying_keys.is_empty() {
+            // Finding 9: a registered trust matrix requires signed hot-swaps.
+            // Reject an unsigned (or flag-cleared) module rather than trusting
+            // the self-asserted flag bit.
+            return Err(VmError::from(crate::bytecode::LoadError::InvalidSignature));
         }
         let new_module = Module::from_bytes(bytes).map_err(VmError::from)?;
         self.replace_module(new_module, initial_data)
@@ -3235,6 +3468,20 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                 new_module.persistent_composite_bytes,
             )));
         }
+        // Build the new bytecode image and decode its ops BEFORE touching any
+        // old state. These two `?` steps are the only remaining fallible work,
+        // so performing them first makes the swap transactional: a failure here
+        // returns with the current module fully intact, instead of dropping the
+        // old private slots and only then erroring, which left
+        // `private_slot_count` stale and made `Drop` double-drop the slots
+        // (V0.2.1 security audit, finding 5: hot-swap double-drop /
+        // use-after-free).
+        let bytes = new_module.to_bytes()?;
+        let mut aligned = rkyv::util::AlignedVec::<8>::with_capacity(bytes.len());
+        aligned.extend_from_slice(&bytes);
+        let decoded_ops = decode_all_ops(aligned.as_slice())?;
+
+        // Commit point: every step below is infallible.
         // Drop the old private slots. Each was initialised at
         // construction or at a prior hot swap and may hold owned
         // resources whose destructor must run.
@@ -3266,13 +3513,8 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         self.reserved_operand_slots = reserve_slots;
         self.reserved_frame_depth = reserve_frames;
         self.reserved_opaque_capacity = reserve_opaque;
-        // Serialize the new module to aligned bytes for archived
-        // access. The borrowed variant is replaced by an owned variant
-        // because hot swap takes an owned input.
-        let bytes = new_module.to_bytes()?;
-        let mut aligned = rkyv::util::AlignedVec::<8>::with_capacity(bytes.len());
-        aligned.extend_from_slice(&bytes);
-        let decoded_ops = decode_all_ops(aligned.as_slice())?;
+        // Install the new bytecode image and decoded ops built above (before
+        // the drop), so the swap is transactional.
         self.bytecode = BytecodeStore::Owned(aligned);
         self.decoded_ops = decoded_ops;
         self.shared_slot_count = new_shared;
@@ -3928,8 +4170,8 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         let wb = self.module_word_bytes();
         let fb = self.module_float_bytes();
         for arg in args {
-            let arg = arg
-                .clone()
+            let arg = self
+                .correct_native_enum_hints(arg.clone())
                 .into_arena_canonical(wb, fb, arena)
                 .map_err(|_| out_of_arena_push("composite argument", arena.capacity()))?;
             // Intern a host-supplied opaque argument to the POD index form
@@ -4041,7 +4283,8 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         let arena = self.arena;
         let wb = self.module_word_bytes();
         let fb = self.module_float_bytes();
-        let input = input
+        let input = self
+            .correct_native_enum_hints(input)
             .into_arena_canonical(wb, fb, arena)
             .map_err(|_| out_of_arena_push("composite resume value", arena.capacity()))?;
         // Intern a host-supplied opaque resume value to the POD index form (B33).
@@ -5503,7 +5746,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                                         crate::value_layout::ScalarKind::Int,
                                         wb,
                                         fb,
-                                    ) {
+                                    )? {
                                         crate::bytecode::GenericValue::Int(w) => {
                                             <W as crate::word::Word>::to_i64(w)
                                         }
@@ -5515,6 +5758,21 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                             // expected variant (B28 P2).
                             Err(_) => false,
                         },
+                        // A scalar `Value::None` denotes `Option::None`. Recognize
+                        // it here so a top-level or host-returned Option None
+                        // matches the same `IsEnum(Option, None, 0)` test the
+                        // compiler now emits for the `None` pattern, alongside a
+                        // nested flat `[disc=0]` body handled by the Flat arm.
+                        // Without this, an extracted flat `Option` None payload
+                        // and a scalar `None` would need two different pattern
+                        // lowerings, which is the nested-`Option` match bug.
+                        crate::bytecode::GenericValue::None => {
+                            let expected_type =
+                                self.chunk_const_str(chunk_idx, enum_const as usize);
+                            let expected_var = self.chunk_const_str(chunk_idx, var_const as usize);
+                            expected_type.as_deref() == Some("Option")
+                                && expected_var.as_deref() == Some("None")
+                        }
                         _ => false,
                     };
                     sp!(self, crate::bytecode::GenericValue::Bool(matches));
@@ -6552,9 +6810,12 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                                 // marshalling path), a scalar, string, opaque,
                                 // or a reference-bearing composite that stays
                                 // boxed is returned unchanged.
-                                let v = v.into_arena_canonical(wb, fb, arena).map_err(|_| {
-                                    out_of_arena_push("native result", arena.capacity())
-                                })?;
+                                let v = self
+                                    .correct_native_enum_hints(v)
+                                    .into_arena_canonical(wb, fb, arena)
+                                    .map_err(|_| {
+                                        out_of_arena_push("native result", arena.capacity())
+                                    })?;
                                 // Intern any host `Opaque(Arc)` the result
                                 // carries into the registry, so the stack form
                                 // is the POD `OpaqueRef` index (B33).
@@ -6593,7 +6854,8 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                         // arena-resident flat body (B28 item 2 step 6B; see the
                         // reify arm above). No-op for a scalar, string, opaque,
                         // already-flat, or reference-bearing boxed value.
-                        let v = result?
+                        let v = self
+                            .correct_native_enum_hints(result?)
                             .into_arena_canonical(wb, fb, arena)
                             .map_err(|_| out_of_arena_push("native result", arena.capacity()))?;
                         // Intern host `Opaque(Arc)` values to the POD index
@@ -7085,6 +7347,24 @@ mod tests {
                 panic!("unexpected breakpoint at chunk {} op {}", chunk, op)
             }
         }
+    }
+
+    #[test]
+    fn generic_with_underscored_origin_name_specializes() {
+        // Finding 26 (V0.2.1 audit): the monomorphizer recovers a
+        // specialization's origin from the authoritative specs map, not by
+        // splitting the mangled `origin__type_args` name on "__". A generic whose
+        // own name contains "__" must still specialize correctly -- the old split
+        // recovered `foo` for `foo__bar`, misattributing its per-function
+        // specialization count. Exercised alongside a plain `foo` generic so a
+        // miscount would conflate the two origins' counts. Both must resolve.
+        let v = run_expect(
+            "fn foo__bar<T>(x: T) -> T { x }\n\
+             fn foo<T>(x: T) -> T { x }\n\
+             fn main() -> Word { foo__bar(5) + foo(7) }",
+            &[],
+        );
+        assert_eq!(v, Value::Int(12));
     }
 
     /// Run `src` and resolve the finished value's string content to an owned
@@ -10561,12 +10841,16 @@ mod tests {
         // 6A (the linker-style fixed-address placement of every private
         // composite slot, array elements included): rkyv reserves one more
         // `ArchivedVec` (8 bytes) in the inline `ArchivedDataLayout` even when
-        // `None`, raising the total to 260 bytes. Per B28 the format may change
-        // freely without a BYTECODE_VERSION bump (no production traction;
-        // programs are recompiled).
+        // `None`, raising the total to 260 bytes, and again for the
+        // `WireAuxBody::enum_layouts` table (B37 / audit finding 25 follow-up:
+        // the per-enum variant-discriminant and padded-body sizes that let the
+        // runtime make a native-returned enum's flat body type-driven), whose
+        // empty `ArchivedVec` adds 8 more bytes for a total of 268. Per B28 the
+        // format may change freely without a BYTECODE_VERSION bump (no
+        // production traction; programs are recompiled).
         let expected: alloc::vec::Vec<u8> = alloc::vec![
-            75, 69, 76, 69, 1, 0, 64, 0, 4, 1, 0, 0, 6, 6, 6, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-            0, 0, 0, 0, 0, 64, 0, 0, 0, 8, 0, 0, 0, 72, 0, 0, 0, 0, 0, 0, 0, 72, 0, 0, 0, 184, 0,
+            75, 69, 76, 69, 1, 0, 64, 0, 12, 1, 0, 0, 6, 6, 6, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 64, 0, 0, 0, 8, 0, 0, 0, 72, 0, 0, 0, 0, 0, 0, 0, 72, 0, 0, 0, 192, 0,
             0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 159, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 1, 0,
             0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
             0, 0, 0, 0, 0, 0, 0, 0, 0, 109, 97, 105, 110, 255, 255, 255, 255, 200, 255, 255, 255,
@@ -10574,7 +10858,8 @@ mod tests {
             0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 200, 255, 255, 255, 1, 0,
             0, 0, 248, 255, 255, 255, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
             0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 6, 6, 6, 0, 0, 0, 0, 0, 0,
-            0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 199, 226, 93, 51,
+            0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 176, 255, 255, 255, 0, 0, 0,
+            0, 91, 104, 111, 20,
         ];
         let src = "fn main() -> Word { 1 }";
         let tokens = tokenize(src).expect("lex");
@@ -10665,6 +10950,35 @@ mod tests {
         match vm.call(&[]).unwrap() {
             VmState::Finished(v) => assert_eq!(v, Value::Int(42)),
             other => panic!("expected finished, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn view_bytes_zero_copy_strips_a_shebang_prefix() {
+        // Findings 8/15: the zero-copy constructor strips the shebang before
+        // validating widths/framing and storing the slice, so the stored bytes
+        // that `archived()` reads aux-body offsets from are the wire-format
+        // bytes, not a shebang-mislocated region (`rkyv::access_unchecked` UB).
+        // The 24-byte shebang keeps the wire start 8-byte aligned inside the
+        // AlignedVec so the archived aux body stays aligned after stripping.
+        let src = "fn double(x: Word) -> Word { x * 2 }\nfn main() -> Word { double(21) }";
+        let module =
+            compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+        let bytes = module.to_bytes().expect("encode");
+        let shebang: &[u8] = b"#!/usr/bin/env keleusma\n"; // 24 bytes, keeps 8-byte alignment
+        let mut aligned = rkyv::util::AlignedVec::<8>::with_capacity(shebang.len() + bytes.len());
+        aligned.extend_from_slice(shebang);
+        aligned.extend_from_slice(&bytes);
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        // SAFETY: the bytes are a freshly compiled module behind a shebang.
+        let mut vm: Vm<'_, '_> =
+            unsafe { Vm::view_bytes_zero_copy(&aligned[..], &arena).expect("view shebang") };
+        match vm.call(&[]).unwrap() {
+            VmState::Finished(v) => assert_eq!(v, Value::Int(42)),
+            other => panic!(
+                "expected Finished(42) from shebang-prefixed zero-copy, got {:?}",
+                other
+            ),
         }
     }
 
@@ -10996,6 +11310,7 @@ mod tests {
         };
         let module = Module {
             schema_hash: 0,
+            enum_layouts: alloc::vec::Vec::new(),
             chunks: alloc::vec![chunk],
             native_names: alloc::vec![],
             entry_point: Some(0),
@@ -11038,6 +11353,7 @@ mod tests {
         };
         let module = Module {
             schema_hash: 0,
+            enum_layouts: alloc::vec::Vec::new(),
             chunks: alloc::vec![chunk],
             native_names: alloc::vec![],
             entry_point: Some(0),
@@ -12237,6 +12553,7 @@ mod tests {
 
         let module = Module {
             schema_hash: 0,
+            enum_layouts: alloc::vec::Vec::new(),
             chunks: alloc::vec![text_returning_chunk, int_returning_chunk],
             native_names: alloc::vec::Vec::new(),
             entry_point: Some(0),
@@ -13309,6 +13626,252 @@ mod tests {
             ),
             Err(other) => panic!("expected LoadError, got: {:?}", other),
             Ok(_) => panic!("expected LoadError, got Ok(_)"),
+        }
+    }
+
+    #[cfg(feature = "signatures")]
+    #[test]
+    fn load_signed_bytes_rejects_unsigned_when_trust_matrix_is_nonempty() {
+        // Finding 9 regression (V0.2.1 audit). A host that supplies verifying
+        // keys requires signed execution, so an unsigned module -- which an
+        // adversary forges from a signed one by clearing FLAG_REQUIRES_SIGNATURE
+        // and recomputing the CRC -- must be rejected, not loaded. Enforcement
+        // is host policy, not the artefact's self-asserted flag bit.
+        use ed25519_dalek::SigningKey;
+        let verifying = SigningKey::from_bytes(&[7u8; 32]).verifying_key();
+        let src = "fn main() -> Word { 42 }";
+        let module =
+            compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+        let bytes = module.to_bytes().expect("encode unsigned");
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        match Vm::load_signed_bytes(&bytes, &arena, &[verifying]) {
+            Err(VmError::LoadError(msg)) => assert!(
+                msg.contains("signature did not verify") || msg.contains("InvalidSignature"),
+                "expected a signature rejection for unsigned-with-keys, got: {}",
+                msg
+            ),
+            Err(other) => panic!("expected LoadError, got: {:?}", other),
+            Ok(_) => panic!("unsigned module with a non-empty trust matrix must be rejected"),
+        }
+    }
+
+    #[cfg(feature = "signatures")]
+    #[test]
+    fn load_signed_bytes_loads_unsigned_when_trust_matrix_is_empty() {
+        // The permissive contract is preserved: with no enrolled keys, an
+        // unsigned module loads like `load_bytes`.
+        let src = "fn main() -> Word { 5 }";
+        let module =
+            compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+        let bytes = module.to_bytes().expect("encode unsigned");
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let mut vm =
+            Vm::load_signed_bytes(&bytes, &arena, &[]).expect("unsigned + empty matrix loads");
+        match vm.call(&[]).unwrap() {
+            VmState::Finished(v) => assert_eq!(v, Value::Int(5)),
+            other => panic!("expected Finished(5), got {:?}", other),
+        }
+    }
+
+    // -- No-verify signed-load path (audit finding 22). The `*_unchecked`
+    //    variants skip the WCMU resource-bounds check but still verify the
+    //    Ed25519 signature under the same host policy as the checked variants.
+
+    #[cfg(feature = "signatures")]
+    #[test]
+    fn load_signed_bytes_unchecked_verifies_signature_and_executes() {
+        use ed25519_dalek::SigningKey;
+        let signer = SigningKey::from_bytes(&[42u8; 32]);
+        let verifying = signer.verifying_key();
+        let src = "signed fn main() -> Word { 21 + 21 }";
+        let module =
+            compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+        let bytes =
+            crate::wire_format::module_to_signed_wire_bytes(&module, &signer).expect("sign");
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        // SAFETY: test-only; the unchecked path skips the WCMU bound while
+        // keeping signature verification, which is what this test exercises.
+        let mut vm = unsafe { Vm::load_signed_bytes_unchecked(&bytes, &arena, &[verifying]) }
+            .expect("load+verify");
+        assert_eq!(vm.verifying_keys_len(), 1);
+        match vm.call(&[]).unwrap() {
+            VmState::Finished(v) => assert_eq!(v, Value::Int(42)),
+            other => panic!("expected Finished(42), got {:?}", other),
+        }
+    }
+
+    #[cfg(feature = "signatures")]
+    #[test]
+    fn load_signed_bytes_unchecked_rejects_wrong_key() {
+        use ed25519_dalek::SigningKey;
+        let signer = SigningKey::from_bytes(&[42u8; 32]);
+        let wrong = SigningKey::from_bytes(&[43u8; 32]).verifying_key();
+        let src = "signed fn main() -> Word { 0 }";
+        let module =
+            compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+        let bytes =
+            crate::wire_format::module_to_signed_wire_bytes(&module, &signer).expect("sign");
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        // SAFETY: test-only.
+        match unsafe { Vm::load_signed_bytes_unchecked(&bytes, &arena, &[wrong]) } {
+            Err(VmError::LoadError(msg)) => assert!(
+                msg.contains("signature did not verify") || msg.contains("InvalidSignature"),
+                "expected InvalidSignature, got: {}",
+                msg
+            ),
+            Err(other) => panic!("expected LoadError, got: {:?}", other),
+            Ok(_) => panic!("expected LoadError, got Ok(_)"),
+        }
+    }
+
+    #[cfg(feature = "signatures")]
+    #[test]
+    fn load_signed_bytes_unchecked_rejects_unsigned_when_trust_matrix_is_nonempty() {
+        // Finding 9 must hold on the no-verify path too: an unsigned module with a
+        // non-empty trust matrix is rejected, not loaded.
+        use ed25519_dalek::SigningKey;
+        let verifying = SigningKey::from_bytes(&[7u8; 32]).verifying_key();
+        let src = "fn main() -> Word { 42 }";
+        let module =
+            compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+        let bytes = module.to_bytes().expect("encode unsigned");
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        // SAFETY: test-only.
+        match unsafe { Vm::load_signed_bytes_unchecked(&bytes, &arena, &[verifying]) } {
+            Err(VmError::LoadError(msg)) => assert!(
+                msg.contains("signature did not verify") || msg.contains("InvalidSignature"),
+                "expected a signature rejection for unsigned-with-keys, got: {}",
+                msg
+            ),
+            Err(other) => panic!("expected LoadError, got: {:?}", other),
+            Ok(_) => panic!("unsigned module with a non-empty trust matrix must be rejected"),
+        }
+    }
+
+    #[cfg(all(feature = "signatures", feature = "encryption"))]
+    #[test]
+    fn load_encrypted_signed_bytes_unchecked_verifies_and_decrypts() {
+        use ed25519_dalek::SigningKey;
+        let signer = SigningKey::from_bytes(&[101u8; 32]);
+        let verifying = signer.verifying_key();
+        let recipient_sk = [0xb0u8; 32];
+        let recipient_pk = crate::encryption::public_key_from_private(&recipient_sk);
+        let ephemeral_seed = [0xc0u8; 32];
+        let src = "signed fn main() -> Word { 99 }";
+        let module =
+            compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+        let bytes = crate::wire_format::module_to_encrypted_signed_wire_bytes(
+            &module,
+            &signer,
+            &recipient_pk,
+            &ephemeral_seed,
+        )
+        .expect("encrypt+sign");
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        // SAFETY: test-only; the unchecked path skips the WCMU bound while
+        // keeping signature verification and decryption.
+        let mut vm = unsafe {
+            Vm::load_encrypted_signed_bytes_unchecked(&bytes, &arena, &[verifying], &recipient_sk)
+        }
+        .expect("load+decrypt+verify");
+        match vm.call(&[]).expect("execute") {
+            VmState::Finished(Value::Int(99)) => (),
+            other => panic!("expected Finished(99), got {:?}", other),
+        }
+    }
+
+    #[cfg(all(feature = "signatures", feature = "encryption"))]
+    #[test]
+    fn load_encrypted_signed_bytes_unchecked_rejects_wrong_recipient() {
+        use ed25519_dalek::SigningKey;
+        let signer = SigningKey::from_bytes(&[102u8; 32]);
+        let verifying = signer.verifying_key();
+        let alice_sk = [0xd1u8; 32];
+        let alice_pk = crate::encryption::public_key_from_private(&alice_sk);
+        let bob_sk = [0xd2u8; 32];
+        let ephemeral_seed = [0xc1u8; 32];
+        let src = "signed fn main() -> Word { 7 }";
+        let module =
+            compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+        let bytes = crate::wire_format::module_to_encrypted_signed_wire_bytes(
+            &module,
+            &signer,
+            &alice_pk,
+            &ephemeral_seed,
+        )
+        .expect("encrypt+sign");
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        // SAFETY: test-only.
+        let result = unsafe {
+            Vm::load_encrypted_signed_bytes_unchecked(&bytes, &arena, &[verifying], &bob_sk)
+        };
+        assert!(result.is_err(), "expected wrong-recipient rejection");
+    }
+
+    #[cfg(feature = "signatures")]
+    #[test]
+    fn replace_module_from_bytes_rejects_unsigned_when_keys_registered() {
+        // Finding 9 regression for the hot-swap path. A registered trust matrix
+        // requires signed swaps; an unsigned module is rejected.
+        use ed25519_dalek::SigningKey;
+        let verifying = SigningKey::from_bytes(&[9u8; 32]).verifying_key();
+        let module =
+            compile(&parse(&tokenize("fn main() -> Word { 1 }").expect("lex")).expect("parse"))
+                .expect("compile");
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let mut vm = Vm::new(module, &arena).expect("construct");
+        vm.register_verifying_key(verifying);
+        let swap =
+            compile(&parse(&tokenize("fn main() -> Word { 2 }").expect("lex")).expect("parse"))
+                .expect("compile");
+        let swap_bytes = swap.to_bytes().expect("encode unsigned");
+        match vm.replace_module_from_bytes(&swap_bytes, alloc::vec::Vec::new()) {
+            Err(VmError::LoadError(msg)) => assert!(
+                msg.contains("signature did not verify") || msg.contains("InvalidSignature"),
+                "expected a signature rejection for unsigned hot-swap, got: {}",
+                msg
+            ),
+            Err(other) => panic!("expected LoadError, got: {:?}", other),
+            Ok(()) => panic!("unsigned hot-swap with registered keys must be rejected"),
+        }
+    }
+
+    #[cfg(feature = "signatures")]
+    #[test]
+    fn rejected_hot_swap_leaves_the_running_module_intact() {
+        // Finding 5: the hot swap is transactional. The fallible decode steps
+        // now run before the old private slots are dropped, so a rejected swap
+        // leaves the current module fully usable rather than corrupting VM
+        // state (the original bug left `private_slot_count` stale after an
+        // early drop, double-dropping on the next `Drop`). Here the swap is
+        // rejected by the signing policy; the original module must still run.
+        // The exact original trigger -- a `to_bytes`/`decode_all_ops` failure
+        // after the drop -- is not reachable on a valid module, so this checks
+        // the observable property the reorder guarantees.
+        use ed25519_dalek::SigningKey;
+        let verifying = SigningKey::from_bytes(&[11u8; 32]).verifying_key();
+        let module =
+            compile(&parse(&tokenize("fn main() -> Word { 1 }").expect("lex")).expect("parse"))
+                .expect("compile");
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let mut vm = Vm::new(module, &arena).expect("construct");
+        vm.register_verifying_key(verifying);
+        let swap =
+            compile(&parse(&tokenize("fn main() -> Word { 2 }").expect("lex")).expect("parse"))
+                .expect("compile");
+        let swap_bytes = swap.to_bytes().expect("encode");
+        assert!(
+            vm.replace_module_from_bytes(&swap_bytes, alloc::vec::Vec::new())
+                .is_err(),
+            "the unsigned swap should be rejected"
+        );
+        // The original module is intact and still runs after the rejected swap.
+        match vm.call(&[]).expect("run after rejected swap") {
+            VmState::Finished(v) => assert_eq!(v, Value::Int(1)),
+            other => panic!(
+                "expected Finished(1) after a rejected swap, got {:?}",
+                other
+            ),
         }
     }
 

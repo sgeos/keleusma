@@ -693,6 +693,23 @@ pub(crate) fn flat_composite_ref<W: crate::word::Word, F: crate::float::Float>(
     }
 }
 
+/// Error from the total flat-scalar codec ([`GenericValue::read_scalar_le`]
+/// and [`GenericValue::write_scalar_le`]). Replaces the prior panics on a
+/// short buffer, a reference kind, or an unsupported width, so attacker-shaped
+/// bytecode reaches a clean rejection rather than a panic or out-of-bounds
+/// access (V0.2.1 security audit, findings 10, 11, 12, 14, 19, 20, 21).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScalarError {
+    /// The requested byte range lies outside the buffer.
+    OutOfBounds,
+    /// A reference kind (`Text`/`Opaque`) was requested through the flat
+    /// fixed-scalar path, which carries only fixed scalars.
+    ReferenceKind,
+    /// An unsupported width: a float width other than 4 or 8 bytes, a word
+    /// width above 8 bytes, or a non-fixed-scalar value on the write path.
+    UnsupportedWidth,
+}
+
 impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
     /// Construct a tuple value, choosing the flat byte body for a
     /// transitively-scalar tuple and the boxed body otherwise (B28 P2).
@@ -1153,22 +1170,33 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
         offset: usize,
         word_bytes: usize,
         float_bytes: usize,
-    ) {
+    ) -> Result<(), ScalarError> {
+        // Checked mutable slice of `n` bytes at `offset`; an out-of-range
+        // offset rejects cleanly rather than panicking.
+        fn slice_mut(dst: &mut [u8], offset: usize, n: usize) -> Result<&mut [u8], ScalarError> {
+            offset
+                .checked_add(n)
+                .and_then(|end| dst.get_mut(offset..end))
+                .ok_or(ScalarError::OutOfBounds)
+        }
         match self {
             Self::Unit | Self::None => {}
-            Self::Bool(b) => dst[offset] = u8::from(*b),
-            Self::Byte(b) => dst[offset] = *b,
+            Self::Bool(b) => *dst.get_mut(offset).ok_or(ScalarError::OutOfBounds)? = u8::from(*b),
+            Self::Byte(b) => *dst.get_mut(offset).ok_or(ScalarError::OutOfBounds)? = *b,
             Self::Int(w) | Self::Fixed(w) => {
+                if word_bytes > 8 {
+                    return Err(ScalarError::UnsupportedWidth);
+                }
                 let le = w.to_i64().to_le_bytes();
-                dst[offset..offset + word_bytes].copy_from_slice(&le[..word_bytes]);
+                slice_mut(dst, offset, word_bytes)?.copy_from_slice(&le[..word_bytes]);
             }
             #[cfg(feature = "floats")]
             Self::Float(f) => {
                 let v = f.to_f64();
                 match float_bytes {
-                    8 => dst[offset..offset + 8].copy_from_slice(&v.to_le_bytes()),
-                    4 => dst[offset..offset + 4].copy_from_slice(&(v as f32).to_le_bytes()),
-                    other => panic!("write_scalar_le: unsupported float width {other}"),
+                    8 => slice_mut(dst, offset, 8)?.copy_from_slice(&v.to_le_bytes()),
+                    4 => slice_mut(dst, offset, 4)?.copy_from_slice(&(v as f32).to_le_bytes()),
+                    _ => return Err(ScalarError::UnsupportedWidth),
                 }
             }
             // A `KStr` Text field is two words: the arena data pointer then
@@ -1176,21 +1204,23 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
             // reattached at the read side, not stored. This requires
             // `word_bytes` to be at least the host pointer width, which the
             // bundled `i64` runtime satisfies; a narrower-word target keeps
-            // `Text` boxed (a separate compile-time gate).
+            // `Text` boxed (a separate compile-time gate), so a narrow word
+            // here rejects rather than truncating the pointer.
             Self::KStr(ks) => {
                 let (ptr, len) = ks.raw_parts();
-                debug_assert!(
-                    word_bytes >= core::mem::size_of::<usize>(),
-                    "flat Text requires word_bytes >= host pointer width"
-                );
+                if word_bytes < core::mem::size_of::<usize>() {
+                    return Err(ScalarError::UnsupportedWidth);
+                }
                 let pe = (ptr as u64).to_le_bytes();
-                dst[offset..offset + word_bytes].copy_from_slice(&pe[..word_bytes]);
+                slice_mut(dst, offset, word_bytes)?.copy_from_slice(&pe[..word_bytes]);
                 let le = (len as u64).to_le_bytes();
-                dst[offset + word_bytes..offset + 2 * word_bytes]
-                    .copy_from_slice(&le[..word_bytes]);
+                slice_mut(dst, offset + word_bytes, word_bytes)?.copy_from_slice(&le[..word_bytes]);
             }
-            other => panic!("write_scalar_le: not a fixed-size scalar: {other:?}"),
+            // Composite, reference, or otherwise non-fixed-scalar values are
+            // not writable through this path.
+            _ => return Err(ScalarError::UnsupportedWidth),
         }
+        Ok(())
     }
 
     /// Build a boxed composite of `kind` from `values` (B28 P4). For a
@@ -1347,7 +1377,8 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
             for v in values {
                 if let Some(kind) = flat_tuple_scalar_kind(v) {
                     let field = kind.size_in_bytes(word_bytes, float_bytes);
-                    v.write_scalar_le(dst, off, word_bytes, float_bytes);
+                    v.write_scalar_le(dst, off, word_bytes, float_bytes)
+                        .map_err(|_| ())?;
                     off += field;
                 } else if let Some(fc) = flat_composite_ref(v) {
                     // A freshly constructed child resolves under the current
@@ -1385,15 +1416,31 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
         kind: crate::value_layout::ScalarKind,
         word_bytes: usize,
         float_bytes: usize,
-    ) -> Self {
+    ) -> Result<Self, ScalarError> {
         use crate::value_layout::ScalarKind;
+        // Checked slice of `n` bytes at `offset`. The flat offset is operand
+        // data the structural verifier does not yet bound, so an out-of-range
+        // offset rejects cleanly rather than panicking or reading OOB.
+        let slice = |n: usize| -> Result<&[u8], ScalarError> {
+            offset
+                .checked_add(n)
+                .and_then(|end| src.get(offset..end))
+                .ok_or(ScalarError::OutOfBounds)
+        };
         match kind {
-            ScalarKind::Unit => Self::Unit,
-            ScalarKind::Bool => Self::Bool(src[offset] != 0),
-            ScalarKind::Byte => Self::Byte(src[offset]),
+            ScalarKind::Unit => Ok(Self::Unit),
+            ScalarKind::Bool => Ok(Self::Bool(
+                *src.get(offset).ok_or(ScalarError::OutOfBounds)? != 0,
+            )),
+            ScalarKind::Byte => Ok(Self::Byte(
+                *src.get(offset).ok_or(ScalarError::OutOfBounds)?,
+            )),
             ScalarKind::Int | ScalarKind::Fixed => {
+                if word_bytes > 8 {
+                    return Err(ScalarError::UnsupportedWidth);
+                }
                 let mut buf = [0u8; 8];
-                buf[..word_bytes].copy_from_slice(&src[offset..offset + word_bytes]);
+                buf[..word_bytes].copy_from_slice(slice(word_bytes)?);
                 let mut n = i64::from_le_bytes(buf);
                 // Sign-extend a narrow word from its top bit.
                 if word_bytes < 8 {
@@ -1404,32 +1451,30 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
                     }
                 }
                 let w = W::from_i64_wrap(n);
-                if matches!(kind, ScalarKind::Fixed) {
+                Ok(if matches!(kind, ScalarKind::Fixed) {
                     Self::Fixed(w)
                 } else {
                     Self::Int(w)
-                }
+                })
             }
             #[cfg(feature = "floats")]
             ScalarKind::Float => {
                 let v = match float_bytes {
                     8 => {
                         let mut buf = [0u8; 8];
-                        buf.copy_from_slice(&src[offset..offset + 8]);
+                        buf.copy_from_slice(slice(8)?);
                         f64::from_le_bytes(buf)
                     }
                     4 => {
                         let mut buf = [0u8; 4];
-                        buf.copy_from_slice(&src[offset..offset + 4]);
+                        buf.copy_from_slice(slice(4)?);
                         f32::from_le_bytes(buf) as f64
                     }
-                    other => panic!("read_scalar_le: unsupported float width {other}"),
+                    _ => return Err(ScalarError::UnsupportedWidth),
                 };
-                Self::Float(F::from_f64(v))
+                Ok(Self::Float(F::from_f64(v)))
             }
-            ScalarKind::Text | ScalarKind::Opaque => {
-                panic!("read_scalar_le: reference kinds are handled in B28 P3")
-            }
+            ScalarKind::Text | ScalarKind::Opaque => Err(ScalarError::ReferenceKind),
         }
     }
 
@@ -2833,6 +2878,41 @@ pub struct StructTemplate {
     pub field_names: Vec<String>,
 }
 
+/// One variant's name and discriminant within an [`EnumLayout`].
+#[derive(Debug, Clone, Archive, Serialize, Deserialize)]
+pub struct EnumVariantDisc {
+    /// Variant name.
+    pub name: String,
+    /// Variant discriminant (the flat body's leading word).
+    pub disc: i64,
+}
+
+/// Module-level layout descriptor for one enum type (B37 / audit finding 25
+/// follow-up).
+///
+/// Carries the type information the runtime needs to make an enum's flat body
+/// *type-driven* rather than caller-asserted: the discriminant for each
+/// variant and the padded-body payload size at the module's widths. The VM
+/// consults it when flattening a boxed enum value returned by an unsignatured
+/// native, correcting the discriminant and padding hints that the arena-less
+/// [`EnumBody::boxed`] constructor cannot supply, so the flat body matches the
+/// compiler's baked flat access exactly (the way a script-constructed value or
+/// a signatured native already does). Only uniformly-flat enums, which the
+/// compiler flattens, need the padding; a non-flat enum stays boxed and is
+/// matched by name.
+#[derive(Debug, Clone, Archive, Serialize, Deserialize)]
+pub struct EnumLayout {
+    /// Enum type name.
+    pub type_name: String,
+    /// Each variant's name and discriminant, in declaration order.
+    pub variants: Vec<EnumVariantDisc>,
+    /// Largest-variant payload size in bytes at the module's widths, the
+    /// `min_payload` padding hint for a uniformly-flat enum's fixed body size
+    /// (`word_bytes + min_payload`); `0` for a non-flat enum, which is not
+    /// flattened.
+    pub min_payload: u32,
+}
+
 /// A named slot in the data segment.
 #[derive(Debug, Clone, Archive, Serialize, Deserialize)]
 pub struct DataSlot {
@@ -3215,6 +3295,13 @@ pub struct Module {
     /// arena capacity) call
     /// [`crate::vm::Vm::replace_module_unchecked`] to bypass it.
     pub schema_hash: u32,
+    /// Per-enum-type layout descriptors (B37 / audit finding 25 follow-up).
+    /// Lets the VM make an enum's flat body type-driven: when flattening a
+    /// boxed enum returned by an unsignatured native, it looks up the variant's
+    /// true discriminant and the padded-body size here rather than trusting the
+    /// arena-less constructor's hints. Empty for a module that declares no
+    /// enums. See [`EnumLayout`].
+    pub enum_layouts: Vec<EnumLayout>,
 }
 
 /// Bit flags defined for [`Module::flags`].
@@ -4232,8 +4319,10 @@ mod flat_scalar_bridge_tests {
 
     fn roundtrip(v: V, kind: ScalarKind, word_bytes: usize, float_bytes: usize, size: usize) -> V {
         let mut buf = alloc::vec![0u8; size];
-        v.write_scalar_le(&mut buf, 0, word_bytes, float_bytes);
+        v.write_scalar_le(&mut buf, 0, word_bytes, float_bytes)
+            .expect("write_scalar_le in roundtrip");
         V::read_scalar_le(&buf, 0, kind, word_bytes, float_bytes)
+            .expect("read_scalar_le in roundtrip")
     }
 
     #[test]
@@ -4285,10 +4374,42 @@ mod flat_scalar_bridge_tests {
     #[test]
     fn unit_writes_no_bytes() {
         let mut buf = [0xFFu8; 0];
-        V::Unit.write_scalar_le(&mut buf, 0, W8, F8);
+        V::Unit
+            .write_scalar_le(&mut buf, 0, W8, F8)
+            .expect("write unit");
         assert_eq!(
-            V::read_scalar_le(&buf, 0, ScalarKind::Unit, W8, F8),
+            V::read_scalar_le(&buf, 0, ScalarKind::Unit, W8, F8).expect("read unit"),
             V::Unit
+        );
+    }
+
+    #[test]
+    fn read_write_scalar_le_are_total() {
+        // Audit findings 11, 12, 20, 21: the flat scalar codec returns a clean
+        // error instead of panicking on an out-of-range offset, a short
+        // buffer, or a reference kind.
+        use crate::bytecode::ScalarError;
+        let buf = [0u8; 2];
+        assert_eq!(
+            V::read_scalar_le(&buf, 8, ScalarKind::Int, W8, F8),
+            Err(ScalarError::OutOfBounds),
+            "offset past the end"
+        );
+        assert_eq!(
+            V::read_scalar_le(&buf, 0, ScalarKind::Int, W8, F8),
+            Err(ScalarError::OutOfBounds),
+            "an 8-byte word read overruns a 2-byte buffer"
+        );
+        assert_eq!(
+            V::read_scalar_le(&buf, 0, ScalarKind::Text, W8, F8),
+            Err(ScalarError::ReferenceKind),
+            "a reference kind on the fixed-scalar path"
+        );
+        let mut dst = [0u8; 1];
+        assert_eq!(
+            V::Bool(true).write_scalar_le(&mut dst, 4, W8, F8),
+            Err(ScalarError::OutOfBounds),
+            "write past the end"
         );
     }
 

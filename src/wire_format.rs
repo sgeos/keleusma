@@ -1289,6 +1289,10 @@ pub struct WireAuxBody {
     /// Used by `Vm::replace_module` to reject schema-incompatible
     /// hot swaps.
     pub schema_hash: u32,
+    /// Per-enum-type layout descriptors; mirrors `Module::enum_layouts`
+    /// (B37). Rkyv-archived in the auxiliary body alongside the chunk
+    /// metadata.
+    pub enum_layouts: Vec<crate::bytecode::EnumLayout>,
 }
 
 /// Strip a `#!` shebang prefix from a byte slice. Wire-format
@@ -1296,7 +1300,7 @@ pub struct WireAuxBody {
 /// the bytecode after an executable shebang; the strip returns
 /// the slice past the first `\n`. Bytes without the prefix pass
 /// through unchanged.
-fn strip_shebang_prefix(bytes: &[u8]) -> &[u8] {
+pub(crate) fn strip_shebang_prefix(bytes: &[u8]) -> &[u8] {
     if bytes.starts_with(b"#!") {
         if let Some(newline_pos) = bytes.iter().position(|&b| b == b'\n') {
             &bytes[newline_pos + 1..]
@@ -1559,6 +1563,7 @@ pub fn module_to_wire_bytes(module: &Module) -> Result<Vec<u8>, LoadError> {
     }
     let aux = WireAuxBody {
         chunks: wire_chunks,
+        enum_layouts: module.enum_layouts.clone(),
         native_names: module.native_names.clone(),
         entry_point: module.entry_point,
         data_layout: module.data_layout.clone(),
@@ -1768,6 +1773,7 @@ pub fn module_to_signed_wire_bytes(
     }
     let aux = WireAuxBody {
         chunks: wire_chunks,
+        enum_layouts: module.enum_layouts.clone(),
         native_names: module.native_names.clone(),
         entry_point: module.entry_point,
         data_layout: module.data_layout.clone(),
@@ -1837,8 +1843,6 @@ pub fn verify_module_signature(
     bytes: &[u8],
     keys: &[ed25519_dalek::VerifyingKey],
 ) -> Result<(), LoadError> {
-    use ed25519_dalek::Verifier;
-
     let bytes = strip_shebang_prefix(bytes);
     if bytes.len() < WIRE_FORMAT_HEADER_BYTES + WIRE_FORMAT_FOOTER_BYTES {
         return Err(LoadError::Truncated);
@@ -1875,8 +1879,13 @@ pub fn verify_module_signature(
 
     // Try each key. The first match wins; an empty key set
     // produces `InvalidSignature` (no host trust matrix → reject).
+    // `verify_strict` rejects the malleable forms `verify` admits (a
+    // non-canonical scalar `S`, or an `R`/`A` with a small-order
+    // component), so a signed module has a single canonical signature
+    // and a third party cannot mint a distinct one that still verifies
+    // (audit finding 23).
     for key in keys {
-        if key.verify(&message, &signature).is_ok() {
+        if key.verify_strict(&message, &signature).is_ok() {
             return Ok(());
         }
     }
@@ -2474,6 +2483,7 @@ pub fn module_from_wire_bytes(bytes: &[u8]) -> Result<Module, LoadError> {
 
     Ok(Module {
         chunks,
+        enum_layouts: aux.enum_layouts,
         native_names: aux.native_names,
         entry_point: aux.entry_point,
         data_layout: aux.data_layout,
@@ -2931,6 +2941,7 @@ mod tests {
         Module {
             chunks: alloc::vec![chunk],
             native_names: alloc::vec::Vec::new(),
+            enum_layouts: alloc::vec::Vec::new(),
             entry_point: Some(0),
             data_layout: None,
             word_bits_log2: crate::bytecode::RUNTIME_WORD_BITS_LOG2,
@@ -2977,6 +2988,7 @@ mod tests {
         let module = Module {
             chunks: alloc::vec::Vec::new(),
             native_names: alloc::vec::Vec::new(),
+            enum_layouts: alloc::vec::Vec::new(),
             entry_point: None,
             data_layout: None,
             word_bits_log2: crate::bytecode::RUNTIME_WORD_BITS_LOG2,
@@ -3123,6 +3135,7 @@ mod tests {
         let module = Module {
             chunks: alloc::vec![body_chunk, if_chunk],
             native_names: alloc::vec::Vec::new(),
+            enum_layouts: alloc::vec::Vec::new(),
             entry_point: Some(0),
             data_layout: None,
             word_bits_log2: crate::bytecode::RUNTIME_WORD_BITS_LOG2,
@@ -3175,6 +3188,7 @@ mod tests {
         let module = Module {
             chunks: alloc::vec![chunk],
             native_names: alloc::vec::Vec::new(),
+            enum_layouts: alloc::vec::Vec::new(),
             entry_point: Some(0),
             data_layout: None,
             word_bits_log2: crate::bytecode::RUNTIME_WORD_BITS_LOG2,
@@ -3218,6 +3232,7 @@ mod tests {
         let module = Module {
             chunks: alloc::vec![chunk],
             native_names: alloc::vec::Vec::new(),
+            enum_layouts: alloc::vec::Vec::new(),
             entry_point: Some(0),
             data_layout: None,
             word_bits_log2: crate::bytecode::RUNTIME_WORD_BITS_LOG2,

@@ -171,7 +171,7 @@ pub trait KeleusmaType<W: Word, F: Float>: Sized {
     ) -> Result<Self, VmError> {
         match Self::flat_field_kind() {
             Some(kind) => {
-                let v = GenericValue::read_scalar_le(bytes, 0, kind, word_bytes, float_bytes);
+                let v = GenericValue::read_scalar_le(bytes, 0, kind, word_bytes, float_bytes)?;
                 Self::from_value(&v)
             }
             None => Err(VmError::TypeError(alloc::string::String::from(
@@ -233,7 +233,7 @@ pub trait KeleusmaType<W: Word, F: Float>: Sized {
             }
             Some(_) => {
                 self.into_value()
-                    .write_scalar_le(dst, 0, word_bytes, float_bytes);
+                    .write_scalar_le(dst, 0, word_bytes, float_bytes)?;
                 Ok(())
             }
             None => Err(VmError::TypeError(alloc::string::String::from(
@@ -290,7 +290,22 @@ impl<W: Word, F: Float> KeleusmaType<W, F> for f64 {
     fn from_value(v: &GenericValue<W, F>) -> Result<Self, VmError> {
         match v {
             GenericValue::Float(f) => Ok(F::to_f64(*f)),
-            GenericValue::Int(n) => Ok(W::to_i64(*n) as f64),
+            GenericValue::Int(n) => {
+                // Coerce an Int to f64 only within the exactly-representable
+                // range. `|n| <= 2^53` is the f64 safe-integer bound; beyond it
+                // the cast rounds and would silently lose precision, so reject
+                // it rather than return a wrong value (audit finding 29).
+                const F64_SAFE_INT: i64 = 1 << 53;
+                let n = W::to_i64(*n);
+                if (-F64_SAFE_INT..=F64_SAFE_INT).contains(&n) {
+                    Ok(n as f64)
+                } else {
+                    Err(VmError::TypeError(format!(
+                        "Int {} exceeds the f64 safe-integer range (±2^53); coercion to Float would lose precision",
+                        n
+                    )))
+                }
+            }
             other => Err(VmError::TypeError(format!(
                 "expected Float, got {}",
                 other.type_name()
@@ -421,13 +436,13 @@ impl<W: Word, F: Float> KeleusmaType<W, F> for alloc::string::String {
         _float_bytes: usize,
         ctx: &RefContext<'_>,
     ) -> Result<Self, VmError> {
-        let read_word = |o: usize| -> usize {
+        let read_word = |o: usize| -> Result<usize, VmError> {
             let mut buf = [0u8; 8];
-            buf[..word_bytes].copy_from_slice(&bytes[o..o + word_bytes]);
-            u64::from_le_bytes(buf) as usize
+            buf[..word_bytes].copy_from_slice(flat_subslice(bytes, o, word_bytes)?);
+            Ok(u64::from_le_bytes(buf) as usize)
         };
-        let ptr = read_word(0);
-        let len = read_word(word_bytes);
+        let ptr = read_word(0)?;
+        let len = read_word(word_bytes)?;
         // SAFETY: the (ptr, len) was packed from a KString issued under the
         // composite body's originating epoch (`ctx.ref_epoch`). Rebuilding
         // with that epoch (not the current arena epoch) means the `get`
@@ -506,7 +521,7 @@ impl<W: Word, F: Float> KeleusmaType<W, F> for Arc<dyn HostOpaque> {
         ctx: &RefContext<'_>,
     ) -> Result<Self, VmError> {
         let mut buf = [0u8; 8];
-        buf[..word_bytes].copy_from_slice(&bytes[0..word_bytes]);
+        buf[..word_bytes].copy_from_slice(flat_subslice(bytes, 0, word_bytes)?);
         let index = u64::from_le_bytes(buf) as usize;
         ctx.opaques.get(index).map(Arc::clone).ok_or_else(|| {
             VmError::InvalidBytecode(alloc::string::String::from(
@@ -522,23 +537,35 @@ impl<W: Word, F: Float, T: KeleusmaType<W, F>> KeleusmaType<W, F> for Option<T> 
     fn from_value(v: &GenericValue<W, F>) -> Result<Self, VmError> {
         match v {
             GenericValue::None => Ok(Option::None),
-            other => {
-                // The runtime represents Option::Some(x) as the inner value
-                // wrapped in a single-field struct named "Some" by the compiler
-                // when constructed via WrapSome. Here we accept either a
-                // direct inner value or the Some-wrapped form depending on
-                // how the host produced it. In practice, the compiler emits
-                // WrapSome which yields a Value variant that does not exist
-                // separately. The convention is that any non-None value
-                // is treated as Some. This matches the existing VM behavior.
-                T::from_value(other).map(Some)
+            // The `Option::Some` enum shape produced by `into_value` (and by the
+            // compiler for a boxed `Some`): unwrap its single payload field. This
+            // is what distinguishes `Some(None)` from `None` (audit finding 25).
+            GenericValue::Enum(crate::bytecode::EnumBody::Boxed(be))
+                if be.type_name == "Option" && be.variant == "Some" && be.fields.len() == 1 =>
+            {
+                Ok(Some(T::from_value(&be.fields[0])?))
             }
+            // Back-compat: a bare non-`None` value is treated as `Some` (the
+            // legacy convention). This cannot represent `Some(None)`, which is
+            // why `into_value` now wraps `Some` in the enum shape above.
+            other => T::from_value(other).map(Some),
         }
     }
 
     fn into_value(self) -> GenericValue<W, F> {
         match self {
-            Some(t) => t.into_value(),
+            // Wrap `Some(x)` in the runtime's `Option::Some` enum shape (a boxed
+            // single-field enum, discriminant 1) so it is distinguishable from
+            // `None` (`GenericValue::None`) and nested options round-trip (audit
+            // finding 25). This matches the shape the compiler emits for
+            // `Option::Some(x)` and that the VM's `IsEnum` matches, so a
+            // host-built `Some` is a first-class Option value to the script.
+            Some(t) => GenericValue::Enum(crate::bytecode::EnumBody::boxed_with_disc(
+                alloc::string::String::from("Option"),
+                alloc::string::String::from("Some"),
+                1,
+                alloc::vec![t.into_value()],
+            )),
             Option::None => GenericValue::None,
         }
     }
@@ -546,18 +573,79 @@ impl<W: Word, F: Float, T: KeleusmaType<W, F>> KeleusmaType<W, F> for Option<T> 
     fn from_value_ctx(v: &GenericValue<W, F>, ctx: &RefContext<'_>) -> Result<Self, VmError> {
         match v {
             GenericValue::None => Ok(Option::None),
+            // A flat Option body (produced by `into_value_ctx` for a flat-eligible
+            // option, or a yielded/returned flat option): resolve against the
+            // arena and decode through the type-driven flat path, which reads the
+            // discriminant and, for `Some`, the payload -- handling a nested
+            // `None` correctly (audit finding 25).
+            GenericValue::Enum(crate::bytecode::EnumBody::Flat(fc)) => {
+                let bytes = fc.resolve(ctx.arena).map_err(|_| stale_flat_decode())?;
+                Self::from_flat_bytes_ctx(bytes, ctx.word_bytes, ctx.float_bytes, ctx)
+            }
+            GenericValue::Enum(crate::bytecode::EnumBody::Boxed(be))
+                if be.type_name == "Option" && be.variant == "Some" && be.fields.len() == 1 =>
+            {
+                Ok(Some(T::from_value_ctx(&be.fields[0], ctx)?))
+            }
             other => T::from_value_ctx(other, ctx).map(Some),
         }
     }
 
     fn into_value_ctx(self, ctx: &RefContext<'_>) -> Result<GenericValue<W, F>, VmError> {
-        // `Some(t)` is the bare inner value (the runtime treats any non-`None`
-        // as `Some`), so recurse into the inner type's arena-direct builder so
-        // a `Some(composite)` native result is arena-resident (B28 P3 item 2,
-        // Increment 3).
-        match self {
-            Some(t) => t.into_value_ctx(ctx),
-            Option::None => Ok(GenericValue::None),
+        // A native result must distinguish `Some(None)` from `None` and let
+        // nested options round-trip, including through a script's flat `Option`
+        // access (audit finding 25).
+        //
+        // Top-level `None` is the scalar `Value::None` (the compiler's Option
+        // None representation). `Some` is built one of two ways:
+        //
+        //   * flat-eligible `Option<T>` -> a real flat arena body written by the
+        //     type-driven `to_flat_bytes`, which encodes the discriminant and,
+        //     crucially, recurses through the payload so a nested `None` becomes
+        //     the flat `[disc=0][zeros]` its `Option<T>` layout requires rather
+        //     than a type-erased scalar `Value::None`. The result is byte-for-byte
+        //     the body a script constructs for the same value, so it round-trips
+        //     host-to-host and matches the compiler's flat access. (Matching a
+        //     *nested* `Some(None)` in a script still fails, but as a separate
+        //     language-level bug reproducible with no native at all -- the
+        //     `Option::None` pattern is lowered to a scalar `Value::None` check
+        //     that does not recognize an extracted flat `[disc=0]` payload; see
+        //     the `nested_option_match_is_a_language_limitation` test.)
+        //   * non-flat `T` -> the boxed `Option::Some` enum shape (discriminant
+        //     1), matching the compiler's boxed access for `Option<non-flat>`.
+        let wb = ctx.word_bytes;
+        let fb = ctx.float_bytes;
+        if matches!(self, Option::None) {
+            return Ok(GenericValue::None);
+        }
+        match Self::flat_byte_size(wb, fb) {
+            Some(size) => {
+                let fc = crate::flat_value::FlatComposite::build_in_arena(ctx.arena, size, |dst| {
+                    self.to_flat_bytes(dst, wb, fb).map_err(|_| ())
+                })
+                .map_err(|_| {
+                    VmError::OutOfArena(alloc::string::String::from(
+                        "arena exhausted building a flat Option native result",
+                    ))
+                })?
+                .ok_or_else(|| {
+                    VmError::TypeError(alloc::string::String::from(
+                        "flat Option payload is not flat-eligible",
+                    ))
+                })?;
+                Ok(GenericValue::Enum(crate::bytecode::EnumBody::Flat(fc)))
+            }
+            None => match self {
+                Some(t) => Ok(GenericValue::Enum(
+                    crate::bytecode::EnumBody::boxed_with_disc(
+                        alloc::string::String::from("Option"),
+                        alloc::string::String::from("Some"),
+                        1,
+                        alloc::vec![t.into_value_ctx(ctx)?],
+                    ),
+                )),
+                Option::None => unreachable!("None handled above"),
+            },
         }
     }
 
@@ -582,7 +670,7 @@ impl<W: Word, F: Float, T: KeleusmaType<W, F>> KeleusmaType<W, F> for Option<T> 
             1 => {
                 let psize = option_payload_size::<W, F, T>(word_bytes, float_bytes)?;
                 Ok(Some(T::from_flat_bytes(
-                    &bytes[word_bytes..word_bytes + psize],
+                    flat_subslice(bytes, word_bytes, psize)?,
                     word_bytes,
                     float_bytes,
                 )?))
@@ -602,14 +690,14 @@ impl<W: Word, F: Float, T: KeleusmaType<W, F>> KeleusmaType<W, F> for Option<T> 
     ) -> Result<(), VmError> {
         match self {
             Option::None => {
-                write_flat_disc::<W, F>(dst, 0, word_bytes, float_bytes);
+                write_flat_disc::<W, F>(dst, 0, word_bytes, float_bytes)?;
                 for b in dst[word_bytes..].iter_mut() {
                     *b = 0;
                 }
                 Ok(())
             }
             Some(t) => {
-                write_flat_disc::<W, F>(dst, 1, word_bytes, float_bytes);
+                write_flat_disc::<W, F>(dst, 1, word_bytes, float_bytes)?;
                 let psize = option_payload_size::<W, F, T>(word_bytes, float_bytes)?;
                 t.to_flat_bytes(
                     &mut dst[word_bytes..word_bytes + psize],
@@ -635,7 +723,7 @@ impl<W: Word, F: Float, T: KeleusmaType<W, F>> KeleusmaType<W, F> for Option<T> 
             1 => {
                 let psize = option_payload_size::<W, F, T>(word_bytes, float_bytes)?;
                 Ok(Some(T::from_flat_bytes_ctx(
-                    &bytes[word_bytes..word_bytes + psize],
+                    flat_subslice(bytes, word_bytes, psize)?,
                     word_bytes,
                     float_bytes,
                     ctx,
@@ -650,6 +738,30 @@ impl<W: Word, F: Float, T: KeleusmaType<W, F>> KeleusmaType<W, F> for Option<T> 
 }
 
 /// Read the leading discriminant word of a flat enum body as `i64` (B34).
+/// Borrow a `len`-byte subslice of a flat composite body at `lo`, or a
+/// [`VmError::TypeError`] when the body is shorter than its declared layout
+/// (audit finding 10).
+///
+/// Replaces the unchecked `&bytes[lo..lo + len]` indexing in the flat
+/// composite decoders. The unchecked form panicked on a body shorter than
+/// the host type expects, which is reachable from attacker-shaped bytecode
+/// that packs a composite whose framed `byte_size` is smaller than the
+/// decoding host type. A parent decoder slices a child's field range before
+/// the child runs its own checks, so the bound must be enforced at the slice.
+///
+/// `#[doc(hidden)] pub` so the `KeleusmaType` derive in `keleusma-macros` can
+/// emit `::keleusma::marshall::flat_subslice(...)` in host crates.
+#[doc(hidden)]
+pub fn flat_subslice(bytes: &[u8], lo: usize, len: usize) -> Result<&[u8], VmError> {
+    lo.checked_add(len)
+        .and_then(|hi| bytes.get(lo..hi))
+        .ok_or_else(|| {
+            VmError::TypeError(alloc::string::String::from(
+                "flat composite body is shorter than its declared layout",
+            ))
+        })
+}
+
 fn read_flat_disc<W: Word, F: Float>(
     bytes: &[u8],
     word_bytes: usize,
@@ -661,7 +773,7 @@ fn read_flat_disc<W: Word, F: Float>(
         crate::value_layout::ScalarKind::Int,
         word_bytes,
         float_bytes,
-    ) {
+    )? {
         GenericValue::Int(w) => Ok(W::to_i64(w)),
         _ => Err(VmError::TypeError(alloc::string::String::from(
             "flat enum discriminant is not an Int",
@@ -675,13 +787,10 @@ fn write_flat_disc<W: Word, F: Float>(
     disc: i64,
     word_bytes: usize,
     float_bytes: usize,
-) {
-    GenericValue::<W, F>::Int(W::from_i64_wrap(disc)).write_scalar_le(
-        dst,
-        0,
-        word_bytes,
-        float_bytes,
-    );
+) -> Result<(), VmError> {
+    GenericValue::<W, F>::Int(W::from_i64_wrap(disc))
+        .write_scalar_le(dst, 0, word_bytes, float_bytes)
+        .map_err(VmError::from)
 }
 
 /// The flat byte size of an `Option`'s `Some` payload, or a `TypeError` when
@@ -1007,7 +1116,7 @@ macro_rules! impl_tuple {
                                 "flat tuple field is not flat-eligible",
                             )))?;
                         let val = <$name as KeleusmaType<W, FloatT>>::from_flat_bytes(
-                            &bytes[offset..offset + size], word_bytes, float_bytes,
+                            flat_subslice(bytes, offset, size)?, word_bytes, float_bytes,
                         )?;
                         offset += size;
                         val
@@ -1073,7 +1182,7 @@ macro_rules! impl_tuple {
                                 "flat tuple field is not flat-eligible",
                             )))?;
                         let val = <$name as KeleusmaType<W, FloatT>>::from_flat_bytes_ctx(
-                            &bytes[offset..offset + size], word_bytes, float_bytes, __ctx,
+                            flat_subslice(bytes, offset, size)?, word_bytes, float_bytes, __ctx,
                         )?;
                         offset += size;
                         val
@@ -1259,17 +1368,48 @@ mod tests {
 
     #[test]
     fn option_roundtrip() {
+        // `Some` is wrapped in the `Option::Some` enum shape (audit finding 25),
+        // distinguishable from `None`, and round-trips through into/from_value.
         let some = <Option<i64> as KeleusmaType<i64, f64>>::into_value(Some(42i64));
-        assert_eq!(some, Value::Int(42));
+        assert_ne!(some, Value::None);
+        assert_eq!(
+            <Option<i64> as KeleusmaType<i64, f64>>::from_value(&some).unwrap(),
+            Some(42)
+        );
         let none = <Option<i64> as KeleusmaType<i64, f64>>::into_value(Option::<i64>::None);
         assert_eq!(none, Value::None);
 
+        // A bare non-`None` value is still accepted as `Some` (legacy convention).
         let recovered: Option<i64> =
             <Option<i64> as KeleusmaType<i64, f64>>::from_value(&Value::Int(42)).unwrap();
         assert_eq!(recovered, Some(42));
         let recovered_none: Option<i64> =
             <Option<i64> as KeleusmaType<i64, f64>>::from_value(&Value::None).unwrap();
         assert_eq!(recovered_none, Option::None);
+    }
+
+    #[test]
+    fn nested_option_round_trips_some_none() {
+        // Audit finding 25: `Some(None)` no longer collapses to `None`; the
+        // outer `Some` survives the value-path round-trip.
+        type Oo = Option<Option<i64>>;
+        let some_none = <Oo as KeleusmaType<i64, f64>>::into_value(Some(None));
+        let none = <Oo as KeleusmaType<i64, f64>>::into_value(None);
+        assert_ne!(some_none, none, "Some(None) must differ from None");
+        assert_eq!(
+            <Oo as KeleusmaType<i64, f64>>::from_value(&some_none).unwrap(),
+            Some(None)
+        );
+        assert_eq!(
+            <Oo as KeleusmaType<i64, f64>>::from_value(&none).unwrap(),
+            None
+        );
+        // `Some(Some(x))` also round-trips through the nested enum wrapping.
+        let some_some = <Oo as KeleusmaType<i64, f64>>::into_value(Some(Some(7)));
+        assert_eq!(
+            <Oo as KeleusmaType<i64, f64>>::from_value(&some_some).unwrap(),
+            Some(Some(7))
+        );
     }
 
     #[test]
