@@ -201,6 +201,34 @@ fn compile_fails(src: &str) -> bool {
     compile(&parse(&tokenize(src).expect("lex")).expect("parse")).is_err()
 }
 
+// --- Phase 1 boundary: a tuple casts to Multiword<N> only when it has
+// exactly N Word elements. A wrong arity or a non-Word element is
+// rejected at compile time (B19). ---
+
+#[test]
+fn multiword_cast_rejects_wrong_tuple_arity() {
+    // Too few and too many tuple elements are both rejected.
+    assert!(compile_fails(
+        "fn main() -> Word { let m = (1, 2, 3) as Multiword<4>; m[0] }"
+    ));
+    assert!(compile_fails(
+        "fn main() -> Word { let m = (1, 2, 3) as Multiword<2>; m[0] }"
+    ));
+    // The turbofish constructor desugars to the same cast, so a wrong
+    // argument count is rejected too.
+    assert!(compile_fails(
+        "fn main() -> Word { let m = Multiword::<4>(1, 2, 3); m[0] }"
+    ));
+}
+
+#[test]
+fn multiword_cast_rejects_non_word_element() {
+    // A Float element cannot pack into a Multiword word.
+    assert!(compile_fails(
+        "fn main() -> Word { let m = (1, 2.0) as Multiword<2>; m[0] }"
+    ));
+}
+
 fn run_to_bool(src: &str) -> bool {
     let module = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
     let arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);

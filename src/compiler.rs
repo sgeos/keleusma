@@ -1324,9 +1324,15 @@ fn compile_multiword_compare(
 /// word k, every low word at digit position k and every corrected high
 /// word at position k - 1 is added into a two-word accumulator, the low
 /// word of which becomes result word k before the accumulator is shifted
-/// down one word for the next column. The two-word accumulator is
-/// sufficient while the number of terms per column stays below 2^word_bits,
-/// which holds for every N admitted here.
+/// down one word for the next column. A column sum is at most
+/// `(2N + 1) * 2^word_bits`, so the two-word accumulator is exact only
+/// while `2N + 1 < 2^word_bits`. For every word width of seventeen bits
+/// or more this admits the full word-count range (N up to 65535), so the
+/// bound is a real constraint only on eight- and sixteen-bit words, and
+/// there it excludes only word counts so large that the N-squared
+/// unrolling would be impractical regardless. A word count that would
+/// overflow the accumulator is rejected here rather than lowered to a
+/// silently wrong product.
 fn compile_multiword_mul(
     fc: &mut FuncCompiler,
     left: &Expr,
@@ -1334,6 +1340,19 @@ fn compile_multiword_mul(
     n: u16,
 ) -> Result<(), CompileError> {
     let word_bits = (fc.type_info.word_bytes * 8) as i64;
+    // Guard the two-word column accumulator against overflow. Computed in
+    // u128 so the shift is exact for every admitted word width up to 64.
+    let column_modulus = 1u128 << (word_bits as u32);
+    if 2u128 * n as u128 + 1 >= column_modulus {
+        return Err(CompileError {
+            message: alloc::format!(
+                "Multiword<{}> multiply exceeds the multi-word accumulator capacity at a {}-bit word; reduce the word count",
+                n,
+                word_bits
+            ),
+            span: left.span(),
+        });
+    }
     let byte_size = flat_alloc_bytes(&TypeExpr::Multiword(n, 0, Span::default()), &fc.type_info)
         .unwrap_or_else(|| conservative_alloc_bytes(n));
     let word_ty = TypeExpr::Prim(PrimType::Word, Span::default());

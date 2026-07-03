@@ -622,3 +622,31 @@ fn narrow_multiword_mul_carry_into_high_word() {
         1_i16
     );
 }
+
+#[test]
+fn narrow_multiword_mul_rejects_word_count_that_overflows_accumulator() {
+    // The two-word Comba accumulator of the multiply stays exact only
+    // while 2N + 1 < 2^word_bits. On the 16-bit target that bound is
+    // N < 32768, so a Multiword<32768> multiply must be rejected at
+    // compile time rather than lowered to a silently wrong product. The
+    // operands are declared through a parameter type, so no 32768-element
+    // tuple is constructed; the guard fires before any unrolling. Every
+    // top-level function is compiled, so the uncalled `wide` is enough.
+    let src = "fn wide(a: Multiword<32768>, b: Multiword<32768>) -> Word { let s = a * b; s[0] }\n\
+               fn main() -> Word { 0 }";
+    let tokens = tokenize(src).expect("lex");
+    let program = parse(&tokens).expect("parse");
+    assert!(
+        compile_with_target(&program, &Target::embedded_16()).is_err(),
+        "Multiword<32768> multiply must be rejected on a 16-bit word"
+    );
+    // The same word count is admitted when it does not overflow: on the
+    // default 64-bit host word, 2N + 1 is far below 2^64, so the multiply
+    // compiles (verified indirectly by a small N here to keep the test
+    // cheap; the 64-bit N=32768 case would unroll a billion products).
+    let ok_src = "fn wide(a: Multiword<2>, b: Multiword<2>) -> Word { let s = a * b; s[0] }\n\
+                  fn main() -> Word { 0 }";
+    let ok_tokens = tokenize(ok_src).expect("lex");
+    let ok_program = parse(&ok_tokens).expect("parse");
+    assert!(compile_with_target(&ok_program, &Target::embedded_16()).is_ok());
+}
