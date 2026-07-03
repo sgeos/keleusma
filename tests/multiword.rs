@@ -229,6 +229,15 @@ fn multiword_cast_rejects_non_word_element() {
     ));
 }
 
+// A program that compiles and verifies but whose execution traps
+// returns an error from `call`. Used for the division-by-zero test.
+fn run_traps(src: &str) -> bool {
+    let module = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+    let arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+    let mut vm = Vm::new(module, &arena).expect("verify");
+    vm.call(&[]).is_err()
+}
+
 fn run_to_bool(src: &str) -> bool {
     let module = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
     let arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
@@ -668,6 +677,160 @@ fn multiword_fixed_mul_over_bound_rejected() {
     // more fraction bits than the value can hold and is rejected.
     assert!(compile_fails(
         "fn main() -> Word { let a = (1, 0) as Multiword<2, 200>; let b = (1, 0) as Multiword<2, 200>; let s = a * b; s[0] }"
+    ));
+}
+
+// --- Phase 4a: integer divide and modulo (F = 0). Signed with
+// truncation toward zero; the quotient takes the sign of the operand
+// exclusive-or and the remainder the sign of the dividend (B19). ---
+
+#[test]
+fn multiword_div_and_mod_basic() {
+    assert_eq!(
+        run_to_int(
+            "fn main() -> Word { let a = (100, 0) as Multiword<2>; let b = (7, 0) as Multiword<2>; let s = a / b; s[0] }"
+        ),
+        14
+    );
+    assert_eq!(
+        run_to_int(
+            "fn main() -> Word { let a = (100, 0) as Multiword<2>; let b = (7, 0) as Multiword<2>; let s = a % b; s[0] }"
+        ),
+        2
+    );
+}
+
+#[test]
+fn multiword_div_exact_and_smaller_dividend() {
+    assert_eq!(
+        run_to_int(
+            "fn main() -> Word { let a = (100, 0) as Multiword<2>; let b = (4, 0) as Multiword<2>; let s = a / b; s[0] }"
+        ),
+        25
+    );
+    // Dividend smaller than divisor: quotient 0, remainder is the dividend.
+    assert_eq!(
+        run_to_int(
+            "fn main() -> Word { let a = (5, 0) as Multiword<2>; let b = (10, 0) as Multiword<2>; let s = a / b; s[0] }"
+        ),
+        0
+    );
+    assert_eq!(
+        run_to_int(
+            "fn main() -> Word { let a = (5, 0) as Multiword<2>; let b = (10, 0) as Multiword<2>; let s = a % b; s[0] }"
+        ),
+        5
+    );
+}
+
+#[test]
+fn multiword_div_spans_two_words() {
+    // 2^64 / 2 = 2^63, which is the bit pattern i64::MIN in the low word
+    // with a zero high word. Exercises the division across a word
+    // boundary with an unsigned dividend larger than a single word.
+    assert_eq!(
+        run_to_int(
+            "fn main() -> Word { let a = (0, 1) as Multiword<2>; let b = (2, 0) as Multiword<2>; let s = a / b; s[1] }"
+        ),
+        0
+    );
+    assert_eq!(
+        run_to_int(
+            "fn main() -> Word { let a = (0, 1) as Multiword<2>; let b = (2, 0) as Multiword<2>; let s = a / b; s[0] }"
+        ),
+        i64::MIN
+    );
+}
+
+#[test]
+fn multiword_div_negative_dividend() {
+    // -100 / 7 = -14 (toward zero); -100 % 7 = -2 (sign of dividend).
+    assert_eq!(
+        run_to_int(
+            "fn main() -> Word { let a = (-100, -1) as Multiword<2>; let b = (7, 0) as Multiword<2>; let s = a / b; s[0] }"
+        ),
+        -14
+    );
+    assert_eq!(
+        run_to_int(
+            "fn main() -> Word { let a = (-100, -1) as Multiword<2>; let b = (7, 0) as Multiword<2>; let s = a % b; s[0] }"
+        ),
+        -2
+    );
+}
+
+#[test]
+fn multiword_div_negative_divisor() {
+    // 100 / -7 = -14; 100 % -7 = 2 (remainder keeps the dividend's sign).
+    assert_eq!(
+        run_to_int(
+            "fn main() -> Word { let a = (100, 0) as Multiword<2>; let b = (-7, -1) as Multiword<2>; let s = a / b; s[0] }"
+        ),
+        -14
+    );
+    assert_eq!(
+        run_to_int(
+            "fn main() -> Word { let a = (100, 0) as Multiword<2>; let b = (-7, -1) as Multiword<2>; let s = a % b; s[0] }"
+        ),
+        2
+    );
+}
+
+#[test]
+fn multiword_div_both_negative() {
+    // -100 / -7 = 14; -100 % -7 = -2.
+    assert_eq!(
+        run_to_int(
+            "fn main() -> Word { let a = (-100, -1) as Multiword<2>; let b = (-7, -1) as Multiword<2>; let s = a / b; s[0] }"
+        ),
+        14
+    );
+    assert_eq!(
+        run_to_int(
+            "fn main() -> Word { let a = (-100, -1) as Multiword<2>; let b = (-7, -1) as Multiword<2>; let s = a % b; s[0] }"
+        ),
+        -2
+    );
+}
+
+#[test]
+fn multiword_div_three_word() {
+    // (0, 0, 6) is 6 * 2^128; divided by (3, 0, 0) = 3 gives 2 * 2^128,
+    // so the high word of the quotient is 2 and the rest zero.
+    let base =
+        "let a = (0, 0, 6) as Multiword<3>; let b = (3, 0, 0) as Multiword<3>; let s = a / b;";
+    assert_eq!(
+        run_to_int(&format!("fn main() -> Word {{ {} s[2] }}", base)),
+        2
+    );
+    assert_eq!(
+        run_to_int(&format!("fn main() -> Word {{ {} s[0] }}", base)),
+        0
+    );
+}
+
+#[test]
+fn multiword_div_by_zero_traps() {
+    // A zero divisor traps at runtime as a division by zero, the same
+    // bounded fault as the scalar integer divide.
+    assert!(run_traps(
+        "fn main() -> Word { let a = (100, 0) as Multiword<2>; let b = (0, 0) as Multiword<2>; let s = a / b; s[0] }"
+    ));
+    assert!(run_traps(
+        "fn main() -> Word { let a = (100, 0) as Multiword<2>; let b = (0, 0) as Multiword<2>; let s = a % b; s[0] }"
+    ));
+}
+
+#[test]
+fn multiword_fixed_point_divide_is_rejected_for_now() {
+    // Integer divide and modulo (F = 0) are implemented; the fixed-point
+    // divide (F > 0) is a later increment and must be rejected rather
+    // than accepted and mis-lowered.
+    assert!(compile_fails(
+        "fn main() -> Word { let a = (1, 0) as Multiword<2, 16>; let b = (1, 0) as Multiword<2, 16>; let s = a / b; s[0] }"
+    ));
+    assert!(compile_fails(
+        "fn main() -> Word { let a = (1, 0) as Multiword<2, 16>; let b = (1, 0) as Multiword<2, 16>; let s = a % b; s[0] }"
     ));
 }
 

@@ -989,6 +989,10 @@ fn compile_multiword_binop(
         // multiply (F > 0) forms the full product and shifts it right by F.
         BinOp::Mul if f == 0 => compile_multiword_mul(fc, left, right, n),
         BinOp::Mul => compile_multiword_fixed_mul(fc, left, right, n, f),
+        // Integer divide and modulo (F = 0). The fixed-point divide is a
+        // later increment (rejected at the type checker).
+        BinOp::Div => compile_multiword_div(fc, left, right, n, false),
+        BinOp::Mod => compile_multiword_div(fc, left, right, n, true),
         BinOp::Eq | BinOp::NotEq | BinOp::Lt | BinOp::Gt | BinOp::LtEq | BinOp::GtEq => {
             compile_multiword_compare(fc, op, left, right, n)
         }
@@ -1780,6 +1784,281 @@ fn compile_multiword_fixed_mul(
     }
     for &rk in &rwords {
         fc.emit(Op::GetLocal(rk));
+    }
+    fc.emit(Op::NewComposite(NewCompositeOperand::Flat {
+        kind: crate::value_layout::CompositeKind::Array,
+        count: n,
+        byte_size,
+    }));
+    Ok(())
+}
+
+/// Conditionally two's-complement negate the N-word value in `words` in
+/// place (B19 phase 4). The `mask` local is all ones to negate and zero
+/// to leave the value unchanged, so a caller passes a sign mask to make a
+/// negate-if-negative. Negation is `~x + 1`, so the words are XORed with
+/// the mask and then `mask & 1` is added through with carry.
+#[allow(clippy::too_many_arguments)]
+fn emit_multiword_cond_negate(
+    fc: &mut FuncCompiler,
+    words: &[u16],
+    mask: u16,
+    n: u16,
+    neg1: u16,
+    shift_c: u16,
+    one: u16,
+) {
+    let carry = fc.declare_local("__mw_cn_c");
+    let t = fc.declare_local("__mw_cn_t");
+    let s = fc.declare_local("__mw_cn_s");
+    let bo = fc.declare_local("__mw_cn_bo");
+    fc.emit(Op::GetLocal(mask));
+    fc.emit(Op::Const(one));
+    fc.emit(Op::BitAnd);
+    fc.emit(Op::SetLocal(carry));
+    for &w in words.iter().take(n as usize) {
+        fc.emit(Op::GetLocal(w));
+        fc.emit(Op::GetLocal(mask));
+        fc.emit(Op::BitXor);
+        fc.emit(Op::SetLocal(t));
+        fc.emit(Op::GetLocal(t));
+        fc.emit(Op::GetLocal(carry));
+        fc.emit(Op::CheckedAdd);
+        fc.emit(Op::PopN(2));
+        fc.emit(Op::SetLocal(s));
+        emit_limb_carry(fc, false, t, carry, s, neg1, shift_c, one);
+        fc.emit(Op::SetLocal(bo));
+        fc.emit(Op::GetLocal(s));
+        fc.emit(Op::SetLocal(w));
+        fc.emit(Op::GetLocal(bo));
+        fc.emit(Op::SetLocal(carry));
+    }
+}
+
+/// Compile an integer `Multiword<N>` divide (`is_mod` false) or modulo
+/// (`is_mod` true), fraction-bit count F = 0 (B19 phase 4a).
+///
+/// Division is signed with truncation toward zero, matching the scalar
+/// `Word` division: the quotient takes the sign of the operand-sign
+/// exclusive-or and the remainder takes the sign of the dividend. The
+/// operands are reduced to their magnitudes, an unsigned division runs,
+/// and the sign is reapplied. A zero divisor traps as a division by
+/// zero, reusing the scalar `Op::Div` trap.
+///
+/// The unsigned core is branchless binary long division. The constrained
+/// instruction set has no mutable array indexing, so every word and bit
+/// index must be a compile-time constant, which the bit loop is unrolled
+/// to provide. Each of the N*word_bits bit-steps shifts the running
+/// remainder left by one and injects the next dividend bit, tentatively
+/// subtracts the divisor, and uses the subtraction's final borrow both as
+/// the `remainder < divisor` test and as the mask that either keeps the
+/// old remainder (borrow) or takes the difference (no borrow) and sets
+/// the corresponding quotient bit. Because the loop is unrolled, a word
+/// count whose bit total is impractically large is rejected.
+fn compile_multiword_div(
+    fc: &mut FuncCompiler,
+    left: &Expr,
+    right: &Expr,
+    n: u16,
+    is_mod: bool,
+) -> Result<(), CompileError> {
+    let word_bits = (fc.type_info.word_bytes * 8) as i64;
+    // The bit loop unrolls to N * word_bits steps; bound it so a single
+    // division cannot emit an unreasonable amount of code. The limit
+    // admits the practical word counts (N up to eight at a 64-bit word,
+    // up to thirty-two at a 16-bit word) and rejects only values so wide
+    // the unrolling would be impractical.
+    let bit_count = n as u128 * word_bits as u128;
+    if bit_count > 512 {
+        return Err(CompileError {
+            message: alloc::format!(
+                "Multiword<{}> division at a {}-bit word unrolls to {} bit-steps, beyond the compiler's limit; reduce the word count",
+                n,
+                word_bits,
+                bit_count
+            ),
+            span: left.span(),
+        });
+    }
+    let byte_size = flat_alloc_bytes(&TypeExpr::Multiword(n, 0, Span::default()), &fc.type_info)
+        .unwrap_or_else(|| conservative_alloc_bytes(n));
+    let word_ty = TypeExpr::Prim(PrimType::Word, Span::default());
+    let elem_op = array_elem_operand(Some(&word_ty), &fc.type_info);
+    let neg1 = fc.add_constant(Value::Int(-1));
+    let one = fc.add_constant(Value::Int(1));
+    let zero = fc.add_constant(Value::Int(0));
+    let shift_c = fc.add_constant(Value::Int(word_bits - 1));
+    let av = fc.declare_local("__mw_a");
+    let bv = fc.declare_local("__mw_b");
+    compile_expr(fc, left)?;
+    fc.emit(Op::SetLocal(av));
+    compile_expr(fc, right)?;
+    fc.emit(Op::SetLocal(bv));
+    // Load operand words. `adig` becomes |a| and `bdig` becomes |b| below.
+    let mut adig: alloc::vec::Vec<u16> = alloc::vec::Vec::new();
+    let mut bdig: alloc::vec::Vec<u16> = alloc::vec::Vec::new();
+    for i in 0..n {
+        let idx_c = fc.add_constant(Value::Int(i as i64));
+        let ai = fc.declare_local("__mw_ai");
+        fc.emit(Op::GetLocal(av));
+        fc.emit(Op::Const(idx_c));
+        fc.emit(Op::GetIndex(elem_op));
+        fc.emit(Op::SetLocal(ai));
+        adig.push(ai);
+        let bj = fc.declare_local("__mw_bj");
+        fc.emit(Op::GetLocal(bv));
+        fc.emit(Op::Const(idx_c));
+        fc.emit(Op::GetIndex(elem_op));
+        fc.emit(Op::SetLocal(bj));
+        bdig.push(bj);
+    }
+    // Divide-by-zero guard: 1 / (OR of divisor words) traps exactly when
+    // the divisor is all zeros, reusing the scalar zero-divisor trap.
+    let b_or = fc.declare_local("__mw_bor");
+    fc.emit(Op::GetLocal(bdig[0]));
+    for w in bdig.iter().skip(1) {
+        fc.emit(Op::GetLocal(*w));
+        fc.emit(Op::BitOr);
+    }
+    fc.emit(Op::SetLocal(b_or));
+    fc.emit(Op::Const(one));
+    fc.emit(Op::GetLocal(b_or));
+    fc.emit(Op::Div);
+    fc.emit(Op::PopN(1));
+    // Sign masks (all ones when negative) and magnitudes.
+    let sign_a = fc.declare_local("__mw_sga");
+    let sign_b = fc.declare_local("__mw_sgb");
+    fc.emit(Op::GetLocal(adig[(n - 1) as usize]));
+    fc.emit(Op::Const(shift_c));
+    fc.emit(Op::Shr);
+    fc.emit(Op::SetLocal(sign_a));
+    fc.emit(Op::GetLocal(bdig[(n - 1) as usize]));
+    fc.emit(Op::Const(shift_c));
+    fc.emit(Op::Shr);
+    fc.emit(Op::SetLocal(sign_b));
+    emit_multiword_cond_negate(fc, &adig, sign_a, n, neg1, shift_c, one);
+    emit_multiword_cond_negate(fc, &bdig, sign_b, n, neg1, shift_c, one);
+    // Remainder R, quotient Q, and reused scratch temporaries.
+    let mut rword: alloc::vec::Vec<u16> = alloc::vec::Vec::new();
+    let mut qword: alloc::vec::Vec<u16> = alloc::vec::Vec::new();
+    let mut tent: alloc::vec::Vec<u16> = alloc::vec::Vec::new();
+    for _ in 0..n {
+        let rk = fc.declare_local("__mw_rr");
+        fc.emit(Op::Const(zero));
+        fc.emit(Op::SetLocal(rk));
+        rword.push(rk);
+        let qk = fc.declare_local("__mw_qq");
+        fc.emit(Op::Const(zero));
+        fc.emit(Op::SetLocal(qk));
+        qword.push(qk);
+        tent.push(fc.declare_local("__mw_tt"));
+    }
+    let s1 = fc.declare_local("__mw_ds1");
+    let s2 = fc.declare_local("__mw_ds2");
+    let bo1 = fc.declare_local("__mw_dbo1");
+    let bo2 = fc.declare_local("__mw_dbo2");
+    let borrow = fc.declare_local("__mw_dbor");
+    let mask = fc.declare_local("__mw_dmask");
+    let notmask = fc.declare_local("__mw_dnmask");
+    // Bit loop from the most significant dividend bit down.
+    for i in (0..bit_count).rev() {
+        let wi = (i / word_bits as u128) as usize;
+        let bp = (i % word_bits as u128) as i64;
+        let bp_c = fc.add_constant(Value::Int(bp));
+        // Shift R left by one, injecting bit i of |a| into bit 0.
+        for j in (1..n as usize).rev() {
+            fc.emit(Op::GetLocal(rword[j]));
+            fc.emit(Op::Const(one));
+            fc.emit(Op::Shl);
+            fc.emit(Op::GetLocal(rword[j - 1]));
+            fc.emit(Op::Const(shift_c));
+            fc.emit(Op::Shr);
+            fc.emit(Op::Const(one));
+            fc.emit(Op::BitAnd);
+            fc.emit(Op::BitOr);
+            fc.emit(Op::SetLocal(rword[j]));
+        }
+        fc.emit(Op::GetLocal(rword[0]));
+        fc.emit(Op::Const(one));
+        fc.emit(Op::Shl);
+        fc.emit(Op::GetLocal(adig[wi]));
+        fc.emit(Op::Const(bp_c));
+        fc.emit(Op::Shr);
+        fc.emit(Op::Const(one));
+        fc.emit(Op::BitAnd);
+        fc.emit(Op::BitOr);
+        fc.emit(Op::SetLocal(rword[0]));
+        // tentative = R - |b|, tracking the final borrow.
+        fc.emit(Op::Const(zero));
+        fc.emit(Op::SetLocal(borrow));
+        for j in 0..n as usize {
+            fc.emit(Op::GetLocal(rword[j]));
+            fc.emit(Op::GetLocal(bdig[j]));
+            fc.emit(Op::CheckedSub);
+            fc.emit(Op::PopN(2));
+            fc.emit(Op::SetLocal(s1));
+            emit_limb_carry(fc, true, rword[j], bdig[j], s1, neg1, shift_c, one);
+            fc.emit(Op::SetLocal(bo1));
+            fc.emit(Op::GetLocal(s1));
+            fc.emit(Op::GetLocal(borrow));
+            fc.emit(Op::CheckedSub);
+            fc.emit(Op::PopN(2));
+            fc.emit(Op::SetLocal(s2));
+            emit_limb_carry(fc, true, s1, borrow, s2, neg1, shift_c, one);
+            fc.emit(Op::SetLocal(bo2));
+            fc.emit(Op::GetLocal(s2));
+            fc.emit(Op::SetLocal(tent[j]));
+            fc.emit(Op::GetLocal(bo1));
+            fc.emit(Op::GetLocal(bo2));
+            fc.emit(Op::BitOr);
+            fc.emit(Op::SetLocal(borrow));
+        }
+        // mask = 0 - borrow (all ones when R < |b|); notmask = ~mask.
+        fc.emit(Op::Const(zero));
+        fc.emit(Op::GetLocal(borrow));
+        fc.emit(Op::CheckedSub);
+        fc.emit(Op::PopN(2));
+        fc.emit(Op::SetLocal(mask));
+        fc.emit(Op::GetLocal(mask));
+        fc.emit(Op::Const(neg1));
+        fc.emit(Op::BitXor);
+        fc.emit(Op::SetLocal(notmask));
+        // R = borrow ? R : tentative.
+        for j in 0..n as usize {
+            fc.emit(Op::GetLocal(rword[j]));
+            fc.emit(Op::GetLocal(mask));
+            fc.emit(Op::BitAnd);
+            fc.emit(Op::GetLocal(tent[j]));
+            fc.emit(Op::GetLocal(notmask));
+            fc.emit(Op::BitAnd);
+            fc.emit(Op::BitOr);
+            fc.emit(Op::SetLocal(rword[j]));
+        }
+        // Quotient bit i is 1 when the subtraction succeeded (no borrow).
+        fc.emit(Op::GetLocal(qword[wi]));
+        fc.emit(Op::GetLocal(borrow));
+        fc.emit(Op::Const(one));
+        fc.emit(Op::BitXor);
+        fc.emit(Op::Const(bp_c));
+        fc.emit(Op::Shl);
+        fc.emit(Op::BitOr);
+        fc.emit(Op::SetLocal(qword[wi]));
+    }
+    // Reapply the sign and select the quotient or the remainder.
+    let result = if is_mod {
+        emit_multiword_cond_negate(fc, &rword, sign_a, n, neg1, shift_c, one);
+        rword
+    } else {
+        let qsign = fc.declare_local("__mw_qsg");
+        fc.emit(Op::GetLocal(sign_a));
+        fc.emit(Op::GetLocal(sign_b));
+        fc.emit(Op::BitXor);
+        fc.emit(Op::SetLocal(qsign));
+        emit_multiword_cond_negate(fc, &qword, qsign, n, neg1, shift_c, one);
+        qword
+    };
+    for &w in &result {
+        fc.emit(Op::GetLocal(w));
     }
     fc.emit(Op::NewComposite(NewCompositeOperand::Flat {
         kind: crate::value_layout::CompositeKind::Array,

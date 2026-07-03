@@ -682,3 +682,45 @@ fn narrow_multiword_fixed_mul_negative() {
         -1_i16
     );
 }
+
+#[test]
+fn narrow_multiword_div_and_mod() {
+    // 100 / 7 = 14, 100 % 7 = 2 at the i16 word width.
+    assert_eq!(
+        run_i16(
+            "fn main() -> Word { let a = (100, 0) as Multiword<2>; let b = (7, 0) as Multiword<2>; let s = a / b; s[0] }"
+        ),
+        14_i16
+    );
+    assert_eq!(
+        run_i16(
+            "fn main() -> Word { let a = (100, 0) as Multiword<2>; let b = (7, 0) as Multiword<2>; let s = a % b; s[0] }"
+        ),
+        2_i16
+    );
+    // -100 / 7 = -14, sign handling at the narrow width.
+    assert_eq!(
+        run_i16(
+            "fn main() -> Word { let a = (-100, -1) as Multiword<2>; let b = (7, 0) as Multiword<2>; let s = a / b; s[0] }"
+        ),
+        -14_i16
+    );
+}
+
+#[test]
+fn narrow_multiword_div_spans_two_words() {
+    // 2^16 / 2 = 2^15, the bit pattern i16::MIN in the low word with a
+    // zero high word.
+    assert_eq!(
+        run_i16(
+            "fn main() -> Word { let a = (0, 1) as Multiword<2>; let b = (2, 0) as Multiword<2>; let s = a / b; s[1] }"
+        ),
+        0_i16
+    );
+    assert_eq!(
+        run_i16(
+            "fn main() -> Word { let a = (0, 1) as Multiword<2>; let b = (2, 0) as Multiword<2>; let s = a / b; s[0] }"
+        ),
+        i16::MIN
+    );
+}
