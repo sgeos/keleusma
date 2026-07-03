@@ -650,3 +650,35 @@ fn narrow_multiword_mul_rejects_word_count_that_overflows_accumulator() {
     let ok_program = parse(&ok_tokens).expect("parse");
     assert!(compile_with_target(&ok_program, &Target::embedded_16()).is_ok());
 }
+
+#[test]
+fn narrow_multiword_fixed_mul_positive() {
+    // Q8.8 at i16: 1.5 = 384, 2.0 = 512, product 3.0 = 768. The raw
+    // product 3 * 2^16 is shifted right by F = 8 to 768. Confirms the
+    // sub-word shift and its logical-shift mask at a 16-bit word.
+    assert_eq!(
+        run_i16(
+            "fn main() -> Word { let a = (384, 0) as Multiword<2, 8>; let b = (512, 0) as Multiword<2, 8>; let s = a * b; s[0] }"
+        ),
+        768_i16
+    );
+}
+
+#[test]
+fn narrow_multiword_fixed_mul_negative() {
+    // Q8.8 at i16: -1.5 = (-384, -1), times 2.0 = 512, product -3.0 =
+    // (-768, -1). Exercises the product-level signed correction and the
+    // arithmetic shift at the narrow width.
+    assert_eq!(
+        run_i16(
+            "fn main() -> Word { let a = (-384, -1) as Multiword<2, 8>; let b = (512, 0) as Multiword<2, 8>; let s = a * b; s[0] }"
+        ),
+        -768_i16
+    );
+    assert_eq!(
+        run_i16(
+            "fn main() -> Word { let a = (-384, -1) as Multiword<2, 8>; let b = (512, 0) as Multiword<2, 8>; let s = a * b; s[1] }"
+        ),
+        -1_i16
+    );
+}

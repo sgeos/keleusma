@@ -513,13 +513,125 @@ fn multiword_mul_is_commutative() {
 }
 
 #[test]
-fn multiword_fixed_point_multiply_is_rejected_for_now() {
-    // Integer multiply (F = 0) is implemented; the fixed-point multiply
-    // (F > 0), which shifts the product right by F, is a later increment
-    // and must be rejected at compile time rather than accepted then
-    // mis-lowered.
+fn multiword_fixed_point_multiply_small_scale() {
+    // Q112.16: 1.0 = 2^16 = 65536, 2.0 = 131072, product 2.0 = 131072.
+    // The raw product 2^33 is shifted right by F = 16 to 2^17 = 131072.
+    assert_eq!(
+        run_to_int(
+            "fn main() -> Word { let a = (65536, 0) as Multiword<2, 16>; let b = (131072, 0) as Multiword<2, 16>; let s = a * b; s[0] }"
+        ),
+        131072
+    );
+}
+
+// --- Phase 3b: fixed-point multiply (F > 0). The result is the full
+// 2N-word signed product shifted right by F, truncated to N words. Raw
+// words are written directly; a Multiword<2, F> value v represents
+// (v[1] * 2^64 + v[0]) / 2^F on the default 64-bit runtime (B19). ---
+
+#[test]
+fn multiword_fixed_mul_integer_scale() {
+    // Q64.64: a = (0, 2) is 2.0, b = (0, 3) is 3.0, product 6.0 = (0, 6).
+    // F = 64 is a whole-word shift (q = 1, r = 0).
+    assert_eq!(
+        run_to_int(
+            "fn main() -> Word { let a = (0, 2) as Multiword<2, 64>; let b = (0, 3) as Multiword<2, 64>; let s = a * b; s[0] }"
+        ),
+        0
+    );
+    assert_eq!(
+        run_to_int(
+            "fn main() -> Word { let a = (0, 2) as Multiword<2, 64>; let b = (0, 3) as Multiword<2, 64>; let s = a * b; s[1] }"
+        ),
+        6
+    );
+}
+
+#[test]
+fn multiword_fixed_mul_bit_scale() {
+    // Q96.32: 1.5 = 1.5 * 2^32 = 6442450944, 2.0 = 8589934592, product
+    // 3.0 = 3 * 2^32 = 12884901888. F = 32 is a sub-word shift (r = 32).
+    assert_eq!(
+        run_to_int(
+            "fn main() -> Word { let a = (6442450944, 0) as Multiword<2, 32>; let b = (8589934592, 0) as Multiword<2, 32>; let s = a * b; s[0] }"
+        ),
+        12884901888
+    );
+    assert_eq!(
+        run_to_int(
+            "fn main() -> Word { let a = (6442450944, 0) as Multiword<2, 32>; let b = (8589934592, 0) as Multiword<2, 32>; let s = a * b; s[1] }"
+        ),
+        0
+    );
+}
+
+#[test]
+fn multiword_fixed_mul_fractional_result() {
+    // Q96.32: 0.5 = 2^31 = 2147483648, squared is 0.25 = 2^30 =
+    // 1073741824. The product's fractional bits are shifted back down.
+    assert_eq!(
+        run_to_int(
+            "fn main() -> Word { let a = (2147483648, 0) as Multiword<2, 32>; let b = (2147483648, 0) as Multiword<2, 32>; let s = a * b; s[0] }"
+        ),
+        1073741824
+    );
+}
+
+#[test]
+fn multiword_fixed_mul_negative() {
+    // Q64.64: -2.0 = (0, -2), times 3.0 = (0, 3), product -6.0 = (0, -6).
+    // Exercises the product-level signed correction on one negative
+    // operand.
+    assert_eq!(
+        run_to_int(
+            "fn main() -> Word { let a = (0, -2) as Multiword<2, 64>; let b = (0, 3) as Multiword<2, 64>; let s = a * b; s[0] }"
+        ),
+        0
+    );
+    assert_eq!(
+        run_to_int(
+            "fn main() -> Word { let a = (0, -2) as Multiword<2, 64>; let b = (0, 3) as Multiword<2, 64>; let s = a * b; s[1] }"
+        ),
+        -6
+    );
+}
+
+#[test]
+fn multiword_fixed_mul_both_negative() {
+    // Q64.64: (-2.0) * (-3.0) = 6.0 = (0, 6). Both product-level
+    // corrections apply and cancel the spurious high bits.
+    assert_eq!(
+        run_to_int(
+            "fn main() -> Word { let a = (0, -2) as Multiword<2, 64>; let b = (0, -3) as Multiword<2, 64>; let s = a * b; s[1] }"
+        ),
+        6
+    );
+    assert_eq!(
+        run_to_int(
+            "fn main() -> Word { let a = (0, -2) as Multiword<2, 64>; let b = (0, -3) as Multiword<2, 64>; let s = a * b; s[0] }"
+        ),
+        0
+    );
+}
+
+#[test]
+fn multiword_fixed_mul_at_bound_compiles() {
+    // F = N * word_bits = 128 is the maximum admissible fraction-bit
+    // count for Multiword<2> on the 64-bit runtime; it must compile.
+    assert_eq!(
+        run_to_int(
+            "fn main() -> Word { let a = (0, 0) as Multiword<2, 128>; let b = (0, 0) as Multiword<2, 128>; let s = a * b; s[0] }"
+        ),
+        0
+    );
+}
+
+#[test]
+fn multiword_fixed_mul_over_bound_rejected() {
+    // F greater than N * word_bits (128 for Multiword<2> on 64-bit) has
+    // more fraction bits than the value can hold and is rejected.
     assert!(compile_fails(
-        "fn main() -> Word { let a = (1, 0) as Multiword<2, 16>; let b = (1, 0) as Multiword<2, 16>; let s = a * b; s[0] }"
+        "fn main() -> Word { let a = (1, 0) as Multiword<2, 200>; let b = (1, 0) as Multiword<2, 200>; let s = a * b; s[0] }"
     ));
 }
 

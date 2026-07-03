@@ -979,12 +979,16 @@ fn compile_multiword_binop(
     left: &Expr,
     right: &Expr,
     n: u16,
+    f: u16,
 ) -> Result<(), CompileError> {
     use crate::ast::BinOp;
     match op {
         BinOp::Add => compile_multiword_add_sub(fc, left, right, n, false),
         BinOp::Sub => compile_multiword_add_sub(fc, left, right, n, true),
-        BinOp::Mul => compile_multiword_mul(fc, left, right, n),
+        // Integer multiply (F = 0) truncates to N words; the fixed-point
+        // multiply (F > 0) forms the full product and shifts it right by F.
+        BinOp::Mul if f == 0 => compile_multiword_mul(fc, left, right, n),
+        BinOp::Mul => compile_multiword_fixed_mul(fc, left, right, n, f),
         BinOp::Eq | BinOp::NotEq | BinOp::Lt | BinOp::Gt | BinOp::LtEq | BinOp::GtEq => {
             compile_multiword_compare(fc, op, left, right, n)
         }
@@ -1476,6 +1480,301 @@ fn compile_multiword_mul(
         fc.emit(Op::SetLocal(acc_lo));
         fc.emit(Op::Const(zero));
         fc.emit(Op::SetLocal(acc_hi));
+    }
+    for &rk in &rwords {
+        fc.emit(Op::GetLocal(rk));
+    }
+    fc.emit(Op::NewComposite(NewCompositeOperand::Flat {
+        kind: crate::value_layout::CompositeKind::Array,
+        count: n,
+        byte_size,
+    }));
+    Ok(())
+}
+
+/// Subtract the N-word vector `dig[i] & mask` from the high N words
+/// `pwords[N + i]` in place, propagating an unsigned borrow through the
+/// high half (B19 phase 3b). When `mask` is all zeros the subtraction is
+/// a no-op, so a caller gates a conditional correction by passing the
+/// arithmetic-shift sign mask of an operand. A borrow out of the top
+/// word is dropped, which is correct because the product-level
+/// correction only ever cancels the spurious high bits of the unsigned
+/// product.
+#[allow(clippy::too_many_arguments)]
+fn emit_multiword_highword_subtract(
+    fc: &mut FuncCompiler,
+    pwords: &[u16],
+    dig: &[u16],
+    mask: u16,
+    n: u16,
+    neg1: u16,
+    shift_c: u16,
+    one: u16,
+) {
+    let zero = fc.add_constant(Value::Int(0));
+    let borrow = fc.declare_local("__mw_hb");
+    let term = fc.declare_local("__mw_ht");
+    let s1 = fc.declare_local("__mw_hs1");
+    let s2 = fc.declare_local("__mw_hs2");
+    let bo1 = fc.declare_local("__mw_hbo1");
+    let bo2 = fc.declare_local("__mw_hbo2");
+    fc.emit(Op::Const(zero));
+    fc.emit(Op::SetLocal(borrow));
+    for i in 0..n as usize {
+        let hi_word = pwords[n as usize + i];
+        // term = dig[i] & mask
+        fc.emit(Op::GetLocal(dig[i]));
+        fc.emit(Op::GetLocal(mask));
+        fc.emit(Op::BitAnd);
+        fc.emit(Op::SetLocal(term));
+        // s1 = hi_word - term, wrapping; bo1 = borrow out.
+        fc.emit(Op::GetLocal(hi_word));
+        fc.emit(Op::GetLocal(term));
+        fc.emit(Op::CheckedSub);
+        fc.emit(Op::PopN(2));
+        fc.emit(Op::SetLocal(s1));
+        emit_limb_carry(fc, true, hi_word, term, s1, neg1, shift_c, one);
+        fc.emit(Op::SetLocal(bo1));
+        // s2 = s1 - borrow, wrapping; bo2 = borrow out.
+        fc.emit(Op::GetLocal(s1));
+        fc.emit(Op::GetLocal(borrow));
+        fc.emit(Op::CheckedSub);
+        fc.emit(Op::PopN(2));
+        fc.emit(Op::SetLocal(s2));
+        emit_limb_carry(fc, true, s1, borrow, s2, neg1, shift_c, one);
+        fc.emit(Op::SetLocal(bo2));
+        // hi_word = s2; borrow = bo1 | bo2 (at most one is set).
+        fc.emit(Op::GetLocal(s2));
+        fc.emit(Op::SetLocal(hi_word));
+        fc.emit(Op::GetLocal(bo1));
+        fc.emit(Op::GetLocal(bo2));
+        fc.emit(Op::BitOr);
+        fc.emit(Op::SetLocal(borrow));
+    }
+}
+
+/// Compile a fixed-point `Multiword<N, F>` multiply (F > 0) as the full
+/// 2N-word product shifted right by F, truncated to N words (B19 phase
+/// 3b). Two same-scale operands `a` and `b` represent `a / 2^F` and
+/// `b / 2^F`, so their product represents `a * b / 2^(2F)`, and the raw
+/// result that represents `(a / 2^F) * (b / 2^F)` is `(a * b) >> F`.
+///
+/// The full product is formed in three steps. First the unsigned 2N-word
+/// product of the two operands' bit patterns is accumulated by column
+/// (the same Comba scheme and per-digit unsigned-high correction as the
+/// integer multiply, but over all 2N columns rather than the low N).
+/// Second the unsigned product is corrected to the signed product by
+/// `S = U - 2^(N*word_bits) * (a * [b < 0] + b * [a < 0])`, realised as
+/// two conditional in-place subtractions from the high N words gated by
+/// each operand's sign mask. Third `S` is shifted right by F with an
+/// arithmetic (sign-extending) shift and the low N words are taken.
+///
+/// The shift splits F into a word offset `q = F / word_bits` and a bit
+/// offset `r = F % word_bits`. For `r == 0` each result word is a shifted
+/// word of `S`; otherwise result word k is
+/// `logical_shr(S[k+q], r) | (S[k+q+1] << (word_bits - r))`, the logical
+/// right shift synthesised as an arithmetic shift masked to the low
+/// `word_bits - r` bits since `Op::Shr` is arithmetic. Words at or beyond
+/// index 2N read the arithmetic sign-extension of the top product word.
+fn compile_multiword_fixed_mul(
+    fc: &mut FuncCompiler,
+    left: &Expr,
+    right: &Expr,
+    n: u16,
+    f: u16,
+) -> Result<(), CompileError> {
+    let word_bits = (fc.type_info.word_bytes * 8) as i64;
+    // Fraction-bit bound: F must fit within the N-word value.
+    let total_bits = n as u128 * word_bits as u128;
+    if f as u128 > total_bits {
+        return Err(CompileError {
+            message: alloc::format!(
+                "Multiword<{}, {}> declares more fraction bits than the {}-bit N-word width holds",
+                n,
+                f,
+                total_bits
+            ),
+            span: left.span(),
+        });
+    }
+    // Guard the two-word column accumulator (see the integer multiply).
+    let column_modulus = 1u128 << (word_bits as u32);
+    if 2u128 * n as u128 + 1 >= column_modulus {
+        return Err(CompileError {
+            message: alloc::format!(
+                "Multiword<{}> multiply exceeds the multi-word accumulator capacity at a {}-bit word; reduce the word count",
+                n,
+                word_bits
+            ),
+            span: left.span(),
+        });
+    }
+    let byte_size = flat_alloc_bytes(&TypeExpr::Multiword(n, 0, Span::default()), &fc.type_info)
+        .unwrap_or_else(|| conservative_alloc_bytes(n));
+    let word_ty = TypeExpr::Prim(PrimType::Word, Span::default());
+    let elem_op = array_elem_operand(Some(&word_ty), &fc.type_info);
+    let neg1 = fc.add_constant(Value::Int(-1));
+    let one = fc.add_constant(Value::Int(1));
+    let zero = fc.add_constant(Value::Int(0));
+    let shift_c = fc.add_constant(Value::Int(word_bits - 1));
+    let av = fc.declare_local("__mw_a");
+    let bv = fc.declare_local("__mw_b");
+    compile_expr(fc, left)?;
+    fc.emit(Op::SetLocal(av));
+    compile_expr(fc, right)?;
+    fc.emit(Op::SetLocal(bv));
+    // Load every operand word into its own local.
+    let mut adig: alloc::vec::Vec<u16> = alloc::vec::Vec::new();
+    let mut bdig: alloc::vec::Vec<u16> = alloc::vec::Vec::new();
+    for i in 0..n {
+        let idx_c = fc.add_constant(Value::Int(i as i64));
+        let ai = fc.declare_local("__mw_ai");
+        fc.emit(Op::GetLocal(av));
+        fc.emit(Op::Const(idx_c));
+        fc.emit(Op::GetIndex(elem_op));
+        fc.emit(Op::SetLocal(ai));
+        adig.push(ai);
+        let bj = fc.declare_local("__mw_bj");
+        fc.emit(Op::GetLocal(bv));
+        fc.emit(Op::Const(idx_c));
+        fc.emit(Op::GetIndex(elem_op));
+        fc.emit(Op::SetLocal(bj));
+        bdig.push(bj);
+    }
+    let hs = fc.declare_local("__mw_hs");
+    // Unsigned digit products (low, corrected high) for every pair; the
+    // full product keeps all N*N of them.
+    let mut prods: alloc::vec::Vec<(u16, u16, u16, u16)> = alloc::vec::Vec::new();
+    for i in 0..n {
+        for j in 0..n {
+            let lo = fc.declare_local("__mw_plo");
+            let hi = fc.declare_local("__mw_phi");
+            fc.emit(Op::GetLocal(adig[i as usize]));
+            fc.emit(Op::GetLocal(bdig[j as usize]));
+            fc.emit(Op::CheckedMul(0));
+            fc.emit(Op::PopN(1));
+            fc.emit(Op::SetLocal(hs));
+            fc.emit(Op::SetLocal(lo));
+            // uhi = signed_high + (a[i] & signmask(b[j])) + (b[j] & signmask(a[i]))
+            fc.emit(Op::GetLocal(hs));
+            fc.emit(Op::GetLocal(adig[i as usize]));
+            fc.emit(Op::GetLocal(bdig[j as usize]));
+            fc.emit(Op::Const(shift_c));
+            fc.emit(Op::Shr);
+            fc.emit(Op::BitAnd);
+            fc.emit(Op::CheckedAdd);
+            fc.emit(Op::PopN(2));
+            fc.emit(Op::GetLocal(bdig[j as usize]));
+            fc.emit(Op::GetLocal(adig[i as usize]));
+            fc.emit(Op::Const(shift_c));
+            fc.emit(Op::Shr);
+            fc.emit(Op::BitAnd);
+            fc.emit(Op::CheckedAdd);
+            fc.emit(Op::PopN(2));
+            fc.emit(Op::SetLocal(hi));
+            prods.push((i, j, lo, hi));
+        }
+    }
+    // Accumulate the full 2N-word unsigned product by column.
+    let two_n = 2 * n as usize;
+    let acc_lo = fc.declare_local("__mw_acc_lo");
+    let acc_hi = fc.declare_local("__mw_acc_hi");
+    let tmp_s = fc.declare_local("__mw_tmp_s");
+    let carry = fc.declare_local("__mw_carry");
+    fc.emit(Op::Const(zero));
+    fc.emit(Op::SetLocal(acc_lo));
+    fc.emit(Op::Const(zero));
+    fc.emit(Op::SetLocal(acc_hi));
+    let mut pwords: alloc::vec::Vec<u16> = alloc::vec::Vec::new();
+    for k in 0..two_n {
+        let mut terms: alloc::vec::Vec<u16> = alloc::vec::Vec::new();
+        for &(i, j, lo, hi) in &prods {
+            if i as usize + j as usize == k {
+                terms.push(lo);
+            }
+            if k > 0 && i as usize + j as usize == k - 1 {
+                terms.push(hi);
+            }
+        }
+        for v in terms {
+            fc.emit(Op::GetLocal(acc_lo));
+            fc.emit(Op::GetLocal(v));
+            fc.emit(Op::CheckedAdd);
+            fc.emit(Op::PopN(2));
+            fc.emit(Op::SetLocal(tmp_s));
+            emit_limb_carry(fc, false, acc_lo, v, tmp_s, neg1, shift_c, one);
+            fc.emit(Op::SetLocal(carry));
+            fc.emit(Op::GetLocal(tmp_s));
+            fc.emit(Op::SetLocal(acc_lo));
+            fc.emit(Op::GetLocal(acc_hi));
+            fc.emit(Op::GetLocal(carry));
+            fc.emit(Op::CheckedAdd);
+            fc.emit(Op::PopN(2));
+            fc.emit(Op::SetLocal(acc_hi));
+        }
+        let pk = fc.declare_local("__mw_p");
+        fc.emit(Op::GetLocal(acc_lo));
+        fc.emit(Op::SetLocal(pk));
+        pwords.push(pk);
+        fc.emit(Op::GetLocal(acc_hi));
+        fc.emit(Op::SetLocal(acc_lo));
+        fc.emit(Op::Const(zero));
+        fc.emit(Op::SetLocal(acc_hi));
+    }
+    // Correct the unsigned product to the signed product: subtract a from
+    // the high words when b is negative, and b when a is negative.
+    let a_neg = fc.declare_local("__mw_aneg");
+    let b_neg = fc.declare_local("__mw_bneg");
+    fc.emit(Op::GetLocal(adig[(n - 1) as usize]));
+    fc.emit(Op::Const(shift_c));
+    fc.emit(Op::Shr);
+    fc.emit(Op::SetLocal(a_neg));
+    fc.emit(Op::GetLocal(bdig[(n - 1) as usize]));
+    fc.emit(Op::Const(shift_c));
+    fc.emit(Op::Shr);
+    fc.emit(Op::SetLocal(b_neg));
+    emit_multiword_highword_subtract(fc, &pwords, &adig, b_neg, n, neg1, shift_c, one);
+    emit_multiword_highword_subtract(fc, &pwords, &bdig, a_neg, n, neg1, shift_c, one);
+    // Arithmetic-shift the signed 2N-word product right by F and take the
+    // low N words.
+    let sign_word = fc.declare_local("__mw_signw");
+    fc.emit(Op::GetLocal(pwords[two_n - 1]));
+    fc.emit(Op::Const(shift_c));
+    fc.emit(Op::Shr);
+    fc.emit(Op::SetLocal(sign_word));
+    let q = (f as usize) / (word_bits as usize);
+    let r = (f as usize) % (word_bits as usize);
+    let pword = |m: usize| -> u16 { if m < two_n { pwords[m] } else { sign_word } };
+    let mut rwords: alloc::vec::Vec<u16> = alloc::vec::Vec::new();
+    let (r_c, wr_c, mask_c) = if r != 0 {
+        let mask = ((1i128 << (word_bits as i128 - r as i128)) - 1) as i64;
+        (
+            Some(fc.add_constant(Value::Int(r as i64))),
+            Some(fc.add_constant(Value::Int(word_bits - r as i64))),
+            Some(fc.add_constant(Value::Int(mask))),
+        )
+    } else {
+        (None, None, None)
+    };
+    for k in 0..n as usize {
+        let rk = fc.declare_local("__mw_r");
+        if r == 0 {
+            fc.emit(Op::GetLocal(pword(k + q)));
+        } else {
+            // logical_shr(S[k+q], r) = (S[k+q] >>a r) & mask
+            fc.emit(Op::GetLocal(pword(k + q)));
+            fc.emit(Op::Const(r_c.unwrap()));
+            fc.emit(Op::Shr);
+            fc.emit(Op::Const(mask_c.unwrap()));
+            fc.emit(Op::BitAnd);
+            // | (S[k+q+1] << (word_bits - r))
+            fc.emit(Op::GetLocal(pword(k + q + 1)));
+            fc.emit(Op::Const(wr_c.unwrap()));
+            fc.emit(Op::Shl);
+            fc.emit(Op::BitOr);
+        }
+        fc.emit(Op::SetLocal(rk));
+        rwords.push(rk);
     }
     for &rk in &rwords {
         fc.emit(Op::GetLocal(rk));
@@ -6834,9 +7133,9 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
             let operand_ty = infer_expr_type(fc, left).or_else(|| infer_expr_type(fc, right));
             // Multiword<N> operators lower to unrolled per-limb cascades
             // over the existing checked-word and bitwise opcodes (B19).
-            if let Some(TypeExpr::Multiword(n, _, _)) = &operand_ty {
-                let n = *n;
-                return compile_multiword_binop(fc, *op, left, right, n);
+            if let Some(TypeExpr::Multiword(n, f, _)) = &operand_ty {
+                let (n, f) = (*n, *f);
+                return compile_multiword_binop(fc, *op, left, right, n, f);
             }
             let left_fixed_n = match &operand_ty {
                 Some(TypeExpr::Prim(PrimType::Fixed(n), _)) => {

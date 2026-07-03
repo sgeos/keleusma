@@ -3597,21 +3597,11 @@ fn type_of_expr_inner(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError>
                 }
                 let bare = match op {
                     BinOp::Add | BinOp::Sub => Type::Multiword(*ln, *lf),
-                    // Integer multiply is scale-preserving with F = 0. The
-                    // fixed-point multiply, which shifts the product right
-                    // by F, is a later increment and is rejected here so
-                    // the surface never accepts what the compiler cannot
-                    // yet lower.
-                    BinOp::Mul if *lf == 0 => Type::Multiword(*ln, 0),
-                    BinOp::Mul => {
-                        return Err(TypeError::new(
-                            format!(
-                                "{} multiply is a later increment; only integer multiply (F = 0) is implemented",
-                                lt.display()
-                            ),
-                            *span,
-                        ));
-                    }
+                    // Multiply is scale-preserving in the type: the integer
+                    // case (F = 0) truncates to N words and the fixed-point
+                    // case (F > 0) shifts the double-width product right by
+                    // F, both yielding a Multiword<N, F>.
+                    BinOp::Mul => Type::Multiword(*ln, *lf),
                     BinOp::Eq
                     | BinOp::NotEq
                     | BinOp::Lt
