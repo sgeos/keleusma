@@ -906,6 +906,31 @@ fn multiword_fixed_div_by_zero_traps() {
 }
 
 #[test]
+fn multiword_fixed_div_truncates_toward_zero() {
+    // The fixed-point divide truncates toward zero, matching the scalar
+    // Fixed divide (which computes (x << F) / y with Rust's truncating
+    // division), not toward negative infinity. Q60.4: -1.0 = raw -16,
+    // 3.0 = raw 48, exact ratio -1/3 = -0.333. The raw result is
+    // (16 << 4) / 48 = 256 / 48 = 5 in magnitude, sign-reapplied to -5,
+    // representing -0.3125, the truncated-toward-zero value; a floor
+    // would give -6 (-0.375).
+    assert_eq!(
+        run_to_int(
+            "fn main() -> Word { let a = Multiword::<1, 4>(0 - 16); let b = Multiword::<1, 4>(48); let s = a / b; s[0] }"
+        ),
+        -5
+    );
+    // The positive counterpart truncates the same way: 1.0 / 3.0 raw is
+    // 5, representing 0.3125.
+    assert_eq!(
+        run_to_int(
+            "fn main() -> Word { let a = Multiword::<1, 4>(16); let b = Multiword::<1, 4>(48); let s = a / b; s[0] }"
+        ),
+        5
+    );
+}
+
+#[test]
 fn multiword_nested_operations_do_not_alias_scratch_locals() {
     // Each lowered operation declares its own scratch locals, and
     // declare_local hands out a fresh slot every call, so a nested
