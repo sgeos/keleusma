@@ -584,3 +584,41 @@ fn narrow_multiword_compare_high_word_signed_low_word_unsigned() {
         "fn main() -> bool { let a = (-1, 0) as Multiword<2>; let b = (1, 0) as Multiword<2>; a > b }"
     ));
 }
+
+#[test]
+fn narrow_multiword_mul_unsigned_high_correction() {
+    // At i16, low word -1 is 0xFFFF = 65_535 unsigned. (-1, 0) * (2, 0)
+    // is the unsigned product 131_070, whose low two 16-bit words are
+    // (-2, 1). Exercises the signed-to-unsigned high-word correction and
+    // the i16 widening path of Op::CheckedMul.
+    assert_eq!(
+        run_i16(
+            "fn main() -> Word { let a = (-1, 0) as Multiword<2>; let b = (2, 0) as Multiword<2>; let s = a * b; s[0] }"
+        ),
+        -2_i16
+    );
+    assert_eq!(
+        run_i16(
+            "fn main() -> Word { let a = (-1, 0) as Multiword<2>; let b = (2, 0) as Multiword<2>; let s = a * b; s[1] }"
+        ),
+        1_i16
+    );
+}
+
+#[test]
+fn narrow_multiword_mul_carry_into_high_word() {
+    // 300 * 300 = 90_000 exceeds 2^16, so the low digit product carries
+    // 1 into result word 1; the low word is 90_000 mod 2^16 = 24_464.
+    assert_eq!(
+        run_i16(
+            "fn main() -> Word { let a = (300, 0) as Multiword<2>; let b = (300, 0) as Multiword<2>; let s = a * b; s[0] }"
+        ),
+        24_464_i16
+    );
+    assert_eq!(
+        run_i16(
+            "fn main() -> Word { let a = (300, 0) as Multiword<2>; let b = (300, 0) as Multiword<2>; let s = a * b; s[1] }"
+        ),
+        1_i16
+    );
+}

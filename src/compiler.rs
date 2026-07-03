@@ -984,6 +984,7 @@ fn compile_multiword_binop(
     match op {
         BinOp::Add => compile_multiword_add_sub(fc, left, right, n, false),
         BinOp::Sub => compile_multiword_add_sub(fc, left, right, n, true),
+        BinOp::Mul => compile_multiword_mul(fc, left, right, n),
         BinOp::Eq | BinOp::NotEq | BinOp::Lt | BinOp::Gt | BinOp::LtEq | BinOp::GtEq => {
             compile_multiword_compare(fc, op, left, right, n)
         }
@@ -1090,12 +1091,12 @@ fn compile_multiword_add_sub(
         // x = a[i]
         fc.emit(Op::GetLocal(av));
         fc.emit(Op::Const(idx_c));
-        fc.emit(Op::GetIndex(elem_op.clone()));
+        fc.emit(Op::GetIndex(elem_op));
         fc.emit(Op::SetLocal(xi));
         // y = b[i]
         fc.emit(Op::GetLocal(bv));
         fc.emit(Op::Const(idx_c));
-        fc.emit(Op::GetIndex(elem_op.clone()));
+        fc.emit(Op::GetIndex(elem_op));
         fc.emit(Op::SetLocal(yi));
         // s1 = x (op) y, wrapping; discard the high word and flag.
         fc.emit(Op::GetLocal(xi));
@@ -1204,7 +1205,7 @@ fn compile_multiword_compare(
         // x = a[i], sign-flipped for the signed top limb.
         fc.emit(Op::GetLocal(av));
         fc.emit(Op::Const(idx_c));
-        fc.emit(Op::GetIndex(elem_op.clone()));
+        fc.emit(Op::GetIndex(elem_op));
         if is_top {
             fc.emit(Op::Const(sign));
             fc.emit(Op::BitXor);
@@ -1213,7 +1214,7 @@ fn compile_multiword_compare(
         // y = b[i], sign-flipped for the signed top limb.
         fc.emit(Op::GetLocal(bv));
         fc.emit(Op::Const(idx_c));
-        fc.emit(Op::GetIndex(elem_op.clone()));
+        fc.emit(Op::GetIndex(elem_op));
         if is_top {
             fc.emit(Op::Const(sign));
             fc.emit(Op::BitXor);
@@ -1298,6 +1299,173 @@ fn compile_multiword_compare(
         }
         _ => unreachable!("compile_multiword_compare called with a non-comparison operator"),
     }
+    Ok(())
+}
+
+/// Compile an integer `Multiword<N>` multiply (fraction-bit count F = 0)
+/// as an unrolled schoolbook product truncated to N words (B19 phase 3a).
+///
+/// The result is `(a * b) mod 2^(N*word_bits)`, the low N words of the
+/// full product. Two's-complement multiplication truncated to the low N
+/// words equals the unsigned multiplication of the same bit patterns
+/// truncated to N words, so the digits are treated as unsigned magnitudes
+/// throughout and the top word's sign takes care of itself.
+///
+/// Each word-by-word partial product needs the unsigned double-word
+/// result. `Op::CheckedMul` computes the signed widening product and
+/// returns the signed high word, so the high word is corrected to the
+/// unsigned high word by the identity
+///   unsigned_high = signed_high + (x < 0 ? y : 0) + (y < 0 ? x : 0)
+/// evaluated mod 2^word_bits, where the conditional add is done
+/// branch-free with the arithmetic-shift sign mask `w >> (word_bits - 1)`.
+/// The low word is the same for the signed and unsigned interpretations.
+///
+/// Partial products are summed by column (the Comba scheme): for output
+/// word k, every low word at digit position k and every corrected high
+/// word at position k - 1 is added into a two-word accumulator, the low
+/// word of which becomes result word k before the accumulator is shifted
+/// down one word for the next column. The two-word accumulator is
+/// sufficient while the number of terms per column stays below 2^word_bits,
+/// which holds for every N admitted here.
+fn compile_multiword_mul(
+    fc: &mut FuncCompiler,
+    left: &Expr,
+    right: &Expr,
+    n: u16,
+) -> Result<(), CompileError> {
+    let word_bits = (fc.type_info.word_bytes * 8) as i64;
+    let byte_size = flat_alloc_bytes(&TypeExpr::Multiword(n, 0, Span::default()), &fc.type_info)
+        .unwrap_or_else(|| conservative_alloc_bytes(n));
+    let word_ty = TypeExpr::Prim(PrimType::Word, Span::default());
+    let elem_op = array_elem_operand(Some(&word_ty), &fc.type_info);
+    let neg1 = fc.add_constant(Value::Int(-1));
+    let one = fc.add_constant(Value::Int(1));
+    let zero = fc.add_constant(Value::Int(0));
+    let shift_c = fc.add_constant(Value::Int(word_bits - 1));
+    let av = fc.declare_local("__mw_a");
+    let bv = fc.declare_local("__mw_b");
+    compile_expr(fc, left)?;
+    fc.emit(Op::SetLocal(av));
+    compile_expr(fc, right)?;
+    fc.emit(Op::SetLocal(bv));
+    // Load every operand word into its own local.
+    let mut adig: alloc::vec::Vec<u16> = alloc::vec::Vec::new();
+    let mut bdig: alloc::vec::Vec<u16> = alloc::vec::Vec::new();
+    for i in 0..n {
+        let idx_c = fc.add_constant(Value::Int(i as i64));
+        let ai = fc.declare_local("__mw_ai");
+        fc.emit(Op::GetLocal(av));
+        fc.emit(Op::Const(idx_c));
+        fc.emit(Op::GetIndex(elem_op));
+        fc.emit(Op::SetLocal(ai));
+        adig.push(ai);
+        let bj = fc.declare_local("__mw_bj");
+        fc.emit(Op::GetLocal(bv));
+        fc.emit(Op::Const(idx_c));
+        fc.emit(Op::GetIndex(elem_op));
+        fc.emit(Op::SetLocal(bj));
+        bdig.push(bj);
+    }
+    let hs = fc.declare_local("__mw_hs");
+    // Unsigned digit products (low, corrected high) for every pair whose
+    // low word lands within the truncated result, that is i + j <= N - 1.
+    // Stored as (i, j, lo_local, hi_local).
+    let mut prods: alloc::vec::Vec<(u16, u16, u16, u16)> = alloc::vec::Vec::new();
+    for i in 0..n {
+        for j in 0..n {
+            if i as u32 + j as u32 > (n - 1) as u32 {
+                continue;
+            }
+            let lo = fc.declare_local("__mw_plo");
+            let hi = fc.declare_local("__mw_phi");
+            // (low, signed_high, flag) = a[i] * b[j]; drop the flag.
+            fc.emit(Op::GetLocal(adig[i as usize]));
+            fc.emit(Op::GetLocal(bdig[j as usize]));
+            fc.emit(Op::CheckedMul(0));
+            fc.emit(Op::PopN(1));
+            fc.emit(Op::SetLocal(hs));
+            fc.emit(Op::SetLocal(lo));
+            // uhi = signed_high + (a[i] & signmask(b[j])) + (b[j] & signmask(a[i]))
+            fc.emit(Op::GetLocal(hs));
+            fc.emit(Op::GetLocal(adig[i as usize]));
+            fc.emit(Op::GetLocal(bdig[j as usize]));
+            fc.emit(Op::Const(shift_c));
+            fc.emit(Op::Shr);
+            fc.emit(Op::BitAnd);
+            fc.emit(Op::CheckedAdd);
+            fc.emit(Op::PopN(2));
+            fc.emit(Op::GetLocal(bdig[j as usize]));
+            fc.emit(Op::GetLocal(adig[i as usize]));
+            fc.emit(Op::Const(shift_c));
+            fc.emit(Op::Shr);
+            fc.emit(Op::BitAnd);
+            fc.emit(Op::CheckedAdd);
+            fc.emit(Op::PopN(2));
+            fc.emit(Op::SetLocal(hi));
+            prods.push((i, j, lo, hi));
+        }
+    }
+    // Column accumulation with a two-word accumulator.
+    let acc_lo = fc.declare_local("__mw_acc_lo");
+    let acc_hi = fc.declare_local("__mw_acc_hi");
+    let tmp_s = fc.declare_local("__mw_tmp_s");
+    let carry = fc.declare_local("__mw_carry");
+    fc.emit(Op::Const(zero));
+    fc.emit(Op::SetLocal(acc_lo));
+    fc.emit(Op::Const(zero));
+    fc.emit(Op::SetLocal(acc_hi));
+    let mut rwords: alloc::vec::Vec<u16> = alloc::vec::Vec::new();
+    for k in 0..n {
+        // The terms for column k are every low word at digit position k
+        // and every corrected high word at position k - 1.
+        let mut terms: alloc::vec::Vec<u16> = alloc::vec::Vec::new();
+        for &(i, j, lo, hi) in &prods {
+            if i as u32 + j as u32 == k as u32 {
+                terms.push(lo);
+            }
+            if k > 0 && i as u32 + j as u32 == (k - 1) as u32 {
+                terms.push(hi);
+            }
+        }
+        for v in terms {
+            // tmp_s = acc_lo + v, wrapping.
+            fc.emit(Op::GetLocal(acc_lo));
+            fc.emit(Op::GetLocal(v));
+            fc.emit(Op::CheckedAdd);
+            fc.emit(Op::PopN(2));
+            fc.emit(Op::SetLocal(tmp_s));
+            // carry = unsigned carry out of that add (acc_lo still old).
+            emit_limb_carry(fc, false, acc_lo, v, tmp_s, neg1, shift_c, one);
+            fc.emit(Op::SetLocal(carry));
+            fc.emit(Op::GetLocal(tmp_s));
+            fc.emit(Op::SetLocal(acc_lo));
+            // acc_hi += carry, wrapping (acc_hi never overflows for
+            // admitted N, so the carry out here is discarded).
+            fc.emit(Op::GetLocal(acc_hi));
+            fc.emit(Op::GetLocal(carry));
+            fc.emit(Op::CheckedAdd);
+            fc.emit(Op::PopN(2));
+            fc.emit(Op::SetLocal(acc_hi));
+        }
+        // Result word k is the accumulator low word.
+        let rk = fc.declare_local("__mw_r");
+        fc.emit(Op::GetLocal(acc_lo));
+        fc.emit(Op::SetLocal(rk));
+        rwords.push(rk);
+        // Shift the accumulator down one word for the next column.
+        fc.emit(Op::GetLocal(acc_hi));
+        fc.emit(Op::SetLocal(acc_lo));
+        fc.emit(Op::Const(zero));
+        fc.emit(Op::SetLocal(acc_hi));
+    }
+    for &rk in &rwords {
+        fc.emit(Op::GetLocal(rk));
+    }
+    fc.emit(Op::NewComposite(NewCompositeOperand::Flat {
+        kind: crate::value_layout::CompositeKind::Array,
+        count: n,
+        byte_size,
+    }));
     Ok(())
 }
 

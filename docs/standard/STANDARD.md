@@ -432,10 +432,13 @@ Division by zero is the same bounded fault as for the word-width integer.
 **Note.** The multi-word family is partially implemented, and its completion is a
 known non-conformance per Annex A. The type, its construction and indexing, its
 scale-independent addition and subtraction with the correct unsigned carry and
-borrow, and the six comparison operators are implemented. The comparison orders a
-value by its most significant differing word, the top word read signed and the
-lower words read unsigned. The fixed-point multiply and divide and the shifts are
-pending, and general const generics remain a separate feature.
+borrow, the six comparison operators, and the integer multiply (fraction-bit count
+F equal to zero) are implemented. The comparison orders a value by its most
+significant differing word, the top word read signed and the lower words read
+unsigned. The integer multiply is the low-N-word two's-complement product computed
+as an unsigned schoolbook product with a signed-to-unsigned high-word correction
+per digit product. The fixed-point multiply (F greater than zero), the divide, and
+the shifts are pending, and general const generics remain a separate feature.
 
 #### 5.1.3 Composite kinds
 
@@ -1159,9 +1162,10 @@ this document.
    the single largest verifier work item.
 2. The multi-word fixed-point family of Standard 5.1.2 is partially implemented. The
    type `Multiword<N>` and `Multiword<N, F>`, its construction and indexing, its
-   scale-independent addition and subtraction, and the six comparison operators are
-   implemented. The fixed-point multiply and divide and the shifts are pending, and
-   general const generics remain a separate feature.
+   scale-independent addition and subtraction, the six comparison operators, and the
+   integer multiply (F equal to zero) are implemented. The fixed-point multiply (F
+   greater than zero), the divide, and the shifts are pending, and general const
+   generics remain a separate feature.
 3. The instruction count in prior project documents was recorded as 66. The instruction
    set is 67, because the `SetDataComposite` opcode at identifier 70 is implemented,
    dispatched, and verified but was undocumented. The issuing authority reconciles the

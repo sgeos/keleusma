@@ -3579,9 +3579,11 @@ fn type_of_expr_inner(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError>
                 .collect();
             let lt = strip_labels(lt_raw);
             let rt = strip_labels(rt_raw);
-            // Multiword<N> arithmetic and comparison. Add and Sub are
-            // implemented (phase 2); multiply, divide, modulo, and the
-            // shifts are later phases (B19). Both operands must share N.
+            // Multiword<N, F> arithmetic and comparison. Add, Sub, and the
+            // six comparisons are implemented (phase 2); integer multiply
+            // (F = 0) is implemented (phase 3a). Fixed-point multiply
+            // (F > 0), divide, modulo, and the shifts are later phases
+            // (B19). Both operands must share N and F.
             if let (Type::Multiword(ln, lf), Type::Multiword(rn, rf)) = (&lt, &rt) {
                 if ln != rn || lf != rf {
                     return Err(TypeError::new(
@@ -3595,6 +3597,21 @@ fn type_of_expr_inner(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError>
                 }
                 let bare = match op {
                     BinOp::Add | BinOp::Sub => Type::Multiword(*ln, *lf),
+                    // Integer multiply is scale-preserving with F = 0. The
+                    // fixed-point multiply, which shifts the product right
+                    // by F, is a later increment and is rejected here so
+                    // the surface never accepts what the compiler cannot
+                    // yet lower.
+                    BinOp::Mul if *lf == 0 => Type::Multiword(*ln, 0),
+                    BinOp::Mul => {
+                        return Err(TypeError::new(
+                            format!(
+                                "{} multiply is a later increment; only integer multiply (F = 0) is implemented",
+                                lt.display()
+                            ),
+                            *span,
+                        ));
+                    }
                     BinOp::Eq
                     | BinOp::NotEq
                     | BinOp::Lt

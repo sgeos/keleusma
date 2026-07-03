@@ -337,6 +337,164 @@ fn multiword_fixed_point_add_same_scale() {
     );
 }
 
+// --- Phase 3a: integer multiply (F = 0). The result is the low N words
+// of the two's-complement product, computed as an unsigned schoolbook
+// product with a signed-to-unsigned high-word correction per digit
+// product (B19). ---
+
+#[test]
+fn multiword_mul_small_no_carry() {
+    assert_eq!(
+        run_to_int(
+            "fn main() -> Word { let a = (6, 0) as Multiword<2>; let b = (7, 0) as Multiword<2>; let s = a * b; s[0] }"
+        ),
+        42
+    );
+    assert_eq!(
+        run_to_int(
+            "fn main() -> Word { let a = (6, 0) as Multiword<2>; let b = (7, 0) as Multiword<2>; let s = a * b; s[1] }"
+        ),
+        0
+    );
+}
+
+#[test]
+fn multiword_mul_cross_term_into_high_word() {
+    // (3, 5) is 5 * 2^64 + 3; times 7 is 35 * 2^64 + 21, so the high
+    // digit's partial product lands in result word 1.
+    assert_eq!(
+        run_to_int(
+            "fn main() -> Word { let a = (3, 5) as Multiword<2>; let b = (7, 0) as Multiword<2>; let s = a * b; s[0] }"
+        ),
+        21
+    );
+    assert_eq!(
+        run_to_int(
+            "fn main() -> Word { let a = (3, 5) as Multiword<2>; let b = (7, 0) as Multiword<2>; let s = a * b; s[1] }"
+        ),
+        35
+    );
+}
+
+#[test]
+fn multiword_mul_high_word_carry_from_digit_product() {
+    // 5_000_000_000 squared is 2.5e19, which exceeds 2^64, so the low
+    // digit product carries a 1 into result word 1. Low word is
+    // 25e18 mod 2^64 = 6553255926290448384.
+    assert_eq!(
+        run_to_int(
+            "fn main() -> Word { let a = (5000000000, 0) as Multiword<2>; let b = (5000000000, 0) as Multiword<2>; let s = a * b; s[0] }"
+        ),
+        6553255926290448384
+    );
+    assert_eq!(
+        run_to_int(
+            "fn main() -> Word { let a = (5000000000, 0) as Multiword<2>; let b = (5000000000, 0) as Multiword<2>; let s = a * b; s[1] }"
+        ),
+        1
+    );
+}
+
+#[test]
+fn multiword_mul_unsigned_high_correction() {
+    // The low word -1 is 2^64 - 1 unsigned. Multiplying (-1, 0) by
+    // (2, 0) gives the unsigned product (2^64 - 1) * 2 = 2^65 - 2, whose
+    // low two words are (-2, 1). This requires the signed-to-unsigned
+    // high-word correction: the raw signed high of (-1) * 2 is -1, which
+    // would give a wrong high word; the correction yields the right high
+    // word 1, and the low word is -2.
+    assert_eq!(
+        run_to_int(
+            "fn main() -> Word { let a = (-1, 0) as Multiword<2>; let b = (2, 0) as Multiword<2>; let s = a * b; s[0] }"
+        ),
+        -2
+    );
+    assert_eq!(
+        run_to_int(
+            "fn main() -> Word { let a = (-1, 0) as Multiword<2>; let b = (2, 0) as Multiword<2>; let s = a * b; s[1] }"
+        ),
+        1
+    );
+}
+
+#[test]
+fn multiword_mul_negative_value() {
+    // (-1, -1) is the two's-complement value -1; times 2 is -2, whose
+    // two-word representation is (-2, -1). Exercises the multiply on a
+    // genuinely negative multi-word value.
+    assert_eq!(
+        run_to_int(
+            "fn main() -> Word { let a = (-1, -1) as Multiword<2>; let b = (2, 0) as Multiword<2>; let s = a * b; s[0] }"
+        ),
+        -2
+    );
+    assert_eq!(
+        run_to_int(
+            "fn main() -> Word { let a = (-1, -1) as Multiword<2>; let b = (2, 0) as Multiword<2>; let s = a * b; s[1] }"
+        ),
+        -1
+    );
+}
+
+#[test]
+fn multiword_mul_identity_and_zero() {
+    assert_eq!(
+        run_to_int(
+            "fn main() -> Word { let a = (123, 456) as Multiword<2>; let b = (1, 0) as Multiword<2>; let s = a * b; s[0] + s[1] }"
+        ),
+        579
+    );
+    assert_eq!(
+        run_to_int(
+            "fn main() -> Word { let a = (123, 456) as Multiword<2>; let b = (0, 0) as Multiword<2>; let s = a * b; s[0] + s[1] }"
+        ),
+        0
+    );
+}
+
+#[test]
+fn multiword_mul_three_word_scalar() {
+    // (2, 3, 4) times the scalar (5, 0, 0) multiplies each digit by 5
+    // with no carry, giving (10, 15, 20).
+    let base =
+        "let a = (2, 3, 4) as Multiword<3>; let b = (5, 0, 0) as Multiword<3>; let s = a * b;";
+    assert_eq!(
+        run_to_int(&format!("fn main() -> Word {{ {} s[0] }}", base)),
+        10
+    );
+    assert_eq!(
+        run_to_int(&format!("fn main() -> Word {{ {} s[1] }}", base)),
+        15
+    );
+    assert_eq!(
+        run_to_int(&format!("fn main() -> Word {{ {} s[2] }}", base)),
+        20
+    );
+}
+
+#[test]
+fn multiword_mul_is_commutative() {
+    // a * b and b * a produce the same low word.
+    let ab = run_to_int(
+        "fn main() -> Word { let a = (7, 11) as Multiword<2>; let b = (13, 3) as Multiword<2>; let s = a * b; s[0] + s[1] }",
+    );
+    let ba = run_to_int(
+        "fn main() -> Word { let a = (7, 11) as Multiword<2>; let b = (13, 3) as Multiword<2>; let s = b * a; s[0] + s[1] }",
+    );
+    assert_eq!(ab, ba);
+}
+
+#[test]
+fn multiword_fixed_point_multiply_is_rejected_for_now() {
+    // Integer multiply (F = 0) is implemented; the fixed-point multiply
+    // (F > 0), which shifts the product right by F, is a later increment
+    // and must be rejected at compile time rather than accepted then
+    // mis-lowered.
+    assert!(compile_fails(
+        "fn main() -> Word { let a = (1, 0) as Multiword<2, 16>; let b = (1, 0) as Multiword<2, 16>; let s = a * b; s[0] }"
+    ));
+}
+
 #[test]
 fn multiword_nested_operations_do_not_alias_scratch_locals() {
     // Each lowered operation declares its own scratch locals, and
