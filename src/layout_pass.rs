@@ -132,6 +132,10 @@ impl<'a> LayoutContext<'a> {
         match ty {
             TypeExpr::Unit(_) => Ok(LayoutDescriptor::Scalar(ScalarKind::Unit)),
             TypeExpr::Prim(prim, _) => Ok(LayoutDescriptor::Scalar(scalar_kind_for_prim(*prim))),
+            TypeExpr::Multiword(n, _) => Ok(LayoutDescriptor::Array {
+                element: Box::new(LayoutDescriptor::Scalar(ScalarKind::Int)),
+                count: *n as usize,
+            }),
             TypeExpr::Tuple(elems, _) => {
                 let mut layouts = Vec::with_capacity(elems.len());
                 for elem in elems {

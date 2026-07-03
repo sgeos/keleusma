@@ -86,6 +86,9 @@ fn zero_value_at(
     match ty {
         TypeExpr::Unit(_) => Ok(ConstValue::Unit),
         TypeExpr::Prim(p, _) => Ok(zero_prim(p)),
+        TypeExpr::Multiword(n, _) => Ok(ConstValue::Array(
+            alloc::vec![zero_prim(&crate::ast::PrimType::Word); *n as usize],
+        )),
         TypeExpr::Option(_, _) => Ok(ConstValue::None),
         TypeExpr::Tuple(elems, _) => {
             let mut out = Vec::with_capacity(elems.len());

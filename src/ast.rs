@@ -997,6 +997,12 @@ pub enum TypeExpr {
     Tuple(Vec<TypeExpr>, Span),
     /// Array type: `[T; N]`.
     Array(Box<TypeExpr>, i64, Span),
+    /// Fixed-width multi-word integer type: `Multiword<N>`, N words
+    /// wide, little-endian signed two's complement. The digit count N
+    /// is a positive integer literal validated at parse time. Distinct
+    /// nominal type; its runtime representation is a flat array of N
+    /// words (B19).
+    Multiword(u16, Span),
     /// Option type: `Option<T>`.
     Option(Box<TypeExpr>, Span),
     /// Unit type: `()`.
@@ -1040,6 +1046,7 @@ impl TypeExpr {
             | TypeExpr::Named(_, _, span)
             | TypeExpr::Tuple(_, span)
             | TypeExpr::Array(_, _, span)
+            | TypeExpr::Multiword(_, span)
             | TypeExpr::Option(_, span)
             | TypeExpr::Unit(span)
             | TypeExpr::Labelled(_, _, span) => *span,

@@ -100,6 +100,10 @@ pub enum Type {
     Tuple(Vec<Type>),
     /// Fixed-length array.
     Array(Box<Type>, i64),
+    /// Fixed-width multi-word integer, `Multiword<N>`, N words wide,
+    /// little-endian signed two's complement. Distinct nominal type;
+    /// its runtime representation is a flat array of N words (B19).
+    Multiword(u16),
     /// Option of a type.
     Option(Box<Type>),
     /// Named struct with optional generic type arguments. Empty
@@ -192,6 +196,7 @@ impl Type {
                 )),
                 *len,
             ),
+            TypeExpr::Multiword(words, _) => Type::Multiword(*words),
             TypeExpr::Option(inner, _) => {
                 Type::Option(Box::new(Type::from_expr_with_params_and_frac(
                     inner,
@@ -291,6 +296,7 @@ impl Type {
                 format!("({})", inner.join(", "))
             }
             Type::Array(elem, n) => format!("[{}; {}]", elem.display(), n),
+            Type::Multiword(n) => format!("Multiword<{}>", n),
             Type::Option(inner) => format!("Option<{}>", inner.display()),
             Type::Struct(name, args) | Type::Enum(name, args) => {
                 if args.is_empty() {
@@ -471,6 +477,16 @@ pub fn unify(a: &Type, b: &Type, subst: &mut Subst) -> Result<(), UnifyError> {
                 Err(UnifyError::Mismatch {
                     left: Type::Fixed(a_n),
                     right: Type::Fixed(b_n),
+                })
+            }
+        }
+        (Type::Multiword(a_n), Type::Multiword(b_n)) => {
+            if a_n == b_n {
+                Ok(())
+            } else {
+                Err(UnifyError::Mismatch {
+                    left: Type::Multiword(a_n),
+                    right: Type::Multiword(b_n),
                 })
             }
         }
@@ -746,6 +762,7 @@ fn validate_no_nested_negative_labels(
             validate_no_nested_negative_labels(inner, false)
         }
         TypeExpr::Labelled(inner, _, _) => validate_no_nested_negative_labels(inner, false),
+        TypeExpr::Multiword(_, _) => Ok(()),
         TypeExpr::Tuple(items, _) => {
             for item in items {
                 validate_no_nested_negative_labels(item, false)?;
@@ -806,6 +823,7 @@ fn type_head_name(t: &Type) -> Option<String> {
         Type::Str => Some("Text".to_string()),
         Type::Tuple(_) => Some("tuple".to_string()),
         Type::Array(_, _) => Some("array".to_string()),
+        Type::Multiword(_) => Some("Multiword".to_string()),
         Type::Option(_) => Some("Option".to_string()),
         Type::Struct(name, _) | Type::Enum(name, _) | Type::Opaque(name) => Some(name.clone()),
         Type::Newtype(name) => Some(name.clone()),
@@ -1269,6 +1287,7 @@ fn type_to_expr_full(ty: &Type, span: crate::token::Span) -> Option<TypeExpr> {
             TypeExpr::Tuple(elems, span)
         }
         Type::Array(elem, n) => TypeExpr::Array(Box::new(type_to_expr_full(elem, span)?), *n, span),
+        Type::Multiword(n) => TypeExpr::Multiword(*n, span),
         Type::Option(inner) => TypeExpr::Option(Box::new(type_to_expr_full(inner, span)?), span),
         Type::Struct(name, _) | Type::Enum(name, _) | Type::Newtype(name) | Type::Opaque(name) => {
             TypeExpr::Named(name.clone(), Vec::new(), span)
@@ -1749,6 +1768,7 @@ fn run_check(program: &mut Program, mut ctx: Ctx) -> Result<(), TypeError> {
             Type::Str => "Text".to_string(),
             Type::Tuple(_) => "tuple".to_string(),
             Type::Array(_, _) => "array".to_string(),
+            Type::Multiword(n) => alloc::format!("Multiword<{}>", n),
             Type::Option(_) => "Option".to_string(),
             Type::Struct(name, _) | Type::Enum(name, _) | Type::Opaque(name) => name,
             Type::Newtype(name) => name,
@@ -1950,6 +1970,7 @@ fn run_check(program: &mut Program, mut ctx: Ctx) -> Result<(), TypeError> {
             Type::Str => "Text".to_string(),
             Type::Tuple(_) => "tuple".to_string(),
             Type::Array(_, _) => "array".to_string(),
+            Type::Multiword(n) => alloc::format!("Multiword<{}>", n),
             Type::Option(_) => "Option".to_string(),
             Type::Struct(name, _) | Type::Enum(name, _) | Type::Opaque(name) => name,
             Type::Newtype(name) => name,

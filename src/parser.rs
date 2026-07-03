@@ -2295,6 +2295,30 @@ impl<'a> Parser<'a> {
             self.pos += 1;
             return Ok(TypeExpr::Prim(PrimType::Float, span));
         }
+        // Multiword<N>: fixed-width multi-word integer, N words wide.
+        // N is a positive integer literal validated here (B19).
+        if self.at_upper("Multiword") {
+            self.pos += 1;
+            self.expect(&TokenKind::Lt)?;
+            let tok = self.tokens[self.pos].clone();
+            let words = match tok.kind {
+                TokenKind::IntLit(n) => {
+                    if !(1..=65535).contains(&n) {
+                        return Err(self
+                            .error("Multiword<N> word count must be in the range [1, 65535]"));
+                    }
+                    self.pos += 1;
+                    n as u16
+                }
+                _ => {
+                    return Err(
+                        self.error("expected integer literal for Multiword<N> word count")
+                    );
+                }
+            };
+            let end = self.expect(&TokenKind::Gt)?;
+            return Ok(TypeExpr::Multiword(words, merge_spans(span, end)));
+        }
 
         // Check for Text (upper ident). Keleusma's surface text type
         // is named `Text` to avoid confusion with Rust's `String`.

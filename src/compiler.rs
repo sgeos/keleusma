@@ -329,6 +329,7 @@ fn render_type_expr(ty: &TypeExpr) -> String {
             PrimType::Fixed(None) => String::from("Fixed"),
             PrimType::Fixed(Some(n)) => alloc::format!("Fixed<{}>", n),
         },
+        TypeExpr::Multiword(n, _) => alloc::format!("Multiword<{}>", n),
         TypeExpr::Named(name, args, _) => {
             if args.is_empty() {
                 name.clone()
@@ -2328,6 +2329,7 @@ fn type_expr_head_name(t: &TypeExpr) -> String {
             PrimType::Text => String::from("Text"),
         },
         TypeExpr::Unit(_) => String::from("()"),
+        TypeExpr::Multiword(_, _) => String::from("Multiword"),
         TypeExpr::Named(name, _, _) => name.clone(),
         TypeExpr::Tuple(_, _) => String::from("tuple"),
         TypeExpr::Array(_, _, _) => String::from("array"),
@@ -3020,6 +3022,7 @@ fn validate_data_field_type(
     visiting: &mut BTreeSet<String>,
 ) -> Result<(), CompileError> {
     match type_expr {
+        TypeExpr::Multiword(_, _) => Ok(()),
         TypeExpr::Prim(prim, span) => match prim {
             PrimType::Byte
             | PrimType::Word
@@ -3868,6 +3871,7 @@ fn type_expr_head(ty: &TypeExpr) -> Option<String> {
             .to_string(),
         ),
         TypeExpr::Unit(_) => Some("()".to_string()),
+        TypeExpr::Multiword(_, _) => Some("Multiword".to_string()),
         TypeExpr::Tuple(_, _) => Some("tuple".to_string()),
         TypeExpr::Array(_, _, _) => Some("array".to_string()),
         TypeExpr::Option(_, _) => Some("Option".to_string()),
@@ -5262,7 +5266,7 @@ fn normalize_fixed_defaults(program: &mut Program, frac_bits: u8) {
                     *slot = Some(frac_bits);
                 }
             }
-            TypeExpr::Prim(_, _) | TypeExpr::Unit(_) => {}
+            TypeExpr::Prim(_, _) | TypeExpr::Unit(_) | TypeExpr::Multiword(_, _) => {}
             TypeExpr::Tuple(parts, _) => {
                 for p in parts.iter_mut() {
                     fix_type(p, frac_bits);
