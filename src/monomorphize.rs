@@ -824,7 +824,7 @@ fn type_arg_canonical(t: &TypeExpr) -> String {
         TypeExpr::Array(elem, n, _) => {
             format!("arr_{}_{}", type_arg_canonical(elem), n)
         }
-        TypeExpr::Multiword(n, _) => format!("Multiword{}", n),
+        TypeExpr::Multiword(n, f, _) => format!("Multiword{}_{}", n, f),
         TypeExpr::Option(inner, _) => format!("opt_{}", type_arg_canonical(inner)),
         TypeExpr::Labelled(inner, _, _) => type_arg_canonical(inner),
         TypeExpr::NegativeLabelled(inner, _, _) => type_arg_canonical(inner),
@@ -1035,7 +1035,7 @@ fn type_head_for_impl(ty: &TypeExpr) -> String {
         TypeExpr::Named(name, _, _) => name.clone(),
         TypeExpr::Tuple(_, _) => "tuple".to_string(),
         TypeExpr::Array(_, _, _) => "array".to_string(),
-        TypeExpr::Multiword(_, _) => "Multiword".to_string(),
+        TypeExpr::Multiword(_, _, _) => "Multiword".to_string(),
         TypeExpr::Option(_, _) => "Option".to_string(),
         TypeExpr::Labelled(inner, _, _) => type_head_for_impl(inner),
         TypeExpr::NegativeLabelled(inner, _, _) => type_head_for_impl(inner),
@@ -1048,7 +1048,7 @@ fn type_head_for_impl(ty: &TypeExpr) -> String {
 /// and structural types recurse.
 fn subst_type_expr(t: &TypeExpr, subst: &BTreeMap<String, TypeExpr>) -> TypeExpr {
     match t {
-        TypeExpr::Prim(_, _) | TypeExpr::Unit(_) | TypeExpr::Multiword(_, _) => t.clone(),
+        TypeExpr::Prim(_, _) | TypeExpr::Unit(_) | TypeExpr::Multiword(_, _, _) => t.clone(),
         TypeExpr::Named(name, args, span) => {
             if args.is_empty()
                 && let Some(replacement) = subst.get(name)

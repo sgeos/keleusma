@@ -172,3 +172,44 @@ fn multiword_four_word_add_carry_chain() {
     // s = (0, 0, 0, 1) -> sum of digits is 1.
     assert_eq!(run_to_int(src), 1);
 }
+
+// --- Fixed-point form: Multiword<N, F> carries F fractional bits over
+// the same N-word layout; Multiword<N> is Multiword<N, 0>, the integer
+// case (B19). ---
+
+fn compile_fails(src: &str) -> bool {
+    compile(&parse(&tokenize(src).expect("lex")).expect("parse")).is_err()
+}
+
+#[test]
+fn multiword_fixed_point_annotation_constructs_and_indexes() {
+    // The fraction-bit count is a type annotation over the same layout,
+    // so construction and digit indexing behave as for the integer form.
+    assert_eq!(
+        run_to_int("fn main() -> Word { let m = Multiword::<2, 32>(7, 3); m[1] }"),
+        3
+    );
+    assert_eq!(
+        run_to_int("fn main() -> Word { let m = (7, 3) as Multiword<2, 32>; m[0] }"),
+        7
+    );
+}
+
+#[test]
+fn multiword_fixed_point_add_same_scale() {
+    // Adding two same-scale fixed-point values is the integer add of the
+    // underlying words (phase 2 is scale-independent).
+    assert_eq!(
+        run_to_int("fn main() -> Word { let a = (100, 0) as Multiword<2, 16>; let b = (50, 0) as Multiword<2, 16>; let s = a + b; s[0] }"),
+        150
+    );
+}
+
+#[test]
+fn multiword_different_scales_do_not_mix() {
+    // Multiword<2> (integer, F = 0) and Multiword<2, 16> are distinct
+    // types and cannot be combined without an explicit cast.
+    assert!(compile_fails(
+        "fn main() -> Word { let a = (1, 0) as Multiword<2>; let b = (1, 0) as Multiword<2, 16>; let s = a + b; s[0] }"
+    ));
+}

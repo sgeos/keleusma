@@ -329,7 +329,13 @@ fn render_type_expr(ty: &TypeExpr) -> String {
             PrimType::Fixed(None) => String::from("Fixed"),
             PrimType::Fixed(Some(n)) => alloc::format!("Fixed<{}>", n),
         },
-        TypeExpr::Multiword(n, _) => alloc::format!("Multiword<{}>", n),
+        TypeExpr::Multiword(n, f, _) => {
+            if *f == 0 {
+                alloc::format!("Multiword<{}>", n)
+            } else {
+                alloc::format!("Multiword<{}, {}>", n, f)
+            }
+        }
         TypeExpr::Named(name, args, _) => {
             if args.is_empty() {
                 name.clone()
@@ -958,7 +964,7 @@ fn element_type_of(t: &TypeExpr) -> Option<TypeExpr> {
         TypeExpr::Array(elem, _, _) => Some((**elem).clone()),
         // A Multiword<N> indexes to a Word digit; its representation is
         // a flat N-word array (B19).
-        TypeExpr::Multiword(_, _) => Some(TypeExpr::Prim(PrimType::Word, Span::default())),
+        TypeExpr::Multiword(_, _, _) => Some(TypeExpr::Prim(PrimType::Word, Span::default())),
         _ => None,
     }
 }
@@ -1051,7 +1057,7 @@ fn compile_multiword_add_sub(
     is_sub: bool,
 ) -> Result<(), CompileError> {
     let word_bits = (fc.type_info.word_bytes * 8) as i64;
-    let byte_size = flat_alloc_bytes(&TypeExpr::Multiword(n, Span::default()), &fc.type_info)
+    let byte_size = flat_alloc_bytes(&TypeExpr::Multiword(n, 0, Span::default()), &fc.type_info)
         .unwrap_or_else(|| conservative_alloc_bytes(n));
     let word_ty = TypeExpr::Prim(PrimType::Word, Span::default());
     let elem_op = array_elem_operand(Some(&word_ty), &fc.type_info);
@@ -2499,7 +2505,7 @@ fn type_expr_head_name(t: &TypeExpr) -> String {
             PrimType::Text => String::from("Text"),
         },
         TypeExpr::Unit(_) => String::from("()"),
-        TypeExpr::Multiword(_, _) => String::from("Multiword"),
+        TypeExpr::Multiword(_, _, _) => String::from("Multiword"),
         TypeExpr::Named(name, _, _) => name.clone(),
         TypeExpr::Tuple(_, _) => String::from("tuple"),
         TypeExpr::Array(_, _, _) => String::from("array"),
@@ -3192,7 +3198,7 @@ fn validate_data_field_type(
     visiting: &mut BTreeSet<String>,
 ) -> Result<(), CompileError> {
     match type_expr {
-        TypeExpr::Multiword(_, _) => Ok(()),
+        TypeExpr::Multiword(_, _, _) => Ok(()),
         TypeExpr::Prim(prim, span) => match prim {
             PrimType::Byte
             | PrimType::Word
@@ -4041,7 +4047,7 @@ fn type_expr_head(ty: &TypeExpr) -> Option<String> {
             .to_string(),
         ),
         TypeExpr::Unit(_) => Some("()".to_string()),
-        TypeExpr::Multiword(_, _) => Some("Multiword".to_string()),
+        TypeExpr::Multiword(_, _, _) => Some("Multiword".to_string()),
         TypeExpr::Tuple(_, _) => Some("tuple".to_string()),
         TypeExpr::Array(_, _, _) => Some("array".to_string()),
         TypeExpr::Option(_, _) => Some("Option".to_string()),
@@ -5436,7 +5442,7 @@ fn normalize_fixed_defaults(program: &mut Program, frac_bits: u8) {
                     *slot = Some(frac_bits);
                 }
             }
-            TypeExpr::Prim(_, _) | TypeExpr::Unit(_) | TypeExpr::Multiword(_, _) => {}
+            TypeExpr::Prim(_, _) | TypeExpr::Unit(_) | TypeExpr::Multiword(_, _, _) => {}
             TypeExpr::Tuple(parts, _) => {
                 for p in parts.iter_mut() {
                     fix_type(p, frac_bits);
@@ -6476,7 +6482,7 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
             let operand_ty = infer_expr_type(fc, left).or_else(|| infer_expr_type(fc, right));
             // Multiword<N> operators lower to unrolled per-limb cascades
             // over the existing checked-word and bitwise opcodes (B19).
-            if let Some(TypeExpr::Multiword(n, _)) = &operand_ty {
+            if let Some(TypeExpr::Multiword(n, _, _)) = &operand_ty {
                 let n = *n;
                 return compile_multiword_binop(fc, *op, left, right, n);
             }
@@ -7187,9 +7193,9 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
             // Multiword<N>, represented as a flat N-word array. The
             // documented construction form is a tuple literal, compiled
             // directly to the digit array (B19).
-            if let TypeExpr::Multiword(n, _) = target {
+            if let TypeExpr::Multiword(n, _, _) = target {
                 let byte_size =
-                    flat_alloc_bytes(&TypeExpr::Multiword(*n, Span::default()), &fc.type_info)
+                    flat_alloc_bytes(&TypeExpr::Multiword(*n, 0, Span::default()), &fc.type_info)
                         .unwrap_or_else(|| conservative_alloc_bytes(*n));
                 if let Expr::TupleLiteral { elements, .. } = inner.as_ref() {
                     // Fast path: compile the digit expressions directly

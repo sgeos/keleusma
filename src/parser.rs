@@ -1943,6 +1943,27 @@ impl<'a> Parser<'a> {
                                 .error("expected integer literal for Multiword<N> word count"));
                         }
                     };
+                    let frac: u16 = if self.eat(&TokenKind::Comma) {
+                        let ftok = self.tokens[self.pos].clone();
+                        match ftok.kind {
+                            TokenKind::IntLit(f) => {
+                                if !(0..=65535).contains(&f) {
+                                    return Err(self.error(
+                                        "Multiword<N, F> fraction bits must be in [0, 65535]",
+                                    ));
+                                }
+                                self.pos += 1;
+                                f as u16
+                            }
+                            _ => {
+                                return Err(self.error(
+                                    "expected integer literal for Multiword<N, F> fraction bits",
+                                ));
+                            }
+                        }
+                    } else {
+                        0
+                    };
                     self.expect(&TokenKind::Gt)?;
                     self.expect(&TokenKind::LParen)?;
                     let args = self.parse_arg_list()?;
@@ -1954,7 +1975,7 @@ impl<'a> Parser<'a> {
                     };
                     return Ok(Expr::Cast {
                         expr: Box::new(tuple),
-                        target: TypeExpr::Multiword(words, span),
+                        target: TypeExpr::Multiword(words, frac, span),
                         span,
                     });
                 }
@@ -2360,8 +2381,28 @@ impl<'a> Parser<'a> {
                     );
                 }
             };
+            let frac: u16 = if self.eat(&TokenKind::Comma) {
+                let ftok = self.tokens[self.pos].clone();
+                match ftok.kind {
+                    TokenKind::IntLit(f) => {
+                        if !(0..=65535).contains(&f) {
+                            return Err(self.error(
+                                "Multiword<N, F> fraction bits must be in the range [0, 65535]",
+                            ));
+                        }
+                        self.pos += 1;
+                        f as u16
+                    }
+                    _ => {
+                        return Err(self
+                            .error("expected integer literal for Multiword<N, F> fraction bits"));
+                    }
+                }
+            } else {
+                0
+            };
             let end = self.expect(&TokenKind::Gt)?;
-            return Ok(TypeExpr::Multiword(words, merge_spans(span, end)));
+            return Ok(TypeExpr::Multiword(words, frac, merge_spans(span, end)));
         }
 
         // Check for Text (upper ident). Keleusma's surface text type
