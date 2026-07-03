@@ -984,6 +984,9 @@ fn compile_multiword_binop(
     match op {
         BinOp::Add => compile_multiword_add_sub(fc, left, right, n, false),
         BinOp::Sub => compile_multiword_add_sub(fc, left, right, n, true),
+        BinOp::Eq | BinOp::NotEq | BinOp::Lt | BinOp::Gt | BinOp::LtEq | BinOp::GtEq => {
+            compile_multiword_compare(fc, op, left, right, n)
+        }
         _ => Err(CompileError {
             message: alloc::format!(
                 "Multiword<{}> does not yet support this operator (later phase)",
@@ -1133,6 +1136,168 @@ fn compile_multiword_add_sub(
         count: n,
         byte_size,
     }));
+    Ok(())
+}
+
+/// Compile a `Multiword<N>` comparison (`==`, `!=`, `<`, `>`, `<=`, `>=`)
+/// as a branch-free limb-wise fold that yields a `Bool` (B19). The value
+/// is little-endian two's complement, so the ordering is decided by the
+/// most significant differing limb, the top limb read signed and the
+/// lower limbs unsigned.
+///
+/// The whole fold stays in the `Word` domain because the bitwise opcodes
+/// require `Word` operands and the comparison opcodes yield `Bool`. Two
+/// running accumulators, `lt` and `gt`, hold whether the value seen so
+/// far compares less or greater. Folding from the least significant limb
+/// upward, each limb that differs overrides the accumulators, so the most
+/// significant differing limb wins:
+///   lt := li | (lt & eq_i)   gt := gi | (gt & eq_i)
+/// where `li` is `a[i] <u b[i]` and `gi` is `b[i] <u a[i]`. An unsigned
+/// limb less-than is exactly the borrow out of the limb subtraction, so
+/// [`emit_limb_carry`] computes both. The most significant limb is read
+/// signed by XOR-ing both limbs with the sign bit before the same
+/// unsigned comparison, which maps the signed order onto the unsigned
+/// order. The final `Bool` is produced by comparing the accumulators to
+/// zero, so no comparison opcode operates on a `Multiword` directly.
+fn compile_multiword_compare(
+    fc: &mut FuncCompiler,
+    op: crate::ast::BinOp,
+    left: &Expr,
+    right: &Expr,
+    n: u16,
+) -> Result<(), CompileError> {
+    use crate::ast::BinOp;
+    let word_bits = (fc.type_info.word_bytes * 8) as i64;
+    let word_ty = TypeExpr::Prim(PrimType::Word, Span::default());
+    let elem_op = array_elem_operand(Some(&word_ty), &fc.type_info);
+    let neg1 = fc.add_constant(Value::Int(-1));
+    let one = fc.add_constant(Value::Int(1));
+    let zero = fc.add_constant(Value::Int(0));
+    let shift_c = fc.add_constant(Value::Int(word_bits - 1));
+    // The sign bit of a single word; XOR-ing both operands with it maps
+    // the signed ordering of the top limb onto the unsigned ordering the
+    // borrow computes.
+    let sign = fc.add_constant(Value::Int(1i64 << (word_bits - 1)));
+    let av = fc.declare_local("__mw_a");
+    let bv = fc.declare_local("__mw_b");
+    let xi = fc.declare_local("__mw_x");
+    let yi = fc.declare_local("__mw_y");
+    let s = fc.declare_local("__mw_s");
+    let li = fc.declare_local("__mw_lt_i");
+    let gi = fc.declare_local("__mw_gt_i");
+    let eqi = fc.declare_local("__mw_eq_i");
+    let lt = fc.declare_local("__mw_lt");
+    let gt = fc.declare_local("__mw_gt");
+    // Evaluate both operands into locals.
+    compile_expr(fc, left)?;
+    fc.emit(Op::SetLocal(av));
+    compile_expr(fc, right)?;
+    fc.emit(Op::SetLocal(bv));
+    // Accumulators start at "equal so far".
+    fc.emit(Op::Const(zero));
+    fc.emit(Op::SetLocal(lt));
+    fc.emit(Op::Const(zero));
+    fc.emit(Op::SetLocal(gt));
+    for i in 0..n {
+        let idx_c = fc.add_constant(Value::Int(i as i64));
+        let is_top = i == n - 1;
+        // x = a[i], sign-flipped for the signed top limb.
+        fc.emit(Op::GetLocal(av));
+        fc.emit(Op::Const(idx_c));
+        fc.emit(Op::GetIndex(elem_op.clone()));
+        if is_top {
+            fc.emit(Op::Const(sign));
+            fc.emit(Op::BitXor);
+        }
+        fc.emit(Op::SetLocal(xi));
+        // y = b[i], sign-flipped for the signed top limb.
+        fc.emit(Op::GetLocal(bv));
+        fc.emit(Op::Const(idx_c));
+        fc.emit(Op::GetIndex(elem_op.clone()));
+        if is_top {
+            fc.emit(Op::Const(sign));
+            fc.emit(Op::BitXor);
+        }
+        fc.emit(Op::SetLocal(yi));
+        // li = (x <u y) = borrow out of x - y.
+        fc.emit(Op::GetLocal(xi));
+        fc.emit(Op::GetLocal(yi));
+        fc.emit(Op::CheckedSub);
+        fc.emit(Op::PopN(2));
+        fc.emit(Op::SetLocal(s));
+        emit_limb_carry(fc, true, xi, yi, s, neg1, shift_c, one);
+        fc.emit(Op::SetLocal(li));
+        // gi = (y <u x) = borrow out of y - x.
+        fc.emit(Op::GetLocal(yi));
+        fc.emit(Op::GetLocal(xi));
+        fc.emit(Op::CheckedSub);
+        fc.emit(Op::PopN(2));
+        fc.emit(Op::SetLocal(s));
+        emit_limb_carry(fc, true, yi, xi, s, neg1, shift_c, one);
+        fc.emit(Op::SetLocal(gi));
+        // eq_i = 1 - (li | gi); exactly one of li, gi, eq_i is set.
+        fc.emit(Op::GetLocal(li));
+        fc.emit(Op::GetLocal(gi));
+        fc.emit(Op::BitOr);
+        fc.emit(Op::Const(one));
+        fc.emit(Op::BitXor);
+        fc.emit(Op::SetLocal(eqi));
+        // lt = li | (lt & eq_i)
+        fc.emit(Op::GetLocal(lt));
+        fc.emit(Op::GetLocal(eqi));
+        fc.emit(Op::BitAnd);
+        fc.emit(Op::GetLocal(li));
+        fc.emit(Op::BitOr);
+        fc.emit(Op::SetLocal(lt));
+        // gt = gi | (gt & eq_i)
+        fc.emit(Op::GetLocal(gt));
+        fc.emit(Op::GetLocal(eqi));
+        fc.emit(Op::BitAnd);
+        fc.emit(Op::GetLocal(gi));
+        fc.emit(Op::BitOr);
+        fc.emit(Op::SetLocal(gt));
+    }
+    // Reduce the accumulators to the requested Bool. `<` and `>` are the
+    // accumulators themselves; `<=` and `>=` are the negations of the
+    // opposite strict order; `==` and `!=` test that neither strict order
+    // holds.
+    match op {
+        BinOp::Lt => {
+            fc.emit(Op::GetLocal(lt));
+            fc.emit(Op::Const(zero));
+            fc.emit(Op::CmpNe);
+        }
+        BinOp::Gt => {
+            fc.emit(Op::GetLocal(gt));
+            fc.emit(Op::Const(zero));
+            fc.emit(Op::CmpNe);
+        }
+        BinOp::LtEq => {
+            fc.emit(Op::GetLocal(gt));
+            fc.emit(Op::Const(zero));
+            fc.emit(Op::CmpEq);
+        }
+        BinOp::GtEq => {
+            fc.emit(Op::GetLocal(lt));
+            fc.emit(Op::Const(zero));
+            fc.emit(Op::CmpEq);
+        }
+        BinOp::Eq => {
+            fc.emit(Op::GetLocal(lt));
+            fc.emit(Op::GetLocal(gt));
+            fc.emit(Op::BitOr);
+            fc.emit(Op::Const(zero));
+            fc.emit(Op::CmpEq);
+        }
+        BinOp::NotEq => {
+            fc.emit(Op::GetLocal(lt));
+            fc.emit(Op::GetLocal(gt));
+            fc.emit(Op::BitOr);
+            fc.emit(Op::Const(zero));
+            fc.emit(Op::CmpNe);
+        }
+        _ => unreachable!("compile_multiword_compare called with a non-comparison operator"),
+    }
     Ok(())
 }
 

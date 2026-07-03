@@ -93,11 +93,15 @@ fn multiword_single_word_constructor() {
 #[test]
 fn multiword_add_no_carry() {
     assert_eq!(
-        run_to_int("fn main() -> Word { let a = (100, 200) as Multiword<2>; let b = (50, 25) as Multiword<2>; let s = a + b; s[0] }"),
+        run_to_int(
+            "fn main() -> Word { let a = (100, 200) as Multiword<2>; let b = (50, 25) as Multiword<2>; let s = a + b; s[0] }"
+        ),
         150
     );
     assert_eq!(
-        run_to_int("fn main() -> Word { let a = (100, 200) as Multiword<2>; let b = (50, 25) as Multiword<2>; let s = a + b; s[1] }"),
+        run_to_int(
+            "fn main() -> Word { let a = (100, 200) as Multiword<2>; let b = (50, 25) as Multiword<2>; let s = a + b; s[1] }"
+        ),
         225
     );
 }
@@ -108,11 +112,15 @@ fn multiword_add_unsigned_carry_propagates() {
     // into the high limb, giving (0, 1). This is the correct unsigned
     // carry, which the signed-overflow flag does not provide.
     assert_eq!(
-        run_to_int("fn main() -> Word { let a = (-1, 0) as Multiword<2>; let b = (1, 0) as Multiword<2>; let s = a + b; s[0] }"),
+        run_to_int(
+            "fn main() -> Word { let a = (-1, 0) as Multiword<2>; let b = (1, 0) as Multiword<2>; let s = a + b; s[0] }"
+        ),
         0
     );
     assert_eq!(
-        run_to_int("fn main() -> Word { let a = (-1, 0) as Multiword<2>; let b = (1, 0) as Multiword<2>; let s = a + b; s[1] }"),
+        run_to_int(
+            "fn main() -> Word { let a = (-1, 0) as Multiword<2>; let b = (1, 0) as Multiword<2>; let s = a + b; s[1] }"
+        ),
         1
     );
 }
@@ -124,11 +132,15 @@ fn multiword_add_no_spurious_signed_carry() {
     // naive signed-flag cascade would wrongly propagate a carry and
     // give (Word::MIN, 1); the high limb MUST be 0.
     assert_eq!(
-        run_to_int("fn main() -> Word { let a = (9223372036854775807, 0) as Multiword<2>; let b = (1, 0) as Multiword<2>; let s = a + b; s[1] }"),
+        run_to_int(
+            "fn main() -> Word { let a = (9223372036854775807, 0) as Multiword<2>; let b = (1, 0) as Multiword<2>; let s = a + b; s[1] }"
+        ),
         0
     );
     assert_eq!(
-        run_to_int("fn main() -> Word { let a = (9223372036854775807, 0) as Multiword<2>; let b = (1, 0) as Multiword<2>; let s = a + b; s[0] }"),
+        run_to_int(
+            "fn main() -> Word { let a = (9223372036854775807, 0) as Multiword<2>; let b = (1, 0) as Multiword<2>; let s = a + b; s[0] }"
+        ),
         i64::MIN
     );
 }
@@ -136,11 +148,15 @@ fn multiword_add_no_spurious_signed_carry() {
 #[test]
 fn multiword_sub_no_borrow() {
     assert_eq!(
-        run_to_int("fn main() -> Word { let a = (150, 225) as Multiword<2>; let b = (50, 25) as Multiword<2>; let d = a - b; d[0] }"),
+        run_to_int(
+            "fn main() -> Word { let a = (150, 225) as Multiword<2>; let b = (50, 25) as Multiword<2>; let d = a - b; d[0] }"
+        ),
         100
     );
     assert_eq!(
-        run_to_int("fn main() -> Word { let a = (150, 225) as Multiword<2>; let b = (50, 25) as Multiword<2>; let d = a - b; d[1] }"),
+        run_to_int(
+            "fn main() -> Word { let a = (150, 225) as Multiword<2>; let b = (50, 25) as Multiword<2>; let d = a - b; d[1] }"
+        ),
         200
     );
 }
@@ -150,11 +166,15 @@ fn multiword_sub_borrow_propagates() {
     // (0, 5) - (1, 0): the low limb underflows, borrowing from the high
     // limb, giving low = -1 (all ones) and high = 5 - 1 = 4.
     assert_eq!(
-        run_to_int("fn main() -> Word { let a = (0, 5) as Multiword<2>; let b = (1, 0) as Multiword<2>; let d = a - b; d[0] }"),
+        run_to_int(
+            "fn main() -> Word { let a = (0, 5) as Multiword<2>; let b = (1, 0) as Multiword<2>; let d = a - b; d[0] }"
+        ),
         -1
     );
     assert_eq!(
-        run_to_int("fn main() -> Word { let a = (0, 5) as Multiword<2>; let b = (1, 0) as Multiword<2>; let d = a - b; d[1] }"),
+        run_to_int(
+            "fn main() -> Word { let a = (0, 5) as Multiword<2>; let b = (1, 0) as Multiword<2>; let d = a - b; d[1] }"
+        ),
         4
     );
 }
@@ -181,6 +201,116 @@ fn compile_fails(src: &str) -> bool {
     compile(&parse(&tokenize(src).expect("lex")).expect("parse")).is_err()
 }
 
+fn run_to_bool(src: &str) -> bool {
+    let module = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+    let arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+    let mut vm = Vm::new(module, &arena).expect("verify");
+    match vm.call(&[]).expect("call") {
+        VmState::Finished(Value::Bool(b)) => b,
+        other => panic!("expected a finished bool, got {:?}", other),
+    }
+}
+
+// --- Phase 2, remainder: the six comparison operators. A Multiword<N>
+// is little-endian two's complement, so ordering is decided by the most
+// significant differing limb, the top limb signed and the lower limbs
+// unsigned (B19). ---
+
+#[test]
+fn multiword_eq_and_ne() {
+    assert!(run_to_bool(
+        "fn main() -> bool { let a = (5, 7) as Multiword<2>; let b = (5, 7) as Multiword<2>; a == b }"
+    ));
+    assert!(!run_to_bool(
+        "fn main() -> bool { let a = (5, 7) as Multiword<2>; let b = (5, 8) as Multiword<2>; a == b }"
+    ));
+    assert!(run_to_bool(
+        "fn main() -> bool { let a = (5, 7) as Multiword<2>; let b = (6, 7) as Multiword<2>; a != b }"
+    ));
+    assert!(!run_to_bool(
+        "fn main() -> bool { let a = (5, 7) as Multiword<2>; let b = (5, 7) as Multiword<2>; a != b }"
+    ));
+}
+
+#[test]
+fn multiword_ordering_decided_by_high_limb() {
+    // The most significant limb dominates regardless of the low limb.
+    assert!(run_to_bool(
+        "fn main() -> bool { let a = (100, 1) as Multiword<2>; let b = (0, 2) as Multiword<2>; a < b }"
+    ));
+    assert!(run_to_bool(
+        "fn main() -> bool { let a = (0, 2) as Multiword<2>; let b = (100, 1) as Multiword<2>; a > b }"
+    ));
+}
+
+#[test]
+fn multiword_ordering_low_limb_is_unsigned() {
+    // High limbs equal, so the low limb decides, and it is unsigned. The
+    // low limb -1 is 2^64 - 1 unsigned, so (-1, 0) is the larger value.
+    // A signed low-limb compare would wrongly rank -1 below 1.
+    assert!(run_to_bool(
+        "fn main() -> bool { let a = (-1, 0) as Multiword<2>; let b = (1, 0) as Multiword<2>; a > b }"
+    ));
+    assert!(!run_to_bool(
+        "fn main() -> bool { let a = (-1, 0) as Multiword<2>; let b = (1, 0) as Multiword<2>; a < b }"
+    ));
+    // Same high limb, plain unsigned low compare.
+    assert!(run_to_bool(
+        "fn main() -> bool { let a = (5, 3) as Multiword<2>; let b = (9, 3) as Multiword<2>; a < b }"
+    ));
+}
+
+#[test]
+fn multiword_ordering_high_limb_is_signed() {
+    // (0, -1) is high limb -1, a negative value near -2^64; it must rank
+    // below zero. A signed top-limb compare gives this; an unsigned one
+    // would rank -1 as the largest high limb and invert the order.
+    assert!(run_to_bool(
+        "fn main() -> bool { let a = (0, -1) as Multiword<2>; let b = (0, 0) as Multiword<2>; a < b }"
+    ));
+    assert!(run_to_bool(
+        "fn main() -> bool { let a = (0, 0) as Multiword<2>; let b = (0, -1) as Multiword<2>; a > b }"
+    ));
+}
+
+#[test]
+fn multiword_le_and_ge_include_equality() {
+    assert!(run_to_bool(
+        "fn main() -> bool { let a = (5, 7) as Multiword<2>; let b = (5, 7) as Multiword<2>; a <= b }"
+    ));
+    assert!(run_to_bool(
+        "fn main() -> bool { let a = (5, 7) as Multiword<2>; let b = (5, 7) as Multiword<2>; a >= b }"
+    ));
+    assert!(!run_to_bool(
+        "fn main() -> bool { let a = (5, 7) as Multiword<2>; let b = (4, 7) as Multiword<2>; a <= b }"
+    ));
+    assert!(run_to_bool(
+        "fn main() -> bool { let a = (5, 7) as Multiword<2>; let b = (4, 7) as Multiword<2>; a >= b }"
+    ));
+}
+
+#[test]
+fn multiword_four_word_ordering() {
+    // The two values differ only in the third limb; that limb decides.
+    let base = "let a = (9, 9, 5, 0) as Multiword<4>; let b = (0, 0, 6, 0) as Multiword<4>;";
+    assert!(run_to_bool(&alloc_src(base, "a < b")));
+    assert!(!run_to_bool(&alloc_src(base, "a > b")));
+    assert!(run_to_bool(&alloc_src(base, "a != b")));
+}
+
+fn alloc_src(bindings: &str, expr: &str) -> String {
+    format!("fn main() -> bool {{ {} {} }}", bindings, expr)
+}
+
+#[test]
+fn multiword_fixed_point_compare_same_scale() {
+    // Comparison is scale-independent: same-scale fixed-point values
+    // compare by their underlying words.
+    assert!(run_to_bool(
+        "fn main() -> bool { let a = (100, 0) as Multiword<2, 16>; let b = (50, 0) as Multiword<2, 16>; a > b }"
+    ));
+}
+
 #[test]
 fn multiword_fixed_point_annotation_constructs_and_indexes() {
     // The fraction-bit count is a type annotation over the same layout,
@@ -200,7 +330,9 @@ fn multiword_fixed_point_add_same_scale() {
     // Adding two same-scale fixed-point values is the integer add of the
     // underlying words (phase 2 is scale-independent).
     assert_eq!(
-        run_to_int("fn main() -> Word { let a = (100, 0) as Multiword<2, 16>; let b = (50, 0) as Multiword<2, 16>; let s = a + b; s[0] }"),
+        run_to_int(
+            "fn main() -> Word { let a = (100, 0) as Multiword<2, 16>; let b = (50, 0) as Multiword<2, 16>; let s = a + b; s[0] }"
+        ),
         150
     );
 }

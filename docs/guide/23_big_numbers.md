@@ -89,6 +89,35 @@ half, and the carry from one position threads into the next. The bundled
 example `examples/scripts/09_big_numbers.kel`, and the guide page
 `BIG_NUMBERS.md`, work this technique in full.
 
+## The first-class multi-word type
+
+You do not have to thread the carry by hand for the common case. The
+`Multiword<N, F>` type is a fixed-width multi-word fixed-point value, `N`
+words wide with `F` fractional bits, that carries the halves for you. The
+form `Multiword<N>` is the integer case, equal to `Multiword<N, 0>`. You
+construct one from a tuple of its words, least significant first, and
+index its words back out:
+
+````
+fn main() -> Word {
+    let a = (9223372036854775807, 0) as Multiword<2>;
+    let b = (1, 0) as Multiword<2>;
+    let s = a + b;
+    s[1]
+}
+````
+
+The low word of `a` is the largest `Word`. Adding `1` sets that word's
+top bit, turning it into the smallest `Word`, but no bit carries out of
+the low word, so the high word `s[1]` stays `0`. This is the correct
+unsigned multi-word carry, which is not the same as the signed-overflow
+report of the checked construct above. Addition, subtraction,
+and the six comparisons are available today, each lowered to the very
+carry and borrow cascade this chapter describes, so the type adds no new
+instructions. Multiplication and division, which will apply the
+fractional scale `F`, are a later increment. The type is tracked as B19
+in the backlog.
+
 ## Optional arms and the wrapping default
 
 The `overflow` and `underflow` arms are optional. When you omit them, an

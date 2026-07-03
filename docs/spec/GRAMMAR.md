@@ -1046,11 +1046,17 @@ scalar_literal     = [ '-' ] integer_lit
 
 (* Types *)
 type_expr       = prim_type | named_type | tuple_type | array_type | option_type
+                | multiword_type
 prim_type       = 'Word' | 'Float' | 'bool' | 'Text' | '(' ')'
 named_type      = upper_ident [ '<' type_expr { ',' type_expr } '>' ]
 tuple_type      = '(' type_expr ',' type_expr { ',' type_expr } ')'
 array_type      = '[' type_expr ';' integer_lit ']'
 option_type     = 'Option' '<' type_expr '>'
+(* Multi-word fixed-point type. The first argument is the word count
+   N in [1, 65535]; the optional second argument is the fraction-bit
+   count F in [0, 65535], defaulting to 0 (the integer case). Both
+   arguments are integer literals, not type expressions. *)
+multiword_type  = 'Multiword' '<' integer_lit [ ',' integer_lit ] '>'
 
 (* Functions *)
 (* The `ephemeral` and `signed` modifiers are permitted only on
@@ -1117,6 +1123,15 @@ primary_expr    = literal
                 | '(' expression ',' expression { ',' expression } [ ',' ] ')'
                 | '[' [ arg_list ] ']'
                 | expression 'as' type_expr
+                | multiword_ctor
+
+(* Multi-word fixed-point constructor. A turbofish carrying the word
+   count and optional fraction bits, applied to N word arguments. It
+   desugars to a tuple of the arguments cast to the same Multiword
+   type, and is the only construction form for the single-word case
+   since a one-element tuple is not surface syntax. *)
+multiword_ctor  = 'Multiword' '::' '<' integer_lit [ ',' integer_lit ] '>'
+                  '(' [ arg_list ] ')'
 
 (* Closures, f-strings, and first-class function references are not
    admitted in V0.2.0. Closure-shaped expressions and bare function

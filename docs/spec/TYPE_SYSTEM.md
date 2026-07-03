@@ -19,6 +19,34 @@ All numeric operations use `Word` or `Float`. When host structs contain integer 
 
 The `Word` and `Float` surface types refer to the runtime's chosen word and float widths. The bundled default runtime is `Vm<i64, u64, f64>`, which makes `Word` a 64-bit signed integer and `Float` a 64-bit IEEE-754 floating-point number; the sizes and alignments above reflect that default. Hosts that instantiate the parametric `GenericVm<W, A, F>` shape with narrower trait parameters change the underlying widths accordingly. The bytecode header's `word_bits_log2`, `addr_bits_log2`, and `float_bits_log2` fields record the declared widths so a runtime can reject mismatched bytecode at load time. See B16 in [BACKLOG.md](../decisions/BACKLOG.md) for the parametric-Vm cascade and `docs/guide/COOKBOOK.md` for the narrow-runtime type-alias recipe.
 
+## Multi-Word Fixed-Point Types
+
+`Multiword<N, F>` is a fixed-width multi-word fixed-point type. It is `N` machine words wide, little-endian two's complement, with `F` fractional bits. The word count `N` sets the total width at `N` times the runtime word width, and `F` places the implied binary point `F` bits above the least significant bit. The surface form `Multiword<N>` abbreviates `Multiword<N, 0>`, the integer case with no fractional component. The type therefore spans both wide integers and fixed-point fractions under one representation.
+
+| Form | Meaning |
+|------|---------|
+| `Multiword<N>` | `N`-word signed integer, equivalent to `Multiword<N, 0>`. |
+| `Multiword<N, F>` | `N`-word signed fixed-point value with `F` fractional bits. |
+
+The word count `N` is in the range `[1, 65535]` and the fraction-bit count `F` is in the range `[0, 65535]`. The runtime representation is a flat array of `N` signed words, digit zero least significant, so a value constructed from a tuple indexes to its underlying words with `m[i]`.
+
+`Multiword<N, F>` is nominal in both parameters. Two multi-word types unify only when their word counts and their fraction-bit counts are equal. A `Multiword<2>` and a `Multiword<2, 16>` are distinct types and do not combine in an arithmetic operation without an explicit cast, because they carry different scales. This prevents a silent scale mismatch, which in fixed-point arithmetic is a correctness fault rather than a rounding difference.
+
+Construction is an explicit cast from a tuple of `N` words, or the equivalent turbofish constructor. The constructor form also expresses the single-word case, which a one-element tuple cannot.
+
+```rust
+let a = (42, 7, 0, 0) as Multiword<4>;   // integer, four words
+let q = (0, 1) as Multiword<2, 32>;      // fixed-point, thirty-two fractional bits
+let b = Multiword::<4>(42, 7, 0, 0);     // equivalent to the tuple cast
+let c = Multiword::<1>(77);              // single word, no tuple form
+```
+
+Indexing a `Multiword<N, F>` with `m[i]` yields the `i`-th underlying word as a `Word`, digit zero least significant. Indexing is independent of `F`; it reads the stored words regardless of the implied binary point.
+
+The supported operators are addition, subtraction, and the six comparisons `==`, `!=`, `<`, `>`, `<=`, `>=`. Addition and subtraction are the two's-complement multi-word carry and borrow cascades; they are scale-independent, so two same-scale operands add or subtract as their underlying words. Comparisons yield `bool`; the ordering is decided by the most significant differing word, the top word read signed and the lower words read unsigned, which is the correct signed two's-complement multi-word order. Multiplication, division, the modulo operation, and the shift operators are reserved for later increments; the multiply and divide will apply the fractional scale, a multiply shifting the double-width product right by `F` and a divide shifting the dividend left by `F`. See B19 in [BACKLOG.md](../decisions/BACKLOG.md) for the operator roadmap and the carry-semantics rationale.
+
+Every multi-word operation lowers to an unrolled cascade over the existing single-word opcodes, so the type adds no instructions to the instruction set.
+
 ## Text Types
 
 The Keleusma surface type for textual data is named `Text` to avoid confusion with Rust's `String`. The runtime distinguishes two string variants behind the `Text` surface type with distinct lifetimes and allowed flow paths.

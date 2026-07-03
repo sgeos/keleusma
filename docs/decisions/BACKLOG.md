@@ -577,15 +577,17 @@ The per-digit cascade must propagate the **unsigned** carry and borrow, not the 
 
 ### Phased implementation plan (for the eventual implementation)
 
-| Phase | Scope | Approximate Rust-side effort |
-|-------|-------|----------------------------|
-| 1 | Lexer + parser + AST + type checker for `Multiword<N>`, tuple constructor, `(...) as Multiword<N>` cast, indexing | ~600 lines |
-| 2 | `+`, `-`, all six comparison operators | ~500 lines |
-| 3 | `*` (schoolbook with carry plumbing) | ~300 lines |
-| 4 | `/`, `%` (Knuth Algorithm D unrolled) | ~400 lines |
-| 5 | `<<`, `>>` (constant amount first; variable amount as a stretch) | ~300 lines |
+| Phase | Scope | Approximate Rust-side effort | Status |
+|-------|-------|----------------------------|--------|
+| 1 | Lexer + parser + AST + type checker for `Multiword<N>`, tuple constructor, `(...) as Multiword<N>` cast, indexing | ~600 lines | Implemented |
+| 2 | `+`, `-`, all six comparison operators | ~500 lines | Implemented |
+| 3 | `*` (schoolbook with carry plumbing) | ~300 lines | Pending |
+| 4 | `/`, `%` (Knuth Algorithm D unrolled) | ~400 lines | Pending |
+| 5 | `<<`, `>>` (constant amount first; variable amount as a stretch) | ~300 lines | Pending |
 
 Each phase ends with end-to-end integration tests at N = 2 (128-bit on the default i64 runtime), N = 3 (192-bit), and N = 4 (256-bit). Earlier phases unblock testing of later phases.
+
+Phase 2 status detail. Addition and subtraction lower to the unsigned carry and borrow cascade recorded in the correction note above. The six comparison operators lower to a branch-free limb-wise fold: two accumulators, one for less-than and one for greater-than, are updated from the least significant word upward so the most significant differing word decides, the top word compared signed by XOR-ing both operands with the word sign bit and the lower words compared unsigned. An unsigned word less-than is exactly the subtraction borrow-out, so the same carry helper serves both arithmetic and comparison, and no new opcode is introduced. The fraction-bit count F is not yet consumed by any implemented operator, so the bound F no greater than N times the word width is deferred to the multiply and divide lowering of phase 3, where F first becomes a shift amount and the target word width is concretely available.
 
 ### Interaction with other backlog items
 

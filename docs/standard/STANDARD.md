@@ -430,10 +430,12 @@ right by F, and division shifts the dividend left by F, so the scale is preserve
 Division by zero is the same bounded fault as for the word-width integer.
 
 **Note.** The multi-word family is partially implemented, and its completion is a
-known non-conformance per Annex A. The type, its construction and indexing, and its
+known non-conformance per Annex A. The type, its construction and indexing, its
 scale-independent addition and subtraction with the correct unsigned carry and
-borrow are implemented. The fixed-point multiply and divide, the comparisons, and
-the shifts are pending, and general const generics remain a separate feature.
+borrow, and the six comparison operators are implemented. The comparison orders a
+value by its most significant differing word, the top word read signed and the
+lower words read unsigned. The fixed-point multiply and divide and the shifts are
+pending, and general const generics remain a separate feature.
 
 #### 5.1.3 Composite kinds
 
@@ -1156,10 +1158,10 @@ this document.
    depth, and baked-offset correctness is a compiler-integrity assumption. This is
    the single largest verifier work item.
 2. The multi-word fixed-point family of Standard 5.1.2 is partially implemented. The
-   type `Multiword<N>` and `Multiword<N, F>`, its construction and indexing, and its
-   scale-independent addition and subtraction are implemented. The fixed-point
-   multiply and divide, the comparisons, and the shifts are pending, and general
-   const generics remain a separate feature.
+   type `Multiword<N>` and `Multiword<N, F>`, its construction and indexing, its
+   scale-independent addition and subtraction, and the six comparison operators are
+   implemented. The fixed-point multiply and divide and the shifts are pending, and
+   general const generics remain a separate feature.
 3. The instruction count in prior project documents was recorded as 66. The instruction
    set is 67, because the `SetDataComposite` opcode at identifier 70 is implemented,
    dispatched, and verified but was undocumented. The issuing authority reconciles the

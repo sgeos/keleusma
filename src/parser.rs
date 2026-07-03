@@ -1939,8 +1939,9 @@ impl<'a> Parser<'a> {
                             nn as u16
                         }
                         _ => {
-                            return Err(self
-                                .error("expected integer literal for Multiword<N> word count"));
+                            return Err(
+                                self.error("expected integer literal for Multiword<N> word count")
+                            );
                         }
                     };
                     let frac: u16 = if self.eat(&TokenKind::Comma) {
@@ -2369,16 +2370,15 @@ impl<'a> Parser<'a> {
             let words = match tok.kind {
                 TokenKind::IntLit(n) => {
                     if !(1..=65535).contains(&n) {
-                        return Err(self
-                            .error("Multiword<N> word count must be in the range [1, 65535]"));
+                        return Err(
+                            self.error("Multiword<N> word count must be in the range [1, 65535]")
+                        );
                     }
                     self.pos += 1;
                     n as u16
                 }
                 _ => {
-                    return Err(
-                        self.error("expected integer literal for Multiword<N> word count")
-                    );
+                    return Err(self.error("expected integer literal for Multiword<N> word count"));
                 }
             };
             let frac: u16 = if self.eat(&TokenKind::Comma) {

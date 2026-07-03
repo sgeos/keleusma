@@ -3595,7 +3595,11 @@ fn type_of_expr_inner(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError>
                 }
                 let bare = match op {
                     BinOp::Add | BinOp::Sub => Type::Multiword(*ln, *lf),
-                    BinOp::Eq | BinOp::NotEq | BinOp::Lt | BinOp::Gt | BinOp::LtEq
+                    BinOp::Eq
+                    | BinOp::NotEq
+                    | BinOp::Lt
+                    | BinOp::Gt
+                    | BinOp::LtEq
                     | BinOp::GtEq => Type::Bool,
                     _ => {
                         return Err(TypeError::new(
