@@ -724,3 +724,37 @@ fn narrow_multiword_div_spans_two_words() {
         i16::MIN
     );
 }
+
+#[test]
+fn narrow_multiword_div_min_over_minus_one_wraps() {
+    // The most negative two-word value at i16 is MIN = (0, -32768) =
+    // -2^31. MIN / -1 is mathematically 2^31, which overflows the
+    // two-word range and wraps back to MIN, matching the scalar
+    // wrapping division; MIN % -1 is 0. The magnitude of MIN is not
+    // representable, so this is the one division edge where the result
+    // wraps.
+    assert_eq!(
+        run_i16(
+            "fn main() -> Word { let a = (0, -32768) as Multiword<2>; let b = (-1, -1) as Multiword<2>; let s = a / b; s[1] }"
+        ),
+        i16::MIN
+    );
+    assert_eq!(
+        run_i16(
+            "fn main() -> Word { let a = (0, -32768) as Multiword<2>; let b = (-1, -1) as Multiword<2>; let s = a / b; s[0] }"
+        ),
+        0_i16
+    );
+    assert_eq!(
+        run_i16(
+            "fn main() -> Word { let a = (0, -32768) as Multiword<2>; let b = (-1, -1) as Multiword<2>; let s = a % b; s[0] }"
+        ),
+        0_i16
+    );
+    assert_eq!(
+        run_i16(
+            "fn main() -> Word { let a = (0, -32768) as Multiword<2>; let b = (-1, -1) as Multiword<2>; let s = a % b; s[1] }"
+        ),
+        0_i16
+    );
+}
