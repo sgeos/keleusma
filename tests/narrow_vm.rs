@@ -484,3 +484,103 @@ fn narrow_runtime_register_fn_marshall_truncates_through_word() {
         other => panic!("unexpected: {:?}", other),
     }
 }
+
+// --- Multiword<N> on the narrow i16 runtime (B19). The multi-word
+// carry, borrow, and comparison lowerings compute their sign-bit shift
+// and sign constant from the target word width, so they must be correct
+// at a 16-bit word, not only at the default 64-bit word. These tests
+// lock that in: a signed sign constant of 1 << 15 narrows through
+// Word::from_i64_wrap to the i16 sign pattern 0x8000, and the top-bit
+// extraction shifts by word_bits - 1 = 15. ---
+
+/// Compile a Multiword source for the 16-bit target and run it on the
+/// i16 narrow runtime, returning the finished integer.
+fn run_i16(src: &str) -> i16 {
+    let tokens = tokenize(src).expect("lex");
+    let program = parse(&tokens).expect("parse");
+    let module = compile_with_target(&program, &Target::embedded_16()).expect("compile");
+    let arena = Arena::with_capacity(4096);
+    let mut vm: NarrowVm<'_, '_> = NarrowVm::new(module, &arena).expect("new");
+    match vm.call(&[]).expect("call") {
+        GenericVmState::Finished(GenericValue::Int(n)) => n,
+        other => panic!("unexpected: {:?}", other),
+    }
+}
+
+/// As `run_i16`, for a bool-returning entry point.
+fn run_bool_i16(src: &str) -> bool {
+    let tokens = tokenize(src).expect("lex");
+    let program = parse(&tokens).expect("parse");
+    let module = compile_with_target(&program, &Target::embedded_16()).expect("compile");
+    let arena = Arena::with_capacity(4096);
+    let mut vm: NarrowVm<'_, '_> = NarrowVm::new(module, &arena).expect("new");
+    match vm.call(&[]).expect("call") {
+        GenericVmState::Finished(GenericValue::Bool(b)) => b,
+        other => panic!("unexpected: {:?}", other),
+    }
+}
+
+#[test]
+fn narrow_multiword_construct_and_index() {
+    // A two-word value at i16 is a 32-bit magnitude; the words index
+    // back out unchanged.
+    assert_eq!(
+        run_i16("fn main() -> Word { let m = (42, 7) as Multiword<2>; m[0] }"),
+        42_i16
+    );
+    assert_eq!(
+        run_i16("fn main() -> Word { let m = (42, 7) as Multiword<2>; m[1] }"),
+        7_i16
+    );
+}
+
+#[test]
+fn narrow_multiword_add_unsigned_carry() {
+    // Low word -1 is 0xFFFF, unsigned 65_535 at i16; adding 1 carries
+    // into the high word, giving (0, 1). This exercises the word_bits-1
+    // = 15 top-bit shift at the narrow width.
+    assert_eq!(
+        run_i16(
+            "fn main() -> Word { let a = (-1, 0) as Multiword<2>; let b = (1, 0) as Multiword<2>; let s = a + b; s[0] }"
+        ),
+        0_i16
+    );
+    assert_eq!(
+        run_i16(
+            "fn main() -> Word { let a = (-1, 0) as Multiword<2>; let b = (1, 0) as Multiword<2>; let s = a + b; s[1] }"
+        ),
+        1_i16
+    );
+}
+
+#[test]
+fn narrow_multiword_add_no_spurious_signed_carry() {
+    // i16::MAX = 32_767. Adding 1 sets the low word's sign bit, turning
+    // it into i16::MIN, but no bit carries out of the low word, so the
+    // high word stays 0. A signed-flag cascade would wrongly carry.
+    assert_eq!(
+        run_i16(
+            "fn main() -> Word { let a = (32767, 0) as Multiword<2>; let b = (1, 0) as Multiword<2>; let s = a + b; s[1] }"
+        ),
+        0_i16
+    );
+    assert_eq!(
+        run_i16(
+            "fn main() -> Word { let a = (32767, 0) as Multiword<2>; let b = (1, 0) as Multiword<2>; let s = a + b; s[0] }"
+        ),
+        i16::MIN
+    );
+}
+
+#[test]
+fn narrow_multiword_compare_high_word_signed_low_word_unsigned() {
+    // Signed top word: (0, -1) is a negative value, below zero.
+    assert!(run_bool_i16(
+        "fn main() -> bool { let a = (0, -1) as Multiword<2>; let b = (0, 0) as Multiword<2>; a < b }"
+    ));
+    // Unsigned low word: -1 is 65_535 unsigned, so (-1, 0) is the
+    // larger value when the high words are equal.
+    assert!(run_bool_i16(
+        "fn main() -> bool { let a = (-1, 0) as Multiword<2>; let b = (1, 0) as Multiword<2>; a > b }"
+    ));
+}

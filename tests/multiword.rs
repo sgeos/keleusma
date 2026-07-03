@@ -338,6 +338,34 @@ fn multiword_fixed_point_add_same_scale() {
 }
 
 #[test]
+fn multiword_nested_operations_do_not_alias_scratch_locals() {
+    // Each lowered operation declares its own scratch locals, and
+    // declare_local hands out a fresh slot every call, so a nested
+    // expression whose subexpressions are themselves multi-word
+    // operations must not clobber one another. `(a + b) + c` nests one
+    // add inside another, and the surrounding comparison nests two adds
+    // under one comparison; both must evaluate cleanly.
+    assert_eq!(
+        run_to_int(
+            "fn main() -> Word { \
+             let a = (1, 0) as Multiword<2>; \
+             let b = (2, 0) as Multiword<2>; \
+             let c = (3, 0) as Multiword<2>; \
+             let s = (a + b) + c; s[0] }"
+        ),
+        6
+    );
+    // Two independent sums compared in one expression.
+    assert!(run_to_bool(
+        "fn main() -> bool { \
+         let a = (1, 0) as Multiword<2>; \
+         let b = (2, 0) as Multiword<2>; \
+         let c = (3, 0) as Multiword<2>; \
+         (a + b) < (a + c) }"
+    ));
+}
+
+#[test]
 fn multiword_different_scales_do_not_mix() {
     // Multiword<2> (integer, F = 0) and Multiword<2, 16> are distinct
     // types and cannot be combined without an explicit cast.
