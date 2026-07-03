@@ -963,6 +963,173 @@ fn element_type_of(t: &TypeExpr) -> Option<TypeExpr> {
     }
 }
 
+/// Compile a binary operator whose operands are `Multiword<N>` (B19).
+/// Add and Sub lower to per-limb carry and borrow cascades over the
+/// existing checked-word and bitwise opcodes; comparisons, multiply,
+/// divide, and shifts are later increments.
+fn compile_multiword_binop(
+    fc: &mut FuncCompiler,
+    op: crate::ast::BinOp,
+    left: &Expr,
+    right: &Expr,
+    n: u16,
+) -> Result<(), CompileError> {
+    use crate::ast::BinOp;
+    match op {
+        BinOp::Add => compile_multiword_add_sub(fc, left, right, n, false),
+        BinOp::Sub => compile_multiword_add_sub(fc, left, right, n, true),
+        _ => Err(CompileError {
+            message: alloc::format!(
+                "Multiword<{}> does not yet support this operator (later phase)",
+                n
+            ),
+            span: left.span(),
+        }),
+    }
+}
+
+/// Emit one limb's unsigned carry (add) or borrow (sub) as a 0/1 word
+/// left on the operand stack. Given operand limbs `x` and `y` and the
+/// wrapping result limb `s`, all in locals:
+///   add carry  = top_bit((x & y) | ((x ^ y) & ~s))
+///   sub borrow = top_bit((~x & y) | (~(x ^ y) & s))
+/// The top bit is extracted by an arithmetic right shift of word_bits-1
+/// followed by a mask of 1. This is the correct two's-complement
+/// multi-word carry, not the signed-overflow flag of the checked op.
+#[allow(clippy::too_many_arguments)]
+fn emit_limb_carry(
+    fc: &mut FuncCompiler,
+    is_sub: bool,
+    x: u16,
+    y: u16,
+    s: u16,
+    neg1: u16,
+    shift_c: u16,
+    one: u16,
+) {
+    if is_sub {
+        fc.emit(Op::GetLocal(x));
+        fc.emit(Op::Const(neg1));
+        fc.emit(Op::BitXor); // ~x
+        fc.emit(Op::GetLocal(y));
+        fc.emit(Op::BitAnd); // ~x & y
+        fc.emit(Op::GetLocal(x));
+        fc.emit(Op::GetLocal(y));
+        fc.emit(Op::BitXor);
+        fc.emit(Op::Const(neg1));
+        fc.emit(Op::BitXor); // ~(x ^ y)
+        fc.emit(Op::GetLocal(s));
+        fc.emit(Op::BitAnd); // ~(x ^ y) & s
+        fc.emit(Op::BitOr);
+    } else {
+        fc.emit(Op::GetLocal(x));
+        fc.emit(Op::GetLocal(y));
+        fc.emit(Op::BitAnd); // x & y
+        fc.emit(Op::GetLocal(x));
+        fc.emit(Op::GetLocal(y));
+        fc.emit(Op::BitXor); // x ^ y
+        fc.emit(Op::GetLocal(s));
+        fc.emit(Op::Const(neg1));
+        fc.emit(Op::BitXor); // ~s
+        fc.emit(Op::BitAnd); // (x ^ y) & ~s
+        fc.emit(Op::BitOr);
+    }
+    fc.emit(Op::Const(shift_c));
+    fc.emit(Op::Shr);
+    fc.emit(Op::Const(one));
+    fc.emit(Op::BitAnd);
+}
+
+/// Compile `Multiword<N>` addition or subtraction as an unrolled
+/// per-limb carry or borrow cascade over the existing checked-word and
+/// bitwise opcodes, producing a fresh N-word array (B19).
+fn compile_multiword_add_sub(
+    fc: &mut FuncCompiler,
+    left: &Expr,
+    right: &Expr,
+    n: u16,
+    is_sub: bool,
+) -> Result<(), CompileError> {
+    let word_bits = (fc.type_info.word_bytes * 8) as i64;
+    let byte_size = flat_alloc_bytes(&TypeExpr::Multiword(n, Span::default()), &fc.type_info)
+        .unwrap_or_else(|| conservative_alloc_bytes(n));
+    let word_ty = TypeExpr::Prim(PrimType::Word, Span::default());
+    let elem_op = array_elem_operand(Some(&word_ty), &fc.type_info);
+    let neg1 = fc.add_constant(Value::Int(-1));
+    let one = fc.add_constant(Value::Int(1));
+    let zero = fc.add_constant(Value::Int(0));
+    let shift_c = fc.add_constant(Value::Int(word_bits - 1));
+    let av = fc.declare_local("__mw_a");
+    let bv = fc.declare_local("__mw_b");
+    let cv = fc.declare_local("__mw_carry");
+    let xi = fc.declare_local("__mw_x");
+    let yi = fc.declare_local("__mw_y");
+    let s1 = fc.declare_local("__mw_s1");
+    let c1 = fc.declare_local("__mw_c1");
+    let s2 = fc.declare_local("__mw_s2");
+    let c2 = fc.declare_local("__mw_c2");
+    // Evaluate both operands into locals.
+    compile_expr(fc, left)?;
+    fc.emit(Op::SetLocal(av));
+    compile_expr(fc, right)?;
+    fc.emit(Op::SetLocal(bv));
+    // The running carry or borrow starts at zero.
+    fc.emit(Op::Const(zero));
+    fc.emit(Op::SetLocal(cv));
+    for i in 0..n {
+        let idx_c = fc.add_constant(Value::Int(i as i64));
+        // x = a[i]
+        fc.emit(Op::GetLocal(av));
+        fc.emit(Op::Const(idx_c));
+        fc.emit(Op::GetIndex(elem_op.clone()));
+        fc.emit(Op::SetLocal(xi));
+        // y = b[i]
+        fc.emit(Op::GetLocal(bv));
+        fc.emit(Op::Const(idx_c));
+        fc.emit(Op::GetIndex(elem_op.clone()));
+        fc.emit(Op::SetLocal(yi));
+        // s1 = x (op) y, wrapping; discard the high word and flag.
+        fc.emit(Op::GetLocal(xi));
+        fc.emit(Op::GetLocal(yi));
+        if is_sub {
+            fc.emit(Op::CheckedSub);
+        } else {
+            fc.emit(Op::CheckedAdd);
+        }
+        fc.emit(Op::PopN(2));
+        fc.emit(Op::SetLocal(s1));
+        // c1 = carry or borrow out of that step.
+        emit_limb_carry(fc, is_sub, xi, yi, s1, neg1, shift_c, one);
+        fc.emit(Op::SetLocal(c1));
+        // s2 = s1 (op) incoming carry, wrapping.
+        fc.emit(Op::GetLocal(s1));
+        fc.emit(Op::GetLocal(cv));
+        if is_sub {
+            fc.emit(Op::CheckedSub);
+        } else {
+            fc.emit(Op::CheckedAdd);
+        }
+        fc.emit(Op::PopN(2));
+        fc.emit(Op::SetLocal(s2));
+        // c2 = carry or borrow out of folding the incoming carry.
+        emit_limb_carry(fc, is_sub, s1, cv, s2, neg1, shift_c, one);
+        fc.emit(Op::SetLocal(c2));
+        // Outgoing carry is c1 | c2; at most one is set.
+        fc.emit(Op::GetLocal(c1));
+        fc.emit(Op::GetLocal(c2));
+        fc.emit(Op::BitOr);
+        fc.emit(Op::SetLocal(cv));
+        // Push the result limb for the array.
+        fc.emit(Op::GetLocal(s2));
+    }
+    fc.emit(Op::NewComposite(NewCompositeOperand::Flat {
+        kind: crate::value_layout::CompositeKind::Array,
+        count: n,
+        byte_size,
+    }));
+    Ok(())
+}
+
 /// Compile a parsed Keleusma program into a bytecode module.
 ///
 /// Runs the static type checker before bytecode emission. Type errors
@@ -6307,6 +6474,12 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
             // `DEFAULT_FIXED_FRAC_BITS` which matches the host
             // runtime's Q31.32 format.
             let operand_ty = infer_expr_type(fc, left).or_else(|| infer_expr_type(fc, right));
+            // Multiword<N> operators lower to unrolled per-limb cascades
+            // over the existing checked-word and bitwise opcodes (B19).
+            if let Some(TypeExpr::Multiword(n, _)) = &operand_ty {
+                let n = *n;
+                return compile_multiword_binop(fc, *op, left, right, n);
+            }
             let left_fixed_n = match &operand_ty {
                 Some(TypeExpr::Prim(PrimType::Fixed(n), _)) => {
                     Some(n.unwrap_or(crate::typecheck::DEFAULT_FIXED_FRAC_BITS))

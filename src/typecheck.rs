@@ -3572,6 +3572,34 @@ fn type_of_expr_inner(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError>
                 .collect();
             let lt = strip_labels(lt_raw);
             let rt = strip_labels(rt_raw);
+            // Multiword<N> arithmetic and comparison. Add and Sub are
+            // implemented (phase 2); multiply, divide, modulo, and the
+            // shifts are later phases (B19). Both operands must share N.
+            if let (Type::Multiword(ln), Type::Multiword(rn)) = (&lt, &rt) {
+                if ln != rn {
+                    return Err(TypeError::new(
+                        format!(
+                            "cannot apply operator to {} and {}",
+                            lt.display(),
+                            rt.display()
+                        ),
+                        *span,
+                    ));
+                }
+                let n = *ln;
+                let bare = match op {
+                    BinOp::Add | BinOp::Sub => Type::Multiword(n),
+                    BinOp::Eq | BinOp::NotEq | BinOp::Lt | BinOp::Gt | BinOp::LtEq
+                    | BinOp::GtEq => Type::Bool,
+                    _ => {
+                        return Err(TypeError::new(
+                            format!("Multiword<{}> does not yet support this operator", n),
+                            *span,
+                        ));
+                    }
+                };
+                return Ok(apply_labels(bare, &combined_labels));
+            }
             let bare_result = match op {
                 BinOp::Add => {
                     if matches!(lt, Type::Word) && matches!(rt, Type::Word) {

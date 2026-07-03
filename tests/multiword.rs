@@ -86,3 +86,89 @@ fn multiword_single_word_constructor() {
         77
     );
 }
+
+// --- Phase 2: addition and subtraction with correct two's-complement
+// unsigned carry and borrow (B19). ---
+
+#[test]
+fn multiword_add_no_carry() {
+    assert_eq!(
+        run_to_int("fn main() -> Word { let a = (100, 200) as Multiword<2>; let b = (50, 25) as Multiword<2>; let s = a + b; s[0] }"),
+        150
+    );
+    assert_eq!(
+        run_to_int("fn main() -> Word { let a = (100, 200) as Multiword<2>; let b = (50, 25) as Multiword<2>; let s = a + b; s[1] }"),
+        225
+    );
+}
+
+#[test]
+fn multiword_add_unsigned_carry_propagates() {
+    // (-1, 0) is unsigned 2^64 - 1 in the low limb; adding 1 carries
+    // into the high limb, giving (0, 1). This is the correct unsigned
+    // carry, which the signed-overflow flag does not provide.
+    assert_eq!(
+        run_to_int("fn main() -> Word { let a = (-1, 0) as Multiword<2>; let b = (1, 0) as Multiword<2>; let s = a + b; s[0] }"),
+        0
+    );
+    assert_eq!(
+        run_to_int("fn main() -> Word { let a = (-1, 0) as Multiword<2>; let b = (1, 0) as Multiword<2>; let s = a + b; s[1] }"),
+        1
+    );
+}
+
+#[test]
+fn multiword_add_no_spurious_signed_carry() {
+    // The signed-overflow counterexample. a = (Word::MAX, 0) is the
+    // integer 2^63 - 1, so a + 1 = 2^63, correctly (Word::MIN, 0). A
+    // naive signed-flag cascade would wrongly propagate a carry and
+    // give (Word::MIN, 1); the high limb MUST be 0.
+    assert_eq!(
+        run_to_int("fn main() -> Word { let a = (9223372036854775807, 0) as Multiword<2>; let b = (1, 0) as Multiword<2>; let s = a + b; s[1] }"),
+        0
+    );
+    assert_eq!(
+        run_to_int("fn main() -> Word { let a = (9223372036854775807, 0) as Multiword<2>; let b = (1, 0) as Multiword<2>; let s = a + b; s[0] }"),
+        i64::MIN
+    );
+}
+
+#[test]
+fn multiword_sub_no_borrow() {
+    assert_eq!(
+        run_to_int("fn main() -> Word { let a = (150, 225) as Multiword<2>; let b = (50, 25) as Multiword<2>; let d = a - b; d[0] }"),
+        100
+    );
+    assert_eq!(
+        run_to_int("fn main() -> Word { let a = (150, 225) as Multiword<2>; let b = (50, 25) as Multiword<2>; let d = a - b; d[1] }"),
+        200
+    );
+}
+
+#[test]
+fn multiword_sub_borrow_propagates() {
+    // (0, 5) - (1, 0): the low limb underflows, borrowing from the high
+    // limb, giving low = -1 (all ones) and high = 5 - 1 = 4.
+    assert_eq!(
+        run_to_int("fn main() -> Word { let a = (0, 5) as Multiword<2>; let b = (1, 0) as Multiword<2>; let d = a - b; d[0] }"),
+        -1
+    );
+    assert_eq!(
+        run_to_int("fn main() -> Word { let a = (0, 5) as Multiword<2>; let b = (1, 0) as Multiword<2>; let d = a - b; d[1] }"),
+        4
+    );
+}
+
+#[test]
+fn multiword_four_word_add_carry_chain() {
+    // A carry that ripples across multiple limbs: (-1, -1, -1, 0) is
+    // 2^192 - 1 in the low three limbs; adding 1 clears them and sets
+    // the fourth limb to 1.
+    let src = "fn main() -> Word { \
+        let a = (-1, -1, -1, 0) as Multiword<4>; \
+        let b = (1, 0, 0, 0) as Multiword<4>; \
+        let s = a + b; \
+        s[0] + s[1] + s[2] + s[3] }";
+    // s = (0, 0, 0, 1) -> sum of digits is 1.
+    assert_eq!(run_to_int(src), 1);
+}
