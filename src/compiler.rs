@@ -956,6 +956,9 @@ fn array_length_of_type(t: &TypeExpr) -> Option<i64> {
 fn element_type_of(t: &TypeExpr) -> Option<TypeExpr> {
     match t {
         TypeExpr::Array(elem, _, _) => Some((**elem).clone()),
+        // A Multiword<N> indexes to a Word digit; its representation is
+        // a flat N-word array (B19).
+        TypeExpr::Multiword(_, _) => Some(TypeExpr::Prim(PrimType::Word, Span::default())),
         _ => None,
     }
 }
@@ -7007,6 +7010,32 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
             // sub-64-bit targets are deferred to a follow-up that
             // threads the target descriptor into the function
             // compiler.
+            // Multiword construction. A tuple of N words casts to
+            // Multiword<N>, represented as a flat N-word array. The
+            // documented construction form is a tuple literal, compiled
+            // directly to the digit array (B19).
+            if let TypeExpr::Multiword(n, _) = target {
+                if let Expr::TupleLiteral { elements, .. } = inner.as_ref() {
+                    let byte_size =
+                        flat_alloc_bytes(&TypeExpr::Multiword(*n, Span::default()), &fc.type_info)
+                            .unwrap_or_else(|| conservative_alloc_bytes(*n));
+                    for e in elements {
+                        compile_expr(fc, e)?;
+                    }
+                    fc.emit(Op::NewComposite(NewCompositeOperand::Flat {
+                        kind: crate::value_layout::CompositeKind::Array,
+                        count: *n,
+                        byte_size,
+                    }));
+                    return Ok(());
+                }
+                return Err(CompileError {
+                    message: alloc::string::String::from(
+                        "Multiword<N> construction currently requires a tuple literal of N words",
+                    ),
+                    span: target.span(),
+                });
+            }
             let source = infer_expr_type(fc, inner);
             // Enum-to-Word special case. The source must be an
             // enum type the compiler knows about; the cast emits

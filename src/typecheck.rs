@@ -4148,6 +4148,10 @@ fn type_of_expr_inner(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError>
             }
             match obj_ty {
                 Type::Array(inner, _) => Ok(*inner),
+                // Indexing a Multiword<N> yields the i-th Word digit,
+                // little-endian, with the same runtime bounds check as
+                // an array (B19).
+                Type::Multiword(_) => Ok(Type::Word),
                 other => Err(TypeError::new(
                     format!("array index on non-array type {}", other.display()),
                     *span,
@@ -4412,6 +4416,18 @@ fn type_of_expr_inner(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError>
                 // tests; the runtime selects the matching
                 // discriminant.
                 (Type::Enum(_, _), Type::Word) => to_ty.clone(),
+                // Tuple-to-Multiword construction. A tuple of exactly N
+                // Word elements casts to Multiword<N>. Both share the
+                // flat little-endian N-word layout, so the cast repacks
+                // the tuple elements as the multiword digit array (B19).
+                (Type::Tuple(elems), Type::Multiword(n))
+                    if elems.len() == *n as usize
+                        && elems
+                            .iter()
+                            .all(|e| matches!(strip_labels(e.clone()), Type::Word)) =>
+                {
+                    to_ty.clone()
+                }
                 // Type variables on either side of a cast pass
                 // through (the unifier will narrow them when
                 // possible). Casts between fully-resolved types
