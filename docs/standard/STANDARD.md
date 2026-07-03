@@ -415,21 +415,25 @@ An `Opaque` value is a single-word handle to a host reference. The Float kind an
 its wire tag are reserved even in a Core build so that tags never shift, and the
 kind is materialized only under the Float profile.
 
-#### 5.1.2 The big-number family
+#### 5.1.2 The multi-word fixed-point family
 
-A fixed-width multi-word integer, the big-number family, is a parameterized
-numeric type distinct from the closed base scalar set in the way an array is
-distinct from its element. Its width is a word count that is part of the type, so a
-value of an N-word big-number is exactly `N * w` bytes, stored little-endian and
-signed in two's complement. Distinct word counts are distinct types related only by
-an explicit cast. A widening cast sign-extends, a narrowing cast wraps to the low
-words, arithmetic wraps at the word-count width, and division by zero is the same
-bounded fault as for the word-width integer.
+A fixed-width multi-word fixed-point number, written `Multiword<N>` or
+`Multiword<N, F>`, is a parameterized numeric type distinct from the closed base
+scalar set in the way an array is distinct from its element. It is N words wide, so
+a value is exactly `N * w` bytes, stored little-endian in two's complement, with F
+fractional bits. The fraction-bit count F defaults to zero, and `Multiword<N>` is
+`Multiword<N, 0>`, the multi-word integer case. Distinct word counts and distinct
+fraction-bit counts are distinct types, related only by an explicit cast. Addition
+and subtraction are scale-independent and wrap at the word-count width.
+Multiplication of two values of fraction-bit count F shifts the double-width product
+right by F, and division shifts the dividend left by F, so the scale is preserved.
+Division by zero is the same bounded fault as for the word-width integer.
 
-**Note.** The big-number family is a known non-conformance per Annex A. It requires
-a parametric type family the surface does not yet expose, and the reference
-implementation provides only the checked-arithmetic building blocks of Standard
-4.2 and the `[Word; N]` array pattern.
+**Note.** The multi-word family is partially implemented, and its completion is a
+known non-conformance per Annex A. The type, its construction and indexing, and its
+scale-independent addition and subtraction with the correct unsigned carry and
+borrow are implemented. The fixed-point multiply and divide, the comparisons, and
+the shifts are pending, and general const generics remain a separate feature.
 
 #### 5.1.3 Composite kinds
 
@@ -1151,10 +1155,11 @@ this document.
    Standard 5.2.6 are not implemented. The reference verifier tracks only operand
    depth, and baked-offset correctness is a compiler-integrity assumption. This is
    the single largest verifier work item.
-2. The big-number family of Standard 5.1.2 is specified but not implemented. It
-   requires a parametric type family the surface does not yet expose. Multi-word
-   arithmetic is presently available only as the checked-arithmetic building blocks
-   of Standard 4.2 and the `[Word; N]` array pattern.
+2. The multi-word fixed-point family of Standard 5.1.2 is partially implemented. The
+   type `Multiword<N>` and `Multiword<N, F>`, its construction and indexing, and its
+   scale-independent addition and subtraction are implemented. The fixed-point
+   multiply and divide, the comparisons, and the shifts are pending, and general
+   const generics remain a separate feature.
 3. The instruction count in prior project documents was recorded as 66. The instruction
    set is 67, because the `SetDataComposite` opcode at identifier 70 is implemented,
    dispatched, and verified but was undocumented. The issuing authority reconciles the

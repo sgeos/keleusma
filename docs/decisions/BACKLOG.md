@@ -497,7 +497,9 @@ Follow-on items that interact but remain out of scope:
 
 The `Op::CheckedDiv` and `Op::CheckedMod` follow-on landed separately: the checked construct's `/` and `%` paths now route through dedicated opcodes that surface the `i64::MIN / -1` and `i64::MIN % -1` corners through the standard pattern-arm dispatch.
 
-## B19. `Multiword<N>` parametric bignum type
+## B19. `Multiword<N, F>` parametric multi-word fixed-point type
+
+> **Reframing (implemented).** Per the pilot decision, Multiword is implicitly fixed-point. The type carries a word count N and an optional fraction-bit count F, written `Multiword<N>` for the integer case (F = 0) or `Multiword<N, F>` for F fractional bits over the same N-word layout. Addition and subtraction are scale-independent and unchanged; the fixed-point shift enters at multiply, which shifts the double-width product right by F, and divide, which shifts the dividend left by F. The integer-only description below is the original design and is superseded on the fixed-point point by this note and by Standard 5.1.2.
 
 ### Goal
 
