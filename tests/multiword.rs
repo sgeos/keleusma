@@ -530,6 +530,42 @@ fn multiword_fixed_point_multiply_small_scale() {
 // (v[1] * 2^64 + v[0]) / 2^F on the default 64-bit runtime (B19). ---
 
 #[test]
+fn multiword_fixed_mul_rounds_toward_negative_infinity() {
+    // The shift is arithmetic, so a negative product floors rather than
+    // truncating toward zero. Q127.1: -1.5 = raw -3, times 0.5 = raw 1,
+    // exact product -0.75; the raw product -3 arithmetic-shifted right by
+    // 1 is -2 (floor), representing -1.0, not the -1 (round-toward-zero)
+    // that would represent -0.5.
+    assert_eq!(
+        run_to_int(
+            "fn main() -> Word { let a = (-3, -1) as Multiword<2, 1>; let b = (1, 0) as Multiword<2, 1>; let s = a * b; s[0] }"
+        ),
+        -2
+    );
+    // The positive counterpart: 1.5 * 0.5 raw is 3, shifted right by 1 is
+    // 1, representing 0.5.
+    assert_eq!(
+        run_to_int(
+            "fn main() -> Word { let a = (3, 0) as Multiword<2, 1>; let b = (1, 0) as Multiword<2, 1>; let s = a * b; s[0] }"
+        ),
+        1
+    );
+}
+
+#[test]
+fn multiword_fixed_mul_single_word() {
+    // N = 1 fixed-point multiply. Q56.8 in one word: 1.0 = 256, 2.0 =
+    // 512, product 2.0 = 512. The raw product 2^17 is shifted right by
+    // F = 8 to 2^9 = 512.
+    assert_eq!(
+        run_to_int(
+            "fn main() -> Word { let a = Multiword::<1, 8>(256); let b = Multiword::<1, 8>(512); let s = a * b; s[0] }"
+        ),
+        512
+    );
+}
+
+#[test]
 fn multiword_fixed_mul_integer_scale() {
     // Q64.64: a = (0, 2) is 2.0, b = (0, 3) is 3.0, product 6.0 = (0, 6).
     // F = 64 is a whole-word shift (q = 1, r = 0).

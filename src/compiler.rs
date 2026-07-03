@@ -1736,15 +1736,17 @@ fn compile_multiword_fixed_mul(
     emit_multiword_highword_subtract(fc, &pwords, &adig, b_neg, n, neg1, shift_c, one);
     emit_multiword_highword_subtract(fc, &pwords, &bdig, a_neg, n, neg1, shift_c, one);
     // Arithmetic-shift the signed 2N-word product right by F and take the
-    // low N words.
-    let sign_word = fc.declare_local("__mw_signw");
-    fc.emit(Op::GetLocal(pwords[two_n - 1]));
-    fc.emit(Op::Const(shift_c));
-    fc.emit(Op::Shr);
-    fc.emit(Op::SetLocal(sign_word));
+    // low N words. Because F <= N * word_bits, the highest product bit the
+    // shift reads is F + N * word_bits - 1, at most 2N * word_bits - 1, the
+    // top bit of the 2N-word product; every word access therefore stays
+    // within the product and no sign-extension word beyond index 2N is
+    // ever needed. The shift is arithmetic (floor toward negative
+    // infinity), so a negative product rounds down rather than toward
+    // zero, and a result that does not fit in N words wraps, matching the
+    // wrapping default of the other multi-word operations.
     let q = (f as usize) / (word_bits as usize);
     let r = (f as usize) % (word_bits as usize);
-    let pword = |m: usize| -> u16 { if m < two_n { pwords[m] } else { sign_word } };
+    debug_assert!(q + n as usize <= two_n, "shift window escapes the product");
     let mut rwords: alloc::vec::Vec<u16> = alloc::vec::Vec::new();
     let (r_c, wr_c, mask_c) = if r != 0 {
         let mask = ((1i128 << (word_bits as i128 - r as i128)) - 1) as i64;
@@ -1759,16 +1761,16 @@ fn compile_multiword_fixed_mul(
     for k in 0..n as usize {
         let rk = fc.declare_local("__mw_r");
         if r == 0 {
-            fc.emit(Op::GetLocal(pword(k + q)));
+            fc.emit(Op::GetLocal(pwords[k + q]));
         } else {
             // logical_shr(S[k+q], r) = (S[k+q] >>a r) & mask
-            fc.emit(Op::GetLocal(pword(k + q)));
+            fc.emit(Op::GetLocal(pwords[k + q]));
             fc.emit(Op::Const(r_c.unwrap()));
             fc.emit(Op::Shr);
             fc.emit(Op::Const(mask_c.unwrap()));
             fc.emit(Op::BitAnd);
             // | (S[k+q+1] << (word_bits - r))
-            fc.emit(Op::GetLocal(pword(k + q + 1)));
+            fc.emit(Op::GetLocal(pwords[k + q + 1]));
             fc.emit(Op::Const(wr_c.unwrap()));
             fc.emit(Op::Shl);
             fc.emit(Op::BitOr);
