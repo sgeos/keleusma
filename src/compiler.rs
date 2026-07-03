@@ -989,10 +989,10 @@ fn compile_multiword_binop(
         // multiply (F > 0) forms the full product and shifts it right by F.
         BinOp::Mul if f == 0 => compile_multiword_mul(fc, left, right, n),
         BinOp::Mul => compile_multiword_fixed_mul(fc, left, right, n, f),
-        // Integer divide and modulo (F = 0). The fixed-point divide is a
-        // later increment (rejected at the type checker).
-        BinOp::Div => compile_multiword_div(fc, left, right, n, false),
-        BinOp::Mod => compile_multiword_div(fc, left, right, n, true),
+        // Divide and modulo at every scale. The fixed-point divide pre-
+        // shifts the dividend by F; the modulo needs no shift.
+        BinOp::Div => compile_multiword_div(fc, left, right, n, f, false),
+        BinOp::Mod => compile_multiword_div(fc, left, right, n, f, true),
         BinOp::Eq | BinOp::NotEq | BinOp::Lt | BinOp::Gt | BinOp::LtEq | BinOp::GtEq => {
             compile_multiword_compare(fc, op, left, right, n)
         }
@@ -1835,8 +1835,10 @@ fn emit_multiword_cond_negate(
     }
 }
 
-/// Compile an integer `Multiword<N>` divide (`is_mod` false) or modulo
-/// (`is_mod` true), fraction-bit count F = 0 (B19 phase 4a).
+/// Compile a `Multiword<N, F>` divide (`is_mod` false) or modulo
+/// (`is_mod` true). Integer divide and modulo (F = 0, B19 phase 4a) and
+/// the fixed-point divide and modulo (F > 0, B19 phase 4b) are all
+/// handled here.
 ///
 /// Division is signed with truncation toward zero, matching the scalar
 /// `Word` division: the quotient takes the sign of the operand-sign
@@ -1845,37 +1847,63 @@ fn emit_multiword_cond_negate(
 /// and the sign is reapplied. A zero divisor traps as a division by
 /// zero, reusing the scalar `Op::Div` trap.
 ///
+/// The fixed-point divide pre-shifts the dividend left by F, because two
+/// same-scale operands a and b represent a/2^F and b/2^F, so the raw
+/// quotient that represents (a/2^F)/(b/2^F) is (a << F) / b. The shift is
+/// folded into the bit loop: dividend bit i is bit i - F of the
+/// magnitude, the loop runs over the widened dividend, and only the low N
+/// words of the quotient are stored, the higher bits being the overflow.
+/// The fixed-point modulo needs no shift, because a same-scale remainder
+/// keeps the scale, so raw_a mod raw_b is already the fixed-point
+/// remainder, identical to the integer modulo.
+///
 /// The unsigned core is branchless binary long division. The constrained
 /// instruction set has no mutable array indexing, so every word and bit
 /// index must be a compile-time constant, which the bit loop is unrolled
-/// to provide. Each of the N*word_bits bit-steps shifts the running
-/// remainder left by one and injects the next dividend bit, tentatively
-/// subtracts the divisor, and uses the subtraction's final borrow both as
-/// the `remainder < divisor` test and as the mask that either keeps the
-/// old remainder (borrow) or takes the difference (no borrow) and sets
-/// the corresponding quotient bit. Because the loop is unrolled, a word
-/// count whose bit total is impractically large is rejected.
+/// to provide. Each bit-step shifts the running remainder left by one and
+/// injects the next dividend bit, tentatively subtracts the divisor, and
+/// uses the subtraction's final borrow both as the `remainder < divisor`
+/// test and as the mask that either keeps the old remainder (borrow) or
+/// takes the difference (no borrow) and sets the corresponding quotient
+/// bit. Because the loop is unrolled, a dividend whose bit total is
+/// impractically large is rejected.
 fn compile_multiword_div(
     fc: &mut FuncCompiler,
     left: &Expr,
     right: &Expr,
     n: u16,
+    f: u16,
     is_mod: bool,
 ) -> Result<(), CompileError> {
     let word_bits = (fc.type_info.word_bytes * 8) as i64;
-    // The bit loop unrolls to N * word_bits steps; bound it so a single
+    let n_bits = n as u128 * word_bits as u128;
+    // The fixed-point divide widens the dividend by F bits; the integer
+    // divide and the modulo (at any scale) do not.
+    let shift = if !is_mod && f > 0 { f as u128 } else { 0 };
+    // A fraction-bit count wider than the value is malformed.
+    if shift > n_bits {
+        return Err(CompileError {
+            message: alloc::format!(
+                "Multiword<{}, {}> declares more fraction bits than the {}-bit N-word width holds",
+                n,
+                f,
+                n_bits
+            ),
+            span: left.span(),
+        });
+    }
+    // The bit loop unrolls to dividend_bits steps; bound it so a single
     // division cannot emit an unreasonable amount of code. The limit
-    // admits the practical word counts (N up to eight at a 64-bit word,
-    // up to thirty-two at a 16-bit word) and rejects only values so wide
+    // admits the practical word counts and rejects only values so wide
     // the unrolling would be impractical.
-    let bit_count = n as u128 * word_bits as u128;
-    if bit_count > 512 {
+    let dividend_bits = n_bits + shift;
+    if dividend_bits > 512 {
         return Err(CompileError {
             message: alloc::format!(
                 "Multiword<{}> division at a {}-bit word unrolls to {} bit-steps, beyond the compiler's limit; reduce the word count",
                 n,
                 word_bits,
-                bit_count
+                dividend_bits
             ),
             span: left.span(),
         });
@@ -1961,11 +1989,8 @@ fn compile_multiword_div(
     let mask = fc.declare_local("__mw_dmask");
     let notmask = fc.declare_local("__mw_dnmask");
     // Bit loop from the most significant dividend bit down.
-    for i in (0..bit_count).rev() {
-        let wi = (i / word_bits as u128) as usize;
-        let bp = (i % word_bits as u128) as i64;
-        let bp_c = fc.add_constant(Value::Int(bp));
-        // Shift R left by one, injecting bit i of |a| into bit 0.
+    for i in (0..dividend_bits).rev() {
+        // Shift R left by one, injecting dividend bit i into bit 0.
         for j in (1..n as usize).rev() {
             fc.emit(Op::GetLocal(rword[j]));
             fc.emit(Op::Const(one));
@@ -1981,12 +2006,21 @@ fn compile_multiword_div(
         fc.emit(Op::GetLocal(rword[0]));
         fc.emit(Op::Const(one));
         fc.emit(Op::Shl);
-        fc.emit(Op::GetLocal(adig[wi]));
-        fc.emit(Op::Const(bp_c));
-        fc.emit(Op::Shr);
-        fc.emit(Op::Const(one));
-        fc.emit(Op::BitAnd);
-        fc.emit(Op::BitOr);
+        // Dividend bit i is bit (i - shift) of the magnitude; when that
+        // index falls outside the magnitude the injected bit is zero, so
+        // R is left as R << 1 with no bit set.
+        let src = i as i128 - shift as i128;
+        if src >= 0 && (src as u128) < n_bits {
+            let src = src as u128;
+            let swi = (src / word_bits as u128) as usize;
+            let sbp = fc.add_constant(Value::Int((src % word_bits as u128) as i64));
+            fc.emit(Op::GetLocal(adig[swi]));
+            fc.emit(Op::Const(sbp));
+            fc.emit(Op::Shr);
+            fc.emit(Op::Const(one));
+            fc.emit(Op::BitAnd);
+            fc.emit(Op::BitOr);
+        }
         fc.emit(Op::SetLocal(rword[0]));
         // tentative = R - |b|, tracking the final borrow.
         fc.emit(Op::Const(zero));
@@ -2035,14 +2069,20 @@ fn compile_multiword_div(
             fc.emit(Op::SetLocal(rword[j]));
         }
         // Quotient bit i is 1 when the subtraction succeeded (no borrow).
-        fc.emit(Op::GetLocal(qword[wi]));
-        fc.emit(Op::GetLocal(borrow));
-        fc.emit(Op::Const(one));
-        fc.emit(Op::BitXor);
-        fc.emit(Op::Const(bp_c));
-        fc.emit(Op::Shl);
-        fc.emit(Op::BitOr);
-        fc.emit(Op::SetLocal(qword[wi]));
+        // Only the low N words are kept; higher bits are the fixed-divide
+        // overflow and are discarded.
+        if i < n_bits {
+            let qwi = (i / word_bits as u128) as usize;
+            let qbp = fc.add_constant(Value::Int((i % word_bits as u128) as i64));
+            fc.emit(Op::GetLocal(qword[qwi]));
+            fc.emit(Op::GetLocal(borrow));
+            fc.emit(Op::Const(one));
+            fc.emit(Op::BitXor);
+            fc.emit(Op::Const(qbp));
+            fc.emit(Op::Shl);
+            fc.emit(Op::BitOr);
+            fc.emit(Op::SetLocal(qword[qwi]));
+        }
     }
     // Reapply the sign and select the quotient or the remainder.
     let result = if is_mod {

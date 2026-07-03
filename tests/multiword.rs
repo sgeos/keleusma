@@ -821,16 +821,87 @@ fn multiword_div_by_zero_traps() {
     ));
 }
 
+// --- Phase 4b: fixed-point divide (F > 0) pre-shifts the dividend left
+// by F; fixed-point modulo is the scale-preserving raw remainder (B19).
+// Q96.32 raw units: 1.0 = 2^32 = 4294967296 (B19). ---
+
 #[test]
-fn multiword_fixed_point_divide_is_rejected_for_now() {
-    // Integer divide and modulo (F = 0) are implemented; the fixed-point
-    // divide (F > 0) is a later increment and must be rejected rather
-    // than accepted and mis-lowered.
-    assert!(compile_fails(
-        "fn main() -> Word { let a = (1, 0) as Multiword<2, 16>; let b = (1, 0) as Multiword<2, 16>; let s = a / b; s[0] }"
-    ));
-    assert!(compile_fails(
-        "fn main() -> Word { let a = (1, 0) as Multiword<2, 16>; let b = (1, 0) as Multiword<2, 16>; let s = a % b; s[0] }"
+fn multiword_fixed_div_basic() {
+    // Q96.32: 6.0 / 2.0 = 3.0. raw 6*2^32 / (2*2^32) pre-shifts to
+    // (6*2^32 << 32) / (2*2^32) = 3*2^32 = 12884901888.
+    assert_eq!(
+        run_to_int(
+            "fn main() -> Word { let a = (25769803776, 0) as Multiword<2, 32>; let b = (8589934592, 0) as Multiword<2, 32>; let s = a / b; s[0] }"
+        ),
+        12884901888
+    );
+}
+
+#[test]
+fn multiword_fixed_div_fractional_result() {
+    // Q96.32: 1.0 / 2.0 = 0.5. (2^32 << 32) / 2^33 = 2^31 = 2147483648.
+    assert_eq!(
+        run_to_int(
+            "fn main() -> Word { let a = (4294967296, 0) as Multiword<2, 32>; let b = (8589934592, 0) as Multiword<2, 32>; let s = a / b; s[0] }"
+        ),
+        2147483648
+    );
+}
+
+#[test]
+fn multiword_fixed_div_negative() {
+    // Q96.32: -6.0 / 2.0 = -3.0 = -12884901888.
+    assert_eq!(
+        run_to_int(
+            "fn main() -> Word { let a = (-25769803776, -1) as Multiword<2, 32>; let b = (8589934592, 0) as Multiword<2, 32>; let s = a / b; s[0] }"
+        ),
+        -12884901888
+    );
+}
+
+#[test]
+fn multiword_fixed_div_whole_word_shift() {
+    // Q64.64: 6.0 / 2.0 = 3.0. F = 64 is a whole-word dividend shift;
+    // 6.0 = (0, 6), 2.0 = (0, 2), result 3.0 = (0, 3).
+    assert_eq!(
+        run_to_int(
+            "fn main() -> Word { let a = (0, 6) as Multiword<2, 64>; let b = (0, 2) as Multiword<2, 64>; let s = a / b; s[1] }"
+        ),
+        3
+    );
+    assert_eq!(
+        run_to_int(
+            "fn main() -> Word { let a = (0, 6) as Multiword<2, 64>; let b = (0, 2) as Multiword<2, 64>; let s = a / b; s[0] }"
+        ),
+        0
+    );
+}
+
+#[test]
+fn multiword_fixed_mod_keeps_scale() {
+    // Q96.32: 5.5 % 2.0 = 1.5. The fixed-point remainder keeps the scale,
+    // so it is the raw integer modulo with no shift: 5.5*2^32 mod 2.0*2^32
+    // = 1.5*2^32 = 6442450944.
+    assert_eq!(
+        run_to_int(
+            "fn main() -> Word { let a = (23622320128, 0) as Multiword<2, 32>; let b = (8589934592, 0) as Multiword<2, 32>; let s = a % b; s[0] }"
+        ),
+        6442450944
+    );
+    // Q64.64: 5.0 % 3.0 = 2.0, across the word boundary. (0,5) mod (0,3)
+    // = (0,2).
+    assert_eq!(
+        run_to_int(
+            "fn main() -> Word { let a = (0, 5) as Multiword<2, 64>; let b = (0, 3) as Multiword<2, 64>; let s = a % b; s[1] }"
+        ),
+        2
+    );
+}
+
+#[test]
+fn multiword_fixed_div_by_zero_traps() {
+    assert!(run_traps(
+        "fn main() -> Word { let a = (4294967296, 0) as Multiword<2, 32>; let b = (0, 0) as Multiword<2, 32>; let s = a / b; s[0] }"
     ));
 }
 

@@ -758,3 +758,23 @@ fn narrow_multiword_div_min_over_minus_one_wraps() {
         0_i16
     );
 }
+
+#[test]
+fn narrow_multiword_fixed_div() {
+    // Q8.8 at i16: 6.0 / 2.0 = 3.0. 6.0 = 1536, 2.0 = 512, and the
+    // pre-shifted division (1536 << 8) / 512 = 768 = 3.0. Confirms the
+    // dividend pre-shift at the narrow width.
+    assert_eq!(
+        run_i16(
+            "fn main() -> Word { let a = (1536, 0) as Multiword<2, 8>; let b = (512, 0) as Multiword<2, 8>; let s = a / b; s[0] }"
+        ),
+        768_i16
+    );
+    // Fixed-point modulo keeps the scale: 5.5 % 2.0 = 1.5 = 384.
+    assert_eq!(
+        run_i16(
+            "fn main() -> Word { let a = (1408, 0) as Multiword<2, 8>; let b = (512, 0) as Multiword<2, 8>; let s = a % b; s[0] }"
+        ),
+        384_i16
+    );
+}

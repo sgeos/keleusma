@@ -439,13 +439,15 @@ integer multiply (F equal to zero) is the low-N-word two's-complement product
 computed as an unsigned schoolbook product with a signed-to-unsigned high-word
 correction per digit product; the fixed-point multiply (F greater than zero) forms
 the full 2N-word signed product and shifts it right by F, taking the low N words.
-The integer divide and modulo (F equal to zero) are also implemented, signed with
-truncation toward zero as for the word-width integer, the quotient taking the sign
-of the operand exclusive-or and the remainder the sign of the dividend, over a
-branchless binary long division of the operand magnitudes; a zero divisor is the
-same bounded fault as the word-width integer. The fixed-point divide (F greater than
-zero) and the shifts are pending, and general const generics remain a separate
-feature.
+The divide and modulo are also implemented at every scale, signed with truncation
+toward zero as for the word-width integer, the quotient taking the sign of the
+operand exclusive-or and the remainder the sign of the dividend, over a branchless
+binary long division of the operand magnitudes; a zero divisor is the same bounded
+fault as the word-width integer. The fixed-point divide pre-shifts the dividend left
+by F, since the raw quotient representing the ratio of two same-scale values is the
+shifted dividend divided by the divisor, while the fixed-point modulo needs no
+shift, a same-scale remainder keeping the scale. The shifts are pending, and general
+const generics remain a separate feature.
 
 #### 5.1.3 Composite kinds
 
@@ -1171,9 +1173,8 @@ this document.
    type `Multiword<N>` and `Multiword<N, F>`, its construction and indexing, its
    scale-independent addition and subtraction, the six comparison operators,
    multiplication at every fraction-bit count (integer and fixed-point), and the
-   integer divide and modulo (F equal to zero) are implemented. The fixed-point
-   divide (F greater than zero) and the shifts are pending, and general const
-   generics remain a separate feature.
+   divide and modulo at every fraction-bit count are implemented. The shift
+   operators are pending, and general const generics remain a separate feature.
 3. The instruction count in prior project documents was recorded as 66. The instruction
    set is 67, because the `SetDataComposite` opcode at identifier 70 is implemented,
    dispatched, and verified but was undocumented. The issuing authority reconciles the

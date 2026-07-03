@@ -3602,21 +3602,12 @@ fn type_of_expr_inner(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError>
                     // case (F > 0) shifts the double-width product right by
                     // F, both yielding a Multiword<N, F>.
                     BinOp::Mul => Type::Multiword(*ln, *lf),
-                    // Integer divide and modulo (F = 0) are implemented
-                    // (phase 4a). The fixed-point divide (F > 0), which
-                    // pre-shifts the dividend left by F, is a later
-                    // increment and is rejected here so the surface never
-                    // accepts what the compiler cannot yet lower.
-                    BinOp::Div | BinOp::Mod if *lf == 0 => Type::Multiword(*ln, 0),
-                    BinOp::Div | BinOp::Mod => {
-                        return Err(TypeError::new(
-                            format!(
-                                "{} division is a later increment; only integer divide and modulo (F = 0) are implemented",
-                                lt.display()
-                            ),
-                            *span,
-                        ));
-                    }
+                    // Divide and modulo are scale-preserving in the type.
+                    // Integer divide and modulo (F = 0) and the fixed-point
+                    // divide (F > 0, which pre-shifts the dividend by F) and
+                    // modulo (F > 0, the raw remainder, scale-preserving)
+                    // all yield a Multiword<N, F>.
+                    BinOp::Div | BinOp::Mod => Type::Multiword(*ln, *lf),
                     BinOp::Eq
                     | BinOp::NotEq
                     | BinOp::Lt
