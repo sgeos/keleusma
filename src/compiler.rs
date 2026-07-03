@@ -7015,26 +7015,38 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
             // documented construction form is a tuple literal, compiled
             // directly to the digit array (B19).
             if let TypeExpr::Multiword(n, _) = target {
+                let byte_size =
+                    flat_alloc_bytes(&TypeExpr::Multiword(*n, Span::default()), &fc.type_info)
+                        .unwrap_or_else(|| conservative_alloc_bytes(*n));
                 if let Expr::TupleLiteral { elements, .. } = inner.as_ref() {
-                    let byte_size =
-                        flat_alloc_bytes(&TypeExpr::Multiword(*n, Span::default()), &fc.type_info)
-                            .unwrap_or_else(|| conservative_alloc_bytes(*n));
+                    // Fast path: compile the digit expressions directly
+                    // into the array, with no intermediate tuple value.
                     for e in elements {
                         compile_expr(fc, e)?;
                     }
-                    fc.emit(Op::NewComposite(NewCompositeOperand::Flat {
-                        kind: crate::value_layout::CompositeKind::Array,
-                        count: *n,
-                        byte_size,
-                    }));
-                    return Ok(());
+                } else {
+                    // General tuple source: compile the tuple, stash it
+                    // in a scratch local, and extract each Word digit in
+                    // order into the array (B19).
+                    compile_expr(fc, inner)?;
+                    let tmp = fc.declare_local("__mw_src");
+                    fc.emit(Op::SetLocal(tmp));
+                    let elem_types = alloc::vec![
+                        Some(TypeExpr::Prim(PrimType::Word, Span::default()));
+                        *n as usize
+                    ];
+                    for i in 0..*n as usize {
+                        fc.emit(Op::GetLocal(tmp));
+                        let operand = tuple_field_access(fc, &elem_types, i);
+                        fc.emit(Op::GetTupleField(operand));
+                    }
                 }
-                return Err(CompileError {
-                    message: alloc::string::String::from(
-                        "Multiword<N> construction currently requires a tuple literal of N words",
-                    ),
-                    span: target.span(),
-                });
+                fc.emit(Op::NewComposite(NewCompositeOperand::Flat {
+                    kind: crate::value_layout::CompositeKind::Array,
+                    count: *n,
+                    byte_size,
+                }));
+                return Ok(());
             }
             let source = infer_expr_type(fc, inner);
             // Enum-to-Word special case. The source must be an

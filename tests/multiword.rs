@@ -58,3 +58,31 @@ fn multiword_two_word_digits_sum() {
         300
     );
 }
+
+#[test]
+fn multiword_construct_from_non_literal_tuple() {
+    // A tuple bound to a variable also casts to Multiword<N>; the
+    // compiler stashes it and extracts each digit.
+    let src = "fn main() -> Word { let t = (11, 22, 33, 44); let m = t as Multiword<4>; m[2] }";
+    assert_eq!(run_to_int(src), 33);
+}
+
+#[test]
+fn multiword_turbofish_constructor() {
+    // The Multiword::<N>(...) constructor form is equivalent to the
+    // tuple cast.
+    assert_eq!(
+        run_to_int("fn main() -> Word { let m = Multiword::<4>(5, 6, 7, 8); m[1] }"),
+        6
+    );
+}
+
+#[test]
+fn multiword_single_word_constructor() {
+    // Multiword<1> through the constructor form, which the tuple cast
+    // cannot express since a one-element tuple is not surface syntax.
+    assert_eq!(
+        run_to_int("fn main() -> Word { let m = Multiword::<1>(77); m[0] }"),
+        77
+    );
+}

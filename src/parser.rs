@@ -1915,6 +1915,50 @@ impl<'a> Parser<'a> {
             TokenKind::UpperIdent(_) => {
                 let (name, name_span) = self.expect_upper_ident()?;
 
+                // Multiword::<N>(d0, ..., d_{N-1}) construction. Desugar
+                // to a tuple of the N arguments cast to Multiword<N>,
+                // reusing the tuple-to-Multiword cast (B19).
+                if name == "Multiword"
+                    && self.at(&TokenKind::ColonColon)
+                    && matches!(
+                        self.tokens.get(self.pos + 1).map(|t| &t.kind),
+                        Some(TokenKind::Lt)
+                    )
+                {
+                    self.expect(&TokenKind::ColonColon)?;
+                    self.expect(&TokenKind::Lt)?;
+                    let tok = self.tokens[self.pos].clone();
+                    let words = match tok.kind {
+                        TokenKind::IntLit(nn) => {
+                            if !(1..=65535).contains(&nn) {
+                                return Err(self.error(
+                                    "Multiword<N> word count must be in the range [1, 65535]",
+                                ));
+                            }
+                            self.pos += 1;
+                            nn as u16
+                        }
+                        _ => {
+                            return Err(self
+                                .error("expected integer literal for Multiword<N> word count"));
+                        }
+                    };
+                    self.expect(&TokenKind::Gt)?;
+                    self.expect(&TokenKind::LParen)?;
+                    let args = self.parse_arg_list()?;
+                    let end = self.expect(&TokenKind::RParen)?;
+                    let span = merge_spans(name_span, end);
+                    let tuple = Expr::TupleLiteral {
+                        elements: args,
+                        span,
+                    };
+                    return Ok(Expr::Cast {
+                        expr: Box::new(tuple),
+                        target: TypeExpr::Multiword(words, span),
+                        span,
+                    });
+                }
+
                 if self.eat(&TokenKind::ColonColon) {
                     // Enum variant.
                     let (variant, _) = self.expect_upper_ident()?;
