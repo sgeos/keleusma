@@ -562,6 +562,10 @@ The compiler emits a specialised inline bytecode sequence per `(operation, N)`. 
 | `<<`, `>>` | Constant shift amount K: split into K/W full-digit shifts and K%W bit-level shifts, unrolled at compile time. Variable amount: bounded runtime loop that consults a Word-typed shift count and applies the digit-level and bit-level steps in turn. | Linear in N for constant K; bounded for variable | ~80 for constant K |
 | `m[i]` | Direct `Op::ArrayIndex` with the existing array-bounds-check semantics. | Trivial | ~3 |
 
+### Carry and borrow semantics (correction)
+
+The per-digit cascade must propagate the **unsigned** carry and borrow, not the signed-overflow flag that `Op::CheckedAdd` / `Op::CheckedSub` raise. The `examples/scripts/10_multbyte.kel` worked example uses the signed-overflow flag, which coincides with the true multi-word carry only at the signed-range boundary and gives wrong results otherwise. Concretely, for `Multiword<2>`, `(Word::MAX, 0) + (1, 0)` is `2^63`, whose correct representation is `(Word::MIN, 0)`; a signed-flag cascade would wrongly yield `(Word::MIN, 1)`. The implemented lowering (phase 2) takes the wrapping result limb from the checked opcode and derives the carry from the bit formula `top_bit((x & y) | ((x ^ y) & ~s))` for addition and its dual `top_bit((~x & y) | (~(x ^ y) & s))` for subtraction, extracting the top bit by an arithmetic right shift of `word_bits - 1` and a mask of `1`. The `10_multbyte.kel` example is retained as a signed-carry demonstration and is not the `Multiword` semantics.
+
 ### Why no new opcodes are needed
 
 - The checked-arithmetic opcodes (`Op::CheckedAdd` / Sub / Mul / Div / Mod) already produce the `(high, low, flag)` triple that the cascade consumes. The pattern-arm `ok` / `overflow` / `underflow` dispatch surfaces the flag through bytecode without an extra opcode.
