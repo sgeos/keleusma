@@ -828,7 +828,7 @@ fn multiword_div_by_zero_traps() {
 #[test]
 fn multiword_fixed_div_basic() {
     // Q96.32: 6.0 / 2.0 = 3.0. raw 6*2^32 / (2*2^32) pre-shifts to
-    // (6*2^32 << 32) / (2*2^32) = 3*2^32 = 12884901888.
+    // (6*2^32 lsl 32) / (2*2^32) = 3*2^32 = 12884901888.
     assert_eq!(
         run_to_int(
             "fn main() -> Word { let a = (25769803776, 0) as Multiword<2, 32>; let b = (8589934592, 0) as Multiword<2, 32>; let s = a / b; s[0] }"
@@ -839,7 +839,7 @@ fn multiword_fixed_div_basic() {
 
 #[test]
 fn multiword_fixed_div_fractional_result() {
-    // Q96.32: 1.0 / 2.0 = 0.5. (2^32 << 32) / 2^33 = 2^31 = 2147483648.
+    // Q96.32: 1.0 / 2.0 = 0.5. (2^32 lsl 32) / 2^33 = 2^31 = 2147483648.
     assert_eq!(
         run_to_int(
             "fn main() -> Word { let a = (4294967296, 0) as Multiword<2, 32>; let b = (8589934592, 0) as Multiword<2, 32>; let s = a / b; s[0] }"
@@ -908,10 +908,10 @@ fn multiword_fixed_div_by_zero_traps() {
 #[test]
 fn multiword_fixed_div_truncates_toward_zero() {
     // The fixed-point divide truncates toward zero, matching the scalar
-    // Fixed divide (which computes (x << F) / y with Rust's truncating
+    // Fixed divide (which computes (x lsl F) / y with Rust's truncating
     // division), not toward negative infinity. Q60.4: -1.0 = raw -16,
     // 3.0 = raw 48, exact ratio -1/3 = -0.333. The raw result is
-    // (16 << 4) / 48 = 256 / 48 = 5 in magnitude, sign-reapplied to -5,
+    // (16 lsl 4) / 48 = 256 / 48 = 5 in magnitude, sign-reapplied to -5,
     // representing -0.3125, the truncated-toward-zero value; a floor
     // would give -6 (-0.375).
     assert_eq!(
@@ -930,54 +930,54 @@ fn multiword_fixed_div_truncates_toward_zero() {
     );
 }
 
-// --- Phase 5: shift operators, Verilog convention. `<<` logical left,
-// `<<<` arithmetic left (value x * 2^k), `>>` logical (zero-fill) right,
-// `>>>` arithmetic (sign-preserving) right, with a compile-time-constant
+// --- Phase 5: shift operators, assembly-mnemonic keyword shifts. `lsl` logical left,
+// `asl` arithmetic left (value x * 2^k), `lsr` logical (zero-fill) right,
+// `asr` arithmetic (sign-preserving) right, with a compile-time-constant
 // amount. Word and Multiword values (B19). ---
 
 #[test]
 fn scalar_word_shifts() {
-    assert_eq!(run_to_int("fn main() -> Word { 5 << 2 }"), 20);
-    assert_eq!(run_to_int("fn main() -> Word { 20 >> 2 }"), 5);
-    // The arithmetic right shift `>>>` preserves the sign.
+    assert_eq!(run_to_int("fn main() -> Word { 5 lsl 2 }"), 20);
+    assert_eq!(run_to_int("fn main() -> Word { 20 lsr 2 }"), 5);
+    // The arithmetic right shift `asr` preserves the sign.
     assert_eq!(
-        run_to_int("fn main() -> Word { let x = 0 - 8; x >>> 1 }"),
+        run_to_int("fn main() -> Word { let x = 0 - 8; x asr 1 }"),
         -4
     );
-    // The logical right shift `>>` zero-fills, so -8 becomes a large
+    // The logical right shift `lsr` zero-fills, so -8 becomes a large
     // positive.
     assert_eq!(
-        run_to_int("fn main() -> Word { let x = 0 - 8; x >> 1 }"),
+        run_to_int("fn main() -> Word { let x = 0 - 8; x lsr 1 }"),
         9223372036854775804
     );
-    // 1 << 63 is 2^63, which wraps to the most negative Word.
-    assert_eq!(run_to_int("fn main() -> Word { 1 << 63 }"), i64::MIN);
+    // 1 lsl 63 is 2^63, which wraps to the most negative Word.
+    assert_eq!(run_to_int("fn main() -> Word { 1 lsl 63 }"), i64::MIN);
     // Shift by zero is the identity.
-    assert_eq!(run_to_int("fn main() -> Word { 5 << 0 }"), 5);
+    assert_eq!(run_to_int("fn main() -> Word { 5 lsl 0 }"), 5);
 }
 
 #[test]
 fn scalar_arithmetic_left_shift_bare_wraps_like_logical() {
-    // The bare arithmetic left shift `<<<` produces the same value as the
-    // logical left shift `<<`; the difference appears only under the
+    // The bare arithmetic left shift `asl` produces the same value as the
+    // logical left shift `lsl`; the difference appears only under the
     // checked-arithmetic construct (overflow capture), tested separately.
-    assert_eq!(run_to_int("fn main() -> Word { 5 <<< 2 }"), 20);
-    // 1 <<< 63 wraps to the most negative Word, exactly as 1 << 63.
-    assert_eq!(run_to_int("fn main() -> Word { 1 <<< 63 }"), i64::MIN);
+    assert_eq!(run_to_int("fn main() -> Word { 5 asl 2 }"), 20);
+    // 1 asl 63 wraps to the most negative Word, exactly as 1 lsl 63.
+    assert_eq!(run_to_int("fn main() -> Word { 1 asl 63 }"), i64::MIN);
 }
 
 #[test]
 fn scalar_arithmetic_left_shift_captures_overflow() {
-    // `<<<` is `x * 2^k`, so it admits the checked-arithmetic arms. A
+    // `asl` is `x * 2^k`, so it admits the checked-arithmetic arms. A
     // shift that fits takes the ok arm.
     assert_eq!(
-        run_to_int("fn main() -> Word { 3 <<< 2 { ok(v) => v, overflow(h, l) => 0 } }"),
+        run_to_int("fn main() -> Word { 3 asl 2 { ok(v) => v, overflow(h, l) => 0 } }"),
         12
     );
-    // 2^62 <<< 1 is 2^63, one past Word::MAX, so it overflows.
+    // 2^62 asl 1 is 2^63, one past Word::MAX, so it overflows.
     assert_eq!(
         run_to_int(
-            "fn main() -> Word { let x = 4611686018427387904; x <<< 1 { ok(v) => v, overflow(h, l) => 999 } }"
+            "fn main() -> Word { let x = 4611686018427387904; x asl 1 { ok(v) => v, overflow(h, l) => 999 } }"
         ),
         999
     );
@@ -985,14 +985,14 @@ fn scalar_arithmetic_left_shift_captures_overflow() {
     // is the wrapped result, 2^63 mod 2^64 = i64::MIN.
     assert_eq!(
         run_to_int(
-            "fn main() -> Word { let x = 4611686018427387904; x <<< 1 { ok(v) => v, overflow(h, l) => l } }"
+            "fn main() -> Word { let x = 4611686018427387904; x asl 1 { ok(v) => v, overflow(h, l) => l } }"
         ),
         i64::MIN
     );
     // saturate_max resolves in the overflow arm.
     assert_eq!(
         run_to_int(
-            "fn main() -> Word { let x = 4611686018427387904; x <<< 1 { ok(v) => v, overflow(h, l) => saturate_max } }"
+            "fn main() -> Word { let x = 4611686018427387904; x asl 1 { ok(v) => v, overflow(h, l) => saturate_max } }"
         ),
         i64::MAX
     );
@@ -1000,10 +1000,10 @@ fn scalar_arithmetic_left_shift_captures_overflow() {
 
 #[test]
 fn scalar_arithmetic_left_shift_captures_underflow() {
-    // -2^62 <<< 2 is -2^64, past Word::MIN, so it underflows.
+    // -2^62 asl 2 is -2^64, past Word::MIN, so it underflows.
     assert_eq!(
         run_to_int(
-            "fn main() -> Word { let x = 0 - 4611686018427387904; x <<< 2 { ok(v) => v, underflow(h, l) => 0 - 1 } }"
+            "fn main() -> Word { let x = 0 - 4611686018427387904; x asl 2 { ok(v) => v, underflow(h, l) => 0 - 1 } }"
         ),
         -1
     );
@@ -1011,79 +1011,79 @@ fn scalar_arithmetic_left_shift_captures_underflow() {
 
 #[test]
 fn scalar_shift_precedence_below_additive() {
-    // `0 - 8 >>> 1` parses as `(0 - 8) >>> 1`, not `0 - (8 >>> 1)`.
-    assert_eq!(run_to_int("fn main() -> Word { 0 - 8 >>> 1 }"), -4);
+    // `0 - 8 asr 1` parses as `(0 - 8) asr 1`, not `0 - (8 asr 1)`.
+    assert_eq!(run_to_int("fn main() -> Word { 0 - 8 asr 1 }"), -4);
 }
 
 #[test]
 fn scalar_shift_rejects_variable_and_out_of_range_amount() {
     // A variable shift amount is a later increment.
-    assert!(compile_fails("fn main() -> Word { let k = 1; 5 << k }"));
+    assert!(compile_fails("fn main() -> Word { let k = 1; 5 lsl k }"));
     // An amount at or beyond the value width is rejected.
-    assert!(compile_fails("fn main() -> Word { 5 << 64 }"));
+    assert!(compile_fails("fn main() -> Word { 5 lsl 64 }"));
     assert!(compile_fails(
-        "fn main() -> Word { let x = 0 - 1; x >>> 64 }"
+        "fn main() -> Word { let x = 0 - 1; x asr 64 }"
     ));
 }
 
 #[test]
 fn multiword_shift_left_within_and_across_words() {
-    // Within a word: (1, 0) << 1 = (2, 0).
+    // Within a word: (1, 0) lsl 1 = (2, 0).
     assert_eq!(
-        run_to_int("fn main() -> Word { let m = (1, 0) as Multiword<2>; let s = m << 1; s[0] }"),
+        run_to_int("fn main() -> Word { let m = (1, 0) as Multiword<2>; let s = m lsl 1; s[0] }"),
         2
     );
-    // Across a word: (5, 0) << 64 moves the low word into the high word.
+    // Across a word: (5, 0) lsl 64 moves the low word into the high word.
     assert_eq!(
-        run_to_int("fn main() -> Word { let m = (5, 0) as Multiword<2>; let s = m << 64; s[1] }"),
+        run_to_int("fn main() -> Word { let m = (5, 0) as Multiword<2>; let s = m lsl 64; s[1] }"),
         5
     );
     assert_eq!(
-        run_to_int("fn main() -> Word { let m = (5, 0) as Multiword<2>; let s = m << 64; s[0] }"),
+        run_to_int("fn main() -> Word { let m = (5, 0) as Multiword<2>; let s = m lsl 64; s[0] }"),
         0
     );
-    // The arithmetic left shift `<<<` on Multiword produces the same
+    // The arithmetic left shift `asl` on Multiword produces the same
     // value (Multiword wraps; it has no overflow capture).
     assert_eq!(
-        run_to_int("fn main() -> Word { let m = (1, 0) as Multiword<2>; let s = m <<< 1; s[0] }"),
+        run_to_int("fn main() -> Word { let m = (1, 0) as Multiword<2>; let s = m asl 1; s[0] }"),
         2
     );
 }
 
 #[test]
 fn multiword_shift_right_arithmetic_vs_logical() {
-    // (0, -1) is the value -2^64. The arithmetic right shift `>>>` by 1
+    // (0, -1) is the value -2^64. The arithmetic right shift `asr` by 1
     // gives -2^63 = (i64::MIN, -1): the sign fills the vacated top bit.
     assert_eq!(
-        run_to_int("fn main() -> Word { let m = (0, -1) as Multiword<2>; let s = m >>> 1; s[1] }"),
+        run_to_int("fn main() -> Word { let m = (0, -1) as Multiword<2>; let s = m asr 1; s[1] }"),
         -1
     );
     assert_eq!(
-        run_to_int("fn main() -> Word { let m = (0, -1) as Multiword<2>; let s = m >>> 1; s[0] }"),
+        run_to_int("fn main() -> Word { let m = (0, -1) as Multiword<2>; let s = m asr 1; s[0] }"),
         i64::MIN
     );
-    // The logical right shift `>>` by 1 zero-fills the top bit, giving
+    // The logical right shift `lsr` by 1 zero-fills the top bit, giving
     // the high word i64::MAX and the low word i64::MIN.
     assert_eq!(
-        run_to_int("fn main() -> Word { let m = (0, -1) as Multiword<2>; let s = m >> 1; s[1] }"),
+        run_to_int("fn main() -> Word { let m = (0, -1) as Multiword<2>; let s = m lsr 1; s[1] }"),
         i64::MAX
     );
     assert_eq!(
-        run_to_int("fn main() -> Word { let m = (0, -1) as Multiword<2>; let s = m >> 1; s[0] }"),
+        run_to_int("fn main() -> Word { let m = (0, -1) as Multiword<2>; let s = m lsr 1; s[0] }"),
         i64::MIN
     );
 }
 
 #[test]
 fn multiword_shift_right_whole_word() {
-    // (0, 1) is 2^64, positive; >> 64 gives 1 = (1, 0). The value is
+    // (0, 1) is 2^64, positive; lsr 64 gives 1 = (1, 0). The value is
     // positive, so the logical and arithmetic shifts agree.
     assert_eq!(
-        run_to_int("fn main() -> Word { let m = (0, 1) as Multiword<2>; let s = m >> 64; s[0] }"),
+        run_to_int("fn main() -> Word { let m = (0, 1) as Multiword<2>; let s = m lsr 64; s[0] }"),
         1
     );
     assert_eq!(
-        run_to_int("fn main() -> Word { let m = (0, 1) as Multiword<2>; let s = m >> 64; s[1] }"),
+        run_to_int("fn main() -> Word { let m = (0, 1) as Multiword<2>; let s = m lsr 64; s[1] }"),
         0
     );
 }
@@ -1092,15 +1092,15 @@ fn multiword_shift_right_whole_word() {
 fn multiword_shift_rejects_out_of_range_amount() {
     // The amount must be within the value's total bit width (128 here).
     assert!(compile_fails(
-        "fn main() -> Word { let m = (1, 0) as Multiword<2>; let s = m << 128; s[0] }"
+        "fn main() -> Word { let m = (1, 0) as Multiword<2>; let s = m lsl 128; s[0] }"
     ));
 }
 
 #[test]
-fn nested_generics_still_parse_with_shift_tokens() {
-    // Regression: adding the `>>` shift token must not break the stacked
-    // generic close in a nested type. This program uses Option<Option<T>>
-    // only for its parse; the body is trivial.
+fn nested_generics_parse() {
+    // The keyword shift operators removed the earlier symbolic `>>`, so a
+    // stacked generic close such as Option<Option<T>> lexes to two plain
+    // `>` tokens again with no token-splitting. This confirms it parses.
     assert_eq!(
         run_to_int("fn id(x: Option<Option<Word>>) -> Word { 0 }\nfn main() -> Word { 7 }"),
         7

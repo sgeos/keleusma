@@ -175,7 +175,7 @@ fn narrow_runtime_checked_arithmetic_exercises_word_widen() {
     // (i16 -> i32) and surfaces the (high, low) intermediate
     // through the overflow arm. The example verifies that
     // narrow-word checked arithmetic uses the right widened type:
-    // high = 40000 >> 16 = 0; low = 40000 - 32768 - 32768 = wraps
+    // high = 40000 lsr 16 = 0; low = 40000 - 32768 - 32768 = wraps
     // (40000 as i16 = -25_536).
     let src = "
         fn product_overflow_low() -> Word {
@@ -489,7 +489,7 @@ fn narrow_runtime_register_fn_marshall_truncates_through_word() {
 // carry, borrow, and comparison lowerings compute their sign-bit shift
 // and sign constant from the target word width, so they must be correct
 // at a 16-bit word, not only at the default 64-bit word. These tests
-// lock that in: a signed sign constant of 1 << 15 narrows through
+// lock that in: a signed sign constant of 1 lsl 15 narrows through
 // Word::from_i64_wrap to the i16 sign pattern 0x8000, and the top-bit
 // extraction shifts by word_bits - 1 = 15. ---
 
@@ -762,7 +762,7 @@ fn narrow_multiword_div_min_over_minus_one_wraps() {
 #[test]
 fn narrow_multiword_fixed_div() {
     // Q8.8 at i16: 6.0 / 2.0 = 3.0. 6.0 = 1536, 2.0 = 512, and the
-    // pre-shifted division (1536 << 8) / 512 = 768 = 3.0. Confirms the
+    // pre-shifted division (1536 lsl 8) / 512 = 768 = 3.0. Confirms the
     // dividend pre-shift at the narrow width.
     assert_eq!(
         run_i16(
@@ -781,39 +781,39 @@ fn narrow_multiword_fixed_div() {
 
 #[test]
 fn narrow_scalar_word_shifts() {
-    // Word shifts at the i16 width, Verilog convention.
-    assert_eq!(run_i16("fn main() -> Word { 5 << 2 }"), 20_i16);
-    // Arithmetic right shift `>>>` preserves the sign.
+    // Word shifts at the i16 width, assembly-mnemonic keyword shifts.
+    assert_eq!(run_i16("fn main() -> Word { 5 lsl 2 }"), 20_i16);
+    // Arithmetic right shift `asr` preserves the sign.
     assert_eq!(
-        run_i16("fn main() -> Word { let x = 0 - 8; x >>> 1 }"),
+        run_i16("fn main() -> Word { let x = 0 - 8; x asr 1 }"),
         -4_i16
     );
-    // Logical right shift `>>` zero-fills: -8 = 0xFFF8, >> 1 = 0x7FFC = 32764.
+    // Logical right shift `lsr` zero-fills: -8 = 0xFFF8, lsr 1 = 0x7FFC = 32764.
     assert_eq!(
-        run_i16("fn main() -> Word { let x = 0 - 8; x >> 1 }"),
+        run_i16("fn main() -> Word { let x = 0 - 8; x lsr 1 }"),
         32764_i16
     );
 }
 
 #[test]
 fn narrow_multiword_shift_arithmetic_vs_logical() {
-    // (0, -1) is -2^16 at i16. Arithmetic `>>>` 1 gives -2^15 = (i16::MIN,
-    // -1); logical `>>` 1 gives (i16::MIN, i16::MAX).
+    // (0, -1) is -2^16 at i16. Arithmetic `asr` 1 gives -2^15 = (i16::MIN,
+    // -1); logical `lsr` 1 gives (i16::MIN, i16::MAX).
     assert_eq!(
-        run_i16("fn main() -> Word { let m = (0, -1) as Multiword<2>; let s = m >>> 1; s[1] }"),
+        run_i16("fn main() -> Word { let m = (0, -1) as Multiword<2>; let s = m asr 1; s[1] }"),
         -1_i16
     );
     assert_eq!(
-        run_i16("fn main() -> Word { let m = (0, -1) as Multiword<2>; let s = m >> 1; s[1] }"),
+        run_i16("fn main() -> Word { let m = (0, -1) as Multiword<2>; let s = m lsr 1; s[1] }"),
         i16::MAX
     );
     assert_eq!(
-        run_i16("fn main() -> Word { let m = (0, -1) as Multiword<2>; let s = m >> 1; s[0] }"),
+        run_i16("fn main() -> Word { let m = (0, -1) as Multiword<2>; let s = m lsr 1; s[0] }"),
         i16::MIN
     );
-    // Cross-word left shift: (5, 0) << 16 = (0, 5).
+    // Cross-word left shift: (5, 0) lsl 16 = (0, 5).
     assert_eq!(
-        run_i16("fn main() -> Word { let m = (5, 0) as Multiword<2>; let s = m << 16; s[1] }"),
+        run_i16("fn main() -> Word { let m = (5, 0) as Multiword<2>; let s = m lsl 16; s[1] }"),
         5_i16
     );
 }

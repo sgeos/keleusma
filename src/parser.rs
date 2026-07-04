@@ -80,14 +80,6 @@ struct Parser<'a> {
     /// decremented on exit. Exceeding [`MAX_PARSE_DEPTH`] returns
     /// a [`ParseError`] instead of a stack overflow.
     depth: u32,
-    /// Count of leftover `>` tokens from a `>>` or `>>>` that was split
-    /// at a generic close. When a stacked generic close (for example the
-    /// `>>` ending `Option<Option<T>>`) lexes to a single `Shr`/`Ushr`
-    /// token, the first close consumes it and records the remaining `>`s
-    /// here for the immediately-following stacked closes to consume. It
-    /// is only ever set and cleared across consecutive generic closes,
-    /// so it never masks a non-`>` token for a well-formed program.
-    gt_debt: usize,
 }
 
 /// Maximum recursive-descent depth before the parser bails with
@@ -109,7 +101,6 @@ impl<'a> Parser<'a> {
             pos: 0,
             data_names: BTreeSet::new(),
             depth: 0,
-            gt_debt: 0,
         }
     }
 
@@ -197,41 +188,6 @@ impl<'a> Parser<'a> {
             Ok(self.bump())
         } else {
             Err(self.error_expected(kind))
-        }
-    }
-
-    /// Whether a generic-close `>` is available at the current position.
-    /// True for a `>` token, for the leading `>` of a `>>`/`>>>` token,
-    /// and while a split token still owes `>`s. Used everywhere a type
-    /// argument list or a turbofish is closed, so that a stacked close
-    /// such as `Option<Option<T>>` is recognised even though it lexes to
-    /// a single `Shr` token.
-    fn at_gt(&self) -> bool {
-        self.gt_debt > 0
-            || matches!(
-                self.peek(),
-                TokenKind::Gt | TokenKind::GtGt | TokenKind::GtGtGt
-            )
-    }
-
-    /// Consume one generic-close `>`, splitting a `>>`/`>>>` token into
-    /// its constituent `>`s. Returns the span of the consumed close.
-    fn consume_gt(&mut self) -> Result<Span, ParseError> {
-        if self.gt_debt > 0 {
-            self.gt_debt -= 1;
-            return Ok(self.prev_span());
-        }
-        match self.peek() {
-            TokenKind::Gt => Ok(self.bump()),
-            TokenKind::GtGt => {
-                self.gt_debt = 1;
-                Ok(self.bump())
-            }
-            TokenKind::GtGtGt => {
-                self.gt_debt = 2;
-                Ok(self.bump())
-            }
-            _ => Err(self.error_expected(&TokenKind::Gt)),
         }
     }
 
@@ -624,16 +580,16 @@ impl<'a> Parser<'a> {
     fn parse_optional_type_params(&mut self) -> Result<Vec<TypeParam>, ParseError> {
         let mut type_params: Vec<TypeParam> = Vec::new();
         if self.eat(&TokenKind::Lt) {
-            if !self.at_gt() {
+            if !self.at(&TokenKind::Gt) {
                 type_params.push(self.parse_type_param()?);
                 while self.eat(&TokenKind::Comma) {
-                    if self.at_gt() {
+                    if self.at(&TokenKind::Gt) {
                         break;
                     }
                     type_params.push(self.parse_type_param()?);
                 }
             }
-            self.consume_gt()?;
+            self.expect(&TokenKind::Gt)?;
         }
         Ok(type_params)
     }
@@ -1082,16 +1038,16 @@ impl<'a> Parser<'a> {
         // not parsed here.
         let mut type_params: Vec<TypeParam> = Vec::new();
         if self.eat(&TokenKind::Lt) {
-            if !self.at_gt() {
+            if !self.at(&TokenKind::Gt) {
                 type_params.push(self.parse_type_param()?);
                 while self.eat(&TokenKind::Comma) {
-                    if self.at_gt() {
+                    if self.at(&TokenKind::Gt) {
                         break;
                     }
                     type_params.push(self.parse_type_param()?);
                 }
             }
-            self.consume_gt()?;
+            self.expect(&TokenKind::Gt)?;
         }
 
         self.expect(&TokenKind::LParen)?;
@@ -1611,15 +1567,15 @@ impl<'a> Parser<'a> {
         let mut left = self.parse_additive_expr()?;
 
         loop {
-            // Verilog convention: `<<` logical left, `<<<` arithmetic
-            // left, `>>` logical right, `>>>` arithmetic right.
-            let op = if self.eat(&TokenKind::LtLt) {
+            // Assembly-mnemonic keyword shifts: `lsl` logical left, `asl`
+            // arithmetic left, `lsr` logical right, `asr` arithmetic right.
+            let op = if self.eat(&TokenKind::Lsl) {
                 BinOp::Shl
-            } else if self.eat(&TokenKind::LtLtLt) {
+            } else if self.eat(&TokenKind::Asl) {
                 BinOp::AShl
-            } else if self.eat(&TokenKind::GtGt) {
+            } else if self.eat(&TokenKind::Lsr) {
                 BinOp::ShrL
-            } else if self.eat(&TokenKind::GtGtGt) {
+            } else if self.eat(&TokenKind::Asr) {
                 BinOp::ShrA
             } else {
                 break;
@@ -2042,7 +1998,7 @@ impl<'a> Parser<'a> {
                     } else {
                         0
                     };
-                    self.consume_gt()?;
+                    self.expect(&TokenKind::Gt)?;
                     self.expect(&TokenKind::LParen)?;
                     let args = self.parse_arg_list()?;
                     let end = self.expect(&TokenKind::RParen)?;
@@ -2426,7 +2382,7 @@ impl<'a> Parser<'a> {
                         );
                     }
                 };
-                let end = self.consume_gt()?;
+                let end = self.expect(&TokenKind::Gt)?;
                 return Ok(TypeExpr::Prim(
                     PrimType::Fixed(Some(frac_bits)),
                     merge_spans(span, end),
@@ -2478,7 +2434,7 @@ impl<'a> Parser<'a> {
             } else {
                 0
             };
-            let end = self.consume_gt()?;
+            let end = self.expect(&TokenKind::Gt)?;
             return Ok(TypeExpr::Multiword(words, frac, merge_spans(span, end)));
         }
 
@@ -2497,7 +2453,7 @@ impl<'a> Parser<'a> {
             self.pos += 1;
             self.expect(&TokenKind::Lt)?;
             let inner = self.parse_type_expr()?;
-            let end = self.consume_gt()?;
+            let end = self.expect(&TokenKind::Gt)?;
             return Ok(TypeExpr::Option(Box::new(inner), merge_spans(span, end)));
         }
 
@@ -2509,16 +2465,16 @@ impl<'a> Parser<'a> {
             let mut args: Vec<TypeExpr> = Vec::new();
             let mut end = name_span;
             if self.eat(&TokenKind::Lt) {
-                if !self.at_gt() {
+                if !self.at(&TokenKind::Gt) {
                     args.push(self.parse_type_expr()?);
                     while self.eat(&TokenKind::Comma) {
-                        if self.at_gt() {
+                        if self.at(&TokenKind::Gt) {
                             break;
                         }
                         args.push(self.parse_type_expr()?);
                     }
                 }
-                end = self.consume_gt()?;
+                end = self.expect(&TokenKind::Gt)?;
             }
             return Ok(TypeExpr::Named(name, args, merge_spans(name_span, end)));
         }

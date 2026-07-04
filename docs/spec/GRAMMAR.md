@@ -45,6 +45,7 @@ fn  yield  loop  break  let  for  in  if  else  match
 use  struct  enum  newtype  trait  impl  data  true  false  as  when
 not  and  or  pure  shared  private  const  ephemeral  signed  where
 overflow  underflow  saturate_max  saturate_min
+lsl  asl  lsr  asr
 ````
 
 All keywords are reserved and cannot be used as identifiers.
@@ -82,6 +83,7 @@ A numeric literal may carry a type suffix that sets and checks the literal's typ
 | Category | Operators |
 |----------|-----------|
 | Arithmetic | `+`, `-`, `*`, `/`, `%` |
+| Shift | `lsl`, `asl`, `lsr`, `asr` |
 | Comparison | `==`, `!=`, `<`, `>`, `<=`, `>=` |
 | Logical | `and`, `or`, `not` |
 | Pipeline | `\|>` |
@@ -1103,14 +1105,14 @@ pipeline_expr   = logical_expr { '|>' qualified_name '(' [ arg_list ] ')' }
 logical_expr    = comparison_expr { ('and' | 'or') comparison_expr }
 comparison_expr = shift_expr [ comparison_op shift_expr ]
 (* Shifts bind below the comparisons and above the additive operators.
-   The Verilog convention applies: `<<` is the logical left shift, `<<<`
-   the arithmetic left shift, `>>` the logical (zero-fill) right shift,
-   and `>>>` the arithmetic (sign-preserving) right shift. The right
-   operand is a compile-time-constant amount in the current increment.
-   The `>>` and `>>>` tokens also close stacked generics such as
-   `Option<Option<T>>`, which the parser splits; `<<` and `<<<` never
-   appear in type position, so the left shift has no such conflict. *)
-shift_expr      = additive_expr { ('<<' | '<<<' | '>>' | '>>>') additive_expr }
+   They are keyword operators named after the assembly mnemonics, so the
+   arithmetic-versus-logical choice is explicit. `lsl` is the logical
+   left shift, `asl` the arithmetic left shift, `lsr` the logical
+   (zero-fill) right shift, and `asr` the arithmetic (sign-preserving)
+   right shift. The right operand is a compile-time-constant amount in
+   the current increment. Because the operators are keywords, they never
+   collide with a stacked generic close such as `Option<Option<T>>`. *)
+shift_expr      = additive_expr { ('lsl' | 'asl' | 'lsr' | 'asr') additive_expr }
 additive_expr   = multiplicative_expr { ('+' | '-') multiplicative_expr }
 multiplicative_expr = unary_expr { ('*' | '/' | '%') unary_expr }
 unary_expr      = [ 'not' | '-' ] postfix_expr

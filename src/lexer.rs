@@ -324,23 +324,6 @@ impl<'a> Lexer<'a> {
                         kind: TokenKind::LtEq,
                         span: self.span_from(start, start_line, start_col),
                     })
-                } else if self.peek() == Some(b'<') {
-                    self.advance();
-                    // `<<<` is the arithmetic left shift; `<<` the logical
-                    // one. `<<` never appears in type position, so there is
-                    // no generic-close conflict on the left.
-                    if self.peek() == Some(b'<') {
-                        self.advance();
-                        Ok(Token {
-                            kind: TokenKind::LtLtLt,
-                            span: self.span_from(start, start_line, start_col),
-                        })
-                    } else {
-                        Ok(Token {
-                            kind: TokenKind::LtLt,
-                            span: self.span_from(start, start_line, start_col),
-                        })
-                    }
                 } else {
                     Ok(Token {
                         kind: TokenKind::Lt,
@@ -356,23 +339,6 @@ impl<'a> Lexer<'a> {
                         kind: TokenKind::GtEq,
                         span: self.span_from(start, start_line, start_col),
                     })
-                } else if self.peek() == Some(b'>') {
-                    self.advance();
-                    // `>>>` is the arithmetic right shift; `>>` the logical
-                    // one. Both also serve as stacked generic closes, which
-                    // the parser splits back into single `>` tokens.
-                    if self.peek() == Some(b'>') {
-                        self.advance();
-                        Ok(Token {
-                            kind: TokenKind::GtGtGt,
-                            span: self.span_from(start, start_line, start_col),
-                        })
-                    } else {
-                        Ok(Token {
-                            kind: TokenKind::GtGt,
-                            span: self.span_from(start, start_line, start_col),
-                        })
-                    }
                 } else {
                     Ok(Token {
                         kind: TokenKind::Gt,

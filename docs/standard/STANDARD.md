@@ -447,13 +447,12 @@ fault as the word-width integer. The fixed-point divide pre-shifts the dividend 
 by F, since the raw quotient representing the ratio of two same-scale values is the
 shifted dividend divided by the divisor, while the fixed-point modulo needs no
 shift, a same-scale remainder keeping the scale. The four shift operators are
-implemented for a compile-time-constant amount, following the Verilog convention.
-The plain `<<` and `>>` are the logical shifts, zero-filling the vacated bits, and
-the tripled `<<<` and `>>>` are the arithmetic shifts, the arithmetic right shift
-filling the vacated top with the sign and the arithmetic left shift carrying the
-value `x * 2^k` so it admits overflow capture on the word-width type. The multi-word
-arithmetic family is therefore complete; general const generics remain a separate
-feature.
+implemented for a compile-time-constant amount, named after the assembly mnemonics.
+`lsl` and `lsr` are the logical shifts, zero-filling the vacated bits, and `asl` and
+`asr` are the arithmetic shifts, the arithmetic right shift filling the vacated top
+with the sign and the arithmetic left shift carrying the value `x * 2^k` so it
+admits overflow capture on the word-width type. The multi-word arithmetic family is
+therefore complete; general const generics remain a separate feature.
 
 #### 5.1.3 Composite kinds
 

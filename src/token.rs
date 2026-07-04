@@ -174,21 +174,17 @@ pub enum TokenKind {
     /// `>=` greater-than-or-equal test.
     GtEq,
 
-    // Angle-bracket shift operators, named by glyph. The parser assigns
-    // the logical or arithmetic meaning; the mapping follows the Verilog
-    // convention, so `>>` is the logical right shift and `>>>` the
-    // arithmetic one, and `<<<` is the arithmetic left shift that admits
-    // overflow capture.
-    /// `<<` left shift (logical).
-    LtLt,
-    /// `<<<` arithmetic left shift.
-    LtLtLt,
-    /// `>>` logical (zero-fill) right shift. Also the leading two `>` of
-    /// a stacked generic close, which the parser splits.
-    GtGt,
-    /// `>>>` arithmetic (sign-preserving) right shift. Also the leading
-    /// three `>` of a stacked generic close, which the parser splits.
-    GtGtGt,
+    // Shift operators, keyword-named after the assembly mnemonics so the
+    // arithmetic-versus-logical choice is explicit and there is no
+    // collision with the generic-close `>`.
+    /// `lsl` logical (and arithmetic-equivalent) left shift.
+    Lsl,
+    /// `asl` arithmetic left shift, which admits overflow capture.
+    Asl,
+    /// `lsr` logical (zero-fill) right shift.
+    Lsr,
+    /// `asr` arithmetic (sign-preserving) right shift.
+    Asr,
 
     /// `!` punctuation. Distinct from the `not` keyword
     /// ([`TokenKind::Not`]) and from `!=` ([`TokenKind::NotEq`]).
@@ -288,6 +284,10 @@ impl TokenKind {
             "not" => Some(TokenKind::Not),
             "and" => Some(TokenKind::And),
             "or" => Some(TokenKind::Or),
+            "lsl" => Some(TokenKind::Lsl),
+            "asl" => Some(TokenKind::Asl),
+            "lsr" => Some(TokenKind::Lsr),
+            "asr" => Some(TokenKind::Asr),
             "pure" => Some(TokenKind::Pure),
             "data" => Some(TokenKind::Data),
             "shared" => Some(TokenKind::Shared),
