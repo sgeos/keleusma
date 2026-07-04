@@ -935,11 +935,14 @@ pub enum BinOp {
     Mul,
     Div,
     Mod,
-    /// `<<` left shift (logical and arithmetic left shift coincide).
+    /// `<<` logical left shift, wrapping and total.
     Shl,
-    /// `>>` arithmetic (sign-preserving) right shift.
+    /// `<<<` arithmetic left shift, the value `x * 2^k`. Wraps when bare;
+    /// admits overflow capture in the checked-arithmetic construct.
+    AShl,
+    /// `>>>` arithmetic (sign-preserving) right shift.
     ShrA,
-    /// `>>>` logical (zero-fill) right shift.
+    /// `>>` logical (zero-fill) right shift.
     ShrL,
     Eq,
     NotEq,

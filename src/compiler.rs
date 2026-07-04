@@ -1019,7 +1019,10 @@ fn compile_scalar_shift(
     compile_expr(fc, left)?;
     fc.emit(Op::Const(k_c));
     match op {
-        BinOp::Shl => {
+        // The bare arithmetic left shift wraps, producing the same value
+        // as the logical left shift; overflow capture is handled by the
+        // checked-arithmetic construct, not here.
+        BinOp::Shl | BinOp::AShl => {
             fc.emit(Op::Shl);
         }
         BinOp::ShrA => {
@@ -1078,7 +1081,7 @@ fn compile_multiword_shift(
     let r = k % word_bits;
     let nn = n as usize;
     let mut rwords: alloc::vec::Vec<u16> = alloc::vec::Vec::new();
-    if matches!(op, BinOp::Shl) {
+    if matches!(op, BinOp::Shl | BinOp::AShl) {
         // result[j] = (value[j-q] << r) | top_r_bits(value[j-q-1])
         let (r_c, wr_c, carry_mask) = if r != 0 {
             let cm = ((1i128 << r) - 1) as i64;
@@ -1189,7 +1192,9 @@ fn compile_multiword_binop(
         // shifts the dividend by F; the modulo needs no shift.
         BinOp::Div => compile_multiword_div(fc, left, right, n, f, false),
         BinOp::Mod => compile_multiword_div(fc, left, right, n, f, true),
-        BinOp::Shl | BinOp::ShrA | BinOp::ShrL => compile_multiword_shift(fc, op, left, right, n),
+        BinOp::Shl | BinOp::AShl | BinOp::ShrA | BinOp::ShrL => {
+            compile_multiword_shift(fc, op, left, right, n)
+        }
         BinOp::Eq | BinOp::NotEq | BinOp::Lt | BinOp::Gt | BinOp::LtEq | BinOp::GtEq => {
             compile_multiword_compare(fc, op, left, right, n)
         }
@@ -5159,7 +5164,7 @@ fn infer_expr_type(fc: &FuncCompiler, expr: &Expr) -> Option<TypeExpr> {
                 }
                 // A shift preserves the shifted value's type; the shift
                 // amount (right) is a Word and must not be inferred from.
-                BinOp::Shl | BinOp::ShrA | BinOp::ShrL => infer_expr_type(fc, left),
+                BinOp::Shl | BinOp::AShl | BinOp::ShrA | BinOp::ShrL => infer_expr_type(fc, left),
                 BinOp::Eq
                 | BinOp::NotEq
                 | BinOp::Lt
@@ -7660,7 +7665,7 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
             }
             // Scalar Word shifts with a compile-time-constant amount. The
             // Multiword case is handled above through compile_multiword_binop.
-            if matches!(op, BinOp::Shl | BinOp::ShrA | BinOp::ShrL) {
+            if matches!(op, BinOp::Shl | BinOp::AShl | BinOp::ShrA | BinOp::ShrL) {
                 return compile_scalar_shift(fc, *op, left, right);
             }
             let left_fixed_n = match &operand_ty {
@@ -7770,7 +7775,7 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
                     fc.emit(Op::CmpGe);
                 }
                 BinOp::And | BinOp::Or => unreachable!(),
-                BinOp::Shl | BinOp::ShrA | BinOp::ShrL => {
+                BinOp::Shl | BinOp::AShl | BinOp::ShrA | BinOp::ShrL => {
                     unreachable!(
                         "shifts are dispatched to compile_scalar_shift / compile_multiword_shift"
                     )

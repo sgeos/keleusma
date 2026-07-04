@@ -991,6 +991,7 @@ fn infer_arg_type(
                 | BinOp::Div
                 | BinOp::Mod
                 | BinOp::Shl
+                | BinOp::AShl
                 | BinOp::ShrA
                 | BinOp::ShrL => infer_arg_type(left, locals, fn_returns, structs),
                 BinOp::Eq

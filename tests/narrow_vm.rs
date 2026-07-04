@@ -781,33 +781,34 @@ fn narrow_multiword_fixed_div() {
 
 #[test]
 fn narrow_scalar_word_shifts() {
-    // Word shifts at the i16 width.
+    // Word shifts at the i16 width, Verilog convention.
     assert_eq!(run_i16("fn main() -> Word { 5 << 2 }"), 20_i16);
-    assert_eq!(
-        run_i16("fn main() -> Word { let x = 0 - 8; x >> 1 }"),
-        -4_i16
-    );
-    // Logical right shift zero-fills: -8 = 0xFFF8, >>> 1 = 0x7FFC = 32764.
+    // Arithmetic right shift `>>>` preserves the sign.
     assert_eq!(
         run_i16("fn main() -> Word { let x = 0 - 8; x >>> 1 }"),
+        -4_i16
+    );
+    // Logical right shift `>>` zero-fills: -8 = 0xFFF8, >> 1 = 0x7FFC = 32764.
+    assert_eq!(
+        run_i16("fn main() -> Word { let x = 0 - 8; x >> 1 }"),
         32764_i16
     );
 }
 
 #[test]
 fn narrow_multiword_shift_arithmetic_vs_logical() {
-    // (0, -1) is -2^16 at i16. Arithmetic >> 1 gives -2^15 = (i16::MIN,
-    // -1); logical >>> 1 gives (i16::MIN, i16::MAX).
+    // (0, -1) is -2^16 at i16. Arithmetic `>>>` 1 gives -2^15 = (i16::MIN,
+    // -1); logical `>>` 1 gives (i16::MIN, i16::MAX).
     assert_eq!(
-        run_i16("fn main() -> Word { let m = (0, -1) as Multiword<2>; let s = m >> 1; s[1] }"),
+        run_i16("fn main() -> Word { let m = (0, -1) as Multiword<2>; let s = m >>> 1; s[1] }"),
         -1_i16
     );
     assert_eq!(
-        run_i16("fn main() -> Word { let m = (0, -1) as Multiword<2>; let s = m >>> 1; s[1] }"),
+        run_i16("fn main() -> Word { let m = (0, -1) as Multiword<2>; let s = m >> 1; s[1] }"),
         i16::MAX
     );
     assert_eq!(
-        run_i16("fn main() -> Word { let m = (0, -1) as Multiword<2>; let s = m >>> 1; s[0] }"),
+        run_i16("fn main() -> Word { let m = (0, -1) as Multiword<2>; let s = m >> 1; s[0] }"),
         i16::MIN
     );
     // Cross-word left shift: (5, 0) << 16 = (0, 5).

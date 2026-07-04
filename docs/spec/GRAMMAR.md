@@ -1102,13 +1102,15 @@ expression      = pipeline_expr
 pipeline_expr   = logical_expr { '|>' qualified_name '(' [ arg_list ] ')' }
 logical_expr    = comparison_expr { ('and' | 'or') comparison_expr }
 comparison_expr = shift_expr [ comparison_op shift_expr ]
-(* Shifts bind below the comparisons and above the additive operators,
-   the C and Java convention. `<<` is the left shift, `>>` the arithmetic
-   (sign-preserving) right shift, and `>>>` the logical (zero-fill) right
-   shift. The right operand is a compile-time-constant amount in the
-   current increment. The `>>` and `>>>` tokens also close stacked
-   generics such as `Option<Option<T>>`, which the parser splits. *)
-shift_expr      = additive_expr { ('<<' | '>>' | '>>>') additive_expr }
+(* Shifts bind below the comparisons and above the additive operators.
+   The Verilog convention applies: `<<` is the logical left shift, `<<<`
+   the arithmetic left shift, `>>` the logical (zero-fill) right shift,
+   and `>>>` the arithmetic (sign-preserving) right shift. The right
+   operand is a compile-time-constant amount in the current increment.
+   The `>>` and `>>>` tokens also close stacked generics such as
+   `Option<Option<T>>`, which the parser splits; `<<` and `<<<` never
+   appear in type position, so the left shift has no such conflict. *)
+shift_expr      = additive_expr { ('<<' | '<<<' | '>>' | '>>>') additive_expr }
 additive_expr   = multiplicative_expr { ('+' | '-') multiplicative_expr }
 multiplicative_expr = unary_expr { ('*' | '/' | '%') unary_expr }
 unary_expr      = [ 'not' | '-' ] postfix_expr

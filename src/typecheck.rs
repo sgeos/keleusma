@@ -3583,7 +3583,7 @@ fn type_of_expr_inner(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError>
             // Multiword<N, F>, and the shift amount is a Word, so the two
             // operands are asymmetric and the shift is handled before the
             // same-type arithmetic below. The result has the value's type.
-            if matches!(op, BinOp::Shl | BinOp::ShrA | BinOp::ShrL) {
+            if matches!(op, BinOp::Shl | BinOp::AShl | BinOp::ShrA | BinOp::ShrL) {
                 let value_ok = matches!(lt, Type::Word | Type::Multiword(_, _) | Type::Var(_));
                 let amount_ok = matches!(rt, Type::Word | Type::Var(_));
                 if value_ok && amount_ok {
@@ -3736,7 +3736,7 @@ fn type_of_expr_inner(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError>
                     }
                     Ok(Type::Bool)
                 }
-                BinOp::Shl | BinOp::ShrA | BinOp::ShrL => {
+                BinOp::Shl | BinOp::AShl | BinOp::ShrA | BinOp::ShrL => {
                     unreachable!("shift operators are handled before the same-type arithmetic")
                 }
             };

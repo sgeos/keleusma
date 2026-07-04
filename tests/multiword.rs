@@ -930,22 +930,24 @@ fn multiword_fixed_div_truncates_toward_zero() {
     );
 }
 
-// --- Phase 5: shift operators. `<<` left, `>>` arithmetic (sign-
-// preserving) right, `>>>` logical (zero-fill) right, with a
-// compile-time-constant amount. Word and Multiword values (B19). ---
+// --- Phase 5: shift operators, Verilog convention. `<<` logical left,
+// `<<<` arithmetic left (value x * 2^k), `>>` logical (zero-fill) right,
+// `>>>` arithmetic (sign-preserving) right, with a compile-time-constant
+// amount. Word and Multiword values (B19). ---
 
 #[test]
 fn scalar_word_shifts() {
     assert_eq!(run_to_int("fn main() -> Word { 5 << 2 }"), 20);
     assert_eq!(run_to_int("fn main() -> Word { 20 >> 2 }"), 5);
-    // Arithmetic right shift preserves the sign.
-    assert_eq!(
-        run_to_int("fn main() -> Word { let x = 0 - 8; x >> 1 }"),
-        -4
-    );
-    // Logical right shift zero-fills, so -8 becomes a large positive.
+    // The arithmetic right shift `>>>` preserves the sign.
     assert_eq!(
         run_to_int("fn main() -> Word { let x = 0 - 8; x >>> 1 }"),
+        -4
+    );
+    // The logical right shift `>>` zero-fills, so -8 becomes a large
+    // positive.
+    assert_eq!(
+        run_to_int("fn main() -> Word { let x = 0 - 8; x >> 1 }"),
         9223372036854775804
     );
     // 1 << 63 is 2^63, which wraps to the most negative Word.
@@ -955,9 +957,19 @@ fn scalar_word_shifts() {
 }
 
 #[test]
+fn scalar_arithmetic_left_shift_bare_wraps_like_logical() {
+    // The bare arithmetic left shift `<<<` produces the same value as the
+    // logical left shift `<<`; the difference appears only under the
+    // checked-arithmetic construct (overflow capture), tested separately.
+    assert_eq!(run_to_int("fn main() -> Word { 5 <<< 2 }"), 20);
+    // 1 <<< 63 wraps to the most negative Word, exactly as 1 << 63.
+    assert_eq!(run_to_int("fn main() -> Word { 1 <<< 63 }"), i64::MIN);
+}
+
+#[test]
 fn scalar_shift_precedence_below_additive() {
-    // `0 - 8 >> 1` parses as `(0 - 8) >> 1`, not `0 - (8 >> 1)`.
-    assert_eq!(run_to_int("fn main() -> Word { 0 - 8 >> 1 }"), -4);
+    // `0 - 8 >>> 1` parses as `(0 - 8) >>> 1`, not `0 - (8 >>> 1)`.
+    assert_eq!(run_to_int("fn main() -> Word { 0 - 8 >>> 1 }"), -4);
 }
 
 #[test]
@@ -967,7 +979,7 @@ fn scalar_shift_rejects_variable_and_out_of_range_amount() {
     // An amount at or beyond the value width is rejected.
     assert!(compile_fails("fn main() -> Word { 5 << 64 }"));
     assert!(compile_fails(
-        "fn main() -> Word { let x = 0 - 1; x >> 64 }"
+        "fn main() -> Word { let x = 0 - 1; x >>> 64 }"
     ));
 }
 
@@ -987,35 +999,42 @@ fn multiword_shift_left_within_and_across_words() {
         run_to_int("fn main() -> Word { let m = (5, 0) as Multiword<2>; let s = m << 64; s[0] }"),
         0
     );
+    // The arithmetic left shift `<<<` on Multiword produces the same
+    // value (Multiword wraps; it has no overflow capture).
+    assert_eq!(
+        run_to_int("fn main() -> Word { let m = (1, 0) as Multiword<2>; let s = m <<< 1; s[0] }"),
+        2
+    );
 }
 
 #[test]
 fn multiword_shift_right_arithmetic_vs_logical() {
-    // (0, -1) is the value -2^64. The arithmetic right shift by 1 gives
-    // -2^63 = (i64::MIN, -1): the sign fills the vacated top bit.
+    // (0, -1) is the value -2^64. The arithmetic right shift `>>>` by 1
+    // gives -2^63 = (i64::MIN, -1): the sign fills the vacated top bit.
     assert_eq!(
-        run_to_int("fn main() -> Word { let m = (0, -1) as Multiword<2>; let s = m >> 1; s[1] }"),
+        run_to_int("fn main() -> Word { let m = (0, -1) as Multiword<2>; let s = m >>> 1; s[1] }"),
         -1
     );
     assert_eq!(
-        run_to_int("fn main() -> Word { let m = (0, -1) as Multiword<2>; let s = m >> 1; s[0] }"),
+        run_to_int("fn main() -> Word { let m = (0, -1) as Multiword<2>; let s = m >>> 1; s[0] }"),
         i64::MIN
     );
-    // The logical right shift by 1 zero-fills the top bit, giving the
-    // high word i64::MAX and the low word i64::MIN.
+    // The logical right shift `>>` by 1 zero-fills the top bit, giving
+    // the high word i64::MAX and the low word i64::MIN.
     assert_eq!(
-        run_to_int("fn main() -> Word { let m = (0, -1) as Multiword<2>; let s = m >>> 1; s[1] }"),
+        run_to_int("fn main() -> Word { let m = (0, -1) as Multiword<2>; let s = m >> 1; s[1] }"),
         i64::MAX
     );
     assert_eq!(
-        run_to_int("fn main() -> Word { let m = (0, -1) as Multiword<2>; let s = m >>> 1; s[0] }"),
+        run_to_int("fn main() -> Word { let m = (0, -1) as Multiword<2>; let s = m >> 1; s[0] }"),
         i64::MIN
     );
 }
 
 #[test]
 fn multiword_shift_right_whole_word() {
-    // (0, 1) is 2^64; >> 64 gives 1 = (1, 0).
+    // (0, 1) is 2^64, positive; >> 64 gives 1 = (1, 0). The value is
+    // positive, so the logical and arithmetic shifts agree.
     assert_eq!(
         run_to_int("fn main() -> Word { let m = (0, 1) as Multiword<2>; let s = m >> 64; s[0] }"),
         1

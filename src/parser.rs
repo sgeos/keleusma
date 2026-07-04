@@ -210,7 +210,7 @@ impl<'a> Parser<'a> {
         self.gt_debt > 0
             || matches!(
                 self.peek(),
-                TokenKind::Gt | TokenKind::Shr | TokenKind::Ushr
+                TokenKind::Gt | TokenKind::GtGt | TokenKind::GtGtGt
             )
     }
 
@@ -223,11 +223,11 @@ impl<'a> Parser<'a> {
         }
         match self.peek() {
             TokenKind::Gt => Ok(self.bump()),
-            TokenKind::Shr => {
+            TokenKind::GtGt => {
                 self.gt_debt = 1;
                 Ok(self.bump())
             }
-            TokenKind::Ushr => {
+            TokenKind::GtGtGt => {
                 self.gt_debt = 2;
                 Ok(self.bump())
             }
@@ -1611,12 +1611,16 @@ impl<'a> Parser<'a> {
         let mut left = self.parse_additive_expr()?;
 
         loop {
-            let op = if self.eat(&TokenKind::Shl) {
+            // Verilog convention: `<<` logical left, `<<<` arithmetic
+            // left, `>>` logical right, `>>>` arithmetic right.
+            let op = if self.eat(&TokenKind::LtLt) {
                 BinOp::Shl
-            } else if self.eat(&TokenKind::Shr) {
-                BinOp::ShrA
-            } else if self.eat(&TokenKind::Ushr) {
+            } else if self.eat(&TokenKind::LtLtLt) {
+                BinOp::AShl
+            } else if self.eat(&TokenKind::GtGt) {
                 BinOp::ShrL
+            } else if self.eat(&TokenKind::GtGtGt) {
+                BinOp::ShrA
             } else {
                 break;
             };
