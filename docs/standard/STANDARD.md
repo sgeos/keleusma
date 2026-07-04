@@ -455,14 +455,18 @@ fault as the word-width integer. The fixed-point divide pre-shifts the dividend 
 by F, since the raw quotient representing the ratio of two same-scale values is the
 shifted dividend divided by the divisor, while the fixed-point modulo needs no
 shift, a same-scale remainder keeping the scale. The four shift operators are
-implemented for a compile-time-constant amount, named after the assembly mnemonics.
-`lsl` and `lsr` are the logical shifts, zero-filling the vacated bits, and `asl` and
-`asr` are the arithmetic shifts, the arithmetic right shift filling the vacated top
-with the sign and the arithmetic left shift carrying the value `x * 2^k` so it
-admits overflow capture on the word-width type. The bitwise operators `band`,
-`bor`, `bxor`, and the prefix `bnot` are implemented, applied to each limb
-independently with no cross-limb interaction. The multi-word arithmetic family is
-therefore complete; general const generics remain a separate feature.
+implemented for a compile-time-constant amount and for a runtime-variable amount,
+named after the assembly mnemonics. `lsl` and `lsr` are the logical shifts,
+zero-filling the vacated bits, and `asl` and `asr` are the arithmetic shifts, the
+arithmetic right shift filling the vacated top with the sign and the arithmetic
+left shift carrying the value `x * 2^k` so it admits overflow capture on the
+word-width type. A variable multi-word shift is unrolled over the compile-time
+word count with runtime index arithmetic and branch-free bounds guards, so it
+carries no runtime loop and preserves the definitive worst-case bounds. The
+bitwise operators `band`, `bor`, `bxor`, and the prefix `bnot` are implemented,
+applied to each limb independently with no cross-limb interaction. The multi-word
+arithmetic family is therefore complete; general const generics for the word and
+fraction-bit parameters remain a separate feature, tracked as B40 in the backlog.
 
 #### 5.1.3 Composite kinds
 
@@ -1189,12 +1193,13 @@ this document.
    construction and indexing, its scale-independent addition and subtraction, the
    six comparison operators, multiplication at every fraction-bit count (integer and
    fixed-point), the divide and modulo at every fraction-bit count, the four
-   shift operators, and the bitwise operators `band`, `bor`, `bxor`, and `bnot`
-   are implemented. Two narrower items remain: the shift amount must
-   be a compile-time constant, a variable amount being a later increment, and the
-   type is recognised specially rather than through general const generics, which
-   stay a separate feature. The `Byte` type is not yet shiftable, and `Byte` is not
-   yet admitted by the bitwise operators.
+   shift operators with a constant or runtime-variable amount, and the bitwise
+   operators `band`, `bor`, `bxor`, and `bnot` are implemented; `Byte` is admitted
+   by the scalar shift and bitwise operators. One item remains: the type is
+   recognised specially rather than through general const generics, which stay a
+   separate feature tracked as B40. The overflow-capturing form of `asl` inside the
+   checked-arithmetic construct still requires a compile-time-constant amount,
+   because it lowers to a multiply by the constant `2^k`.
 3. The instruction count in prior project documents was recorded as 66. The instruction
    set is 67, because the `SetDataComposite` opcode at identifier 70 is implemented,
    dispatched, and verified but was undocumented. The issuing authority reconciles the

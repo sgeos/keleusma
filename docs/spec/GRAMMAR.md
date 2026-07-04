@@ -281,9 +281,9 @@ Integer arithmetic (`Word`) and floating-point arithmetic (`Float`) do not mix w
 
 ### Shift and Bitwise Expressions
 
-Shift operators are assembly-mnemonic keywords with a compile-time-constant amount: `lsl` logical left, `asl` arithmetic left, `lsr` logical (zero-fill) right, and `asr` arithmetic (sign-preserving) right. The `lsl` and `asl` forms produce the same value; `asl` additionally admits overflow capture in the checked-arithmetic construct because it denotes `x * 2^k`. Shifts operate on `Word` and `Multiword<N>` values and bind tighter than the additive operators.
+Shift operators are assembly-mnemonic keywords: `lsl` logical left, `asl` arithmetic left, `lsr` logical (zero-fill) right, and `asr` arithmetic (sign-preserving) right. The `lsl` and `asl` forms produce the same value; `asl` additionally admits overflow capture in the checked-arithmetic construct because it denotes `x * 2^k` (the overflow-capturing form requires a constant amount). Shifts operate on `Word`, `Byte`, and `Multiword<N>` values and bind tighter than the additive operators. The amount is a `Word` and may be a constant literal or a runtime-variable value; a constant literal is range-checked at compile time, and a runtime amount at or beyond the value width shifts every bit out rather than trapping.
 
-Bitwise operators are keyword mnemonics: `band`, `bor`, and `bxor` are the binary and, or, and exclusive-or; `bnot` is the prefix complement. They operate on `Word` and `Multiword<N>` values. On a `Multiword<N>` the operation is applied limb by limb with no cross-limb interaction. Among the binary bitwise operators, `band` binds tightest, then `bxor`, then `bor`, and the whole bitwise group binds tighter than comparison. Disambiguation is by operator name and never by operand type.
+Bitwise operators are keyword mnemonics: `band`, `bor`, and `bxor` are the binary and, or, and exclusive-or; `bnot` is the prefix complement. They operate on `Word`, `Byte`, and `Multiword<N>` values (a `Byte` at the byte width). On a `Multiword<N>` the operation is applied limb by limb with no cross-limb interaction. Among the binary bitwise operators, `band` binds tightest, then `bxor`, then `bor`, and the whole bitwise group binds tighter than comparison. Disambiguation is by operator name and never by operand type.
 
 ````
 let mask  = flags band 0x0F;

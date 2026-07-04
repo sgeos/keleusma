@@ -969,9 +969,12 @@ fn element_type_of(t: &TypeExpr) -> Option<TypeExpr> {
     }
 }
 
-/// Extract a compile-time-constant, non-negative shift amount from a
-/// shift's right operand, bounded by `max_bits` (B19 phase 5). A variable
-/// amount is a later increment, and an out-of-range amount is rejected.
+/// Extract a compile-time-constant, non-negative shift amount bounded by
+/// `max_bits`. Used by the overflow-checked arithmetic left shift, which
+/// lowers `x asl k` to a checked multiply by the constant `2^k`; that
+/// multiplier cannot be formed for a runtime amount, so the checked form
+/// requires a literal. The bare shift operators admit a variable amount
+/// through `classify_shift_amount` instead.
 fn const_shift_amount(right: &Expr, max_bits: i64) -> Result<i64, CompileError> {
     match right {
         Expr::Literal {
@@ -993,30 +996,90 @@ fn const_shift_amount(right: &Expr, max_bits: i64) -> Result<i64, CompileError> 
         }
         _ => Err(CompileError {
             message: String::from(
-                "a variable shift amount is a later increment; the shift amount must be an integer literal",
+                "the overflow-checked arithmetic left shift requires a compile-time-constant amount; a variable amount is admissible only for the bare shift operators",
             ),
             span: right.span(),
         }),
     }
 }
 
-/// Compile a scalar `Word` shift with a compile-time-constant amount
-/// (B19 phase 5). Left shift (`<<`) and the arithmetic right shift (`>>`)
-/// map directly to `Op::Shl` and `Op::Shr`, which is arithmetic. The
-/// logical right shift (`>>>`) is `Op::Shr` followed by a mask of the low
-/// `word_bits - k` bits, which clears the sign-extended high bits; at
-/// `k = 0` the mask is all ones and the shift is the identity.
+/// Classify a shift's right operand as either a compile-time-constant
+/// amount in `[0, max_bits)` or a runtime-variable amount. A literal
+/// outside the range is a compile error; any non-literal is a variable
+/// amount, which is admissible because the VM masks the runtime count to
+/// the word width (`Op::Shl`/`Op::Shr` take `count & (word_bits - 1)`).
+fn classify_shift_amount(right: &Expr, max_bits: i64) -> Result<Option<i64>, CompileError> {
+    match right {
+        Expr::Literal {
+            value: crate::ast::Literal::Int(k),
+            span,
+        } => {
+            if *k < 0 || *k >= max_bits {
+                Err(CompileError {
+                    message: alloc::format!(
+                        "shift amount {} is out of range [0, {}) for the value width",
+                        k,
+                        max_bits
+                    ),
+                    span: *span,
+                })
+            } else {
+                Ok(Some(*k))
+            }
+        }
+        _ => Ok(None),
+    }
+}
+
+/// Compile a scalar `Word` or `Byte` shift. The amount is either a
+/// compile-time-constant literal or a runtime-variable `Word` (B19). A
+/// `Byte` value is promoted to `Word` with `Op::ByteToWord`, shifted at
+/// the word width, and truncated back with `Op::WordToByte`, which also
+/// performs the left-shift masking; a `Byte` is unsigned, so its
+/// arithmetic and logical right shifts coincide. The left shift and the
+/// arithmetic right shift map to `Op::Shl` and the arithmetic `Op::Shr`;
+/// the logical right shift clears the sign-extended high bits.
 fn compile_scalar_shift(
     fc: &mut FuncCompiler,
     op: crate::ast::BinOp,
     left: &Expr,
     right: &Expr,
 ) -> Result<(), CompileError> {
-    use crate::ast::BinOp;
     let word_bits = (fc.type_info.word_bytes * 8) as i64;
-    let k = const_shift_amount(right, word_bits)?;
-    let k_c = fc.add_constant(Value::Int(k));
+    let is_byte = matches!(
+        infer_expr_type(fc, left),
+        Some(TypeExpr::Prim(PrimType::Byte, _))
+    );
+    // The constant-amount range is the value's own bit width: eight bits
+    // for a `Byte`, the word width for a `Word`. A variable amount is
+    // masked to the word width by the VM at runtime.
+    let value_bits = if is_byte { 8 } else { word_bits };
+    let amount = classify_shift_amount(right, value_bits)?;
     compile_expr(fc, left)?;
+    if is_byte {
+        fc.emit(Op::ByteToWord);
+    }
+    match amount {
+        Some(k) => compile_scalar_shift_const(fc, op, k, word_bits),
+        None => compile_scalar_shift_variable(fc, op, right, word_bits)?,
+    }
+    if is_byte {
+        fc.emit(Op::WordToByte);
+    }
+    Ok(())
+}
+
+/// Emit a constant-amount scalar shift by `k` over the `Word`-typed value
+/// already on the operand stack. At `k = 0` the logical-right mask is all
+/// ones and the shift is the identity.
+fn compile_scalar_shift_const(
+    fc: &mut FuncCompiler,
+    op: crate::ast::BinOp,
+    k: i64,
+    word_bits: i64,
+) {
+    use crate::ast::BinOp;
+    let k_c = fc.add_constant(Value::Int(k));
     fc.emit(Op::Const(k_c));
     match op {
         // The bare arithmetic left shift wraps, producing the same value
@@ -1035,8 +1098,107 @@ fn compile_scalar_shift(
             fc.emit(Op::Const(mask_c));
             fc.emit(Op::BitAnd);
         }
-        _ => unreachable!("compile_scalar_shift called with a non-shift operator"),
+        _ => unreachable!("compile_scalar_shift_const called with a non-shift operator"),
     }
+}
+
+/// Emit a variable-amount scalar shift over the `Word`-typed value
+/// already on the operand stack, consuming the runtime count expression
+/// `right`. The left shift and arithmetic right shift lower to `Op::Shl`
+/// and `Op::Shr`, whose VM dispatch masks the count to the word width.
+/// The logical right shift is the arithmetic shift with the
+/// sign-extended high bits masked away; because the mask
+/// `(1 << (word_bits - c)) - 1` is all ones at `c = 0` (where the VM's
+/// count masking would otherwise collapse `1 << word_bits` to `1`), the
+/// `c = 0` case is handled by an explicit identity branch.
+fn compile_scalar_shift_variable(
+    fc: &mut FuncCompiler,
+    op: crate::ast::BinOp,
+    right: &Expr,
+    word_bits: i64,
+) -> Result<(), CompileError> {
+    use crate::ast::BinOp;
+    match op {
+        BinOp::Shl | BinOp::AShl => {
+            compile_expr(fc, right)?;
+            fc.emit(Op::Shl);
+        }
+        BinOp::ShrA => {
+            compile_expr(fc, right)?;
+            fc.emit(Op::Shr);
+        }
+        BinOp::ShrL => {
+            let lv = fc.declare_local("__shr_v");
+            fc.emit(Op::SetLocal(lv));
+            compile_expr(fc, right)?;
+            let lc = fc.declare_local("__shr_c");
+            fc.emit(Op::SetLocal(lc));
+            let zero = fc.add_constant(Value::Int(0));
+            let one = fc.add_constant(Value::Int(1));
+            let wb_c = fc.add_constant(Value::Int(word_bits));
+            // if c == 0 { v } else { (v asr c) band ((1 lsl (word_bits - c)) - 1) }
+            fc.emit(Op::GetLocal(lc));
+            fc.emit(Op::Const(zero));
+            fc.emit(Op::CmpEq);
+            let if_addr = fc.emit_jump(Op::If(0));
+            fc.emit(Op::GetLocal(lv));
+            let else_addr = fc.emit_jump(Op::Else(0));
+            fc.patch_jump(if_addr);
+            fc.emit(Op::GetLocal(lv));
+            fc.emit(Op::GetLocal(lc));
+            fc.emit(Op::Shr); // v asr c
+            fc.emit(Op::Const(one));
+            fc.emit(Op::Const(wb_c));
+            fc.emit(Op::GetLocal(lc));
+            // Word subtraction routes through the checked opcode; the low
+            // word of the (high, low, flag) triple is the wrapping result
+            // and the high/flag are discarded (Consolidation B removed the
+            // unchecked `Op::Sub` Int arm).
+            fc.emit(Op::CheckedSub);
+            fc.emit(Op::PopN(2)); // word_bits - c
+            fc.emit(Op::Shl); // 1 lsl (word_bits - c)
+            fc.emit(Op::Const(one));
+            fc.emit(Op::CheckedSub);
+            fc.emit(Op::PopN(2)); // mask = (1 lsl (word_bits - c)) - 1
+            fc.emit(Op::BitAnd);
+            fc.patch_jump(else_addr);
+            fc.emit(Op::EndIf);
+        }
+        _ => unreachable!("compile_scalar_shift_variable called with a non-shift operator"),
+    }
+    Ok(())
+}
+
+/// Compile a scalar `Byte` bitwise operation (`band`/`bor`/`bxor`). Each
+/// operand is promoted to `Word` with `Op::ByteToWord`, combined with the
+/// word-width bitwise opcode, and truncated back to `Byte` with
+/// `Op::WordToByte`. The word-width high bits produced by the operation
+/// are cleared by the truncation, so the result is the byte-width
+/// combination.
+fn compile_byte_bitwise(
+    fc: &mut FuncCompiler,
+    op: crate::ast::BinOp,
+    left: &Expr,
+    right: &Expr,
+) -> Result<(), CompileError> {
+    use crate::ast::BinOp;
+    compile_expr(fc, left)?;
+    fc.emit(Op::ByteToWord);
+    compile_expr(fc, right)?;
+    fc.emit(Op::ByteToWord);
+    match op {
+        BinOp::Band => {
+            fc.emit(Op::BitAnd);
+        }
+        BinOp::Bor => {
+            fc.emit(Op::BitOr);
+        }
+        BinOp::Bxor => {
+            fc.emit(Op::BitXor);
+        }
+        _ => unreachable!("compile_byte_bitwise called with a non-bitwise operator"),
+    }
+    fc.emit(Op::WordToByte);
     Ok(())
 }
 
@@ -1057,7 +1219,11 @@ fn compile_multiword_shift(
     use crate::ast::BinOp;
     let word_bits = (fc.type_info.word_bytes * 8) as i64;
     let total_bits = n as i64 * word_bits;
-    let k = const_shift_amount(right, total_bits)?;
+    // A runtime-variable amount takes the unrolled-with-runtime-index path.
+    let k = match classify_shift_amount(right, total_bits)? {
+        Some(k) => k,
+        None => return compile_multiword_variable_shift(fc, op, left, right, n, word_bits),
+    };
     let byte_size = flat_alloc_bytes(&TypeExpr::Multiword(n, 0, Span::default()), &fc.type_info)
         .unwrap_or_else(|| conservative_alloc_bytes(n));
     let word_ty = TypeExpr::Prim(PrimType::Word, Span::default());
@@ -1166,6 +1332,230 @@ fn compile_multiword_shift(
         count: n,
         byte_size,
     }));
+    Ok(())
+}
+
+/// Emit `iv := base + delta * q` for a runtime word offset `q`
+/// (`delta` is `+1` to add the offset for a right shift, `-1` to subtract
+/// it for a left shift). Word arithmetic routes through the checked
+/// opcodes; the low word of the triple is the wrapping result.
+fn emit_mw_index(fc: &mut FuncCompiler, base: i64, qv: u16, add: bool, iv: u16) {
+    let base_c = fc.add_constant(Value::Int(base));
+    fc.emit(Op::Const(base_c));
+    fc.emit(Op::GetLocal(qv));
+    if add {
+        fc.emit(Op::CheckedAdd);
+    } else {
+        fc.emit(Op::CheckedSub);
+    }
+    fc.emit(Op::PopN(2));
+    fc.emit(Op::SetLocal(iv));
+}
+
+/// Push the `iv`-indexed limb of the source array `av`, guarded so an
+/// index outside `[0, n)` yields `fillv` rather than trapping. The guard
+/// is branch-free: `in_mask` is all ones exactly when `0 <= iv < n`, the
+/// index is clamped to zero when out of range so `GetIndex` never traps,
+/// and the fetched word is blended with the fill by the mask.
+#[allow(clippy::too_many_arguments)]
+fn emit_mw_guarded(
+    fc: &mut FuncCompiler,
+    av: u16,
+    iv: u16,
+    fillv: u16,
+    imv: u16,
+    siv: u16,
+    elem_op: crate::bytecode::ArrayElem,
+    neg1: u16,
+    wbm1_c: u16,
+    n_c: u16,
+) {
+    // ge0 = bnot(iv asr (word_bits - 1)) : all ones when iv >= 0.
+    fc.emit(Op::GetLocal(iv));
+    fc.emit(Op::Const(wbm1_c));
+    fc.emit(Op::Shr);
+    fc.emit(Op::Const(neg1));
+    fc.emit(Op::BitXor);
+    // ltn = (iv - n) asr (word_bits - 1) : all ones when iv < n.
+    fc.emit(Op::GetLocal(iv));
+    fc.emit(Op::Const(n_c));
+    fc.emit(Op::CheckedSub);
+    fc.emit(Op::PopN(2));
+    fc.emit(Op::Const(wbm1_c));
+    fc.emit(Op::Shr);
+    fc.emit(Op::BitAnd); // in_mask = ge0 band ltn
+    fc.emit(Op::SetLocal(imv));
+    // safe_idx = iv band in_mask (0 when out of range, so no trap).
+    fc.emit(Op::GetLocal(iv));
+    fc.emit(Op::GetLocal(imv));
+    fc.emit(Op::BitAnd);
+    fc.emit(Op::SetLocal(siv));
+    // (a[safe_idx] band in_mask) bor (fill band bnot(in_mask)).
+    fc.emit(Op::GetLocal(av));
+    fc.emit(Op::GetLocal(siv));
+    fc.emit(Op::GetIndex(elem_op));
+    fc.emit(Op::GetLocal(imv));
+    fc.emit(Op::BitAnd);
+    fc.emit(Op::GetLocal(fillv));
+    fc.emit(Op::GetLocal(imv));
+    fc.emit(Op::Const(neg1));
+    fc.emit(Op::BitXor);
+    fc.emit(Op::BitAnd);
+    fc.emit(Op::BitOr);
+}
+
+/// Compile a `Multiword<N, F>` shift by a runtime-variable amount. The
+/// value stays a flat N-word array; the word offset `q = c >> log2(wb)`
+/// and bit offset `r = c & (wb - 1)` are computed at runtime and each of
+/// the N result limbs is built from runtime-indexed, bounds-guarded
+/// source limbs. The construction is unrolled over N (a compile-time
+/// constant), so there is no runtime loop and the worst-case bounds stay
+/// exactly as the verifier already accounts opcodes. An out-of-range or
+/// over-large count shifts every bit out through the index guards (zero
+/// for a left or logical shift, the sign word for an arithmetic right
+/// shift), matching the constant lowering. `asl` equals `lsl` here, since
+/// a multi-word value has no overflow-capture construct.
+fn compile_multiword_variable_shift(
+    fc: &mut FuncCompiler,
+    op: crate::ast::BinOp,
+    left: &Expr,
+    right: &Expr,
+    n: u16,
+    word_bits: i64,
+) -> Result<(), CompileError> {
+    use crate::ast::BinOp;
+    let nn = n as usize;
+    let log2_wb = word_bits.trailing_zeros() as i64;
+    let byte_size = flat_alloc_bytes(&TypeExpr::Multiword(n, 0, Span::default()), &fc.type_info)
+        .unwrap_or_else(|| conservative_alloc_bytes(n));
+    let word_ty = TypeExpr::Prim(PrimType::Word, Span::default());
+    let elem_op = array_elem_operand(Some(&word_ty), &fc.type_info);
+    let is_left = matches!(op, BinOp::Shl | BinOp::AShl);
+
+    let zero = fc.add_constant(Value::Int(0));
+    let one = fc.add_constant(Value::Int(1));
+    let neg1 = fc.add_constant(Value::Int(-1));
+    let wbm1_c = fc.add_constant(Value::Int(word_bits - 1));
+    let log2_c = fc.add_constant(Value::Int(log2_wb));
+    let wb_c = fc.add_constant(Value::Int(word_bits));
+    let n_c = fc.add_constant(Value::Int(n as i64));
+
+    let av = fc.declare_local("__mwv_a");
+    compile_expr(fc, left)?;
+    fc.emit(Op::SetLocal(av));
+    let cv = fc.declare_local("__mwv_c");
+    compile_expr(fc, right)?;
+    fc.emit(Op::SetLocal(cv));
+    // q = c >> log2(wb) (arithmetic; a non-negative count divides cleanly).
+    let qv = fc.declare_local("__mwv_q");
+    fc.emit(Op::GetLocal(cv));
+    fc.emit(Op::Const(log2_c));
+    fc.emit(Op::Shr);
+    fc.emit(Op::SetLocal(qv));
+    // r = c band (wb - 1).
+    let rv = fc.declare_local("__mwv_r");
+    fc.emit(Op::GetLocal(cv));
+    fc.emit(Op::Const(wbm1_c));
+    fc.emit(Op::BitAnd);
+    fc.emit(Op::SetLocal(rv));
+    // The vacated fill: the sign word for an arithmetic right shift, zero
+    // otherwise.
+    let fillv = fc.declare_local("__mwv_fill");
+    if matches!(op, BinOp::ShrA) {
+        let top_c = fc.add_constant(Value::Int((nn - 1) as i64));
+        fc.emit(Op::GetLocal(av));
+        fc.emit(Op::Const(top_c));
+        fc.emit(Op::GetIndex(elem_op));
+        fc.emit(Op::Const(wbm1_c));
+        fc.emit(Op::Shr);
+        fc.emit(Op::SetLocal(fillv));
+    } else {
+        fc.emit(Op::Const(zero));
+        fc.emit(Op::SetLocal(fillv));
+    }
+    let iv = fc.declare_local("__mwv_i");
+    let imv = fc.declare_local("__mwv_im");
+    let siv = fc.declare_local("__mwv_si");
+
+    // if r == 0 { pure word shift } else { word + bit combine }
+    fc.emit(Op::GetLocal(rv));
+    fc.emit(Op::Const(zero));
+    fc.emit(Op::CmpEq);
+    let if_addr = fc.emit_jump(Op::If(0));
+    // r == 0: each result limb is the guarded source limb at the shifted
+    // word position.
+    for j in 0..nn {
+        emit_mw_index(fc, j as i64, qv, !is_left, iv);
+        emit_mw_guarded(fc, av, iv, fillv, imv, siv, elem_op, neg1, wbm1_c, n_c);
+    }
+    fc.emit(Op::NewComposite(NewCompositeOperand::Flat {
+        kind: crate::value_layout::CompositeKind::Array,
+        count: n,
+        byte_size,
+    }));
+    let else_addr = fc.emit_jump(Op::Else(0));
+    fc.patch_jump(if_addr);
+    // r != 0: word + bit combine. wbr = wb - r.
+    let wbrv = fc.declare_local("__mwv_wbr");
+    fc.emit(Op::Const(wb_c));
+    fc.emit(Op::GetLocal(rv));
+    fc.emit(Op::CheckedSub);
+    fc.emit(Op::PopN(2));
+    fc.emit(Op::SetLocal(wbrv));
+    if is_left {
+        // result[j] = (guarded(j-q) lsl r) bor ((guarded(j-q-1) asr wbr) band ((1 lsl r) - 1))
+        let maskr = fc.declare_local("__mwv_mr");
+        fc.emit(Op::Const(one));
+        fc.emit(Op::GetLocal(rv));
+        fc.emit(Op::Shl);
+        fc.emit(Op::Const(one));
+        fc.emit(Op::CheckedSub);
+        fc.emit(Op::PopN(2));
+        fc.emit(Op::SetLocal(maskr));
+        for j in 0..nn {
+            emit_mw_index(fc, j as i64, qv, false, iv);
+            emit_mw_guarded(fc, av, iv, fillv, imv, siv, elem_op, neg1, wbm1_c, n_c);
+            fc.emit(Op::GetLocal(rv));
+            fc.emit(Op::Shl);
+            emit_mw_index(fc, j as i64 - 1, qv, false, iv);
+            emit_mw_guarded(fc, av, iv, fillv, imv, siv, elem_op, neg1, wbm1_c, n_c);
+            fc.emit(Op::GetLocal(wbrv));
+            fc.emit(Op::Shr);
+            fc.emit(Op::GetLocal(maskr));
+            fc.emit(Op::BitAnd);
+            fc.emit(Op::BitOr);
+        }
+    } else {
+        // result[j] = ((guarded(j+q) asr r) band ((1 lsl wbr) - 1)) bor (guarded(j+q+1) lsl wbr)
+        let lomask = fc.declare_local("__mwv_lm");
+        fc.emit(Op::Const(one));
+        fc.emit(Op::GetLocal(wbrv));
+        fc.emit(Op::Shl);
+        fc.emit(Op::Const(one));
+        fc.emit(Op::CheckedSub);
+        fc.emit(Op::PopN(2));
+        fc.emit(Op::SetLocal(lomask));
+        for j in 0..nn {
+            emit_mw_index(fc, j as i64, qv, true, iv);
+            emit_mw_guarded(fc, av, iv, fillv, imv, siv, elem_op, neg1, wbm1_c, n_c);
+            fc.emit(Op::GetLocal(rv));
+            fc.emit(Op::Shr);
+            fc.emit(Op::GetLocal(lomask));
+            fc.emit(Op::BitAnd);
+            emit_mw_index(fc, j as i64 + 1, qv, true, iv);
+            emit_mw_guarded(fc, av, iv, fillv, imv, siv, elem_op, neg1, wbm1_c, n_c);
+            fc.emit(Op::GetLocal(wbrv));
+            fc.emit(Op::Shl);
+            fc.emit(Op::BitOr);
+        }
+    }
+    fc.emit(Op::NewComposite(NewCompositeOperand::Flat {
+        kind: crate::value_layout::CompositeKind::Array,
+        count: n,
+        byte_size,
+    }));
+    fc.patch_jump(else_addr);
+    fc.emit(Op::EndIf);
     Ok(())
 }
 
@@ -7836,10 +8226,18 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
                 let (n, f) = (*n, *f);
                 return compile_multiword_binop(fc, *op, left, right, n, f);
             }
-            // Scalar Word shifts with a compile-time-constant amount. The
+            // Scalar `Word`/`Byte` shifts, constant or variable amount. The
             // Multiword case is handled above through compile_multiword_binop.
             if matches!(op, BinOp::Shl | BinOp::AShl | BinOp::ShrA | BinOp::ShrL) {
                 return compile_scalar_shift(fc, *op, left, right);
+            }
+            // Byte bitwise operations promote each operand to `Word`,
+            // combine, and truncate back to `Byte`; the generic scalar
+            // lowering below assumes `Word` operands.
+            if matches!(op, BinOp::Band | BinOp::Bor | BinOp::Bxor)
+                && matches!(&operand_ty, Some(TypeExpr::Prim(PrimType::Byte, _)))
+            {
+                return compile_byte_bitwise(fc, *op, left, right);
             }
             let left_fixed_n = match &operand_ty {
                 Some(TypeExpr::Prim(PrimType::Fixed(n), _)) => {
@@ -7986,10 +8384,9 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
             // continue to use `Op::Neg` whose VM dispatch retains
             // those three arms. Unknown-type operands default to
             // `Int` for the same reason as the binary path.
-            let operand_is_int = matches!(
-                infer_expr_type(fc, operand),
-                None | Some(TypeExpr::Prim(PrimType::Word, _))
-            );
+            let inferred = infer_expr_type(fc, operand);
+            let operand_is_int = matches!(inferred, None | Some(TypeExpr::Prim(PrimType::Word, _)));
+            let operand_is_byte = matches!(inferred, Some(TypeExpr::Prim(PrimType::Byte, _)));
             compile_expr(fc, operand)?;
             match op {
                 UnaryOp::Neg => {
@@ -8006,10 +8403,18 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
                 UnaryOp::Bnot => {
                     // Scalar bitwise complement is XOR against the
                     // all-ones word; the Multiword case is dispatched
-                    // above before the operand is compiled.
+                    // above before the operand is compiled. A `Byte` is
+                    // promoted to `Word`, complemented, and truncated back,
+                    // so the complement is taken within the byte width.
+                    if operand_is_byte {
+                        fc.emit(Op::ByteToWord);
+                    }
                     let neg1 = fc.add_constant(Value::Int(-1));
                     fc.emit(Op::Const(neg1));
                     fc.emit(Op::BitXor);
+                    if operand_is_byte {
+                        fc.emit(Op::WordToByte);
+                    }
                 }
             }
         }

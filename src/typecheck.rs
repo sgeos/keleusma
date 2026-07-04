@@ -3565,8 +3565,21 @@ fn type_of_expr_inner(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError>
             // to-fixed shift for Fixed targets). Out-of-range
             // literals fall through to the regular type-error
             // path.
-            let lt_raw = coerce_integer_literal(ctx, left, lt_raw, &rt_raw, *span);
-            let rt_raw = coerce_integer_literal(ctx, right, rt_raw, &lt_raw, *span);
+            // A shift is asymmetric: the amount is always a `Word`, so the
+            // operands are not coerced to a common type. Coercing the
+            // amount literal to a `Byte` value's type would wrongly reject
+            // a `Byte` shift by an integer literal.
+            let is_shift = matches!(op, BinOp::Shl | BinOp::AShl | BinOp::ShrA | BinOp::ShrL);
+            let lt_raw = if is_shift {
+                lt_raw
+            } else {
+                coerce_integer_literal(ctx, left, lt_raw, &rt_raw, *span)
+            };
+            let rt_raw = if is_shift {
+                rt_raw
+            } else {
+                coerce_integer_literal(ctx, right, rt_raw, &lt_raw, *span)
+            };
             // Information-flow label propagation. The operands'
             // labels are unioned to form the result's labels;
             // arithmetic on a labeled value taints the result.
@@ -3584,7 +3597,10 @@ fn type_of_expr_inner(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError>
             // operands are asymmetric and the shift is handled before the
             // same-type arithmetic below. The result has the value's type.
             if matches!(op, BinOp::Shl | BinOp::AShl | BinOp::ShrA | BinOp::ShrL) {
-                let value_ok = matches!(lt, Type::Word | Type::Multiword(_, _) | Type::Var(_));
+                let value_ok = matches!(
+                    lt,
+                    Type::Word | Type::Byte | Type::Multiword(_, _) | Type::Var(_)
+                );
                 let amount_ok = matches!(rt, Type::Word | Type::Var(_));
                 if value_ok && amount_ok {
                     return Ok(apply_labels(lt, &combined_labels));
@@ -3741,12 +3757,14 @@ fn type_of_expr_inner(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError>
                 BinOp::Band | BinOp::Bor | BinOp::Bxor => {
                     if matches!(lt, Type::Word) && matches!(rt, Type::Word) {
                         Ok(Type::Word)
+                    } else if matches!(lt, Type::Byte) && matches!(rt, Type::Byte) {
+                        Ok(Type::Byte)
                     } else if matches!(lt, Type::Var(_)) || matches!(rt, Type::Var(_)) {
                         Ok(ctx.fresh())
                     } else {
                         Err(TypeError::new(
                             format!(
-                                "bitwise operator requires two Word or Multiword operands, got {} and {}",
+                                "bitwise operator requires two Word, Byte, or Multiword operands, got {} and {}",
                                 lt.display(),
                                 rt.display()
                             ),

@@ -43,6 +43,16 @@ fn run_to_int(src: &str) -> i64 {
     }
 }
 
+fn run_to_byte(src: &str) -> u8 {
+    let module = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+    let arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+    let mut vm = Vm::new(module, &arena).expect("verify");
+    match vm.call(&[]).expect("call") {
+        VmState::Finished(Value::Byte(b)) => b,
+        other => panic!("expected a finished byte, got {:?}", other),
+    }
+}
+
 #[test]
 fn multiword_construct_and_index_digit_zero() {
     // Digit 0 is the least significant word.
@@ -1038,14 +1048,70 @@ fn scalar_shift_precedence_below_additive() {
 }
 
 #[test]
-fn scalar_shift_rejects_variable_and_out_of_range_amount() {
-    // A variable shift amount is a later increment.
-    assert!(compile_fails("fn main() -> Word { let k = 1; 5 lsl k }"));
-    // An amount at or beyond the value width is rejected.
+fn scalar_shift_rejects_out_of_range_literal_amount() {
+    // A literal amount at or beyond the value width is rejected at
+    // compile time. A variable amount is now admissible (see the
+    // scalar_variable_shift tests) and is masked to the word width at
+    // runtime, so only a constant out-of-range literal is a compile
+    // error.
     assert!(compile_fails("fn main() -> Word { 5 lsl 64 }"));
     assert!(compile_fails(
         "fn main() -> Word { let x = 0 - 1; x asr 64 }"
     ));
+}
+
+#[test]
+fn scalar_variable_shift_word() {
+    // A non-literal amount compiles and shifts at runtime.
+    assert_eq!(run_to_int("fn main() -> Word { let k = 2; 5 lsl k }"), 20);
+    assert_eq!(run_to_int("fn main() -> Word { let k = 3; 40 lsr k }"), 5);
+    // Arithmetic right shift preserves the sign.
+    assert_eq!(
+        run_to_int("fn main() -> Word { let k = 1; let x = 0 - 8; x asr k }"),
+        -4
+    );
+    // Logical right shift zero-fills, so a negative value becomes a large
+    // positive one: -8 as unsigned, shifted right by one.
+    assert_eq!(
+        run_to_int("fn main() -> Word { let k = 1; let x = 0 - 8; x lsr k }"),
+        9223372036854775804
+    );
+    // The c == 0 identity branch of the variable logical right shift.
+    assert_eq!(run_to_int("fn main() -> Word { let k = 0; 5 lsr k }"), 5);
+    // The runtime count is masked to the word width, so 64 wraps to 0.
+    assert_eq!(run_to_int("fn main() -> Word { let k = 64; 5 lsl k }"), 5);
+}
+
+#[test]
+fn byte_shift_constant_and_variable() {
+    // A Byte shifts at the byte width; the left shift truncates to eight
+    // bits, so 200 lsl 1 wraps modulo 256 to 144.
+    assert_eq!(run_to_byte("fn main() -> Byte { 5Byte lsl 1 }"), 10);
+    assert_eq!(run_to_byte("fn main() -> Byte { 200Byte lsl 1 }"), 144);
+    // A Byte is unsigned, so its arithmetic and logical right shifts
+    // coincide and never sign-extend.
+    assert_eq!(run_to_byte("fn main() -> Byte { 255Byte lsr 1 }"), 127);
+    assert_eq!(run_to_byte("fn main() -> Byte { 255Byte asr 1 }"), 127);
+    // A variable amount is admissible for a Byte as well.
+    assert_eq!(
+        run_to_byte("fn main() -> Byte { let k = 2; 5Byte lsl k }"),
+        20
+    );
+    assert_eq!(
+        run_to_byte("fn main() -> Byte { let k = 1; 254Byte lsr k }"),
+        127
+    );
+}
+
+#[test]
+fn byte_bitwise_and_complement() {
+    assert_eq!(run_to_byte("fn main() -> Byte { 12Byte band 10Byte }"), 8);
+    assert_eq!(run_to_byte("fn main() -> Byte { 12Byte bor 10Byte }"), 14);
+    assert_eq!(run_to_byte("fn main() -> Byte { 12Byte bxor 10Byte }"), 6);
+    // Complement is within the byte width, so bnot 0 is 255 and bnot 5
+    // is 250 (0xFA), not the word-width -1/-6.
+    assert_eq!(run_to_byte("fn main() -> Byte { bnot 0Byte }"), 255);
+    assert_eq!(run_to_byte("fn main() -> Byte { bnot 5Byte }"), 250);
 }
 
 #[test]
@@ -1111,11 +1177,134 @@ fn multiword_shift_right_whole_word() {
 }
 
 #[test]
-fn multiword_shift_rejects_out_of_range_amount() {
-    // The amount must be within the value's total bit width (128 here).
+fn multiword_shift_rejects_out_of_range_literal_amount() {
+    // A literal amount must be within the value's total bit width (128
+    // here); a variable amount is admissible and shifts everything out
+    // when it meets or exceeds the width (see multiword_variable_shift).
     assert!(compile_fails(
         "fn main() -> Word { let m = (1, 0) as Multiword<2>; let s = m lsl 128; s[0] }"
     ));
+}
+
+#[test]
+fn multiword_variable_shift() {
+    // Each case mirrors a constant-amount case above with the amount
+    // bound to a variable, so the runtime lowering is checked against the
+    // unrolled constant lowering as an oracle.
+    // Left within a word: (1, 0) lsl 1 = (2, 0).
+    assert_eq!(
+        run_to_int(
+            "fn main() -> Word { let k = 1; let m = (1, 0) as Multiword<2>; let s = m lsl k; s[0] }"
+        ),
+        2
+    );
+    // Left across a word: (5, 0) lsl 64 = (0, 5).
+    assert_eq!(
+        run_to_int(
+            "fn main() -> Word { let k = 64; let m = (5, 0) as Multiword<2>; let s = m lsl k; s[1] }"
+        ),
+        5
+    );
+    assert_eq!(
+        run_to_int(
+            "fn main() -> Word { let k = 64; let m = (5, 0) as Multiword<2>; let s = m lsl k; s[0] }"
+        ),
+        0
+    );
+    // Left across a word with a bit offset: (1, 0) lsl 65 sets bit 65,
+    // which is bit 1 of the high word, so the high word is 2.
+    assert_eq!(
+        run_to_int(
+            "fn main() -> Word { let k = 65; let m = (1, 0) as Multiword<2>; let s = m lsl k; s[1] }"
+        ),
+        2
+    );
+    // Arithmetic left equals logical left on a Multiword.
+    assert_eq!(
+        run_to_int(
+            "fn main() -> Word { let k = 1; let m = (1, 0) as Multiword<2>; let s = m asl k; s[0] }"
+        ),
+        2
+    );
+    // Arithmetic right fills the vacated top with the sign word.
+    assert_eq!(
+        run_to_int(
+            "fn main() -> Word { let k = 1; let m = (0, 0 - 1) as Multiword<2>; let s = m asr k; s[1] }"
+        ),
+        -1
+    );
+    assert_eq!(
+        run_to_int(
+            "fn main() -> Word { let k = 1; let m = (0, 0 - 1) as Multiword<2>; let s = m asr k; s[0] }"
+        ),
+        i64::MIN
+    );
+    // Logical right zero-fills the vacated top.
+    assert_eq!(
+        run_to_int(
+            "fn main() -> Word { let k = 1; let m = (0, 0 - 1) as Multiword<2>; let s = m lsr k; s[1] }"
+        ),
+        i64::MAX
+    );
+    // Logical right by a whole word.
+    assert_eq!(
+        run_to_int(
+            "fn main() -> Word { let k = 64; let m = (0, 1) as Multiword<2>; let s = m lsr k; s[0] }"
+        ),
+        1
+    );
+    // Shift by zero is the identity (the r == 0, q == 0 path).
+    assert_eq!(
+        run_to_int(
+            "fn main() -> Word { let k = 0; let m = (5, 7) as Multiword<2>; let s = m lsl k; s[1] }"
+        ),
+        7
+    );
+    // A count at or beyond the total width shifts everything out.
+    assert_eq!(
+        run_to_int(
+            "fn main() -> Word { let k = 200; let m = (1, 0) as Multiword<2>; let s = m lsl k; s[0] }"
+        ),
+        0
+    );
+    assert_eq!(
+        run_to_int(
+            "fn main() -> Word { let k = 200; let m = (1, 0) as Multiword<2>; let s = m lsl k; s[1] }"
+        ),
+        0
+    );
+}
+
+#[test]
+fn checked_asl_still_requires_constant_amount() {
+    // The overflow-checked arithmetic left shift lowers to a multiply by
+    // the constant 2^k, which cannot be formed for a runtime amount, so
+    // the checked form still rejects a variable amount even though the
+    // bare shift now admits one.
+    assert!(compile_fails(
+        "fn main() -> Word { let k = 2; 3 asl k { ok(v) => v, overflow(h, l) => 0 } }"
+    ));
+    // The bare variable arithmetic left shift is admissible.
+    assert_eq!(run_to_int("fn main() -> Word { let k = 2; 3 asl k }"), 12);
+}
+
+#[test]
+fn multiword_variable_shift_three_word() {
+    // A three-word value exercises the unrolled-over-N path at N = 3.
+    // (1, 0, 0) lsl 64 = (0, 1, 0): the low word moves up one limb.
+    assert_eq!(
+        run_to_int(
+            "fn main() -> Word { let k = 64; let m = (1, 0, 0) as Multiword<3>; let s = m lsl k; s[1] }"
+        ),
+        1
+    );
+    // (0, 0, 8) lsr 64 = (0, 8, 0).
+    assert_eq!(
+        run_to_int(
+            "fn main() -> Word { let k = 64; let m = (0, 0, 8) as Multiword<3>; let s = m lsr k; s[1] }"
+        ),
+        8
+    );
 }
 
 #[test]

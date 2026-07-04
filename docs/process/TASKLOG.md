@@ -41,6 +41,19 @@ Long-horizon work tracked in `docs/decisions/BACKLOG.md` and `PRIORITY.md`.
 
 ## Task Breakdown
 
+### Recent: B19 operator residuals addressed (2026-07-04, session 19)
+
+Following the session-18 operator redesign, the residuals were addressed on `feat-const-generics-bignum`. Variable (runtime) shift amounts now work for scalar and Multiword; `Byte` is admitted by the scalar shift and bitwise operators via promote-mask-truncate; and general const generics is scoped and filed as a tracked deferral (B40) rather than implemented (operator decision). No opcode added. Green on default, default+signatures, `--all-features`, clippy, and fmt.
+
+| ID | Description | Status | Verification |
+|----|-------------|--------|--------------|
+| B19-R1 | Variable (runtime) scalar shift amount (Word/Byte) | Complete | `classify_shift_amount` splits constant vs runtime; left/arith-right emit `Op::Shl`/`Op::Shr` (VM masks the count); logical-right masks the sign bits with a `c == 0` identity branch; Word subtraction routes through `CheckedSub`+`PopN(2)`. Tests `scalar_variable_shift_word`. |
+| B19-R2 | Variable (runtime) Multiword shift amount | Complete | `compile_multiword_variable_shift`: unrolled over N with runtime word/bit offsets and branch-free bounds guards (`emit_mw_guarded`), no runtime loop, so WCET/WCMU stay automatic (verified through `Vm::new`). Tested at N=2/N=3 against the constant path as oracle: `multiword_variable_shift`, `multiword_variable_shift_three_word`. |
+| B19-R3 | `Byte` shift and bitwise via masking | Complete | Promote `ByteToWord`, operate, `WordToByte`; `Byte` unsigned so `asr==lsr`; `bnot 0Byte == 255Byte`. Typecheck admits `Byte`; shift-amount literal no longer coerced to the value's `Byte` type (fixed a latent byte-`bnot` mis-lowering). Tests `byte_shift_constant_and_variable`, `byte_bitwise_and_complement`. |
+| B19-R4 | Checked `asl` still constant-only | Verified | The overflow-capturing `asl` (multiply by `2^k`) keeps requiring a literal; variable rejected cleanly. Test `checked_asl_still_requires_constant_amount`. |
+| B40 | General const generics | Deferred (tracked) | Scoped and filed as backlog item B40 with a full deferral rationale (grammar/AST, type-system kind + unification, monomorphization over const values, WCET/WCMU static-known-per-instance invariant). Not implemented. B19 and Standard 5.1.2 point at it. |
+| B19-R5 | Documentation | Complete | GRAMMAR, TYPE_SYSTEM, STANDARD (5.1.2 + Annex A), BACKLOG (B19 status banner + phase table refreshed, B40 added), CHANGELOG updated for variable shift, byte support, and the const-generics deferral. |
+
 ### Recent: B19 bitwise and boolean operator redesign (2026-07-03, session 18)
 
 On `feat-const-generics-bignum`, the surface language gained keyword operators for the five `Op::BitAnd`/`BitOr`/`BitXor`/`Shl`/`Shr` opcodes V0.2.0 added but left without grammar, and a coherent boolean scheme, on top of the already-committed stage-1 shift rename (`cda0005`). Bitwise `band`/`bor`/`bxor`/`bnot` apply to `Word` and `Multiword<N>` (limb by limb on a `Multiword`); boolean `and`/`or`/`xor` are eager (always evaluate both operands, branch-free for WCET) with `andalso`/`orelse` for short-circuit. An operation is chosen by operator name and never by operand type. No opcode is added. `MAX_PARSE_DEPTH` dropped 32 to 24 (with precedence-climbing parser levels) to keep the deeper chain within the stack-safety margin. Green on default, default+signatures, clippy `--all-features`, and fmt; 15 new tests. A pre-existing, unrelated `--all-features` multiword-arithmetic miscomputation was discovered during verification and is the next investigation (see `REVERSE_PROMPT.md`).

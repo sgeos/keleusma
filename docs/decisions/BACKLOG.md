@@ -499,6 +499,8 @@ The `Op::CheckedDiv` and `Op::CheckedMod` follow-on landed separately: the check
 
 ## B19. `Multiword<N, F>` parametric multi-word fixed-point type
 
+> **Status: implemented (V0.2.1).** Originally deferred (the paragraph below is retained as the original rationale), the type was implemented on the `feat-const-generics-bignum` branch. Construction and indexing, scale-independent addition and subtraction, the six comparisons, integer and fixed-point multiply, divide and modulo at every scale, the four shift operators with a constant or runtime-variable amount, and the per-limb bitwise operators (`band`/`bor`/`bxor`/`bnot`) are all in place; the surface operator redesign (`lsl`/`asl`/`lsr`/`asr`, `band`/`bor`/`bxor`/`bnot`, and the boolean `and`/`or`/`xor`/`andalso`/`orelse`) rides on top. `Byte` is admitted by the scalar shift and bitwise operators through promote-operate-truncate masking. The one remaining generality item, recognising `N`/`F` as general const generic parameters rather than a special case, is tracked separately as B40.
+
 > **Reframing (implemented).** Per the pilot decision, Multiword is implicitly fixed-point. The type carries a word count N and an optional fraction-bit count F, written `Multiword<N>` for the integer case (F = 0) or `Multiword<N, F>` for F fractional bits over the same N-word layout. Addition and subtraction are scale-independent and unchanged; the fixed-point shift enters at multiply, which shifts the double-width product right by F, and divide, which shifts the dividend left by F. The integer-only description below is the original design and is superseded on the fixed-point point by this note and by Standard 5.1.2.
 
 ### Goal
@@ -592,7 +594,11 @@ The per-digit cascade must propagate the **unsigned** carry and borrow, not the 
 | 3b | `*` fixed-point, F > 0 (full product, signed correction, right shift by F) | ~200 lines | Implemented |
 | 4a | `/`, `%` integer, F = 0 (branchless binary long division, unrolled) | ~350 lines | Implemented |
 | 4b | `/` fixed-point, F > 0 (dividend pre-shift left by F) | ~150 lines | Implemented |
-| 5 | `<<`, `>>` (arithmetic), `>>>` (logical), constant amount; variable amount a stretch | ~300 lines | Implemented |
+| 5 | `lsl`, `asl` (left), `asr` (arithmetic right), `lsr` (logical right), constant amount | ~300 lines | Implemented |
+| 6 | Variable (runtime) shift amount, scalar and Multiword (unrolled-over-N runtime-index lowering) | ~250 lines | Implemented |
+| 7 | Per-limb bitwise `band`/`bor`/`bxor`/`bnot`; `Byte` shift and bitwise via promote-mask-truncate | ~150 lines | Implemented |
+
+The surface operator spelling was settled in the operator redesign: shifts are the assembly mnemonics `lsl`/`asl`/`lsr`/`asr` (replacing the unpublished symbolic `<<`/`<<<`/`>>`/`>>>`), the bitwise operators are the Erlang-style keywords `band`/`bor`/`bxor`/`bnot`, and the boolean operators are the eager `and`/`or`/`xor`/`not` with the short-circuit control forms `andalso`/`orelse`. Selection is by operator name, never by operand type. The remaining generality item (general const generics for `N`/`F`) is tracked as B40.
 
 Each phase ends with end-to-end integration tests at N = 2 (128-bit on the default i64 runtime), N = 3 (192-bit), and N = 4 (256-bit). Earlier phases unblock testing of later phases.
 
@@ -1956,3 +1962,22 @@ Filed 2026-06-26. An earlier diagnosis, repeated in the `.config/nextest.toml` a
 There is no arena change to make. This entry exists to retract the incorrect claim and points at the comment corrections.
 
 **Resolved (2026-06-26).** Both actions are complete in commit `0c6e299`: the `.config/nextest.toml` and `CONTRIBUTING.md` comments now state the memory rationale and explicitly retract the arena-reservation claim, and the `test-threads = 4` cap is kept. The single-gate nextest runs earlier in the session succeeded repeatedly; the wedges occurred only when several heavy builds overlapped, so the cap plus serial discipline is an adequate mitigation. Whether to harden the gate further (a memory-aware runner, or reverting to serial `cargo test`) is a separate operational question, not an arena defect, and is left open as a note rather than tracked work.
+
+## B40. General const generics
+
+**Status: deferred (tracked).** A deliberate operator decision (2026-07-03): scope the feature and track it here rather than implement it now, because it is a large type-system feature disproportionate to the B19 operator residuals it was raised alongside.
+
+**Current situation.** `Multiword<N, F>` is the only type that carries compile-time-constant parameters, and the compiler recognises `N` (word count) and `F` (fraction bits) **specially**: they are fields of a dedicated `Type::Multiword(N, F)` and `TypeExpr::Multiword`, parsed by a bespoke path, and consumed by hand-written per-`N` lowerings. There is no general notion of a `const` type parameter that a user type or function can declare and use. A program cannot write, for example, `struct Buffer<const N> { data: [Word; N] }`, `fn zeros<const N>() -> [Word; N]`, or a bound like `Multiword<N>` where `N` is itself a generic parameter threaded from an enclosing definition.
+
+**What the feature is.** General const generics would add const-valued type parameters across the surface language and the pipeline:
+
+1. **Grammar and AST.** A `const` generic parameter in `<...>` lists (`<const N>`, and mixed with type parameters), const arguments at use sites (`Buffer<8>`, `Multiword<N>` with `N` a parameter), and const parameters usable in array sizes and other const positions.
+2. **Type system.** A const parameter is a distinct kind from a type parameter; unification and the occurs check extend to const equality; const arguments must be checked for kind and for satisfying any declared bound (for example an array length must be a non-negative `Word` constant). Const expressions in argument position need a small, total const-evaluation sublanguage or a literals-only restriction.
+3. **Monomorphization.** The monomorphizer, which already specialises over type arguments, must specialise over const **values**, keying instances by the concrete const and substituting it into array sizes, `Multiword` parameters, and loop bounds. `Multiword<N, F>`'s per-`N` cascades would become the first consumer, replacing the special-case path.
+4. **Verifier (the load-bearing constraint).** Keleusma's guarantee is definitive WCET and WCMU. A const parameter that feeds a loop bound or an allocation size must remain **statically known at each monomorphized instance**, so the bound stays provable. This is compatible with monomorphization (each instance has a concrete const) but forbids any route by which a const becomes runtime-dependent. The design must state and enforce that const parameters are resolved before verification, per instance, exactly like the current `Multiword<N>` unrolling depends on a concrete `N`.
+
+**Why deferred.** The feature is comparable in size to the existing generics-and-monomorphization system and touches every stage of the pipeline; it is not a residual-sized change. The one type that needs const parameters today, `Multiword<N, F>`, already works through its special-case path, so there is no functional gap for current programs, only a generality gap. Implementing it now would not unblock any committed milestone; V0.3.0 is committed to self-hosting the lexer, parser, and compiler, which does not depend on const generics (the same reasoning that deferred `Multiword` itself, recorded in B19).
+
+**When to revisit.** When a concrete use case needs a user-defined type or function parameterised by a compile-time constant (for example a fixed-capacity ring buffer or a statically-sized matrix in an embedding), or when the `Multiword` special-case path becomes a maintenance burden worth replacing with the general mechanism. At that point this entry should become a phased plan mirroring the generics rollout: grammar and AST, type-system kind and unification, monomorphization over const values, then verifier integration with the static-known-per-instance invariant made explicit.
+
+**Relation to other items.** Supersedes the "general const generics remain a separate feature" note in B19 and Standard 5.1.2, which now points here.
