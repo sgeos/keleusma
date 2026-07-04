@@ -983,9 +983,16 @@ fn infer_arg_type(
             // the type checker's existing same-type unification.
             // Comparison and logical operators return Bool.
             match op {
-                BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod => {
-                    infer_arg_type(left, locals, fn_returns, structs)
-                }
+                // Arithmetic and shifts preserve the shifted value's
+                // (left operand's) type.
+                BinOp::Add
+                | BinOp::Sub
+                | BinOp::Mul
+                | BinOp::Div
+                | BinOp::Mod
+                | BinOp::Shl
+                | BinOp::ShrA
+                | BinOp::ShrL => infer_arg_type(left, locals, fn_returns, structs),
                 BinOp::Eq
                 | BinOp::NotEq
                 | BinOp::Lt

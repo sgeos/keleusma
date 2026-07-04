@@ -3579,6 +3579,25 @@ fn type_of_expr_inner(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError>
                 .collect();
             let lt = strip_labels(lt_raw);
             let rt = strip_labels(rt_raw);
+            // Shift operators. The value being shifted is a Word, Byte, or
+            // Multiword<N, F>, and the shift amount is a Word, so the two
+            // operands are asymmetric and the shift is handled before the
+            // same-type arithmetic below. The result has the value's type.
+            if matches!(op, BinOp::Shl | BinOp::ShrA | BinOp::ShrL) {
+                let value_ok = matches!(lt, Type::Word | Type::Multiword(_, _) | Type::Var(_));
+                let amount_ok = matches!(rt, Type::Word | Type::Var(_));
+                if value_ok && amount_ok {
+                    return Ok(apply_labels(lt, &combined_labels));
+                }
+                return Err(TypeError::new(
+                    format!(
+                        "cannot shift {} by {}; the value must be a Word or Multiword and the amount a Word",
+                        lt.display(),
+                        rt.display()
+                    ),
+                    *span,
+                ));
+            }
             // Multiword<N, F> arithmetic and comparison. Add, Sub, and the
             // six comparisons are implemented (phase 2); integer multiply
             // (F = 0) is implemented (phase 3a). Fixed-point multiply
@@ -3716,6 +3735,9 @@ fn type_of_expr_inner(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError>
                         ));
                     }
                     Ok(Type::Bool)
+                }
+                BinOp::Shl | BinOp::ShrA | BinOp::ShrL => {
+                    unreachable!("shift operators are handled before the same-type arithmetic")
                 }
             };
             // Re-apply the union of operand labels to the

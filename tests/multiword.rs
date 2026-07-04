@@ -930,6 +930,121 @@ fn multiword_fixed_div_truncates_toward_zero() {
     );
 }
 
+// --- Phase 5: shift operators. `<<` left, `>>` arithmetic (sign-
+// preserving) right, `>>>` logical (zero-fill) right, with a
+// compile-time-constant amount. Word and Multiword values (B19). ---
+
+#[test]
+fn scalar_word_shifts() {
+    assert_eq!(run_to_int("fn main() -> Word { 5 << 2 }"), 20);
+    assert_eq!(run_to_int("fn main() -> Word { 20 >> 2 }"), 5);
+    // Arithmetic right shift preserves the sign.
+    assert_eq!(
+        run_to_int("fn main() -> Word { let x = 0 - 8; x >> 1 }"),
+        -4
+    );
+    // Logical right shift zero-fills, so -8 becomes a large positive.
+    assert_eq!(
+        run_to_int("fn main() -> Word { let x = 0 - 8; x >>> 1 }"),
+        9223372036854775804
+    );
+    // 1 << 63 is 2^63, which wraps to the most negative Word.
+    assert_eq!(run_to_int("fn main() -> Word { 1 << 63 }"), i64::MIN);
+    // Shift by zero is the identity.
+    assert_eq!(run_to_int("fn main() -> Word { 5 << 0 }"), 5);
+}
+
+#[test]
+fn scalar_shift_precedence_below_additive() {
+    // `0 - 8 >> 1` parses as `(0 - 8) >> 1`, not `0 - (8 >> 1)`.
+    assert_eq!(run_to_int("fn main() -> Word { 0 - 8 >> 1 }"), -4);
+}
+
+#[test]
+fn scalar_shift_rejects_variable_and_out_of_range_amount() {
+    // A variable shift amount is a later increment.
+    assert!(compile_fails("fn main() -> Word { let k = 1; 5 << k }"));
+    // An amount at or beyond the value width is rejected.
+    assert!(compile_fails("fn main() -> Word { 5 << 64 }"));
+    assert!(compile_fails(
+        "fn main() -> Word { let x = 0 - 1; x >> 64 }"
+    ));
+}
+
+#[test]
+fn multiword_shift_left_within_and_across_words() {
+    // Within a word: (1, 0) << 1 = (2, 0).
+    assert_eq!(
+        run_to_int("fn main() -> Word { let m = (1, 0) as Multiword<2>; let s = m << 1; s[0] }"),
+        2
+    );
+    // Across a word: (5, 0) << 64 moves the low word into the high word.
+    assert_eq!(
+        run_to_int("fn main() -> Word { let m = (5, 0) as Multiword<2>; let s = m << 64; s[1] }"),
+        5
+    );
+    assert_eq!(
+        run_to_int("fn main() -> Word { let m = (5, 0) as Multiword<2>; let s = m << 64; s[0] }"),
+        0
+    );
+}
+
+#[test]
+fn multiword_shift_right_arithmetic_vs_logical() {
+    // (0, -1) is the value -2^64. The arithmetic right shift by 1 gives
+    // -2^63 = (i64::MIN, -1): the sign fills the vacated top bit.
+    assert_eq!(
+        run_to_int("fn main() -> Word { let m = (0, -1) as Multiword<2>; let s = m >> 1; s[1] }"),
+        -1
+    );
+    assert_eq!(
+        run_to_int("fn main() -> Word { let m = (0, -1) as Multiword<2>; let s = m >> 1; s[0] }"),
+        i64::MIN
+    );
+    // The logical right shift by 1 zero-fills the top bit, giving the
+    // high word i64::MAX and the low word i64::MIN.
+    assert_eq!(
+        run_to_int("fn main() -> Word { let m = (0, -1) as Multiword<2>; let s = m >>> 1; s[1] }"),
+        i64::MAX
+    );
+    assert_eq!(
+        run_to_int("fn main() -> Word { let m = (0, -1) as Multiword<2>; let s = m >>> 1; s[0] }"),
+        i64::MIN
+    );
+}
+
+#[test]
+fn multiword_shift_right_whole_word() {
+    // (0, 1) is 2^64; >> 64 gives 1 = (1, 0).
+    assert_eq!(
+        run_to_int("fn main() -> Word { let m = (0, 1) as Multiword<2>; let s = m >> 64; s[0] }"),
+        1
+    );
+    assert_eq!(
+        run_to_int("fn main() -> Word { let m = (0, 1) as Multiword<2>; let s = m >> 64; s[1] }"),
+        0
+    );
+}
+
+#[test]
+fn multiword_shift_rejects_out_of_range_amount() {
+    // The amount must be within the value's total bit width (128 here).
+    assert!(compile_fails(
+        "fn main() -> Word { let m = (1, 0) as Multiword<2>; let s = m << 128; s[0] }"
+    ));
+}
+
+#[test]
+fn nested_generics_still_parse_with_shift_tokens() {
+    // Regression: adding the `>>` shift token must not break the stacked
+    // generic close in a nested type. This program uses Option<Option<T>>
+    // only for its parse; the body is trivial.
+    assert_eq!(
+        run_to_int("fn id(x: Option<Option<Word>>) -> Word { 0 }\nfn main() -> Word { 7 }"),
+        7
+    );
+}
+
 #[test]
 fn multiword_nested_operations_do_not_alias_scratch_locals() {
     // Each lowered operation declares its own scratch locals, and

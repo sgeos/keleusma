@@ -935,6 +935,12 @@ pub enum BinOp {
     Mul,
     Div,
     Mod,
+    /// `<<` left shift (logical and arithmetic left shift coincide).
+    Shl,
+    /// `>>` arithmetic (sign-preserving) right shift.
+    ShrA,
+    /// `>>>` logical (zero-fill) right shift.
+    ShrL,
     Eq,
     NotEq,
     Lt,

@@ -446,8 +446,11 @@ binary long division of the operand magnitudes; a zero divisor is the same bound
 fault as the word-width integer. The fixed-point divide pre-shifts the dividend left
 by F, since the raw quotient representing the ratio of two same-scale values is the
 shifted dividend divided by the divisor, while the fixed-point modulo needs no
-shift, a same-scale remainder keeping the scale. The shifts are pending, and general
-const generics remain a separate feature.
+shift, a same-scale remainder keeping the scale. The three shift operators are
+implemented for a compile-time-constant amount, the left shift zero-filling and
+truncating, the arithmetic right shift filling the vacated top with the sign, and
+the logical right shift filling it with zero. The multi-word arithmetic family is
+therefore complete; general const generics remain a separate feature.
 
 #### 5.1.3 Composite kinds
 
@@ -1169,12 +1172,15 @@ this document.
    Standard 5.2.6 are not implemented. The reference verifier tracks only operand
    depth, and baked-offset correctness is a compiler-integrity assumption. This is
    the single largest verifier work item.
-2. The multi-word fixed-point family of Standard 5.1.2 is partially implemented. The
-   type `Multiword<N>` and `Multiword<N, F>`, its construction and indexing, its
-   scale-independent addition and subtraction, the six comparison operators,
-   multiplication at every fraction-bit count (integer and fixed-point), and the
-   divide and modulo at every fraction-bit count are implemented. The shift
-   operators are pending, and general const generics remain a separate feature.
+2. The multi-word fixed-point family of Standard 5.1.2 is implemented for its whole
+   arithmetic surface. The type `Multiword<N>` and `Multiword<N, F>`, its
+   construction and indexing, its scale-independent addition and subtraction, the
+   six comparison operators, multiplication at every fraction-bit count (integer and
+   fixed-point), the divide and modulo at every fraction-bit count, and the three
+   shift operators are implemented. Two narrower items remain: the shift amount must
+   be a compile-time constant, a variable amount being a later increment, and the
+   type is recognised specially rather than through general const generics, which
+   stay a separate feature. The `Byte` type is not yet shiftable.
 3. The instruction count in prior project documents was recorded as 66. The instruction
    set is 67, because the `SetDataComposite` opcode at identifier 70 is implemented,
    dispatched, and verified but was undocumented. The issuing authority reconciles the

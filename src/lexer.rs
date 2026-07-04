@@ -324,6 +324,12 @@ impl<'a> Lexer<'a> {
                         kind: TokenKind::LtEq,
                         span: self.span_from(start, start_line, start_col),
                     })
+                } else if self.peek() == Some(b'<') {
+                    self.advance();
+                    Ok(Token {
+                        kind: TokenKind::Shl,
+                        span: self.span_from(start, start_line, start_col),
+                    })
                 } else {
                     Ok(Token {
                         kind: TokenKind::Lt,
@@ -339,6 +345,23 @@ impl<'a> Lexer<'a> {
                         kind: TokenKind::GtEq,
                         span: self.span_from(start, start_line, start_col),
                     })
+                } else if self.peek() == Some(b'>') {
+                    self.advance();
+                    // `>>>` is the logical right shift; `>>` the arithmetic
+                    // one. Both also serve as stacked generic closes, which
+                    // the parser splits back into single `>` tokens.
+                    if self.peek() == Some(b'>') {
+                        self.advance();
+                        Ok(Token {
+                            kind: TokenKind::Ushr,
+                            span: self.span_from(start, start_line, start_col),
+                        })
+                    } else {
+                        Ok(Token {
+                            kind: TokenKind::Shr,
+                            span: self.span_from(start, start_line, start_col),
+                        })
+                    }
                 } else {
                     Ok(Token {
                         kind: TokenKind::Gt,

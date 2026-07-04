@@ -969,10 +969,206 @@ fn element_type_of(t: &TypeExpr) -> Option<TypeExpr> {
     }
 }
 
+/// Extract a compile-time-constant, non-negative shift amount from a
+/// shift's right operand, bounded by `max_bits` (B19 phase 5). A variable
+/// amount is a later increment, and an out-of-range amount is rejected.
+fn const_shift_amount(right: &Expr, max_bits: i64) -> Result<i64, CompileError> {
+    match right {
+        Expr::Literal {
+            value: crate::ast::Literal::Int(k),
+            span,
+        } => {
+            if *k < 0 || *k >= max_bits {
+                Err(CompileError {
+                    message: alloc::format!(
+                        "shift amount {} is out of range [0, {}) for the value width",
+                        k,
+                        max_bits
+                    ),
+                    span: *span,
+                })
+            } else {
+                Ok(*k)
+            }
+        }
+        _ => Err(CompileError {
+            message: String::from(
+                "a variable shift amount is a later increment; the shift amount must be an integer literal",
+            ),
+            span: right.span(),
+        }),
+    }
+}
+
+/// Compile a scalar `Word` shift with a compile-time-constant amount
+/// (B19 phase 5). Left shift (`<<`) and the arithmetic right shift (`>>`)
+/// map directly to `Op::Shl` and `Op::Shr`, which is arithmetic. The
+/// logical right shift (`>>>`) is `Op::Shr` followed by a mask of the low
+/// `word_bits - k` bits, which clears the sign-extended high bits; at
+/// `k = 0` the mask is all ones and the shift is the identity.
+fn compile_scalar_shift(
+    fc: &mut FuncCompiler,
+    op: crate::ast::BinOp,
+    left: &Expr,
+    right: &Expr,
+) -> Result<(), CompileError> {
+    use crate::ast::BinOp;
+    let word_bits = (fc.type_info.word_bytes * 8) as i64;
+    let k = const_shift_amount(right, word_bits)?;
+    let k_c = fc.add_constant(Value::Int(k));
+    compile_expr(fc, left)?;
+    fc.emit(Op::Const(k_c));
+    match op {
+        BinOp::Shl => {
+            fc.emit(Op::Shl);
+        }
+        BinOp::ShrA => {
+            fc.emit(Op::Shr);
+        }
+        BinOp::ShrL => {
+            fc.emit(Op::Shr);
+            let mask = ((1i128 << (word_bits - k)) - 1) as i64;
+            let mask_c = fc.add_constant(Value::Int(mask));
+            fc.emit(Op::Const(mask_c));
+            fc.emit(Op::BitAnd);
+        }
+        _ => unreachable!("compile_scalar_shift called with a non-shift operator"),
+    }
+    Ok(())
+}
+
+/// Compile a `Multiword<N, F>` shift with a compile-time-constant amount
+/// (B19 phase 5). The shift splits into a word offset q and a bit offset
+/// r. A left shift fills zero at the bottom and truncates (wraps) at the
+/// top; a right shift fills the vacated top with the sign word for the
+/// arithmetic `>>` and with zero for the logical `>>>`. Because `Op::Shr`
+/// is arithmetic, the intra-word logical part is an arithmetic shift
+/// masked to the low `word_bits - r` bits.
+fn compile_multiword_shift(
+    fc: &mut FuncCompiler,
+    op: crate::ast::BinOp,
+    left: &Expr,
+    right: &Expr,
+    n: u16,
+) -> Result<(), CompileError> {
+    use crate::ast::BinOp;
+    let word_bits = (fc.type_info.word_bytes * 8) as i64;
+    let total_bits = n as i64 * word_bits;
+    let k = const_shift_amount(right, total_bits)?;
+    let byte_size = flat_alloc_bytes(&TypeExpr::Multiword(n, 0, Span::default()), &fc.type_info)
+        .unwrap_or_else(|| conservative_alloc_bytes(n));
+    let word_ty = TypeExpr::Prim(PrimType::Word, Span::default());
+    let elem_op = array_elem_operand(Some(&word_ty), &fc.type_info);
+    let zero = fc.add_constant(Value::Int(0));
+    let shift_c = fc.add_constant(Value::Int(word_bits - 1));
+    let av = fc.declare_local("__mw_a");
+    compile_expr(fc, left)?;
+    fc.emit(Op::SetLocal(av));
+    let mut wv: alloc::vec::Vec<u16> = alloc::vec::Vec::new();
+    for i in 0..n {
+        let idx_c = fc.add_constant(Value::Int(i as i64));
+        let wi = fc.declare_local("__mw_w");
+        fc.emit(Op::GetLocal(av));
+        fc.emit(Op::Const(idx_c));
+        fc.emit(Op::GetIndex(elem_op));
+        fc.emit(Op::SetLocal(wi));
+        wv.push(wi);
+    }
+    let q = (k / word_bits) as usize;
+    let r = k % word_bits;
+    let nn = n as usize;
+    let mut rwords: alloc::vec::Vec<u16> = alloc::vec::Vec::new();
+    if matches!(op, BinOp::Shl) {
+        // result[j] = (value[j-q] << r) | top_r_bits(value[j-q-1])
+        let (r_c, wr_c, carry_mask) = if r != 0 {
+            let cm = ((1i128 << r) - 1) as i64;
+            (
+                Some(fc.add_constant(Value::Int(r))),
+                Some(fc.add_constant(Value::Int(word_bits - r))),
+                Some(fc.add_constant(Value::Int(cm))),
+            )
+        } else {
+            (None, None, None)
+        };
+        for j in 0..nn {
+            let rk = fc.declare_local("__mw_r");
+            if j >= q {
+                fc.emit(Op::GetLocal(wv[j - q]));
+                if r != 0 {
+                    fc.emit(Op::Const(r_c.unwrap()));
+                    fc.emit(Op::Shl);
+                }
+            } else {
+                fc.emit(Op::Const(zero));
+            }
+            if r != 0 && j > q {
+                fc.emit(Op::GetLocal(wv[j - q - 1]));
+                fc.emit(Op::Const(wr_c.unwrap()));
+                fc.emit(Op::Shr);
+                fc.emit(Op::Const(carry_mask.unwrap()));
+                fc.emit(Op::BitAnd);
+                fc.emit(Op::BitOr);
+            }
+            fc.emit(Op::SetLocal(rk));
+            rwords.push(rk);
+        }
+    } else {
+        // Right shift. The fill for the vacated top is the sign word for
+        // the arithmetic shift and zero for the logical shift.
+        let fill = fc.declare_local("__mw_fill");
+        if matches!(op, BinOp::ShrA) {
+            fc.emit(Op::GetLocal(wv[nn - 1]));
+            fc.emit(Op::Const(shift_c));
+            fc.emit(Op::Shr);
+            fc.emit(Op::SetLocal(fill));
+        } else {
+            fc.emit(Op::Const(zero));
+            fc.emit(Op::SetLocal(fill));
+        }
+        let vword = |m: usize| -> u16 { if m < nn { wv[m] } else { fill } };
+        let (r_c, wr_c, logmask) = if r != 0 {
+            let lm = ((1i128 << (word_bits - r)) - 1) as i64;
+            (
+                Some(fc.add_constant(Value::Int(r))),
+                Some(fc.add_constant(Value::Int(word_bits - r))),
+                Some(fc.add_constant(Value::Int(lm))),
+            )
+        } else {
+            (None, None, None)
+        };
+        for j in 0..nn {
+            let rk = fc.declare_local("__mw_r");
+            if r == 0 {
+                fc.emit(Op::GetLocal(vword(j + q)));
+            } else {
+                fc.emit(Op::GetLocal(vword(j + q)));
+                fc.emit(Op::Const(r_c.unwrap()));
+                fc.emit(Op::Shr);
+                fc.emit(Op::Const(logmask.unwrap()));
+                fc.emit(Op::BitAnd);
+                fc.emit(Op::GetLocal(vword(j + q + 1)));
+                fc.emit(Op::Const(wr_c.unwrap()));
+                fc.emit(Op::Shl);
+                fc.emit(Op::BitOr);
+            }
+            fc.emit(Op::SetLocal(rk));
+            rwords.push(rk);
+        }
+    }
+    for &rk in &rwords {
+        fc.emit(Op::GetLocal(rk));
+    }
+    fc.emit(Op::NewComposite(NewCompositeOperand::Flat {
+        kind: crate::value_layout::CompositeKind::Array,
+        count: n,
+        byte_size,
+    }));
+    Ok(())
+}
+
 /// Compile a binary operator whose operands are `Multiword<N>` (B19).
-/// Add and Sub lower to per-limb carry and borrow cascades over the
-/// existing checked-word and bitwise opcodes; comparisons, multiply,
-/// divide, and shifts are later increments.
+/// Add, subtract, comparisons, multiply, divide, modulo, and shifts all
+/// lower to unrolled cascades over the existing scalar opcodes.
 fn compile_multiword_binop(
     fc: &mut FuncCompiler,
     op: crate::ast::BinOp,
@@ -993,6 +1189,7 @@ fn compile_multiword_binop(
         // shifts the dividend by F; the modulo needs no shift.
         BinOp::Div => compile_multiword_div(fc, left, right, n, f, false),
         BinOp::Mod => compile_multiword_div(fc, left, right, n, f, true),
+        BinOp::Shl | BinOp::ShrA | BinOp::ShrL => compile_multiword_shift(fc, op, left, right, n),
         BinOp::Eq | BinOp::NotEq | BinOp::Lt | BinOp::Gt | BinOp::LtEq | BinOp::GtEq => {
             compile_multiword_compare(fc, op, left, right, n)
         }
@@ -4960,6 +5157,9 @@ fn infer_expr_type(fc: &FuncCompiler, expr: &Expr) -> Option<TypeExpr> {
                 BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod => {
                     infer_expr_type(fc, left).or_else(|| infer_expr_type(fc, right))
                 }
+                // A shift preserves the shifted value's type; the shift
+                // amount (right) is a Word and must not be inferred from.
+                BinOp::Shl | BinOp::ShrA | BinOp::ShrL => infer_expr_type(fc, left),
                 BinOp::Eq
                 | BinOp::NotEq
                 | BinOp::Lt
@@ -7458,6 +7658,11 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
                 let (n, f) = (*n, *f);
                 return compile_multiword_binop(fc, *op, left, right, n, f);
             }
+            // Scalar Word shifts with a compile-time-constant amount. The
+            // Multiword case is handled above through compile_multiword_binop.
+            if matches!(op, BinOp::Shl | BinOp::ShrA | BinOp::ShrL) {
+                return compile_scalar_shift(fc, *op, left, right);
+            }
             let left_fixed_n = match &operand_ty {
                 Some(TypeExpr::Prim(PrimType::Fixed(n), _)) => {
                     Some(n.unwrap_or(crate::typecheck::DEFAULT_FIXED_FRAC_BITS))
@@ -7565,6 +7770,11 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
                     fc.emit(Op::CmpGe);
                 }
                 BinOp::And | BinOp::Or => unreachable!(),
+                BinOp::Shl | BinOp::ShrA | BinOp::ShrL => {
+                    unreachable!(
+                        "shifts are dispatched to compile_scalar_shift / compile_multiword_shift"
+                    )
+                }
             }
         }
 
