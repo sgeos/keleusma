@@ -43,9 +43,10 @@ Structural verification at the bytecode level is implemented. See [STRUCTURAL_IS
 ````
 fn  yield  loop  break  let  for  in  if  else  match
 use  struct  enum  newtype  trait  impl  data  true  false  as  when
-not  and  or  pure  shared  private  const  ephemeral  signed  where
+not  and  or  xor  andalso  orelse  pure  shared  private  const  ephemeral  signed  where
 overflow  underflow  saturate_max  saturate_min
 lsl  asl  lsr  asr
+band  bor  bxor  bnot
 ````
 
 All keywords are reserved and cannot be used as identifiers.
@@ -84,8 +85,10 @@ A numeric literal may carry a type suffix that sets and checks the literal's typ
 |----------|-----------|
 | Arithmetic | `+`, `-`, `*`, `/`, `%` |
 | Shift | `lsl`, `asl`, `lsr`, `asr` |
+| Bitwise | `band`, `bor`, `bxor`, `bnot` |
 | Comparison | `==`, `!=`, `<`, `>`, `<=`, `>=` |
-| Logical | `and`, `or`, `not` |
+| Logical (eager) | `and`, `or`, `xor`, `not` |
+| Logical (short-circuit) | `andalso`, `orelse` |
 | Pipeline | `\|>` |
 | Assignment | `=` |
 | Field access | `.` |
@@ -276,13 +279,30 @@ let result = (a + b) * c / d - e % f;
 
 Integer arithmetic (`Word`) and floating-point arithmetic (`Float`) do not mix without explicit `as` casts.
 
+### Shift and Bitwise Expressions
+
+Shift operators are assembly-mnemonic keywords with a compile-time-constant amount: `lsl` logical left, `asl` arithmetic left, `lsr` logical (zero-fill) right, and `asr` arithmetic (sign-preserving) right. The `lsl` and `asl` forms produce the same value; `asl` additionally admits overflow capture in the checked-arithmetic construct because it denotes `x * 2^k`. Shifts operate on `Word` and `Multiword<N>` values and bind tighter than the additive operators.
+
+Bitwise operators are keyword mnemonics: `band`, `bor`, and `bxor` are the binary and, or, and exclusive-or; `bnot` is the prefix complement. They operate on `Word` and `Multiword<N>` values. On a `Multiword<N>` the operation is applied limb by limb with no cross-limb interaction. Among the binary bitwise operators, `band` binds tightest, then `bxor`, then `bor`, and the whole bitwise group binds tighter than comparison. Disambiguation is by operator name and never by operand type.
+
+````
+let mask  = flags band 0x0F;
+let flip  = value bxor all_ones;
+let clear = bnot dirty_bits;
+````
+
 ### Comparison and Logical Expressions
 
-Comparison operators produce `bool`. Logical operators `and` and `or` short-circuit. `not` is a prefix operator.
+Comparison operators produce `bool`. The eager logical operators `and`, `or`, and `xor` always evaluate both operands; `not` is the prefix negation. The short-circuit operators `andalso` and `orelse` skip the right operand when the left already determines the result. There are no short-circuit `xor` or `not` forms because those operations cannot short-circuit. In a pure total context the eager and short-circuit forms yield the same value; the eager forms are preferred where a native side effect on the right must run unconditionally or where a data-independent evaluation is wanted for worst-case-execution-time analysis. Precedence among the boolean operators binds loosest to tightest as `orelse`, `andalso`, `or`, `xor`, `and`, then comparison.
 
 ````
 if x > 0 and not done {
   process(x);
+}
+
+// The short-circuit form guards a call that must not run on the null case.
+if ptr_valid orelse recover(state) {
+  step(ptr);
 }
 ````
 
@@ -1102,20 +1122,37 @@ expr_stmt       = expression ';'
 (* Expressions *)
 expression      = pipeline_expr
 pipeline_expr   = logical_expr { '|>' qualified_name '(' [ arg_list ] ')' }
-logical_expr    = comparison_expr { ('and' | 'or') comparison_expr }
-comparison_expr = shift_expr [ comparison_op shift_expr ]
-(* Shifts bind below the comparisons and above the additive operators.
-   They are keyword operators named after the assembly mnemonics, so the
-   arithmetic-versus-logical choice is explicit. `lsl` is the logical
-   left shift, `asl` the arithmetic left shift, `lsr` the logical
-   (zero-fill) right shift, and `asr` the arithmetic (sign-preserving)
-   right shift. The right operand is a compile-time-constant amount in
-   the current increment. Because the operators are keywords, they never
-   collide with a stacked generic close such as `Option<Option<T>>`. *)
+(* The boolean operators, loosest to tightest binding: `orelse`,
+   `andalso`, `or`, `xor`, `and`, then comparison. `andalso` and `orelse`
+   are the short-circuit control forms; `and`, `or`, and `xor` are eager
+   and always evaluate both operands. All are left-associative. *)
+logical_expr    = orelse_expr
+orelse_expr     = andalso_expr { 'orelse' andalso_expr }
+andalso_expr    = or_expr { 'andalso' or_expr }
+or_expr         = xor_expr { 'or' xor_expr }
+xor_expr        = and_expr { 'xor' and_expr }
+and_expr        = comparison_expr { 'and' comparison_expr }
+comparison_expr = bitwise_expr [ comparison_op bitwise_expr ]
+(* Bitwise operators bind below the comparisons and above the shifts.
+   They are keyword mnemonics, so the operation is chosen by name and
+   never by operand type. `band` binds tightest, then `bxor`, then `bor`;
+   all are left-associative and operate on `Word` and `Multiword<N>`. *)
+bitwise_expr    = bxor_expr { 'bor' bxor_expr }
+bxor_expr       = band_expr { 'bxor' band_expr }
+band_expr       = shift_expr { 'band' shift_expr }
+(* Shifts bind below the bitwise operators and above the additive
+   operators. They are keyword operators named after the assembly
+   mnemonics, so the arithmetic-versus-logical choice is explicit. `lsl`
+   is the logical left shift, `asl` the arithmetic left shift, `lsr` the
+   logical (zero-fill) right shift, and `asr` the arithmetic
+   (sign-preserving) right shift. The right operand is a
+   compile-time-constant amount in the current increment. Because the
+   operators are keywords, they never collide with a stacked generic
+   close such as `Option<Option<T>>`. *)
 shift_expr      = additive_expr { ('lsl' | 'asl' | 'lsr' | 'asr') additive_expr }
 additive_expr   = multiplicative_expr { ('+' | '-') multiplicative_expr }
 multiplicative_expr = unary_expr { ('*' | '/' | '%') unary_expr }
-unary_expr      = [ 'not' | '-' ] postfix_expr
+unary_expr      = [ 'not' | '-' | 'bnot' ] postfix_expr
 postfix_expr    = primary_expr { method_call | field_access | tuple_index | array_index }
 method_call     = '.' lower_ident '(' [ arg_list ] ')'
 field_access    = '.' lower_ident

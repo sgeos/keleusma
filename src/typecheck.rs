@@ -3627,6 +3627,8 @@ fn type_of_expr_inner(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError>
                     // modulo (F > 0, the raw remainder, scale-preserving)
                     // all yield a Multiword<N, F>.
                     BinOp::Div | BinOp::Mod => Type::Multiword(*ln, *lf),
+                    // Bitwise operations act per word and preserve the type.
+                    BinOp::Band | BinOp::Bor | BinOp::Bxor => Type::Multiword(*ln, *lf),
                     BinOp::Eq
                     | BinOp::NotEq
                     | BinOp::Lt
@@ -3721,7 +3723,7 @@ fn type_of_expr_inner(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError>
                     }
                     Ok(Type::Bool)
                 }
-                BinOp::And | BinOp::Or => {
+                BinOp::And | BinOp::Or | BinOp::Xor | BinOp::Andalso | BinOp::Orelse => {
                     if !types_compatible(ctx, &lt, &Type::Bool)
                         || !types_compatible(ctx, &rt, &Type::Bool)
                     {
@@ -3735,6 +3737,22 @@ fn type_of_expr_inner(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError>
                         ));
                     }
                     Ok(Type::Bool)
+                }
+                BinOp::Band | BinOp::Bor | BinOp::Bxor => {
+                    if matches!(lt, Type::Word) && matches!(rt, Type::Word) {
+                        Ok(Type::Word)
+                    } else if matches!(lt, Type::Var(_)) || matches!(rt, Type::Var(_)) {
+                        Ok(ctx.fresh())
+                    } else {
+                        Err(TypeError::new(
+                            format!(
+                                "bitwise operator requires two Word or Multiword operands, got {} and {}",
+                                lt.display(),
+                                rt.display()
+                            ),
+                            *span,
+                        ))
+                    }
                 }
                 BinOp::Shl | BinOp::AShl | BinOp::ShrA | BinOp::ShrL => {
                     unreachable!("shift operators are handled before the same-type arithmetic")
@@ -3766,6 +3784,16 @@ fn type_of_expr_inner(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError>
                     }
                     Ok(Type::Bool)
                 }
+                UnaryOp::Bnot => match ty {
+                    Type::Word | Type::Byte | Type::Multiword(_, _) | Type::Var(_) => Ok(ty),
+                    other => Err(TypeError::new(
+                        format!(
+                            "`bnot` requires a Word, Byte, or Multiword, got {}",
+                            other.display()
+                        ),
+                        *span,
+                    )),
+                },
             };
             bare_result.map(|t| apply_labels(t, &labels))
         }

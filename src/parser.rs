@@ -84,15 +84,18 @@ struct Parser<'a> {
 
 /// Maximum recursive-descent depth before the parser bails with
 /// an error. Each level of expression nesting traverses the
-/// precedence chain (pipeline → logical → comparison → addition
-/// → multiplication → unary → primary), so a single level of
-/// parenthesisation consumes roughly 8-10 stack frames. The limit
-/// is chosen so that a maximally-nested admissible program
-/// consumes well under 2 MiB of stack even in a debug build with
-/// fat frames, fitting comfortably inside the default cargo-test
-/// thread stack and leaving headroom for the type checker,
-/// compiler, and VM passes that follow.
-const MAX_PARSE_DEPTH: u32 = 32;
+/// precedence chain (pipeline → logical → comparison → bitwise →
+/// shift → addition → multiplication → unary → postfix → primary),
+/// so a single level of parenthesisation consumes roughly a dozen
+/// stack frames. The limit is chosen so that a maximally-nested
+/// admissible program consumes well under 2 MiB of stack even in a
+/// debug build with fat frames, fitting comfortably inside the
+/// default cargo-test thread stack and inside the small stacks of
+/// `no_std` embedded targets, and leaving headroom for the type
+/// checker, compiler, and VM passes that follow. The bound was
+/// reduced from 32 to 24 when the bitwise operator level was added
+/// to the precedence chain, restoring the per-level stack margin.
+const MAX_PARSE_DEPTH: u32 = 24;
 
 impl<'a> Parser<'a> {
     fn new(tokens: &'a [Token]) -> Self {
@@ -1507,18 +1510,45 @@ impl<'a> Parser<'a> {
         Ok(left)
     }
 
+    /// Logical operators, loosest to tightest binding power: `orelse`
+    /// (0), `andalso` (1), `or` (2), `xor` (3), `and` (4), then
+    /// comparison. The two short-circuit operators bind loosest so that
+    /// an eager boolean subexpression groups before a short-circuit
+    /// guard wraps it. All operators are left-associative.
+    ///
+    /// A single precedence-climbing loop rather than one recursive
+    /// descent function per level keeps the native call stack flat when
+    /// no boolean operator is present, so deeply nested parenthesized
+    /// expressions do not consume extra stack per level. The recursion
+    /// that remains is bounded by the number of distinct binding powers
+    /// (five), independent of expression size.
     fn parse_logical_expr(&mut self) -> Result<Expr, ParseError> {
-        let mut left = self.parse_comparison_expr()?;
+        self.parse_logical_bp(0)
+    }
 
-        loop {
-            let op = if self.eat(&TokenKind::And) {
-                BinOp::And
-            } else if self.eat(&TokenKind::Or) {
-                BinOp::Or
-            } else {
+    /// Binding power of a logical operator token, or `None` when the
+    /// current token does not open a logical operator.
+    fn logical_binding_power(kind: &TokenKind) -> Option<(BinOp, u8)> {
+        match kind {
+            TokenKind::Orelse => Some((BinOp::Orelse, 0)),
+            TokenKind::Andalso => Some((BinOp::Andalso, 1)),
+            TokenKind::Or => Some((BinOp::Or, 2)),
+            TokenKind::Xor => Some((BinOp::Xor, 3)),
+            TokenKind::And => Some((BinOp::And, 4)),
+            _ => None,
+        }
+    }
+
+    fn parse_logical_bp(&mut self, min_bp: u8) -> Result<Expr, ParseError> {
+        let mut left = self.parse_comparison_expr()?;
+        while let Some((op, bp)) = Self::logical_binding_power(self.peek()) {
+            if bp < min_bp {
                 break;
-            };
-            let right = self.parse_comparison_expr()?;
+            }
+            self.bump();
+            // Left-associative: the right operand binds tighter than the
+            // current level, so its recursion stops at bp + 1.
+            let right = self.parse_logical_bp(bp + 1)?;
             let span = merge_spans(left.span(), right.span());
             left = Expr::BinOp {
                 op,
@@ -1527,12 +1557,11 @@ impl<'a> Parser<'a> {
                 span,
             };
         }
-
         Ok(left)
     }
 
     fn parse_comparison_expr(&mut self) -> Result<Expr, ParseError> {
-        let left = self.parse_shift_expr()?;
+        let left = self.parse_bitwise_expr(0)?;
 
         let op = if self.eat(&TokenKind::EqEq) {
             BinOp::Eq
@@ -1550,7 +1579,7 @@ impl<'a> Parser<'a> {
             return Ok(left);
         };
 
-        let right = self.parse_shift_expr()?;
+        let right = self.parse_bitwise_expr(0)?;
         let span = merge_spans(left.span(), right.span());
         Ok(Expr::BinOp {
             op,
@@ -1558,6 +1587,40 @@ impl<'a> Parser<'a> {
             right: Box::new(right),
             span,
         })
+    }
+
+    /// Bitwise level, between the comparisons and the shifts, with `band`
+    /// binding tightest, then `bxor`, then `bor`, the C ordering. All
+    /// left-associative. A single precedence-climbing loop keeps the
+    /// native call stack flat when no bitwise operator is present, matching
+    /// the boolean level and avoiding extra per-nesting stack for deeply
+    /// parenthesized expressions.
+    fn bitwise_binding_power(kind: &TokenKind) -> Option<(BinOp, u8)> {
+        match kind {
+            TokenKind::Bor => Some((BinOp::Bor, 0)),
+            TokenKind::Bxor => Some((BinOp::Bxor, 1)),
+            TokenKind::Band => Some((BinOp::Band, 2)),
+            _ => None,
+        }
+    }
+
+    fn parse_bitwise_expr(&mut self, min_bp: u8) -> Result<Expr, ParseError> {
+        let mut left = self.parse_shift_expr()?;
+        while let Some((op, bp)) = Self::bitwise_binding_power(self.peek()) {
+            if bp < min_bp {
+                break;
+            }
+            self.bump();
+            let right = self.parse_bitwise_expr(bp + 1)?;
+            let span = merge_spans(left.span(), right.span());
+            left = Expr::BinOp {
+                op,
+                left: Box::new(left),
+                right: Box::new(right),
+                span,
+            };
+        }
+        Ok(left)
     }
 
     /// Shift level, between the comparisons and the additive operators
@@ -1660,6 +1723,16 @@ impl<'a> Parser<'a> {
             let span = merge_spans(start, operand.span());
             return Ok(Expr::UnaryOp {
                 op: UnaryOp::Neg,
+                operand: Box::new(operand),
+                span,
+            });
+        }
+        if self.eat(&TokenKind::Bnot) {
+            let start = self.prev_span();
+            let operand = self.parse_unary_expr()?;
+            let span = merge_spans(start, operand.span());
+            return Ok(Expr::UnaryOp {
+                op: UnaryOp::Bnot,
                 operand: Box::new(operand),
                 span,
             });
@@ -2818,7 +2891,8 @@ mod tests {
     #[test]
     fn parse_logical_and_or() {
         let expr = parse_expr_str("a and b or c").unwrap();
-        // `and` and `or` are same precedence, left-to-right.
+        // `and` binds tighter than `or`, so this groups as
+        // `(a and b) or c`: the top node is `or`, its left is `and`.
         match expr {
             Expr::BinOp {
                 op: BinOp::Or,

@@ -974,7 +974,9 @@ fn infer_arg_type(
             // returns Bool. Both arms recurse on the operand for
             // type information.
             match op {
-                UnaryOp::Neg => infer_arg_type(operand, locals, fn_returns, structs),
+                UnaryOp::Neg | UnaryOp::Bnot => {
+                    infer_arg_type(operand, locals, fn_returns, structs)
+                }
                 UnaryOp::Not => Some(TypeExpr::Prim(PrimType::Bool, operand.span())),
             }
         }
@@ -993,7 +995,10 @@ fn infer_arg_type(
                 | BinOp::Shl
                 | BinOp::AShl
                 | BinOp::ShrA
-                | BinOp::ShrL => infer_arg_type(left, locals, fn_returns, structs),
+                | BinOp::ShrL
+                | BinOp::Band
+                | BinOp::Bor
+                | BinOp::Bxor => infer_arg_type(left, locals, fn_returns, structs),
                 BinOp::Eq
                 | BinOp::NotEq
                 | BinOp::Lt
@@ -1001,7 +1006,10 @@ fn infer_arg_type(
                 | BinOp::LtEq
                 | BinOp::GtEq
                 | BinOp::And
-                | BinOp::Or => Some(TypeExpr::Prim(PrimType::Bool, *span)),
+                | BinOp::Or
+                | BinOp::Xor
+                | BinOp::Andalso
+                | BinOp::Orelse => Some(TypeExpr::Prim(PrimType::Bool, *span)),
             }
         }
         Expr::MethodCall {

@@ -532,9 +532,16 @@ let p = a * b;       // truncated to Multiword<N>; full 2N width
 let q = a / b;
 let r = a % b;
 
-// Bit shift operators with a shift amount of Word type.
-let l = a << 8;
-let r2 = a >> 16;
+// Shift operators with a compile-time-constant Word amount. The
+// keyword mnemonics name the arithmetic-versus-logical choice: `lsl`
+// logical left, `asl` arithmetic left, `lsr` logical right, `asr`
+// arithmetic right.
+let l = a lsl 8;
+let r2 = a asr 16;
+
+// Bitwise operators, applied limb by limb.
+let m = a band b;
+let c = bnot a;
 
 // Comparison operators. The result is `Bool`.
 let eq = a == b;

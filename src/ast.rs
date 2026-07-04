@@ -935,23 +935,37 @@ pub enum BinOp {
     Mul,
     Div,
     Mod,
-    /// `<<` logical left shift, wrapping and total.
+    /// `lsl` logical left shift, wrapping and total.
     Shl,
-    /// `<<<` arithmetic left shift, the value `x * 2^k`. Wraps when bare;
+    /// `asl` arithmetic left shift, the value `x * 2^k`. Wraps when bare;
     /// admits overflow capture in the checked-arithmetic construct.
     AShl,
-    /// `>>>` arithmetic (sign-preserving) right shift.
+    /// `asr` arithmetic (sign-preserving) right shift.
     ShrA,
-    /// `>>` logical (zero-fill) right shift.
+    /// `lsr` logical (zero-fill) right shift.
     ShrL,
+    /// `band` bitwise and.
+    Band,
+    /// `bor` bitwise or.
+    Bor,
+    /// `bxor` bitwise exclusive or.
+    Bxor,
     Eq,
     NotEq,
     Lt,
     Gt,
     LtEq,
     GtEq,
+    /// `and` eager (non-short-circuit) logical and.
     And,
+    /// `or` eager (non-short-circuit) logical or.
     Or,
+    /// `xor` eager logical exclusive or.
+    Xor,
+    /// `andalso` short-circuit logical and.
+    Andalso,
+    /// `orelse` short-circuit logical or.
+    Orelse,
 }
 
 /// Unary operator.
@@ -961,6 +975,8 @@ pub enum UnaryOp {
     Neg,
     /// Logical negation `not`.
     Not,
+    /// Bitwise complement `bnot`.
+    Bnot,
 }
 
 /// A match arm: `pattern [when guard] => expression`.

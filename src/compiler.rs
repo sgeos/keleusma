@@ -1169,6 +1169,100 @@ fn compile_multiword_shift(
     Ok(())
 }
 
+/// Compile a per-word `Multiword<N>` bitwise operation (`band`, `bor`,
+/// `bxor`). Each result limb is the scalar bitwise combination of the
+/// two operand limbs; there is no cross-limb interaction, so the
+/// lowering is a flat unrolled loop over the existing bitwise opcodes.
+fn compile_multiword_bitwise(
+    fc: &mut FuncCompiler,
+    op: crate::ast::BinOp,
+    left: &Expr,
+    right: &Expr,
+    n: u16,
+) -> Result<(), CompileError> {
+    use crate::ast::BinOp;
+    let byte_size = flat_alloc_bytes(&TypeExpr::Multiword(n, 0, Span::default()), &fc.type_info)
+        .unwrap_or_else(|| conservative_alloc_bytes(n));
+    let word_ty = TypeExpr::Prim(PrimType::Word, Span::default());
+    let elem_op = array_elem_operand(Some(&word_ty), &fc.type_info);
+    let bit_op = match op {
+        BinOp::Band => Op::BitAnd,
+        BinOp::Bor => Op::BitOr,
+        BinOp::Bxor => Op::BitXor,
+        _ => unreachable!("compile_multiword_bitwise called with a non-bitwise operator"),
+    };
+    let av = fc.declare_local("__mw_a");
+    compile_expr(fc, left)?;
+    fc.emit(Op::SetLocal(av));
+    let bv = fc.declare_local("__mw_b");
+    compile_expr(fc, right)?;
+    fc.emit(Op::SetLocal(bv));
+    let mut rwords: alloc::vec::Vec<u16> = alloc::vec::Vec::new();
+    for i in 0..n {
+        let idx_c = fc.add_constant(Value::Int(i as i64));
+        let rk = fc.declare_local("__mw_r");
+        fc.emit(Op::GetLocal(av));
+        fc.emit(Op::Const(idx_c));
+        fc.emit(Op::GetIndex(elem_op));
+        fc.emit(Op::GetLocal(bv));
+        fc.emit(Op::Const(idx_c));
+        fc.emit(Op::GetIndex(elem_op));
+        fc.emit(bit_op);
+        fc.emit(Op::SetLocal(rk));
+        rwords.push(rk);
+    }
+    for &rk in &rwords {
+        fc.emit(Op::GetLocal(rk));
+    }
+    fc.emit(Op::NewComposite(NewCompositeOperand::Flat {
+        kind: crate::value_layout::CompositeKind::Array,
+        count: n,
+        byte_size,
+    }));
+    Ok(())
+}
+
+/// Compile a `Multiword<N>` bitwise complement (`bnot`) as a per-word
+/// exclusive-or against the all-ones word. Each limb is extracted, XORed
+/// with `-1` (all ones under two's-complement), and stored back; the
+/// upper bits beyond the module word width are discarded on store, so
+/// the complement of the retained low bits is correct at narrow widths.
+fn compile_multiword_bnot(
+    fc: &mut FuncCompiler,
+    operand: &Expr,
+    n: u16,
+) -> Result<(), CompileError> {
+    let byte_size = flat_alloc_bytes(&TypeExpr::Multiword(n, 0, Span::default()), &fc.type_info)
+        .unwrap_or_else(|| conservative_alloc_bytes(n));
+    let word_ty = TypeExpr::Prim(PrimType::Word, Span::default());
+    let elem_op = array_elem_operand(Some(&word_ty), &fc.type_info);
+    let neg1 = fc.add_constant(Value::Int(-1));
+    let av = fc.declare_local("__mw_a");
+    compile_expr(fc, operand)?;
+    fc.emit(Op::SetLocal(av));
+    let mut rwords: alloc::vec::Vec<u16> = alloc::vec::Vec::new();
+    for i in 0..n {
+        let idx_c = fc.add_constant(Value::Int(i as i64));
+        let rk = fc.declare_local("__mw_r");
+        fc.emit(Op::GetLocal(av));
+        fc.emit(Op::Const(idx_c));
+        fc.emit(Op::GetIndex(elem_op));
+        fc.emit(Op::Const(neg1));
+        fc.emit(Op::BitXor);
+        fc.emit(Op::SetLocal(rk));
+        rwords.push(rk);
+    }
+    for &rk in &rwords {
+        fc.emit(Op::GetLocal(rk));
+    }
+    fc.emit(Op::NewComposite(NewCompositeOperand::Flat {
+        kind: crate::value_layout::CompositeKind::Array,
+        count: n,
+        byte_size,
+    }));
+    Ok(())
+}
+
 /// Compile a binary operator whose operands are `Multiword<N>` (B19).
 /// Add, subtract, comparisons, multiply, divide, modulo, and shifts all
 /// lower to unrolled cascades over the existing scalar opcodes.
@@ -1195,6 +1289,7 @@ fn compile_multiword_binop(
         BinOp::Shl | BinOp::AShl | BinOp::ShrA | BinOp::ShrL => {
             compile_multiword_shift(fc, op, left, right, n)
         }
+        BinOp::Band | BinOp::Bor | BinOp::Bxor => compile_multiword_bitwise(fc, op, left, right, n),
         BinOp::Eq | BinOp::NotEq | BinOp::Lt | BinOp::Gt | BinOp::LtEq | BinOp::GtEq => {
             compile_multiword_compare(fc, op, left, right, n)
         }
@@ -5159,9 +5254,14 @@ fn infer_expr_type(fc: &FuncCompiler, expr: &Expr) -> Option<TypeExpr> {
             // type equals right's; comparisons produce `bool`.
             use crate::ast::BinOp;
             match op {
-                BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod => {
-                    infer_expr_type(fc, left).or_else(|| infer_expr_type(fc, right))
-                }
+                BinOp::Add
+                | BinOp::Sub
+                | BinOp::Mul
+                | BinOp::Div
+                | BinOp::Mod
+                | BinOp::Band
+                | BinOp::Bor
+                | BinOp::Bxor => infer_expr_type(fc, left).or_else(|| infer_expr_type(fc, right)),
                 // A shift preserves the shifted value's type; the shift
                 // amount (right) is a Word and must not be inferred from.
                 BinOp::Shl | BinOp::AShl | BinOp::ShrA | BinOp::ShrL => infer_expr_type(fc, left),
@@ -5172,7 +5272,10 @@ fn infer_expr_type(fc: &FuncCompiler, expr: &Expr) -> Option<TypeExpr> {
                 | BinOp::LtEq
                 | BinOp::GtEq
                 | BinOp::And
-                | BinOp::Or => Some(TypeExpr::Prim(PrimType::Bool, *span)),
+                | BinOp::Or
+                | BinOp::Xor
+                | BinOp::Andalso
+                | BinOp::Orelse => Some(TypeExpr::Prim(PrimType::Bool, *span)),
             }
         }
         Expr::UnaryOp { operand, .. } => infer_expr_type(fc, operand),
@@ -7025,11 +7128,21 @@ fn eval_expr_with(expr: &Expr, lookup: &dyn Fn(&str) -> Option<EvalValue>) -> Op
                 (crate::ast::BinOp::GtEq, EvalValue::Int(a), EvalValue::Int(b)) => {
                     Some(EvalValue::Bool(a >= b))
                 }
-                (crate::ast::BinOp::And, EvalValue::Bool(a), EvalValue::Bool(b)) => {
-                    Some(EvalValue::Bool(a && b))
-                }
-                (crate::ast::BinOp::Or, EvalValue::Bool(a), EvalValue::Bool(b)) => {
-                    Some(EvalValue::Bool(a || b))
+                // The eager and short-circuit operators fold to the same
+                // value on constant operands; the difference is only in
+                // runtime evaluation order, which is moot for constants.
+                (
+                    crate::ast::BinOp::And | crate::ast::BinOp::Andalso,
+                    EvalValue::Bool(a),
+                    EvalValue::Bool(b),
+                ) => Some(EvalValue::Bool(a && b)),
+                (
+                    crate::ast::BinOp::Or | crate::ast::BinOp::Orelse,
+                    EvalValue::Bool(a),
+                    EvalValue::Bool(b),
+                ) => Some(EvalValue::Bool(a || b)),
+                (crate::ast::BinOp::Xor, EvalValue::Bool(a), EvalValue::Bool(b)) => {
+                    Some(EvalValue::Bool(a != b))
                 }
                 _ => None,
             }
@@ -7067,11 +7180,11 @@ pub(crate) fn predicate_true_set(body: &Expr, param: &str) -> Option<crate::inte
         } => {
             if let Some((cmp, n)) = comparison_against_param(*op, left, right, param) {
                 comparison_set(cmp, n)
-            } else if matches!(op, crate::ast::BinOp::And) {
+            } else if matches!(op, crate::ast::BinOp::And | crate::ast::BinOp::Andalso) {
                 let l = predicate_true_set(left, param)?;
                 let r = predicate_true_set(right, param)?;
                 Some(l.intersect(&r))
-            } else if matches!(op, crate::ast::BinOp::Or) {
+            } else if matches!(op, crate::ast::BinOp::Or | crate::ast::BinOp::Orelse) {
                 let l = predicate_true_set(left, param)?;
                 let r = predicate_true_set(right, param)?;
                 Some(l.union(&r))
@@ -7595,10 +7708,20 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
             right,
             span,
         } => {
-            // Short-circuit for logical operators using block-structured control.
+            // The boolean operator family. `andalso` / `orelse` are the
+            // short-circuit control forms: the right operand is skipped
+            // when the left already decides the result. `and` / `or` /
+            // `xor` are eager: both operands are always evaluated, which
+            // is more predictable for worst-case-execution-time analysis
+            // (no data-dependent branch) and lets a native side effect on
+            // the right run unconditionally. The eager forms evaluate the
+            // left into a scratch local and the right onto the stack, then
+            // branch only to select, so no operand is evaluated twice or
+            // skipped.
             match op {
-                BinOp::And => {
-                    // a && b: if a is false, result is false; else result is b.
+                BinOp::Andalso => {
+                    // a andalso b: if a is false, result is false (b is
+                    // skipped); else result is b.
                     compile_expr(fc, left)?;
                     fc.emit(Op::Dup);
                     let if_addr = fc.emit_jump(Op::If(0));
@@ -7612,8 +7735,9 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
                     fc.emit(Op::EndIf);
                     return Ok(());
                 }
-                BinOp::Or => {
-                    // a || b: if a is true, result is true; else result is b.
+                BinOp::Orelse => {
+                    // a orelse b: if a is true, result is true (b is
+                    // skipped); else result is b.
                     compile_expr(fc, left)?;
                     fc.emit(Op::Dup);
                     fc.emit(Op::Not);
@@ -7626,6 +7750,55 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
                     // a was true (Not gave false, If skipped): duplicated true is on stack.
                     fc.patch_jump(else_addr);
                     fc.emit(Op::EndIf);
+                    return Ok(());
+                }
+                BinOp::And => {
+                    // Eager and: evaluate both, then select b when a is
+                    // true and false otherwise.
+                    let la = fc.declare_local("__and_l");
+                    compile_expr(fc, left)?;
+                    fc.emit(Op::SetLocal(la));
+                    compile_expr(fc, right)?; // stack: [b]
+                    fc.emit(Op::GetLocal(la)); // stack: [b, a]
+                    let if_addr = fc.emit_jump(Op::If(0));
+                    // a true: result is b, already on the stack.
+                    let else_addr = fc.emit_jump(Op::Else(0));
+                    fc.patch_jump(if_addr);
+                    // a false: discard b, push false.
+                    fc.emit(Op::PopN(1));
+                    let false_c = fc.add_constant(Value::Bool(false));
+                    fc.emit(Op::Const(false_c));
+                    fc.patch_jump(else_addr);
+                    fc.emit(Op::EndIf);
+                    return Ok(());
+                }
+                BinOp::Or => {
+                    // Eager or: evaluate both, then select b when a is
+                    // false and true otherwise.
+                    let la = fc.declare_local("__or_l");
+                    compile_expr(fc, left)?;
+                    fc.emit(Op::SetLocal(la));
+                    compile_expr(fc, right)?; // stack: [b]
+                    fc.emit(Op::GetLocal(la)); // stack: [b, a]
+                    fc.emit(Op::Not); // stack: [b, !a]
+                    let if_addr = fc.emit_jump(Op::If(0));
+                    // !a true (a false): result is b, already on the stack.
+                    let else_addr = fc.emit_jump(Op::Else(0));
+                    fc.patch_jump(if_addr);
+                    // a true: discard b, push true.
+                    fc.emit(Op::PopN(1));
+                    let true_c = fc.add_constant(Value::Bool(true));
+                    fc.emit(Op::Const(true_c));
+                    fc.patch_jump(else_addr);
+                    fc.emit(Op::EndIf);
+                    return Ok(());
+                }
+                BinOp::Xor => {
+                    // Eager exclusive-or of two booleans is inequality;
+                    // both operands are evaluated with no branch.
+                    compile_expr(fc, left)?;
+                    compile_expr(fc, right)?;
+                    fc.emit(Op::CmpNe);
                     return Ok(());
                 }
                 _ => {}
@@ -7774,7 +7947,20 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
                 BinOp::GtEq => {
                     fc.emit(Op::CmpGe);
                 }
-                BinOp::And | BinOp::Or => unreachable!(),
+                BinOp::And | BinOp::Or | BinOp::Xor | BinOp::Andalso | BinOp::Orelse => {
+                    unreachable!("boolean operators are lowered above with an early return")
+                }
+                // Scalar bitwise operations lower directly to the bitwise
+                // opcodes; the Multiword case routes to compile_multiword_binop.
+                BinOp::Band => {
+                    fc.emit(Op::BitAnd);
+                }
+                BinOp::Bor => {
+                    fc.emit(Op::BitOr);
+                }
+                BinOp::Bxor => {
+                    fc.emit(Op::BitXor);
+                }
                 BinOp::Shl | BinOp::AShl | BinOp::ShrA | BinOp::ShrL => {
                     unreachable!(
                         "shifts are dispatched to compile_scalar_shift / compile_multiword_shift"
@@ -7784,6 +7970,13 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
         }
 
         Expr::UnaryOp { op, operand, .. } => {
+            // A bitwise complement of a `Multiword<N>` lowers to a
+            // per-limb complement, mirroring the Multiword binary path.
+            if matches!(op, UnaryOp::Bnot)
+                && let Some(TypeExpr::Multiword(n, _, _)) = infer_expr_type(fc, operand)
+            {
+                return compile_multiword_bnot(fc, operand, n);
+            }
             // Mirrors the binary-op type-specialization from
             // Consolidation B: operands inferred or defaulted to
             // `Int` route through `CheckedNeg` followed by
@@ -7809,6 +8002,14 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
                 }
                 UnaryOp::Not => {
                     fc.emit(Op::Not);
+                }
+                UnaryOp::Bnot => {
+                    // Scalar bitwise complement is XOR against the
+                    // all-ones word; the Multiword case is dispatched
+                    // above before the operand is compiled.
+                    let neg1 = fc.add_constant(Value::Int(-1));
+                    fc.emit(Op::Const(neg1));
+                    fc.emit(Op::BitXor);
                 }
             }
         }

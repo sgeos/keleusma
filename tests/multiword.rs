@@ -1143,3 +1143,166 @@ fn multiword_different_scales_do_not_mix() {
         "fn main() -> Word { let a = (1, 0) as Multiword<2>; let b = (1, 0) as Multiword<2, 16>; let s = a + b; s[0] }"
     ));
 }
+
+// --- Bitwise operators: `band`, `bor`, `bxor` (binary), `bnot` (unary).
+// Scalar operands operate on a single Word; Multiword operands combine
+// limb by limb with no cross-limb interaction. Disambiguation is by
+// operator name, never by operand type. ---
+
+#[test]
+fn scalar_bitwise_and_or_xor() {
+    assert_eq!(run_to_int("fn main() -> Word { 12 band 10 }"), 8);
+    assert_eq!(run_to_int("fn main() -> Word { 12 bor 10 }"), 14);
+    assert_eq!(run_to_int("fn main() -> Word { 12 bxor 10 }"), 6);
+}
+
+#[test]
+fn scalar_bitwise_not_is_all_ones_complement() {
+    // ~0 = -1 and ~(-1) = 0 under two's complement.
+    assert_eq!(run_to_int("fn main() -> Word { bnot 0 }"), -1);
+    assert_eq!(run_to_int("fn main() -> Word { bnot (0 - 1) }"), 0);
+    // ~5 = -6.
+    assert_eq!(run_to_int("fn main() -> Word { bnot 5 }"), -6);
+}
+
+#[test]
+fn scalar_bitwise_precedence_band_below_bxor_below_bor() {
+    // `bor` binds loosest, then `bxor`, then `band`: 1 bor 2 band 2
+    // parses as 1 bor (2 band 2) = 1 bor 2 = 3.
+    assert_eq!(run_to_int("fn main() -> Word { 1 bor 2 band 2 }"), 3);
+    // 5 bxor 1 band 1 parses as 5 bxor (1 band 1) = 5 bxor 1 = 4.
+    assert_eq!(run_to_int("fn main() -> Word { 5 bxor 1 band 1 }"), 4);
+}
+
+#[test]
+fn scalar_bitwise_below_comparison() {
+    // Comparison binds looser than bitwise, so `1 band 1 == 1` parses
+    // as `(1 band 1) == 1`, which is true.
+    assert!(run_to_bool("fn main() -> bool { 1 band 1 == 1 }"));
+}
+
+#[test]
+fn multiword_bitwise_per_limb() {
+    // Each limb combines independently; there is no carry or borrow.
+    assert_eq!(
+        run_to_int(
+            "fn main() -> Word { let a = (12, 6) as Multiword<2>; let b = (10, 3) as Multiword<2>; let c = a band b; c[0] }"
+        ),
+        8
+    );
+    assert_eq!(
+        run_to_int(
+            "fn main() -> Word { let a = (12, 6) as Multiword<2>; let b = (10, 3) as Multiword<2>; let c = a band b; c[1] }"
+        ),
+        2
+    );
+    assert_eq!(
+        run_to_int(
+            "fn main() -> Word { let a = (12, 6) as Multiword<2>; let b = (10, 3) as Multiword<2>; let c = a bor b; c[0] }"
+        ),
+        14
+    );
+    assert_eq!(
+        run_to_int(
+            "fn main() -> Word { let a = (12, 6) as Multiword<2>; let b = (10, 3) as Multiword<2>; let c = a bxor b; c[1] }"
+        ),
+        5
+    );
+}
+
+#[test]
+fn multiword_bitwise_not_per_limb() {
+    // ~(0, 0) = (-1, -1) limb by limb.
+    assert_eq!(
+        run_to_int("fn main() -> Word { let a = (0, 0) as Multiword<2>; let c = bnot a; c[0] }"),
+        -1
+    );
+    assert_eq!(
+        run_to_int("fn main() -> Word { let a = (5, 0) as Multiword<2>; let c = bnot a; c[1] }"),
+        -1
+    );
+    assert_eq!(
+        run_to_int("fn main() -> Word { let a = (5, 0) as Multiword<2>; let c = bnot a; c[0] }"),
+        -6
+    );
+}
+
+#[test]
+fn bitwise_rejects_non_integer_operands() {
+    // Bitwise operators require Word or Multiword operands; a Bool is
+    // rejected rather than silently reinterpreted.
+    assert!(compile_fails("fn main() -> Word { true band 1 }"));
+    assert!(compile_fails("fn main() -> Word { bnot true }"));
+}
+
+// --- Boolean operators: eager `and`, `or`, `xor` and unary `not`, plus
+// the short-circuit control forms `andalso`, `orelse`. Eager forms
+// always evaluate both operands; the short-circuit forms may skip the
+// right operand. In a pure total context the value is identical; the
+// tests below pin the value truth tables and operator precedence. ---
+
+#[test]
+fn boolean_eager_and_truth_table() {
+    assert!(run_to_bool("fn main() -> bool { true and true }"));
+    assert!(!run_to_bool("fn main() -> bool { true and false }"));
+    assert!(!run_to_bool("fn main() -> bool { false and true }"));
+    assert!(!run_to_bool("fn main() -> bool { false and false }"));
+}
+
+#[test]
+fn boolean_eager_or_truth_table() {
+    assert!(run_to_bool("fn main() -> bool { true or true }"));
+    assert!(run_to_bool("fn main() -> bool { true or false }"));
+    assert!(run_to_bool("fn main() -> bool { false or true }"));
+    assert!(!run_to_bool("fn main() -> bool { false or false }"));
+}
+
+#[test]
+fn boolean_xor_truth_table() {
+    assert!(!run_to_bool("fn main() -> bool { true xor true }"));
+    assert!(run_to_bool("fn main() -> bool { true xor false }"));
+    assert!(run_to_bool("fn main() -> bool { false xor true }"));
+    assert!(!run_to_bool("fn main() -> bool { false xor false }"));
+}
+
+#[test]
+fn boolean_not_and_double_not() {
+    assert!(!run_to_bool("fn main() -> bool { not true }"));
+    assert!(run_to_bool("fn main() -> bool { not false }"));
+    assert!(run_to_bool("fn main() -> bool { not not true }"));
+}
+
+#[test]
+fn boolean_short_circuit_truth_table_matches_eager() {
+    // andalso / orelse produce the same value as and / or.
+    assert!(run_to_bool("fn main() -> bool { true andalso true }"));
+    assert!(!run_to_bool("fn main() -> bool { true andalso false }"));
+    assert!(!run_to_bool("fn main() -> bool { false andalso true }"));
+    assert!(run_to_bool("fn main() -> bool { false orelse true }"));
+    assert!(!run_to_bool("fn main() -> bool { false orelse false }"));
+    assert!(run_to_bool("fn main() -> bool { true orelse false }"));
+}
+
+#[test]
+fn boolean_precedence_and_binds_tighter_than_or() {
+    // `false or true and false` parses as `false or (true and false)`
+    // = `false or false` = false. If `and` did not bind tighter than
+    // `or`, it would parse as `(false or true) and false` = false too,
+    // so use an asymmetric case to distinguish.
+    // `true or false and false` = `true or (false and false)` = true.
+    // The mis-grouping `(true or false) and false` would be false.
+    assert!(run_to_bool("fn main() -> bool { true or false and false }"));
+}
+
+#[test]
+fn boolean_precedence_comparison_binds_tighter_than_and() {
+    // `1 == 1 and 2 == 2` parses as `(1 == 1) and (2 == 2)` = true.
+    assert!(run_to_bool("fn main() -> bool { 1 == 1 and 2 == 2 }"));
+}
+
+#[test]
+fn boolean_rejects_non_bool_operands() {
+    assert!(compile_fails("fn main() -> bool { 1 and true }"));
+    assert!(compile_fails("fn main() -> bool { true xor 3 }"));
+    assert!(compile_fails("fn main() -> bool { 1 andalso true }"));
+}

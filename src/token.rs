@@ -83,10 +83,16 @@ pub enum TokenKind {
     When,
     /// `not` logical-negation keyword.
     Not,
-    /// `and` logical-and keyword.
+    /// `and` eager (non-short-circuit) logical-and keyword.
     And,
-    /// `or` logical-or keyword.
+    /// `or` eager (non-short-circuit) logical-or keyword.
     Or,
+    /// `xor` eager logical exclusive-or keyword.
+    Xor,
+    /// `andalso` short-circuit logical-and keyword.
+    Andalso,
+    /// `orelse` short-circuit logical-or keyword.
+    Orelse,
     /// `pure` declaration modifier reserved for future use.
     Pure,
     /// `data` block declaration keyword.
@@ -186,6 +192,17 @@ pub enum TokenKind {
     /// `asr` arithmetic (sign-preserving) right shift.
     Asr,
 
+    // Bitwise operators, keyword-named to stay distinct from the boolean
+    // operators and from the `|` glyph used for match alternation.
+    /// `band` bitwise and.
+    Band,
+    /// `bor` bitwise or.
+    Bor,
+    /// `bxor` bitwise exclusive or.
+    Bxor,
+    /// `bnot` bitwise complement (unary prefix).
+    Bnot,
+
     /// `!` punctuation. Distinct from the `not` keyword
     /// ([`TokenKind::Not`]) and from `!=` ([`TokenKind::NotEq`]).
     /// V0.2.0 admits this token only as the negative-label prefix
@@ -284,10 +301,17 @@ impl TokenKind {
             "not" => Some(TokenKind::Not),
             "and" => Some(TokenKind::And),
             "or" => Some(TokenKind::Or),
+            "xor" => Some(TokenKind::Xor),
+            "andalso" => Some(TokenKind::Andalso),
+            "orelse" => Some(TokenKind::Orelse),
             "lsl" => Some(TokenKind::Lsl),
             "asl" => Some(TokenKind::Asl),
             "lsr" => Some(TokenKind::Lsr),
             "asr" => Some(TokenKind::Asr),
+            "band" => Some(TokenKind::Band),
+            "bor" => Some(TokenKind::Bor),
+            "bxor" => Some(TokenKind::Bxor),
+            "bnot" => Some(TokenKind::Bnot),
             "pure" => Some(TokenKind::Pure),
             "data" => Some(TokenKind::Data),
             "shared" => Some(TokenKind::Shared),

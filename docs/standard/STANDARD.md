@@ -226,8 +226,9 @@ operators, and delimiters.
 **Keywords.** The reserved keyword set is `fn`, `yield`, `loop`, `break`, `let`,
 `for`, `in`, `if`, `else`, `match`, `use`, `external`, `struct`, `enum`,
 `newtype`, `where`, `overflow`, `underflow`, `saturate_max`, `saturate_min`,
-`signed`, `true`, `false`, `as`, `when`, `not`, `and`, `or`, `pure`, `data`,
-`shared`, `private`, `const`, `ephemeral`, `trait`, and `impl`. The words
+`signed`, `true`, `false`, `as`, `when`, `not`, `and`, `or`, `xor`, `andalso`,
+`orelse`, `lsl`, `asl`, `lsr`, `asr`, `band`, `bor`, `bxor`, `bnot`, `pure`,
+`data`, `shared`, `private`, `const`, `ephemeral`, `trait`, and `impl`. The words
 `classify`, `declassify`, and `assert` are context-sensitive and are recognized as
 operators or statements only when not immediately followed by a call.
 
@@ -248,10 +249,15 @@ double quote, and nul. The boolean literals are `true` and `false`.
 **Comments.** A line comment runs from `//` to end of line. A block comment runs
 from `/*` to `*/` and does not nest. A leading shebang line is ignored.
 
-**Operators.** The arithmetic operators are `+ - * / %`. The comparison operators
-are `== != < > <= >=` and are non-associative, so a chained comparison does not
-parse. The logical operators are the keywords `and`, `or`, and `not`. The
-pipeline operator is `|>`. Field access is `.`, path resolution is `::`, the
+**Operators.** The arithmetic operators are `+ - * / %`. The shift operators are
+the keywords `lsl`, `asl`, `lsr`, and `asr`, named after the assembly mnemonics.
+The bitwise operators are the keywords `band`, `bor`, `bxor`, and the prefix
+`bnot`. The comparison operators are `== != < > <= >=` and are non-associative, so
+a chained comparison does not parse. The eager logical operators are the keywords
+`and`, `or`, `xor`, and the prefix `not`; the short-circuit logical operators are
+the keywords `andalso` and `orelse`. A logical or bitwise operation is selected by
+the operator name and never by the operand type. The pipeline operator is `|>`.
+Field access is `.`, path resolution is `::`, the
 range operator is `..`, the return arrow is `->`, the match arrow is `=>`, the
 information-flow-control marker is `@`, and a trait bound joins with `+`.
 
@@ -289,10 +295,12 @@ only inside a `for`, the debug `assert cond [, "message"];`, the data-field
 assignment `name.field = expr;` and its indexed form, and the expression
 statement.
 
-Expression precedence from weakest to tightest is the pipeline, the logical `and`
-and `or`, the non-associative comparison, additive, multiplicative, prefix `not`
-and unary minus, postfix field access and method call and index and the cast `as
-Type`, and the primary forms. The primary forms include literals, the
+Expression precedence from weakest to tightest is the pipeline; the logical
+operators in the order `orelse`, `andalso`, `or`, `xor`, `and`; the
+non-associative comparison; the bitwise operators in the order `bor`, `bxor`,
+`band`; the shifts `lsl`, `asl`, `lsr`, `asr`; the additive; the multiplicative;
+the prefix `not`, `bnot`, and unary minus; the postfix field access and method
+call and index and the cast `as Type`; and the primary forms. The primary forms include literals, the
 `classify` and `declassify` operators, saturation literals, calls and qualified
 calls, enum-variant construction, struct initialization, newtype construction,
 `yield`, `if` with `else`, `match`, the `loop` expression, the unit value,
@@ -451,7 +459,9 @@ implemented for a compile-time-constant amount, named after the assembly mnemoni
 `lsl` and `lsr` are the logical shifts, zero-filling the vacated bits, and `asl` and
 `asr` are the arithmetic shifts, the arithmetic right shift filling the vacated top
 with the sign and the arithmetic left shift carrying the value `x * 2^k` so it
-admits overflow capture on the word-width type. The multi-word arithmetic family is
+admits overflow capture on the word-width type. The bitwise operators `band`,
+`bor`, `bxor`, and the prefix `bnot` are implemented, applied to each limb
+independently with no cross-limb interaction. The multi-word arithmetic family is
 therefore complete; general const generics remain a separate feature.
 
 #### 5.1.3 Composite kinds
@@ -1178,11 +1188,13 @@ this document.
    arithmetic surface. The type `Multiword<N>` and `Multiword<N, F>`, its
    construction and indexing, its scale-independent addition and subtraction, the
    six comparison operators, multiplication at every fraction-bit count (integer and
-   fixed-point), the divide and modulo at every fraction-bit count, and the three
-   shift operators are implemented. Two narrower items remain: the shift amount must
+   fixed-point), the divide and modulo at every fraction-bit count, the four
+   shift operators, and the bitwise operators `band`, `bor`, `bxor`, and `bnot`
+   are implemented. Two narrower items remain: the shift amount must
    be a compile-time constant, a variable amount being a later increment, and the
    type is recognised specially rather than through general const generics, which
-   stay a separate feature. The `Byte` type is not yet shiftable.
+   stay a separate feature. The `Byte` type is not yet shiftable, and `Byte` is not
+   yet admitted by the bitwise operators.
 3. The instruction count in prior project documents was recorded as 66. The instruction
    set is 67, because the `SetDataComposite` opcode at identifier 70 is implemented,
    dispatched, and verified but was undocumented. The issuing authority reconciles the
