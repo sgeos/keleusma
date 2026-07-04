@@ -1,4 +1,26 @@
-#![cfg(all(feature = "compile", feature = "verify"))]
+// This suite pins `Multiword<N, F>` results at the default 64-bit host
+// word width, so it is excluded when a `narrow-word`/`narrow-address`/
+// `narrow-float` feature lowers `Target::host()` to a narrower width (the
+// "narrowest wins" rule of the framing-width features). Under a narrow
+// width the compiler lowers multi-word arithmetic to that width and these
+// 64-bit-word expectations no longer hold; narrow-width multi-word
+// coverage lives in `tests/narrow_vm.rs`. Without this guard, enabling
+// every feature at once (for example `cargo test --all-features`, which
+// turns on `narrow-word-8`) compiles this suite at an 8-bit word and it
+// fails as a false negative.
+#![cfg(all(
+    feature = "compile",
+    feature = "verify",
+    not(any(
+        feature = "narrow-word-8",
+        feature = "narrow-word-16",
+        feature = "narrow-word-32",
+        feature = "narrow-address-8",
+        feature = "narrow-address-16",
+        feature = "narrow-address-32",
+        feature = "narrow-float-32"
+    ))
+))]
 //! `Multiword<N>` fixed-width multi-word integer, phase 1: the type,
 //! construction from a tuple literal, and digit indexing (B19). The
 //! value is represented as a flat little-endian array of N words, so a
