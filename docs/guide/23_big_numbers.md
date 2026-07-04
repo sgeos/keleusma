@@ -172,9 +172,12 @@ fn main() -> Byte {
 
 The sum `300` does not fit in a `Byte`, so the `overflow` arm runs and
 binds the wrapped result `w`, which is `44`. The supported operators are
-`+`, `-`, `*`, `/`, `%`, and unary `-`, with the admissible arms
-depending on the type. An unsigned `Byte`, for instance, can overflow on
-addition but can only go below zero on subtraction.
+`+`, `-`, `*`, `/`, `%`, the arithmetic left shift `<<<`, and unary `-`,
+with the admissible arms depending on the type. An unsigned `Byte`, for
+instance, can overflow on addition but can only go below zero on
+subtraction. The arithmetic left shift `<<<` is the value `x * 2^k`, so
+on a `Word` it can overflow or go below zero exactly as a multiply does,
+and it takes the same `overflow` and `underflow` arms.
 
 ## Saturating to the edge
 

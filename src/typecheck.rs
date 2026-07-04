@@ -4699,7 +4699,12 @@ fn type_of_expr_inner(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError>
             let supported = matches!(
                 op_expr.as_ref(),
                 Expr::BinOp {
-                    op: BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod,
+                    op: BinOp::Add
+                        | BinOp::Sub
+                        | BinOp::Mul
+                        | BinOp::Div
+                        | BinOp::Mod
+                        | BinOp::AShl,
                     ..
                 } | Expr::UnaryOp {
                     op: UnaryOp::Neg,
@@ -4771,6 +4776,7 @@ fn type_of_expr_inner(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError>
                 Mul,
                 Div,
                 Mod,
+                AShl,
                 Neg,
             }
             let (cop, op_desc) = match op_expr.as_ref() {
@@ -4779,9 +4785,23 @@ fn type_of_expr_inner(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError>
                 Expr::BinOp { op: BinOp::Mul, .. } => (CheckedOp::Mul, "`*`"),
                 Expr::BinOp { op: BinOp::Div, .. } => (CheckedOp::Div, "`/`"),
                 Expr::BinOp { op: BinOp::Mod, .. } => (CheckedOp::Mod, "`%`"),
+                Expr::BinOp {
+                    op: BinOp::AShl, ..
+                } => (CheckedOp::AShl, "arithmetic left shift `<<<`"),
                 // The `supported` check above guarantees unary `-`.
                 _ => (CheckedOp::Neg, "unary `-`"),
             };
+            // The arithmetic left shift is signed-only and Word-only, the
+            // same as multiply-by-a-power-of-two, which is how it lowers.
+            if cop == CheckedOp::AShl && !is_word {
+                return Err(TypeError::new(
+                    alloc::format!(
+                        "the arithmetic left shift `<<<` in a checked construct requires Word operands, got {}",
+                        inner_ty.display()
+                    ),
+                    *span,
+                ));
+            }
 
             // Unary negation is signed-only; reject it on Byte.
             if is_byte && cop == CheckedOp::Neg {
@@ -4842,6 +4862,7 @@ fn type_of_expr_inner(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError>
                                 CheckedOp::Add
                                     | CheckedOp::Sub
                                     | CheckedOp::Mul
+                                    | CheckedOp::AShl
                                     | CheckedOp::Neg
                                     | CheckedOp::Div
                             )
@@ -4858,7 +4879,10 @@ fn type_of_expr_inner(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError>
                                 CheckedOp::Add | CheckedOp::Sub | CheckedOp::Mul | CheckedOp::Div
                             )
                         } else {
-                            matches!(cop, CheckedOp::Add | CheckedOp::Sub | CheckedOp::Mul)
+                            matches!(
+                                cop,
+                                CheckedOp::Add | CheckedOp::Sub | CheckedOp::Mul | CheckedOp::AShl
+                            )
                         };
                         (ok, "underflow")
                     }

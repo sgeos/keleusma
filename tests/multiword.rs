@@ -967,6 +967,49 @@ fn scalar_arithmetic_left_shift_bare_wraps_like_logical() {
 }
 
 #[test]
+fn scalar_arithmetic_left_shift_captures_overflow() {
+    // `<<<` is `x * 2^k`, so it admits the checked-arithmetic arms. A
+    // shift that fits takes the ok arm.
+    assert_eq!(
+        run_to_int("fn main() -> Word { 3 <<< 2 { ok(v) => v, overflow(h, l) => 0 } }"),
+        12
+    );
+    // 2^62 <<< 1 is 2^63, one past Word::MAX, so it overflows.
+    assert_eq!(
+        run_to_int(
+            "fn main() -> Word { let x = 4611686018427387904; x <<< 1 { ok(v) => v, overflow(h, l) => 999 } }"
+        ),
+        999
+    );
+    // The overflow arm binds the two halves of the product; the low half
+    // is the wrapped result, 2^63 mod 2^64 = i64::MIN.
+    assert_eq!(
+        run_to_int(
+            "fn main() -> Word { let x = 4611686018427387904; x <<< 1 { ok(v) => v, overflow(h, l) => l } }"
+        ),
+        i64::MIN
+    );
+    // saturate_max resolves in the overflow arm.
+    assert_eq!(
+        run_to_int(
+            "fn main() -> Word { let x = 4611686018427387904; x <<< 1 { ok(v) => v, overflow(h, l) => saturate_max } }"
+        ),
+        i64::MAX
+    );
+}
+
+#[test]
+fn scalar_arithmetic_left_shift_captures_underflow() {
+    // -2^62 <<< 2 is -2^64, past Word::MIN, so it underflows.
+    assert_eq!(
+        run_to_int(
+            "fn main() -> Word { let x = 0 - 4611686018427387904; x <<< 2 { ok(v) => v, underflow(h, l) => 0 - 1 } }"
+        ),
+        -1
+    );
+}
+
+#[test]
 fn scalar_shift_precedence_below_additive() {
     // `0 - 8 >>> 1` parses as `(0 - 8) >>> 1`, not `0 - (8 >>> 1)`.
     assert_eq!(run_to_int("fn main() -> Word { 0 - 8 >>> 1 }"), -4);

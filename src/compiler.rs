@@ -8691,6 +8691,24 @@ fn compile_checked(
             compile_expr(fc, right)?;
             fc.emit(Op::CheckedMod);
         }
+        Expr::BinOp {
+            op: BinOp::AShl,
+            left,
+            right,
+            ..
+        } => {
+            // `x <<< k` is `x * 2^k`, so the checked arithmetic left shift
+            // is a checked multiply by the constant 2^k. The multiplier
+            // must be a positive Word, so the amount is bounded to
+            // word_bits - 2 here; a larger shift overflows for all but the
+            // degenerate inputs and is out of range for the checked form.
+            let word_bits = (fc.type_info.word_bytes * 8) as i64;
+            let k = const_shift_amount(right, word_bits - 1)?;
+            let mul = fc.add_constant(Value::Int(1i64 << k));
+            compile_expr(fc, left)?;
+            fc.emit(Op::Const(mul));
+            fc.emit(Op::CheckedMul(0));
+        }
         Expr::UnaryOp {
             op: UnaryOp::Neg,
             operand,
@@ -8702,7 +8720,7 @@ fn compile_checked(
         _ => {
             return Err(CompileError {
                 message: alloc::string::String::from(
-                    "checked-overflow construct currently supports only the operators `+`, `-`, `*`, `/`, `%`, and unary `-`",
+                    "checked-overflow construct currently supports only the operators `+`, `-`, `*`, `/`, `%`, `<<<`, and unary `-`",
                 ),
                 span: *span,
             });
