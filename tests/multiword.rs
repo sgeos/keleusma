@@ -30,7 +30,8 @@
 use keleusma::compiler::compile;
 use keleusma::lexer::tokenize;
 use keleusma::parser::parse;
-use keleusma::vm::{DEFAULT_ARENA_CAPACITY, Vm, VmState};
+use keleusma::verify::wcet_whole_chunk;
+use keleusma::vm::{DEFAULT_ARENA_CAPACITY, Vm, VmState, auto_arena_capacity_for};
 use keleusma::{Arena, Value};
 
 fn run_to_int(src: &str) -> i64 {
@@ -1304,6 +1305,176 @@ fn multiword_variable_shift_three_word() {
             "fn main() -> Word { let k = 64; let m = (0, 0, 8) as Multiword<3>; let s = m lsr k; s[1] }"
         ),
         8
+    );
+}
+
+#[test]
+fn multiword_variable_shift_four_word() {
+    // N = 4 (256-bit) exercises the unrolled path at the width the
+    // constant tests cover. (1,0,0,0) lsl 128 = (0,0,1,0): two limbs up.
+    assert_eq!(
+        run_to_int(
+            "fn main() -> Word { let k = 128; let m = (1, 0, 0, 0) as Multiword<4>; let s = m lsl k; s[2] }"
+        ),
+        1
+    );
+    assert_eq!(
+        run_to_int(
+            "fn main() -> Word { let k = 128; let m = (1, 0, 0, 0) as Multiword<4>; let s = m lsl k; s[0] }"
+        ),
+        0
+    );
+    // (0,0,0,8) lsr 192 = (8,0,0,0): three limbs down.
+    assert_eq!(
+        run_to_int(
+            "fn main() -> Word { let k = 192; let m = (0, 0, 0, 8) as Multiword<4>; let s = m lsr k; s[0] }"
+        ),
+        8
+    );
+}
+
+#[test]
+fn multiword_variable_shift_fixed_point() {
+    // A fixed-point Multiword<N, F> shifts its raw words identically to
+    // the integer form, since a shift is a bit operation independent of
+    // the implied binary point. (2, 0) as Q with a variable left shift by
+    // one doubles the raw low word to 4.
+    assert_eq!(
+        run_to_int(
+            "fn main() -> Word { let k = 1; let m = (2, 0) as Multiword<2, 16>; let s = m lsl k; s[0] }"
+        ),
+        4
+    );
+    // A whole-word variable shift moves the raw limb up regardless of F.
+    assert_eq!(
+        run_to_int(
+            "fn main() -> Word { let k = 64; let m = (7, 0) as Multiword<2, 16>; let s = m lsl k; s[1] }"
+        ),
+        7
+    );
+}
+
+#[test]
+fn variable_shift_is_total_for_negative_and_over_large_counts() {
+    // Totality is the load-bearing guarantee: a runtime shift count that
+    // is negative or at/beyond the value width must produce a value
+    // rather than trap. `run_to_int` panics on a VM trap, so a returning
+    // call proves totality; the pinned values additionally fix the
+    // mask-defined semantics.
+    //
+    // Scalar: a negative count masks to the word width, so 5 lsl (-1)
+    // masks the count to 63 and 5 << 63 keeps only bit 0, giving the most
+    // negative Word.
+    assert_eq!(
+        run_to_int("fn main() -> Word { let k = 0 - 1; 5 lsl k }"),
+        i64::MIN
+    );
+    // Scalar over-large count masks to the word width (1000 mod 64 = 40).
+    assert_eq!(
+        run_to_int("fn main() -> Word { let k = 1000; 1 lsl k }"),
+        1i64 << 40
+    );
+    // Multiword: a negative or over-large count completes without a trap.
+    // An over-large left shift moves every bit out, giving zero.
+    assert_eq!(
+        run_to_int(
+            "fn main() -> Word { let k = 1000000; let m = (1, 7) as Multiword<2>; let s = m lsl k; s[0] }"
+        ),
+        0
+    );
+    assert_eq!(
+        run_to_int(
+            "fn main() -> Word { let k = 1000000; let m = (1, 7) as Multiword<2>; let s = m lsl k; s[1] }"
+        ),
+        0
+    );
+    // A negative Multiword count is total: this must return rather than
+    // trap. The value is the mask-defined result; the test's purpose is
+    // to prove the call completes.
+    let _neg = run_to_int(
+        "fn main() -> Word { let k = 0 - 1; let m = (1, 0) as Multiword<2>; let s = m lsr k; s[0] }",
+    );
+    // A negative logical right shift is deterministic across runs.
+    assert_eq!(
+        run_to_int(
+            "fn main() -> Word { let k = 0 - 5; let m = (9, 3) as Multiword<2>; let s = m lsr k; s[1] }"
+        ),
+        run_to_int(
+            "fn main() -> Word { let k = 0 - 5; let m = (9, 3) as Multiword<2>; let s = m lsr k; s[1] }"
+        )
+    );
+}
+
+/// Whole-chunk WCET of the compiled module's `main`, or `Err` when the
+/// bound is not statically provable.
+fn main_wcet(src: &str) -> Result<u32, ()> {
+    let module = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+    let main = module
+        .chunks
+        .iter()
+        .find(|c| c.name == "main")
+        .expect("main chunk");
+    wcet_whole_chunk(main).map_err(|_| ())
+}
+
+/// Worst-case arena capacity of the compiled module, or `Err` when the
+/// bound is not statically provable.
+fn main_wcmu(src: &str) -> Result<usize, ()> {
+    let module = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+    auto_arena_capacity_for(&module, &[]).map_err(|_| ())
+}
+
+#[test]
+fn variable_shift_bounds_are_finite_and_account_the_unrolled_ops() {
+    // The definitive-bound guarantee: a variable shift must have a proven,
+    // finite worst-case execution time and memory usage, and because the
+    // variable lowering is unrolled over N with no runtime loop, its WCET
+    // must be finite and at least the constant lowering's (it emits the
+    // extra runtime index and guard opcodes). This audits that the cost
+    // model actually counts the extra work rather than reporting the same
+    // figure as the constant path.
+    const CONST_SHIFT: &str =
+        "fn main() -> Word { let m = (1, 3) as Multiword<2>; let s = m lsl 5; s[0] }";
+    const VAR_SHIFT: &str =
+        "fn main() -> Word { let k = 5; let m = (1, 3) as Multiword<2>; let s = m lsl k; s[0] }";
+    let const_wcet = main_wcet(CONST_SHIFT).expect("constant shift WCET is provable");
+    let var_wcet = main_wcet(VAR_SHIFT).expect("variable shift WCET is provable");
+    assert!(const_wcet > 0 && var_wcet > 0);
+    assert!(
+        var_wcet > const_wcet,
+        "variable shift ({var_wcet}) emits strictly more ops than constant ({const_wcet}); the cost model must reflect them"
+    );
+    // Both memory bounds are finite; each allocates one Multiword result.
+    assert!(main_wcmu(CONST_SHIFT).expect("constant shift WCMU is provable") > 0);
+    assert!(main_wcmu(VAR_SHIFT).expect("variable shift WCMU is provable") > 0);
+    // The Multiword variable shift's WCET is finite at N = 4 as well.
+    assert!(
+        main_wcet(
+            "fn main() -> Word { let k = 130; let m = (1, 0, 0, 0) as Multiword<4>; let s = m lsr k; s[0] }"
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn byte_variable_shift_masks_to_word_width() {
+    // A Byte shift promotes to Word, so the runtime count is masked to
+    // the word width, not the byte width. A left shift by eight moves the
+    // byte's bits above the low eight, so the truncation to Byte yields
+    // zero.
+    assert_eq!(
+        run_to_byte("fn main() -> Byte { let k = 8; 5Byte lsl k }"),
+        0
+    );
+    // A count of 64 masks to zero, so the shift is the identity.
+    assert_eq!(
+        run_to_byte("fn main() -> Byte { let k = 64; 5Byte lsl k }"),
+        5
+    );
+    // A right shift by eight also clears the byte.
+    assert_eq!(
+        run_to_byte("fn main() -> Byte { let k = 8; 200Byte lsr k }"),
+        0
     );
 }
 

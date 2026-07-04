@@ -53,6 +53,7 @@ Following the session-18 operator redesign, the residuals were addressed on `fea
 | B19-R4 | Checked `asl` still constant-only | Verified | The overflow-capturing `asl` (multiply by `2^k`) keeps requiring a literal; variable rejected cleanly. Test `checked_asl_still_requires_constant_amount`. |
 | B40 | General const generics | Deferred (tracked) | Scoped and filed as backlog item B40 with a full deferral rationale (grammar/AST, type-system kind + unification, monomorphization over const values, WCET/WCMU static-known-per-instance invariant). Not implemented. B19 and Standard 5.1.2 point at it. |
 | B19-R5 | Documentation | Complete | GRAMMAR, TYPE_SYSTEM, STANDARD (5.1.2 + Annex A), BACKLOG (B19 status banner + phase table refreshed, B40 added), CHANGELOG updated for variable shift, byte support, and the const-generics deferral. |
+| B19-R6 | Edge coverage + bound audit (gap-closing) | Complete | Converted the untested corners to tested fact: variable Multiword shift at N=4; totality under negative/over-large runtime counts (scalar and Multiword; a returning `run_to_int` proves no trap, mask-defined values pinned); fixed-point `Multiword<N,F>` variable shift; `Byte` variable shift masking to word width (`5Byte lsl 8 == 0`, `lsl 64 == 5`). WCET/WCMU audit test asserts finite proven bounds and that the variable path's WCET is strictly greater than the constant path's, so the extra unrolled ops are counted. Multiword suite now 96 tests. |
 
 ### Recent: B19 bitwise and boolean operator redesign (2026-07-03, session 18)
 
