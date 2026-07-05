@@ -89,6 +89,10 @@ pub struct ImplBlock {
     /// `impl Trait for Box<T>` style declarations. Empty for
     /// concrete-type impls.
     pub type_params: Vec<TypeParam>,
+    /// Const parameters introduced by the impl block, allowing
+    /// `impl Trait for Buf<n>` style declarations over a const-generic
+    /// type. Empty for non-const-generic impls (B40).
+    pub const_params: Vec<ConstParam>,
     /// The implementing type expression. For nominal types this is
     /// typically `TypeExpr::Named(Type, args)`.
     pub for_type: TypeExpr,
@@ -321,6 +325,11 @@ pub struct StructDef {
     pub name: String,
     /// Generic type parameters declared in `<T, U>` form.
     pub type_params: Vec<TypeParam>,
+    /// Generic const parameters declared in `<const n: Word>` form,
+    /// following any type parameters. A use site supplies these
+    /// explicitly in the type (`Buf<8>`) or a construction turbofish
+    /// (`Buf::<8> { ... }`) (B40).
+    pub const_params: Vec<ConstParam>,
     /// Declared fields in source order.
     pub fields: Vec<FieldDecl>,
     /// Span of the struct declaration.
@@ -351,6 +360,10 @@ pub struct EnumDef {
     pub name: String,
     /// Generic type parameters declared in `<T, U>` form.
     pub type_params: Vec<TypeParam>,
+    /// Generic const parameters declared in `<const n: Word>` form,
+    /// following any type parameters. Supplied explicitly at a use site
+    /// in the type or a variant-construction turbofish (B40).
+    pub const_params: Vec<ConstParam>,
     /// Declared variants in source order.
     pub variants: Vec<VariantDecl>,
     /// Span of the enum declaration.
@@ -410,6 +423,11 @@ pub struct FunctionDef {
     /// non-generic functions. The order is significant for
     /// monomorphization: each call site instantiates these in order.
     pub type_params: Vec<TypeParam>,
+    /// Generic const parameters declared in `<const n: Word>` form,
+    /// following any type parameters in the same `<...>` list. Empty for
+    /// non-const-generic functions. A call site supplies these
+    /// explicitly through a turbofish `f::<8>(...)` (B40).
+    pub const_params: Vec<ConstParam>,
     /// Parameter list in declaration order.
     pub params: Vec<Param>,
     /// Return type expression.
@@ -458,6 +476,61 @@ pub struct TypeParam {
     pub bounds: Vec<String>,
     /// Span of the parameter declaration.
     pub span: Span,
+}
+
+/// A generic const parameter declared in a signature, e.g.
+/// `<const n: Word>`. A const parameter is a compile-time integer fixed
+/// at each monomorphized instance; its only admissible type is `Word`.
+/// Const parameters are lowercase (they name a value), which
+/// distinguishes them from the uppercase type parameters in a `<...>`
+/// list. Fully erased before bytecode: monomorphization substitutes each
+/// with a concrete literal, so the verifier never sees a symbolic const
+/// (B40).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ConstParam {
+    /// Parameter name (a lowercase identifier).
+    pub name: String,
+    /// Span of the parameter declaration.
+    pub span: Span,
+}
+
+/// The binary operators admissible in a const expression. Restricted to
+/// addition, subtraction, and multiplication so const evaluation is
+/// total: excluding division means there is no division-by-zero, so the
+/// worst-case-bound analysis is preserved with no extra fault path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConstBinOp {
+    /// `+`
+    Add,
+    /// `-`
+    Sub,
+    /// `*`
+    Mul,
+}
+
+/// A compile-time-constant expression in a const position: an array
+/// size, a `Multiword` word or fraction-bit count, or a generic const
+/// argument. Every variant carries a span so an error surfaced at
+/// monomorphization (for example a negative array size after
+/// substitution) points at the source. Const expressions are erased
+/// before bytecode: monomorphization evaluates each to a literal (B40).
+#[derive(Debug, Clone, PartialEq)]
+pub enum ConstExpr {
+    /// An integer literal.
+    Lit(i64, Span),
+    /// A reference to a const parameter by name.
+    Param(String, Span),
+    /// A binary const operation over two const expressions.
+    Bin(ConstBinOp, Box<ConstExpr>, Box<ConstExpr>, Span),
+}
+
+impl ConstExpr {
+    /// The source span of the const expression.
+    pub fn span(&self) -> Span {
+        match self {
+            ConstExpr::Lit(_, s) | ConstExpr::Param(_, s) | ConstExpr::Bin(_, _, _, s) => *s,
+        }
+    }
 }
 
 /// A function parameter.
@@ -1171,5 +1244,44 @@ pub fn merge_spans(start: Span, end: Span) -> Span {
         end: end.end,
         line: start.line,
         column: start.column,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn span_at(start: usize, end: usize) -> Span {
+        Span {
+            start,
+            end,
+            line: 1,
+            column: start as u32 + 1,
+        }
+    }
+
+    #[test]
+    fn const_expr_reports_its_span() {
+        // A const expression carries a span on every variant so an error
+        // surfaced at monomorphization points at the source (B40).
+        let lit = ConstExpr::Lit(3, span_at(0, 1));
+        let param = ConstExpr::Param(String::from("n"), span_at(2, 3));
+        let bin = ConstExpr::Bin(
+            ConstBinOp::Add,
+            Box::new(param.clone()),
+            Box::new(lit.clone()),
+            span_at(0, 3),
+        );
+        assert_eq!(lit.span(), span_at(0, 1));
+        assert_eq!(param.span(), span_at(2, 3));
+        assert_eq!(bin.span(), span_at(0, 3));
+        // The tree structure is preserved.
+        match bin {
+            ConstExpr::Bin(ConstBinOp::Add, l, r, _) => {
+                assert!(matches!(*l, ConstExpr::Param(_, _)));
+                assert!(matches!(*r, ConstExpr::Lit(3, _)));
+            }
+            _ => panic!("expected a binary const expression"),
+        }
     }
 }

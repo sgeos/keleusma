@@ -508,6 +508,7 @@ fn specialize_enum(enum_def: &EnumDef, type_args: &[TypeExpr], spec_name: String
     EnumDef {
         name: spec_name,
         type_params: Vec::new(),
+        const_params: Vec::new(),
         variants,
         span: enum_def.span,
     }
@@ -727,6 +728,7 @@ fn specialize_struct(
     StructDef {
         name: spec_name,
         type_params: Vec::new(),
+        const_params: Vec::new(),
         fields,
         span: struct_def.span,
     }
@@ -1127,6 +1129,7 @@ fn specialize_function(
         category: func.category,
         name: spec_name,
         type_params: Vec::new(),
+        const_params: Vec::new(),
         params,
         return_type,
         guard: func.guard.clone(),

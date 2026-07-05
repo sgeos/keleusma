@@ -411,6 +411,7 @@ mod tests {
             StructDef {
                 name: "Point".to_string(),
                 type_params: alloc::vec![],
+                const_params: alloc::vec![],
                 fields: alloc::vec![
                     FieldDecl {
                         name: "x".to_string(),
@@ -440,6 +441,7 @@ mod tests {
             EnumDef {
                 name: "Color".to_string(),
                 type_params: alloc::vec![],
+                const_params: alloc::vec![],
                 variants: alloc::vec![
                     VariantDecl {
                         name: "Red".to_string(),
@@ -504,6 +506,7 @@ mod tests {
             StructDef {
                 name: "Wrapper".to_string(),
                 type_params: alloc::vec![],
+                const_params: alloc::vec![],
                 fields: alloc::vec![FieldDecl {
                     name: "coords".to_string(),
                     type_expr: TypeExpr::Tuple(
@@ -532,6 +535,7 @@ mod tests {
             StructDef {
                 name: "Greeting".to_string(),
                 type_params: alloc::vec![],
+                const_params: alloc::vec![],
                 fields: alloc::vec![
                     FieldDecl {
                         name: "id".to_string(),
@@ -561,6 +565,7 @@ mod tests {
             StructDef {
                 name: "Point".to_string(),
                 type_params: alloc::vec![],
+                const_params: alloc::vec![],
                 fields: alloc::vec![
                     FieldDecl {
                         name: "x".to_string(),

@@ -354,6 +354,7 @@ impl<'a> Parser<'a> {
         Ok(ImplBlock {
             trait_name,
             type_params,
+            const_params: Vec::new(),
             for_type,
             methods,
             span: merge_spans(start, end),
@@ -571,6 +572,7 @@ impl<'a> Parser<'a> {
         Ok(StructDef {
             name,
             type_params,
+            const_params: Vec::new(),
             fields,
             span: merge_spans(start, end),
         })
@@ -972,6 +974,7 @@ impl<'a> Parser<'a> {
         Ok(EnumDef {
             name,
             type_params,
+            const_params: Vec::new(),
             variants,
             span: merge_spans(start, end),
         })
@@ -1083,6 +1086,7 @@ impl<'a> Parser<'a> {
             category,
             name,
             type_params,
+            const_params: Vec::new(),
             params,
             return_type,
             guard,

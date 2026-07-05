@@ -337,6 +337,7 @@ mod tests {
             StructDef {
                 name: String::from("Point"),
                 type_params: Vec::new(),
+                const_params: Vec::new(),
                 fields: alloc::vec![
                     FieldDecl {
                         name: String::from("x"),
@@ -389,6 +390,7 @@ mod tests {
             EnumDef {
                 name: String::from("Dir"),
                 type_params: Vec::new(),
+                const_params: Vec::new(),
                 variants: alloc::vec![unit_variant("North", 0), unit_variant("South", 1)],
                 span: sp(),
             },
@@ -419,6 +421,7 @@ mod tests {
             EnumDef {
                 name: String::from("Code"),
                 type_params: Vec::new(),
+                const_params: Vec::new(),
                 variants: alloc::vec![unit_variant("B", 8), unit_variant("A", 5)],
                 span: sp(),
             },
