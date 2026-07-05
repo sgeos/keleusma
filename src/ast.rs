@@ -673,6 +673,11 @@ pub enum Expr {
     Call {
         name: String,
         args: Vec<Expr>,
+        /// Explicit const arguments from a turbofish `f::<8>(...)`, in
+        /// declaration order. Empty for a non-const-generic call (const
+        /// arguments cannot be inferred, so a const-generic call must
+        /// supply them here). B40.
+        const_args: Vec<ConstExpr>,
         span: Span,
     },
     /// Pipeline expression: `left |> func(args)`.

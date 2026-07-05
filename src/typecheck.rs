@@ -854,6 +854,10 @@ struct FnSig {
     /// Generic type parameter names in declaration order. Empty for
     /// non-generic functions.
     type_params: Vec<String>,
+    /// Generic const parameter names in declaration order. Empty for
+    /// non-const-generic functions. A call site must supply exactly this
+    /// many const arguments through a turbofish (B40).
+    const_params: Vec<String>,
     /// `Type::Var` allocated for each type parameter at signature
     /// construction. Indexed in the same order as `type_params`. Used
     /// for monomorphic checking of the function body and as the
@@ -989,6 +993,12 @@ struct Ctx {
     /// `Expr::Yield` visited inside the body. Empty between
     /// function checks.
     current_return_negative_labels: BTreeSet<String>,
+    /// Const parameter names of the function currently being checked.
+    /// Populated by `check_function`; consulted so a const argument that
+    /// references a name is confirmed to be a const parameter rather than
+    /// a runtime local (a const argument must be a compile-time constant).
+    /// Empty between function checks (B40).
+    current_const_params: BTreeSet<String>,
     /// Fresh type variable allocator for the Hindley-Milner pipeline.
     vargen: VarGen,
     /// Active substitution accumulating constraints solved so far.
@@ -1041,6 +1051,7 @@ impl Ctx {
             locals: Vec::new(),
             current_return: None,
             current_return_negative_labels: BTreeSet::new(),
+            current_const_params: BTreeSet::new(),
             vargen: VarGen::default(),
             subst: Subst::new(),
             fixed_default_frac_bits: DEFAULT_FIXED_FRAC_BITS,
@@ -1613,6 +1624,7 @@ fn run_check(program: &mut Program, mut ctx: Ctx) -> Result<(), TypeError> {
                     full.clone(),
                     FnSig {
                         type_params: Vec::new(),
+                        const_params: Vec::new(),
                         type_param_vars: Vec::new(),
                         type_param_bounds: Vec::new(),
                         params,
@@ -1679,6 +1691,7 @@ fn run_check(program: &mut Program, mut ctx: Ctx) -> Result<(), TypeError> {
             func.name.clone(),
             FnSig {
                 type_params: tp_names,
+                const_params: func.const_params.iter().map(|c| c.name.clone()).collect(),
                 type_param_vars: tp_vars,
                 type_param_bounds: tp_bounds,
                 params,
@@ -1833,6 +1846,7 @@ fn run_check(program: &mut Program, mut ctx: Ctx) -> Result<(), TypeError> {
                 mangled,
                 FnSig {
                     type_params: tp_names,
+                    const_params: Vec::new(),
                     type_param_vars: tp_vars,
                     type_param_bounds: tp_bounds,
                     params,
@@ -2042,6 +2056,14 @@ fn check_function(ctx: &mut Ctx, func: &mut FunctionDef) -> Result<(), TypeError
     for (param, param_type) in func.params.iter().zip(sig_params.iter()) {
         bind_pattern(ctx, &param.pattern, param_type.clone());
     }
+    // Bind const parameters as `Word` values in the function scope, so a
+    // body may use `n` as an integer (`for i in 0..n`). A local binding
+    // in a nested scope shadows the const parameter, since `lookup_local`
+    // searches inner scopes first (B40).
+    for cp in &func.const_params {
+        ctx.add_local(cp.name.clone(), Type::Word);
+    }
+    ctx.current_const_params = func.const_params.iter().map(|c| c.name.clone()).collect();
     // Check body. The block's tail expression must match the return
     // type when the return type is not Unit. For Unit-returning
     // functions, an absent tail is admissible. The declared return
@@ -2842,6 +2864,34 @@ fn coerce_integer_literal(
             Type::Fixed(n)
         }
         _ => expr_ty,
+    }
+}
+
+/// Validate a const argument: a literal is always admissible; a
+/// parameter reference must name an in-scope const parameter (not a
+/// runtime local), so a const argument is a compile-time constant; a
+/// binary const expression validates its operands (B40).
+fn check_const_arg(ctx: &Ctx, ca: &crate::ast::ConstExpr) -> Result<(), TypeError> {
+    use crate::ast::ConstExpr;
+    match ca {
+        ConstExpr::Lit(_, _) => Ok(()),
+        ConstExpr::Param(name, span) => {
+            if ctx.current_const_params.contains(name) {
+                Ok(())
+            } else {
+                Err(TypeError::new(
+                    alloc::format!(
+                        "const argument `{}` is not an in-scope const parameter; a const argument must be a compile-time constant",
+                        name
+                    ),
+                    *span,
+                ))
+            }
+        }
+        ConstExpr::Bin(_, l, r, _) => {
+            check_const_arg(ctx, l)?;
+            check_const_arg(ctx, r)
+        }
     }
 }
 
@@ -3815,7 +3865,45 @@ fn type_of_expr_inner(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError>
             };
             bare_result.map(|t| apply_labels(t, &labels))
         }
-        Expr::Call { name, args, span } => {
+        Expr::Call {
+            name,
+            args,
+            span,
+            const_args,
+        } => {
+            // Const-generic arity: a call to a function with const
+            // parameters must supply exactly that many const arguments
+            // through a turbofish, and a turbofish is admissible only on
+            // such a function. Each const argument must be a compile-time
+            // constant (a literal or an in-scope const parameter) (B40).
+            match ctx.functions.get(name).map(|s| s.const_params.len()) {
+                Some(k) if k > 0 || !const_args.is_empty() => {
+                    if const_args.len() != k {
+                        return Err(TypeError::new(
+                            alloc::format!(
+                                "function `{}` takes {} const argument(s) but {} were supplied",
+                                name,
+                                k,
+                                const_args.len()
+                            ),
+                            *span,
+                        ));
+                    }
+                }
+                _ if !const_args.is_empty() => {
+                    return Err(TypeError::new(
+                        alloc::format!(
+                            "`{}` is not a const-generic function; a const turbofish `::<...>` is not admissible here",
+                            name
+                        ),
+                        *span,
+                    ));
+                }
+                _ => {}
+            }
+            for ca in const_args.iter() {
+                check_const_arg(ctx, ca)?;
+            }
             // If `name` resolves to a local first, this is an indirect
             // call through a function value (closure). Type-check the
             // arguments and return a fresh type for the result. The
@@ -5146,6 +5234,7 @@ fn type_of_expr_inner(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError>
                                     value: Literal::Int(value),
                                     span: span_copy,
                                 }],
+                                const_args: Vec::new(),
                                 span: span_copy,
                             };
                             return Ok(Type::Newtype(name));

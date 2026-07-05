@@ -26,7 +26,7 @@
 
 extern crate alloc;
 use alloc::boxed::Box;
-use alloc::collections::BTreeMap;
+use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
@@ -55,7 +55,7 @@ pub fn monomorphize_with_provenance(
     let generics: BTreeMap<String, FunctionDef> = program
         .functions
         .iter()
-        .filter(|f| !f.type_params.is_empty())
+        .filter(|f| !f.type_params.is_empty() || !f.const_params.is_empty())
         .map(|f| (f.name.clone(), f.clone()))
         .collect();
 
@@ -108,7 +108,7 @@ pub fn monomorphize_with_provenance(
     {
         use crate::visitor::MutVisitor;
         for func in &mut program.functions {
-            if func.type_params.is_empty() {
+            if func.type_params.is_empty() && func.const_params.is_empty() {
                 local_types.clear();
                 for param in &func.params {
                     if let Some(t) = &param.type_expr
@@ -233,9 +233,14 @@ pub fn monomorphize_with_provenance(
     // statically inferred.
     let specialized_origins: alloc::collections::BTreeSet<String> =
         specs.keys().map(|(name, _)| name.clone()).collect();
+    // A const-generic function is dropped unconditionally: unlike a
+    // type-generic function (which can remain and dispatch on runtime
+    // tags), it cannot be compiled with a symbolic const, so every
+    // instance must be a concrete specialization. An un-instantiated
+    // const-generic function is dead code and is removed (B40).
     program
         .functions
-        .retain(|f| !specialized_origins.contains(&f.name));
+        .retain(|f| !specialized_origins.contains(&f.name) && f.const_params.is_empty());
 
     // Provenance for B29 GenericInstantiation records: invert `specs`
     // so each specialized function's mangled name maps to its origin
@@ -795,6 +800,23 @@ fn mangle(name: &str, type_args: &[TypeExpr]) -> String {
     s
 }
 
+/// Mangle a specialized name including const arguments after the type
+/// arguments. A negative const value is rendered with an `n` prefix
+/// (`c__n3` for `-3`) so the mangled name has no `-` (B40).
+fn mangle_with_consts(name: &str, type_args: &[TypeExpr], const_values: &[i64]) -> String {
+    let mut s = mangle(name, type_args);
+    for v in const_values {
+        s.push_str("__c");
+        if *v < 0 {
+            s.push('n');
+            s.push_str(&v.unsigned_abs().to_string());
+        } else {
+            s.push_str(&v.to_string());
+        }
+    }
+    s
+}
+
 /// Canonical short string representation for a type argument used in
 /// mangling. Uses the head name only, which is sufficient because
 /// monomorphization happens after type checking has validated the
@@ -1105,9 +1127,154 @@ fn subst_type_expr(t: &TypeExpr, subst: &BTreeMap<String, TypeExpr>) -> TypeExpr
 /// Specialize a generic function with concrete type arguments. Clones
 /// the function and substitutes type parameters in param types,
 /// return type, and the body.
+/// Evaluate a const expression to a concrete integer, resolving const
+/// parameters through `subst`. Total over `+`, `-`, `*` (wrapping),
+/// which is why const arithmetic excludes division. Returns `None` when
+/// a referenced parameter is not in `subst` (an unresolved const
+/// parameter), which defers specialization to a later fixed-point pass
+/// once the enclosing function is itself specialized (B40).
+fn eval_const_expr(e: &crate::ast::ConstExpr, subst: &BTreeMap<String, i64>) -> Option<i64> {
+    use crate::ast::{ConstBinOp, ConstExpr};
+    match e {
+        ConstExpr::Lit(n, _) => Some(*n),
+        ConstExpr::Param(name, _) => subst.get(name).copied(),
+        ConstExpr::Bin(op, l, r, _) => {
+            let a = eval_const_expr(l, subst)?;
+            let b = eval_const_expr(r, subst)?;
+            Some(match op {
+                ConstBinOp::Add => a.wrapping_add(b),
+                ConstBinOp::Sub => a.wrapping_sub(b),
+                ConstBinOp::Mul => a.wrapping_mul(b),
+            })
+        }
+    }
+}
+
+/// Collect the variable names a pattern binds, recursing into tuple and
+/// enum sub-patterns.
+fn collect_pattern_bindings(pattern: &Pattern, out: &mut Vec<String>) {
+    match pattern {
+        Pattern::Variable(name, _) => out.push(name.clone()),
+        Pattern::Enum(_, _, subs, _) | Pattern::Tuple(subs, _) => {
+            for s in subs {
+                collect_pattern_bindings(s, out);
+            }
+        }
+        Pattern::Struct(_, fields, _) => {
+            for f in fields {
+                match &f.pattern {
+                    // A sub-pattern binds its own names.
+                    Some(p) => collect_pattern_bindings(p, out),
+                    // Field shorthand binds a local named after the field.
+                    None => out.push(f.name.clone()),
+                }
+            }
+        }
+        Pattern::Literal(_, _) | Pattern::Wildcard(_) => {}
+    }
+}
+
+/// Substitute const-parameter value references (`Expr::Ident(n)`) with
+/// their concrete literal, honouring local lexical shadowing. A `let`
+/// binding, a `for` loop variable, or a match-arm binding that reuses a
+/// const parameter's name shadows it within its scope, so an inner
+/// reference to that name is left untouched. This is the correctness
+/// crux of const-generic value substitution (B40).
+struct ConstValueSubstitutor {
+    subst: BTreeMap<String, i64>,
+    shadowed: Vec<BTreeSet<String>>,
+}
+
+impl ConstValueSubstitutor {
+    fn is_shadowed(&self, name: &str) -> bool {
+        self.shadowed.iter().any(|s| s.contains(name))
+    }
+    fn shadow_if_const(&mut self, name: &str) {
+        if self.subst.contains_key(name)
+            && let Some(top) = self.shadowed.last_mut()
+        {
+            top.insert(name.to_string());
+        }
+    }
+}
+
+impl crate::visitor::MutVisitor for ConstValueSubstitutor {
+    fn visit_block(&mut self, block: &mut Block) {
+        self.shadowed.push(BTreeSet::new());
+        self.walk_block(block);
+        self.shadowed.pop();
+    }
+
+    fn visit_stmt(&mut self, stmt: &mut Stmt) {
+        match stmt {
+            Stmt::Let(l) => {
+                // The value is evaluated before the binding takes effect,
+                // so it sees the pre-binding scope.
+                self.visit_expr(&mut l.value);
+                let mut names = Vec::new();
+                collect_pattern_bindings(&l.pattern, &mut names);
+                for name in names {
+                    self.shadow_if_const(&name);
+                }
+            }
+            Stmt::For(f) => {
+                // The iterable is evaluated in the outer scope; the loop
+                // variable shadows within the body.
+                match &mut f.iterable {
+                    Iterable::Expr(e) => self.visit_expr(e),
+                    Iterable::Range(a, b) => {
+                        self.visit_expr(a);
+                        self.visit_expr(b);
+                    }
+                }
+                let var = f.var.clone();
+                self.shadowed.push(BTreeSet::new());
+                self.shadow_if_const(&var);
+                self.visit_block(&mut f.body);
+                self.shadowed.pop();
+            }
+            _ => self.walk_stmt(stmt),
+        }
+    }
+
+    fn visit_expr(&mut self, expr: &mut Expr) {
+        match expr {
+            Expr::Ident { name, span } => {
+                if self.subst.contains_key(name) && !self.is_shadowed(name) {
+                    let value = self.subst[name];
+                    *expr = Expr::Literal {
+                        value: Literal::Int(value),
+                        span: *span,
+                    };
+                }
+            }
+            Expr::Match {
+                scrutinee, arms, ..
+            } => {
+                self.visit_expr(scrutinee);
+                for arm in arms.iter_mut() {
+                    self.shadowed.push(BTreeSet::new());
+                    let mut names = Vec::new();
+                    collect_pattern_bindings(&arm.pattern, &mut names);
+                    for name in names {
+                        self.shadow_if_const(&name);
+                    }
+                    if let Some(g) = &mut arm.guard {
+                        self.visit_expr(g);
+                    }
+                    self.visit_expr(&mut arm.expr);
+                    self.shadowed.pop();
+                }
+            }
+            _ => self.walk_expr(expr),
+        }
+    }
+}
+
 fn specialize_function(
     func: &FunctionDef,
     type_args: &[TypeExpr],
+    const_values: &[i64],
     spec_name: String,
 ) -> FunctionDef {
     let mut subst: BTreeMap<String, TypeExpr> = BTreeMap::new();
@@ -1124,7 +1291,22 @@ fn specialize_function(
         })
         .collect();
     let return_type = subst_type_expr(&func.return_type, &subst);
-    let body = subst_in_block(&func.body, &subst);
+    let mut body = subst_in_block(&func.body, &subst);
+    // Substitute const-parameter value references with their concrete
+    // literal (the erasure step). After this, the body carries no
+    // symbolic const, so the verifier sees only concrete values.
+    if !func.const_params.is_empty() {
+        use crate::visitor::MutVisitor;
+        let mut const_subst: BTreeMap<String, i64> = BTreeMap::new();
+        for (cp, val) in func.const_params.iter().zip(const_values.iter()) {
+            const_subst.insert(cp.name.clone(), *val);
+        }
+        let mut substitutor = ConstValueSubstitutor {
+            subst: const_subst,
+            shadowed: Vec::new(),
+        };
+        substitutor.visit_block(&mut body);
+    }
     FunctionDef {
         category: func.category,
         name: spec_name,
@@ -1245,9 +1427,15 @@ fn subst_in_expr(expr: &Expr, subst: &BTreeMap<String, TypeExpr>) -> Expr {
             operand: Box::new(subst_in_expr(operand, subst)),
             span: *span,
         },
-        Expr::Call { name, args, span } => Expr::Call {
+        Expr::Call {
+            name,
+            args,
+            const_args,
+            span,
+        } => Expr::Call {
             name: name.clone(),
             args: args.iter().map(|a| subst_in_expr(a, subst)).collect(),
+            const_args: const_args.clone(),
             span: *span,
         },
         Expr::Pipeline {
@@ -1484,7 +1672,13 @@ impl crate::visitor::MutVisitor for CallSpecializer<'_> {
         // specialized bottom-up.
         self.walk_expr(expr);
         // Then check this node for a generic call to specialize.
-        let Expr::Call { name, args, .. } = expr else {
+        let Expr::Call {
+            name,
+            args,
+            const_args,
+            ..
+        } = expr
+        else {
             return;
         };
         let Some(generic_func) = self.generics.get(name) else {
@@ -1515,20 +1709,48 @@ impl crate::visitor::MutVisitor for CallSpecializer<'_> {
         if type_args.len() != generic_func.type_params.len() {
             return;
         }
+        // Evaluate the explicit const arguments. Post-substitution they
+        // are ground (literals), so an empty parameter map suffices; a
+        // still-symbolic const argument defers specialization to a later
+        // fixed-point pass once the enclosing function is specialized.
+        let empty: BTreeMap<String, i64> = BTreeMap::new();
+        let mut const_values: Vec<i64> = Vec::new();
+        for ca in const_args.iter() {
+            match eval_const_expr(ca, &empty) {
+                Some(v) => const_values.push(v),
+                None => return,
+            }
+        }
+        if const_values.len() != generic_func.const_params.len() {
+            return;
+        }
         let key_args: Vec<String> = type_args.iter().map(type_arg_canonical).collect();
-        let canonical = key_args.join(",");
+        let mut canonical = key_args.join(",");
+        if !const_values.is_empty() {
+            use alloc::string::ToString;
+            let cvs: Vec<String> = const_values.iter().map(|v| v.to_string()).collect();
+            canonical.push_str(";c=");
+            canonical.push_str(&cvs.join(","));
+        }
         let cache_key = (name.clone(), canonical);
         let spec_name = if let Some(existing) = self.specs.get(&cache_key) {
             existing.clone()
         } else {
-            let spec_name = mangle(name, &type_args);
-            let specialized = specialize_function(generic_func, &type_args, spec_name.clone());
+            let spec_name = mangle_with_consts(name, &type_args, &const_values);
+            let specialized =
+                specialize_function(generic_func, &type_args, &const_values, spec_name.clone());
             self.specs.insert(cache_key, spec_name.clone());
             self.new_functions.push(specialized);
             spec_name
         };
-        if let Expr::Call { name, .. } = expr {
+        if let Expr::Call {
+            name, const_args, ..
+        } = expr
+        {
             *name = spec_name;
+            // The const arguments are consumed into the specialization;
+            // the rewritten call targets a non-const-generic function.
+            const_args.clear();
         }
     }
 }

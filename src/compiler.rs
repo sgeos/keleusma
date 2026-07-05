@@ -8419,7 +8419,9 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
             }
         }
 
-        Expr::Call { name, args, span } => {
+        Expr::Call {
+            name, args, span, ..
+        } => {
             compile_call(fc, name, args, span)?;
             fc.record_call_site_last_op(span);
         }

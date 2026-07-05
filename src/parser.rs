@@ -298,7 +298,10 @@ impl<'a> Parser<'a> {
     fn parse_trait_def(&mut self) -> Result<TraitDef, ParseError> {
         let start = self.expect(&TokenKind::Trait)?;
         let (name, _) = self.expect_upper_ident()?;
-        let type_params = self.parse_optional_type_params()?;
+        let (type_params, const_params) = self.parse_optional_type_params()?;
+        if !const_params.is_empty() {
+            return Err(self.error("const parameters on a trait are not supported"));
+        }
         self.expect(&TokenKind::LBrace)?;
         let mut methods: Vec<TraitMethodSig> = Vec::new();
         while !self.at(&TokenKind::RBrace) {
@@ -341,7 +344,7 @@ impl<'a> Parser<'a> {
 
     fn parse_impl_block(&mut self) -> Result<ImplBlock, ParseError> {
         let start = self.expect(&TokenKind::Impl)?;
-        let type_params = self.parse_optional_type_params()?;
+        let (type_params, const_params) = self.parse_optional_type_params()?;
         let (trait_name, _) = self.expect_upper_ident()?;
         self.expect(&TokenKind::For)?;
         let for_type = self.parse_type_expr()?;
@@ -354,7 +357,7 @@ impl<'a> Parser<'a> {
         Ok(ImplBlock {
             trait_name,
             type_params,
-            const_params: Vec::new(),
+            const_params,
             for_type,
             methods,
             span: merge_spans(start, end),
@@ -550,7 +553,7 @@ impl<'a> Parser<'a> {
     fn parse_struct_def(&mut self) -> Result<StructDef, ParseError> {
         let start = self.expect(&TokenKind::Struct)?;
         let (name, _) = self.expect_upper_ident()?;
-        let type_params = self.parse_optional_type_params()?;
+        let (type_params, const_params) = self.parse_optional_type_params()?;
         self.expect(&TokenKind::LBrace)?;
 
         let mut fields = Vec::new();
@@ -572,31 +575,116 @@ impl<'a> Parser<'a> {
         Ok(StructDef {
             name,
             type_params,
-            const_params: Vec::new(),
+            const_params,
             fields,
             span: merge_spans(start, end),
         })
     }
 
-    /// Parse an optional generic type parameter list `<T, U>`.
+    /// Parse an optional generic parameter list `<T, U, const n: Word>`.
     ///
-    /// Returns an empty vector when no `<` is present. Used by both
-    /// function and type definitions.
-    fn parse_optional_type_params(&mut self) -> Result<Vec<TypeParam>, ParseError> {
+    /// Returns two empty vectors when no `<` is present. Type parameters
+    /// (uppercase) come first; const parameters (`const n`, lowercase)
+    /// follow. Used by both function and type definitions.
+    fn parse_optional_type_params(
+        &mut self,
+    ) -> Result<(Vec<TypeParam>, Vec<ConstParam>), ParseError> {
         let mut type_params: Vec<TypeParam> = Vec::new();
+        let mut const_params: Vec<ConstParam> = Vec::new();
         if self.eat(&TokenKind::Lt) {
             if !self.at(&TokenKind::Gt) {
-                type_params.push(self.parse_type_param()?);
+                self.parse_one_generic_param(&mut type_params, &mut const_params)?;
                 while self.eat(&TokenKind::Comma) {
                     if self.at(&TokenKind::Gt) {
                         break;
                     }
-                    type_params.push(self.parse_type_param()?);
+                    self.parse_one_generic_param(&mut type_params, &mut const_params)?;
                 }
             }
             self.expect(&TokenKind::Gt)?;
         }
-        Ok(type_params)
+        Ok((type_params, const_params))
+    }
+
+    /// Parse one generic parameter into the appropriate list. A const
+    /// parameter (`const n: Word`) must follow all type parameters.
+    fn parse_one_generic_param(
+        &mut self,
+        type_params: &mut Vec<TypeParam>,
+        const_params: &mut Vec<ConstParam>,
+    ) -> Result<(), ParseError> {
+        if self.at(&TokenKind::Const) {
+            const_params.push(self.parse_const_param()?);
+        } else {
+            if !const_params.is_empty() {
+                return Err(self.error(
+                    "a type parameter cannot follow a const parameter; list type parameters first",
+                ));
+            }
+            type_params.push(self.parse_type_param()?);
+        }
+        Ok(())
+    }
+
+    /// Parse a const parameter declaration `const n` or `const n: Word`.
+    /// The only admissible const-parameter type is `Word`, which may be
+    /// omitted. A const parameter names a compile-time integer.
+    fn parse_const_param(&mut self) -> Result<ConstParam, ParseError> {
+        let start = self.expect(&TokenKind::Const)?;
+        let (name, name_span) = self.expect_lower_ident()?;
+        if self.eat(&TokenKind::Colon) {
+            let (ty, ty_span) = self.expect_upper_ident()?;
+            if ty != "Word" {
+                return Err(ParseError {
+                    message: alloc::format!("const parameter type must be `Word`, found `{}`", ty),
+                    span: ty_span,
+                });
+            }
+        }
+        Ok(ConstParam {
+            name,
+            span: merge_spans(start, name_span),
+        })
+    }
+
+    /// Parse a const-argument turbofish list `<8, n>` after a leading
+    /// `::`. Used by a const-generic call `f::<8>(...)`. In this increment
+    /// a const expression is an integer literal or a const-parameter
+    /// reference; arithmetic is a later increment.
+    fn parse_const_args(&mut self) -> Result<Vec<ConstExpr>, ParseError> {
+        self.expect(&TokenKind::Lt)?;
+        let mut args: Vec<ConstExpr> = Vec::new();
+        if !self.at(&TokenKind::Gt) {
+            args.push(self.parse_const_expr()?);
+            while self.eat(&TokenKind::Comma) {
+                if self.at(&TokenKind::Gt) {
+                    break;
+                }
+                args.push(self.parse_const_expr()?);
+            }
+        }
+        self.expect(&TokenKind::Gt)?;
+        Ok(args)
+    }
+
+    /// Parse a single const expression. In this increment: an integer
+    /// literal or a const-parameter reference (a lowercase identifier).
+    fn parse_const_expr(&mut self) -> Result<ConstExpr, ParseError> {
+        let tok = self.tokens[self.pos].clone();
+        match tok.kind {
+            TokenKind::IntLit(n) => {
+                self.pos += 1;
+                Ok(ConstExpr::Lit(n, tok.span))
+            }
+            TokenKind::LowerIdent(name) => {
+                self.pos += 1;
+                Ok(ConstExpr::Param(name, tok.span))
+            }
+            _ => {
+                Err(self
+                    .error("expected a const expression: an integer literal or a const parameter"))
+            }
+        }
     }
 
     fn parse_data_decl(&mut self) -> Result<DataDecl, ParseError> {
@@ -871,7 +959,7 @@ impl<'a> Parser<'a> {
     fn parse_enum_def(&mut self) -> Result<EnumDef, ParseError> {
         let start = self.expect(&TokenKind::Enum)?;
         let (name, _) = self.expect_upper_ident()?;
-        let type_params = self.parse_optional_type_params()?;
+        let (type_params, const_params) = self.parse_optional_type_params()?;
         self.expect(&TokenKind::LBrace)?;
 
         let mut variants = Vec::new();
@@ -974,7 +1062,7 @@ impl<'a> Parser<'a> {
         Ok(EnumDef {
             name,
             type_params,
-            const_params: Vec::new(),
+            const_params,
             variants,
             span: merge_spans(start, end),
         })
@@ -1037,24 +1125,9 @@ impl<'a> Parser<'a> {
 
         let (name, _) = self.expect_lower_ident()?;
 
-        // Optional generic type parameter list: `fn name<T, U>(...)`.
-        // Each parameter is an upper-case identifier such as `T`. The
-        // empty list is permitted but conventionally elided. Bounds
-        // and trait constraints are reserved for future work and are
-        // not parsed here.
-        let mut type_params: Vec<TypeParam> = Vec::new();
-        if self.eat(&TokenKind::Lt) {
-            if !self.at(&TokenKind::Gt) {
-                type_params.push(self.parse_type_param()?);
-                while self.eat(&TokenKind::Comma) {
-                    if self.at(&TokenKind::Gt) {
-                        break;
-                    }
-                    type_params.push(self.parse_type_param()?);
-                }
-            }
-            self.expect(&TokenKind::Gt)?;
-        }
+        // Optional generic parameter list: `fn name<T, const n: Word>(...)`.
+        // Type parameters (uppercase) come first, then const parameters.
+        let (type_params, const_params) = self.parse_optional_type_params()?;
 
         self.expect(&TokenKind::LParen)?;
 
@@ -1086,7 +1159,7 @@ impl<'a> Parser<'a> {
             category,
             name,
             type_params,
-            const_params: Vec::new(),
+            const_params,
             params,
             return_type,
             guard,
@@ -2002,6 +2075,15 @@ impl<'a> Parser<'a> {
                     }
                 }
 
+                // Optional const turbofish `::<8, ...>` before the
+                // argument list, e.g. `f::<8>(...)`. Distinguished from a
+                // qualified-path `::` by a `<` following the `::`.
+                let mut const_args: Vec<ConstExpr> = Vec::new();
+                if self.at(&TokenKind::ColonColon) && matches!(self.peek_ahead(1), TokenKind::Lt) {
+                    self.bump(); // consume ::
+                    const_args = self.parse_const_args()?;
+                }
+
                 // Function call?
                 if self.at(&TokenKind::LParen) {
                     self.pos += 1;
@@ -2011,8 +2093,13 @@ impl<'a> Parser<'a> {
                     Ok(Expr::Call {
                         name: full_name,
                         args,
+                        const_args,
                         span,
                     })
+                } else if !const_args.is_empty() {
+                    Err(self.error(
+                        "a const turbofish `::<...>` must be followed by a call argument list",
+                    ))
                 } else {
                     Ok(Expr::Ident {
                         name: full_name,
@@ -2149,6 +2236,7 @@ impl<'a> Parser<'a> {
                     Ok(Expr::Call {
                         name,
                         args,
+                        const_args: Vec::new(),
                         span: merge_spans(name_span, end),
                     })
                 } else {
