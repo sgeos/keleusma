@@ -169,3 +169,36 @@ fn const_generic_struct_basic() {
         42
     );
 }
+
+#[test]
+fn const_generic_enum_basic() {
+    // An enum parameterized by a const value; the variant payload type
+    // [Word; n] specializes to a concrete array so the specialized enum
+    // `Buf__c3` lays out (a symbolic dim reaching the layout pass is an
+    // internal-compiler-error tripwire, so a successful compile proves the
+    // const parameter was erased) (B40 phase 3, enums).
+    assert_eq!(
+        run_to_int(
+            "enum Buf<const n: Word> { Full([Word; n]), Tag(Word) }\n\
+             fn get(b: Buf<3>) -> Word { match b { Buf::Full(_) => 0, Buf::Tag(x) => x } }\n\
+             fn main() -> Word { get(Buf::<3>::Tag(42)) }"
+        ),
+        42
+    );
+}
+
+#[test]
+fn distinct_enum_const_args_specialize_independently() {
+    // Two instantiations of a const-generic enum with different const
+    // values are distinct specializations (`Buf__c2` and `Buf__c4`), each
+    // with its own concrete payload layout.
+    assert_eq!(
+        run_to_int(
+            "enum Buf<const n: Word> { Full([Word; n]), Tag(Word) }\n\
+             fn get2(b: Buf<2>) -> Word { match b { Buf::Full(_) => 0, Buf::Tag(x) => x } }\n\
+             fn get4(b: Buf<4>) -> Word { match b { Buf::Full(_) => 0, Buf::Tag(x) => x } }\n\
+             fn main() -> Word { get2(Buf::<2>::Tag(5)) + get4(Buf::<4>::Tag(8)) }"
+        ),
+        13
+    );
+}

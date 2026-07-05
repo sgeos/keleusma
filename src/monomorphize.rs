@@ -290,7 +290,9 @@ fn specialize_enums(mut program: Program, fn_returns: &BTreeMap<String, TypeExpr
         .types
         .iter()
         .filter_map(|td| match td {
-            TypeDef::Enum(e) if !e.type_params.is_empty() => Some((e.name.clone(), e.clone())),
+            TypeDef::Enum(e) if !e.type_params.is_empty() || !e.const_params.is_empty() => {
+                Some((e.name.clone(), e.clone()))
+            }
             _ => None,
         })
         .collect();
@@ -317,6 +319,18 @@ fn specialize_enums(mut program: Program, fn_returns: &BTreeMap<String, TypeExpr
             fn_returns,
         };
         visitor.visit_block(&mut func.body);
+    }
+    // Rewrite enum type references in function signatures to their
+    // specialized names, mirroring the struct pass: a const-generic
+    // reference `Maybe<8>` in a signature resolves to `Maybe__c8`,
+    // matching the specialized construction (B40).
+    for func in &mut program.functions {
+        for param in &mut func.params {
+            if let Some(t) = &param.type_expr {
+                param.type_expr = Some(resolve_generic_type_to_spec(t, &enum_specs));
+            }
+        }
+        func.return_type = resolve_generic_type_to_spec(&func.return_type, &enum_specs);
     }
     program
         .types
@@ -370,12 +384,34 @@ impl crate::visitor::MutVisitor for EnumSpecializer<'_> {
         {
             if let Some(scrutinee_ty) =
                 infer_arg_type(scrutinee, self.locals, self.fn_returns, None)
-                && let TypeExpr::Named(spec_name, _, _, _) = &scrutinee_ty
-                && let Some(original) = find_original_for_spec(self.specs, spec_name)
+                && let TypeExpr::Named(ty_name, ty_args, ty_const_args, _) = &scrutinee_ty
             {
-                let spec_name = spec_name.clone();
-                for arm in arms.iter_mut() {
-                    rewrite_pattern_enum_name(&mut arm.pattern, &original, &spec_name);
+                if let Some(original) = find_original_for_spec(self.specs, ty_name) {
+                    // The scrutinee already infers to a specialization
+                    // name (e.g. a locally constructed `Maybe__Word`).
+                    let spec_name = ty_name.clone();
+                    for arm in arms.iter_mut() {
+                        rewrite_pattern_enum_name(&mut arm.pattern, &original, &spec_name);
+                    }
+                } else if self.generic_enums.contains_key(ty_name) {
+                    // The scrutinee infers to a generic enum reference
+                    // with concrete arguments (e.g. a parameter typed
+                    // `Buf<3>`). Mint or reuse the specialization and
+                    // rewrite the arm patterns from the generic name to
+                    // the specialized name (B40 const-generic enums).
+                    let const_values: Option<Vec<i64>> =
+                        ty_const_args.iter().map(|c| c.as_lit()).collect();
+                    if let Some(const_values) = const_values {
+                        let original = ty_name.clone();
+                        let type_args = ty_args.clone();
+                        if let Some(spec_name) =
+                            self.get_or_mint_enum_spec(&original, &type_args, &const_values)
+                        {
+                            for arm in arms.iter_mut() {
+                                rewrite_pattern_enum_name(&mut arm.pattern, &original, &spec_name);
+                            }
+                        }
+                    }
                 }
             }
             return;
@@ -386,6 +422,7 @@ impl crate::visitor::MutVisitor for EnumSpecializer<'_> {
             enum_name,
             variant,
             args,
+            const_args,
             ..
         } = expr
         else {
@@ -397,6 +434,20 @@ impl crate::visitor::MutVisitor for EnumSpecializer<'_> {
         let Some(decl_variant) = enum_def.variants.iter().find(|v| v.name == *variant) else {
             return;
         };
+        // Explicit const arguments from the construction turbofish
+        // `Opt::<8>::Some(...)`, evaluated (post-substitution they are
+        // ground). A missing or still-symbolic const argument defers.
+        let empty: BTreeMap<String, i64> = BTreeMap::new();
+        let mut const_values: Vec<i64> = Vec::new();
+        for ca in const_args.iter() {
+            match eval_const_expr(ca, &empty) {
+                Some(v) => const_values.push(v),
+                None => return,
+            }
+        }
+        if const_values.len() != enum_def.const_params.len() {
+            return;
+        }
         let mut type_args: Vec<TypeExpr> = Vec::new();
         for tp in &enum_def.type_params {
             let mut inferred: Option<TypeExpr> = None;
@@ -418,25 +469,59 @@ impl crate::visitor::MutVisitor for EnumSpecializer<'_> {
         if type_args.len() != enum_def.type_params.len() {
             return;
         }
-        let key_args: Vec<String> = type_args.iter().map(type_arg_canonical).collect();
-        let canonical = key_args.join(",");
-        let cache_key = (enum_name.clone(), canonical);
-        let spec_name = if let Some(existing) = self.specs.get(&cache_key) {
-            existing.clone()
-        } else if self.new_enums.len() >= TYPE_SPECIALIZATION_LIMIT {
-            // Explicit specialization cap reached (audit finding 27);
-            // leave the construction generic for a clean later error.
+        let Some(spec_name) =
+            self.get_or_mint_enum_spec(&enum_name.clone(), &type_args, &const_values)
+        else {
+            // Not a generic enum, or the specialization cap was reached
+            // (audit finding 27); leave the construction generic for a
+            // clean later error.
             return;
-        } else {
-            let spec_name = mangle_struct(enum_name, &type_args);
-            let specialized = specialize_enum(enum_def, &type_args, spec_name.clone());
-            self.specs.insert(cache_key, spec_name.clone());
-            self.new_enums.push(specialized);
-            spec_name
         };
-        if let Expr::EnumVariant { enum_name, .. } = expr {
+        if let Expr::EnumVariant {
+            enum_name,
+            const_args,
+            ..
+        } = expr
+        {
             *enum_name = spec_name;
+            const_args.clear();
         }
+    }
+}
+
+impl EnumSpecializer<'_> {
+    /// Return the specialization name for a generic enum instantiated
+    /// with the given type and const arguments, minting a fresh
+    /// `EnumDef` on first use and caching it. Shared by the
+    /// `EnumVariant` construction path and the match-arm pattern
+    /// rewrite, so a construction `Buf::<3>::Tag(...)` and a scrutinee
+    /// typed `Buf<3>` agree on `Buf__c3`. Returns `None` if the name is
+    /// not a generic enum or the specialization cap is reached (audit
+    /// finding 27), in which case the caller leaves the site generic
+    /// for a clean later error (B40).
+    fn get_or_mint_enum_spec(
+        &mut self,
+        enum_name: &str,
+        type_args: &[TypeExpr],
+        const_values: &[i64],
+    ) -> Option<String> {
+        let canonical = generic_cache_canonical(type_args, const_values);
+        let cache_key = (enum_name.to_string(), canonical);
+        if let Some(existing) = self.specs.get(&cache_key) {
+            return Some(existing.clone());
+        }
+        // Copy the shared reference out so the immutable borrow of the
+        // enum table does not overlap the mutation of `specs`/`new_enums`.
+        let generic_enums: &BTreeMap<String, EnumDef> = self.generic_enums;
+        let enum_def = generic_enums.get(enum_name)?;
+        if self.new_enums.len() >= TYPE_SPECIALIZATION_LIMIT {
+            return None;
+        }
+        let spec_name = mangle_struct_with_consts(enum_name, type_args, const_values);
+        let specialized = specialize_enum(enum_def, type_args, const_values, spec_name.clone());
+        self.specs.insert(cache_key, spec_name.clone());
+        self.new_enums.push(specialized);
+        Some(spec_name)
     }
 }
 
@@ -490,11 +575,22 @@ fn rewrite_pattern_enum_name(
     }
 }
 
-fn specialize_enum(enum_def: &EnumDef, type_args: &[TypeExpr], spec_name: String) -> EnumDef {
+fn specialize_enum(
+    enum_def: &EnumDef,
+    type_args: &[TypeExpr],
+    const_values: &[i64],
+    spec_name: String,
+) -> EnumDef {
     let mut subst: BTreeMap<String, TypeExpr> = BTreeMap::new();
     for (tp, arg) in enum_def.type_params.iter().zip(type_args.iter()) {
         subst.insert(tp.name.clone(), arg.clone());
     }
+    let const_subst: BTreeMap<String, i64> = enum_def
+        .const_params
+        .iter()
+        .zip(const_values.iter())
+        .map(|(cp, v)| (cp.name.clone(), *v))
+        .collect();
     let variants: Vec<VariantDecl> = enum_def
         .variants
         .iter()
@@ -503,7 +599,7 @@ fn specialize_enum(enum_def: &EnumDef, type_args: &[TypeExpr], spec_name: String
             fields: v
                 .fields
                 .iter()
-                .map(|t| subst_type_expr(t, &subst))
+                .map(|t| subst_const_dims_in_type(&subst_type_expr(t, &subst), &const_subst))
                 .collect(),
             explicit_discriminant: v.explicit_discriminant,
             discriminant_value: v.discriminant_value,
