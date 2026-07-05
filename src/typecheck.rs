@@ -69,6 +69,81 @@ use crate::token::Span;
 /// falls back to this constant.
 pub const DEFAULT_FIXED_FRAC_BITS: u8 = 32;
 
+/// A resolved const dimension of an array or `Multiword` type. Concrete
+/// (`Known`) in a non-generic context and after monomorphization; a
+/// normalized const-expression string (`Sym`) inside a generic body
+/// where it references a const parameter. Two `Sym`s unify by string
+/// equality; a `Known` and a `Sym` unify only inside a generic body,
+/// deferred to the mandatory post-monomorphization re-typecheck, which
+/// sees only `Known` and is the real soundness gate (B40).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConstDim {
+    /// A concrete dimension.
+    Known(i64),
+    /// A symbolic dimension, the normalized const-expression string.
+    Sym(String),
+}
+
+impl ConstDim {
+    /// The concrete value, or `None` when symbolic.
+    pub fn known(&self) -> Option<i64> {
+        match self {
+            ConstDim::Known(n) => Some(*n),
+            ConstDim::Sym(_) => None,
+        }
+    }
+}
+
+impl core::fmt::Display for ConstDim {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            ConstDim::Known(n) => write!(f, "{}", n),
+            ConstDim::Sym(s) => write!(f, "{}", s),
+        }
+    }
+}
+
+/// Fully evaluate a const expression over literals; `None` if it
+/// references a const parameter (so it is symbolic).
+fn eval_const_lit(ce: &crate::ast::ConstExpr) -> Option<i64> {
+    use crate::ast::{ConstBinOp, ConstExpr};
+    match ce {
+        ConstExpr::Lit(n, _) => Some(*n),
+        ConstExpr::Param(_, _) => None,
+        ConstExpr::Bin(op, l, r, _) => {
+            let a = eval_const_lit(l)?;
+            let b = eval_const_lit(r)?;
+            Some(match op {
+                ConstBinOp::Add => a.wrapping_add(b),
+                ConstBinOp::Sub => a.wrapping_sub(b),
+                ConstBinOp::Mul => a.wrapping_mul(b),
+            })
+        }
+    }
+}
+
+/// Resolve a const expression to a [`ConstDim`]: `Known` when it folds to
+/// a literal, else `Sym` of its rendered form (B40).
+fn const_dim_from_expr(ce: &crate::ast::ConstExpr) -> ConstDim {
+    match eval_const_lit(ce) {
+        Some(n) => ConstDim::Known(n),
+        None => ConstDim::Sym(alloc::format!("{}", ce)),
+    }
+}
+
+/// Whether two const dimensions may unify. Two `Known`s must be equal;
+/// two `Sym`s must be string-equal; a `Known` and a `Sym` are accepted,
+/// which arises only inside a generic body and is resolved by the
+/// mandatory post-monomorphization re-typecheck, where both are `Known`
+/// (B40).
+fn const_dims_compatible(a: &ConstDim, b: &ConstDim) -> bool {
+    match (a, b) {
+        (ConstDim::Known(x), ConstDim::Known(y)) => x == y,
+        (ConstDim::Sym(x), ConstDim::Sym(y)) => x == y,
+        _ => true,
+    }
+}
+
 /// A computed type. The internal representation is independent of the
 /// `TypeExpr` AST node so the checker can reason about types without
 /// surface-syntax detail.
@@ -98,13 +173,17 @@ pub enum Type {
     Str,
     /// Tuple of types.
     Tuple(Vec<Type>),
-    /// Fixed-length array.
-    Array(Box<Type>, i64),
+    /// Fixed-length array. The dimension is a [`ConstDim`]: a concrete
+    /// length, or symbolic when it references a const parameter inside a
+    /// generic body (B40).
+    Array(Box<Type>, ConstDim),
     /// Fixed-width multi-word fixed-point, `Multiword<N, F>`, N words
     /// wide with F fractional bits, little-endian two's complement.
     /// F is zero for the big-integer case. Distinct nominal type; its
-    /// runtime representation is a flat array of N words (B19).
-    Multiword(u16, u16),
+    /// runtime representation is a flat array of N words. N and F are
+    /// [`ConstDim`]s: concrete post-monomorphization, possibly symbolic
+    /// inside a generic body (B19, B40).
+    Multiword(ConstDim, ConstDim),
     /// Option of a type.
     Option(Box<Type>),
     /// Named struct with optional generic type arguments. Empty
@@ -195,9 +274,11 @@ impl Type {
                     type_params,
                     fixed_default_frac_bits,
                 )),
-                *len,
+                const_dim_from_expr(len),
             ),
-            TypeExpr::Multiword(words, frac, _) => Type::Multiword(*words, *frac),
+            TypeExpr::Multiword(words, frac, _) => {
+                Type::Multiword(const_dim_from_expr(words), const_dim_from_expr(frac))
+            }
             TypeExpr::Option(inner, _) => {
                 Type::Option(Box::new(Type::from_expr_with_params_and_frac(
                     inner,
@@ -298,7 +379,7 @@ impl Type {
             }
             Type::Array(elem, n) => format!("[{}; {}]", elem.display(), n),
             Type::Multiword(n, f) => {
-                if *f == 0 {
+                if f.known() == Some(0) {
                     format!("Multiword<{}>", n)
                 } else {
                     format!("Multiword<{}, {}>", n, f)
@@ -352,7 +433,7 @@ impl Type {
                 None => self.clone(),
             },
             Type::Tuple(items) => Type::Tuple(items.iter().map(|t| t.apply(subst)).collect()),
-            Type::Array(elem, n) => Type::Array(Box::new(elem.apply(subst)), *n),
+            Type::Array(elem, n) => Type::Array(Box::new(elem.apply(subst)), n.clone()),
             Type::Option(inner) => Type::Option(Box::new(inner.apply(subst))),
             Type::Struct(name, args) => {
                 Type::Struct(name.clone(), args.iter().map(|t| t.apply(subst)).collect())
@@ -430,10 +511,10 @@ pub enum UnifyError {
     },
     /// Two arrays have different declared lengths.
     ArrayLengthMismatch {
-        /// Left array's declared length.
-        left: i64,
-        /// Right array's declared length.
-        right: i64,
+        /// Left array's declared length (rendered; may be symbolic).
+        left: String,
+        /// Right array's declared length (rendered; may be symbolic).
+        right: String,
     },
     /// Two tuples have different arity.
     TupleArityMismatch {
@@ -488,7 +569,7 @@ pub fn unify(a: &Type, b: &Type, subst: &mut Subst) -> Result<(), UnifyError> {
             }
         }
         (Type::Multiword(a_n, a_f), Type::Multiword(b_n, b_f)) => {
-            if a_n == b_n && a_f == b_f {
+            if const_dims_compatible(&a_n, &b_n) && const_dims_compatible(&a_f, &b_f) {
                 Ok(())
             } else {
                 Err(UnifyError::Mismatch {
@@ -528,10 +609,10 @@ pub fn unify(a: &Type, b: &Type, subst: &mut Subst) -> Result<(), UnifyError> {
             Ok(())
         }
         (Type::Array(le, ln), Type::Array(re, rn)) => {
-            if ln != rn {
+            if !const_dims_compatible(&ln, &rn) {
                 return Err(UnifyError::ArrayLengthMismatch {
-                    left: ln,
-                    right: rn,
+                    left: ln.to_string(),
+                    right: rn.to_string(),
                 });
             }
             unify(&le, &re, subst)
@@ -1304,8 +1385,16 @@ fn type_to_expr_full(ty: &Type, span: crate::token::Span) -> Option<TypeExpr> {
                 .collect::<Option<Vec<_>>>()?;
             TypeExpr::Tuple(elems, span)
         }
-        Type::Array(elem, n) => TypeExpr::Array(Box::new(type_to_expr_full(elem, span)?), *n, span),
-        Type::Multiword(n, f) => TypeExpr::Multiword(*n, *f, span),
+        Type::Array(elem, n) => TypeExpr::array_lit(
+            Box::new(type_to_expr_full(elem, span)?),
+            n.known().unwrap_or(0),
+            span,
+        ),
+        Type::Multiword(n, f) => TypeExpr::multiword_lit(
+            n.known().unwrap_or(0) as u16,
+            f.known().unwrap_or(0) as u16,
+            span,
+        ),
         Type::Option(inner) => TypeExpr::Option(Box::new(type_to_expr_full(inner, span)?), span),
         Type::Struct(name, _) | Type::Enum(name, _) | Type::Newtype(name) | Type::Opaque(name) => {
             TypeExpr::Named(name.clone(), Vec::new(), span)
@@ -3670,7 +3759,7 @@ fn type_of_expr_inner(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError>
             // (F > 0), divide, modulo, and the shifts are later phases
             // (B19). Both operands must share N and F.
             if let (Type::Multiword(ln, lf), Type::Multiword(rn, rf)) = (&lt, &rt) {
-                if ln != rn || lf != rf {
+                if !const_dims_compatible(ln, rn) || !const_dims_compatible(lf, rf) {
                     return Err(TypeError::new(
                         format!(
                             "cannot apply operator to {} and {}",
@@ -3681,20 +3770,22 @@ fn type_of_expr_inner(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError>
                     ));
                 }
                 let bare = match op {
-                    BinOp::Add | BinOp::Sub => Type::Multiword(*ln, *lf),
+                    BinOp::Add | BinOp::Sub => Type::Multiword(ln.clone(), lf.clone()),
                     // Multiply is scale-preserving in the type: the integer
                     // case (F = 0) truncates to N words and the fixed-point
                     // case (F > 0) shifts the double-width product right by
                     // F, both yielding a Multiword<N, F>.
-                    BinOp::Mul => Type::Multiword(*ln, *lf),
+                    BinOp::Mul => Type::Multiword(ln.clone(), lf.clone()),
                     // Divide and modulo are scale-preserving in the type.
                     // Integer divide and modulo (F = 0) and the fixed-point
                     // divide (F > 0, which pre-shifts the dividend by F) and
                     // modulo (F > 0, the raw remainder, scale-preserving)
                     // all yield a Multiword<N, F>.
-                    BinOp::Div | BinOp::Mod => Type::Multiword(*ln, *lf),
+                    BinOp::Div | BinOp::Mod => Type::Multiword(ln.clone(), lf.clone()),
                     // Bitwise operations act per word and preserve the type.
-                    BinOp::Band | BinOp::Bor | BinOp::Bxor => Type::Multiword(*ln, *lf),
+                    BinOp::Band | BinOp::Bor | BinOp::Bxor => {
+                        Type::Multiword(ln.clone(), lf.clone())
+                    }
                     BinOp::Eq
                     | BinOp::NotEq
                     | BinOp::Lt
@@ -4553,7 +4644,7 @@ fn type_of_expr_inner(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError>
             }
             Ok(Type::Array(
                 Box::new(elem_ty.unwrap_or_else(|| ctx.fresh())),
-                elements.len() as i64,
+                ConstDim::Known(elements.len() as i64),
             ))
         }
         Expr::TupleLiteral { elements, .. } => {
@@ -4628,7 +4719,7 @@ fn type_of_expr_inner(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError>
                 // flat little-endian N-word layout, so the cast repacks
                 // the tuple elements as the multiword digit array (B19).
                 (Type::Tuple(elems), Type::Multiword(n, _))
-                    if elems.len() == *n as usize
+                    if n.known() == Some(elems.len() as i64)
                         && elems
                             .iter()
                             .all(|e| matches!(strip_labels(e.clone()), Type::Word)) =>
@@ -6737,13 +6828,13 @@ mod tests {
     #[test]
     fn unify_array_length_mismatch() {
         let mut s = Subst::new();
-        let t1 = Type::Array(Box::new(Type::Word), 3);
-        let t2 = Type::Array(Box::new(Type::Word), 4);
+        let t1 = Type::Array(Box::new(Type::Word), ConstDim::Known(3));
+        let t2 = Type::Array(Box::new(Type::Word), ConstDim::Known(4));
         let err = unify(&t1, &t2, &mut s).unwrap_err();
         match err {
             UnifyError::ArrayLengthMismatch { left, right } => {
-                assert_eq!(left, 3);
-                assert_eq!(right, 4);
+                assert_eq!(left, "3");
+                assert_eq!(right, "4");
             }
             other => panic!("expected ArrayLengthMismatch, got {:?}", other),
         }
@@ -6752,8 +6843,8 @@ mod tests {
     #[test]
     fn unify_array_element_types_unify() {
         let mut s = Subst::new();
-        let t1 = Type::Array(Box::new(Type::Var(0)), 3);
-        let t2 = Type::Array(Box::new(Type::Word), 3);
+        let t1 = Type::Array(Box::new(Type::Var(0)), ConstDim::Known(3));
+        let t2 = Type::Array(Box::new(Type::Word), ConstDim::Known(3));
         unify(&t1, &t2, &mut s).unwrap();
         assert_eq!(s.get(0), Some(&Type::Word));
     }

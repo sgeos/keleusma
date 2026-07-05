@@ -330,7 +330,7 @@ fn render_type_expr(ty: &TypeExpr) -> String {
             PrimType::Fixed(Some(n)) => alloc::format!("Fixed<{}>", n),
         },
         TypeExpr::Multiword(n, f, _) => {
-            if *f == 0 {
+            if f.as_lit() == Some(0) {
                 alloc::format!("Multiword<{}>", n)
             } else {
                 alloc::format!("Multiword<{}, {}>", n, f)
@@ -952,7 +952,7 @@ impl FuncCompiler {
 /// for `[T; N]` and `None` for other shapes.
 fn array_length_of_type(t: &TypeExpr) -> Option<i64> {
     match t {
-        TypeExpr::Array(_, n, _) => Some(*n),
+        TypeExpr::Array(_, n, _) => n.as_lit(),
         _ => None,
     }
 }
@@ -1224,8 +1224,11 @@ fn compile_multiword_shift(
         Some(k) => k,
         None => return compile_multiword_variable_shift(fc, op, left, right, n, word_bits),
     };
-    let byte_size = flat_alloc_bytes(&TypeExpr::Multiword(n, 0, Span::default()), &fc.type_info)
-        .unwrap_or_else(|| conservative_alloc_bytes(n));
+    let byte_size = flat_alloc_bytes(
+        &TypeExpr::multiword_lit(n, 0, Span::default()),
+        &fc.type_info,
+    )
+    .unwrap_or_else(|| conservative_alloc_bytes(n));
     let word_ty = TypeExpr::Prim(PrimType::Word, Span::default());
     let elem_op = array_elem_operand(Some(&word_ty), &fc.type_info);
     let zero = fc.add_constant(Value::Int(0));
@@ -1426,8 +1429,11 @@ fn compile_multiword_variable_shift(
     use crate::ast::BinOp;
     let nn = n as usize;
     let log2_wb = word_bits.trailing_zeros() as i64;
-    let byte_size = flat_alloc_bytes(&TypeExpr::Multiword(n, 0, Span::default()), &fc.type_info)
-        .unwrap_or_else(|| conservative_alloc_bytes(n));
+    let byte_size = flat_alloc_bytes(
+        &TypeExpr::multiword_lit(n, 0, Span::default()),
+        &fc.type_info,
+    )
+    .unwrap_or_else(|| conservative_alloc_bytes(n));
     let word_ty = TypeExpr::Prim(PrimType::Word, Span::default());
     let elem_op = array_elem_operand(Some(&word_ty), &fc.type_info);
     let is_left = matches!(op, BinOp::Shl | BinOp::AShl);
@@ -1571,8 +1577,11 @@ fn compile_multiword_bitwise(
     n: u16,
 ) -> Result<(), CompileError> {
     use crate::ast::BinOp;
-    let byte_size = flat_alloc_bytes(&TypeExpr::Multiword(n, 0, Span::default()), &fc.type_info)
-        .unwrap_or_else(|| conservative_alloc_bytes(n));
+    let byte_size = flat_alloc_bytes(
+        &TypeExpr::multiword_lit(n, 0, Span::default()),
+        &fc.type_info,
+    )
+    .unwrap_or_else(|| conservative_alloc_bytes(n));
     let word_ty = TypeExpr::Prim(PrimType::Word, Span::default());
     let elem_op = array_elem_operand(Some(&word_ty), &fc.type_info);
     let bit_op = match op {
@@ -1622,8 +1631,11 @@ fn compile_multiword_bnot(
     operand: &Expr,
     n: u16,
 ) -> Result<(), CompileError> {
-    let byte_size = flat_alloc_bytes(&TypeExpr::Multiword(n, 0, Span::default()), &fc.type_info)
-        .unwrap_or_else(|| conservative_alloc_bytes(n));
+    let byte_size = flat_alloc_bytes(
+        &TypeExpr::multiword_lit(n, 0, Span::default()),
+        &fc.type_info,
+    )
+    .unwrap_or_else(|| conservative_alloc_bytes(n));
     let word_ty = TypeExpr::Prim(PrimType::Word, Span::default());
     let elem_op = array_elem_operand(Some(&word_ty), &fc.type_info);
     let neg1 = fc.add_constant(Value::Int(-1));
@@ -1756,8 +1768,11 @@ fn compile_multiword_add_sub(
     is_sub: bool,
 ) -> Result<(), CompileError> {
     let word_bits = (fc.type_info.word_bytes * 8) as i64;
-    let byte_size = flat_alloc_bytes(&TypeExpr::Multiword(n, 0, Span::default()), &fc.type_info)
-        .unwrap_or_else(|| conservative_alloc_bytes(n));
+    let byte_size = flat_alloc_bytes(
+        &TypeExpr::multiword_lit(n, 0, Span::default()),
+        &fc.type_info,
+    )
+    .unwrap_or_else(|| conservative_alloc_bytes(n));
     let word_ty = TypeExpr::Prim(PrimType::Word, Span::default());
     let elem_op = array_elem_operand(Some(&word_ty), &fc.type_info);
     let neg1 = fc.add_constant(Value::Int(-1));
@@ -2048,8 +2063,11 @@ fn compile_multiword_mul(
             span: left.span(),
         });
     }
-    let byte_size = flat_alloc_bytes(&TypeExpr::Multiword(n, 0, Span::default()), &fc.type_info)
-        .unwrap_or_else(|| conservative_alloc_bytes(n));
+    let byte_size = flat_alloc_bytes(
+        &TypeExpr::multiword_lit(n, 0, Span::default()),
+        &fc.type_info,
+    )
+    .unwrap_or_else(|| conservative_alloc_bytes(n));
     let word_ty = TypeExpr::Prim(PrimType::Word, Span::default());
     let elem_op = array_elem_operand(Some(&word_ty), &fc.type_info);
     let neg1 = fc.add_constant(Value::Int(-1));
@@ -2300,8 +2318,11 @@ fn compile_multiword_fixed_mul(
             span: left.span(),
         });
     }
-    let byte_size = flat_alloc_bytes(&TypeExpr::Multiword(n, 0, Span::default()), &fc.type_info)
-        .unwrap_or_else(|| conservative_alloc_bytes(n));
+    let byte_size = flat_alloc_bytes(
+        &TypeExpr::multiword_lit(n, 0, Span::default()),
+        &fc.type_info,
+    )
+    .unwrap_or_else(|| conservative_alloc_bytes(n));
     let word_ty = TypeExpr::Prim(PrimType::Word, Span::default());
     let elem_op = array_elem_operand(Some(&word_ty), &fc.type_info);
     let neg1 = fc.add_constant(Value::Int(-1));
@@ -2595,8 +2616,11 @@ fn compile_multiword_div(
             span: left.span(),
         });
     }
-    let byte_size = flat_alloc_bytes(&TypeExpr::Multiword(n, 0, Span::default()), &fc.type_info)
-        .unwrap_or_else(|| conservative_alloc_bytes(n));
+    let byte_size = flat_alloc_bytes(
+        &TypeExpr::multiword_lit(n, 0, Span::default()),
+        &fc.type_info,
+    )
+    .unwrap_or_else(|| conservative_alloc_bytes(n));
     let word_ty = TypeExpr::Prim(PrimType::Word, Span::default());
     let elem_op = array_elem_operand(Some(&word_ty), &fc.type_info);
     let neg1 = fc.add_constant(Value::Int(-1));
@@ -4473,7 +4497,7 @@ fn const_value_from_literal_for_field(
             Ok(ConstValue::Tuple(out))
         }
         (ConstInitializer::Array(elements), TypeExpr::Array(elem_type, len, _)) => {
-            if elements.len() != *len as usize {
+            if elements.len() != len.as_lit().unwrap_or(-1) as usize {
                 return Err(CompileError {
                     message: format!(
                         "const data field `{}.{}` array initializer has {} element(s), expected {}",
@@ -4580,7 +4604,7 @@ fn slots_for_data_type(type_expr: &TypeExpr) -> u16 {
     match type_expr {
         TypeExpr::Array(elem, len, _) => {
             let elem_slots = slots_for_data_type(elem) as u32;
-            let total = elem_slots.saturating_mul(*len as u32);
+            let total = elem_slots.saturating_mul(len.as_lit().unwrap_or(0) as u32);
             total.min(u16::MAX as u32) as u16
         }
         _ => 1,
@@ -4646,7 +4670,13 @@ fn emit_indexed_offset(
     let mut emitted_first = false;
     for idx_expr in indices {
         let (elem_type, len) = match current_type {
-            TypeExpr::Array(elem, len, _) => (*elem, len),
+            TypeExpr::Array(elem, len, _) => {
+                let len = len.as_lit().ok_or_else(|| CompileError {
+                    message: alloc::format!("data array size `{}` is not a resolved constant", len),
+                    span,
+                })?;
+                (*elem, len)
+            }
             _ => {
                 return Err(CompileError {
                     message: String::from(
@@ -5585,7 +5615,7 @@ fn infer_expr_type(fc: &FuncCompiler, expr: &Expr) -> Option<TypeExpr> {
         }
         Expr::ArrayLiteral { elements, span } => {
             let elem_ty = elements.first().and_then(|e| infer_expr_type(fc, e))?;
-            Some(TypeExpr::Array(
+            Some(TypeExpr::array_lit(
                 Box::new(elem_ty),
                 elements.len() as i64,
                 *span,
@@ -6316,6 +6346,10 @@ fn composite_field_accessors(
             Ok(out)
         }
         TypeExpr::Array(elem, count, span) => {
+            let count = count.as_lit().ok_or_else(|| CompileError {
+                message: alloc::format!("array size `{}` is not a resolved constant", count),
+                span,
+            })?;
             if count < 0 {
                 return Err(CompileError {
                     message: String::from("field-wise equality on a negative-length array"),
@@ -6977,7 +7011,7 @@ fn compile_for(fc: &mut FuncCompiler, for_stmt: &ForStmt) -> Result<(), CompileE
             // indexed reads. The lowered iteration is a numeric loop
             // from zero to the array length emitting
             // `Op::GetDataIndexed` per element.
-            if let Expr::FieldAccess { object, field, .. } = expr
+            if let Expr::FieldAccess { object, field, .. } = expr.as_ref()
                 && let Expr::Ident { name, .. } = object.as_ref()
                 && fc.is_data_block(name)
             {
@@ -6988,6 +7022,7 @@ fn compile_for(fc: &mut FuncCompiler, for_stmt: &ForStmt) -> Result<(), CompileE
                     .and_then(|f| f.get(field))
                     .cloned();
                 if let Some(TypeExpr::Array(elem, len, _)) = field_type {
+                    let len = len.as_lit().unwrap_or(0);
                     return compile_for_in_data_array(fc, for_stmt, name, field, &elem, len);
                 }
             }
@@ -8222,8 +8257,7 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
             let operand_ty = infer_expr_type(fc, left).or_else(|| infer_expr_type(fc, right));
             // Multiword<N> operators lower to unrolled per-limb cascades
             // over the existing checked-word and bitwise opcodes (B19).
-            if let Some(TypeExpr::Multiword(n, f, _)) = &operand_ty {
-                let (n, f) = (*n, *f);
+            if let Some((n, f)) = operand_ty.as_ref().and_then(|t| t.as_multiword_lit()) {
                 return compile_multiword_binop(fc, *op, left, right, n, f);
             }
             // Scalar `Word`/`Byte` shifts, constant or variable amount. The
@@ -8371,7 +8405,8 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
             // A bitwise complement of a `Multiword<N>` lowers to a
             // per-limb complement, mirroring the Multiword binary path.
             if matches!(op, UnaryOp::Bnot)
-                && let Some(TypeExpr::Multiword(n, _, _)) = infer_expr_type(fc, operand)
+                && let Some((n, _)) =
+                    infer_expr_type(fc, operand).and_then(|t| t.as_multiword_lit())
             {
                 return compile_multiword_bnot(fc, operand, n);
             }
@@ -8906,7 +8941,11 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
             } else {
                 infer_expr_type(fc, &elements[0]).and_then(|elem_ty| {
                     flat_alloc_bytes(
-                        &TypeExpr::Array(Box::new(elem_ty), elements.len() as i64, Span::default()),
+                        &TypeExpr::array_lit(
+                            Box::new(elem_ty),
+                            elements.len() as i64,
+                            Span::default(),
+                        ),
                         &fc.type_info,
                     )
                 })
@@ -8988,10 +9027,12 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
             // Multiword<N>, represented as a flat N-word array. The
             // documented construction form is a tuple literal, compiled
             // directly to the digit array (B19).
-            if let TypeExpr::Multiword(n, _, _) = target {
-                let byte_size =
-                    flat_alloc_bytes(&TypeExpr::Multiword(*n, 0, Span::default()), &fc.type_info)
-                        .unwrap_or_else(|| conservative_alloc_bytes(*n));
+            if let Some((n, _)) = target.as_multiword_lit() {
+                let byte_size = flat_alloc_bytes(
+                    &TypeExpr::multiword_lit(n, 0, Span::default()),
+                    &fc.type_info,
+                )
+                .unwrap_or_else(|| conservative_alloc_bytes(n));
                 if let Expr::TupleLiteral { elements, .. } = inner.as_ref() {
                     // Fast path: compile the digit expressions directly
                     // into the array, with no intermediate tuple value.
@@ -9007,9 +9048,9 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
                     fc.emit(Op::SetLocal(tmp));
                     let elem_types = alloc::vec![
                         Some(TypeExpr::Prim(PrimType::Word, Span::default()));
-                        *n as usize
+                        n as usize
                     ];
-                    for i in 0..*n as usize {
+                    for i in 0..n as usize {
                         fc.emit(Op::GetLocal(tmp));
                         let operand = tuple_field_access(fc, &elem_types, i);
                         fc.emit(Op::GetTupleField(operand));
@@ -9017,7 +9058,7 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
                 }
                 fc.emit(Op::NewComposite(NewCompositeOperand::Flat {
                     kind: crate::value_layout::CompositeKind::Array,
-                    count: *n,
+                    count: n,
                     byte_size,
                 }));
                 return Ok(());

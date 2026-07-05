@@ -116,3 +116,42 @@ fn const_param_type_must_be_word() {
         "fn val<const n: Byte>() -> Word { 0 }\nfn main() -> Word { val::<5>() }"
     ));
 }
+
+#[test]
+fn const_dim_in_array_param() {
+    // A parameter typed `[Word; n]` specializes to a concrete array size;
+    // the argument's size unifies with the const dimension (B40 phase 2).
+    assert_eq!(
+        run_to_int(
+            "fn first<const n: Word>(a: [Word; n]) -> Word { a[0] }\n\
+             fn main() -> Word { first::<3>([10, 20, 30]) }"
+        ),
+        10
+    );
+}
+
+#[test]
+fn const_dim_in_multiword_param() {
+    // A parameter typed `Multiword<n>` specializes to a concrete word
+    // count; digit indexing works after substitution.
+    assert_eq!(
+        run_to_int(
+            "fn low<const n: Word>(m: Multiword<n>) -> Word { m[0] }\n\
+             fn main() -> Word { low::<2>((7, 0) as Multiword<2>) }"
+        ),
+        7
+    );
+}
+
+#[test]
+fn const_dim_mismatch_fails_at_retypecheck() {
+    // A body generically valid but instantiated to a mismatching const
+    // dimension is rejected: the argument `[Word; 2]` does not match the
+    // specialized parameter `[Word; 3]`. The post-monomorphization
+    // re-typecheck is the soundness gate (a symbolic dimension is
+    // accepted in the first pass, deferred to here).
+    assert!(compile_fails(
+        "fn first<const n: Word>(a: [Word; n]) -> Word { a[0] }\n\
+         fn main() -> Word { first::<3>([10, 20]) }"
+    ));
+}

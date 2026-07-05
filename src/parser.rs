@@ -687,6 +687,40 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// Range-check a Multiword const argument when it is a literal; a
+    /// symbolic argument (a const parameter or arithmetic) is checked
+    /// after substitution at monomorphization. `is_word_count` selects
+    /// the N range `[1, 65535]` versus the F range `[0, 65535]` (B40).
+    fn check_multiword_lit_range(
+        &self,
+        ce: &ConstExpr,
+        is_word_count: bool,
+    ) -> Result<(), ParseError> {
+        if let ConstExpr::Lit(n, span) = ce {
+            let (lo, hi): (i64, i64) = if is_word_count {
+                (1, 65535)
+            } else {
+                (0, 65535)
+            };
+            if *n < lo || *n > hi {
+                return Err(ParseError {
+                    message: alloc::format!(
+                        "Multiword {} must be in the range [{}, {}]",
+                        if is_word_count {
+                            "word count"
+                        } else {
+                            "fraction-bit count"
+                        },
+                        lo,
+                        hi
+                    ),
+                    span: *span,
+                });
+            }
+        }
+        Ok(())
+    }
+
     fn parse_data_decl(&mut self) -> Result<DataDecl, ParseError> {
         // Optional visibility modifier. `shared data ...` and `data ...`
         // are equivalent; `private data ...` marks the block as
@@ -1362,7 +1396,7 @@ impl<'a> Parser<'a> {
             let end = self.parse_expr()?;
             Ok(Iterable::Range(Box::new(expr), Box::new(end)))
         } else {
-            Ok(Iterable::Expr(expr))
+            Ok(Iterable::Expr(Box::new(expr)))
         }
     }
 
@@ -2124,43 +2158,14 @@ impl<'a> Parser<'a> {
                 {
                     self.expect(&TokenKind::ColonColon)?;
                     self.expect(&TokenKind::Lt)?;
-                    let tok = self.tokens[self.pos].clone();
-                    let words = match tok.kind {
-                        TokenKind::IntLit(nn) => {
-                            if !(1..=65535).contains(&nn) {
-                                return Err(self.error(
-                                    "Multiword<N> word count must be in the range [1, 65535]",
-                                ));
-                            }
-                            self.pos += 1;
-                            nn as u16
-                        }
-                        _ => {
-                            return Err(
-                                self.error("expected integer literal for Multiword<N> word count")
-                            );
-                        }
-                    };
-                    let frac: u16 = if self.eat(&TokenKind::Comma) {
-                        let ftok = self.tokens[self.pos].clone();
-                        match ftok.kind {
-                            TokenKind::IntLit(f) => {
-                                if !(0..=65535).contains(&f) {
-                                    return Err(self.error(
-                                        "Multiword<N, F> fraction bits must be in [0, 65535]",
-                                    ));
-                                }
-                                self.pos += 1;
-                                f as u16
-                            }
-                            _ => {
-                                return Err(self.error(
-                                    "expected integer literal for Multiword<N, F> fraction bits",
-                                ));
-                            }
-                        }
+                    let words = self.parse_const_expr()?;
+                    self.check_multiword_lit_range(&words, true)?;
+                    let frac = if self.eat(&TokenKind::Comma) {
+                        let f = self.parse_const_expr()?;
+                        self.check_multiword_lit_range(&f, false)?;
+                        f
                     } else {
-                        0
+                        ConstExpr::Lit(0, name_span)
                     };
                     self.expect(&TokenKind::Gt)?;
                     self.expect(&TokenKind::LParen)?;
@@ -2559,45 +2564,22 @@ impl<'a> Parser<'a> {
             self.pos += 1;
             return Ok(TypeExpr::Prim(PrimType::Float, span));
         }
-        // Multiword<N>: fixed-width multi-word integer, N words wide.
-        // N is a positive integer literal validated here (B19).
+        // Multiword<N>: fixed-width multi-word integer, N words wide. N
+        // and the optional fraction-bit count F are const expressions (a
+        // literal, a const parameter, or const arithmetic). A literal is
+        // range-checked here; a symbolic amount is range-checked after
+        // substitution at monomorphization (B19, B40).
         if self.at_upper("Multiword") {
             self.pos += 1;
             self.expect(&TokenKind::Lt)?;
-            let tok = self.tokens[self.pos].clone();
-            let words = match tok.kind {
-                TokenKind::IntLit(n) => {
-                    if !(1..=65535).contains(&n) {
-                        return Err(
-                            self.error("Multiword<N> word count must be in the range [1, 65535]")
-                        );
-                    }
-                    self.pos += 1;
-                    n as u16
-                }
-                _ => {
-                    return Err(self.error("expected integer literal for Multiword<N> word count"));
-                }
-            };
-            let frac: u16 = if self.eat(&TokenKind::Comma) {
-                let ftok = self.tokens[self.pos].clone();
-                match ftok.kind {
-                    TokenKind::IntLit(f) => {
-                        if !(0..=65535).contains(&f) {
-                            return Err(self.error(
-                                "Multiword<N, F> fraction bits must be in the range [0, 65535]",
-                            ));
-                        }
-                        self.pos += 1;
-                        f as u16
-                    }
-                    _ => {
-                        return Err(self
-                            .error("expected integer literal for Multiword<N, F> fraction bits"));
-                    }
-                }
+            let words = self.parse_const_expr()?;
+            self.check_multiword_lit_range(&words, true)?;
+            let frac = if self.eat(&TokenKind::Comma) {
+                let f = self.parse_const_expr()?;
+                self.check_multiword_lit_range(&f, false)?;
+                f
             } else {
-                0
+                ConstExpr::Lit(0, span)
             };
             let end = self.expect(&TokenKind::Gt)?;
             return Ok(TypeExpr::Multiword(words, frac, merge_spans(span, end)));
@@ -2668,18 +2650,12 @@ impl<'a> Parser<'a> {
             return Ok(first);
         }
 
-        // Array type `[T; N]`.
+        // Array type `[T; N]`. The size is a const expression: a literal,
+        // a const parameter, or const arithmetic (B40).
         if self.eat(&TokenKind::LBracket) {
             let elem = self.parse_type_expr()?;
             self.expect(&TokenKind::Semicolon)?;
-            let tok = self.tokens[self.pos].clone();
-            let size = match tok.kind {
-                TokenKind::IntLit(n) => {
-                    self.pos += 1;
-                    n
-                }
-                _ => return Err(self.error("expected integer for array size")),
-            };
+            let size = self.parse_const_expr()?;
             let end = self.expect(&TokenKind::RBracket)?;
             return Ok(TypeExpr::Array(
                 Box::new(elem),
@@ -3635,7 +3611,7 @@ mod tests {
         let program = parse_str(src).unwrap();
         let param_type = program.functions[0].params[0].type_expr.as_ref().unwrap();
         match param_type {
-            TypeExpr::Array(_, size, _) => assert_eq!(*size, 8),
+            TypeExpr::Array(_, size, _) => assert_eq!(size.as_lit(), Some(8)),
             _ => panic!("expected Array type"),
         }
     }

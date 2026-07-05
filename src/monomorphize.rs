@@ -776,7 +776,7 @@ fn resolve_generic_type_to_spec(
         ),
         TypeExpr::Array(elem, len, span) => TypeExpr::Array(
             alloc::boxed::Box::new(resolve_generic_type_to_spec(elem, specs)),
-            *len,
+            len.clone(),
             *span,
         ),
         TypeExpr::Option(inner, span) => TypeExpr::Option(
@@ -902,7 +902,7 @@ fn infer_arg_type(
         Expr::ArrayLiteral { elements, span } => {
             let elem = elements.first()?;
             let elem_ty = infer_arg_type(elem, locals, fn_returns, structs)?;
-            Some(TypeExpr::Array(
+            Some(TypeExpr::array_lit(
                 Box::new(elem_ty),
                 elements.len() as i64,
                 *span,
@@ -1106,7 +1106,7 @@ fn subst_type_expr(t: &TypeExpr, subst: &BTreeMap<String, TypeExpr>) -> TypeExpr
             *span,
         ),
         TypeExpr::Array(elem, n, span) => {
-            TypeExpr::Array(Box::new(subst_type_expr(elem, subst)), *n, *span)
+            TypeExpr::Array(Box::new(subst_type_expr(elem, subst)), n.clone(), *span)
         }
         TypeExpr::Option(inner, span) => {
             TypeExpr::Option(Box::new(subst_type_expr(inner, subst)), *span)
@@ -1147,6 +1147,83 @@ fn eval_const_expr(e: &crate::ast::ConstExpr, subst: &BTreeMap<String, i64>) -> 
                 ConstBinOp::Mul => a.wrapping_mul(b),
             })
         }
+    }
+}
+
+/// Substitute const parameters in a const expression with their values,
+/// folding to a literal where both operands are known (B40).
+fn subst_const_expr(
+    ce: &crate::ast::ConstExpr,
+    const_subst: &BTreeMap<String, i64>,
+) -> crate::ast::ConstExpr {
+    use crate::ast::{ConstBinOp, ConstExpr};
+    match ce {
+        ConstExpr::Lit(_, _) => ce.clone(),
+        ConstExpr::Param(name, span) => match const_subst.get(name) {
+            Some(v) => ConstExpr::Lit(*v, *span),
+            None => ce.clone(),
+        },
+        ConstExpr::Bin(op, l, r, span) => {
+            let l = subst_const_expr(l, const_subst);
+            let r = subst_const_expr(r, const_subst);
+            if let (Some(a), Some(b)) = (l.as_lit(), r.as_lit()) {
+                let v = match op {
+                    ConstBinOp::Add => a.wrapping_add(b),
+                    ConstBinOp::Sub => a.wrapping_sub(b),
+                    ConstBinOp::Mul => a.wrapping_mul(b),
+                };
+                ConstExpr::Lit(v, *span)
+            } else {
+                ConstExpr::Bin(*op, Box::new(l), Box::new(r), *span)
+            }
+        }
+    }
+}
+
+/// Substitute const parameters in every const dimension of a type
+/// expression (array sizes and `Multiword` N/F), recursing into nested
+/// types (B40).
+fn subst_const_dims_in_type(te: &TypeExpr, const_subst: &BTreeMap<String, i64>) -> TypeExpr {
+    match te {
+        TypeExpr::Prim(_, _) | TypeExpr::Unit(_) => te.clone(),
+        TypeExpr::Array(elem, n, span) => TypeExpr::Array(
+            Box::new(subst_const_dims_in_type(elem, const_subst)),
+            subst_const_expr(n, const_subst),
+            *span,
+        ),
+        TypeExpr::Multiword(n, f, span) => TypeExpr::Multiword(
+            subst_const_expr(n, const_subst),
+            subst_const_expr(f, const_subst),
+            *span,
+        ),
+        TypeExpr::Tuple(items, span) => TypeExpr::Tuple(
+            items
+                .iter()
+                .map(|t| subst_const_dims_in_type(t, const_subst))
+                .collect(),
+            *span,
+        ),
+        TypeExpr::Named(name, args, span) => TypeExpr::Named(
+            name.clone(),
+            args.iter()
+                .map(|a| subst_const_dims_in_type(a, const_subst))
+                .collect(),
+            *span,
+        ),
+        TypeExpr::Option(inner, span) => TypeExpr::Option(
+            Box::new(subst_const_dims_in_type(inner, const_subst)),
+            *span,
+        ),
+        TypeExpr::Labelled(inner, l, span) => TypeExpr::Labelled(
+            Box::new(subst_const_dims_in_type(inner, const_subst)),
+            l.clone(),
+            *span,
+        ),
+        TypeExpr::NegativeLabelled(inner, l, span) => TypeExpr::NegativeLabelled(
+            Box::new(subst_const_dims_in_type(inner, const_subst)),
+            l.clone(),
+            *span,
+        ),
     }
 }
 
@@ -1211,6 +1288,11 @@ impl crate::visitor::MutVisitor for ConstValueSubstitutor {
                 // The value is evaluated before the binding takes effect,
                 // so it sees the pre-binding scope.
                 self.visit_expr(&mut l.value);
+                // A `let x: [Word; n] = ...` type annotation carries const
+                // dimensions that must be substituted too.
+                if let Some(t) = &l.type_expr {
+                    l.type_expr = Some(subst_const_dims_in_type(t, &self.subst));
+                }
                 let mut names = Vec::new();
                 collect_pattern_bindings(&l.pattern, &mut names);
                 for name in names {
@@ -1248,6 +1330,16 @@ impl crate::visitor::MutVisitor for ConstValueSubstitutor {
                     };
                 }
             }
+            Expr::Cast {
+                expr: inner,
+                target,
+                ..
+            } => {
+                // A cast target such as `... as Multiword<n>` carries
+                // const dimensions that must be substituted.
+                *target = subst_const_dims_in_type(target, &self.subst);
+                self.visit_expr(inner);
+            }
             Expr::Match {
                 scrutinee, arms, ..
             } => {
@@ -1281,26 +1373,33 @@ fn specialize_function(
     for (tp, arg) in func.type_params.iter().zip(type_args.iter()) {
         subst.insert(tp.name.clone(), arg.clone());
     }
+    let const_subst: BTreeMap<String, i64> = func
+        .const_params
+        .iter()
+        .zip(const_values.iter())
+        .map(|(cp, val)| (cp.name.clone(), *val))
+        .collect();
     let params: Vec<Param> = func
         .params
         .iter()
         .map(|p| Param {
             pattern: p.pattern.clone(),
-            type_expr: p.type_expr.as_ref().map(|t| subst_type_expr(t, &subst)),
+            type_expr: p
+                .type_expr
+                .as_ref()
+                .map(|t| subst_const_dims_in_type(&subst_type_expr(t, &subst), &const_subst)),
             span: p.span,
         })
         .collect();
-    let return_type = subst_type_expr(&func.return_type, &subst);
+    let return_type =
+        subst_const_dims_in_type(&subst_type_expr(&func.return_type, &subst), &const_subst);
     let mut body = subst_in_block(&func.body, &subst);
-    // Substitute const-parameter value references with their concrete
-    // literal (the erasure step). After this, the body carries no
-    // symbolic const, so the verifier sees only concrete values.
-    if !func.const_params.is_empty() {
+    // Substitute const-parameter value references and const dimensions in
+    // the body with their concrete literals (the erasure step). After
+    // this, the body carries no symbolic const, so the verifier sees only
+    // concrete values.
+    if !const_subst.is_empty() {
         use crate::visitor::MutVisitor;
-        let mut const_subst: BTreeMap<String, i64> = BTreeMap::new();
-        for (cp, val) in func.const_params.iter().zip(const_values.iter()) {
-            const_subst.insert(cp.name.clone(), *val);
-        }
         let mut substitutor = ConstValueSubstitutor {
             subst: const_subst,
             shadowed: Vec::new(),
@@ -1397,7 +1496,7 @@ fn subst_in_iterable(it: &Iterable, subst: &BTreeMap<String, TypeExpr>) -> Itera
             Box::new(subst_in_expr(start, subst)),
             Box::new(subst_in_expr(end, subst)),
         ),
-        Iterable::Expr(e) => Iterable::Expr(subst_in_expr(e, subst)),
+        Iterable::Expr(e) => Iterable::Expr(Box::new(subst_in_expr(e, subst))),
     }
 }
 

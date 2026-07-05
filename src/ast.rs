@@ -531,6 +531,34 @@ impl ConstExpr {
             ConstExpr::Lit(_, s) | ConstExpr::Param(_, s) | ConstExpr::Bin(_, _, _, s) => *s,
         }
     }
+
+    /// The literal value when the const expression is a bare integer
+    /// literal, else `None`. After monomorphization every const
+    /// expression is a literal, so a post-erasure reader uses this to
+    /// recover the concrete dimension (B40).
+    pub fn as_lit(&self) -> Option<i64> {
+        match self {
+            ConstExpr::Lit(n, _) => Some(*n),
+            _ => None,
+        }
+    }
+}
+
+impl core::fmt::Display for ConstExpr {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            ConstExpr::Lit(n, _) => write!(f, "{}", n),
+            ConstExpr::Param(name, _) => write!(f, "{}", name),
+            ConstExpr::Bin(op, l, r, _) => {
+                let sym = match op {
+                    ConstBinOp::Add => "+",
+                    ConstBinOp::Sub => "-",
+                    ConstBinOp::Mul => "*",
+                };
+                write!(f, "{} {} {}", l, sym, r)
+            }
+        }
+    }
 }
 
 /// A function parameter.
@@ -639,8 +667,9 @@ pub struct ForStmt {
 /// The iterable in a `for` loop.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Iterable {
-    /// A plain expression (e.g., an array).
-    Expr(Expr),
+    /// A plain expression (e.g., an array). Boxed to keep the enum
+    /// variants size-balanced.
+    Expr(Box<Expr>),
     /// A range expression (e.g., `0..8`).
     Range(Box<Expr>, Box<Expr>),
 }
@@ -1098,16 +1127,19 @@ pub enum TypeExpr {
     Named(String, Vec<TypeExpr>, Span),
     /// Tuple type: `(T, U)`.
     Tuple(Vec<TypeExpr>, Span),
-    /// Array type: `[T; N]`.
-    Array(Box<TypeExpr>, i64, Span),
+    /// Array type: `[T; N]`. The size is a const expression: a literal, a
+    /// const parameter, or const arithmetic (B40). It is a literal after
+    /// monomorphization.
+    Array(Box<TypeExpr>, ConstExpr, Span),
     /// Fixed-width multi-word fixed-point type: `Multiword<N>` or
     /// `Multiword<N, F>`, N words wide with F fractional bits, stored
-    /// little-endian in two's complement. The word count N is a
-    /// positive integer literal; the optional fraction-bit count F
-    /// defaults to zero, and `Multiword<N>` or `Multiword<N, 0>` is the
-    /// big-integer case. Distinct nominal type; its runtime
-    /// representation is a flat array of N words (B19).
-    Multiword(u16, u16, Span),
+    /// little-endian in two's complement. The word count N and the
+    /// optional fraction-bit count F (defaulting to zero) are const
+    /// expressions: a literal, a const parameter, or const arithmetic,
+    /// resolved to a literal at monomorphization (B19, B40). Distinct
+    /// nominal type; its runtime representation is a flat array of N
+    /// words.
+    Multiword(ConstExpr, ConstExpr, Span),
     /// Option type: `Option<T>`.
     Option(Box<TypeExpr>, Span),
     /// Unit type: `()`.
@@ -1144,6 +1176,41 @@ pub enum TypeExpr {
 }
 
 impl TypeExpr {
+    /// Construct a `Multiword<N, F>` type from literal N and F. Used by
+    /// internal size computations and by any producer that already has
+    /// concrete word/fraction counts (B19, B40).
+    pub fn multiword_lit(n: u16, f: u16, span: Span) -> TypeExpr {
+        TypeExpr::Multiword(
+            ConstExpr::Lit(n as i64, span),
+            ConstExpr::Lit(f as i64, span),
+            span,
+        )
+    }
+
+    /// Construct an array type `[T; N]` from a literal size.
+    pub fn array_lit(elem: Box<TypeExpr>, n: i64, span: Span) -> TypeExpr {
+        TypeExpr::Array(elem, ConstExpr::Lit(n, span), span)
+    }
+
+    /// The literal `(N, F)` of a `Multiword` type, or `None` when the
+    /// dimensions are not yet literal (a symbolic const inside a generic
+    /// body). Every dimension is literal after monomorphization (B40).
+    pub fn as_multiword_lit(&self) -> Option<(u16, u16)> {
+        match self {
+            TypeExpr::Multiword(n, f, _) => Some((n.as_lit()? as u16, f.as_lit()? as u16)),
+            _ => None,
+        }
+    }
+
+    /// The literal element type and size of an array type, or `None`
+    /// when the size is not yet literal (B40).
+    pub fn as_array_lit(&self) -> Option<(&TypeExpr, i64)> {
+        match self {
+            TypeExpr::Array(elem, n, _) => Some((elem, n.as_lit()?)),
+            _ => None,
+        }
+    }
+
     /// Return the span of this type expression.
     pub fn span(&self) -> Span {
         match self {

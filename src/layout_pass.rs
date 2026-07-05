@@ -132,10 +132,18 @@ impl<'a> LayoutContext<'a> {
         match ty {
             TypeExpr::Unit(_) => Ok(LayoutDescriptor::Scalar(ScalarKind::Unit)),
             TypeExpr::Prim(prim, _) => Ok(LayoutDescriptor::Scalar(scalar_kind_for_prim(*prim))),
-            TypeExpr::Multiword(n, _, _) => Ok(LayoutDescriptor::Array {
-                element: Box::new(LayoutDescriptor::Scalar(ScalarKind::Int)),
-                count: *n as usize,
-            }),
+            TypeExpr::Multiword(n, _, _) => {
+                // Post-erasure tripwire: a symbolic const dimension must
+                // never reach the layout pass; monomorphization resolves
+                // it to a literal first (B40).
+                let n = n.as_lit().ok_or_else(|| {
+                    LayoutError::UnresolvedGeneric(alloc::format!("Multiword word count `{}`", n))
+                })?;
+                Ok(LayoutDescriptor::Array {
+                    element: Box::new(LayoutDescriptor::Scalar(ScalarKind::Int)),
+                    count: n as usize,
+                })
+            }
             TypeExpr::Tuple(elems, _) => {
                 let mut layouts = Vec::with_capacity(elems.len());
                 for elem in elems {
@@ -144,13 +152,16 @@ impl<'a> LayoutContext<'a> {
                 Ok(LayoutDescriptor::Tuple(layouts))
             }
             TypeExpr::Array(elem, count, _) => {
-                if *count < 0 {
-                    return Err(LayoutError::InvalidArraySize(*count));
+                let count = count.as_lit().ok_or_else(|| {
+                    LayoutError::UnresolvedGeneric(alloc::format!("array size `{}`", count))
+                })?;
+                if count < 0 {
+                    return Err(LayoutError::InvalidArraySize(count));
                 }
                 let elem_layout = self.layout_for(elem)?;
                 Ok(LayoutDescriptor::Array {
                     element: Box::new(elem_layout),
-                    count: *count as usize,
+                    count: count as usize,
                 })
             }
             TypeExpr::Option(inner, _) => {
@@ -345,7 +356,7 @@ mod tests {
     fn array_of_words() {
         let (structs, enums) = empty_tables();
         let ctx = LayoutContext::new(&structs, &enums, I64_BYTES, F64_BYTES);
-        let ty = TypeExpr::Array(Box::new(TypeExpr::Prim(PrimType::Word, span())), 8, span());
+        let ty = TypeExpr::array_lit(Box::new(TypeExpr::Prim(PrimType::Word, span())), 8, span());
         assert_eq!(ctx.size_in_bytes(&ty).unwrap(), 8 * I64_BYTES);
     }
 
@@ -353,7 +364,7 @@ mod tests {
     fn array_negative_size_rejected() {
         let (structs, enums) = empty_tables();
         let ctx = LayoutContext::new(&structs, &enums, I64_BYTES, F64_BYTES);
-        let ty = TypeExpr::Array(Box::new(TypeExpr::Prim(PrimType::Word, span())), -1, span());
+        let ty = TypeExpr::array_lit(Box::new(TypeExpr::Prim(PrimType::Word, span())), -1, span());
         assert!(matches!(
             ctx.size_in_bytes(&ty),
             Err(LayoutError::InvalidArraySize(-1))

@@ -87,7 +87,7 @@ fn zero_value_at(
         TypeExpr::Unit(_) => Ok(ConstValue::Unit),
         TypeExpr::Prim(p, _) => Ok(zero_prim(p)),
         TypeExpr::Multiword(n, _, _) => Ok(ConstValue::Array(
-            alloc::vec![zero_prim(&crate::ast::PrimType::Word); *n as usize],
+            alloc::vec![zero_prim(&crate::ast::PrimType::Word); n.as_lit().unwrap_or(0) as usize],
         )),
         TypeExpr::Option(_, _) => Ok(ConstValue::None),
         TypeExpr::Tuple(elems, _) => {
@@ -98,7 +98,7 @@ fn zero_value_at(
             Ok(ConstValue::Tuple(out))
         }
         TypeExpr::Array(elem, n, _) => {
-            let count = (*n).max(0) as usize;
+            let count = n.as_lit().unwrap_or(0).max(0) as usize;
             let z = zero_value_at(elem, reg, depth + 1)?;
             Ok(ConstValue::Array(alloc::vec![z; count]))
         }
@@ -318,7 +318,7 @@ mod tests {
                 ConstValue::Bool(false)
             ]))
         );
-        let arr = TypeExpr::Array(alloc::boxed::Box::new(prim(PrimType::Byte)), 3, sp());
+        let arr = TypeExpr::array_lit(alloc::boxed::Box::new(prim(PrimType::Byte)), 3, sp());
         assert_eq!(
             zero_value(&arr, &reg),
             Ok(ConstValue::Array(alloc::vec![
