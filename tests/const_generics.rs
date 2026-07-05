@@ -155,3 +155,17 @@ fn const_dim_mismatch_fails_at_retypecheck() {
          fn main() -> Word { first::<3>([10, 20]) }"
     ));
 }
+
+#[test]
+fn const_generic_struct_basic() {
+    // A struct parameterized by a const value; the field type [Word; n]
+    // specializes to a concrete array (B40 phase 3).
+    assert_eq!(
+        run_to_int(
+            "struct Buf<const n: Word> { cap: Word, items: [Word; n] }\n\
+             fn get(b: Buf<8>) -> Word { b.cap }\n\
+             fn main() -> Word { get(Buf::<8> { cap: 42, items: [0, 0, 0, 0, 0, 0, 0, 0] }) }"
+        ),
+        42
+    );
+}

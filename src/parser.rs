@@ -667,6 +667,31 @@ impl<'a> Parser<'a> {
         Ok(args)
     }
 
+    /// Parse one argument of a named type's `<...>` list into either the
+    /// type-argument or const-argument list. A const argument (an integer
+    /// literal or a lowercase const-parameter reference) follows all type
+    /// arguments; a type argument after a const argument is rejected (B40).
+    fn parse_one_named_arg(
+        &mut self,
+        args: &mut Vec<TypeExpr>,
+        const_args: &mut Vec<ConstExpr>,
+    ) -> Result<(), ParseError> {
+        match self.peek() {
+            TokenKind::IntLit(_) | TokenKind::LowerIdent(_) => {
+                const_args.push(self.parse_const_expr()?);
+            }
+            _ => {
+                if !const_args.is_empty() {
+                    return Err(self.error(
+                        "a type argument cannot follow a const argument; list type arguments first",
+                    ));
+                }
+                args.push(self.parse_type_expr()?);
+            }
+        }
+        Ok(())
+    }
+
     /// Parse a single const expression. In this increment: an integer
     /// literal or a const-parameter reference (a lowercase identifier).
     fn parse_const_expr(&mut self) -> Result<ConstExpr, ParseError> {
@@ -2183,6 +2208,16 @@ impl<'a> Parser<'a> {
                     });
                 }
 
+                // Optional const turbofish on a construction: the
+                // `Buf::<8> { ... }` struct form or the `Opt::<8>::Some(...)`
+                // enum form. A `::` followed by `<` is the turbofish; a
+                // `::` followed by an upper ident is an enum variant.
+                let mut const_args: Vec<ConstExpr> = Vec::new();
+                if self.at(&TokenKind::ColonColon) && matches!(self.peek_ahead(1), TokenKind::Lt) {
+                    self.bump(); // ::
+                    const_args = self.parse_const_args()?;
+                }
+
                 if self.eat(&TokenKind::ColonColon) {
                     // Enum variant.
                     let (variant, _) = self.expect_upper_ident()?;
@@ -2199,6 +2234,7 @@ impl<'a> Parser<'a> {
                         enum_name: name,
                         variant,
                         args,
+                        const_args,
                         span: merge_spans(name_span, end),
                     })
                 } else if self.at(&TokenKind::LBrace) {
@@ -2223,6 +2259,7 @@ impl<'a> Parser<'a> {
                     Ok(Expr::StructInit {
                         name,
                         fields,
+                        const_args,
                         span: merge_spans(name_span, end),
                     })
                 } else if self.at(&TokenKind::LParen) {
@@ -2610,15 +2647,16 @@ impl<'a> Parser<'a> {
         if self.at(&TokenKind::UpperIdent(String::new())) {
             let (name, name_span) = self.expect_upper_ident()?;
             let mut args: Vec<TypeExpr> = Vec::new();
+            let mut const_args: Vec<ConstExpr> = Vec::new();
             let mut end = name_span;
             if self.eat(&TokenKind::Lt) {
                 if !self.at(&TokenKind::Gt) {
-                    args.push(self.parse_type_expr()?);
+                    self.parse_one_named_arg(&mut args, &mut const_args)?;
                     while self.eat(&TokenKind::Comma) {
                         if self.at(&TokenKind::Gt) {
                             break;
                         }
-                        args.push(self.parse_type_expr()?);
+                        self.parse_one_named_arg(&mut args, &mut const_args)?;
                     }
                 }
                 end = self.expect(&TokenKind::Gt)?;
@@ -2626,7 +2664,7 @@ impl<'a> Parser<'a> {
             return Ok(TypeExpr::Named(
                 name,
                 args,
-                Vec::new(),
+                const_args,
                 merge_spans(name_span, end),
             ));
         }

@@ -4456,7 +4456,15 @@ fn type_of_expr_inner(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError>
                 )),
             }
         }
-        Expr::StructInit { name, fields, span } => {
+        Expr::StructInit {
+            name,
+            fields,
+            const_args,
+            span,
+        } => {
+            for ca in const_args.iter() {
+                check_const_arg(ctx, ca)?;
+            }
             let declared_fields = ctx
                 .structs
                 .get(name)
@@ -4513,8 +4521,12 @@ fn type_of_expr_inner(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError>
             enum_name,
             variant,
             args,
+            const_args,
             span,
         } => {
+            for ca in const_args.iter() {
+                check_const_arg(ctx, ca)?;
+            }
             let payload_types = ctx
                 .enums
                 .get(enum_name)

@@ -764,6 +764,9 @@ pub enum Expr {
     StructInit {
         name: String,
         fields: Vec<FieldInit>,
+        /// Explicit const arguments from a construction turbofish
+        /// `Buf::<8> { ... }`. Empty for a non-const-generic struct (B40).
+        const_args: Vec<ConstExpr>,
         span: Span,
     },
     /// Enum variant: `Enum::Variant(args)`.
@@ -771,6 +774,9 @@ pub enum Expr {
         enum_name: String,
         variant: String,
         args: Vec<Expr>,
+        /// Explicit const arguments from a construction turbofish
+        /// `Opt::<8>::Some(...)`. Empty for a non-const-generic enum (B40).
+        const_args: Vec<ConstExpr>,
         span: Span,
     },
     /// Array literal: `[a, b, c]`.

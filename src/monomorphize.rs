@@ -534,7 +534,9 @@ fn specialize_structs(mut program: Program, fn_returns: &BTreeMap<String, TypeEx
         .types
         .iter()
         .filter_map(|td| match td {
-            TypeDef::Struct(s) if !s.type_params.is_empty() => Some((s.name.clone(), s.clone())),
+            TypeDef::Struct(s) if !s.type_params.is_empty() || !s.const_params.is_empty() => {
+                Some((s.name.clone(), s.clone()))
+            }
             _ => None,
         })
         .collect();
@@ -563,6 +565,19 @@ fn specialize_structs(mut program: Program, fn_returns: &BTreeMap<String, TypeEx
             fn_returns,
         };
         visitor.visit_block(&mut func.body);
+    }
+    // Rewrite struct type references in function signatures (parameters
+    // and return types) to their specialized names, now that every
+    // specialization has been collected. A const-generic type reference
+    // `Buf<8>` in a signature resolves to `Buf__c8`, matching the
+    // specialized construction (B40).
+    for func in &mut program.functions {
+        for param in &mut func.params {
+            if let Some(t) = &param.type_expr {
+                param.type_expr = Some(resolve_generic_type_to_spec(t, &struct_specs));
+            }
+        }
+        func.return_type = resolve_generic_type_to_spec(&func.return_type, &struct_specs);
     }
     program
         .types
@@ -609,12 +624,32 @@ impl crate::visitor::MutVisitor for StructSpecializer<'_> {
         // Recurse into children first so nested StructInit
         // constructions specialize bottom-up.
         self.walk_expr(expr);
-        let Expr::StructInit { name, fields, .. } = expr else {
+        let Expr::StructInit {
+            name,
+            fields,
+            const_args,
+            ..
+        } = expr
+        else {
             return;
         };
         let Some(struct_def) = self.generic_structs.get(name) else {
             return;
         };
+        // Explicit const arguments from the construction turbofish
+        // `Buf::<8> { ... }`, evaluated (post-substitution they are
+        // ground). A missing or still-symbolic const argument defers.
+        let empty: BTreeMap<String, i64> = BTreeMap::new();
+        let mut const_values: Vec<i64> = Vec::new();
+        for ca in const_args.iter() {
+            match eval_const_expr(ca, &empty) {
+                Some(v) => const_values.push(v),
+                None => return,
+            }
+        }
+        if const_values.len() != struct_def.const_params.len() {
+            return;
+        }
         let mut type_args: Vec<TypeExpr> = Vec::new();
         for tp in &struct_def.type_params {
             let mut inferred: Option<TypeExpr> = None;
@@ -668,8 +703,7 @@ impl crate::visitor::MutVisitor for StructSpecializer<'_> {
         if type_args.len() != struct_def.type_params.len() {
             return;
         }
-        let key_args: Vec<String> = type_args.iter().map(type_arg_canonical).collect();
-        let canonical = key_args.join(",");
+        let canonical = generic_cache_canonical(&type_args, &const_values);
         let cache_key = (name.clone(), canonical);
         let spec_name = if let Some(existing) = self.specs.get(&cache_key) {
             existing.clone()
@@ -678,23 +712,32 @@ impl crate::visitor::MutVisitor for StructSpecializer<'_> {
             // leave the construction generic for a clean later error.
             return;
         } else {
-            let spec_name = mangle_struct(name, &type_args);
+            let spec_name = mangle_struct_with_consts(name, &type_args, &const_values);
             // Pass the in-progress specs so any nested generic
             // field types (e.g. `inner: Cell<i64>` inside a
             // freshly specialized `Wrap<i64>`) are rewritten to
             // their already-emitted specialization names. The
             // bottom-up walk guarantees inner specializations
             // exist before the outer is emitted.
-            let specialized =
-                specialize_struct(struct_def, &type_args, spec_name.clone(), self.specs);
+            let specialized = specialize_struct(
+                struct_def,
+                &type_args,
+                &const_values,
+                spec_name.clone(),
+                self.specs,
+            );
             self.specs.insert(cache_key, spec_name.clone());
             self.reverse_specs
                 .insert(spec_name.clone(), (name.clone(), type_args.clone()));
             self.new_structs.push(specialized);
             spec_name
         };
-        if let Expr::StructInit { name, .. } = expr {
+        if let Expr::StructInit {
+            name, const_args, ..
+        } = expr
+        {
             *name = spec_name;
+            const_args.clear();
         }
     }
 }
@@ -708,9 +751,51 @@ fn mangle_struct(name: &str, type_args: &[TypeExpr]) -> String {
     s
 }
 
+/// Canonical cache key for a generic instantiation over type and const
+/// arguments, shared by the specializer (which populates the cache) and
+/// the type-reference resolver (which reads it), so a const-generic type
+/// reference resolves to the same specialization (B40).
+fn generic_cache_canonical(type_args: &[TypeExpr], const_values: &[i64]) -> String {
+    use alloc::string::ToString;
+    let mut s = type_args
+        .iter()
+        .map(type_arg_canonical)
+        .collect::<Vec<_>>()
+        .join(",");
+    if !const_values.is_empty() {
+        s.push_str(";c=");
+        s.push_str(
+            &const_values
+                .iter()
+                .map(|v| v.to_string())
+                .collect::<Vec<_>>()
+                .join(","),
+        );
+    }
+    s
+}
+
+/// Mangle a specialized struct/enum name including const arguments after
+/// the type arguments, mirroring [`mangle_with_consts`] (B40).
+fn mangle_struct_with_consts(name: &str, type_args: &[TypeExpr], const_values: &[i64]) -> String {
+    use alloc::string::ToString;
+    let mut s = mangle_struct(name, type_args);
+    for v in const_values {
+        s.push_str("__c");
+        if *v < 0 {
+            s.push('n');
+            s.push_str(&v.unsigned_abs().to_string());
+        } else {
+            s.push_str(&v.to_string());
+        }
+    }
+    s
+}
+
 fn specialize_struct(
     struct_def: &StructDef,
     type_args: &[TypeExpr],
+    const_values: &[i64],
     spec_name: String,
     existing_specs: &BTreeMap<(String, String), String>,
 ) -> StructDef {
@@ -718,11 +803,18 @@ fn specialize_struct(
     for (tp, arg) in struct_def.type_params.iter().zip(type_args.iter()) {
         subst.insert(tp.name.clone(), arg.clone());
     }
+    let const_subst: BTreeMap<String, i64> = struct_def
+        .const_params
+        .iter()
+        .zip(const_values.iter())
+        .map(|(cp, v)| (cp.name.clone(), *v))
+        .collect();
     let fields: Vec<FieldDecl> = struct_def
         .fields
         .iter()
         .map(|f| {
             let substituted = subst_type_expr(&f.type_expr, &subst);
+            let substituted = subst_const_dims_in_type(&substituted, &const_subst);
             FieldDecl {
                 name: f.name.clone(),
                 type_expr: resolve_generic_type_to_spec(&substituted, existing_specs),
@@ -750,24 +842,27 @@ fn resolve_generic_type_to_spec(
     specs: &BTreeMap<(String, String), String>,
 ) -> TypeExpr {
     match t {
-        TypeExpr::Named(name, args, _, span) if !args.is_empty() => {
+        TypeExpr::Named(name, args, const_args, span)
+            if !args.is_empty() || !const_args.is_empty() =>
+        {
             let resolved_args: Vec<TypeExpr> = args
                 .iter()
                 .map(|a| resolve_generic_type_to_spec(a, specs))
                 .collect();
-            let canonical = resolved_args
-                .iter()
-                .map(type_arg_canonical)
-                .collect::<Vec<_>>()
-                .join(",");
-            if let Some(spec) = specs.get(&(name.clone(), canonical)) {
-                TypeExpr::Named(spec.clone(), Vec::new(), Vec::new(), *span)
-            } else {
-                TypeExpr::Named(name.clone(), resolved_args, Vec::new(), *span)
+            // A const argument in a type reference is a literal after
+            // substitution; a still-symbolic one leaves the reference
+            // generic (an internal state the re-typecheck rejects).
+            let const_values: Option<Vec<i64>> = const_args.iter().map(|c| c.as_lit()).collect();
+            if let Some(const_values) = const_values {
+                let canonical = generic_cache_canonical(&resolved_args, &const_values);
+                if let Some(spec) = specs.get(&(name.clone(), canonical)) {
+                    return TypeExpr::Named(spec.clone(), Vec::new(), Vec::new(), *span);
+                }
             }
+            TypeExpr::Named(name.clone(), resolved_args, const_args.clone(), *span)
         }
-        TypeExpr::Named(name, args, _, span) => {
-            TypeExpr::Named(name.clone(), args.clone(), Vec::new(), *span)
+        TypeExpr::Named(name, args, const_args, span) => {
+            TypeExpr::Named(name.clone(), args.clone(), const_args.clone(), *span)
         }
         TypeExpr::Tuple(items, span) => TypeExpr::Tuple(
             items
@@ -1635,7 +1730,12 @@ fn subst_in_expr(expr: &Expr, subst: &BTreeMap<String, TypeExpr>) -> Expr {
             index: Box::new(subst_in_expr(index, subst)),
             span: *span,
         },
-        Expr::StructInit { name, fields, span } => Expr::StructInit {
+        Expr::StructInit {
+            name,
+            fields,
+            const_args,
+            span,
+        } => Expr::StructInit {
             name: name.clone(),
             fields: fields
                 .iter()
@@ -1645,17 +1745,20 @@ fn subst_in_expr(expr: &Expr, subst: &BTreeMap<String, TypeExpr>) -> Expr {
                     span: f.span,
                 })
                 .collect(),
+            const_args: const_args.clone(),
             span: *span,
         },
         Expr::EnumVariant {
             enum_name,
             variant,
             args,
+            const_args,
             span,
         } => Expr::EnumVariant {
             enum_name: enum_name.clone(),
             variant: variant.clone(),
             args: args.iter().map(|a| subst_in_expr(a, subst)).collect(),
+            const_args: const_args.clone(),
             span: *span,
         },
         Expr::ArrayLiteral { elements, span } => Expr::ArrayLiteral {

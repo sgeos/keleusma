@@ -5589,6 +5589,7 @@ fn infer_expr_type(fc: &FuncCompiler, expr: &Expr) -> Option<TypeExpr> {
             variant,
             args,
             span,
+            ..
         } => {
             // `Option::Some(x)` infers as `Option<T>` so a later flat access
             // (a `match` scrutinee binding) recovers the payload type `T`
