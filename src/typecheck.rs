@@ -287,7 +287,7 @@ impl Type {
                     fixed_default_frac_bits,
                 )))
             }
-            TypeExpr::Named(name, args, _) => {
+            TypeExpr::Named(name, args, _, _) => {
                 if let Some(t) = type_params.get(name) {
                     return t.clone();
                 }
@@ -860,7 +860,7 @@ fn validate_no_nested_negative_labels(
         TypeExpr::Array(elem, _, _) | TypeExpr::Option(elem, _) => {
             validate_no_nested_negative_labels(elem, false)
         }
-        TypeExpr::Named(_, args, _) => {
+        TypeExpr::Named(_, args, _, _) => {
             for arg in args {
                 validate_no_nested_negative_labels(arg, false)?;
             }
@@ -1397,7 +1397,7 @@ fn type_to_expr_full(ty: &Type, span: crate::token::Span) -> Option<TypeExpr> {
         ),
         Type::Option(inner) => TypeExpr::Option(Box::new(type_to_expr_full(inner, span)?), span),
         Type::Struct(name, _) | Type::Enum(name, _) | Type::Newtype(name) | Type::Opaque(name) => {
-            TypeExpr::Named(name.clone(), Vec::new(), span)
+            TypeExpr::Named(name.clone(), Vec::new(), Vec::new(), span)
         }
         Type::Labelled(inner, _) => return type_to_expr_full(inner, span),
         Type::Var(_) => return None,

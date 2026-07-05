@@ -176,7 +176,7 @@ impl<'a> LayoutContext<'a> {
             }
             TypeExpr::Labelled(inner, _, _) => self.layout_for(inner),
             TypeExpr::NegativeLabelled(inner, _, _) => self.layout_for(inner),
-            TypeExpr::Named(name, args, _) => {
+            TypeExpr::Named(name, args, _, _) => {
                 if !args.is_empty() {
                     return Err(LayoutError::UnresolvedGeneric(name.clone()));
                 }
@@ -439,7 +439,7 @@ mod tests {
             },
         );
         let ctx = LayoutContext::new(&structs, &enums, I64_BYTES, F64_BYTES);
-        let ty = TypeExpr::Named("Point".to_string(), alloc::vec![], span());
+        let ty = TypeExpr::Named("Point".to_string(), alloc::vec![], alloc::vec![], span());
         assert_eq!(ctx.size_in_bytes(&ty).unwrap(), 2 * I64_BYTES);
     }
 
@@ -477,7 +477,7 @@ mod tests {
             },
         );
         let ctx = LayoutContext::new(&structs, &enums, I64_BYTES, F64_BYTES);
-        let ty = TypeExpr::Named("Color".to_string(), alloc::vec![], span());
+        let ty = TypeExpr::Named("Color".to_string(), alloc::vec![], alloc::vec![], span());
         // Word-sized discriminant (B28 P2): 8-byte disc + 3-byte payload.
         assert_eq!(ctx.size_in_bytes(&ty).unwrap(), I64_BYTES + 3);
     }
@@ -486,7 +486,7 @@ mod tests {
     fn unknown_named_type_is_an_error() {
         let (structs, enums) = empty_tables();
         let ctx = LayoutContext::new(&structs, &enums, I64_BYTES, F64_BYTES);
-        let ty = TypeExpr::Named("Missing".to_string(), alloc::vec![], span());
+        let ty = TypeExpr::Named("Missing".to_string(), alloc::vec![], alloc::vec![], span());
         match ctx.size_in_bytes(&ty) {
             Err(LayoutError::UnknownType(name)) => assert_eq!(name, "Missing"),
             other => panic!("expected UnknownType error, got {:?}", other),
@@ -500,6 +500,7 @@ mod tests {
         let ty = TypeExpr::Named(
             "Vec".to_string(),
             alloc::vec![TypeExpr::Prim(PrimType::Word, span())],
+            alloc::vec![],
             span(),
         );
         match ctx.size_in_bytes(&ty) {
@@ -533,7 +534,7 @@ mod tests {
             },
         );
         let ctx = LayoutContext::new(&structs, &enums, I64_BYTES, F64_BYTES);
-        let ty = TypeExpr::Named("Wrapper".to_string(), alloc::vec![], span());
+        let ty = TypeExpr::Named("Wrapper".to_string(), alloc::vec![], alloc::vec![], span());
         assert_eq!(ctx.size_in_bytes(&ty).unwrap(), 2 * I64_BYTES);
     }
 
@@ -563,7 +564,7 @@ mod tests {
             },
         );
         let ctx = LayoutContext::new(&structs, &enums, I64_BYTES, F64_BYTES);
-        let ty = TypeExpr::Named("Greeting".to_string(), alloc::vec![], span());
+        let ty = TypeExpr::Named("Greeting".to_string(), alloc::vec![], alloc::vec![], span());
         assert_eq!(ctx.size_in_bytes(&ty).unwrap(), I64_BYTES + 2 * I64_BYTES);
     }
 
@@ -593,7 +594,7 @@ mod tests {
             },
         );
         let ctx_2byte_word = LayoutContext::new(&structs, &enums, 2, 4);
-        let ty = TypeExpr::Named("Point".to_string(), alloc::vec![], span());
+        let ty = TypeExpr::Named("Point".to_string(), alloc::vec![], alloc::vec![], span());
         assert_eq!(ctx_2byte_word.size_in_bytes(&ty).unwrap(), 2 * 2);
 
         let ctx_1byte_word = LayoutContext::new(&structs, &enums, 1, 4);

@@ -102,7 +102,7 @@ fn zero_value_at(
             let z = zero_value_at(elem, reg, depth + 1)?;
             Ok(ConstValue::Array(alloc::vec![z; count]))
         }
-        TypeExpr::Named(name, _generics, _) => zero_named(name, reg, depth),
+        TypeExpr::Named(name, _generics, _, _) => zero_named(name, reg, depth),
         // Information-flow labels do not affect the runtime value;
         // descend to the inner type, as the layout pass does.
         TypeExpr::Labelled(inner, _, _) | TypeExpr::NegativeLabelled(inner, _, _) => {
@@ -356,7 +356,7 @@ mod tests {
         let (_s, e, n, r) = empty_reg();
         let reg = reg(&s, &e, &n, &r);
         let z = zero_value(
-            &TypeExpr::Named(String::from("Point"), Vec::new(), sp()),
+            &TypeExpr::Named(String::from("Point"), Vec::new(), Vec::new(), sp()),
             &reg,
         )
         .unwrap();
@@ -398,7 +398,7 @@ mod tests {
         let (s, _e, n, r) = empty_reg();
         let reg = reg(&s, &e, &n, &r);
         let z = zero_value(
-            &TypeExpr::Named(String::from("Dir"), Vec::new(), sp()),
+            &TypeExpr::Named(String::from("Dir"), Vec::new(), Vec::new(), sp()),
             &reg,
         )
         .unwrap();
@@ -429,7 +429,7 @@ mod tests {
         let (s, _e, n, r) = empty_reg();
         let reg = reg(&s, &e, &n, &r);
         let z = zero_value(
-            &TypeExpr::Named(String::from("Code"), Vec::new(), sp()),
+            &TypeExpr::Named(String::from("Code"), Vec::new(), Vec::new(), sp()),
             &reg,
         )
         .unwrap();
@@ -460,7 +460,7 @@ mod tests {
         assert_eq!(lowest_valid(nt, &reg), Some(5));
         assert_eq!(
             zero_value(
-                &TypeExpr::Named(String::from("Limited"), Vec::new(), sp()),
+                &TypeExpr::Named(String::from("Limited"), Vec::new(), Vec::new(), sp()),
                 &reg
             ),
             Ok(ConstValue::Int(5))
@@ -509,7 +509,7 @@ mod tests {
         assert_eq!(lowest_valid(nt, &reg), None);
         assert_eq!(
             zero_value(
-                &TypeExpr::Named(String::from("Raw"), Vec::new(), sp()),
+                &TypeExpr::Named(String::from("Raw"), Vec::new(), Vec::new(), sp()),
                 &reg
             ),
             Ok(ConstValue::Int(0))
@@ -522,7 +522,7 @@ mod tests {
         let reg = reg(&s, &e, &n, &r);
         assert_eq!(
             zero_value(
-                &TypeExpr::Named(String::from("Nope"), Vec::new(), sp()),
+                &TypeExpr::Named(String::from("Nope"), Vec::new(), Vec::new(), sp()),
                 &reg
             ),
             Err(ZeroValueError::UnknownType(String::from("Nope")))

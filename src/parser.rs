@@ -2623,7 +2623,12 @@ impl<'a> Parser<'a> {
                 }
                 end = self.expect(&TokenKind::Gt)?;
             }
-            return Ok(TypeExpr::Named(name, args, merge_spans(name_span, end)));
+            return Ok(TypeExpr::Named(
+                name,
+                args,
+                Vec::new(),
+                merge_spans(name_span, end),
+            ));
         }
 
         // Unit type `()` or tuple type `(T, U, ...)`.

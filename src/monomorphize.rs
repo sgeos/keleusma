@@ -370,7 +370,7 @@ impl crate::visitor::MutVisitor for EnumSpecializer<'_> {
         {
             if let Some(scrutinee_ty) =
                 infer_arg_type(scrutinee, self.locals, self.fn_returns, None)
-                && let TypeExpr::Named(spec_name, _, _) = &scrutinee_ty
+                && let TypeExpr::Named(spec_name, _, _, _) = &scrutinee_ty
                 && let Some(original) = find_original_for_spec(self.specs, spec_name)
             {
                 let spec_name = spec_name.clone();
@@ -401,7 +401,7 @@ impl crate::visitor::MutVisitor for EnumSpecializer<'_> {
         for tp in &enum_def.type_params {
             let mut inferred: Option<TypeExpr> = None;
             for (i, decl_ty) in decl_variant.fields.iter().enumerate() {
-                if let TypeExpr::Named(n, _, _) = decl_ty
+                if let TypeExpr::Named(n, _, _, _) = decl_ty
                     && *n == tp.name
                     && let Some(arg) = args.get(i)
                     && let Some(t) = infer_arg_type(arg, self.locals, self.fn_returns, None)
@@ -629,7 +629,7 @@ impl crate::visitor::MutVisitor for StructSpecializer<'_> {
                 // Case 1: the field's declared type is the type
                 // parameter itself (e.g. `value: T`). The inferred
                 // init type is the bound for `T`.
-                if let TypeExpr::Named(n, _, _) = &decl_field.type_expr
+                if let TypeExpr::Named(n, _, _, _) = &decl_field.type_expr
                     && *n == tp.name
                 {
                     inferred = Some(init_ty);
@@ -642,13 +642,13 @@ impl crate::visitor::MutVisitor for StructSpecializer<'_> {
                 // through `reverse_specs` to recover the bound for
                 // `T`. Single-level only; deeper nesting (e.g.
                 // `Cell<Wrap<T>>`) is not yet handled.
-                if let TypeExpr::Named(outer_decl, decl_args, _) = &decl_field.type_expr
-                    && let TypeExpr::Named(spec_name, _, _) = &init_ty
+                if let TypeExpr::Named(outer_decl, decl_args, _, _) = &decl_field.type_expr
+                    && let TypeExpr::Named(spec_name, _, _, _) = &init_ty
                     && let Some((orig, inferred_args)) = self.reverse_specs.get(spec_name)
                     && orig == outer_decl
                 {
                     for (decl_arg, inf_arg) in decl_args.iter().zip(inferred_args.iter()) {
-                        if let TypeExpr::Named(arg_n, _, _) = decl_arg
+                        if let TypeExpr::Named(arg_n, _, _, _) = decl_arg
                             && *arg_n == tp.name
                         {
                             inferred = Some(inf_arg.clone());
@@ -750,7 +750,7 @@ fn resolve_generic_type_to_spec(
     specs: &BTreeMap<(String, String), String>,
 ) -> TypeExpr {
     match t {
-        TypeExpr::Named(name, args, span) if !args.is_empty() => {
+        TypeExpr::Named(name, args, _, span) if !args.is_empty() => {
             let resolved_args: Vec<TypeExpr> = args
                 .iter()
                 .map(|a| resolve_generic_type_to_spec(a, specs))
@@ -761,12 +761,14 @@ fn resolve_generic_type_to_spec(
                 .collect::<Vec<_>>()
                 .join(",");
             if let Some(spec) = specs.get(&(name.clone(), canonical)) {
-                TypeExpr::Named(spec.clone(), Vec::new(), *span)
+                TypeExpr::Named(spec.clone(), Vec::new(), Vec::new(), *span)
             } else {
-                TypeExpr::Named(name.clone(), resolved_args, *span)
+                TypeExpr::Named(name.clone(), resolved_args, Vec::new(), *span)
             }
         }
-        TypeExpr::Named(name, args, span) => TypeExpr::Named(name.clone(), args.clone(), *span),
+        TypeExpr::Named(name, args, _, span) => {
+            TypeExpr::Named(name.clone(), args.clone(), Vec::new(), *span)
+        }
         TypeExpr::Tuple(items, span) => TypeExpr::Tuple(
             items
                 .iter()
@@ -833,7 +835,7 @@ fn type_arg_canonical(t: &TypeExpr) -> String {
             PrimType::Text => "Text".to_string(),
         },
         TypeExpr::Unit(_) => "unit".to_string(),
-        TypeExpr::Named(n, args, _) => {
+        TypeExpr::Named(n, args, _, _) => {
             if args.is_empty() {
                 n.clone()
             } else {
@@ -885,11 +887,16 @@ fn infer_arg_type(
         }),
         Expr::Ident { name, .. } => locals.get(name).cloned(),
         Expr::StructInit { name, span, .. } => {
-            Some(TypeExpr::Named(name.clone(), Vec::new(), *span))
+            Some(TypeExpr::Named(name.clone(), Vec::new(), Vec::new(), *span))
         }
         Expr::EnumVariant {
             enum_name, span, ..
-        } => Some(TypeExpr::Named(enum_name.clone(), Vec::new(), *span)),
+        } => Some(TypeExpr::Named(
+            enum_name.clone(),
+            Vec::new(),
+            Vec::new(),
+            *span,
+        )),
         Expr::Call { name, .. } => fn_returns.get(name).cloned(),
         Expr::Cast { target, .. } => Some(target.clone()),
         Expr::TupleLiteral { elements, span } => {
@@ -961,7 +968,7 @@ fn infer_arg_type(
             let structs = structs?;
             let obj_ty = infer_arg_type(object, locals, fn_returns, Some(structs))?;
             let (struct_name, type_args) = match obj_ty {
-                TypeExpr::Named(name, args, _) => (name, args),
+                TypeExpr::Named(name, args, _, _) => (name, args),
                 _ => return None,
             };
             let struct_def = structs.get(&struct_name)?;
@@ -981,7 +988,7 @@ fn infer_arg_type(
                 // and would erroneously propagate as a concrete
                 // type argument at the call site. Return None so
                 // the call falls back to runtime tag dispatch.
-                if let TypeExpr::Named(field_name, field_args, _) = &field_decl.type_expr
+                if let TypeExpr::Named(field_name, field_args, _, _) = &field_decl.type_expr
                     && field_args.is_empty()
                     && struct_def
                         .type_params
@@ -1072,7 +1079,7 @@ fn type_head_for_impl(ty: &TypeExpr) -> String {
             PrimType::Text => "Text".to_string(),
         },
         TypeExpr::Unit(_) => "()".to_string(),
-        TypeExpr::Named(name, _, _) => name.clone(),
+        TypeExpr::Named(name, _, _, _) => name.clone(),
         TypeExpr::Tuple(_, _) => "tuple".to_string(),
         TypeExpr::Array(_, _, _) => "array".to_string(),
         TypeExpr::Multiword(_, _, _) => "Multiword".to_string(),
@@ -1089,8 +1096,9 @@ fn type_head_for_impl(ty: &TypeExpr) -> String {
 fn subst_type_expr(t: &TypeExpr, subst: &BTreeMap<String, TypeExpr>) -> TypeExpr {
     match t {
         TypeExpr::Prim(_, _) | TypeExpr::Unit(_) | TypeExpr::Multiword(_, _, _) => t.clone(),
-        TypeExpr::Named(name, args, span) => {
+        TypeExpr::Named(name, args, const_args, span) => {
             if args.is_empty()
+                && const_args.is_empty()
                 && let Some(replacement) = subst.get(name)
             {
                 return replacement.clone();
@@ -1098,6 +1106,7 @@ fn subst_type_expr(t: &TypeExpr, subst: &BTreeMap<String, TypeExpr>) -> TypeExpr
             TypeExpr::Named(
                 name.clone(),
                 args.iter().map(|a| subst_type_expr(a, subst)).collect(),
+                const_args.clone(),
                 *span,
             )
         }
@@ -1203,10 +1212,14 @@ fn subst_const_dims_in_type(te: &TypeExpr, const_subst: &BTreeMap<String, i64>) 
                 .collect(),
             *span,
         ),
-        TypeExpr::Named(name, args, span) => TypeExpr::Named(
+        TypeExpr::Named(name, args, const_args, span) => TypeExpr::Named(
             name.clone(),
             args.iter()
                 .map(|a| subst_const_dims_in_type(a, const_subst))
+                .collect(),
+            const_args
+                .iter()
+                .map(|c| subst_const_expr(c, const_subst))
                 .collect(),
             *span,
         ),
@@ -1790,7 +1803,7 @@ impl crate::visitor::MutVisitor for CallSpecializer<'_> {
         for tp in &generic_func.type_params {
             let mut inferred: Option<TypeExpr> = None;
             for (param_idx, param) in generic_func.params.iter().enumerate() {
-                if let Some(TypeExpr::Named(n, _, _)) = &param.type_expr
+                if let Some(TypeExpr::Named(n, _, _, _)) = &param.type_expr
                     && *n == tp.name
                     && let Some(arg) = args.get(param_idx)
                     && let Some(t) =

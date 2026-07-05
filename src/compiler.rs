@@ -336,7 +336,7 @@ fn render_type_expr(ty: &TypeExpr) -> String {
                 alloc::format!("Multiword<{}, {}>", n, f)
             }
         }
-        TypeExpr::Named(name, args, _) => {
+        TypeExpr::Named(name, args, _, _) => {
             if args.is_empty() {
                 name.clone()
             } else {
@@ -709,7 +709,7 @@ impl FuncCompiler {
                     return Some(name.clone());
                 }
                 let ty = self.local_type(name)?;
-                if let TypeExpr::Named(struct_name, _, _) = ty {
+                if let TypeExpr::Named(struct_name, _, _, _) = ty {
                     return Some(struct_name.clone());
                 }
                 None
@@ -726,7 +726,7 @@ impl FuncCompiler {
                     .get(&owner)
                     .or_else(|| self.type_info.data_field_types.get(&owner))
                     .and_then(|fields| fields.get(field))?;
-                if let TypeExpr::Named(struct_name, _, _) = field_ty {
+                if let TypeExpr::Named(struct_name, _, _, _) = field_ty {
                     return Some(struct_name.clone());
                 }
                 None
@@ -4189,7 +4189,7 @@ fn type_expr_head_name(t: &TypeExpr) -> String {
         },
         TypeExpr::Unit(_) => String::from("()"),
         TypeExpr::Multiword(_, _, _) => String::from("Multiword"),
-        TypeExpr::Named(name, _, _) => name.clone(),
+        TypeExpr::Named(name, _, _, _) => name.clone(),
         TypeExpr::Tuple(_, _) => String::from("tuple"),
         TypeExpr::Array(_, _, _) => String::from("array"),
         TypeExpr::Option(_, _) => String::from("Option"),
@@ -4517,7 +4517,7 @@ fn const_value_from_literal_for_field(
             }
             Ok(ConstValue::Array(out))
         }
-        (ConstInitializer::Struct { name, fields }, TypeExpr::Named(decl_name, _, _)) => {
+        (ConstInitializer::Struct { name, fields }, TypeExpr::Named(decl_name, _, _, _)) => {
             if decl_name != name {
                 return Err(CompileError {
                     message: format!(
@@ -4571,7 +4571,7 @@ fn const_value_from_literal_for_field(
                 variant,
                 args,
             },
-            TypeExpr::Named(decl_name, _, _),
+            TypeExpr::Named(decl_name, _, _, _),
         ) => {
             if decl_name != enum_name {
                 return Err(CompileError {
@@ -4946,7 +4946,7 @@ fn validate_data_field_type(
         TypeExpr::NegativeLabelled(inner, _, _) => {
             validate_data_field_type(inner, types, visibility, visiting)
         }
-        TypeExpr::Named(name, _args, span) => {
+        TypeExpr::Named(name, _args, _, span) => {
             if visiting.contains(name) {
                 return Err(CompileError {
                     message: format!(
@@ -5147,7 +5147,7 @@ fn compile_function_group(
             // primary source of non-singleton ranges consumed by
             // the refinement-elision lattice pass.
             if let crate::ast::Pattern::Variable(_, _) = &param.pattern {
-                if let Some(crate::ast::TypeExpr::Named(type_name, _, _)) = &param.type_expr
+                if let Some(crate::ast::TypeExpr::Named(type_name, _, _, _)) = &param.type_expr
                     && let Some(pred_name) =
                         fc.type_info.newtype_refinements.get(type_name).cloned()
                     && let Some((pred_param, body)) =
@@ -5582,7 +5582,7 @@ fn infer_expr_type(fc: &FuncCompiler, expr: &Expr) -> Option<TypeExpr> {
     }
     match expr {
         Expr::StructInit { name, span, .. } => {
-            Some(TypeExpr::Named(name.clone(), Vec::new(), *span))
+            Some(TypeExpr::Named(name.clone(), Vec::new(), Vec::new(), *span))
         }
         Expr::EnumVariant {
             enum_name,
@@ -5598,7 +5598,12 @@ fn infer_expr_type(fc: &FuncCompiler, expr: &Expr) -> Option<TypeExpr> {
                 let payload = args.first().and_then(|a| infer_expr_type(fc, a))?;
                 Some(TypeExpr::Option(Box::new(payload), *span))
             } else {
-                Some(TypeExpr::Named(enum_name.clone(), Vec::new(), *span))
+                Some(TypeExpr::Named(
+                    enum_name.clone(),
+                    Vec::new(),
+                    Vec::new(),
+                    *span,
+                ))
             }
         }
         Expr::Call { name, .. } => fc.type_info.function_returns.get(name).cloned(),
@@ -5705,10 +5710,10 @@ fn infer_expr_type(fc: &FuncCompiler, expr: &Expr) -> Option<TypeExpr> {
         // `as Word` cast).
         Expr::Checked { op_expr, arms, .. } => match op_expr.as_ref() {
             Expr::Cast {
-                target: TypeExpr::Named(n, args, sp),
+                target: TypeExpr::Named(n, args, _, sp),
                 ..
             } if fc.type_info.enum_variant_order.contains_key(n) => {
-                Some(TypeExpr::Named(n.clone(), args.clone(), *sp))
+                Some(TypeExpr::Named(n.clone(), args.clone(), Vec::new(), *sp))
             }
             // The construct's result type is its arms' common body type.
             // The arm bindings (ok(v), overflow(h, l), …) carry the
@@ -5751,7 +5756,7 @@ fn type_expr_head(ty: &TypeExpr) -> Option<String> {
         TypeExpr::Tuple(_, _) => Some("tuple".to_string()),
         TypeExpr::Array(_, _, _) => Some("array".to_string()),
         TypeExpr::Option(_, _) => Some("Option".to_string()),
-        TypeExpr::Named(name, _, _) => Some(name.clone()),
+        TypeExpr::Named(name, _, _, _) => Some(name.clone()),
         TypeExpr::Labelled(inner, _, _) => type_expr_head(inner),
         TypeExpr::NegativeLabelled(inner, _, _) => type_expr_head(inner),
     }
@@ -5798,7 +5803,7 @@ fn build_enum_layouts(ti: &TypeInfo) -> Vec<crate::bytecode::EnumLayout> {
     ti.enum_variant_order
         .iter()
         .map(|(enum_name, variants)| {
-            let ty = TypeExpr::Named(enum_name.clone(), Vec::new(), Span::default());
+            let ty = TypeExpr::Named(enum_name.clone(), Vec::new(), Vec::new(), Span::default());
             let min_payload = type_flat_size(&ty, ti)
                 .and_then(|total| total.checked_sub(ti.word_bytes))
                 .and_then(|payload_max| u32::try_from(payload_max).ok())
@@ -6267,7 +6272,7 @@ fn composite_needs_fieldwise_eq(ty: &TypeExpr, ti: &TypeInfo) -> bool {
         // `Option<T>` flattens its `Some` payload (B28 P3 item 5 C4), so two
         // `Some` bodies must be compared field-wise rather than by raw bytes.
         TypeExpr::Option(_, _) => true,
-        TypeExpr::Named(name, _, _) => {
+        TypeExpr::Named(name, _, _, _) => {
             ti.struct_field_order.contains_key(&name) || ti.enum_variant_order.contains_key(&name)
         }
         _ => false,
@@ -6316,7 +6321,7 @@ fn composite_field_accessors(
     ty: &TypeExpr,
 ) -> Result<Vec<(FieldAccessOp, TypeExpr)>, CompileError> {
     match strip_type_labels(ty) {
-        TypeExpr::Named(name, _, span) => {
+        TypeExpr::Named(name, _, _, span) => {
             let order = fc
                 .type_info
                 .struct_field_order
@@ -6407,7 +6412,7 @@ fn emit_composite_fieldwise_eq(
     }
     // An enum is compared by variant dispatch, not the uniform field loop:
     // the active variant selects which payload fields to compare.
-    if let TypeExpr::Named(name, _, _) = &strip_type_labels(ty)
+    if let TypeExpr::Named(name, _, _, _) = &strip_type_labels(ty)
         && fc.type_info.enum_variant_order.contains_key(name)
     {
         return emit_enum_fieldwise_eq(fc, name, ltmp, rtmp);
@@ -6702,7 +6707,7 @@ fn emit_enum_fieldwise_eq(
 /// unwrapping information-flow label wrappers. `None` for any other type.
 fn named_type_name(ty: Option<&TypeExpr>) -> Option<&str> {
     match ty {
-        Some(TypeExpr::Named(name, _, _)) => Some(name),
+        Some(TypeExpr::Named(name, _, _, _)) => Some(name),
         Some(TypeExpr::Labelled(inner, _, _)) | Some(TypeExpr::NegativeLabelled(inner, _, _)) => {
             named_type_name(Some(inner))
         }
@@ -7155,7 +7160,7 @@ fn normalize_fixed_defaults(program: &mut Program, frac_bits: u8) {
             }
             TypeExpr::Array(elem, _, _) => fix_type(elem, frac_bits),
             TypeExpr::Option(inner, _) => fix_type(inner, frac_bits),
-            TypeExpr::Named(_, args, _) => {
+            TypeExpr::Named(_, args, _, _) => {
                 for a in args.iter_mut() {
                     fix_type(a, frac_bits);
                 }
@@ -7801,7 +7806,7 @@ fn param_range_from_type(
     t: &Option<crate::ast::TypeExpr>,
     type_info: &TypeInfo,
 ) -> Option<crate::interval::IntervalSet> {
-    if let Some(crate::ast::TypeExpr::Named(type_name, _, _)) = t
+    if let Some(crate::ast::TypeExpr::Named(type_name, _, _, _)) = t
         && let Some(pred_name) = type_info.newtype_refinements.get(type_name)
         && let Some((pred_param, body)) = type_info.refinement_bodies.get(pred_name)
         && let Some(range) = predicate_true_set(body, pred_param)
@@ -8829,7 +8834,7 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
             // The flat allocation size comes from the struct type; a
             // non-flat (reference-bearing) struct bakes the boxed form with
             // a template for by-name access (B28 P4).
-            let ty = TypeExpr::Named(name.clone(), Vec::new(), Span::default());
+            let ty = TypeExpr::Named(name.clone(), Vec::new(), Vec::new(), Span::default());
             let byte_size = flat_alloc_bytes(&ty, &fc.type_info);
             let count = ordered.len() as u16;
             for field in &ordered {
@@ -8889,7 +8894,12 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
                     Some(1i64),
                 ),
                 None => (
-                    TypeExpr::Named(enum_name.to_string(), Vec::new(), Span::default()),
+                    TypeExpr::Named(
+                        enum_name.to_string(),
+                        Vec::new(),
+                        Vec::new(),
+                        Span::default(),
+                    ),
                     None,
                 ),
             };
@@ -9069,7 +9079,7 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
             // a chain of `IsEnum` tests, one per variant, that
             // each push the variant's discriminant on a match.
             if matches!(target, TypeExpr::Prim(PrimType::Word, _))
-                && let Some(TypeExpr::Named(enum_name, _, _)) = source.as_ref()
+                && let Some(TypeExpr::Named(enum_name, _, _, _)) = source.as_ref()
                 && fc.type_info.enum_variant_order.contains_key(enum_name)
             {
                 let enum_name = enum_name.clone();
@@ -9081,11 +9091,11 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
             // bytecode level because newtypes are transparent.
             // Detect both directions and emit nothing.
             let source_is_newtype = match source.as_ref() {
-                Some(TypeExpr::Named(name, _, _)) => fc.type_info.newtype_names.contains(name),
+                Some(TypeExpr::Named(name, _, _, _)) => fc.type_info.newtype_names.contains(name),
                 _ => false,
             };
             let target_is_newtype = match target {
-                TypeExpr::Named(name, _, _) => fc.type_info.newtype_names.contains(name),
+                TypeExpr::Named(name, _, _, _) => fc.type_info.newtype_names.contains(name),
                 _ => false,
             };
             if source_is_newtype || target_is_newtype {
@@ -9243,7 +9253,7 @@ fn compile_checked(
         target,
         ..
     } = op_expr
-        && let TypeExpr::Named(enum_name, _, _) = target
+        && let TypeExpr::Named(enum_name, _, _, _) = target
         && fc.type_info.enum_variant_order.contains_key(enum_name)
     {
         let enum_name = enum_name.clone();
@@ -9761,7 +9771,12 @@ fn compile_checked_newtype(
     // value. Newtypes are transparent at runtime, so both read the
     // same slot; only the bound type differs.
     let newtype_ty = infer_expr_type(fc, op_expr).unwrap_or_else(|| {
-        TypeExpr::Named(alloc::string::String::from(newtype_name), Vec::new(), *span)
+        TypeExpr::Named(
+            alloc::string::String::from(newtype_name),
+            Vec::new(),
+            Vec::new(),
+            *span,
+        )
     });
     let underlying_ty = infer_expr_type(fc, arg).unwrap_or(TypeExpr::Prim(PrimType::Word, *span));
 
@@ -10021,7 +10036,12 @@ fn compile_checked_discriminant(
                 // Unit-variant construction (B28 P4). A flat enum bakes the
                 // discriminant as its only packed value; a non-uniform enum
                 // bakes the boxed form with a type/variant template.
-                let ty = TypeExpr::Named(enum_name.to_string(), Vec::new(), Span::default());
+                let ty = TypeExpr::Named(
+                    enum_name.to_string(),
+                    Vec::new(),
+                    Vec::new(),
+                    Span::default(),
+                );
                 match flat_alloc_bytes(&ty, &fc.type_info) {
                     Some(byte_size) => {
                         let d_const = fc.add_constant(Value::Int(disc));
@@ -10047,6 +10067,7 @@ fn compile_checked_discriminant(
                             bind,
                             Some(TypeExpr::Named(
                                 alloc::string::String::from(enum_name),
+                                Vec::new(),
                                 Vec::new(),
                                 *span,
                             )),
@@ -10074,7 +10095,12 @@ fn compile_checked_discriminant(
                 // Unit-variant construction (B28 P4). A flat enum bakes the
                 // discriminant as its only packed value; a non-uniform enum
                 // bakes the boxed form with a type/variant template.
-                let ty = TypeExpr::Named(enum_name.to_string(), Vec::new(), Span::default());
+                let ty = TypeExpr::Named(
+                    enum_name.to_string(),
+                    Vec::new(),
+                    Vec::new(),
+                    Span::default(),
+                );
                 match flat_alloc_bytes(&ty, &fc.type_info) {
                     Some(byte_size) => {
                         let d_const = fc.add_constant(Value::Int(disc));

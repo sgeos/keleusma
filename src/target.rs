@@ -291,7 +291,7 @@ impl TargetChecker<'_> {
             }
             TypeExpr::Array(elem, _, _) => self.check_type(elem),
             TypeExpr::Option(inner, _) => self.check_type(inner),
-            TypeExpr::Named(_, args, _) => {
+            TypeExpr::Named(_, args, _, _) => {
                 for a in args {
                     self.check_type(a);
                 }

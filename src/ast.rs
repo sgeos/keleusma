@@ -1121,10 +1121,12 @@ pub struct FieldInit {
 pub enum TypeExpr {
     /// Primitive type (`i64`, `f64`, `bool`, `String`).
     Prim(PrimType, Span),
-    /// Named type (struct, enum, or opaque) with optional generic
-    /// arguments. The `Vec<TypeExpr>` is empty for non-generic
-    /// references.
-    Named(String, Vec<TypeExpr>, Span),
+    /// Named type (struct, enum, or opaque) with optional generic type
+    /// arguments (`Vec<TypeExpr>`) and const arguments (`Vec<ConstExpr>`),
+    /// in that order (types before consts). Both are empty for a
+    /// non-generic reference. A const argument arises from a
+    /// const-generic type such as `Buf<8>` (B40).
+    Named(String, Vec<TypeExpr>, Vec<ConstExpr>, Span),
     /// Tuple type: `(T, U)`.
     Tuple(Vec<TypeExpr>, Span),
     /// Array type: `[T; N]`. The size is a const expression: a literal, a
@@ -1215,7 +1217,7 @@ impl TypeExpr {
     pub fn span(&self) -> Span {
         match self {
             TypeExpr::Prim(_, span)
-            | TypeExpr::Named(_, _, span)
+            | TypeExpr::Named(_, _, _, span)
             | TypeExpr::Tuple(_, span)
             | TypeExpr::Array(_, _, span)
             | TypeExpr::Multiword(_, _, span)
