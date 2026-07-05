@@ -122,12 +122,50 @@ fn eval_const_lit(ce: &crate::ast::ConstExpr) -> Option<i64> {
     }
 }
 
+/// Render a symbolic const expression in a canonical form so that
+/// commutatively equivalent expressions compare equal. Fully-literal
+/// subexpressions are folded; the operands of the commutative operators
+/// `+` and `*` are ordered by their rendered form (so `n + 1` and
+/// `1 + n` both render `(1 + n)`); `-` keeps its operand order. This is
+/// a first-pass usability aid only: after monomorphization every const
+/// dimension is a folded literal, so the post-monomorphization
+/// re-typecheck, not this string comparison, is the soundness gate.
+/// Associativity across nested additions or multiplications is not
+/// normalized, so `(n + 1) + m` and `n + (1 + m)` still differ here and
+/// defer to the re-typecheck (B40).
+fn normalize_const_expr(ce: &crate::ast::ConstExpr) -> alloc::string::String {
+    use crate::ast::{ConstBinOp, ConstExpr};
+    if let Some(n) = eval_const_lit(ce) {
+        return alloc::format!("{}", n);
+    }
+    match ce {
+        ConstExpr::Lit(n, _) => alloc::format!("{}", n),
+        ConstExpr::Param(name, _) => name.clone(),
+        ConstExpr::Bin(op, l, r, _) => {
+            let ls = normalize_const_expr(l);
+            let rs = normalize_const_expr(r);
+            match op {
+                ConstBinOp::Add | ConstBinOp::Mul => {
+                    let sym = if matches!(op, ConstBinOp::Add) {
+                        "+"
+                    } else {
+                        "*"
+                    };
+                    let (a, b) = if ls <= rs { (ls, rs) } else { (rs, ls) };
+                    alloc::format!("({} {} {})", a, sym, b)
+                }
+                ConstBinOp::Sub => alloc::format!("({} - {})", ls, rs),
+            }
+        }
+    }
+}
+
 /// Resolve a const expression to a [`ConstDim`]: `Known` when it folds to
-/// a literal, else `Sym` of its rendered form (B40).
+/// a literal, else `Sym` of its canonical rendered form (B40).
 fn const_dim_from_expr(ce: &crate::ast::ConstExpr) -> ConstDim {
     match eval_const_lit(ce) {
         Some(n) => ConstDim::Known(n),
-        None => ConstDim::Sym(alloc::format!("{}", ce)),
+        None => ConstDim::Sym(normalize_const_expr(ce)),
     }
 }
 

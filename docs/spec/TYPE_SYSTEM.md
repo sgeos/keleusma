@@ -192,7 +192,7 @@ let second = pair.1;
 
 ### Fixed-Size Arrays
 
-Fixed-size arrays are homogeneous sequences with a known length. The syntax is `[T; N]` where `T` is the element type and `N` is the length. Element access uses index notation with a `Word` index.
+Fixed-size arrays are homogeneous sequences with a known length. The syntax is `[T; N]` where `T` is the element type and `N` is the length. The length may be an integer literal, a const parameter of an enclosing definition, or a total const expression over such parameters, as described in the Const Generics section. Element access uses index notation with a `Word` index.
 
 ```
 let values: [Float; 4] = [1.0, 2.0, 3.0, 4.0];
@@ -207,6 +207,24 @@ Option represents nullable values. It uses two variants: `Option::Some(value)` f
 let found: Option<Word> = Option::Some(42);
 let missing: Option<Word> = Option::None;
 ```
+
+## Const Generics
+
+A definition may be parameterized by a compile-time constant in addition to its type parameters. A const parameter is a lowercase name introduced by the `const` keyword, whose type is `Word`, the only admissible const-parameter type. Const parameters are declared on functions, structs, and enums, mixed freely with type parameters.
+
+```
+fn zeros<const n: Word>() -> [Word; n] { ... }
+struct Buf<const n: Word> { cap: Word, items: [Word; n] }
+enum Tagged<const n: Word> { Full([Word; n]), Tag(Word) }
+```
+
+A const parameter serves in two positions. In a type position it fixes an array length or a `Multiword` parameter, as in `[Word; n]` or `Multiword<n>`. In a value position inside a function body it is an ordinary `Word` value, so `for i in 0..n` and `let cap = n` are admissible. A local binding that reuses a const parameter's name shadows it in the ordinary lexical manner.
+
+Const arguments are always explicit because they cannot be inferred from value arguments. A call writes a turbofish, `zeros::<4>()`. A struct or enum construction writes a turbofish before the body or variant, `Buf::<8> { ... }` and `Tagged::<3>::Tag(...)`. A type reference writes the const in the argument list, `Buf<8>`. A const argument may be a total arithmetic expression over `+`, `-`, and `*`, for example `Buf<n + 1>` and `Multiword<2 * n>`; division and modulo are excluded so evaluation is total.
+
+Two array or `Multiword` types unify when their element or scale parameters agree and their dimensions are equal. A dimension is compared as a folded literal when it is fully constant, and otherwise by a canonical rendering of its symbolic form that folds constant subexpressions and orders the operands of the commutative operators, so `n + 1` and `1 + n` are equal. A symbolic dimension arises only inside a generic body and is resolved by monomorphization.
+
+Monomorphization substitutes every const parameter to a concrete integer literal, minting one specialization per distinct const value and keying each on the concrete value. After substitution every array length, `Multiword` parameter, and loop bound is a literal, so the worst-case-execution-time and worst-case-memory-usage analyses see no symbolic constant and the static bounds are preserved. This erasure is the reason const generics do not weaken the resource guarantees. The mandatory re-typecheck after monomorphization is the soundness gate. A dimension that is symbolically compatible in a generic body but concretely mismatched at an instantiation is rejected there rather than reaching code generation.
 
 ## Opaque Types
 

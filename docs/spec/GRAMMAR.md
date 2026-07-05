@@ -1036,9 +1036,28 @@ type_list       = type_expr { ',' type_expr }
 field_decl_list = field_decl { ',' field_decl }
 
 (* Generic Type Parameters and Bounds *)
-type_params     = '<' type_param { ',' type_param } '>'
+(* A parameter list mixes type parameters and const parameters. A const
+   parameter is a lowercase name introduced by the `const` keyword; its
+   type is `Word`, the only admissible const-parameter type, and may be
+   written explicitly. Type parameters and const parameters may appear in
+   any order in the declaration. *)
+type_params     = '<' generic_param { ',' generic_param } '>'
+generic_param   = type_param | const_param
 type_param      = upper_ident [ ':' trait_bound_list ]
+const_param     = 'const' lower_ident [ ':' 'Word' ]
 trait_bound_list = upper_ident { '+' upper_ident }
+
+(* A const expression appears in a const-argument position and in an
+   array size or Multiword parameter. It is total arithmetic over the
+   operators `+`, `-`, and `*` with the usual precedence and left
+   associativity, over integer literals and const parameters, with
+   parenthesised grouping. Division and modulo are excluded so evaluation
+   cannot fail. Comparison and shift operators are excluded so a closing
+   `>` in a `<...>` list is never ambiguous with an operator. *)
+const_expr      = const_add
+const_add       = const_mul { ('+' | '-') const_mul }
+const_mul       = const_atom { '*' const_atom }
+const_atom      = integer_lit | lower_ident | '(' const_expr ')'
 
 (* Trait Declarations *)
 trait_def       = 'trait' upper_ident [ type_params ] '{'
@@ -1070,15 +1089,22 @@ scalar_literal     = [ '-' ] integer_lit
 type_expr       = prim_type | named_type | tuple_type | array_type | option_type
                 | multiword_type
 prim_type       = 'Word' | 'Float' | 'bool' | 'Text' | '(' ')'
-named_type      = upper_ident [ '<' type_expr { ',' type_expr } '>' ]
+(* A named type's argument list carries type arguments followed by const
+   arguments. A const argument is a const expression; a type argument may
+   not follow a const argument. A pure const argument such as `Buf<8>` or
+   `Buf<n + 1>` is admissible. *)
+named_type      = upper_ident [ '<' generic_arg { ',' generic_arg } '>' ]
+generic_arg     = type_expr | const_expr
 tuple_type      = '(' type_expr ',' type_expr { ',' type_expr } ')'
-array_type      = '[' type_expr ';' integer_lit ']'
+array_type      = '[' type_expr ';' const_expr ']'
 option_type     = 'Option' '<' type_expr '>'
 (* Multi-word fixed-point type. The first argument is the word count
    N in [1, 65535]; the optional second argument is the fraction-bit
-   count F in [0, 65535], defaulting to 0 (the integer case). Both
-   arguments are integer literals, not type expressions. *)
-multiword_type  = 'Multiword' '<' integer_lit [ ',' integer_lit ] '>'
+   count F in [0, 65535], defaulting to 0 (the integer case). Each
+   argument is a const expression. A literal argument is range-checked at
+   parse time; a symbolic argument is range-checked after substitution at
+   monomorphization. *)
+multiword_type  = 'Multiword' '<' const_expr [ ',' const_expr ] '>'
 
 (* Functions *)
 (* The `ephemeral` and `signed` modifiers are permitted only on
@@ -1160,8 +1186,8 @@ tuple_index     = '.' integer_lit
 array_index     = '[' expression ']'
 primary_expr    = literal
                 | lower_ident
-                | upper_ident '::' upper_ident [ '(' [ arg_list ] ')' ]
-                | upper_ident [ '{' field_init_list '}' ]
+                | upper_ident [ const_args ] '::' upper_ident [ '(' [ arg_list ] ')' ]
+                | upper_ident [ const_args ] [ '{' field_init_list '}' ]
                 | function_call
                 | yield_expr
                 | if_expr
@@ -1190,7 +1216,12 @@ multiword_ctor  = 'Multiword' '::' '<' integer_lit [ ',' integer_lit ] '>'
 
 literal         = integer_lit | float_lit | string_lit | bool_lit
 qualified_name  = lower_ident { '::' lower_ident }
-function_call   = qualified_name '(' [ arg_list ] ')'
+(* A call, a struct construction, and an enum-variant construction each
+   supply const arguments through an explicit turbofish, because a const
+   argument cannot be inferred from the value arguments. The turbofish
+   carries const expressions only. *)
+const_args      = '::' '<' const_expr { ',' const_expr } '>'
+function_call   = qualified_name [ const_args ] '(' [ arg_list ] ')'
 arg_list        = expression { ',' expression }
                 | expression { ',' expression } ',' '_'
                 | '_' { ',' expression }

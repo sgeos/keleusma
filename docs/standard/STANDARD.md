@@ -465,8 +465,10 @@ word count with runtime index arithmetic and branch-free bounds guards, so it
 carries no runtime loop and preserves the definitive worst-case bounds. The
 bitwise operators `band`, `bor`, `bxor`, and the prefix `bnot` are implemented,
 applied to each limb independently with no cross-limb interaction. The multi-word
-arithmetic family is therefore complete; general const generics for the word and
-fraction-bit parameters remain a separate feature, tracked as B40 in the backlog.
+arithmetic family is therefore complete. General const generics for the word and
+fraction-bit parameters were implemented under B40 in V0.2.1, so a word count or
+fraction-bit count may now be a const parameter or a total const expression
+threaded from an enclosing definition rather than only a literal.
 
 #### 5.1.3 Composite kinds
 
@@ -1195,9 +1197,10 @@ this document.
    fixed-point), the divide and modulo at every fraction-bit count, the four
    shift operators with a constant or runtime-variable amount, and the bitwise
    operators `band`, `bor`, `bxor`, and `bnot` are implemented; `Byte` is admitted
-   by the scalar shift and bitwise operators. One item remains: the type is
-   recognised specially rather than through general const generics, which stay a
-   separate feature tracked as B40. The overflow-capturing form of `asl` inside the
+   by the scalar shift and bitwise operators. General const generics were
+   implemented under B40 in V0.2.1, so the word and fraction-bit parameters may now
+   be const parameters or total const expressions rather than only literals, and the
+   type is no longer a special case in that respect. The overflow-capturing form of `asl` inside the
    checked-arithmetic construct still requires a compile-time-constant amount,
    because it lowers to a multiply by the constant `2^k`.
 3. The instruction count in prior project documents was recorded as 66. The instruction

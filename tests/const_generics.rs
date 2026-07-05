@@ -188,6 +188,64 @@ fn const_generic_enum_basic() {
 }
 
 #[test]
+fn const_arith_in_array_dim() {
+    // A const dimension may be an arithmetic expression over a const
+    // parameter. `[Word; n + 1]` with `n = 2` specializes to `[Word; 3]`,
+    // so the three-element argument matches (B40 phase 4).
+    assert_eq!(
+        run_to_int(
+            "fn first<const n: Word>(a: [Word; n + 1]) -> Word { a[0] }\n\
+             fn main() -> Word { first::<2>([10, 20, 30]) }"
+        ),
+        10
+    );
+}
+
+#[test]
+fn const_arith_precedence() {
+    // `*` binds tighter than `+`: `n * 2 + 1` with `n = 2` is `5`, used
+    // here as a value (the body arithmetic path), confirming the const
+    // parameter participates in ordinary precedence.
+    assert_eq!(
+        run_to_int(
+            "fn v<const n: Word>() -> Word { n * 2 + 1 }\n\
+             fn main() -> Word { v::<2>() }"
+        ),
+        5
+    );
+}
+
+#[test]
+fn commutative_const_dims_unify() {
+    // A body whose parameter dimension is `n + 1` and whose return
+    // dimension is `1 + n` must type check in the first pass: the two
+    // symbolic dimensions are commutatively equal, so canonical
+    // normalization makes them compatible. Without normalization the
+    // first pass would reject this valid program (B40 phase 4). The
+    // instantiation `n = 2` makes both `3`.
+    assert_eq!(
+        run_to_int(
+            "fn ident<const n: Word>(a: [Word; n + 1]) -> [Word; 1 + n] { a }\n\
+             fn main() -> Word { ident::<2>([7, 8, 9])[0] }"
+        ),
+        7
+    );
+}
+
+#[test]
+fn const_arith_multiword_word_count() {
+    // A Multiword word count may be an arithmetic expression: `2 * n`
+    // with `n = 1` specializes to a two-word value (B40 phase 4).
+    assert_eq!(
+        run_to_int(
+            "fn low<const n: Word>(m: Multiword<2 * n>) -> Word { m[0] }\n\
+             fn main() -> Word { low::<1>((7, 0) as Multiword<2>) }"
+        ),
+        7
+    );
+}
+
+#[test]
 fn distinct_enum_const_args_specialize_independently() {
     // Two instantiations of a const-generic enum with different const
     // values are distinct specializations (`Buf__c2` and `Buf__c4`), each

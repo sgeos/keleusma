@@ -692,9 +692,61 @@ impl<'a> Parser<'a> {
         Ok(())
     }
 
-    /// Parse a single const expression. In this increment: an integer
-    /// literal or a const-parameter reference (a lowercase identifier).
+    /// Parse a const expression. Total arithmetic over `+`, `-`, and `*`
+    /// (no division or modulo, so evaluation is trivially total) with the
+    /// usual precedence (`*` binds tighter than `+`/`-`) and left
+    /// associativity; atoms are integer literals, const-parameter
+    /// references (lowercase identifiers), and parenthesized const
+    /// expressions. Comparison and shift operators are deliberately
+    /// excluded so a `<...>` argument list never has to disambiguate a
+    /// closing `>` from an operator (B40).
     fn parse_const_expr(&mut self) -> Result<ConstExpr, ParseError> {
+        self.parse_const_add()
+    }
+
+    /// Additive level: `+` and `-`, left-associative, lowest precedence.
+    fn parse_const_add(&mut self) -> Result<ConstExpr, ParseError> {
+        let mut left = self.parse_const_mul()?;
+        loop {
+            let op = match self.peek() {
+                TokenKind::Plus => ConstBinOp::Add,
+                TokenKind::Minus => ConstBinOp::Sub,
+                _ => break,
+            };
+            self.pos += 1;
+            let right = self.parse_const_mul()?;
+            let span = merge_spans(left.span(), right.span());
+            left = ConstExpr::Bin(
+                op,
+                alloc::boxed::Box::new(left),
+                alloc::boxed::Box::new(right),
+                span,
+            );
+        }
+        Ok(left)
+    }
+
+    /// Multiplicative level: `*`, left-associative, binds tighter than
+    /// the additive level.
+    fn parse_const_mul(&mut self) -> Result<ConstExpr, ParseError> {
+        let mut left = self.parse_const_atom()?;
+        while matches!(self.peek(), TokenKind::Star) {
+            self.pos += 1;
+            let right = self.parse_const_atom()?;
+            let span = merge_spans(left.span(), right.span());
+            left = ConstExpr::Bin(
+                ConstBinOp::Mul,
+                alloc::boxed::Box::new(left),
+                alloc::boxed::Box::new(right),
+                span,
+            );
+        }
+        Ok(left)
+    }
+
+    /// Atom level: an integer literal, a const-parameter reference, or a
+    /// parenthesized const expression.
+    fn parse_const_atom(&mut self) -> Result<ConstExpr, ParseError> {
         let tok = self.tokens[self.pos].clone();
         match tok.kind {
             TokenKind::IntLit(n) => {
@@ -705,10 +757,21 @@ impl<'a> Parser<'a> {
                 self.pos += 1;
                 Ok(ConstExpr::Param(name, tok.span))
             }
-            _ => {
-                Err(self
-                    .error("expected a const expression: an integer literal or a const parameter"))
+            TokenKind::LParen => {
+                // Bound parenthesis nesting with the shared recursion
+                // guard so adversarial input like `<((((...))))>` is
+                // rejected rather than overflowing the stack.
+                self.enter_depth()?;
+                self.pos += 1;
+                let inner = self.parse_const_expr()?;
+                self.expect(&TokenKind::RParen)?;
+                self.leave_depth();
+                Ok(inner)
             }
+            _ => Err(self.error(
+                "expected a const expression: an integer literal, a const parameter, \
+                 or a parenthesized const expression",
+            )),
         }
     }
 
