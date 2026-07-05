@@ -8793,8 +8793,15 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
             // Detect indexed access against a data-segment field and
             // emit `Op::GetDataIndexed` plus the per-level
             // `Op::BoundsCheck` / stride arithmetic. Stack-resident
-            // arrays continue to use `Op::GetIndex`.
-            if let Some(chain) = data_indexed_chain(object, index) {
+            // arrays continue to use `Op::GetIndex`. The chain is a
+            // data access only when its base identifier is actually a
+            // data block; a `local.field[i]` where `local` is a struct
+            // or enum value (its field an array) falls through to the
+            // general `GetIndex` path below, the same lowering as
+            // binding the field to a local first and indexing that.
+            if let Some(chain) = data_indexed_chain(object, index)
+                && fc.is_data_block(chain.data_name)
+            {
                 emit_data_indexed_read(fc, chain, *span)?;
                 return Ok(());
             }

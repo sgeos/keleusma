@@ -171,6 +171,22 @@ fn const_generic_struct_basic() {
 }
 
 #[test]
+fn const_generic_struct_array_field_index() {
+    // Indexing a const-generic struct's array-typed field, `b.items[i]`,
+    // resolves after the field-index misrouting fix: the field type
+    // `[Word; n]` specializes to `[Word; 3]` and the access lowers to the
+    // general array-index path rather than a data-segment access.
+    assert_eq!(
+        run_to_int(
+            "struct Buf<const n: Word> { items: [Word; n] }\n\
+             fn get(b: Buf<3>) -> Word { b.items[2] }\n\
+             fn main() -> Word { get(Buf::<3> { items: [10, 20, 30] }) }"
+        ),
+        30
+    );
+}
+
+#[test]
 fn const_generic_enum_basic() {
     // An enum parameterized by a const value; the variant payload type
     // [Word; n] specializes to a concrete array so the specialized enum
