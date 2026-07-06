@@ -171,6 +171,23 @@ fn const_generic_struct_basic() {
 }
 
 #[test]
+fn mixed_type_and_const_parameters() {
+    // A struct may carry both a type parameter and a const parameter.
+    // The type argument is inferred from the field value and the const
+    // argument is supplied through the const-only construction turbofish
+    // `Pair::<3>`; both specialize together. `p.first` is the `T = Word`
+    // field and `p.items[0]` the const-dimensioned array field.
+    assert_eq!(
+        run_to_int(
+            "struct Pair<T, const n: Word> { first: T, items: [Word; n] }\n\
+             fn get(p: Pair<Word, 3>) -> Word { p.first + p.items[0] }\n\
+             fn main() -> Word { get(Pair::<3> { first: 5, items: [10, 20, 30] }) }"
+        ),
+        15
+    );
+}
+
+#[test]
 fn const_generic_struct_array_field_index() {
     // Indexing a const-generic struct's array-typed field, `b.items[i]`,
     // resolves after the field-index misrouting fix: the field type
