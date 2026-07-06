@@ -1938,7 +1938,17 @@ fn run_check(program: &mut Program, mut ctx: Ctx) -> Result<(), TypeError> {
             let mut tp_vars: Vec<Type> = Vec::new();
             let mut tp_names: Vec<String> = Vec::new();
             let mut tp_bounds: Vec<Vec<String>> = Vec::new();
-            for tp in &method.type_params {
+            // The impl block's own type parameters (the `T` in
+            // `impl<T> Trait for Cell<T>`) are generic parameters of every
+            // method, so a fresh variable must stand for each and the
+            // receiver type `Cell<T>` must resolve through it. Without this
+            // the receiver would resolve to a rigid `T` that never unifies
+            // with a concrete `Cell<Word>` at a call site.
+            for tp in impl_block
+                .type_params
+                .iter()
+                .chain(method.type_params.iter())
+            {
                 let v = ctx.fresh();
                 tp_map.insert(tp.name.clone(), v.clone());
                 tp_vars.push(v);
@@ -1969,11 +1979,17 @@ fn run_check(program: &mut Program, mut ctx: Ctx) -> Result<(), TypeError> {
                 })
                 .collect();
             let return_type = ctx.resolve_type_with_params(&method.return_type, &tp_map);
+            let const_param_names: Vec<String> = impl_block
+                .const_params
+                .iter()
+                .chain(method.const_params.iter())
+                .map(|c| c.name.clone())
+                .collect();
             ctx.functions.insert(
                 mangled,
                 FnSig {
                     type_params: tp_names,
-                    const_params: Vec::new(),
+                    const_params: const_param_names,
                     type_param_vars: tp_vars,
                     type_param_bounds: tp_bounds,
                     params,
@@ -2128,6 +2144,16 @@ fn run_check(program: &mut Program, mut ctx: Ctx) -> Result<(), TypeError> {
         for method in &impl_block.methods {
             let mut renamed = method.clone();
             renamed.name = format!("{}::{}::{}", impl_block.trait_name, head, method.name);
+            // The method body resolves the impl block's generic parameters
+            // (`T`, `n`), so prepend them to the method's own parameter
+            // lists before checking the body. Without this a method body
+            // that mentions `T` or uses `n` as a value fails to resolve.
+            let mut tps = impl_block.type_params.clone();
+            tps.extend(renamed.type_params.clone());
+            renamed.type_params = tps;
+            let mut cps = impl_block.const_params.clone();
+            cps.extend(renamed.const_params.clone());
+            renamed.const_params = cps;
             check_function(&mut ctx, &mut renamed)?;
         }
     }

@@ -259,15 +259,153 @@ pub fn monomorphize_with_provenance(
     // specialized struct as a regular non-generic struct, which
     // lets compile-time field-type inference resolve method
     // dispatch on field-typed receivers.
-    program = specialize_structs(program, &fn_returns);
+    let (program, struct_meta) = specialize_structs(program, &fn_returns);
 
     // Generic enum specialization mirrors the struct pass for
     // `Expr::EnumVariant` whose target enum has type parameters.
     // The payload values' inferred types determine the type
     // arguments, and the pass emits a specialized `EnumDef` with
     // payload types substituted.
-    program = specialize_enums(program, &fn_returns);
+    let (mut program, enum_meta) = specialize_enums(program, &fn_returns);
+
+    // Trait-impl specialization. A trait implemented for a generic type
+    // (`impl<T> Trait for Cell<T>` or `impl<const n: Word> Trait for
+    // Buf<n>`) is specialized once per concrete instantiation of that
+    // type, so the specialized method chunks the compiler folds under
+    // `Trait::SpecName::method` match the specialized receiver at a call
+    // site. The generic impl original is dropped because its method
+    // bodies carry unresolved type or const parameters (B40).
+    let mut all_meta = struct_meta;
+    all_meta.extend(enum_meta);
+    program = specialize_impls(program, &all_meta);
     (program, provenance)
+}
+
+/// Specialize trait impls declared over a generic type. For each generic
+/// impl block, emit one concrete impl per recorded specialization of the
+/// impl's target type, substituting the impl's type and const parameters
+/// through the method signatures and bodies, and drop the generic
+/// original. A concrete impl is preserved unchanged. See [`SpecInstance`].
+fn specialize_impls(mut program: Program, spec_meta: &[SpecInstance]) -> Program {
+    if program
+        .impls
+        .iter()
+        .all(|ib| ib.type_params.is_empty() && ib.const_params.is_empty())
+    {
+        return program;
+    }
+    // Group specializations by their originating generic head, and build
+    // the `(orig, canonical) -> spec_name` map used to rewrite a
+    // specialized method's signature types (`Cell<Word>` to `Cell__Word`,
+    // `Buf<4>` to `Buf__c4`) so the method's receiver parameter matches
+    // the specialized receiver at the call site.
+    let mut by_head: BTreeMap<String, Vec<&SpecInstance>> = BTreeMap::new();
+    let mut specs_map: BTreeMap<(String, String), String> = BTreeMap::new();
+    for si in spec_meta {
+        by_head.entry(si.orig.clone()).or_default().push(si);
+        let canonical = generic_cache_canonical(&si.type_args, &si.const_values);
+        specs_map.insert((si.orig.clone(), canonical), si.spec_name.clone());
+    }
+    let mut new_impls: Vec<ImplBlock> = Vec::new();
+    for impl_block in &program.impls {
+        if impl_block.type_params.is_empty() && impl_block.const_params.is_empty() {
+            // Concrete impl; keep as-is.
+            new_impls.push(impl_block.clone());
+            continue;
+        }
+        let head = type_head_for_impl(&impl_block.for_type);
+        let Some(instances) = by_head.get(&head) else {
+            // No concrete instantiation of this generic type exists, so
+            // the impl is dead. Dropping it is correct: its method bodies
+            // could not compile with unresolved parameters.
+            continue;
+        };
+        for si in instances {
+            // Build the specialized methods by attaching the impl block's
+            // generic parameters to each method and running the shared
+            // function specializer, which substitutes types and const
+            // dimensions in the signature and const values in the body.
+            let methods: Vec<FunctionDef> = impl_block
+                .methods
+                .iter()
+                .map(|m| {
+                    let mut templ = m.clone();
+                    let mut tps = impl_block.type_params.clone();
+                    tps.extend(m.type_params.clone());
+                    templ.type_params = tps;
+                    let mut cps = impl_block.const_params.clone();
+                    cps.extend(m.const_params.clone());
+                    templ.const_params = cps;
+                    let mut sm = specialize_function(
+                        &templ,
+                        &si.type_args,
+                        &si.const_values,
+                        m.name.clone(),
+                    );
+                    // Rewrite the now-concrete generic type references in
+                    // the signature to their specialized names so the
+                    // receiver parameter matches the specialized receiver.
+                    for p in &mut sm.params {
+                        if let Some(t) = &p.type_expr {
+                            p.type_expr = Some(resolve_generic_type_to_spec(t, &specs_map));
+                        }
+                    }
+                    sm.return_type = resolve_generic_type_to_spec(&sm.return_type, &specs_map);
+                    // A method body that matches on the receiver enum
+                    // keeps the generic name (`E::A`) after body
+                    // substitution; rewrite those arm patterns to the
+                    // specialized enum name so they match the specialized
+                    // scrutinee. Harmless for a struct impl, whose head
+                    // never appears as an enum pattern name.
+                    {
+                        use crate::visitor::MutVisitor;
+                        let mut renamer = EnumPatternRenamer {
+                            orig: &si.orig,
+                            spec: &si.spec_name,
+                        };
+                        renamer.visit_block(&mut sm.body);
+                    }
+                    sm
+                })
+                .collect();
+            new_impls.push(ImplBlock {
+                trait_name: impl_block.trait_name.clone(),
+                type_params: Vec::new(),
+                const_params: Vec::new(),
+                for_type: TypeExpr::Named(
+                    si.spec_name.clone(),
+                    Vec::new(),
+                    Vec::new(),
+                    impl_block.for_type.span(),
+                ),
+                methods,
+                span: impl_block.span,
+            });
+        }
+    }
+    program.impls = new_impls;
+    program
+}
+
+/// AST visitor that rewrites `match` arm patterns naming a generic enum
+/// to a specialized enum name inside a specialized impl method body. Used
+/// by [`specialize_impls`] so a method that matches on its receiver enum
+/// (`match e { E::A(x) => ... }`) resolves against the specialized
+/// scrutinee `E__c3` after monomorphization (B40).
+struct EnumPatternRenamer<'a> {
+    orig: &'a str,
+    spec: &'a str,
+}
+
+impl crate::visitor::MutVisitor for EnumPatternRenamer<'_> {
+    fn visit_expr(&mut self, expr: &mut Expr) {
+        self.walk_expr(expr);
+        if let Expr::Match { arms, .. } = expr {
+            for arm in arms.iter_mut() {
+                rewrite_pattern_enum_name(&mut arm.pattern, self.orig, self.spec);
+            }
+        }
+    }
 }
 
 /// Generic enum specialization pass. See [`specialize_structs`] for
@@ -284,7 +422,10 @@ pub fn monomorphize_with_provenance(
 /// unbounded family of types.
 const TYPE_SPECIALIZATION_LIMIT: usize = 1024;
 
-fn specialize_enums(mut program: Program, fn_returns: &BTreeMap<String, TypeExpr>) -> Program {
+fn specialize_enums(
+    mut program: Program,
+    fn_returns: &BTreeMap<String, TypeExpr>,
+) -> (Program, Vec<SpecInstance>) {
     use crate::visitor::MutVisitor;
     let generic_enums: BTreeMap<String, EnumDef> = program
         .types
@@ -297,10 +438,11 @@ fn specialize_enums(mut program: Program, fn_returns: &BTreeMap<String, TypeExpr
         })
         .collect();
     if generic_enums.is_empty() {
-        return program;
+        return (program, Vec::new());
     }
     let mut enum_specs: BTreeMap<(String, String), String> = BTreeMap::new();
     let mut new_enums: Vec<EnumDef> = Vec::new();
+    let mut spec_meta: Vec<SpecInstance> = Vec::new();
     let mut local_types: BTreeMap<String, TypeExpr> = BTreeMap::new();
     for func in &mut program.functions {
         local_types.clear();
@@ -316,6 +458,7 @@ fn specialize_enums(mut program: Program, fn_returns: &BTreeMap<String, TypeExpr
             locals: &mut local_types,
             specs: &mut enum_specs,
             new_enums: &mut new_enums,
+            spec_meta: &mut spec_meta,
             fn_returns,
         };
         visitor.visit_block(&mut func.body);
@@ -335,7 +478,7 @@ fn specialize_enums(mut program: Program, fn_returns: &BTreeMap<String, TypeExpr
     program
         .types
         .extend(new_enums.into_iter().map(TypeDef::Enum));
-    program
+    (program, spec_meta)
 }
 
 /// AST visitor that rewrites generic `Expr::EnumVariant` constructions
@@ -346,6 +489,7 @@ struct EnumSpecializer<'a> {
     locals: &'a mut BTreeMap<String, TypeExpr>,
     specs: &'a mut BTreeMap<(String, String), String>,
     new_enums: &'a mut Vec<EnumDef>,
+    spec_meta: &'a mut Vec<SpecInstance>,
     fn_returns: &'a BTreeMap<String, TypeExpr>,
 }
 
@@ -520,6 +664,12 @@ impl EnumSpecializer<'_> {
         let spec_name = mangle_struct_with_consts(enum_name, type_args, const_values);
         let specialized = specialize_enum(enum_def, type_args, const_values, spec_name.clone());
         self.specs.insert(cache_key, spec_name.clone());
+        self.spec_meta.push(SpecInstance {
+            orig: enum_name.to_string(),
+            spec_name: spec_name.clone(),
+            type_args: type_args.to_vec(),
+            const_values: const_values.to_vec(),
+        });
         self.new_enums.push(specialized);
         Some(spec_name)
     }
@@ -624,7 +774,23 @@ fn specialize_enum(
 /// emits a specialized `StructDef` with concrete field types and
 /// rewrites the `StructInit`'s name to a mangled form. The original
 /// generic struct is retained alongside the specialization.
-fn specialize_structs(mut program: Program, fn_returns: &BTreeMap<String, TypeExpr>) -> Program {
+/// One concrete specialization of a generic struct or enum, recording the
+/// original generic head, the specialized name, and the type and const
+/// arguments that produced it. Collected during struct and enum
+/// specialization and consumed by [`specialize_impls`] so a trait impl on
+/// a generic type can be specialized for the same instantiations (B40).
+#[derive(Clone)]
+struct SpecInstance {
+    orig: String,
+    spec_name: String,
+    type_args: Vec<TypeExpr>,
+    const_values: Vec<i64>,
+}
+
+fn specialize_structs(
+    mut program: Program,
+    fn_returns: &BTreeMap<String, TypeExpr>,
+) -> (Program, Vec<SpecInstance>) {
     use crate::visitor::MutVisitor;
     let generic_structs: BTreeMap<String, StructDef> = program
         .types
@@ -637,11 +803,12 @@ fn specialize_structs(mut program: Program, fn_returns: &BTreeMap<String, TypeEx
         })
         .collect();
     if generic_structs.is_empty() {
-        return program;
+        return (program, Vec::new());
     }
     let mut struct_specs: BTreeMap<(String, String), String> = BTreeMap::new();
     let mut reverse_specs: BTreeMap<String, (String, Vec<TypeExpr>)> = BTreeMap::new();
     let mut new_structs: Vec<StructDef> = Vec::new();
+    let mut spec_meta: Vec<SpecInstance> = Vec::new();
     let mut local_types: BTreeMap<String, TypeExpr> = BTreeMap::new();
     for func in &mut program.functions {
         local_types.clear();
@@ -658,6 +825,7 @@ fn specialize_structs(mut program: Program, fn_returns: &BTreeMap<String, TypeEx
             specs: &mut struct_specs,
             reverse_specs: &mut reverse_specs,
             new_structs: &mut new_structs,
+            spec_meta: &mut spec_meta,
             fn_returns,
         };
         visitor.visit_block(&mut func.body);
@@ -678,7 +846,7 @@ fn specialize_structs(mut program: Program, fn_returns: &BTreeMap<String, TypeEx
     program
         .types
         .extend(new_structs.into_iter().map(TypeDef::Struct));
-    program
+    (program, spec_meta)
 }
 
 /// AST visitor that rewrites generic `Expr::StructInit` constructions
@@ -688,6 +856,7 @@ struct StructSpecializer<'a> {
     generic_structs: &'a BTreeMap<String, StructDef>,
     locals: &'a mut BTreeMap<String, TypeExpr>,
     specs: &'a mut BTreeMap<(String, String), String>,
+    spec_meta: &'a mut Vec<SpecInstance>,
     /// Reverse lookup mapping each emitted specialization name back
     /// to its original generic name and the concrete type arguments
     /// used to produce it. Used by the inference loop to recover
@@ -825,6 +994,12 @@ impl crate::visitor::MutVisitor for StructSpecializer<'_> {
             self.specs.insert(cache_key, spec_name.clone());
             self.reverse_specs
                 .insert(spec_name.clone(), (name.clone(), type_args.clone()));
+            self.spec_meta.push(SpecInstance {
+                orig: name.clone(),
+                spec_name: spec_name.clone(),
+                type_args: type_args.clone(),
+                const_values: const_values.clone(),
+            });
             self.new_structs.push(specialized);
             spec_name
         };
