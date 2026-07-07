@@ -7408,8 +7408,12 @@ fn compile_enum_to_word(
         let d_const = fc.add_constant(Value::Int(*discriminant));
         fc.emit(Op::GetLocal(temp));
         fc.emit(Op::IsEnum(e_const, v_const, d_const));
+        // `IsEnum` peeks; consume the enum copy on both branches so a
+        // non-matching variant does not leak it onto the stack, which would
+        // otherwise accumulate across the dispatch loop and leave each arm's
+        // `Break` at a different height (B5).
+        emit_consume_peeked_scrutinee(fc);
         let fail_addr = fc.emit_jump(Op::If(0));
-        fc.emit(Op::PopN(1)); // Discard the peeked enum value.
         let disc_const = fc.add_constant(Value::Int(*discriminant));
         fc.emit(Op::Const(disc_const));
         let break_addr = fc.emit(Op::Break(0));

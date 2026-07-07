@@ -183,18 +183,14 @@ pub fn typed_check_chunk_with_sig(
     word_bytes: usize,
     float_bytes: usize,
 ) -> Result<(), TypedError> {
-    let mut breaks: Vec<Vec<AbsVal>> = Vec::new();
-    interp_region(
+    let ctx = Ctx {
         chunk,
         sig,
-        0,
-        chunk.ops.len(),
-        Vec::new(),
-        &mut breaks,
-        word_bytes,
-        float_bytes,
-    )
-    .map(|_| ())
+        wb: word_bytes,
+        fb: float_bytes,
+    };
+    let mut breaks: Vec<Vec<AbsVal>> = Vec::new();
+    interp_region(&ctx, 0, chunk.ops.len(), Vec::new(), &mut breaks).map(|_| ())
 }
 
 /// Interpret ops `[start, end)` from `stack`. Returns `Ok(Some(exit_stack))`
@@ -203,22 +199,33 @@ pub fn typed_check_chunk_with_sig(
 /// break edge that leaves the enclosing loop. Mirrors
 /// `verify::verify_depth_region`'s control-flow shape, but over an abstract
 /// stack rather than a scalar depth.
-// A recursive abstract interpreter that threads the chunk, its signature,
-// the region bounds, the working stack, the break collector, and the target
-// widths. These are genuinely distinct pieces of state; a later phase folds
-// the chunk/signature/widths into a context struct as more are added.
-#[allow(clippy::too_many_arguments)]
+/// Immutable context threaded through the abstract interpreter: the chunk
+/// under check, its seeding signature, and the module's target widths.
+/// Folding these into one struct keeps the recursive interpreter's signature
+/// small as Phase 2b adds the module-level signature table for cross-`Call`
+/// seeding here.
+struct Ctx<'a> {
+    /// The chunk whose op stream is being interpreted.
+    chunk: &'a Chunk,
+    /// Seeds for the chunk's local slots and resume value.
+    sig: &'a ChunkSig,
+    /// Target word width in bytes (for scalar/composite sizing).
+    wb: usize,
+    /// Target float width in bytes.
+    fb: usize,
+}
+
+/// A recursive abstract interpreter over ops `[start, end)`. The immutable
+/// per-chunk context is carried in `ctx`; only the region bounds, the working
+/// stack, and the break collector vary per call.
 fn interp_region(
-    chunk: &Chunk,
-    sig: &ChunkSig,
+    ctx: &Ctx,
     start: usize,
     end: usize,
     mut stack: Vec<AbsVal>,
     breaks: &mut Vec<Vec<AbsVal>>,
-    wb: usize,
-    fb: usize,
 ) -> Result<Option<Vec<AbsVal>>, TypedError> {
-    let ops = &chunk.ops;
+    let ops = &ctx.chunk.ops;
     let mut ip = start;
     while ip < end {
         let op = &ops[ip];
@@ -229,29 +236,20 @@ fn interp_region(
                 return Ok(None);
             }
             Op::BreakIf(_) => {
-                apply_op(op, &mut stack, chunk, sig, wb, fb, ip)?;
+                apply_op(ctx, op, &mut stack, ip)?;
                 breaks.push(stack.clone());
                 ip += 1;
             }
             Op::If(target) => {
-                apply_op(op, &mut stack, chunk, sig, wb, fb, ip)?;
+                apply_op(ctx, op, &mut stack, ip)?;
                 let target = *target as usize;
                 if target > 0 && matches!(&ops[target - 1], Op::Else(_)) {
                     let endif = match &ops[target - 1] {
                         Op::Else(e) => *e as usize,
                         _ => unreachable!(),
                     };
-                    let then_end = interp_region(
-                        chunk,
-                        sig,
-                        ip + 1,
-                        target - 1,
-                        stack.clone(),
-                        breaks,
-                        wb,
-                        fb,
-                    )?;
-                    let else_end = interp_region(chunk, sig, target, endif, stack, breaks, wb, fb)?;
+                    let then_end = interp_region(ctx, ip + 1, target - 1, stack.clone(), breaks)?;
+                    let else_end = interp_region(ctx, target, endif, stack, breaks)?;
                     match join_ends(then_end, else_end, ip)? {
                         Some(joined) => stack = joined,
                         None => return Ok(None),
@@ -261,8 +259,7 @@ fn interp_region(
                     // No else: the then-arm merges with the fall-through path
                     // (the stack unchanged after popping the condition).
                     let skip = stack.clone();
-                    let then_end =
-                        interp_region(chunk, sig, ip + 1, target, stack, breaks, wb, fb)?;
+                    let then_end = interp_region(ctx, ip + 1, target, stack, breaks)?;
                     match join_ends(then_end, Some(skip), ip)? {
                         Some(joined) => stack = joined,
                         None => return Ok(None),
@@ -274,16 +271,8 @@ fn interp_region(
                 let exit = *target as usize;
                 let entry_height = stack.len();
                 let mut loop_breaks: Vec<Vec<AbsVal>> = Vec::new();
-                let body_end = interp_region(
-                    chunk,
-                    sig,
-                    ip + 1,
-                    exit - 1,
-                    stack.clone(),
-                    &mut loop_breaks,
-                    wb,
-                    fb,
-                )?;
+                let body_end =
+                    interp_region(ctx, ip + 1, exit - 1, stack.clone(), &mut loop_breaks)?;
                 // Back-edge neutrality: the body's fall-through must restore
                 // the exact entry stack (height and per-slot shape), so each
                 // iteration begins in the same state and per-iteration stack
@@ -307,7 +296,7 @@ fn interp_region(
                 ip = exit;
             }
             _ => {
-                apply_op(op, &mut stack, chunk, sig, wb, fb, ip)?;
+                apply_op(ctx, op, &mut stack, ip)?;
                 ip += 1;
             }
         }
@@ -366,16 +355,8 @@ fn join_all(stacks: Vec<Vec<AbsVal>>, ip: usize) -> Result<Option<Vec<AbsVal>>, 
 /// discipline exactly matches the scalar depth pass. Shape is tracked
 /// precisely for the ops that carry or consume it and conservatively (`Top`)
 /// otherwise.
-fn apply_op(
-    op: &Op,
-    stack: &mut Vec<AbsVal>,
-    chunk: &Chunk,
-    sig: &ChunkSig,
-    wb: usize,
-    fb: usize,
-    ip: usize,
-) -> Result<(), TypedError> {
-    let (req, net) = op_depth_effect(op, chunk);
+fn apply_op(ctx: &Ctx, op: &Op, stack: &mut Vec<AbsVal>, ip: usize) -> Result<(), TypedError> {
+    let (req, net) = op_depth_effect(op, ctx.chunk);
     if (stack.len() as i32) < req {
         return Err(TypedError::StackUnderflow { ip });
     }
@@ -390,14 +371,14 @@ fn apply_op(
 
         // Seed a local read with its declared shape (Phase 2). Unseeded
         // locals are `Top`.
-        Op::GetLocal(i) => stack.push(sig.local(*i as usize)),
+        Op::GetLocal(i) => stack.push(ctx.sig.local(*i as usize)),
 
         // A local write must store a value whose shape is compatible with the
         // slot's declared shape, so the seeded `GetLocal` reads stay
         // trustworthy. An unseeded slot or an unknown value defers.
         Op::SetLocal(i) => {
             let v = stack.pop().ok_or(TypedError::StackUnderflow { ip })?;
-            if !shapes_compatible(&v, &sig.local(*i as usize)) {
+            if !shapes_compatible(&v, &ctx.sig.local(*i as usize)) {
                 return Err(TypedError::LocalTypeMismatch {
                     ip,
                     slot: *i as usize,
@@ -409,12 +390,12 @@ fn apply_op(
         // resume's shape comes from the signature (Phase 2).
         Op::Yield => {
             stack.pop();
-            stack.push(sig.resume_shape());
+            stack.push(ctx.sig.resume_shape());
         }
 
         // A constant's shape comes from the pool: scalars are precise;
         // composite, string, and option constants are `Top` until Phase 3.
-        Op::Const(idx) => stack.push(const_abs(chunk.constants.get(*idx as usize))),
+        Op::Const(idx) => stack.push(const_abs(ctx.chunk.constants.get(*idx as usize))),
 
         Op::NewComposite(NewCompositeOperand::Flat {
             kind,
@@ -425,7 +406,7 @@ fn apply_op(
             let mut all_known = true;
             for _ in 0..*count {
                 let v = stack.pop().ok_or(TypedError::StackUnderflow { ip })?;
-                match v.packed_size(wb, fb) {
+                match v.packed_size(ctx.wb, ctx.fb) {
                     Some(n) => computed = computed.saturating_add(n),
                     None => all_known = false,
                 }
@@ -452,7 +433,7 @@ fn apply_op(
 
         Op::GetField(StructField::Flat { offset, kind }) => {
             let v = stack.pop().ok_or(TypedError::StackUnderflow { ip })?;
-            check_flat_scalar(&v, *offset, *kind, wb, fb, ip)?;
+            check_flat_scalar(&v, *offset, *kind, ctx.wb, ctx.fb, ip)?;
             stack.push(AbsVal::Scalar(*kind));
         }
         Op::GetField(StructField::FlatNested {
@@ -965,6 +946,36 @@ mod tests {
             assert!(
                 r.is_ok(),
                 "match chunk `{}` should verify after the B5 balancing fix, got {:?}",
+                c.name,
+                r
+            );
+        }
+    }
+
+    // The `enum as Word` cast (`compile_enum_to_word`) is a separate dispatch
+    // loop that also emitted a peeking `IsEnum` per variant and cleaned the
+    // copy only on the match path, so a non-matching variant leaked it and each
+    // arm's `Break` left a different height (the same B5 shape as the `match`
+    // lowering). It now consumes the peek on both branches; this pins that a
+    // compiled multi-variant cast verifies.
+    #[cfg(feature = "compile")]
+    #[test]
+    fn balanced_enum_to_word_cast_verifies_after_b5_fix() {
+        use crate::compiler::compile;
+        use crate::lexer::tokenize;
+        use crate::parser::parse;
+
+        let src = "enum Color { Red, Green, Blue }\n\
+                   fn main() -> Word { Color::Blue as Word }";
+        let module =
+            compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+        let wb = (1usize << module.word_bits_log2) / 8;
+        let fb = (1usize << module.float_bits_log2) / 8;
+        for c in &module.chunks {
+            let r = typed_check_chunk(c, wb, fb);
+            assert!(
+                r.is_ok(),
+                "enum-to-word cast chunk `{}` should verify after the B5 balancing fix, got {:?}",
                 c.name,
                 r
             );
