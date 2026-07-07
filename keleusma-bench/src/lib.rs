@@ -218,6 +218,10 @@ fn build_benchmark_chunk(pattern: &[Op], constants: &[ConstValue], repetitions: 
         flags: 0,
         shared_data_bytes: 0,
         private_data_bytes: 0,
+        // The benchmark chunk declares no enums, so the enum-layout table
+        // added to `Module` by B37 is empty. This constructor was not
+        // updated when the field was introduced.
+        enum_layouts: Vec::new(),
     }
 }
 
