@@ -126,16 +126,56 @@ pub enum TypedError {
     },
 }
 
-/// Check one chunk. `Ok(())` when the abstract interpretation completes with
-/// no MUST-REJECT, else the first reason found.
+/// Per-chunk signature that seeds the abstract stack where the op stream
+/// alone cannot determine a value's shape. Phase 2 consumes it; the
+/// compiler emitting it and the wire format carrying it (additively in the
+/// auxiliary body) is the Phase 2b plumbing. Absent, every seed point is
+/// [`AbsVal::Top`] and shape checks defer, which is exactly the Phase 1
+/// behaviour.
+#[derive(Clone, Debug, Default)]
+pub struct ChunkSig {
+    /// Abstract shape of each local slot, parameters first. A slot beyond
+    /// the vector is treated as `Top`.
+    pub locals: Vec<AbsVal>,
+    /// Abstract shape a `Yield` resumes with (Stream and Reentrant chunks).
+    pub resume: Option<AbsVal>,
+}
+
+impl ChunkSig {
+    /// The shape of local slot `i`, or `Top` when unseeded.
+    fn local(&self, i: usize) -> AbsVal {
+        self.locals.get(i).cloned().unwrap_or(AbsVal::Top)
+    }
+
+    /// The shape a resume pushes, or `Top` when unseeded.
+    fn resume_shape(&self) -> AbsVal {
+        self.resume.clone().unwrap_or(AbsVal::Top)
+    }
+}
+
+/// Check one chunk with no seeding (parameters, locals, and resume values
+/// are `Top`). Equivalent to Phase 1.
 pub fn typed_check_chunk(
     chunk: &Chunk,
+    word_bytes: usize,
+    float_bytes: usize,
+) -> Result<(), TypedError> {
+    typed_check_chunk_with_sig(chunk, &ChunkSig::default(), word_bytes, float_bytes)
+}
+
+/// Check one chunk, seeding local and resume shapes from `sig`. `Ok(())`
+/// when the abstract interpretation completes with no MUST-REJECT, else the
+/// first reason found.
+pub fn typed_check_chunk_with_sig(
+    chunk: &Chunk,
+    sig: &ChunkSig,
     word_bytes: usize,
     float_bytes: usize,
 ) -> Result<(), TypedError> {
     let mut breaks: Vec<Vec<AbsVal>> = Vec::new();
     interp_region(
         chunk,
+        sig,
         0,
         chunk.ops.len(),
         Vec::new(),
@@ -152,8 +192,14 @@ pub fn typed_check_chunk(
 /// break edge that leaves the enclosing loop. Mirrors
 /// `verify::verify_depth_region`'s control-flow shape, but over an abstract
 /// stack rather than a scalar depth.
+// A recursive abstract interpreter that threads the chunk, its signature,
+// the region bounds, the working stack, the break collector, and the target
+// widths. These are genuinely distinct pieces of state; a later phase folds
+// the chunk/signature/widths into a context struct as more are added.
+#[allow(clippy::too_many_arguments)]
 fn interp_region(
     chunk: &Chunk,
+    sig: &ChunkSig,
     start: usize,
     end: usize,
     mut stack: Vec<AbsVal>,
@@ -172,21 +218,29 @@ fn interp_region(
                 return Ok(None);
             }
             Op::BreakIf(_) => {
-                apply_op(op, &mut stack, chunk, wb, fb, ip)?;
+                apply_op(op, &mut stack, chunk, sig, wb, fb, ip)?;
                 breaks.push(stack.clone());
                 ip += 1;
             }
             Op::If(target) => {
-                apply_op(op, &mut stack, chunk, wb, fb, ip)?;
+                apply_op(op, &mut stack, chunk, sig, wb, fb, ip)?;
                 let target = *target as usize;
                 if target > 0 && matches!(&ops[target - 1], Op::Else(_)) {
                     let endif = match &ops[target - 1] {
                         Op::Else(e) => *e as usize,
                         _ => unreachable!(),
                     };
-                    let then_end =
-                        interp_region(chunk, ip + 1, target - 1, stack.clone(), breaks, wb, fb)?;
-                    let else_end = interp_region(chunk, target, endif, stack, breaks, wb, fb)?;
+                    let then_end = interp_region(
+                        chunk,
+                        sig,
+                        ip + 1,
+                        target - 1,
+                        stack.clone(),
+                        breaks,
+                        wb,
+                        fb,
+                    )?;
+                    let else_end = interp_region(chunk, sig, target, endif, stack, breaks, wb, fb)?;
                     match join_ends(then_end, else_end, ip)? {
                         Some(joined) => stack = joined,
                         None => return Ok(None),
@@ -196,7 +250,8 @@ fn interp_region(
                     // No else: the then-arm merges with the fall-through path
                     // (the stack unchanged after popping the condition).
                     let skip = stack.clone();
-                    let then_end = interp_region(chunk, ip + 1, target, stack, breaks, wb, fb)?;
+                    let then_end =
+                        interp_region(chunk, sig, ip + 1, target, stack, breaks, wb, fb)?;
                     match join_ends(then_end, Some(skip), ip)? {
                         Some(joined) => stack = joined,
                         None => return Ok(None),
@@ -210,6 +265,7 @@ fn interp_region(
                 let mut loop_breaks: Vec<Vec<AbsVal>> = Vec::new();
                 let body_end = interp_region(
                     chunk,
+                    sig,
                     ip + 1,
                     exit - 1,
                     stack.clone(),
@@ -236,7 +292,7 @@ fn interp_region(
                 ip = exit;
             }
             _ => {
-                apply_op(op, &mut stack, chunk, wb, fb, ip)?;
+                apply_op(op, &mut stack, chunk, sig, wb, fb, ip)?;
                 ip += 1;
             }
         }
@@ -299,6 +355,7 @@ fn apply_op(
     op: &Op,
     stack: &mut Vec<AbsVal>,
     chunk: &Chunk,
+    sig: &ChunkSig,
     wb: usize,
     fb: usize,
     ip: usize,
@@ -315,6 +372,17 @@ fn apply_op(
             stack.push(top);
         }
         Op::IsEnum(_, _, _) | Op::IsStruct(_) => stack.push(AbsVal::Scalar(ScalarKind::Bool)),
+
+        // Seed a local read with its declared shape (Phase 2). Unseeded
+        // locals are `Top`.
+        Op::GetLocal(i) => stack.push(sig.local(*i as usize)),
+
+        // A yield pops the output value and the resume pushes the input; the
+        // resume's shape comes from the signature (Phase 2).
+        Op::Yield => {
+            stack.pop();
+            stack.push(sig.resume_shape());
+        }
 
         // A constant's shape comes from the pool: scalars are precise;
         // composite, string, and option constants are `Top` until Phase 3.
@@ -560,6 +628,107 @@ mod tests {
         assert!(matches!(
             typed_check_chunk(&chunk(ops, ints()), 8, 8),
             Err(TypedError::StackUnderflow { .. })
+        ));
+    }
+
+    // Seeding a local's shape (Phase 2) makes a flat-field offset check fire
+    // across the local boundary, which Phase 1 could only defer to `Top`.
+    #[test]
+    fn seeded_local_composite_offset_checks() {
+        let ops = vec![
+            Op::GetLocal(0),
+            Op::GetField(StructField::Flat {
+                offset: 8,
+                kind: ScalarKind::Int,
+            }),
+        ];
+        let c = chunk(ops, Vec::new());
+        // Unseeded: the local is `Top`, so the check defers and accepts.
+        assert!(typed_check_chunk(&c, 8, 8).is_ok());
+        // Seeded with a 16-byte struct: the valid offset 8 accepts.
+        let sig = ChunkSig {
+            locals: vec![AbsVal::Flat {
+                kind: CompositeKind::Struct,
+                size: 16,
+            }],
+            resume: None,
+        };
+        assert!(typed_check_chunk_with_sig(&c, &sig, 8, 8).is_ok());
+        // Seeded, an out-of-bounds offset now rejects.
+        let bad = chunk(
+            vec![
+                Op::GetLocal(0),
+                Op::GetField(StructField::Flat {
+                    offset: 12,
+                    kind: ScalarKind::Int,
+                }),
+            ],
+            Vec::new(),
+        );
+        assert!(matches!(
+            typed_check_chunk_with_sig(&bad, &sig, 8, 8),
+            Err(TypedError::OffsetOutOfBounds { .. })
+        ));
+    }
+
+    // A local seeded as a scalar, then a field read on it, is a type error
+    // the depth pass cannot see.
+    #[test]
+    fn seeded_local_scalar_field_access_rejects() {
+        let ops = vec![
+            Op::GetLocal(0),
+            Op::GetField(StructField::Flat {
+                offset: 0,
+                kind: ScalarKind::Int,
+            }),
+        ];
+        let sig = ChunkSig {
+            locals: vec![AbsVal::Scalar(ScalarKind::Int)],
+            resume: None,
+        };
+        assert!(matches!(
+            typed_check_chunk_with_sig(&chunk(ops, Vec::new()), &sig, 8, 8),
+            Err(TypedError::ExpectedComposite { .. })
+        ));
+    }
+
+    // The resume value's shape is seeded, so a field access on a resumed
+    // composite is validated.
+    #[test]
+    fn yield_resume_shape_is_seeded() {
+        let sig = ChunkSig {
+            locals: Vec::new(),
+            resume: Some(AbsVal::Flat {
+                kind: CompositeKind::Struct,
+                size: 16,
+            }),
+        };
+        let good = chunk(
+            vec![
+                Op::Const(0),
+                Op::Yield,
+                Op::GetField(StructField::Flat {
+                    offset: 8,
+                    kind: ScalarKind::Int,
+                }),
+            ],
+            ints(),
+        );
+        assert!(typed_check_chunk_with_sig(&good, &sig, 8, 8).is_ok());
+        let bad = chunk(
+            vec![
+                Op::Const(0),
+                Op::Yield,
+                Op::GetField(StructField::Flat {
+                    offset: 12,
+                    kind: ScalarKind::Int,
+                }),
+            ],
+            ints(),
+        );
+        assert!(matches!(
+            typed_check_chunk_with_sig(&bad, &sig, 8, 8),
+            Err(TypedError::OffsetOutOfBounds { .. })
         ));
     }
 
