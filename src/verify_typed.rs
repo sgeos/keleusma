@@ -268,8 +268,36 @@ fn check_chunk_seeded(
         wb: word_bytes,
         fb: float_bytes,
     };
-    let mut breaks: Vec<Vec<AbsVal>> = Vec::new();
-    interp_region(&ctx, 0, chunk.ops.len(), Vec::new(), &mut breaks).map(|_| ())
+    // The local frame starts from the seed (parameters carry their declared
+    // shape; every other slot is `Top`) and is tracked precisely thereafter
+    // (A.2.1 Phase 2 residual — the "reconstruct locals from SetLocal
+    // producers" option). A `GetLocal` reads the tracked shape, so a flat
+    // access on a local-held composite is bounds-checked, not deferred.
+    let locals: Vec<AbsVal> = (0..chunk.local_count as usize)
+        .map(|i| sig.local(i))
+        .collect();
+    let state = AbsState {
+        stack: Vec::new(),
+        locals,
+    };
+    let mut breaks: Vec<AbsState> = Vec::new();
+    interp_region(&ctx, 0, chunk.ops.len(), state, &mut breaks).map(|_| ())
+}
+
+/// Abstract state at a program point: the operand stack and the per-slot
+/// shapes of the local frame. At a control-flow merge the stack must match in
+/// height (a mismatch is a MUST-REJECT imbalance) and joins per slot; the
+/// locals join per slot to `Top` on disagreement. Local slots are tracked so
+/// a flat access on a local-held composite is validated rather than deferred;
+/// soundness in a loop comes from invalidating (to `Top`) every slot the loop
+/// body writes before the body is interpreted, since a prior iteration may
+/// have overwritten it.
+#[derive(Clone)]
+struct AbsState {
+    /// The abstract operand stack (top last).
+    stack: Vec<AbsVal>,
+    /// Per-slot abstract shapes of the local frame, indexed by slot.
+    locals: Vec<AbsVal>,
 }
 
 /// Interpret ops `[start, end)` from `stack`. Returns `Ok(Some(exit_stack))`
@@ -300,15 +328,17 @@ struct Ctx<'a> {
 }
 
 /// A recursive abstract interpreter over ops `[start, end)`. The immutable
-/// per-chunk context is carried in `ctx`; only the region bounds, the working
-/// stack, and the break collector vary per call.
+/// per-chunk context is carried in `ctx`; the working state (operand stack and
+/// local frame) and the break collector vary per call. Returns `Ok(Some(_))`
+/// with the fall-through state, or `Ok(None)` when every path exits via
+/// `Break`, `Trap`, or `Return`.
 fn interp_region(
     ctx: &Ctx,
     start: usize,
     end: usize,
-    mut stack: Vec<AbsVal>,
-    breaks: &mut Vec<Vec<AbsVal>>,
-) -> Result<Option<Vec<AbsVal>>, TypedError> {
+    mut state: AbsState,
+    breaks: &mut Vec<AbsState>,
+) -> Result<Option<AbsState>, TypedError> {
     let ops = &ctx.chunk.ops;
     let mut ip = start;
     while ip < end {
@@ -316,36 +346,40 @@ fn interp_region(
         match op {
             Op::Trap(_) | Op::Return => return Ok(None),
             Op::Break(_) => {
-                breaks.push(stack);
+                breaks.push(state);
                 return Ok(None);
             }
             Op::BreakIf(_) => {
-                apply_op(ctx, op, &mut stack, ip)?;
-                breaks.push(stack.clone());
+                let AbsState { stack, locals } = &mut state;
+                apply_op(ctx, op, stack, locals, ip)?;
+                breaks.push(state.clone());
                 ip += 1;
             }
             Op::If(target) => {
-                apply_op(ctx, op, &mut stack, ip)?;
+                {
+                    let AbsState { stack, locals } = &mut state;
+                    apply_op(ctx, op, stack, locals, ip)?;
+                }
                 let target = *target as usize;
                 if target > 0 && matches!(&ops[target - 1], Op::Else(_)) {
                     let endif = match &ops[target - 1] {
                         Op::Else(e) => *e as usize,
                         _ => unreachable!(),
                     };
-                    let then_end = interp_region(ctx, ip + 1, target - 1, stack.clone(), breaks)?;
-                    let else_end = interp_region(ctx, target, endif, stack, breaks)?;
+                    let then_end = interp_region(ctx, ip + 1, target - 1, state.clone(), breaks)?;
+                    let else_end = interp_region(ctx, target, endif, state, breaks)?;
                     match join_ends(then_end, else_end, ip)? {
-                        Some(joined) => stack = joined,
+                        Some(joined) => state = joined,
                         None => return Ok(None),
                     }
                     ip = endif + 1;
                 } else {
                     // No else: the then-arm merges with the fall-through path
-                    // (the stack unchanged after popping the condition).
-                    let skip = stack.clone();
-                    let then_end = interp_region(ctx, ip + 1, target, stack, breaks)?;
+                    // (the state unchanged after popping the condition).
+                    let skip = state.clone();
+                    let then_end = interp_region(ctx, ip + 1, target, state, breaks)?;
                     match join_ends(then_end, Some(skip), ip)? {
-                        Some(joined) => stack = joined,
+                        Some(joined) => state = joined,
                         None => return Ok(None),
                     }
                     ip = target + 1;
@@ -353,83 +387,118 @@ fn interp_region(
             }
             Op::Loop(target) => {
                 let exit = *target as usize;
-                let entry_height = stack.len();
-                let mut loop_breaks: Vec<Vec<AbsVal>> = Vec::new();
+                let entry_height = state.stack.len();
+                // A slot the loop body writes may hold a prior iteration's
+                // value at the loop head, which a single pass cannot know, so
+                // invalidate it to `Top` before interpreting the body. A slot
+                // the body never writes is loop-invariant and keeps its shape.
+                let mut body_entry = state.clone();
+                invalidate_written_locals(ctx.chunk, ip + 1, exit - 1, &mut body_entry.locals);
+                let mut loop_breaks: Vec<AbsState> = Vec::new();
                 let body_end =
-                    interp_region(ctx, ip + 1, exit - 1, stack.clone(), &mut loop_breaks)?;
+                    interp_region(ctx, ip + 1, exit - 1, body_entry.clone(), &mut loop_breaks)?;
                 // Back-edge neutrality: the body's fall-through must restore
-                // the exact entry stack (height and per-slot shape), so each
-                // iteration begins in the same state and per-iteration stack
-                // growth cannot escape the worst-case bound.
+                // the exact entry operand stack (height and per-slot shape), so
+                // each iteration begins in the same state and per-iteration
+                // stack growth cannot escape the worst-case bound. Locals may
+                // legitimately change across iterations and are not required to
+                // be neutral.
                 if let Some(be) = &body_end
-                    && *be != stack
+                    && be.stack != body_entry.stack
                 {
                     return Err(TypedError::LoopNotNeutral {
                         ip,
                         entry_height,
-                        exit_height: be.len(),
+                        exit_height: be.stack.len(),
                     });
                 }
                 // The code after the loop is reached via the break edges; if
                 // there are none, fall back to the (neutral) body exit or the
-                // entry stack, mirroring the depth pass.
-                stack = match join_all(loop_breaks, ip)? {
+                // body-entry state, mirroring the depth pass.
+                state = match join_all(loop_breaks, ip)? {
                     Some(s) => s,
-                    None => body_end.unwrap_or(stack),
+                    None => body_end.unwrap_or(body_entry),
                 };
                 ip = exit;
             }
             _ => {
-                apply_op(ctx, op, &mut stack, ip)?;
+                let AbsState { stack, locals } = &mut state;
+                apply_op(ctx, op, stack, locals, ip)?;
                 ip += 1;
             }
         }
     }
-    Ok(Some(stack))
+    Ok(Some(state))
 }
 
-/// Join two region ends. `Some`/`Some` requires equal height and joins
-/// per slot; a `None` (exiting) arm yields the other; both `None` yields
-/// `None` (the merge is unreachable).
-fn join_ends(
-    then_end: Option<Vec<AbsVal>>,
-    else_end: Option<Vec<AbsVal>>,
-    ip: usize,
-) -> Result<Option<Vec<AbsVal>>, TypedError> {
-    match (then_end, else_end) {
-        (Some(a), Some(b)) => {
-            if a.len() != b.len() {
-                return Err(TypedError::BranchHeightMismatch {
-                    ip,
-                    then_height: a.len(),
-                    else_height: b.len(),
-                });
-            }
-            let joined = a.iter().zip(b.iter()).map(|(x, y)| x.join(y)).collect();
-            Ok(Some(joined))
+/// Set to `Top` every local slot that any op in `[start, end)` writes via
+/// `SetLocal`, so a loop body reads a body-written slot as unknown rather than
+/// a stale pre-loop shape.
+fn invalidate_written_locals(chunk: &Chunk, start: usize, end: usize, locals: &mut [AbsVal]) {
+    for op in &chunk.ops[start..end] {
+        if let Op::SetLocal(i) = op
+            && let Some(slot) = locals.get_mut(*i as usize)
+        {
+            *slot = AbsVal::Top;
         }
+    }
+}
+
+/// Join the operand stacks of two states: equal height required (else a
+/// MUST-REJECT imbalance), then per-slot lattice join.
+fn join_stacks(a: &[AbsVal], b: &[AbsVal], ip: usize) -> Result<Vec<AbsVal>, TypedError> {
+    if a.len() != b.len() {
+        return Err(TypedError::BranchHeightMismatch {
+            ip,
+            then_height: a.len(),
+            else_height: b.len(),
+        });
+    }
+    Ok(a.iter().zip(b.iter()).map(|(x, y)| x.join(y)).collect())
+}
+
+/// Join two local frames per slot; a shorter frame is padded with `Top`.
+fn join_locals(a: &[AbsVal], b: &[AbsVal]) -> Vec<AbsVal> {
+    let n = a.len().max(b.len());
+    (0..n)
+        .map(|i| {
+            let x = a.get(i).unwrap_or(&AbsVal::Top);
+            let y = b.get(i).unwrap_or(&AbsVal::Top);
+            x.join(y)
+        })
+        .collect()
+}
+
+/// Join two region ends (stack and locals). `Some`/`Some` joins both; a
+/// `None` (exiting) arm yields the other; both `None` yields `None`.
+fn join_ends(
+    then_end: Option<AbsState>,
+    else_end: Option<AbsState>,
+    ip: usize,
+) -> Result<Option<AbsState>, TypedError> {
+    match (then_end, else_end) {
+        (Some(a), Some(b)) => Ok(Some(AbsState {
+            stack: join_stacks(&a.stack, &b.stack, ip)?,
+            locals: join_locals(&a.locals, &b.locals),
+        })),
         (Some(a), None) => Ok(Some(a)),
         (None, Some(b)) => Ok(Some(b)),
         (None, None) => Ok(None),
     }
 }
 
-/// Join a set of break-edge stacks. Requires equal heights; `None` when the
-/// set is empty.
-fn join_all(stacks: Vec<Vec<AbsVal>>, ip: usize) -> Result<Option<Vec<AbsVal>>, TypedError> {
-    let mut it = stacks.into_iter();
+/// Join a set of break-edge states. Requires equal stack heights; `None` when
+/// the set is empty.
+fn join_all(states: Vec<AbsState>, ip: usize) -> Result<Option<AbsState>, TypedError> {
+    let mut it = states.into_iter();
     let Some(mut acc) = it.next() else {
         return Ok(None);
     };
     for s in it {
-        if s.len() != acc.len() {
-            return Err(TypedError::BranchHeightMismatch {
-                ip,
-                then_height: acc.len(),
-                else_height: s.len(),
-            });
-        }
-        acc = acc.iter().zip(s.iter()).map(|(x, y)| x.join(y)).collect();
+        acc = AbsState {
+            stack: join_stacks(&acc.stack, &s.stack, ip)?,
+            locals: join_locals(&acc.locals, &s.locals),
+        };
     }
     Ok(Some(acc))
 }
@@ -439,7 +508,13 @@ fn join_all(stacks: Vec<Vec<AbsVal>>, ip: usize) -> Result<Option<Vec<AbsVal>>, 
 /// discipline exactly matches the scalar depth pass. Shape is tracked
 /// precisely for the ops that carry or consume it and conservatively (`Top`)
 /// otherwise.
-fn apply_op(ctx: &Ctx, op: &Op, stack: &mut Vec<AbsVal>, ip: usize) -> Result<(), TypedError> {
+fn apply_op(
+    ctx: &Ctx,
+    op: &Op,
+    stack: &mut Vec<AbsVal>,
+    locals: &mut [AbsVal],
+    ip: usize,
+) -> Result<(), TypedError> {
     let (req, net) = op_depth_effect(op, ctx.chunk);
     if (stack.len() as i32) < req {
         return Err(TypedError::StackUnderflow { ip });
@@ -453,13 +528,17 @@ fn apply_op(ctx: &Ctx, op: &Op, stack: &mut Vec<AbsVal>, ip: usize) -> Result<()
         }
         Op::IsEnum(_, _, _) | Op::IsStruct(_) => stack.push(AbsVal::Scalar(ScalarKind::Bool)),
 
-        // Seed a local read with its declared shape (Phase 2). Unseeded
-        // locals are `Top`.
-        Op::GetLocal(i) => stack.push(ctx.sig.local(*i as usize)),
+        // Read a local's tracked shape. A slot beyond the frame is `Top`.
+        Op::GetLocal(i) => {
+            let shape = locals.get(*i as usize).cloned().unwrap_or(AbsVal::Top);
+            stack.push(shape);
+        }
 
         // A local write must store a value whose shape is compatible with the
-        // slot's declared shape, so the seeded `GetLocal` reads stay
-        // trustworthy. An unseeded slot or an unknown value defers.
+        // slot's declared (seed) shape, so a seeded `GetLocal` read stays
+        // trustworthy; an unseeded slot (seed `Top`) accepts any value. The
+        // tracked shape is then updated to the stored value, so a later
+        // `GetLocal` sees exactly what was written.
         Op::SetLocal(i) => {
             let v = stack.pop().ok_or(TypedError::StackUnderflow { ip })?;
             if !shapes_compatible(&v, &ctx.sig.local(*i as usize)) {
@@ -467,6 +546,9 @@ fn apply_op(ctx: &Ctx, op: &Op, stack: &mut Vec<AbsVal>, ip: usize) -> Result<()
                     ip,
                     slot: *i as usize,
                 });
+            }
+            if let Some(slot) = locals.get_mut(*i as usize) {
+                *slot = v;
             }
         }
 
@@ -939,6 +1021,69 @@ mod tests {
             resume: None,
         };
         assert!(typed_check_chunk_with_sig(&chunk(ops, ints()), &sig, 8, 8).is_ok());
+    }
+
+    // Phase 2 local tracking: a composite built and stored into an unseeded
+    // local is read back with its tracked shape, so a flat field access with
+    // an out-of-bounds offset on the local-held value is rejected (before,
+    // the unseeded local read `Top` and the check deferred).
+    #[test]
+    fn tracked_local_composite_offset_out_of_bounds_rejects() {
+        let mut ops = two_int_struct(16);
+        ops.push(Op::SetLocal(0));
+        ops.push(Op::GetLocal(0));
+        ops.push(Op::GetField(StructField::Flat {
+            offset: 12,
+            kind: ScalarKind::Int,
+        }));
+        assert!(matches!(
+            typed_check_chunk(&chunk(ops, ints()), 8, 8),
+            Err(TypedError::OffsetOutOfBounds { .. })
+        ));
+    }
+
+    // The same access at an in-bounds offset accepts.
+    #[test]
+    fn tracked_local_composite_valid_offset_accepts() {
+        let mut ops = two_int_struct(16);
+        ops.push(Op::SetLocal(0));
+        ops.push(Op::GetLocal(0));
+        ops.push(Op::GetField(StructField::Flat {
+            offset: 8,
+            kind: ScalarKind::Int,
+        }));
+        assert!(typed_check_chunk(&chunk(ops, ints()), 8, 8).is_ok());
+    }
+
+    // Phase 2 local tracking, loop soundness: a local the loop body writes is
+    // invalidated to `Top` at the loop head (a prior iteration may have
+    // overwritten it), so a flat access on it inside the loop defers rather
+    // than trusting the stale shape it held before the loop. Slot 0 is set to
+    // a 16-byte struct before the loop; the loop body reads it with an offset
+    // that would be out of bounds for that struct and also rewrites it. With
+    // the slot invalidated the access defers and the program verifies; without
+    // invalidation the stale struct shape would make it a false out-of-bounds
+    // rejection.
+    #[test]
+    fn loop_written_local_is_invalidated_and_defers() {
+        let mut ops = two_int_struct(16); // 0,1,2: build a struct
+        ops.push(Op::SetLocal(0)); // 3: slot 0 = Flat{16}
+        ops.push(Op::Loop(14)); // 4: body [5,13), exit=14, EndLoop at 13
+        ops.push(Op::GetLocal(0)); // 5: slot 0 invalidated to Top -> [Top]
+        ops.push(Op::GetField(StructField::Flat {
+            offset: 12,
+            kind: ScalarKind::Int,
+        })); // 6: on Top -> defers -> [Scalar]
+        ops.push(Op::PopN(1)); // 7: -> []
+        ops.extend(two_int_struct(16)); // 8,9,10: rebuild -> [Flat]
+        ops.push(Op::SetLocal(0)); // 11: writes slot 0 (triggers invalidation) -> []
+        ops.push(Op::Break(14)); // 12: exit
+        ops.push(Op::EndLoop(5)); // 13: back-edge to 5
+        ops.push(Op::Return); // 14
+        assert!(
+            typed_check_chunk(&chunk(ops, ints()), 8, 8).is_ok(),
+            "a loop-written local must be invalidated to Top so the access defers"
+        );
     }
 
     // A loop body that returns to the entry height but with a different slot
