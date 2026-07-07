@@ -900,7 +900,7 @@ signed loop main(input: Word) -> Word {
 }
 ````
 
-A daughtership loading this bytecode rejects the module unless the attached signature verifies against a public key the operator has registered.
+A device loading this bytecode rejects the module unless the attached signature verifies against a public key the operator has registered.
 
 ## 8. Pattern Matching
 
@@ -1628,4 +1628,4 @@ The remaining open questions concern target-application policy and ecosystem rat
 
 3. **Opaque-type runtime path.** The type checker tracks opaque types but the runtime cannot marshal them across the native boundary as themselves. Adding a `Value::Opaque` variant and a marshalling path is tracked for a future release; in the meantime, hosts pass opaque values as `Word` handles.
 
-4. **Application-domain DSL conventions.** Audio engines, game scripting, embedded control loops, and UAV mission control each have their own register-fn vocabularies. Conventions for these domains will emerge from real adopters rather than from up-front specification.
+4. **Application-domain DSL conventions.** Audio engines, game scripting, embedded control loops, and industrial control each have their own register-fn vocabularies. Conventions for these domains will emerge from real adopters rather than from up-front specification.

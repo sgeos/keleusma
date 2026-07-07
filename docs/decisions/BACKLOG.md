@@ -614,7 +614,7 @@ Phase 4b status detail. The fixed-point divide (F > 0) and modulo reuse the phas
 
 Phase 5 status detail. The shift operators are a language-wide surface addition, not a Multiword-internal one, because Keleusma had no shift or bitwise operators at all before this phase. Four operators are added, named after the assembly mnemonics: `lsl` logical left shift, `asl` arithmetic left shift, `lsr` logical (zero-fill) right shift, and `asr` arithmetic (sign-preserving) right shift. They apply to a `Word` or a `Multiword<N, F>` value shifted by a `Word` amount, and bind below the comparisons and above the additive operators. The amount is a compile-time constant within the value's total bit width in this increment; a variable amount is a stretch item, and `Byte` shifts are not yet supported.
 
-The keyword-mnemonic naming was chosen after an extended comparative review. The mission-critical language cluster the Justification compares against, Ada and the instruction sets Keleusma lowers toward, makes the arithmetic-versus-logical distinction explicit by name rather than inferring it from operand signedness or distinguishing it by a confusable glyph pair such as the shift-right against shift-right-arithmetic forms. A symbolic first pass used the Verilog convention, but naming the operations after the mnemonics is more legible under a convention where the plain right shift is logical, it dissolves the shift-versus-nested-generics parsing conflict entirely since a keyword never collides with a generic close, and it keeps the whole operator surface consistent with the language's existing keyword operators. The names `asl`, `asr`, `lsl`, `lsr` are the 68000's four shift mnemonics verbatim.
+The keyword-mnemonic naming was chosen after an extended comparative review. The high-assurance language cluster the Justification compares against, Ada and the instruction sets Keleusma lowers toward, makes the arithmetic-versus-logical distinction explicit by name rather than inferring it from operand signedness or distinguishing it by a confusable glyph pair such as the shift-right against shift-right-arithmetic forms. A symbolic first pass used the Verilog convention, but naming the operations after the mnemonics is more legible under a convention where the plain right shift is logical, it dissolves the shift-versus-nested-generics parsing conflict entirely since a keyword never collides with a generic close, and it keeps the whole operator surface consistent with the language's existing keyword operators. The names `asl`, `asr`, `lsl`, `lsr` are the 68000's four shift mnemonics verbatim.
 
 A left shift is a single operation on the data, so `lsl` and `asl` produce the same value, and the arithmetic one earns its distinct name by carrying overflow. `asl` is the value `x * 2^k`, which can exceed the range, so on the word-width type it admits the `overflow` and `underflow` arms of the checked-arithmetic construct, lowering to a checked multiply by the constant `2^k`, while `lsl` is a plain wrapping bit operation. The right shifts and the logical left shift never overflow. On the multi-word type, which has no checked construct, `asl` wraps identically to `lsl`. The overflow capture reuses the existing checked-multiply machinery in full, so no new opcode or fault path is added; the amount for a checked `asl` is bounded to `word_bits - 2` because the multiplier `2^k` must be a positive Word. The capture is verified by tests for the `ok` outcome, the `overflow` and `underflow` outcomes, the low-half binding of the wrapped result, and the `saturate_max` resolution in the overflow arm.
 
@@ -700,11 +700,11 @@ The two clauses run independently. The product lattice composes algebraically.
 
 3. **Compositional absence proofs.** Two values that both carry `!Secret` combine into a value that still carries `!Secret`. Static type checking propagates the guarantee through chains of operations.
 
-4. **Deep trust chains.** A von Neumann probe deployed many generations downstream of an originating mothership ought to carry compositional provenance: "this command value was never derived from a contaminated sensor reading," "this code segment's signature path never passed through a compromised intermediate." The product lattice expresses this directly; positive labels alone require enumeration.
+4. **Deep trust chains.** A device deployed many delegation hops downstream of an originating signer ought to carry compositional provenance: "this command value was never derived from a contaminated sensor reading," "this code segment's signature path never passed through a compromised intermediate." The product lattice expresses this directly; positive labels alone require enumeration.
 
 **Why deferred.** The V0.2.0 parameter-position form covers the immediate signing-and-sanitization use cases. The product-lattice extension adds doubled per-value state, more delicate declassify semantics (a `re-attest` operator that re-establishes a negative guarantee after declassify is its own surface question), and conceptual surface for regular programmers ("how does a value know what it doesn't have?"). The deferral keeps V0.2.0 minimal without preventing the eventual extension: value-side negatives are a strict superset of parameter-position negatives, so a V0.2.0 program will not need to change when the extension lands.
 
-**Forcing case.** Awaits a concrete customer use case. The trust-chain aspects of the hierarchical control scenarios are the strongest candidate; certification audits that want compositional absence proofs would also qualify. Without a concrete forcing case, designing the value-side semantics risks committing to a model that the eventual case will need to revise.
+**Forcing case.** Awaits a concrete customer use case. The trust-chain aspects of the fleet delivery scenarios are the strongest candidate; certification audits that want compositional absence proofs would also qualify. Without a concrete forcing case, designing the value-side semantics risks committing to a model that the eventual case will need to revise.
 
 **Compatibility.** Value-side negatives can land as a backwards-compatible feature addition. Every V0.2.0 program parses unchanged; every existing test continues to pass; the AST gains an internal-only extension to `TypeExpr::NegativeLabelled` that the parser starts to produce at additional positions, and the type checker propagates the negative component through the lattice. No surface syntax changes are required.
 
@@ -761,7 +761,7 @@ Keleusma's productivity rule (every `loop` iteration must yield) is currently a 
 
 ## B24. Hardware-isolation integration for Cortex-M targets
 
-Keleusma's defense-adjacent posture combines four protective layers: cryptographically signed modules (R42), statically verified information flow (R43), encrypted artefacts (in-flight at `tmp/encrypted_signed_modules.md`), and hardware-isolated execution (this entry). The first three layers are language-level features; the fourth requires platform support that Cortex-M55 provides through TrustZone-M and ARMv8-M Memory Protection Units. This backlog entry documents the integration direction.
+Keleusma's layered-security posture combines four protective layers: cryptographically signed modules (R42), statically verified information flow (R43), encrypted artefacts (in-flight at `tmp/encrypted_signed_modules.md`), and hardware-isolated execution (this entry). The first three layers are language-level features; the fourth requires platform support that Cortex-M55 provides through TrustZone-M and ARMv8-M Memory Protection Units. This backlog entry documents the integration direction.
 
 **Scope: narrow integration only.** Keleusma provides primitives that the host can use to mark arena regions as secure-world only, configure the MPU for arena protection, and store decryption keys in secure flash. The runtime does not manage secure-world entry points itself; secure-world control remains the host's responsibility. The narrow scope keeps the work bounded and avoids substantial architectural changes to the runtime.
 
@@ -797,7 +797,7 @@ Each layer addresses a distinct threat. The combination is materially stronger t
 
 **Why deferred.** The first three layers, namely signed modules, IFC labels, and encrypted modules, are operational improvements that do not require platform-specific work. They land as V0.2.0 and V0.2.x. The hardware-isolation work is necessarily platform-specific, substantial in scope, and pre-requires the encrypted-modules infrastructure to exist. The natural sequencing is V0.4.x for initial Cortex-M55 integration, with other Cortex-M variants following based on operator demand.
 
-**Forcing case.** A concrete defense-adjacent customer use case that requires Common Criteria EAL4+ or equivalent certification. Without such a forcing case, the platform-specific engineering investment is hard to justify against the alternative of operator-managed hardware integration outside the Keleusma runtime.
+**Forcing case.** A concrete customer use case that requires hardware-isolated execution and a high-assurance evaluation posture. Without such a forcing case, the platform-specific engineering investment is hard to justify against the alternative of operator-managed hardware integration outside the Keleusma runtime.
 
 **Compatibility.** Backwards-compatible feature addition. The work extends the host-interface surface with optional native functions that hosts may register or ignore. Programs written without hardware-isolation awareness continue to run identically. Hosts that opt in gain the additional isolation layer.
 
@@ -807,7 +807,7 @@ Each layer addresses a distinct threat. The combination is materially stronger t
 - R43 (information-flow labels with negative variants) is the second.
 - `tmp/encrypted_signed_modules.md` (the in-flight spec) is the third.
 - R4.5 (cross-platform target order) places Cortex-M55 in Tier 2 of V0.4.x, which is the natural delivery window for the initial hardware-isolation integration.
-- The hierarchical control scenarios, together with the related perpetual operational scenarios, are the operational shape that the four-layer combination addresses end to end.
+- The fleet delivery scenarios, together with the related long-running deployment scenarios, are the operational shape that the four-layer combination addresses end to end.
 
 ## B25. Directional information-flow labels on data field types
 
@@ -884,7 +884,7 @@ The work is mechanical once the forcing case pins the design endpoint. The V0.2.
 - The 2026-05-23 commit `0262634` (data-field negative labels) is the implementation landing of R51.
 - B21 (value-side negative labels via product lattice) is the larger generalisation. B25 is strictly narrower; it remains a boundary clause rather than a value-side property.
 - `RA.14` in `tmp/research/rtos_api/ra_14_ifc_labels.md` outlines the RTOS-level IFC discipline this entry would compose with.
-- The hierarchical control scenarios are the operational shape whose audit and hot-swap concerns this entry would address.
+- The fleet delivery scenarios are the operational shape whose audit and hot-swap concerns this entry would address.
 
 ## ~~B26. Arena-resident persistent region for composite data values~~ (Resolved through B28, V0.2.1)
 
@@ -900,7 +900,7 @@ The 2026-05-23 REPL persistence work (commit `92b994c`) snapshots `shared data` 
 
 **Future manifestation: live migration and cross-process state transfer.**
 
-A V0.4.x or V0.5.x feature that wants to migrate a Vm's persistent state across processes (mothership-to-daughtership update delivery, checkpoint-resume on embedded targets with battery-backed RAM, hot-swap onto a new module via an opaque blob) would hit the same heap-pointer problem. Today these features require per-Value serialisation walks. A persistent region whose every byte is self-contained would let the feature treat the region as a flat opaque byte buffer.
+A V0.4.x or V0.5.x feature that wants to migrate a Vm's persistent state across processes (signer-to-device update delivery, checkpoint-resume on embedded targets with battery-backed RAM, hot-swap onto a new module via an opaque blob) would hit the same heap-pointer problem. Today these features require per-Value serialisation walks. A persistent region whose every byte is self-contained would let the feature treat the region as a flat opaque byte buffer.
 
 **Design space.**
 
@@ -948,7 +948,7 @@ The REPL persistence work covers the operationally relevant case (shared data wi
 
 **Forcing case.**
 
-A V0.4.x or V0.5.x feature that requires opaque-buffer persistent-state transfer. Candidates include hot-swap blob delivery, multi-tier update propagation in the hierarchical control scenarios, embedded-target battery-backed RAM checkpoints, or a generated codebase that produces many module variants whose persistent state must round-trip without a typed walk.
+A V0.4.x or V0.5.x feature that requires opaque-buffer persistent-state transfer. Candidates include hot-swap blob delivery, multi-tier update propagation in the fleet delivery scenarios, embedded-target battery-backed RAM checkpoints, or a generated codebase that produces many module variants whose persistent state must round-trip without a typed walk.
 
 **Compatibility.**
 
@@ -1075,7 +1075,7 @@ A V0.4.x or V0.5.x deployment to an embedded target with no global allocator (or
 - R32 (dual-end arena) is the prior decision that B27 completes.
 - B24 (hardware-isolation integration for Cortex-M targets) is the deployment family that benefits from arena-as-sole-allocator.
 - `keleusma-arena` already implements an `Allocator` shape for KString; B27 generalises the same mechanism to composite Vec and String bodies.
-- The hierarchical control scenarios are the operational shape that benefits from the deterministic-allocator property.
+- The fleet delivery scenarios are the operational shape that benefits from the deterministic-allocator property.
 
 ## ~~B28. Runtime composite Value representation aligned with the language guarantee~~ (Resolved for V0.2.1; all phases P0-P5 complete)
 
@@ -1199,7 +1199,7 @@ No opcode changes in any phase. `BYTECODE_VERSION` stays at 1 for lack of tracti
 
 **Forcing case.**
 
-V0.4.x cross-target deployment, particularly to embedded targets without a global allocator (Cortex-M55, Cortex-M variants, rad-tolerant cores). V0.5.x self-hosted compiler that produces native code through `llvm-mos` or similar backends and wants LLVM's register allocator to see through composite values. The hierarchical control scenarios that require deterministic memory-allocation behaviour for certification.
+V0.4.x cross-target deployment, particularly to embedded targets without a global allocator (Cortex-M55, Cortex-M variants, rad-tolerant cores). V0.5.x self-hosted compiler that produces native code through `llvm-mos` or similar backends and wants LLVM's register allocator to see through composite values. The fleet delivery scenarios that require deterministic memory-allocation behaviour for certification.
 
 **Composition with B26 and B27.**
 
@@ -1219,7 +1219,7 @@ B26 and B27 stay in the backlog as documentary captures of the symptom-level fix
 - R29 (hot code swap) interacts: the migration path needs updating because the Value tree's internal shape changes.
 - B16 (parametric Vm for sub-64-bit native runtimes) intersects: byte-size computation depends on the target's word and float widths. `LayoutDescriptor` is parameterised over those widths from P0.
 - B24 (hardware-isolation for Cortex-M) is the deployment family that benefits from arena-as-sole-allocator and from precise WCMU bounds.
-- The hierarchical control scenarios are the operational shape that benefits most from the deterministic-allocator property and the certification-grade WCMU precision.
+- The fleet delivery scenarios are the operational shape that benefits most from the deterministic-allocator property and the certification-grade WCMU precision.
 - V0.2.0's WCMU calculation imprecision is the operational artefact of this defect; corrected runtime produces corrected numbers.
 
 ## ~~B29. Strippable debug metadata in the ISA~~ (Resolved for V0.2.1; three precision refinements deferred)

@@ -50,16 +50,16 @@ studio guards. `studio.pub` is the public key, given to anyone who needs
 to verify. The tool refuses to overwrite an existing key file, because a
 key is a long-lived secret.
 
-Save the program above as `mission.kel`, then compile and sign it:
+Save the program above as `app.kel`, then compile and sign it:
 
 ````
-keleusma compile mission.kel --signing-key studio.seed -o mission.kel.bin
+keleusma compile app.kel --signing-key studio.seed -o app.kel.bin
 ````
 
 Run the signed bytecode, supplying the public key to verify against:
 
 ````
-keleusma run mission.kel.bin --verifying-key studio.pub
+keleusma run app.kel.bin --verifying-key studio.pub
 ````
 
 The output is `42`. The runtime checked the signature against
@@ -93,17 +93,17 @@ The compile step takes both a signing key and the recipient's public
 encryption key:
 
 ````
-keleusma compile mission.kel \
+keleusma compile app.kel \
     --signing-key studio.seed \
     --encryption-key device.pub \
-    -o mission.kel.bin
+    -o app.kel.bin
 ````
 
 The recipient runs the artefact with both the verifying key and their
 own decryption key:
 
 ````
-keleusma run mission.kel.bin \
+keleusma run app.kel.bin \
     --verifying-key studio.pub \
     --decryption-key device.seed
 ````

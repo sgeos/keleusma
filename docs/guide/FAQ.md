@@ -187,7 +187,7 @@ The signing operation itself is a toolchain step independent of the compiler. `k
 
 The feature requires the `signatures` cargo feature, which is off by default and pulls in `ed25519-dalek`. Builds without the feature accept unsigned modules normally and reject signed modules with `LoadError::SignaturesUnsupported`. The `signed` surface keyword still parses without the feature so source files remain portable.
 
-Use case: multi-party module delivery to embedded targets. A mothership compiles per-mission scripts and signs them; a daughtership flashed with the mothership's public key verifies before loading. See the [Distributing signed bytecode](./COOKBOOK.md#distributing-signed-bytecode) cookbook recipe and `R42` in [RESOLVED.md](../decisions/RESOLVED.md).
+Use case: multi-party module delivery to embedded targets. A signer compiles scripts and signs them; a device flashed with the signer's public key verifies before loading. See the [Distributing signed bytecode](./COOKBOOK.md#distributing-signed-bytecode) cookbook recipe and `R42` in [RESOLVED.md](../decisions/RESOLVED.md).
 
 ### If-else at statement position requires a trailing semicolon
 

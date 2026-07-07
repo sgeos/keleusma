@@ -53,7 +53,7 @@ V0.2.0 is the first publicly released line. V0.1.x circulated as a pre-release. 
 
 ### Cryptographic module signing (R42)
 
-V0.2.0 adds optional Ed25519 signing of compiled bytecode. The mechanism enforces origin authenticity and tamper resistance for modules delivered to embedded targets; the motivating use case is the mothership-to-daughtership UAV scenario where a mothership compiles per-mission scripts and a daughtership verifies them over a bandwidth-constrained link.
+V0.2.0 adds optional Ed25519 signing of compiled bytecode. The mechanism enforces origin authenticity and tamper resistance for modules delivered to embedded targets; the motivating use case is signed delivery to embedded devices, where a signer compiles scripts and a device verifies them over a bandwidth-constrained link.
 
 - **Surface syntax.** A new `signed` modifier on the entry function declaration (`signed fn main`, `signed yield main`, `signed loop main`) emits `FLAG_REQUIRES_SIGNATURE = 0x02` in the module header flags. The modifier is admissible only on the entry function; a `signed` modifier on a helper rejects at compile time with a diagnostic naming the offending declaration.
 - **Wire format.** The framing header extends through the existing `header_length: u16` field. Unsigned modules retain the 64-byte base; signed modules grow to `64 + 8 (signature metadata) + signature_length + padding-to-8` bytes. Bytes 64..72 hold the signature metadata (`scheme_id` byte, reserved byte, `signature_length: u16`, reserved u32); the signature payload follows. Ed25519 (`scheme_id = 1`) is the only V0.2.0 scheme; the byte is the substrate for future migrations to ECDSA / ML-DSA / LMS without an ABI break.

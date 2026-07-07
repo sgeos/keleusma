@@ -157,10 +157,10 @@ keleusma-compile = ["keleusma/compile"]
 keleusma-verify = ["keleusma/verify"]
 # Pass-through to keleusma's `signatures` feature. With this on,
 # the runtime image carries the Ed25519 verifier (sha2,
-# curve25519-dalek, zeroize, ed25519-dalek) and the daughtership
+# curve25519-dalek, zeroize, ed25519-dalek) and the device
 # can verify signed scripts delivered over the comm link via
 # `Vm::register_verifying_key` and `Vm::replace_module_from_bytes`.
-# Off by default to keep the flash image lean; daughterships that
+# Off by default to keep the flash image lean; devices that
 # only trust-load unsigned baked-in bytecode leave this disabled.
 # Pulls the runtime dep on `ed25519-dalek` so the boot-time
 # self-test path in `setup::run_signed_self_test` can construct a

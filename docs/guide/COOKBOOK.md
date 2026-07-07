@@ -345,7 +345,7 @@ Script-side arithmetic on a narrow runtime wraps at the runtime's word boundary,
 
 ### Problem
 
-The host application loads compiled bytecode that arrives from an untrusted source — over a comms link, from disk, from a content-delivery channel — and needs to refuse modules that were not produced by an authorised signer. The threat model is multi-party: one or more known mothership identities are trusted to sign modules; everything else is rejected.
+The host application loads compiled bytecode that arrives from an untrusted source — over a comms link, from disk, from a content-delivery channel — and needs to refuse modules that were not produced by an authorised signer. The threat model is multi-party: one or more known signer identities are trusted to sign modules; everything else is rejected.
 
 ### Solution
 
@@ -371,11 +371,11 @@ let key = ed25519_dalek::VerifyingKey::from_bytes(&public_key_bytes)?;
 let mut vm = Vm::load_signed_bytes(&signed_bytes, &arena, &[key])?;
 ```
 
-For hot-swap delivery (mothership/daughtership pattern), the host constructs the VM from an unsigned baseline, registers the trust matrix, and accepts signed updates over the comm link:
+For hot-swap delivery (signer/device pattern), the host constructs the VM from an unsigned baseline, registers the trust matrix, and accepts signed updates over the comm link:
 
 ```rust
 let mut vm = Vm::new(baseline_module, &arena)?;
-vm.register_verifying_key(mothership_key);
+vm.register_verifying_key(signer_key);
 // later, after receiving an update over the wire:
 vm.replace_module_from_bytes(&update_bytes, initial_data)?;
 ```

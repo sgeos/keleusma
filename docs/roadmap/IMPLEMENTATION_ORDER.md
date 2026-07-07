@@ -12,7 +12,6 @@ When the operator returns, the recommended reading order across the research and
 4. **The R4 series** (`r4_1` through `r4_5`) — V0.4.0 design.
 5. **The R5 series** (`r5_1` through `r5_5`) — V0.5.0 design.
 6. **The cross-cutting items** (`rc_1`, `rc_2`) — testbed and vintage homebrew.
-7. **The perpetual operational scenarios** — internal materials documenting the long-duration deployment framing.
 
 Each individual document is ~500-1500 lines. Total reading effort is one to two days at unhurried pace.
 
@@ -257,7 +256,6 @@ These remain for the operator to undertake when they return. The R-docs provide 
 
 - All R-docs in `tmp/research/`.
 - `tmp/research/STATUS.md` for the backlog and firing log.
-- Internal materials for the perpetual operational scenarios.
 - `tmp/research/rtos_n6_testbed/` for the Phase α skeleton.
 - `docs/roadmap/V0_3_0_SELF_HOSTING.md`, `V0_4_0_NATIVE_CODEGEN.md`, `V0_5_0_KELEUSMA_HOST.md` for the strategy documents the R-docs settle.
 - `docs/architecture/SUB_COROUTINES.md` for the sub-coroutine spec R5.1 and R5.4 advance.

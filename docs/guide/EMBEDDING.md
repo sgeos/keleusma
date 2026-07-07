@@ -426,7 +426,7 @@ Hosts that bootstrap from an unsigned baseline and only accept signed bytecode a
 
 ````rust
 let mut vm = Vm::new(unsigned_baseline_module, &arena)?;
-vm.register_verifying_key(mothership_key);
+vm.register_verifying_key(signer_key);
 // ... later, after receiving a signed update over the comm link ...
 vm.replace_module_from_bytes(&update_bytes, initial_data)?;
 ````

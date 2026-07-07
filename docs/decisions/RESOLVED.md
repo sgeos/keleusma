@@ -54,7 +54,7 @@ Top-level productive divergent functions model stream transformations of the for
 
 ## R13. Arena memory model
 
-The VM uses an arena memory model consisting of a single contiguous bump-allocated buffer. The stack grows from one end. There is no heap initially. The arena persists across yields within a single stream phase but is cleared at the top of every productive divergent function iteration (the RESET boundary) by resetting the bump pointer. This prevents memory leaks, ensures predictable resource usage, and eliminates memory debt across mission phases. Memory bounds are statically analyzable per stream phase. See R20 for implementation details.
+The VM uses an arena memory model consisting of a single contiguous bump-allocated buffer. The stack grows from one end. There is no heap initially. The arena persists across yields within a single stream phase but is cleared at the top of every productive divergent function iteration (the RESET boundary) by resetting the bump pointer. This prevents memory leaks, ensures predictable resource usage, and eliminates memory debt across stream phases. Memory bounds are statically analyzable per stream phase. See R20 for implementation details.
 
 ## R14. Two temporal domains
 
@@ -292,7 +292,7 @@ This rejection does not preclude a future revisit. If a real workload demonstrat
 
 ## R42. Compiled-module signing for V0.2.0
 
-The V0.2.0 wire format gains an optional cryptographic signature appended to the framing header. The mechanism enforces authentic origin and tamper resistance for compiled modules delivered to embedded targets. The use case that justifies the addition is documented in the hierarchical control scenarios, where a higher-tier controller compiles per-mission scripts and delivers them to lower-tier platforms over a bandwidth-constrained communications link.
+The V0.2.0 wire format gains an optional cryptographic signature appended to the framing header. The mechanism enforces authentic origin and tamper resistance for compiled modules delivered to embedded targets. The use case that justifies the addition is signed delivery to embedded devices, where a signer compiles scripts and delivers them to devices over a bandwidth-constrained communications link.
 
 **Design.** Surface syntax: the entry function declaration accepts an optional `signed` modifier (`signed fn main`, `signed yield main`, `signed loop main`). The modifier is admissible only on the entry function; a `signed` modifier on a helper function is a compile error. When present, the compiler sets `FLAG_REQUIRES_SIGNATURE = 0x02` in the module's framing header flags byte.
 
@@ -345,7 +345,7 @@ Negative labels at any other position (let bindings, struct fields, enum payload
 
 **Implementation.** AST gains `TypeExpr::NegativeLabelled(inner, labels, span)` parallel to `TypeExpr::Labelled`. The parser produces it for `T@!Label` and `T@{!N1, ...}` forms; mixed sets are rejected at parse time. The type checker extracts top-level negatives at signature collection (stored on `FnSig::param_negative_labels` and `FnSig::return_negative_labels`) and runs a validation walk that rejects `NegativeLabelled` at every other position. Boundary clauses are wired into the call-site path (regular and native), the function-body return check, and the `Expr::Yield` handler.
 
-**Cross-references.** `B21` records the value-side product-lattice extension as deferred future work. The hierarchical control scenarios are the strongest motivating use case for the eventual value-side extension; the V0.2.0 parameter-position form covers the immediate signing-related use cases.
+**Cross-references.** `B21` records the value-side product-lattice extension as deferred future work. The fleet delivery scenarios are the strongest motivating use case for the eventual value-side extension; the V0.2.0 parameter-position form covers the immediate signing-related use cases.
 
 ## R44. V0.3.0 self-hosted compiler design questions resolved
 
