@@ -13,8 +13,9 @@
 //!   join** at an `If`/`Else` merge, closing the branch-imbalance hole
 //!   (findings B4/B5);
 //! - requires **loop back-edge neutrality** — a loop body's fall-through
-//!   must return the stack to its entry height, so per-iteration stack
-//!   growth cannot escape the worst-case bound (finding 3/B4);
+//!   must restore the exact entry stack (height and per-slot shape), so
+//!   per-iteration stack growth cannot escape the worst-case bound
+//!   (finding 3/B4);
 //! - validates a compiler-baked flat-field offset against the byte size of
 //!   the composite it is applied to, wherever that size is statically known
 //!   (findings B1/B2).
@@ -114,8 +115,9 @@ pub enum TypedError {
         /// Operand-stack height where the else-arm falls through.
         else_height: usize,
     },
-    /// A loop body's fall-through does not return the operand stack to its
-    /// entry height (the back-edge is not stack-neutral).
+    /// A loop body's fall-through does not restore the operand stack to its
+    /// entry state (the back-edge is not stack-neutral), either in height or
+    /// in a per-slot shape.
     LoopNotNeutral {
         /// Instruction index of the `Loop`.
         ip: usize,
@@ -123,6 +125,15 @@ pub enum TypedError {
         entry_height: usize,
         /// Operand-stack height where the body falls through.
         exit_height: usize,
+    },
+    /// A `SetLocal` stores a value whose shape is incompatible with the
+    /// slot's declared shape, which would make a later `GetLocal` seeding
+    /// untrustworthy.
+    LocalTypeMismatch {
+        /// Instruction index of the `SetLocal`.
+        ip: usize,
+        /// The local slot being written.
+        slot: usize,
     },
 }
 
@@ -273,8 +284,12 @@ fn interp_region(
                     wb,
                     fb,
                 )?;
+                // Back-edge neutrality: the body's fall-through must restore
+                // the exact entry stack (height and per-slot shape), so each
+                // iteration begins in the same state and per-iteration stack
+                // growth cannot escape the worst-case bound.
                 if let Some(be) = &body_end
-                    && be.len() != entry_height
+                    && *be != stack
                 {
                     return Err(TypedError::LoopNotNeutral {
                         ip,
@@ -376,6 +391,19 @@ fn apply_op(
         // Seed a local read with its declared shape (Phase 2). Unseeded
         // locals are `Top`.
         Op::GetLocal(i) => stack.push(sig.local(*i as usize)),
+
+        // A local write must store a value whose shape is compatible with the
+        // slot's declared shape, so the seeded `GetLocal` reads stay
+        // trustworthy. An unseeded slot or an unknown value defers.
+        Op::SetLocal(i) => {
+            let v = stack.pop().ok_or(TypedError::StackUnderflow { ip })?;
+            if !shapes_compatible(&v, &sig.local(*i as usize)) {
+                return Err(TypedError::LocalTypeMismatch {
+                    ip,
+                    slot: *i as usize,
+                });
+            }
+        }
 
         // A yield pops the output value and the resume pushes the input; the
         // resume's shape comes from the signature (Phase 2).
@@ -502,6 +530,22 @@ fn check_flat_nested(v: &AbsVal, offset: u16, size: u16, ip: usize) -> Result<()
         }
         AbsVal::Scalar(_) => Err(TypedError::ExpectedComposite { ip }),
         AbsVal::Top => Ok(()),
+    }
+}
+
+/// Whether a value's shape may be stored into a slot of the declared
+/// shape. `Top` on either side defers. Two scalars are compatible
+/// regardless of kind (they share the word/byte/float width the layout
+/// cares about); two flat composites must match in kind and size; a scalar
+/// and a composite never match.
+fn shapes_compatible(value: &AbsVal, declared: &AbsVal) -> bool {
+    match (value, declared) {
+        (AbsVal::Top, _) | (_, AbsVal::Top) => true,
+        (AbsVal::Scalar(_), AbsVal::Scalar(_)) => true,
+        (AbsVal::Flat { kind: k1, size: s1 }, AbsVal::Flat { kind: k2, size: s2 }) => {
+            k1 == k2 && s1 == s2
+        }
+        _ => false,
     }
 }
 
@@ -730,6 +774,79 @@ mod tests {
             typed_check_chunk_with_sig(&bad, &sig, 8, 8),
             Err(TypedError::OffsetOutOfBounds { .. })
         ));
+    }
+
+    // Storing a scalar into a slot declared as a composite is a mismatch
+    // (Phase 2a residual): it would make a later GetLocal seeding wrong.
+    #[test]
+    fn setlocal_shape_mismatch_rejects() {
+        let ops = vec![Op::Const(0), Op::SetLocal(0)];
+        let sig = ChunkSig {
+            locals: vec![AbsVal::Flat {
+                kind: CompositeKind::Struct,
+                size: 16,
+            }],
+            resume: None,
+        };
+        assert!(matches!(
+            typed_check_chunk_with_sig(&chunk(ops, ints()), &sig, 8, 8),
+            Err(TypedError::LocalTypeMismatch { .. })
+        ));
+    }
+
+    // Storing a matching composite into the declared slot accepts.
+    #[test]
+    fn setlocal_matching_shape_accepts() {
+        let ops = vec![
+            Op::Const(0),
+            Op::Const(1),
+            Op::NewComposite(NewCompositeOperand::Flat {
+                kind: CompositeKind::Struct,
+                count: 2,
+                byte_size: 16,
+            }),
+            Op::SetLocal(0),
+        ];
+        let sig = ChunkSig {
+            locals: vec![AbsVal::Flat {
+                kind: CompositeKind::Struct,
+                size: 16,
+            }],
+            resume: None,
+        };
+        assert!(typed_check_chunk_with_sig(&chunk(ops, ints()), &sig, 8, 8).is_ok());
+    }
+
+    // A loop body that returns to the entry height but with a different slot
+    // shape is not neutral (Phase 1 residual: back-edge equality, not just
+    // height). Modelled by a body that pops a seeded composite local and
+    // pushes a scalar in its place across the back-edge.
+    #[test]
+    fn loop_non_neutral_by_shape_rejects() {
+        // Entry stack seeded with one composite via GetLocal; the loop body
+        // replaces it with a scalar (Const) at equal height.
+        let ops = vec![
+            Op::GetLocal(0), // 0: entry stack [Flat]
+            Op::Loop(5),     // 1: body [2,4), exit=5, EndLoop at 4
+            Op::PopN(1),     // 2: pop the Flat -> []
+            Op::Const(0),    // 3: push a Scalar -> [Scalar] (height 1, != entry [Flat])
+            Op::EndLoop(0),  // 4
+            Op::Return,      // 5
+        ];
+        let sig = ChunkSig {
+            locals: vec![AbsVal::Flat {
+                kind: CompositeKind::Struct,
+                size: 16,
+            }],
+            resume: None,
+        };
+        assert!(
+            matches!(
+                typed_check_chunk_with_sig(&chunk(ops, ints()), &sig, 8, 8),
+                Err(TypedError::LoopNotNeutral { .. })
+            ),
+            "a loop back-edge that changes a slot's shape at equal height must be rejected"
+        );
     }
 
     // If/Else with balanced arms (each leaves one value) accepts; the merge
