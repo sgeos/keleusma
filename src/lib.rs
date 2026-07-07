@@ -219,6 +219,11 @@ pub mod text_size;
 /// Structural verifier plus WCET and WCMU resource-bounds pass.
 #[cfg(feature = "verify")]
 pub mod verify;
+/// Phase 0 spike for the A.2.1 typed operand-stack verifier pass. Not yet
+/// wired into [`verify`]; a standalone proof of concept for the abstract
+/// operand-stack domain and baked-offset validation.
+#[cfg(feature = "verify")]
+pub mod verify_typed;
 
 pub use keleusma_arena::{
     Arena, ArenaHandle, BottomHandle, Budget, EpochSaturated, Stale, TopHandle,
