@@ -8,7 +8,7 @@ This document describes the development process for Keleusma, adapted for librar
 
 This project is classified as **Library Engineering**.
 
-Libraries occupy a middle ground between FMCG (Fast-Moving Consumer Goods) and mission-critical engineering. Correctness matters more than in a game, because users depend on the library for their own projects. However, the cost of a bug is lower than in high-assurance systems. This classification informs the level of rigor applied to testing, documentation, and code review throughout the project.
+Libraries occupy a middle ground between FMCG (Fast-Moving Consumer Goods) and high-assurance engineering. Correctness matters more than in a game, because users depend on the library for their own projects. However, the cost of a bug is lower than in high-assurance systems. This classification informs the level of rigor applied to testing, documentation, and code review throughout the project.
 
 | Dimension | Library | FMCG | Mission-Critical |
 |-----------|---------|------|-------------------|

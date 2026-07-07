@@ -34,14 +34,11 @@ These are general defaults. Project-specific invariants override when they confl
 
 ## Output placement
 
-All loop output goes into untracked directories at the project root. Two roots are in use, distinguished by sensitivity.
+All loop output goes into an untracked directory at the project root.
 
-- `tmp/research/` for general, public-facing research. One subdirectory per topic when the topic generates more than a single document or carries a test project. One file per design question, named after the backlog identifier.
-- `secret/research/` for material that touches internal use cases. This includes any framing, scenario, or worked example whose subject matter the operator does not want indexed, accidentally committed, or visible to third parties. Internal-use-case implications and scenario exploration belong here. Defence-adjacent framings, customer-specific scenarios, and any topic the operator flags as internal are the typical inhabitants. The two trees are otherwise structurally identical.
+- `tmp/research/` holds the research output. One subdirectory per topic when the topic generates more than a single document or carries a test project. One file per design question, named after the backlog identifier.
 
-Each root carries a `STATUS.md` recording the backlog, the firing log, and the stopping condition status. A synthesis document at the end summarises the body of work for operator review.
-
-The default is `tmp/`. Move material to `secret/` only when the topic itself is internal, not when the document happens to mention a sensitive technique in passing.
+The directory carries a `STATUS.md` recording the backlog, the firing log, and the stopping condition status. A synthesis document at the end summarises the body of work for operator review.
 
 Each document should carry explicit uncertainty markers. The categories fact, inference, and hypothesis are the minimum. The verification activities listed in the firing protocol below feed the confidence labelling on each recommendation.
 
@@ -54,7 +51,7 @@ Each firing follows a consistent shape. The numbered steps are mandatory. The ve
 3. Perform the research work for that item. The work consists of a verification phase followed by a drafting phase. The verification phase draws from three activities, chosen based on the question.
    - **Web search.** Search for prior art, recent literature, authoritative documentation, and reference implementations of the technique under study. This is the default first step when the question depends on facts established outside the project. Use `WebFetch` to read the most authoritative source directly when a search result identifies one.
    - **Local-documentation reconciliation.** Read the relevant project documentation under `docs/architecture/`, `docs/spec/`, `docs/decisions/`, and `docs/guide/`. Identify any place the question intersects an existing decision, invariant, or design statement. A recommendation that contradicts the project's own published positions must surface the contradiction explicitly rather than glossing it.
-   - **Test project.** When the question hinges on whether a technique compiles, runs, links, or interoperates, create a small Rust cargo project under `tmp/research/<id>_spike/`, implement the minimum that exercises the question, and run it. For internal-use-case items the equivalent path is `secret/research/<id>_spike/`. A successful build, a captured runtime output, and a reproducible recipe in the design document are the deliverable. The bundled `llvm_retcon_spike` directory under `tmp/research/` is a worked example of this pattern.
+   - **Test project.** When the question hinges on whether a technique compiles, runs, links, or interoperates, create a small Rust cargo project under `tmp/research/<id>_spike/`, implement the minimum that exercises the question, and run it. A successful build, a captured runtime output, and a reproducible recipe in the design document are the deliverable. The bundled `llvm_retcon_spike` directory under `tmp/research/` is a worked example of this pattern.
 4. Write the resulting design document with explicit confidence labelling. High confidence when verified directly against an authoritative source or a working test project. Medium confidence when verified against a secondary or older source. Low confidence when verification was not possible within the firing budget.
 5. Update `STATUS.md` with the firing outcome.
 6. Evaluate whether stopping conditions have been met.
@@ -141,8 +138,7 @@ The following were observed or risked during the inaugural loop. Avoid in future
 - Confidence flattening. Treating high-stakes recommendations with the same epistemic weight as cosmetic recommendations is a disservice. Confidence labels per document are mandatory.
 - Length over precision. Long documents impose review cost. Tighter documents respect operator attention.
 - Silent termination. Always record why the loop stopped.
-- Mixing tracked and untracked output. All loop output goes to `tmp/` or `secret/`. No edits to `docs/`, `src/`, or any other tracked directory during the autonomous phase.
-- Placing internal-use-case material in `tmp/`. The `secret/` tree exists for that material; the placement decision is the operator's standing policy, not a per-firing judgement.
+- Mixing tracked and untracked output. All loop output goes to `tmp/`. No edits to `docs/`, `src/`, or any other tracked directory during the autonomous phase.
 
 ## Tooling notes
 
@@ -153,7 +149,7 @@ The following tools, from the Claude Code agent harness, are the standard set fo
 - `Write` and `Edit` for document production.
 - `WebSearch` and `WebFetch` for the web-search verification step. These are mandatory tools for the loop, not optional. Every firing whose question depends on facts established outside the project must use them.
 - `Read` and `Grep` for the local-documentation reconciliation step.
-- `Bash` for creating and running test projects, restricted to actions within `tmp/` and `secret/` and to read-only operations elsewhere.
+- `Bash` for creating and running test projects, restricted to actions within `tmp/` and to read-only operations elsewhere.
 
 ## Cross-references
 
@@ -169,4 +165,4 @@ Material revisions bump the version and note the change in `docs/process/TASKLOG
 | Version | Date | Change |
 |---------|------|--------|
 | 0.1 | 2026-05-21 | Initial draft distilled from the inaugural Keleusma research loop. |
-| 0.2 | 2026-05-22 | Web search, local-documentation reconciliation, and test-project creation elevated to the standard verification menu in the firing protocol. `secret/research/` output destination added for internal-use-case material. Navigation header, cross-references section, and `Worst-Case Execution Time` and `Worst-Case Memory Usage` acronym expansions added. Specific R-id citations from the inaugural loop removed because the audit found they mischaracterised the underlying research items. Verification budget and pacing interval reconciled. |
+| 0.2 | 2026-05-22 | Web search, local-documentation reconciliation, and test-project creation elevated to the standard verification menu in the firing protocol. Navigation header, cross-references section, and `Worst-Case Execution Time` and `Worst-Case Memory Usage` acronym expansions added. Specific R-id citations from the inaugural loop removed because the audit found they mischaracterised the underlying research items. Verification budget and pacing interval reconciled. |
