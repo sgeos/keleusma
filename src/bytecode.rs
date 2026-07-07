@@ -2913,6 +2913,64 @@ pub struct EnumLayout {
     pub min_payload: u32,
 }
 
+/// Flat-shape descriptor for one value at a chunk's signature boundary
+/// (a parameter, the resume value, or the return), consumed by the typed
+/// operand-stack verifier pass to seed the abstract stack where the op stream
+/// alone cannot determine a value's shape (A.2.1 Phase 2b). The `kind` fields
+/// carry the stable [`crate::value_layout::ScalarKind::to_tag`] and
+/// [`crate::value_layout::CompositeKind::to_tag`] codes rather than the layout
+/// enums directly, so the wire encoding does not couple those enums to rkyv.
+/// A [`WireShape::Top`] entry is the lattice top and reproduces the unseeded
+/// Phase 1 behaviour (the pass defers shape-dependent checks).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Archive, Serialize, Deserialize)]
+pub enum WireShape {
+    /// Shape not statically known; the pass defers shape checks.
+    Top,
+    /// A fixed-size scalar. `kind` is a [`crate::value_layout::ScalarKind`] tag.
+    Scalar {
+        /// `ScalarKind::to_tag` code for the scalar's kind.
+        kind: u8,
+    },
+    /// A flat composite body of `size` bytes at the module's widths. `kind` is
+    /// a [`crate::value_layout::CompositeKind`] tag.
+    Flat {
+        /// `CompositeKind::to_tag` code for the composite variant.
+        kind: u8,
+        /// The body's byte length at the module's declared widths.
+        size: u32,
+    },
+}
+
+/// Per-chunk signature descriptor for the typed operand-stack verifier pass
+/// (A.2.1 Phase 2b). Carried in a module-level table parallel to
+/// [`Module::chunks`] so a `Call` can seed its result and check its arguments
+/// against the callee's boundary. Additive on the wire (mirrored in the
+/// auxiliary body alongside [`Module::enum_layouts`]); an absent table entry
+/// or an all-[`WireShape::Top`] signature reproduces the unseeded Phase 1
+/// behaviour. Only the signature boundary is described; non-parameter locals
+/// are seeded as `Top` and refined by the pass (a later phase may narrow
+/// them).
+#[derive(Debug, Clone, Archive, Serialize, Deserialize)]
+pub struct ChunkSignature {
+    /// Flat shape of each parameter, in declaration order.
+    pub params: Vec<WireShape>,
+    /// Flat shape of the return value.
+    pub ret: WireShape,
+    /// Flat shape a `Yield`/resume pushes. A Stream chunk resumes with its
+    /// single parameter's shape; other chunks record `Top`.
+    pub resume: WireShape,
+}
+
+impl Default for ChunkSignature {
+    fn default() -> Self {
+        ChunkSignature {
+            params: Vec::new(),
+            ret: WireShape::Top,
+            resume: WireShape::Top,
+        }
+    }
+}
+
 /// A named slot in the data segment.
 #[derive(Debug, Clone, Archive, Serialize, Deserialize)]
 pub struct DataSlot {
@@ -3302,6 +3360,13 @@ pub struct Module {
     /// arena-less constructor's hints. Empty for a module that declares no
     /// enums. See [`EnumLayout`].
     pub enum_layouts: Vec<EnumLayout>,
+    /// Per-chunk signature descriptors for the typed operand-stack verifier
+    /// pass (A.2.1 Phase 2b), parallel to [`Module::chunks`] by index. Seeds
+    /// each chunk's parameters, resume, and return, and lets a `Call` seed its
+    /// result and check its arguments against the callee. Empty (or shorter
+    /// than `chunks`) reproduces the unseeded behaviour: a chunk without an
+    /// entry is checked with an all-`Top` signature. See [`ChunkSignature`].
+    pub signatures: Vec<ChunkSignature>,
 }
 
 /// Bit flags defined for [`Module::flags`].

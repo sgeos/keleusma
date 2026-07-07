@@ -2854,6 +2854,7 @@ mod tests {
         Module {
             schema_hash: 0,
             enum_layouts: alloc::vec::Vec::new(),
+            signatures: alloc::vec::Vec::new(),
             chunks,
             native_names: Vec::new(),
             entry_point: Some(0),
@@ -3912,6 +3913,7 @@ mod tests {
         let module = Module {
             schema_hash: 0,
             enum_layouts: alloc::vec::Vec::new(),
+            signatures: alloc::vec::Vec::new(),
             chunks: vec![chunk],
             native_names: Vec::new(),
             entry_point: Some(0),
@@ -3964,6 +3966,7 @@ mod tests {
         let module = Module {
             schema_hash: 0,
             enum_layouts: alloc::vec::Vec::new(),
+            signatures: alloc::vec::Vec::new(),
             chunks: vec![chunk],
             native_names: Vec::new(),
             entry_point: Some(0),

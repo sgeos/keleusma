@@ -222,6 +222,7 @@ fn build_benchmark_chunk(pattern: &[Op], constants: &[ConstValue], repetitions: 
         // added to `Module` by B37 is empty. This constructor was not
         // updated when the field was introduced.
         enum_layouts: Vec::new(),
+        signatures: Vec::new(),
     }
 }
 

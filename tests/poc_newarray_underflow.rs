@@ -25,6 +25,7 @@ fn make_module(chunks: Vec<Chunk>) -> Module {
     Module {
         schema_hash: 0,
         enum_layouts: Vec::new(),
+        signatures: Vec::new(),
         chunks,
         native_names: Vec::new(),
         entry_point: Some(0),

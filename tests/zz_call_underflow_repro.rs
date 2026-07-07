@@ -29,6 +29,7 @@ fn mk_module(chunks: Vec<Chunk>) -> Module {
     Module {
         schema_hash: 0,
         enum_layouts: vec![],
+        signatures: vec![],
         chunks,
         native_names: vec![],
         entry_point: Some(0),

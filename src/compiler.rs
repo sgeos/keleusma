@@ -3554,6 +3554,9 @@ pub fn compile_with_options(
     // `CHUNK_SIZE_SOFT_WARN_THRESHOLD` are admissible but produce
     // a `CompileWarning` prompting decomposition into helpers.
     let mut chunks: Vec<Chunk> = Vec::new();
+    // Typed-verifier per-chunk signatures, parallel to `chunks` by index
+    // (A.2.1 Phase 2b). Carried in the module and additively on the wire.
+    let mut signatures: Vec<crate::bytecode::ChunkSignature> = Vec::new();
     // Set when any chunk emits a flat composite that could intern a host
     // opaque; gates the opaque-registry arena bound below (B28 P3 item 5).
     // Read only by the verify-gated WCMU aux-arena computation, so a no-verify
@@ -3565,7 +3568,7 @@ pub fn compile_with_options(
         let generic_origin = generic_provenance
             .get(name)
             .map(|(origin, type_args)| (origin.as_str(), type_args.as_str()));
-        let (chunk, chunk_may_intern_opaque) = compile_function_group(
+        let (chunk, chunk_may_intern_opaque, signature) = compile_function_group(
             name,
             defs,
             &function_map,
@@ -3589,6 +3592,7 @@ pub fn compile_with_options(
             .unwrap_or_else(crate::token::Span::default);
         check_chunk_size_against_limits(&chunk, span, &mut warnings)?;
         chunks.push(chunk);
+        signatures.push(signature);
     }
 
     let entry_point = function_map.get("main").map(|&idx| idx as usize);
@@ -3680,6 +3684,7 @@ pub fn compile_with_options(
     let mut module = Module {
         schema_hash: crate::bytecode::compute_schema_hash(data_layout.as_ref()),
         enum_layouts: build_enum_layouts(&type_info),
+        signatures,
         chunks,
         native_names,
         entry_point,
@@ -5063,7 +5068,7 @@ fn compile_function_group(
     persistent_composite_offsets: &BTreeMap<u16, u16>,
     emit_debug: bool,
     generic_origin: Option<(&str, &str)>,
-) -> Result<(Chunk, bool), CompileError> {
+) -> Result<(Chunk, bool, crate::bytecode::ChunkSignature), CompileError> {
     // Within a group, every head after the first must dispatch on
     // a pattern shape distinct from every earlier head; otherwise
     // the later head is unreachable. Single-head groups skip this
@@ -5099,6 +5104,13 @@ fn compile_function_group(
         FunctionCategory::Loop => BlockType::Stream,
     };
     let param_count = first.params.len() as u8;
+
+    // Typed-verifier signature descriptor (A.2.1 Phase 2b): the flat shapes of
+    // the parameters, the return, and (for a Stream chunk) the resume value.
+    // Computed from the leading head's declared types via the shared layout
+    // context, so it agrees with the flat access baking; an un-resolvable type
+    // records `WireShape::Top`.
+    let signature = chunk_signature_for(first, block_type, type_info);
 
     let mut fc = FuncCompiler::new(
         name,
@@ -5284,7 +5296,7 @@ fn compile_function_group(
     fc.record_function_entry(&first.span);
 
     let may_intern_opaque = fc.may_intern_opaque;
-    Ok((fc.finish(), may_intern_opaque))
+    Ok((fc.finish(), may_intern_opaque, signature))
 }
 
 /// Check if any parameter has a non-trivial pattern (not a simple variable).
@@ -5822,6 +5834,76 @@ fn build_enum_layouts(ti: &TypeInfo) -> Vec<crate::bytecode::EnumLayout> {
             }
         })
         .collect()
+}
+
+/// Compute the typed-verifier signature descriptor for a function group's
+/// leading head (A.2.1 Phase 2b): the flat shape of each parameter, the
+/// return, and the resume value. A Stream chunk resumes with its single
+/// parameter's shape (the Stream category's `param_types[0]` doubles as the
+/// resume type); other categories record `Top`. Shapes come from the same
+/// layout context the flat access baking uses, so a seeded shape agrees with a
+/// baked offset. An inferred, un-resolvable, or oversized type records
+/// `WireShape::Top`, which the pass treats as unseeded.
+fn chunk_signature_for(
+    first: &FunctionDef,
+    block_type: BlockType,
+    ti: &TypeInfo,
+) -> crate::bytecode::ChunkSignature {
+    let params: Vec<crate::bytecode::WireShape> = first
+        .params
+        .iter()
+        .map(|p| wire_shape_of_type_opt(p.type_expr.as_ref(), ti))
+        .collect();
+    let ret = wire_shape_of_type(&first.return_type, ti);
+    let resume = if matches!(block_type, BlockType::Stream) {
+        params
+            .first()
+            .copied()
+            .unwrap_or(crate::bytecode::WireShape::Top)
+    } else {
+        crate::bytecode::WireShape::Top
+    };
+    crate::bytecode::ChunkSignature {
+        params,
+        ret,
+        resume,
+    }
+}
+
+/// Flat shape of an optional declared type. An absent annotation records
+/// `Top`; a present one delegates to [`wire_shape_of_type`].
+fn wire_shape_of_type_opt(ty: Option<&TypeExpr>, ti: &TypeInfo) -> crate::bytecode::WireShape {
+    match ty {
+        Some(ty) => wire_shape_of_type(ty, ti),
+        None => crate::bytecode::WireShape::Top,
+    }
+}
+
+/// Flat shape of a declared type at the module's widths. A scalar records its
+/// [`ScalarKind`](crate::value_layout::ScalarKind) tag; a composite records
+/// its [`CompositeKind`](crate::value_layout::CompositeKind) tag and flat byte
+/// size. A type whose layout does not resolve (a residual generic, a bare
+/// function value) or whose size exceeds `u32` records `Top`.
+fn wire_shape_of_type(ty: &TypeExpr, ti: &TypeInfo) -> crate::bytecode::WireShape {
+    use crate::bytecode::WireShape;
+    use crate::value_layout::{CompositeKind, LayoutDescriptor};
+    let Ok(desc) = ti.layout_context().layout_for(ty) else {
+        return WireShape::Top;
+    };
+    let composite_kind = match &desc {
+        LayoutDescriptor::Scalar(k) => return WireShape::Scalar { kind: k.to_tag() },
+        LayoutDescriptor::Tuple(_) => CompositeKind::Tuple,
+        LayoutDescriptor::Array { .. } => CompositeKind::Array,
+        LayoutDescriptor::Struct { .. } => CompositeKind::Struct,
+        LayoutDescriptor::Enum { .. } => CompositeKind::Enum,
+    };
+    match u32::try_from(desc.size_in_bytes(ti.word_bytes, ti.float_bytes)) {
+        Ok(size) => WireShape::Flat {
+            kind: composite_kind.to_tag(),
+            size,
+        },
+        Err(_) => WireShape::Top,
+    }
 }
 
 /// Bytes of persistent flat-composite body storage a private `.data` field of

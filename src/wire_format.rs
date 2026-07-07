@@ -1292,6 +1292,11 @@ pub struct WireAuxBody {
     /// (B37). Rkyv-archived in the auxiliary body alongside the chunk
     /// metadata.
     pub enum_layouts: Vec<crate::bytecode::EnumLayout>,
+    /// Per-chunk signature descriptors for the typed operand-stack verifier
+    /// pass (A.2.1 Phase 2b); mirrors `Module::signatures`. Additive in the
+    /// auxiliary body alongside `enum_layouts`; empty for a module compiled
+    /// without the descriptors, which the pass treats as all-`Top`.
+    pub signatures: Vec<crate::bytecode::ChunkSignature>,
 }
 
 /// Strip a `#!` shebang prefix from a byte slice. Wire-format
@@ -1563,6 +1568,7 @@ pub fn module_to_wire_bytes(module: &Module) -> Result<Vec<u8>, LoadError> {
     let aux = WireAuxBody {
         chunks: wire_chunks,
         enum_layouts: module.enum_layouts.clone(),
+        signatures: module.signatures.clone(),
         native_names: module.native_names.clone(),
         entry_point: module.entry_point,
         data_layout: module.data_layout.clone(),
@@ -1773,6 +1779,7 @@ pub fn module_to_signed_wire_bytes(
     let aux = WireAuxBody {
         chunks: wire_chunks,
         enum_layouts: module.enum_layouts.clone(),
+        signatures: module.signatures.clone(),
         native_names: module.native_names.clone(),
         entry_point: module.entry_point,
         data_layout: module.data_layout.clone(),
@@ -2483,6 +2490,7 @@ pub fn module_from_wire_bytes(bytes: &[u8]) -> Result<Module, LoadError> {
     Ok(Module {
         chunks,
         enum_layouts: aux.enum_layouts,
+        signatures: aux.signatures,
         native_names: aux.native_names,
         entry_point: aux.entry_point,
         data_layout: aux.data_layout,
@@ -2924,6 +2932,31 @@ mod tests {
         assert_eq!(bytes, re_encoded, "wire-format round trip differs");
     }
 
+    // A.2.1 Phase 2b: the typed-verifier signature table is carried additively
+    // in the auxiliary body and survives a serialize/deserialize round trip
+    // (Option A). A populated table must decode with the same shapes.
+    #[test]
+    fn signature_table_survives_wire_round_trip() {
+        use crate::bytecode::{ChunkSignature, WireShape};
+        let mut module = make_minimal_module();
+        module.signatures = alloc::vec![ChunkSignature {
+            params: alloc::vec![WireShape::Flat { kind: 2, size: 16 }],
+            ret: WireShape::Scalar { kind: 3 },
+            resume: WireShape::Top,
+        }];
+        // Byte-stable round trip (re-encoding the decode matches).
+        module_roundtrip_through_wire_format(module.clone());
+        // And the decoded shapes are exactly the encoded ones.
+        let bytes = module_to_wire_bytes(&module).expect("encode");
+        let decoded = module_from_wire_bytes(&bytes).expect("decode");
+        assert_eq!(decoded.signatures.len(), 1);
+        let s = &decoded.signatures[0];
+        assert_eq!(s.params.len(), 1);
+        assert!(matches!(s.params[0], WireShape::Flat { kind: 2, size: 16 }));
+        assert!(matches!(s.ret, WireShape::Scalar { kind: 3 }));
+        assert!(matches!(s.resume, WireShape::Top));
+    }
+
     fn make_minimal_module() -> Module {
         // Hand-crafted chunk: PushImmediate(1) then Return.
         let chunk = Chunk {
@@ -2941,6 +2974,7 @@ mod tests {
             chunks: alloc::vec![chunk],
             native_names: alloc::vec::Vec::new(),
             enum_layouts: alloc::vec::Vec::new(),
+            signatures: alloc::vec::Vec::new(),
             entry_point: Some(0),
             data_layout: None,
             word_bits_log2: crate::bytecode::RUNTIME_WORD_BITS_LOG2,
@@ -2988,6 +3022,7 @@ mod tests {
             chunks: alloc::vec::Vec::new(),
             native_names: alloc::vec::Vec::new(),
             enum_layouts: alloc::vec::Vec::new(),
+            signatures: alloc::vec::Vec::new(),
             entry_point: None,
             data_layout: None,
             word_bits_log2: crate::bytecode::RUNTIME_WORD_BITS_LOG2,
@@ -3135,6 +3170,7 @@ mod tests {
             chunks: alloc::vec![body_chunk, if_chunk],
             native_names: alloc::vec::Vec::new(),
             enum_layouts: alloc::vec::Vec::new(),
+            signatures: alloc::vec::Vec::new(),
             entry_point: Some(0),
             data_layout: None,
             word_bits_log2: crate::bytecode::RUNTIME_WORD_BITS_LOG2,
@@ -3188,6 +3224,7 @@ mod tests {
             chunks: alloc::vec![chunk],
             native_names: alloc::vec::Vec::new(),
             enum_layouts: alloc::vec::Vec::new(),
+            signatures: alloc::vec::Vec::new(),
             entry_point: Some(0),
             data_layout: None,
             word_bits_log2: crate::bytecode::RUNTIME_WORD_BITS_LOG2,
@@ -3232,6 +3269,7 @@ mod tests {
             chunks: alloc::vec![chunk],
             native_names: alloc::vec::Vec::new(),
             enum_layouts: alloc::vec::Vec::new(),
+            signatures: alloc::vec::Vec::new(),
             entry_point: Some(0),
             data_layout: None,
             word_bits_log2: crate::bytecode::RUNTIME_WORD_BITS_LOG2,

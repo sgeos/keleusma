@@ -27,7 +27,9 @@
 //! the offset validation to every access op and the wire-carried layout
 //! tables is Phase 3/4. Nothing here changes runtime behaviour.
 
-use crate::bytecode::{Chunk, ConstValue, NewCompositeOperand, Op, StructField};
+use crate::bytecode::{
+    Chunk, ChunkSignature, ConstValue, Module, NewCompositeOperand, Op, StructField, WireShape,
+};
 use crate::value_layout::{CompositeKind, ScalarKind};
 use crate::verify::op_depth_effect;
 use alloc::vec::Vec;
@@ -66,6 +68,27 @@ impl AbsVal {
             self.clone()
         } else {
             AbsVal::Top
+        }
+    }
+
+    /// Lift a wire signature shape into an abstract value. An unknown tag
+    /// (a wire from a newer producer, or a `Float` tag on a build without
+    /// the `floats` feature) degrades to `Top`, which defers rather than
+    /// falsely rejecting.
+    fn from_wire(shape: &WireShape) -> AbsVal {
+        match shape {
+            WireShape::Top => AbsVal::Top,
+            WireShape::Scalar { kind } => match ScalarKind::from_tag(*kind) {
+                Some(k) => AbsVal::Scalar(k),
+                None => AbsVal::Top,
+            },
+            WireShape::Flat { kind, size } => match CompositeKind::from_tag(*kind) {
+                Some(k) => AbsVal::Flat {
+                    kind: k,
+                    size: *size,
+                },
+                None => AbsVal::Top,
+            },
         }
     }
 }
@@ -135,6 +158,16 @@ pub enum TypedError {
         /// The local slot being written.
         slot: usize,
     },
+    /// A `Call` passes an argument whose shape is incompatible with the
+    /// callee chunk's declared parameter shape (A.2.1 Phase 2b).
+    CallArgMismatch {
+        /// Instruction index of the `Call`.
+        ip: usize,
+        /// Callee chunk index.
+        callee: usize,
+        /// Zero-based argument position.
+        arg: usize,
+    },
 }
 
 /// Per-chunk signature that seeds the abstract stack where the op stream
@@ -153,6 +186,20 @@ pub struct ChunkSig {
 }
 
 impl ChunkSig {
+    /// Build a seeding signature from a wire [`ChunkSignature`] (A.2.1 Phase
+    /// 2b). The parameters seed the leading local slots (parameters occupy
+    /// slots `0..param_count`); later locals are unseeded (`Top`) and refined
+    /// by the pass. A `Top` resume records `None`, reproducing the unseeded
+    /// resume behaviour.
+    fn from_signature(sig: &ChunkSignature) -> ChunkSig {
+        let locals = sig.params.iter().map(AbsVal::from_wire).collect();
+        let resume = match &sig.resume {
+            WireShape::Top => None,
+            other => Some(AbsVal::from_wire(other)),
+        };
+        ChunkSig { locals, resume }
+    }
+
     /// The shape of local slot `i`, or `Top` when unseeded.
     fn local(&self, i: usize) -> AbsVal {
         self.locals.get(i).cloned().unwrap_or(AbsVal::Top)
@@ -183,9 +230,41 @@ pub fn typed_check_chunk_with_sig(
     word_bytes: usize,
     float_bytes: usize,
 ) -> Result<(), TypedError> {
+    check_chunk_seeded(chunk, sig, &[], word_bytes, float_bytes)
+}
+
+/// Check every chunk of a module, seeding each from the module's per-chunk
+/// signature table and resolving `Call`s against it (A.2.1 Phase 2b). A chunk
+/// without a table entry (a shorter or empty `signatures` table) is checked
+/// with an all-`Top` signature, reproducing the unseeded behaviour. `Ok(())`
+/// when every chunk verifies, else the first reason found.
+pub fn typed_check_module(
+    module: &Module,
+    word_bytes: usize,
+    float_bytes: usize,
+) -> Result<(), TypedError> {
+    let default_sig = ChunkSig::default();
+    for (i, chunk) in module.chunks.iter().enumerate() {
+        let seeded = module.signatures.get(i).map(ChunkSig::from_signature);
+        let sig = seeded.as_ref().unwrap_or(&default_sig);
+        check_chunk_seeded(chunk, sig, &module.signatures, word_bytes, float_bytes)?;
+    }
+    Ok(())
+}
+
+/// Shared entry: interpret one chunk under a seeding signature and a module
+/// signature table (empty when the chunk is checked in isolation).
+fn check_chunk_seeded(
+    chunk: &Chunk,
+    sig: &ChunkSig,
+    module_sigs: &[ChunkSignature],
+    word_bytes: usize,
+    float_bytes: usize,
+) -> Result<(), TypedError> {
     let ctx = Ctx {
         chunk,
         sig,
+        module_sigs,
         wb: word_bytes,
         fb: float_bytes,
     };
@@ -209,6 +288,11 @@ struct Ctx<'a> {
     chunk: &'a Chunk,
     /// Seeds for the chunk's local slots and resume value.
     sig: &'a ChunkSig,
+    /// The module's per-chunk signature table, indexed by callee chunk index,
+    /// used to seed a `Call`'s result and check its arguments. Empty when the
+    /// chunk is checked in isolation, in which case a `Call` result degrades
+    /// to `Top` and arguments are not checked (A.2.1 Phase 2b).
+    module_sigs: &'a [ChunkSignature],
     /// Target word width in bytes (for scalar/composite sizing).
     wb: usize,
     /// Target float width in bytes.
@@ -449,6 +533,41 @@ fn apply_op(ctx: &Ctx, op: &Op, stack: &mut Vec<AbsVal>, ip: usize) -> Result<()
             });
         }
 
+        // A script-to-script call: pop the arguments, check each against the
+        // callee's declared parameter shape, and push the callee's return
+        // shape (A.2.1 Phase 2b). With no module signature table (an isolated
+        // chunk check) the result degrades to `Top` and arguments are not
+        // checked. The top-level underflow guard already ensured `n` operands
+        // are present.
+        Op::Call(callee, n) => {
+            let argc = *n as usize;
+            let mut args: Vec<AbsVal> = Vec::with_capacity(argc);
+            for _ in 0..argc {
+                args.push(stack.pop().ok_or(TypedError::StackUnderflow { ip })?);
+            }
+            // `args` is in reverse call order (last argument popped first);
+            // reverse to index by declared parameter position.
+            args.reverse();
+            match ctx.module_sigs.get(*callee as usize) {
+                Some(callee_sig) => {
+                    for (arg, declared) in callee_sig.params.iter().enumerate() {
+                        let expected = AbsVal::from_wire(declared);
+                        if let Some(actual) = args.get(arg)
+                            && !shapes_compatible(actual, &expected)
+                        {
+                            return Err(TypedError::CallArgMismatch {
+                                ip,
+                                callee: *callee as usize,
+                                arg,
+                            });
+                        }
+                    }
+                    stack.push(AbsVal::from_wire(&callee_sig.ret));
+                }
+                None => stack.push(AbsVal::Top),
+            }
+        }
+
         // Generic height-correct effect for every other op: pop `req`,
         // push `net + req` unknown values.
         _ => {
@@ -581,6 +700,30 @@ mod tests {
 
     fn ints() -> Vec<ConstValue> {
         vec![ConstValue::Int(0), ConstValue::Int(0)]
+    }
+
+    // A minimal module wrapping the given chunks and their parallel signature
+    // table, at 64-bit word and float widths.
+    fn module(chunks: Vec<Chunk>, signatures: Vec<ChunkSignature>) -> Module {
+        Module {
+            chunks,
+            signatures,
+            native_names: Vec::new(),
+            entry_point: None,
+            data_layout: None,
+            word_bits_log2: 6,
+            addr_bits_log2: 6,
+            float_bits_log2: 6,
+            wcet_cycles: 0,
+            wcmu_bytes: 0,
+            aux_arena_bytes: 0,
+            persistent_composite_bytes: 0,
+            flags: 0,
+            shared_data_bytes: 0,
+            private_data_bytes: 0,
+            schema_hash: 0,
+            enum_layouts: Vec::new(),
+        }
     }
 
     #[test]
@@ -916,6 +1059,53 @@ mod tests {
         }
     }
 
+    // Phase 2b seeding must not turn a valid program into a false reject.
+    // These programs pass composite values across parameters and calls, so
+    // the module-level `typed_check_module` seeds parameters and call results
+    // to concrete flat shapes (not `Top`) and fires the offset and argument
+    // checks against them. Every program must still verify.
+    #[cfg(feature = "compile")]
+    #[test]
+    fn typed_check_module_accepts_seeded_real_programs() {
+        use crate::compiler::compile;
+        use crate::lexer::tokenize;
+        use crate::parser::parse;
+
+        let programs = [
+            // Struct passed by parameter, then flat field access on the param.
+            "struct P { x: Word, y: Word }\n\
+             fn sum(p: P) -> Word { p.x + p.y }\n\
+             fn main() -> Word { sum(P { x: 1, y: 2 }) }",
+            // Struct returned from a call, then field access on the result.
+            "struct P { x: Word, y: Word }\n\
+             fn mk(a: Word) -> P { P { x: a, y: a } }\n\
+             fn main() -> Word { mk(3).y }",
+            // Enum parameter matched in the callee.
+            "enum E { A(Word), B }\n\
+             fn f(e: E) -> Word { match e { E::A(v) => v, E::B => 0 } }\n\
+             fn main() -> Word { f(E::A(5)) + f(E::B) }",
+            // Nested composite parameter (a struct field that is a tuple).
+            "struct Q { p: (Word, Word), z: Word }\n\
+             fn g(q: Q) -> Word { q.z }\n\
+             fn main() -> Word { g(Q { p: (1, 2), z: 3 }) }",
+            // A Stream chunk resumes with its parameter's shape.
+            "loop main(i: Word) -> Word { let n = yield i * 2; n }",
+        ];
+        for src in programs {
+            let module =
+                compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+            let wb = (1usize << module.word_bits_log2) / 8;
+            let fb = (1usize << module.float_bits_log2) / 8;
+            let r = typed_check_module(&module, wb, fb);
+            assert!(
+                r.is_ok(),
+                "seeded module for `{}` should verify, got {:?}",
+                src,
+                r
+            );
+        }
+    }
+
     // Phase 1 finding (B5), now fixed: the `match`/enum lowering compiled to a
     // dispatch `Loop` with one `Break` per arm and left the peeked scrutinee on
     // the operand stack in a failed arm, so the arms' break edges left
@@ -980,6 +1170,105 @@ mod tests {
                 r
             );
         }
+    }
+
+    // Phase 2b: a cross-call flat-composite field access validates. `mk`
+    // returns a two-`Word` struct; `main` calls it and reads a field. The
+    // module signature table seeds the call result's flat shape so the
+    // `GetField` offset check fires (and passes) rather than deferring to
+    // `Top`. The module must actually carry a populated signature table with a
+    // flat return, else the seeding would be vacuous.
+    #[cfg(feature = "compile")]
+    #[test]
+    fn cross_call_composite_access_validates() {
+        use crate::compiler::compile;
+        use crate::lexer::tokenize;
+        use crate::parser::parse;
+
+        let src = "struct P { x: Word, y: Word }\n\
+                   fn mk() -> P { P { x: 1, y: 2 } }\n\
+                   fn main() -> Word { mk().x }";
+        let m = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+        let wb = (1usize << m.word_bits_log2) / 8;
+        let fb = (1usize << m.float_bits_log2) / 8;
+        assert!(
+            typed_check_module(&m, wb, fb).is_ok(),
+            "a cross-call composite field access should verify under signature seeding"
+        );
+        assert_eq!(
+            m.signatures.len(),
+            m.chunks.len(),
+            "the compiler must emit one signature per chunk"
+        );
+        assert!(
+            m.signatures
+                .iter()
+                .any(|s| matches!(s.ret, WireShape::Flat { .. })),
+            "`mk`'s struct return must be recorded as a flat shape"
+        );
+    }
+
+    // Phase 2b: a `Call` whose argument shape is incompatible with the
+    // callee's declared parameter shape is rejected. The callee (chunk 0)
+    // declares one 16-byte struct parameter; the caller (chunk 1) passes a
+    // scalar `Int`.
+    #[test]
+    fn call_arg_shape_mismatch_rejects() {
+        let callee = chunk(vec![Op::Const(0), Op::Return], ints());
+        let caller = chunk(vec![Op::Const(0), Op::Call(0, 1), Op::Return], ints());
+        let sigs = vec![
+            ChunkSignature {
+                params: vec![WireShape::Flat {
+                    kind: CompositeKind::Struct.to_tag(),
+                    size: 16,
+                }],
+                ret: WireShape::Scalar {
+                    kind: ScalarKind::Int.to_tag(),
+                },
+                resume: WireShape::Top,
+            },
+            ChunkSignature::default(),
+        ];
+        let m = module(vec![callee, caller], sigs);
+        assert!(
+            matches!(
+                typed_check_module(&m, 8, 8),
+                Err(TypedError::CallArgMismatch {
+                    callee: 0,
+                    arg: 0,
+                    ..
+                })
+            ),
+            "a scalar argument to a struct parameter must be rejected"
+        );
+    }
+
+    // Phase 2b: a matching argument shape accepts, and the call result takes
+    // the callee's return shape. The caller builds the struct the callee
+    // expects, calls it, and the checker completes with no mismatch.
+    #[test]
+    fn call_arg_shape_match_accepts() {
+        let callee = chunk(vec![Op::Const(0), Op::Return], ints());
+        // Caller: build a 16-byte struct, then Call(0, 1).
+        let mut ops = two_int_struct(16);
+        ops.push(Op::Call(0, 1));
+        ops.push(Op::Return);
+        let caller = chunk(ops, ints());
+        let sigs = vec![
+            ChunkSignature {
+                params: vec![WireShape::Flat {
+                    kind: CompositeKind::Struct.to_tag(),
+                    size: 16,
+                }],
+                ret: WireShape::Scalar {
+                    kind: ScalarKind::Int.to_tag(),
+                },
+                resume: WireShape::Top,
+            },
+            ChunkSignature::default(),
+        ];
+        let m = module(vec![callee, caller], sigs);
+        assert!(typed_check_module(&m, 8, 8).is_ok());
     }
 
     // A neutral loop body (pushes then pops) accepts; a non-neutral one

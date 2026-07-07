@@ -10826,7 +10826,7 @@ mod tests {
         // Layout: 64-byte framing header + opcode stream (8 bytes:
         // PushImmediate(5) + Return as 4-byte records) + empty
         // operand pool + rkyv-archived WireAuxBody + 4-byte CRC.
-        // Total length: 228 bytes.
+        // Total length: 300 bytes.
         //
         // The aux body grew by the optional per-chunk
         // `WireChunk::debug_pool_bytes` field added for B29 (strippable
@@ -10845,21 +10845,27 @@ mod tests {
         // `WireAuxBody::enum_layouts` table (B37 / audit finding 25 follow-up:
         // the per-enum variant-discriminant and padded-body sizes that let the
         // runtime make a native-returned enum's flat body type-driven), whose
-        // empty `ArchivedVec` adds 8 more bytes for a total of 268. Per B28 the
-        // format may change freely without a BYTECODE_VERSION bump (no
-        // production traction; programs are recompiled).
+        // empty `ArchivedVec` adds 8 more bytes for a total of 268, and again
+        // for the `WireAuxBody::signatures` table (A.2.1 Phase 2b: the typed
+        // operand-stack verifier's per-chunk parameter, return, and resume
+        // flat-shape descriptors), which for this one-chunk module carries one
+        // signature (no parameters, a scalar `Word` return, `Top` resume),
+        // raising the total to 300 bytes. Per B28 the format may change freely
+        // without a BYTECODE_VERSION bump (no production traction; programs are
+        // recompiled).
         let expected: alloc::vec::Vec<u8> = alloc::vec![
-            75, 69, 76, 69, 1, 0, 64, 0, 12, 1, 0, 0, 6, 6, 6, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-            0, 0, 0, 0, 0, 64, 0, 0, 0, 8, 0, 0, 0, 72, 0, 0, 0, 0, 0, 0, 0, 72, 0, 0, 0, 192, 0,
+            75, 69, 76, 69, 1, 0, 64, 0, 44, 1, 0, 0, 6, 6, 6, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 64, 0, 0, 0, 8, 0, 0, 0, 72, 0, 0, 0, 0, 0, 0, 0, 72, 0, 0, 0, 224, 0,
             0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 159, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 1, 0,
             0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
             0, 0, 0, 0, 0, 0, 0, 0, 0, 109, 97, 105, 110, 255, 255, 255, 255, 200, 255, 255, 255,
             1, 0, 0, 0, 240, 255, 255, 255, 0, 0, 0, 0, 0, 0, 0, 0, 228, 255, 255, 255, 0, 0, 0, 0,
-            0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 200, 255, 255, 255, 1, 0,
-            0, 0, 248, 255, 255, 255, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 6, 6, 6, 0, 0, 0, 0, 0, 0,
-            0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 176, 255, 255, 255, 0, 0, 0,
-            0, 91, 104, 111, 20,
+            0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1,
+            3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 176, 255, 255, 255, 1, 0, 0, 0, 224, 255,
+            255, 255, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 6, 6, 6, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 152, 255, 255, 255, 0, 0, 0, 0, 144, 255, 255,
+            255, 1, 0, 0, 0, 57, 20, 244, 92,
         ];
         let src = "fn main() -> Word { 1 }";
         let tokens = tokenize(src).expect("lex");
@@ -11311,6 +11317,7 @@ mod tests {
         let module = Module {
             schema_hash: 0,
             enum_layouts: alloc::vec::Vec::new(),
+            signatures: alloc::vec::Vec::new(),
             chunks: alloc::vec![chunk],
             native_names: alloc::vec![],
             entry_point: Some(0),
@@ -11354,6 +11361,7 @@ mod tests {
         let module = Module {
             schema_hash: 0,
             enum_layouts: alloc::vec::Vec::new(),
+            signatures: alloc::vec::Vec::new(),
             chunks: alloc::vec![chunk],
             native_names: alloc::vec![],
             entry_point: Some(0),
@@ -12554,6 +12562,7 @@ mod tests {
         let module = Module {
             schema_hash: 0,
             enum_layouts: alloc::vec::Vec::new(),
+            signatures: alloc::vec::Vec::new(),
             chunks: alloc::vec![text_returning_chunk, int_returning_chunk],
             native_names: alloc::vec::Vec::new(),
             entry_point: Some(0),
