@@ -90,7 +90,7 @@ The comparison is intentionally selective. Each runner has different design goal
 - **Python, Ruby**: general-purpose dynamic languages with rich standard libraries. Operationally heavier; type errors caught only at runtime. No bounded resource analysis. Signing and encryption available through third-party packages, not built in.
 - **Node.js**: V8 plus Node runtime. Designed for high-throughput server workloads; the JIT amortizes startup cost across long-running services. Heavy for one-shot scripts. No built-in signing or encryption of code.
 
-Where Keleusma genuinely wins: deployments that need verified execution properties (defence, regulated industries, embedded), and deployments where the CLI runs many short-lived scripts (low per-script overhead). Where the comparators win: deployments that need rich ecosystems and where startup cost is amortized across long-running services.
+Where Keleusma genuinely wins: deployments that need verified execution properties (regulated industries, embedded), and deployments where the CLI runs many short-lived scripts (low per-script overhead). Where the comparators win: deployments that need rich ecosystems and where startup cost is amortized across long-running services.
 
 ## Reproducibility
 

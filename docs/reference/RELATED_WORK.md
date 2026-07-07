@@ -14,7 +14,7 @@ SCADE is a widely used industrial realization of the synchronous approach. SCADE
 
 **Relationship to Keleusma.** Keleusma shares the synchronous hypothesis with Lustre, Esterel, and SCADE. The yield domain (control clock) corresponds to the synchronous tick: all computation between two YIELD points completes within a bounded number of instructions. The RESET domain (phase clock) provides a coarser temporal boundary analogous to mode changes in SCADE.
 
-Keleusma differs from the established synchronous languages in several ways. It is a bytecode VM language rather than compiling to automata or native C code. It does not support multi-clock domains or concurrent composition. It targets embedded scripting (audio engines, game logic) rather than safety-critical control systems as its primary application domain. Its claims of suitability for safety-critical applications are design aspirations informed by synchronous language principles, not verification status. See Section 7 for a discussion of the gap between current implementation and high-assurance verification.
+Keleusma differs from the established synchronous languages in several ways. It is a bytecode VM language rather than compiling to automata or native C code. It does not support multi-clock domains or concurrent composition. It targets embedded scripting (audio engines, game logic) rather than high-assurance control systems as its primary application domain. Its claims of suitability for high-assurance applications are design aspirations informed by synchronous language principles, not verification status. See Section 7 for a discussion of the gap between current implementation and high-assurance verification.
 
 ## 2. Coalgebra and Stream Processing
 

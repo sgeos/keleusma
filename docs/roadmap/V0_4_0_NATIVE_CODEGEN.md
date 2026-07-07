@@ -276,7 +276,7 @@ The strategy's open questions were addressed in a dedicated research loop (2026-
 - **Tier 2 (V0.4.x)**: Windows MSVC, Cortex-M55 (`thumbv8m.main-none-eabihf`), Cortex-M4 (`thumbv7em-none-eabihf`).
 - **Tier 3 (V0.5+)**: RISC-V, Wasm, vintage CPUs.
 
-**Confidence**. High. Tier classification follows LLVM back-end maturity, defence-customer relevance, and the existing `examples/rtos/` infrastructure for the Cortex-M55 testbed.
+**Confidence**. High. Tier classification follows LLVM back-end maturity, target-platform relevance, and the existing `examples/rtos/` infrastructure for the Cortex-M55 testbed.
 
 ## Open questions
 

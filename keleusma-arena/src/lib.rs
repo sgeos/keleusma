@@ -234,7 +234,7 @@ pub struct Arena {
 ///
 /// Saturation requires roughly five hundred eighty four thousand years
 /// at one reset per microsecond, but explicit refusal at saturation is
-/// the correct posture for safety-critical use. Recovery is via
+/// the correct posture for high-assurance use. Recovery is via
 /// [`Arena::force_reset_epoch`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EpochSaturated;

@@ -1502,7 +1502,7 @@ Note that `handle` is declared with `yield` because it is called from the `loop 
 | Memory model | Arena (bump allocation, cleared at RESET) | Static allocation |
 | Host interaction | Bidirectional typed yield | Sensor/actuator interface |
 
-**Rationale**: Keleusma applies synchronous language principles to an embeddable bytecode VM for game and audio scripting. It shares the synchronous hypothesis (all computation within a logical tick completes before the next tick) but targets a different execution model (interpreted bytecode with coroutine yield) and application domain (embedded scripting rather than safety-critical control). See [RELATED_WORK.md](../reference/RELATED_WORK.md) Section 1 for detailed analysis and citations.
+**Rationale**: Keleusma applies synchronous language principles to an embeddable bytecode VM for game and audio scripting. It shares the synchronous hypothesis (all computation within a logical tick completes before the next tick) but targets a different execution model (interpreted bytecode with coroutine yield) and application domain (embedded scripting rather than high-assurance control). See [RELATED_WORK.md](../reference/RELATED_WORK.md) Section 1 for detailed analysis and citations.
 
 ### Keleusma and WebAssembly
 

@@ -32,7 +32,7 @@ Keleusma pursues seven design goals drawn from its grammar specification.
 
 Keleusma targets three application domains.
 
-- **Safety-critical control systems.** The totality guarantees of the language, bounded-step execution, and static Worst-Case Execution Time (WCET) analysis make it suitable for high-assurance control loops.
+- **High-assurance control systems.** The totality guarantees of the language, bounded-step execution, and static Worst-Case Execution Time (WCET) analysis make it suitable for high-assurance control loops.
 - **Audio engines.** Real-time audio synthesis and effect processing. The deterministic execution model prevents glitches and timing jitter.
 - **Game scripting.** Scenario event handling, NPC behavior, and game logic. The coroutine model allows scripts to process events across multiple game ticks.
 
@@ -90,7 +90,7 @@ Tooling can highlight verifier-rejected constructs so developers see the gap bef
 
 The language can grow its admitted set without surface changes. As analysis techniques mature, more programs become admissible. Candidate techniques include flow analysis for indirect dispatch, attestation APIs for declared bounds, and inter-procedural reach extension. The surface remains stable. Only the verifier's reach changes.
 
-The rejection-by-default stance is the dual of the conventional acceptance-by-default stance. Both are coherent design choices. Keleusma's choice follows from its safety-critical positioning. A sound bound on time and memory is the load-bearing guarantee. The safest place to draw the boundary is the analysis's current capability.
+The rejection-by-default stance is the dual of the conventional acceptance-by-default stance. Both are coherent design choices. Keleusma's choice follows from its high-assurance positioning. A sound bound on time and memory is the load-bearing guarantee. The safest place to draw the boundary is the analysis's current capability.
 
 ### Worked examples
 
@@ -239,7 +239,7 @@ Features explicitly excluded from the current design.
 
 Hot code swapping at the bytecode level is part of the design and is described in [EXECUTION_MODEL.md](./EXECUTION_MODEL.md). Structural verification is implemented and described in [STRUCTURAL_ISA.md](../spec/STRUCTURAL_ISA.md).
 
-Keleusma's design choices are informed by synchronous reactive language principles and are favorable for eventual high-assurance verification, but current claims of suitability for safety-critical control systems are design aspirations, not verification status. See [RELATED_WORK.md](../reference/RELATED_WORK.md) Section 7 for a gap analysis between the current implementation and verification maturity.
+Keleusma's design choices are informed by synchronous reactive language principles and are favorable for eventual high-assurance verification, but current claims of suitability for high-assurance control systems are design aspirations, not verification status. See [RELATED_WORK.md](../reference/RELATED_WORK.md) Section 7 for a gap analysis between the current implementation and verification maturity.
 
 ## Surface Extensions Added in V0.2
 

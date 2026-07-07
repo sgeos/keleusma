@@ -26,7 +26,7 @@ Boring code that does exciting things. The arena's storage shape, allocation str
 
 - Embedded systems with link-time-allocated buffers.
 - Targets with multiple distinct memory regions. Construct one arena per region.
-- Real-time and safety-critical workloads where fixed bounds and constant-time allocation are required.
+- Real-time and high-assurance workloads where fixed bounds and constant-time allocation are required.
 - Game engines and simulation loops that reset the arena per frame.
 - Programs that want a compile-time memory budget contract.
 

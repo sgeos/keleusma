@@ -6,7 +6,7 @@
 
 The Keleusma verifier's WCET and WCMU bounds, the `loop main` cooperative yield model, and the conservative-verification stance compose into a coherent kernel design that does not exist in shipping form today. The combination "total cooperative scheduling" gives an RTOS the response-latency guarantee of a pre-emptive kernel without the per-task kernel stacks, atomic critical sections, priority inheritance machinery, and interrupt-during-syscall complexity that preemption normally drags in.
 
-The shipped rogue example demonstrates the host-script architecture at consumer-software scale. This spec proposes the same architecture applied to a safety-critical embedded RTOS niche.
+The shipped rogue example demonstrates the host-script architecture at consumer-software scale. This spec proposes the same architecture applied to a high-assurance embedded RTOS niche.
 
 ## 2. Goals and non-goals
 
@@ -496,7 +496,7 @@ Before flashing any custom firmware to the STM32N6570-DK, the operator wants a w
 
 **The naive dump approach does not work on this board.** Confirmed empirically with STM32CubeProgrammer v2.22 against the N6570-DK Rev B. The expected commands run cleanly through connect and external-loader upload, but the loader's `Init` step fails with `Data read failed` regardless of BOOT0 position. Debug Authentication discovery (`debugauth=2`) hangs at the "Writing magic number" stage. The chip's security state machine is blocking flash reads from the debugger.
 
-This is the N6's safety-critical-chip behaviour working as ST designed it. The factory firmware is protected and the chip refuses to expose its flash contents to a debugger without credentials we do not have. The same gate protects the NPU model data, which lives in the same external octal flash region.
+This is the N6's high-assurance-chip behaviour working as ST designed it. The factory firmware is protected and the chip refuses to expose its flash contents to a debugger without credentials we do not have. The same gate protects the NPU model data, which lives in the same external octal flash region.
 
 **The substitute is to download ST's published factory image rather than dump from the board.** ST distributes the demonstration firmware as a re-flashable binary alongside the STM32CubeN6 firmware package.
 

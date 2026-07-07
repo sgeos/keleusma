@@ -2989,7 +2989,7 @@ pub const SHARED_SLOT_COMPOSITE_FLAG: u8 = 0x80;
 /// body into that fixed location and stores a region-aware handle that survives
 /// RESET in place, so no private composite write needs a global-heap owned
 /// body. This is the linker-style fixed-address placement of program state, the
-/// 6502/NES and aerospace-control-loop model: every composite slot, including
+/// 6502/NES and real-time control-loop model: every composite slot, including
 /// array elements, has a statically baked address. Entries are sorted ascending
 /// by `slot` so the runtime resolves a slot by binary search.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Archive, Serialize, Deserialize)]
